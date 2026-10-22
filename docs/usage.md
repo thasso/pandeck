@@ -46,6 +46,11 @@ because a spend budget governs extra credits, not the included allowance.
   the RAW provider snapshot, so it holds more than the card payload does (an
   OpenAI file includes the account email and spend-control detail); it never
   holds a token.
+- Writes use `privateJsonFile.ts`, retaining compact JSON with a trailing
+  newline. Parent directories are created with `0700`, without changing an
+  existing directory's mode. A stale temporary file is tightened to `0600`
+  before writing. Disk failures log the existing warning and leave the fetched
+  snapshot available in memory.
 - Deleting an account removes its entry **and** its file.
 
 It is server-owned because the credentials are: the Claude fetch spawns a

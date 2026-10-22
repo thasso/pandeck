@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -293,6 +299,42 @@ describe("persistence", () => {
     const [indicator] = usageIndicators();
     expect(indicator?.short?.usedPct).toBe(12);
     expect(harness.openAiCalls).toEqual([]);
+  });
+
+  test.each([
+    "{ not json",
+    JSON.stringify({ version: 2, snapshot: openAiSnapshot() }),
+    JSON.stringify({
+      version: 1,
+      provider: "claude",
+      snapshot: claudeSnapshot(),
+      fetchedAt: 1,
+    }),
+  ])(
+    "ignores corrupt, obsolete or wrong-provider snapshots: %s",
+    (contents) => {
+      mkdirSync(CACHE_DIR, { recursive: true });
+      writeFileSync(join(CACHE_DIR, "openai.json"), contents);
+      install([profile("openai", "openai-codex")]);
+      expect(usageIndicators()[0]?.fetchedAt).toBeNull();
+    },
+  );
+
+  test("a failed disk write still serves the fetched snapshot", async () => {
+    install([profile("openai", "openai-codex")]);
+    mkdirSync(join(CACHE_DIR, "openai.json.tmp"), { recursive: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const snapshot = await readUsageSnapshot("openai", "openai-codex");
+      expect(snapshot).toEqual(openAiSnapshot());
+      expect(usageIndicators()[0]?.short?.usedPct).toBe(12);
+      expect(warn).toHaveBeenCalledWith(
+        "[usage-cache] failed to persist snapshot:",
+        expect.any(String),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("forgetting an account removes its numbers and its file", async () => {

@@ -1,12 +1,7 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 
 const CACHE_DIR = join(DATA_DIR, "cache", "jira");
 
@@ -33,11 +28,5 @@ export function readJsonCacheFile<T>(path: string): T | null {
 }
 
 export function writeJsonCacheFile(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, path);
+  createPrivateJsonFile(path, "Jira cache").write(value);
 }

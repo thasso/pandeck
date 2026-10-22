@@ -1,11 +1,4 @@
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import {
   accountLimitMatches,
   accountLimitModel,
@@ -15,6 +8,7 @@ import type {
   OpenAiUsageSnapshot,
 } from "@assistant/shared/usage";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 
 export const QUOTA_BENCH_MS = 30 * 60_000;
 export const RATE_LIMIT_BENCH_MS = 5 * 60_000;
@@ -283,8 +277,10 @@ export class AccountBenchStore {
   }
   private persist(): void {
     try {
-      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-      const raw = Object.fromEntries(
+      const raw: Record<
+        string,
+        Record<string, AccountBench>
+      > = Object.fromEntries(
         [...this.records].flatMap(([id, scopes]) => {
           const live = [...scopes].flatMap(([model, { bench }]) =>
             bench && bench.until > this.now() ? [[model, bench] as const] : [],
@@ -292,10 +288,10 @@ export class AccountBenchStore {
           return live.length ? [[id, Object.fromEntries(live)] as const] : [];
         }),
       );
-      const tmp = `${this.path}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify(raw)}\n`, { mode: 0o600 });
-      chmodSync(tmp, 0o600);
-      renameSync(tmp, this.path);
+      createPrivateJsonFile(this.path, "Account benches", {
+        privateDirectory: "create",
+        compact: true,
+      }).write(raw);
     } catch {
       /* In-memory benches remain usable if persistence fails. */
     }

@@ -9,6 +9,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
   return {
     ...actual,
+    chmodSync: vi.fn(actual.chmodSync),
     writeFileSync: vi.fn(actual.writeFileSync),
     renameSync: vi.fn(actual.renameSync),
     closeSync: vi.fn(actual.closeSync),
@@ -99,6 +100,61 @@ for (const staleTemp of [false, true]) {
     assert.equal(fs.existsSync(`${path}.tmp`), false);
   });
 }
+
+for (const privateDirectory of [undefined, "create", "enforce"] as const) {
+  for (const existing of [false, true]) {
+    test(`directory privacy ${privateDirectory ?? "default"}, existing: ${existing}`, async () => {
+      const actual = await vi.importActual<typeof fs>("node:fs");
+      const parent = join(directory, "settings");
+      if (existing) {
+        fs.mkdirSync(parent);
+        fs.chmodSync(parent, 0o755);
+      }
+      const expectedMode =
+        privateDirectory === "enforce" ||
+        (privateDirectory === "create" && !existing)
+          ? 0o700
+          : 0o755;
+      vi.mocked(fs.writeFileSync).mockImplementationOnce(
+        (target, data, options) => {
+          assert.equal(fs.statSync(parent).mode & 0o777, expectedMode);
+          actual.writeFileSync(target, data, options);
+        },
+      );
+      const previous = process.umask(0o022);
+      try {
+        createPrivateJsonFile(
+          path,
+          "Example settings",
+          privateDirectory ? { privateDirectory } : {},
+        ).write({ enabled: true });
+      } finally {
+        process.umask(previous);
+      }
+      assert.equal(fs.statSync(parent).mode & 0o777, expectedMode);
+    });
+  }
+}
+
+test("does not write when enforcing directory privacy fails", () => {
+  const file = createPrivateJsonFile(path, "Example settings", {
+    privateDirectory: "enforce",
+  });
+  vi.mocked(fs.chmodSync).mockImplementationOnce(() => {
+    throw new Error("chmod failed");
+  });
+  assert.throws(() => file.write({ token: "fake-secret" }), /chmod failed/);
+  assert.equal(vi.mocked(fs.writeFileSync).mock.calls.length, 0);
+  assert.equal(vi.mocked(fs.renameSync).mock.calls.length, 0);
+  assert.equal(fs.existsSync(`${path}.tmp`), false);
+});
+
+test("retains compact JSON with a trailing newline when requested", () => {
+  createPrivateJsonFile(path, "Example cache", { compact: true }).write({
+    nested: { count: 1 },
+  });
+  assert.equal(fs.readFileSync(path, "utf8"), '{"nested":{"count":1}}\n');
+});
 
 test("replaces the destination only after a complete, closed temp file", async () => {
   const actual = await vi.importActual<typeof fs>("node:fs");

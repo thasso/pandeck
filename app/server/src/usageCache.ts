@@ -15,15 +15,8 @@
  * sweep (`openaiResetAutoRedeem.ts`), which decides for itself, and only for
  * the sub-second OpenAI GET, when a fetch is worth it.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type {
   CredentialProfileProvider,
   CredentialProfileSummary,
@@ -37,6 +30,7 @@ import type {
 } from "@assistant/shared/usage";
 import { USAGE_HARD_INVALID_MS } from "@assistant/shared/usage";
 import { DATA_DIR } from "./config.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import {
   listCredentialProfiles,
   subscribeCredentialProfileDeleted,
@@ -234,13 +228,10 @@ function writePersisted(entry: CacheEntry): void {
   try {
     // The files hold raw provider snapshots (an OpenAI one names the account),
     // so the directory is private too, not just the files.
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const tmp = `${path}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(payload)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    renameSync(tmp, path);
+    createPrivateJsonFile(path, "Usage snapshot", {
+      privateDirectory: "create",
+      compact: true,
+    }).write(payload);
   } catch (err) {
     console.warn("[usage-cache] failed to persist snapshot:", errorText(err));
   }

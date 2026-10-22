@@ -753,7 +753,7 @@ it.each(["quota", "rate_limit"] as const)(
     });
   },
 );
-it("persistence is private, unchanged evidence does not rewrite, and expiry survives restart", () => {
+it("unchanged evidence does not rewrite and expiry survives restart", () => {
   const f = fixture();
   const until = f.now() + 1000;
   f.store.runFailure(
@@ -761,7 +761,6 @@ it("persistence is private, unchanged evidence does not rewrite, and expiry surv
     { kind: "rate_limit", resetAtMs: until },
     "claude-sdk",
   );
-  expect(statSync(f.path).mode & 0o777).toBe(0o600);
   const before = statSync(f.path).mtimeMs;
   f.advance(1);
   f.store.runFailure(

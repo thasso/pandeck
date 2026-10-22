@@ -1,19 +1,21 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WebPushSubscriptionInput } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 
 const STORE_VERSION = 1;
 const WEB_PUSH_DIR = join(DATA_DIR, "web-push");
 const VAPID_PATH = join(WEB_PUSH_DIR, "vapid.json");
 const SUBSCRIPTIONS_PATH = join(WEB_PUSH_DIR, "subscriptions.json");
+const vapidFile = createPrivateJsonFile(VAPID_PATH, "VAPID keys", {
+  privateDirectory: "enforce",
+});
+const subscriptionsFile = createPrivateJsonFile(
+  SUBSCRIPTIONS_PATH,
+  "Web Push subscriptions",
+  { privateDirectory: "enforce" },
+);
 const MAX_ENDPOINT_CHARS = 4_096;
 const MAX_KEY_CHARS = 512;
 const MAX_ORIGIN_CHARS = 2_048;
@@ -33,23 +35,6 @@ export interface StoredWebPushSubscription extends WebPushSubscriptionInput {
 interface StoredSubscriptionsFile {
   version: 1;
   subscriptions: StoredWebPushSubscription[];
-}
-
-function ensureStoreDir(): void {
-  mkdirSync(WEB_PUSH_DIR, { recursive: true, mode: 0o700 });
-  chmodSync(WEB_PUSH_DIR, 0o700);
-}
-
-function writePrivateJson(path: string, value: unknown): void {
-  ensureStoreDir();
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
-  chmodSync(path, 0o600);
 }
 
 function nonEmptyBounded(
@@ -146,7 +131,7 @@ export function getOrCreateVapidKeys(
       JSON.parse(readFileSync(VAPID_PATH, "utf8")) as unknown,
     );
   const keys = normalizeVapidKeys(generate());
-  writePrivateJson(VAPID_PATH, keys);
+  vapidFile.write(keys);
   return keys;
 }
 
@@ -187,7 +172,7 @@ function readSubscriptionsFile(): StoredSubscriptionsFile {
 }
 
 function writeSubscriptions(subscriptions: StoredWebPushSubscription[]): void {
-  writePrivateJson(SUBSCRIPTIONS_PATH, {
+  subscriptionsFile.write({
     version: STORE_VERSION,
     subscriptions,
   } satisfies StoredSubscriptionsFile);

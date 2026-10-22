@@ -16,11 +16,15 @@ provider messages or tokens in health.
 
 `app/server/src/accountHealth.ts` owns health in memory and persists best-effort
 to `DATA_DIR/cache/account-health.json`, using a private `0600` temporary file
-and rename. Missing or corrupt files start unknown. A restart retains observed
-login failures and whether an account ever had credentials. Only
-`wasConnected: true` restores connection history. Deleted accounts are
-forgotten; late evidence for deleted ids is ignored. Disabled accounts retain
-health but never alert or push.
+and rename through `privateJsonFile.ts`. Health and bench files retain compact
+JSON with a trailing newline. Their parents are created with `0700`, without
+tightening an existing directory. The helper tightens a stale temporary file
+before writing. Persistence failures leave in-memory evidence usable; health
+keeps its dirty flag for a later retry. Missing or corrupt files start unknown.
+A restart retains observed login failures and whether an account ever had
+credentials. Only `wasConnected: true` restores connection history. Deleted
+accounts are forgotten; late evidence for deleted ids is ignored. Disabled
+accounts retain health but never alert or push.
 
 Evidence rules:
 

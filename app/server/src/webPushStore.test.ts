@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "vitest";
-import { rmSync, statSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
 import {
@@ -21,7 +21,7 @@ const subscription = {
 beforeEach(() => rmSync(storeDir, { recursive: true, force: true }));
 afterEach(() => rmSync(storeDir, { recursive: true, force: true }));
 
-test("persists one private VAPID key pair", () => {
+test("persists one VAPID key pair", () => {
   let generated = 0;
   const first = getOrCreateVapidKeys(() => {
     generated += 1;
@@ -34,8 +34,6 @@ test("persists one private VAPID key pair", () => {
 
   assert.deepEqual(first, second);
   assert.equal(generated, 1);
-  assert.equal(statSync(storeDir).mode & 0o777, 0o700);
-  assert.equal(statSync(join(storeDir, "vapid.json")).mode & 0o777, 0o600);
 });
 
 test("upserts and removes subscriptions idempotently", () => {
@@ -55,13 +53,35 @@ test("upserts and removes subscriptions idempotently", () => {
   assert.equal(updated.updatedAt, 200);
   assert.equal(updated.keys.auth, "changed");
   assert.equal(listWebPushSubscriptions().length, 1);
-  assert.equal(
-    statSync(join(storeDir, "subscriptions.json")).mode & 0o777,
-    0o600,
-  );
   assert.equal(removeWebPushSubscription(subscription.endpoint), true);
   assert.equal(removeWebPushSubscription(subscription.endpoint), false);
   assert.deepEqual(listWebPushSubscriptions(), []);
+});
+
+test("rejects malformed stored VAPID keys without replacing them", () => {
+  mkdirSync(storeDir, { recursive: true });
+  writeFileSync(join(storeDir, "vapid.json"), "{}");
+  let generated = false;
+  assert.throws(
+    () =>
+      getOrCreateVapidKeys(() => {
+        generated = true;
+        return { publicKey: "public_123", privateKey: "private_456" };
+      }),
+    { message: "publicKey must be a string." },
+  );
+  assert.equal(generated, false);
+});
+
+test("keeps raw parse and store validation errors on subscription reads", () => {
+  mkdirSync(storeDir, { recursive: true });
+  const path = join(storeDir, "subscriptions.json");
+  writeFileSync(path, "{ not json");
+  assert.throws(() => listWebPushSubscriptions(), SyntaxError);
+  writeFileSync(path, '{"version":2,"subscriptions":[]}');
+  assert.throws(() => listWebPushSubscriptions(), {
+    message: "Stored Web Push subscriptions are malformed.",
+  });
 });
 
 test("strictly validates subscription capability data and installation origins", () => {

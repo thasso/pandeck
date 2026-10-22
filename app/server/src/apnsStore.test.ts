@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "vitest";
-import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, test, vi } from "vitest";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
 import {
@@ -110,12 +110,6 @@ test("still keys on the token for a client that reports no installation", () => 
   assert.equal(listApnsDevices()[0]?.installId, "install-a");
 });
 
-test("keeps the store private on disk", () => {
-  upsertApnsDevice({ token, environment: "development" }, 100);
-  assert.equal(statSync(storeDir).mode & 0o777, 0o700);
-  assert.equal(statSync(join(storeDir, "devices.json")).mode & 0o777, 0o600);
-});
-
 test("reports push as unconfigured rather than throwing on a bad credential", () => {
   assert.equal(getApnsCredential(), null);
 
@@ -175,4 +169,21 @@ test("ignores a corrupt device list instead of failing every notification", () =
   mkdirSync(storeDir, { recursive: true, mode: 0o700 });
   writeFileSync(join(storeDir, "devices.json"), "{ not json");
   assert.deepEqual(listApnsDevices(), []);
+});
+
+test("keeps the warning for a malformed device list", () => {
+  mkdirSync(storeDir, { recursive: true });
+  writeFileSync(join(storeDir, "devices.json"), '{"version":2,"devices":[]}');
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    assert.deepEqual(listApnsDevices(), []);
+    assert.deepEqual(warn.mock.calls, [
+      [
+        "[apns] ignoring the stored device list:",
+        "Stored APNs devices are malformed.",
+      ],
+    ]);
+  } finally {
+    warn.mockRestore();
+  }
 });
