@@ -44,7 +44,6 @@ const { sessionStore } = await import("./db/sessionStore.ts");
 const { viewSessionById, ViewSession } = await import("./viewSession.ts");
 const { buildSessionState } = await import("./sessionState.ts");
 const { storedSessionModelOption } = await import("./harnesses/models.ts");
-const { harnessRegistry } = await import("./harnesses/registry.ts");
 const proxied = await import("./mcp/toolGroups/proxiedServer.ts");
 const questions = await import("./tools/core/questionTool.ts");
 const approvals = await import("./pendingApprovals.ts");
@@ -53,7 +52,7 @@ const cwd = await import("./worktrees/sessionCwd.ts");
 const { SKILLS_RUNTIME_DIR } = await import("./config.ts");
 const { skillSetHash, skillRuntimePluginName } =
   await import("./skills/skillRuntimeMaterializer.ts");
-const { closeDb } = await import("./db/index.ts");
+const { closeDb, getDb } = await import("./db/index.ts");
 const tasks = await import("./tasks.ts");
 const worktrees = await import("./db/worktreeStore.ts");
 const { directPeerChildStore } = await import("./db/directPeerChildStore.ts");
@@ -78,7 +77,6 @@ function storedFacts(id: string): SessionNativeFacts {
     model: storedSessionModelOption(meta.harness, meta.provider, meta.model),
     thinkingLevel: (meta.thinkingLevel ?? "off") as ThinkingLevel,
     mode: meta.mode,
-    requiresEnterprise: meta.requiresEnterprise,
   };
 }
 
@@ -253,12 +251,12 @@ test("detached serialization preserves the pre-owner field order and values", as
       },
       false,
     );
-    vi.spyOn(harnessRegistry, "browserRuntimeOwner").mockReturnValue({
-      agentKind: "workshop",
-      agentStatus: "idle",
+    const browserRuntimeOwner = vi.fn(() => ({
+      agentKind: "workshop" as const,
+      agentStatus: "idle" as const,
       sessionTitle: "Owner",
       sessionFile: nativeFile,
-    });
+    }));
     const appFields = [
       "idleReason",
       "pendingQuestions",
@@ -282,7 +280,8 @@ test("detached serialization preserves the pre-owner field order and values", as
       "worktreeMissing",
     ] as const satisfies readonly (keyof SessionState)[];
     for (const facts of liveFixtures(detachedFacts)) {
-      const state = buildSessionState(id, facts);
+      const state = buildSessionState(id, facts, browserRuntimeOwner);
+      expect(browserRuntimeOwner).toHaveBeenLastCalledWith(id);
       for (const field of appFields) {
         expect(state[field], `${facts.harness} ${field}`).toEqual(
           detached[field],
@@ -399,7 +398,7 @@ function liveFixtures(base: SessionNativeFacts): SessionNativeFacts[] {
         underlyingReserve: 10_000,
         live: { applied: "confirmed", appliedTokens: 100_000 },
       },
-      skillInvocationTranscript: {
+      skillInvocationTranscript: () => ({
         calls: [
           {
             toolCallId: "load",
@@ -407,9 +406,17 @@ function liveFixtures(base: SessionNativeFacts): SessionNativeFacts[] {
             input: harness === "pi" ? { path } : { skill: `${plugin}:review` },
             at: 500,
           },
+          {
+            toolCallId: "foreign",
+            toolName: "read",
+            input: { path: join(tmp, "elsewhere", "SKILL.md") },
+            at: 501,
+          },
+          { toolCallId: "failed", toolName: "read", input: { path }, at: 502 },
+          { toolCallId: "pending", toolName: "read", input: { path }, at: 503 },
         ],
-        succeeded: new Set(["load"]),
-      },
+        succeeded: new Set(["load", "foreign"]),
+      }),
       toolLoading: {
         loadedToolNames: new Set([
           "task_read",
@@ -493,8 +500,17 @@ test("a directly spawned child's state names its spawner; no other session's doe
     credentialProfileId: "acct",
     createdAt: Date.now(),
   });
-  expect(storedState("view-child").directSpawnedBy).toBe("view-spawner");
-  expect(storedState("view-plain")).not.toHaveProperty("directSpawnedBy");
+  for (const facts of [
+    storedFacts("view-child"),
+    ...liveFixtures(storedFacts("view-child")),
+  ]) {
+    expect(buildSessionState("view-child", facts).directSpawnedBy).toBe(
+      "view-spawner",
+    );
+    expect(buildSessionState("view-plain", facts)).not.toHaveProperty(
+      "directSpawnedBy",
+    );
+  }
 });
 
 test("undefined optionals are absent, and only coding live facts enable live projections", () => {
@@ -507,7 +523,6 @@ test("undefined optionals are absent, and only coding live facts enable live pro
     forkOrigin: undefined,
     model: undefined,
     mode: undefined,
-    requiresEnterprise: false,
     live: undefined,
   };
   const state = buildSessionState("no-row", detached);
@@ -553,26 +568,72 @@ test("undefined optionals are absent, and only coding live facts enable live pro
   expect(coding).not.toHaveProperty("browserRuntimes");
 });
 
-test("detached entitlement stays captured while compaction reads the current row", () => {
+test("lazy native transcripts are read only for rendered nonempty frozen skills", () => {
+  const transcript = vi.fn(() => ({ calls: [], succeeded: new Set<string>() }));
+  const facts: SessionNativeFacts = {
+    harness: "pi",
+    kind: "assistant",
+    agentType: "assistant",
+    thinkingLevel: "off",
+    live: { canSteer: true, skillInvocationTranscript: transcript },
+  };
+  expect(buildSessionState("lazy-skills", facts)).not.toHaveProperty(
+    "skillInvocations",
+  );
+  expect(
+    buildSessionState("lazy-skills", {
+      ...facts,
+      kind: "developer",
+      agentType: "developer",
+    }).skillInvocations,
+  ).toEqual([]);
+  expect(transcript).not.toHaveBeenCalled();
+  sessionStore.freezeSkills("lazy-skills", '["review"]');
+  expect(
+    buildSessionState("lazy-skills", {
+      ...facts,
+      kind: "developer",
+      agentType: "developer",
+    }).skillInvocations,
+  ).toEqual([]);
+  expect(transcript).toHaveBeenCalledExactlyOnceWith(["review"]);
+});
+
+test("the owner reads fresh stored restrictions and compaction, not captured view metadata", () => {
   sessionStore.upsert({
     id: "fresh-window",
     harness: "pi",
     agentType: "developer",
     provider: "openai-codex",
     model: "gpt-6-sol",
-    requiresEnterprise: true,
   });
   const meta = sessionStore.get("fresh-window")!;
   const view = new ViewSession(meta);
   sessionStore.setCompactionWindow(meta.id, 80_000);
-  expect(view.state()).toMatchObject({
-    requiresEnterprise: true,
-    compactionWindow: { tokens: 80_000 },
-  });
+  expect(view.state()).toMatchObject({ compactionWindow: { tokens: 80_000 } });
+  expect(view.state()).not.toHaveProperty("requiresEnterprise");
   sessionStore.setCompactionWindow(meta.id, 60_000);
   expect(view.state().compactionWindow?.tokens).toBe(60_000);
-  const unstored = new ViewSession({ ...meta, id: "unstored" });
-  expect(unstored.state().requiresEnterprise).toBe(true);
+  const fixtures = [
+    storedFacts(meta.id),
+    ...liveFixtures(storedFacts(meta.id)),
+  ];
+  // Model a persisted restriction correction. Ordinary metadata upserts cannot change it.
+  getDb()
+    .prepare("UPDATE session_index SET requires_enterprise = 1 WHERE id = ?")
+    .run(meta.id);
+  expect(view.state().requiresEnterprise).toBe(true);
+  for (const facts of fixtures)
+    expect(buildSessionState(meta.id, facts).requiresEnterprise).toBe(true);
+  sessionStore.markDeleted(meta.id);
+  expect(view.state().requiresEnterprise).toBe(true);
+  expect(view.state()).not.toHaveProperty("compactionWindow");
+  const unstored = new ViewSession({
+    ...meta,
+    id: "unstored",
+    requiresEnterprise: true,
+  });
+  expect(unstored.state()).not.toHaveProperty("requiresEnterprise");
   expect(unstored.state()).not.toHaveProperty("compactionWindow");
 });
 

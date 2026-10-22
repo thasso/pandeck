@@ -10,43 +10,10 @@ process.env.DATA_DIR = join(tmp, "data");
 
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
-const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
-const { SKILLS_RUNTIME_DIR } = await import("./config.ts");
 const { skillRuntimePluginName, skillSetHash } =
   await import("./skills/skillRuntimeMaterializer.ts");
 
-const host = {
-  broadcastSessions: async () => {},
-  noteRunStarted() {},
-  checkPendingReload() {},
-  isReloadQueued: () => false,
-  browserRuntimesFor: () => [],
-};
-
-function piSession(
-  id: string,
-  agentType: "developer" | "assistant",
-  branch: unknown[] = [],
-) {
-  const native = {
-    sessionId: id,
-    sessionFile: undefined,
-    sessionName: undefined,
-    sessionManager: {
-      getBranch: () => branch,
-      getEntries: () => [],
-      getHeader: () => undefined,
-    },
-    model: undefined,
-    thinkingLevel: "off",
-    subscribe: () => () => {},
-    getSessionStats: () => ({ totalMessages: 0 }),
-    dispose() {},
-  };
-  return new PiLiveSession(agentType, native as never, host, () => {});
-}
-
-test("both harness SessionState projections carry frozen coding skills", () => {
+test("Claude SessionState carries frozen coding skills", () => {
   sessionStore.freezeSkills("claude-coding", '["claude-skill"]');
   const claude = new ClaudeSdkSession("claude-coding", {
     seam: async () => {
@@ -56,17 +23,9 @@ test("both harness SessionState projections carry frozen coding skills", () => {
   });
   assert.deepEqual(claude.state().activeSkills, ["claude-skill"]);
   assert.deepEqual(claude.state().skillInvocations, []);
-
-  sessionStore.freezeSkills("pi-coding", '["pi-skill"]');
-  const pi = piSession("pi-coding", "developer");
-  try {
-    assert.deepEqual(pi.state().activeSkills, ["pi-skill"]);
-  } finally {
-    pi.dispose();
-  }
 });
 
-test("both harness projections derive skill loads from their transcripts", () => {
+test("Claude derives skill loads from its transcript", () => {
   const plugin = skillRuntimePluginName(skillSetHash(["claude-skill"]));
   sessionStore.freezeSkills("claude-loaded", '["claude-skill"]');
   const claude = new ClaudeSdkSession("claude-loaded", {
@@ -146,67 +105,9 @@ test("both harness projections derive skill loads from their transcripts", () =>
       via: "skill_tool",
     },
   ]);
-
-  sessionStore.freezeSkills("pi-loaded", '["pi-skill"]');
-  const skillFile = join(
-    SKILLS_RUNTIME_DIR,
-    skillSetHash(["pi-skill"]),
-    "skills",
-    "pi-skill",
-    "SKILL.md",
-  );
-  const pi = piSession("pi-loaded", "developer", [
-    {
-      type: "message",
-      message: {
-        role: "assistant",
-        timestamp: 5_000,
-        content: [
-          {
-            type: "toolCall",
-            id: "r1",
-            name: "read",
-            arguments: { path: skillFile },
-          },
-          {
-            type: "toolCall",
-            id: "r2",
-            name: "read",
-            arguments: { path: join(tmp, "elsewhere", "SKILL.md") },
-          },
-          {
-            type: "toolCall",
-            id: "r3",
-            name: "read",
-            arguments: { path: skillFile },
-          },
-          {
-            type: "toolCall",
-            id: "r4",
-            name: "read",
-            arguments: { path: skillFile },
-          },
-        ],
-      },
-    },
-    { type: "message", message: { role: "toolResult", toolCallId: "r1" } },
-    { type: "message", message: { role: "toolResult", toolCallId: "r2" } },
-    // r3 failed; r4 is still running.
-    {
-      type: "message",
-      message: { role: "toolResult", toolCallId: "r3", isError: true },
-    },
-  ]);
-  try {
-    assert.deepEqual(pi.state().skillInvocations, [
-      { at: 5_000, name: "pi-skill", via: "read" },
-    ]);
-  } finally {
-    pi.dispose();
-  }
 });
 
-test("both harness SessionState projections omit skills for non-coding personas", () => {
+test("Claude omits skills for non-coding personas", () => {
   const claude = new ClaudeSdkSession("claude-assistant", {
     seam: async () => {
       throw new Error("unused");
@@ -215,14 +116,6 @@ test("both harness SessionState projections omit skills for non-coding personas"
   });
   assert.equal(Object.hasOwn(claude.state(), "activeSkills"), false);
   assert.equal(Object.hasOwn(claude.state(), "skillInvocations"), false);
-
-  const pi = piSession("pi-assistant", "assistant");
-  try {
-    assert.equal(Object.hasOwn(pi.state(), "activeSkills"), false);
-    assert.equal(Object.hasOwn(pi.state(), "skillInvocations"), false);
-  } finally {
-    pi.dispose();
-  }
 });
 
 afterAll(() => {

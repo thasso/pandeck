@@ -14,9 +14,8 @@ import {
 import { sessionStore } from "./db/sessionStore.ts";
 import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import { errorText } from "./errors.ts";
-import type { CompactionWindowHarnessStatus } from "./harness.ts";
+import type { CompactionWindowHarnessStatus, HarnessHost } from "./harness.ts";
 import { storedCompactionWindowState } from "./harnesses/compactionWindow.ts";
-import { harnessRegistry } from "./harnesses/registry.ts";
 import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import {
   getPendingPostReloadContinuation,
@@ -75,13 +74,14 @@ export interface SessionNativeFacts {
   model?: ModelOption | undefined;
   thinkingLevel: ThinkingLevel;
   mode?: SessionMode | undefined;
-  /** Captured identity restriction, as in the detached view's stored metadata. */
-  requiresEnterprise?: boolean | undefined;
   live?:
     | {
         canSteer: boolean;
         compactionWindow?: CompactionWindowHarnessStatus | undefined;
-        skillInvocationTranscript: SkillInvocationTranscript;
+        /** Lazy for engines that need frozen names to classify native commands. */
+        skillInvocationTranscript(
+          frozenNames: readonly string[],
+        ): SkillInvocationTranscript;
         /** Native loading/usage and wire sizes; the owner computes usability. */
         toolLoading?:
           | Omit<BuildToolExposureInput, "agentType" | "usableToolNames">
@@ -132,6 +132,7 @@ function toolExposureFor(sessionId: string, facts: SessionNativeFacts) {
 export function buildSessionState(
   sessionId: string,
   facts: SessionNativeFacts,
+  browserRuntimeOwner: HarnessHost["browserRuntimeOwner"] = () => undefined,
 ): SessionState {
   const idleReasonValue = hasPendingAgentQuestion(sessionId)
     ? "awaiting_question"
@@ -158,9 +159,8 @@ export function buildSessionState(
   const toolExposureValue = toolExposureFor(sessionId, facts);
   const coding = isCodingAgentType(facts.kind);
   // A view can outlive a stored-window change. Never use its captured setting.
-  const stored = facts.live
-    ? sessionStore.getIncludingDeleted(sessionId)
-    : sessionStore.get(sessionId);
+  const stored = sessionStore.getIncludingDeleted(sessionId);
+  const visibleStored = stored?.deletedAt === undefined ? stored : undefined;
   const window = facts.live?.compactionWindow;
   const compactionWindowValue = facts.live
     ? sessionCompactionWindowState(HARNESSES[facts.harness].compactionWindow, {
@@ -168,8 +168,8 @@ export function buildSessionState(
         note: stored?.compactionWindowNote,
         ...window,
       })
-    : stored
-      ? storedCompactionWindowState(stored)
+    : visibleStored
+      ? storedCompactionWindowState(visibleStored)
       : undefined;
   return {
     sessionId,
@@ -182,7 +182,7 @@ export function buildSessionState(
     ...(facts.model !== undefined ? { model: facts.model } : {}),
     thinkingLevel: facts.thinkingLevel,
     ...(facts.mode !== undefined ? { mode: facts.mode } : {}),
-    ...(facts.requiresEnterprise ? { requiresEnterprise: true } : {}),
+    ...(stored?.requiresEnterprise ? { requiresEnterprise: true } : {}),
     ...(compactionWindowValue !== undefined
       ? { compactionWindow: compactionWindowValue }
       : {}),
@@ -211,10 +211,13 @@ export function buildSessionState(
           activeSkills: activeSkillsValue,
           ...(facts.live
             ? {
-                skillInvocations: skillInvocationTrail(
-                  activeSkillsValue,
-                  facts.live.skillInvocationTranscript,
-                ),
+                skillInvocations:
+                  activeSkillsValue.length === 0
+                    ? []
+                    : skillInvocationTrail(
+                        activeSkillsValue,
+                        facts.live.skillInvocationTranscript(activeSkillsValue),
+                      ),
               }
             : {}),
         }
@@ -227,9 +230,7 @@ export function buildSessionState(
       : {}),
     ...(coding && facts.live
       ? {
-          browserRuntimes: listBrowserRuntimes(sessionId, (id) =>
-            harnessRegistry.browserRuntimeOwner(id),
-          ),
+          browserRuntimes: listBrowserRuntimes(sessionId, browserRuntimeOwner),
         }
       : {}),
     peerPrompts: peerPromptThreadsFor(sessionId),

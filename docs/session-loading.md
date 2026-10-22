@@ -76,8 +76,12 @@ harness.**
 `buildSessionState(sessionId, facts)` in `app/server/src/sessionState.ts` owns
 state assembly. It composes the existing per-domain projections, including
 Tasks, queues, peers, skills and worktree status. `ViewSession.state()` supplies
-only its stored identity and configuration, with no live facts. The live engines
-still assemble their own state until their migration to this owner.
+only its stored identity and configuration, with no live facts. Pi supplies
+native facts through `PiLiveSession.nativeFacts()`, and its temporary `state()`
+entry point delegates to the owner. Claude still assembles its own state until
+its migration. Enterprise restrictions are app-owned and read fresh from the
+stored row, including tombstones. A directly constructed view without a stored
+row cannot supply a restriction through captured metadata.
 
 A detached view is the case with no live part in the native facts. The owner
 OMITS what storage cannot answer rather than guessing: no `skillInvocations`, no
@@ -85,7 +89,11 @@ OMITS what storage cannot answer rather than guessing: no `skillInvocations`, no
 is not running. The upgrade fills them in. Optional fields are omitted when
 undefined. Safe Task and worktree reads log a failure once per failed read and
 fall back without losing the rest of the state. The detached JSON field order
-and values remain unchanged.
+and values for stored sessions remain unchanged. Pi now includes `sessionFile`
+when its native session knows the path. The owner receives the browser-owner
+lookup from the host, so it never imports the engine registry. The live
+transcript callback receives frozen skill names; the owner requests it only when
+rendering a nonempty skill list. Detached state never reads a native transcript.
 
 Two consequences worth knowing:
 

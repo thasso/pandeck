@@ -483,6 +483,7 @@ test("both stores reach the hub through one host", () => {
       calls.push(`browserRuntimesFor:${sessionId}`);
       return [];
     },
+    browserRuntimeOwner: () => undefined,
   };
   harnessRegistry.setHost(host);
 

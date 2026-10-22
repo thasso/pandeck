@@ -20,6 +20,7 @@ import type {
 } from "@assistant/shared";
 import type { SyntheticToolHost } from "./hostSlashCommands.ts";
 import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
+import type { listBrowserRuntimes } from "./mcp/toolGroups/registry.ts";
 
 /**
  * How long a resident harness that nobody views and nothing drives stays in
@@ -43,6 +44,8 @@ export interface HarnessHost {
   isReloadQueued(): boolean;
   /** Browser runtimes visible to `sessionId`, for coding session state. */
   browserRuntimesFor(sessionId: string): BrowserRuntimeInfo[];
+  /** Resident owner metadata, injected into the app's state projection. */
+  browserRuntimeOwner: Parameters<typeof listBrowserRuntimes>[1];
 }
 
 /**

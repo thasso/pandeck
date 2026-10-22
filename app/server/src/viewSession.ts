@@ -127,7 +127,6 @@ export class ViewSession implements HarnessDriver {
       ),
       thinkingLevel: (this.meta.thinkingLevel ?? "off") as ThinkingLevel,
       mode: this.meta.mode,
-      requiresEnterprise: this.meta.requiresEnterprise,
     });
   }
 

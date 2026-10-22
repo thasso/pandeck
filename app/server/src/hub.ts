@@ -167,6 +167,8 @@ class SessionHub {
       checkPendingReload: () => this.checkPendingReload(),
       isReloadQueued: () => this.isReloadQueued(),
       browserRuntimesFor: (sessionId) => this.browserRuntimesFor(sessionId),
+      browserRuntimeOwner: (sessionId) =>
+        harnessRegistry.browserRuntimeOwner(sessionId),
     });
     subscribeBrowserRuntimeChanges(() => {
       for (const session of harnessRegistry.resident())
