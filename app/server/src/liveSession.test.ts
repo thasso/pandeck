@@ -14,7 +14,7 @@ const tmp = mkdtempSync(join(tmpdir(), "live-session-test-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
 const { isLiveSession } = await import("./harness.ts");
 

@@ -96,7 +96,7 @@ const { setRunFailureHook, setSessionIdleHook, subscribeSessionRunCompleted } =
 const { createPiAdapter } = await import("./session/adapters/pi.ts");
 const { NativeAdapterEventSource } =
   await import("./session/adapters/nativeEvents.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { holdAutomaticTurns } = await import("./automaticTurnHold.ts");
 const {
   HELD_START_REASONS,
@@ -397,7 +397,7 @@ function realPiChild(parentId: string): {
     noteRunStarted() {},
     checkPendingReload() {},
     isReloadQueued: () => false,
-    browserRuntimesFor: () => [],
+    buildSessionState: () => ({}) as never,
   };
   const live = new PiLiveSession(
     "assistant",
@@ -1698,7 +1698,7 @@ if (mode === "crash") {
     const { PiLiveSession } = await import(src + "piSdk/PiLiveSession.ts");
     let listener;
     const session = { sessionId: "Child", sessionName: "Already named", isStreaming: false, sessionManager: { getBranch: () => [], getEntries: () => [] }, subscribe: (l) => { listener = l; return () => {}; }, getSessionStats: () => ({ totalMessages: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), settingsManager: { getRetrySettings: () => ({ enabled: true, maxRetries: 3 }), applyOverrides() {} }, abortRetry() {}, dispose() {} };
-    const host = { broadcastSessions: async () => {}, noteRunStarted() {}, checkPendingReload() {}, isReloadQueued: () => false, browserRuntimesFor: () => [] };
+    const host = { broadcastSessions: async () => {}, noteRunStarted() {}, checkPendingReload() {}, isReloadQueued: () => false, buildSessionState: () => ({}) };
     const live = new PiLiveSession("assistant", session, host, () => {});
     sessionRuntime.createSession("Child", live.createRuntimeAdapter());
     live.addViewer({ send: (e) => { if (e.type === "assistantEnd" && e.error) process.exit(73); } });
@@ -1706,7 +1706,7 @@ if (mode === "crash") {
     listener({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "401 Unauthorized" } });
     listener({ type: "agent_settled" });
   } else if (scenario === "claude-fanout") {
-    const { ClaudeSdkSession } = await import(src + "claudeSdk/ClaudeSdkSession.ts");
+    const { ClaudeSdkSession } = await import(src + "test/claudeSdkSession.ts");
     const seam = { query() { return { async *[Symbol.asyncIterator]() {
       yield { type: "assistant", uuid: "s1", session_id: "p", error: "rate_limit", message: { id: "m1", role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "You've hit your org's monthly spend limit" }], usage: { input_tokens: 0, output_tokens: 0 } } };
       yield { type: "result", subtype: "success", session_id: "p", is_error: true, api_error_status: 429, result: "API Error: 429", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} };

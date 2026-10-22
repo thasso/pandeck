@@ -31,7 +31,7 @@ const { buildClaudeSdkQueryOptions, claudeSdkSystemPrompt } =
   await import("../claudeSdk/options.ts");
 const { buildAgentOptions } = await import("../piSdk/options.ts");
 const { CLAUDE_SDK_MODELS } = await import("../claudeSdk/modelSettings.ts");
-const { ClaudeSdkSession } = await import("../claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { createClaudeSessionToolServer } =
   await import("../claudeSdk/toolServer.ts");
 

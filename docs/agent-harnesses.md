@@ -17,9 +17,9 @@ describes the architecture they produced, and "Status" records the steps.
   Independent of the harness: every persona runs on either engine.
 - **Backend**: one engine's implementation of the harness seam. It owns the
   engine's session store, model catalog, one-shot runner and usage query.
-- **Native facts** (`SessionNativeFacts` in `sessionState.ts`): identity and
-  engine configuration, plus an optional live part for steering, compaction
-  status, tool-loading state and skill-invocation transcript. The app-owned
+- **Native facts** (`SessionNativeFacts` in `harness.ts`): identity and engine
+  configuration, plus an optional live part for steering, compaction status,
+  tool-loading state and skill-invocation transcript. The app-owned
   `buildSessionState` projects domain state from these facts. No live part means
   a detached view. Enterprise restriction comes from the stored row, not facts.
 - **Account provider** (`claude`, `openai-codex`): which kind of credential
@@ -137,8 +137,11 @@ Four layers, each depending only on the ones below it:
      model it carries into a new session). `isLiveSession` tells it from a
      storage-backed view by its `live` marker; an engine-only feature is an
      optional method (`acceptCommitDryRun`, pi only), not an `instanceof` check.
-     Compact and clear join it as later steps route them through the registry; a
-     rename goes through the registry's engine entry instead.
+     Drivers supply `nativeFacts()`, never a `SessionState`. The app calls
+     `buildSessionState` with the current view's facts for every snapshot and
+     direct state send. Compact and clear join it as later steps route them
+     through the registry; a rename goes through the registry's engine entry
+     instead.
    - `runOneShot()` (`harnesses/oneShot.ts`) runs a single prompt on whichever
      engine a model slot names and returns one result shape: text and
      `AgentUsage`. A run that failed without writing anything throws
@@ -200,10 +203,14 @@ Four layers, each depending only on the ones below it:
    turn's ids, running state and teardown. A host command ends its turn with one
    `finishSyntheticCard`, whichever card it renders. The live display-block
    helpers live in `session/runtime/liveBlocks.ts`. Both engines supply native
-   facts to the app's state owner; `HarnessDriver.state()` remains during the
-   staged migration. `HarnessHost.browserRuntimeOwner` injects resident
-   browser-owner metadata into the owner, avoiding an
-   owner-to-registry-to-engine cycle.
+   facts to the app's state owner. Their state broadcasts use the injected
+   `HarnessHost.buildSessionState` callback, so neither engine imports the
+   owner. Claude requires the builder at construction, and pi requires its host.
+   The Claude store refuses acquisition before wiring and updates
+   already-resident sessions when its builder changes. The hub wires the
+   browser-owner lookup into that callback. Connections project the current view
+   directly, including after a detached view upgrades. The owner never imports
+   the engine registry.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
    `session/planHint.ts` keeps each engine's Plan reminder in a table keyed by
@@ -245,6 +252,15 @@ the table when a later step needs them.
   comparison deletes its entry in the same change, and a measurement module that
   needs neither any more leaves `MEASUREMENT_MODULES`; the test fails on a stale
   entry so the lists cannot drift above reality.
+- Engines import no state-only projection modules. `harnessBoundary.test.ts`
+  enforces a zero allowance for `sessionState.ts`, `promptQueue.ts`,
+  `backgroundUpdateQueue.ts`, `tasks.ts`, `db/worktreeStore.ts` and
+  `harnesses/compactionWindow.ts`. In mixed modules it forbids the named
+  projection exports, including queue/peer fields, skill trails, artifacts,
+  browser runtime lists and worktree status, while retaining native lifecycle
+  imports. Namespace loads of mixed modules are refused; computed imports are
+  pinned to the existing installed-SDK prompt-builder load in
+  `piSdk/piPromptMeasure.ts`, with no projection exception.
 - pi sessions load none of pi's built-in extensions (`mcp`, `codemode`,
   `tool-search`, `llama.cpp`). Only pi's CLI adds them; the SDK loader knows the
   built-ins it is handed, and `piSdk/options.ts` hands it only app extensions,

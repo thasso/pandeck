@@ -75,14 +75,16 @@ harness.**
 
 `buildSessionState(sessionId, facts)` in `app/server/src/sessionState.ts` owns
 state assembly. It composes the existing per-domain projections, including
-Tasks, queues, peers, skills and worktree status. `ViewSession.state()` supplies
-only its stored identity and configuration, with no live facts. Both
-`PiLiveSession.nativeFacts()` and `ClaudeSdkSession.nativeFacts()` supply native
-model, mode, steering, compaction and tool-loading facts. Their temporary
-`state()` entry points delegate to the owner. Enterprise restrictions are
-app-owned and read fresh from the stored row, including tombstones. A directly
-constructed view without a stored row cannot supply a restriction through
-captured metadata.
+Tasks, queues, peers, skills and worktree status. `HarnessDriver.nativeFacts()`
+is the read contract for all views. `ViewSession` supplies only its stored
+identity and configuration, with no live facts. Both `PiLiveSession` and
+`ClaudeSdkSession` supply native model, mode, steering, compaction and
+tool-loading facts. Connections project the current view for snapshots, attach,
+subscribe and direct sends. Engine broadcasts use the app-owned builder injected
+through `HarnessHost`, including the hub's task-linked refreshes. Enterprise
+restrictions are app-owned and read fresh from the stored row, including
+tombstones. A directly constructed view without a stored row cannot supply a
+restriction through captured metadata.
 
 The owner computes catalog definition sizes and integration/mode usability.
 Claude supplies its native MCP name prefix, loaded/used names, token sizes and
@@ -102,8 +104,11 @@ when its native session knows the path. Claude uses the same omission and
 safe-read rules, including logging failed worktree reads. Its live compaction
 note comes from `getIncludingDeleted`, so a deleted session still resident in
 memory keeps the note with its stored window. The owner receives the
-browser-owner lookup from the host, so it never imports the engine registry.
-Detached state never reads a native transcript.
+browser-owner lookup from the caller, so it never imports the engine registry.
+Without a lookup, live coding state lists no browser runtimes. An explicitly
+wired lookup keeps listing actual runtimes even when their owner is no longer
+resident, using the existing `not-live` metadata fallback. Detached state never
+reads a native transcript.
 
 Two consequences worth knowing:
 

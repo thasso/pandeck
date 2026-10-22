@@ -10,6 +10,7 @@ process.env.DATA_DIR = join(tmp, "data");
 
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { viewSessionById } = await import("./viewSession.ts");
+const { buildSessionState } = await import("./sessionState.ts");
 const { DetachedSessionError } = await import("./session/adapters/detached.ts");
 const { closeDb } = await import("./db/index.ts");
 
@@ -30,7 +31,7 @@ test("a detached driver broadcasts only to its attached viewers", () => {
   view.broadcastState();
   expect(viewer.send).toHaveBeenCalledExactlyOnceWith({
     type: "state",
-    state: view.state(),
+    state: buildSessionState(view.id, view.nativeFacts()),
   });
   view.removeViewer(viewer);
   view.broadcastState();

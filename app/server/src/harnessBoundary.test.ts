@@ -9,9 +9,10 @@
  * a new exception fails, and so does an entry the code no longer needs, so the
  * lists can only shrink.
  *
- * Scope: every non-test `.ts` module under `app/server/src` outside the exempt
- * folders, parsed into a syntax tree (oxc) so comments and unrelated strings
- * never count. A comparison is `==`, `===`, `!=` or `!==` with a
+ * App scope: every non-test `.ts` module under `app/server/src` outside the
+ * exempt folders. Engine scope: both engine folders must import none of the
+ * owner-composed projections below. Both scans parse a syntax tree (oxc), so
+ * comments and unrelated strings never count. A comparison is `==`, `===`, `!=` or `!==` with a
  * harness-id literal on either side, a `case` with one, or `.includes()` on an
  * array literal holding one.
  */
@@ -38,6 +39,39 @@ const EXEMPT_FOLDER = /^(?:piSdk|claudeSdk|harnesses|test)\//;
 const ENGINE_FOLDER = /^(?:piSdk|claudeSdk)(?:\/|$)/;
 
 const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
+
+/** State-only modules: engines may not import any export, including types. */
+const STATE_PROJECTION_MODULES = new Set([
+  "sessionState.ts",
+  "promptQueue.ts",
+  "backgroundUpdateQueue.ts",
+  "tasks.ts",
+  "db/worktreeStore.ts",
+  "harnesses/compactionWindow.ts",
+]);
+
+/** Mixed modules still have native lifecycle callers. Only these exports project state. */
+const STATE_PROJECTION_EXPORTS: Record<string, readonly string[]> = {
+  "peerPrompt.ts": [
+    "directSpawnField",
+    "peerPromptPeersFor",
+    "peerPromptQueueField",
+    "peerPromptThreadsFor",
+  ],
+  "skills/skillInvocations.ts": ["skillInvocationTrail"],
+  "agents/sessionAgent.ts": ["sessionAgentSummary"],
+  "mcp/toolGroups/packRuntime.ts": ["listSessionArtifacts"],
+  "mcp/toolGroups/registry.ts": [
+    "getPendingPostReloadContinuation",
+    "listBrowserRuntimes",
+  ],
+  "tools/sessionToolExposure.ts": ["sessionToolExposure"],
+  "tools/core/questionTool.ts": [
+    "getPendingAgentQuestions",
+    "getAnsweredAgentQuestions",
+  ],
+  "worktrees/sessionCwd.ts": ["sessionWorktreeMissing"],
+};
 
 /**
  * The measurement modules: prompt budgets and inventory, task overhead and the
@@ -85,6 +119,11 @@ const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
  */
 const COMPUTED_IMPORT_EXCEPTIONS: Record<string, number> = {
   "parcelWatcher.ts": 3,
+};
+
+/** The inventory loads pi's installed internal prompt builder, never app code. */
+const ENGINE_COMPUTED_IMPORT_EXCEPTIONS: Record<string, number> = {
+  "piSdk/piPromptMeasure.ts": 1,
 };
 
 const EQUALITY_OPERATORS = new Set(["==", "===", "!=", "!=="]);
@@ -150,6 +189,7 @@ function scanModule(
   source: string,
 ): {
   engineImports: string[];
+  stateProjectionImports: string[];
   harnessComparisons: number;
   computedImports: number;
 } {
@@ -160,11 +200,12 @@ function scanModule(
     `${relative(SRC_ROOT, file)} must parse for the boundary scan`,
   );
   const imports = new Set<string>();
+  const stateProjectionImports = new Set<string>();
   let harnessComparisons = 0;
   // A path the scan cannot read could name an engine module unseen.
   let computedImports = 0;
 
-  const addSpecifier = (value: unknown) => {
+  const addSpecifier = (value: unknown, declaration?: AstNode) => {
     const specifier = constantString(value);
     if (specifier === undefined) {
       if (value != null) computedImports++;
@@ -180,6 +221,36 @@ function scanModule(
     else return;
     const target = relative(SRC_ROOT, path);
     if (ENGINE_FOLDER.test(target)) imports.add(target);
+    // tsx also resolves extensionless and .js specifiers to our .ts sources.
+    const projectionTarget = extname(target)
+      ? target.replace(/\.js$/, ".ts")
+      : `${target}.ts`;
+    if (STATE_PROJECTION_MODULES.has(projectionTarget))
+      stateProjectionImports.add(projectionTarget);
+    const projected = STATE_PROJECTION_EXPORTS[projectionTarget];
+    if (!projected) return;
+    // Named imports/re-exports can reach lifecycle exports. Namespace, default,
+    // dynamic and require loads can reach every export, so they are refused.
+    if (
+      declaration &&
+      (declaration.type === "ImportDeclaration" ||
+        declaration.type === "ExportNamedDeclaration") &&
+      Array.isArray(declaration.specifiers)
+    ) {
+      for (const specifier of declaration.specifiers as AstNode[]) {
+        const binding = specifier.imported ?? specifier.local;
+        const name = isNode(binding)
+          ? (binding.name ?? binding.value)
+          : undefined;
+        if (
+          specifier.type === "ImportSpecifier" ||
+          specifier.type === "ExportSpecifier"
+        ) {
+          if (typeof name === "string" && projected.includes(name))
+            stateProjectionImports.add(`${projectionTarget}:${name}`);
+        } else stateProjectionImports.add(`${projectionTarget}:*`);
+      }
+    } else stateProjectionImports.add(`${projectionTarget}:*`);
   };
 
   // What loads a module when called: every name bound to `createRequire(...)`,
@@ -255,7 +326,7 @@ function scanModule(
       case "ExportAllDeclaration":
       case "ImportExpression":
       case "TSImportType":
-        addSpecifier(node.source);
+        addSpecifier(node.source, node);
         break;
       case "TSExternalModuleReference":
         addSpecifier(node.expression);
@@ -297,6 +368,7 @@ function scanModule(
 
   return {
     engineImports: [...imports].sort(),
+    stateProjectionImports: [...stateProjectionImports].sort(),
     harnessComparisons,
     computedImports,
   };
@@ -309,6 +381,62 @@ function appModules(): { rel: string; file: string; source: string }[] {
     .map((entry) => ({ ...entry, source: readFileSync(entry.file, "utf8") }))
     .sort((a, b) => a.rel.localeCompare(b.rel));
 }
+
+test("engines import no owner-composed state projections and pin computed module paths", () => {
+  const computed: Record<string, number> = {};
+  for (const folder of ["piSdk", "claudeSdk"]) {
+    for (const file of sourceFiles(join(SRC_ROOT, folder))) {
+      const rel = relative(SRC_ROOT, file);
+      const scanned = scanModule(file, readFileSync(file, "utf8"));
+      assert.deepEqual(
+        scanned.stateProjectionImports,
+        [],
+        `${rel} must supply native facts, not import app state projections`,
+      );
+      if (scanned.computedImports) computed[rel] = scanned.computedImports;
+    }
+  }
+  assert.deepEqual(
+    computed,
+    ENGINE_COMPUTED_IMPORT_EXCEPTIONS,
+    "Engines use literal module paths so the state projection guard can inspect them; delete stale computed-import exceptions",
+  );
+});
+
+test("the state projection scan sees aliases, types, re-exports and every loader", () => {
+  const file = join(SRC_ROOT, "piSdk", "probe.ts");
+  const source = [
+    'import type { State as Alias } from "../sessionState.ts";',
+    'export * from "../promptQueue.ts";',
+    "const a = await import(`../backgroundUpdateQueue.ts`);",
+    'type B = typeof import("../tasks.ts");',
+    'const c = require("../db/worktreeStore.ts");',
+    'export { storedCompactionWindowState as d } from "../harnesses/compactionWindow.ts";',
+    'import { peerPromptThreadsFor as threads, drainRecipient } from "../peerPrompt.ts";',
+    'import type { SkillInvocationTranscript } from "../skills/skillInvocations.ts";',
+    'import { skillInvocationTrail as trail } from "../skills/skillInvocations.ts";',
+    'const all = await import("../mcp/toolGroups/registry.ts");',
+    'import { createRequire } from "node:module";',
+    "const load = createRequire(import.meta.url);",
+    `const abs = load("${join(SRC_ROOT, "sessionState.ts")}");`,
+    `const url = module.require("file://${join(SRC_ROOT, "tasks.ts")}");`,
+    '// import { listBrowserRuntimes } from "../mcp/toolGroups/registry.ts";',
+    'const label = "sessionState.ts";',
+    'const noExtension = require("../sessionState");',
+    'const jsExtension = import("../tasks.js");',
+  ].join("\n");
+  assert.deepEqual(scanModule(file, source).stateProjectionImports, [
+    "backgroundUpdateQueue.ts",
+    "db/worktreeStore.ts",
+    "harnesses/compactionWindow.ts",
+    "mcp/toolGroups/registry.ts:*",
+    "peerPrompt.ts:peerPromptThreadsFor",
+    "promptQueue.ts",
+    "sessionState.ts",
+    "skills/skillInvocations.ts:skillInvocationTrail",
+    "tasks.ts",
+  ]);
+});
 
 test("app code reaches engine folders only through the pinned exceptions", () => {
   const actual: Record<string, string[]> = {};

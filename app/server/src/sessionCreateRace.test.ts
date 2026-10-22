@@ -58,7 +58,7 @@ const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 

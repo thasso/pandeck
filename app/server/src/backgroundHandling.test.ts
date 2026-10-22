@@ -1203,7 +1203,7 @@ test("an ordinary Pi steer the real producer refuses after its run closed cleanl
     noteRunStarted: () => {},
     checkPendingReload: () => {},
     isReloadQueued: () => false,
-    browserRuntimesFor: () => [],
+    buildSessionState: () => ({}) as never,
   };
   const live = new PiLiveSession(
     "assistant",

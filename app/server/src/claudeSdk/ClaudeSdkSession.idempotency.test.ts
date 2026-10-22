@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
-import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
+import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import type { ClaudeSdkSeam } from "./sdkSeam.ts";
 
 // An empty stream: the turn opens and immediately finishes.

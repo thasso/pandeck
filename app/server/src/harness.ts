@@ -7,12 +7,13 @@
 import type {
   AgentType,
   BroadcastTopic,
-  BrowserRuntimeInfo,
   CompactionWindowLiveStatus,
   CompactionWindowPendingReason,
   ContextInfo,
   DisplayMessage,
   Harness,
+  ModelOption,
+  SessionForkOrigin,
   ServerMessage,
   SessionMode,
   SessionState,
@@ -20,7 +21,8 @@ import type {
 } from "@assistant/shared";
 import type { SyntheticToolHost } from "./hostSlashCommands.ts";
 import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
-import type { listBrowserRuntimes } from "./mcp/toolGroups/registry.ts";
+import type { BuildToolExposureInput } from "./tools/toolExposure.ts";
+import type { SkillInvocationTranscript } from "./skills/skillInvocations.ts";
 
 /**
  * How long a resident harness that nobody views and nothing drives stays in
@@ -42,10 +44,8 @@ export interface HarnessHost {
   checkPendingReload(): void;
   /** True while a requested dev reload is pending or already exiting. */
   isReloadQueued(): boolean;
-  /** Browser runtimes visible to `sessionId`, for coding session state. */
-  browserRuntimesFor(sessionId: string): BrowserRuntimeInfo[];
-  /** Resident owner metadata, injected into the app's state projection. */
-  browserRuntimeOwner: Parameters<typeof listBrowserRuntimes>[1];
+  /** App-owned projection, injected so engines never assemble domain state. */
+  buildSessionState(sessionId: string, facts: SessionNativeFacts): SessionState;
 }
 
 /**
@@ -141,7 +141,7 @@ export interface HarnessDriver extends SyntheticToolHost {
   addViewer(v: Viewer): void;
   removeViewer(v: Viewer): void;
   broadcastState(): void;
-  state(): SessionState;
+  nativeFacts(): SessionNativeFacts;
   snapshot(): DisplayMessage[];
   contextInfo(): ContextInfo;
 }
@@ -205,6 +205,36 @@ export interface LiveSession extends HarnessDriver, RuntimePromptDriver {
     tokens: number,
     persist: (tokens: number) => void,
   ): Promise<CompactionWindowLowerResult>;
+}
+
+/** Native identity/configuration, with no live part for a storage-only view. */
+export interface SessionNativeFacts {
+  harness: Harness;
+  agentType: AgentType;
+  /** Projection persona, including ViewSession's fallback for old stored rows. */
+  kind: AgentType;
+  sessionFile?: string | undefined;
+  forkOrigin?: SessionForkOrigin | undefined;
+  model?: ModelOption | undefined;
+  thinkingLevel: ThinkingLevel;
+  mode?: SessionMode | undefined;
+  live?:
+    | {
+        canSteer: boolean;
+        compactionWindow?: CompactionWindowHarnessStatus | undefined;
+        /** Read native history only when the frozen skill set is nonempty. */
+        skillInvocationTranscript(
+          frozenNames: readonly string[],
+        ): SkillInvocationTranscript;
+        /** Native loading/usage; catalog sizes and usability belong to the owner. */
+        toolLoading?:
+          | (Omit<BuildToolExposureInput, "agentType" | "usableToolNames"> & {
+              /** Native wire namespace, empty for unqualified tool names. */
+              definitionNamePrefix?: string;
+            })
+          | undefined;
+      }
+    | undefined;
 }
 
 /** A live harness's window state plus the inputs its range is computed from. */

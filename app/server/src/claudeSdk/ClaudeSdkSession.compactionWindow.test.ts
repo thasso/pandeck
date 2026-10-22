@@ -23,7 +23,7 @@ const dataDir = mkdtempSync(join(tmpdir(), "claude-compaction-window-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 
-const { ClaudeSdkSession } = await import("./ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { CLAUDE_AUTO_COMPACT_WINDOW_ENV } = await import("./options.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings } = await import("../settings.ts");
@@ -263,8 +263,10 @@ const startWindow = (query: FakeQuery) =>
   (query.params.options?.settings as { autoCompactWindow?: number } | undefined)
     ?.autoCompactWindow;
 
+const { buildSessionState } = await import("../sessionState.ts");
+
 const window = (session: InstanceType<typeof ClaudeSdkSession>) =>
-  session.state().compactionWindow;
+  buildSessionState(session.id, session.nativeFacts()).compactionWindow;
 
 test("a query starts with the stored window and confirms it", async () => {
   const { session, queries } = makeHarness(200_000);

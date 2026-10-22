@@ -216,8 +216,8 @@ export const harnessRegistry = {
       void host.broadcastSessions();
       host.checkPendingReload();
     });
-    claudeSdkStore.setBrowserRuntimeOwner((sessionId) =>
-      host.browserRuntimeOwner(sessionId),
+    claudeSdkStore.setStateBuilder((sessionId, facts) =>
+      host.buildSessionState(sessionId, facts),
     );
   },
 

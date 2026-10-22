@@ -45,6 +45,7 @@ import {
   type ServerMessage,
   type SelectorBundle,
   type SessionMode,
+  type SessionState,
   type ThinkingLevel,
   type TimelineCacheDescriptor,
   type TaskListRequest,
@@ -108,6 +109,7 @@ import { prepareFork } from "./harnesses/fork.ts";
 import { setSessionCompactionWindow } from "./sessionCompactionWindow.ts";
 import { handoffEngine } from "./harnesses/handoffSession.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
+import { buildSessionState } from "./sessionState.ts";
 import { sessionRefFile } from "./harnesses/storage.ts";
 import {
   pickerModels,
@@ -650,7 +652,7 @@ export class Connection implements Viewer {
     this.send({
       type: "ready",
       ...(this.webBuildId ? { webBuildId: this.webBuildId } : {}),
-      state: viewing?.state() ?? null,
+      state: viewing ? this.stateFor(viewing) : null,
       models: pickerModels(),
       agents: availableAgents(),
       sessions: initial.sessions,
@@ -4608,7 +4610,7 @@ export class Connection implements Viewer {
     this.armReadDwell(view);
     this.send({
       type: "permanentAssistantOpened",
-      state: view.state(),
+      state: this.stateFor(view),
       sessions,
       contextInfo: view.contextInfo(),
     });
@@ -4686,7 +4688,7 @@ export class Connection implements Viewer {
       if (!this.viewIfCurrent(ticket, live)) return;
       this.send({
         type: "draftSession",
-        state: live.state(),
+        state: this.stateFor(live),
         sessions,
         contextInfo: live.contextInfo(),
         draftText: text,
@@ -5063,7 +5065,7 @@ export class Connection implements Viewer {
       // the fork unviewed: it exists, and the client is where it went.
       const sessions = await hub.listSessions();
       if (!this.viewIfCurrent(ticket, live)) return;
-      const state = live.state();
+      const state = this.stateFor(live);
       this.send({
         type: "forkedSession",
         state,
@@ -5436,7 +5438,7 @@ export class Connection implements Viewer {
     const viewing = this.viewing;
     if (!viewing || viewing.live || viewing.sessionId !== sessionId) return;
     if (this.disposed) return;
-    this.send({ type: "state", state: viewing.state() });
+    this.send({ type: "state", state: this.stateFor(viewing) });
   }
 
   /**
@@ -5460,7 +5462,7 @@ export class Connection implements Viewer {
     this.engineStateViewer = undefined;
     this.viewing = driver;
     this.attachEngineStateViewer(driver);
-    this.send({ type: "state", state: driver.state() });
+    this.send({ type: "state", state: this.stateFor(driver) });
     this.send({
       type: "contextInfo",
       sessionId: driver.sessionId,
@@ -5573,10 +5575,17 @@ export class Connection implements Viewer {
         // Resolved per call, not captured: a storage-backed view is upgraded to
         // its real driver in place (`upgradeViewingDriver`), and the transport
         // must then report what THAT driver says.
-        buildState: () => this.viewSource(live).state(),
+        buildState: () => this.stateFor(this.viewSource(live)),
         buildContextInfo: () => this.viewSource(live).contextInfo(),
         ...(timelineCache !== undefined ? { timelineCache } : {}),
       },
+    );
+  }
+
+  /** Always project the supplied current view, never a captured engine state. */
+  private stateFor(driver: HarnessDriver): SessionState {
+    return buildSessionState(driver.sessionId, driver.nativeFacts(), (id) =>
+      harnessRegistry.browserRuntimeOwner(id),
     );
   }
 

@@ -46,7 +46,12 @@ test("message-level draft sessions inherit and persist the source pi profile", a
   const fakeLive = {
     key: childId,
     sessionId: childId,
-    state: () => ({ sessionId: childId }),
+    nativeFacts: () => ({
+      kind: "developer",
+      agentType: "developer",
+      harness: "pi",
+      thinkingLevel: "off",
+    }),
     contextInfo: () => ({ sessionId: childId }),
   };
   (
@@ -214,7 +219,12 @@ for (const path of ["draft", "newSession"] as const) {
       const fakeLive = {
         key: childId,
         sessionId: childId,
-        state: () => ({ sessionId: childId }),
+        nativeFacts: () => ({
+          kind: "developer",
+          agentType: "developer",
+          harness: "pi",
+          thinkingLevel: "off",
+        }),
         contextInfo: () => ({}),
       };
       const acquire = vi

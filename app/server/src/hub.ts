@@ -9,10 +9,10 @@ import type { HarnessDriver, Viewer } from "./harness.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { subscribeHarnessOpened } from "./session/runtimePrompt.ts";
 import { viewSessionById } from "./viewSession.ts";
+import { buildSessionState } from "./sessionState.ts";
 import { taskLinkedSessionIds } from "./tasks.ts";
 import {
   consumePostReloadContinuation,
-  listBrowserRuntimes,
   subscribeBrowserRuntimeChanges,
   type PostReloadContinuation,
 } from "./mcp/toolGroups/registry.ts";
@@ -166,9 +166,10 @@ class SessionHub {
       noteRunStarted: () => this.noteRunStarted(),
       checkPendingReload: () => this.checkPendingReload(),
       isReloadQueued: () => this.isReloadQueued(),
-      browserRuntimesFor: (sessionId) => this.browserRuntimesFor(sessionId),
-      browserRuntimeOwner: (sessionId) =>
-        harnessRegistry.browserRuntimeOwner(sessionId),
+      buildSessionState: (sessionId, facts) =>
+        buildSessionState(sessionId, facts, (id) =>
+          harnessRegistry.browserRuntimeOwner(id),
+        ),
     });
     subscribeBrowserRuntimeChanges(() => {
       for (const session of harnessRegistry.resident())
@@ -292,12 +293,6 @@ class SessionHub {
       if (id) ids.add(id);
     }
     return ids;
-  }
-
-  browserRuntimesFor(currentSessionId: string) {
-    return listBrowserRuntimes(currentSessionId, (sessionId) =>
-      harnessRegistry.browserRuntimeOwner(sessionId),
-    );
   }
 
   consumePostReloadContinuation(): PostReloadContinuation | undefined {

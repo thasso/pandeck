@@ -22,6 +22,8 @@ import { claudeTurnSeam } from "../test/claudeTurnSeam.ts";
 import type { ClaudeSdkSeam } from "./sdkSeam.ts";
 import type { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
 import { claudeSdkStore } from "./claudeSdkStore.ts";
+import { installClaudeStateBuilder } from "../test/claudeSdkSession.ts";
+installClaudeStateBuilder(claudeSdkStore);
 import {
   readClaudeSdkRecord,
   removeClaudeSdkRecord,

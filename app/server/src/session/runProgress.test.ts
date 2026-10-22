@@ -36,7 +36,7 @@ const { RuntimeTransport } = await import("./transport/gateway.ts");
 const { SessionRuntime } = await import("./runtime/runtime.ts");
 const { SessionLogStore } = await import("./log/store.ts");
 const { setSessionIdleHook } = await import("./runtime/liveSession.ts");
-const { ClaudeSdkSession } = await import("../claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { PiLiveSession } = await import("../piSdk/PiLiveSession.ts");
 const { closeDb } = await import("../db/index.ts");
 type AdapterEvent = import("./adapters/contract.ts").AdapterEvent;
@@ -1085,7 +1085,7 @@ function piHarness(sessionId: string) {
     noteRunStarted: () => {},
     checkPendingReload: () => {},
     isReloadQueued: () => false,
-    browserRuntimesFor: () => [],
+    buildSessionState: () => ({}) as never,
   };
   const live = new PiLiveSession(
     "coding" as never,

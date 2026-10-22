@@ -22,8 +22,7 @@ process.env.ASSISTANT_CWD = tmp;
 
 const { SessionRuntime } = await import("../runtime/runtime.ts");
 const { SessionLogStore } = await import("../log/store.ts");
-const { ClaudeSdkSession } =
-  await import("../../claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../../test/claudeSdkSession.ts");
 
 const TOOL_ID = "toolu_abc";
 const MSG_ID = "msg_123";

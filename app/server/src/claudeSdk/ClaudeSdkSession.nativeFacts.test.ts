@@ -10,8 +10,7 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 mkdirSync(process.env.DATA_DIR, { recursive: true });
 
-const { ClaudeSdkSession } = await import("./ClaudeSdkSession.ts");
-const owner = await import("../sessionState.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { closeDb } = await import("../db/index.ts");
 const { eagerToolNamesFor } = await import("../tools/catalog.ts");
@@ -31,7 +30,9 @@ test("Claude hands native facts to the owner without projecting app state or ope
   const at = "2026-01-01T00:00:00.000Z";
   sessionStore.upsert({ id, harness: "claude-sdk", agentType: "developer" });
   sessionStore.setCompactionWindow(id, 100_000);
+  const projection = vi.fn(() => ({ sessionId: id }) as SessionState);
   const session = new ClaudeSdkSession(id, {
+    buildSessionState: projection,
     agentType: "developer",
     seam,
     modelId: "opus",
@@ -104,9 +105,6 @@ test("Claude hands native facts to the owner without projecting app state or ope
     committedToolCalls(): SkillInvocationTranscript;
   };
   const transcript = vi.spyOn(native, "committedToolCalls");
-  const projection = vi
-    .spyOn(owner, "buildSessionState")
-    .mockReturnValue({ sessionId: id } as SessionState);
   try {
     const initial = session.nativeFacts();
     expect(initial.live!.toolLoading!.loadedToolNames).toEqual(
@@ -190,18 +188,20 @@ test("Claude hands native facts to the owner without projecting app state or ope
       succeeded: new Set(["skill"]),
       commands: [{ name: "review", at: Date.parse(at), turn: "1" }],
     });
-    const browserRuntimeOwner = vi.fn(() => undefined);
-    session.browserRuntimeOwner = browserRuntimeOwner;
-    expect(session.state()).toEqual({ sessionId: id });
-    expect(projection).toHaveBeenCalledWith(
+    session.broadcastState();
+    expect(projection).not.toHaveBeenCalled();
+    const viewer = { send: vi.fn() };
+    session.addViewer(viewer);
+    session.broadcastState();
+    expect(projection).toHaveBeenCalledExactlyOnceWith(
       id,
       expect.objectContaining({ model: facts.model, live: expect.any(Object) }),
-      expect.any(Function),
     );
-    projection.mock.calls[0]![2]!("browser-owner");
-    expect(browserRuntimeOwner).toHaveBeenCalledExactlyOnceWith(
-      "browser-owner",
-    );
+    expect(viewer.send).toHaveBeenCalledExactlyOnceWith({
+      type: "state",
+      state: { sessionId: id },
+    });
+    session.removeViewer(viewer);
     expect(transcript).toHaveBeenCalledTimes(1);
     expect(seam).not.toHaveBeenCalled();
   } finally {

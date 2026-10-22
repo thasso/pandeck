@@ -5,14 +5,11 @@ import { join } from "node:path";
 import { afterAll, expect, test, vi } from "vitest";
 import type { SessionState } from "@assistant/shared";
 
-vi.mock("../sessionState.ts", () => ({ buildSessionState: vi.fn() }));
-
 const tmp = mkdtempSync(join(tmpdir(), "pi-native-facts-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
-const { buildSessionState } = await import("../sessionState.ts");
 const { createPiToolActivation } = await import("./toolActivation.ts");
 const { agentToolsFor, eagerToolNamesFor } =
   await import("../tools/catalog.ts");
@@ -110,7 +107,9 @@ test("pi hands the owner native identity, live limits, tool loading and the comm
     getSessionStats: () => ({ totalMessages: 0 }),
     dispose() {},
   };
-  const browserRuntimeOwner = vi.fn(() => undefined);
+  const buildSessionState = vi.fn(
+    (_id: string, _facts: unknown) => ({ sessionId: id }) as SessionState,
+  );
   const live = new PiLiveSession(
     "developer",
     native as never,
@@ -119,8 +118,7 @@ test("pi hands the owner native identity, live limits, tool loading and the comm
       noteRunStarted() {},
       checkPendingReload() {},
       isReloadQueued: () => false,
-      browserRuntimesFor: () => [],
-      browserRuntimeOwner,
+      buildSessionState,
     },
     () => {},
     [],
@@ -210,19 +208,23 @@ test("pi hands the owner native identity, live limits, tool loading and the comm
       succeeded: new Set(["success"]),
       commands: [{ name: "review", at: 100, turn: "1" }],
     });
-    const projected = { sessionId: id } as SessionState;
-    vi.mocked(buildSessionState).mockReturnValue(projected);
-    expect(live.state()).toBe(projected);
-    const [sessionId, supplied, owner] = vi
-      .mocked(buildSessionState)
-      .mock.calls.at(-1)!;
+    live.broadcastState();
+    expect(buildSessionState).not.toHaveBeenCalled();
+    const viewer = { send: vi.fn() };
+    live.addViewer(viewer);
+    live.broadcastState();
+    expect(viewer.send).toHaveBeenCalledExactlyOnceWith({
+      type: "state",
+      state: { sessionId: id },
+    });
+    live.removeViewer(viewer);
+    const [sessionId, supplied] = buildSessionState.mock.calls.at(-1)!;
     expect(sessionId).toBe(id);
     expect(supplied).toEqual({
       ...facts,
       live: { ...facts.live!, skillInvocationTranscript: expect.any(Function) },
     });
-    owner!("browser-owner");
-    expect(browserRuntimeOwner).toHaveBeenCalledWith("browser-owner");
+    expect(buildSessionState).toHaveBeenCalledTimes(1);
   } finally {
     activation.dispose();
     live.dispose();

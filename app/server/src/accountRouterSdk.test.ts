@@ -20,6 +20,7 @@ const { modelsForAccount, piModelForAccount } =
   await import("./harnesses/models.ts");
 const { createSession } = await import("./harnesses/create.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
+const { buildSessionState } = await import("./sessionState.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
@@ -290,7 +291,11 @@ test("real pi-store creation persists enterprise before its first immutable clai
       sessionStore.get(piSession.sessionId)?.requiresEnterprise,
       true,
     );
-    assert.equal(piSession.state().requiresEnterprise, true);
+    assert.equal(
+      buildSessionState(piSession.id, piSession.nativeFacts())
+        .requiresEnterprise,
+      true,
+    );
     const native = piStore.get(piSession.sessionId);
     assert.ok(native);
     const anchor = native.session.sessionManager.appendMessage({
@@ -317,7 +322,10 @@ test("real pi-store creation persists enterprise before its first immutable clai
     );
     try {
       assert.equal(sessionStore.get(child.sessionId)?.requiresEnterprise, true);
-      assert.equal(child.state().requiresEnterprise, true);
+      assert.equal(
+        buildSessionState(child.id, child.nativeFacts()).requiresEnterprise,
+        true,
+      );
       assert.equal(child.credentialProfileId, pi.id);
     } finally {
       piStore.evict(child.sessionId);
@@ -370,7 +378,11 @@ test.each(["build", "plan"] as const)(
         sessionStore.get(claudeSession.sessionId)?.requiresEnterprise,
         true,
       );
-      assert.equal(claudeSession.state().requiresEnterprise, true);
+      assert.equal(
+        buildSessionState(claudeSession.id, claudeSession.nativeFacts())
+          .requiresEnterprise,
+        true,
+      );
     } finally {
       spy.mockRestore();
       if (claudeSession) {

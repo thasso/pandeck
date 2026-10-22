@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { PromptAttachment } from "@assistant/shared";
-import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
+import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import type {
   ClaudeQueryParams,
   ClaudeSdkMessage,

@@ -19,7 +19,7 @@ import {
   agentPromptLayer,
   freezeSessionAgent,
 } from "../agents/sessionAgent.ts";
-import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
+import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./sdkSeam.ts";
 
 const PROVIDER_SESSION = "11111111-2222-3333-4444-555555555555";

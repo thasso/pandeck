@@ -14,7 +14,7 @@ import { test } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
 import { runClearForHost } from "../hostSlashCommands.ts";
-import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
+import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./sdkSeam.ts";
 
 const PROVIDER_SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

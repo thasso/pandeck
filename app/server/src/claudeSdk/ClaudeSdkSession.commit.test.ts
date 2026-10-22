@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { CommitDisplay, ServerMessage } from "@assistant/shared";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
-import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
+import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import type { ClaudeSdkSeam } from "./sdkSeam.ts";
 
 const seam: ClaudeSdkSeam = {

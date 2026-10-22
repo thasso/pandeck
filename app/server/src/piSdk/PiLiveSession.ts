@@ -25,7 +25,6 @@ import type {
   ServerMessage,
   SessionMode,
   SessionNamingSettings,
-  SessionState,
   ThinkingLevel,
 } from "@assistant/shared";
 import { UNLABELED_SESSION_TITLE } from "@assistant/shared";
@@ -67,12 +66,12 @@ import { deriveTitle, type LiveListInfo } from "../sessions.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { assertSessionAccountSwitch } from "../sessionAccount.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
-import { buildSessionState, type SessionNativeFacts } from "../sessionState.ts";
 import type {
   CompactionWindowApplyResult,
   CompactionWindowHarnessStatus,
   CompactionWindowLowerResult,
   HarnessHost,
+  SessionNativeFacts,
   LiveSession,
   Viewer,
 } from "../harness.ts";
@@ -499,7 +498,10 @@ export class PiLiveSession implements LiveSession {
 
   broadcastState(): void {
     if (this.viewers.size === 0) return;
-    this.broadcast({ type: "state", state: this.state() });
+    this.broadcast({
+      type: "state",
+      state: this.host.buildSessionState(this.sessionId, this.nativeFacts()),
+    });
   }
 
   broadcast(message: ServerMessage): void {
@@ -1817,12 +1819,6 @@ export class PiLiveSession implements LiveSession {
         toolLoading: toolLoadingForSession(this.sessionId),
       },
     };
-  }
-
-  state(): SessionState {
-    return buildSessionState(this.sessionId, this.nativeFacts(), (id) =>
-      this.host.browserRuntimeOwner(id),
-    );
   }
 
   /** Cumulative billed totals across the whole session, from pi's native stats. */

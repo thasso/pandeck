@@ -12,6 +12,9 @@ import { afterEach, test } from "vitest";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { listSessions } from "./sessions.ts";
+import { installClaudeStateBuilder } from "./test/claudeSdkSession.ts";
+
+installClaudeStateBuilder(claudeSdkStore);
 
 const created: string[] = [];
 

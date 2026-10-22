@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import { UNLABELED_SESSION_TITLE, type ServerMessage } from "@assistant/shared";
-import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
+import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import { claudeSdkModelId } from "./modelSettings.ts";
 import {
   claudeConfigDir,

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, expect, test, vi } from "vitest";
 import type { AgentType, SessionState, ThinkingLevel } from "@assistant/shared";
-import type { SessionNativeFacts } from "./sessionState.ts";
+import type { SessionNativeFacts } from "./harness.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "session-state-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -66,7 +66,8 @@ const { registerSessionToolExposure } =
 const { stageSessionArtifact } =
   await import("./mcp/toolGroups/packRuntime.ts");
 const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
-const { agentToolsFor } = await import("./tools/catalog.ts");
+const catalog = await import("./tools/catalog.ts");
+const { agentToolsFor } = catalog;
 const { toolDefinitionChars } = await import("./tools/toolExposure.ts");
 const { externalToolName } = await import("./mcp/names.ts");
 
@@ -229,7 +230,8 @@ test("detached serialization preserves the pre-owner field order and values", as
   }));
   try {
     // Captured on the exact base before the owner replaces ViewSession.state().
-    const detached = viewSessionById(id)!.state();
+    const view = viewSessionById(id)!;
+    const detached = buildSessionState(id, view.nativeFacts());
     expect(
       serialized(detached).replaceAll(artifact.id, "<artifact-id>"),
     ).toMatchSnapshot();
@@ -283,6 +285,14 @@ test("detached serialization preserves the pre-owner field order and values", as
       "worktreeMissing",
     ] as const satisfies readonly (keyof SessionState)[];
     for (const facts of liveFixtures(detachedFacts)) {
+      // Unwired projections list no runtimes. An explicit lookup, even when
+      // it finds no resident owner, retains the real runtime as not-live.
+      expect(buildSessionState(id, facts).browserRuntimes).toEqual([]);
+      expect(
+        buildSessionState(id, facts, () => undefined).browserRuntimes,
+      ).toEqual([
+        expect.objectContaining({ sessionId: id, agentStatus: "not-live" }),
+      ]);
       const state = buildSessionState(id, facts, browserRuntimeOwner);
       expect(browserRuntimeOwner).toHaveBeenLastCalledWith(id);
       for (const field of appFields) {
@@ -540,6 +550,22 @@ test("a directly spawned child's state names its spawner; no other session's doe
   }
 });
 
+test.each(["pi", "claude-sdk"] as const)(
+  "%s tool exposure reads the catalog once per state projection",
+  (harness) => {
+    const id = "one-catalog";
+    const facts = liveFixtures({
+      harness,
+      kind: "developer",
+      agentType: "developer",
+      thinkingLevel: "off",
+    }).find((fixture) => fixture.harness === harness)!;
+    const readCatalog = vi.spyOn(catalog, "agentToolsFor");
+    expect(buildSessionState(id, facts).toolExposure).toBeDefined();
+    expect(readCatalog).toHaveBeenCalledExactlyOnceWith("developer");
+  },
+);
+
 test("undefined optionals are absent, and only coding live facts enable live projections", () => {
   const detached: SessionNativeFacts = {
     harness: "pi",
@@ -639,10 +665,16 @@ test("the owner reads fresh stored restrictions and compaction, not captured vie
   const meta = sessionStore.get("fresh-window")!;
   const view = new ViewSession(meta);
   sessionStore.setCompactionWindow(meta.id, 80_000);
-  expect(view.state()).toMatchObject({ compactionWindow: { tokens: 80_000 } });
-  expect(view.state()).not.toHaveProperty("requiresEnterprise");
+  expect(buildSessionState(view.id, view.nativeFacts())).toMatchObject({
+    compactionWindow: { tokens: 80_000 },
+  });
+  expect(buildSessionState(view.id, view.nativeFacts())).not.toHaveProperty(
+    "requiresEnterprise",
+  );
   sessionStore.setCompactionWindow(meta.id, 60_000);
-  expect(view.state().compactionWindow?.tokens).toBe(60_000);
+  expect(
+    buildSessionState(view.id, view.nativeFacts()).compactionWindow?.tokens,
+  ).toBe(60_000);
   const fixtures = [
     storedFacts(meta.id),
     ...liveFixtures(storedFacts(meta.id)),
@@ -651,19 +683,29 @@ test("the owner reads fresh stored restrictions and compaction, not captured vie
   getDb()
     .prepare("UPDATE session_index SET requires_enterprise = 1 WHERE id = ?")
     .run(meta.id);
-  expect(view.state().requiresEnterprise).toBe(true);
+  expect(
+    buildSessionState(view.id, view.nativeFacts()).requiresEnterprise,
+  ).toBe(true);
   for (const facts of fixtures)
     expect(buildSessionState(meta.id, facts).requiresEnterprise).toBe(true);
   sessionStore.markDeleted(meta.id);
-  expect(view.state().requiresEnterprise).toBe(true);
-  expect(view.state()).not.toHaveProperty("compactionWindow");
+  expect(
+    buildSessionState(view.id, view.nativeFacts()).requiresEnterprise,
+  ).toBe(true);
+  expect(buildSessionState(view.id, view.nativeFacts())).not.toHaveProperty(
+    "compactionWindow",
+  );
   const unstored = new ViewSession({
     ...meta,
     id: "unstored",
     requiresEnterprise: true,
   });
-  expect(unstored.state()).not.toHaveProperty("requiresEnterprise");
-  expect(unstored.state()).not.toHaveProperty("compactionWindow");
+  expect(
+    buildSessionState(unstored.id, unstored.nativeFacts()),
+  ).not.toHaveProperty("requiresEnterprise");
+  expect(
+    buildSessionState(unstored.id, unstored.nativeFacts()),
+  ).not.toHaveProperty("compactionWindow");
 });
 
 test("question, approval and task-choice priority comes from the app stores", async () => {

@@ -15,6 +15,9 @@ process.env.DATA_DIR = join(tmp, "data");
 const { createSession, SessionIdTakenError } = await import("./create.ts");
 const { harnessRegistry } = await import("./registry.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
+const { installClaudeStateBuilder } =
+  await import("../test/claudeSdkSession.ts");
+installClaudeStateBuilder(claudeSdkStore);
 const { piStore } = await import("../piSdk/piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { createCredentialProfile, patchCredentialProfile } =

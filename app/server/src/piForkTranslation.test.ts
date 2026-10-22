@@ -282,7 +282,12 @@ function makeFakeLive(id: string): unknown {
     addViewer: () => {},
     removeViewer: () => {},
     broadcastState: () => {},
-    state: () => ({ sessionId: id, agentType: "developer", harness: "pi" }),
+    nativeFacts: () => ({
+      kind: "developer",
+      agentType: "developer",
+      harness: "pi",
+      thinkingLevel: "off",
+    }),
     snapshot: () => [],
     contextInfo: () => ({ sessionId: id, updatedAt: Date.now() }),
   };
