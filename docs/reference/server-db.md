@@ -245,13 +245,13 @@ facade.
   it is appended after its siblings (archived ones counted, for the same
   reason). `../tasks.ts` asks on create, on a reparent that states no position,
   and on unarchive. `tasks.revision` (migration `0040_task_revision.sql`) is the
-  state-event revision: `stampRevisions(ids)` allocates ONE value from the
-  persisted `task_revision` sequence per notification and stamps every touched
-  row with it, including tombstoned ones (a delete event carries a revision
-  too), and `revisions()` reads the whole `{id → revision, live}` index the
-  broadcast flush diffs. The counter is persisted because a restart that handed
-  out numbers a client has already seen would emit events every subscribed
-  browser silently discards.
+  state-event revision: `taskTopicWrites` stamps every touched row with ONE
+  value from the persisted `task_revision` sequence per change set, including
+  tombstoned ones (a delete event carries a revision too); `revisionsFor(ids)`
+  reads `{id → revision, live}` for exactly the ids a flush publishes, and
+  `revisions()` the whole index the digest is built from. The counter is
+  persisted because a restart that handed out numbers a client has already seen
+  would emit events every subscribed browser silently discards.
 - No store owns the `task_comments` rows (migration `0020_task_comments.sql`):
   Task comments were removed, and the table and its rows are kept untouched for
   the user to decide about. Only `../taskOverhead.ts` (the `measure:tasks`

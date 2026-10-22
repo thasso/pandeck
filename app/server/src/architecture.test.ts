@@ -432,27 +432,54 @@ test("peer-prompt delivery never steers/interrupts a target or emits an info not
  * and a single well-meaning `list:` rider puts it straight back.
  */
 test("Task mutations carry no full-collection payload", () => {
-  const connection = readFileSync(join(SRC_ROOT, "connection.ts"), "utf8");
-  const hub = readFileSync(join(SRC_ROOT, "hub.ts"), "utf8");
+  const sources = sourceFiles(SRC_ROOT).map((path) => ({
+    name: relative(SRC_ROOT, path),
+    source: readFileSync(path, "utf8"),
+  }));
 
-  // The snapshot survives in exactly one place: the subscribe/read answer.
-  const snapshotSends = [...connection.matchAll(/type:\s*"taskList"/g)].length;
-  assert.equal(
-    snapshotSends,
-    1,
+  // The snapshot is built in exactly one place: the `tasks.ts` builder. Its
+  // one type-level spelling, `Extract<ServerMessage, …>`, builds nothing.
+  assert.deepEqual(
+    sources.flatMap(({ name, source }) =>
+      [
+        ...source.matchAll(
+          /(?<!Extract<ServerMessage,\s*\{\s*)type:\s*"taskList"/g,
+        ),
+      ].map(() => name),
+    ),
+    ["tasks.ts"],
     "`taskList` is the subscribe/read answer only; mutations answer with events",
   );
-  const listAnswer = connection.indexOf("private onListTasks(");
-  assert.ok(listAnswer >= 0, "onListTasks exists");
-  assert.ok(
-    connection.slice(listAnswer).indexOf('type: "taskList"') <
-      connection.slice(listAnswer).indexOf("private onSaveTask("),
-    "the one `taskList` send belongs to onListTasks",
+  // And the builder answers only a subscribe or a read: the kernel's snapshot
+  // and the connection's `listTasks` answer. Any other caller — the hub, the
+  // kernel wiring, a new module — would be a list riding a mutation.
+  const calls = sources.flatMap(({ name, source }) =>
+    [...source.matchAll(/(?<!function )\btaskListMessage\(/g)].map((match) => ({
+      name,
+      source,
+      at: match.index,
+    })),
   );
-  assert.equal(
-    /type:\s*"taskList"/.test(hub),
-    false,
-    "the hub broadcasts Task changes as `stateEvents`, never as a list",
+  const within = (source: string, at: number, from: string, to: string) =>
+    source.indexOf(from) >= 0 &&
+    source.indexOf(from) < at &&
+    at < source.indexOf(to, source.indexOf(from));
+  assert.deepEqual(
+    calls
+      .map(({ name, source, at }) =>
+        name === "tasks.ts"
+          ? within(source, at, "export const taskStateTopic", "satisfies")
+            ? "snapshot"
+            : `tasks.ts@${at}`
+          : name === "connection.ts"
+            ? within(source, at, "private onListTasks(", "private onSaveTask(")
+              ? "onListTasks"
+              : `connection.ts@${at}`
+            : name,
+      )
+      .sort(),
+    ["onListTasks", "snapshot"],
+    "the `taskList` builder is called only by the snapshot and onListTasks",
   );
 
   // The mutator's direct reply carries the full item and nothing collective.

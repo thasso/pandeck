@@ -77,9 +77,8 @@ failure, and explicit recovery reads.
   descriptor: revisions for given ids, the summary, the snapshot, an optional
   digest and a batch maximum. `stateTopics.ts` registers the kernels, the hub
   attaches its topic broadcaster to them, and `connection.ts` routes a kernel
-  topic's subscribe and `getStateItems` to its kernel. Background, Projects and
-  Initiatives run on it. Tasks still diff the current `{id → revision}` map
-  against the last flushed one in `hub.ts` until they move (Task-1045).
+  topic's subscribe and `getStateItems` to its kernel. Background, Projects,
+  Tasks and Initiatives run on it; `hub.ts` diffs no domain.
 - The change set (`db/changeSet.ts`) is the kernel's write half. A write runs as
   one top-level transaction with a change set, which stamps each topic's touched
   rows inside that transaction with one revision per topic, drawn from the
@@ -94,8 +93,11 @@ failure, and explicit recovery reads.
   the one exception to "reported after commit", since node:sqlite has no commit
   hook. If that transaction rolls back, each reported id still publishes once
   from committed state, at its unchanged committed revision, which a client
-  already holding that revision ignores. Initiatives' fan-out stamp is its only
-  caller.
+  already holding that revision ignores. Its callers are the Initiatives'
+  fan-out stamp and the Task seam (`notifyTaskChange`), through which a Project
+  delete, an Initiative membership write and the knowledge link migration touch
+  Tasks; each touch stamps the touched Tasks and the Initiatives holding them in
+  one transaction.
 - A kernel publishes from reported ids only. A report adds its ids to the
   pending set and restarts a trailing debounce, even an empty report. The flush
   reads revisions for exactly the pending ids and walks them in first-report
@@ -109,10 +111,10 @@ failure, and explicit recovery reads.
     retries it, and any later report schedules that flush. The kernel never
     reschedules itself.
 - A flush is cut into frames of at most the topic's batch maximum, each with the
-  next `seq`. `seq` is an in-memory per-topic counter, kept by the kernel (by
-  the hub for Tasks, not yet on it); the subscribe answer carries the current
-  value. It exists only to trip resync, so it does not survive restarts — a
-  reconnect resubscribes and gets a fresh baseline anyway.
+  next `seq`. `seq` is an in-memory per-topic counter, kept by the kernel; the
+  subscribe answer carries the current value. It exists only to trip resync, so
+  it does not survive restarts — a reconnect resubscribes and gets a fresh
+  baseline anyway.
 - A kernel's subscribe answer is a digest only when the topic declares one and
   the client asked for it, otherwise the topic's snapshot. Items by id follow
   the flush's event rules without consuming a `seq` or touching pending ids.
@@ -121,7 +123,9 @@ failure, and explicit recovery reads.
   sent; a throwing listener is logged and stops neither the frames nor the other
   listeners. Background's only listener is the session-list refresh for the
   owner's `backgroundActivity`, which therefore lands one Background debounce
-  window after the write.
+  window after the write. Tasks' only listener refreshes the state of the
+  sessions linked to a Task, and of one whose last link just went, since that
+  state carries a session's Task back-links.
 - Server-internal mutations (agent tools, sweeps such as auto-archive) flow
   through the same seam and mint the same events; there is no second write path.
 
@@ -223,25 +227,30 @@ per-surface sub-tasks — no page invents its own delta format.
   out (archived or deleted, perhaps while the tab was away) and every live body
   whose revision is newer than the one it was read at. A filtered snapshot
   judges nothing. A body read without a revision (an older server) stays on the
-  `updatedAt` rule for live rows.
+  `updatedAt` rule for live rows. Every Task write stamps its rows in its own
+  change set. The Initiative fan-out joins that change set, so its failure fails
+  the write. The auto-archive sweep is a best-effort follow-up: after the
+  triggering write committed and reported, each Task it archives is an ordinary
+  Task write with its own change set, and its failure never fails that save.
 - Projects: canonical archived-inclusive lean summaries plus keyed full
   documents. Project archive/restore is an upsert; only deletion removes
   registry membership. Every Project write (row, paths and edges) commits as one
   change set. A delete stamps the Project and its child Projects, whose `parent`
-  edge its sweep removes, so each child gets an upsert without its parent; the
-  Tasks it held are reported through the Task seam after that commit. The
-  subscribe answer and `getStateItems` come from the kernel, a snapshot
-  (`projectList`) or, when asked, a digest. Failed optimistic mutations recover
-  their touched ids with `getStateItems` and force a keyed detail read only when
-  that id is open.
+  edge its sweep removes, so each child gets an upsert without its parent. The
+  Tasks it held are stamped through the Task seam in the same change set, so one
+  commit covers the tombstone, the Project, Task and holding Initiative stamps,
+  and all three topics report after it. The subscribe answer and `getStateItems`
+  come from the kernel, a snapshot (`projectList`) or, when asked, a digest.
+  Failed optimistic mutations recover their touched ids with `getStateItems` and
+  force a keyed detail read only when that id is open.
 - Initiatives: canonical live summaries (neither archived nor deleted) plus a
   keyed graph read (`getInitiative` → `initiativeDetail`, carrying the revision
   it is as of). Archiving is a `delete`, unarchiving an `upsert`, and a write to
   an Initiative already outside the projection is reported as a `delete` again
   with its new revision, as archived Tasks are. A summary reads member Tasks,
-  their outside blockers and the live sessions on them, so the Task seam's
-  notify-with-ids also reports the Initiatives that read a touched Task — as a
-  member or below one, or through a Task it blocks — in the same act, and a
+  their outside blockers and the live sessions on them, so the Task seam also
+  stamps the Initiatives that read a touched Task — as a member or below one, or
+  through a Task it blocks — in the same transaction as the Task write, and a
   delete or a move reads the holders it takes the Task from before it writes.
   `sessionStore` reports every session whose liveness a write may change
   (archive, settle, a raised outcome, a tombstone, a new row), which reaches the

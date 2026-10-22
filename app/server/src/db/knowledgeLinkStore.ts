@@ -4,7 +4,7 @@
  * the file it named, the migration's done-marker, and the row reads and writes
  * the migration rewrites. Policy lives in `../knowledgeLinkMigration.ts`.
  */
-import { getDb, withDbTransaction } from "./index.ts";
+import { getDb, inDbTransaction, withDbTransaction } from "./index.ts";
 
 /** The file a retired `pa://knowledge/<id>` link names, if the id was known. */
 function legacyPath(legacyId: string): string | undefined {
@@ -77,12 +77,12 @@ function memoryCardsWithKnowledgeLinks(): {
 }
 
 /**
- * Write rewritten Task descriptions in one transaction. `updated_at_ms` is left
- * alone: a link's new spelling is not an edit anyone made, and must not reorder
- * lists.
+ * Write rewritten Task descriptions in one transaction, or in the caller's when
+ * one is open (the migration's change set). `updated_at_ms` is left alone: a
+ * link's new spelling is not an edit anyone made, and must not reorder lists.
  */
 function rewriteTaskDescriptions(rows: { id: number; text: string }[]): void {
-  withDbTransaction(() => {
+  inDbTransaction(() => {
     const description = getDb().prepare(
       "UPDATE tasks SET description = ? WHERE id = ?",
     );

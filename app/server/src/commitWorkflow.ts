@@ -806,7 +806,12 @@ function markCommittedTasks(
       marked.push(
         taskSummaryOf(updateTask(task.id, { commitHash, committedAt: now })),
       );
-    } catch {
+    } catch (err) {
+      // The commit stands; only this Task stays unmarked.
+      console.warn(
+        `[commit] Task ${task.id} was not marked committed:`,
+        errorText(err),
+      );
       marked.push(task);
     }
   }

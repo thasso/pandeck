@@ -9,6 +9,7 @@
  * Writes are synchronous (node:sqlite + WAL), durable at call time; `closeDb()`
  * flushes on exit. This is the single façade over task metadata.
  */
+import type { StateTopicWrites } from "./changeSet.ts";
 import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import {
@@ -59,9 +60,9 @@ interface Task {
   /** Manual ordering position (root + siblings); assigned by drag-reorder. */
   sortOrder?: number;
   /**
-   * Monotonic per-row state-event revision, stamped by {@link stampRevisions}
-   * when a write notifies. Never travels as a field on a wire object — it rides
-   * the event envelope (docs/state-sync.md).
+   * Monotonic per-row state-event revision, stamped through
+   * {@link taskTopicWrites} inside the write's change set. Never travels as a
+   * field on a wire object — it rides the event envelope (docs/state-sync.md).
    */
   revision: number;
 }
@@ -315,49 +316,63 @@ interface TaskRevisionRow {
 }
 
 /**
- * Stamp `ids` with the next value of the persisted `task_revision` sequence and
- * return it. One value for the whole batch: revisions only ever need to be
- * monotonic PER ROW, and a shared value keeps a sweep that archives fifty Tasks
- * to a single sequence allocation.
- *
- * Tombstoned rows are stamped too — a delete event carries a revision, and the
- * row survives the tombstone.
+ * The `tasks` topic's revisions, stamped only through a change set: one
+ * `task_revision` value per transaction, since revisions only ever need to be
+ * monotonic PER ROW. Tombstoned rows are stamped too — a delete event carries a
+ * revision, and the row survives the tombstone.
  */
-function stampRevisions(ids: readonly number[]): number {
-  const db = getDb();
-  const revision = nextId("task_revision");
-  db.exec("BEGIN");
-  try {
-    const update = db.prepare("UPDATE tasks SET revision = ? WHERE id = ?");
-    for (const id of ids) update.run(revision, id);
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-  return revision;
+export const taskTopicWrites: StateTopicWrites = {
+  topic: "tasks",
+  sequence: "task_revision",
+  stamp: (ids, revision) => {
+    const update = getDb().prepare(
+      "UPDATE tasks SET revision = ? WHERE id = ?",
+    );
+    for (const id of ids) update.run(revision, Number(id));
+  },
+};
+
+interface DbRevisionRow {
+  id: number;
+  revision: number;
+  archived_at_ms: number | null;
+  deleted_at_ms: number | null;
+}
+
+const revisionRow = (row: DbRevisionRow): TaskRevisionRow => ({
+  id: row.id,
+  revision: row.revision,
+  live: row.archived_at_ms === null && row.deleted_at_ms === null,
+});
+
+/**
+ * Every Task's revision and live-projection membership, in one read: the
+ * digest, and the live set the task-linked session refresh filters by.
+ */
+function revisions(): TaskRevisionRow[] {
+  return (
+    getDb()
+      .prepare("SELECT id, revision, archived_at_ms, deleted_at_ms FROM tasks")
+      .all() as unknown as DbRevisionRow[]
+  ).map(revisionRow);
 }
 
 /**
- * Every Task's revision and live-projection membership, in one read.
- *
- * The broadcast flush diffs this against the map it last sent, so it needs the
- * ARCHIVED and tombstoned rows as well: they are what turns into a delete event.
+ * {@link revisions} for exactly these ids, archived and tombstoned rows
+ * included, by primary key. An id that is not a positive integer names no row.
  */
-function revisions(): TaskRevisionRow[] {
-  const rows = getDb()
-    .prepare("SELECT id, revision, archived_at_ms, deleted_at_ms FROM tasks")
-    .all() as unknown as Array<{
-    id: number;
-    revision: number;
-    archived_at_ms: number | null;
-    deleted_at_ms: number | null;
-  }>;
-  return rows.map((row) => ({
-    id: row.id,
-    revision: row.revision,
-    live: row.archived_at_ms === null && row.deleted_at_ms === null,
-  }));
+function revisionsFor(ids: readonly string[]): TaskRevisionRow[] {
+  const numeric = [
+    ...new Set(ids.filter((id) => /^[1-9]\d*$/.test(id)).map(Number)),
+  ].filter(Number.isSafeInteger);
+  if (!numeric.length) return [];
+  return (
+    getDb()
+      .prepare(
+        "SELECT id, revision, archived_at_ms, deleted_at_ms FROM tasks WHERE id IN (SELECT value FROM json_each(?))",
+      )
+      .all(JSON.stringify(numeric)) as unknown as DbRevisionRow[]
+  ).map(revisionRow);
 }
 
 /**
@@ -893,8 +908,8 @@ export const taskStore = {
   setArchived,
   remove,
   // state-event revisions
-  stampRevisions,
   revisions,
+  revisionsFor,
   // status provenance
   addStatusEvent,
   statusEventsForTask,

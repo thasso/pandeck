@@ -45,10 +45,15 @@ let active: ChangeSet | undefined;
 
 /**
  * The single after-commit hand-off, installed by the hub. With none installed,
- * committed ids are dropped: there is nobody to publish them to.
+ * committed ids are dropped: there is nobody to publish them to. Returns the
+ * sink it replaced, so a test recorder can forward to it and put it back.
  */
-export function setStateChangeSink(next: StateChangeSink | undefined): void {
+export function setStateChangeSink(
+  next: StateChangeSink | undefined,
+): StateChangeSink | undefined {
+  const previous = sink;
   sink = next;
+  return previous;
 }
 
 /**

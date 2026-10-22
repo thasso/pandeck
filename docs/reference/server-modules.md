@@ -2770,54 +2770,51 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   the FIRST production frame (`webBuild`, repeated on `ready.webBuildId`) so an
   already-open browser can reload before old JS consumes any newer
   snapshot/event shape.
-- Task mutations notify `hub` WITH THE IDS THEY TOUCHED, and `tasks.ts` stamps
-  those rows' `revision` from the persisted `task_revision` sequence in the same
-  act — bump and notification cannot diverge (`docs/state-sync.md`). "Touched"
-  includes every row an EDGE SWEEP moved, which is the easy half to miss:
-  `deleteTask` reports the children whose parent edge it drops (they must be
-  read before `taskStore.remove`), and `projectRegistry.deleteProject` reports
-  the Tasks whose `in_project` edge `projectStore.remove` sweeps. Nothing else
-  repairs those rows any more — the full-list broadcast that used to hide such
-  holes is gone. The hub COALESCES the notifications
-  (`TASK_BROADCAST_DEBOUNCE_MS`, the session list's shape) and
-  `flushTaskBroadcast` diffs `taskRevisionIndex()` against the map it last
-  flushed: changed or new live ids become `upsert` events carrying
-  `taskSummaryFor(id)`, ids that left the live projection become `delete`s
-  (archiving is a delete, unarchiving an upsert). The batch travels as one
-  `stateEvents` message with a per-topic `seq`; a mutation NEVER puts a list on
-  the wire. The first flush of a process seeds its baseline from the current
-  live projection minus the pending ids (`seedTaskBaseline`), because every
-  subscriber's snapshot was read from that same database. The same flush
-  refreshes SESSION state only for sessions that are — or just stopped being —
-  task-linked (from `taskLinkedSessionIds()`, keeping the previous set so a
-  removed link still gets a final refresh); it used to re-run `toolExposure()`
-  and `peerPromptThreadsFor()` for every open conversation on every Task edit.
-  Tests that assert on the broadcast must wait out the debounce window.
-  Subscribing to `tasks` delivers the full list ONCE, as the authoritative read,
-  carrying the current `seq` as the client's gap baseline, so a browser/PWA
-  cache cannot diverge across fresh loads (the subscribe is re-sent on every
-  connect). That list is SUMMARIES ONLY, enforced by the wire types
-  (`TaskListResponse.items` is `TaskSummary[]`; there is no
-  `includeDescriptions` request flag any more). `taskSummaryOf` (shared, because
-  the browser projects too when it settles an optimistic create) is the ONE
-  explicit allowlist narrowing from `TaskItem` to `TaskSummary`: it drops the
-  Markdown body, empty/default collection fields, unused commit time, and all
-  session-ref metadata except `sessionId`/`origin` (including the server-local
-  transcript path). The open Task's body and full refs are fetched per Task
-  through request-correlated `getTask` → `taskDetail`; not-found and read error
-  are distinct direct outcomes. `taskSaved` carries the full mutated `TaskItem`
-  and nothing collective — it is the mutator's direct reply, so a save returns a
-  fresh body without another round trip, and its echoed `requestId` is what
-  settles the browser's optimistic create. The projection census test fixes the
-  key allowlist and a representative per-item byte budget. On the 2026-08-13
-  read-only production copy, this cut the 180-row snapshot from 184,419 to
-  140,779 bytes. Done Tasks age out of this default list after 14 days;
-  `tasks.ts` sweeps at boot/hourly and on writes through `archiveTask`, while a
-  done child stays visible until its direct parent is done or archived (16 rows
-  / another 13,429 bytes on that copy). All three triggers isolate/log sweep
-  failures and retry later; a post-write retention failure cannot escape after
-  the originating mutation is durable or suppress that mutation's
-  version/listener notification.
+- Every Task mutation runs in its own change set (`db/changeSet.ts`) and touches
+  THE IDS IT CHANGED, stamping those rows' `revision` from the persisted
+  `task_revision` sequence inside the write's transaction, with the Initiative
+  fan-out in the same transaction (`docs/state-sync.md`). "Touched" includes
+  every row an EDGE SWEEP moved, which is the easy half to miss: `deleteTask`
+  reports the children whose parent edge it drops (they must be read before
+  `taskStore.remove`), and `projectRegistry.deleteProject` touches the Tasks
+  whose `in_project` edge `projectStore.remove` sweeps, inside its own change
+  set. Nothing else repairs those rows any more — the full-list broadcast that
+  used to hide such holes is gone. After COMMIT the ids reach the `tasks` kernel
+  (`stateTopics.ts`, descriptor `taskStateTopic`), which coalesces them and
+  publishes exactly the reported ids: a live id becomes an `upsert` carrying
+  `taskSummaryFor(id)`, an id outside the live projection a `delete` (archiving
+  is a delete, unarchiving an upsert). The batch travels as `stateEvents` frames
+  with a per-topic `seq`; a mutation NEVER puts a list on the wire. After every
+  flush the hub's post-publish listener refreshes SESSION state only for
+  sessions that are — or just stopped being — task-linked (from
+  `taskLinkedSessionIds()`, keeping the previous set so a removed link still
+  gets a final refresh); it used to re-run `toolExposure()` and
+  `peerPromptThreadsFor()` for every open conversation on every Task edit. Tests
+  that assert on the broadcast must wait out the debounce window. Subscribing to
+  `tasks` delivers the full list ONCE, as the authoritative read, carrying the
+  current `seq` as the client's gap baseline, so a browser/PWA cache cannot
+  diverge across fresh loads (the subscribe is re-sent on every connect). That
+  list is SUMMARIES ONLY, enforced by the wire types (`TaskListResponse.items`
+  is `TaskSummary[]`; there is no `includeDescriptions` request flag any more).
+  `taskSummaryOf` (shared, because the browser projects too when it settles an
+  optimistic create) is the ONE explicit allowlist narrowing from `TaskItem` to
+  `TaskSummary`: it drops the Markdown body, empty/default collection fields,
+  unused commit time, and all session-ref metadata except `sessionId`/`origin`
+  (including the server-local transcript path). The open Task's body and full
+  refs are fetched per Task through request-correlated `getTask` → `taskDetail`;
+  not-found and read error are distinct direct outcomes. `taskSaved` carries the
+  full mutated `TaskItem` and nothing collective — it is the mutator's direct
+  reply, so a save returns a fresh body without another round trip, and its
+  echoed `requestId` is what settles the browser's optimistic create. The
+  projection census test fixes the key allowlist and a representative per-item
+  byte budget. On the 2026-08-13 read-only production copy, this cut the 180-row
+  snapshot from 184,419 to 140,779 bytes. Done Tasks age out of this default
+  list after 14 days; `tasks.ts` sweeps at boot/hourly and on writes through
+  `archiveTask`, while a done child stays visible until its direct parent is
+  done or archived (16 rows / another 13,429 bytes on that copy). All three
+  triggers isolate/log sweep failures and retry later; a post-write retention
+  failure cannot escape after the originating mutation is durable or suppress
+  that mutation's version/listener notification.
 - Per-OBJECT streams are addressed by the object a connection has open, never by
   topic. `worktreeEvents.ts`'s `broadcastWorktree(worktreeId, msg)` (gated by
   `Viewer.wantsWorktree`, i.e. the connection's `watchWorktree` set,

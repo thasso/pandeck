@@ -1219,9 +1219,13 @@ function suggestLinkedTaskDoneOutcome(
     });
     const summary = taskSummaryOf(updated);
     return { patch: { linkedTask: summary }, created: summary };
-  } catch {
+  } catch (err) {
     // The suggestion is bookkeeping about a merge that already happened; it
     // must never turn a completed merge into a reported failure.
+    console.warn(
+      `[pull-request] Task ${linked.id} got no done suggestion:`,
+      errorText(err),
+    );
     return { patch: {} };
   }
 }
