@@ -13,12 +13,16 @@ import {
   taskSummaryOf,
   type ClientMessage,
   type ServerMessage,
+  type StateEvent,
   type TaskItem,
+  type TaskSummary,
 } from "@assistant/shared";
 import { Connection } from "./connection.ts";
 import { withDbTransaction } from "./db/index.ts";
 import { incoming, outgoing } from "./db/links.ts";
 import { taskStore } from "./db/taskStore.ts";
+import { stateTopicFor } from "./stateTopics.ts";
+import { recordStateReports } from "./test/stateReports.ts";
 import {
   archiveTask,
   createTask,
@@ -28,9 +32,7 @@ import {
   listTasks,
   openTaskBlockerCounts,
   readTask,
-  subscribeTaskChanges,
-  taskRevisionIndex,
-  taskStateItems,
+  taskRevision,
   taskSummaryFor,
   unarchiveTask,
   unlinkSessionEverywhere,
@@ -235,11 +237,9 @@ test("reversing a link that a longer path already implies is a cycle, and keeps 
 test("a failed operation moves no revision, notifies nobody and records no status event", () => {
   const a = make("Quiet failure A");
   const b = make("Quiet failure B");
-  const heard: string[][] = [];
-  const unsubscribe = subscribeTaskChanges((ids) => heard.push([...ids]));
+  const { tasks: heard, stop } = recordStateReports();
   try {
-    const revisions = () =>
-      [a.id, b.id].map((id) => taskRevisionIndex().get(id)?.revision);
+    const revisions = () => [a.id, b.id].map((id) => taskRevision(id));
     const before = revisions();
     const eventsBefore = taskStore.statusEventsForTask(Number(a.id)).length;
     assert.throws(() =>
@@ -263,14 +263,14 @@ test("a failed operation moves no revision, notifies nobody and records no statu
       }),
     );
     assert.deepEqual(revisions(), before);
-    assert.deepEqual(heard, []);
+    assert.deepEqual(heard(), []);
     assert.equal(
       taskStore.statusEventsForTask(Number(a.id)).length,
       eventsBefore,
     );
     assert.equal(readTask(a.id)?.status, "todo");
   } finally {
-    unsubscribe();
+    stop();
     discard(a.id, b.id);
   }
 });
@@ -278,8 +278,7 @@ test("a failed operation moves no revision, notifies nobody and records no statu
 test("the write entry points refuse to run inside a caller's transaction", () => {
   const a = make("Top-level only A");
   const b = make("Top-level only B");
-  const heard: string[][] = [];
-  const unsubscribe = subscribeTaskChanges((ids) => heard.push([...ids]));
+  const { tasks: heard, stop } = recordStateReports();
   try {
     withDbTransaction(() => {
       assert.throws(
@@ -311,9 +310,9 @@ test("the write entry points refuse to run inside a caller's transaction", () =>
       ),
       false,
     );
-    assert.deepEqual(heard, []);
+    assert.deepEqual(heard(), []);
   } finally {
-    unsubscribe();
+    stop();
     discard(a.id, b.id);
   }
 });
@@ -477,10 +476,7 @@ test("the socket deleteTask clears links, and getTask returns them", async () =>
     assert.equal(before.item?.blocked, true);
     // The reply names the revision its body is as of, so the client can tell
     // a later event about this Task from the echo of what it already holds.
-    assert.equal(
-      before.revision,
-      taskRevisionIndex().get(survivor.id)?.revision,
-    );
+    assert.equal(before.revision, taskRevision(survivor.id));
 
     await connection.handle({
       type: "deleteTask",
@@ -536,7 +532,9 @@ test("every summary carries its open blocker count, done and archived blockers e
     const listed = listTasks().find((t) => t.id === task.id);
     assert.equal(listed?.openBlockerCount, 2);
     assert.equal(taskSummaryFor(task.id)?.openBlockerCount, 2);
-    const [event] = taskStateItems([task.id]);
+    const [event] = stateTopicFor("tasks")!.items([
+      task.id,
+    ]) as StateEvent<TaskSummary>[];
     assert.ok(event?.kind === "upsert");
     assert.equal(event.item.openBlockerCount, 2);
     assert.equal(
@@ -588,7 +586,7 @@ test("the socket taskSaved names the revision its Task is as of", async () => {
     );
     assert.ok(saved?.type === "taskSaved");
     assert.equal(saved.item.status, "doing");
-    assert.equal(saved.revision, taskRevisionIndex().get(task.id)?.revision);
+    assert.equal(saved.revision, taskRevision(task.id));
   } finally {
     connection.dispose();
     discard(task.id);

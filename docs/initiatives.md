@@ -207,9 +207,9 @@ the tool descriptions, never in a harness-specific prompt layer.
   the sessions working on its Tasks (below). Because the counts move with member
   Tasks, the Task notification seam also reports the Initiatives that read a
   touched Task — as a member or descendant, or as an outside blocker of a member
-  — in the same flush, and a session's liveness change reports the Initiatives
-  listing it. A write is the only place that knows it changed, so no second path
-  recomputes counts on a timer.
+  — in the same transaction as the Task write, and a session's liveness change
+  reports the Initiatives listing it. A write is the only place that knows it
+  changed, so no second path recomputes counts on a timer.
 - The other way round, an Initiative write that changes what a Task lists of it
   (members added or removed, absorbed edges included; the title or state;
   archive, unarchive or delete) reports every such Task through the Task seam

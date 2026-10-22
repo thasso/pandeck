@@ -24,12 +24,9 @@ import {
   upsertProject,
 } from "./projectRegistry.ts";
 import { stateTopicFor } from "./stateTopics.ts";
-import {
-  createTask,
-  readTask,
-  subscribeTaskChanges,
-  taskRevision,
-} from "./tasks.ts";
+import { createInitiative, initiativeStateTopic } from "./initiatives.ts";
+import { createTask, readTask, taskRevision } from "./tasks.ts";
+import { failInitiativeFanOut } from "./test/stateReports.ts";
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 const suffix = Math.random().toString(36).slice(2, 9);
@@ -37,18 +34,17 @@ const parentId = `revision-parent-${suffix}`;
 const childId = `revision-child-${suffix}`;
 
 /**
- * Run `write` with a recording change-set sink, which also appends each
- * reported topic to `log`. A report made inside a transaction fails.
+ * Run `write` with a recording change-set sink. A report made inside a
+ * transaction fails.
  */
-function recording<T>(
-  write: () => T,
-  log: string[] = [],
-): { value: T; reports: Array<[BroadcastTopic, readonly string[]]> } {
+function recording<T>(write: () => T): {
+  value: T;
+  reports: Array<[BroadcastTopic, readonly string[]]>;
+} {
   const reports: Array<[BroadcastTopic, readonly string[]]> = [];
   setStateChangeSink((topic, ids) => {
     assert.equal(getDb().isTransaction, false, "reported before COMMIT");
     reports.push([topic, ids]);
-    log.push(topic);
   });
   try {
     return { value: write(), reports };
@@ -158,21 +154,19 @@ function taskIn(projectId: string): string {
   }).id;
 }
 
-test("a Project delete stamps its child Projects in its change set, then reports its Tasks", () => {
+test("a Project delete stamps its child Projects and orphaned Tasks in its change set", () => {
   const parent = fixture("delete-parent");
   const child = fixture("delete-child", { parentId: parent });
   const held = taskIn(parent);
   const before = [parent, child].map(projectRevision);
   const taskBefore = taskRevision(held)!;
-  const order: string[] = [];
-  const stop = subscribeTaskChanges((ids) => {
-    if (ids.includes(held)) order.push("tasks");
-  });
   try {
-    const { reports } = recording(() => deleteProject(parent), order);
-    assert.deepEqual(reports, [["projects", [parent, child]]]);
+    const { reports } = recording(() => deleteProject(parent));
+    assert.deepEqual(reports, [
+      ["projects", [parent, child]],
+      ["tasks", [held]],
+    ]);
   } finally {
-    stop();
     discard(child);
   }
   assert.ok(projectRevision(parent) > before[0]!);
@@ -180,7 +174,44 @@ test("a Project delete stamps its child Projects in its change set, then reports
   assert.equal(getProject(child)?.parentId, undefined);
   assert.ok(taskRevision(held)! > taskBefore);
   assert.equal(readTask(held)?.projectId, undefined);
-  assert.deepEqual(order, ["projects", "tasks"]);
+});
+
+test("a Project delete whose Initiative fan-out fails commits nothing and reports nothing", () => {
+  const project = fixture("fanout-delete");
+  const held = taskIn(project);
+  const holder = String(
+    createInitiative({ title: `Holder ${suffix}`, taskIds: [held] }).initiative
+      .id,
+  );
+  const initiativeRevision = () =>
+    initiativeStateTopic.revisions([holder]).get(holder)?.revision;
+  const before = {
+    project: projectRevision(project),
+    task: taskRevision(held),
+    initiative: initiativeRevision(),
+  };
+  const restore = failInitiativeFanOut(new Error("fan-out failed"), {
+    callThrough: true,
+  });
+  try {
+    const { reports } = recording(() =>
+      assert.throws(() => deleteProject(project), /fan-out failed/),
+    );
+    assert.ok(getProject(project), "the Project is live again");
+    assert.equal(readTask(held)?.projectId, project);
+    assert.deepEqual(
+      {
+        project: projectRevision(project),
+        task: taskRevision(held),
+        initiative: initiativeRevision(),
+      },
+      before,
+    );
+    assert.deepEqual(reports, []);
+  } finally {
+    restore();
+    discard(project);
+  }
 });
 
 test("a refused reorder moves no revision and reports nothing", () => {

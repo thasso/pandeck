@@ -29,6 +29,7 @@ import {
   linkSessionToTask,
   readTask,
   reorderTasks,
+  taskRevision,
   unarchiveTask,
   unlinkSessionEverywhere,
   updateTask,
@@ -36,8 +37,13 @@ import {
 import { deleteProject, upsertProject } from "./projectRegistry.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { taskStore } from "./db/taskStore.ts";
 import { withChangeSet } from "./db/changeSet.ts";
 import { withDbTransaction } from "./db/index.ts";
+import {
+  failInitiativeFanOut,
+  recordStateReports,
+} from "./test/stateReports.ts";
 
 function task(title: string, parentId?: string): string {
   return createTask({
@@ -555,4 +561,89 @@ test("a session tombstone inside a larger transaction stamps with it, or publish
   } finally {
     hub.unregister(viewer);
   }
+});
+
+/**
+ * Run `write` under a failing Initiative fan-out, which must reject with the
+ * fault and report nothing, so the caller can check what stayed committed.
+ */
+function underFailedFanOut(
+  write: () => void,
+  options: { callThrough?: boolean } = {},
+): void {
+  const fault = new Error("injected fan-out failure");
+  const restore = failInitiativeFanOut(fault, options);
+  const { reports, stop } = recordStateReports();
+  try {
+    assert.throws(write, (error) => error === fault);
+  } finally {
+    stop();
+    restore();
+  }
+  assert.deepEqual(reports, [], "a write that rolled back reports nothing");
+}
+
+test("a failed fan-out fails the Task update: no row, edge or revision moves", () => {
+  const subject = task("Fan-out failure subject");
+  const other = task("Fan-out failure other");
+  const before = [subject, other].map(taskRevision);
+  underFailedFanOut(() =>
+    updateTask(subject, {
+      title: "Renamed despite the fan-out",
+      addLinks: [{ type: "blocks", taskId: other }],
+    }),
+  );
+  assert.equal(readTask(subject)?.title, "Fan-out failure subject");
+  assert.equal(readTask(subject)?.links, undefined);
+  assert.equal(readTask(other)?.links, undefined);
+  assert.deepEqual([subject, other].map(taskRevision), before);
+});
+
+test("a failed fan-out on an archive rolls back the Initiative stamps it wrote", () => {
+  const member = task("Fan-out archive member");
+  const id = initiative("Fan-out archive", [member]);
+  const taskBefore = taskRevision(member);
+  const initiativeBefore = revisionOf(id);
+  underFailedFanOut(() => archiveTask(member), { callThrough: true });
+  assert.equal(readTask(member)?.archivedAt, undefined, "still live");
+  assert.equal(taskRevision(member), taskBefore);
+  assert.equal(revisionOf(id), initiativeBefore);
+});
+
+test("a failed fan-out on a delete leaves the Task, its children and its links", () => {
+  const doomed = task("Fan-out delete parent");
+  const child = task("Fan-out delete child", doomed);
+  const linked = task("Fan-out delete linked");
+  updateTask(linked, { addLinks: [{ type: "relates", taskId: doomed }] });
+  const id = initiative("Fan-out delete", [doomed]);
+  const initiativeBefore = revisionOf(id);
+  underFailedFanOut(() => deleteTask(doomed), { callThrough: true });
+  assert.ok(readTask(doomed), "not tombstoned");
+  assert.equal(readTask(child)?.parentId, doomed);
+  assert.deepEqual(
+    readTask(linked)?.links?.relates.map((link) => link.id),
+    [doomed],
+  );
+  assert.equal(revisionOf(id), initiativeBefore);
+});
+
+test("a failed fan-out on a reorder moves no parent and no sort order", () => {
+  const parent = task("Fan-out reorder parent");
+  const moved = task("Fan-out reorder moved");
+  const before = [parent, moved].map((id) => taskStore.get(Number(id)));
+  underFailedFanOut(() =>
+    reorderTasks(
+      [moved, parent],
+      [
+        { id: moved, parentId: parent },
+        { id: parent, parentId: null },
+      ],
+      true,
+    ),
+  );
+  assert.equal(readTask(moved)?.parentId, undefined);
+  assert.deepEqual(
+    [parent, moved].map((id) => taskStore.get(Number(id))),
+    before,
+  );
 });

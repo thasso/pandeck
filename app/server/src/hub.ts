@@ -1,9 +1,4 @@
-import type {
-  BroadcastTopic,
-  ServerMessage,
-  StateEvent,
-  TaskSummary,
-} from "@assistant/shared";
+import type { BroadcastTopic, ServerMessage } from "@assistant/shared";
 import { isCodingAgentType } from "@assistant/shared";
 import {
   archivedSessionCount,
@@ -14,13 +9,7 @@ import type { HarnessDriver, Viewer } from "./harness.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { subscribeHarnessOpened } from "./session/runtimePrompt.ts";
 import { viewSessionById } from "./viewSession.ts";
-import {
-  subscribeTaskChanges,
-  taskLinkedSessionIds,
-  taskRevisionIndex,
-  openTaskBlockerCounts,
-  taskSummaryFor,
-} from "./tasks.ts";
+import { taskLinkedSessionIds } from "./tasks.ts";
 import {
   consumePostReloadContinuation,
   listBrowserRuntimes,
@@ -77,8 +66,6 @@ const RELOAD_GRACE_MS = 1500;
 const RELOAD_IDLE_SETTLE_MS = 1200;
 
 const SESSION_BROADCAST_DEBOUNCE_MS = 25;
-/** Same shape as the session-list debounce; a burst of Task writes is one broadcast. */
-const TASK_BROADCAST_DEBOUNCE_MS = 25;
 /**
  * Minimum gap between consecutive list rebuilds while invalidations keep
  * arriving (e.g. a streaming run). The first broadcast is fast (25ms debounce);
@@ -125,31 +112,6 @@ function sessionListDelta<T extends { id: string }>(
   return changed;
 }
 
-/**
- * The `{id → revision}` baseline for the FIRST Task flush of the process.
- *
- * Every subscriber's snapshot was read from this same database, so the state
- * they already hold is the current live projection — minus the rows the writes
- * that triggered this flush just touched, which are exactly what they still owe
- * an event. Starting from an empty map instead would make the first mutation
- * after a restart emit an upsert for every Task alive, which is the full-list
- * broadcast this model exists to remove.
- */
-export function seedTaskBaseline(
-  index: Map<string, { revision: number; live: boolean }>,
-  pending: ReadonlySet<string>,
-): Map<string, number> {
-  const baseline = new Map<string, number>();
-  for (const [id, entry] of index) {
-    // A pending LIVE row is the change itself: leaving it out makes it an upsert.
-    if (entry.live && pending.has(id)) continue;
-    // A pending row that is no longer live left the projection in this same
-    // burst, and a subscriber holding it needs the delete.
-    if (entry.live || pending.has(id)) baseline.set(id, entry.revision);
-  }
-  return baseline;
-}
-
 /** Object-addressed comment delivery shared by the live hub and isolation tests. */
 export function broadcastCommentEventToViewers(
   viewers: Iterable<Viewer>,
@@ -194,18 +156,7 @@ class SessionHub {
   /** Archived count last sent; it only travels on a full list (see `flushSessionsBroadcast`). */
   private lastBroadcastArchivedCount: number | undefined;
   private lastPermanentAssistantUnread: boolean | undefined;
-  /** Coalesces a burst of Task mutations into one event batch + fan-out. */
-  private tasksBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  /**
-   * `{task id → revision}` as of the last flush; the next one diffs against it.
-   * Undefined until the first flush of the process — see {@link seedTaskBaseline}.
-   */
-  private lastFlushedTaskRevisions: Map<string, number> | undefined;
-  /** Ids reported by writes since the last flush (notify-with-ids). */
-  private pendingTaskIds = new Set<string>();
-  /** Gap tripwire for the `tasks` topic; see {@link taskEventSeq}. */
-  private tasksEventSeq = 0;
-  /** Sessions that were task-linked at the previous broadcast (see `flushTaskBroadcast`). */
+  /** Sessions task-linked at the previous Task flush; see `refreshTaskLinkedSessions`. */
   private taskLinkedSessions = new Set<string>();
 
   constructor() {
@@ -221,11 +172,9 @@ class SessionHub {
       for (const session of harnessRegistry.resident())
         if (isCodingAgentType(session.agentType)) session.broadcastState();
     });
-    subscribeTaskChanges((ids) => {
-      for (const id of ids) this.pendingTaskIds.add(id);
-      this.broadcastTasks();
-    });
     attachStateTopics((topic, msg) => this.broadcastTopic(topic, msg));
+    // A published Task change may have moved a session's task back-links.
+    stateTopicFor("tasks")!.onPublished(() => this.refreshTaskLinkedSessions());
     // A published Background change moved its owner's `backgroundActivity`.
     // This is the ONLY session-list effect background work has: run state and
     // unread stay untouched.
@@ -560,27 +509,12 @@ class SessionHub {
   }
 
   /**
-   * The `tasks` topic sequence a snapshot is taken at. The subscribe answer
-   * carries it so the client can tell a MISSED event batch (a gap) from an
-   * ordinary one; it is in-memory on purpose, because a reconnect resubscribes
-   * and gets a fresh baseline anyway (docs/state-sync.md).
-   */
-  taskEventSeq(): number {
-    return this.tasksEventSeq;
-  }
-
-  /**
    * Test seam: end every pending broadcast window now, as its timer would.
    * Writes made before the call still coalesce into one flush per domain; the
    * test only stops sleeping through the debounce. Resolves once a pending
    * session-list flush has sent.
    */
   async flushPendingBroadcastsForTests(): Promise<void> {
-    if (this.tasksBroadcastTimer) {
-      clearTimeout(this.tasksBroadcastTimer);
-      this.tasksBroadcastTimer = undefined;
-      this.flushTaskBroadcast();
-    }
     // Before the session list: a post-publish listener may request it.
     flushStateTopicsForTests();
     if (this.sessionsBroadcastTimer) {
@@ -590,95 +524,8 @@ class SessionHub {
     }
   }
 
-  /**
-   * A Task write happened. The authoritative rows reach subscribers as a
-   * `stateEvents` batch, never as a list: a status toggle used to push the whole
-   * active list (~140 KB) to every connected browser.
-   */
-  broadcastTasks(): void {
-    // Coalesced like the session list: a bulk edit fires this many times in a
-    // row. One trailing flush per burst diffs the same revisions and emits one
-    // batch, so a fifty-Task sweep is one message, not fifty.
-    if (this.tasksBroadcastTimer) clearTimeout(this.tasksBroadcastTimer);
-    this.tasksBroadcastTimer = setTimeout(() => {
-      this.tasksBroadcastTimer = undefined;
-      this.flushTaskBroadcast();
-    }, TASK_BROADCAST_DEBOUNCE_MS);
-  }
-
-  /**
-   * Diff the domain's `{id → revision}` map against the one last flushed:
-   * changed or new live ids become upserts carrying the row's summary, ids that
-   * left the live projection become deletes. Membership is what travels, so
-   * archiving is a delete and unarchiving an upsert. A touched id that was
-   * already outside the projection is reported as a delete too, so an open
-   * body of an archived Task hears that its linked Tasks changed.
-   */
-  private flushTaskBroadcast(): void {
-    const index = taskRevisionIndex();
-    const pending = this.pendingTaskIds;
-    this.pendingTaskIds = new Set();
-    const baseline =
-      this.lastFlushedTaskRevisions ?? seedTaskBaseline(index, pending);
-    const events: StateEvent<TaskSummary>[] = [];
-    const flushed = new Map<string, number>();
-    // Read once, and only when a row actually changed.
-    let blockerCounts: Map<string, number> | undefined;
-    for (const [id, entry] of index) {
-      if (!entry.live) continue;
-      if (baseline.get(id) === entry.revision) {
-        flushed.set(id, entry.revision);
-        continue;
-      }
-      // Summaries only. Bodies are the bulk of a Task payload (~350 KB of
-      // Markdown across the active list here) and no list surface renders them.
-      blockerCounts ??= openTaskBlockerCounts();
-      const item = taskSummaryFor(id, blockerCounts);
-      if (!item) {
-        // A live row with no summary cannot happen in one synchronous flush.
-        // If it ever does, carry the OLD revision forward so the next flush
-        // retries this row: recording the new one would tell every later flush
-        // the event had been sent and lose it silently.
-        console.warn(`[tasks] no summary for live Task ${id}; event deferred.`);
-        const previous = baseline.get(id);
-        if (previous !== undefined) flushed.set(id, previous);
-        continue;
-      }
-      flushed.set(id, entry.revision);
-      events.push({ kind: "upsert", id, revision: entry.revision, item });
-    }
-    for (const [id, revision] of baseline) {
-      if (flushed.has(id)) continue;
-      // A row that left the projection was archived or tombstoned; either way
-      // its revision was stamped by the write that removed it.
-      events.push({
-        kind: "delete",
-        id,
-        revision: index.get(id)?.revision ?? revision + 1,
-      });
-    }
-    // A write that touched a row ALREADY outside the projection — an archived
-    // Task whose linked Task was renamed, completed or unlinked — still owes
-    // its viewers a revision. It travels as a `delete`: a no-op for every list,
-    // which never held the row, and the newer revision an open body of that
-    // Task is waiting for. It never puts an archived summary back in the list.
-    for (const id of pending) {
-      if (flushed.has(id) || baseline.has(id)) continue;
-      const entry = index.get(id);
-      if (!entry || entry.live) continue;
-      events.push({ kind: "delete", id, revision: entry.revision });
-    }
-    this.lastFlushedTaskRevisions = flushed;
-    if (events.length > 0) {
-      this.tasksEventSeq += 1;
-      this.broadcastTopic("tasks", {
-        type: "stateEvents",
-        topic: "tasks",
-        seq: this.tasksEventSeq,
-        events,
-      });
-    }
-
+  /** The `tasks` kernel's post-publish listener: runs after every Task flush. */
+  private refreshTaskLinkedSessions(): void {
     // Session state carries a session's TASK BACK-LINKS, so only sessions that
     // are (or just stopped being) linked to a Task can have changed. Rebuilding
     // it for every live session meant one Task edit re-ran `toolExposure()` and

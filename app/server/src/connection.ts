@@ -48,7 +48,7 @@ import {
   type ThinkingLevel,
   type TimelineCacheDescriptor,
   type TaskListRequest,
-  type TaskListResponse,
+  type TaskSummary,
   type TaskProjectAssignmentUpdate,
   type InboxPositionEntry,
   type TaskReorderPlacement,
@@ -228,9 +228,8 @@ import {
   listTasks,
   markTaskProcessed,
   readTask,
-  taskRevisionDigest,
+  taskListMessage,
   taskRevision,
-  taskStateItems,
   reorderTasks,
   unarchiveTask,
   unlinkSessionEverywhere,
@@ -431,9 +430,10 @@ function markProcessedTasksFor(msg: ClientMessage): void {
   for (const id of tasksProcessedByUserCommand(msg)) {
     try {
       markTaskProcessed(id);
-    } catch {
+    } catch (err) {
       // Triage is bookkeeping ABOUT a command that already succeeded; it must
       // never turn a completed user action into a reported failure.
+      console.warn(`[tasks] Task ${id} was not triaged:`, errorText(err));
     }
   }
 }
@@ -1781,18 +1781,6 @@ export class Connection implements Viewer {
         this.onSubscribeStateTopic(topic, kernel, digestTopics.has(topic));
         continue;
       }
-      if (topic === "tasks") {
-        if (digestTopics.has(topic)) {
-          this.send({
-            type: "stateDigest",
-            topic,
-            seq: hub.taskEventSeq(),
-            entries: taskRevisionDigest(),
-          });
-        } else {
-          this.onListTasks({});
-        }
-      }
       if (topic === "worktrees") void this.onListWorktrees();
       // A library (skills, agents) is hand-authored on disk, so a subscribe is
       // a fresh SCAN, never a cached index. It answers through the topic
@@ -1814,15 +1802,13 @@ export class Connection implements Viewer {
 
   private onListTasks(request: TaskListRequest): void {
     try {
-      this.send({
-        type: "taskList",
-        list: this.taskListResponse(request),
-        seq: hub.taskEventSeq(),
-        // Only the canonical live snapshot can seed digest resubscribe. Filtered
-        // and archived reads remain explicit request/response projections.
-        revisions:
-          Object.keys(request).length === 0 ? taskRevisionDigest() : [],
-      });
+      this.send(
+        taskListMessage(
+          request,
+          this.taskListItems(request),
+          stateTopicFor("tasks")!.seq(),
+        ),
+      );
     } catch (err) {
       this.send({
         type: "error",
@@ -1848,7 +1834,13 @@ export class Connection implements Viewer {
     try {
       this.send(kernel.subscribeAnswer(digestRequested));
     } catch (err) {
-      if (topic === "projects")
+      if (topic === "tasks")
+        this.send({
+          type: "error",
+          message: `Failed to list tasks: ${errorText(err)}`,
+          target: { type: "task" },
+        });
+      else if (topic === "projects")
         this.send({
           type: "error",
           message: `Failed to list projects: ${errorText(err)}`,
@@ -1872,22 +1864,12 @@ export class Connection implements Viewer {
     try {
       if (ids.length > MAX_STATE_ITEM_IDS)
         throw new Error(`Too many state item ids (max ${MAX_STATE_ITEM_IDS})`);
-      const kernel = stateTopicFor(topic);
-      if (kernel) {
-        this.send({
-          type: "stateItems",
-          topic,
-          requestId,
-          events: kernel.items(ids),
-        } as ServerMessage);
-      } else if (topic === "tasks") {
-        this.send({
-          type: "stateItems",
-          topic,
-          requestId,
-          events: taskStateItems(ids),
-        });
-      }
+      this.send({
+        type: "stateItems",
+        topic,
+        requestId,
+        events: stateTopicFor(topic)!.items(ids),
+      } as ServerMessage);
     } catch (err) {
       const label = {
         tasks: "Task",
@@ -3117,14 +3099,14 @@ export class Connection implements Viewer {
    * pre-nudge read is what used to open a Task-attached session on a stale
    * `Status: todo`.
    */
-  private taskListResponse(request: TaskListRequest): TaskListResponse {
+  private taskListItems(request: TaskListRequest): TaskSummary[] {
     const session =
       request.sessionId && this.viewing
         ? { kind: this.viewing.kind, sessionId: request.sessionId }
         : undefined;
     const projectIdValue = cleanOptional(request.projectId);
     const queryValue = cleanOptional(request.query);
-    const items = listTasks({
+    return listTasks({
       ...(request.status !== undefined ? { status: request.status } : {}),
       ...(projectIdValue !== undefined ? { projectId: projectIdValue } : {}),
       ...(request.priority !== undefined ? { priority: request.priority } : {}),
@@ -3133,7 +3115,6 @@ export class Connection implements Viewer {
       ...(queryValue !== undefined ? { query: queryValue } : {}),
       includeArchived: Boolean(request.includeArchived),
     });
-    return { request, items, updatedAt: Date.now() };
   }
 
   /**

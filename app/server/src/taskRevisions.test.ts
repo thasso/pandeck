@@ -20,22 +20,27 @@ import {
   notifyTaskChange,
   readTask,
   reorderTasks,
-  subscribeTaskChanges,
   sweepCompletedTaskArchive,
-  taskRevisionIndex,
+  taskStateTopic,
   unarchiveTask,
   unlinkSessionEverywhere,
   updateTask,
   TASK_AUTO_ARCHIVE_AFTER_MS,
 } from "./tasks.ts";
 import { deleteProject, upsertProject } from "./projectRegistry.ts";
+import { recordStateReports } from "./test/stateReports.ts";
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 
-function revisionOf(id: string): number {
-  const entry = taskRevisionIndex().get(id);
+/** A Task's committed revision and membership, tombstones included. */
+function entryOf(id: string): { revision: number; live: boolean } {
+  const entry = taskStateTopic.revisions([id]).get(id);
   assert.ok(entry, `no revision row for Task ${id}`);
-  return entry.revision;
+  return entry;
+}
+
+function revisionOf(id: string): number {
+  return entryOf(id).revision;
 }
 
 /** Run `write` and assert it moved the revision of every id in `ids`. */
@@ -45,7 +50,7 @@ function movesRevisions(ids: string[], write: () => void): void {
   ids.forEach((id, index) => {
     assert.ok(
       revisionOf(id) > before[index]!,
-      `Task ${id} was written without reporting its id through notify()`,
+      `Task ${id} was written without touching its id`,
     );
   });
 }
@@ -116,7 +121,7 @@ test("every Task write reports the rows it touched", () => {
 
     movesRevisions([task.id], () => deleteTask(task.id));
     assert.equal(
-      taskRevisionIndex().get(task.id)?.live,
+      entryOf(task.id).live,
       false,
       "a deleted Task leaves the live projection but keeps a revision to delete with",
     );
@@ -210,18 +215,35 @@ test("deleting a linked Task reports the Tasks that lose the link", () => {
 });
 
 /**
- * Run `write` and return the id sets it notified, one entry per notification.
+ * Run `write` and return the id sets it reported for `tasks`, one entry per
+ * committed change set. A report made inside a transaction fails.
  */
 function heardDuring(write: () => void): string[][] {
-  const heard: string[][] = [];
-  const unsubscribe = subscribeTaskChanges((ids) => heard.push([...ids]));
+  const { tasks, stop } = recordStateReports();
   try {
     write();
   } finally {
-    unsubscribe();
+    stop();
   }
-  return heard;
+  return tasks();
 }
+
+test("an unlinked Task's status toggle reports exactly its own id", () => {
+  const alone = createTask({
+    title: "Toggled alone",
+    source: { createdBy: "user" },
+  });
+  try {
+    assert.deepEqual(
+      heardDuring(() =>
+        updateTask(alone.id, { status: "doing", actor: { kind: "user" } }),
+      ),
+      [[alone.id]],
+    );
+  } finally {
+    discard(alone.id);
+  }
+});
 
 test("a status, title or archive change reports every linked Task once", () => {
   const subject = createTask({
@@ -384,7 +406,7 @@ test("the retention sweep archives through the same seam", () => {
       "the sweep's archive reported its id like any other write",
     );
     assert.equal(
-      taskRevisionIndex().get(done.id)?.live,
+      entryOf(done.id).live,
       false,
       "an archived Task leaves the live projection, which is a delete event",
     );
@@ -407,11 +429,8 @@ test("every exported Task write is covered by the revision test", () => {
     "listSessionTasks",
     "listRelatedGlobalTasks",
     "findOriginTask",
-    "subscribeTaskChanges",
     "taskIndexVersion",
-    "taskRevisionIndex",
-    "taskRevisionDigest",
-    "taskStateItems",
+    "taskListMessage",
     "taskSummaryFor",
     "taskRevision",
     "taskLinkedSessionIds",

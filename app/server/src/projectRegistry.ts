@@ -489,14 +489,15 @@ export function deleteProject(id: string): {
   if (!deleted) throw new Error(`Project not found: ${id}`);
   // `remove` sweeps every edge touching the project, including the
   // `in_project` edges of its Tasks — so those Task rows change here, and read
-  // AFTER the sweep nothing records that they ever belonged to it. Report them
-  // through the Task domain's one change seam: a Task list showing a project
-  // that no longer exists has nothing left to repair it, now that a mutation
-  // broadcasts only the rows it touched.
+  // AFTER the sweep nothing records that they ever belonged to it. Touch them
+  // through the Task domain's one change seam, which joins this change set: a
+  // Task list showing a project that no longer exists has nothing left to
+  // repair it, now that a mutation broadcasts only the rows it touched.
   //
   // Its child Projects lose their `parent` edge in the same sweep, so their
-  // summaries change too: they are stamped in the delete's own change set.
-  const orphaned = withChangeSet((changes) => {
+  // summaries change too. One commit covers the tombstone, both stamps and the
+  // Initiatives holding the orphaned Tasks.
+  withChangeSet((changes) => {
     const tasks = incoming(projectNode(normalizedId), "in_project")
       .filter((edge) => edge.fromType === "task")
       .map((edge) => edge.fromId);
@@ -505,10 +506,8 @@ export function deleteProject(id: string): {
       .map((edge) => edge.fromId);
     projectStore.remove(normalizedId);
     changes.touch(projectTopicWrites, [normalizedId, ...children]);
-    return tasks;
+    if (tasks.length) notifyTaskChange(tasks);
   });
-  // After the Project commit: the Task stamp is not yet part of the change set.
-  if (orphaned.length) notifyTaskChange(orphaned);
   return { registry: readProjectRegistry(), deleted };
 }
 

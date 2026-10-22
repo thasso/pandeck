@@ -7,7 +7,15 @@
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { TaskInitiativeRef } from "@assistant/shared";
+import type {
+  ServerMessage,
+  StateEvent,
+  TaskInitiativeRef,
+  TaskSummary,
+} from "@assistant/shared";
+import { setStateChangeSink, withChangeSet } from "./db/changeSet.ts";
+import { getDb, withDbTransaction } from "./db/index.ts";
+import { hub } from "./hub.ts";
 import {
   addInitiativeMembers,
   archiveInitiative,
@@ -19,21 +27,27 @@ import {
   unarchiveInitiative,
   updateInitiative,
 } from "./initiatives.ts";
+import { stateTopicFor } from "./stateTopics.ts";
 import {
   createTask,
   deleteTask,
+  notifyTaskChange,
   readTask,
   reorderTasks,
   taskRevision,
-  taskStateItems,
   taskSummaryFor,
   updateTask,
 } from "./tasks.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import type { ToolCallContext, ToolResult } from "./mcp/tool.ts";
 import { taskToolsForKind } from "./tools/tasks/taskTools.ts";
-import { taskStore } from "./db/taskStore.ts";
+import { taskStore, taskTopicWrites } from "./db/taskStore.ts";
 import { buildTaskContextAttachment } from "./taskContext.ts";
+import {
+  failInitiativeFanOut,
+  forwardStateReports,
+  recordStateReports,
+} from "./test/stateReports.ts";
 
 function task(title: string, parentId?: string): string {
   return createTask({
@@ -139,7 +153,9 @@ test("only a single-Task read carries them: never a summary or a state event", (
   initiative("Summary", [member]);
   assert.ok(readTask(member)!.initiatives?.length);
   assert.equal("initiatives" in taskSummaryFor(member)!, false);
-  const [event] = taskStateItems([member]);
+  const [event] = stateTopicFor("tasks")!.items([
+    member,
+  ]) as StateEvent<TaskSummary>[];
   assert.equal(event?.kind, "upsert");
   assert.equal(event?.kind === "upsert" && "initiatives" in event.item, false);
 });
@@ -335,4 +351,213 @@ test("task_read by id lists the Initiatives; a list read does not", async () => 
   const tree = await taskRead({ id: epic, includeSubtasks: true });
   assert.ok(tree.find((item) => item.id === epic)?.initiatives);
   assert.equal(tree.find((item) => item.id === sub)?.initiatives, undefined);
+});
+
+/**
+ * A Task held by its own Initiative, settled, with the committed revisions
+ * every `notifyTaskChange` case compares against.
+ */
+async function heldFixture(title: string): Promise<{
+  id: string;
+  iid: string;
+  t0: number;
+  i0: number;
+  taskNow: () => number;
+  initiativeNow: () => number;
+}> {
+  const id = task(title);
+  const iid = initiative(`${title} holder`, [id]);
+  await hub.flushPendingBroadcastsForTests();
+  const taskNow = () => taskRevision(id)!;
+  const initiativeNow = () =>
+    initiativeStateTopic.revisions([iid]).get(iid)!.revision;
+  return {
+    id,
+    iid,
+    t0: taskNow(),
+    i0: initiativeNow(),
+    taskNow,
+    initiativeNow,
+  };
+}
+
+const pairs = (reports: Array<{ topic: string; ids: string[] }>) =>
+  reports.map((report) => [report.topic, report.ids]);
+
+test("notifyTaskChange with no transaction stamps the Task and its holders in one change set", async () => {
+  const f = await heldFixture("Notify alone");
+  // Each report with the holder's committed revision as it arrives: a Task
+  // touch committed on its own would report before that stamp existed.
+  const seen: Array<[string, string[], number]> = [];
+  const previous = setStateChangeSink((topic, ids) => {
+    assert.equal(getDb().isTransaction, false, "reported before COMMIT");
+    seen.push([topic, [...ids], f.initiativeNow()]);
+  });
+  try {
+    notifyTaskChange([f.id]);
+  } finally {
+    setStateChangeSink(previous);
+  }
+  assert.ok(f.taskNow() > f.t0);
+  assert.ok(f.initiativeNow() > f.i0);
+  assert.deepEqual(seen, [
+    ["tasks", [f.id], f.initiativeNow()],
+    ["initiatives", [f.iid], f.initiativeNow()],
+  ]);
+});
+
+test("notifyTaskChange with no transaction and a failed fan-out commits neither stamp", async () => {
+  const f = await heldFixture("Notify fan-out failure");
+  const fault = new Error("injected fan-out failure");
+  const restore = failInitiativeFanOut(fault, { callThrough: true });
+  const { reports, stop } = recordStateReports();
+  try {
+    assert.throws(
+      () => notifyTaskChange([f.id]),
+      (error) => error === fault,
+    );
+  } finally {
+    stop();
+    restore();
+  }
+  assert.equal(f.taskNow(), f.t0);
+  assert.equal(f.initiativeNow(), f.i0);
+  assert.deepEqual(reports, []);
+});
+
+test("notifyTaskChange joins a change set that rolls back: nothing stamped, nothing reported", async () => {
+  const f = await heldFixture("Notify joined rollback");
+  const { reports, stop } = recordStateReports();
+  try {
+    assert.throws(
+      () =>
+        withChangeSet(() => {
+          notifyTaskChange([f.id]);
+          throw new Error("the larger write fails");
+        }),
+      /the larger write fails/,
+    );
+  } finally {
+    stop();
+  }
+  assert.equal(f.taskNow(), f.t0);
+  assert.equal(f.initiativeNow(), f.i0);
+  assert.deepEqual(reports, []);
+});
+
+test("notifyTaskChange joins a change set that commits, at its revision, reported after", async () => {
+  const f = await heldFixture("Notify joined commit");
+  const { reports, stop } = recordStateReports();
+  let revision: number;
+  try {
+    revision = withChangeSet((changes) => {
+      notifyTaskChange([f.id]);
+      return changes.revision(taskTopicWrites);
+    });
+  } finally {
+    stop();
+  }
+  assert.equal(f.taskNow(), revision);
+  assert.ok(f.initiativeNow() > f.i0);
+  assert.deepEqual(pairs(reports), [
+    ["tasks", [f.id]],
+    ["initiatives", [f.iid]],
+  ]);
+});
+
+/** A `tasks` and `initiatives` subscriber, and the events it received for `ids`. */
+function topicViewer() {
+  const messages: ServerMessage[] = [];
+  const viewer = {
+    send: (message: ServerMessage) => messages.push(message),
+    wantsTopic: (topic: string) => topic === "tasks" || topic === "initiatives",
+  };
+  hub.register(viewer);
+  return {
+    eventsOf: (topic: string, id: string) =>
+      messages.flatMap((message) =>
+        message.type === "stateEvents" && message.topic === topic
+          ? (message.events as StateEvent<unknown>[])
+              .filter((event) => event.id === id)
+              .map((event) => [event.kind, event.revision])
+          : [],
+      ),
+    stop: () => hub.unregister(viewer),
+  };
+}
+
+test("notifyTaskChange in a foreign transaction that commits reports at once and publishes the new revisions", async () => {
+  const f = await heldFixture("Notify foreign commit");
+  const viewer = topicViewer();
+  const { reports, stop } = forwardStateReports();
+  let inside: { task: number; initiative: number };
+  try {
+    inside = withDbTransaction(() => {
+      notifyTaskChange([f.id]);
+      return { task: f.taskNow(), initiative: f.initiativeNow() };
+    });
+    assert.ok(inside.task > f.t0);
+    assert.ok(inside.initiative > f.i0);
+    assert.deepEqual(reports, [
+      { topic: "tasks", ids: [f.id], inTransaction: true },
+      { topic: "initiatives", ids: [f.iid], inTransaction: true },
+    ]);
+    assert.equal(f.taskNow(), inside.task);
+    assert.equal(f.initiativeNow(), inside.initiative);
+    await hub.flushPendingBroadcastsForTests();
+    assert.deepEqual(viewer.eventsOf("tasks", f.id), [["upsert", inside.task]]);
+    assert.deepEqual(viewer.eventsOf("initiatives", f.iid), [
+      ["upsert", inside.initiative],
+    ]);
+  } finally {
+    stop();
+    viewer.stop();
+  }
+});
+
+test("notifyTaskChange in a foreign transaction that rolls back publishes the committed state", async () => {
+  const f = await heldFixture("Notify foreign rollback");
+  const viewer = topicViewer();
+  const { reports, stop } = forwardStateReports();
+  const marker = new Error("the foreign transaction fails");
+  try {
+    assert.throws(
+      () =>
+        withDbTransaction(() => {
+          notifyTaskChange([f.id]);
+          throw marker;
+        }),
+      (error) => error === marker,
+    );
+    assert.equal(f.taskNow(), f.t0);
+    assert.equal(f.initiativeNow(), f.i0);
+    assert.deepEqual(reports, [
+      { topic: "tasks", ids: [f.id], inTransaction: true },
+      { topic: "initiatives", ids: [f.iid], inTransaction: true },
+    ]);
+    await hub.flushPendingBroadcastsForTests();
+    assert.deepEqual(viewer.eventsOf("tasks", f.id), [["upsert", f.t0]]);
+    assert.deepEqual(viewer.eventsOf("initiatives", f.iid), [["upsert", f.i0]]);
+    assert.equal(readTask(f.id)?.archivedAt, undefined);
+    assert.deepEqual(
+      initiativesOf(f.id)?.map((ref) => ref.id),
+      [f.iid],
+    );
+  } finally {
+    stop();
+    viewer.stop();
+  }
+});
+
+test("notifyTaskChange with holders: false stamps no Initiative", async () => {
+  const f = await heldFixture("Notify without holders");
+  const { reports, stop } = recordStateReports();
+  try {
+    notifyTaskChange([f.id], { holders: false });
+  } finally {
+    stop();
+  }
+  assert.deepEqual(pairs(reports), [["tasks", [f.id]]]);
+  assert.ok(f.taskNow() > f.t0);
+  assert.equal(f.initiativeNow(), f.i0);
 });

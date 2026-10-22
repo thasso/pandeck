@@ -149,8 +149,12 @@ transaction:
   link and none of that operation is written. Earlier operations in the batch
   stand, as before. One operation may name a given Task only once across
   `addLinks` and `removeLinks`.
+- Every Task write owns one change set (`docs/state-sync.md`): its rows and
+  their revisions commit together and are reported after the commit. The
+  Initiative fan-out commits with them, so a failed fan-out fails the write and
+  nothing of it is written.
 - `createTask`, `updateTask`, `deleteTask` and `reorderTasks` own their
-  transaction and notify after it commits, so they are top-level only and refuse
+  transaction and report after it commits, so they are top-level only and refuse
   to run inside an open one. A reorder is one write: a placement refused late in
   the list leaves the earlier ones unwritten. There are no savepoints: nested, a
   caught failure would commit half an operation without an event.

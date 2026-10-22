@@ -4,20 +4,23 @@
  * the connections showing that topic.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import type { ServerMessage, StateEvent, TaskSummary } from "@assistant/shared";
+import { harnessRegistry } from "./harnesses/registry.ts";
 import { hub } from "./hub.ts";
 import {
   archiveTask,
   createTask,
   deleteTask,
+  linkSessionToTask,
   readTask,
-  taskRevisionIndex,
+  taskRevision,
   unarchiveTask,
+  unlinkSessionEverywhere,
   updateTask,
 } from "./tasks.ts";
 
-/** The task broadcast is coalesced (see `hub.flushTaskBroadcast`), so a test ends its window. */
+/** The `tasks` kernel coalesces its flush (`stateTopicKernel.ts`), so a test ends its window. */
 const settled = () => hub.flushPendingBroadcastsForTests();
 
 function lastBatch(messages: ServerMessage[]): {
@@ -52,9 +55,8 @@ test("Task mutations reach topic subscribers as state events, never as a list", 
     await settled();
 
     const create = lastBatch(messages);
-    // The FIRST flush of a process carries only what was written, never the
-    // whole live projection: subscribers hold a snapshot read from this same
-    // database (see `seedTaskBaseline`).
+    // A flush carries only what was written, never the whole live projection:
+    // the kernel publishes the ids the write reported.
     assert.deepEqual(
       create.events.map((event) => event.id),
       [created.id],
@@ -82,7 +84,6 @@ test("Task mutations reach topic subscribers as state events, never as a list", 
       "delete",
       "archiving leaves the live projection, so it is a delete",
     );
-    assert.equal(archived.seq, create.seq + 1, "each batch advances the seq");
 
     unarchiveTask(created.id);
     await settled();
@@ -107,42 +108,6 @@ test("Task mutations reach topic subscribers as state events, never as a list", 
   } finally {
     hub.unregister(viewer);
     hub.unregister(quiet);
-  }
-});
-
-test("one flush carries only the rows that changed", async () => {
-  const messages: ServerMessage[] = [];
-  const viewer = {
-    send: (message: ServerMessage) => messages.push(message),
-    wantsTopic: (topic: string) => topic === "tasks",
-  };
-  const untouched = createTask({
-    title: "Stays put",
-    source: { createdBy: "user" },
-  });
-  const moved = createTask({
-    title: "Gets toggled",
-    source: { createdBy: "user" },
-  });
-  await settled();
-  hub.register(viewer);
-  try {
-    updateTask(moved.id, { status: "doing", actor: { kind: "user" } });
-    await settled();
-    const batch = lastBatch(messages);
-    assert.deepEqual(
-      batch.events.map((event) => event.id),
-      [moved.id],
-      "a status toggle is one row, not the whole list",
-    );
-    assert.ok(
-      JSON.stringify(batch).length < 4_000,
-      "the broadcast stays a small event batch",
-    );
-  } finally {
-    hub.unregister(viewer);
-    deleteTask(untouched.id);
-    deleteTask(moved.id);
   }
 });
 
@@ -314,7 +279,7 @@ test("an already-archived Task hears its linked Tasks change, without rejoining 
       assert.ok(messages.length > before, "the write was broadcast");
       return batch.events.find((event) => event.id === shelved.id);
     };
-    const revision = () => taskRevisionIndex().get(shelved.id)!.revision;
+    const revision = () => taskRevision(shelved.id)!;
 
     for (const [what, write] of [
       ["rename", () => updateTask(blocker.id, { title: "Blocker renamed" })],
@@ -358,5 +323,43 @@ test("an already-archived Task hears its linked Tasks change, without rejoining 
         /* already gone */
       }
     }
+  }
+});
+
+test("a Task flush refreshes the state of the sessions linked to a Task, and of one just unlinked", async () => {
+  await settled();
+  const fake = (sessionId: string) => ({
+    sessionId,
+    broadcastState: vi.fn(),
+  });
+  const linked = fake(`refresh-linked-${Date.now()}`);
+  const other = fake(`refresh-other-${Date.now()}`);
+  const resident = vi
+    .spyOn(harnessRegistry, "resident")
+    .mockReturnValue([linked, other] as never);
+  const task = createTask({
+    title: "Session refresh",
+    source: { createdBy: "user" },
+  });
+  try {
+    await settled();
+    linked.broadcastState.mockClear();
+    other.broadcastState.mockClear();
+
+    linkSessionToTask(task.id, { sessionId: linked.sessionId });
+    assert.equal(linked.broadcastState.mock.calls.length, 0, "not before");
+    assert.equal(other.broadcastState.mock.calls.length, 0, "not before");
+    await settled();
+    assert.equal(linked.broadcastState.mock.calls.length, 1);
+    assert.equal(other.broadcastState.mock.calls.length, 0);
+
+    // Its last link gone, the session still shows it until one more refresh.
+    unlinkSessionEverywhere(linked.sessionId);
+    await settled();
+    assert.equal(linked.broadcastState.mock.calls.length, 2);
+    assert.equal(other.broadcastState.mock.calls.length, 0);
+  } finally {
+    resident.mockRestore();
+    deleteTask(task.id);
   }
 });

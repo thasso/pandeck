@@ -14,7 +14,6 @@ import {
   shiftLocalDateKey,
   startTaskAutoArchiveSweep,
   stopTaskAutoArchiveSweep,
-  subscribeTaskChanges,
   sweepCompletedTaskArchive,
   TASK_AUTO_ARCHIVE_AFTER_MS,
   taskIndexVersion,
@@ -22,8 +21,10 @@ import {
   unarchiveTask,
   updateTask,
 } from "./tasks.ts";
+import { getDb } from "./db/index.ts";
 import { taskStore } from "./db/taskStore.ts";
 import { updateForgejoSettings } from "./forgejoSettings.ts";
+import { recordStateReports } from "./test/stateReports.ts";
 
 test("tasks list/save/read use the current task shape without inert compatibility fields", () => {
   const created = createTask({
@@ -273,11 +274,8 @@ test("done Task retention archives old roots but guards children of active paren
 
 test("a failed post-write retention sweep cannot fail or hide the originating write", () => {
   const beforeVersion = taskIndexVersion();
-  let notifications = 0;
   let createdId: string | undefined;
-  const off = subscribeTaskChanges(() => {
-    notifications += 1;
-  });
+  const { tasks, stop } = recordStateReports();
   const list = vi.spyOn(taskStore, "list").mockImplementationOnce(() => {
     throw new Error("injected retention read failure");
   });
@@ -292,16 +290,41 @@ test("a failed post-write retention sweep cannot fail or hide the originating wr
     });
     assert.ok(createdId && readTask(createdId));
     assert.equal(taskIndexVersion(), beforeVersion + 1);
-    assert.equal(
-      notifications,
-      1,
-      "the durable write still notified listeners",
+    assert.deepEqual(
+      tasks(),
+      [[createdId]],
+      "the durable write was still reported",
     );
     assert.match(String(warn.mock.calls[0]?.[0]), /post-write auto-archive/);
   } finally {
-    off();
+    stop();
     list.mockRestore();
     warn.mockRestore();
+    if (createdId) deleteTask(createdId);
+  }
+});
+
+test("the post-write retention sweep runs after the write committed and reported", () => {
+  let createdId: string | undefined;
+  const { tasks, stop } = recordStateReports();
+  const seen: Array<{ inTransaction: boolean; reports: number }> = [];
+  const original = taskStore.list;
+  const list = vi.spyOn(taskStore, "list").mockImplementation((...args) => {
+    seen.push({
+      inTransaction: getDb().isTransaction,
+      reports: tasks().length,
+    });
+    return original(...args);
+  });
+  try {
+    createdId = createTask({
+      title: "Sweep follows its write",
+      source: { createdBy: "user" },
+    }).id;
+    assert.deepEqual(seen[0], { inTransaction: false, reports: 1 });
+  } finally {
+    stop();
+    list.mockRestore();
     if (createdId) deleteTask(createdId);
   }
 });

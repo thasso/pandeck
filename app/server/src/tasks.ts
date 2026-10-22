@@ -13,14 +13,15 @@
 import type {
   AgentType,
   Harness,
+  ServerMessage,
   StateDigestEntry,
-  StateEvent,
   TaskBackRef,
   TaskExternalLink,
   TaskExternalLinkSource,
   TaskExternalLinkType,
   TaskInitiativeRef,
   TaskItem,
+  TaskListRequest,
   TaskLinkedTask,
   TaskLinkInput,
   TaskLinks,
@@ -39,8 +40,13 @@ import {
   normalizeTaskTicket,
   taskSummaryOf,
 } from "@assistant/shared";
-import { getDb, withDbTransaction } from "./db/index.ts";
-import { taskStore, type TaskStatusActor } from "./db/taskStore.ts";
+import { touchStateTopic, withChangeSet } from "./db/changeSet.ts";
+import { getDb } from "./db/index.ts";
+import {
+  taskStore,
+  taskTopicWrites,
+  type TaskStatusActor,
+} from "./db/taskStore.ts";
 import {
   initiativeStore,
   type InitiativeMembership,
@@ -57,6 +63,7 @@ import {
 import { getForgejoBaseUrl } from "./forgejoSettings.ts";
 import { localDateOf } from "@assistant/shared/zonedTime";
 import { userTimeZone } from "./userProfile.ts";
+import type { StateTopicDescriptor } from "./stateTopicKernel.ts";
 
 export interface TaskListFilter {
   status?: TaskStatus;
@@ -142,77 +149,94 @@ export interface UpdateTaskInput {
 /* ----------------------------- change events ----------------------------- */
 
 let version = 1;
-const listeners = new Set<TaskChangeListener>();
 let autoArchiveSweepRunning = false;
 let autoArchiveTimer: ReturnType<typeof setInterval> | undefined;
 
 export const TASK_AUTO_ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const TASK_AUTO_ARCHIVE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
-/** Receives the ids a write touched, already stamped with their new revisions. */
-export type TaskChangeListener = (ids: readonly string[]) => void;
-
-export function subscribeTaskChanges(fn: TaskChangeListener): () => void {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-
 /**
- * Announce a Task write — and, in the SAME act, stamp the touched rows'
- * revisions (docs/state-sync.md).
+ * Stamp a Task write's touched rows through `stamp`, inside the write's
+ * transaction (docs/state-sync.md).
  *
- * Notify-with-ids is deliberately the only way to bump a revision: a bump that
- * could happen without a notification (or a notification without a bump) is a
- * row whose viewers either never hear about the change or discard the event
- * that carries it. Every write path in this module therefore reports what it
- * touched, INCLUDING the rows a cascade moved (an inherited project) rather
+ * Touch-with-ids is deliberately the only way to move a revision: a stamp that
+ * could happen without a report (or a report without a stamp) is a row whose
+ * viewers either never hear about the change or discard the event that
+ * carries it. Every write path in this module therefore touches what it
+ * changed, INCLUDING the rows a cascade moved (an inherited project) rather
  * than only the row the caller named.
  *
- * The same act reports the Initiatives that hold a touched Task, as a member
- * or below one, because their progress counts and graphs read these rows
- * (docs/initiatives.md). A write that can take a Task OUT of an Initiative — a
+ * The same act stamps the Initiatives that hold a touched Task, as a member or
+ * below one, because their progress counts and graphs read these rows
+ * (docs/initiatives.md). That fan-out joins the transaction, so its failure
+ * fails the write. A write that can take a Task OUT of an Initiative — a
  * delete, a move to another parent — reads the holders before it writes and
  * passes them as `formerHolders`: afterwards nothing links them any more. Such
- * a write also reports the subtree of a Task whose `initiatives` it changed
+ * a write also touches the subtree of a Task whose `initiatives` it changed
  * (`movedMembershipSubtrees`), since every Task below lists them too.
-
  */
-function notify(
+function touchTasks(
+  stamp: (ids: readonly string[]) => void,
   ids: Iterable<string>,
   formerHolders: readonly number[] = [],
   holders = true,
 ): void {
-  // A write may make old completed work eligible (most importantly, completing
-  // its active parent). Retention is best-effort: this write is already durable,
-  // so a sweep failure must never make the caller see a false save failure or
-  // suppress this write's version/broadcast. The hourly sweep retries later.
-  if (!autoArchiveSweepRunning) runTaskAutoArchiveSweep("post-write");
+  const numeric = [
+    ...new Set(
+      [...ids]
+        .map((id) => parseId(id))
+        .filter((id): id is number => id !== undefined),
+    ),
+  ];
+  stamp(numeric.map(String));
   version += 1;
-  const touched = [...new Set(ids)];
-  const numeric = touched
-    .map((id) => parseId(id))
-    .filter((id): id is number => id !== undefined);
-  if (numeric.length) taskStore.stampRevisions(numeric);
-  try {
-    if (holders) initiativeStore.touchHolders(numeric, formerHolders);
-  } catch (error) {
-    // The Task write is durable already; a failed fan-out leaves the counts of
-    // the Initiatives holding it behind until their next write, so say so.
-    const detail = error instanceof Error ? error.message : String(error);
-    console.warn(`[tasks] Initiative fan-out failed: ${detail}`);
-  }
-  for (const fn of listeners) {
-    try {
-      fn(touched);
-    } catch {
-      /* listener errors must not break writes */
-    }
-  }
+  if (holders) initiativeStore.touchHolders(numeric, formerHolders);
+}
+
+/** Touch Tasks inside one write's change set; see {@link writeTasks}. */
+type TaskTouch = (
+  ids: Iterable<string>,
+  formerHolders?: readonly number[],
+) => void;
+
+/**
+ * Run one Task write in its OWN change set: its rows, their revisions and the
+ * Initiative fan-out commit together or not at all, and the touched ids are
+ * reported after COMMIT. Top-level only, like every mutator here.
+ *
+ * A write that touched anything may make old completed work eligible (most
+ * importantly, completing its active parent), so the retention sweep follows
+ * it — after the commit and report, as separate writes. Retention is
+ * best-effort: this write is already durable, so a sweep failure must never
+ * make the caller see a false save failure. The hourly sweep retries later.
+ */
+function writeTasks<T>(fn: (touch: TaskTouch) => T): T {
+  let touched = false;
+  const value = withChangeSet((changes) =>
+    fn((ids, formerHolders) => {
+      touched = true;
+      touchTasks(
+        (numeric) => changes.touch(taskTopicWrites, numeric),
+        ids,
+        formerHolders,
+      );
+    }),
+  );
+  if (touched && !autoArchiveSweepRunning)
+    runTaskAutoArchiveSweep("post-write");
+  return value;
 }
 
 /**
- * Public trigger for a task-list change originating outside this module (e.g. a
- * Project removal orphaning a Task's project link), so viewers see the change. The touched ids are required — they ARE the revision bump.
+ * Public trigger for a Task change originating outside this module (e.g. a
+ * Project removal orphaning a Task's project link), so viewers see the change.
+ * The touched ids are required — they ARE the revision bump.
+ *
+ * It joins wherever the caller stands (`touchStateTopic`): a running change
+ * set, which reports after its commit; another open transaction, which stamps
+ * there and reports at once; or, with none open, its own change set, so the
+ * Tasks and the Initiatives holding them commit together. It runs no retention
+ * sweep: a cross-domain change moves no status, completion or parent.
  *
  * An Initiative write reporting the Tasks whose `initiatives` it changed passes
  * `{ holders: false }`: those Task rows did not change, so the Initiatives
@@ -223,81 +247,85 @@ export function notifyTaskChange(
   ids: Iterable<string>,
   options: { holders?: boolean } = {},
 ): void {
-  notify(ids, [], options.holders ?? true);
-}
-
-/**
- * Every Task's state-event revision and live-projection membership.
- *
- * The broadcast flush diffs this against the map it last sent; it deliberately
- * does NOT build the list, since the point of the event model is that only the
- * changed rows are ever projected and serialized.
- */
-export function taskRevisionIndex(): Map<
-  string,
-  { revision: number; live: boolean }
-> {
-  const index = new Map<string, { revision: number; live: boolean }>();
-  for (const row of taskStore.revisions())
-    index.set(String(row.id), { revision: row.revision, live: row.live });
-  return index;
+  const touch = () =>
+    touchTasks(
+      (numeric) => touchStateTopic(taskTopicWrites, numeric),
+      ids,
+      [],
+      options.holders ?? true,
+    );
+  if (getDb().isTransaction) touch();
+  else withChangeSet(touch);
 }
 
 /** The compact revision digest of exactly the canonical live projection. */
-export function taskRevisionDigest(): StateDigestEntry[] {
-  const entries: StateDigestEntry[] = [];
-  for (const [id, entry] of taskRevisionIndex())
-    if (entry.live) entries.push({ id, revision: entry.revision });
-  return entries;
+function taskRevisionDigest(): StateDigestEntry[] {
+  return taskStore
+    .revisions()
+    .filter((row) => row.live)
+    .map((row) => ({ id: String(row.id), revision: row.revision }));
+}
+
+type TaskListMessage = Extract<ServerMessage, { type: "taskList" }>;
+
+/**
+ * The one canonical `taskList` answer: the subscribe snapshot and an explicit
+ * `listTasks` request both build it here. Only the unfiltered live list can
+ * seed a digest resubscribe; filtered and archived reads remain explicit
+ * request/response projections.
+ */
+export function taskListMessage(
+  request: TaskListRequest,
+  items: TaskSummary[],
+  seq: number,
+): TaskListMessage {
+  return {
+    type: "taskList",
+    list: { request, items, updatedAt: Date.now() },
+    seq,
+    revisions: Object.keys(request).length === 0 ? taskRevisionDigest() : [],
+  };
 }
 
 /**
- * Authoritative summaries for a digest diff, still expressed as ordinary state
- * events so targeted catch-up and live broadcasts share one apply seam.
+ * The `tasks` topic's read half. The live projection is neither archived nor
+ * tombstoned: archiving is a delete, unarchiving an upsert, and a write that
+ * touches a Task already outside it — an archived Task whose linked Task was
+ * renamed, completed or unlinked — deletes again at its new revision: a no-op
+ * for every list, and the newer revision an open body of that Task waits for.
+ * Summaries only: bodies are the bulk of a Task payload and no list renders
+ * them.
  */
-export function taskStateItems(
-  ids: readonly string[],
-): StateEvent<TaskSummary>[] {
-  const index = taskRevisionIndex();
-  const events: StateEvent<TaskSummary>[] = [];
-  let blockerCounts: Map<string, number> | undefined;
-  for (const id of new Set(ids)) {
-    const entry = index.get(id);
-    if (!entry) continue;
-    if (!entry.live) {
-      events.push({ kind: "delete", id, revision: entry.revision });
-      continue;
-    }
-    blockerCounts ??= openTaskBlockerCounts();
-    const item = taskSummaryFor(id, blockerCounts);
-    if (item)
-      events.push({ kind: "upsert", id, revision: entry.revision, item });
-  }
-  return events;
-}
+export const taskStateTopic = {
+  topic: "tasks",
+  revisions: (ids) =>
+    new Map(
+      taskStore
+        .revisionsFor(ids)
+        .map((row) => [
+          String(row.id),
+          { revision: row.revision, live: row.live },
+        ]),
+    ),
+  summary: (id) => taskSummaryFor(id) ?? undefined,
+  snapshot: (seq) =>
+    taskListMessage({}, listTasks({ includeArchived: false }), seq),
+  digest: taskRevisionDigest,
+  batchMax: 200,
+} satisfies StateTopicDescriptor<"tasks", TaskSummary, TaskListMessage>;
 
 /**
  * The live-projection summary for one Task, or null when it is not in it
  * (archived, tombstoned, never existed) — which is exactly when the domain owes
- * its viewers a `delete` rather than an `upsert`.
- *
- * A caller projecting several Tasks passes one `openTaskBlockerCounts()` map
- * for the batch; alone, the Task's own count is one indexed query.
+ * its viewers a `delete` rather than an `upsert`. Its open-blocker count is one
+ * indexed query.
  */
-export function taskSummaryFor(
-  id: string,
-  blockerCounts?: ReadonlyMap<string, number>,
-): TaskSummary | null {
+export function taskSummaryFor(id: string): TaskSummary | null {
   const nid = parseId(id);
   const item = nid === undefined ? null : readTaskItem(nid, false);
   if (!item || item.archivedAt !== undefined) return null;
   return toSummary(
-    withOpenBlockers(
-      item,
-      blockerCounts
-        ? blockerCounts.get(id)
-        : taskStore.openBlockerCounts(nid).get(nid!),
-    ),
+    withOpenBlockers(item, taskStore.openBlockerCounts(nid).get(nid!)),
   );
 }
 
@@ -580,10 +608,10 @@ export function findOriginTask(sessionId: string): TaskBackRef | undefined {
 /* -------------------------------- mutate --------------------------------- */
 
 /**
- * `createTask`, `updateTask` and `deleteTask` own their transaction and notify
+ * `createTask`, `updateTask` and `deleteTask` own their change set and report
  * only after it commits, so they are TOP-LEVEL ONLY. Inside a caller's
  * transaction there is no savepoint to roll back to: a caught failure would
- * commit half an operation with no event, and a success would stamp revisions
+ * commit half an operation with no event, and a success would report revisions
  * before the outer commit. Refused before anything is written.
  */
 function assertTopLevelWrite(name: string): void {
@@ -601,8 +629,8 @@ export function createTask(input: CreateTaskInput): TaskItem {
   const ticketValue =
     input.ticket !== undefined ? ticketInput(input.ticket) : undefined;
   const linkChanges = taskLinkChanges(input.addLinks, undefined);
-  // One transaction: a link that breaks a rule leaves no half-made Task behind.
-  const { task, touched } = withDbTransaction(() => {
+  // One change set: a link that breaks a rule leaves no half-made Task behind.
+  const task = writeTasks((touch) => {
     const task = taskStore.create({
       title: cleanText(input.title, 200),
       description: stripInjectedRelayHistory(input.description ?? ""),
@@ -645,12 +673,13 @@ export function createTask(input: CreateTaskInput): TaskItem {
         ),
       sessionRefs: normalizeSessionRefs(input.sessionRefs),
     });
-    return {
-      task,
-      touched: [...cascaded, ...applyTaskLinkChanges(task.id, linkChanges)],
-    };
+    touch([
+      String(task.id),
+      ...cascaded,
+      ...applyTaskLinkChanges(task.id, linkChanges),
+    ]);
+    return task;
   });
-  notify([String(task.id), ...touched]);
   return readTask(String(task.id))!;
 }
 
@@ -676,8 +705,8 @@ function writeTask(id: string, patch: UpdateTaskInput): TaskItem {
       ? initiativeStore.membershipsOf([nid])
       : undefined;
 
-  // One transaction: a link that breaks a rule writes none of the update.
-  const touched = withDbTransaction(() => {
+  // One change set: a link that breaks a rule writes none of the update.
+  writeTasks((touch) => {
     if (
       statusWrite.status !== undefined &&
       statusWrite.status !== current.status
@@ -759,24 +788,21 @@ function writeTask(id: string, patch: UpdateTaskInput): TaskItem {
         : {}),
     });
     if (patch.parentId !== undefined) dropNestedMemberships([nid]);
-    return [
-      ...cascaded,
-      ...applyTaskLinkChanges(nid, linkChanges),
-      ...(linkedStateChanged(current, patch, statusWrite.status)
-        ? taskStore.linkedTaskIds(nid).map(String)
-        : []),
-    ];
+    touch(
+      [
+        id,
+        ...cascaded,
+        ...applyTaskLinkChanges(nid, linkChanges),
+        ...(linkedStateChanged(current, patch, statusWrite.status)
+          ? taskStore.linkedTaskIds(nid).map(String)
+          : []),
+        ...(membershipBefore
+          ? movedMembershipSubtrees(membershipBefore, [nid])
+          : []),
+      ],
+      formerHolders,
+    );
   });
-  notify(
-    [
-      id,
-      ...touched,
-      ...(membershipBefore
-        ? movedMembershipSubtrees(membershipBefore, [nid])
-        : []),
-    ],
-    formerHolders,
-  );
   return readTask(id)!;
 }
 
@@ -814,8 +840,8 @@ export function unarchiveTask(id: string, actor?: TaskStatusActor): TaskItem {
 
 /**
  * Archive Tasks completed more than 14 days ago unless their direct parent is
- * still active. Each eligible row goes through the ordinary Task write, so
- * Task change notifications and broadcasts remain the only lifecycle path.
+ * still active. Each eligible row goes through the ordinary Task write, with
+ * its own change set, so that write stays the only lifecycle path.
  */
 export function sweepCompletedTaskArchive(now = Date.now()): string[] {
   if (autoArchiveSweepRunning) return [];
@@ -880,26 +906,28 @@ export function deleteTask(id: string): void {
   const nid = parseId(id);
   if (nid === undefined || !taskStore.get(nid))
     throw new Error(`Task not found: ${id}`);
-  // Read the children BEFORE the edge cleanup: `remove` drops this Task's
-  // `subtask` edges, so every child silently becomes a root and nothing
-  // afterwards can tell that it ever had this parent. A child left unreported
-  // keeps a `parentId` pointing at a Task that no longer exists, and the next
-  // Backlog drag sends that dead id back as a placement — which `reorderTasks`
-  // refuses, failing the whole reorder.
-  const orphaned = taskStore.children(nid).map((child) => String(child.id));
-  // Its linked Tasks lose their links to it in the same cleanup, and their
-  // viewers have to hear that just as much.
-  const linked = taskStore.linkedTaskIds(nid).map(String);
-  // The cleanup drops its membership edges and the `subtask` edges its
-  // children joined Initiatives through, so the Initiatives are read first.
-  const formerHolders = initiativeStore.holdersOf([nid]);
-  // A Task held by an Initiative takes that membership from its whole subtree
-  // (`TaskItem.initiatives`), whose viewers are told like a move's.
-  const unheld = initiativeStore.membershipsOf([nid]).has(nid)
-    ? initiativeStore.subtreeIds([nid]).map(String)
-    : [];
-  taskStore.remove(nid); // tombstone + edge cleanup
-  notify([id, ...orphaned, ...linked, ...unheld], formerHolders);
+  writeTasks((touch) => {
+    // Read the children BEFORE the edge cleanup: `remove` drops this Task's
+    // `subtask` edges, so every child silently becomes a root and nothing
+    // afterwards can tell that it ever had this parent. A child left
+    // unreported keeps a `parentId` pointing at a Task that no longer exists,
+    // and the next Backlog drag sends that dead id back as a placement — which
+    // `reorderTasks` refuses, failing the whole reorder.
+    const orphaned = taskStore.children(nid).map((child) => String(child.id));
+    // Its linked Tasks lose their links to it in the same cleanup, and their
+    // viewers have to hear that just as much.
+    const linked = taskStore.linkedTaskIds(nid).map(String);
+    // The cleanup drops its membership edges and the `subtask` edges its
+    // children joined Initiatives through, so the Initiatives are read first.
+    const formerHolders = initiativeStore.holdersOf([nid]);
+    // A Task held by an Initiative takes that membership from its whole
+    // subtree (`TaskItem.initiatives`), whose viewers are told like a move's.
+    const unheld = initiativeStore.membershipsOf([nid]).has(nid)
+      ? initiativeStore.subtreeIds([nid]).map(String)
+      : [];
+    taskStore.remove(nid); // tombstone + edge cleanup
+    touch([id, ...orphaned, ...linked, ...unheld], formerHolders);
+  });
 }
 
 /**
@@ -923,16 +951,18 @@ export function linkSessionToTask(
   const agentType = ref.agentType ?? prev?.agentType;
   const sessionFile = ref.sessionFile ?? prev?.sessionFile;
   const attachedAt = ref.attachedAt ?? prev?.attachedAt;
-  addLink(node(nid), "context", sessionNode(ref.sessionId), {
-    metadata: {
-      ...(harness !== undefined ? { harness } : {}),
-      ...(agentType !== undefined ? { agentType } : {}),
-      ...(sessionFile !== undefined ? { sessionFile } : {}),
-      ...(origin !== undefined ? { origin } : {}),
-      ...(attachedAt !== undefined ? { attachedAt } : {}),
-    } satisfies SessionEdgeMeta,
+  writeTasks((touch) => {
+    addLink(node(nid), "context", sessionNode(ref.sessionId), {
+      metadata: {
+        ...(harness !== undefined ? { harness } : {}),
+        ...(agentType !== undefined ? { agentType } : {}),
+        ...(sessionFile !== undefined ? { sessionFile } : {}),
+        ...(origin !== undefined ? { origin } : {}),
+        ...(attachedAt !== undefined ? { attachedAt } : {}),
+      } satisfies SessionEdgeMeta,
+    });
+    touch([id]);
   });
-  notify([id]);
   return readTask(id);
 }
 
@@ -941,17 +971,19 @@ export function linkSessionToTask(
  * Returns changed ids.
  */
 export function unlinkSessionEverywhere(sessionId: string): string[] {
-  const changed = new Set<string>();
-  for (const edge of incoming(sessionNode(sessionId), "context")) {
-    removeLink(
-      { type: "task", id: edge.fromId },
-      "context",
-      sessionNode(sessionId),
-    );
-    changed.add(edge.fromId);
-  }
-  if (changed.size) notify(changed);
-  return [...changed];
+  return writeTasks((touch) => {
+    const changed = new Set<string>();
+    for (const edge of incoming(sessionNode(sessionId), "context")) {
+      removeLink(
+        { type: "task", id: edge.fromId },
+        "context",
+        sessionNode(sessionId),
+      );
+      changed.add(edge.fromId);
+    }
+    if (changed.size) touch(changed);
+    return [...changed];
+  });
 }
 
 /**
@@ -979,15 +1011,17 @@ export function reorderTasks(
     .filter((id): id is number => id !== undefined);
   const formerHolders = initiativeStore.holdersOf(placed);
   const membershipBefore = initiativeStore.membershipsOf(placed);
-  // One transaction: a placement refused late in the list (a Task another tab
+  // One change set: a placement refused late in the list (a Task another tab
   // deleted, a duplicate, a cycle) must not leave the earlier moves written
-  // without the notification that reports them — that is a hierarchy, and an
+  // without the revisions that report them — that is a hierarchy, and an
   // Initiative's membership, changing with nobody told.
-  const { touched } = withDbTransaction(() => applyReorder(order, byUser));
-  notify(
-    [...touched, ...movedMembershipSubtrees(membershipBefore, placed)],
-    formerHolders,
-  );
+  writeTasks((touch) => {
+    const { touched } = applyReorder(order, byUser);
+    touch(
+      [...touched, ...movedMembershipSubtrees(membershipBefore, placed)],
+      formerHolders,
+    );
+  });
 }
 
 function applyReorder(
@@ -1395,8 +1429,10 @@ export function markTaskProcessed(id: string): void {
   if (nid === undefined) return;
   const task = taskStore.get(nid);
   if (!task || task.triagedAt !== undefined) return;
-  taskStore.update(nid, { triagedAt: Date.now() });
-  notify([id]);
+  writeTasks((touch) => {
+    taskStore.update(nid, { triagedAt: Date.now() });
+    touch([id]);
+  });
 }
 
 /**

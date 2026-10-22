@@ -22,6 +22,7 @@ import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
 import { knowledgeFileLink } from "@assistant/shared/objectLinks";
 import { DATA_DIR } from "./config.ts";
+import { withChangeSet } from "./db/changeSet.ts";
 import { knowledgeLinkStore } from "./db/knowledgeLinkStore.ts";
 import { knowledgeFiles } from "./knowledgeBaseIndex.ts";
 import { KnowledgeBaseStore, type KbFileChange } from "./knowledgeBaseStore.ts";
@@ -144,10 +145,14 @@ export async function migrateKnowledgeLinks(
         reason: "Rewrite Knowledge links to file paths",
       })
     ).shortCommit;
-  if (descriptions.length > 0) {
-    knowledgeLinkStore.rewriteTaskDescriptions(descriptions);
-    notifyTaskChange(descriptions.map((row) => String(row.id)));
-  }
+  // One change set: a failed Task stamp or Initiative fan-out takes the
+  // rewrite with it, so this run records no completion and the next one still
+  // finds the descriptions to rewrite and stamp.
+  if (descriptions.length > 0)
+    withChangeSet(() => {
+      knowledgeLinkStore.rewriteTaskDescriptions(descriptions);
+      notifyTaskChange(descriptions.map((row) => String(row.id)));
+    });
   for (const card of memoryCards) {
     const result = editMemory(card.id, card.revision, {
       text: card.text,
