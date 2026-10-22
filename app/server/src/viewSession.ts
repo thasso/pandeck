@@ -27,50 +27,21 @@ import type {
   ContextInfo,
   DisplayMessage,
   Harness,
-  ModelOption,
   SessionMode,
   SessionState,
   ThinkingLevel,
 } from "@assistant/shared";
-import { isCodingAgentType } from "@assistant/shared";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
-import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
 } from "./hostSlashCommands.ts";
-import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
-import { storedCompactionWindowState } from "./harnesses/compactionWindow.ts";
 import { engineTranscript } from "./harnesses/storage.ts";
-import { sessionToolExposure } from "./tools/sessionToolExposure.ts";
-import {
-  directSpawnField,
-  peerPromptPeersFor,
-  peerPromptQueueField,
-  peerPromptThreadsFor,
-} from "./peerPrompt.ts";
-import { backgroundUpdateQueueField } from "./backgroundUpdateQueue.ts";
-import { promptQueueField } from "./promptQueue.ts";
 import { DetachedSessionError } from "./session/adapters/detached.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
-import { activeSkillsForSession } from "./sessionSkills.ts";
-import { sessionAgentSummary } from "./agents/sessionAgent.ts";
-import {
-  findOriginTask,
-  listRelatedGlobalTasks,
-  listSessionTasks,
-} from "./tasks.ts";
-import {
-  getAnsweredAgentQuestions,
-  getPendingAgentQuestions,
-  hasPendingAgentQuestion,
-} from "./tools/core/questionTool.ts";
-import { hasPendingApproval } from "./pendingApprovals.ts";
-import { hasChoosingTaskCard } from "./pullRequestCards.ts";
-import { getPendingPostReloadContinuation } from "./mcp/toolGroups/registry.ts";
-import { sessionWorktreeMissing } from "./worktrees/sessionCwd.ts";
+import { buildSessionState } from "./sessionState.ts";
 
 /** Persona for a stored session, defaulting the way the pi store's reopen does. */
 function kindOf(meta: SessionMeta): AgentType {
@@ -143,127 +114,26 @@ export class ViewSession implements HarnessDriver {
   }
 
   state(): SessionState {
-    const idleReasonValue = hasPendingAgentQuestion(this.id)
-      ? "awaiting_question"
-      : hasPendingApproval(this.id)
-        ? "awaiting_approval"
-        : hasChoosingTaskCard(this.id)
-          ? "awaiting_task_choice"
-          : undefined;
-    const pendingQuestionsValue = getPendingAgentQuestions(this.id);
-    const pendingPostReloadContinuationValue = getPendingPostReloadContinuation(
-      this.id,
-    );
-    const activeSkillsValue = activeSkillsForSession(this.id, this.kind);
-    const agentValue = sessionAgentSummary(this.id);
-    const worktreeIdValue = this.safeWorktreeId();
-    const modelValue = this.modelOption();
-    const originTaskValue = this.originTask();
-    const toolExposureValue = sessionToolExposure(this.id);
-    const coding = isCodingAgentType(this.kind);
-    // Read fresh: an open view outlives a change to the stored window.
-    const stored = sessionStore.get(this.id);
-    const compactionWindowValue = stored
-      ? storedCompactionWindowState(stored)
-      : undefined;
-    return {
-      sessionId: this.id,
-      ...(this.sessionFile !== undefined
-        ? { sessionFile: this.sessionFile }
-        : {}),
+    return buildSessionState(this.id, {
       harness: this.harness,
       agentType: this.agentType,
-      ...(this.meta.forkOrigin !== undefined
-        ? { forkOrigin: this.meta.forkOrigin }
-        : {}),
-      ...(modelValue !== undefined ? { model: modelValue } : {}),
-      thinkingLevel: (this.meta.thinkingLevel ?? "off") as ThinkingLevel,
-      ...(this.meta.mode !== undefined ? { mode: this.meta.mode } : {}),
-      ...(this.meta.requiresEnterprise ? { requiresEnterprise: true } : {}),
-      ...(compactionWindowValue !== undefined
-        ? { compactionWindow: compactionWindowValue }
-        : {}),
-      // Steering needs a running turn, which a detached session cannot have.
-      canSteer: false,
-      ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
-      ...(pendingQuestionsValue.length > 0
-        ? { pendingQuestions: pendingQuestionsValue }
-        : {}),
-      answeredQuestions: getAnsweredAgentQuestions(this.id),
-      tasks: this.safe(() => listSessionTasks(this.kind, this.id), []),
-      relatedGlobalTasks: this.safe(
-        () => listRelatedGlobalTasks(this.kind, this.id),
-        [],
+      kind: this.kind,
+      sessionFile: this.sessionFile,
+      forkOrigin: this.meta.forkOrigin,
+      model: storedSessionModelOption(
+        this.harness,
+        this.meta.provider,
+        this.meta.model,
       ),
-      ...(originTaskValue !== undefined ? { originTask: originTaskValue } : {}),
-      ...(toolExposureValue !== undefined
-        ? { toolExposure: toolExposureValue }
-        : {}),
-      ...(activeSkillsValue !== undefined
-        ? { activeSkills: activeSkillsValue }
-        : {}),
-      ...(agentValue !== undefined ? { agent: agentValue } : {}),
-      ...(coding ? { artifacts: listSessionArtifacts(this.id) } : {}),
-      ...(this.kind === "workshop" &&
-      pendingPostReloadContinuationValue !== undefined
-        ? { pendingPostReloadContinuation: pendingPostReloadContinuationValue }
-        : {}),
-      peerPrompts: peerPromptThreadsFor(this.id),
-      peerPromptPeers: peerPromptPeersFor(this.id),
-      ...promptQueueField(this.id),
-      ...peerPromptQueueField(this.id),
-      ...directSpawnField(this.id),
-      ...backgroundUpdateQueueField(this.id),
-      ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
-      ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
-    };
+      thinkingLevel: (this.meta.thinkingLevel ?? "off") as ThinkingLevel,
+      mode: this.meta.mode,
+      requiresEnterprise: this.meta.requiresEnterprise,
+    });
   }
 
   /** Stats for the stored transcript, computed by the runtime from the log. */
   contextInfo(): ContextInfo {
     return sessionRuntime.openForView(this.id).contextInfo();
-  }
-
-  /**
-   * The model this session last ran on, resolved from the registry the way the
-   * picker lists them. An id no catalog offers any more resolves to nothing
-   * rather than to a fabricated option: the upgrade's `state` carries whatever
-   * the harness itself reports.
-   *
-   * A Claude SDK row is resolved by its model alias alone: its `provider`
-   * column is the credential kind (`claude`), not the picker's provider id.
-   */
-  private modelOption(): ModelOption | undefined {
-    return storedSessionModelOption(
-      this.harness,
-      this.meta.provider,
-      this.meta.model,
-    );
-  }
-
-  private originTask(): ReturnType<typeof findOriginTask> {
-    return this.safe(() => findOriginTask(this.id), undefined);
-  }
-
-  private safeWorktreeId(): string | undefined {
-    return this.safe(() => worktreeIdForSession(this.id), undefined);
-  }
-
-  private safeWorktreeMissing(): boolean {
-    return this.safe(() => sessionWorktreeMissing(this.id), false);
-  }
-
-  /** A store hiccup must degrade one field, never fail the whole view. */
-  private safe<T>(read: () => T, fallback: T): T {
-    try {
-      return read();
-    } catch (err) {
-      console.warn(
-        "Detached session state read failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-      return fallback;
-    }
   }
 
   /* --------------------------- synthetic tool host -------------------------- */
