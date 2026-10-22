@@ -1,11 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type {
   JiraConnectionStatus,
   JiraSettings,
@@ -13,7 +6,7 @@ import type {
 } from "@assistant/shared";
 import { DATA_DIR, JIRA_HOST } from "./config.ts";
 import type { JiraApiConfig } from "./jiraClient.ts";
-import { fileReadErrorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
 
 const JIRA_SETTINGS_PATH = join(DATA_DIR, "settings", "jira.json");
@@ -48,28 +41,11 @@ function normalizeStored(
   };
 }
 
-function readPrivate(): StoredJiraSettings {
-  if (!existsSync(JIRA_SETTINGS_PATH)) return { ...DEFAULTS };
-  try {
-    const parsed = JSON.parse(
-      readFileSync(JIRA_SETTINGS_PATH, "utf8"),
-    ) as JiraSettingsFile;
-    return normalizeStored(parsed);
-  } catch (err) {
-    throw new Error(
-      `Failed to read Jira settings at ${JIRA_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
-}
+const privateFile = createPrivateJsonFile(JIRA_SETTINGS_PATH, "Jira settings");
+const writePrivate = privateFile.write;
 
-function writePrivate(next: StoredJiraSettings): void {
-  mkdirSync(dirname(JIRA_SETTINGS_PATH), { recursive: true });
-  const tmp = `${JIRA_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, JIRA_SETTINGS_PATH);
+function readPrivate(): StoredJiraSettings {
+  return privateFile.read(normalizeStored);
 }
 
 function publicSettings(settings: StoredJiraSettings): JiraSettings {

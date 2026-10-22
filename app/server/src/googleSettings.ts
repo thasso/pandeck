@@ -1,12 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type {
   GoogleConnectionStatus,
   GoogleSettings,
@@ -19,7 +12,8 @@ import {
   PORT,
   PUBLIC_BASE_URL,
 } from "./config.ts";
-import { errorText, fileReadErrorText } from "./errors.ts";
+import { errorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 
 const GOOGLE_SETTINGS_PATH = join(DATA_DIR, "settings", "google.json");
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -145,28 +139,14 @@ function normalizeStored(
   };
 }
 
-function readPrivate(): StoredGoogleSettings {
-  if (!existsSync(GOOGLE_SETTINGS_PATH)) return { ...DEFAULTS };
-  try {
-    const parsed = JSON.parse(
-      readFileSync(GOOGLE_SETTINGS_PATH, "utf8"),
-    ) as GoogleSettingsFile;
-    return normalizeStored(parsed);
-  } catch (err) {
-    throw new Error(
-      `Failed to read Google settings at ${GOOGLE_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
-}
+const privateFile = createPrivateJsonFile(
+  GOOGLE_SETTINGS_PATH,
+  "Google settings",
+);
+const writePrivate = privateFile.write;
 
-function writePrivate(next: StoredGoogleSettings): void {
-  mkdirSync(dirname(GOOGLE_SETTINGS_PATH), { recursive: true });
-  const tmp = `${GOOGLE_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, GOOGLE_SETTINGS_PATH);
+function readPrivate(): StoredGoogleSettings {
+  return privateFile.read(normalizeStored);
 }
 
 function publicSettings(

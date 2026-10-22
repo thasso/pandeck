@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "vitest";
+import { renameSync } from "node:fs";
+import { afterEach, test, vi } from "vitest";
 import {
   getForgejoToolConfig,
   getForgejoSettings,
   updateForgejoSettings,
 } from "./forgejoSettings.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return { ...fs, renameSync: vi.fn(fs.renameSync) };
+});
 
 afterEach(() => {
   updateForgejoSettings({ enabled: false, baseUrl: "", clearToken: true });
@@ -32,4 +38,17 @@ test("a token entered with the new host is kept", () => {
   updateForgejoSettings({ baseUrl: "https://git.example.net", token: "tok-2" });
   assert.equal(getForgejoToolConfig().token, "tok-2");
   assert.equal(getForgejoSettings().tokenConfigured, true);
+});
+
+test("a failed write leaves the cached settings unchanged", () => {
+  configure("https://git.example.com");
+  vi.mocked(renameSync).mockImplementationOnce(() => {
+    throw new Error("rename failed");
+  });
+  assert.throws(
+    () => updateForgejoSettings({ token: "tok-2", defaultOwner: "new-owner" }),
+    /rename failed/,
+  );
+  assert.equal(getForgejoToolConfig().token, "tok-1");
+  assert.equal(getForgejoSettings().defaultOwner, "");
 });

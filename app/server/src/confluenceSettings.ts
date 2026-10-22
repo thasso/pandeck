@@ -9,14 +9,7 @@
  * authenticated. Without Jira credentials its tools fail fast with a hint
  * rather than returning an unauthenticated half-answer.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type {
   ConfluenceConnectionStatus,
   ConfluenceSettings,
@@ -26,7 +19,7 @@ import { atlassianFetch } from "./atlassian/atlassianFetch.ts";
 import { CONFLUENCE_HOST, DATA_DIR } from "./config.ts";
 import type { ConfluenceApiConfig } from "./atlassian/confluenceClient.ts";
 import { getJiraCredsIfAvailable } from "./jiraSettings.ts";
-import { fileReadErrorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 
 const CONFLUENCE_SETTINGS_PATH = join(DATA_DIR, "settings", "confluence.json");
 
@@ -34,28 +27,16 @@ interface ConfluenceSettingsFile {
   enabled?: boolean;
 }
 
-function readPrivate(): Required<ConfluenceSettingsFile> {
-  if (!existsSync(CONFLUENCE_SETTINGS_PATH)) return { enabled: false };
-  try {
-    const parsed = JSON.parse(
-      readFileSync(CONFLUENCE_SETTINGS_PATH, "utf8"),
-    ) as ConfluenceSettingsFile;
-    return { enabled: Boolean(parsed?.enabled) };
-  } catch (err) {
-    throw new Error(
-      `Failed to read Confluence settings at ${CONFLUENCE_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
-}
+const privateFile = createPrivateJsonFile(
+  CONFLUENCE_SETTINGS_PATH,
+  "Confluence settings",
+);
+const writePrivate = privateFile.write;
 
-function writePrivate(next: Required<ConfluenceSettingsFile>): void {
-  mkdirSync(dirname(CONFLUENCE_SETTINGS_PATH), { recursive: true });
-  const tmp = `${CONFLUENCE_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, CONFLUENCE_SETTINGS_PATH);
+function readPrivate(): Required<ConfluenceSettingsFile> {
+  return privateFile.read((parsed: ConfluenceSettingsFile | undefined) => ({
+    enabled: Boolean(parsed?.enabled),
+  }));
 }
 
 export function getConfluenceSettings(): ConfluenceSettings {
