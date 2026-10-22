@@ -1,13 +1,19 @@
-/** Installed at boot. Isolated lane tests can still drive their private drains. */
-let wake: ((sessionId: string) => void) | undefined;
+/** Installed at boot. Without it automatic offers cannot admit work. */
+let wake:
+  | ((sessionId: string, reminders?: boolean, endedRunId?: string) => void)
+  | undefined;
 
 export function setDeliveryWake(next: typeof wake): void {
   wake = next;
 }
 
 /** True when the scheduler owns this offer; false before boot wiring. */
-export function wakeSessionDelivery(sessionId: string): boolean {
+export function wakeSessionDelivery(
+  sessionId: string,
+  reminders = false,
+  endedRunId?: string,
+): boolean {
   if (!wake) return false;
-  wake(sessionId);
+  wake(sessionId, reminders, endedRunId);
   return true;
 }

@@ -63,11 +63,13 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
     /hub\.registerLifecycleDrainParticipant\s*\(\s*\{/,
     "background work must register with the existing hub lifecycle authority",
   );
-  assert.match(
-    source,
-    /new BackgroundCompletionDelivery\s*\(\s*\{[\s\S]{0,300}?drainPeers:[\s\S]{0,200}?drainRecipient\(sessionId,/,
-    "background completion must drain the durable peer FIFO first",
+  const lanes = readFileSync(join(SRC_ROOT, "sessionDeliveryLanes.ts"), "utf8");
+  assert.ok(
+    lanes.search(/name: `peer \$\{phase\}`/) <
+      lanes.indexOf('name: "background completions"'),
+    "the scheduler offers peer lanes before background",
   );
+  assert.doesNotMatch(source, /drainPeers:|setReplyReminderHost/);
   assert.match(
     source,
     /createDeliveryScheduler\(\{\s*\.\.\.sessionDeliveryLanes\(backgroundCompletionDelivery\)/,
@@ -75,7 +77,7 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*offerDelivery\(sessionId, true\);\s*\}\s*\)/,
+    /setSessionIdleHook\(\s*\(sessionId, endedRunId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*offerDelivery\(sessionId, true, endedRunId\);\s*\}\s*\)/,
     "the idle hook must offer a freed direct slot, then the scheduler with reminders",
   );
   assert.match(
@@ -90,8 +92,8 @@ test("a Stop's hold gates background delivery and Resume reruns the idle chain",
 
   assert.match(
     source,
-    /new BackgroundCompletionDelivery\s*\(\s*\{[\s\S]{0,600}?held:\s*\(sessionId\)\s*=>\s*automaticTurnsHeld\(sessionId\)/,
-    "background completion must read the session's Stop hold",
+    /createDeliveryScheduler\(\{[\s\S]{0,1000}?held:\s*automaticTurnsHeld/,
+    "the scheduler owns the session's Stop hold check",
   );
   assert.match(
     source,

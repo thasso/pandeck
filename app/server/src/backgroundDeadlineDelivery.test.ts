@@ -27,8 +27,8 @@ process.env.ASSISTANT_CWD = dataDir;
 
 const { BackgroundWorkSupervisor } =
   await import("./backgroundWork/supervisor.ts");
-const { BackgroundCompletionDelivery } =
-  await import("./backgroundWork/completionDelivery.ts");
+const { ScheduledBackgroundDelivery: BackgroundCompletionDelivery } =
+  await import("./test/backgroundDelivery.ts");
 const notices = await import("./backgroundCompletionNotices.ts");
 const hold = await import("./automaticTurnHold.ts");
 const { backgroundDeliveryOutboxStore } =
@@ -134,14 +134,9 @@ function harness() {
     [];
   const answers = new Map<string, Answer>();
   const queueCounts: Array<[string, number]> = [];
-  let duringPeers: ((sessionId: string) => void) | undefined;
   let duringOffer: ((sessionId: string) => void) | undefined;
   const delivery: InstanceType<typeof BackgroundCompletionDelivery> =
     new BackgroundCompletionDelivery({
-      drainPeers: async (sessionId) => {
-        events.push(`peers:${sessionId}`);
-        duringPeers?.(sessionId);
-      },
       held: hold.automaticTurnsHeld,
       disposition: notices.completionDisposition,
       outbox: notices.backgroundDeliveryOutbox,
@@ -188,7 +183,6 @@ function harness() {
     offers,
     answers,
     queueCounts,
-    duringPeers: (fn: typeof duringPeers) => (duringPeers = fn),
     duringOffer: (fn: typeof duringOffer) => (duringOffer = fn),
   };
 }
@@ -239,7 +233,7 @@ beforeEach(() => {
   });
 });
 
-test("an idle parked owner is woken with the deadline fact, after its peers", async () => {
+test("an idle parked owner is woken with the deadline fact", async () => {
   const h = harness();
   const session = owner();
   for (const kind of ["shell", "monitor-command"] as const) {
@@ -267,9 +261,7 @@ test("an idle parked owner is woken with the deadline fact, after its peers", as
     );
   }
   assert.deepEqual(h.events, [
-    `peers:${session}`,
     `offer:${session}:delivered`,
-    `peers:${session}`,
     `offer:${session}:delivered`,
   ]);
   assert.equal(h.delivery.queuedCount(session), 0);
@@ -361,8 +353,8 @@ test("a held owner is never woken; its deadline fact waits for Resume and goes o
   assert.deepEqual(owed(session), []);
 });
 
-test("a Stop landing in the peer phase or during the offer keeps the fact for Resume", async () => {
-  for (const phase of ["peers", "offer"] as const) {
+test("a Stop landing during the offer keeps the fact for Resume", async () => {
+  for (const phase of ["offer"] as const) {
     const h = harness();
     const session = owner();
     const item = await launch(h, session);
@@ -372,8 +364,7 @@ test("a Stop landing in the peer phase or during the offer keeps the fact for Re
       stopped = true;
       hold.holdAutomaticTurns(session);
     };
-    if (phase === "peers") h.duringPeers(stop);
-    else h.duringOffer(stop);
+    h.duringOffer(stop);
     await h.clock.advanceTo(item.deadlineAt);
     await settle();
     assert.equal(h.offers.length, 0, `${phase}: nothing delivered while held`);

@@ -8,6 +8,7 @@ import type {
   DeliveryLane,
   DeliveryResult,
   DeliveryAcquisitionFailure,
+  DeliveryAdmissionCheck,
 } from "./deliveryScheduler.ts";
 import {
   drainRecipient,
@@ -26,37 +27,24 @@ import {
 import { subscribeSessionUserEntry } from "./session/runtime/liveSession.ts";
 import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
 import { workflowAssignmentDelivery } from "./workflow/assignmentDelivery.ts";
+import {
+  settleSessionDeliveries,
+  trackDeliverySettlement,
+} from "./deliverySettlement.ts";
 
 /**
  * Drains own their run promises. Observe append to return admission immediately
  * and fence later claims. Lanes interpret their own per-prompt receipts.
  */
 function createDeliver() {
-  const settling = new Map<string, Set<Promise<DeliveryResult>>>();
-
-  async function settleEarlierDeliveries(id: string): Promise<void> {
-    // Shared across lanes: background's peer phase can still own the peer lock.
-    const earlier = [...(settling.get(id) ?? [])];
-    if (earlier.length === 0) return;
-    // Diagnostic only: a timeout must not admit over a still-owned drain.
-    const warning = setTimeout(() => {
-      console.warn(
-        `[delivery] session ${id} is idle but ${earlier.length} earlier drain(s) have not settled after 30s`,
-      );
-    }, 30_000);
-    warning.unref?.();
-    try {
-      await Promise.all(earlier.map((run) => run.catch(() => {})));
-    } finally {
-      clearTimeout(warning);
-    }
-  }
-
   async function deliver(
     session: PromptQueueDriver,
+    checkAdmission: DeliveryAdmissionCheck,
     drain: (shouldStart: () => boolean) => Promise<void>,
+    peer = false,
   ): Promise<DeliveryResult> {
     const id = session.sessionId;
+    if (hasExplicitRecipientAuthority(id)) return "none";
     let appended = false;
     const running = session.isRunning;
     let onAppend!: (result: DeliveryResult) => void;
@@ -69,21 +57,29 @@ function createDeliver() {
       unsubscribe();
       onAppend(running ? "steer" : "turn");
     });
-    const pending = settling.get(id) ?? new Set<Promise<DeliveryResult>>();
-    settling.set(id, pending);
     const drained = Promise.resolve()
-      .then(() => drain(() => !appended))
+      .then(() =>
+        drain(() => {
+          if (appended || hasExplicitRecipientAuthority(id)) return false;
+          const failure = checkAdmission();
+          // Preserve the facade's released-driver failure accounting for peers.
+          // Other admission refusals return the claim without spending a retry.
+          if (peer && failure === "released")
+            throw new Error(
+              `Session ${session.id} was released from memory; send it again.`,
+            );
+          return failure === undefined;
+        }),
+      )
       .then<DeliveryResult>(() => "none")
       .finally(() => {
         unsubscribe();
-        pending.delete(drained);
-        if (pending.size === 0) settling.delete(id);
       });
-    pending.add(drained);
+    trackDeliverySettlement(id, drained, peer);
     return Promise.race([admitted, drained]);
   }
 
-  return { deliver, settleEarlierDeliveries };
+  return { deliver, settleEarlierDeliveries: settleSessionDeliveries };
 }
 
 export function sessionDeliveryLanes(
@@ -91,19 +87,23 @@ export function sessionDeliveryLanes(
 ): {
   lanes: DeliveryLane<PromptQueueDriver>[];
   reminder: DeliveryLane<PromptQueueDriver>;
+  deferOnDecline: Readonly<Record<string, readonly string[]>>;
   settleEarlierDeliveries(sessionId: string): Promise<void>;
 } {
   const { deliver, settleEarlierDeliveries } = createDeliver();
   return {
     settleEarlierDeliveries,
+    // Keep the old queue-to-peer deferral without lane-owned cross-yields.
+    // A paused/failed queue no longer owes; other lanes keep their policy.
+    deferOnDecline: { "user queue": ["peer fifo", "peer notices"] },
     lanes: [
       {
         name: "handoffs",
         mayJoinRunningTurn: false,
         owes: agentHandoffOwed,
         unavailable: agentHandoffUnavailable,
-        deliver: (session) =>
-          deliver(session, (shouldStart) =>
+        deliver: (session, canAdmit) =>
+          deliver(session, canAdmit, (shouldStart) =>
             drainAgentHandoffs(session.sessionId, {
               driver: session,
               shouldStart,
@@ -115,8 +115,8 @@ export function sessionDeliveryLanes(
         mayJoinRunningTurn: false,
         owes: promptQueueHasPriority,
         unavailable: promptQueueUnavailable,
-        deliver: (session) =>
-          deliver(session, (shouldStart) =>
+        deliver: (session, canAdmit) =>
+          deliver(session, canAdmit, (shouldStart) =>
             drainPromptQueue(session.sessionId, shouldStart, session),
           ),
       },
@@ -125,8 +125,8 @@ export function sessionDeliveryLanes(
         mayJoinRunningTurn: false,
         owes: workflowAssignmentDelivery.owes,
         unavailable: workflowAssignmentDelivery.unavailable,
-        deliver: (session) =>
-          deliver(session, (shouldStart) =>
+        deliver: (session, canAdmit) =>
+          deliver(session, canAdmit, (shouldStart) =>
             workflowAssignmentDelivery.deliver(session, shouldStart),
           ),
       },
@@ -136,13 +136,20 @@ export function sessionDeliveryLanes(
         owes: phase === "fifo" ? peerFifoOwed : peerNoticeOwed,
         unavailable: (id: string, failure: DeliveryAcquisitionFailure) =>
           noteDrainTargetUnavailable(id, failure.reason, phase),
-        deliver: (session: PromptQueueDriver) =>
-          deliver(session, (shouldStart) =>
-            drainRecipient(session.sessionId, {
-              phase,
-              driver: session,
-              shouldStart,
-            }),
+        deliver: (
+          session: PromptQueueDriver,
+          canAdmit: DeliveryAdmissionCheck,
+        ) =>
+          deliver(
+            session,
+            canAdmit,
+            (shouldStart) =>
+              drainRecipient(session.sessionId, {
+                phase,
+                driver: session,
+                shouldStart,
+              }),
+            true,
           ),
       })),
       {
@@ -158,8 +165,8 @@ export function sessionDeliveryLanes(
           )
             await background.unavailable(id);
         },
-        deliver: (session) =>
-          deliver(session, (shouldStart) =>
+        deliver: (session, canAdmit) =>
+          deliver(session, canAdmit, (shouldStart) =>
             background.drain(session.sessionId, shouldStart),
           ),
       },
@@ -168,12 +175,16 @@ export function sessionDeliveryLanes(
       name: "reminders",
       mayJoinRunningTurn: false,
       owes: replyReminderOwed,
-      deliver: (session) =>
-        deliver(session, (shouldStart) =>
-          offerReplyReminders(session.sessionId, {
-            driver: session,
-            shouldStart,
-          }),
+      deliver: (session, canAdmit) =>
+        deliver(
+          session,
+          canAdmit,
+          (shouldStart) =>
+            offerReplyReminders(session.sessionId, {
+              driver: session,
+              shouldStart,
+            }),
+          true,
         ),
     },
   };

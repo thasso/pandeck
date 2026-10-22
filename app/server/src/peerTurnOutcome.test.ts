@@ -8,6 +8,9 @@
  * provider or network is touched.
  */
 import assert from "node:assert/strict";
+import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
+import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -20,7 +23,15 @@ import { tmpdir } from "node:os";
 import { DATA_DIR } from "./config.ts";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+  vi,
+} from "vitest";
 import type { AgentType, Harness } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
@@ -119,7 +130,6 @@ vi.mock("./sessionSkills.ts", async (importOriginal) => {
 });
 
 const {
-  drainRecipient,
   installDelegationFailureNotices,
   peerPromptQueueField,
   recoverPeerPromptsOnBoot,
@@ -130,6 +140,7 @@ const {
   sweepExpiredLeases,
   withdrawQueuedPeerPrompt,
 } = await import("./peerPrompt.ts");
+const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
 const { createPiAdapter } = await import("./session/adapters/pi.ts");
@@ -141,6 +152,16 @@ const { holdAutomaticTurns, resumeAutomaticTurns } =
 const { PEER_NOTICE_AGENT_ID } = await import("./delegationFailureNotice.ts");
 
 setHubForTests(fakeHub as never);
+let delivery: ReturnType<typeof installDeliveryTestScheduler>;
+beforeEach(() => {
+  delivery = installDeliveryTestScheduler({
+    live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
+    acquire: async (id) =>
+      (await fakeHub.acquireById(id)) as RuntimePromptDriver | undefined,
+  });
+  setSessionIdleHook((id) => void delivery.wake(id));
+});
+const drainRecipient = (id: string) => delivery.drain(id);
 
 /* ------------------------------- fixtures -------------------------------- */
 
@@ -422,6 +443,8 @@ beforeAll(() => {
 afterAll(() => uninstall());
 
 afterEach(async () => {
+  setDeliveryWake(undefined);
+  setSessionIdleHook(undefined);
   delete preparation.gate;
   readFault.path = "";
   writeFault.path = "";
@@ -1876,6 +1899,11 @@ peer.setHubForTests({
   broadcastPeerPromptCardUpdate() {},
 });
 peer.setPeerPromptAutoDeliverForTests(false);
+const { installDeliveryTestScheduler } = await import(src + "test/deliveryScheduler.ts");
+const delivery = installDeliveryTestScheduler({
+  live: (id) => drivers.get(id),
+  acquire: async (id) => drivers.get(id),
+});
 function driver(id) {
   const d = new FakeRuntimeDriver(id);
   const make = d.createRuntimeAdapter.bind(d);
@@ -1905,7 +1933,7 @@ if (mode === "first") {
   const send = (to, prompt) => { const chainId = peerPromptStore.createChain(); return peerPromptStore.enqueue({ conversationId: "c-" + to, chainId, hop: peerPromptStore.reserveHop(chainId), senderSessionId: "Coordinator", recipientSessionId: to, prompt, responseRequested: true, expiresAt: Date.now() + 86400000 }); };
   const stopped = await send("Stopped", "will be stopped");
   const release = drivers.get("Stopped").holdTurns();
-  const drained = peer.drainRecipient("Stopped");
+  const drained = delivery.drain("Stopped");
   await until(() => sessionRuntime.isRunning("Stopped"));
   holdAutomaticTurns("Stopped");
   await sessionRuntime.abort("Stopped");
@@ -1913,7 +1941,7 @@ if (mode === "first") {
   release();
   const dies = await send("Dies", "process dies mid-turn");
   drivers.get("Dies").holdTurns();
-  void peer.drainRecipient("Dies");
+  void delivery.drain("Dies");
   await until(() => peerPromptStore.getById(dies.id).status === "acknowledged");
   const backlog = await send("Backlog", "never delivered before the restart");
   console.log(JSON.stringify({ stopped: stopped.id, dies: dies.id, backlog: backlog.id, before: peerPromptStore.getById(stopped.id) }));

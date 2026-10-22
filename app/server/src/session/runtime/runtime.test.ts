@@ -127,6 +127,48 @@ function makeRuntime() {
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+test.each(["prompt result", "provider completion"] as const)(
+  "idle identity names the receipt's closed run, %s",
+  async (ending) => {
+    const { runtime, adapter } = makeRuntime();
+    const edges: Array<[string, string | undefined]> = [];
+    setSessionIdleHook((id, runId) => edges.push([id, runId]));
+    try {
+      const receipt = runtime.prompt("s1", "go");
+      await tick();
+      const ownRunId = receipt.runId;
+      assert.ok(ownRunId);
+      if (ending === "provider completion") {
+        adapter.emit({ type: "runCompleted", stopReason: "end" });
+        assert.equal(
+          runtime.get("s1")!.currentRunId,
+          undefined,
+          "endTurn still precedes idle",
+        );
+        assert.deepEqual(edges, [["s1", ownRunId]]);
+      }
+      adapter.finishRun({ stopReason: "end" });
+      await receipt;
+      assert.deepEqual(
+        edges,
+        [["s1", ownRunId]],
+        "only the real running-to-idle edge names a run",
+      );
+      runtime.get("s1")!.notifyIdle();
+      assert.deepEqual(
+        edges,
+        [
+          ["s1", ownRunId],
+          ["s1", undefined],
+        ],
+        "reservation reoffers have no run identity",
+      );
+    } finally {
+      setSessionIdleHook(undefined);
+    }
+  },
+);
+
 /* ---------------------- run gate + idempotency --------------------------- */
 test("run gate + idempotency", async () => {
   const { runtime, adapter } = makeRuntime();

@@ -9,6 +9,8 @@ import { dirname } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, it, vi } from "vitest";
 import { sessionStore } from "./db/sessionStore.ts";
 import { promptQueueStore } from "./db/promptQueueStore.ts";
+import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
@@ -20,8 +22,6 @@ import {
   resolveApproval,
   setApprovalBroadcastForTests,
 } from "./pendingApprovals.ts";
-import { recordRunFailureNotices } from "./delegationFailureNotice.ts";
-import { delegationFailureNoticeStore } from "./db/delegationFailureNoticeStore.ts";
 
 const { fakeDrivers, coldIds, acquired, listBroadcasts, preparation } =
   vi.hoisted(() => ({
@@ -64,20 +64,16 @@ vi.mock("./hub.ts", () => ({ hub: fakeHub }));
 
 const peer = await import("./peerPrompt.ts");
 const {
-  drainRecipient,
   installReplyReminders,
-  offerReplyReminders,
   peerRequestKey,
   setHubForTests,
   setPeerPromptAutoDeliverForTests,
-  setReplyReminderHost,
   settlePeerRequests,
   sendPeerPrompt,
   drainAllQueuedOnBoot,
 } = peer;
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
 const hold = await import("./automaticTurnHold.ts");
-const handoffs = await import("./agentHandoffs.ts");
 const { BackgroundCompletionDelivery } =
   await import("./backgroundWork/completionDelivery.ts");
 
@@ -88,10 +84,9 @@ setHubForTests(fakeHub as never);
 let n = 0;
 const created: string[] = [];
 let uninstall: () => void = () => {};
-/** Every re-offer of the idle edge the engine asked for. */
-const reoffers: string[] = [];
-let handoffOwed = (_id: string) => false;
-let wakeOwed = (_id: string) => false;
+let delivery: ReturnType<typeof installDeliveryTestScheduler>;
+const offerReplyReminders = (id: string) => delivery.drain(id, true);
+const drainRecipient = (id: string) => delivery.drain(id);
 
 function driverFor(id: string): FakeRuntimeDriver {
   const existing = fakeDrivers.get(id);
@@ -188,23 +183,17 @@ beforeAll(() => setPeerPromptAutoDeliverForTests(false));
 
 beforeEach(() => {
   uninstall = installReplyReminders();
-  handoffOwed = () => false;
-  wakeOwed = () => false;
-  setReplyReminderHost({
-    handoffOwed: (id) => handoffOwed(id),
-    wakeOwed: (id) => wakeOwed(id),
-    requestIdleEdge: (id) => {
-      reoffers.push(id);
-    },
+  delivery = installDeliveryTestScheduler({
+    live: fakeHub.getLiveById,
+    acquire: fakeHub.acquireById,
   });
 });
 
 afterEach(() => {
   uninstall();
-  setReplyReminderHost(undefined);
+  setDeliveryWake(undefined);
   setSessionIdleHook(undefined);
   preparation.gate = undefined;
-  reoffers.length = 0;
   acquired.length = 0;
   for (const id of created.splice(0)) {
     hold.deleteAutomaticTurnHold(id);
@@ -296,7 +285,6 @@ describe("reply reminders", () => {
 
     await offerReplyReminders(me);
     assert.equal(reminders(me).length, 0);
-    assert.deepEqual(reoffers, [], "a hold is not work to yield to");
 
     hold.resumeAutomaticTurns(me);
     await offerReplyReminders(me);
@@ -472,77 +460,11 @@ describe("reply reminders", () => {
       await offer;
       assert.equal(reminders(me).length, 0);
       assert.equal(userTexts(me).length, 0);
-      assert.deepEqual(reoffers, []);
     });
 
-    const overtakers: Array<
-      [string, (me: string) => Promise<() => void> | (() => void)]
-    > = [
-      [
-        "a message the user queued",
-        (me) => {
-          promptQueueStore.append({
-            id: `q-${n++}`,
-            sessionId: me,
-            text: "mine first",
-          });
-          return () => {};
-        },
-      ],
-      [
-        "an agent handoff",
-        (me) => {
-          handoffs.enqueueAgentHandoff({
-            sessionId: me,
-            origin: { kind: "system", source: "test" },
-            text: "card decided",
-            visible: true,
-          } as never);
-          handoffOwed = (id) => handoffs.agentHandoffOwed(id);
-          return () => {};
-        },
-      ],
-      [
-        "a background wake",
-        () => {
-          wakeOwed = () => true;
-          return () => {
-            wakeOwed = () => false;
-          };
-        },
-      ],
-      [
-        "a peer prompt",
-        async (me) => {
-          await sendPeerPrompt({
-            senderSessionId: seed("Late sender"),
-            targetSessionId: me,
-            prompt: "late",
-            responseRequested: false,
-          });
-          return () => {};
-        },
-      ],
-    ];
-    for (const [what, arrive] of overtakers)
-      it(`gives way to ${what} and offers the edge again`, async () => {
-        const me = seed("Yielding");
-        const r = openRequest(seed("Asker"), me, "question");
-        const gate = gatePreparation();
-        const offer = offerReplyReminders(me);
-        await gate.atGate;
-        const clear = await arrive(me);
-        gate.open();
-        await offer;
-        assert.equal(reminders(me).length, 0);
-        assert.equal(count(r.id), 0);
-        assert.deepEqual(reoffers, [me]);
-        clear();
-      });
-
-    it("gives way to a send-now that started waiting", async () => {
+    it("keeps reminder debt and count when explicit send-now starts waiting during preparation", async () => {
       const me = seed("Yielding");
-      openRequest(seed("Asker"), me, "question");
+      const request = openRequest(seed("Asker"), me, "question");
       const { markExplicitRecipientWaiter, releaseExplicitRecipientWaiter } =
         await import("./recipientDrainAuthority.ts");
       const gate = gatePreparation();
@@ -552,17 +474,19 @@ describe("reply reminders", () => {
       gate.open();
       try {
         await offer;
+        assert.equal(reminders(me).length, 0);
+        assert.equal(count(request.id), 0);
       } finally {
         releaseExplicitRecipientWaiter(me);
       }
-      assert.equal(reminders(me).length, 0);
-      assert.deepEqual(reoffers, [me]);
+      await offerReplyReminders(me);
+      assert.equal(reminders(me).length, 1);
+      assert.equal(count(request.id), 1);
     });
 
     it("does not give way to a card nobody has decided", async () => {
       const me = seed("Asking");
       openRequest(seed("Asker"), me, "question");
-      handoffOwed = (id) => handoffs.agentHandoffOwed(id);
       setApprovalBroadcastForTests(() => {});
       const card = createApproval({
         sessionId: me,
@@ -585,15 +509,6 @@ describe("reply reminders", () => {
       }
     });
 
-    it("stops offering the edge again when a blocker never clears", async () => {
-      const me = seed("Stuck");
-      openRequest(seed("Asker"), me, "question");
-      wakeOwed = () => true;
-      for (let i = 0; i < 6; i += 1) await offerReplyReminders(me);
-      assert.equal(reoffers.length, 3);
-      wakeOwed = () => false;
-    });
-
     it("accepts at most one of two concurrent offers", async () => {
       const me = seed("Twice");
       const r = openRequest(seed("Asker"), me, "question");
@@ -601,71 +516,6 @@ describe("reply reminders", () => {
       assert.equal(reminders(me).length, 1);
       assert.equal(count(r.id), 1);
     });
-  });
-
-  it("delivers a notice owed while the reminder held the drain lock, without another event", async () => {
-    const me = seed("Coordinator");
-    const child = seed("Child");
-    openRequest(seed("Asker"), me, "question");
-    const driver = driverFor(me);
-    const release = driver.holdTurns();
-    const offer = offerReplyReminders(me);
-    await until(() => driver.isRunning, "the reminder turn");
-    // A request it sent is cut off mid-reminder: it is owed a notice, and
-    // the wake for it finds the reminder holding the drain lock.
-    const chainId = peerPromptStore.createChain();
-    const sent = peerPromptStore.enqueue({
-      conversationId: `rem-conv-${n++}`,
-      chainId,
-      hop: peerPromptStore.reserveHop(chainId),
-      senderSessionId: me,
-      recipientSessionId: child,
-      prompt: "please review",
-      responseRequested: true,
-    });
-    peerPromptStore.claimNext(child, "test", 60_000);
-    peerPromptStore.markAdmitted(sent.id);
-    peerPromptStore.markInterrupted(sent.id, "the process died", "restart");
-    void drainRecipient(me);
-    release();
-    await offer;
-    await until(
-      () => userTexts(me).some((t) => t.startsWith("Peer notice")),
-      "the notice",
-    );
-  });
-
-  it("yields to a real run-failure notice and the wake survives the reminder's drain lock", async () => {
-    const me = seed("Failure coordinator");
-    const child = seed("Failed child");
-    sessionStore.linkSpawned(me, child);
-    const request = openRequest(seed("Asker"), me, "question");
-    const gate = gatePreparation();
-    const offer = offerReplyReminders(me);
-    await gate.atGate;
-    const written = recordRunFailureNotices({
-      sessionId: child,
-      runId: "failed-during-reminder",
-      origin: { kind: "system", source: "test" },
-      errorMessage: "401 Unauthorized",
-      failure: { kind: "auth" },
-      at: Date.now(),
-    });
-    assert.equal(written.length, 1);
-    assert.equal(delegationFailureNoticeStore.hasPendingFor(me), true);
-    peer.wakeForNotice(written.map((notice) => notice.coordinatorSessionId));
-    gate.open();
-    await offer;
-    assert.equal(count(request.id), 0, "the real notice outranks the reminder");
-    await until(
-      () => userTexts(me).some((text) => text.startsWith("Peer notice")),
-      "failure notice wake",
-    );
-    assert.equal(delegationFailureNoticeStore.hasPendingFor(me), false);
-    assert.match(
-      userTexts(me).find((text) => text.startsWith("Peer notice"))!,
-      /credentials|sign.in|authentication/,
-    );
   });
 
   it("speaks in the deepest request's chain, spends no hop, and a plain reply answers it", async () => {
@@ -739,7 +589,6 @@ describe("deferred background context", () => {
     const { setDeferredBackgroundContextProvider } =
       await import("./session/runtimePrompt.ts");
     const background = new BackgroundCompletionDelivery({
-      drainPeers: drainRecipient,
       offer: async () => "delivered",
       disposition: () => "defer",
     });
@@ -758,7 +607,6 @@ describe("deferred background context", () => {
     setDeferredBackgroundContextProvider((id) =>
       background.claimDeferredContext(id),
     );
-    wakeOwed = (id) => background.wakeOwed(id);
     try {
       await offerReplyReminders(me);
       await until(() => reminders(me).length === 1, "the reminder");

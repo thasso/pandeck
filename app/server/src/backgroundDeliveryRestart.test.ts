@@ -38,7 +38,7 @@ const script = `
   const hold = await import(${JSON.stringify(url("./automaticTurnHold.ts"))});
   const { sessionStore } = await import(${JSON.stringify(url("./db/sessionStore.ts"))});
   const { backgroundWorkStore } = await import(${JSON.stringify(url("./db/backgroundWorkStore.ts"))});
-  const { BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./backgroundWork/completionDelivery.ts"))});
+  const { ScheduledBackgroundDelivery: BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./test/backgroundDelivery.ts"))});
   const notices = await import(${JSON.stringify(url("./backgroundCompletionNotices.ts"))});
   const { PromptDeliveryReceipt } = await import(${JSON.stringify(url("./session/runtime/promptDelivery.ts"))});
   const { reconcileBackgroundWorkOnBoot } = await import(${JSON.stringify(url("./backgroundWorkBoot.ts"))});
@@ -46,7 +46,6 @@ const script = `
   const offered = [];
   const answer = {};
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: async () => {},
     held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,

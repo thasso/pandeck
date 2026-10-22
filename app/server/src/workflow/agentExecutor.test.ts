@@ -948,7 +948,6 @@ test("the production workflow adapter releases admission at append but tracks th
     await import("../backgroundWork/completionDelivery.ts");
   const background = new BackgroundCompletionDelivery({
     offer: async () => "busy",
-    drainPeers: async () => {},
   });
   live = new FakeRuntimeDriver(roleSession);
   const release = live.holdTurns();
@@ -960,7 +959,7 @@ test("the production workflow adapter releases admission at append but tracks th
   )!;
   try {
     assert.equal(
-      await lane.deliver(live as unknown as PromptQueueDriver),
+      await lane.deliver(live as unknown as PromptQueueDriver, () => undefined),
       "turn",
     );
     assert.equal(live.isRunning, true);
@@ -970,7 +969,9 @@ test("the production workflow adapter releases admission at append but tracks th
     let settled = false;
     const second = production
       .settleEarlierDeliveries(roleSession)
-      .then(() => lane.deliver(live as unknown as PromptQueueDriver))
+      .then(() =>
+        lane.deliver(live as unknown as PromptQueueDriver, () => undefined),
+      )
       .then((result) => {
         settled = true;
         return result;

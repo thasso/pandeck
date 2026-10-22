@@ -333,16 +333,6 @@ export interface BackgroundCompletionOffer {
 }
 
 export interface BackgroundCompletionDeliveryOptions {
-  /** Drains the existing durable peer FIFO, including any admitted peer turn. */
-  drainPeers(
-    sessionId: string,
-    admission?: { shouldStart(): boolean },
-  ): Promise<void>;
-  /**
-   * The user stopped this session, so no automatic turn may start: the batch
-   * stays pending, unoffered, until a later drain finds the hold lifted.
-   */
-  held?(sessionId: string): boolean;
   /**
    * How a terminal fact reaches the model: a turn of its own, the next turn, or
    * not at all when it is already in the session's context. Absent means every
@@ -471,14 +461,10 @@ interface RenderedUpdate {
 export class BackgroundCompletionDelivery {
   private readonly pending = new Map<string, PendingCompletionBatch>();
   private readonly deferred = new Map<string, PendingCompletionBatch>();
-  private readonly drains = new Map<string, Promise<void>>();
   private readonly maxNoticesPerSession: number;
   private readonly maxPromptChars: number;
-  private readonly rerunAfterDrain = new Set<string>();
   /** Sessions whose wake batch is being offered as a turn right now. */
   private readonly offering = new Set<string>();
-  /** Sessions whose drain in flight has passed its peer phase (`drain`). */
-  private readonly pastPeerPhase = new Set<string>();
   /** Completions whose outbox row could not be written when they were queued. */
   private readonly unrecorded = new WeakSet<BackgroundCompletionNotice>();
   private stopped = false;
@@ -507,9 +493,7 @@ export class BackgroundCompletionDelivery {
    * Whether a wake is owed to this session before anything offered after the
    * background step (a peer reply reminder): a batch waiting to start its own
    * turn, or one being offered right now. Deferred facts never count, since
-   * they ride whatever turn comes next. A drain still in its peer phase does
-   * not count either: it may be waiting on the very turn that asks. A map
-   * lookup.
+   * they ride whatever turn comes next. A map lookup.
    */
   wakeOwed(sessionId: string): boolean {
     if (this.stopped) return false;
@@ -525,8 +509,6 @@ export class BackgroundCompletionDelivery {
       for (const notice of batch.notices) this.options.discard?.(notice);
     this.pending.clear();
     this.deferred.clear();
-    this.rerunAfterDrain.clear();
-    this.pastPeerPhase.clear();
   }
 
   enqueue(sessionId: string, notice: BackgroundCompletionNotice): void {
@@ -683,7 +665,6 @@ export class BackgroundCompletionDelivery {
       this.options.discard?.(notice);
       return;
     }
-    if (this.drains.has(sessionId)) this.rerunAfterDrain.add(sessionId);
     const batch = this.pending.get(sessionId) ?? { notices: [], dropped: 0 };
     if (batch.notices.length >= this.maxNoticesPerSession) {
       batch.dropped += 1;
@@ -694,83 +675,32 @@ export class BackgroundCompletionDelivery {
     if (drain) void this.drain(sessionId);
   }
 
-  /**
-   * Drain now, or once more after the drain in flight. For a caller that has
-   * just changed what that drain decided — the user's queue giving up an idle
-   * edge the peer phase deferred to — which a coalesced {@link drain} would
-   * swallow.
-   */
+  /** Producers always mark a scheduler pass, including after a read point. */
   requestDrain(sessionId: string): Promise<void> {
-    if (this.drains.has(sessionId)) this.rerunAfterDrain.add(sessionId);
     return this.drain(sessionId);
   }
 
-  /**
-   * Drain now, or join the drain in flight. One already past its peer phase
-   * runs once more after it instead: it may be awaiting a turn — its own offer,
-   * or a steer the provider will decline — whose idle edge is this call, and a
-   * peer prompt or notice that found the session busy has no other wake
-   * (Task-973). Joining during the peer phase is enough, since that phase still
-   * reads the queue.
-   */
+  /** Only an admitted offer enters the lane; ordinary calls wake the scheduler. */
   drain(sessionId: string, shouldStart?: () => boolean): Promise<void> {
     if (this.stopped) return Promise.resolve();
-    if (!shouldStart && wakeSessionDelivery(sessionId))
+    if (!shouldStart) {
+      wakeSessionDelivery(sessionId);
       return Promise.resolve();
-    return this.startDrain(sessionId, shouldStart);
+    }
+    return this.drainOnce(sessionId, shouldStart);
   }
 
   /** Same unsent/unavailable outcome as an offer, without another acquisition or peer drain. */
   unavailable(sessionId: string): Promise<void> {
-    return this.startDrain(sessionId, () => true, true);
-  }
-
-  private startDrain(
-    sessionId: string,
-    shouldStart?: () => boolean,
-    unavailable = false,
-  ): Promise<void> {
-    if (this.stopped) return Promise.resolve();
-    const existing = this.drains.get(sessionId);
-    if (existing) {
-      if (this.pastPeerPhase.has(sessionId))
-        this.rerunAfterDrain.add(sessionId);
-      return existing;
-    }
-    const run = this.drainOnce(sessionId, shouldStart, unavailable)
-      .catch((error: unknown) => {
-        if (shouldStart) throw error;
-      })
-      .finally(() => {
-        this.drains.delete(sessionId);
-        this.pastPeerPhase.delete(sessionId);
-        if (this.rerunAfterDrain.delete(sessionId) && !this.stopped)
-          void this.drain(sessionId);
-      });
-    this.drains.set(sessionId, run);
-    return run;
+    return this.drainOnce(sessionId, () => true, true);
   }
 
   private async drainOnce(
     sessionId: string,
-    shouldStart?: () => boolean,
+    shouldStart: () => boolean,
     unavailable = false,
   ): Promise<void> {
-    if (!unavailable)
-      await this.options.drainPeers(
-        sessionId,
-        shouldStart ? { shouldStart } : undefined,
-      );
-    this.pastPeerPhase.add(sessionId);
-    // Read AFTER the peer phase: a Stop during that turn holds this batch too.
-    // One that lands while the offer below awaits is refused at the run door
-    // and answered `busy`, which puts the batch back.
-    if (
-      shouldStart?.() === false ||
-      this.stopped ||
-      this.options.held?.(sessionId)
-    )
-      return;
+    if (!shouldStart() || this.stopped) return;
     const liveBatch = this.pending.get(sessionId);
     if (!liveBatch || liveBatch.notices.length === 0) return;
     const offered: PendingCompletionBatch = {
@@ -831,7 +761,7 @@ export class BackgroundCompletionDelivery {
     for (const notice of sent) this.options.discard?.(notice);
     if (liveBatch.notices.length === 0 && liveBatch.dropped === 0)
       this.pending.delete(sessionId);
-    if (leftOver.length > 0) this.rerunAfterDrain.add(sessionId);
+    if (leftOver.length > 0) wakeSessionDelivery(sessionId);
   }
 
   /** Put notices back at the front of a session's wake queue, in order. */

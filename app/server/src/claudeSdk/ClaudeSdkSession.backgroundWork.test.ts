@@ -23,14 +23,20 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings } = await import("../settings.ts");
 const { sessionSkills } = await import("../sessionSkills.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
-const { drainRecipient, setHubForTests } = await import("../peerPrompt.ts");
+const { setHubForTests } = await import("../peerPrompt.ts");
+const { installDeliveryTestScheduler } =
+  await import("../test/deliveryScheduler.ts");
+const { setDeliveryWake } = await import("../deliveryWake.ts");
 const { peerPromptStore } = await import("../db/peerPromptStore.ts");
 const { holdAutomaticTurns, resumeAutomaticTurns } =
   await import("../automaticTurnHold.ts");
 const { claudeBackgroundWorkBackend } =
   await import("./backgroundWorkBackend.ts");
 
-afterEach(() => setHubForTests(undefined));
+afterEach(() => {
+  setHubForTests(undefined);
+  setDeliveryWake(undefined);
+});
 
 class OutputQueue implements AsyncIterable<ClaudeSdkMessage> {
   private readonly values: ClaudeSdkMessage[] = [];
@@ -1019,6 +1025,10 @@ test("a peer turn is not swallowed when a denied provider result never arrives",
     acquireById: async (id) => (id === session.id ? session : undefined),
     broadcastPeerPromptCardUpdate: () => undefined,
   });
+  const scheduler = installDeliveryTestScheduler({
+    live: (id) => (id === session.id ? session : undefined),
+    acquire: async (id) => (id === session.id ? session : undefined),
+  });
   const chainId = peerPromptStore.createChain();
   peerPromptStore.enqueue({
     conversationId: `peer-priority-conversation-${serial}`,
@@ -1038,7 +1048,7 @@ test("a peer turn is not swallowed when a denied provider result never arrives",
     session_id: "provider-background",
   } as unknown as ClaudeSdkMessage);
   await until(() => query.interruptCalls === 1 && query.inputs.length === 2);
-  const drain = drainRecipient(session.id);
+  const drain = scheduler.drain(session.id);
   query.output.emit({
     type: "system",
     subtype: "session_state_changed",
@@ -1066,7 +1076,7 @@ test("a peer turn is not swallowed when a denied provider result never arrives",
   assert.equal(
     drained,
     true,
-    "the peer drain lock releases even when the denied provider result is absent",
+    "peer delivery settles even when the denied provider result is absent",
   );
   setHubForTests(undefined);
   session.dispose();

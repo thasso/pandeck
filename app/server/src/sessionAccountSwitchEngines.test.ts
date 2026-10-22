@@ -367,6 +367,15 @@ test.each([
       const { peerPromptStore } = await import("./db/peerPromptStore.ts");
       let sender: string | undefined;
       if (mode === "admission" || mode === "peer-switch") {
+        const { installDeliveryTestScheduler } =
+          await import("./test/deliveryScheduler.ts");
+        const { setDeliveryWake } = await import("./deliveryWake.ts");
+        const scheduler = installDeliveryTestScheduler({
+          live: (sessionId) => (sessionId === pi.sessionId ? pi : undefined),
+          acquire: async (sessionId) =>
+            sessionId === pi.sessionId ? pi : undefined,
+        });
+        cleanup.push(() => setDeliveryWake(undefined));
         let moving = false;
         const originalSwitch = pi.switchAccount.bind(pi);
         const move = vi
@@ -400,7 +409,7 @@ test.each([
               })
             : undefined;
         const sent = first
-          ? peer.drainRecipient(id)
+          ? scheduler.drain(id)
           : promptRuntimeSessionWithRuntime(
               runtime,
               live,
@@ -431,14 +440,6 @@ test.each([
           const handoffs = await import("./agentHandoffs.ts");
           const { agentHandoffStore } =
             await import("./db/agentHandoffStore.ts");
-          const { installDeliveryTestScheduler } =
-            await import("./test/deliveryScheduler.ts");
-          const { setDeliveryWake } = await import("./deliveryWake.ts");
-          const scheduler = installDeliveryTestScheduler({
-            live: () => pi,
-            acquire: async () => pi,
-          });
-          cleanup.push(() => setDeliveryWake(undefined));
           queue.setPromptQueueHost({
             live: () => pi as never,
             publish: () => {},
@@ -456,7 +457,7 @@ test.each([
             prompt: "Waiting peer input",
             responseRequested: false,
           });
-          await peer.drainRecipient(id);
+          await scheduler.drain(id);
           assert.equal(
             peerPromptStore.getById(waiting.message.id)?.attempts,
             0,
@@ -475,8 +476,8 @@ test.each([
             "queued",
           );
           assert.equal(agentHandoffStore.listForSession(id)[0]?.attempts, 0);
-          lifecycle.setSessionIdleHook((sid) => {
-            void scheduler.wake(sid);
+          lifecycle.setSessionIdleHook((sid, runId) => {
+            void scheduler.wake(sid, runId);
           });
           cleanup.push(() => lifecycle.setSessionIdleHook(undefined));
           releaseMove!();
@@ -487,6 +488,7 @@ test.each([
             assert.equal(
               peerPromptStore.getById(waiting.message.id)?.status,
               "completed",
+              peerPromptStore.getById(waiting.message.id)?.failureReason,
             );
             assert.equal(agentHandoffStore.listForSession(id!).length, 0);
           });

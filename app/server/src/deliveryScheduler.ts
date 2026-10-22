@@ -7,6 +7,14 @@ export interface DeliverySession {
 }
 
 export type DeliveryResult = "none" | "turn" | "steer";
+type DeliveryAdmissionFailure =
+  | "shutdown"
+  | "held"
+  | "released"
+  | "not-promptable"
+  | "running"
+  | "earlier-debt";
+export type DeliveryAdmissionCheck = () => DeliveryAdmissionFailure | undefined;
 
 export interface DeliveryAcquisitionFailure {
   kind: "error" | "unavailable";
@@ -17,8 +25,11 @@ export interface DeliveryLane<Session extends DeliverySession> {
   readonly name: string;
   readonly mayJoinRunningTurn: boolean;
   /** Cheap and harness-free. */
-  owes(sessionId: string): boolean;
-  deliver(session: Session): Promise<DeliveryResult>;
+  owes(sessionId: string, endedRunId?: string): boolean;
+  deliver(
+    session: Session,
+    checkAdmission: DeliveryAdmissionCheck,
+  ): Promise<DeliveryResult>;
   /** Interpret the shared acquisition failure without acquiring again. */
   unavailable?(
     sessionId: string,
@@ -29,6 +40,8 @@ export interface DeliveryLane<Session extends DeliverySession> {
 interface DeliverySchedulerOptions<Session extends DeliverySession> {
   lanes: readonly DeliveryLane<Session>[];
   reminder: DeliveryLane<Session>;
+  /** A declined lane with debt remaining defers these lanes for this pass. */
+  deferOnDecline?: Readonly<Record<string, readonly string[]>>;
   /** Settle earlier admitted drains before an idle pass reads shared state. */
   settleEarlierDeliveries(sessionId: string): Promise<void>;
   runAutoApprovals(sessionId: string): Promise<unknown>;
@@ -43,7 +56,9 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
   options: DeliverySchedulerOptions<Session>,
 ) {
   const passes = new Map<string, Promise<void>>();
-  const wakes = new Set<string>();
+  // Only a single real idle edge retains its run identity. Any coalesced
+  // wake makes the next pass unrelated, even when it arrived in the same turn.
+  const wakes = new Map<string, string | undefined>();
   const reminders = new Set<string>();
 
   // One owner for changing admission state. A missing driver is cold before
@@ -53,19 +68,29 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
     const canSteer = session?.canSteer ?? false;
     const shutdown = options.shutdown();
     const held = options.held(sessionId);
-    const blocked =
-      shutdown || held || !!session?.released || (running && !canSteer);
+    const failure: DeliveryAdmissionFailure | undefined = shutdown
+      ? "shutdown"
+      : held
+        ? "held"
+        : !session
+          ? "not-promptable"
+          : session.released
+            ? "released"
+            : running && !canSteer
+              ? "running"
+              : undefined;
     return {
       session,
       running,
       canSteer,
       shutdown,
       held,
-      admissible: !!session && !blocked,
+      failure,
+      admissible: failure === undefined,
     };
   }
 
-  async function pass(sessionId: string): Promise<void> {
+  async function pass(sessionId: string, endedRunId?: string): Promise<void> {
     // Idle edges precede prompt settlement. A fresh pass must not reuse an
     // earlier fenced drain. Running joinable offers must not wait for the turn
     // they may steer. Read shared state only after the wait, including Stop.
@@ -96,7 +121,7 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
     const owed = lanes.filter(
       (lane) =>
         (!state.running || (state.canSteer && lane.mayJoinRunningTurn)) &&
-        lane.owes(sessionId),
+        lane.owes(sessionId, endedRunId),
     );
     if (owed.length === 0) return;
     if (!session) {
@@ -127,15 +152,35 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
       }
       if (!state.admissible || !session) return;
     }
+    const deferred = new Set<string>();
     for (const lane of owed) {
       // The selected driver's getters stay live across awaits. In particular,
       // a refused lane must not admit its successor using an old idle snapshot.
       state = sharedChecks(sessionId, session);
       if (!state.admissible) return;
       if (state.running && !lane.mayJoinRunningTurn) continue;
+      if (deferred.has(lane.name)) continue;
       let result: DeliveryResult = "none";
       try {
-        result = await lane.deliver(session);
+        const selected = session;
+        result = await lane.deliver(session, () => {
+          const current = sharedChecks(sessionId, selected);
+          if (current.failure) return current.failure;
+          if (current.running && !lane.mayJoinRunningTurn) return "running";
+          // Only reminders yield to debt arriving during their preparation.
+          // Its producer already marked the next pass; retain eligibility for it.
+          if (
+            lane === options.reminder &&
+            options.lanes.some((prior) => prior.owes(sessionId))
+          ) {
+            if (wakes.has(sessionId)) reminders.add(sessionId);
+            return "earlier-debt";
+          }
+          return undefined;
+        });
+        const successors = options.deferOnDecline?.[lane.name];
+        if (result === "none" && successors && lane.owes(sessionId))
+          for (const name of successors) deferred.add(name);
       } catch (error) {
         // A lane owns retries. One refused delivery must not block the others.
         options.reportError(sessionId, lane.name, error);
@@ -145,17 +190,18 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
     }
   }
 
-  function wake(sessionId: string): Promise<void> {
-    wakes.add(sessionId);
+  function wake(sessionId: string, endedRunId?: string): Promise<void> {
+    wakes.set(sessionId, wakes.has(sessionId) ? undefined : endedRunId);
     const existing = passes.get(sessionId);
     if (existing) return existing;
     // Install the gate before any synchronous lane callback can wake it again.
     const run = Promise.resolve().then(async () => {
       try {
         do {
+          const endedRunId = wakes.get(sessionId);
           wakes.delete(sessionId);
           try {
-            await pass(sessionId);
+            await pass(sessionId, endedRunId);
           } catch (error) {
             options.reportError(sessionId, "pass", error);
           }
@@ -172,13 +218,15 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
   return {
     wake,
     /** Only real idle edges, Resume and the reminder's own re-offer call this. */
-    offerReminders(sessionId: string): Promise<void> {
+    offerReminders(sessionId: string, endedRunId?: string): Promise<void> {
       reminders.add(sessionId);
-      return wake(sessionId);
+      return wake(sessionId, endedRunId);
     },
     /** Ordered within a session, with no cross-session wait. No boot reminders. */
     boot(sessionIds: Iterable<string>): Promise<void> {
-      return Promise.all([...new Set(sessionIds)].map(wake)).then(() => {});
+      return Promise.all([...new Set(sessionIds)].map((id) => wake(id))).then(
+        () => {},
+      );
     },
   };
 }

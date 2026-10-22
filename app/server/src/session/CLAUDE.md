@@ -45,7 +45,8 @@
   an error or resolution. Its provider-call fact precedes EVERY adapter
   `prompt`; an ordinary steer's append is not acceptance. Only acceptance in its
   still-open run binds it; late acceptance stays unknown. Observe the receipt
-  before admission resumes; observers must not throw.
+  before admission resumes; observers must not throw. Idle carries the ended run
+  id; reservation reoffers none. Keep end/idle order.
 - Aborted turns are lossless everywhere: persist partial assistant content with
   `stopReason: "aborted"` and completed tool results before the aborted run
   completion, and mirror a live `toolEnd` into the transient stream so a
