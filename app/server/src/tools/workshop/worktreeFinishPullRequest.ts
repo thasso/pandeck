@@ -87,7 +87,7 @@ import {
 } from "../../pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "../../pullRequestInventory.ts";
 import { invalidatePullRequestInventorySnapshot } from "../../pullRequestInventorySync.ts";
-import { scheduleImmediatePoll } from "../../pullRequestWatcher.ts";
+import { scheduleImmediatePoll } from "../../pullRequestPollSchedule.ts";
 import type { ResolvedPushTarget } from "../../pushWorkflow.ts";
 import {
   assertManagedProviderRepository,
@@ -1117,6 +1117,20 @@ async function finishFollowUps(
   }
 }
 
+/** The requested follow-ups a merge that is not confirmed did NOT run. */
+function skippedFollowUps(request: {
+  markTaskDone?: boolean;
+  removeWorktree?: boolean;
+}): string | undefined {
+  const skipped = [
+    request.markTaskDone ? "marking the Task done" : undefined,
+    request.removeWorktree ? "removing the worktree" : undefined,
+  ].filter(Boolean);
+  return skipped.length > 0
+    ? `Not done, because the merge is not confirmed: ${skipped.join(" and ")}.`
+    : undefined;
+}
+
 function followUpMessage(result: ManagedMergeFollowUpResult): string {
   return [
     result.task ? `Task-${result.task.id} is done.` : undefined,
@@ -1355,6 +1369,34 @@ async function runMerge(
     // default-branch merge.
     managedDecision: { baseIsDefaultBranch: false, defaultBranch },
   });
+  const merged = projection.result;
+  if (merged.outcome === "pending")
+    // Accepted, not confirmed: the same partial convention as
+    // `retargeted-partial`. A retry follows the request already running, and
+    // no follow-up may run on a merge nobody confirmed.
+    return {
+      action: "merge" as const,
+      status: "merge-pending" as const,
+      approvalRequired: false,
+      provider: target.hosted.provider.kind,
+      number: target.number,
+      url: target.url,
+      head: { ref: target.headBranch, sha: target.headSha },
+      base: { ref: target.baseBranch },
+      defaultBranch,
+      baseIsDefaultBranch: false,
+      method: merged.method,
+      supportedMethods,
+      pendingReason: merged.pendingReason,
+      ...(request.reason ? { reason: request.reason } : {}),
+      message: [
+        projection.message,
+        skippedFollowUps(request),
+        "Its pull-request card follows the request: it turns merged once the provider confirms, or states the failure with Merge on offer again. Check the card or the pull request before cleaning up; a merge retried meanwhile follows the same request.",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    };
   const followUps = await finishFollowUps(
     {
       worktreeId: target.row.id,
@@ -1381,11 +1423,14 @@ async function runMerge(
     base: { ref: target.baseBranch },
     defaultBranch,
     baseIsDefaultBranch: false,
-    method: projection.result.method,
+    method: merged.method,
     supportedMethods,
-    remoteBranchDeleted: projection.result.branchDeleted,
-    ...(projection.result.branchDeleteError
-      ? { remoteBranchDeleteError: projection.result.branchDeleteError }
+    remoteBranchDeleted: merged.branchDeleted,
+    ...(merged.branchDeleteError
+      ? { remoteBranchDeleteError: merged.branchDeleteError }
+      : {}),
+    ...(merged.branchKeptReason
+      ? { remoteBranchKeptReason: merged.branchKeptReason }
       : {}),
     cardIds: projection.cardIds,
     // What the projection actually WROTE, never what the worktree links
@@ -1576,6 +1621,21 @@ export const managedPullRequestMergeApprovalExecutor: ApprovalExecutor = {
           approvedMethods: body.supportedMethods,
         },
       });
+      if (projection.result.outcome === "pending")
+        // Requested, not confirmed: no merged result is recorded, no
+        // follow-up runs, and the summary says so in the projection's words.
+        return {
+          resultSummary: [
+            projection.message,
+            skippedFollowUps({
+              markTaskDone: body.markTaskDone === true,
+              removeWorktree: body.removeWorktree === true,
+            }),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          resultUrl: body.url,
+        };
       body.resultMerged = true;
       body.resultBranchDeleted = projection.result.branchDeleted;
       const followUps = await finishFollowUps(

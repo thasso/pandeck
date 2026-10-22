@@ -347,10 +347,11 @@ a synthetic record (never a DB row).
   the same provider call unless the request carries the explicit
   `deleteBranch: false` opt-out (omitted still means delete), and the card, the
   linked Task's suggestion and this module's TTL cache are all updated from that
-  one place so the two surfaces cannot drift. The LOCAL consequences (removing
-  the worktree, settling the session) stay with the card, which is where the
-  state that justifies them is visible. The session `/pr` workflow deliberately
-  does NOT call that row-only endpoint: it resolves
+  one place so the two surfaces cannot drift. A merge the provider has not
+  confirmed answers `status: "pending"` with the pull request still open. The
+  LOCAL consequences (removing the worktree, settling the session) stay with the
+  card, which is where the state that justifies them is visible. The session
+  `/pr` workflow deliberately does NOT call that row-only endpoint: it resolves
   `hostingProviderForRepo(cwd)` directly so an ordinary unregistered repository
   is supported, while still borrowing a linked row's `baseBranch` when one
   exists. It also resolves the open PR's standing review (a SECOND round trip,
@@ -409,13 +410,13 @@ a synthetic record (never a DB row).
   repeats the exact local/remote/PR head triangle, re-runs the shared readiness
   read, requires a currently supported method, and only merges a non-default
   base directly — a default base stages one human approval and merges nothing in
-  that call. All four tools use the caller-aware reservation in
-  `session/sessionRunLease.ts`, which permits the current run on its own target,
-  refuses every other current writer, blocks new runs until release, and shares
-  removal's hold map. Push and PR provider calls stay outside the repository
-  lock across remote I/O. Synthetic main, arbitrary paths/remotes/refs/content,
-  partial dirty delivery, raw force, first-push force and caller-supplied lease
-  oids are not in the contract.
+  that call. An accepted, unconfirmed merge returns `merge-pending`. All four
+  tools use the caller-aware reservation in `session/sessionRunLease.ts`, which
+  permits the current run on its own target, refuses every other current writer,
+  blocks new runs until release, and shares removal's hold map. Push and PR
+  provider calls stay outside the repository lock across remote I/O. Synthetic
+  main, arbitrary paths/remotes/refs/content, partial dirty delivery, raw force,
+  first-push force and caller-supplied lease oids are not in the contract.
 - `worktreeWrite.ts` owns user-initiated repository writes behind
   `POST /api/worktrees/:id/{commit,auto-commit,clean,push}` (request/response,
   not WS): manual commit stages (`add -A`, or a validated path subset) + commits

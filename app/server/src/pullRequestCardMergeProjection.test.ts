@@ -110,7 +110,12 @@ function provider(onMerge: () => void = () => undefined): GitHostingProvider {
       options: { method: PullRequestMergeMethod },
     ) => {
       onMerge();
-      return { number, method: options.method, branchDeleted: true };
+      return {
+        outcome: "merged",
+        number,
+        method: options.method,
+        branchDeleted: true,
+      };
     },
   } as unknown as GitHostingProvider;
 }

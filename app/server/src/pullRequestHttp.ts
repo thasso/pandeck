@@ -137,7 +137,7 @@ async function handleCheck(
   }
   let request: PullRequestViewCheckRequest;
   try {
-    request = parseIdentity(await readJsonBody(req, MAX_BODY_BYTES));
+    request = parseCheckRequest(await readJsonBody(req, MAX_BODY_BYTES));
   } catch (err) {
     json(req, res, headers, 400, { error: errorText(err) });
     return;
@@ -287,6 +287,17 @@ function parseIdentity(body: unknown): PullRequestViewCheckRequest {
     repositoryKey: text("repositoryKey").toLowerCase(),
     number,
   };
+}
+
+/** The identity, plus the merge request a pending merge named, when any. */
+function parseCheckRequest(body: unknown): PullRequestViewCheckRequest {
+  const identity = parseIdentity(body);
+  const raw = ((body ?? {}) as Record<string, unknown>)["mergeRequestId"];
+  if (raw === undefined) return identity;
+  // An opaque provider id that ends up in a URL path segment.
+  if (typeof raw !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(raw))
+    throw new Error("Invalid mergeRequestId.");
+  return { ...identity, mergeRequestId: raw };
 }
 
 /** The identity plus everything the merge decides; every field validated. */

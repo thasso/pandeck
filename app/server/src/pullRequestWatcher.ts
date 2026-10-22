@@ -21,20 +21,32 @@
  * the process comes back up, so a conclusion that happened while the server was
  * down is not missed.
  */
-import type { PullRequestCard, PullRequestCardStatus } from "@assistant/shared";
+import type {
+  Patch,
+  PullRequestCard,
+  PullRequestCardStatus,
+  PullRequestDetail,
+} from "@assistant/shared";
 import {
   ciBesideReviewGates,
   hostingProviderForRepo,
   repositoryCapabilitiesFor,
   type GitHostingProvider,
+  type MergeRequestStatus,
 } from "./gitHosting.ts";
 import {
   beginPullRequestCardObservation,
   openPullRequestCards,
   patchPullRequestCardObservation,
   pullRequestCardRecord,
+  type PendingPullRequestMerge,
+  type PullRequestCardContext,
 } from "./pullRequestCards.ts";
 import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
+import {
+  nextPullRequestPollAt,
+  scheduleImmediatePoll,
+} from "./pullRequestPollSchedule.ts";
 import {
   pullRequestMutationInProgress,
   suggestLinkedTaskDone,
@@ -44,6 +56,16 @@ import {
   workflowObservationArmedForCard,
 } from "./workflow/pullRequestObservation.ts";
 import { sessionIsDirectlyOwned } from "./sessionOutcomePolicy.ts";
+import {
+  asUnknown,
+  forgetPendingMerge,
+  judgePendingMerge,
+  noteStatusRead,
+  pendingMergeFor,
+  recordPendingMerge,
+  updatePendingMerge,
+} from "./pendingMerges.ts";
+import { pullRequestKey } from "./pullRequestIdentity.ts";
 import {
   deliverAppNotification,
   pullRequestCiConclusionNotification,
@@ -106,8 +128,7 @@ const CONCURRENCY = 3;
 const CONFLICT_CONFIRMING_READS = 2;
 
 let sweeper: ReturnType<typeof setInterval> | undefined;
-/** Next-due schedule, in-memory only — rebuilt by `reconcilePullRequestCardsOnBoot` on restart. */
-const nextPollAt = new Map<string, number>();
+const nextPollAt = nextPullRequestPollAt;
 const inFlight = new Set<string>();
 /** Consecutive `mergeable: false` reads per card, with the head and base they concern. */
 const unmergeableReads = new Map<
@@ -186,11 +207,6 @@ function forgetCard(cardId: string): void {
   unmergeableReads.delete(cardId);
 }
 
-/** Poll this card on the next sweep instead of waiting out its current interval. */
-export function scheduleImmediatePoll(cardId: string): void {
-  nextPollAt.set(cardId, 0);
-}
-
 async function pollCard(cardId: string): Promise<void> {
   const record = pullRequestCardRecord(cardId);
   if (!record || record.card.status !== "open") {
@@ -246,6 +262,29 @@ async function pollCard(cardId: string): Promise<void> {
   }
   const observationToken = beginPullRequestCardObservation(cardId);
 
+  // An accepted, unconfirmed merge is asked about FIRST, so the detail read
+  // below already reflects a request that has just finished.
+  const pendingMerge = context.pendingMerge;
+  const identityKey = pullRequestKey(
+    provider.kind,
+    provider.repoWebUrl,
+    number,
+  );
+  // The card's copy is the durable one; after a restart it restores the
+  // by-identity record the Pull Requests view's check reads.
+  if (pendingMerge && identityKey && !pendingMergeFor(identityKey))
+    recordPendingMerge(identityKey, pendingMerge);
+  const mergeRequest =
+    pendingMerge?.requestId && provider.mergeRequestStatus
+      ? await provider
+          .mergeRequestStatus(number, pendingMerge.requestId)
+          .catch(() => undefined)
+      : undefined;
+  // When the status read started failing is part of the record.
+  const notedMerge = pendingMerge
+    ? noteStatusRead(pendingMerge, mergeRequest, Date.now())
+    : undefined;
+
   const detail = await provider.pullRequestDetail(number);
   if (!detail) {
     nextPollAt.set(cardId, Date.now() + retryIntervalFor(card));
@@ -273,6 +312,19 @@ async function pollCard(cardId: string): Promise<void> {
   const shouldNotify =
     nowConcluded && context.notifiedHeadSha !== detail.headSha;
 
+  const settlement = settlePendingMerge(
+    card,
+    notedMerge,
+    mergeRequest,
+    detail,
+    provider.kind === "github" ? "GitHub" : "Forgejo",
+  );
+  // The by-identity record follows the card's, for THIS attempt only.
+  if (pendingMerge && identityKey) {
+    if (settlement.record) updatePendingMerge(identityKey, settlement.record);
+    else forgetPendingMerge(identityKey, pendingMerge);
+  }
+
   const status: PullRequestCardStatus = detail.merged
     ? "merged"
     : detail.state === "closed"
@@ -293,6 +345,8 @@ async function pollCard(cardId: string): Promise<void> {
       // or a generic PR tool). Omission would leave the old draft flag stuck.
       draft: detail.draft ? true : undefined,
       mergeable: detail.mergeable,
+      // Written every poll so a stack that merged down or dissolved clears.
+      stack: detail.stack,
       conflicts: conflictConfirmed(card, context.observedHeadSha, detail),
       // A head other than the one the agent inherited means the branch was
       // republished: the rebase it was handed is over (or someone else moved
@@ -313,8 +367,10 @@ async function pollCard(cardId: string): Promise<void> {
       ...(ci ? { ci } : {}),
       ...(review ? { review } : {}),
       ...(repositoryCapabilities ? { repositoryCapabilities } : {}),
+      ...settlement.card,
     },
     {
+      ...settlement.context,
       observedHeadSha: detail.headSha,
       ...(detail.baseBranch && detail.baseBranch !== context.baseBranch
         ? { baseBranch: detail.baseBranch }
@@ -350,7 +406,81 @@ async function pollCard(cardId: string): Promise<void> {
     forgetCard(cardId);
     return;
   }
-  nextPollAt.set(cardId, Date.now() + intervalFor(updated));
+  // A request still running is asked about again soon, not on the slow
+  // GitHub cadence: its card is telling the user it does not know yet.
+  nextPollAt.set(
+    cardId,
+    Date.now() +
+      (settlement.stillPending ? FAST_POLL_MS : intervalFor(updated)),
+  );
+}
+
+/**
+ * What this poll says about an accepted, unconfirmed merge
+ * (`PullRequestCardContext.pendingMerge`), in `judgePendingMerge`'s words —
+ * the same judgement the Pull Requests view's check uses. A settled or failed
+ * attempt clears the record and the card's pending message (only that
+ * message, never a later action's): a failure leaves the provider's reason
+ * with Merge on offer again. One that ends UNKNOWN keeps its record as a
+ * tombstone saying so, which every later read keeps returning until the pull
+ * request itself answers; `record` is what stays, or `undefined` once gone.
+ */
+function settlePendingMerge(
+  card: PullRequestCard,
+  pending: PendingPullRequestMerge | undefined,
+  request: MergeRequestStatus | undefined,
+  detail: PullRequestDetail,
+  providerName: string,
+): {
+  card: Patch<PullRequestCard>;
+  context: Patch<PullRequestCardContext>;
+  stillPending: boolean;
+  record?: PendingPullRequestMerge;
+} {
+  if (!pending) return { card: {}, context: {}, stillPending: false };
+  const verdict = judgePendingMerge(pending, detail, request, Date.now());
+  if (verdict.kind === "pending") {
+    // A fresh "still running" makes a tombstone live again.
+    const live = { ...pending };
+    delete live.unknownReason;
+    return {
+      card: {},
+      context: { pendingMerge: live },
+      stillPending: true,
+      record: live,
+    };
+  }
+  if (verdict.kind === "unknown") {
+    // Already known to be unknown: nothing new to say.
+    if (pending.unknownReason)
+      return {
+        card: {},
+        context: { pendingMerge: pending },
+        stillPending: false,
+        record: pending,
+      };
+    const message = `Whether the accepted merge of #${detail.number} landed is unknown: ${verdict.reason}. Look at the pull request before merging it again.`;
+    const tombstone = asUnknown(pending, verdict.reason, message);
+    return {
+      card: { actionMessage: message },
+      context: { pendingMerge: tombstone },
+      stillPending: false,
+      record: tombstone,
+    };
+  }
+  const clearMessage: Patch<PullRequestCard> =
+    card.actionMessage === pending.message ? { actionMessage: undefined } : {};
+  const settled = { pendingMerge: undefined };
+  if (verdict.kind === "failed")
+    return {
+      card: {
+        ...clearMessage,
+        actionError: `${providerName} could not merge #${detail.number}: ${verdict.message}. Nothing was merged; merge it again once that is fixed.`,
+      },
+      context: settled,
+      stillPending: false,
+    };
+  return { card: clearMessage, context: settled, stillPending: false };
 }
 
 /** One sweep: poll every open card whose schedule is due, bounded concurrency. Awaitable for tests. */

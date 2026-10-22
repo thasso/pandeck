@@ -106,3 +106,46 @@ test("the conversation route refuses an incomplete identity before any provider 
   );
   assert.equal(status, 400);
 });
+
+// `mergeRequestId` ends up in a provider URL path segment, so anything but an
+// opaque id is refused at the edge, before any provider read.
+test("the check route refuses a malformed mergeRequestId before any provider read", async () => {
+  const { Readable } = await import("node:stream");
+  for (const mergeRequestId of ["../stacks/3", "a".repeat(129), 42, ""]) {
+    let status = 0;
+    let body = "";
+    const req = Object.assign(
+      Readable.from([
+        Buffer.from(
+          JSON.stringify({
+            projectId: "pa",
+            provider: "github",
+            repositoryKey: "acme/pa",
+            number: 7,
+            mergeRequestId,
+          }),
+        ),
+      ]),
+      { method: "POST", headers: {} },
+    ) as unknown as IncomingMessage;
+    const res = {
+      writeHead(next: number) {
+        status = next;
+        return this;
+      },
+      end(value?: string) {
+        body = value ?? "";
+        return this;
+      },
+    } as unknown as ServerResponse;
+    await handlePullRequestApi(
+      req,
+      res,
+      new URL("http://localhost/api/pull-requests/check"),
+      () => ({ "content-type": "application/json" }),
+    );
+    assert.equal(status, 400, String(mergeRequestId));
+    assert.match(body, /Invalid mergeRequestId/);
+  }
+  assert.equal(hoisted.provider.mock.calls.length, 0);
+});

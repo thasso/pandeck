@@ -24,6 +24,7 @@ import type { WorktreeRow } from "./db/worktreeStore.ts";
 import {
   invalidateRepositoryCapabilities,
   type GitHostingProvider,
+  type MergeRequestStatus,
 } from "./gitHosting.ts";
 import {
   createPullRequestCard,
@@ -41,6 +42,11 @@ import {
   type PullRequestViewMergeOperations,
 } from "./pullRequestViewMerge.ts";
 import { mainWorktreeId } from "./worktrees/worktreeResolve.ts";
+import {
+  pendingMergeFor,
+  recordPendingMerge,
+  resetPendingMergesForTests,
+} from "./pendingMerges.ts";
 
 /* --------------------------------- fixtures -------------------------------- */
 
@@ -90,6 +96,11 @@ interface ProviderOptions {
   merges?: { method: string; deleteBranch: boolean; headBranch?: string }[];
   branchDeleted?: boolean;
   branchDeleteError?: string;
+  branchKeptReason?: string;
+  /** The provider accepted but did not confirm: this is why. */
+  pendingReason?: string;
+  /** The id the provider named for that pending request, if any. */
+  pendingRequestId?: string;
   /** Runs at the moment the provider ACCEPTS, for what happens after it. */
   onMerged?: () => void;
 }
@@ -133,12 +144,26 @@ function fakeProvider(options: ProviderOptions = {}): GitHostingProvider {
         ...(merge.headBranch ? { headBranch: merge.headBranch } : {}),
       });
       options.onMerged?.();
+      if (options.pendingReason)
+        return {
+          outcome: "pending",
+          number,
+          method: merge.method,
+          pendingReason: options.pendingReason,
+          ...(options.pendingRequestId
+            ? { requestId: options.pendingRequestId }
+            : {}),
+        };
       return {
+        outcome: "merged",
         number,
         method: merge.method,
         branchDeleted: options.branchDeleted !== false,
         ...(options.branchDeleteError
           ? { branchDeleteError: options.branchDeleteError }
+          : {}),
+        ...(options.branchKeptReason
+          ? { branchKeptReason: options.branchKeptReason }
           : {}),
       };
     },
@@ -216,6 +241,7 @@ function withoutMethod(
 }
 
 afterEach(() => {
+  resetPendingMergesForTests();
   resetPullRequestCardsStoreForTests();
   resetPullRequestMutationsForTests();
   invalidateRepositoryCapabilities();
@@ -267,6 +293,60 @@ test("merges the pull request and then retires its local worktree", async () => 
     branchDeleted: true,
     settledSessions: 2,
     deliveryVerified: true,
+  });
+});
+
+// Accepted but not confirmed: whether it merged is unknown, so the checkout is
+// left alone — removing it could lose work that never lands.
+test("a merge the provider has not confirmed reports pending and skips the cleanup", async () => {
+  const path = repo();
+  const provider = fakeProvider({
+    pendingReason:
+      "GitHub had not finished merging it when this stopped waiting",
+  });
+  const worktree = row("wt-7", path, "feature-7");
+
+  const result = await mergePullRequestFromView(
+    request({ removeWorktree: true }),
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main"), worktree],
+      providers: { [path]: provider },
+    }),
+  );
+
+  assert.equal(result.merge.status, "pending");
+  assert.match(
+    result.merge.status === "pending" ? result.merge.reason : "",
+    /accepted the merge of #7 into main \(squash\) but has not confirmed it: GitHub had not finished/,
+  );
+  assert.equal(result.cleanup.status, "skipped");
+  assert.deepEqual(result.taskSuggestions, []);
+});
+
+// A branch another open pull request targets is kept on purpose, and the view
+// says why in place of a deletion error.
+test("a branch kept for a stacked pull request is reported with that reason", async () => {
+  const path = repo();
+  const provider = fakeProvider({
+    branchDeleted: false,
+    branchKeptReason: "#8 still targets it as base",
+  });
+
+  const result = await mergePullRequestFromView(
+    request(),
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    }),
+  );
+
+  assert.deepEqual(result.merge, {
+    status: "merged",
+    method: "squash",
+    headBranch: "feature-7",
+    baseBranch: "main",
+    remoteBranch: "not-deleted",
+    remoteBranchError: "#8 still targets it as base",
   });
 });
 
@@ -768,6 +848,219 @@ test("an identity no checkout of the project publishes to is refused", async () 
 // answered: what IS this pull request. It attempts nothing — which is the whole
 // point, since a merge re-issued after the pull request turned into a draft (or
 // lost its method) would be refused by an authoritative guard forever.
+// A check about a pending merge also asks where its request stands: an open
+// pull request is not "did not merge" while that request may still land.
+test("a check about a pending merge reports where its request stands", async () => {
+  const path = repo();
+  const asked: string[] = [];
+  const check = (
+    provider: GitHostingProvider,
+    mergeRequestId: string | null = "req-1",
+  ) =>
+    checkPullRequestFromView(
+      {
+        projectId: PROJECT,
+        provider: "forgejo",
+        repositoryKey: REPOSITORY_KEY,
+        number: 7,
+        ...(mergeRequestId ? { mergeRequestId } : {}),
+      },
+      operations({
+        rows: [row(mainWorktreeId(PROJECT), path, "main")],
+        providers: { [path]: provider },
+      }),
+    );
+  const asking = (status: MergeRequestStatus) => ({
+    ...fakeProvider(),
+    mergeRequestStatus: async (_number: number, requestId: string) => {
+      asked.push(requestId);
+      return status;
+    },
+  });
+
+  assert.deepEqual((await check(asking({ status: "pending" }))).mergeRequest, {
+    status: "pending",
+  });
+  assert.deepEqual(asked, ["req-1"]);
+  assert.deepEqual(
+    (await check(asking({ status: "failed", message: "closed" }))).mergeRequest,
+    { status: "failed", message: "closed" },
+  );
+  // A provider that cannot say keeps it unknown, never "did not merge".
+  assert.deepEqual((await check(fakeProvider())).mergeRequest, {
+    status: "pending",
+    message: "its status cannot be asked",
+  });
+  // A terminal pull request answers for itself; nothing else is asked.
+  const terminal = await check({
+    ...asking({ status: "pending" }),
+    pullRequestDetail: async () => detail({ state: "merged", merged: true }),
+  });
+  assert.equal(terminal.mergeRequest, undefined);
+  // Without an id, the check is the ordinary one.
+  assert.equal(
+    (await check(asking({ status: "pending" }), null)).mergeRequest,
+    undefined,
+  );
+  assert.deepEqual(asked, ["req-1", "req-1"]);
+});
+
+// The server keeps its own record of an accepted merge, by identity: a check
+// with no id — the provider named none, or the browser lost the pending answer
+// — must not read an open pull request as "did not merge".
+for (const [name, requestId, expected] of [
+  [
+    "named no request",
+    undefined,
+    {
+      status: "inconclusive",
+      message: "the provider named no request to follow",
+    },
+  ],
+  ["was lost on its way back", "req-9", { status: "pending" }],
+] as const)
+  test(`a check after a pending merge whose answer ${name} stays uncertain`, async () => {
+    const path = repo();
+    const asked: string[] = [];
+    const provider = {
+      ...fakeProvider({
+        pendingReason: "GitHub had not finished merging it",
+        ...(requestId ? { pendingRequestId: requestId } : {}),
+      }),
+      mergeRequestStatus: async (_number: number, id: string) => {
+        asked.push(id);
+        return { status: "pending" as const };
+      },
+    };
+    const ops = operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    });
+    const merged = await mergePullRequestFromView(request(), ops);
+    assert.equal(merged.merge.status, "pending");
+
+    // The client sends no id at all.
+    const answer = await checkPullRequestFromView(
+      {
+        projectId: PROJECT,
+        provider: "forgejo",
+        repositoryKey: REPOSITORY_KEY,
+        number: 7,
+      },
+      ops,
+    );
+    assert.equal(answer.state, "open");
+    assert.deepEqual(answer.mergeRequest, expected);
+    assert.deepEqual(asked, requestId ? [requestId] : []);
+  });
+
+/** A check of #7 with no request id, against one provider. */
+async function checkWithoutId(provider: GitHostingProvider, path = repo()) {
+  return checkPullRequestFromView(
+    {
+      projectId: PROJECT,
+      provider: "forgejo",
+      repositoryKey: REPOSITORY_KEY,
+      number: 7,
+    },
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    }),
+  );
+}
+
+const KEY = "forgejo#acme/repo#7";
+/** The head `detail()` reports. */
+const HEAD_7 = "a".repeat(40);
+
+// An attempt nobody could follow ends UNKNOWN, and stays so: the evidence that
+// the server sent a merge is never lost into "did not merge" — not when the
+// watch ends, not on the next check, not on the one after.
+test("an attempt whose watch ended stays unknown on every later check", async () => {
+  const path = repo();
+  recordPendingMerge(KEY, {
+    expectedHeadSha: HEAD_7,
+    requestedAt: Date.now() - 11 * 60_000,
+    message: "pending",
+  });
+  for (let i = 0; i < 3; i += 1) {
+    const answer = await checkWithoutId(fakeProvider(), path);
+    assert.deepEqual(answer.mergeRequest, {
+      status: "unknown",
+      message:
+        "the provider named no request to follow, and the pull request is still open",
+    });
+  }
+  assert.ok(pendingMergeFor(KEY)?.unknownReason);
+  // The head moving past the conditioned one is an answer.
+  const moved = await checkWithoutId(
+    fakeProvider({ detail: detail({ headSha: "b".repeat(40) }) }),
+    path,
+  );
+  assert.equal(moved.mergeRequest?.status, "failed");
+  assert.equal(pendingMergeFor(KEY), undefined);
+});
+
+// The watcher can end the watch first; the check then finds its tombstone.
+test("a tombstone the watcher left is what the next check reports", async () => {
+  recordPendingMerge(KEY, {
+    expectedHeadSha: HEAD_7,
+    requestedAt: Date.now(),
+    message: "unknown",
+    unknownReason: "the provider named no request to follow",
+  });
+  assert.deepEqual((await checkWithoutId(fakeProvider())).mergeRequest, {
+    status: "unknown",
+    message: "the provider named no request to follow",
+  });
+});
+
+// An answer settles only the attempt it was read for. An old tab still naming
+// attempt A is told about A; attempt B, still running, is left alone.
+test("a stale client id is answered about its own attempt and leaves the current one", async () => {
+  const path = repo();
+  recordPendingMerge(KEY, {
+    requestId: "req-B",
+    expectedHeadSha: HEAD_7,
+    requestedAt: Date.now(),
+    message: "pending B",
+  });
+  const asked: string[] = [];
+  const provider = {
+    ...fakeProvider(),
+    mergeRequestStatus: async (_number: number, id: string) => {
+      asked.push(id);
+      return id === "req-A"
+        ? { status: "failed" as const, message: "Pull request is closed." }
+        : { status: "pending" as const };
+    },
+  };
+  const stale = await checkPullRequestFromView(
+    {
+      projectId: PROJECT,
+      provider: "forgejo",
+      repositoryKey: REPOSITORY_KEY,
+      number: 7,
+      mergeRequestId: "req-A",
+    },
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    }),
+  );
+  assert.deepEqual(stale.mergeRequest, {
+    status: "failed",
+    message: "Pull request is closed.",
+  });
+  assert.equal(pendingMergeFor(KEY)?.requestId, "req-B");
+  // A later check with no id still follows B.
+  assert.deepEqual((await checkWithoutId(provider, path)).mergeRequest, {
+    status: "pending",
+  });
+  assert.deepEqual(asked, ["req-A", "req-B"]);
+});
+
 test("a check answers the state under the lock and merges nothing", async () => {
   const path = repo();
   const merges: ProviderOptions["merges"] = [];

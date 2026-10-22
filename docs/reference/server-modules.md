@@ -232,24 +232,25 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `mergePullRequestAndProject`, while the default branch stages one
   `managedPullRequestMerge` approval and ends the turn without any provider
   merge. That approval's executor re-derives the complete state under a fresh
-  worktree reservation and refuses on any drift. The bundled Claude Code CLI
-  hard-blocks native agent `git push`, so both the checked tool and human
-  `/push` run git app-side. `/commit` and free-form `/push` remain human
-  convenience surfaces; `/push` retains its existing remote/ref and guarded
-  bare-lease behavior. It resolves a missing upstream for both implicit and
-  explicit remote first-push forms and renders a durable push-result card
-  (`PushDisplay`) through the same synthetic-host-command path as `/commit`
-  (`finishSyntheticCard` on both harnesses → `command.result` timeline entry).
-  `prWorkflow.ts` composes those workflows for `/pr`: clean and up-to-date
-  phases stay silent, a blocked commit stops the chain, and the final phase
-  resolves `gitHosting.ts` directly from the repo so unregistered checkouts work
-  too. `prAgent.ts` is the dedicated no-tool JSON title/body writer. The
-  pull-request phase itself is store-driven (stage 2, Task 323):
-  `pullRequestCards.ts` (modeled on `pendingApprovals.ts`) persists a
-  `PullRequestCard`, injects it into session snapshots like an approval
-  (`withPullRequestCardBlocks`), and broadcasts `pullRequestCardUpdate` on every
-  change, so `/pr`'s synthetic tool turn only ever finishes with plain text. It
-  also owns the session-LIST projection of those cards
+  worktree reservation and refuses on any drift. A merge the provider accepted
+  but has not confirmed returns `status: "merge-pending"` (the approval executor
+  records no merged result). The bundled Claude Code CLI hard-blocks native
+  agent `git push`, so both the checked tool and human `/push` run git app-side.
+  `/commit` and free-form `/push` remain human convenience surfaces; `/push`
+  retains its existing remote/ref and guarded bare-lease behavior. It resolves a
+  missing upstream for both implicit and explicit remote first-push forms and
+  renders a durable push-result card (`PushDisplay`) through the same
+  synthetic-host-command path as `/commit` (`finishSyntheticCard` on both
+  harnesses → `command.result` timeline entry). `prWorkflow.ts` composes those
+  workflows for `/pr`: clean and up-to-date phases stay silent, a blocked commit
+  stops the chain, and the final phase resolves `gitHosting.ts` directly from
+  the repo so unregistered checkouts work too. `prAgent.ts` is the dedicated
+  no-tool JSON title/body writer. The pull-request phase itself is store-driven
+  (stage 2, Task 323): `pullRequestCards.ts` (modeled on `pendingApprovals.ts`)
+  persists a `PullRequestCard`, injects it into session snapshots like an
+  approval (`withPullRequestCardBlocks`), and broadcasts `pullRequestCardUpdate`
+  on every change, so `/pr`'s synthetic tool turn only ever finishes with plain
+  text. It also owns the session-LIST projection of those cards
   (`pullRequestSummariesBySession`: one card per session, the newest still
   moving, narrowed to `SessionPullRequestSummary`; memoized, and dropped
   directly by `writeStore` — the file stamp it is keyed on is only a backstop
@@ -270,28 +271,28 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   (`awaiting_task_choice`) and the list states it as `attention: "task-choice"`;
   an unanswered prompt counts even when a newer card has taken over the row.
   `pullRequestWatcher.ts` is the adaptive, viewer-independent poller that keeps
-  an `open` card's CI/review/mergeability current via `gitHosting.ts`'s
-  `pullRequestDetail`, sends a deduped (per PR + head SHA) CI-conclusion alert,
-  and is reconciled on boot like `reconcileWorktreeMergesOnBoot`.
-  `pullRequestHosting.ts` answers WHICH checkout a card speaks for — its own
-  while that directory exists, the worktree's main checkout once it does not —
-  and the poller, the card's merge action and the repository identity above all
-  ask it, so a card outlives the worktree it was published from.
-  `pullRequestIdentity.ts` owns what counts as the SAME pull request —
-  `<provider>#<owner>/<repo>#<number>`, read off any repository or pull-request
-  URL — because two repositories both having #7 is ordinary and one project can
-  publish to both. `pullRequestIdentity()` returns both halves: the join key,
-  and the `owner/repo` the inventory puts ON THE WIRE, because the client has to
-  address a pull request too: its route carries project, provider, repository
-  and number, because any smaller address names more than one of them.
-  `pullRequestInventory.ts` builds the Pull Requests view's inventory —
-  `GET /api/pull-requests` via `pullRequestHttp.ts` — by folding the 60 s
-  per-project open-PR list (yours plus review-requested) together with the 15 s
-  per-worktree hosting projection (merged/closed pull requests whose local
-  worktree still exists, the cleanup queue), then joining each one to its
-  worktree, sessions and Tasks as IDs; `docs/pull-requests.md` holds the
-  contract. `pullRequestIdentityThrough()` is the shared "does this resolved
-  provider speak for the pull request this request names" check, so the
+  an `open` card's CI/review/mergeability (and native `stack`) current via
+  `gitHosting.ts`'s `pullRequestDetail`, sends a deduped (per PR + head SHA)
+  CI-conclusion alert, and is reconciled on boot like
+  `reconcileWorktreeMergesOnBoot`. `pullRequestHosting.ts` answers WHICH
+  checkout a card speaks for — its own while that directory exists, the
+  worktree's main checkout once it does not — and the poller, the card's merge
+  action and the repository identity above all ask it, so a card outlives the
+  worktree it was published from. `pullRequestIdentity.ts` owns what counts as
+  the SAME pull request — `<provider>#<owner>/<repo>#<number>`, read off any
+  repository or pull-request URL — because two repositories both having #7 is
+  ordinary and one project can publish to both. `pullRequestIdentity()` returns
+  both halves: the join key, and the `owner/repo` the inventory puts ON THE
+  WIRE, because the client has to address a pull request too: its route carries
+  project, provider, repository and number, because any smaller address names
+  more than one of them. `pullRequestInventory.ts` builds the Pull Requests
+  view's inventory — `GET /api/pull-requests` via `pullRequestHttp.ts` — by
+  folding the 60 s per-project open-PR list (yours plus review-requested)
+  together with the 15 s per-worktree hosting projection (merged/closed pull
+  requests whose local worktree still exists, the cleanup queue), then joining
+  each one to its worktree, sessions and Tasks as IDs; `docs/pull-requests.md`
+  holds the contract. `pullRequestIdentityThrough()` is the shared "does this
+  resolved provider speak for the pull request this request names" check, so the
   inventory's actions cannot drift about which repository a number belongs to.
   `pullRequestViewMerge.ts` is that view's merge action —
   `POST /api/pull-requests/merge`, also served by `pullRequestHttp.ts`: it
@@ -393,15 +394,23 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   against the same fresh answer, so a moved default branch cannot turn a direct
   merge into an unapproved default-branch merge and an approval cannot execute
   after its base stopped being the default. The managed tool's own check is an
-  earlier, more legible refusal, not the only one. `pullRequestActions.ts`
-  (stage 3, Task 324) owns the ACTIONS on that card — merge (method AND
-  remote-branch fate per merge, both arriving with the click as
-  `PullRequestCardActionOptions`, through that shared projection),
-  `update-with-main` (deterministic `worktreeSync` pull-rebase + rebase-main +
-  lease-guarded force push, handing the work to the session's agent only on a
-  `WorktreeSyncConflictError`), `cleanup` (pull-rebase main →
-  `branchContainedInBase` → `removeWorktree({ deleteBranch: true })` → settle
-  the sessions, never forced, only when merged and only when the shared
+  earlier, more legible refusal, not the only one. For a provider with native
+  stacks (`stackMembers`, GitHub) the seam also reads the pull request's stack
+  and its members BEFORE the identity re-read, binds the stack the re-read
+  reports against them, and refuses a merge with open pull requests below it or
+  a direct base other than the stack's (`docs/pull-requests.md#native-stacks`).
+  A merge the provider accepted but has not confirmed (`outcome: "pending"`)
+  projects only a message onto the cards plus an immediate watcher poll; a
+  confirmed one also polls the cards whose base is the merged head.
+  `pullRequestPollSchedule.ts` holds the watcher's schedule so the seam can ask
+  for polls without an import cycle. `pullRequestActions.ts` (stage 3, Task 324)
+  owns the ACTIONS on that card — merge (method AND remote-branch fate per
+  merge, both arriving with the click as `PullRequestCardActionOptions`, through
+  that shared projection), `update-with-main` (deterministic `worktreeSync`
+  pull-rebase + rebase-main + lease-guarded force push, handing the work to the
+  session's agent only on a `WorktreeSyncConflictError`), `cleanup` (pull-rebase
+  main → `branchContainedInBase` → `removeWorktree({ deleteBranch: true })` →
+  settle the sessions, never forced, only when merged and only when the shared
   `settleBlockedReason` predicate says every session it settles may leave the
   inbox at all — the card's own plus the other sessions still LIVE on the
   checkout (`liveSessionIdsForWorktree`; a finished review session is not one of
@@ -1992,43 +2001,48 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   the merge precondition, so every merge carries `sha`/`head_commit_id` and a
   pull request with no head commit refuses instead of merging unconditioned.
   `mergePullRequest` merges AND deletes the remote head branch in ONE seam call
-  — GitHub as `PUT .../merge` then `DELETE /git/refs/heads/<branch>`, Forgejo as
-  a single `POST .../merge` with `Do` + `delete_branch_after_merge` and a
-  confirming branch read (Forgejo answers a merge identically whether or not a
-  protected head branch survived it, and the card states the deletion as fact) —
-  because a surface that merges usually wants the branch gone and two calls
-  means two ways to leave a stale branch behind; `deleteBranch: false` is the
-  caller's explicit opt-out and skips the deletion (and the confirming read)
-  entirely, while omitting it still deletes. A refusal throws with the
-  provider's own words (it is the authority on branch protection and required
-  checks), while a failed branch deletion is reported without turning a landed
-  merge into a failure. Provider calls now THROW when the API could not be
-  reached or refused, returning `null` only when the answer is genuinely "there
-  is nothing": swallowing a failure into `null` produced a payload saying "no
-  PR, no CI", which is indistinguishable from a clean branch, so an outage
-  rendered as a list of healthy-looking worktrees. `findPullRequestForBranch`
-  also queries ALL states rather than only open ones — a MERGED pull request is
-  the single signal that a branch's life is over, and `state=open` made that
-  state unreachable; `pickBranchPull` prefers an open PR, else the most recent.
-  `listOpenPullRequests` returns EVERYTHING open rather than only your own — it
-  is one request either way, the ownership facts ride along in the same
-  response, and the two consumers want different slices (the inbox takes what
-  needs you, the Project page shows the repo). `changesRequestedFromReviews` is
-  the shared rule behind that last one and is exported for its own test: only
-  the LATEST review per person counts (a reviewer who objected and later
-  approved has withdrawn the objection), stale/dismissed/pending/comment-only
-  reviews never object, and the two providers' spellings (`REQUEST_CHANGES` vs
-  `CHANGES_REQUESTED`) are normalized in one place. `closePullRequest` is the
-  provider-neutral close-without-merging seam: both backends transition state to
-  `closed` without a head precondition of their own, so the exact expected head
-  and open state are proven by a read immediately BEFORE the write and the
-  outcome by one after it — a refusal throws with the provider's message, and a
-  landed-but-unconfirmed write comes back as `closed: false` with
-  `unconfirmedReason` rather than an invented success. `repositoryCapabilities`
-  reads what the repository allows (default branch, supported merge methods,
-  optional default method, close and branch-deletion support) from provider
-  metadata — GitHub's `allow_*_merge`/`delete_branch_on_merge`, Forgejo's
-  differently spelled `allow_merge_commits`/`allow_rebase`/
+  — GitHub as `PUT .../merge-async` (`direct_merge`, exact `sha`, never
+  `bypass_rules`) followed by a bounded poll of the accepted request, Forgejo as
+  `POST .../merge` with `Do`; then, after a CONFIRMED merge only and only while
+  no open pull request targets the head as its base, the branch deletion
+  (`DELETE /git/refs/heads/<branch>`, Forgejo's `DELETE /branches/<branch>` and
+  a confirming branch read, since Forgejo answers identically whether or not a
+  protected branch survived). An accepted GitHub merge that is still running,
+  queued, or unreadable when the wait ends is `outcome: "pending"` — never a
+  merge and never a refusal — because a surface that merges usually wants the
+  branch gone and two calls means two ways to leave a stale branch behind;
+  `deleteBranch: false` is the caller's explicit opt-out and skips the deletion
+  (and the confirming read) entirely, while omitting it still deletes. A refusal
+  throws with the provider's own words (it is the authority on branch protection
+  and required checks), while a failed branch deletion is reported without
+  turning a landed merge into a failure. Provider calls now THROW when the API
+  could not be reached or refused, returning `null` only when the answer is
+  genuinely "there is nothing": swallowing a failure into `null` produced a
+  payload saying "no PR, no CI", which is indistinguishable from a clean branch,
+  so an outage rendered as a list of healthy-looking worktrees.
+  `findPullRequestForBranch` also queries ALL states rather than only open ones
+  — a MERGED pull request is the single signal that a branch's life is over, and
+  `state=open` made that state unreachable; `pickBranchPull` prefers an open PR,
+  else the most recent. `listOpenPullRequests` returns EVERYTHING open rather
+  than only your own — it is one request either way, the ownership facts ride
+  along in the same response, and the two consumers want different slices (the
+  inbox takes what needs you, the Project page shows the repo).
+  `changesRequestedFromReviews` is the shared rule behind that last one and is
+  exported for its own test: only the LATEST review per person counts (a
+  reviewer who objected and later approved has withdrawn the objection),
+  stale/dismissed/pending/comment-only reviews never object, and the two
+  providers' spellings (`REQUEST_CHANGES` vs `CHANGES_REQUESTED`) are normalized
+  in one place. `closePullRequest` is the provider-neutral close-without-merging
+  seam: both backends transition state to `closed` without a head precondition
+  of their own, so the exact expected head and open state are proven by a read
+  immediately BEFORE the write and the outcome by one after it — a refusal
+  throws with the provider's message, and a landed-but-unconfirmed write comes
+  back as `closed: false` with `unconfirmedReason` rather than an invented
+  success. `repositoryCapabilities` reads what the repository allows (default
+  branch, supported merge methods, optional default method, close and
+  branch-deletion support) from provider metadata — GitHub's
+  `allow_*_merge`/`delete_branch_on_merge`, Forgejo's differently spelled
+  `allow_merge_commits`/`allow_rebase`/
   `default_merge_style`/`default_delete_branch_after_merge`, verified against
   its own API — and throws rather than answering "everything is allowed".
   Callers use `repositoryCapabilitiesFor`, which caches/coalesces per repository

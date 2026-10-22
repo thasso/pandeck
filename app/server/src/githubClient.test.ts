@@ -156,3 +156,45 @@ test("out-of-order answers keep the lowest remainder of their window", async () 
   await read(); // the next window replaces it
   expect(githubRateLimit(config("ghp_order"))?.remaining).toBe(4998);
 });
+
+// A merge answering 409 carries the id of the request already running, which
+// the caller follows; only the statuses a caller names come back, and even
+// they are never cached.
+test("an accepted error status returns its body; any other still throws", async () => {
+  const fetchMock = vi.fn(
+    async (_input: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify({ uuid: "req-1", message: "in progress" }), {
+        status: 409,
+        headers: { etag: '"v1"' },
+      }),
+  );
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const accepted = await githubRequest<{ uuid?: string }>(
+    config("ghp_accept"),
+    "GET",
+    "/pulls/7/merge-async/req-1",
+    { acceptStatuses: [409] },
+  );
+  expect(accepted.status).toBe(409);
+  expect(accepted.data.uuid).toBe("req-1");
+  await githubRequest(
+    config("ghp_accept"),
+    "GET",
+    "/pulls/7/merge-async/req-1",
+    {
+      acceptStatuses: [409],
+    },
+  );
+  expect(headerOf(fetchMock.mock.calls[1]![1], "If-None-Match")).toBe(
+    undefined,
+  );
+  await expect(
+    githubRequest(config("ghp_accept"), "GET", "/pulls/7/merge-async/req-1"),
+  ).rejects.toThrow(/HTTP 409/);
+  await expect(
+    githubRequest(config("ghp_accept"), "PUT", "/pulls/7/merge-async", {
+      acceptStatuses: [404],
+    }),
+  ).rejects.toThrow(/HTTP 409/);
+});

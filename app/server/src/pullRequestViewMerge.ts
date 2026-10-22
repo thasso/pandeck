@@ -27,13 +27,15 @@
  *  3. read the pull request once to derive what is being merged;
  *  4. merge, then clean up — in that order, and never the other way. A merge
  *     that landed is reported as landed whatever the cleanup then did; that is
- *     why the two phases are separate answers on the wire.
+ *     why the two phases are separate answers on the wire. A merge the
+ *     provider accepted but has not confirmed skips the cleanup.
  *
  * {@link checkPullRequestFromView} is the same resolution with NO side effect:
  * what this pull request is, read under that same lock, for a client whose
  * request went unanswered.
  */
 import type {
+  PullRequestDetail,
   PullRequestViewCheckRequest,
   PullRequestViewCheckResponse,
   PullRequestViewCleanupOutcome,
@@ -48,7 +50,16 @@ import { errorText } from "./errors.ts";
 import {
   hostingProviderForRepo,
   type GitHostingProvider,
+  type MergeRequestStatus,
 } from "./gitHosting.ts";
+import {
+  asUnknown,
+  forgetPendingMerge,
+  judgePendingMerge,
+  noteStatusRead,
+  pendingMergeFor,
+  updatePendingMerge,
+} from "./pendingMerges.ts";
 import { pullRequestIdentityThrough } from "./pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "./pullRequestInventory.ts";
 import {
@@ -225,6 +236,15 @@ export async function checkPullRequestFromView(
           `Pull request #${request.number} could not be read from ${request.provider}; its state is still unknown.`,
           409,
         );
+      // An accepted merge still outstanding — named by the client, or found
+      // by identity when the client never got (or lost) the pending answer.
+      // While the pull request is open only that request can say whether it
+      // may yet land.
+      const mergeRequest = await outstandingMergeStanding(
+        request,
+        repository,
+        detail,
+      );
       const local = await resolveWorktree(
         request,
         detail.headBranch,
@@ -245,6 +265,7 @@ export async function checkPullRequestFromView(
         ...(detail.draft ? { draft: true } : {}),
         // Three-valued, so it travels whenever the detail answered at all.
         mergeable: detail.mergeable,
+        ...(mergeRequest ? { mergeRequest } : {}),
         // Three answers, never two: "two checkouts stand on this branch" is not
         // "there is no checkout", and a surface told the latter would announce
         // that nothing local is left while both are still there.
@@ -256,6 +277,94 @@ export async function checkPullRequestFromView(
       };
     },
   );
+}
+
+/**
+ * Where an accepted merge stands, for the check. The record kept by identity
+ * (`pendingMerges.ts`) is judged exactly as the watcher judges it. Every
+ * answer is bound to the attempt it was read for: a client naming a request
+ * other than the current record's — an old tab, an earlier attempt — is told
+ * about ITS attempt alone, and the record is left to answers about it. Nothing
+ * here ever turns "could not tell" into "did not merge": a request that
+ * cannot be asked stays `pending`, one with no id to follow is `inconclusive`
+ * while it is watched, and a watch that ended without an answer stays
+ * `unknown` — kept as a tombstone — until the pull request itself answers.
+ */
+async function outstandingMergeStanding(
+  request: PullRequestViewCheckRequest,
+  repository: ResolvedRepository,
+  detail: PullRequestDetail,
+): Promise<PullRequestViewCheckResponse["mergeRequest"]> {
+  const key = repository.identityKey;
+  const record = pendingMergeFor(key);
+  if (detail.state !== "open") {
+    if (record) forgetPendingMerge(key, record);
+    return undefined;
+  }
+  const clientId = request.mergeRequestId;
+  if (clientId && clientId !== record?.requestId) {
+    const asked = await askMergeRequest(
+      repository.provider,
+      request.number,
+      clientId,
+    );
+    return "answer" in asked
+      ? asked.answer
+      : { status: "pending", message: asked.unreadable };
+  }
+  if (!record) return undefined;
+  const asked: Asked = record.requestId
+    ? await askMergeRequest(
+        repository.provider,
+        request.number,
+        record.requestId,
+      )
+    : { unreadable: "the provider named no request to follow" };
+  const answer = "answer" in asked ? asked.answer : undefined;
+  const now = Date.now();
+  const noted = noteStatusRead(record, answer, now);
+  const verdict = judgePendingMerge(noted, detail, answer, now);
+  if (verdict.kind === "pending") {
+    const live = { ...noted };
+    delete live.unknownReason;
+    updatePendingMerge(key, live);
+    if ("answer" in asked)
+      return {
+        status: asked.answer.status === "merged" ? "merged" : "pending",
+      };
+    return {
+      status: record.requestId ? "pending" : "inconclusive",
+      message: asked.unreadable,
+    };
+  }
+  if (verdict.kind === "unknown") {
+    updatePendingMerge(
+      key,
+      noted.unknownReason ? noted : asUnknown(noted, verdict.reason),
+    );
+    return { status: "unknown", message: verdict.reason };
+  }
+  forgetPendingMerge(key, record);
+  if (verdict.kind === "failed")
+    return { status: "failed", message: verdict.message };
+  return { status: "expired" };
+}
+
+/** The provider's FRESH answer about one request, or why there is none. */
+type Asked = { answer: MergeRequestStatus } | { unreadable: string };
+
+async function askMergeRequest(
+  provider: GitHostingProvider,
+  number: number,
+  requestId: string,
+): Promise<Asked> {
+  if (!provider.mergeRequestStatus)
+    return { unreadable: "its status cannot be asked" };
+  try {
+    return { answer: await provider.mergeRequestStatus(number, requestId) };
+  } catch (err) {
+    return { unreadable: `its status could not be read (${errorText(err)})` };
+  }
 }
 
 async function mergeAndCleanUp(
@@ -304,6 +413,29 @@ async function mergeAndCleanUp(
       ...(request.deleteRemoteBranch === false ? { deleteBranch: false } : {}),
       ...(local.worktreeId ? { worktreeId: local.worktreeId } : {}),
     });
+    if (projection.result.outcome === "pending") {
+      // Whether it merged is unknown, so nothing local may act on it: the
+      // cleanup would remove a checkout whose work may never land.
+      forgetInventoryReads(request, repository, operations);
+      return {
+        number: request.number,
+        merge: {
+          status: "pending",
+          reason: projection.message,
+          ...(projection.result.requestId
+            ? { requestId: projection.result.requestId }
+            : {}),
+        },
+        cleanup: request.removeWorktree
+          ? {
+              status: "skipped",
+              reason:
+                "The merge is not confirmed yet, so the checkout was left alone.",
+            }
+          : { status: "not-requested" },
+        taskSuggestions: [],
+      };
+    }
     merge = {
       status: "merged",
       method: projection.result.method,
@@ -315,8 +447,13 @@ async function mergeAndCleanUp(
           : projection.result.branchDeleted
             ? "deleted"
             : "not-deleted",
-      ...(projection.result.branchDeleteError
-        ? { remoteBranchError: projection.result.branchDeleteError }
+      ...(projection.result.branchKeptReason ||
+      projection.result.branchDeleteError
+        ? {
+            remoteBranchError:
+              projection.result.branchKeptReason ??
+              projection.result.branchDeleteError,
+          }
         : {}),
     };
     taskSuggestions = projection.taskSuggestions;

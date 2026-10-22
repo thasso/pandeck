@@ -91,6 +91,12 @@ interface MergeState {
    * request that is merely unmergeable right now.
    */
   unknown?: boolean;
+  /**
+   * The merge request a `pending` merge answered with. While it is set the
+   * outcome stays unknown however the pull request reads — the request may
+   * still land — until a check finds it settled.
+   */
+  pendingRequestId?: string;
 }
 
 const NOTHING: MergeState = {
@@ -152,8 +158,11 @@ export function usePullRequestMergeCleanup({
     async (
       target: PullRequestInventoryItem,
       priorMerge: string | undefined,
+      pendingRequestId?: string,
     ) => {
       const id = pullRequestRowId(target);
+      const pending =
+        pendingRequestId !== undefined ? { pendingRequestId } : {};
       setState({
         key: id,
         open: true,
@@ -163,6 +172,7 @@ export function usePullRequestMergeCleanup({
         // not on having asked.
         unknown: true,
         ...(priorMerge !== undefined ? { mergedNote: priorMerge } : {}),
+        ...pending,
       });
       try {
         const answer = await checkPullRequestFromView({
@@ -170,8 +180,40 @@ export function usePullRequestMergeCleanup({
           provider: target.provider,
           repositoryKey: target.repositoryKey,
           number: target.number,
+          ...(pendingRequestId !== undefined
+            ? { mergeRequestId: pendingRequestId }
+            : {}),
         });
         const terminal = answer.state !== "open";
+        // Open is not "did not merge" while the request it was asked about
+        // has not settled: it may still land.
+        const request = answer.mergeRequest;
+        if (
+          !terminal &&
+          request &&
+          (request.status === "pending" ||
+            request.status === "merged" ||
+            request.status === "inconclusive")
+        ) {
+          setState({
+            key: id,
+            open: true,
+            busy: false,
+            escalatable: false,
+            unknown: true,
+            note:
+              request.status === "inconclusive"
+                ? `Checked under the pull request's lock: #${answer.number} is still open, and the earlier merge attempt is inconclusive${
+                    request.message ? ` (${request.message})` : ""
+                  }: it may still land. Check again in a moment.`
+                : `Checked under the pull request's lock: #${answer.number} is still open and its merge request has not finished${
+                    request.message ? ` (${request.message})` : ""
+                  }. Check again in a moment.`,
+            ...(priorMerge !== undefined ? { mergedNote: priorMerge } : {}),
+            ...pending,
+          });
+          return;
+        }
         // The local half has THREE answers and the middle one is not absence:
         // two checkouts on this branch is a situation to state, never "nothing
         // is left here".
@@ -200,7 +242,18 @@ export function usePullRequestMergeCleanup({
             : terminal
               ? {}
               : {
-                  note: `Checked under the pull request's lock: #${answer.number} is still open, so the attempt did not merge it.`,
+                  note:
+                    request?.status === "failed"
+                      ? `Checked under the pull request's lock: #${answer.number} is still open; its merge request failed${
+                          request.message ? `: ${request.message}` : ""
+                        }.`
+                      : request?.status === "expired"
+                        ? `Checked under the pull request's lock: #${answer.number} is still open and its merge request is no longer known, so it did not merge.`
+                        : request?.status === "unknown"
+                          ? `Checked under the pull request's lock: #${answer.number} is still open; whether the earlier accepted merge landed is unknown${
+                              request.message ? ` (${request.message})` : ""
+                            }. Look at the pull request before merging it again.`
+                          : `Checked under the pull request's lock: #${answer.number} is still open, so the attempt did not merge it.`,
                 }),
         }));
         // The sanctioned toast, on the same rule as everywhere here: only when
@@ -223,6 +276,7 @@ export function usePullRequestMergeCleanup({
           escalatable: false,
           unknown: true,
           ...(priorMerge !== undefined ? { mergedNote: priorMerge } : {}),
+          ...pending,
         });
       } finally {
         onDone();
@@ -319,7 +373,9 @@ export function usePullRequestMergeCleanup({
           onConfirm={(choice) => void run(choice, item, mine.mergedNote)}
           // Asks what the pull request IS, never re-attempts the merge: that is
           // what can still be answered once a guard has turned against it.
-          onRecheck={() => void check(item, mine.mergedNote)}
+          onRecheck={() =>
+            void check(item, mine.mergedNote, mine.pendingRequestId)
+          }
           onClose={close}
         />
       ) : null,
@@ -338,6 +394,22 @@ function settle(
   item: PullRequestInventoryItem,
   priorMerge: string | undefined,
 ): MergeState {
+  // Accepted but not confirmed is the UNKNOWN state with an answer attached:
+  // the merge may still land, so only the check may end it — and checking at
+  // once would mostly find it still open and call that "did not merge".
+  if (result.merge.status === "pending")
+    return {
+      key,
+      open: true,
+      busy: false,
+      error: `${result.merge.reason} Checking asks what it is now.`,
+      escalatable: false,
+      unknown: true,
+      ...(result.merge.requestId !== undefined
+        ? { pendingRequestId: result.merge.requestId }
+        : {}),
+      ...(priorMerge !== undefined ? { mergedNote: priorMerge } : {}),
+    };
   // A retry after a refusal finds the pull request already terminal and reports
   // no merge of its own; the one that DID land is still this flow's fact and
   // must keep being stated.

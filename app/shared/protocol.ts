@@ -4552,6 +4552,12 @@ export interface PullRequestCard {
   /** null = the provider cannot answer it yet; poll again. */
   mergeable?: boolean | null;
   /**
+   * The provider-native stack this pull request is part of, as the watcher
+   * last read it. A pull request above the bottom of its stack cannot merge
+   * here until the ones below it have.
+   */
+  stack?: PullRequestStack;
+  /**
    * A CONFIRMED base conflict, surfaced directly so a renderer need not infer
    * it. Not merely `mergeable === false`: a single `false` is also what a
    * queued conflict check answers, so this is claimed only once a second read
@@ -5487,22 +5493,70 @@ export interface PullRequestDetail {
   headSha: string;
   headBranch: string;
   baseBranch: string;
+  /** The provider-native stack this pull request belongs to, when it does. */
+  stack?: PullRequestStack;
+  /**
+   * The provider reported a stack this app could not read. Nothing may merge
+   * on it: a merge of a stacked pull request can land the ones below it too.
+   */
+  stackUnknownReason?: string;
+}
+
+/**
+ * A provider-native pull-request stack (GitHub stacked pull requests), as one
+ * member's detail reports it. Pull requests are stacked bottom to top, each
+ * targeting the head branch of the one below; the bottom one targets
+ * `baseBranch`, where the whole stack lands.
+ */
+export interface PullRequestStack {
+  /** The provider's id for the stack. */
+  number: number;
+  /** How many pull requests the provider counts in the stack. */
+  size: number;
+  /** This pull request's place in it, 1 = bottom. */
+  position: number;
+  /** The branch the bottom of the stack targets. */
+  baseBranch: string;
 }
 
 /**
  * Outcome of a merge through the hosting seam. A provider REFUSAL (branch
  * protection, required checks, a stale mergeability answer) arrives as a thrown
- * error carrying the provider's own words, never as `merged: false` — so a
- * result in hand always means the pull request is merged.
+ * error carrying the provider's own words, never as `merged: false`. A result
+ * in hand is therefore either a CONFIRMED merge or an accepted request whose
+ * outcome the provider has not reported yet — never a refusal.
  */
-export interface PullRequestMergeResult {
-  number: number;
-  method: PullRequestMergeMethod;
-  /** The remote head branch was deleted as part of the same call. */
-  branchDeleted: boolean;
-  /** Present when deletion was asked for and refused (protected branch, …). */
-  branchDeleteError?: string;
-}
+export type PullRequestMergeResult =
+  | {
+      outcome: "merged";
+      number: number;
+      method: PullRequestMergeMethod;
+      /** The remote head branch was deleted as part of the same call. */
+      branchDeleted: boolean;
+      /** Present when deletion was asked for and refused (protected branch, …). */
+      branchDeleteError?: string;
+      /**
+       * Deletion was asked for and deliberately NOT attempted: another open
+       * pull request still targets the branch as its base, or that could not
+       * be ruled out.
+       */
+      branchKeptReason?: string;
+    }
+  | {
+      /**
+       * The provider accepted the merge request but has not confirmed it (still
+       * processing, or queued). Nothing that follows a merge may happen on this
+       * answer: no terminal card state, Task suggestion, base refresh or branch
+       * deletion. The watcher reports the real outcome.
+       */
+      outcome: "pending";
+      number: number;
+      method: PullRequestMergeMethod;
+      /** The provider's id for the accepted request, when it reported one. */
+      requestId?: string;
+      /** Why the merge is not confirmed, as a sentence fragment. */
+      pendingReason: string;
+    };
 
 /**
  * Outcome of closing a pull request WITHOUT merging. The provider write either
@@ -5795,6 +5849,16 @@ export type PullRequestViewMergeOutcome =
     }
   | {
       /**
+       * The provider accepted the merge but has not confirmed it. Whether it
+       * merged is UNKNOWN, so the cleanup half does not run (`skipped`).
+       */
+      status: "pending";
+      reason: string;
+      /** The provider's id for the accepted request, when it reported one. */
+      requestId?: string;
+    }
+  | {
+      /**
        * Nothing was merged because there was nothing left to merge: the pull
        * request was already terminal when this ran. The cleanup half still
        * runs — that is the whole reason the view lists it.
@@ -5811,6 +5875,8 @@ export type PullRequestViewMergeOutcome =
  */
 export type PullRequestViewCleanupOutcome =
   | { status: "not-requested" }
+  /** Requested, but not attempted: the merge is not confirmed yet. */
+  | { status: "skipped"; reason: string }
   /** No local worktree of this project holds this pull request's head branch. */
   | { status: "no-worktree" }
   | {
@@ -5869,6 +5935,11 @@ export interface PullRequestViewCheckRequest {
   /** `owner/repo`, lowercased — the same identity the merge request carries. */
   repositoryKey: string;
   number: number;
+  /**
+   * The accepted, unconfirmed merge request a `pending` merge answered with,
+   * when the check is about one: the check then also says where it stands.
+   */
+  mergeRequestId?: string;
 }
 
 /**
@@ -5990,6 +6061,19 @@ export interface PullRequestViewCheckResponse {
   mergeable?: boolean | null;
   /** The local checkout situation, which decides what cleanup still applies. */
   checkout: PullRequestViewCheckoutState;
+  /**
+   * Where an outstanding accepted merge stands, for an OPEN pull request: the
+   * one named by `mergeRequestId`, or the server's own record of one when the
+   * client sent none. `pending` (also: could not be asked) and `inconclusive`
+   * (no request id to follow, still being watched) keep the outcome uncertain
+   * — it may still land; `unknown` means the watch ended without an answer;
+   * only `failed` or `expired` says it did not merge.
+   */
+  mergeRequest?: {
+    status:
+      "pending" | "merged" | "failed" | "expired" | "inconclusive" | "unknown";
+    message?: string;
+  };
 }
 
 /**
@@ -6228,11 +6312,18 @@ export interface WorktreeMergePrRequest {
 
 export interface WorktreeMergePrResponse {
   worktreeId: string;
-  /** The merged pull request, in its post-merge state. */
+  /**
+   * `pending`: the provider accepted the merge but has not confirmed it, so
+   * `pr` is still open and nothing else happened.
+   */
+  status: "merged" | "pending";
+  /** The pull request, in its post-merge state (or still open when pending). */
   pr: WorktreePullRequestInfo;
   method: PullRequestMergeMethod;
   /** The remote branch was deleted along with the merge. */
   branchDeleted: boolean;
+  /** Why the outcome is not known yet; present only when `pending`. */
+  pendingReason?: string;
 }
 
 /**

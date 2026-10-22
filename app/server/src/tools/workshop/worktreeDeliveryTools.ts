@@ -73,7 +73,7 @@ import {
   pullRequestCardRecord,
   pullRequestCardsForWorktree,
 } from "../../pullRequestCards.ts";
-import { scheduleImmediatePoll } from "../../pullRequestWatcher.ts";
+import { scheduleImmediatePoll } from "../../pullRequestPollSchedule.ts";
 import { readTask, taskSummaryOf } from "../../tasks.ts";
 import { invalidateWorktreeHosting } from "../../worktrees/worktreeHosting.ts";
 import {

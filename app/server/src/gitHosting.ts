@@ -21,6 +21,7 @@ import {
   type PullRequestMergeMethod,
   type PullRequestMergeResult,
   type PullRequestRepositoryCapabilities,
+  type PullRequestStack,
   type PullRequestReviewThread,
   type PullRequestReviewVerdict,
   type PullRequestTimelineEntry,
@@ -38,6 +39,7 @@ import {
   githubRequest,
   type GithubApiConfig,
   type GithubRefChecksSummary,
+  type GithubResponse,
 } from "./githubClient.ts";
 import {
   isFailedGitCheckStatus,
@@ -125,8 +127,11 @@ export function forgejoRefChecksVerdict(
 }
 
 /** Bound each provider request while still honoring a long-running tool's cancellation. */
-function requestSignal(parentSignal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+function requestSignal(
+  parentSignal?: AbortSignal,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
   return parentSignal ? AbortSignal.any([parentSignal, timeout]) : timeout;
 }
 
@@ -231,8 +236,29 @@ export interface GitHostingProvider {
    * never "conflicting". Each provider maps its own unknowns onto it — GitHub's
    * literal `null` while it recomputes, Forgejo's `false` on a draft/WIP pull
    * request, which it reports whether or not the base actually conflicts.
+   *
+   * `stack` is GitHub's native stack, read from the same response; a stack
+   * the response carries in a shape this app cannot read is
+   * `stackUnknownReason`, never silently absent.
    */
   pullRequestDetail(prNumber: number): Promise<PullRequestDetail | null>;
+  /**
+   * OPTIONAL: the members of one provider-native stack, bottom to top and
+   * merged ones included, for a provider that has stacks (GitHub). A THROW
+   * means they could not be read, including a body this app does not
+   * understand.
+   */
+  stackMembers?(stackNumber: number): Promise<PullRequestStackMembers>;
+  /**
+   * OPTIONAL: where one accepted asynchronous merge request stands, for a
+   * provider whose merges can come back pending (GitHub). `expired` = the
+   * provider no longer knows the request (GitHub drops a result 24 h after
+   * its last update). A THROW means it could not be asked.
+   */
+  mergeRequestStatus?(
+    prNumber: number,
+    requestId: string,
+  ): Promise<MergeRequestStatus>;
   createPullRequest(input: {
     title: string;
     body?: string;
@@ -269,6 +295,12 @@ export interface GitHostingProvider {
    * authority on whether a merge is allowed, so nothing here pre-judges it.
    * Deleting the branch is the one part allowed to fail softly — the merge has
    * already landed by then, and a protected branch is not a failed merge.
+   *
+   * GitHub merges asynchronously and is waited for, boundedly: a request it
+   * accepted but has not finished comes back as `outcome: "pending"`, never
+   * as a merge or a refusal. The branch is deleted only after a CONFIRMED
+   * merge, and only while no other open pull request targets it as its base:
+   * deleting a stacked pull request's base can close that pull request.
    */
   mergePullRequest(
     prNumber: number,
@@ -293,6 +325,12 @@ export interface GitHostingProvider {
        * it just saw pointing somewhere else.
        */
       expectedBaseBranch?: string;
+      /**
+       * The native stack the caller bound (`null` = it proved there is none),
+       * checked by the same pre-merge read: one that finds a stack the caller
+       * did not bind refuses.
+       */
+      expectedStack?: PullRequestStack | null;
     },
   ): Promise<PullRequestMergeResult>;
   /**
@@ -1180,6 +1218,62 @@ async function resolveMergePreconditions(
   };
 }
 
+/** Where one accepted asynchronous merge request stands. */
+export interface MergeRequestStatus {
+  status: "pending" | "merged" | "failed" | "expired";
+  /** The provider's own words, for a failure. */
+  message?: string;
+}
+
+/** One provider-native stack's members, bottom to top, merged ones included. */
+export interface PullRequestStackMembers {
+  number: number;
+  members: Array<{
+    number: number;
+    state: "open" | "merged" | "closed";
+  }>;
+}
+
+type BranchDeletionOutcome = Pick<
+  Extract<PullRequestMergeResult, { outcome: "merged" }>,
+  "branchDeleted" | "branchDeleteError" | "branchKeptReason"
+>;
+
+/**
+ * Delete a MERGED pull request's head branch — unless another open pull
+ * request still targets it as its base.
+ *
+ * That is what a stack looks like, native or not: the branch just merged is
+ * the base of the pull request above it. A native stack's is retargeted by
+ * the time the merge reports done, but a plain chain's is not retargeted at
+ * all — deleting its base CLOSES it, for good. So any open dependent keeps
+ * the branch, and so does a dependents read that failed: a kept branch costs
+ * a later cleanup, a closed pull request costs the work on it.
+ */
+async function deleteMergedHeadBranch(
+  headBranch: string,
+  openPullsTargeting: (branch: string) => Promise<number[]>,
+  remove: () => Promise<BranchDeletionOutcome>,
+): Promise<BranchDeletionOutcome> {
+  let dependents: number[];
+  try {
+    dependents = await openPullsTargeting(headBranch);
+  } catch (err) {
+    return {
+      branchDeleted: false,
+      branchKeptReason: `whether another open pull request targets it could not be checked (${errorText(err)})`,
+    };
+  }
+  if (dependents.length > 0) {
+    const list = dependents.map((number) => `#${number}`).join(", ");
+    return {
+      branchDeleted: false,
+      branchKeptReason: `${list} still ${dependents.length === 1 ? "targets" : "target"} it as base, and deleting it could close ${dependents.length === 1 ? "that pull request" : "them"}; delete it once nothing targets it`,
+    };
+  }
+  return remove();
+}
+
 /**
  * Refuse a close whose target is not the exact OPEN pull request at the exact
  * head the caller decided about. Both providers write the state transition
@@ -1494,6 +1588,227 @@ interface GithubPull {
   draft?: boolean;
   node_id?: string;
   updated_at?: string;
+  /** GitHub's native stack, when the pull request is in one; see {@link githubStackFrom}. */
+  stack?: unknown;
+}
+
+/**
+ * GitHub's `stack` object onto the shared shape — the ONE place that knows
+ * how GitHub spells it, so a live answer that differs is fixed here.
+ *
+ * Absent or `null` is "not stacked". Anything else that does not carry every
+ * field is UNKNOWN rather than absent: a stacked pull request read as an
+ * unstacked one would merge the pull requests below it too.
+ */
+function githubStackFrom(
+  raw: unknown,
+): Pick<PullRequestDetail, "stack" | "stackUnknownReason"> {
+  if (raw === undefined || raw === null) return {};
+  const stack = raw as {
+    number?: unknown;
+    size?: unknown;
+    position?: unknown;
+    base?: { ref?: unknown } | null;
+  };
+  const baseBranch = stack.base?.ref;
+  if (
+    typeof stack.number !== "number" ||
+    typeof stack.size !== "number" ||
+    typeof stack.position !== "number" ||
+    typeof baseBranch !== "string" ||
+    !baseBranch
+  )
+    return {
+      stackUnknownReason:
+        "GitHub reported a stack for it in a shape this app does not understand",
+    };
+  return {
+    stack: {
+      number: stack.number,
+      size: stack.size,
+      position: stack.position,
+      baseBranch,
+    },
+  };
+}
+
+/**
+ * One answer about a GitHub `merge-async` request — the PUT, a poll, or a
+ * refusal: every one of them, 4xx included, is JSON with `status` and
+ * `details`, and the request id travels in `details.uuid`.
+ */
+interface GithubMergeRequest {
+  /** `pending` | `merged` | `enqueued` | `failed`. */
+  status?: string;
+  message?: string;
+  details?: {
+    message?: string;
+    uuid?: string;
+    merge_method?: string;
+    merge_action?: string;
+    expected_head_sha?: string;
+  } | null;
+}
+
+/** The statuses whose body says why GitHub refused, read rather than thrown. */
+const GITHUB_MERGE_REFUSAL_STATUSES: readonly number[] = [
+  400, 403, 404, 405, 409, 422,
+];
+
+type GithubMergeState =
+  | { kind: "merged" }
+  | { kind: "poll"; requestId: string }
+  | { kind: "pending"; requestId?: string; reason: string };
+
+/** What this merge asked for, which a request GitHub already holds must match. */
+interface GithubMergeAsk {
+  sha: string;
+  method: PullRequestMergeMethod;
+}
+
+/**
+ * GitHub's refusal in its own words. A head that moved is the same refusal
+ * the seam's own head check gives, so it reads like one.
+ */
+function githubMergeRefusal(prNumber: number, message: string): Error {
+  return /head branch was modified/i.test(message)
+    ? new Error(
+        `Pull request #${prNumber} head moved since it was checked (GitHub: ${message}); nothing was merged. Re-check it and decide again.`,
+      )
+    : new Error(
+        `GitHub refused to merge pull request #${prNumber}: ${message}`,
+      );
+}
+
+/**
+ * What one `merge-async` answer means. Only `merged` is a merge; `failed` and
+ * a refusal status throw. Anything else this app cannot settle is PENDING,
+ * never guessed into either — and the decision rests on `status` alone: the
+ * accepting answer's MESSAGE says "enqueued" even for a direct merge.
+ */
+function githubMergeStateFrom(
+  prNumber: number,
+  httpStatus: number,
+  answer: GithubMergeRequest | null | undefined,
+  ask: GithubMergeAsk,
+  knownRequestId?: string,
+): GithubMergeState {
+  const details = answer?.details ?? undefined;
+  const message = details?.message || answer?.message || `HTTP ${httpStatus}`;
+  const requestId =
+    (typeof details?.uuid === "string" && details.uuid) || knownRequestId;
+  if (httpStatus === 409 && requestId) {
+    // A request already exists for this pull request. Following it is what
+    // makes a retry after a lost answer safe — but only when it IS this
+    // merge: someone else's request for another head or method is not ours
+    // to adopt.
+    if (
+      (details?.expected_head_sha ?? "").toLowerCase() ===
+        ask.sha.toLowerCase() &&
+      details?.merge_method === ask.method &&
+      details?.merge_action === "direct_merge"
+    )
+      return { kind: "poll", requestId };
+    throw new Error(
+      `GitHub is already running another merge request for pull request #${prNumber} (${details?.merge_method ?? "unknown method"} at ${details?.expected_head_sha ?? "an unreported head"}); this merge sent nothing.`,
+    );
+  }
+  if (httpStatus >= 400) throw githubMergeRefusal(prNumber, message);
+  const status = answer?.status;
+  if (status === "merged") return { kind: "merged" };
+  if (status === "failed") throw githubMergeRefusal(prNumber, message);
+  if (status === "enqueued")
+    return {
+      kind: "pending",
+      ...(requestId ? { requestId } : {}),
+      reason: "GitHub put it in the merge queue instead of merging it",
+    };
+  if (requestId) return { kind: "poll", requestId };
+  return {
+    kind: "pending",
+    reason: `GitHub answered with status ${status || "(none)"} and no request to follow`,
+  };
+}
+
+/**
+ * How long a GitHub merge waits for its own outcome, and the waits between
+ * polls (the last one repeats). The bound is ABSOLUTE — the PUT, every wait
+ * and every poll's own request time count against it — because the merge
+ * holds this pull request's mutation lock all along; one still unfinished
+ * comes back PENDING for the watcher to settle.
+ */
+interface GithubMergeWait {
+  budgetMs: number;
+  delaysMs: readonly number[];
+  now: () => number;
+  /** Wait, or stop early when the caller gave up; `false` = cancelled. */
+  pause: (ms: number, signal?: AbortSignal) => Promise<boolean>;
+}
+
+const GITHUB_MERGE_WAIT: GithubMergeWait = {
+  budgetMs: 45_000,
+  delaysMs: [1_000, 2_000, 3_000, 5_000],
+  now: () => Date.now(),
+  pause,
+};
+let githubMergeWait = GITHUB_MERGE_WAIT;
+
+/** Test seam: replace (or restore) the merge wait's budget, steps and clock. */
+export function setGithubMergeWaitForTests(
+  wait?: Partial<GithubMergeWait>,
+): void {
+  githubMergeWait = { ...GITHUB_MERGE_WAIT, ...wait };
+}
+
+function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Whether two reads describe the same native stack (or both none). */
+export function samePullRequestStack(
+  a: PullRequestStack | null | undefined,
+  b: PullRequestStack | null | undefined,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return (
+    a.number === b.number &&
+    a.size === b.size &&
+    a.position === b.position &&
+    a.baseBranch === b.baseBranch
+  );
+}
+
+/**
+ * A pre-merge read that happened anyway must not pass a pull request whose
+ * native stack is not the one the caller bound — including a stack that
+ * appeared after the caller looked: merging it would land the pull requests
+ * below it too.
+ */
+function requireBoundStack(
+  prNumber: number,
+  raw: unknown,
+  expected: PullRequestStack | null | undefined,
+): void {
+  const seen = githubStackFrom(raw);
+  if (seen.stackUnknownReason)
+    throw new Error(
+      `Pull request #${prNumber} was not merged: ${seen.stackUnknownReason}.`,
+    );
+  if (!samePullRequestStack(seen.stack, expected))
+    throw new Error(
+      `Pull request #${prNumber} is ${seen.stack ? `in stack ${seen.stack.number} (${seen.stack.position} of ${seen.stack.size} on ${seen.stack.baseBranch})` : "not in a stack"}, which is not what this merge was decided for; nothing was merged.`,
+    );
 }
 
 /**
@@ -2308,7 +2623,60 @@ export function githubProvider(
         headSha: pull.head?.sha ?? "",
         headBranch: pull.head?.ref ?? "",
         baseBranch: pull.base?.ref ?? "",
+        ...githubStackFrom(pull.stack),
       };
+    },
+    async stackMembers(stackNumber) {
+      // Members are listed bottom to top and STAY listed once merged; they
+      // carry no base, and `position`/`size` never change as the stack
+      // merges down — so their order and state are the whole answer.
+      const res = await githubRequest<{ pull_requests?: unknown }>(
+        config,
+        "GET",
+        `${repoApi}/stacks/${stackNumber}`,
+        { signal: signal() },
+      );
+      const pulls = requirePullRequestList<GithubPull>(
+        requireData(res, "stack members")?.pull_requests,
+        `the members of stack ${stackNumber}`,
+      );
+      return {
+        number: stackNumber,
+        members: pulls.map((pull) => {
+          if (
+            typeof pull?.number !== "number" ||
+            typeof pull.state !== "string"
+          )
+            throw new Error(
+              `GitHub listed a member of stack ${stackNumber} without its number or state.`,
+            );
+          return {
+            number: pull.number,
+            state: toGithubPullRequestInfo(pull).state,
+          };
+        }),
+      };
+    },
+    async mergeRequestStatus(prNumber, requestId) {
+      const res = await githubRequest<GithubMergeRequest>(
+        config,
+        "GET",
+        `${repoApi}/pulls/${prNumber}/merge-async/${encodeURIComponent(requestId)}`,
+        { acceptStatuses: [404], signal: signal() },
+      );
+      if (res.status === 404) return { status: "expired" };
+      const status = res.data?.status;
+      if (status === "merged") return { status: "merged" };
+      if (status === "failed")
+        return {
+          status: "failed",
+          message:
+            res.data?.details?.message ||
+            res.data?.message ||
+            "the merge request failed",
+        };
+      // `pending`, `enqueued`, or anything not yet settled.
+      return { status: "pending" };
     },
     async mergePullRequest(prNumber, options) {
       // A caller that proved the head and, when deleting, its branch is merged
@@ -2318,48 +2686,158 @@ export function githubProvider(
       const { headBranch, expectedHeadSha } = await resolveMergePreconditions(
         prNumber,
         options,
-        async () =>
-          (
-            await githubRequest<GithubPull>(
-              config,
-              "GET",
-              `${repoApi}/pulls/${prNumber}`,
-              { signal: signal() },
-            )
-          ).data ?? null,
+        async () => {
+          const pull =
+            (
+              await githubRequest<GithubPull>(
+                config,
+                "GET",
+                `${repoApi}/pulls/${prNumber}`,
+                { signal: signal() },
+              )
+            ).data ?? null;
+          requireBoundStack(prNumber, pull?.stack, options.expectedStack);
+          return pull;
+        },
       );
-      await githubRequest<{ merged?: boolean; message?: string }>(
+      const mergeApi = `${repoApi}/pulls/${prNumber}/merge-async`;
+      const wait = githubMergeWait;
+      const deadline = wait.now() + wait.budgetMs;
+      const remaining = () => deadline - wait.now();
+      // Every request inside the wait is cut to what is left of it.
+      const waitSignal = () =>
+        requestSignal(
+          parentSignal,
+          Math.max(1, Math.min(REQUEST_TIMEOUT_MS, remaining())),
+        );
+      // `direct_merge` keeps the meaning "merge now": the default action
+      // ENQUEUES on a base with a merge queue. `bypass_rules` is never sent —
+      // the provider's rules are the authority on whether this may merge.
+      const accepted = await githubRequest<GithubMergeRequest>(
         config,
         "PUT",
-        `${repoApi}/pulls/${prNumber}/merge`,
+        mergeApi,
         {
           body: {
             merge_method: options.method,
             sha: expectedHeadSha,
+            merge_action: "direct_merge",
           },
-          signal: signal(),
+          // Every refusal's body is read for GitHub's own words, and a 409
+          // names the request already running for this pull request.
+          acceptStatuses: GITHUB_MERGE_REFUSAL_STATUSES,
+          signal: waitSignal(),
         },
       );
-      let branchDeleted = false;
-      let branchDeleteError: string | undefined;
-      if (options.deleteBranch && headBranch) {
-        try {
-          await githubRequest(
-            config,
-            "DELETE",
-            `${repoApi}/git/refs/heads/${headBranch.split("/").map(encodeURIComponent).join("/")}`,
-            { signal: signal() },
-          );
-          branchDeleted = true;
-        } catch (err) {
-          branchDeleteError = err instanceof Error ? err.message : String(err);
+      const ask: GithubMergeAsk = {
+        sha: expectedHeadSha,
+        method: options.method,
+      };
+      let state = githubMergeStateFrom(
+        prNumber,
+        accepted.status,
+        accepted.data,
+        ask,
+      );
+      for (let attempt = 0; state.kind === "poll"; attempt += 1) {
+        const requestId = state.requestId;
+        if (remaining() <= 0) break;
+        const delay =
+          wait.delaysMs[Math.min(attempt, wait.delaysMs.length - 1)] ?? 0;
+        if (!(await wait.pause(Math.min(delay, remaining()), parentSignal))) {
+          state = {
+            kind: "pending",
+            requestId,
+            reason: "waiting for GitHub's answer was cancelled",
+          };
+          break;
         }
+        if (remaining() <= 0) break;
+        let polled: GithubResponse<GithubMergeRequest>;
+        try {
+          polled = await githubRequest<GithubMergeRequest>(
+            config,
+            "GET",
+            `${mergeApi}/${encodeURIComponent(requestId)}`,
+            { signal: waitSignal() },
+          );
+        } catch (err) {
+          // A read the deadline cut short is the wait ending, not a failure.
+          if (remaining() <= 0) break;
+          state = {
+            kind: "pending",
+            requestId,
+            reason: `its status could not be read (${errorText(err)})`,
+          };
+          break;
+        }
+        // Outside the read's `try`: a request that FAILED is a refusal, not
+        // an unreadable answer.
+        state = githubMergeStateFrom(
+          prNumber,
+          polled.status,
+          polled.data,
+          ask,
+          requestId,
+        );
       }
+      if (state.kind !== "merged")
+        return {
+          outcome: "pending",
+          number: prNumber,
+          method: options.method,
+          ...(state.requestId ? { requestId: state.requestId } : {}),
+          pendingReason:
+            state.kind === "poll"
+              ? "GitHub had not finished merging it when this stopped waiting"
+              : state.reason,
+        };
+      const deletion: BranchDeletionOutcome =
+        options.deleteBranch && headBranch
+          ? await deleteMergedHeadBranch(
+              headBranch,
+              async (branch) =>
+                requirePullRequestList<GithubPull>(
+                  requireData(
+                    await githubRequest<GithubPull[]>(
+                      config,
+                      "GET",
+                      `${repoApi}/pulls`,
+                      {
+                        // Any one is enough to keep the branch; the page only
+                        // bounds how many the outcome sentence names.
+                        query: { state: "open", base: branch, per_page: 10 },
+                        signal: signal(),
+                      },
+                    ),
+                    "open pull requests",
+                  ),
+                  "open pull requests",
+                ).map((pull) => pull.number),
+              async () => {
+                try {
+                  await githubRequest(
+                    config,
+                    "DELETE",
+                    `${repoApi}/git/refs/heads/${headBranch.split("/").map(encodeURIComponent).join("/")}`,
+                    { signal: signal() },
+                  );
+                  return { branchDeleted: true };
+                } catch (err) {
+                  return {
+                    branchDeleted: false,
+                    branchDeleteError:
+                      err instanceof Error ? err.message : String(err),
+                  };
+                }
+              },
+            )
+          : { branchDeleted: false };
       return {
+        outcome: "merged",
         number: prNumber,
         method: options.method,
-        branchDeleted,
-        ...(branchDeleteError ? { branchDeleteError } : {}),
+        ...deletion,
       };
     },
     async closePullRequest(prNumber, options) {
@@ -2654,34 +3132,9 @@ function forgejoMergeStyle(
 async function confirmForgejoBranchDeleted(
   config: ForgejoApiConfig,
   repoApi: string,
-  prNumber: number,
   signal: () => AbortSignal,
-  knownHeadRef?: string,
+  headRef: string,
 ): Promise<{ deleted: boolean; reason?: string }> {
-  // A caller that proved the head branch spares this read; only one that did
-  // not asks the (already merged) pull request which ref it had.
-  let headRef = knownHeadRef ?? "";
-  if (!headRef)
-    try {
-      const res = await forgejoRequest<ForgejoPull>(
-        config,
-        "GET",
-        `${repoApi}/pulls/${prNumber}`,
-        { signal: signal() },
-      );
-      headRef = res.data?.head?.ref ?? "";
-    } catch (err) {
-      return {
-        deleted: false,
-        reason: `the branch deletion could not be confirmed (${errorText(err)}).`,
-      };
-    }
-  if (!headRef)
-    return {
-      deleted: false,
-      reason:
-        "the branch deletion could not be confirmed (the pull request no longer reports a head branch).",
-    };
   try {
     await forgejoRequest(
       config,
@@ -2952,8 +3405,12 @@ export function forgejoProvider(
             )
           ).data ?? null,
       );
-      // Gitea/Forgejo merge and branch deletion are one request: `Do` picks the
-      // method, `delete_branch_after_merge` disposes of the head branch.
+      // Forgejo could delete the head branch in this same request
+      // (`delete_branch_after_merge`), but only blindly: whether another open
+      // pull request still targets that branch can be asked only AFTER the
+      // merge, since a read between the identity check and the merge is the
+      // window the preconditions above exist to close. So the merge keeps the
+      // branch and the deletion follows it, guarded.
       await forgejoRequest(
         config,
         "POST",
@@ -2961,7 +3418,7 @@ export function forgejoProvider(
         {
           body: {
             Do: options.method,
-            delete_branch_after_merge: options.deleteBranch === true,
+            delete_branch_after_merge: false,
             head_commit_id: expectedHeadSha,
           },
           signal: signal(),
@@ -2969,32 +3426,93 @@ export function forgejoProvider(
       );
       if (options.deleteBranch !== true)
         return {
+          outcome: "merged",
           number: prNumber,
           method: options.method,
           branchDeleted: false,
         };
-      // The merge response carries no separate deletion outcome and a PROTECTED
-      // head branch is simply kept, so the deletion is CONFIRMED rather than
-      // assumed: the card states it as fact, and a false claim about a branch is
-      // worse than one more read.
-      //
-      // Exactly ONE outcome means "deleted": a 404 on the branch. Everything
-      // else — the branch still there, an unauthorized/500/timeout answer, an
-      // unreadable pull request — is reported as NOT confirmed, because a check
-      // that could not be completed must not invent the answer it was for. The
-      // merge itself already landed either way.
-      const deletion = await confirmForgejoBranchDeleted(
-        config,
-        repoApi,
-        prNumber,
-        signal,
+      if (!headBranch)
+        return {
+          outcome: "merged",
+          number: prNumber,
+          method: options.method,
+          branchDeleted: false,
+          branchDeleteError:
+            "the pull request reported no head branch, so none was deleted.",
+        };
+      const encodedHead = headBranch
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/");
+      const deletion = await deleteMergedHeadBranch(
         headBranch,
+        async (branch) => {
+          // Forgejo cannot filter by base, so the open set is paged and
+          // filtered here; one that cannot be exhausted proves nothing.
+          const dependents: number[] = [];
+          for (let page = 1; page <= OPEN_PULL_REQUEST_PAGE_CAP; page += 1) {
+            const res = await forgejoRequest<ForgejoPull[]>(
+              config,
+              "GET",
+              `${repoApi}/pulls`,
+              {
+                query: { state: "open", limit: MAX_PULL_REQUESTS, page },
+                signal: signal(),
+              },
+            );
+            const pulls = requirePullRequestList<ForgejoPull>(
+              requireData(res, "open pull requests"),
+              "open pull requests",
+            );
+            for (const pull of pulls)
+              if (pull.base?.ref === branch) dependents.push(pull.number);
+            if (pulls.length < MAX_PULL_REQUESTS) return dependents;
+          }
+          throw new Error(
+            `Forgejo still reported open pull requests after ${OPEN_PULL_REQUEST_PAGE_CAP} pages`,
+          );
+        },
+        async () => {
+          try {
+            await forgejoRequest(
+              config,
+              "DELETE",
+              `${repoApi}/branches/${encodedHead}`,
+              { signal: signal() },
+            );
+          } catch (err) {
+            // A refusal (a protected branch) leaves it in place, which the
+            // confirmation below reports in its own words.
+            if (!(err instanceof ForgejoHttpError))
+              return {
+                branchDeleted: false,
+                branchDeleteError: `the branch deletion failed (${errorText(err)}).`,
+              };
+          }
+          // Exactly ONE outcome means "deleted": a 404 on the branch. Everything
+          // else — the branch still there, an unauthorized/500/timeout answer —
+          // is reported as NOT confirmed, because a check that could not be
+          // completed must not invent the answer it was for. The merge itself
+          // already landed either way.
+          const confirmed = await confirmForgejoBranchDeleted(
+            config,
+            repoApi,
+            signal,
+            headBranch,
+          );
+          return {
+            branchDeleted: confirmed.deleted,
+            ...(confirmed.reason
+              ? { branchDeleteError: confirmed.reason }
+              : {}),
+          };
+        },
       );
       return {
+        outcome: "merged",
         number: prNumber,
         method: options.method,
-        branchDeleted: deletion.deleted,
-        ...(deletion.reason ? { branchDeleteError: deletion.reason } : {}),
+        ...deletion,
       };
     },
     async closePullRequest(prNumber, options) {

@@ -61,8 +61,20 @@ test.each(["github.com", "forgejo.example"])(
       .catch((error: unknown) => error);
     await writing;
     controller.abort(new Error("turn stopped"));
-    finish(new Response(JSON.stringify({ merged: true }), { status: 200 }));
-    expect(await result).toMatchObject({ number: 42, branchDeleted: false });
+    // GitHub answers through merge-async, Forgejo through its plain merge.
+    finish(
+      new Response(
+        JSON.stringify(
+          host === "github.com" ? { status: "merged" } : { merged: true },
+        ),
+        { status: 200 },
+      ),
+    );
+    expect(await result).toMatchObject({
+      outcome: "merged",
+      number: 42,
+      branchDeleted: false,
+    });
     expect(signal.aborted).toBe(false);
   },
 );
