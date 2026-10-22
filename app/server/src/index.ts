@@ -242,6 +242,7 @@ import {
   runAutoApprovals,
 } from "./pendingApprovals.ts";
 import { createDeliveryScheduler } from "./deliveryScheduler.ts";
+import { createDeliveryBoot } from "./deliveryBoot.ts";
 import { setDeliveryWake } from "./deliveryWake.ts";
 import { sessionDeliveryLanes } from "./sessionDeliveryLanes.ts";
 import {
@@ -2041,15 +2042,10 @@ server.listen(PORT, HOST, () => {
     reportError: (sessionId, lane) =>
       console.warn(`[delivery] ${lane} for ${sessionId} failed`),
   });
-  // Collect every recovery offer before any automatic lane starts. Workflow
-  // reconciliation loads asynchronously below and must join the same boot pass.
-  const bootSessions = new Set<string>();
-  let collectingBootDelivery = true;
-  const offerDelivery = (sessionId: string, reminders = false) => {
-    if (collectingBootDelivery) bootSessions.add(sessionId);
-    else if (reminders) void deliveryScheduler.offerReminders(sessionId);
-    else void deliveryScheduler.wake(sessionId);
-  };
+  // Collect cheap pending-agent offers before admission, but never wait for
+  // workflow operation recovery. True idle/Resume offers retain reminders.
+  const deliveryBoot = createDeliveryBoot(deliveryScheduler);
+  const offerDelivery = deliveryBoot.offer;
   setDeliveryWake(offerDelivery);
   setReplyReminderHost({
     handoffOwed: agentHandoffOwed,
@@ -2094,7 +2090,7 @@ server.listen(PORT, HOST, () => {
     },
   });
   const offerOnBoot = (sessionId: string): void => {
-    bootSessions.add(sessionId);
+    offerDelivery(sessionId);
   };
   bootStep("owed background delivery", () => {
     // After reconciliation (each notice reads its row as it ended) and after
@@ -2255,6 +2251,11 @@ server.listen(PORT, HOST, () => {
       commitSync.registerCommitSyncOperationRuntime();
       delivery.registerDeliveryOperationsRuntime();
       observation.registerPullRequestObservationRuntime();
+      // Agent registration synchronously offers recovered pending assignments.
+      // Release admission before any observation or host operation can wait.
+      bootStep("session delivery", () => {
+        void deliveryBoot.release();
+      });
       await observation.reconcilePullRequestObservationsOnBoot();
     })
     // Then decide what each open Workflow Run may resume: re-dispatch pending
@@ -2269,10 +2270,8 @@ server.listen(PORT, HOST, () => {
       console.warn("[workflow] run reconcile failed:", errorText(err)),
     )
     .finally(() => {
-      collectingBootDelivery = false;
-      bootStep("session delivery", () => {
-        void deliveryScheduler.boot(bootSessions);
-      });
+      // Import/registration failure must not strand unrelated session debt.
+      void deliveryBoot.release();
     });
 });
 

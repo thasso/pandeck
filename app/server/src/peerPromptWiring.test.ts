@@ -100,20 +100,30 @@ test("a Stop's hold gates background delivery and Resume reruns the idle chain",
   );
 });
 
-test("workflow recovery joins the boot collection before any automatic pass starts", () => {
+test("cheap workflow offers release boot before asynchronous operation recovery", () => {
   const source = readFileSync(join(SRC_ROOT, "index.ts"), "utf8");
-  assert.match(
-    source,
-    /if \(collectingBootDelivery\) bootSessions\.add\(sessionId\)/,
-  );
+  assert.match(source, /createDeliveryBoot\(deliveryScheduler\)/);
   assert.match(source, /setDeliveryWake\(offerDelivery\)/);
+  const registered = source.indexOf(
+    "agent.registerWorkflowAgentExecutorRuntime()",
+  );
+  const release = source.indexOf("deliveryBoot.release()");
+  const observation = source.indexOf(
+    "await observation.reconcilePullRequestObservationsOnBoot()",
+  );
   const reconcile = source.indexOf(
     ".then((m) => m.reconcileWorkflowRunsOnBoot())",
   );
-  const start = source.indexOf("collectingBootDelivery = false");
-  const boot = source.indexOf("deliveryScheduler.boot(bootSessions)");
-  assert.ok(reconcile > 0 && start > reconcile && boot > start);
-  assert.match(source.slice(reconcile, boot), /\.finally\(\(\) =>/);
+  assert.ok(
+    registered > 0 &&
+      release > registered &&
+      observation > release &&
+      reconcile > observation,
+  );
+  assert.match(
+    source.slice(reconcile),
+    /\.finally\(\(\) =>\s*\{[\s\S]{0,150}deliveryBoot\.release\(\)/,
+  );
 });
 
 test("graceful shutdown stops peer-prompt delivery so the drain can settle", () => {

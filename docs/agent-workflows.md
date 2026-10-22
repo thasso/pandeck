@@ -472,12 +472,19 @@ Steps are persisted generically. V1 needs four step kinds:
   starts no assignment that Stop, shutdown, pause or a moved step now forbids.
   Busy waits keep the `queuedBehindTurn` observation and use scheduler wakes
   instead of polling. A single fifteen-minute deadline pauses an active run only
-  if its reservation remains pending and its role session remains busy.
-  Stop-held idle debt waits for Resume; a run Resume or restart rebuilds the
-  offer from persisted history. Acquisition failure pauses with the reservation
-  intact. Creating a new role session and its first assignment retain their
-  existing path, before that new session has competing debt. Boot collects
-  workflow offers before starting any automatic session pass.
+  if its reservation remains pending and its role session remains busy. If
+  teardown emitted no idle edge, the same deadline re-offers a metadata-backed
+  session once, or re-enters the workflow for ordinary replacement of a deleted
+  session. Stop-held idle debt waits for Resume; a run Resume or restart
+  rebuilds the offer and deadline from persisted history. Acquisition failure
+  pauses with the reservation intact. Creating a new role session and its first
+  assignment retain their existing path, before that new session has competing
+  debt. Boot cheaply enumerates recipe-selected pending agent reservations
+  before starting automatic session passes. It releases admission before
+  asynchronous observation or host-operation recovery, so unrelated sessions
+  never wait on that recovery. Real idle/Resume/reminder offers during
+  collection keep their reminder eligibility; plain boot offers do not create
+  it.
 - **Host-operation step** — a registered deterministic operation calling
   existing application services through their seams: the commit workflow with
   its safety review, base sync/rebase, push, and PR creation/adoption. Never

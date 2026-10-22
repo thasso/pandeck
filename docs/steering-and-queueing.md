@@ -164,20 +164,26 @@ Delivery calls back into the workflow engine under its run lock, so the recipe
 and fresh reservation still choose dispatch. Assignments never steer. A busy
 session records the existing `queuedBehindTurn` observation and waits for a
 scheduler wake, not a polling timer. One fifteen-minute deadline pauses a run
-whose reservation is still pending and whose session is still busy. Stop,
-shutdown, paused runs and moved reservations cannot start an assignment. The
-workflow still creates and initially prompts a new role session itself, before
-that session has any competing delivery debt.
+whose reservation is still pending and whose session is still busy. If the
+session was deleted without an idle edge, that deadline re-enters the workflow
+to choose its ordinary replacement. A teardown that kept the session's metadata
+gets one scheduler re-offer. Neither path polls. Resume starts a fresh deadline.
+Stop, shutdown, paused runs and moved reservations cannot start an assignment.
+The workflow still creates and initially prompts a new role session itself,
+before that session has any competing delivery debt.
 
 Only a real idle edge, Resume or a reminder's own re-offer enables the reminder
 lane, which never cold-acquires a session. Queue failures and removals wake the
 scheduler without enabling reminders. Boot first prepares recovered rows and
-collects offers through asynchronous workflow reconciliation, then offers every
-owed session through the same scheduler, ordered within a session and parallel
-across sessions. Automatic wakes during recovery join that collection. A
-recovery error still releases the collected offers. There is no boot ordering
-exception and no boot reminder. Permanent-assistant intake, explicit send-now
-authority and direct host-command turns retain their own admission paths.
+cheaply enumerates recipe-selected pending workflow agent reservations, then
+offers every owed session through the same scheduler, ordered within a session
+and parallel across sessions. Observation and host-operation recovery run after
+that release and cannot hold unrelated sessions. Automatic wakes during the
+short collection window join it; genuine idle, Resume and reminder re-offers
+retain their reminder eligibility. An import or registration error still
+releases the collected offers. There is no boot ordering exception and no boot
+reminder. Permanent-assistant intake, explicit send-now authority and direct
+host-command turns retain their own admission paths.
 
 ### Peer prompts in the queue
 

@@ -1134,6 +1134,27 @@ export function rebaseAndReviewRun(
 /* ------------------------------ boot recovery ------------------------------ */
 
 /**
+ * Cheap boot phase: offer only the pending agent reservation the recipe selects.
+ * No acquisition, dispatch, operation recovery or run lock wait occurs here.
+ * Delivery still re-enters advanceRun and re-reads the decision under its lock.
+ */
+export function pendingWorkflowAgentsOnBoot(): WorkflowStepContext[] {
+  const pending: WorkflowStepContext[] = [];
+  for (const run of listOpenRuns()) {
+    if (run.lifecycle !== "active" || run.cancelRequestedAt !== undefined)
+      continue;
+    const recipe = getWorkflowRecipe(run.recipeId, run.recipeVersion);
+    const steps = listSteps(run.id);
+    const decision = recipe?.decide(run, steps);
+    if (decision?.kind !== "executing") continue;
+    const step = steps.find((it) => it.id === decision.stepId);
+    if (step?.kind === "agent" && step.status === "pending")
+      pending.push(workflowStepContext(run, step, SYSTEM_ACTOR));
+  }
+  return pending;
+}
+
+/**
  * Decide what a restart may resume (`app/server/src/index.ts` calls this beside
  * the other boot reconcilers). Foundation invariant 6: restart behavior is
  * idempotent or pauses as indeterminate.

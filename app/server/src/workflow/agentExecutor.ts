@@ -59,7 +59,7 @@ import { readTask } from "../tasks.ts";
 import { taskNamingReference } from "../taskNaming.ts";
 import { broadcastWorkflowRuns } from "../workflowRuns.ts";
 import { buildReviewHandoffPrompt } from "../worktrees/reviewHandoff.ts";
-import { advanceRun, pauseRun } from "./engine.ts";
+import { advanceRun, pauseRun, pendingWorkflowAgentsOnBoot } from "./engine.ts";
 import {
   registerWorkflowAgentExecutor,
   type WorkflowAgentExecutor,
@@ -156,6 +156,7 @@ type PendingAssignment = {
   stepId: number;
   sessionId: string;
   actor: WorkflowActor;
+  lifecycleRevision: number;
   queuedBehindTurn?: boolean;
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -173,16 +174,37 @@ interface AssignmentOffers {
 /** Build the registered executor, with fakes available for store-backed tests. */
 export function createWorkflowAgentExecutor(
   deps: WorkflowAgentExecutorDeps = REAL_DEPS,
-): WorkflowAgentExecutor & WorkflowAssignmentDelivery {
+): WorkflowAgentExecutor &
+  WorkflowAssignmentDelivery & {
+    offerPendingOnBoot(): void;
+  } {
   const pending = new Map<number, PendingAssignment>();
   const admitted = new Map<number, AssignmentAdmission>();
   const forget = (stepId: number) => {
     clearTimeout(pending.get(stepId)?.timer);
     pending.delete(stepId);
   };
-  const current = (offer: PendingAssignment) =>
-    getStep(offer.stepId)?.status === "pending" &&
-    getRun(offer.runId)?.lifecycle === "active";
+  const current = (offer: PendingAssignment) => {
+    const run = getRun(offer.runId);
+    return (
+      getStep(offer.stepId)?.status === "pending" &&
+      run?.lifecycle === "active" &&
+      (run.attention?.revision ?? 0) === offer.lifecycleRevision
+    );
+  };
+  const recoverMissing = async (offer: PendingAssignment): Promise<boolean> => {
+    if (
+      !current(offer) ||
+      deps.deliveryStopped() ||
+      sessionStore.get(offer.sessionId)
+    )
+      return false;
+    forget(offer.stepId);
+    // Teardown does not emit an idle edge. Re-derive session identity under
+    // the run lock so a tombstoned role session gets its ordinary replacement.
+    await advanceRun(offer.runId, offer.actor);
+    return true;
+  };
   const owed = (id: string) =>
     [...pending.values()].filter((offer) => {
       if (!current(offer)) {
@@ -197,8 +219,18 @@ export function createWorkflowAgentExecutor(
     offer(context, sessionId, busy) {
       const { run, step, actor } = context;
       let offer = pending.get(step.id);
+      if (offer && (!current(offer) || offer.sessionId !== sessionId)) {
+        forget(step.id);
+        offer = undefined;
+      }
       if (!offer) {
-        offer = { runId: run.id, stepId: step.id, sessionId, actor };
+        offer = {
+          runId: run.id,
+          stepId: step.id,
+          sessionId,
+          actor,
+          lifecycleRevision: run.attention?.revision ?? 0,
+        };
         pending.set(step.id, offer);
       }
       if (busy && !offer.queuedBehindTurn) {
@@ -214,25 +246,41 @@ export function createWorkflowAgentExecutor(
       if (!offer.timer) {
         const waiting = offer;
         offer.timer = setTimeout(() => {
-          try {
+          void (async () => {
+            if (pending.get(step.id) !== waiting) return;
             if (!current(waiting)) {
               forget(step.id);
               return;
             }
-            if (deps.deliveryStopped() || !deps.isSessionBusy(sessionId))
+            if (
+              deps.deliveryStopped() ||
+              automaticTurnsHeld(sessionId) ||
+              (await recoverMissing(waiting))
+            )
               return;
+            if (pending.get(step.id) !== waiting || !current(waiting)) return;
+            if (!deps.isSessionBusy(sessionId)) {
+              // A released/teardown driver may have no idle edge either. This
+              // is one deadline re-offer, not a replacement polling loop.
+              if (
+                !automaticTurnsHeld(sessionId) &&
+                !deps.wakeDelivery(sessionId)
+              )
+                await advanceRun(run.id, actor);
+              return;
+            }
             forget(step.id);
             pauseRun(
               run.id,
               `assignment for step ${step.id} waited 15 minutes for session ${sessionId} to finish its turn`,
               actor,
             );
-          } catch (err) {
+          })().catch((err: unknown) =>
             console.error(
               `[workflow] queued assignment timeout for step ${step.id} failed:`,
               errorText(err),
-            );
-          }
+            ),
+          );
         }, QUEUED_ASSIGNMENT_TIMEOUT_MS);
         offer.timer.unref();
       }
@@ -244,16 +292,23 @@ export function createWorkflowAgentExecutor(
   };
   return {
     dispatch: (context) => dispatchWorkflowAgentStep(context, deps, offers),
+    offerPendingOnBoot() {
+      for (const context of pendingWorkflowAgentsOnBoot()) {
+        const id = reusableRoleSessionIds(context.run, context.step)[0];
+        if (id) offers.offer(context, id, deps.isSessionBusy(id));
+      }
+    },
     owes: (id) => owed(id).length > 0,
     async deliver(session, shouldStart) {
       for (const offer of owed(session.sessionId)) {
         if (
           !shouldStart() ||
           deps.deliveryStopped() ||
-          deps.isSessionBusy(session.sessionId) ||
           automaticTurnsHeld(session.sessionId)
         )
           return;
+        if (await recoverMissing(offer)) continue;
+        if (deps.isSessionBusy(session.sessionId)) return;
         const admission: AssignmentAdmission = { session, shouldStart };
         admitted.set(offer.stepId, admission);
         try {
@@ -273,6 +328,15 @@ export function createWorkflowAgentExecutor(
     unavailable(id, failure) {
       if (deps.deliveryStopped() || automaticTurnsHeld(id)) return;
       for (const offer of owed(id)) {
+        if (!sessionStore.get(id)) {
+          void recoverMissing(offer).catch((err: unknown) =>
+            console.error(
+              `[workflow] recovering missing session ${id} failed:`,
+              errorText(err),
+            ),
+          );
+          continue;
+        }
         forget(offer.stepId);
         pauseRun(
           offer.runId,
@@ -289,6 +353,7 @@ export function registerWorkflowAgentExecutorRuntime(): void {
   const executor = createWorkflowAgentExecutor();
   setWorkflowAssignmentDelivery(executor);
   registerWorkflowAgentExecutor(executor);
+  executor.offerPendingOnBoot();
 }
 
 async function dispatchWorkflowAgentStep(

@@ -1094,6 +1094,127 @@ test.each(["paused", "cancelled", "step-started"] as const)(
   },
 );
 
+test("cheap boot offers preserve workflow priority while unrelated delivery passes blocked host recovery", async () => {
+  const hostRun = createRun().run;
+  const host = store.appendStep({
+    runId: hostRun.id,
+    kind: "host-operation",
+    payload: {
+      operation: recipe.COMMIT_SYNC_OPERATION_ID,
+      idempotencyKey: "blocked-boot",
+    },
+    actor: ACTOR,
+  });
+  store.startStep(
+    host.id,
+    { kind: "operation", id: recipe.COMMIT_SYNC_OPERATION_ID },
+    ACTOR,
+  );
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const { roleSession, revise } = await busyRoleSessionRun();
+  executors.registerWorkflowHostOperation({
+    id: recipe.COMMIT_SYNC_OPERATION_ID,
+    recoveryPolicy: "retry-safe",
+    execute: async () => {
+      entered();
+      await gate;
+      return { status: "blocked", summary: "test host settled" };
+    },
+  });
+  busySessions.clear();
+  const { createDeliveryBoot } = await import("../deliveryBoot.ts");
+  const { createDeliveryScheduler } = await import("../deliveryScheduler.ts");
+  const calls: string[] = [];
+  let peersOwed = true;
+  let userOwed = true;
+  const restarted = agentExecutor.createWorkflowAgentExecutor({
+    ...deps(),
+    wakeDelivery: (id) => {
+      boot.offer(id);
+      return true;
+    },
+  });
+  executors.registerWorkflowAgentExecutor(restarted);
+  const scheduler = createDeliveryScheduler<RuntimePromptDriver>({
+    lanes: [
+      {
+        name: "user queue",
+        mayJoinRunningTurn: false,
+        owes: (id) => id === "unrelated" && userOwed,
+        deliver: async () => {
+          userOwed = false;
+          calls.push("unrelated user");
+          return "none";
+        },
+      },
+      {
+        name: "workflow",
+        mayJoinRunningTurn: false,
+        owes: restarted.owes,
+        deliver: async (session) => {
+          calls.push("workflow");
+          await restarted.deliver(session, () => true);
+          return "none";
+        },
+      },
+      {
+        name: "peer",
+        mayJoinRunningTurn: false,
+        owes: (id) => id === roleSession && peersOwed,
+        deliver: async () => {
+          peersOwed = false;
+          calls.push("peer");
+          return "none";
+        },
+      },
+    ],
+    reminder: {
+      name: "reminder",
+      mayJoinRunningTurn: false,
+      owes: () => false,
+      deliver: async () => "none",
+    },
+    live: (id) => driver(id),
+    acquire: async (id) => driver(id),
+    runAutoApprovals: async () => {},
+    held: () => false,
+    shutdown: () => false,
+    reportError: (_id, _lane, error) => {
+      throw error;
+    },
+  });
+  const boot = createDeliveryBoot(scheduler);
+  boot.offer(roleSession); // Recovered peer FIFO arrived first.
+  boot.offer("unrelated");
+  restarted.offerPendingOnBoot();
+  assert.equal(restarted.owes(roleSession), true);
+  let reconciled = false;
+  const recovery = engine.reconcileWorkflowRunsOnBoot().then(() => {
+    reconciled = true;
+  });
+  try {
+    await started;
+    await boot.release();
+    assert.equal(reconciled, false, "host recovery remains blocked");
+    assert.ok(
+      calls.includes("unrelated user"),
+      "another session must make progress",
+    );
+    assert.ok(calls.indexOf("workflow") < calls.indexOf("peer"));
+    assert.equal(store.getStep(revise.id)!.status, "running");
+  } finally {
+    release();
+    await recovery;
+  }
+});
+
 test("boot reconstructs the offer without directly redispatching the pending assignment", async () => {
   const { run, revise, roleSession } = await busyRoleSessionRun();
   busySessions.clear();
@@ -1120,6 +1241,68 @@ test("boot reconstructs the offer without directly redispatching the pending ass
     "no duplicate reservation",
   );
   assert.equal(prompts.length, 2);
+});
+
+test.each(["deadline", "unavailable", "stale-driver"] as const)(
+  "a deleted busy role session recovers its pending assignment through %s",
+  async (path) => {
+    const { run, revise, roleSession, executor } = await busyRoleSessionRun();
+    available.delete(roleSession);
+    sessionStore.remove(roleSession);
+    busySessions.clear(); // Teardown emits no idle hook.
+    await executor.deliver(driver(roleSession), () => false);
+    assert.equal(
+      store.getStep(revise.id)!.status,
+      "pending",
+      "even replacement respects the admission fence",
+    );
+    assert.equal(prompts.length, 1);
+    if (path === "deadline") await vi.advanceTimersByTimeAsync(15 * 60_000);
+    else if (path === "unavailable") {
+      executor.unavailable(roleSession, {
+        kind: "unavailable",
+        reason: new Error("deleted"),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    } else await executor.deliver(driver(roleSession), () => true);
+    await vi.waitFor(() =>
+      assert.equal(store.getStep(revise.id)!.status, "running"),
+    );
+    assert.equal(store.getRun(run.id)!.lifecycle, "active");
+    assert.equal(store.getStep(revise.id)!.status, "running");
+    assert.notEqual(store.getStep(revise.id)!.executor?.id, roleSession);
+    assert.equal(prompts.length, 2);
+    assert.equal(executor.owes(roleSession), false);
+    await executor.deliver(driver(roleSession), () => true);
+    assert.equal(
+      prompts.length,
+      2,
+      "late offers cannot duplicate the assignment",
+    );
+  },
+);
+
+test("a teardown without deletion gets one deadline re-offer, not polling", async () => {
+  const { revise, executor, roleSession } = await busyRoleSessionRun();
+  busySessions.clear();
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  assert.equal(store.getStep(revise.id)!.status, "running");
+  assert.equal(store.getStep(revise.id)!.executor?.id, roleSession);
+  assert.equal(executor.owes(roleSession), false);
+  assert.equal(prompts.length, 2);
+});
+
+test("Resume rebuilds its deadline rather than inheriting the previous offer", async () => {
+  const { run, revise } = await busyRoleSessionRun();
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  engine.pauseRun(run.id, "user pause", ACTOR);
+  await engine.resumeRun(run.id, ACTOR);
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 10);
+  assert.equal(store.getRun(run.id)!.lifecycle, "active");
+  assert.equal(store.getStep(revise.id)!.status, "pending");
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  assert.equal(store.getRun(run.id)!.lifecycle, "paused");
+  assert.match(store.getRun(run.id)!.lifecycleReason!, /waited 15 minutes/);
 });
 
 test("a scheduler acquisition failure pauses workflow debt without spending the reservation", async () => {
