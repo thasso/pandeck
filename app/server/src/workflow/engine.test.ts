@@ -1100,6 +1100,28 @@ test("a crash between admission and dispatch re-dispatches, never twins", async 
   assert.equal(store.getRun(run.id)!.lifecycle, "active");
 });
 
+test("late and duplicate boot reconciliation never interrupts an assignment started in this process", async () => {
+  const run = newRun();
+  await engine.advanceRun(run.id);
+  const implement = lastStep(run.id);
+  const history = store.listSteps(run.id);
+  engine.setSessionTurnLivenessForTests(() => false);
+
+  await engine.reconcileWorkflowRunsOnBoot();
+  engine.pendingWorkflowAgentsOnBoot(); // Re-enumeration cannot replace the recovery set.
+  await engine.reconcileWorkflowRunsOnBoot();
+
+  assert.deepEqual(store.listSteps(run.id), history);
+  assert.equal(store.getStep(implement.id)!.status, "running");
+  assert.equal(store.getRun(run.id)!.lifecycle, "active");
+  assert.equal(
+    store
+      .listEvents(run.id)
+      .filter((event) => event.type === "observation-recorded").length,
+    0,
+  );
+});
+
 test("a running agent step is adopted only while its turn is alive", async () => {
   const run = newRun();
   await engine.advanceRun(run.id);
@@ -1111,6 +1133,8 @@ test("a running agent step is adopted only while its turn is alive", async () =>
   // duplicated. Only that case may be adopted: a session row alone proves
   // nothing once the process that drove the turn is gone.
   engine.setSessionTurnLivenessForTests(() => true);
+  await engine.reconcileWorkflowRunsOnBoot();
+  engine.pendingWorkflowAgentsOnBoot();
   await engine.reconcileWorkflowRunsOnBoot();
 
   const adopted = store.getStep(implement.id)!;

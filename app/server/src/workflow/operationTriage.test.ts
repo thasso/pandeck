@@ -37,7 +37,7 @@ function git(cwd: string, ...args: string[]): string {
  * A run stopped on a reproduced commit-sync failure, with its triage assignment
  * already appended — the state `recordOperationTriageSnapshot` is called in.
  */
-function fixture(name: string) {
+function fixture(name: string, captureBeforeStart = false) {
   const main = join(tmp, `${name}-main`);
   const feature = join(tmp, `${name}-feature`);
   git(tmp, "init", "--initial-branch=main", main);
@@ -123,6 +123,8 @@ function fixture(name: string) {
     predecessorId: failed.id,
     actor: { kind: "user" },
   });
+  // A boot-pending reservation may start while another run recovers.
+  if (captureBeforeStart) engine.pendingWorkflowAgentsOnBoot();
   store.startStep(
     step.id,
     { kind: "session", id: `sess-${name}` },
@@ -288,32 +290,50 @@ test("a snapshot is refused while the checkout is mid-rebase", async () => {
   spawnSync("git", ["rebase", "--abort"], { cwd: rig.feature });
 });
 
-test("a restart restores Git and fails the interrupted triage with its evidence", async () => {
-  const rig = fixture("interrupted");
-  await recordOperationTriageSnapshot(rig.run, rig.step);
-  // The state a crash mid-triage leaves on disk.
-  writeFileSync(join(rig.feature, "scratch.txt"), "temporary\n");
-  const rebase = spawnSync("git", ["rebase", "main"], {
-    cwd: rig.feature,
-    encoding: "utf8",
-  });
-  assert.notEqual(rebase.status, 0);
+test.each(["interrupted", "live"] as const)(
+  "boot recovery protects a %s triage",
+  async (mode) => {
+    engine.resetWorkflowEngineForTests();
+    const rig = fixture(`boot-${mode}`, mode === "live");
+    await recordOperationTriageSnapshot(rig.run, rig.step);
+    // The state a crash mid-triage leaves on disk.
+    writeFileSync(join(rig.feature, "scratch.txt"), "temporary\n");
+    const rebase = spawnSync("git", ["rebase", "main"], {
+      cwd: rig.feature,
+      encoding: "utf8",
+    });
+    assert.notEqual(rebase.status, 0);
 
-  await engine.reconcileWorkflowRunsOnBoot();
+    await engine.reconcileWorkflowRunsOnBoot();
 
-  assert.equal(git(rig.feature, "rev-parse", "HEAD").trim(), rig.originalHead);
-  assert.equal(git(rig.feature, "status", "--porcelain").trim(), "");
-  assert.equal(existsSync(join(rig.feature, "scratch.txt")), false);
-  const failed = store.getStep(rig.step.id)!;
-  assert.equal(failed.status, "failed");
-  assert.match(failed.result?.summary ?? "", /restored to the state/);
-  assert.equal(
-    (failed.result!.payload as Record<string, Record<string, unknown>>)
-      .operationTriageSafety?.restored,
-    true,
-  );
-  assert.equal(store.getRun(rig.run.id)?.lifecycle, "paused");
-});
+    if (mode === "live") {
+      await engine.reconcileWorkflowRunsOnBoot();
+      assert.equal(store.getStep(rig.step.id)?.status, "running");
+      assert.equal(store.getRun(rig.run.id)?.lifecycle, "active");
+      assert.equal(existsSync(join(rig.feature, "scratch.txt")), true);
+      assert.match(git(rig.feature, "status", "--porcelain"), /UU file.txt/);
+      assert.equal(store.getStep(rig.step.id)?.result, undefined);
+      await finalizeOperationTriage(rig.run, rig.step, "failed");
+      return;
+    }
+
+    assert.equal(
+      git(rig.feature, "rev-parse", "HEAD").trim(),
+      rig.originalHead,
+    );
+    assert.equal(git(rig.feature, "status", "--porcelain").trim(), "");
+    assert.equal(existsSync(join(rig.feature, "scratch.txt")), false);
+    const failed = store.getStep(rig.step.id)!;
+    assert.equal(failed.status, "failed");
+    assert.match(failed.result?.summary ?? "", /restored to the state/);
+    assert.equal(
+      (failed.result!.payload as Record<string, Record<string, unknown>>)
+        .operationTriageSafety?.restored,
+      true,
+    );
+    assert.equal(store.getRun(rig.run.id)?.lifecycle, "paused");
+  },
+);
 
 test("anything but a triage assignment is left alone by both halves", async () => {
   const rig = fixture("other");

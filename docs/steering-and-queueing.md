@@ -174,16 +174,17 @@ before that session has any competing delivery debt.
 
 Only a real idle edge, Resume or a reminder's own re-offer enables the reminder
 lane, which never cold-acquires a session. Queue failures and removals wake the
-scheduler without enabling reminders. Boot first prepares recovered rows and
-cheaply enumerates recipe-selected pending workflow agent reservations, then
-offers every owed session through the same scheduler, ordered within a session
-and parallel across sessions. Observation and host-operation recovery run after
-that release and cannot hold unrelated sessions. Automatic wakes during the
-short collection window join it; genuine idle, Resume and reminder re-offers
-retain their reminder eligibility. An import or registration error still
-releases the collected offers. There is no boot ordering exception and no boot
-reminder. Permanent-assistant intake, explicit send-now authority and direct
-host-command turns retain their own admission paths.
+scheduler without enabling reminders. Boot first prepares recovered rows,
+freezes the running workflow step IDs eligible for crash recovery, and cheaply
+enumerates recipe-selected pending workflow agent reservations, then offers
+every owed session through the same scheduler, ordered within a session and
+parallel across sessions. Observation and host-operation recovery run after that
+release and cannot hold unrelated sessions. Automatic wakes during the short
+collection window join it; genuine idle, Resume and reminder re-offers retain
+their reminder eligibility. An import or registration error still releases the
+collected offers. There is no boot ordering exception and no boot reminder.
+Permanent-assistant intake, explicit send-now authority and direct host-command
+turns retain their own admission paths.
 
 ### Peer prompts in the queue
 

@@ -479,12 +479,16 @@ Steps are persisted generically. V1 needs four step kinds:
   rebuilds the offer and deadline from persisted history. Acquisition failure
   pauses with the reservation intact. Creating a new role session and its first
   assignment retain their existing path, before that new session has competing
-  debt. Boot cheaply enumerates recipe-selected pending agent reservations
-  before starting automatic session passes. It releases admission before
-  asynchronous observation or host-operation recovery, so unrelated sessions
-  never wait on that recovery. Real idle/Resume/reminder offers during
-  collection keep their reminder eligibility; plain boot offers do not create
-  it.
+  debt. Boot snapshots the running step IDs left by the previous process, then
+  cheaply enumerates recipe-selected pending agent reservations before starting
+  automatic session passes. The first workflow advance also captures that set if
+  it precedes boot offering. Reconciliation claims only those IDs, at most once,
+  before any recovery effect, including repair/triage Git restoration. Pending
+  reservations started by this process are never crash leftovers, regardless of
+  run age or provider liveness. It releases admission before asynchronous
+  observation or host-operation recovery, so unrelated sessions never wait on
+  that recovery. Real idle/Resume/reminder offers during collection keep their
+  reminder eligibility; plain boot offers do not create it.
 - **Host-operation step** — a registered deterministic operation calling
   existing application services through their seams: the commit workflow with
   its safety review, base sync/rebase, push, and PR creation/adoption. Never
