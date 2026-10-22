@@ -6,9 +6,10 @@
  * corrupt `settings.json` via `updateSettings(msg.patch)`.
  *
  * Dependency-free by design (no zod): a small per-type validator registry keyed
- * by `ClientMessage["type"]`. The registry is a plain `Record` literal so the
- * compiler forces an entry for *every* message variant (a new `ClientMessage`
- * type fails the build until its validator exists); lookup goes through a `Map`
+ * by `ClientMessage["type"]`. Each entry's field spec is mapped from its own
+ * message variant: every field, including optional fields, needs a check, and
+ * extra spec keys fail compilation. Custom checks refine those same specs.
+ * New message types or fields fail the build until covered. Lookup uses a `Map`
  * so untrusted `raw.type` (`"__proto__"`, `"constructor"`, …) cannot select a
  * bogus validator via the prototype chain.
  *
@@ -64,10 +65,14 @@ function hasOwn(obj: Record<string, unknown>, key: string): boolean {
 
 /* ------------------------------ field-spec helper --------------------------- */
 
-interface FieldSpec {
+interface FieldCheck {
   check: (value: unknown) => boolean;
   /** Human label of the expected kind, used in rejection reasons. */
   kind: string;
+}
+
+interface FieldSpec extends FieldCheck {
+  optional?: false;
 }
 
 /** Reusable kind specs for the field checkers below. */
@@ -135,6 +140,32 @@ const BACKGROUND_REFS: FieldSpec = {
   kind: "1 to 20 background update identities",
 };
 
+interface OptionalFieldSpec extends FieldCheck {
+  optional: true;
+}
+
+function optional(spec: FieldSpec): OptionalFieldSpec {
+  return { ...spec, optional: true };
+}
+
+type MessageFields<K extends ClientMessage["type"]> = Omit<
+  Extract<ClientMessage, { type: K }>,
+  "type"
+>;
+
+/** All wire fields need a spec, even when the client may omit them. */
+export type MessageFieldSpecs<K extends ClientMessage["type"]> =
+  keyof MessageFields<K> extends never
+    ? Record<string, never>
+    : {
+        [P in keyof MessageFields<K>]-?: Record<never, never> extends Pick<
+          MessageFields<K>,
+          P
+        >
+          ? OptionalFieldSpec
+          : FieldSpec;
+      };
+
 type FieldSpecMap = Record<string, FieldSpec>;
 
 /** Each present field must be the right kind. Absent fields are allowed. */
@@ -165,17 +196,74 @@ function checkRequiredFields(
 
 type Validator = (msg: Record<string, unknown>) => string | null;
 
-/** Build a validator from required and (optionally) optional field specs. */
-function fields(required: FieldSpecMap, optional?: FieldSpecMap): Validator {
-  return (msg) => {
-    const missing = checkRequiredFields(msg, required);
-    if (missing) return missing;
-    return optional ? checkOptionalFields(msg, optional) : null;
+interface MessageSpec {
+  fields: Record<string, FieldSpec | OptionalFieldSpec>;
+  refine?: Validator;
+}
+
+type MessageRegistry = {
+  [K in ClientMessage["type"]]: {
+    fields: MessageFieldSpecs<K>;
+    refine?: Validator;
+  };
+};
+
+/** Preserve literal keys so the registry can reject extra spec fields too. */
+function fields<
+  R extends FieldSpecMap,
+  O extends FieldSpecMap = Record<never, never>,
+>(
+  required: R,
+  optionalFields?: O & Record<Extract<keyof R, keyof O>, never>,
+  refine?: Validator,
+): {
+  // Infer keys only from arguments, never from a registry entry's context.
+  fields: NoInfer<R> & { [P in keyof NoInfer<O>]: OptionalFieldSpec };
+  refine?: Validator;
+} {
+  const optionalSpecs = Object.fromEntries(
+    Object.entries(optionalFields ?? {}).map(([key, spec]) => [
+      key,
+      optional(spec),
+    ]),
+  ) as { [P in keyof O]: OptionalFieldSpec };
+  return {
+    fields: { ...required, ...optionalSpecs },
+    ...(refine ? { refine } : {}),
   };
 }
 
-/** Zero-payload messages: the type match is the validation. */
-const NONE: Validator = () => null;
+/** Structural assignability alone would allow extra keys returned by fields(). */
+function defineRegistry<R extends MessageRegistry>(
+  registry: R &
+    Record<Exclude<keyof R, keyof MessageRegistry>, never> & {
+      [K in keyof MessageRegistry]: {
+        fields: Record<
+          Exclude<keyof R[K]["fields"], keyof MessageFieldSpecs<K>>,
+          never
+        >;
+      };
+    },
+): R {
+  return registry;
+}
+
+/** Zero-payload messages still participate in the per-field contract. */
+const NONE = fields({});
+
+/** Run every field check before the optional whole-message refinement. */
+function compileValidator(spec: MessageSpec): Validator {
+  return (msg) => {
+    for (const [field, check] of Object.entries(spec.fields)) {
+      if (!hasOwn(msg, field) || msg[field] === undefined) {
+        if ("optional" in check && check.optional) continue;
+        return `${field} is required and must be ${check.kind}`;
+      }
+      if (!check.check(msg[field])) return `${field} must be ${check.kind}`;
+    }
+    return spec.refine?.(msg) ?? null;
+  };
+}
 
 const LIVE_BODY_KINDS = new Set(["thinking", "toolInput", "toolOutput"]);
 
@@ -199,10 +287,6 @@ const validateSetLiveBodySubscriptions: Validator = (msg) => {
   }
   return null;
 };
-
-/** A patch-bearing settings message whose patch must be a plain object. */
-const PATCH_OBJECT: Validator = (msg) =>
-  isPlainObject(msg.patch) ? null : "patch must be an object";
 
 /* --------------------------- prompt attachments ----------------------------- */
 
@@ -609,17 +693,7 @@ const validateSaveTask: Validator = (msg) => {
   return null;
 };
 
-const validatePrompt: Validator = (msg) => {
-  if (!isString(msg.text)) return "text is required and must be a string";
-  const attachments = checkAttachments(msg);
-  if (attachments) return attachments;
-  return checkOptionalFields(msg, {
-    attachTaskId: STRING,
-    projectId: STRING,
-    fileContext: STRING,
-    clientRequestId: STRING,
-  });
-};
+const validatePrompt: Validator = checkAttachments;
 
 const validateQueuePrompt: Validator = (msg) => {
   const required = checkRequiredFields(msg, {
@@ -647,49 +721,10 @@ const validateHarnessSend: Validator = (msg) => {
   if (!isString(msg.text)) return "text is required and must be a string";
   const attachments = checkAttachments(msg);
   if (attachments) return attachments;
-  return checkOptionalFields(msg, {
-    modelProvider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-    mode: STRING,
-    attachTaskId: STRING,
-    projectId: STRING,
-    fileContext: STRING,
-    worktreeId: STRING,
-    createWorktreeInProjectId: STRING,
-    agent: STRING,
-    clientRequestId: STRING,
-    requiresEnterprise: BOOLEAN,
-  });
+  return null;
 };
 
 const validateNewSession: Validator = (msg) => {
-  if (!isString(msg.agentType))
-    return "agentType is required and must be a string";
-  if (
-    hasOwn(msg, "harness") &&
-    msg.harness !== undefined &&
-    !isString(msg.harness)
-  ) {
-    return "harness must be a string";
-  }
-  if (
-    hasOwn(msg, "thinkingLevel") &&
-    msg.thinkingLevel !== undefined &&
-    !isString(msg.thinkingLevel)
-  ) {
-    return "thinkingLevel must be a string";
-  }
-  if (hasOwn(msg, "mode") && msg.mode !== undefined && !isString(msg.mode)) {
-    return "mode must be a string";
-  }
-  if (
-    hasOwn(msg, "worktreeId") &&
-    msg.worktreeId !== undefined &&
-    !isString(msg.worktreeId)
-  ) {
-    return "worktreeId must be a string";
-  }
   if (hasOwn(msg, "model") && msg.model !== undefined) {
     const model = msg.model;
     if (!isPlainObject(model)) return "model must be an object";
@@ -945,13 +980,27 @@ const validateAttachComments: Validator = (msg) => {
 
 /* ------------------------------- the registry ------------------------------- */
 
-// A plain Record literal so the compiler requires an entry for EVERY
-// ClientMessage variant (the build fails until a new type's validator exists).
-// The object is never indexed by untrusted input — it only seeds the Map below.
-const REGISTRY: Record<ClientMessage["type"], Validator> = {
-  prompt: validatePrompt,
+// Each entry is bound to its own ClientMessage variant, with no missing or
+// extra spec fields. The object only seeds the Map, never an untrusted lookup.
+const REGISTRY = defineRegistry({
+  prompt: fields(
+    { text: STRING },
+    {
+      attachments: ARRAY,
+      attachTaskId: STRING,
+      projectId: STRING,
+      fileContext: STRING,
+      clientRequestId: STRING,
+      skill: STRING,
+    },
+    validatePrompt,
+  ),
   runSlashCommand: fields({ name: STRING, rawArgs: STRING }),
-  queuePrompt: validateQueuePrompt,
+  queuePrompt: fields(
+    { sessionId: STRING, text: STRING },
+    { attachments: ARRAY, command: OBJECT },
+    validateQueuePrompt,
+  ),
   updateQueuedPrompt: fields({ sessionId: STRING, id: STRING, text: STRING }),
   removeQueuedPrompt: fields({ sessionId: STRING, id: STRING }),
   moveQueuedPrompt: fields({ sessionId: STRING, id: STRING, toIndex: NUMBER }),
@@ -976,7 +1025,11 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     blockIndex: NUMBER,
     kind: STRING,
   }),
-  setLiveBodySubscriptions: validateSetLiveBodySubscriptions,
+  setLiveBodySubscriptions: fields(
+    { sessionId: STRING, bodies: ARRAY },
+    {},
+    validateSetLiveBodySubscriptions,
+  ),
   loadTimelineRange: fields(
     { sessionId: STRING, beforeSeq: NUMBER },
     { limit: NUMBER },
@@ -986,23 +1039,37 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   setSessionMode: fields({ mode: STRING }),
   refreshModels: fields({ requestId: STRING }),
   requestSettings: NONE,
-  newSession: validateNewSession,
-  loadSession: (msg) => {
+  newSession: fields(
+    { agentType: STRING },
+    {
+      harness: STRING,
+      model: OBJECT,
+      thinkingLevel: STRING,
+      mode: STRING,
+      worktreeId: STRING,
+    },
+    validateNewSession,
+  ),
+  loadSession: fields({ id: STRING }, { timelineCache: OBJECT }, (msg) => {
     const required = checkRequiredFields(msg, { id: STRING });
     if (required) return required;
     return hasOwn(msg, "timelineCache") && msg.timelineCache !== undefined
       ? validateTimelineCache(msg.timelineCache)
       : null;
-  },
-  openPermanentAssistant: (msg) =>
+  }),
+  openPermanentAssistant: fields({}, { timelineCache: OBJECT }, (msg) =>
     hasOwn(msg, "timelineCache") && msg.timelineCache !== undefined
       ? validateTimelineCache(msg.timelineCache)
       : null,
+  ),
   releasePermanentAssistant: fields({ sessionId: STRING }),
   loadArchivedSessions: NONE,
   resolveObjectLinks: fields({ requestId: STRING, uris: STRING_ARRAY }),
-  deleteSession: fields({ id: STRING }),
-  archiveSession: fields({ id: STRING }, { archived: BOOLEAN }),
+  deleteSession: fields({ id: STRING }, { requestId: STRING }),
+  archiveSession: fields(
+    { id: STRING },
+    { archived: BOOLEAN, requestId: STRING },
+  ),
   // `throughRevision` is REQUIRED: a settle that states no observed revision
   // would acknowledge whatever the server holds, hiding an outcome the client
   // never rendered.
@@ -1010,49 +1077,63 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     { id: STRING, throughRevision: COUNT },
     {
       settled: BOOLEAN,
+      requestId: STRING,
     },
   ),
   // The failure the clicked row showed: its revision is required for the same
   // reason, and an omitted `errorAt` matches only a row with no error record.
   dismissSessionFailure: fields(
     { id: STRING, outcomeRevision: COUNT },
-    { errorAt: COUNT },
+    { errorAt: COUNT, requestId: STRING },
   ),
   // Same rule for a Workflow Run's Settle (Task-677): the observed revision is
   // required, so a stale item cannot acknowledge an outcome it never rendered.
-  settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),
-  setInboxPositions: (msg) => {
-    const { positions } = msg;
-    if (!Array.isArray(positions) || positions.length === 0)
-      return "positions is required and must be a non-empty array";
-    if (positions.length > MAX_INBOX_POSITIONS)
-      return `positions may carry at most ${MAX_INBOX_POSITIONS} entries`;
-    for (const entry of positions as unknown[]) {
-      if (!isPlainObject(entry)) return "each position must be an object";
-      const missing =
-        entry.kind === "session"
-          ? checkRequiredFields(entry, { id: STRING, position: NUMBER })
-          : entry.kind === "run"
-            ? checkRequiredFields(entry, { runId: STRING, position: NUMBER })
-            : 'each position\'s kind must be "session" or "run"';
-      if (missing) return missing;
-    }
-    return checkOptionalFields(msg, { requestId: STRING });
-  },
-  renameSession: fields({ id: STRING, title: STRING }),
-  setCompactionWindow: fields({
-    sessionId: STRING,
-    tokens: COMPACTION_WINDOW_TOKENS,
-  }),
-  regenerateSessionTitle: fields({ id: STRING }, { guidance: STRING }),
-  setSpawnOwnership: fields({
-    id: STRING,
-    ownership: {
-      check: (value: unknown) =>
-        value === "taken-over" || value === "coordinator",
-      kind: '"taken-over" or "coordinator"',
+  settleWorkflowRun: fields(
+    { runId: STRING, throughRevision: COUNT },
+    { requestId: STRING },
+  ),
+  setInboxPositions: fields(
+    { positions: ARRAY },
+    { requestId: STRING },
+    (msg) => {
+      const { positions } = msg;
+      if (!Array.isArray(positions) || positions.length === 0)
+        return "positions is required and must be a non-empty array";
+      if (positions.length > MAX_INBOX_POSITIONS)
+        return `positions may carry at most ${MAX_INBOX_POSITIONS} entries`;
+      for (const entry of positions as unknown[]) {
+        if (!isPlainObject(entry)) return "each position must be an object";
+        const missing =
+          entry.kind === "session"
+            ? checkRequiredFields(entry, { id: STRING, position: NUMBER })
+            : entry.kind === "run"
+              ? checkRequiredFields(entry, { runId: STRING, position: NUMBER })
+              : 'each position\'s kind must be "session" or "run"';
+        if (missing) return missing;
+      }
+      return null;
     },
-  }),
+  ),
+  renameSession: fields({ id: STRING, title: STRING }, { requestId: STRING }),
+  setCompactionWindow: fields(
+    {
+      sessionId: STRING,
+      tokens: COMPACTION_WINDOW_TOKENS,
+    },
+    { requestId: STRING },
+  ),
+  regenerateSessionTitle: fields({ id: STRING }, { guidance: STRING }),
+  setSpawnOwnership: fields(
+    {
+      id: STRING,
+      ownership: {
+        check: (value: unknown) =>
+          value === "taken-over" || value === "coordinator",
+        kind: '"taken-over" or "coordinator"',
+      },
+    },
+    { requestId: STRING },
+  ),
   acknowledgeMissingWorktree: fields({ id: STRING }),
   forkSession: fields({ id: STRING, entryId: STRING, position: STRING }),
   createDraftSession: fields(
@@ -1068,53 +1149,68 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     { limit: NUMBER },
   ),
   memoryStatus: fields({ requestId: STRING }),
-  resolveTimelineAnchor: validateTimelineAnchorTarget,
-  updateSettings: validateUpdateSettings,
-  updateJiraSettings: PATCH_OBJECT,
-  saveAndTestJiraSettings: PATCH_OBJECT,
+  resolveTimelineAnchor: fields(
+    { requestId: STRING, target: OBJECT },
+    {},
+    validateTimelineAnchorTarget,
+  ),
+  updateSettings: fields(
+    { patch: OBJECT },
+    { requestId: STRING },
+    validateUpdateSettings,
+  ),
+  updateJiraSettings: fields({ patch: OBJECT }),
+  saveAndTestJiraSettings: fields({ patch: OBJECT }),
   testJiraSettings: NONE,
-  updateConfluenceSettings: PATCH_OBJECT,
-  saveAndTestConfluenceSettings: PATCH_OBJECT,
+  updateConfluenceSettings: fields({ patch: OBJECT }),
+  saveAndTestConfluenceSettings: fields({ patch: OBJECT }),
   testConfluenceSettings: NONE,
-  updateTempoSettings: PATCH_OBJECT,
-  saveAndTestTempoSettings: PATCH_OBJECT,
+  updateTempoSettings: fields({ patch: OBJECT }),
+  saveAndTestTempoSettings: fields({ patch: OBJECT }),
   testTempoSettings: NONE,
-  updateGoogleSettings: PATCH_OBJECT,
-  saveAndTestGoogleSettings: PATCH_OBJECT,
+  updateGoogleSettings: fields({ patch: OBJECT }),
+  saveAndTestGoogleSettings: fields({ patch: OBJECT }),
   testGoogleSettings: NONE,
-  updateSlackSettings: PATCH_OBJECT,
-  saveAndTestSlackSettings: PATCH_OBJECT,
+  updateSlackSettings: fields({ patch: OBJECT }),
+  saveAndTestSlackSettings: fields({ patch: OBJECT }),
   testSlackSettings: NONE,
-  updateOpenAiCompatibleSettings: PATCH_OBJECT,
-  saveAndTestOpenAiCompatibleSettings: PATCH_OBJECT,
+  updateOpenAiCompatibleSettings: fields({ patch: OBJECT }),
+  saveAndTestOpenAiCompatibleSettings: fields({ patch: OBJECT }),
   testOpenAiCompatibleSettings: NONE,
-  updateBraveSettings: PATCH_OBJECT,
-  saveAndTestBraveSettings: PATCH_OBJECT,
+  updateBraveSettings: fields({ patch: OBJECT }),
+  saveAndTestBraveSettings: fields({ patch: OBJECT }),
   testBraveSettings: NONE,
-  updateContext7Settings: PATCH_OBJECT,
-  saveAndTestContext7Settings: PATCH_OBJECT,
+  updateContext7Settings: fields({ patch: OBJECT }),
+  saveAndTestContext7Settings: fields({ patch: OBJECT }),
   testContext7Settings: NONE,
-  updateGithubSettings: PATCH_OBJECT,
-  saveAndTestGithubSettings: PATCH_OBJECT,
+  updateGithubSettings: fields({ patch: OBJECT }),
+  saveAndTestGithubSettings: fields({ patch: OBJECT }),
   testGithubSettings: NONE,
-  updateForgejoSettings: PATCH_OBJECT,
-  saveAndTestForgejoSettings: PATCH_OBJECT,
+  updateForgejoSettings: fields({ patch: OBJECT }),
+  saveAndTestForgejoSettings: fields({ patch: OBJECT }),
   testForgejoSettings: NONE,
-  subscribe: validateTopics,
-  unsubscribe: validateTopics,
+  subscribe: fields({ topics: ARRAY }, { digests: ARRAY }, validateTopics),
+  unsubscribe: fields({ topics: ARRAY }, {}, validateTopics),
   stopBackgroundWork: fields({ itemId: STRING, requestId: STRING }),
   stopAllBackgroundWork: fields({ ownerSessionId: STRING, requestId: STRING }),
   refreshUsage: NONE,
   listTasks: fields({ request: OBJECT }),
-  getStateItems: validateGetStateItems,
-  saveTask: validateSaveTask,
-  assignTaskProjects: validateAssignTaskProjects,
-  listProjects: (msg) =>
-    !hasOwn(msg, "request") ||
-    msg.request === undefined ||
-    isPlainObject(msg.request)
-      ? null
-      : "request must be an object",
+  getStateItems: fields(
+    { topic: STRING, ids: STRING_ARRAY, requestId: STRING },
+    {},
+    validateGetStateItems,
+  ),
+  saveTask: fields(
+    { request: OBJECT },
+    { requestId: STRING },
+    validateSaveTask,
+  ),
+  assignTaskProjects: fields(
+    { updates: ARRAY },
+    { requestId: STRING },
+    validateAssignTaskProjects,
+  ),
+  listProjects: fields({}, { request: OBJECT }),
   getProject: fields({ id: STRING, requestId: STRING }),
   getInitiative: fields(
     { id: STRING, requestId: STRING },
@@ -1132,11 +1228,17 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   archiveTask: fields({ id: STRING }, { archived: BOOLEAN, requestId: STRING }),
   deleteTask: fields({ id: STRING }, { requestId: STRING }),
   getTask: fields({ id: STRING, requestId: STRING }),
-  listComments: (msg) =>
-    validateCommentTarget(msg.target) ??
-    checkOptionalFields(msg, { requestId: STRING }),
-  unwatchComments: (msg) => validateCommentTarget(msg.target),
-  addComment: validateGenericAddComment,
+  listComments: fields({ target: OBJECT }, { requestId: STRING }, (msg) =>
+    validateCommentTarget(msg.target),
+  ),
+  unwatchComments: fields({ target: OBJECT }, {}, (msg) =>
+    validateCommentTarget(msg.target),
+  ),
+  addComment: fields(
+    { target: OBJECT, body: STRING },
+    { requestId: STRING, selectors: OBJECT },
+    validateGenericAddComment,
+  ),
   replyComment: fields(
     { threadId: STRING, body: STRING },
     { parentId: STRING, requestId: STRING },
@@ -1153,21 +1255,49 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     { threadId: STRING },
     { commentId: STRING, requestId: STRING },
   ),
-  attachComments: validateAttachComments,
+  attachComments: fields(
+    { threadIds: STRING_ARRAY },
+    { sessionId: STRING, session: OBJECT, requestId: STRING },
+    validateAttachComments,
+  ),
   reorderTasks: fields(
     { orderedIds: STRING_ARRAY },
     { placements: ARRAY, requestId: STRING },
   ),
   cancelPostReloadContinuation: NONE,
-  harnessSend: validateHarnessSend,
-  resolveApproval: validateResolveApproval,
-  revokeApprovalGrant: (msg) =>
-    checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
-  setSessionPeerTurnCap: (msg) =>
-    checkRequiredFields(msg, { sessionId: STRING }) ??
-    (msg.cap === null || isSessionPeerTurnCap(msg.cap)
-      ? null
-      : "cap must be an integer from 1 to 16, or null"),
+  harnessSend: fields(
+    { id: STRING, harness: STRING, agentType: STRING, text: STRING },
+    {
+      attachments: ARRAY,
+      modelProvider: STRING,
+      modelId: STRING,
+      thinkingLevel: STRING,
+      mode: STRING,
+      attachTaskId: STRING,
+      projectId: STRING,
+      fileContext: STRING,
+      worktreeId: STRING,
+      createWorktreeInProjectId: STRING,
+      agent: STRING,
+      clientRequestId: STRING,
+      requiresEnterprise: BOOLEAN,
+      credentialProfileId: STRING,
+    },
+    validateHarnessSend,
+  ),
+  resolveApproval: fields(
+    { approvalId: STRING, decision: STRING },
+    { edits: OBJECT, forSession: BOOLEAN, grantInheritable: BOOLEAN },
+    validateResolveApproval,
+  ),
+  revokeApprovalGrant: fields({ sessionId: STRING, key: STRING }),
+  setSessionPeerTurnCap: fields({
+    sessionId: STRING,
+    cap: {
+      check: (value) => value === null || isSessionPeerTurnCap(value),
+      kind: "an integer from 1 to 16, or null",
+    },
+  }),
   grantApprovalForSession: fields(
     { sessionId: STRING, key: STRING },
     { inheritable: BOOLEAN },
@@ -1177,51 +1307,57 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     keys: GRANT_KEYS,
     inheritable: BOOLEAN,
   }),
-  resolvePullRequestCardTask: (msg) => {
-    if (!hasOwn(msg, "cardId") || !isString(msg.cardId))
-      return "cardId is required and must be a string";
-    if (
-      !hasOwn(msg, "taskId") ||
-      (msg.taskId !== null && !isString(msg.taskId))
-    )
-      return "taskId is required and must be a string or null";
-    return null;
-  },
-  pullRequestCardAction: (msg) => {
-    if (!hasOwn(msg, "cardId") || !isString(msg.cardId))
-      return "cardId is required and must be a string";
-    if (
-      !isString(msg.action) ||
-      !(PULL_REQUEST_CARD_ACTIONS as readonly string[]).includes(msg.action)
-    )
-      return `action must be one of ${PULL_REQUEST_CARD_ACTIONS.join(", ")}`;
-    // The method is a per-merge decision, so it is required exactly for `merge`
-    // rather than defaulted here: no surface may merge with a method the user
-    // did not pick.
-    if (msg.action === "merge") {
+  resolvePullRequestCardTask: fields({
+    cardId: STRING,
+    taskId: {
+      check: (value) => value === null || isString(value),
+      kind: "a string or null",
+    },
+  }),
+  pullRequestCardAction: fields(
+    { cardId: STRING, action: STRING },
+    {
+      mergeMethod: STRING,
+      deleteBranch: BOOLEAN,
+      baseBranch: STRING,
+      requestId: STRING,
+    },
+    (msg) => {
+      if (!hasOwn(msg, "cardId") || !isString(msg.cardId))
+        return "cardId is required and must be a string";
       if (
-        !isString(msg.mergeMethod) ||
-        !(PULL_REQUEST_MERGE_METHODS as readonly string[]).includes(
-          msg.mergeMethod,
-        )
+        !isString(msg.action) ||
+        !(PULL_REQUEST_CARD_ACTIONS as readonly string[]).includes(msg.action)
       )
-        return `mergeMethod must be one of ${PULL_REQUEST_MERGE_METHODS.join(", ")} for a merge`;
-      if (!isString(msg.baseBranch) || !msg.baseBranch)
-        return "baseBranch is required for a merge";
-    } else if (hasOwn(msg, "mergeMethod") && !isString(msg.mergeMethod)) {
-      return "mergeMethod must be a string";
-    }
-    if (hasOwn(msg, "baseBranch") && !isString(msg.baseBranch))
-      return "baseBranch must be a string";
-    // Keeping the remote branch is an explicit opt-out, so only a real boolean
-    // is accepted: a truthy string must never read as "delete it".
-    if (hasOwn(msg, "deleteBranch") && typeof msg.deleteBranch !== "boolean")
-      return "deleteBranch must be a boolean";
-    if (hasOwn(msg, "requestId") && !isString(msg.requestId))
-      return "requestId must be a string";
-    return null;
-  },
-  listWorktrees: (msg) => checkOptionalFields(msg, { projectId: STRING }),
+        return `action must be one of ${PULL_REQUEST_CARD_ACTIONS.join(", ")}`;
+      // The method is a per-merge decision, so it is required exactly for `merge`
+      // rather than defaulted here: no surface may merge with a method the user
+      // did not pick.
+      if (msg.action === "merge") {
+        if (
+          !isString(msg.mergeMethod) ||
+          !(PULL_REQUEST_MERGE_METHODS as readonly string[]).includes(
+            msg.mergeMethod,
+          )
+        )
+          return `mergeMethod must be one of ${PULL_REQUEST_MERGE_METHODS.join(", ")} for a merge`;
+        if (!isString(msg.baseBranch) || !msg.baseBranch)
+          return "baseBranch is required for a merge";
+      } else if (hasOwn(msg, "mergeMethod") && !isString(msg.mergeMethod)) {
+        return "mergeMethod must be a string";
+      }
+      if (hasOwn(msg, "baseBranch") && !isString(msg.baseBranch))
+        return "baseBranch must be a string";
+      // Keeping the remote branch is an explicit opt-out, so only a real boolean
+      // is accepted: a truthy string must never read as "delete it".
+      if (hasOwn(msg, "deleteBranch") && typeof msg.deleteBranch !== "boolean")
+        return "deleteBranch must be a boolean";
+      if (hasOwn(msg, "requestId") && !isString(msg.requestId))
+        return "requestId must be a string";
+      return null;
+    },
+  ),
+  listWorktrees: fields({}, { projectId: STRING }),
   proposeWorktreeName: fields(
     { projectId: STRING, requestId: STRING },
     { taskId: STRING, context: STRING },
@@ -1234,9 +1370,21 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     { worktreeId: STRING },
     { deleteBranch: BOOLEAN, force: BOOLEAN, requestId: STRING },
   ),
-  startWorkflowRun: validateStartWorkflowRun,
-  answerWorkflowCeiling: validateAnswerWorkflowCeiling,
-  answerWorkflowCommitCheck: validateAnswerWorkflowCommitCheck,
+  startWorkflowRun: fields(
+    { taskId: STRING, requestId: STRING, config: OBJECT },
+    { baseBranch: STRING, limits: OBJECT },
+    validateStartWorkflowRun,
+  ),
+  answerWorkflowCeiling: fields(
+    { runId: STRING, choice: STRING },
+    { raise: OBJECT },
+    validateAnswerWorkflowCeiling,
+  ),
+  answerWorkflowCommitCheck: fields(
+    { runId: STRING, choice: STRING },
+    {},
+    validateAnswerWorkflowCommitCheck,
+  ),
   pauseWorkflowRun: fields({ runId: STRING }, { reason: STRING }),
   resumeWorkflowRun: fields({ runId: STRING }),
   cancelWorkflowRun: fields({ runId: STRING }),
@@ -1250,33 +1398,39 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   // Same rule as `pullRequestCardAction`: this IS that merge, reached from the
   // run, so the method stays a per-merge decision the click has to carry and
   // keeping the remote branch stays an explicit boolean opt-out.
-  mergeWorkflowRun: (msg) => {
-    if (!hasOwn(msg, "runId") || !isString(msg.runId))
-      return "runId is required and must be a string";
-    if (
-      !isString(msg.mergeMethod) ||
-      !(PULL_REQUEST_MERGE_METHODS as readonly string[]).includes(
-        msg.mergeMethod,
+  mergeWorkflowRun: fields(
+    { runId: STRING, mergeMethod: STRING },
+    { deleteBranch: BOOLEAN, requestId: STRING },
+    (msg) => {
+      if (!hasOwn(msg, "runId") || !isString(msg.runId))
+        return "runId is required and must be a string";
+      if (
+        !isString(msg.mergeMethod) ||
+        !(PULL_REQUEST_MERGE_METHODS as readonly string[]).includes(
+          msg.mergeMethod,
+        )
       )
-    )
-      return `mergeMethod must be one of ${PULL_REQUEST_MERGE_METHODS.join(", ")}`;
-    if (hasOwn(msg, "deleteBranch") && typeof msg.deleteBranch !== "boolean")
-      return "deleteBranch must be a boolean";
-    if (hasOwn(msg, "requestId") && !isString(msg.requestId))
-      return "requestId must be a string";
-    return null;
-  },
+        return `mergeMethod must be one of ${PULL_REQUEST_MERGE_METHODS.join(", ")}`;
+      if (hasOwn(msg, "deleteBranch") && typeof msg.deleteBranch !== "boolean")
+        return "deleteBranch must be a boolean";
+      if (hasOwn(msg, "requestId") && !isString(msg.requestId))
+        return "requestId must be a string";
+      return null;
+    },
+  ),
   cleanUpWorkflowRun: fields({ runId: STRING }, { requestId: STRING }),
   watchWorktree: fields({ worktreeId: STRING }),
   unwatchWorktree: fields({ worktreeId: STRING }),
   mergeWorktree: fields({ worktreeId: STRING }, { strategy: STRING }),
-};
+});
 
 // Look up validators through a Map (clean lookup semantics, no prototype chain),
 // so a spoofed `raw.type` of "__proto__"/"constructor"/"toString" cannot resolve
 // to an inherited member and bypass validation.
 const VALIDATORS = new Map<ClientMessage["type"], Validator>(
-  Object.entries(REGISTRY) as Array<[ClientMessage["type"], Validator]>,
+  (Object.entries(REGISTRY) as Array<[ClientMessage["type"], MessageSpec]>).map(
+    ([type, spec]) => [type, compileValidator(spec)],
+  ),
 );
 
 export type ValidateClientMessageResult =
