@@ -29,6 +29,20 @@ export function pendingMergeFor(
   return outstanding.get(key);
 }
 
+/**
+ * Rewrite the record, but only while it is still THIS attempt's (or there is
+ * none): a newer attempt recorded meanwhile is never overwritten by an older
+ * one's bookkeeping.
+ */
+export function updatePendingMerge(
+  key: string,
+  record: PendingPullRequestMerge,
+): void {
+  const current = outstanding.get(key);
+  if (!current || current.requestedAt === record.requestedAt)
+    outstanding.set(key, record);
+}
+
 /** Drop the record, but only while it is still THIS attempt's. */
 export function forgetPendingMerge(
   key: string,
@@ -68,13 +82,46 @@ export type PendingMergeVerdict =
   | { kind: "unknown"; reason: string };
 
 /**
+ * The record after one attempt to read its request's status: a fresh answer
+ * clears `unreadableSince`, a failed read starts it (once). `answer` is
+ * `undefined` for a read that failed or could not be made.
+ */
+export function noteStatusRead(
+  record: PendingPullRequestMerge,
+  answer: MergeRequestStatus | undefined,
+  now: number,
+): PendingPullRequestMerge {
+  if (!record.requestId) return record;
+  if (answer) {
+    if (record.unreadableSince === undefined) return record;
+    const next = { ...record };
+    delete next.unreadableSince;
+    return next;
+  }
+  return record.unreadableSince === undefined
+    ? { ...record, unreadableSince: now }
+    : record;
+}
+
+/** The record kept as an `unknown` answer once following it ended. */
+export function asUnknown(
+  record: PendingPullRequestMerge,
+  reason: string,
+  message: string = record.message,
+): PendingPullRequestMerge {
+  return { ...record, unknownReason: reason, message };
+}
+
+/**
  * Where an accepted merge stands, from the pull request's current detail and
  * — when there is a request to ask — the provider's FRESH answer about it,
  * which always wins: `failed` is a failure and `pending` keeps it, however old.
  * Only without one (no request id, or a read that failed) does anything else
  * decide: a head that moved past the conditioned one cannot be merged by that
- * request, and a bounded watch ends in an explicit "unknown", never in "did
- * not merge".
+ * request, a record already known to be `unknown` stays so, and a bounded
+ * watch — ten minutes without a request id, a day of UNREADABLE status —
+ * ends in an explicit "unknown", never in "did not merge". `record` must
+ * already carry `noteStatusRead`'s bookkeeping.
  */
 export function judgePendingMerge(
   record: PendingPullRequestMerge,
@@ -102,8 +149,11 @@ export function judgePendingMerge(
       kind: "failed",
       message: `the branch moved past ${record.expectedHeadSha.slice(0, 12)}, the head that merge was conditioned on, so it cannot land`,
     };
+  if (record.unknownReason)
+    return { kind: "unknown", reason: record.unknownReason };
+  const since = record.requestId ? record.unreadableSince : record.requestedAt;
   const watch = record.requestId ? UNREADABLE_REQUEST_MS : NO_REQUEST_WATCH_MS;
-  if (now - record.requestedAt > watch)
+  if (since !== undefined && now - since > watch)
     return {
       kind: "unknown",
       reason: record.requestId

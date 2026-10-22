@@ -57,10 +57,13 @@ import {
 } from "./workflow/pullRequestObservation.ts";
 import { sessionIsDirectlyOwned } from "./sessionOutcomePolicy.ts";
 import {
+  asUnknown,
   forgetPendingMerge,
   judgePendingMerge,
+  noteStatusRead,
   pendingMergeFor,
   recordPendingMerge,
+  updatePendingMerge,
 } from "./pendingMerges.ts";
 import { pullRequestKey } from "./pullRequestIdentity.ts";
 import {
@@ -277,6 +280,10 @@ async function pollCard(cardId: string): Promise<void> {
           .mergeRequestStatus(number, pendingMerge.requestId)
           .catch(() => undefined)
       : undefined;
+  // When the status read started failing is part of the record.
+  const notedMerge = pendingMerge
+    ? noteStatusRead(pendingMerge, mergeRequest, Date.now())
+    : undefined;
 
   const detail = await provider.pullRequestDetail(number);
   if (!detail) {
@@ -307,13 +314,16 @@ async function pollCard(cardId: string): Promise<void> {
 
   const settlement = settlePendingMerge(
     card,
-    pendingMerge,
+    notedMerge,
     mergeRequest,
     detail,
     provider.kind === "github" ? "GitHub" : "Forgejo",
   );
-  if (pendingMerge && !settlement.stillPending && identityKey)
-    forgetPendingMerge(identityKey, pendingMerge);
+  // The by-identity record follows the card's, for THIS attempt only.
+  if (pendingMerge && identityKey) {
+    if (settlement.record) updatePendingMerge(identityKey, settlement.record);
+    else forgetPendingMerge(identityKey, pendingMerge);
+  }
 
   const status: PullRequestCardStatus = detail.merged
     ? "merged"
@@ -408,10 +418,12 @@ async function pollCard(cardId: string): Promise<void> {
 /**
  * What this poll says about an accepted, unconfirmed merge
  * (`PullRequestCardContext.pendingMerge`), in `judgePendingMerge`'s words —
- * the same judgement the Pull Requests view's check uses. Whatever ends it
- * clears the card's pending message (only that message, never a later
- * action's): a failure leaves the provider's reason with Merge on offer again,
- * and following it without an answer says plainly that the outcome is unknown.
+ * the same judgement the Pull Requests view's check uses. A settled or failed
+ * attempt clears the record and the card's pending message (only that
+ * message, never a later action's): a failure leaves the provider's reason
+ * with Merge on offer again. One that ends UNKNOWN keeps its record as a
+ * tombstone saying so, which every later read keeps returning until the pull
+ * request itself answers; `record` is what stays, or `undefined` once gone.
  */
 function settlePendingMerge(
   card: PullRequestCard,
@@ -423,11 +435,39 @@ function settlePendingMerge(
   card: Patch<PullRequestCard>;
   context: Patch<PullRequestCardContext>;
   stillPending: boolean;
+  record?: PendingPullRequestMerge;
 } {
   if (!pending) return { card: {}, context: {}, stillPending: false };
   const verdict = judgePendingMerge(pending, detail, request, Date.now());
-  if (verdict.kind === "pending")
-    return { card: {}, context: {}, stillPending: true };
+  if (verdict.kind === "pending") {
+    // A fresh "still running" makes a tombstone live again.
+    const live = { ...pending };
+    delete live.unknownReason;
+    return {
+      card: {},
+      context: { pendingMerge: live },
+      stillPending: true,
+      record: live,
+    };
+  }
+  if (verdict.kind === "unknown") {
+    // Already known to be unknown: nothing new to say.
+    if (pending.unknownReason)
+      return {
+        card: {},
+        context: { pendingMerge: pending },
+        stillPending: false,
+        record: pending,
+      };
+    const message = `Whether the accepted merge of #${detail.number} landed is unknown: ${verdict.reason}. Look at the pull request before merging it again.`;
+    const tombstone = asUnknown(pending, verdict.reason, message);
+    return {
+      card: { actionMessage: message },
+      context: { pendingMerge: tombstone },
+      stillPending: false,
+      record: tombstone,
+    };
+  }
   const clearMessage: Patch<PullRequestCard> =
     card.actionMessage === pending.message ? { actionMessage: undefined } : {};
   const settled = { pendingMerge: undefined };
@@ -436,14 +476,6 @@ function settlePendingMerge(
       card: {
         ...clearMessage,
         actionError: `${providerName} could not merge #${detail.number}: ${verdict.message}. Nothing was merged; merge it again once that is fixed.`,
-      },
-      context: settled,
-      stillPending: false,
-    };
-  if (verdict.kind === "unknown")
-    return {
-      card: {
-        actionMessage: `Whether the accepted merge of #${detail.number} landed is unknown: ${verdict.reason}. Look at the pull request before merging it again.`,
       },
       context: settled,
       stillPending: false,

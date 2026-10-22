@@ -1215,9 +1215,16 @@ a branch another surface just merged and deleted.
   - without one (the provider named no request, or its status cannot be read),
     only the pull request can answer: a head that moved past the conditioned one
     means that merge cannot land (reported as a failure), and a watch that runs
-    out — ten minutes with no request id, a day of unreadable status — ends with
-    the card saying plainly that whether it landed is unknown, never "did not
-    merge".
+    out — ten minutes with no request id, or a day since reading its status
+    STARTED failing (`unreadableSince`, cleared by any fresh answer; never the
+    request's age) — ends with the card saying plainly that whether it landed is
+    unknown, never "did not merge";
+  - an `unknown` ending is itself kept, as a tombstone on the record
+    (`unknownReason`), on the card and by identity: every later poll and check
+    keeps answering "unknown" until the pull request goes terminal, its head
+    moves past the conditioned one, a fresh "still running" brings the request
+    back to life, or a new attempt replaces the record. The server knows it sent
+    that merge, and absent evidence never becomes "did not merge".
 
   Whatever settles it clears the pending message (only that message), and a
   confirmed merge from any surface clears the record. The PR view reports a
@@ -1919,9 +1926,17 @@ the check then reports `mergeRequest`, judged exactly as the watcher judges it:
 follow, still within its watch) keep the outcome uncertain, because the request
 may still land; `unknown` says the watch ended without an answer; only `failed`
 (with the provider's reason, a moved head included) or `expired` lets the check
-say it did not merge. The record is memory only — the cards' copy survives a
-restart and the watcher, which polls every open card on boot, restores it; a
-pending merge with no card is forgotten by a restart.
+say it did not merge. Every answer is bound to the attempt it was read for: a
+client naming a request other than the current record's (an old tab, an earlier
+attempt) is told about ITS attempt alone, and only an answer about the current
+record may settle or forget it; a check that names none follows the current
+record.
+
+Known follow-ups: the record is memory only. The cards' copy survives a restart,
+and the watcher restores the by-identity record from it — but lazily, inside
+each card's first poll after boot, so a recovery check served in that startup
+gap may not see it yet. A pending merge with no card at all is forgotten by a
+restart.
 
 The check's LOCAL answer has three values for the same reason the merge's
 cleanup does: `none`, `one` worktree, or `ambiguous` with its reason. Two

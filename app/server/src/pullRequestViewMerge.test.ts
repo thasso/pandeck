@@ -42,7 +42,11 @@ import {
   type PullRequestViewMergeOperations,
 } from "./pullRequestViewMerge.ts";
 import { mainWorktreeId } from "./worktrees/worktreeResolve.ts";
-import { resetPendingMergesForTests } from "./pendingMerges.ts";
+import {
+  pendingMergeFor,
+  recordPendingMerge,
+  resetPendingMergesForTests,
+} from "./pendingMerges.ts";
 
 /* --------------------------------- fixtures -------------------------------- */
 
@@ -949,6 +953,113 @@ for (const [name, requestId, expected] of [
     assert.deepEqual(answer.mergeRequest, expected);
     assert.deepEqual(asked, requestId ? [requestId] : []);
   });
+
+/** A check of #7 with no request id, against one provider. */
+async function checkWithoutId(provider: GitHostingProvider, path = repo()) {
+  return checkPullRequestFromView(
+    {
+      projectId: PROJECT,
+      provider: "forgejo",
+      repositoryKey: REPOSITORY_KEY,
+      number: 7,
+    },
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    }),
+  );
+}
+
+const KEY = "forgejo#acme/repo#7";
+/** The head `detail()` reports. */
+const HEAD_7 = "a".repeat(40);
+
+// An attempt nobody could follow ends UNKNOWN, and stays so: the evidence that
+// the server sent a merge is never lost into "did not merge" — not when the
+// watch ends, not on the next check, not on the one after.
+test("an attempt whose watch ended stays unknown on every later check", async () => {
+  const path = repo();
+  recordPendingMerge(KEY, {
+    expectedHeadSha: HEAD_7,
+    requestedAt: Date.now() - 11 * 60_000,
+    message: "pending",
+  });
+  for (let i = 0; i < 3; i += 1) {
+    const answer = await checkWithoutId(fakeProvider(), path);
+    assert.deepEqual(answer.mergeRequest, {
+      status: "unknown",
+      message:
+        "the provider named no request to follow, and the pull request is still open",
+    });
+  }
+  assert.ok(pendingMergeFor(KEY)?.unknownReason);
+  // The head moving past the conditioned one is an answer.
+  const moved = await checkWithoutId(
+    fakeProvider({ detail: detail({ headSha: "b".repeat(40) }) }),
+    path,
+  );
+  assert.equal(moved.mergeRequest?.status, "failed");
+  assert.equal(pendingMergeFor(KEY), undefined);
+});
+
+// The watcher can end the watch first; the check then finds its tombstone.
+test("a tombstone the watcher left is what the next check reports", async () => {
+  recordPendingMerge(KEY, {
+    expectedHeadSha: HEAD_7,
+    requestedAt: Date.now(),
+    message: "unknown",
+    unknownReason: "the provider named no request to follow",
+  });
+  assert.deepEqual((await checkWithoutId(fakeProvider())).mergeRequest, {
+    status: "unknown",
+    message: "the provider named no request to follow",
+  });
+});
+
+// An answer settles only the attempt it was read for. An old tab still naming
+// attempt A is told about A; attempt B, still running, is left alone.
+test("a stale client id is answered about its own attempt and leaves the current one", async () => {
+  const path = repo();
+  recordPendingMerge(KEY, {
+    requestId: "req-B",
+    expectedHeadSha: HEAD_7,
+    requestedAt: Date.now(),
+    message: "pending B",
+  });
+  const asked: string[] = [];
+  const provider = {
+    ...fakeProvider(),
+    mergeRequestStatus: async (_number: number, id: string) => {
+      asked.push(id);
+      return id === "req-A"
+        ? { status: "failed" as const, message: "Pull request is closed." }
+        : { status: "pending" as const };
+    },
+  };
+  const stale = await checkPullRequestFromView(
+    {
+      projectId: PROJECT,
+      provider: "forgejo",
+      repositoryKey: REPOSITORY_KEY,
+      number: 7,
+      mergeRequestId: "req-A",
+    },
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    }),
+  );
+  assert.deepEqual(stale.mergeRequest, {
+    status: "failed",
+    message: "Pull request is closed.",
+  });
+  assert.equal(pendingMergeFor(KEY)?.requestId, "req-B");
+  // A later check with no id still follows B.
+  assert.deepEqual((await checkWithoutId(provider, path)).mergeRequest, {
+    status: "pending",
+  });
+  assert.deepEqual(asked, ["req-A", "req-B"]);
+});
 
 test("a check answers the state under the lock and merges nothing", async () => {
   const path = repo();

@@ -53,9 +53,12 @@ import {
   type MergeRequestStatus,
 } from "./gitHosting.ts";
 import {
+  asUnknown,
   forgetPendingMerge,
   judgePendingMerge,
+  noteStatusRead,
   pendingMergeFor,
+  updatePendingMerge,
 } from "./pendingMerges.ts";
 import { pullRequestIdentityThrough } from "./pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "./pullRequestInventory.ts";
@@ -278,48 +281,72 @@ export async function checkPullRequestFromView(
 
 /**
  * Where an accepted merge stands, for the check. The record kept by identity
- * (`pendingMerges.ts`) is judged exactly as the watcher judges it; a request
- * named only by the client is asked directly. Nothing here ever turns "could
- * not tell" into "did not merge": a request that cannot be asked stays
- * `pending`, one with no id to follow is `inconclusive` while it is watched,
- * and a watch that ends without an answer is `unknown`.
+ * (`pendingMerges.ts`) is judged exactly as the watcher judges it. Every
+ * answer is bound to the attempt it was read for: a client naming a request
+ * other than the current record's — an old tab, an earlier attempt — is told
+ * about ITS attempt alone, and the record is left to answers about it. Nothing
+ * here ever turns "could not tell" into "did not merge": a request that
+ * cannot be asked stays `pending`, one with no id to follow is `inconclusive`
+ * while it is watched, and a watch that ended without an answer stays
+ * `unknown` — kept as a tombstone — until the pull request itself answers.
  */
 async function outstandingMergeStanding(
   request: PullRequestViewCheckRequest,
   repository: ResolvedRepository,
   detail: PullRequestDetail,
 ): Promise<PullRequestViewCheckResponse["mergeRequest"]> {
-  const record = pendingMergeFor(repository.identityKey);
+  const key = repository.identityKey;
+  const record = pendingMergeFor(key);
   if (detail.state !== "open") {
-    if (record) forgetPendingMerge(repository.identityKey, record);
+    if (record) forgetPendingMerge(key, record);
     return undefined;
   }
-  const requestId = request.mergeRequestId ?? record?.requestId;
-  if (!record && !requestId) return undefined;
-  const asked: Asked = requestId
-    ? await askMergeRequest(repository.provider, request.number, requestId)
-    : { unreadable: "the provider named no request to follow" };
-  const answer = "answer" in asked ? asked.answer : undefined;
-  if (!record)
+  const clientId = request.mergeRequestId;
+  if (clientId && clientId !== record?.requestId) {
+    const asked = await askMergeRequest(
+      repository.provider,
+      request.number,
+      clientId,
+    );
     return "answer" in asked
       ? asked.answer
       : { status: "pending", message: asked.unreadable };
-  const verdict = judgePendingMerge(record, detail, answer, Date.now());
+  }
+  if (!record) return undefined;
+  const asked: Asked = record.requestId
+    ? await askMergeRequest(
+        repository.provider,
+        request.number,
+        record.requestId,
+      )
+    : { unreadable: "the provider named no request to follow" };
+  const answer = "answer" in asked ? asked.answer : undefined;
+  const now = Date.now();
+  const noted = noteStatusRead(record, answer, now);
+  const verdict = judgePendingMerge(noted, detail, answer, now);
   if (verdict.kind === "pending") {
+    const live = { ...noted };
+    delete live.unknownReason;
+    updatePendingMerge(key, live);
     if ("answer" in asked)
       return {
         status: asked.answer.status === "merged" ? "merged" : "pending",
       };
     return {
-      status: requestId ? "pending" : "inconclusive",
+      status: record.requestId ? "pending" : "inconclusive",
       message: asked.unreadable,
     };
   }
-  forgetPendingMerge(repository.identityKey, record);
+  if (verdict.kind === "unknown") {
+    updatePendingMerge(
+      key,
+      noted.unknownReason ? noted : asUnknown(noted, verdict.reason),
+    );
+    return { status: "unknown", message: verdict.reason };
+  }
+  forgetPendingMerge(key, record);
   if (verdict.kind === "failed")
     return { status: "failed", message: verdict.message };
-  if (verdict.kind === "unknown")
-    return { status: "unknown", message: verdict.reason };
   return { status: "expired" };
 }
 

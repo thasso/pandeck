@@ -988,6 +988,7 @@ test("a merge with no request to follow is watched, then stated as unknown", asy
 
   resetPullRequestCardsStoreForTests();
   resetPullRequestWatcherForTests();
+  resetPendingMergesForTests();
   const old = pendingCard(Date.now() - 11 * 60_000, null);
   setPullRequestWatcherProviderResolverForTests(async () =>
     fakeProvider({ pullRequestDetail: async () => detail() }),
@@ -999,7 +1000,82 @@ test("a merge with no request to follow is watched, then stated as unknown", asy
     /Whether the accepted merge of #42 landed is unknown: the provider named no request to follow/,
   );
   assert.equal(after.actionError, undefined);
+  // The evidence is KEPT as that answer, on the card and by identity, so a
+  // later check says "unknown" again rather than "did not merge".
+  assert.match(
+    pullRequestCardRecord(old.id)?.context.pendingMerge?.unknownReason ?? "",
+    /named no request to follow/,
+  );
+  assert.ok(pendingMergeFor("github#acme/repo#42")?.unknownReason);
+
+  // A later poll has nothing new to say, and the head moving past the
+  // conditioned one is what finally answers it.
+  scheduleImmediatePoll(old.id);
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(old.id)?.actionMessage, after.actionMessage);
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () => detail({ headSha: "sha-2" }),
+    }),
+  );
+  scheduleImmediatePoll(old.id);
+  await sweepPullRequestWatcherForTests();
   assert.equal(pullRequestCardRecord(old.id)?.context.pendingMerge, undefined);
+  assert.equal(pendingMergeFor("github#acme/repo#42"), undefined);
+});
+
+// The unreadable cutoff runs from when reading STARTED failing, not from the
+// request's age: an old request read fine a minute ago is not cut off by its
+// first failed read, while one unreadable for a day is.
+test("an old merge request whose status just became unreadable is kept", async () => {
+  const card = pendingCard(A_DAY_AGO());
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => {
+        throw new Error("HTTP 502");
+      },
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+  const before = Date.now();
+  await sweepPullRequestWatcherForTests();
+  const record = pullRequestCardRecord(card.id)?.context.pendingMerge;
+  assert.equal(pullRequestCardById(card.id)?.actionMessage, PENDING_MESSAGE);
+  assert.equal(record?.unknownReason, undefined);
+  assert.ok((record?.unreadableSince ?? 0) >= before);
+});
+
+test("a merge request unreadable for a day is stated as unknown", async () => {
+  const card = openCard();
+  patchPullRequestCard(
+    card.id,
+    { actionMessage: PENDING_MESSAGE },
+    {
+      pendingMerge: {
+        requestId: "req-1",
+        expectedHeadSha: "sha-1",
+        requestedAt: A_DAY_AGO(),
+        unreadableSince: A_DAY_AGO(),
+        message: PENDING_MESSAGE,
+      },
+    },
+  );
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => {
+        throw new Error("HTTP 502");
+      },
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.match(
+    pullRequestCardById(card.id)?.actionMessage ?? "",
+    /landed is unknown: its status could not be read for a day/,
+  );
+  assert.ok(
+    pullRequestCardRecord(card.id)?.context.pendingMerge?.unknownReason,
+  );
 });
 
 test("a merge with no request to follow ends once the head moves past it", async () => {

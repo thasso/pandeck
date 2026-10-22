@@ -96,6 +96,18 @@ export interface PendingPullRequestMerge {
   requestedAt: number;
   /** The card message it wrote, cleared once the request settles. */
   message: string;
+  /**
+   * When reading the request's status started failing; cleared by any fresh
+   * answer. The unreadable cutoff runs from here, not from `requestedAt`.
+   */
+  unreadableSince?: number;
+  /**
+   * Following it ended without an answer: whether it merged is UNKNOWN, and
+   * this record stays as that answer (a tombstone) until the pull request
+   * goes terminal, its head moves past `expectedHeadSha`, or a new attempt
+   * replaces it — absent evidence never becomes "did not merge".
+   */
+  unknownReason?: string;
 }
 
 interface PullRequestCardRecord {
