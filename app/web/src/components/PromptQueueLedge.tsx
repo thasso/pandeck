@@ -329,7 +329,7 @@ const QueuedRow = memo(function QueuedRow({
           size="sm"
           // The whole row takes the hover (its `Item`); open is not a hover
           // state.
-          className="h-7 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm font-normal text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
+          className="h-7 min-w-0 flex-1 shrink justify-start rounded-none bg-clip-border text-sm font-normal text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           title={open ? "Hide the message" : item.text}
@@ -342,7 +342,7 @@ const QueuedRow = memo(function QueuedRow({
             </span>
           ) : null}
         </Button>
-        <ItemActions className="gap-0.5">
+        <ItemActions className="shrink-0 gap-0.5">
           {sending ? (
             <span className="flex items-center gap-1.5 pr-1 text-xs whitespace-nowrap">
               <Spinner size="xs" />
@@ -415,14 +415,14 @@ function QueuedPeerRow({
           aria-label="From another session"
           className="size-3.5 shrink-0"
         />
-        <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5">
+        <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           <span
-            className="min-w-0 truncate text-foreground"
+            className="min-w-0 flex-1 truncate text-foreground"
             title={peer.message}
           >
             {peer.message}
           </span>
-          <span className="shrink-0 truncate text-xs">
+          <span className="min-w-0 max-w-1/2 truncate text-xs">
             {"from "}
             <a
               href={sessionPath(peer.senderSessionId)}
@@ -447,7 +447,7 @@ function QueuedPeerRow({
             {peer.waitingForSlot ? " · Waiting for a slot" : null}
           </span>
         </div>
-        <ItemActions className="gap-0.5">
+        <ItemActions className="shrink-0 gap-0.5">
           {peer.sending ? (
             <span className="flex items-center gap-1.5 pr-1 text-xs whitespace-nowrap">
               <Spinner size="xs" />
