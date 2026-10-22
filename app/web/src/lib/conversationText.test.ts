@@ -7,6 +7,75 @@ import {
 import { ConversationResampler } from "./conversationCapture.ts";
 
 describe("spoken prose", () => {
+  it("M3-C4: keeps ordinary prose and inline code containing pipes", () => {
+    expect(
+      spokenMarkdown("Run `ps | grep server` to check whether it is running."),
+    ).toBe("Run ps | grep server to check whether it is running.");
+    expect(spokenMarkdown("Choose red | blue. Both are valid.")).toBe(
+      "Choose red | blue. Both are valid.",
+    );
+  });
+  it("keeps only real tables out of prose, including optional outer pipes and alignment", () => {
+    expect(
+      spokenMarkdown(
+        "Before.\nname | state\n:--- | ---:\napp | ready\n\nAfter.",
+      ),
+    ).toBe("Before. After.");
+    expect(
+      spokenMarkdown(
+        "| name | state |\n| not a delimiter | still prose |\nNext.",
+      ),
+    ).toContain("not a delimiter");
+    expect(spokenMarkdown("Run `ps | grep server`.\nNo table here.")).toBe(
+      "Run ps | grep server. No table here.",
+    );
+    expect(spokenMarkdown("A \\| B.\n--- | ---\nNot a table.")).toContain(
+      "A \\| B.",
+    );
+    expect(spokenMarkdown("```\n| a | b |\n|---|---|\n```\nDone.")).toBe(
+      "Code omitted. Done.",
+    );
+    expect(
+      spokenMarkdown("> | a | b |\n> |---|---|\n> | x | y |\n\nDone."),
+    ).toBe("Done.");
+    expect(spokenMarkdown("> Choose a | b.\n\nDone.")).toBe(
+      "Choose a | b. Done.",
+    );
+  });
+  it.each([
+    "First. [documentation](https://example.com) helps. [More](https://other.test) follows.",
+    "First. `inline. code` works. **Bold. Words** follow. _Last. part_ ends.",
+    "First. ***Nested. emphasis*** works. ~~Old. text~~ ends.",
+    "First. ``code with `nested` ticks.`` works. [label][ref] follows.",
+    "First. ![picture](https://image.test) <b>Second.</b> More.",
+  ])(
+    "emits only a monotonic stable prefix across every token boundary: %s",
+    (markdown) => {
+      const complete = speechChunks(markdown, true);
+      let previous: string[] = [];
+      for (let length = 0; length <= markdown.length; length++) {
+        const chunks = speechChunks(markdown.slice(0, length), false);
+        expect(chunks, `prefix ${markdown.slice(0, length)}`).toEqual(
+          complete.slice(0, chunks.length),
+        );
+        expect(chunks.slice(0, previous.length)).toEqual(previous);
+        previous = chunks;
+      }
+    },
+  );
+  it("holds unfinished formatting and table candidates without leaking destinations", () => {
+    expect(speechChunks("First. [documentation]", false)).toEqual(["First."]);
+    expect(speechChunks("First. `Second. unfinished", false)).toEqual([
+      "First.",
+    ]);
+    expect(speechChunks("First. **Second. unfinished", false)).toEqual([
+      "First.",
+    ]);
+    expect(speechChunks("Header. | State\n|---", false)).toEqual([]);
+    expect(speechChunks("Run `ps | grep server` to check.", true)).toEqual([
+      "Run ps | grep server to check.",
+    ]);
+  });
   it("strips markdown, speaks link text and skips images, tables and references", () => {
     expect(
       spokenMarkdown(

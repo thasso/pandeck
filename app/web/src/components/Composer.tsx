@@ -1478,6 +1478,7 @@ export const Composer = memo(function Composer({
       ({ previewUrl: _previewUrl, ...attachment }) => attachment,
     );
     const deliver = (prompt: string) => {
+      voice.userMessageSent();
       if (queueing && onQueue)
         onQueue({
           text: prompt,
@@ -1498,7 +1499,7 @@ export const Composer = memo(function Composer({
       clearSentText();
       setAttachmentError(null);
       finishSubmit();
-      return;
+      return true;
     }
 
     // A registered slash command is ALWAYS intercepted — never forwarded to
@@ -1555,8 +1556,9 @@ export const Composer = memo(function Composer({
         setAttachmentError(error);
         return;
       }
+      voice.userMessageSent();
       finishSubmit();
-      return;
+      return true;
     }
     if (slashAction.kind === "host") {
       if (queueing && onQueue)
@@ -1565,19 +1567,21 @@ export const Composer = memo(function Composer({
           command: { name: slashAction.name, rawArgs: slashAction.rawArgs },
         });
       else actions.runSlashCommand(slashAction.name, slashAction.rawArgs);
+      voice.userMessageSent();
       clearSentText();
       setAttachmentError(null);
       finishSubmit();
-      return;
+      return true;
     }
     if (slashAction.kind === "skill") {
       // The typed line as the prompt: the transcript keeps it, and the server
       // sends the harness's native command for `skill`.
       actions.promptSkill(value, slashAction.name);
+      voice.userMessageSent();
       clearSentText();
       setAttachmentError(null);
       finishSubmit();
-      return;
+      return true;
     }
 
     deliver(serializeChatCommentPrompt(value, pendingComments));
@@ -1601,8 +1605,17 @@ export const Composer = memo(function Composer({
     messages: conversation?.messages ?? [],
     ...(conversation ? { getMessages: conversation.getMessages } : {}),
     streaming,
-    onFinal: (spoken) =>
-      submit(false, `${spoken}\n\n${VOICE_REPLY_HINT}`) === true,
+    onFinal: (spoken) => {
+      const utterance = spoken.trim();
+      if (!utterance) return false;
+      // Read the field at send time, including edits made during recognition.
+      // Live partials are only a preview, never a replacement for this draft.
+      const draft = (ref.current?.value ?? text).trim();
+      const combined = [draft, utterance].filter(Boolean).join("\n\n");
+      const sent = submit(false, `${combined}\n\n${VOICE_REPLY_HINT}`) === true;
+      if (!sent) setText(combined);
+      return sent;
+    },
   });
 
   const onConversationActiveChange = conversation?.onActiveChange;
@@ -2042,7 +2055,11 @@ export const Composer = memo(function Composer({
                     <div className="text-muted-foreground">
                       Conversation: {voice.phase}
                     </div>
-                    {voice.partial && <div>{voice.partial}</div>}
+                    {hidden && voice.partial && (
+                      <div aria-label="Draft with live speech">
+                        {[text, voice.partial].filter(Boolean).join("\n\n")}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -2234,6 +2251,17 @@ export const Composer = memo(function Composer({
                 }
                 className={COMPOSER_FIELD_CLASS}
               />
+              {/* Append recognition after the editable draft without persisting
+                  partial guesses or replacing user edits. */}
+              {voice.active && voice.partial && (
+                <div
+                  aria-label="Live speech"
+                  aria-live="polite"
+                  className="px-3 pb-2 text-sm whitespace-pre-wrap"
+                >
+                  {voice.partial}
+                </div>
+              )}
 
               {attachments.length > 0 && (
                 // `pt-1.5 pr-1.5` leaves room for each tile's remove button,

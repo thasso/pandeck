@@ -6,6 +6,13 @@ export const VOICE_REPLY_HINT =
 
 /** Only prose reaches this transform. Callers never pass tool or thinking blocks. */
 export function spokenMarkdown(markdown: string): string {
+  return speechProse(markdown, true).text;
+}
+
+function speechProse(
+  markdown: string,
+  final: boolean,
+): { text: string; boundary: boolean } {
   const lines: string[] = [];
   let fence: string | undefined;
   let indented = false;
@@ -33,14 +40,59 @@ export function spokenMarkdown(markdown: string): string {
     }
     if (indented && !line.trim()) continue;
     indented = false;
-    if (!line.includes("|") && !/^\s*\[[^\]]+\]:/.test(line)) lines.push(line);
+    if (!/^\s*\[[^\]]+\]:/.test(line)) lines.push(line);
   }
-  return lines
-    .join("\n")
+  const prose: string[] = [];
+  let table = false;
+  let tableDepth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const depth = quoteDepth(line);
+    const row = line.replace(/^\s*(?:>\s*)+/, "");
+    const cells = tableCells(row);
+    if (
+      table &&
+      depth === tableDepth &&
+      cells &&
+      !/^\s*(?:#{1,6}\s|[-+*]\s|\d+[.)]\s)/.test(row)
+    )
+      continue;
+    table = false;
+    const next = lines[i + 1];
+    const nextRow = next?.replace(/^\s*(?:>\s*)+/, "");
+    const delimiter =
+      next === undefined || quoteDepth(next) !== depth
+        ? null
+        : tableCells(nextRow!);
+    if (
+      cells &&
+      delimiter?.length === cells.length &&
+      delimiter.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+    ) {
+      table = true;
+      tableDepth = depth;
+      i++;
+      continue;
+    }
+    // Until the next line is known, a pipe-bearing row may become a table
+    // header. Never speak it and then retract it when its delimiter arrives.
+    if (
+      !final &&
+      cells &&
+      (next === undefined ||
+        (i + 1 === lines.length - 1 && /^[| :-]*$/.test(nextRow!)))
+    )
+      break;
+    prose.push(line);
+  }
+  const source = prose.join("\n");
+  const stable = final ? source : stableInlinePrefix(source);
+  const text = stable
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
     .replace(/!?\[[^\]]*\](?:\([^)]*)?$/g, "")
+    .replace(/!?\[[^\]]*$/g, "")
     .replace(/<[^>]*>/g, "")
     .replace(/^\s*(?:#{1,6}\s+|>\s*|[-+*]\s+|\d+[.)]\s+)/gm, "")
     .replace(/[`*_~]/g, "")
@@ -48,13 +100,122 @@ export function spokenMarkdown(markdown: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/\s+/g, " ");
+  return { text: text.trim(), boundary: /\s$/.test(text) };
+}
+
+function quoteDepth(line: string): number {
+  return /^\s*(?:>\s*)+/.exec(line)?.[0].match(/>/g)?.length ?? 0;
+}
+
+/** Split only unescaped pipes outside inline code. Outer pipes are optional. */
+function tableCells(line: string): string[] | null {
+  const cells: string[] = [];
+  let start = 0;
+  let code = "";
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (line[i] === "`") {
+      const marker = /^`+/.exec(line.slice(i))![0];
+      if (!code) code = marker;
+      else if (code === marker) code = "";
+      i += marker.length - 1;
+    } else if (!code && line[i] === "|") {
+      cells.push(line.slice(start, i));
+      start = i + 1;
+    }
+  }
+  if (!cells.length) return null;
+  cells.push(line.slice(start));
+  if (!cells[0]!.trim()) cells.shift();
+  if (!cells.at(-1)!.trim()) cells.pop();
+  return cells.length ? cells : null;
+}
+
+/** Streaming inline syntax may still replace its label/markers. Keep the
+ * trailing open construct out of speech until its meaning is settled. */
+function stableInlinePrefix(source: string): string {
+  const open: { marker: string; start: number }[] = [];
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]!;
+    if (char === "\\") {
+      i++;
+      continue;
+    }
+    const current = open.at(-1);
+    if (current?.marker.startsWith("`")) {
+      if (char === "`") {
+        const marker = /^`+/.exec(source.slice(i))![0];
+        if (marker === current.marker) open.pop();
+        i += marker.length - 1;
+      }
+      continue;
+    }
+    if (char === "[") {
+      const start = source[i - 1] === "!" ? i - 1 : i;
+      const labelEnd = closingDelimiter(source, i, "[", "]");
+      if (labelEnd === undefined || labelEnd === source.length - 1)
+        return source.slice(0, Math.min(start, open[0]?.start ?? start));
+      let end = labelEnd;
+      const next = source[end + 1];
+      if (next === "(" || next === "[") {
+        const targetEnd = closingDelimiter(
+          source,
+          end + 1,
+          next,
+          next === "(" ? ")" : "]",
+        );
+        if (targetEnd === undefined)
+          return source.slice(0, Math.min(start, open[0]?.start ?? start));
+        end = targetEnd;
+      }
+      i = end;
+    } else if (char === "<" && /[a-z!/?]/i.test(source[i + 1] ?? "")) {
+      const end = source.indexOf(">", i + 1);
+      if (end < 0) return source.slice(0, Math.min(i, open[0]?.start ?? i));
+      i = end;
+    } else if (char === "`" || char === "*" || char === "_" || char === "~") {
+      let end = i + 1;
+      while (source[end] === char) end++;
+      const marker = source.slice(i, end);
+      const before = source[i - 1] ?? " ";
+      const after = source[i + marker.length];
+      if (char === "~" && marker.length === 1 && after !== undefined) continue;
+      if (char !== "_" || !/\w/.test(before) || !/\w/.test(after ?? "")) {
+        if (current?.marker === marker && !/\s/.test(before)) open.pop();
+        else if (char === "`" || after === undefined || !/\s/.test(after))
+          open.push({ marker, start: i });
+      }
+      i += marker.length - 1;
+    }
+  }
+  return open.length ? source.slice(0, open[0]!.start) : source;
+}
+
+function closingDelimiter(
+  source: string,
+  start: number,
+  left: string,
+  right: string,
+): number | undefined {
+  let depth = 0;
+  for (let i = start; i < source.length; i++) {
+    if (source[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (source[i] === left) depth++;
+    if (source[i] === right && --depth === 0) return i;
+  }
+  return undefined;
 }
 
 /** Stable complete sentences, plus a bounded tail only when it is final/long. */
 export function speechChunks(markdown: string, final: boolean): string[] {
-  const text = spokenMarkdown(markdown);
+  const { text, boundary } = speechProse(markdown, final);
   const chunks: string[] = [];
   let start = 0;
   for (let i = 0; i < text.length; i++) {
@@ -62,7 +223,7 @@ export function speechChunks(markdown: string, final: boolean): string[] {
     let end = i + 1;
     while (end < text.length && /["')\]]/.test(text[end]!)) end++;
     if (end < text.length && !/\s/.test(text[end]!)) continue;
-    if (end === text.length && !final) continue;
+    if (end === text.length && !final && !boundary) continue;
     const prefix = text.slice(start, end);
     if (/\b(?:Mr|Mrs|Ms|Dr|Prof|e\.g|i\.e)\.$/i.test(prefix)) continue;
     appendBounded(chunks, prefix);

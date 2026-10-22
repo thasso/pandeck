@@ -44,6 +44,7 @@ interface ConversationRun {
   suppressed: Set<string>;
   speaking: boolean;
   waitingForReply: boolean;
+  mutedTurn: boolean;
 }
 
 function parseConversationResponse(data: string): ConversationServerMessage {
@@ -134,6 +135,10 @@ export function useConversation(options: ConversationOptions) {
     [instanceId],
   );
 
+  const userMessageSent = useCallback(() => {
+    if (live.current) live.current.mutedTurn = false;
+  }, []);
+
   const reason =
     conversationUnavailable(options) ??
     (ownerId !== null && ownerId !== instanceId
@@ -200,6 +205,7 @@ export function useConversation(options: ConversationOptions) {
         ),
         speaking: false,
         waitingForReply: false,
+        mutedTurn: false,
         timer: setTimeout(() => {
           if (live.current === run)
             stop("Conversation recognition did not become ready.");
@@ -249,7 +255,8 @@ export function useConversation(options: ConversationOptions) {
             if (message.isFinal) setPartial("");
             return;
           }
-          if (text && player.pending) {
+          if (text && (player.pending || latest.current.streaming)) {
+            run.mutedTurn = true;
             for (const row of latest.current.messages)
               if (row.role === "assistant") run.suppressed.add(row.id);
             player.stop();
@@ -257,12 +264,15 @@ export function useConversation(options: ConversationOptions) {
           setPartial(text);
           if (message.isFinal) {
             if (text) {
-              if (!latest.current.onFinal(text)) {
+              const sent = latest.current.onFinal(text);
+              if (live.current !== run) return;
+              if (!sent) {
                 stop(
                   "Voice message could not be sent. Check the composer and try again.",
                 );
                 return;
               }
+              run.mutedTurn = false;
               run.waitingForReply = true;
               setPartial("");
               setPhase("thinking");
@@ -330,7 +340,18 @@ export function useConversation(options: ConversationOptions) {
       );
       const previouslySeen = known || run.suppressed.has(message.id);
       if (messageIndex < firstNew && !known) run.suppressed.add(message.id);
-      if (message.role !== "assistant") continue;
+      if (message.role !== "assistant") {
+        // Also observe messages sent in another composer/tab. A tool-step stream
+        // is not a new turn, but a new user message releases the interruption.
+        if (
+          message.role === "user" &&
+          !previouslySeen &&
+          messageIndex >= firstNew
+        )
+          run.mutedTurn = false;
+        run.suppressed.add(message.id);
+        continue;
+      }
       if (message.streaming) {
         run.liveMessages.set(message.id, message);
         // Only the active stream and a few pending durable handoffs are useful.
@@ -366,6 +387,7 @@ export function useConversation(options: ConversationOptions) {
           break;
         }
       } else run.liveMessages.delete(message.id);
+      if (run.mutedTurn) run.suppressed.add(message.id);
       if (run.suppressed.has(message.id)) continue;
       if (!known || message.streaming) run.waitingForReply = false;
       message.blocks.forEach((block, index) => {
@@ -376,12 +398,15 @@ export function useConversation(options: ConversationOptions) {
           !message.streaming || index < message.blocks.length - 1,
         );
         const cursor = run.cursors.get(key) ?? 0;
-        run.cursors.set(key, chunks.length);
+        run.cursors.set(key, Math.max(cursor, chunks.length));
         if (chunks.length > cursor) {
           run.player.enqueue(chunks.slice(cursor));
         }
       });
     }
+    // This is the runtime run state, which stays running across tool steps.
+    // Suppress its last projection before releasing the mute on completion.
+    if (!options.streaming) run.mutedTurn = false;
     if (options.messages.length) run.tailId = options.messages.at(-1)?.id;
     if (!run.speaking && !partial)
       setPhase(
@@ -410,5 +435,13 @@ export function useConversation(options: ConversationOptions) {
     };
   }, [options.sessionId, stop]);
 
-  return { active, phase, partial, error, unavailableReason: reason, toggle };
+  return {
+    active,
+    phase,
+    partial,
+    error,
+    unavailableReason: reason,
+    toggle,
+    userMessageSent,
+  };
 }

@@ -15,9 +15,13 @@ non-integer output rates to 16 kHz and sends paced 200 ms Int16 frames after
 recognition admission. It retains no utterance buffer. Upload backpressure stops
 conversation rather than replaying stale speech later.
 
-Replacement partials appear on the composer's conversation ledge. A nonempty
-final sends through the ordinary composer path, including its attachments,
-comments, send restrictions, queueing and permanent-session steering behavior.
+Replacement partials appear after the editable typed draft, without changing its
+browser-local saved copy. A nonempty final sends the latest draft plus the
+utterance together through the ordinary composer path, including attachments,
+comments, send restrictions, queueing and permanent-session steering. Edits made
+during recognition are included. Empty finals and stopping mid-utterance leave
+the typed draft intact; changing sessions restores that session's own draft. A
+refused send keeps the combined draft and final locally so it can be retried.
 The silence threshold is configured in Dictation settings; the recognizer also
 forces a final after two minutes of uninterrupted speech. Empty finals do not
 send or consume a segment number: the recognizer can reuse that number after a
@@ -38,23 +42,27 @@ tool calls or results. Speech uses the runtime stream id, not the display row's
 reused `live` id. When a durable entry replaces that row, matching text-block
 prefixes transfer the sentence cursors and interruption suppression, so the
 response is neither repeated nor unmuted on completion. Markdown links use their
-labels; fenced and indented code becomes "Code omitted"; tables and images are
-skipped. Complete sentences are synthesized as the response streams, with a
-final unpunctuated tail on completion. Long sentences are split within the
-server's 500-character limit. One synthesis fetch runs at a time; at most two
-decoded sentences are scheduled, with the next buffer starting at the previous
-buffer's exact AudioContext end time. Slow synthesis can still cause a gap. A
-global busy response is shown, not retried.
+labels; fenced and indented code becomes "Code omitted"; actual tables and
+images are skipped. Prose and inline code containing pipes remain audible.
+Trailing open inline Markdown is held until stable, and sentence cursors never
+rewind across token boundaries. Complete sentences are synthesized as the
+response streams, with a final unpunctuated tail on completion. Long sentences
+are split within the server's 500-character limit. One synthesis fetch runs at a
+time; at most two decoded sentences are scheduled, with the next buffer starting
+at the previous buffer's exact AudioContext end time. Slow synthesis can still
+cause a gap. A global busy response is shown, not retried.
 
 Distinct nonempty speech cancels the synthesis fetch, scheduled audio and queue,
-including synthesis still waiting for its first buffer. The interrupted
-assistant response stays muted as it finishes. The agent keeps running. The next
-spoken final uses the same queue/steer choice as typing. Matching recognizer
-feedback is ignored against the current/recent spoken text, retained for the
-segment through its final. There is no grace period that would swallow a short
-genuine "stop". This is a lexical echo guard, not speaker identification:
-repeating the exact spoken words may be ignored. Headphones are recommended if
-speaker echo remains.
+including synthesis still waiting for its first buffer. The interrupted agent
+turn stays muted across later assistant messages and tool steps, including
+speech begun in a gap between buffers. The mute ends when that run ends or the
+user sends the next message; the following reply speaks normally. The agent
+keeps running. The next spoken final uses the same queue/steer choice as typing.
+Matching recognizer feedback is ignored against the current/recent spoken text,
+retained for the segment through its final. There is no grace period that would
+swallow a short genuine "stop". This is a lexical echo guard, not speaker
+identification: repeating the exact spoken words may be ignored. Headphones are
+recommended if speaker echo remains.
 
 ## Settings and preview
 

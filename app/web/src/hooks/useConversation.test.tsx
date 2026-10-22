@@ -148,6 +148,152 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it("M3-C2: streamed link boundaries never replay a preceding sentence", async () => {
+  await start();
+  await render({
+    messages: [prose("voice-live:link", "First. [documentation")],
+  });
+  await render({
+    messages: [prose("voice-live:link", "First. [documentation]")],
+  });
+  await render({
+    messages: [
+      prose(
+        "voice-live:link",
+        "First. [documentation](https://example.com) helps.",
+        false,
+      ),
+    ],
+  });
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+  ).toEqual(["First.", "documentation helps."]);
+});
+
+it("never rewinds a spoken cursor if a projection temporarily gets shorter", async () => {
+  await start();
+  await render({ messages: [prose("voice-live:shorter", "First. Second")] });
+  await render({ messages: [prose("voice-live:shorter", "First.")] });
+  await render({
+    messages: [prose("voice-live:shorter", "First. Second.", false)],
+  });
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+  ).toEqual(["First.", "Second."]);
+});
+
+it("M3-C3: interruption mutes later messages from the same running turn", async () => {
+  const socket = await start();
+  await render({
+    messages: [prose("voice-live:step-one", "I will check. More")],
+    streaming: true,
+  });
+  act(() =>
+    socket.message({
+      type: "transcript",
+      segment: 0,
+      text: "wait please",
+      isFinal: false,
+    }),
+  );
+  const first = prose("durable-step-one", "I will check. More", false);
+  await render({ messages: [first], streaming: true });
+  await render({
+    messages: [
+      first,
+      prose("voice-live:step-two", "The check is complete. More"),
+    ],
+    streaming: true,
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a tool-gap turn muted when speech starts between audio buffers", async () => {
+  const socket = await start();
+  const first = prose("voice-live:gap", "First answer. More");
+  await render({ messages: [first], streaming: true });
+  act(() => FakeSpeechContext.instances[0]!.sources[0]!.end());
+  act(() =>
+    socket.message({
+      type: "transcript",
+      segment: 0,
+      text: "wait please",
+      isFinal: false,
+    }),
+  );
+  await render({
+    messages: [
+      prose("gap-durable", "First answer. More", false),
+      prose("voice-live:after-gap", "After the tool. More"),
+    ],
+    streaming: true,
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it.each(["run end", "spoken final", "typed send", "remote user"])(
+  "releases whole-turn interruption for %s, without replaying muted rows",
+  async (releaseBy) => {
+    const socket = await start();
+    await render({
+      messages: [prose("voice-live:a", "First answer. More")],
+      streaming: true,
+    });
+    act(() =>
+      socket.message({
+        type: "transcript",
+        segment: 0,
+        text: "wait please",
+        isFinal: false,
+      }),
+    );
+    const first = prose("durable:a", "First answer. More", false);
+    await render({
+      messages: [first, prose("voice-live:b", "Muted after tools. More")],
+      streaming: true,
+    });
+    const second = prose("durable:b", "Muted after tools. More", false);
+    await render({ messages: [first, second], streaming: true });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    let messages = [first, second];
+    if (releaseBy === "run end") await render({ streaming: false });
+    else if (releaseBy === "spoken final")
+      act(() =>
+        socket.message({
+          type: "transcript",
+          segment: 0,
+          text: "next question",
+          isFinal: true,
+        }),
+      );
+    else if (releaseBy === "typed send") act(() => result.userMessageSent());
+    else
+      messages = [
+        ...messages,
+        {
+          id: "new-user",
+          role: "user",
+          streaming: false,
+          blocks: [{ kind: "text", text: "Next question" }],
+        },
+      ];
+    await render({
+      messages: [...messages, prose("voice-live:c", "Fresh answer. More")],
+      streaming: true,
+    });
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+    ).toEqual(["First answer.", "Fresh answer."]);
+    expect(socket.sent).not.toContainEqual(JSON.stringify({ type: "abort" }));
+  },
+);
+
 it("waits for admission, shows replacement partials and auto-sends a nonempty final exactly once", async () => {
   act(() => result.toggle());
   await act(async () => {
