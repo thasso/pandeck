@@ -55,6 +55,11 @@ a synthetic record (never a DB row).
   still-registered checkout refuses before the record is finalized. The
   caught-failure branch needs no second probe: it already proved Git let go
   before it pruned.
+- Missing repository: when the row's `mainRepoRoot` no longer exists (deleted,
+  moved, a temporary repo), no Git command can be spawned there and the branch
+  went with it, so `removeWorktree` runs none. A missing checkout finalizes the
+  record directly; a surviving checkout folder can no longer be checked for
+  uncommitted work, so it is refused without force and deleted with it.
 - Submodules and removal: Git refuses `worktree remove` for any checkout
   carrying submodules ("working trees containing submodules cannot be moved or
   removed") and only `--force` skips that check, so `removeWorktree` derives

@@ -1160,6 +1160,16 @@ export async function removeWorktree(
     }
   }
 
+  // The repository itself is gone (deleted, moved, or a temporary one): no Git
+  // command can run in it, and the branch went with it. What is left is the
+  // record and possibly a checkout folder that outlived it, which nothing can
+  // inspect for uncommitted work any more, so only force deletes that folder.
+  const repositoryGone = !retryBranchOnly && !existsSync(row.mainRepoRoot);
+  if (repositoryGone && !opts.force && existsSync(row.path))
+    throw new WorktreeRemovalBlockedError(
+      `Repository ${row.mainRepoRoot} no longer exists, so ${row.path} cannot be checked for uncommitted work. Force-remove to delete it.`,
+    );
+
   if (!retryBranchOnly && !opts.force && existsSync(row.path)) {
     const status = await gitOptionalExit(
       ["status", "--porcelain=v1", "-uall"],
@@ -1180,7 +1190,7 @@ export async function removeWorktree(
   // move a local base, and never hold the repository lock across the network.
   let containmentBase = opts.branchContainmentBase;
   let remoteHeads: string[] = [];
-  if (!opts.force && opts.deleteBranch) {
+  if (!opts.force && opts.deleteBranch && !repositoryGone) {
     const branch = await probeLocalBranch(row);
     if (
       branch.kind === "present" &&
@@ -1229,7 +1239,12 @@ export async function removeWorktree(
   /** What is still on disk once Git has stopped registering the checkout. */
   let residue: string | undefined;
   try {
-    await withRepoLock(await repoLockKey(row.mainRepoRoot), async () => {
+    // A missing repository has no common git dir to resolve; its root is the
+    // key `repoLockKey` falls back to for any path that is not a repository.
+    const lockKey = repositoryGone
+      ? row.mainRepoRoot
+      : await repoLockKey(row.mainRepoRoot);
+    await withRepoLock(lockKey, async () => {
       // A queued retry must re-read its durable claim only after acquiring the
       // repo lock. A second waiter cannot act on an oid the first already cleared.
       let branchCleanupOid = retryBranchOnly
@@ -1238,7 +1253,9 @@ export async function removeWorktree(
       let branchAlreadyAbsent = false;
       if (retryBranchOnly && !branchCleanupOid)
         throw new Error("Unknown worktree.");
-      if (!retryBranchOnly && opts.deleteBranch) {
+      if (repositoryGone) {
+        branchAlreadyAbsent = true;
+      } else if (!retryBranchOnly && opts.deleteBranch) {
         const branch = await probeLocalBranch(row);
         branchCleanupOid = branch.kind === "present" ? branch.oid : null;
         branchAlreadyAbsent = branch.kind === "absent";
@@ -1263,7 +1280,14 @@ export async function removeWorktree(
         // Historical malformed reply chains must be caught before Git removes
         // the checkout; normal inserts cannot create a cross-scope parent.
         assertWorktreeCommentsDeletable(id);
-        if (!existsSync(row.path)) {
+        if (repositoryGone) {
+          // Nothing registers the checkout any more; only a surviving folder
+          // (force already required above) needs deleting.
+          if (existsSync(row.path)) {
+            await releaseCheckout();
+            residue = await removeUnregisteredCheckout(row);
+          }
+        } else if (!existsSync(row.path)) {
           // Folder already gone (deleted externally): Git cleanup must still
           // succeed before comment lifetime can end.
           await git(["worktree", "prune"], row.mainRepoRoot);

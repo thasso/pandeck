@@ -2341,6 +2341,54 @@ test("a checkout git already unregistered is still removable", async () => {
 });
 
 /**
+ * A record whose repository was deleted or moved could never be removed: every
+ * Git call spawned in the missing root failed with ENOENT before anything ran.
+ * The branch went with the repository, so only the record and a folder that
+ * outlived it are left, and that folder can no longer be checked for work.
+ */
+test("a worktree whose repository no longer exists is removable", async () => {
+  const goneRepo = join(tmp, "gone-repo");
+  initRepo(goneRepo);
+  const insertRow = (id: string, path: string) =>
+    insertWorktree({
+      id,
+      projectId: "gone-proj",
+      mainRepoRoot: realpathSync(goneRepo),
+      path,
+      branch: id,
+      baseBranch: "main",
+      baseCommit: "0".repeat(40),
+      status: "active",
+      mergeStateJson: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      removedAt: null,
+    });
+  const survivor = join(tmp, "gone-repo-survivor");
+  mkdirSync(survivor, { recursive: true });
+  writeFileSync(join(survivor, "notes.md"), "work\n");
+  insertRow("gone-checkout", join(tmp, "gone-repo-checkout"));
+  insertRow("gone-survivor", survivor);
+  rmSync(goneRepo, { recursive: true, force: true });
+
+  await removeWorktree("gone-checkout", { deleteBranch: true });
+  assert.equal(getWorktree("gone-checkout")?.status, "removed");
+
+  await assert.rejects(
+    () => removeWorktree("gone-survivor", { deleteBranch: true }),
+    (err: Error) =>
+      err.name === "WorktreeRemovalBlockedError" &&
+      /no longer exists/.test(err.message),
+  );
+  assert.equal(getWorktree("gone-survivor")?.status, "active");
+  assert.ok(existsSync(join(survivor, "notes.md")));
+
+  await removeWorktree("gone-survivor", { deleteBranch: true, force: true });
+  assert.equal(getWorktree("gone-survivor")?.status, "removed");
+  assert.ok(!existsSync(survivor));
+});
+
+/**
  * Owner-locked directories are NOT residue. pytest's read-only artifact
  * directories are the everyday case, and refusing them would refuse removals the
  * app performs routinely; restoring owner access is what reclaims them.
