@@ -70,6 +70,9 @@ only binding rules; everything else lives here.
 - `ui-shell.md` (under `app/web/docs/`) — the binding UI shell concept: the
   three-pane layout, navigation rules, object linking, the right object panel,
   and the small-screen screens model.
+- `voice-conversation.md` (under `app/web/docs/`) covers hands-free capture,
+  automatic sending, streamed spoken replies, interruption, cleanup and voice
+  preview. Offline dictation stays separate.
 - `ui-components.md` (under `app/web/docs/`) — the binding component contract:
   vendored shadcn components in `components/ui/`, app composites in
   `components/common/`, which component serves which need, the styling rules

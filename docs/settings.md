@@ -119,6 +119,14 @@ What a test persists, such as discovered models, reaches every client.
 
 ## Speech conversation
 
+The Dictation page groups conversation controls separately from offline
+push-to-talk. It offers an installed streaming-model picker, endpoint silence,
+threads and idle release. The composer's Conversation toggle combines this
+settings group's enablement with independent streaming STT and TTS capabilities
+and synthesis enablement. Unavailable hosts show the reason. See the
+[web conversation contract](../app/web/docs/voice-conversation.md) for
+auto-send, spoken content and interruption behavior.
+
 `speechConversation` is independent of offline dictation's `speechToText` group.
 Its registry entries use the Dictation section. It defaults to enabled, the
 first installed streaming model, four threads, a 600-second idle shutdown, and
@@ -158,7 +166,10 @@ unavailable and the voice names for the picker. User enablement is separate from
 host capability. Thread changes reload the model on the next request; voice and
 speed changes reuse it. Preview requests may override voice/speed without saving
 settings, using
-[the synthesis endpoint](reference/server-speech.md#kokoro-synthesis).
+[the synthesis endpoint](reference/server-speech.md#kokoro-synthesis). The
+Dictation page provides the named voice picker, speed and Preview voice. Preview
+uses current local voice/speed values even before a settings echo; stopping it,
+hiding the page or leaving Settings cancels fetch and playback.
 
 ## Personal Assistant working directory
 

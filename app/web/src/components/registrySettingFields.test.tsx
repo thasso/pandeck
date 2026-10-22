@@ -59,22 +59,12 @@ test("every setting that needs hand-built UI is claimed", () => {
   );
 });
 
-test("generic settings include the streaming conversation controls", () => {
+test("voice settings are claimed by their dedicated UI", () => {
   const unclaimed = SETTINGS_REGISTRY.filter(
     (d) => !CLAIMED_SETTING_PATHS.has(d.path),
   ).map((d) => d.path);
   expect(unclaimed).toEqual([
     "accountRouting.openAiResetAutoRedeemHours",
-    "speechConversation.enabled",
-    "speechConversation.modelId",
-    "speechConversation.numThreads",
-    "speechConversation.idleShutdownSeconds",
-    "speechConversation.endpointSilenceSeconds",
-    "speechSynthesis.enabled",
-    "speechSynthesis.voice",
-    "speechSynthesis.speed",
-    "speechSynthesis.numThreads",
-    "speechSynthesis.idleShutdownSeconds",
     "tempo.authorAccountId",
   ]);
 });

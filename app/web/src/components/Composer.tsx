@@ -30,6 +30,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  type AppSettings,
+  type DisplayMessage,
   type ContextInfo,
   type EntrySummary,
   type ModelOption,
@@ -51,6 +53,8 @@ import { insertTranscript } from "../lib/insertTranscript.ts";
 import { refineText } from "../lib/refineText.ts";
 import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 import { useDictation } from "../hooks/useDictation.ts";
+import { useConversation } from "../hooks/useConversation.ts";
+import { VOICE_REPLY_HINT } from "../lib/conversationText.ts";
 import { useTouchComposerMode } from "../hooks/useTouchComposerMode.ts";
 import type {
   NewPendingChatComment,
@@ -112,7 +116,7 @@ import {
   composerFoldClass,
 } from "./common/composerShell.ts";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
-import { EmptyBox } from "./common/load.tsx";
+import { EmptyBox, ErrorNote } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
 import { localStore } from "../lib/localStore.ts";
@@ -295,6 +299,13 @@ interface Props {
    * reason rather than failing at the first press.
    */
   dictation?: { enabled: boolean; status: SpeechToTextStatus | null };
+  /** Only the active chat supplies prose; secondary composers never speak it. */
+  conversation?: {
+    settings: Pick<AppSettings, "speechConversation" | "speechSynthesis">;
+    messages: readonly DisplayMessage[];
+    getMessages: () => readonly DisplayMessage[];
+    onActiveChange: (active: boolean) => void;
+  };
 }
 
 interface AttachmentDraft extends PromptAttachment {
@@ -927,6 +938,7 @@ export const Composer = memo(function Composer({
   onCommentDraftChange,
   collapseWhenBlurred = false,
   dictation,
+  conversation,
 }: Props) {
   usePerfRenderCount("Composer");
   const [text, setText] = useBrowserDraft(draftStorageKey);
@@ -1459,8 +1471,8 @@ export const Composer = memo(function Composer({
     clearBrowserDraft(draftStorageKey);
   };
 
-  const submit = (alternate = false) => {
-    if (disabled || !canSend || sendBlocked || sendBlockedReason) return;
+  const submit = (alternate = false, voiceText?: string) => {
+    if (disabled || !canSend || sendBlocked || sendBlockedReason) return false;
     const steerNow = alternate && providerCanSteer;
     const outgoing = attachments.map(
       ({ previewUrl: _previewUrl, ...attachment }) => attachment,
@@ -1474,7 +1486,7 @@ export const Composer = memo(function Composer({
         });
       else onSend(prompt, outgoing);
     };
-    const value = text.trim();
+    const value = voiceText ?? text.trim();
     const pendingComments = chatComments?.comments ?? [];
     if (!value && attachments.length === 0 && pendingComments.length === 0)
       return;
@@ -1576,7 +1588,31 @@ export const Composer = memo(function Composer({
     clearSentText();
     setAttachmentError(null);
     finishSubmit();
+    return true;
   };
+
+  const voice = useConversation({
+    instanceId: `${dictationInstanceId}-conversation`,
+    sessionId: session?.sessionId,
+    disabled:
+      disabled || Boolean(sendBlocked || sendBlockedReason) || commentMode,
+    settings: conversation?.settings,
+    status: dictation?.status ?? null,
+    messages: conversation?.messages ?? [],
+    ...(conversation ? { getMessages: conversation.getMessages } : {}),
+    streaming,
+    onFinal: (spoken) =>
+      submit(false, `${spoken}\n\n${VOICE_REPLY_HINT}`) === true,
+  });
+
+  const onConversationActiveChange = conversation?.onActiveChange;
+  useEffect(() => {
+    onConversationActiveChange?.(voice.active);
+  }, [onConversationActiveChange, voice.active]);
+  useEffect(
+    () => () => onConversationActiveChange?.(false),
+    [onConversationActiveChange],
+  );
 
   // After sending, drop the pin and — where the composer collapses (mobile / the
   // inspector footer) — blur so the virtual keyboard closes and it returns to the
@@ -1992,6 +2028,32 @@ export const Composer = memo(function Composer({
             />
           ) : null}
         </ChatDockPanel>
+        {conversation && (voice.active || voice.error) && (
+          <ComposerLedge joined={!hidden} keepWithKeyboard>
+            <div
+              className="flex items-center gap-2 px-3 py-2 text-sm"
+              aria-live="polite"
+            >
+              <div className="min-w-0 flex-1">
+                {voice.error ? (
+                  <ErrorNote message={voice.error} />
+                ) : (
+                  <>
+                    <div className="text-muted-foreground">
+                      Conversation: {voice.phase}
+                    </div>
+                    {voice.partial && <div>{voice.partial}</div>}
+                  </>
+                )}
+              </div>
+              {voice.active && (
+                <Button variant="ghost" size="sm" onClick={voice.toggle}>
+                  Stop conversation
+                </Button>
+              )}
+            </div>
+          </ComposerLedge>
+        )}
         {slashMenuOpen ? (
           // The command menu is a strip of its own on the shelf while a slash
           // is typed, standing in for the resting strips rather than floating
@@ -2273,6 +2335,23 @@ export const Composer = memo(function Composer({
                   >
                     <WandSparkles />
                   </IconButton>
+                  {conversation && (
+                    <Button
+                      variant={voice.active ? "secondary" : "ghost"}
+                      size="sm"
+                      aria-pressed={voice.active}
+                      onClick={voice.toggle}
+                      disabled={
+                        !voice.active && Boolean(voice.unavailableReason)
+                      }
+                      title={
+                        voice.unavailableReason ??
+                        "Hands-free conversation. Pausing sends your words automatically."
+                      }
+                    >
+                      Conversation
+                    </Button>
+                  )}
                   {dictationAvailable && (
                     <IconButton
                       label="Start dictation"

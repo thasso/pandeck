@@ -798,13 +798,15 @@ its ports 46000 to 46999 blocked by the host firewall; app connections use
 ### Kokoro speech synthesis
 
 Kokoro 82M v1.0 fp32 is a separate optional host capability. The app ships only
-its sidecar source and model catalog, never Python, sherpa-onnx or weights in
-its closure. Provide a Python with `python3Packages.sherpa-onnx`, such as a
-host-owned `pkgs.python3.withPackages (p: [ p.sherpa-onnx ])`, and point
-`speech.ttsPython` at its interpreter. This sets `ASSISTANT_TTS_PYTHON`; without
-an override the server searches PATH for `python3`. Startup probes the import
-through the broker, without loading weights, and reports an unavailable reason
-under `ready.speechToText.tts`. Runtime changes require a server restart.
+its sidecar source and model catalog. TTS adds neither sherpa-onnx nor model
+weights to the app closure. Git already brings Python into the app closure
+transitively; TTS does not add its own Python runtime. Provide a Python with
+`python3Packages.sherpa-onnx`, such as a host-owned
+`pkgs.python3.withPackages (p: [ p.sherpa-onnx ])`, and point `speech.ttsPython`
+at its interpreter. This sets `ASSISTANT_TTS_PYTHON`; without an override the
+server searches PATH for `python3`. Startup probes the import through the
+broker, without loading weights, and reports an unavailable reason under
+`ready.speechToText.tts`. Runtime changes require a server restart.
 
 `speech.ttsModelDir` sets `ASSISTANT_TTS_MODEL_DIR` to the complete
 `kokoro-multi-lang-v1_0` directory. Keep `model.onnx`, `voices.bin`,

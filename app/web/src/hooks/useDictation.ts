@@ -24,6 +24,7 @@ import type {
 } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "../lib/serverOrigin.ts";
 import { recordTranscript } from "../lib/recentTranscripts.ts";
+import { microphoneOwner as owner } from "../lib/microphoneOwner.ts";
 import { framePeaks, PEAKS_PER_FRAME, PeakRing } from "../lib/waveform.ts";
 import {
   requestScreenWakeLock,
@@ -45,26 +46,6 @@ const WAVEFORM_SECONDS = 6;
 const DRAIN_TIMEOUT_MS = 4000;
 /** Pending bytes above which the UI should say "uploading" rather than spin. */
 const BACKLOG_HINT_BYTES = 96 * 1024;
-
-/** Module-level single-owner lock across all mounted composers. */
-const owner = {
-  id: null as string | null,
-  listeners: new Set<() => void>(),
-  claim(id: string): boolean {
-    if (this.id !== null && this.id !== id) return false;
-    this.id = id;
-    this.notify();
-    return true;
-  },
-  release(id: string): void {
-    if (this.id !== id) return;
-    this.id = null;
-    this.notify();
-  },
-  notify(): void {
-    for (const listener of this.listeners) listener();
-  },
-};
 
 export interface UseDictationOptions {
   /** Stable id for this composer instance, used for the single-owner lock. */

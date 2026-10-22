@@ -104,6 +104,7 @@ import { serverHttpOrigin } from "../lib/serverOrigin.ts";
 import { startGoogleOAuth } from "../lib/googleOAuth.ts";
 import { settingBounds } from "@assistant/shared/settingsRegistry";
 import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
+import { VoiceSettings } from "./VoiceSettings.tsx";
 import {
   createCredentialProfile,
   limitedAccountDescription,
@@ -2119,9 +2120,9 @@ function DictationSection({
       <h2 className="text-sm font-semibold">Dictation</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         The composer mic button transcribes speech locally on this machine — no
-        audio leaves the server, and no external service is involved. Hold the
-        button to talk, or tap it to keep recording hands-free; the transcript
-        lands in the draft and is never sent for you.
+        audio goes to an external service. Tap to start, then tap to stop. The
+        transcript lands in the draft and is never sent for you. Conversation
+        mode below sends automatically instead.
       </p>
 
       {status && (
@@ -2310,6 +2311,8 @@ function DictationSection({
           </div>
         </SettingsCard>
       )}
+
+      <VoiceSettings settings={settings} status={status} onUpdate={onUpdate} />
 
       <Advanced>
         <div className="space-y-3 p-1">
