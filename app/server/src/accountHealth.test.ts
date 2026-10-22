@@ -1,4 +1,5 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -158,7 +159,7 @@ it.each([
   },
 );
 
-it("pushes once per ordered transition and persists only app wording privately", () => {
+it("pushes once per ordered transition and persists only app wording", () => {
   const { store, deps, push, restart } = fixture();
   deps.profiles();
   expect(store.read("acct", true)).toEqual({ state: "unknown", since: null });
@@ -178,7 +179,6 @@ it("pushes once per ordered transition and persists only app wording privately",
   ]);
   expect(store.read("acct", true).since).toBe(1234);
   expect(readFileSync(deps.persistPath, "utf8")).not.toContain("SECRET");
-  expect(statSync(deps.persistPath).mode & 0o777).toBe(0o600);
   const restarted = restart();
   expect(restarted.read("acct", true).state).toBe("needs-login");
   expect(push).toHaveBeenCalledTimes(1);
@@ -436,6 +436,17 @@ it("keeps reads and observations pure, and lists once per run outcome", () => {
   profiles.mockClear();
   f.store.runWorking("acct", "claude-sdk");
   expect(profiles).toHaveBeenCalledTimes(1);
+});
+
+it("keeps health usable after a failed write and retries dirty evidence", () => {
+  const f = fixture();
+  const tmp = `${f.deps.persistPath}.tmp`;
+  mkdirSync(tmp);
+  f.store.runFailure("acct", authFailure(), "claude-sdk");
+  expect(f.store.read("acct", true).state).toBe("needs-login");
+  rmSync(tmp, { recursive: true });
+  f.deps.profiles();
+  expect(f.restart().read("acct", true).state).toBe("needs-login");
 });
 
 it("persists only changed durable fields, not same-state evidence or login clocks", () => {

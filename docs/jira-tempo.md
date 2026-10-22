@@ -19,6 +19,14 @@ integrations" epic; it is the source of truth the implementing slices reference.
 The two integrations enable, configure, test, and gate their tools
 independently.
 
+## Jira cache files
+
+`jiraCacheFile.ts` owns host-safe paths under `DATA_DIR/cache/jira` and tolerant
+JSON reads. Its writes use `privateJsonFile.ts` for pretty JSON with a trailing
+newline and atomic rename of a `0600` temporary file. Even a leftover temporary
+file is tightened before writing. The cache consumers keep their own TTLs and
+normalization; missing or corrupt files still read as `null`.
+
 ## Dependency: Tempo needs Jira
 
 Tempo's OAuth token authorizes only the Tempo API. Tempo reuses the Jira

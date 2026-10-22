@@ -1,11 +1,5 @@
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   AccountHealth,
   AccountLoginAlert,
@@ -24,6 +18,7 @@ import type {
 import type { AgentStopReason } from "@assistant/shared/session";
 import { DATA_DIR } from "./config.ts";
 import { AccountBenchStore } from "./accountBench.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { analyzeProviderError, runFailureFacts } from "./providerErrors.ts";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
 import type { RunFailureReport } from "./session/runtime/liveSession.ts";
@@ -433,12 +428,7 @@ export class AccountHealthStore {
   private persist(): void {
     if (!this.dirty) return;
     try {
-      mkdirSync(dirname(this.deps.persistPath), {
-        recursive: true,
-        mode: 0o700,
-      });
-      const tmp = `${this.deps.persistPath}.tmp`;
-      const entries = [
+      const entries: [string, AccountHealth & { wasConnected: boolean }][] = [
         ...new Set([...this.health.keys(), ...this.wasConnected]),
       ].map((id) => [
         id,
@@ -447,11 +437,10 @@ export class AccountHealthStore {
           wasConnected: this.wasConnected.has(id),
         },
       ]);
-      writeFileSync(tmp, `${JSON.stringify(Object.fromEntries(entries))}\n`, {
-        mode: 0o600,
-      });
-      chmodSync(tmp, 0o600);
-      renameSync(tmp, this.deps.persistPath);
+      createPrivateJsonFile(this.deps.persistPath, "Account health", {
+        privateDirectory: "create",
+        compact: true,
+      }).write(Object.fromEntries(entries));
       this.dirty = false;
     } catch {
       /* Health remains usable when persistence fails. */

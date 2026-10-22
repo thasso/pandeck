@@ -46,6 +46,16 @@ all: the native shell is a WKWebView, which implements neither `Notification`
 nor `PushManager`, so the Declarative Web Push flow Settings offers cannot even
 subscribe there. On macOS that is the only route the app has.
 
+## Private push state
+
+`webPushStore.ts` persists VAPID keys and subscriptions under
+`DATA_DIR/web-push`; `apnsStore.ts` persists device registrations under
+`DATA_DIR/apns`. Both use `privateJsonFile.ts` for atomic JSON writes,
+tightening their immediate directory to `0700` before writing a `0600` temporary
+file and renaming it. Validation and read-error behavior stay in the stores. The
+APNs credential is read-only, including when configured outside `DATA_DIR`, and
+the writer never changes its contents or permissions.
+
 ## Who acts on the socket copy
 
 The server broadcasts `appNotification` to every connected client and does not

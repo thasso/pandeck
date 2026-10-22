@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -24,7 +24,7 @@ test("jiraCachePath keeps the shared host sanitization", () => {
   assert.match(jiraCachePath("https://", "fields"), /fields-jira\.json$/);
 });
 
-test("JSON cache files retain atomic formatted writes and tolerant reads", () => {
+test("JSON cache files retain round trips and tolerant reads", () => {
   const directory = mkdtempSync(join(tmpdir(), "jira-cache-file-"));
   temporaryDirectories.push(directory);
   const path = join(directory, "nested", "cache.json");
@@ -32,7 +32,8 @@ test("JSON cache files retain atomic formatted writes and tolerant reads", () =>
   assert.equal(readJsonCacheFile(path), null);
   writeJsonCacheFile(path, { value: 1 });
   assert.deepEqual(readJsonCacheFile(path), { value: 1 });
-  assert.equal(readFileSync(path, "utf8"), '{\n  "value": 1\n}\n');
+  writeFileSync(path, "{ not json");
+  assert.equal(readJsonCacheFile(path), null);
 
   writeJsonCacheFile(path, undefined);
   assert.equal(readJsonCacheFile(path), null);

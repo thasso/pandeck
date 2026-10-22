@@ -225,16 +225,30 @@ The Brave, Confluence, Context7, Forgejo, GitHub, Google, Jira,
 OpenAI-compatible, Slack and Tempo stores use
 `app/server/src/privateJsonFile.ts` for private JSON persistence. The helper
 owns the path and error label, passes missing files to the caller's normalizer
-as `undefined`, and does not cache. Settings modules keep their domain
-normalization, validation and public projections. Forgejo keeps its cache and
-updates it only after a successful write.
+as `undefined`, and does not cache. Its write path is also shared by Web Push,
+APNs device lists, account health and benches, usage snapshots and Jira caches.
+Those stores keep their own read paths and error handling. Settings modules keep
+their domain normalization, validation and public projections. Forgejo keeps its
+cache and updates it only after a successful write.
 
 Writes create the parent directory, open `<path>.tmp` with mode `0600`, and
-`fchmod` the open file to `0600` before writing any settings. This also tightens
-a temporary file left with broader permissions by an interrupted write. The
-helper writes pretty JSON with a trailing newline, closes the file, then
-atomically replaces the destination by renaming the temporary file. It does not
-provide concurrent-writer coordination or crash durability through `fsync`.
+`fchmod` the open file to `0600` before writing any JSON. This also tightens a
+temporary file left with broader permissions by an interrupted write. The helper
+writes pretty JSON with a trailing newline, closes the file, then atomically
+replaces the destination by renaming the temporary file. It does not provide
+concurrent-writer coordination or crash durability through `fsync`.
+
+Stores with compact files request `compact: true`; pretty JSON remains the
+default. `privateDirectory: "create"` creates parents with mode `0700` without
+changing an existing parent's mode. `privateDirectory: "enforce"` also tightens
+the immediate parent to `0700` before opening the temporary file. Web Push and
+APNs require enforcement; health, benches and usage retain creation-only
+privacy. Other callers keep ordinary parent-directory creation.
+
+The credential-profile registry is not a fixed-temporary-file store. It keeps
+its per-write PID/UUID temporary names, separate from this helper. Its provider
+credential trees and one-time import marker are also separate contracts, as is
+`authToken.ts`'s create-exclusive, non-JSON token file.
 
 Settings-file read errors keep each store's existing name and path but never
 quote the file: a `JSON.parse` failure reads "the file is not valid JSON"

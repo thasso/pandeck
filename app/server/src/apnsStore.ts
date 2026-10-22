@@ -7,17 +7,11 @@
  * imposes — a signing key we cannot generate for ourselves (unlike VAPID), and a
  * token that is only valid against ONE of Apple's two hosts.
  */
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ApnsEnvironment } from "@assistant/shared";
 import { APNS_CREDENTIAL_PATH, DATA_DIR } from "./config.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 
 const STORE_VERSION = 1;
 const APNS_DIR = join(DATA_DIR, "apns");
@@ -28,6 +22,9 @@ const APNS_DIR = join(DATA_DIR, "apns");
  */
 const CREDENTIAL_PATH = APNS_CREDENTIAL_PATH;
 const DEVICES_PATH = join(APNS_DIR, "devices.json");
+const devicesFile = createPrivateJsonFile(DEVICES_PATH, "APNs devices", {
+  privateDirectory: "enforce",
+});
 /** A device token is 32 bytes of hex today; Apple reserves the right to grow it. */
 const TOKEN_RE = /^[0-9a-f]{64,200}$/;
 const KEY_ID_RE = /^[A-Z0-9]{10}$/;
@@ -83,23 +80,6 @@ export interface StoredApnsDevice {
 interface StoredDevicesFile {
   version: 1;
   devices: StoredApnsDevice[];
-}
-
-function ensureStoreDir(): void {
-  mkdirSync(APNS_DIR, { recursive: true, mode: 0o700 });
-  chmodSync(APNS_DIR, 0o700);
-}
-
-function writePrivateJson(path: string, value: unknown): void {
-  ensureStoreDir();
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
-  chmodSync(path, 0o600);
 }
 
 function matching(value: unknown, pattern: RegExp, field: string): string {
@@ -209,7 +189,7 @@ function readDevicesFile(): StoredDevicesFile {
 }
 
 function writeDevices(devices: StoredApnsDevice[]): void {
-  writePrivateJson(DEVICES_PATH, {
+  devicesFile.write({
     version: STORE_VERSION,
     devices,
   } satisfies StoredDevicesFile);
