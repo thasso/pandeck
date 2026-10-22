@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4000 reason="Rules guard credential origins, harness boundaries, storage-only views and spawn admission. Parsing a 51 MB pi transcript added 1.7s to opening a view; forking this 1.3 GB server froze every connection." task=agent-harnesses date=2026-10-04 -->
+<!-- instruction-budget: bytes=4000 reason="Guard credential origins, harness boundaries, storage-only views and spawn admission. A 51 MB transcript cost 1.7s; forking this 1.3 GB server froze connections." task=agent-harnesses date=2026-10-04 -->
 
 # Server modules
 
@@ -36,10 +36,9 @@
   `tools/list_changed`, never by restart or tool-array patching.
 - Background work enters only through `admitBackgroundWork`; provider hooks and
   tools never write its rows directly.
-- Request/watch/list children use `spawnBroker.ts`: forking this server stalls
-  connections. Only warm speech model processes may spawn directly, at most once
-  per warm-up: they need PID-held lifetime control and SIGKILL escalation, which
-  the broker cannot provide.
+- Request/watch/list children use `spawnBroker.ts`: server forks stall
+  connections. Only warm speech models may spawn directly, once per warm-up, for
+  PID lifetime control and SIGKILL escalation unavailable in the broker.
 - Git mutations to a WORKING TREE, INDEX, or LOCAL ref use
   `withRepoLock(await repoLockKey(cwd), …)` from `gitExec.ts`, never a checkout
   key or nested lock. Only network-bound work is lock-free: fetch/push, creation
