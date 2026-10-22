@@ -66,13 +66,72 @@ function readyMessage(): ServerMessage {
 let latestActions: AssistantActions;
 let latestState: UIState;
 
-function ProjectHarness() {
+function ProjectHarness({ held = true }: { held?: boolean }) {
   const { actions, state } = useAssistant();
   latestActions = actions;
   latestState = state;
-  useEffect(() => actions.setTopics(["projects"]), [actions]);
+  useEffect(() => actions.setTopics(held ? ["projects"] : []), [actions, held]);
   return null;
 }
+
+async function connected() {
+  await act(async () => root.render(<ProjectHarness />));
+  const socket = ScenarioSocket.instances[0]!;
+  await act(async () => {
+    socket.open();
+    socket.receive(readyMessage());
+  });
+  return socket;
+}
+
+const projectSubscribes = (messages: ClientMessage[]) =>
+  messages.filter(
+    (message): message is Extract<ClientMessage, { type: "subscribe" }> =>
+      message.type === "subscribe" && message.topics.includes("projects"),
+  );
+const resubscribes = (messages: ClientMessage[]) =>
+  messages.filter(
+    (message) =>
+      (message.type === "subscribe" || message.type === "unsubscribe") &&
+      message.topics.includes("projects"),
+  );
+const snapshotPair: ClientMessage[] = [
+  { type: "unsubscribe", topics: ["projects"] },
+  { type: "subscribe", topics: ["projects"] },
+];
+const projectRow = (name: string) => ({ id: "a", name, key: "AA" });
+const canonicalList = (seq: number, name = "Alpha", revision = 1) =>
+  ({
+    type: "projectList",
+    list: {
+      request: { includeArchived: true },
+      projects: [projectRow(name)],
+      updatedAt: seq,
+    },
+    seq,
+    revisions: [{ id: "a", revision }],
+  }) satisfies ServerMessage;
+const itemFetch = (messages: ClientMessage[]) => {
+  const fetch = messages.findLast(
+    (message) =>
+      message.type === "getStateItems" && message.topic === "projects",
+  );
+  if (fetch?.type !== "getStateItems") throw new Error("no item fetch");
+  return fetch;
+};
+const rejectSave = (socket: ScenarioSocket) => {
+  const save = socket.sent.findLast(
+    (message) => message.type === "saveProject" && message.id === "a",
+  );
+  if (save?.type !== "saveProject" || !save.requestId)
+    throw new Error("no save");
+  socket.receive({
+    type: "error",
+    requestId: save.requestId,
+    message: "Save rejected",
+  });
+};
+const projectName = () => latestState.projectList?.projects[0]?.name;
 
 let root: Root;
 let container: HTMLDivElement;
@@ -105,6 +164,8 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("Project socket/reducer scenario", () => {
@@ -194,101 +255,286 @@ describe("Project socket/reducer scenario", () => {
     expect(latestState.projectMutations["b:remove"]?.status).toBe("loading");
   });
 
-  it("a full snapshot resets digest recovery and the projects seq tripwire", async () => {
-    await act(async () => root.render(<ProjectHarness />));
-    const socket = ScenarioSocket.instances[0]!;
-    await act(async () => {
-      socket.open();
-      socket.receive(readyMessage());
-    });
-    expect(
-      socket.sent.some(
-        (message) =>
-          message.type === "subscribe" &&
-          message.topics.includes("projects") &&
-          message.digests?.includes("projects"),
-      ),
-    ).toBe(true);
-
-    await act(async () => {
+  it("applies a complete digest catch-up and asks for nothing more", async () => {
+    const socket = await connected();
+    await act(async () =>
       socket.receive({
         type: "stateDigest",
         topic: "projects",
         seq: 4,
         entries: [{ id: "a", revision: 2 }],
-      });
-    });
-    const targeted = socket.sent.find(
-      (message) =>
-        message.type === "getStateItems" && message.topic === "projects",
+      }),
     );
-    expect(targeted?.type).toBe("getStateItems");
-
-    const fullReadsBeforeFiltered = socket.sent.filter(
-      (message) => message.type === "listProjects",
-    ).length;
-    await act(async () => {
+    const fetch = itemFetch(socket.sent);
+    expect(fetch.ids).toEqual(["a"]);
+    const sentBefore = socket.sent.length;
+    await act(async () =>
       socket.receive({
-        type: "projectList",
-        list: {
-          request: { query: "Alpha" },
-          projects: [{ id: "a", name: "Filtered Alpha", key: "AA" }],
-          updatedAt: 2,
-        },
-        seq: 99,
-        revisions: [{ id: "a", revision: 2 }],
-      });
-      if (targeted?.type === "getStateItems")
-        socket.receive({
-          type: "stateItems",
-          topic: "projects",
-          requestId: targeted.requestId,
-          events: [
-            {
-              kind: "upsert",
-              id: "a",
-              revision: 2,
-              item: { id: "a", name: "Alpha two", key: "AA" },
-            },
-          ],
-        });
-    });
-    expect(
-      socket.sent.filter((message) => message.type === "listProjects"),
-    ).toHaveLength(fullReadsBeforeFiltered);
-
-    await act(async () => {
-      socket.receive({
-        type: "projectList",
-        list: {
-          request: { includeArchived: true },
-          projects: [{ id: "a", name: "Alpha two", key: "AA" }],
-          updatedAt: 2,
-        },
-        seq: 5,
-        revisions: [{ id: "a", revision: 2 }],
-      });
-      socket.receive({
-        type: "stateEvents",
+        type: "stateItems",
         topic: "projects",
-        seq: 6,
+        requestId: fetch.requestId,
         events: [
           {
             kind: "upsert",
             id: "a",
-            revision: 3,
-            item: { id: "a", name: "Alpha three", key: "AA" },
+            revision: 2,
+            item: projectRow("Alpha two"),
           },
         ],
-      });
-    });
+      }),
+    );
+    expect(projectName()).toBe("Alpha two");
+    expect(latestState.projectListFresh).toBe(true);
+    expect(socket.sent.slice(sentBefore)).toEqual([]);
+  });
 
+  it("falls back to a snapshot when a rejected save's recovery answers incompletely", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const socket = await connected();
+    await act(async () => {
+      latestActions.saveProject("a", { name: "Attempted name" });
+    });
+    await act(async () => rejectSave(socket));
+    const recovery = itemFetch(socket.sent);
+    const sentBefore = socket.sent.length;
+    await act(async () =>
+      socket.receive({
+        type: "stateItems",
+        topic: "projects",
+        requestId: recovery.requestId,
+        events: [],
+      }),
+    );
+    expect(socket.sent.slice(sentBefore)).toEqual(snapshotPair);
+    expect(warn).toHaveBeenCalledWith(
+      "[state-sync] projects recovery fallback: targeted item response was incomplete",
+    );
+    expect(latestState.stateEventRevisions.projects).not.toHaveProperty("a");
+  });
+
+  it("falls back from a digest over an untrusted baseline by resubscribing, not listProjects", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // A cached list with no revisions is no baseline for a digest.
+    writeAppShellCacheRecord({
+      version: 1,
+      savedAt: Date.now(),
+      models: [],
+      agents: [],
+      sessions: [],
+      settings: {},
+      slashCommands: [],
+      projectList: {
+        request: { includeArchived: true },
+        projects: [projectRow("Alpha")],
+        updatedAt: 1,
+      },
+    });
+    const socket = await connected();
+    expect(projectSubscribes(socket.sent)).toEqual([
+      { type: "subscribe", topics: ["projects"] },
+    ]);
+    const sentBefore = socket.sent.length;
+    await act(async () =>
+      socket.receive({
+        type: "stateDigest",
+        topic: "projects",
+        seq: 4,
+        entries: [{ id: "a", revision: 1 }],
+      }),
+    );
+    expect(socket.sent.slice(sentBefore)).toEqual(snapshotPair);
+    expect(warn).toHaveBeenCalledWith(
+      "[state-sync] projects digest fallback: cached objects or revisions were invalid",
+    );
+  });
+
+  /**
+   * A recovery that cannot complete leaves the optimistic value on screen with
+   * a revision beside it that a digest would trust. Here the topic was let go
+   * first, so nothing may be resubscribed: the next subscribe must instead ask
+   * for the snapshot that restores the server's value.
+   */
+  it("makes the next subscribe a snapshot when an unheld recovery times out", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const socket = await connected();
+    await act(async () => socket.receive(canonicalList(1)));
+    vi.useFakeTimers();
+    await act(async () => {
+      latestActions.saveProject("a", { name: "Attempted name" });
+    });
+    expect(projectName()).toBe("Attempted name");
+    await act(async () => root.render(<ProjectHarness held={false} />));
     expect(
       socket.sent.filter(
         (message) =>
           message.type === "unsubscribe" && message.topics.includes("projects"),
       ),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
+    const droppedAt = socket.sent.length;
+    await act(async () => rejectSave(socket));
+    itemFetch(socket.sent.slice(droppedAt));
+
+    await act(async () => vi.advanceTimersByTime(10_001));
+    expect(projectSubscribes(socket.sent.slice(droppedAt))).toEqual([]);
+    expect(latestState.stateEventRevisions.projects).not.toHaveProperty("a");
+    expect(warn).toHaveBeenCalledWith(
+      "[state-sync] projects recovery fallback: targeted item fetch timed out",
+    );
+
+    await act(async () => root.render(<ProjectHarness />));
+    expect(projectSubscribes(socket.sent.slice(droppedAt))).toEqual([
+      { type: "subscribe", topics: ["projects"] },
+    ]);
+    await act(async () => socket.receive(canonicalList(2)));
+    expect(projectName()).toBe("Alpha");
+
+    // The snapshot re-seeded the baseline: a later re-take digests again.
+    await act(async () => root.render(<ProjectHarness held={false} />));
+    const retakenAt = socket.sent.length;
+    await act(async () => root.render(<ProjectHarness />));
+    expect(projectSubscribes(socket.sent.slice(retakenAt))).toEqual([
+      { type: "subscribe", topics: ["projects"], digests: ["projects"] },
+    ]);
+  });
+
+  it("makes the reconnect a snapshot when a recovery is open at the disconnect", async () => {
+    const socket = await connected();
+    vi.useFakeTimers();
+    await act(async () => {
+      latestActions.saveProject("a", { name: "Attempted name" });
+    });
+    await act(async () => rejectSave(socket));
+    itemFetch(socket.sent);
+    await act(async () => socket.close());
+    expect(latestState.stateEventRevisions.projects).not.toHaveProperty("a");
+    await act(async () => vi.advanceTimersByTime(1_000));
+    const next = ScenarioSocket.instances[1]!;
+    await act(async () => next.open());
+    expect(projectSubscribes(next.sent)).toEqual([
+      { type: "subscribe", topics: ["projects"] },
+    ]);
+    // The dropped recovery's timer is gone with it.
+    await act(async () => vi.advanceTimersByTime(10_001));
+    expect(resubscribes(next.sent)).toHaveLength(1);
+  });
+
+  /**
+   * A filtered list answers one read; it is no snapshot of the topic. It must
+   * neither cancel the catch-up in flight nor rebaseline the seq, which only
+   * the canonical list may do.
+   */
+  it("lets only the canonical list rebaseline the seq or cancel the catch-up", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const socket = await connected();
+    expect(
+      projectSubscribes(socket.sent).some((message) =>
+        message.digests?.includes("projects"),
+      ),
+    ).toBe(true);
+    await act(async () =>
+      socket.receive({
+        type: "stateDigest",
+        topic: "projects",
+        seq: 4,
+        entries: [{ id: "a", revision: 2 }],
+      }),
+    );
+    const fetch = itemFetch(socket.sent);
+    await act(async () => {
+      socket.receive({
+        type: "projectList",
+        list: {
+          request: { query: "Alpha" },
+          projects: [projectRow("Filtered Alpha")],
+          updatedAt: 2,
+        },
+        seq: 99,
+        revisions: [{ id: "a", revision: 2 }],
+      });
+      socket.receive({
+        type: "stateItems",
+        topic: "projects",
+        requestId: fetch.requestId,
+        events: [
+          {
+            kind: "upsert",
+            id: "a",
+            revision: 2,
+            item: projectRow("Alpha two"),
+          },
+        ],
+      });
+    });
+    // The catch-up was still open: it applied and settled the list.
+    expect(projectName()).toBe("Alpha two");
+    expect(latestState.projectListFresh).toBe(true);
+
+    // Seq 5 continues the digest's 4; had 99 been adopted, this would gap.
+    const sentBefore = socket.sent.length;
+    await act(async () =>
+      socket.receive({
+        type: "stateEvents",
+        topic: "projects",
+        seq: 5,
+        events: [
+          {
+            kind: "upsert",
+            id: "a",
+            revision: 3,
+            item: projectRow("Alpha three"),
+          },
+        ],
+      }),
+    );
+    expect(resubscribes(socket.sent.slice(sentBefore))).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(projectName()).toBe("Alpha three");
+
+    await act(async () => {
+      socket.receive(canonicalList(10, "Alpha three", 3));
+      socket.receive({
+        type: "stateEvents",
+        topic: "projects",
+        seq: 11,
+        events: [
+          {
+            kind: "upsert",
+            id: "a",
+            revision: 4,
+            item: projectRow("Alpha four"),
+          },
+        ],
+      });
+    });
+    expect(resubscribes(socket.sent.slice(sentBefore))).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(projectName()).toBe("Alpha four");
+  });
+
+  it("resubscribes for a snapshot, never a digest, on a seq gap", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const socket = await connected();
+    await act(async () => socket.receive(canonicalList(3)));
+    const sentBefore = socket.sent.length;
+    await act(async () =>
+      socket.receive({
+        type: "stateEvents",
+        topic: "projects",
+        seq: 5,
+        events: [
+          {
+            kind: "upsert",
+            id: "a",
+            revision: 2,
+            item: projectRow("Alpha two"),
+          },
+        ],
+      }),
+    );
+    expect(socket.sent.slice(sentBefore)).toEqual(snapshotPair);
+    expect(warn).toHaveBeenCalledWith(
+      "[state-sync] projects event gap: expected seq 4, got 5; resubscribing.",
+    );
   });
 
   /**

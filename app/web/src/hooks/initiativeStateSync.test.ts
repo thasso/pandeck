@@ -1,12 +1,18 @@
 /**
- * The reducer half of the `initiatives` topic (docs/initiatives.md): the
- * subscribe snapshot is authoritative, events apply by revision through the
- * shared `applyEvent` seam, and an unchanged echo keeps every identity.
+ * The reducer half of the `initiatives` topic (docs/initiatives.md): its
+ * replica descriptor's policy. A newly seen row goes last, and a snapshot, a
+ * digest or an event judges the held keyed reads; the digest and its catch-up
+ * settle the list's refresh. The generic revision and identity mechanics are
+ * the replica contract's (`lib/stateReplica.test.ts`).
  *   pnpm --filter @assistant/web test src/hooks/initiativeStateSync.test.ts
  */
 import { describe, expect, it } from "vitest";
 import type { InitiativeSummary, ServerMessage } from "@assistant/shared";
-import { createInitialState, reduceAssistantState } from "./useAssistant.ts";
+import {
+  createInitialState,
+  reduceAssistantState,
+  type UIState,
+} from "./useAssistant.ts";
 import {
   HOSTED_LABS_DETAIL,
   HOSTED_LABS_LAYOUT,
@@ -48,62 +54,147 @@ describe("the initiatives projection", () => {
     expect(state.stateEventRevisions.initiatives).toEqual({ "1": 1 });
   });
 
-  it("applies newer events and keeps identity for an unchanged echo", () => {
-    const seeded = apply(
-      undefined,
-      snapshot([summary({ id: "1" }), summary({ id: "2" })]),
+  /** `ids` each with a ready keyed read, taken at revision 1. */
+  const withReads = (state: UIState, ...ids: string[]) =>
+    ids.reduce(
+      (current, id) =>
+        reduceAssistantState(
+          reduceAssistantState(current, { kind: "initiativeDetailLoad", id }),
+          {
+            kind: "initiativeDetailResult",
+            id,
+            read: { item: { ...HOSTED_LABS_DETAIL, id } },
+            revision: 1,
+          },
+        ),
+      state,
     );
-    const untouched = seeded.initiatives[0];
-    const moved = apply(seeded, {
+
+  it("appends a newly seen row and re-reads a held read an event moves past", () => {
+    const seeded = withReads(
+      apply(undefined, snapshot([summary({ id: "1" }), summary({ id: "2" })])),
+      "1",
+      "2",
+    );
+    const next = apply(seeded, {
       type: "stateEvents",
       topic: "initiatives",
       seq: 2,
       events: [
-        {
-          kind: "upsert",
-          id: "2",
-          revision: 2,
-          item: summary({
-            id: "2",
-            progress: { total: 3, done: 2, doing: 0, startable: 1, blocked: 0 },
-          }),
-        },
-        { kind: "upsert", id: "3", revision: 2, item: summary({ id: "3" }) },
+        { kind: "upsert", id: "3", revision: 1, item: summary({ id: "3" }) },
+        { kind: "delete", id: "2", revision: 2 },
       ],
     });
-    expect(moved.initiatives[0]).toBe(untouched);
-    expect(moved.initiatives.map((item) => item.id)).toEqual(["1", "2", "3"]);
-    expect(moved.initiatives[1]!.progress.done).toBe(2);
+    expect(next.initiatives.map((item) => item.id)).toEqual(["1", "3"]);
+    expect(next.initiativeDetails["2"]?.status).toBe("refreshing");
+    expect(next.initiativeDetails["1"]).toBe(seeded.initiativeDetails["1"]);
 
-    // A stale or equal revision is an exact no-op.
-    const stale = apply(moved, {
+    const appended = apply(seeded, {
       type: "stateEvents",
       topic: "initiatives",
-      seq: 3,
-      events: [{ kind: "delete", id: "2", revision: 2 }],
-    });
-    expect(stale).toBe(moved);
-
-    // An echo with a newer revision but the same wire value keeps the row.
-    const row = moved.initiatives[2];
-    const echo = apply(moved, {
-      type: "stateEvents",
-      topic: "initiatives",
-      seq: 3,
+      seq: 2,
       events: [
-        { kind: "upsert", id: "3", revision: 3, item: summary({ id: "3" }) },
+        { kind: "upsert", id: "3", revision: 1, item: summary({ id: "3" }) },
       ],
     });
-    expect(echo.initiatives[2]).toBe(row);
-    expect(echo.stateEventRevisions.initiatives?.["3"]).toBe(3);
+    expect(appended.initiatives.map((item) => item.id)).toEqual([
+      "1",
+      "2",
+      "3",
+    ]);
+  });
 
-    const archived = apply(echo, {
-      type: "stateItems",
-      topic: "initiatives",
-      requestId: "r",
-      events: [{ kind: "delete", id: "1", revision: 4 }],
+  it("judges held reads by a digest as a snapshot does, and settles only when nothing changed", () => {
+    const seeded = withReads(
+      apply(
+        undefined,
+        snapshot([
+          summary({ id: "1" }),
+          summary({ id: "2" }),
+          summary({ id: "3" }),
+        ]),
+      ),
+      "1",
+      "2",
+      "3",
+    );
+    const refreshing = reduceAssistantState(seeded, {
+      kind: "initiativeListSubscribed",
     });
-    expect(archived.initiatives.map((item) => item.id)).toEqual(["2", "3"]);
+    const changed = apply(refreshing, {
+      type: "stateDigest",
+      topic: "initiatives",
+      seq: 5,
+      entries: [
+        { id: "1", revision: 1 },
+        { id: "3", revision: 2 },
+      ],
+    });
+    // Left out, and named at a newer revision: both re-read.
+    expect(changed.initiativeDetails["2"]?.status).toBe("refreshing");
+    expect(changed.initiativeDetails["3"]?.status).toBe("refreshing");
+    expect(changed.initiativeDetails["1"]?.status).toBe("ready");
+    expect(changed.initiatives.map((item) => item.id)).toEqual(["1", "3"]);
+    expect(changed.initiatives[0]).toBe(seeded.initiatives[0]);
+    expect(changed.stateEventRevisions.initiatives).toEqual({ "1": 1, "3": 1 });
+    expect([changed.initiativesFresh, changed.initiativesRefreshing]).toEqual([
+      false,
+      true,
+    ]);
+
+    const settled = apply(
+      { ...refreshing, initiativeListError: "Failed to list Initiatives" },
+      {
+        type: "stateDigest",
+        topic: "initiatives",
+        seq: 5,
+        entries: [
+          { id: "1", revision: 1 },
+          { id: "2", revision: 1 },
+          { id: "3", revision: 1 },
+        ],
+      },
+    );
+    expect(settled.initiatives).toBe(seeded.initiatives);
+    expect(settled.initiativeDetails).toBe(seeded.initiativeDetails);
+    expect([
+      settled.initiativesFresh,
+      settled.initiativesRefreshing,
+      settled.initiativeListError,
+    ]).toEqual([true, false, null]);
+  });
+
+  it("ends the refresh when the digest's catch-up answers", () => {
+    const refreshing = {
+      ...reduceAssistantState(
+        apply(undefined, snapshot([summary({ id: "1" })])),
+        { kind: "initiativeListSubscribed" },
+      ),
+      initiativeListError: "Failed to list Initiatives",
+    };
+    const next = reduceAssistantState(refreshing, {
+      kind: "replicaItems",
+      purpose: "catchUp",
+      msg: {
+        type: "stateItems",
+        topic: "initiatives",
+        requestId: "r",
+        events: [
+          {
+            kind: "upsert",
+            id: "1",
+            revision: 2,
+            item: summary({ id: "1", title: "Renamed" }),
+          },
+        ],
+      },
+    });
+    expect(next.initiatives[0]!.title).toBe("Renamed");
+    expect([
+      next.initiativesFresh,
+      next.initiativesRefreshing,
+      next.initiativeListError,
+    ]).toEqual([true, false, null]);
   });
 
   it("leaves Task and Project state alone", () => {

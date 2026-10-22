@@ -3,7 +3,8 @@
  * The `background` topic through the real socket effect and the replica
  * transport: the subscribe asks for a snapshot, the snapshot sets the sequence
  * baseline, a continuing batch applies quietly, a gap resubscribes while its
- * batch still applies, and a later snapshot rebaselines.
+ * batch still applies, and a later snapshot rebaselines. Unlike Projects and
+ * Initiatives, a gap resubscribes even after the client dropped the topic.
  *   pnpm --filter @assistant/web test src/backgroundSyncScenario.test.tsx
  */
 import { act, useEffect } from "react";
@@ -58,10 +59,13 @@ function work(id: string, label = "pnpm run build"): BackgroundWorkItemSummary {
 
 let latestState: UIState;
 
-function BackgroundHarness() {
+function BackgroundHarness({ held = true }: { held?: boolean }) {
   const { actions, state } = useAssistant();
   latestState = state;
-  useEffect(() => actions.setTopics(["background"]), [actions]);
+  useEffect(
+    () => actions.setTopics(held ? ["background"] : []),
+    [actions, held],
+  );
   return null;
 }
 
@@ -165,5 +169,44 @@ describe("Background socket/reducer scenario", () => {
     expect(latestState.backgroundWorkItems.map((row) => row.label)).toEqual([
       "renamed",
     ]);
+  });
+
+  it("resubscribes on a gap even after the client dropped the topic", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await act(async () => root.render(<BackgroundHarness />));
+    const socket = FakeSocket.instances[0]!;
+    await act(async () => {
+      socket.open();
+      socket.receive(readyMessage());
+      socket.receive({
+        type: "backgroundWorkList",
+        items: [work("a")],
+        seq: 3,
+        revisions: [{ id: "a", revision: 1 }],
+      });
+    });
+    await act(async () => root.render(<BackgroundHarness held={false} />));
+    expect(socket.sent.at(-1)).toEqual({
+      type: "unsubscribe",
+      topics: ["background"],
+    });
+
+    // A batch already in flight when the topic was dropped, after a gap.
+    const beforeGap = socket.sent.length;
+    await act(async () => {
+      socket.receive({
+        type: "stateEvents",
+        topic: "background",
+        seq: 5,
+        events: [{ kind: "delete", id: "a", revision: 2 }],
+      });
+    });
+    expect(socket.sent.slice(beforeGap)).toEqual([
+      { type: "unsubscribe", topics: ["background"] },
+      { type: "subscribe", topics: ["background"] },
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      "[state-sync] background event gap: expected seq 4, got 5; resubscribing.",
+    );
   });
 });
