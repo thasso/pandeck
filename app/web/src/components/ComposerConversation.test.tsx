@@ -16,6 +16,7 @@ const conversation = vi.hoisted(() => ({
   options: null as ConversationOptions | null,
   active: false,
   partial: "",
+  sent: vi.fn(),
 }));
 vi.mock("../hooks/useConversation.ts", () => ({
   useConversation: (options: ConversationOptions) => {
@@ -27,7 +28,7 @@ vi.mock("../hooks/useConversation.ts", () => ({
       error: null,
       unavailableReason: undefined,
       toggle: vi.fn(),
-      userMessageSent: vi.fn(),
+      userMessageSent: conversation.sent,
     };
   },
 }));
@@ -88,6 +89,40 @@ function props(
     ...patch,
   };
 }
+
+it("passes authoritative user queue identities to conversation", () => {
+  const options = props();
+  const items = [{ id: "remote-queue", text: "Next question", createdAt: 1 }];
+  mount(
+    <Composer
+      {...options}
+      session={{ ...options.session!, promptQueue: { items, paused: false } }}
+    />,
+  );
+  expect(conversation.options!.queuedMessages).toBe(items);
+});
+
+it.each(["queue", "steer"])(
+  "a typed %s releases conversation muting while busy",
+  (path) => {
+    const options = props({
+      streaming: true,
+      ...(path === "queue" ? { onQueue: vi.fn() } : {}),
+    });
+    const view = mount(<Composer {...options} />);
+    const field = view.container.querySelector("textarea")!;
+    type(field, "Next question");
+    act(() => {
+      field.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(conversation.sent).toHaveBeenCalledOnce();
+    if (path === "queue")
+      expect(options.onQueue).toHaveBeenCalledWith({ text: "Next question" });
+    else expect(options.onSend).toHaveBeenCalledWith("Next question", []);
+  },
+);
 
 it("M3-C1: sends an existing draft together with the spoken final", () => {
   const options = props({

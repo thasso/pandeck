@@ -1,12 +1,59 @@
 import { describe, expect, it } from "vitest";
 import {
   speechChunks,
+  speechSegments,
   spokenMarkdown,
   isPlaybackEcho,
 } from "./conversationText.ts";
 import { ConversationResampler } from "./conversationCapture.ts";
 
 describe("spoken prose", () => {
+  it("M3-R1: withholds a trailing sentence that can still become a table header", () => {
+    const markdown = "Header. | State\n--- | ---\nx | y\n\nAfter.";
+    expect(speechChunks(markdown, true)).toEqual(["After."]);
+    for (let length = 0; length <= markdown.length; length++) {
+      const prefix = markdown.slice(0, length);
+      expect(speechChunks(prefix, false), prefix).toEqual([]);
+    }
+    expect(speechChunks("Header. ", false)).toEqual([]);
+    expect(speechChunks("First. Next sentence", false)).toEqual(["First."]);
+  });
+  it.each([
+    "Before. Next.\nHeader. More prose | State\n--- | ---\nx | y\n\nAfter. Final.",
+    "> Header. More | State\n> :--- | ---:\n> x | y\n\nAfter. Final.",
+    "First. [documentation](https://example.com) helps. **Again. More** follows. First. Again.",
+    "Before. Next.\n```ts\nprivate();\n```\nAfter. More.\n\n    secret();\n\nDone.",
+    "Words &amp; **formatting**. More words. " + "long ".repeat(150) + "End.",
+  ])("source cursors never repeat or skip later prose: %s", (markdown) => {
+    let cursor = 0;
+    const spoken: string[] = [];
+    for (let length = 0; length <= markdown.length; length++) {
+      const segments = speechSegments(markdown.slice(0, length), false, cursor);
+      for (const segment of segments) {
+        expect(segment.end).toBeGreaterThan(cursor);
+        expect(segment.text.length).toBeLessThanOrEqual(500);
+        cursor = segment.end;
+        spoken.push(segment.text);
+      }
+    }
+    const final = speechSegments(markdown, true, cursor);
+    spoken.push(...final.map((segment) => segment.text));
+    const output = spoken.join(" ");
+    if (markdown.includes("State")) {
+      expect(output).toContain("After.");
+      expect(output).not.toMatch(/---|x \| y|State/);
+      expect(
+        spoken.filter((text) => text === "Header.").length,
+      ).toBeLessThanOrEqual(1);
+    } else {
+      expect(output.replaceAll(" ", "")).toBe(
+        speechChunks(markdown, true).join("").replaceAll(" ", ""),
+      );
+    }
+    expect(speechSegments(markdown, true, final.at(-1)?.end ?? cursor)).toEqual(
+      [],
+    );
+  });
   it("M3-C4: keeps ordinary prose and inline code containing pipes", () => {
     expect(
       spokenMarkdown("Run `ps | grep server` to check whether it is running."),
@@ -49,18 +96,29 @@ describe("spoken prose", () => {
     "First. ``code with `nested` ticks.`` works. [label][ref] follows.",
     "First. ![picture](https://image.test) <b>Second.</b> More.",
   ])(
-    "emits only a monotonic stable prefix across every token boundary: %s",
+    "speaks exactly once by source position across every token boundary: %s",
     (markdown) => {
       const complete = speechChunks(markdown, true);
-      let previous: string[] = [];
+      const spoken: string[] = [];
+      let cursor = 0;
       for (let length = 0; length <= markdown.length; length++) {
-        const chunks = speechChunks(markdown.slice(0, length), false);
-        expect(chunks, `prefix ${markdown.slice(0, length)}`).toEqual(
-          complete.slice(0, chunks.length),
+        const segments = speechSegments(
+          markdown.slice(0, length),
+          false,
+          cursor,
         );
-        expect(chunks.slice(0, previous.length)).toEqual(previous);
-        previous = chunks;
+        spoken.push(...segments.map((segment) => segment.text));
+        cursor = segments.at(-1)?.end ?? cursor;
+        expect(spoken, `prefix ${markdown.slice(0, length)}`).toEqual(
+          complete.slice(0, spoken.length),
+        );
       }
+      spoken.push(
+        ...speechSegments(markdown, true, cursor).map(
+          (segment) => segment.text,
+        ),
+      );
+      expect(spoken).toEqual(complete);
     },
   );
   it("holds unfinished formatting and table candidates without leaking destinations", () => {

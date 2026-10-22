@@ -148,6 +148,213 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it("M3-R1: a table prefix cannot consume the following prose cursor", async () => {
+  await start();
+  await render({ messages: [prose("voice-live:table", "Header. ")] });
+  await render({
+    messages: [
+      prose(
+        "voice-live:table",
+        "Header. | State\n--- | ---\nx | y\n\nAfter.",
+        false,
+      ),
+    ],
+  });
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+  ).toEqual(["After."]);
+});
+
+it("M3-R1: source positions survive already-spoken prose becoming a table", async () => {
+  await start();
+  await render({
+    messages: [prose("voice-live:changed", "Header. More prose")],
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  await render({
+    messages: [
+      prose(
+        "voice-live:changed",
+        "Header. More prose | State\n--- | ---\nx | y\n\nAfter.",
+        false,
+      ),
+    ],
+  });
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+  ).toEqual(["Header.", "After."]);
+});
+
+it("M3-R2: a remote send before the live overlay releases the mute", async () => {
+  const socket = await start();
+  const live = prose("voice-live:original", "Original answer. More");
+  await render({ messages: [live], streaming: true });
+  act(() =>
+    socket.message({
+      type: "transcript",
+      segment: 0,
+      text: "wait please",
+      isFinal: false,
+    }),
+  );
+  const user: DisplayMessage = {
+    id: "remote-user",
+    role: "user",
+    blocks: [{ kind: "text", text: "Next question" }],
+  };
+  await render({ messages: [user, live], streaming: true });
+  await render({
+    messages: [
+      user,
+      prose("durable-original", "Original answer. More", false),
+      prose("voice-live:next", "Following the next question. More"),
+    ],
+    streaming: true,
+  });
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+  ).toEqual(["Original answer.", "Following the next question."]);
+});
+
+it.each(["steer", "queue"])(
+  "M3-R2: a remote %s while busy releases the mute",
+  async (path) => {
+    const socket = await start();
+    const user: DisplayMessage = {
+      id: "first-user",
+      role: "user",
+      blocks: [{ kind: "text", text: "First question" }],
+    };
+    const live = prose("voice-live:busy", "Original answer. More");
+    await render({
+      messages: [user, live],
+      streaming: true,
+      queuedMessages: [{ id: "old-queue" }],
+    });
+    act(() =>
+      socket.message({
+        type: "transcript",
+        segment: 0,
+        text: "wait please",
+        isFinal: false,
+      }),
+    );
+    // History expansion, a queue edit/reorder and automatic peer prompts aren't sends.
+    await render({
+      messages: [
+        { ...user, id: "older-user" },
+        user,
+        {
+          ...user,
+          id: "peer-user",
+          promptOrigin: { kind: "agent", agentId: "peer" },
+        },
+        live,
+      ],
+      queuedMessages: [{ id: "old-queue" }],
+    });
+    const muted = prose("voice-live:muted-step", "Still interrupted. More");
+    const durable = prose("durable-busy", "Original answer. More", false);
+    await render({ messages: [user, durable, muted] });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const nextUser: DisplayMessage = {
+      ...user,
+      id: "next-user",
+      promptDelivery: "steer",
+    };
+    await render({
+      messages:
+        path === "steer"
+          ? [user, durable, nextUser, muted]
+          : [user, durable, muted],
+      queuedMessages:
+        path === "queue"
+          ? [{ id: "new-queue" }, { id: "old-queue" }]
+          : [{ id: "old-queue" }],
+    });
+    await render({
+      messages: [
+        user,
+        durable,
+        prose("durable-muted", "Still interrupted. More", false),
+        prose("voice-live:fresh", "Fresh answer. More"),
+      ],
+    });
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+    ).toEqual(["Original answer.", "Fresh answer."]);
+  },
+);
+
+it("M3-R2: users already present at interruption never unmute a tool step", async () => {
+  const socket = await start();
+  const user: DisplayMessage = {
+    id: "already-sent",
+    role: "user",
+    blocks: [{ kind: "text", text: "Earlier question" }],
+  };
+  await render({
+    messages: [user, prose("voice-live:before", "Original answer. More")],
+    streaming: true,
+  });
+  act(() =>
+    socket.message({
+      type: "transcript",
+      segment: 0,
+      text: "wait please",
+      isFinal: false,
+    }),
+  );
+  await render({
+    messages: [
+      user,
+      prose("durable-before", "Original answer. More", false),
+      prose("voice-live:after", "Still muted. More"),
+    ],
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("M3-R3: ambiguous multiword prefixes wait for the endpoint and preserve final text", async () => {
+  const socket = await start();
+  await render({
+    messages: [prose("voice-live:prefix", "You cannot change this. More")],
+    streaming: true,
+  });
+  act(() =>
+    socket.message({
+      type: "transcript",
+      segment: 0,
+      text: "you can",
+      isFinal: false,
+    }),
+  );
+  expect(
+    FakeSpeechContext.instances[0]!.sources[0]!.stop,
+  ).not.toHaveBeenCalled();
+  expect(result.partial).toBe("");
+  act(() =>
+    socket.message({
+      type: "transcript",
+      segment: 0,
+      text: "you can",
+      isFinal: true,
+    }),
+  );
+  expect(options.onFinal).toHaveBeenCalledExactlyOnceWith("you can");
+  expect(
+    FakeSpeechContext.instances[0]!.sources[0]!.stop,
+  ).toHaveBeenCalledOnce();
+});
+
 it("M3-C2: streamed link boundaries never replay a preceding sentence", async () => {
   await start();
   await render({

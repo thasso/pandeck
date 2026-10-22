@@ -1603,6 +1603,9 @@ export const Composer = memo(function Composer({
     settings: conversation?.settings,
     status: dictation?.status ?? null,
     messages: conversation?.messages ?? [],
+    ...(session?.promptQueue
+      ? { queuedMessages: session.promptQueue.items }
+      : {}),
     ...(conversation ? { getMessages: conversation.getMessages } : {}),
     streaming,
     onFinal: (spoken) => {

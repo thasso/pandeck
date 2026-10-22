@@ -40,29 +40,43 @@ open.
 Only newly arriving assistant text blocks are spoken, not history, thinking,
 tool calls or results. Speech uses the runtime stream id, not the display row's
 reused `live` id. When a durable entry replaces that row, matching text-block
-prefixes transfer the sentence cursors and interruption suppression, so the
-response is neither repeated nor unmuted on completion. Markdown links use their
-labels; fenced and indented code becomes "Code omitted"; actual tables and
+prefixes transfer the source-position cursors and interruption suppression, so
+the response is neither repeated nor unmuted on completion. Markdown links use
+their labels; fenced and indented code becomes "Code omitted"; actual tables and
 images are skipped. Prose and inline code containing pipes remain audible.
-Trailing open inline Markdown is held until stable, and sentence cursors never
-rewind across token boundaries. Complete sentences are synthesized as the
-response streams, with a final unpunctuated tail on completion. Long sentences
-are split within the server's 500-character limit. One synthesis fetch runs at a
-time; at most two decoded sentences are scheduled, with the next buffer starting
-at the previous buffer's exact AudioContext end time. Slow synthesis can still
-cause a gap. A global busy response is shown, not retried.
+Trailing open inline Markdown is held until stable. A trailing sentence waits
+for following text or message completion, not just whitespace. Speech resumes at
+its original Markdown source position, so later table recognition cannot replay
+earlier speech or skip prose after the table. To keep mid-line speech, a
+prose-looking header sentence already spoken before its pipe arrives is an
+accepted edge case. Once recognized, the table's delimiter and rows are never
+spoken. Complete sentences are synthesized as the response streams, with a final
+unpunctuated tail on completion. Long sentences are split within the server's
+500-character limit. One synthesis fetch runs at a time; at most two decoded
+sentences are scheduled, with the next buffer starting at the previous buffer's
+exact AudioContext end time. Slow synthesis can still cause a gap. A global busy
+response is shown, not retried.
 
 Distinct nonempty speech cancels the synthesis fetch, scheduled audio and queue,
 including synthesis still waiting for its first buffer. The interrupted agent
 turn stays muted across later assistant messages and tool steps, including
 speech begun in a gap between buffers. The mute ends when that run ends or the
-user sends the next message; the following reply speaks normally. The agent
-keeps running. The next spoken final uses the same queue/steer choice as typing.
-Matching recognizer feedback is ignored against the current/recent spoken text,
-retained for the segment through its final. There is no grace period that would
-swallow a short genuine "stop". This is a lexical echo guard, not speaker
-identification: repeating the exact spoken words may be ignored. Headphones are
-recommended if speaker echo remains.
+user sends the next message; the following reply speaks normally. Sends from
+another tab, steering and newly queued messages also release the mute,
+independent of the live overlay's display position. Loading older user history,
+editing or reordering an existing queued message, and automatic agent prompts do
+not release it. The agent keeps running. The next spoken final uses the same
+queue/steer choice as typing. Matching recognizer feedback is ignored against
+the current/recent spoken text, retained for the segment through its final.
+There is no grace period that would swallow a short genuine "stop". This is a
+lexical echo guard, not speaker identification: repeating the exact spoken words
+may be ignored. Echo safety also delays barge-in while the user's partial words
+match a prefix of the spoken words, such as "you can" during "You cannot change
+this." Further speech that distinguishes the words interrupts immediately;
+otherwise the endpoint applies strict whole-word matching and preserves the
+final "you can" text unchanged. There is no delay once the transcript is
+distinguishable from playback. Headphones are recommended if speaker echo
+remains.
 
 ## Settings and preview
 

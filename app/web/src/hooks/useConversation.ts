@@ -14,7 +14,7 @@ import {
 import { startConversationCapture } from "../lib/conversationCapture.ts";
 import { microphoneOwner } from "../lib/microphoneOwner.ts";
 import { SpeechPlayer } from "../lib/speechPlayer.ts";
-import { isPlaybackEcho, speechChunks } from "../lib/conversationText.ts";
+import { isPlaybackEcho, speechSegments } from "../lib/conversationText.ts";
 
 export interface ConversationOptions {
   instanceId: string;
@@ -26,6 +26,7 @@ export interface ConversationOptions {
   messages: readonly DisplayMessage[];
   getMessages?: () => readonly DisplayMessage[];
   streaming: boolean;
+  queuedMessages?: readonly { id: string }[];
   onFinal: (text: string) => boolean;
 }
 
@@ -44,7 +45,12 @@ interface ConversationRun {
   suppressed: Set<string>;
   speaking: boolean;
   waitingForReply: boolean;
-  mutedTurn: boolean;
+  mutedTurn: {
+    messageIds: Set<string>;
+    queuedIds: Set<string>;
+    durableTailId: string | undefined;
+    latestMessageAt: number;
+  } | null;
 }
 
 function parseConversationResponse(data: string): ConversationServerMessage {
@@ -136,7 +142,7 @@ export function useConversation(options: ConversationOptions) {
   );
 
   const userMessageSent = useCallback(() => {
-    if (live.current) live.current.mutedTurn = false;
+    if (live.current) live.current.mutedTurn = null;
   }, []);
 
   const reason =
@@ -205,7 +211,7 @@ export function useConversation(options: ConversationOptions) {
         ),
         speaking: false,
         waitingForReply: false,
-        mutedTurn: false,
+        mutedTurn: null,
         timer: setTimeout(() => {
           if (live.current === run)
             stop("Conversation recognition did not become ready.");
@@ -257,7 +263,22 @@ export function useConversation(options: ConversationOptions) {
             return;
           }
           if (text && (player.pending || latest.current.streaming)) {
-            run.mutedTurn = true;
+            if (!run.mutedTurn) {
+              const rows =
+                latest.current.getMessages?.() ?? latest.current.messages;
+              run.mutedTurn = {
+                messageIds: new Set(rows.map((row) => row.id)),
+                queuedIds: new Set(
+                  latest.current.queuedMessages?.map((item) => item.id),
+                ),
+                durableTailId: rows.findLast((row) => !row.streaming)?.id,
+                latestMessageAt: rows.reduce(
+                  (time, row) =>
+                    Math.max(time, Date.parse(row.createdAt ?? "") || 0),
+                  0,
+                ),
+              };
+            }
             for (const row of latest.current.messages)
               if (row.role === "assistant") run.suppressed.add(row.id);
             player.stop();
@@ -273,7 +294,7 @@ export function useConversation(options: ConversationOptions) {
                 );
                 return;
               }
-              run.mutedTurn = false;
+              run.mutedTurn = null;
               run.waitingForReply = true;
               setPartial("");
               setPhase("thinking");
@@ -328,6 +349,28 @@ export function useConversation(options: ConversationOptions) {
   useEffect(() => {
     const run = live.current;
     if (!run) return;
+    // The durable user row may precede a still-live overlay. Compare identities
+    // against the interruption, independently of assistant speech/history order.
+    const interrupted = run.mutedTurn;
+    if (interrupted) {
+      const anchor = options.messages.findIndex(
+        (row) => row.id === interrupted.durableTailId,
+      );
+      const sent = options.messages.some(
+        (row, index) =>
+          row.role === "user" &&
+          (!row.promptOrigin || row.promptOrigin.kind === "human") &&
+          !interrupted.messageIds.has(row.id) &&
+          (anchor >= 0
+            ? index > anchor
+            : !row.createdAt ||
+              Date.parse(row.createdAt) >= interrupted.latestMessageAt),
+      );
+      const queued = options.queuedMessages?.some(
+        (item) => !interrupted.queuedIds.has(item.id),
+      );
+      if (sent || queued) run.mutedTurn = null;
+    }
     const currentIds = new Set(options.messages.map((message) => message.id));
     const tailIndex = run.tailId
       ? options.messages.findIndex((message) => message.id === run.tailId)
@@ -342,14 +385,6 @@ export function useConversation(options: ConversationOptions) {
       const previouslySeen = known || run.suppressed.has(message.id);
       if (messageIndex < firstNew && !known) run.suppressed.add(message.id);
       if (message.role !== "assistant") {
-        // Also observe messages sent in another composer/tab. A tool-step stream
-        // is not a new turn, but a new user message releases the interruption.
-        if (
-          message.role === "user" &&
-          !previouslySeen &&
-          messageIndex >= firstNew
-        )
-          run.mutedTurn = false;
         run.suppressed.add(message.id);
         continue;
       }
@@ -394,26 +429,26 @@ export function useConversation(options: ConversationOptions) {
       message.blocks.forEach((block, index) => {
         if (block.kind !== "text") return;
         const key = `${message.id}:${index}`;
-        const chunks = speechChunks(
+        const cursor = run.cursors.get(key) ?? 0;
+        const segments = speechSegments(
           block.text,
           !message.streaming || index < message.blocks.length - 1,
+          cursor,
         );
-        const cursor = run.cursors.get(key) ?? 0;
-        run.cursors.set(key, Math.max(cursor, chunks.length));
-        if (chunks.length > cursor) {
-          run.player.enqueue(chunks.slice(cursor));
-        }
+        run.cursors.set(key, segments.at(-1)?.end ?? cursor);
+        if (segments.length)
+          run.player.enqueue(segments.map((segment) => segment.text));
       });
     }
     // This is the runtime run state, which stays running across tool steps.
     // Suppress its last projection before releasing the mute on completion.
-    if (!options.streaming) run.mutedTurn = false;
+    if (!options.streaming) run.mutedTurn = null;
     if (options.messages.length) run.tailId = options.messages.at(-1)?.id;
     if (!run.speaking && !partial)
       setPhase(
         options.streaming || run.waitingForReply ? "thinking" : "listening",
       );
-  }, [options.messages, options.streaming, partial]);
+  }, [options.messages, options.streaming, options.queuedMessages, partial]);
 
   useEffect(() => {
     if (reason && live.current) stop();

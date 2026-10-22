@@ -6,17 +6,34 @@ export const VOICE_REPLY_HINT =
 
 /** Only prose reaches this transform. Callers never pass tool or thinking blocks. */
 export function spokenMarkdown(markdown: string): string {
-  return speechProse(markdown, true).text;
+  return speechProse(markdown, true).text.trim();
+}
+
+interface SourceText {
+  text: string;
+  /** Exclusive Markdown source offset for each output character. */
+  ends: number[];
 }
 
 function speechProse(
   markdown: string,
   final: boolean,
-): { text: string; boundary: boolean } {
-  const lines: string[] = [];
+): SourceText & { boundary: boolean } {
+  const lines: SourceText[] = [];
   let fence: string | undefined;
   let indented = false;
+  let offset = 0;
   for (const line of markdown.split("\n")) {
+    const start = offset;
+    offset += line.length + 1;
+    const mapped = {
+      text: line,
+      ends: Array.from({ length: line.length }, (_, i) => start + i + 1),
+    };
+    const omitted = () => ({
+      text: "Code omitted.",
+      ends: Array<number>(13).fill(start + line.length),
+    });
     const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
     if (fence) {
       if (
@@ -30,23 +47,24 @@ function speechProse(
     }
     if (marker) {
       fence = marker;
-      lines.push("Code omitted.");
+      lines.push(omitted());
       continue;
     }
     if (/^(?: {4}|\t)/.test(line)) {
-      if (!indented) lines.push("Code omitted.");
+      if (!indented) lines.push(omitted());
       indented = true;
       continue;
     }
     if (indented && !line.trim()) continue;
     indented = false;
-    if (!/^\s*\[[^\]]+\]:/.test(line)) lines.push(line);
+    if (!/^\s*\[[^\]]+\]:/.test(line)) lines.push(mapped);
   }
-  const prose: string[] = [];
+  const prose: SourceText[] = [];
   let table = false;
   let tableDepth = 0;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
+    const mapped = lines[i]!;
+    const line = mapped.text;
     const depth = quoteDepth(line);
     const row = line.replace(/^\s*(?:>\s*)+/, "");
     const cells = tableCells(row);
@@ -58,7 +76,7 @@ function speechProse(
     )
       continue;
     table = false;
-    const next = lines[i + 1];
+    const next = lines[i + 1]?.text;
     const nextRow = next?.replace(/^\s*(?:>\s*)+/, "");
     const delimiter =
       next === undefined || quoteDepth(next) !== depth
@@ -83,25 +101,75 @@ function speechProse(
         (i + 1 === lines.length - 1 && /^[| :-]*$/.test(nextRow!)))
     )
       break;
-    prose.push(line);
+    prose.push(mapped);
   }
-  const source = prose.join("\n");
-  const stable = final ? source : stableInlinePrefix(source);
-  const text = stable
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
-    .replace(/!?\[[^\]]*\](?:\([^)]*)?$/g, "")
-    .replace(/!?\[[^\]]*$/g, "")
-    .replace(/<[^>]*>/g, "")
-    .replace(/^\s*(?:#{1,6}\s+|>\s*|[-+*]\s+|\d+[.)]\s+)/gm, "")
-    .replace(/[`*_~]/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, " ");
-  return { text: text.trim(), boundary: /\s$/.test(text) };
+  const source: SourceText = { text: "", ends: [] };
+  for (const line of prose) {
+    if (source.text) {
+      source.text += "\n";
+      source.ends.push(line.ends[0] ?? source.ends.at(-1) ?? 0);
+    }
+    source.text += line.text;
+    for (const end of line.ends) source.ends.push(end);
+  }
+  const stable = final ? source.text : stableInlinePrefix(source.text);
+  let result: SourceText = {
+    text: stable,
+    ends: source.ends.slice(0, stable.length),
+  };
+  const transforms: [RegExp, string | number][] = [
+    [/!\[[^\]]*\]\([^)]*\)/g, ""],
+    [/\[([^\]]+)\]\([^)]*\)/g, 1],
+    [/\[([^\]]+)\]\[[^\]]*\]/g, 1],
+    [/!?\[[^\]]*\](?:\([^)]*)?$/g, ""],
+    [/!?\[[^\]]*$/g, ""],
+    [/<[^>]*>/g, ""],
+    [/^\s*(?:#{1,6}\s+|>\s*|[-+*]\s+|\d+[.)]\s+)/gm, ""],
+    [/[`*_~]/g, ""],
+    [/&amp;/g, "&"],
+    [/&lt;/g, "<"],
+    [/&gt;/g, ">"],
+    [/&quot;/g, '"'],
+    [/\s+/g, " "],
+  ];
+  for (const [pattern, replacement] of transforms)
+    result = replaceSourceText(result, pattern, replacement);
+  // A raw trailing space does not settle the trailing sentence. An open inline
+  // construct does establish that following text exists, even while held back.
+  const boundary =
+    stable.length < source.text.length && /\s$/.test(result.text);
+  return { ...result, boundary };
+}
+
+/** Preserve source positions through removals, link labels and entity decoding. */
+function replaceSourceText(
+  source: SourceText,
+  pattern: RegExp,
+  replacement: string | number,
+): SourceText {
+  const result: SourceText = { text: "", ends: [] };
+  let start = 0;
+  for (const match of source.text.matchAll(pattern)) {
+    const index = match.index;
+    result.text += source.text.slice(start, index);
+    for (let i = start; i < index; i++) result.ends.push(source.ends[i]!);
+    const value =
+      typeof replacement === "number" ? match[replacement]! : replacement;
+    result.text += value;
+    if (typeof replacement === "number") {
+      const label = index + match[0].indexOf(value);
+      for (let i = label; i < label + value.length; i++)
+        result.ends.push(source.ends[i]!);
+    } else {
+      const end = source.ends[index + match[0].length - 1]!;
+      for (let i = 0; i < value.length; i++) result.ends.push(end);
+    }
+    start = index + match[0].length;
+  }
+  result.text += source.text.slice(start);
+  for (let i = start; i < source.ends.length; i++)
+    result.ends.push(source.ends[i]!);
+  return result;
 }
 
 function quoteDepth(line: string): number {
@@ -215,46 +283,65 @@ function closingDelimiter(
 
 /** Stable complete sentences, plus a bounded tail only when it is final/long. */
 export function speechChunks(markdown: string, final: boolean): string[] {
-  const { text, boundary } = speechProse(markdown, final);
-  const chunks: string[] = [];
+  return speechSegments(markdown, final).map((segment) => segment.text);
+}
+
+/** Resume by Markdown source offset, not by the changing number of prose chunks. */
+export function speechSegments(
+  markdown: string,
+  final: boolean,
+  after = 0,
+): { text: string; end: number }[] {
+  const prose = speechProse(markdown, final);
+  let from = prose.ends.findIndex((end) => end > after);
+  if (from < 0) return [];
+  while (/\s/.test(prose.text[from] ?? "") && from < prose.text.length) from++;
+  const text = prose.text.slice(from).trimEnd();
+  const ends = prose.ends.slice(from, from + text.length);
+  const chunks: { text: string; end: number }[] = [];
+  const append = (start: number, end: number) => {
+    while (start < end && /\s/.test(text[start]!)) start++;
+    while (end > start && /\s/.test(text[end - 1]!)) end--;
+    const max = SPEECH_SYNTHESIS_LIMITS.maxTextChars;
+    while (end - start > max) {
+      const split = start + breakAt(text.slice(start, end), max);
+      chunks.push({
+        text: text.slice(start, split).trim(),
+        end: ends[split - 1]!,
+      });
+      start = split;
+      while (start < end && /\s/.test(text[start]!)) start++;
+    }
+    if (end > start)
+      chunks.push({ text: text.slice(start, end), end: ends[end - 1]! });
+  };
   let start = 0;
   for (let i = 0; i < text.length; i++) {
     if (!/[.!?]/.test(text[i]!)) continue;
     let end = i + 1;
     while (end < text.length && /["')\]]/.test(text[end]!)) end++;
     if (end < text.length && !/\s/.test(text[end]!)) continue;
-    if (end === text.length && !final && !boundary) continue;
+    if (end === text.length && !final && !prose.boundary) continue;
     const prefix = text.slice(start, end);
     if (/\b(?:Mr|Mrs|Ms|Dr|Prof|e\.g|i\.e)\.$/i.test(prefix)) continue;
-    appendBounded(chunks, prefix);
+    append(start, end);
     start = end;
     i = end - 1;
   }
-  let tail = text.slice(start).trim();
   const max = SPEECH_SYNTHESIS_LIMITS.maxTextChars;
-  while (tail.length > max) {
-    const end = breakAt(tail, max);
-    chunks.push(tail.slice(0, end).trim());
-    tail = tail.slice(end).trim();
+  while (text.length - start > max) {
+    const end = start + breakAt(text.slice(start), max);
+    append(start, end);
+    start = end;
+    while (start < text.length && /\s/.test(text[start]!)) start++;
   }
-  if (final && tail) chunks.push(tail);
+  if (final) append(start, text.length);
   return chunks;
 }
 
 function breakAt(text: string, max: number): number {
   const space = text.lastIndexOf(" ", max);
   return space > max / 2 ? space : max;
-}
-
-function appendBounded(chunks: string[], value: string): void {
-  let text = value.trim();
-  const max = SPEECH_SYNTHESIS_LIMITS.maxTextChars;
-  while (text.length > max) {
-    const end = breakAt(text, max);
-    chunks.push(text.slice(0, end).trim());
-    text = text.slice(end).trim();
-  }
-  if (text) chunks.push(text);
 }
 
 /** Ignore recognizer feedback that is a prefix/subsequence of our own speech.
