@@ -341,23 +341,26 @@ export async function promptRuntimeSessionWithRuntime(
       await assertSkillInvocation(options, frozenSkills);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
-    // An account recovery continuation has already chosen its account.
-    const accountMove = accountRecovery
-      ? undefined
-      : await moveOffDisabledAccount(driver, () => {
-          assertTurnAllowed(driver.sessionId, options.resumeHold);
-          assertRecoveryAdmission();
-        });
+    // An account recovery continuation has already chosen its account, and a
+    // steer-only message starts no turn.
+    const accountMove =
+      accountRecovery || options.steerOnly
+        ? undefined
+        : await moveOffDisabledAccount(driver, () => {
+            assertTurnAllowed(driver.sessionId, options.resumeHold);
+            assertRecoveryAdmission();
+          });
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
     // Nothing below awaits before the append. The enterprise check runs before
     // `admit`, which must stay the last check: a peer admission reserves its
     // delivery, and a refusal after that reservation could strand the prompt.
+    accountMove?.usable();
     assertSessionEnterpriseAccount(driver);
     admit?.();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
     if (accountMove) live.appendNotice(accountMove.notice);
-    prepareAccountRecoveryTurn(live, accountRecovery, accountMove?.from);
+    prepareAccountRecoveryTurn(live, accountRecovery);
     return await runPromptWithRuntime(
       runtime,
       driver,
