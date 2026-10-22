@@ -19,4 +19,10 @@ describe("sessionScopeOrFailClosed", () => {
     for (const raw of ["", "USER", "user ", "operator", undefined, null])
       expect(sessionScopeOrFailClosed(raw)).toBe("internal");
   });
+
+  it("reads the retired subagent value as internal", () => {
+    // The session_index CHECK still accepts it, so a stored row may carry it.
+    expect(SESSION_SCOPES).toEqual(["user", "internal"]);
+    expect(sessionScopeOrFailClosed("subagent")).toBe("internal");
+  });
 });

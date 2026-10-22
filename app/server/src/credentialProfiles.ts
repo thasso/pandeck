@@ -538,8 +538,8 @@ export function renameCredentialProfile(
 export function deleteCredentialProfile(id: string): void {
   if (isProtectedProfile(id))
     throw new Error("A default profile cannot be deleted.");
-  // Every scope: a profile an internal or subagent session is still bound to is
-  // just as much in use as one the user's own session holds.
+  // Every scope: a profile an internal session is still bound to is just as
+  // much in use as one the user's own session holds.
   if (
     sessionStore
       .list({ scopes: "all" })

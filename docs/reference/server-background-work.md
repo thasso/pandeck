@@ -60,22 +60,21 @@ the global rules already forbid those packages outside their own folders.
   `backgroundWorkOwnerDecision` is pure over `BackgroundWorkOwnerEvidence`, and
   `readBackgroundWorkOwnerEvidence` is the only place that reads durable state
   for it. The exclusions are enumerated — `unknown-session` (a helper or
-  one-shot run has no session record at all), `non-user-scope` (`internal`
-  covers the server's own helper runs, `subagent` the delegated ones),
-  `workflow-owned`, `harness-backend-mismatch` — and every read fails closed.
-  The last one is a CAPABILITY question, asked through the shared
-  `harnessSupportsBackgroundWorkBackend` predicate: Claude background work
-  executes inside the retained query that issued it, PA-supervised pi work does
-  not, and neither runtime can hold the other's. Admitting the mismatch would
-  create a row nothing could ever bind, stop or close, so a pi session naming
-  `claude-query` (or a Claude session naming `host-process`) is refused even
-  though its scope and ownership are impeccable. The ownership question answers
-  "owned" on ANY edge rather than trying to decide whether a past assignment has
-  finished: a session the engine ever executed is not the user's interactive
-  top-level session, whatever state that assignment is in now. A peer session an
-  agent spawned is NOT excluded: it is the user's own session, visible in the
-  sidebar and promptable, and the spawn edge is provenance rather than
-  ownership. Nothing here branches on a persona or agent type.
+  one-shot run has no session record at all), `non-user-scope` (the server's own
+  `internal` helper runs), `workflow-owned`, `harness-backend-mismatch` — and
+  every read fails closed. The last one is a CAPABILITY question, asked through
+  the shared `harnessSupportsBackgroundWorkBackend` predicate: Claude background
+  work executes inside the retained query that issued it, PA-supervised pi work
+  does not, and neither runtime can hold the other's. Admitting the mismatch
+  would create a row nothing could ever bind, stop or close, so a pi session
+  naming `claude-query` (or a Claude session naming `host-process`) is refused
+  even though its scope and ownership are impeccable. The ownership question
+  answers "owned" on ANY edge rather than trying to decide whether a past
+  assignment has finished: a session the engine ever executed is not the user's
+  interactive top-level session, whatever state that assignment is in now. A
+  peer session an agent spawned is NOT excluded: it is the user's own session,
+  visible in the sidebar and promptable, and the spawn edge is provenance rather
+  than ownership. Nothing here branches on a persona or agent type.
 
   Excluded contexts keep ordinary foreground execution untouched — this policy
   governs admission to BACKGROUND work and changes no existing execution path.

@@ -258,16 +258,17 @@ export function sessionModeOrDefault(mode: string | undefined): SessionMode {
  *   includes.
  * - `internal` — a server-only helper run that exists to attribute token/cost
  *   usage (titles, commit messages, …). Never user-facing.
- * - `subagent` — a session PA runs on the user's behalf under a subagent
- *   thread. Excluded from every default projection: it is reached through the
- *   subagent registry, not the sidebar.
  *
  * Scope is a SESSION property, not a run property, and it is fixed when the row
  * is written — before anything live can observe the session.
+ *
+ * The retired third value `subagent` is not a scope this build knows: the
+ * database CHECK still accepts it (docs/migrations.md), and a stored one reads
+ * as `internal` through {@link sessionScopeOrFailClosed}.
  */
-export type SessionScope = "user" | "internal" | "subagent";
+export type SessionScope = "user" | "internal";
 
-export const SESSION_SCOPES: SessionScope[] = ["user", "internal", "subagent"];
+export const SESSION_SCOPES: SessionScope[] = ["user", "internal"];
 
 /** The scope of a session nothing classified otherwise: the user's own. */
 export const DEFAULT_SESSION_SCOPE: SessionScope = "user";

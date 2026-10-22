@@ -1096,13 +1096,13 @@ test("forking refuses a session that has never run", async () => {
 });
 
 test("a fork inherits its parent's scope instead of landing in the user's", async () => {
-  // A subagent parent (Task-492): the child of a session the user's sidebar
+  // An internal parent (Task-492): the child of a session the user's sidebar
   // never shows must not become a session it does.
   installSeam();
   const parent = claudeSdkStore.acquire("fork-scope-parent", {
     agentType: "workshop",
     modelId: "sonnet",
-    scope: "subagent",
+    scope: "internal",
   });
   sessionRuntime.createSession(
     "fork-scope-parent",
@@ -1125,7 +1125,7 @@ test("a fork inherits its parent's scope instead of landing in the user's", asyn
     },
   });
 
-  assert.equal(sessionStore.get(child.id)?.scope, "subagent");
+  assert.equal(sessionStore.get(child.id)?.scope, "internal");
   assert.equal(
     sessionStore.liveDefaultScopeGate([child.id])(child.id),
     false,

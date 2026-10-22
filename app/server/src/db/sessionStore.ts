@@ -1325,8 +1325,8 @@ function list(
  * Whether each of `candidateIds` may appear in a DEFAULT projection, for the
  * live in-memory sources that merge into the session list (the pi store, the
  * Claude SDK store). Those know nothing about scope, so without this a running
- * `internal`/`subagent` session would ride into the sidebar past the store's
- * own `WHERE scope = 'user'`.
+ * `internal` session would ride into the sidebar past the store's own
+ * `WHERE scope = 'user'`.
  *
  * The same gate answers for ARCHIVE state, since the default projection reads
  * unarchived rows only ({@link list} with `excludeArchived`): a live runtime
@@ -1388,9 +1388,9 @@ function liveDefaultScopeGate(
  * Persisting the row first is what lets every default projection treat a live
  * session with no row as the user's. So this either writes that row (a session
  * nothing has persisted yet) or checks the stored scope against the claim, and
- * THROWS on a mismatch: registering a subagent session through a path that
- * declares no scope is a bug that must surface at the registration, not as a
- * subagent conversation appearing in the user's sidebar.
+ * THROWS on a mismatch: registering an internal session through a path that
+ * declares no scope is a bug that must surface at the registration, not as an
+ * internal run appearing in the user's sidebar.
  */
 function claimScope(input: {
   id: string;
