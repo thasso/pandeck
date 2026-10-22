@@ -168,7 +168,7 @@ export function disableAccountImpact(
   }
   if (usage.boundSessionCount > 0) {
     lines.push(
-      `${usage.boundSessionCount} existing ${usage.boundSessionCount === 1 ? "session keeps" : "sessions keep"} running on it (including forks, /clear and drafts of those sessions).`,
+      `${usage.boundSessionCount} existing ${usage.boundSessionCount === 1 ? "session moves to another eligible account on its" : "sessions move to another eligible account on their"} next turn, or stop there if none is left (including forks, /clear and drafts of those sessions).`,
     );
   }
   return lines;
@@ -342,7 +342,12 @@ export async function createCredentialProfile(
 
 async function patchCredentialProfile(
   id: string,
-  patch: { name?: string; enabled?: boolean; enterprise?: boolean },
+  patch: {
+    name?: string;
+    enabled?: boolean;
+    enterprise?: boolean;
+    priority?: number;
+  },
 ): Promise<CredentialProfileSummary> {
   const res = await fetch(
     `${serverHttpOrigin()}/api/credential-profiles/${encodeURIComponent(id)}`,
@@ -384,6 +389,14 @@ export function setCredentialProfileEnterprise(
   enterprise: boolean,
 ): Promise<CredentialProfileSummary> {
   return patchCredentialProfile(id, { enterprise });
+}
+
+/** Automatic prefers higher-priority accounts among the eligible ones. */
+export function setCredentialProfilePriority(
+  id: string,
+  priority: number,
+): Promise<CredentialProfileSummary> {
+  return patchCredentialProfile(id, { priority });
 }
 
 /** Deletes the account and reports the settings slots whose pin was dropped with it. */

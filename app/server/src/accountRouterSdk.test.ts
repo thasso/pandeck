@@ -88,9 +88,8 @@ test.each([
       .spyOn(live, "createRuntimeAdapter")
       .mockReturnValue(adapter);
     try {
-      // Disabled-account inheritance is unchanged. Demotion during an admitted
-      // turn does not interrupt it, but must refuse the next one.
-      setCredentialProfileEnabled(profile.id, false);
+      // Demotion during an admitted turn does not interrupt it, but must
+      // refuse the next one.
       if (priorPrompt) {
         prompt.mockImplementationOnce(async () => {
           patchCredentialProfile(profile.id, { enterprise: false });

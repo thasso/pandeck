@@ -66,6 +66,58 @@ function signature(selection: Selection | undefined): string {
   });
 }
 
+/**
+ * A turn starting on a disabled account first moves the idle session to the
+ * next eligible account within its enterprise requirement, through the same
+ * engine switch as limit failover, and leaves a display-only marker. With no
+ * eligible account the turn is refused. A running turn is never interrupted.
+ */
+export async function moveOffDisabledAccount(
+  driver: RuntimePromptDriver,
+  notice: (message: string) => void,
+): Promise<void> {
+  const source = driver.credentialProfileId
+    ? credentialProfileById(driver.credentialProfileId)
+    : undefined;
+  const selected = driver.modelSelection?.();
+  if (
+    !source ||
+    source.enabled ||
+    driver.isRunning ||
+    !driver.switchAccount ||
+    !selected?.model ||
+    !isSubscriptionAccountModel(source.provider, selected.model.provider)
+  )
+    return;
+  const pick = await pickAccount({
+    model: { provider: selected.model.provider, modelId: selected.model.id },
+    ...(selected.thinkingLevel
+      ? { thinkingLevel: selected.thinkingLevel }
+      : {}),
+    requiresEnterprise:
+      sessionStore.get(driver.id)?.requiresEnterprise === true,
+  });
+  const target =
+    pick.profileId && !pick.degraded
+      ? credentialProfileById(pick.profileId)
+      : undefined;
+  if (!target)
+    throw new Error(
+      `${source.name} is disabled and no other eligible account is available. Enable an account to continue this session.`,
+    );
+  await driver.switchAccount(target.id, () =>
+    assertSessionAccountSwitch(
+      driver.id,
+      source.id,
+      target.id,
+      source.provider,
+    ),
+  );
+  notice(
+    `Switched from ${source.name} to ${target.name} — ${source.name} is disabled.`,
+  );
+}
+
 /** Called immediately before runtime.prompt, after asynchronous admission. */
 export function prepareAccountRecoveryTurn(
   live: LiveRuntimeSession,

@@ -15,7 +15,6 @@ import type {
   UsageLimitWindow,
 } from "@assistant/shared/usage";
 import {
-  OPENAI_RESET_AUTO_REDEEM_LEAD_MS,
   formatUsageReset,
   resetCreditExpiryLevel,
   usageLevel,
@@ -90,7 +89,14 @@ import {
  * "% used" meters with live reset countdowns; utilization is always CONSUMED,
  * never remaining. Each provider loads/refreshes and fails independently.
  */
-export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
+export function UsagePage({
+  back,
+  openAiResetAutoRedeemHours,
+}: {
+  back?: PageHeaderBack | undefined;
+  /** `AppSettings.accountRouting.openAiResetAutoRedeemHours`; 0 means off. */
+  openAiResetAutoRedeemHours: number;
+}) {
   // One query, one key: the enabled-account list is what every section below
   // is keyed on, so an empty state may only be drawn once it has answered (R1).
   const { state: profileState, reload: reloadProfiles } = useFetchState(
@@ -261,6 +267,7 @@ export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
                         openai.loadProfile(profile.id, { refresh: true })
                       }
                       profileId={profile.id}
+                      openAiResetAutoRedeemHours={openAiResetAutoRedeemHours}
                     />
                   ) : null}
                 </UsageAccountSection>
@@ -873,11 +880,13 @@ function OpenAiUsageContent({
   now,
   onReload,
   profileId,
+  openAiResetAutoRedeemHours,
 }: {
   snapshot: OpenAiUsageSnapshot;
   now: number;
   onReload: () => Promise<void>;
   profileId: string;
+  openAiResetAutoRedeemHours: number;
 }) {
   if (!snapshot.available) {
     return (
@@ -927,6 +936,7 @@ function OpenAiUsageContent({
           now={now}
           onReload={onReload}
           profileId={profileId}
+          openAiResetAutoRedeemHours={openAiResetAutoRedeemHours}
         />
       ) : null}
 
@@ -1022,8 +1032,9 @@ function expiryMoment(at: number, now: number, withTime: boolean): string {
 function expiryLabel(
   iso: string | null,
   now: number,
+  leadMs: number,
 ): { text: string; level: ResetCreditExpiryLevel } {
-  const level = resetCreditExpiryLevel(iso, now);
+  const level = resetCreditExpiryLevel(iso, now, leadMs);
   if (level === "unknown") return { text: "expiry unknown", level };
   const at = Date.parse(iso!);
   if (level === "expired")
@@ -1036,10 +1047,11 @@ function expiryLabel(
       text: `expires ${moment} · in ${countdown} · auto-redeem due`,
       level,
     };
-  if (level === "imminent") {
-    const autoAt = new Date(
-      at - OPENAI_RESET_AUTO_REDEEM_LEAD_MS,
-    ).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (level === "imminent" && leadMs > 0) {
+    const autoAt = new Date(at - leadMs).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
     return {
       text: `expires ${moment} · in ${countdown} · auto-redeems ${autoAt}`,
       level,
@@ -1072,13 +1084,16 @@ export function OpenAiCreditsCard({
   now,
   onReload,
   profileId,
+  openAiResetAutoRedeemHours,
 }: {
   credits: NonNullable<OpenAiUsageSnapshot["credits"]>;
   resetCredits: OpenAiUsageSnapshot["resetCredits"];
   now: number;
   onReload: () => Promise<void>;
   profileId: string;
+  openAiResetAutoRedeemHours: number;
 }) {
+  const leadMs = openAiResetAutoRedeemHours * 3_600_000;
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1167,7 +1182,7 @@ export function OpenAiCreditsCard({
             </div>
             <ItemGroup>
               {available.map((credit) => {
-                const expiry = expiryLabel(credit.expiresAt, now);
+                const expiry = expiryLabel(credit.expiresAt, now, leadMs);
                 return (
                   <Item key={credit.id} variant="outline" size="sm">
                     <ItemContent>
@@ -1226,9 +1241,9 @@ export function OpenAiCreditsCard({
                   </span>
                 </div>
                 <div className="mt-1.5 text-sm text-muted-foreground">
-                  An unspent reset is redeemed automatically{" "}
-                  {OPENAI_RESET_AUTO_REDEEM_LEAD_MS / 3_600_000}h before it
-                  expires rather than lost.
+                  {leadMs > 0
+                    ? `An unspent reset is redeemed automatically ${openAiResetAutoRedeemHours}h before it expires rather than lost.`
+                    : "Auto-redeem is off in Settings, so an unspent reset lapses when it expires."}
                 </div>
               </>
             ) : null}
@@ -1252,6 +1267,7 @@ export function OpenAiCreditsCard({
             credit={target}
             applicable={applicable > 0}
             now={now}
+            leadMs={leadMs}
             busy={busy}
             error={error}
             onConfirm={() => void redeem()}
@@ -1268,6 +1284,7 @@ function RedeemResetDialog({
   credit,
   applicable,
   now,
+  leadMs,
   busy,
   error,
   onConfirm,
@@ -1277,12 +1294,13 @@ function RedeemResetDialog({
   /** Whether OpenAI currently reports a window this reset would clear. */
   applicable: boolean;
   now: number;
+  leadMs: number;
   busy: boolean;
   error: string | null;
   onConfirm: () => void;
   onClose: () => void;
 }) {
-  const expiry = expiryLabel(credit.expiresAt, now);
+  const expiry = expiryLabel(credit.expiresAt, now, leadMs);
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="sm:max-w-md" showCloseButton={!busy}>

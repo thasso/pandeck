@@ -283,7 +283,11 @@ test("existing slot pins survive reads and unrelated writes until saved as Autom
         : openai.id;
   updateSettings(pinned);
   updateSettings({
-    accountRouting: { fiveHourUsedThreshold: 85, weeklyUsedThreshold: 90 },
+    accountRouting: {
+      fiveHourUsedThreshold: 85,
+      weeklyUsedThreshold: 90,
+      openAiResetAutoRedeemHours: 6,
+    },
   });
 
   const retained = getSettings();

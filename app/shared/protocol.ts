@@ -387,9 +387,11 @@ export interface CredentialProfileSummary {
   id: string;
   name: string;
   provider: CredentialProfileProvider;
-  /** Disabled profiles remain available to already-bound sessions but are omitted from new-session and Usage account choices. */
+  /** Disabled profiles are omitted from new-session and Usage account choices; a bound session moves off one at its next turn. */
   enabled: boolean;
   enterprise: boolean;
+  /** Automatic prefers higher among eligible accounts; absent means 0. */
+  priority?: number;
   createdAt: number;
   updatedAt: number;
   status: CredentialProfileStatus;
@@ -1548,6 +1550,11 @@ export interface AppSettings {
   accountRouting: {
     fiveHourUsedThreshold: number;
     weeklyUsedThreshold: number;
+    /**
+     * Hours before expiry at which the server redeems an unspent OpenAI reset
+     * credit on its own (`docs/usage.md#auto-redeem`); 0 turns it off.
+     */
+    openAiResetAutoRedeemHours: number;
   };
 }
 

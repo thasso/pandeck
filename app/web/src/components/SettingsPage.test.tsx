@@ -109,6 +109,7 @@ describe("credential profile settings", () => {
         connectionLabel="Connect"
         onToggle={() => {}}
         onToggleEnterprise={() => {}}
+        onPriority={() => {}}
         onConnect={() => {}}
       />,
     );
@@ -131,6 +132,7 @@ describe("credential profile settings", () => {
         connectionLabel="Reconnect"
         onToggle={() => {}}
         onToggleEnterprise={() => {}}
+        onPriority={() => {}}
         onConnect={() => {}}
       />,
     );
@@ -164,6 +166,7 @@ describe("credential profile settings", () => {
         connectionLabel: "Reconnect",
         onToggle: () => {},
         onToggleEnterprise: () => {},
+        onPriority: () => {},
         onConnect: () => {},
         onRename: () => {},
         onDelete: () => {},
@@ -211,6 +214,7 @@ function card(status: CredentialProfileSummary["status"]): string {
       connectionLabel={status === "connecting" ? "Continue login" : "Connect"}
       onToggle={() => {}}
       onToggleEnterprise={() => {}}
+      onPriority={() => {}}
       onConnect={() => {}}
     />,
   );

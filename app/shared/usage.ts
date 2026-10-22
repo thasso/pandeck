@@ -353,14 +353,15 @@ export interface OpenAiResetRedeemResult {
 }
 
 /**
- * How long before its expiry the server spends a still-available reset credit
- * on its own (`docs/usage.md#auto-redeem`). A credit lapses at the grant's
- * time-of-day in UTC — small hours in Europe — and an unspent one is worth
- * nothing, so it is redeemed on whatever window is open rather than let slip.
- * Six hours leaves the whole preceding day for a deliberate redemption while
- * still absorbing a server that was down for an evening.
+ * The default for how long before its expiry the server spends a
+ * still-available reset credit on its own (`docs/usage.md#auto-redeem`,
+ * `AppSettings.accountRouting.openAiResetAutoRedeemHours`). A credit lapses at the
+ * grant's time-of-day in UTC — small hours in Europe — and an unspent one is
+ * worth nothing, so it is redeemed on whatever window is open rather than let
+ * slip. Six hours leaves the whole preceding day for a deliberate redemption
+ * while still absorbing a server that was down for an evening.
  */
-export const OPENAI_RESET_AUTO_REDEEM_LEAD_MS = 6 * 60 * 60_000;
+export const OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS = 6;
 
 /**
  * How urgently a reset credit's expiry should read.
@@ -369,7 +370,8 @@ export const OPENAI_RESET_AUTO_REDEEM_LEAD_MS = 6 * 60 * 60_000;
  * - `soon`: within five days — shown with its clock time, because a date alone
  *   ("Sep 21") hides that the lapse is at 04:21 that morning.
  * - `imminent`: within a day — the countdown is the message.
- * - `pending`: inside the auto-redeem lead — the server is about to spend it.
+ * - `pending`: inside the auto-redeem lead (`leadMs`, 0 when auto-redeem is
+ *   off) — the server is about to spend it.
  * - `expired`: past — the provider drops such rows, so this is rarely seen.
  * - `unknown`: no expiry on the row.
  */
@@ -379,6 +381,7 @@ export type ResetCreditExpiryLevel =
 export function resetCreditExpiryLevel(
   expiresAt: string | null | undefined,
   now: number,
+  leadMs: number,
 ): ResetCreditExpiryLevel {
   if (!expiresAt) return "unknown";
   const at = Date.parse(expiresAt);
@@ -386,7 +389,7 @@ export function resetCreditExpiryLevel(
   const remaining = at - now;
   const DAY = 24 * 60 * 60_000;
   if (remaining <= 0) return "expired";
-  if (remaining <= OPENAI_RESET_AUTO_REDEEM_LEAD_MS) return "pending";
+  if (remaining <= leadMs) return "pending";
   if (remaining <= DAY) return "imminent";
   if (remaining <= 5 * DAY) return "soon";
   return "ok";

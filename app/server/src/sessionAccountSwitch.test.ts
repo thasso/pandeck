@@ -717,3 +717,38 @@ for (const harness of engines) {
     assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
   });
 }
+
+for (const harness of engines) {
+  test(`${harness} moves off a disabled account before its next turn starts`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    profiles.setCredentialProfileEnabled(a, false);
+    await s.send();
+    assert.deepEqual(s.moves, [b]);
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [b],
+    );
+    assert.ok(
+      JSON.stringify(messages(s)).includes(
+        "Switched from A to B — A is disabled.",
+      ),
+    );
+  });
+  test.each([false, true])(
+    `${harness} refuses the turn when disabling left no eligible account; enterprise=%s`,
+    async (enterprise) => {
+      const a = account(harness, "A", enterprise);
+      if (enterprise) account(harness, "Personal");
+      const s = setup(harness, a, [undefined], enterprise);
+      profiles.setCredentialProfileEnabled(a, false);
+      await assert.rejects(
+        s.send(),
+        /A is disabled and no other eligible account is available/,
+      );
+      assert.deepEqual(s.moves, []);
+      assert.equal(s.calls.length, 0);
+    },
+  );
+}

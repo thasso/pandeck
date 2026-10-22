@@ -62,7 +62,7 @@ function UsagePreview({ scenario }: { scenario: UsageScenario }) {
   }, [scenario]);
   return (
     <div className="h-dvh">
-      <UsagePage />
+      <UsagePage openAiResetAutoRedeemHours={6} />
     </div>
   );
 }

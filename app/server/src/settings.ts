@@ -50,6 +50,7 @@ import {
   isSafeEntryName,
   normalizeBackgroundWorkSettings,
 } from "@assistant/shared";
+import { OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS } from "@assistant/shared/usage";
 import { APP_SETTINGS_PATH, readStoredAppSettings } from "./appSettingsFile.ts";
 import { getBraveSettings } from "./braveSettings.ts";
 import { getOpenAiCompatibleSettings } from "./openAiCompatibleSettings.ts";
@@ -86,6 +87,12 @@ function normalizeAccountRoutingSettings(
       90,
     ),
     weeklyUsedThreshold: clampNumber(value?.weeklyUsedThreshold, 0, 100, 95),
+    openAiResetAutoRedeemHours: clampNumber(
+      value?.openAiResetAutoRedeemHours,
+      0,
+      168,
+      OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS,
+    ),
   };
 }
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {

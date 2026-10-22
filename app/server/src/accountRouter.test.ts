@@ -118,6 +118,55 @@ test("weekly reset ties prefer lower known 5-hour usage, then stable id", () => 
   assert.equal(rank([account("z"), account("a")]).profileId, "a");
   assert.equal(rank([account("a"), account("z")]).profileId, "a");
 });
+test("manual priority ranks first within a usage tier, higher wins", () => {
+  const preferred = account("z-preferred", 80, 94, 48);
+  preferred.profile.priority = 1;
+  // Over the usual keys: earlier weekly reset, lower 5-hour use, id.
+  assert.equal(
+    rank([account("a-early", 10, 10, 1), preferred]).profileId,
+    preferred.profile.id,
+  );
+  const missing = account("y-missing");
+  missing.usage = null;
+  missing.profile.priority = 2;
+  const stale = account("x-stale");
+  stale.usage!.fetchedAt = now - USAGE_STALE_MS["openai-codex"];
+  stale.profile.priority = 3;
+  // Never over fresh headroom.
+  assert.equal(
+    rank([missing, stale, preferred]).profileId,
+    preferred.profile.id,
+  );
+  assert.equal(rank([missing, stale]).profileId, stale.profile.id);
+  const demoted = account("a-demoted", 10, 10, 1);
+  demoted.profile.priority = -1;
+  assert.equal(
+    rank([demoted, account("b-plain", 80, 94, 48)]).profileId,
+    "b-plain",
+  );
+});
+
+test("priority never overrides eligibility, exhaustion or enterprise", () => {
+  const spent = account("spent", 95, 30);
+  const benched = { ...account("benched"), limited: { until: now + 60_000 } };
+  const login = account("login");
+  login.profile.health = { state: "needs-login", since: now };
+  const unoffered = { ...account("unoffered"), offersModel: false };
+  const disabled = account("disabled");
+  disabled.profile.enabled = false;
+  const personal = account("personal");
+  for (const top of [spent, benched, login, unoffered, disabled, personal])
+    top.profile.priority = 10;
+  const enterprise = account("z-enterprise", 80, 94, 48);
+  enterprise.profile.enterprise = true;
+  const pool = [spent, benched, login, unoffered, disabled, enterprise];
+  assert.equal(rank(pool).profileId, enterprise.profile.id);
+  assert.equal(
+    rank([personal, enterprise], { requiresEnterprise: true }).profileId,
+    enterprise.profile.id,
+  );
+});
+
 test("fresh room precedes missing and stale usage, which precede exhaustion", () => {
   const missing = account("a-missing");
   missing.usage = null;

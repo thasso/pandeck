@@ -33,7 +33,7 @@ export interface AccountPickRequest {
 
 type RoutingProfile = Pick<
   CredentialProfileSummary,
-  "id" | "provider" | "enabled" | "enterprise" | "health"
+  "id" | "provider" | "enabled" | "enterprise" | "health" | "priority"
 >;
 
 export interface AccountCandidate {
@@ -44,7 +44,10 @@ export interface AccountCandidate {
 }
 
 export type AccountPickResult = AccountPickPreviewResult;
-type AccountRoutingThresholds = AppSettings["accountRouting"];
+type AccountRoutingThresholds = Pick<
+  AppSettings["accountRouting"],
+  "fiveHourUsedThreshold" | "weeklyUsedThreshold"
+>;
 
 /** Pure policy, shared by real gathering and the ranking regressions. */
 export function rankAccountCandidates(
@@ -146,8 +149,10 @@ function compareUsage(
   const left = usageRank(a, thresholds, now);
   const right = usageRank(b, thresholds, now);
   // Infinity - Infinity is NaN; `||` deliberately proceeds to the next key.
+  // The manual priority orders accounts within a usage tier only.
   return (
     left.tier - right.tier ||
+    (b.profile.priority ?? 0) - (a.profile.priority ?? 0) ||
     left.weeklyReset - right.weeklyReset ||
     left.fiveHourUsed - right.fiveHourUsed ||
     (a.profile.id < b.profile.id ? -1 : a.profile.id > b.profile.id ? 1 : 0)

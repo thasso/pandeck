@@ -158,12 +158,14 @@ bench state here.
 
 Accounts carry `enterprise: boolean`, default false in the registry and wire
 summary. Settings changes it with `PATCH /api/credential-profiles/:id`
-`{ enterprise }`; this is metadata only and does not alter login provisioning. A
-PATCH may include `name`, `enabled` and `enterprise` together. The server
-validates every supplied field before one metadata write and publication. A
-session's `requiresEnterprise` is durable, defaults to false and survives
-restore and forks. Regular sessions may choose enterprise or personal accounts.
-The enterprise requirement constrains the account executing the session and
+`{ enterprise }`; this is metadata only and does not alter login provisioning.
+Accounts also carry an integer `priority` (default 0; `{ priority }` on the same
+PATCH, an integer field on the Settings account card). A PATCH may include
+`name`, `enabled`, `enterprise` and `priority` together. The server validates
+every supplied field before one metadata write and publication. A session's
+`requiresEnterprise` is durable, defaults to false and survives restore and
+forks. Regular sessions may choose enterprise or personal accounts. The
+enterprise requirement constrains the account executing the session and
 automatically derived work. Neither normal ranking nor degradation may select a
 personal account. An explicit personal pick is refused when the requirement is
 set. This is an account constraint, not end-to-end data confinement.
@@ -171,12 +173,13 @@ set. This is an account constraint, not end-to-end data confinement.
 Every session turn passes the shared `session/runtimePrompt.ts` admission check,
 including restored sessions, first prompts and spawned peers on both engines. An
 enterprise-required session whose bound account is missing or no longer
-enterprise is refused before any append. Disabled bound accounts still run if
-they satisfy the enterprise requirement. Enterprise flag changes apply to runs
-and one-shots admitted after the change; an already admitted run may finish.
-Policy is not rechecked inside provider engines. Manual compaction on both
-engines checks the same enterprise assertion at the shared host-command entry,
-before flushing memory or making its model call.
+enterprise is refused before any append. A turn starting on a disabled bound
+account first moves the session; see
+[Live account switching](#live-account-switching). Enterprise flag changes apply
+to runs and one-shots admitted after the change; an already admitted run may
+finish. Policy is not rechecked inside provider engines. Manual compaction on
+both engines checks the same enterprise assertion at the shared host-command
+entry, before flushing memory or making its model call.
 
 Enterprise scope follows work the session starts automatically. Spawned peers
 inherit `requiresEnterprise: true`, including approval-delayed creation. An
@@ -253,13 +256,17 @@ isolated SDK runtime. Ranking is:
 3. Fresh usage at or beyond either threshold, even if the other window is
    unknown.
 
-Within a tier, prefer the earliest known future weekly reset, then the lowest
-known 5-hour usage, then the stable account id. Unknown values sort last; stale
-values do not claim a reset or headroom. Shared `USAGE_STALE_MS` determines age,
-and `usageWindowPct` invalidates a cycle after its reset. Thresholds are
-consumed percentages in `AppSettings.accountRouting`: `fiveHourUsedThreshold`
-defaults to 90 and `weeklyUsedThreshold` to 95. Room means strictly below both.
-Settings exposes these under Models; storage normalizes each to 0–100.
+Within a tier, the higher manual `priority` wins first, so it never lifts a
+stale, missing or exhausted account over one with fresh room. Priority never
+readmits a filtered account or crosses the enterprise requirement.
+
+Then prefer the earliest known future weekly reset, then the lowest known 5-hour
+usage, then the stable account id. Unknown values sort last; stale values do not
+claim a reset or headroom. Shared `USAGE_STALE_MS` determines age, and
+`usageWindowPct` invalidates a cycle after its reset. Thresholds are consumed
+percentages in `AppSettings.accountRouting`: `fiveHourUsedThreshold` defaults to
+90 and `weeklyUsedThreshold` to 95. Room means strictly below both. Settings
+exposes these under Models; storage normalizes each to 0–100.
 
 If health/model/effort/bench filters leave none, prefer remaining enabled
 accounts without `needs-login`, then unbenched accounts, then accounts offering
@@ -408,10 +415,21 @@ or push notification projection.
 
 ## Live account switching
 
-An explicitly bound session can move after its own subscription provider reports
-`quota`, `rate_limit` or structured `loginDeath`. Plain auth errors, unrelated
-providers/errors and Stop or abort never trigger a move. This applies to
-interactive, background and provider-initiated runs, including explicitly
+A turn that starts on a disabled bound account moves first
+(`moveOffDisabledAccount`, called by `session/runtimePrompt.ts` after skill
+admission). It picks a non-degraded account for the session's model, effort and
+enterprise requirement, moves the idle session through the same
+`driver.switchAccount` as failover below, and appends the display-only marker
+`Switched from A to B — A is disabled.` With no eligible account the turn is
+refused before any append with a message naming the disabled account. A running
+turn, a steer into it, a recovery continuation and a provider-initiated turn
+(`beginRuntimeProviderTurn`) are never moved this way. Disabling an account
+therefore takes effect on each bound session's next turn.
+
+An explicitly bound session can also move after its own subscription provider
+reports `quota`, `rate_limit` or structured `loginDeath`. Plain auth errors,
+unrelated providers/errors and Stop or abort never trigger a move. This applies
+to interactive, background and provider-initiated runs, including explicitly
 selected session accounts. Existing Settings one-shot pins keep their policy
 above.
 

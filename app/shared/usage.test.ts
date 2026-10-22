@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  OPENAI_RESET_AUTO_REDEEM_LEAD_MS,
-  formatUsageReset,
-  resetCreditExpiryLevel,
-} from "./usage.ts";
+import { formatUsageReset, resetCreditExpiryLevel } from "./usage.ts";
 
 const NOW = Date.parse("2026-08-06T12:00:00Z");
 const MINUTE = 60_000;
@@ -68,8 +64,9 @@ describe("formatUsageReset", () => {
 });
 
 describe("resetCreditExpiryLevel", () => {
-  const level = (ms: number) =>
-    resetCreditExpiryLevel(new Date(NOW + ms).toISOString(), NOW);
+  const LEAD = 6 * HOUR;
+  const level = (ms: number, leadMs = LEAD) =>
+    resetCreditExpiryLevel(new Date(NOW + ms).toISOString(), NOW, leadMs);
 
   it("bands a credit's expiry by how much of it is left", () => {
     expect(level(20 * DAY)).toBe("ok");
@@ -80,15 +77,19 @@ describe("resetCreditExpiryLevel", () => {
   });
 
   it("is `pending` inside the auto-redeem lead — the server is about to spend it", () => {
-    expect(level(OPENAI_RESET_AUTO_REDEEM_LEAD_MS)).toBe("pending");
-    expect(level(OPENAI_RESET_AUTO_REDEEM_LEAD_MS + MINUTE)).toBe("imminent");
+    expect(level(LEAD)).toBe("pending");
+    expect(level(LEAD + MINUTE)).toBe("imminent");
     expect(level(10 * MINUTE)).toBe("pending");
+  });
+
+  it("is never `pending` while auto-redeem is off", () => {
+    expect(level(10 * MINUTE, 0)).toBe("imminent");
   });
 
   it("says expired at and past the moment, and unknown without one", () => {
     expect(level(0)).toBe("expired");
     expect(level(-HOUR)).toBe("expired");
-    expect(resetCreditExpiryLevel(null, NOW)).toBe("unknown");
-    expect(resetCreditExpiryLevel("not a date", NOW)).toBe("unknown");
+    expect(resetCreditExpiryLevel(null, NOW, LEAD)).toBe("unknown");
+    expect(resetCreditExpiryLevel("not a date", NOW, LEAD)).toBe("unknown");
   });
 });

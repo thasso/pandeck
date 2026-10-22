@@ -110,6 +110,7 @@ describe("account page usage", () => {
         connectionLabel: "Reconnect",
         onToggle: () => {},
         onToggleEnterprise: () => {},
+        onPriority: () => {},
         onConnect: () => {},
       }),
     );
@@ -129,6 +130,7 @@ describe("account page usage", () => {
         connectionLabel: "Reconnect",
         onToggle: () => {},
         onToggleEnterprise: () => {},
+        onPriority: () => {},
         onConnect: () => {},
       }),
     );

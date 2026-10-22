@@ -114,6 +114,7 @@ import {
   renameCredentialProfile,
   setCredentialProfileEnabled,
   setCredentialProfileEnterprise,
+  setCredentialProfilePriority,
   slotModelOptions,
   startOpenAiProfileLogin,
   type SlotModelOption,
@@ -628,6 +629,7 @@ export function CredentialProfileCard({
   connectionDisabled,
   onToggle,
   onToggleEnterprise,
+  onPriority,
   onConnect,
   onRename,
   onDelete,
@@ -639,6 +641,7 @@ export function CredentialProfileCard({
   connectionDisabled?: boolean;
   onToggle: () => void;
   onToggleEnterprise: (enterprise: boolean) => void;
+  onPriority: (priority: number) => void;
   onConnect: () => void;
   onRename?: () => void;
   onDelete?: () => void;
@@ -731,6 +734,28 @@ export function CredentialProfileCard({
           checked={profile.enterprise}
           onChange={onToggleEnterprise}
         />
+      </div>
+      <div className="mt-3">
+        <Field label="Priority">
+          <Input
+            key={profile.priority ?? 0}
+            type="number"
+            step={1}
+            aria-label={`Priority: ${profile.name}`}
+            defaultValue={profile.priority ?? 0}
+            onBlur={(event) => {
+              const priority = Number(event.target.value);
+              if (
+                Number.isSafeInteger(priority) &&
+                priority !== (profile.priority ?? 0)
+              )
+                onPriority(priority);
+            }}
+          />
+          <FieldDescription>
+            Automatic picks higher numbers first among eligible accounts.
+          </FieldDescription>
+        </Field>
       </div>
       {profile.setup ? (
         <Item variant="muted" className="mt-2">
@@ -1042,6 +1067,11 @@ function CredentialProfilesSection({
                   onToggle={() => void toggle()}
                   onToggleEnterprise={(enterprise) =>
                     void setCredentialProfileEnterprise(profile.id, enterprise)
+                      .then(refresh)
+                      .catch(fail)
+                  }
+                  onPriority={(priority) =>
+                    void setCredentialProfilePriority(profile.id, priority)
                       .then(refresh)
                       .catch(fail)
                   }

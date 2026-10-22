@@ -8261,7 +8261,13 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                     <Suspense
                       fallback={<LazySurfaceFallback label="Opening Usage…" />}
                     >
-                      <UsagePage back={screenBack} />
+                      <UsagePage
+                        back={screenBack}
+                        openAiResetAutoRedeemHours={
+                          state.settings.accountRouting
+                            .openAiResetAutoRedeemHours
+                        }
+                      />
                     </Suspense>
                   ) : route.name === "files" ? (
                     <Suspense

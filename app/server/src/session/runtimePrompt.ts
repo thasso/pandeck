@@ -39,6 +39,7 @@ import { sessionStore } from "../db/sessionStore.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
 import {
   installAccountRecovery,
+  moveOffDisabledAccount,
   prepareAccountRecoveryTurn,
 } from "../sessionAccountSwitch.ts";
 import {
@@ -333,6 +334,11 @@ export async function promptRuntimeSessionWithRuntime(
     );
     if (options.skillInvocation)
       await assertSkillInvocation(options, frozenSkills);
+    // An account recovery continuation has already chosen its account.
+    if (!accountRecovery)
+      await moveOffDisabledAccount(driver, (message) =>
+        ensureRuntimeSessionWithRuntime(runtime, driver).appendNotice(message),
+      );
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
     // Nothing below awaits before the append. The enterprise check runs before

@@ -24,6 +24,7 @@ const meta = {
     connectionLabel: "Reconnect",
     onToggle: noop,
     onToggleEnterprise: noop,
+    onPriority: noop,
     onConnect: noop,
     onRename: noop,
     onDelete: noop,
