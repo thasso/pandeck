@@ -3,8 +3,11 @@ import {
   OPENAI_COMPATIBLE_THINKING_FORMATS,
 } from "@assistant/shared";
 import {
+  closeSync,
   existsSync,
+  fchmodSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   writeFileSync,
@@ -64,7 +67,16 @@ function readFile(): OpenAiCompatibleConfigFile {
 function writeFile(config: OpenAiCompatibleConfigFile): void {
   mkdirSync(OPENAI_COMPATIBLE_SETTINGS_DIR, { recursive: true });
   const tmp = `${OPENAI_COMPATIBLE_CONFIG_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  // The open mode only applies on creation: a temp file left by an interrupted
+  // write keeps its old mode, so tighten it before it holds the key. The
+  // rename then hands that mode to the config.
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, OPENAI_COMPATIBLE_CONFIG_PATH);
 }
 
