@@ -1,5 +1,6 @@
 import type {
   BackgroundWorkItemSummary,
+  ServerMessage,
   StateDigestEntry,
   StateEvent,
 } from "@assistant/shared";
@@ -7,6 +8,7 @@ import {
   backgroundWorkStore,
   type BackgroundWorkItem,
 } from "./db/backgroundWorkStore.ts";
+import type { StateTopicDescriptor } from "./stateTopicKernel.ts";
 
 /**
  * The sole narrowing boundary between durable background-work rows and the
@@ -66,7 +68,7 @@ export function backgroundWorkItemSummaryOf(
  * reported: reading the whole table here made every broadcast flush cost a scan
  * of all background history ever recorded.
  */
-export function backgroundWorkRevisionIndex(
+function backgroundWorkRevisionIndex(
   ids: Iterable<string>,
 ): Map<string, { revision: number; live: boolean }> {
   return new Map(
@@ -152,3 +154,38 @@ export function backgroundWorkStateItems(
   }
   return events;
 }
+
+function backgroundWorkSummary(
+  id: string,
+): BackgroundWorkItemSummary | undefined {
+  const item = backgroundWorkStore.getItem(id);
+  return item ? backgroundWorkItemSummaryOf(item) : undefined;
+}
+
+/**
+ * The `background` topic on the state topic kernel. Membership only grows, so
+ * there is no digest: the subscribe answer is always the bounded snapshot,
+ * whose sidecar revisions still seed a client digest should one be adopted
+ * later, with no wire change.
+ */
+export const backgroundWorkTopic = {
+  topic: "background",
+  revisions: backgroundWorkRevisionIndex,
+  summary: backgroundWorkSummary,
+  snapshot: (seq) => {
+    const snapshot = backgroundWorkSnapshot();
+    return {
+      type: "backgroundWorkList",
+      items: snapshot.items,
+      seq,
+      revisions: snapshot.revisions,
+      ...(snapshot.truncated ? { truncated: true } : {}),
+    };
+  },
+  // A frame is never larger than a subscribe answer.
+  batchMax: BACKGROUND_WORK_SNAPSHOT_MAX,
+} satisfies StateTopicDescriptor<
+  "background",
+  BackgroundWorkItemSummary,
+  Extract<ServerMessage, { type: "backgroundWorkList" }>
+>;

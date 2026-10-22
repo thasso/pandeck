@@ -1,5 +1,4 @@
 import type {
-  BackgroundWorkItemSummary,
   BroadcastTopic,
   InitiativeSummary,
   ServerMessage,
@@ -71,12 +70,11 @@ import {
 import { errorText } from "./errors.ts";
 import { permanentAssistantStore } from "./db/permanentAssistantStore.ts";
 import { permanentAssistantUnread } from "./permanentAssistantUnread.ts";
-import { setBackgroundWorkStateChangeNotifier } from "./db/backgroundWorkStore.ts";
 import {
-  backgroundWorkRevisionIndex,
-  backgroundWorkStateItems,
-  BACKGROUND_WORK_SNAPSHOT_MAX,
-} from "./backgroundWorkRegistry.ts";
+  attachStateTopics,
+  flushStateTopicsForTests,
+  stateTopicFor,
+} from "./stateTopics.ts";
 
 /**
  * Grace period between announcing a dev reload and exiting. The run has already
@@ -97,7 +95,6 @@ const PROJECT_BROADCAST_DEBOUNCE_MS = 25;
 // The Task window: a Task write reports its Initiatives in the same notify, so
 // equal windows flush both topics together.
 const INITIATIVE_BROADCAST_DEBOUNCE_MS = TASK_BROADCAST_DEBOUNCE_MS;
-const BACKGROUND_WORK_BROADCAST_DEBOUNCE_MS = 25;
 /**
  * Minimum gap between consecutive list rebuilds while invalidations keep
  * arriving (e.g. a streaming run). The first broadcast is fast (25ms debounce);
@@ -237,10 +234,6 @@ class SessionHub {
   private lastFlushedInitiativeRevisions: Map<string, number> | undefined;
   private pendingInitiativeIds = new Set<string>();
   private initiativesEventSeq = 0;
-  /** Background work is event-only after subscribe/resync. */
-  private backgroundBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  private pendingBackgroundIds = new Set<string>();
-  private backgroundEventSequence = 0;
 
   constructor() {
     // The host object inverts the session→hub calls so no engine imports hub.ts.
@@ -267,13 +260,13 @@ class SessionHub {
       for (const id of ids) this.pendingInitiativeIds.add(id);
       this.broadcastInitiatives();
     });
-    setBackgroundWorkStateChangeNotifier((change) => {
-      for (const id of change.itemIds) this.pendingBackgroundIds.add(id);
-      this.broadcastBackgroundWork();
-      // The owner's `backgroundActivity` moved. This is the ONLY session-list
-      // effect background work has: run state and unread stay untouched.
-      if (change.ownerSessionIds.length) void this.broadcastSessions();
-    });
+    attachStateTopics((topic, msg) => this.broadcastTopic(topic, msg));
+    // A published Background change moved its owner's `backgroundActivity`.
+    // This is the ONLY session-list effect background work has: run state and
+    // unread stay untouched.
+    stateTopicFor("background")!.onPublished(
+      () => void this.broadcastSessions(),
+    );
     sessionRuntime.subscribeEvents((_sessionId, event) => {
       if (event.type === "runStateChanged") void this.broadcastSessions();
     });
@@ -619,67 +612,6 @@ class SessionHub {
     return this.initiativesEventSeq;
   }
 
-  backgroundEventSeq(): number {
-    return this.backgroundEventSequence;
-  }
-
-  /** Coalesce post-commit notifications; no mutation sends a registry snapshot. */
-  broadcastBackgroundWork(): void {
-    if (this.backgroundBroadcastTimer)
-      clearTimeout(this.backgroundBroadcastTimer);
-    this.backgroundBroadcastTimer = setTimeout(() => {
-      this.backgroundBroadcastTimer = undefined;
-      this.flushBackgroundWorkBroadcast();
-    }, BACKGROUND_WORK_BROADCAST_DEBOUNCE_MS);
-  }
-
-  /**
-   * Diff only the ids writes reported since the last flush. Every background
-   * write stamps a fresh revision on each row it touches and reports exactly
-   * those ids after COMMIT, so an unreported row cannot have moved: reading
-   * the rest — all terminal history ever recorded — cannot produce an event.
-   * A reported live row is an upsert; a reported row that left membership is
-   * a delete, sent even when it joined and left inside one debounce window,
-   * because a subscribe in between may have snapshotted it.
-   */
-  private flushBackgroundWorkBroadcast(): void {
-    const pending = this.pendingBackgroundIds;
-    this.pendingBackgroundIds = new Set();
-    const index = backgroundWorkRevisionIndex(pending);
-    const events: StateEvent<BackgroundWorkItemSummary>[] = [];
-    for (const id of pending) {
-      if (!index.has(id)) continue;
-      const event = backgroundWorkStateItems([id], index)[0];
-      if (event) {
-        events.push(event);
-        continue;
-      }
-      // A live row with no summary cannot happen in one synchronous flush. If
-      // it ever does, keep the id pending so the next flush retries it rather
-      // than losing the event.
-      console.warn(
-        `[background] no summary for live work item ${id}; event deferred.`,
-      );
-      this.pendingBackgroundIds.add(id);
-    }
-    // Deleting a session reports every row it ever owned, however many, so a
-    // flush is cut into frames no larger than a subscribe answer. Each is an
-    // ordinary batch with the next `seq`, sent in order.
-    for (
-      let start = 0;
-      start < events.length;
-      start += BACKGROUND_WORK_SNAPSHOT_MAX
-    ) {
-      this.backgroundEventSequence += 1;
-      this.broadcastTopic("background", {
-        type: "stateEvents",
-        topic: "background",
-        seq: this.backgroundEventSequence,
-        events: events.slice(start, start + BACKGROUND_WORK_SNAPSHOT_MAX),
-      });
-    }
-  }
-
   broadcastProjects(): void {
     if (this.projectsBroadcastTimer) clearTimeout(this.projectsBroadcastTimer);
     this.projectsBroadcastTimer = setTimeout(() => {
@@ -813,11 +745,8 @@ class SessionHub {
       this.initiativesBroadcastTimer = undefined;
       this.flushInitiativeBroadcast();
     }
-    if (this.backgroundBroadcastTimer) {
-      clearTimeout(this.backgroundBroadcastTimer);
-      this.backgroundBroadcastTimer = undefined;
-      this.flushBackgroundWorkBroadcast();
-    }
+    // Before the session list: a post-publish listener may request it.
+    flushStateTopicsForTests();
     if (this.sessionsBroadcastTimer) {
       clearTimeout(this.sessionsBroadcastTimer);
       this.sessionsBroadcastTimer = undefined;

@@ -11,8 +11,12 @@ import type {
 } from "@assistant/shared";
 import { BACKGROUND_WORK_COMMAND_MAX_CHARS } from "@assistant/shared";
 import { backgroundDeliveryOutboxStore } from "./backgroundDeliveryOutboxStore.ts";
-import { getDb, withDbTransaction } from "./index.ts";
-import { nextId } from "./sequences.ts";
+import {
+  withChangeSet,
+  type ChangeSet,
+  type StateTopicWrites,
+} from "./changeSet.ts";
+import { getDb } from "./index.ts";
 import { sessionStore } from "./sessionStore.ts";
 
 /**
@@ -556,7 +560,11 @@ interface PendingTouches {
 let stateChangeNotifier:
   ((change: BackgroundWorkStateChange) => void) | undefined;
 
-/** The hub installs the one post-commit fan-out here; no projection read runs in a transaction. */
+/**
+ * What each committed write reported, after COMMIT: the store's write-report
+ * seam, which its tests assert. Publishing does not listen here; it receives
+ * the same item ids through the change set.
+ */
 export function setBackgroundWorkStateChangeNotifier(
   notifier: ((change: BackgroundWorkStateChange) => void) | undefined,
 ): void {
@@ -587,14 +595,29 @@ function selectByIds<Row>(
   return rows;
 }
 
+/** The `background` topic's revisions: one sequence for items and hosts. */
+const backgroundWorkTopicWrites: StateTopicWrites = {
+  topic: "background",
+  sequence: "background_work_revision",
+  stamp: (ids, revision) => {
+    const update = getDb().prepare(
+      "UPDATE background_work_items SET revision = ? WHERE id = ?",
+    );
+    for (const id of ids) update.run(revision, id);
+  },
+};
+
 /**
- * Stamp every touched row from one persisted sequence. A touched host pulls in
- * its items, because the host's state is part of each item's projection and a
- * subscriber holding only items must still see it move.
+ * Stamp every touched row with the change set's one `background` revision. A
+ * touched host pulls in its items, because the host's state is part of each
+ * item's projection and a subscriber holding only items must still see it
+ * move. Any touch enlists the topic, a host-only one included: its empty
+ * report still schedules a flush.
  */
 function markStateChanged(
   db: DatabaseSync,
   pending: PendingTouches,
+  changes: ChangeSet,
 ): BackgroundWorkStateChange | undefined {
   const hostIds = [...pending.hostIds];
   const itemIds = new Set(pending.itemIds);
@@ -607,17 +630,14 @@ function markStateChanged(
     itemIds.add(row.id);
   if (itemIds.size === 0 && hostIds.length === 0) return undefined;
 
-  const revision = nextId("background_work_revision");
-  const updateItem = db.prepare(
-    "UPDATE background_work_items SET revision = ? WHERE id = ?",
-  );
+  const ids = [...itemIds].sort();
+  changes.touch(backgroundWorkTopicWrites, ids);
+  const revision = changes.revision(backgroundWorkTopicWrites);
   const updateHost = db.prepare(
     "UPDATE background_hosts SET revision = ? WHERE id = ?",
   );
-  for (const id of itemIds) updateItem.run(revision, id);
   for (const id of hostIds) updateHost.run(revision, id);
 
-  const ids = [...itemIds].sort();
   const owners = new Set<string>();
   for (const row of selectByIds<{ owner_session_id: string }>(
     db,
@@ -645,14 +665,14 @@ function markStateChanged(
  * write minted, instead of the one it replaced.
  */
 function mutation<T>(fn: (touch: PendingTouches) => () => T): T {
-  const committed = withDbTransaction(() => {
+  const committed = withChangeSet((changes) => {
     const touch: PendingTouches = {
       itemIds: new Set(),
       hostIds: new Set(),
       owedNotices: new Set(),
     };
     const project = fn(touch);
-    const change = markStateChanged(getDb(), touch);
+    const change = markStateChanged(getDb(), touch, changes);
     recordOwedNotices(touch);
     return { value: project(), change };
   });

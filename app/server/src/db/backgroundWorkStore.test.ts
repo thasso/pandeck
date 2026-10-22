@@ -25,6 +25,7 @@ const { sessionStore } = await import("./sessionStore.ts");
 const { backgroundDeliveryOutboxStore } =
   await import("./backgroundDeliveryOutboxStore.ts");
 const { getDb } = await import("./index.ts");
+const { setStateChangeSink } = await import("./changeSet.ts");
 const { backgroundWorkItemSummaryOf } =
   await import("../backgroundWorkRegistry.ts");
 
@@ -860,6 +861,76 @@ test("every public write enters the revision seam and reports touched ids", () =
     );
   } finally {
     setBackgroundWorkStateChangeNotifier(undefined);
+  }
+});
+
+/** Two children on one retained host: one already finished, one still active. */
+function hostWithFinishedChild(owner: string) {
+  const host = { epochKey: `epoch-children-${owner}`, emptyGraceMs: 30_000 };
+  const finished = backgroundWorkStore.reserveItem(
+    reserveInput(owner, { backend: "claude-query", host }),
+  );
+  backgroundWorkStore.terminalize({ itemId: finished.id, state: "completed" });
+  const active = backgroundWorkStore.reserveItem(
+    reserveInput(owner, { backend: "claude-query", host }),
+  );
+  assert.equal(active.hostId, finished.hostId);
+  return { hostId: finished.hostId!, itemIds: [finished.id, active.id] };
+}
+
+test("a host close reports its finished member items as well as active ones", () => {
+  const { hostId, itemIds } = hostWithFinishedChild(makeSession());
+  const changes: BackgroundWorkStateChange[] = [];
+  setBackgroundWorkStateChangeNotifier((change) => changes.push(change));
+  try {
+    backgroundWorkStore.setHostState({ hostId, state: "closed" });
+  } finally {
+    setBackgroundWorkStateChangeNotifier(undefined);
+  }
+  assert.equal(changes.length, 1);
+  assert.deepEqual(changes[0]?.itemIds, [...itemIds].sort());
+  assert.deepEqual(changes[0]?.hostIds, [hostId]);
+});
+
+test("the change set hands the background topic sorted item ids, host-only commits included", () => {
+  const reports: Array<[string, string[]]> = [];
+  setStateChangeSink((topic, ids) => reports.push([topic, [...ids]]));
+  try {
+    const owner = makeSession();
+    const { hostId, itemIds } = hostWithFinishedChild(owner);
+    const more = backgroundWorkStore.reserveItem(
+      reserveInput(owner, {
+        backend: "claude-query",
+        host: { epochKey: `epoch-children-${owner}`, emptyGraceMs: 30_000 },
+      }),
+    );
+    reports.length = 0;
+    backgroundWorkStore.setHostState({ hostId, state: "closed" });
+    assert.deepEqual(reports, [["background", [...itemIds, more.id].sort()]]);
+
+    // No public write leaves a live host with no member items, so the fixture
+    // is written directly. Its Stop-all touches only the host, and must still
+    // enlist the topic: the empty report is what schedules a flush.
+    const emptyOwner = makeSession();
+    const emptyHostId = `bgh_empty_${emptyOwner}`;
+    const now = Date.now();
+    getDb()
+      .prepare(
+        `INSERT INTO background_hosts (
+          id, owner_session_id, backend, epoch_key, boot_epoch, provenance, state,
+          empty_grace_ms, settings_generation, created_at_ms, updated_at_ms, revision
+        ) VALUES (?, ?, 'claude-query', ?, 'boot-a', 'reserved', 'live', 0, 3, ?, ?, 0)`,
+      )
+      .run(emptyHostId, emptyOwner, `epoch-empty-${emptyOwner}`, now, now);
+    reports.length = 0;
+    const stopped = backgroundWorkStore.requestHostStopAll({
+      hostId: emptyHostId,
+      reason: "empty host",
+    });
+    assert.deepEqual(reports, [["background", []]]);
+    assert.ok(stopped.revision > 0, "the host is still stamped");
+  } finally {
+    setStateChangeSink(undefined);
   }
 });
 

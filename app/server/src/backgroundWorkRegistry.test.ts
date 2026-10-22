@@ -15,9 +15,11 @@ import {
 import {
   backgroundWorkSnapshot,
   backgroundWorkStateItems,
+  backgroundWorkTopic,
   BACKGROUND_WORK_SNAPSHOT_MAX,
 } from "./backgroundWorkRegistry.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
+import { getDb } from "./db/index.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { listSessions } from "./sessions.ts";
 
@@ -312,106 +314,6 @@ test("mutations reach subscribers as state events only, ending in a delete", asy
   }
 });
 
-test("a flush carries exactly the rows writes reported, never untouched history", async () => {
-  const { hub } = await import("./hub.ts");
-  const owner = makeOwner();
-  // Settled history from before this viewer connected: it must never ride a
-  // later broadcast, because nothing about it changed.
-  const history = reserve(owner, { label: "old build" });
-  backgroundWorkStore.terminalize({ itemId: history.id, state: "completed" });
-  await hub.flushPendingBroadcastsForTests();
-
-  const events: Array<{
-    id: string;
-    kind: string;
-    revision: number;
-    item?: BackgroundWorkItemSummary;
-  }> = [];
-  const viewer = {
-    send: (message: ServerMessage): void => {
-      if (message.type === "stateEvents" && message.topic === "background")
-        events.push(...(message.events as typeof events));
-    },
-    wantsTopic: (topic: string) => topic === "background",
-  };
-  hub.register(viewer);
-  const flushed = async () => {
-    await hub.flushPendingBroadcastsForTests();
-    const mine = events.filter((event) =>
-      [history.id, item.id, host.id, fleeting.id].includes(event.id),
-    );
-    events.length = 0;
-    return mine;
-  };
-  let item = reserve(owner, { label: "watch" });
-  const host = reserve(owner, {
-    backend: "claude-query",
-    host: { epochKey: `epoch-flush-${serial}`, emptyGraceMs: 30_000 },
-  });
-  let fleeting = host;
-  try {
-    // Create: one upsert per reported row, nothing for the history row.
-    const created = await flushed();
-    assert.deepEqual(
-      created.map((event) => [event.id, event.kind]).sort(),
-      [
-        [host.id, "upsert"],
-        [item.id, "upsert"],
-      ].sort(),
-    );
-
-    // Update and terminal transition in one window coalesce to the last write.
-    backgroundWorkStore.markRunning({ itemId: item.id });
-    item = backgroundWorkStore.terminalize({
-      itemId: item.id,
-      state: "completed",
-    });
-    const settled = await flushed();
-    assert.equal(settled.length, 1);
-    assert.equal(settled[0]?.kind, "upsert");
-    assert.equal(settled[0]?.revision, item.revision);
-    assert.equal(settled[0]?.item?.state, "completed");
-
-    // A host transition re-sends its FINISHED children too: host state is
-    // part of each child's summary.
-    backgroundWorkStore.terminalize({ itemId: host.id, state: "completed" });
-    await flushed();
-    backgroundWorkStore.setHostState({
-      hostId: backgroundWorkStore.getItem(host.id)!.hostId!,
-      state: "closed",
-    });
-    const closed = await flushed();
-    assert.deepEqual(
-      closed.map((event) => [event.id, event.kind, event.item?.host?.state]),
-      [[host.id, "upsert", "closed"]],
-    );
-
-    // Tombstoning deletes every member row, the untouched history included.
-    // A row that joins and leaves inside one window still gets its delete: a
-    // subscribe in between may have snapshotted it.
-    fleeting = reserve(owner, { label: "blink" });
-    backgroundWorkStore.terminalize({ itemId: fleeting.id, state: "failed" });
-    backgroundWorkStore.deleteOwnerSession(owner);
-    const deleted = await flushed();
-    assert.deepEqual(
-      deleted.map((event) => [event.id, event.kind]).sort(),
-      [
-        [fleeting.id, "delete"],
-        [history.id, "delete"],
-        [host.id, "delete"],
-        [item.id, "delete"],
-      ].sort(),
-    );
-    for (const event of deleted)
-      assert.equal(
-        event.revision,
-        backgroundWorkStore.itemRevisions([event.id])[0]?.revision,
-      );
-  } finally {
-    hub.unregister(viewer);
-  }
-});
-
 test("the subscribe snapshot is a bounded window that drops finished work first", () => {
   const owner = makeOwner();
   const finished = reserve(owner, { label: "yesterday's build" });
@@ -451,4 +353,49 @@ test("the subscribe snapshot is a bounded window that drops finished work first"
     firstTerminal === -1 || firstTerminal > lastActive,
     "active work sorts ahead of history, so the cap can only cut history",
   );
+});
+
+test("a Background frame is never larger than a subscribe answer", () => {
+  assert.equal(backgroundWorkTopic.batchMax, BACKGROUND_WORK_SNAPSHOT_MAX);
+});
+
+test("the session list refreshes after a Background flush, not at commit", async () => {
+  const { hub } = await import("./hub.ts");
+  const owner = makeOwner();
+  const item = reserve(owner, { label: "npm run dev" });
+  await hub.flushPendingBroadcastsForTests();
+
+  const broadcastSessions = hub.broadcastSessions.bind(hub);
+  let requests = 0;
+  hub.broadcastSessions = () => {
+    requests += 1;
+    return broadcastSessions();
+  };
+  try {
+    backgroundWorkStore.markRunning({ itemId: item.id });
+    assert.equal(requests, 0, "nothing listens at commit");
+    await hub.flushPendingBroadcastsForTests();
+    assert.equal(requests, 1);
+
+    // A host-only commit reports no item ids, and still reaches the listener:
+    // its empty report is what schedules the flush.
+    const hostOwner = makeOwner();
+    const hostId = `bgh_registry_${hostOwner}`;
+    const now = Date.now();
+    getDb()
+      .prepare(
+        `INSERT INTO background_hosts (
+          id, owner_session_id, backend, epoch_key, boot_epoch, provenance, state,
+          empty_grace_ms, settings_generation, created_at_ms, updated_at_ms, revision
+        ) VALUES (?, ?, 'claude-query', ?, 'boot-registry', 'reserved', 'live', 0, 1, ?, ?, 0)`,
+      )
+      .run(hostId, hostOwner, `epoch-host-only-${hostOwner}`, now, now);
+    requests = 0;
+    backgroundWorkStore.requestHostStopAll({ hostId, reason: "empty host" });
+    assert.equal(requests, 0, "nothing listens at commit");
+    await hub.flushPendingBroadcastsForTests();
+    assert.equal(requests, 1);
+  } finally {
+    hub.broadcastSessions = broadcastSessions;
+  }
 });
