@@ -2346,9 +2346,10 @@ describe("interruption notice to the sender", () => {
           "wake",
         );
         const production = sessionDeliveryLanes(background);
-        const unavailableHooks = production.lanes.map((lane) =>
-          vi.spyOn(lane, "unavailable"),
-        );
+        const unavailableHooks = production.lanes.map((lane) => ({
+          hook: vi.spyOn(lane, "unavailable"),
+          owed: lane.owes(owner),
+        }));
         let acquisitions = 0;
         const scheduler = createDeliveryScheduler({
           ...production,
@@ -2390,9 +2391,8 @@ describe("interruption notice to the sender", () => {
             0,
             "failure fan-out does not create an immediate retry loop",
           );
-          assert.ok(
-            unavailableHooks.every((hook) => hook.mock.calls.length === 1),
-          );
+          for (const { hook, owed } of unavailableHooks)
+            assert.equal(hook.mock.calls.length, owed ? 1 : 0);
           assert.equal(agentHandoffStore.next(owner)?.attempts, 1);
           assert.equal(promptQueueStore.isPaused(owner), true);
           assert.match(

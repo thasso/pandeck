@@ -75,12 +75,12 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*void deliveryScheduler\.offerReminders\(sessionId\);\s*\}\s*\)/,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*offerDelivery\(sessionId, true\);\s*\}\s*\)/,
     "the idle hook must offer a freed direct slot, then the scheduler with reminders",
   );
   assert.match(
     source,
-    /yieldToOthers:\s*\(sessionId\)\s*=>\s*\{\s*void deliveryScheduler\.wake\(sessionId\)/,
+    /yieldToOthers:\s*\(sessionId\)\s*=>\s*\{\s*offerDelivery\(sessionId\)/,
     "a queue that yields must wake delivery without enabling reminders",
   );
 });
@@ -95,9 +95,25 @@ test("a Stop's hold gates background delivery and Resume reruns the idle chain",
   );
   assert.match(
     source,
-    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*void deliveryScheduler\.offerReminders\(sessionId\);\s*resumePermanentAssistantIntake\(sessionId\);/,
+    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*offerDelivery\(sessionId, true\);\s*resumePermanentAssistantIntake\(sessionId\);/,
     "Resume must offer the scheduler with reminders, and the Assistant's intake",
   );
+});
+
+test("workflow recovery joins the boot collection before any automatic pass starts", () => {
+  const source = readFileSync(join(SRC_ROOT, "index.ts"), "utf8");
+  assert.match(
+    source,
+    /if \(collectingBootDelivery\) bootSessions\.add\(sessionId\)/,
+  );
+  assert.match(source, /setDeliveryWake\(offerDelivery\)/);
+  const reconcile = source.indexOf(
+    ".then((m) => m.reconcileWorkflowRunsOnBoot())",
+  );
+  const start = source.indexOf("collectingBootDelivery = false");
+  const boot = source.indexOf("deliveryScheduler.boot(bootSessions)");
+  assert.ok(reconcile > 0 && start > reconcile && boot > start);
+  assert.match(source.slice(reconcile, boot), /\.finally\(\(\) =>/);
 });
 
 test("graceful shutdown stops peer-prompt delivery so the drain can settle", () => {

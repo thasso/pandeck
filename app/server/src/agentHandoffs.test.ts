@@ -776,7 +776,7 @@ test("index.ts drains handoffs on the idle edge, at boot, and stops for shutdown
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?void deliveryScheduler\.offerReminders\(sessionId\);\s*\}\s*\)/,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?offerDelivery\(sessionId, true\);\s*\}\s*\)/,
     "the running→idle edge must run that chain",
   );
   // Each inside its own boot step: a bare mention (a comment, an import) must

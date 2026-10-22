@@ -2041,14 +2041,21 @@ server.listen(PORT, HOST, () => {
     reportError: (sessionId, lane) =>
       console.warn(`[delivery] ${lane} for ${sessionId} failed`),
   });
-  setDeliveryWake((sessionId) => {
-    void deliveryScheduler.wake(sessionId);
-  });
+  // Collect every recovery offer before any automatic lane starts. Workflow
+  // reconciliation loads asynchronously below and must join the same boot pass.
+  const bootSessions = new Set<string>();
+  let collectingBootDelivery = true;
+  const offerDelivery = (sessionId: string, reminders = false) => {
+    if (collectingBootDelivery) bootSessions.add(sessionId);
+    else if (reminders) void deliveryScheduler.offerReminders(sessionId);
+    else void deliveryScheduler.wake(sessionId);
+  };
+  setDeliveryWake(offerDelivery);
   setReplyReminderHost({
     handoffOwed: agentHandoffOwed,
     wakeOwed: (sessionId) => backgroundCompletionDelivery.wakeOwed(sessionId),
     requestIdleEdge: (sessionId) => {
-      void deliveryScheduler.offerReminders(sessionId);
+      offerDelivery(sessionId, true);
     },
   });
   setPromptQueueHost({
@@ -2066,7 +2073,7 @@ server.listen(PORT, HOST, () => {
       hub.reportSessionError(sessionId, message),
     // A queue failure or removal is a wake, never a reminder opportunity.
     yieldToOthers: (sessionId) => {
-      void deliveryScheduler.wake(sessionId);
+      offerDelivery(sessionId);
     },
   });
   setHumanPromptHook(
@@ -2077,16 +2084,15 @@ server.listen(PORT, HOST, () => {
   setSessionIdleHook((sessionId) => {
     // A direct child that went idle may free its coordinator's slot.
     nudgeHeldStartsForChild(sessionId);
-    void deliveryScheduler.offerReminders(sessionId);
+    offerDelivery(sessionId, true);
   });
   setAutomaticTurnHoldHost({
     changed: (sessionId) => publishPromptQueue(sessionId),
     resumed: (sessionId) => {
-      void deliveryScheduler.offerReminders(sessionId);
+      offerDelivery(sessionId, true);
       resumePermanentAssistantIntake(sessionId);
     },
   });
-  const bootSessions = new Set<string>();
   const offerOnBoot = (sessionId: string): void => {
     bootSessions.add(sessionId);
   };
@@ -2118,9 +2124,6 @@ server.listen(PORT, HOST, () => {
   bootStep("peer-prompt recovery offers", () =>
     drainAllQueuedOnBoot(offerOnBoot),
   );
-  bootStep("session delivery", () => {
-    void deliveryScheduler.boot(bootSessions);
-  });
   // After recovery and the idle wiring: children that waited for a slot across
   // the restart start as the surviving work allows.
   bootStep("held direct peer starts", () => startHeldDirectPeersOnBoot());
@@ -2264,7 +2267,13 @@ server.listen(PORT, HOST, () => {
     .then(() => settleCompletedWorkflowRunSessionsOnBoot())
     .catch((err) =>
       console.warn("[workflow] run reconcile failed:", errorText(err)),
-    );
+    )
+    .finally(() => {
+      collectingBootDelivery = false;
+      bootStep("session delivery", () => {
+        void deliveryScheduler.boot(bootSessions);
+      });
+    });
 });
 
 function initialSessionRoute(

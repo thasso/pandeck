@@ -41,9 +41,13 @@ function fixture() {
       return "none";
     },
   });
-  const lanes = ["handoffs", "queue", "peer FIFO", "peer notices"].map((name) =>
-    lane(name),
-  );
+  const lanes = [
+    "handoffs",
+    "queue",
+    "workflow",
+    "peer FIFO",
+    "peer notices",
+  ].map((name) => lane(name));
   lanes.push(lane("background", true));
   const reminder = lane("reminders");
   const scheduler = createDeliveryScheduler({
@@ -110,6 +114,7 @@ test("scheduler contract: priority, no cold acquisition without debt, and restri
     "approvals:s",
     "handoffs:s",
     "queue:s",
+    "workflow:s",
     "peer FIFO:s",
     "peer notices:s",
     "background:s",
@@ -119,12 +124,32 @@ test("scheduler contract: priority, no cold acquisition without debt, and restri
   assert.equal(f.delivered().at(-1), "reminders:s");
 });
 
+test("scheduler contract: queued user turns precede workflow assignments, which precede peer FIFO", async () => {
+  const f = fixture();
+  for (const lane of f.lanes.filter((lane) =>
+    ["queue", "workflow", "peer FIFO"].includes(lane.name),
+  )) {
+    f.debts.add(`${lane.name}:s`);
+    lane.deliver = async () => {
+      f.calls.push(`${lane.name}:s`);
+      f.debts.delete(`${lane.name}:s`);
+      return "turn";
+    };
+  }
+  await f.scheduler.boot(["s"]);
+  assert.deepEqual(f.delivered(), ["approvals:s", "queue:s"]);
+  await f.scheduler.wake("s");
+  assert.equal(f.delivered().at(-1), "workflow:s");
+  await f.scheduler.wake("s");
+  assert.equal(f.delivered().at(-1), "peer FIFO:s");
+});
+
 test("scheduler contract: an arrival after a read point reruns from the top, without parallel admission", async () => {
   const f = fixture();
   const entered = deferred();
   const release = deferred();
   f.debts.add("background:s");
-  f.lanes[4]!.deliver = async () => {
+  f.lanes[5]!.deliver = async () => {
     f.calls.push("background:s");
     f.debts.delete("background:s");
     entered.resolve();
@@ -154,12 +179,12 @@ test("scheduler contract: running sessions ask only joinable lanes, steering req
   await f.scheduler.offerReminders("s");
   assert.deepEqual(f.calls, []);
   f.sessions.set("s", { sessionId: "s", isRunning: true, canSteer: true });
-  f.lanes[4]!.deliver = async () => {
+  f.lanes[5]!.deliver = async () => {
     f.calls.push("steer:s");
     return "steer";
   };
   const joinable = {
-    ...f.lanes[4]!,
+    ...f.lanes[5]!,
     name: "second steer",
     deliver: async (): Promise<DeliveryResult> => {
       f.calls.push("second steer:s");
@@ -260,6 +285,7 @@ test("scheduler contract: boot is ordered per session, parallel across sessions,
       "approvals:fast",
       "handoffs:fast",
       "queue:fast",
+      "workflow:fast",
       "peer FIFO:fast",
       "peer notices:fast",
       "background:fast",

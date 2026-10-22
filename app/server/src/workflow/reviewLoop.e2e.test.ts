@@ -257,8 +257,7 @@ function makeRig(
     broadcastSessions() {},
     // The rig's sessions are never mid-turn, so no assignment ever queues.
     isSessionBusy: () => false,
-    now: Date.now,
-    sleep: async () => {},
+    wakeDelivery: () => false,
     deliveryStopped: () => false,
   };
 
