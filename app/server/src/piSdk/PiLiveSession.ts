@@ -25,19 +25,12 @@ import type {
   ServerMessage,
   SessionMode,
   SessionNamingSettings,
-  SessionSkillInvocation,
   SessionState,
   ThinkingLevel,
 } from "@assistant/shared";
-import {
-  HARNESSES,
-  isCodingAgentType,
-  sessionCompactionWindowState,
-  UNLABELED_SESSION_TITLE,
-} from "@assistant/shared";
+import { UNLABELED_SESSION_TITLE } from "@assistant/shared";
 import {
   piSkillCommandName,
-  skillInvocationTrail,
   type SkillInvocationCommand,
   type SkillInvocationToolCall,
   type SkillInvocationTranscript,
@@ -74,9 +67,7 @@ import { deriveTitle, type LiveListInfo } from "../sessions.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { assertSessionAccountSwitch } from "../sessionAccount.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
-import { sessionAgentSummary } from "../agents/sessionAgent.ts";
-import { worktreeIdForSession } from "../db/worktreeStore.ts";
-import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
+import { buildSessionState, type SessionNativeFacts } from "../sessionState.ts";
 import type {
   CompactionWindowApplyResult,
   CompactionWindowHarnessStatus,
@@ -119,8 +110,6 @@ import {
   type CumulativeUsageTotals,
 } from "../session/adapters/nativeEvents.ts";
 import {
-  getAnsweredAgentQuestions,
-  getPendingAgentQuestions,
   hasPendingAgentQuestion,
   QUESTION_ANSWERS_MARKER,
   subscribeAgentQuestionChanges,
@@ -134,14 +123,9 @@ import { acceptCommitDryRun, toCommitDisplay } from "../commitWorkflow.ts";
 import { isForkAutoRenamePending, readForkOrigin } from "./forkOrigin.ts";
 import {
   prepareToolsForUserTurn,
-  toolExposureForSession,
+  toolLoadingForSession,
 } from "./toolActivation.ts";
 import { restorePiLiveTitle, shouldAutoNamePiSession } from "./titleState.ts";
-import {
-  findOriginTask,
-  listRelatedGlobalTasks,
-  listSessionTasks,
-} from "../tasks.ts";
 import {
   hasPendingApproval,
   subscribePendingApprovalChanges,
@@ -153,19 +137,7 @@ import {
   withPullRequestCardBlocks,
 } from "../pullRequestCards.ts";
 import { sessionProjectContextInfo } from "../sessionProjectContext.ts";
-import {
-  directSpawnField,
-  peerPromptPeersFor,
-  peerPromptQueueField,
-  peerPromptThreadsFor,
-} from "../peerPrompt.ts";
-import { backgroundUpdateQueueField } from "../backgroundUpdateQueue.ts";
-import { promptQueueField } from "../promptQueue.ts";
-import {
-  closeToolGroupSession,
-  getPendingPostReloadContinuation,
-} from "../mcp/toolGroups/registry.ts";
-import { listSessionArtifacts } from "../mcp/toolGroups/packRuntime.ts";
+import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
 import { errorText } from "../errors.ts";
 import { SessionBusyError } from "../session/runtime/errors.ts";
 import { assertAccountRecoveryAdmission } from "../session/runtime/accountRecoveryAdmission.ts";
@@ -1766,10 +1738,6 @@ export class PiLiveSession implements LiveSession {
    * branch, not `state.messages`, is walked — a context clear empties the
    * latter.
    */
-  private skillInvocations(frozenNames: string[]): SessionSkillInvocation[] {
-    return skillInvocationTrail(frozenNames, this.branchToolCalls(frozenNames));
-  }
-
   private branchToolCalls(
     frozenNames: readonly string[],
   ): SkillInvocationTranscript {
@@ -1831,157 +1799,30 @@ export class PiLiveSession implements LiveSession {
     return { calls, succeeded, commands };
   }
 
-  state(): SessionState {
+  nativeFacts(): SessionNativeFacts {
     const model = this.session.model as unknown as PiModel | undefined;
-    const forkOriginValue = readForkOrigin(
-      this.kind,
-      this.session.sessionManager,
-    );
-    const idleReasonValue = hasPendingAgentQuestion(this.session.sessionId)
-      ? "awaiting_question"
-      : hasPendingApproval(this.session.sessionId)
-        ? "awaiting_approval"
-        : hasChoosingTaskCard(this.session.sessionId)
-          ? "awaiting_task_choice"
-          : undefined;
-    const pendingQuestionsValue = getPendingAgentQuestions(
-      this.session.sessionId,
-    );
-    const originTaskValue = this.safeOriginTask();
-    const toolExposureValue = toolExposureForSession(this.session.sessionId);
-    const activeSkillsValue = activeSkillsForSession(
-      this.session.sessionId,
-      this.kind,
-    );
-    const pendingPostReloadContinuationValue = getPendingPostReloadContinuation(
-      this.session.sessionId,
-    );
-    const agentValue = sessionAgentSummary(this.session.sessionId);
-    const worktreeIdValue = this.safeWorktreeId();
-    const stored = sessionStore.getIncludingDeleted(this.session.sessionId);
-    const requiresEnterprise = stored?.requiresEnterprise;
-    const windowStatus = this.compactionWindowStatus();
-    const compactionWindowValue = sessionCompactionWindowState(
-      HARNESSES[this.harness].compactionWindow,
-      {
-        stored: stored?.compactionWindow,
-        note: stored?.compactionWindowNote,
-        ...(windowStatus.contextWindow !== undefined
-          ? { contextWindow: windowStatus.contextWindow }
-          : {}),
-        ...(windowStatus.underlyingReserve !== undefined
-          ? { underlyingReserve: windowStatus.underlyingReserve }
-          : {}),
-        live: windowStatus.live,
-      },
-    );
     return {
-      sessionId: this.session.sessionId,
       harness: this.harness,
       agentType: this.agentType,
-      ...(forkOriginValue !== undefined ? { forkOrigin: forkOriginValue } : {}),
-      ...(model ? { model: toModelOption(model) as ModelOption } : {}),
+      kind: this.kind,
+      sessionFile: this.sessionFile,
+      forkOrigin: readForkOrigin(this.kind, this.session.sessionManager),
+      model: model ? (toModelOption(model) as ModelOption) : undefined,
       thinkingLevel: this.session.thinkingLevel as ThinkingLevel,
       mode: this.mode,
-      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
-      ...(compactionWindowValue !== undefined
-        ? { compactionWindow: compactionWindowValue }
-        : {}),
-      canSteer: this.canSteer,
-      ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
-      ...(pendingQuestionsValue.length > 0
-        ? { pendingQuestions: pendingQuestionsValue }
-        : {}),
-      answeredQuestions: getAnsweredAgentQuestions(this.session.sessionId),
-      tasks: this.safeSessionTasks(),
-      relatedGlobalTasks: this.safeRelatedGlobalTasks(),
-      ...(originTaskValue !== undefined ? { originTask: originTaskValue } : {}),
-      ...(toolExposureValue !== undefined
-        ? { toolExposure: toolExposureValue }
-        : {}),
-      ...(activeSkillsValue !== undefined
-        ? {
-            activeSkills: activeSkillsValue,
-            skillInvocations: this.skillInvocations(activeSkillsValue),
-          }
-        : {}),
-      ...(agentValue !== undefined ? { agent: agentValue } : {}),
-      ...(isCodingAgentType(this.kind)
-        ? { artifacts: listSessionArtifacts(this.session.sessionId) }
-        : {}),
-      // Dev-supervisor reload continuation is a Workshop-only (local dev) concept.
-      ...(this.kind === "workshop"
-        ? {
-            ...(pendingPostReloadContinuationValue !== undefined
-              ? {
-                  pendingPostReloadContinuation:
-                    pendingPostReloadContinuationValue,
-                }
-              : {}),
-          }
-        : {}),
-      ...(isCodingAgentType(this.kind)
-        ? {
-            browserRuntimes: this.host.browserRuntimesFor(
-              this.session.sessionId,
-            ),
-          }
-        : {}),
-      peerPrompts: peerPromptThreadsFor(this.session.sessionId),
-      peerPromptPeers: peerPromptPeersFor(this.session.sessionId),
-      ...promptQueueField(this.session.sessionId),
-      ...peerPromptQueueField(this.session.sessionId),
-      ...directSpawnField(this.session.sessionId),
-      ...backgroundUpdateQueueField(this.session.sessionId),
-      ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
-      ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
+      live: {
+        canSteer: this.canSteer,
+        compactionWindow: this.compactionWindowStatus(),
+        skillInvocationTranscript: (names) => this.branchToolCalls(names),
+        toolLoading: toolLoadingForSession(this.sessionId),
+      },
     };
   }
 
-  private safeWorktreeId(): string | undefined {
-    try {
-      return worktreeIdForSession(this.session.sessionId);
-    } catch (err) {
-      console.warn("Failed to read session worktree link:", errorText(err));
-      return undefined;
-    }
-  }
-
-  /** The linked worktree is gone and the user has not acknowledged it (Task 321). */
-  private safeWorktreeMissing(): boolean {
-    try {
-      return sessionWorktreeMissing(this.session.sessionId);
-    } catch (err) {
-      console.warn("Failed to check session worktree:", errorText(err));
-      return false;
-    }
-  }
-
-  private safeSessionTasks(): ReturnType<typeof listSessionTasks> {
-    try {
-      return listSessionTasks(this.kind, this.session.sessionId);
-    } catch (err) {
-      console.warn("Failed to read Session Tasks:", errorText(err));
-      return [];
-    }
-  }
-
-  private safeRelatedGlobalTasks(): ReturnType<typeof listRelatedGlobalTasks> {
-    try {
-      return listRelatedGlobalTasks(this.kind, this.session.sessionId);
-    } catch (err) {
-      console.warn("Failed to read related Tasks:", errorText(err));
-      return [];
-    }
-  }
-
-  private safeOriginTask(): ReturnType<typeof findOriginTask> {
-    try {
-      return findOriginTask(this.session.sessionId);
-    } catch (err) {
-      console.warn("Failed to read origin Task:", errorText(err));
-      return undefined;
-    }
+  state(): SessionState {
+    return buildSessionState(this.sessionId, this.nativeFacts(), (id) =>
+      this.host.browserRuntimeOwner(id),
+    );
   }
 
   /** Cumulative billed totals across the whole session, from pi's native stats. */

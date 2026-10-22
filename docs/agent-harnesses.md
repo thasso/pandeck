@@ -17,6 +17,11 @@ describes the architecture they produced, and "Status" records the steps.
   Independent of the harness: every persona runs on either engine.
 - **Backend**: one engine's implementation of the harness seam. It owns the
   engine's session store, model catalog, one-shot runner and usage query.
+- **Native facts** (`SessionNativeFacts` in `sessionState.ts`): identity and
+  engine configuration, plus an optional live part for steering, compaction
+  status, tool-loading state and skill-invocation transcript. The app-owned
+  `buildSessionState` projects domain state from these facts. No live part means
+  a detached view. Enterprise restriction comes from the stored row, not facts.
 - **Account provider** (`claude`, `openai-codex`): which kind of credential
   profile a harness signs in with.
 - **Model provider**: the provider id a model picker reports (`claude-sdk` for
@@ -179,9 +184,12 @@ Four layers, each depending only on the ones below it:
      `createSession`.
    - A session's tool exposure for the Tools inspector is read from
      `tools/sessionToolExposure.ts`, which the engine that runs the session
-     registers into; the reader never learns which engine answered.
-     `harnesses/piSession.ts` is a type-only pass-through: a commit dry run
-     names the pi session types it is recorded on.
+     registers into; the reader never learns which engine answered. Live pi
+     state instead hands raw loading/usage and wire sizes to
+     `buildSessionState`, which applies catalog, agent, integration and mode
+     gates. Registrations remain available to detached views during this
+     migration. `harnesses/piSession.ts` is a type-only pass-through: a commit
+     dry run names the pi session types it is recorded on.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:
@@ -191,7 +199,10 @@ Four layers, each depending only on the ones below it:
    card) to viewers and the runtime adapter alike, while the engine keeps the
    turn's ids, running state and teardown. A host command ends its turn with one
    `finishSyntheticCard`, whichever card it renders. The live display-block
-   helpers live in `session/runtime/liveBlocks.ts`.
+   helpers live in `session/runtime/liveBlocks.ts`. Pi now supplies native facts
+   to the app's state owner; `HarnessDriver.state()` remains during the staged
+   migration. `HarnessHost.browserRuntimeOwner` injects resident browser-owner
+   metadata into the owner, avoiding an owner-to-registry-to-engine cycle.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
    `session/planHint.ts` keeps each engine's Plan reminder in a table keyed by

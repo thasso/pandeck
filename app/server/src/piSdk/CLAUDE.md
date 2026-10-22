@@ -1,15 +1,15 @@
 # pi SDK harness
 
-- No static import of `hub.ts` anywhere here — hub behaviour arrives via
+- No static `hub.ts` import; hub behaviour arrives via
   `piStore.setHost(...)`/`HarnessHost` injection.
-- Pi tools always come from the direct adapter over `toolActivation.ts` (the
-  session MCP server serves Claude and external consumers only). The full tool
-  universe registers up front — pi cannot add DEFINITIONS mid-session — and
-  every active-set change flows through `applyActiveToolNames` →
-  `setActiveToolsByName`, with additive activations inside a tool's execute
-  window. Plan removes catalog tools with local/external side effects except
-  `task_manage`, the deliberate durable-Task exception; the execute adapter
-  independently denies stale calls.
+- State uses `sessionState.ts`; pi supplies native facts only.
+- Pi tools use the direct `toolActivation.ts` adapter; the session MCP server
+  serves Claude and external consumers only. Register the full tool universe up
+  front: pi cannot add definitions mid-session. Every active-set change uses
+  `applyActiveToolNames` → `setActiveToolsByName`, with additive activations
+  inside a tool's execute window. Plan removes catalog tools with local/external
+  side effects except `task_manage`, the deliberate durable-Task exception; the
+  execute adapter independently denies stale calls.
 - Native-tool personas register provider-native `bash`/`monitor` shadows up
   front, unless the session's frozen agent definition denies `bash`. This is
   pi's equivalent of Claude native-tool hooks, not a second catalog path.

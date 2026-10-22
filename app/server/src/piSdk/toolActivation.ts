@@ -45,7 +45,13 @@ import { registerSessionToolExposure } from "../tools/sessionToolExposure.ts";
 import {
   buildToolExposure,
   toolDefinitionChars,
+  type BuildToolExposureInput,
 } from "../tools/toolExposure.ts";
+
+type PiToolLoading = Omit<
+  BuildToolExposureInput,
+  "agentType" | "usableToolNames"
+>;
 
 export interface PiToolActivationConfig {
   sessionId: string;
@@ -90,6 +96,8 @@ export interface PiToolActivation {
   markUsed(name: string): void;
   /** Prune never-called deferred loads at a cold user-turn boundary. */
   onUserTurnStart(idleMs: number): string[];
+  /** Native loading/usage and exact wire sizes, before app usability gates. */
+  loading(): PiToolLoading;
   /** The session's Tools-inspector projection. */
   exposure(): SessionToolExposure;
   /** Unsubscribe change listeners (session eviction/teardown). */
@@ -99,11 +107,18 @@ export interface PiToolActivation {
 /** Live activations by session id (for the SessionState exposure projection). */
 const activations = new Map<string, PiToolActivation>();
 
-/** The Tools-inspector projection for a live pi session, if one is registered. */
+/** Registered Tools inspector projection, also used by detached views. */
 export function toolExposureForSession(
   sessionId: string,
 ): SessionToolExposure | undefined {
   return activations.get(sessionId)?.exposure();
+}
+
+/** Native tool-loading facts for a live pi session, if one is registered. */
+export function toolLoadingForSession(
+  sessionId: string,
+): PiToolLoading | undefined {
+  return activations.get(sessionId)?.loading();
 }
 
 /** Apply the conservative cold-boundary prune to a live pi session. */
@@ -237,15 +252,23 @@ export function createPiToolActivation(
       if (pruned.length > 0) apply();
       return pruned;
     },
-    exposure() {
-      return buildToolExposure({
-        agentType: config.agentType,
-        usableToolNames: usableToolNames(),
-        loadedToolNames: activeToolNames(),
+    loading() {
+      return {
+        loadedToolNames: config.deferToolLoading
+          ? new Set([...config.eagerToolNames, ...loaded, FIND_TOOLS_NAME])
+          : new Set(config.agentTools.map((tool) => tool.name)),
         usedToolNames: used,
         definitionCharsByName,
         includeFindTools: config.deferToolLoading,
         loadEvents,
+      };
+    },
+    exposure() {
+      return buildToolExposure({
+        ...activation.loading(),
+        agentType: config.agentType,
+        usableToolNames: usableToolNames(),
+        loadedToolNames: activeToolNames(),
       });
     },
     dispose() {

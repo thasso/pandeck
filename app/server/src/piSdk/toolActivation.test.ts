@@ -11,6 +11,7 @@ import {
   createPiToolActivation,
   loadedToolNamesFromMessages,
   mergedActiveToolNames,
+  toolLoadingForSession,
   toolExposureForSession,
   UNUSED_TOOL_PRUNE_IDLE_MS,
 } from "./toolActivation.ts";
@@ -76,15 +77,15 @@ test("staged activation registers only at commit and cannot remove live exposure
   });
   committed.initialize([]);
   try {
-    assert.deepEqual(toolExposureForSession(sessionId), live.exposure());
+    assert.deepEqual(toolLoadingForSession(sessionId), live.loading());
     assert.deepEqual(sessionToolExposure(sessionId), live.exposure());
     abandoned.dispose();
     abandoned.register();
-    assert.deepEqual(toolExposureForSession(sessionId), live.exposure());
+    assert.deepEqual(toolLoadingForSession(sessionId), live.loading());
     assert.deepEqual(sessionToolExposure(sessionId), live.exposure());
     committed.register();
     live.dispose();
-    assert.deepEqual(toolExposureForSession(sessionId), committed.exposure());
+    assert.deepEqual(toolLoadingForSession(sessionId), committed.loading());
     assert.deepEqual(sessionToolExposure(sessionId), committed.exposure());
   } finally {
     abandoned.dispose();
