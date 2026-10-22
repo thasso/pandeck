@@ -6,13 +6,6 @@
  * the sole source of the key — there is no static/env fallback.
  */
 import { applyPatch } from "@assistant/shared";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
 import { join } from "node:path";
 import type {
   BraveConnectionStatus,
@@ -20,7 +13,7 @@ import type {
   BraveSettingsPatch,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
-import { fileReadErrorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
 
 const BRAVE_SETTINGS_DIR = join(DATA_DIR, "settings");
@@ -32,28 +25,13 @@ interface BraveConfigFile {
   apiKey?: string;
 }
 
-function readFile(): BraveConfigFile {
-  if (!existsSync(BRAVE_CONFIG_PATH)) return {};
-  try {
-    const parsed = JSON.parse(
-      readFileSync(BRAVE_CONFIG_PATH, "utf8"),
-    ) as BraveConfigFile;
-    return parsed ?? {};
-  } catch (err) {
-    throw new Error(
-      `Failed to read Brave config at ${BRAVE_CONFIG_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
-}
+const privateFile = createPrivateJsonFile(BRAVE_CONFIG_PATH, "Brave config");
+const writeFile = privateFile.write;
 
-function writeFile(config: BraveConfigFile): void {
-  mkdirSync(BRAVE_SETTINGS_DIR, { recursive: true });
-  const tmp = `${BRAVE_CONFIG_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, BRAVE_CONFIG_PATH);
+function readFile(): BraveConfigFile {
+  return privateFile.read(
+    (parsed: BraveConfigFile | undefined) => parsed ?? {},
+  );
 }
 
 function normalizeConfig(config: BraveConfigFile): BraveConfigFile {

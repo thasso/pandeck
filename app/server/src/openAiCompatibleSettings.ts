@@ -2,16 +2,6 @@ import {
   applyPatch,
   OPENAI_COMPATIBLE_THINKING_FORMATS,
 } from "@assistant/shared";
-import {
-  closeSync,
-  existsSync,
-  fchmodSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
 import { join } from "node:path";
 import type {
   OpenAiCompatibleConnectionStatus,
@@ -21,7 +11,8 @@ import type {
   OpenAiCompatibleThinkingFormat,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
-import { errorText, fileReadErrorText } from "./errors.ts";
+import { errorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
 import { sameOrigin } from "./urlOrigin.ts";
 
@@ -50,34 +41,16 @@ interface NormalizedConfig {
   models: OpenAiCompatibleModelInfo[];
 }
 
-function readFile(): OpenAiCompatibleConfigFile {
-  if (!existsSync(OPENAI_COMPATIBLE_CONFIG_PATH)) return {};
-  try {
-    const parsed = JSON.parse(
-      readFileSync(OPENAI_COMPATIBLE_CONFIG_PATH, "utf8"),
-    ) as OpenAiCompatibleConfigFile;
-    return parsed ?? {};
-  } catch (err) {
-    throw new Error(
-      `Failed to read OpenAI-compatible provider config at ${OPENAI_COMPATIBLE_CONFIG_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
-}
+const privateFile = createPrivateJsonFile(
+  OPENAI_COMPATIBLE_CONFIG_PATH,
+  "OpenAI-compatible provider config",
+);
+const writeFile = privateFile.write;
 
-function writeFile(config: OpenAiCompatibleConfigFile): void {
-  mkdirSync(OPENAI_COMPATIBLE_SETTINGS_DIR, { recursive: true });
-  const tmp = `${OPENAI_COMPATIBLE_CONFIG_PATH}.tmp`;
-  // The open mode only applies on creation: a temp file left by an interrupted
-  // write keeps its old mode, so tighten it before it holds the key. The
-  // rename then hands that mode to the config.
-  const fd = openSync(tmp, "w", 0o600);
-  try {
-    fchmodSync(fd, 0o600);
-    writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, OPENAI_COMPATIBLE_CONFIG_PATH);
+function readFile(): OpenAiCompatibleConfigFile {
+  return privateFile.read(
+    (parsed: OpenAiCompatibleConfigFile | undefined) => parsed ?? {},
+  );
 }
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {

@@ -7,13 +7,6 @@
  * is no static/env fallback.
  */
 import { applyPatch } from "@assistant/shared";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
 import { join } from "node:path";
 import type {
   Context7ConnectionStatus,
@@ -21,7 +14,7 @@ import type {
   Context7SettingsPatch,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
-import { fileReadErrorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
 
 const CONTEXT7_SETTINGS_DIR = join(DATA_DIR, "settings");
@@ -35,28 +28,16 @@ interface Context7ConfigFile {
   apiKey?: string;
 }
 
-function readFile(): Context7ConfigFile {
-  if (!existsSync(CONTEXT7_CONFIG_PATH)) return {};
-  try {
-    const parsed = JSON.parse(
-      readFileSync(CONTEXT7_CONFIG_PATH, "utf8"),
-    ) as Context7ConfigFile;
-    return parsed ?? {};
-  } catch (err) {
-    throw new Error(
-      `Failed to read Context7 config at ${CONTEXT7_CONFIG_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
-}
+const privateFile = createPrivateJsonFile(
+  CONTEXT7_CONFIG_PATH,
+  "Context7 config",
+);
+const writeFile = privateFile.write;
 
-function writeFile(config: Context7ConfigFile): void {
-  mkdirSync(CONTEXT7_SETTINGS_DIR, { recursive: true });
-  const tmp = `${CONTEXT7_CONFIG_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, CONTEXT7_CONFIG_PATH);
+function readFile(): Context7ConfigFile {
+  return privateFile.read(
+    (parsed: Context7ConfigFile | undefined) => parsed ?? {},
+  );
 }
 
 function normalizeConfig(config: Context7ConfigFile): Context7ConfigFile {

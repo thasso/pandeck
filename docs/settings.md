@@ -221,9 +221,24 @@ state is still stored, so a disconnect or API move saved meanwhile stands. A
 refresh is not cancelled mid-request: the provider may already have rotated the
 refresh token, and dropping the answer would lose the grant.
 
-Settings-file read errors never quote the file: a `JSON.parse` failure reads
-"the file is not valid JSON" (`fileReadErrorText` in `errors.ts`), because the
-quoted text could be a token.
+The Brave, Confluence, Context7, Forgejo, GitHub, Google, Jira,
+OpenAI-compatible, Slack and Tempo stores use
+`app/server/src/privateJsonFile.ts` for private JSON persistence. The helper
+owns the path and error label, passes missing files to the caller's normalizer
+as `undefined`, and does not cache. Settings modules keep their domain
+normalization, validation and public projections. Forgejo keeps its cache and
+updates it only after a successful write.
+
+Writes create the parent directory, open `<path>.tmp` with mode `0600`, and
+`fchmod` the open file to `0600` before writing any settings. This also tightens
+a temporary file left with broader permissions by an interrupted write. The
+helper writes pretty JSON with a trailing newline, closes the file, then
+atomically replaces the destination by renaming the temporary file. It does not
+provide concurrent-writer coordination or crash durability through `fsync`.
+
+Settings-file read errors keep each store's existing name and path but never
+quote the file: a `JSON.parse` failure reads "the file is not valid JSON"
+(`fileReadErrorText` in `errors.ts`), because the quoted text could be a token.
 
 ## Google sign-in
 

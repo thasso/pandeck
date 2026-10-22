@@ -7,14 +7,7 @@
  * `tokenConfigured`). This is the sole source of the config — no static/env
  * fallback. Mirrors `githubSettings.ts`.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type {
   ForgejoConnectionStatus,
   ForgejoSettings,
@@ -26,7 +19,7 @@ import {
   forgejoRequest,
   normalizeForgejoBaseUrl,
 } from "./forgejoClient.ts";
-import { fileReadErrorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
 import { sameOrigin } from "./urlOrigin.ts";
 
@@ -69,31 +62,17 @@ function normalizeStored(
  */
 let cached: StoredForgejoSettings | undefined;
 
+const privateFile = createPrivateJsonFile(
+  FORGEJO_SETTINGS_PATH,
+  "Forgejo settings",
+);
+
 function readPrivate(): StoredForgejoSettings {
-  if (cached) return cached;
-  if (!existsSync(FORGEJO_SETTINGS_PATH))
-    return (cached = normalizeStored(undefined));
-  try {
-    return (cached = normalizeStored(
-      JSON.parse(
-        readFileSync(FORGEJO_SETTINGS_PATH, "utf8"),
-      ) as ForgejoConfigFile,
-    ));
-  } catch (err) {
-    throw new Error(
-      `Failed to read Forgejo settings at ${FORGEJO_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
+  return (cached ??= privateFile.read(normalizeStored));
 }
 
 function writePrivate(next: StoredForgejoSettings): void {
-  mkdirSync(dirname(FORGEJO_SETTINGS_PATH), { recursive: true });
-  const tmp = `${FORGEJO_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, FORGEJO_SETTINGS_PATH);
+  privateFile.write(next);
   cached = next;
 }
 

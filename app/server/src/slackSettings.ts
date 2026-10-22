@@ -1,12 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type {
   SlackConnectionStatus,
   SlackSettings,
@@ -18,7 +11,7 @@ import {
   PUBLIC_BASE_URL,
   SLACK_STATIC_CONFIG,
 } from "./config.ts";
-import { fileReadErrorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { userTimeZone } from "./userProfile.ts";
 
 const SLACK_SETTINGS_PATH = join(DATA_DIR, "settings", "slack.json");
@@ -81,31 +74,16 @@ export interface SlackToolConfig {
   source: string;
 }
 
+const privateFile = createPrivateJsonFile(
+  SLACK_SETTINGS_PATH,
+  "Slack settings",
+);
+const writePrivate = privateFile.write;
+
 function readPrivate(): Required<typeof DEFAULTS> {
-  if (existsSync(SLACK_SETTINGS_PATH)) {
-    try {
-      const parsed = JSON.parse(
-        readFileSync(SLACK_SETTINGS_PATH, "utf8"),
-      ) as SlackSettingsFile;
-      return normalizePrivate(parsed ?? {});
-    } catch (err) {
-      throw new Error(
-        `Failed to read Slack settings at ${SLACK_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
-      );
-    }
-  }
-
-  return { ...DEFAULTS };
-}
-
-function writePrivate(next: Required<typeof DEFAULTS>): void {
-  mkdirSync(dirname(SLACK_SETTINGS_PATH), { recursive: true });
-  const tmp = `${SLACK_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, SLACK_SETTINGS_PATH);
+  return privateFile.read((parsed: SlackSettingsFile | undefined) =>
+    normalizePrivate(parsed ?? {}),
+  );
 }
 
 function normalizePrivate(

@@ -6,14 +6,7 @@
  * `tokenConfigured`). This is the sole source of the token — no static/env
  * fallback. Mirrors `jiraSettings.ts`/`context7Settings.ts`.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type {
   GithubConnectionStatus,
   GithubSettings,
@@ -30,7 +23,7 @@ import {
   githubRequest,
   resolveAuthenticatedLogin,
 } from "./githubClient.ts";
-import { fileReadErrorText } from "./errors.ts";
+import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
 
 /** Scope a classic PAT needs so GHCR (`ghcr.io`) accepts a container pull. */
@@ -66,29 +59,14 @@ function normalizeStored(
   };
 }
 
-function readPrivate(): StoredGithubSettings {
-  if (!existsSync(GITHUB_SETTINGS_PATH)) return normalizeStored(undefined);
-  try {
-    return normalizeStored(
-      JSON.parse(
-        readFileSync(GITHUB_SETTINGS_PATH, "utf8"),
-      ) as GithubConfigFile,
-    );
-  } catch (err) {
-    throw new Error(
-      `Failed to read GitHub settings at ${GITHUB_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
-    );
-  }
-}
+const privateFile = createPrivateJsonFile(
+  GITHUB_SETTINGS_PATH,
+  "GitHub settings",
+);
+const writePrivate = privateFile.write;
 
-function writePrivate(next: StoredGithubSettings): void {
-  mkdirSync(dirname(GITHUB_SETTINGS_PATH), { recursive: true });
-  const tmp = `${GITHUB_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, GITHUB_SETTINGS_PATH);
+function readPrivate(): StoredGithubSettings {
+  return privateFile.read(normalizeStored);
 }
 
 function publicSettings(settings: StoredGithubSettings): GithubSettings {
