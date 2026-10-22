@@ -156,20 +156,18 @@ describe("session_audit", () => {
   });
 
   it("refuses a session outside the user's scope", async () => {
-    for (const scope of ["internal", "subagent"] as const) {
-      const id = `${scope}-audited-${counter++}`;
-      sessionStore.upsert({
-        id,
-        harness: "pi",
-        agentType: "developer",
-        title: `A ${scope} session`,
-        scope,
-      });
-      await assert.rejects(
-        () => tool().execute({ sessionId: id }, ctx),
-        new RegExp(`not a user session \\(${scope}\\)`),
-      );
-    }
+    const id = `internal-audited-${counter++}`;
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "developer",
+      title: "An internal session",
+      scope: "internal",
+    });
+    await assert.rejects(
+      () => tool().execute({ sessionId: id }, ctx),
+      /not a user session \(internal\)/,
+    );
   });
 
   it("reports a session whose log is missing instead of failing", async () => {

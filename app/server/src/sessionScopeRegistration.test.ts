@@ -22,36 +22,36 @@ afterEach(() => {
   }
 });
 
-test("a subagent SDK session is persisted before it enters the live map", () => {
-  const id = `scope-reg-subagent-${Date.now()}`;
+test("an internal SDK session is persisted before it enters the live map", () => {
+  const id = `scope-reg-internal-${Date.now()}`;
   created.push(id);
 
   // The claim happens inside `acquire`, so by the time ANY caller can see the
   // session in the live registry the row that hides it already exists.
   const session = claudeSdkStore.acquire(id, {
     agentType: "workshop",
-    scope: "subagent",
+    scope: "internal",
   });
   assert.equal(session.id, id);
-  assert.equal(sessionStore.get(id)?.scope, "subagent");
+  assert.equal(sessionStore.get(id)?.scope, "internal");
   assert.equal(sessionStore.liveDefaultScopeGate([id])(id), false);
 });
 
-test("registering a persisted subagent session as the user's is refused, and it never reaches the live map", () => {
+test("registering a persisted internal session as the user's is refused, and it never reaches the live map", () => {
   const id = `scope-reg-mismatch-${Date.now()}`;
   created.push(id);
   sessionStore.claimScope({
     id,
     harness: "claude-sdk",
     agentType: "workshop",
-    scope: "subagent",
+    scope: "internal",
   });
 
   // A spawn path that forgets to declare the scope fails HERE — loudly, at the
-  // registration — instead of leaking a subagent conversation into the sidebar.
+  // registration — instead of leaking an internal run into the sidebar.
   assert.throws(
     () => claudeSdkStore.acquire(id, { agentType: "workshop" }),
-    /persisted as subagent and cannot be registered as user/,
+    /persisted as internal and cannot be registered as user/,
   );
   assert.equal(
     claudeSdkStore.list().some((s) => s.id === id),
@@ -96,7 +96,7 @@ test("a live pi row is listed only while the store does not classify it otherwis
     id,
     harness: "pi",
     agentType: "assistant",
-    scope: "subagent",
+    scope: "internal",
   });
   const after = await listSessions([liveRow], () => 0);
   assert.ok(!after.some((s) => s.id === id));

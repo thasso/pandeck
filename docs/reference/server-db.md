@@ -17,37 +17,39 @@ facade.
 - `sessionStore.ts` owns the single SQL-facing facade for session metadata,
   links, and usage totals. `session_index.scope` (migration
   `0047_session_scope.sql`, [Task-492](pa://task/492)) replaced the two-valued
-  `visibility` column with the three-way `SessionScope`; the migration carries
-  existing values over verbatim and reclassifies nothing. The column has NO
-  DEFAULT and a CHECK over the known scopes, so a session row cannot exist
-  without a scope somebody chose and an unknown one cannot be written; reads
-  normalize through `sessionScopeOrFailClosed`, which resolves anything else to
-  `internal`. Scope filtering is DEFAULT-CLOSED: `list()`/`countArchived()`
-  without a `scopes` option read `user` rows only, `scopes: "all"` is the
-  explicit opt-out for the few reads that are about session ids as such (id
-  reconciliation, credential bookkeeping — the account-usage projection and the
-  deletion guard read the SAME set, so Settings cannot report 0 bound sessions
-  for an account deletion then refuses to release). Scope is INSERT-ONLY like
-  `created_at_ms` and the credential profile: the first write owns the row, so
-  neither an omitted nor a contradicting `scope` on a later `upsert`
-  reclassifies a session, and the access policy built on it cannot be moved by a
-  metadata refresh. `liveDefaultScopeGate(candidateIds)` is the read the LIVE
-  list sources gate on (`sessions.ts`, `hub.ts`): they know nothing about scope,
-  so a running `internal`/`subagent` session would otherwise ride into the
-  sidebar past the store's own `WHERE scope = 'user'`. It is bounded by the
-  caller's live ids and keyed by the primary key — the list rebuilds up to ~4
-  times a second and every internal usage stub ever recorded is not worth
-  scanning — and it FAILS CLOSED: an unreadable row, and a failed read, exclude
-  the candidate. `claimScope()` is the write-side half that makes "a live
-  session with no row is the user's" true: every live registration
-  (`piStore.track`, `claudeSdkStore.acquire`) claims the id BEFORE the session
-  enters the registry, writing the row for a non-default scope and THROWING when
-  the claim contradicts the stored one, so a spawn path that fails to declare a
-  subagent session fails at the registration instead of leaking it into the
-  sidebar. `session_index.credential_profile_id` (migration
-  `0027_session_credential_profile.sql`) binds a first-prompt-selected PA
-  credential profile immutably to the session; it is a profile id, never a
-  credential path or secret. `session_index.mode` (migration
+  `visibility` column with a scope column; the migration carries existing values
+  over verbatim and reclassifies nothing. The column has NO DEFAULT and a CHECK
+  over `user`, `internal` and the retired `subagent`, so a session row cannot
+  exist without a scope somebody chose and an unknown one cannot be written. The
+  CHECK still accepts `subagent`, a known leftover
+  ([migrations](../migrations.md#known-leftovers)). Reads normalize through
+  `sessionScopeOrFailClosed`, which resolves anything but `user` and `internal`,
+  including `subagent`, to `internal`. Scope filtering is DEFAULT-CLOSED:
+  `list()`/`countArchived()` without a `scopes` option read `user` rows only,
+  `scopes: "all"` is the explicit opt-out for the few reads that are about
+  session ids as such (id reconciliation, credential bookkeeping — the
+  account-usage projection and the deletion guard read the SAME set, so Settings
+  cannot report 0 bound sessions for an account deletion then refuses to
+  release). Scope is INSERT-ONLY like `created_at_ms` and the credential
+  profile: the first write owns the row, so neither an omitted nor a
+  contradicting `scope` on a later `upsert` reclassifies a session, and the
+  access policy built on it cannot be moved by a metadata refresh.
+  `liveDefaultScopeGate(candidateIds)` is the read the LIVE list sources gate on
+  (`sessions.ts`, `hub.ts`): they know nothing about scope, so a running
+  `internal` session would otherwise ride into the sidebar past the store's own
+  `WHERE scope = 'user'`. It is bounded by the caller's live ids and keyed by
+  the primary key — the list rebuilds up to ~4 times a second and every internal
+  usage stub ever recorded is not worth scanning — and it FAILS CLOSED: an
+  unreadable row, and a failed read, exclude the candidate. `claimScope()` is
+  the write-side half that makes "a live session with no row is the user's"
+  true: every live registration (`piStore.track`, `claudeSdkStore.acquire`)
+  claims the id BEFORE the session enters the registry, writing the row for a
+  non-default scope and THROWING when the claim contradicts the stored one, so a
+  spawn path that fails to declare an internal session fails at the registration
+  instead of leaking it into the sidebar. `session_index.credential_profile_id`
+  (migration `0027_session_credential_profile.sql`) binds a
+  first-prompt-selected PA credential profile immutably to the session; it is a
+  profile id, never a credential path or secret. `session_index.mode` (migration
   `0041_session_mode.sql`) stores the mutable Build/Plan policy and defaults
   legacy rows to Build. `background_work_items.description`, `command` and
   `command_truncated` (migration `0059_background_work_command.sql`) hold what a

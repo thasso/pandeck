@@ -134,3 +134,19 @@ the rest:
 
 Reseed any PR preview that was seeded from the repaired directory before the
 repair; it carries the same bad row.
+
+## Known leftovers
+
+Schema that current code no longer uses but that stays, because removing it
+would cost more than it is worth.
+
+- **`session_index.scope` still accepts `subagent`.** Migration
+  `0047_session_scope.sql` added the column with
+  `CHECK (scope IN ('user', 'internal', 'subagent'))`. The PA subagent registry
+  is gone, and current code recognizes only `user` and `internal`
+  (`SessionScope` in `app/shared/protocol.ts`). Tightening the CHECK would mean
+  rebuilding `session_index`, which is deliberately out of scope. A row that
+  still carries `subagent` reads as `internal` through
+  `sessionScopeOrFailClosed`. It stays out of every default projection, and a
+  claim for any other scope throws. A later `upsert` of that row writes the
+  normalized `internal` back.

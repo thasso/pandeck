@@ -1,7 +1,7 @@
 /**
- * The default filtering substrate for the three-way session scope (Task-492):
- * a broad projection carries `user` sessions and nothing else, whether the row
- * comes from the store or from a live in-memory source.
+ * The default filtering substrate for the session scope (Task-492): a broad
+ * projection carries `user` sessions and nothing else, whether the row comes
+ * from the store or from a live in-memory source.
  *   pnpm --filter @assistant/server test src/sessionScope.test.ts
  */
 import assert from "node:assert/strict";
@@ -49,6 +49,18 @@ function liveInfo(id: string, messageCount = 1): LiveListInfo {
   };
 }
 
+/**
+ * A row carrying the retired `subagent` value, which the `session_index` CHECK
+ * still accepts (docs/migrations.md). Only raw SQL can write it now.
+ */
+function seedRetiredSubagent(opts: { archived?: boolean } = {}): string {
+  const id = seed("internal", opts);
+  getDb()
+    .prepare(`UPDATE session_index SET scope = 'subagent' WHERE id = ?`)
+    .run(id);
+  return id;
+}
+
 afterEach(() => {
   for (const id of created.splice(0)) sessionStore.remove(id);
 });
@@ -56,26 +68,48 @@ afterEach(() => {
 test("the store's default read is the user's sessions; every other scope is an explicit ask", () => {
   const user = seed("user");
   const internal = seed("internal");
-  const subagent = seed("subagent");
 
   const listed = new Set(sessionStore.list().map((row) => row.id));
   assert.ok(listed.has(user));
   assert.ok(!listed.has(internal), "internal stays server-only");
-  assert.ok(!listed.has(subagent), "subagent is not a default-projection row");
 
   const all = new Set(sessionStore.list({ scopes: "all" }).map((r) => r.id));
-  assert.ok(all.has(user) && all.has(internal) && all.has(subagent));
+  assert.ok(all.has(user) && all.has(internal));
   const asked = new Set(
-    sessionStore.list({ scopes: ["subagent"] }).map((r) => r.id),
+    sessionStore.list({ scopes: ["internal"] }).map((r) => r.id),
   );
-  assert.deepEqual(asked.has(subagent) && !asked.has(user), true);
+  assert.deepEqual(asked.has(internal) && !asked.has(user), true);
 
-  assert.equal(sessionStore.get(subagent)?.scope, "subagent");
+  assert.equal(sessionStore.get(internal)?.scope, "internal");
   assert.equal(sessionStore.get(user)?.scope, "user");
 });
 
+test("a stored retired subagent value stays hidden and reads as internal", async () => {
+  const retired = seedRetiredSubagent();
+
+  assert.ok(!sessionStore.list().some((row) => row.id === retired));
+  assert.equal(sessionStore.get(retired)?.scope, "internal");
+  assert.equal(sessionStore.liveDefaultScopeGate([retired])(retired), false);
+  const sessions = await listSessions([liveInfo(retired)], () => 0, {
+    includeArchived: true,
+  });
+  assert.ok(
+    !sessions.some((session) => session.id === retired),
+    "a running session on the retired value is not listed",
+  );
+  assert.throws(
+    () =>
+      sessionStore.claimScope({
+        id: retired,
+        harness: "pi",
+        agentType: "assistant",
+      }),
+    /persisted as internal and cannot be registered as user/,
+  );
+});
+
 test("scope is insert-only: no later write can reclassify a session", () => {
-  const id = seed("subagent");
+  const id = seed("internal");
 
   // Omitting it preserves the stored scope …
   sessionStore.upsert({
@@ -84,27 +118,27 @@ test("scope is insert-only: no later write can reclassify a session", () => {
     agentType: "assistant",
     title: "Renamed by a title refresh",
   });
-  assert.equal(sessionStore.get(id)?.scope, "subagent");
+  assert.equal(sessionStore.get(id)?.scope, "internal");
   assert.equal(sessionStore.get(id)?.title, "Renamed by a title refresh");
 
   // … and so does STATING a different one: the first write owns the row, so a
-  // stray metadata refresh cannot promote a subagent session into the user's.
+  // stray metadata refresh cannot promote an internal session into the user's.
   sessionStore.upsert({
     id,
     harness: "pi",
     agentType: "assistant",
     scope: "user",
-    title: "Still a subagent session",
+    title: "Still an internal session",
   });
-  assert.equal(sessionStore.get(id)?.scope, "subagent");
-  assert.equal(sessionStore.get(id)?.title, "Still a subagent session");
+  assert.equal(sessionStore.get(id)?.scope, "internal");
+  assert.equal(sessionStore.get(id)?.title, "Still an internal session");
 
   const user = seed("user");
   sessionStore.upsert({
     id: user,
     harness: "pi",
     agentType: "assistant",
-    scope: "subagent",
+    scope: "internal",
   });
   assert.equal(sessionStore.get(user)?.scope, "user");
 });
@@ -112,17 +146,10 @@ test("scope is insert-only: no later write can reclassify a session", () => {
 test("the live gate answers per candidate id and lets an unknown id through", () => {
   const user = seed("user");
   const internal = seed("internal");
-  const subagent = seed("subagent");
   const unknown = `scope-unknown-${Date.now()}`;
-  const gate = sessionStore.liveDefaultScopeGate([
-    user,
-    internal,
-    subagent,
-    unknown,
-  ]);
+  const gate = sessionStore.liveDefaultScopeGate([user, internal, unknown]);
   assert.equal(gate(user), true);
   assert.equal(gate(internal), false);
-  assert.equal(gate(subagent), false);
   // No row at all: allowed, and `claimScope` is what makes that safe.
   assert.equal(gate(unknown), true);
 });
@@ -134,11 +161,11 @@ test("claimScope persists the scope before a live registry may see the id", () =
     id,
     harness: "pi",
     agentType: "assistant",
-    scope: "subagent",
+    scope: "internal",
   });
   assert.equal(
     sessionStore.get(id)?.scope,
-    "subagent",
+    "internal",
     "the row exists the moment the claim returns",
   );
   assert.equal(sessionStore.liveDefaultScopeGate([id])(id), false);
@@ -148,25 +175,28 @@ test("claimScope persists the scope before a live registry may see the id", () =
     id,
     harness: "pi",
     agentType: "assistant",
-    scope: "subagent",
+    scope: "internal",
   });
 
-  // Registering it as anything else is a bug at the registration, not a
-  // subagent session quietly appearing in the user's sidebar.
+  // Registering it as anything else is a bug at the registration, not an
+  // internal session quietly appearing in the user's sidebar.
   assert.throws(
     () =>
       sessionStore.claimScope({ id, harness: "pi", agentType: "assistant" }),
-    /persisted as subagent and cannot be registered as user/,
+    /persisted as internal and cannot be registered as user/,
   );
+
+  // The reverse holds too: a stored user row cannot be re-registered hidden.
+  const stored = seed("user");
   assert.throws(
     () =>
       sessionStore.claimScope({
-        id,
+        id: stored,
         harness: "pi",
         agentType: "assistant",
         scope: "internal",
       }),
-    /persisted as subagent and cannot be registered as internal/,
+    /persisted as user and cannot be registered as internal/,
   );
 
   // A user session needs no row to be claimed: that IS the default.
@@ -177,7 +207,7 @@ test("claimScope persists the scope before a live registry may see the id", () =
 
 test("the archived count matches the listable user's shelf only", async () => {
   const before = await archivedSessionCount();
-  seed("subagent", { archived: true });
+  seedRetiredSubagent({ archived: true });
   seed("internal", { archived: true });
   seed("user", { archived: true });
   assert.equal(
@@ -273,21 +303,19 @@ test("the session list projects stored spawn provenance in one batch", async () 
 
 test("the session list excludes out-of-scope rows even while they are live", async () => {
   const user = seed("user");
-  const subagent = seed("subagent");
   const internal = seed("internal");
 
   const sessions = await listSessions(
-    [liveInfo(subagent), liveInfo(internal), liveInfo(user)],
+    [liveInfo(internal), liveInfo(user)],
     () => 0,
     { includeArchived: true },
   );
   const ids = new Set(sessions.map((session) => session.id));
   assert.ok(ids.has(user));
   assert.ok(
-    !ids.has(subagent),
-    "a running subagent session is still not listed",
+    !ids.has(internal),
+    "a running internal session is still not listed",
   );
-  assert.ok(!ids.has(internal));
   assert.equal(sessions.find((s) => s.id === user)?.scope, "user");
 
   // A live row with no persisted metadata at all is the user's by

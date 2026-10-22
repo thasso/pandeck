@@ -2363,9 +2363,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   same spirit: a caller's text can never suppress it — a previously generated
   block is stripped and exactly one block naming the CURRENT coordinator is
   appended, so quoting the marker sentence or pasting another coordinator's
-  suffix changes nothing. Nothing here imports the subagent domain;
-  `architecture.test.ts` holds that line. `peerSpawnRuntimes` is also the one
-  ARRAY-valued settings section, and a patch REPLACES the whole roster, so
+  suffix changes nothing. `peerSpawnRuntimes` is also the one ARRAY-valued
+  settings section, and a patch REPLACES the whole roster, so
   `validateClientMessage.ts` checks it explicitly (array, plain-object rows,
   `id`/`modelId` present, kind-checked leaves, `relativeCost` in its four-value
   vocabulary, and `description` within `MAX_PEER_RUNTIME_DESCRIPTION_CHARS`).

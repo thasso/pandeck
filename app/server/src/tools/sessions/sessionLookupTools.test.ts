@@ -98,12 +98,6 @@ describe("session_lookup", () => {
         .notFound,
       true,
     );
-    const subagent = seed("Subagent", { scope: "subagent" });
-    assert.equal(
-      ((await tool().execute({ query: subagent }, ctx())).details as any)
-        .notFound,
-      true,
-    );
     const deleted = seed("Deleted");
     sessionStore.remove(deleted);
     assert.equal(

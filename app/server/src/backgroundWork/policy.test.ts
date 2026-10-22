@@ -28,7 +28,7 @@ const workflowStore = await import("../db/workflowStore.ts");
 
 let serial = 0;
 function makeSession(
-  scope: "user" | "internal" | "subagent" = "user",
+  scope: "user" | "internal" = "user",
   harness: Harness = "claude-sdk",
 ): string {
   serial += 1;
@@ -103,14 +103,12 @@ test("evidence is read default-closed from the durable stores", () => {
     "unknown-session",
   );
 
-  for (const scope of ["internal", "subagent"] as const) {
-    const id = makeSession(scope);
-    assert.equal(readBackgroundWorkOwnerEvidence(id).scope, scope);
-    assert.equal(
-      exclusionOf(backgroundWorkOwnerEligibility(id, "claude-query")),
-      "non-user-scope",
-    );
-  }
+  const internal = makeSession("internal");
+  assert.equal(readBackgroundWorkOwnerEvidence(internal).scope, "internal");
+  assert.equal(
+    exclusionOf(backgroundWorkOwnerEligibility(internal, "claude-query")),
+    "non-user-scope",
+  );
 });
 
 test("a session may own only the background backend its harness supports", () => {

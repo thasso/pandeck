@@ -130,18 +130,18 @@ vocabulary, display projection, and normalized session model types.
   abandons once the card leaves `open`, so no reader may rank it against a
   terminal status. Volatile fields (`isStreaming`, `runStartedAt`) must be
   neutralized when a browser restores its shell cache.
-- `protocol.ts` owns `SessionScope` ([Task-492](pa://task/492)), the three-way
+- `protocol.ts` owns `SessionScope` ([Task-492](pa://task/492)), the
   classification persisted with a session row: `user` (the user's own
-  conversation, the ONLY scope a broad/default projection carries), `internal`
-  (a server-only usage-attribution helper run) and `subagent` (a session PA runs
-  under a subagent thread, reached through the registry rather than the
-  sidebar). It is a property of the SESSION, not of a run, and never derived
-  from who started it. `sessionScopeOrFailClosed` is the one parse, and it fails
-  CLOSED: an unrecognized value resolves to `internal`, so a row a build cannot
-  classify is hidden rather than shown as the user's — widening is always
-  deliberate. `SessionListItem.scope` carries it where session summaries already
-  travel; absent means the user's, because a default projection carries nothing
-  else.
+  conversation, the ONLY scope a broad/default projection carries) and
+  `internal` (a server-only usage-attribution helper run). The retired value
+  `subagent` is no scope: the database CHECK still accepts it
+  ([migrations](../migrations.md)), and it reads as `internal`. It is a property
+  of the SESSION, not of a run, and never derived from who started it.
+  `sessionScopeOrFailClosed` is the one parse, and it fails CLOSED: an
+  unrecognized value resolves to `internal`, so a row a build cannot classify is
+  hidden rather than shown as the user's — widening is always deliberate.
+  `SessionListItem.scope` carries it where session summaries already travel;
+  absent means the user's, because a default projection carries nothing else.
 - `protocol.ts` also owns `SessionToolExposure`, the Tools-inspector wire
   projection. Each tool carries group/tier/usability/load state, exact
   definition characters, actual-call usage, and optional harness token size;

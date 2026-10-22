@@ -99,10 +99,12 @@ test("a data directory that predates the scope migration still reads, through it
   );
 });
 
-test("a migrated data directory reads its scope column, including subagent", () => {
+test("a migrated data directory reads its scope column, and a retired value fails closed", () => {
   const dir = dataDir({ withScopeMigration: true });
   seed(dir, "scope", [
     ["scoped-user", "user"],
+    ["scoped-internal", "internal"],
+    // Retired, but the session_index CHECK still accepts it.
     ["scoped-subagent", "subagent"],
   ]);
   const db = new DatabaseSync(join(dir, "app.sqlite3"));
@@ -117,8 +119,12 @@ test("a migrated data directory reads its scope column, including subagent", () 
     '["alpha"]',
   );
   assert.equal(
+    readSessionSnapshot(dir, "scoped-internal")?.session.scope,
+    "internal",
+  );
+  assert.equal(
     readSessionSnapshot(dir, "scoped-subagent")?.session.scope,
-    "subagent",
+    "internal",
   );
 });
 
