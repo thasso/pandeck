@@ -101,7 +101,6 @@ async function main(): Promise<void> {
       { projectStore },
       { worktreeIdBySession },
       { objectRefsBySession },
-      { subagentStore },
       { backgroundWorkStore },
       { peerPromptStore },
       { agentHandoffStore },
@@ -116,7 +115,6 @@ async function main(): Promise<void> {
       import("./db/projectStore.ts"),
       import("./db/worktreeStore.ts"),
       import("./db/sessionObjectStore.ts"),
-      import("./db/subagentStore.ts"),
       import("./db/backgroundWorkStore.ts"),
       import("./db/peerPromptStore.ts"),
       import("./db/agentHandoffStore.ts"),
@@ -160,10 +158,6 @@ async function main(): Promise<void> {
       [
         "agentHandoffStore.queuedSessionIds",
         () => agentHandoffStore.queuedSessionIds(),
-      ],
-      [
-        "subagentStore.delegationSummaries",
-        () => subagentStore.delegationSummaries(),
       ],
       [
         "backgroundWorkStore.activityByOwner",

@@ -67,24 +67,16 @@ vocabulary, display projection, and normalized session model types.
   browser's banner, with `worktreeMissing` on both `SessionListItem` and
   `SessionState` meaning "dead edge, not yet acknowledged" — distinct from
   simply having no `worktreeId`, which is an ordinary app-CWD session.
-  `delegation` (`SubagentDelegationSummary`, [Task-495](pa://task/495)) is an
-  independent, compositional dimension on that row: active child runs are split
-  into starting, working and awaiting-parent counts without changing the meaning
-  of the parent's own `isStreaming`/`runStartedAt`. The shared
-  `delegationObligationReason` gives settlement and Workflow completion one
-  truthful immediate-parent refusal, prioritizing active runs, then results not
-  yet durably admitted to the parent transcript, then managed delegated
-  worktrees. `settleBlockedReason` feeds it the row's active count, so browser
-  and server settlement cannot overlook delegated work. `backgroundActivity`
-  (`SessionBackgroundActivity`, [Task-482](pa://task/482)) is a third such
-  dimension, for session-owned background shell and monitor work: active counts
-  by kind plus the oldest start, so a provider-IDLE session can still be visibly
-  busy. It never sets or derives `isStreaming`, `runStartedAt`, `unread` or
-  `SessionSnapshot.runState`, and `backgroundWorkBlockedReason` gives settlement
-  and destructive deletion the same one refusal, which `settleBlockedReason`
-  consults after delegation and `onDeleteSession` checks before any destructive
-  step. A retained host with no items left still blocks: the epoch outlives its
-  last task by design, so zero active work is not the same as nothing running.
+  `backgroundActivity` (`SessionBackgroundActivity`, [Task-482](pa://task/482))
+  is an independent, compositional dimension on that row, for session-owned
+  background shell and monitor work: active counts by kind plus the oldest
+  start, so a provider-IDLE session can still be visibly busy. It never sets or
+  derives `isStreaming`, `runStartedAt`, `unread` or `SessionSnapshot.runState`,
+  and `backgroundWorkBlockedReason` gives settlement and destructive deletion
+  the same one refusal, which `settleBlockedReason` consults after the running
+  check and `onDeleteSession` checks before any destructive step. A retained
+  host with no items left still blocks: the epoch outlives its last task by
+  design, so zero active work is not the same as nothing running.
   `BackgroundWorkItemSummary` is the registry row: PA id, owner session,
   backend/kind, the human title (`label`: the agent's `description` when it gave
   one, else the command's first line), the `command` itself bounded at
@@ -683,12 +675,10 @@ vocabulary, display projection, and normalized session model types.
   unequal.
 - `protocol.ts` owns `BroadcastTopic`/`BROADCAST_TOPICS` and the
   `subscribe`/`unsubscribe` client commands: the single session socket's domain
-  LISTS (`tasks`, `projects`, `subagents`, `background`, `worktrees`,
-  `knowledge`, `usage`, `workflow`, `skills`) are fanned out per subscribed
-  connection rather than to everyone, and subscribing to a stateful list is also
-  the authoritative read — which is why `ready` carries no `taskList`. Held
-  subagent thread detail is a separate authorized per-connection topic with
-  bounded snapshots and revisioned run events. The session list is deliberately
+  LISTS (`tasks`, `projects`, `background`, `worktrees`, `knowledge`, `usage`,
+  `workflow`, `skills`) are fanned out per subscribed connection rather than to
+  everyone, and subscribing to a stateful list is also the authoritative read —
+  which is why `ready` carries no `taskList`. The session list is deliberately
   NOT a topic (every surface's sidebar shows it), and neither are per-object
   streams (worktree status/changes, comment traces), which are addressed by the
   object a connection has open.

@@ -40,7 +40,6 @@ function makeSession(
 const ELIGIBLE: BackgroundWorkOwnerEvidence = {
   exists: true,
   scope: "user",
-  subagentOwned: false,
   workflowOwned: false,
   harness: "claude-sdk",
 };
@@ -64,7 +63,6 @@ test("only an interactive top-level user session may own background work", () =>
     // A helper or one-shot run has no session record at all.
     "unknown-session": { exists: false },
     "non-user-scope": { scope: "internal" },
-    "subagent-owned": { subagentOwned: true },
     "workflow-owned": { workflowOwned: true },
     // A Claude session cannot supervise a PA-owned process.
     "harness-backend-mismatch": { harness: "claude-sdk" },

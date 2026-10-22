@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "./session/index.ts";
 import {
-  delegationObligationReason,
   settleBlockedReason,
   subagentUsageSnapshotFromEntries,
   type SessionListItem,
@@ -22,7 +21,7 @@ function assistant(
   };
 }
 
-describe("subagent usage and delegation projections", () => {
+describe("subagent usage projection and settlement", () => {
   it("sums finalized assistant entries only and reports missing usage", () => {
     expect(subagentUsageSnapshotFromEntries([])).toEqual({
       totals: {
@@ -72,40 +71,6 @@ describe("subagent usage and delegation projections", () => {
       subagentUsageSnapshotFromEntries([...entries, assistant("3")])
         .completeness,
     ).toBe("partial");
-  });
-
-  it("uses one truthful obligation reason and blocks settlement on active children", () => {
-    expect(
-      delegationObligationReason({
-        activeRunCount: 2,
-        unadmittedResultCount: 1,
-        ownedManagedWorktreeCount: 1,
-      }),
-    ).toBe("it still has active delegated work.");
-    expect(
-      delegationObligationReason({
-        activeRunCount: 0,
-        unadmittedResultCount: 1,
-        ownedManagedWorktreeCount: 1,
-      }),
-    ).toBe("a delegated result has not been admitted to its transcript.");
-    expect(
-      settleBlockedReason({
-        id: "parent",
-        harness: "pi",
-        agentType: "developer",
-        title: "Parent",
-        createdAt: 1,
-        updatedAt: 1,
-        messageCount: 1,
-        delegation: {
-          activeCount: 1,
-          startingCount: 0,
-          workingCount: 1,
-          awaitingParentCount: 0,
-        },
-      } satisfies SessionListItem),
-    ).toBe("it still has active delegated work.");
   });
 
   it("holds settlement while background updates it was given are unhandled", () => {

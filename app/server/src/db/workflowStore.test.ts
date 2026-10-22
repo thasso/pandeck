@@ -17,7 +17,6 @@ const tmp = mkdtempSync(join(tmpdir(), "workflow-store-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const store = await import("./workflowStore.ts");
-const { subagentStore } = await import("./subagentStore.ts");
 const { sessionStore } = await import("./sessionStore.ts");
 const { worktreeIdForSession } = await import("./worktreeStore.ts");
 const { closeDb, getDb } = await import("./index.ts");
@@ -41,75 +40,6 @@ function newRun(taskId = 1) {
     actor: user,
   });
 }
-
-test("workflow executor results wait for immediate-child obligations", () => {
-  const run = newRun(495);
-  const step = store.appendStep({
-    runId: run.id,
-    kind: "agent",
-    payload: { objective: "delegate" },
-    actor: system,
-  });
-  const parentSessionId = `workflow-parent-${run.id}`;
-  const childSessionId = `workflow-child-${run.id}`;
-  sessionStore.upsert({
-    id: parentSessionId,
-    scope: "internal",
-    harness: "pi",
-    agentType: "developer",
-  });
-  sessionStore.upsert({
-    id: childSessionId,
-    scope: "subagent",
-    harness: "pi",
-    agentType: "developer",
-  });
-  store.startStep(step.id, { kind: "session", id: parentSessionId }, system);
-  const delegated = subagentStore.acceptInitial({
-    thread: {
-      parentSessionId,
-      sessionId: childSessionId,
-      profile: {
-        roleName: "implementer",
-        baseRole: "developer",
-        provider: "openai-codex",
-        modelId: "gpt-5.6",
-        credentialProfileId: "test-profile",
-        accountSource: "test",
-        defaultThinking: "high",
-        hardMaxThinking: "xhigh",
-        executionProfileId: "test-execution",
-        contractId: "implementation-result",
-        contractVersion: 1,
-      },
-      linkage: { worktreeId: `managed-${run.id}`, worktreeRelation: "managed" },
-    },
-    run: { initiatedBy: "agent", actualThinking: "high" },
-    parentLimit: 1,
-  });
-
-  const completion = {
-    status: "completed" as const,
-    result: { status: "completed" as const, summary: "done" },
-    actor: system,
-  };
-  assert.throws(
-    () => store.completeStep(step.id, completion),
-    /active delegated work/,
-  );
-  subagentStore.recordQuiescence(delegated.run.id, "delegated-quiescence");
-  subagentStore.finalizeRun({ runId: delegated.run.id, status: "unreported" });
-  assert.throws(
-    () => store.completeStep(step.id, completion),
-    /managed delegated worktree/,
-  );
-  subagentStore.updateThreadLinkage({
-    threadId: delegated.thread.id,
-    worktreeId: null,
-    worktreeRelation: null,
-  });
-  assert.equal(store.completeStep(step.id, completion).status, "completed");
-});
 
 test("a run starts active, records its creation, and owns its worktree once", () => {
   const run = newRun();

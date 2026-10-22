@@ -23,14 +23,12 @@ import type {
 } from "@assistant/shared";
 import { harnessSupportsBackgroundWorkBackend } from "@assistant/shared";
 import { sessionStore } from "../db/sessionStore.ts";
-import { subagentStore } from "../db/subagentStore.ts";
 import { workflowOwnershipForExecutor } from "../db/workflowStore.ts";
 
 /** The bounded set of reasons a session may not own the background work asked for. */
 export type BackgroundWorkOwnerExclusion =
   | "unknown-session"
   | "non-user-scope"
-  | "subagent-owned"
   | "workflow-owned"
   | "harness-backend-mismatch";
 
@@ -44,8 +42,6 @@ export interface BackgroundWorkOwnerEvidence {
    * to `internal` by the time it gets here.
    */
   scope: SessionScope;
-  /** This session is the agent side of a subagent thread. */
-  subagentOwned: boolean;
   /** This session is (or has been) a workflow step's executor. */
   workflowOwned: boolean;
   /**
@@ -89,13 +85,6 @@ export function backgroundWorkOwnerDecision(
       exclusion: "non-user-scope",
       reason: `a ${evidence.scope} session may not own background work; only the user's own sessions may`,
     };
-  if (evidence.subagentOwned)
-    return {
-      eligible: false,
-      exclusion: "subagent-owned",
-      reason:
-        "a subagent session may not own background work; it belongs to its parent's run, not to the user",
-    };
   if (evidence.workflowOwned)
     return {
       eligible: false,
@@ -121,10 +110,10 @@ export function backgroundWorkOwnerDecision(
 
 /**
  * Gather the evidence. Reads are default-closed throughout: a missing row is
- * "unknown", and both ownership questions answer "owned" on ANY edge rather
+ * "unknown", and the ownership question answers "owned" on ANY edge rather
  * than trying to decide whether a past assignment has finished — a session the
- * engine or a parent ever executed is not the user's interactive top-level
- * session, whatever state that assignment is in now.
+ * engine ever executed is not the user's interactive top-level session,
+ * whatever state that assignment is in now.
  */
 export function readBackgroundWorkOwnerEvidence(
   sessionId: string,
@@ -134,17 +123,12 @@ export function readBackgroundWorkOwnerEvidence(
     return {
       exists: false,
       scope: "internal",
-      subagentOwned: false,
       workflowOwned: false,
     };
   return {
     exists: true,
     scope: session.scope,
     harness: session.harness,
-    // Normally implied by the scope — a subagent session is persisted as
-    // `subagent` — but the thread edge is what the rule is ABOUT, so it is
-    // asked directly rather than inferred from another store's invariant.
-    subagentOwned: Boolean(subagentStore.getThreadBySessionId(sessionId)),
     workflowOwned: workflowOwnershipForExecutor(sessionId).length > 0,
   };
 }

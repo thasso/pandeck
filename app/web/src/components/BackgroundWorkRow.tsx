@@ -62,8 +62,7 @@ export interface BackgroundWorkRowProps {
  * the captured output on demand, and Stop.
  * @useWhen Rendering the background registry route or the owning session's
  * inspector section.
- * @avoidWhen Showing a delegated agent (that is a subagent thread) or a tool
- * call inside a transcript.
+ * @avoidWhen Showing a peer session or a tool call inside a transcript.
  * @intent The row states only what the registry KNOWS. It never derives a
  * lifecycle transition, never marks itself terminal because Stop was pressed,
  * and shows no vendor or OS id, environment, credential or output path — those

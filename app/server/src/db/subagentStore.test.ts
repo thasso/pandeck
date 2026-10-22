@@ -25,7 +25,6 @@ const {
   subagentStore,
 } = await import("./subagentStore.ts");
 const { sessionStore } = await import("./sessionStore.ts");
-const { peerPromptStore } = await import("./peerPromptStore.ts");
 const { getDb } = await import("./index.ts");
 
 const profile: FrozenSubagentProfile = {
@@ -857,36 +856,6 @@ test("usage baselines, parent roll-up, delegation counts, and obligations stay c
     unadmittedResultCount: 0,
     ownedManagedWorktreeCount: 0,
   });
-});
-
-test("result peer rows stay retention-pinned until confirmed parent-tree deletion", () => {
-  const parent = makeParent();
-  const child = makeChild();
-  const conversationId = sessionId("retained-conversation");
-  const chainId = peerPromptStore.createChain(sessionId("retained-chain"));
-  const peer = peerPromptStore.enqueue({
-    conversationId,
-    chainId,
-    hop: peerPromptStore.reserveHop(chainId),
-    senderSessionId: child,
-    recipientSessionId: parent,
-    prompt: "terminal result",
-    responseRequested: false,
-  });
-  peerPromptStore.claimNext(parent, "test-drainer", 1_000);
-  peerPromptStore.markAdmitted(peer.id);
-  peerPromptStore.markCompleted(peer.id);
-
-  const input = initialInput(parent, child, 1);
-  input.run.optionalResultCorrelationId = peer.id;
-  const accepted = subagentStore.acceptInitial(input);
-  terminalize(accepted.run);
-  peerPromptStore.pruneTerminal(Date.now() + 10_000);
-  assert.ok(peerPromptStore.getById(peer.id));
-
-  subagentStore.tombstoneParentTree(parent);
-  peerPromptStore.pruneTerminal(Date.now() + 10_000);
-  assert.equal(peerPromptStore.getById(peer.id), undefined);
 });
 
 test("the additive migration preserves existing session rows", () => {

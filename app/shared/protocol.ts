@@ -1808,11 +1808,6 @@ export interface SessionListItem {
    */
   providerRetry?: { attempt: number; maxAttempts?: number; since: number };
   /**
-   * Activity delegated to immediate child runs. Independent of this session's
-   * own provider turn (`isStreaming`/`runStartedAt`). Omitted when dormant.
-   */
-  delegation?: SubagentDelegationSummary;
-  /**
    * Session-owned background work (shell commands and monitors) that survives
    * the provider turn. A separate component on purpose: it never sets or
    * derives `isStreaming`, `runStartedAt`, `unread` or the viewed session's
@@ -2004,12 +1999,6 @@ export function settleBlockedReason(
   session: SessionListItem,
 ): string | undefined {
   if (session.isStreaming) return "it is still running.";
-  const delegationReason = delegationObligationReason({
-    activeRunCount: session.delegation?.activeCount ?? 0,
-    unadmittedResultCount: 0,
-    ownedManagedWorktreeCount: 0,
-  });
-  if (delegationReason) return delegationReason;
   const backgroundReason = backgroundWorkBlockedReason(
     session.backgroundActivity,
   );
@@ -2175,11 +2164,11 @@ export function isShelvedSession(session: SessionListItem): boolean {
  * "shelved" alone would hide a peer its coordinator just set going again. ONE
  * predicate for the inbox's fold ({@link spawnClusterForest}), the composer
  * ledge and the server's Settle cascade, so the three agree on what is live.
- * Queued work, a retained host or running subagents do NOT make a shelved
- * session live here: they are not a turn or a job the user waits on. They
- * still block a Settle ({@link settleBlockedReason}), so a dormant session kept
- * in a fold by live work below it can refuse its coordinator's Settle in its
- * own words, exactly as the server would.
+ * Queued work or a retained host do NOT make a shelved session live here:
+ * they are not a turn or a job the user waits on. They still block a Settle
+ * ({@link settleBlockedReason}), so a dormant session kept in a fold by live
+ * work below it can refuse its coordinator's Settle in its own words, exactly
+ * as the server would.
  */
 export function isDormantInSpawnTree(session: SessionListItem): boolean {
   return (
@@ -6666,8 +6655,6 @@ export type BroadcastTopic =
   | "projects"
   /** Live Initiative summaries; the graph is a keyed `getInitiative` read. */
   | "initiatives"
-  /** Canonical durable subagent-thread registry summaries. */
-  | "subagents"
   /** Canonical durable session-owned background work items. */
   | "background"
   | "worktrees"
@@ -6682,7 +6669,6 @@ export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "tasks",
   "projects",
   "initiatives",
-  "subagents",
   "background",
   "worktrees",
   "usage",
@@ -6784,113 +6770,6 @@ export interface DelegationObligationProjection {
   unadmittedResultCount: number;
   /** Managed worktrees not yet explicitly integrated or discarded. */
   ownedManagedWorktreeCount: number;
-}
-
-/**
- * One shared refusal for parent settlement and workflow result completion.
- * Priority keeps the reason singular while reporting the earliest obligation.
- */
-export function delegationObligationReason(
-  projection: DelegationObligationProjection,
-): string | undefined {
-  if (projection.activeRunCount > 0)
-    return "it still has active delegated work.";
-  if (projection.unadmittedResultCount > 0)
-    return "a delegated result has not been admitted to its transcript.";
-  if (projection.ownedManagedWorktreeCount > 0)
-    return "it still owns a managed delegated worktree.";
-  return undefined;
-}
-
-/** Bounded identity/configuration evidence for a subagent thread. */
-export interface SubagentThreadConfigSummary {
-  roleName: string;
-  baseRole: string;
-  provider: string;
-  modelId: string;
-  credentialProfileId: string;
-  executionProfileId: string;
-  contractId: string;
-  contractVersion: number;
-  degradedPinReason?: string;
-}
-
-/** Relation pointers only; worktree provenance and other large bodies stay keyed. */
-export interface SubagentThreadRelationSummary {
-  worktreeId?: string;
-  cwd?: string;
-  taskId?: number;
-  projectId?: string;
-  worktreeRelation?: string;
-}
-
-/** No assignment/result body or transcript blocks belong in this projection. */
-export type SubagentRunStatus =
-  | "pending"
-  | "running"
-  | "awaiting-parent"
-  | "submitted"
-  | "unreported"
-  | "failed"
-  | "stopped"
-  | "lost";
-
-export type SubagentExecutionPhase =
-  | "pending-dispatch"
-  | "predecessor-wait"
-  | "provider-admitted"
-  | "nudge-reserved"
-  | "nudge-admitted"
-  | "result-accepted"
-  | "stop-requested"
-  | "safe-idle"
-  | "watchdog"
-  | "awaiting-parent";
-
-export type SubagentWatchdogState =
-  "unused" | "reserved" | "admitted" | "completed";
-
-export interface SubagentRunSummary {
-  id: string;
-  threadId: string;
-  sequence: number;
-  initiatedBy: "human" | "agent";
-  status: SubagentRunStatus;
-  activePhase?: SubagentExecutionPhase;
-  executionQuiescent: boolean;
-  watchdogState: SubagentWatchdogState;
-  actualThinking: string;
-  usageDelta: SubagentUsageTotals;
-  usageState: "current" | "final";
-  usageCompleteness: "partial" | "complete";
-  createdAt: number;
-  updatedAt: number;
-  terminalAt?: number;
-}
-
-/** Canonical registry row. Closure is inherited state, never a thread field. */
-export interface SubagentThreadSummary {
-  id: string;
-  parentSessionId: string;
-  sessionId: string;
-  peerConversationId: string;
-  config: SubagentThreadConfigSummary;
-  relation: SubagentThreadRelationSummary;
-  usage: SubagentUsageTotals;
-  activeRun?: SubagentRunSummary;
-  latestRun?: SubagentRunSummary;
-  createdAt: number;
-  updatedAt: number;
-  activityAt: number;
-  inheritedArchivedAt?: number;
-  inheritedSettledAt?: number;
-}
-
-/** Bounded run-detail snapshot; result and assignment bodies are exact keyed reads. */
-export interface SubagentThreadRunDetail {
-  thread: SubagentThreadSummary;
-  runs: SubagentRunSummary[];
-  nextBeforeSequence?: number;
 }
 
 /**
@@ -8276,15 +8155,6 @@ export type ClientMessage =
       digests?: BroadcastTopic[];
     }
   | { type: "unsubscribe"; topics: BroadcastTopic[] }
-  /** Hold an authorized thread's bounded run-detail topic. */
-  | {
-      type: "subscribeSubagentThread";
-      threadId: string;
-      limit?: number;
-      beforeSequence?: number;
-      digest?: boolean;
-    }
-  | { type: "unsubscribeSubagentThread"; threadId: string }
   /**
    * Stop ONE background item under HUMAN authorization. The server resolves the
    * owner from the durable row and calls the supervisor's Stop service directly:
@@ -8299,13 +8169,6 @@ export type ClientMessage =
    * interrupted, and the answer says the host close is waiting on it instead.
    */
   | { type: "stopAllBackgroundWork"; ownerSessionId: string; requestId: string }
-  /** Fetch changed runs for a held thread after a run digest. */
-  | {
-      type: "getSubagentRunItems";
-      threadId: string;
-      ids: string[];
-      requestId: string;
-    }
   /** Batch-fetch rows whose revisions differed in a state digest. */
   | {
       type: "getStateItems";
@@ -8649,7 +8512,6 @@ export type ServerMessage =
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
   | StateEventsMessage<"initiatives", InitiativeSummary>
-  | StateEventsMessage<"subagents", SubagentThreadSummary>
   | StateEventsMessage<"background", BackgroundWorkItemSummary>
   | CommentsSnapshotMessage
   | CommentEventsMessage
@@ -8935,13 +8797,6 @@ export type ServerMessage =
       requestId: string;
       error?: string;
     }
-  /** Cold/resync registry snapshot; run history is deliberately absent. */
-  | {
-      type: "subagentThreadList";
-      threads: SubagentThreadSummary[];
-      seq: number;
-      revisions: StateDigestEntry[];
-    }
   /**
    * Cold/resync snapshot of the canonical background-work projection. Mutations
    * never travel this way — they are `stateEvents` batches — and the sidecar
@@ -8964,33 +8819,6 @@ export type ServerMessage =
     }
   /** Control feedback for a human Stop; the rows themselves travel as events. */
   | ({ type: "backgroundWorkStopAnswer" } & BackgroundWorkStopAnswer)
-  /** Bounded snapshot for one authorized, held thread's run-detail topic. */
-  | {
-      type: "subagentThreadRunSnapshot";
-      threadId: string;
-      detail: SubagentThreadRunDetail;
-      seq: number;
-      revisions: StateDigestEntry[];
-    }
-  /** Run-detail digest and targeted catch-up reuse the revision sidecar model. */
-  | {
-      type: "subagentRunDigest";
-      threadId: string;
-      seq: number;
-      entries: StateDigestEntry[];
-    }
-  | {
-      type: "subagentRunItems";
-      threadId: string;
-      requestId: string;
-      events: StateEvent<SubagentRunSummary>[];
-    }
-  | {
-      type: "subagentRunEvents";
-      threadId: string;
-      seq: number;
-      events: StateEvent<SubagentRunSummary>[];
-    }
   /**
    * The whole `usage` topic snapshot: one narrow indicator per enabled account
    * (`docs/usage.md`). Sent on subscribe and re-sent whenever the server-side

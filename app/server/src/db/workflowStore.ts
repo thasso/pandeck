@@ -40,7 +40,6 @@ import {
   WORKFLOW_PAYLOAD_MAX_CHARS,
   WORKFLOW_REASON_MAX_CHARS,
   WORKFLOW_SUMMARY_MAX_CHARS,
-  delegationObligationReason,
   isTerminalWorkflowRunLifecycle,
   isTerminalWorkflowStepStatus,
   type WorkflowActor,
@@ -57,7 +56,6 @@ import {
 import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
 import { getDb, withDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
-import { subagentStore } from "./subagentStore.ts";
 import { linkSessionToWorktree } from "./worktreeStore.ts";
 
 /* ---------------------------------- rows --------------------------------- */
@@ -804,29 +802,6 @@ export function setRunLifecycle(
 ): WorkflowRunRow {
   return withDbTransaction(() => {
     const run = requireLiveRun(runId);
-    if (lifecycle === "completed") {
-      // A session whose turn was abandoned at boot is exempt. Its obligation is
-      // already recorded on the step that abandoned it, and NOTHING in this run
-      // can clear it: an unadmitted delegated result has no parent turn left to
-      // admit it, and a managed worktree waits on an integrate/discard the user
-      // makes out of band. Enforcing it here would refuse the terminal
-      // transition after the merge was already observed, and every Resume would
-      // re-derive the same refusal — the run finished, and could never say so.
-      const abandoned = abandonedTurnSessions(runId);
-      const executorIds = new Set(
-        listSteps(runId)
-          .filter((step) => step.executor?.kind === "session")
-          .map((step) => step.executor!.id),
-      );
-      for (const sessionId of executorIds)
-        if (!abandoned.has(sessionId))
-          assertDelegationObligationsCleared(
-            sessionId,
-            // The run is finished; what is left is the user's to settle on the
-            // session, so the pause says so rather than only naming the block.
-            "finish or discard that delegated work on the session, then Resume",
-          );
-    }
     const reason = boundedText(options.reason, WORKFLOW_REASON_MAX_CHARS);
     if (lifecycle === "paused" && !reason)
       throw new WorkflowValidationError(
@@ -1063,8 +1038,7 @@ export function openStepForExecutor(
 
 /**
  * Durable workflow run/step ownership edges for one executor session. The
- * engine remains lifecycle authority; a subagent records this session as its
- * immediate parent rather than pointing at the engine itself.
+ * engine remains lifecycle authority.
  */
 export function workflowOwnershipForExecutor(
   sessionId: string,
@@ -1106,49 +1080,6 @@ export function latestStepForExecutor(
     )
     .get(kind, id) as StepDbRow | undefined;
   return row ? toStep(row) : null;
-}
-
-/**
- * Sessions this run recorded an abandoned delegation obligation for — read from
- * the events {@link completeStep} wrote, which is where that fact is durable.
- */
-function abandonedTurnSessions(runId: number): Set<string> {
-  const rows = getDb()
-    .prepare(
-      `SELECT detail_json FROM workflow_events
-       WHERE run_id = ? AND event_type = 'observation-recorded'
-         AND detail_json LIKE '%abandonedDelegationObligation%'`,
-    )
-    .all(runId) as Array<{ detail_json: string | null }>;
-  const sessions = new Set<string>();
-  for (const row of rows) {
-    if (!row.detail_json) continue;
-    try {
-      const detail = JSON.parse(row.detail_json) as Record<string, unknown>;
-      if (
-        typeof detail.abandonedDelegationObligation === "string" &&
-        typeof detail.sessionId === "string" &&
-        detail.sessionId
-      )
-        sessions.add(detail.sessionId);
-    } catch {
-      // A detail this process cannot read is not evidence of an exemption.
-    }
-  }
-  return sessions;
-}
-
-function assertDelegationObligationsCleared(
-  sessionId: string,
-  remedy?: string,
-): void {
-  const reason = delegationObligationReason(
-    subagentStore.delegationObligations(sessionId),
-  );
-  if (reason)
-    throw new WorkflowValidationError(
-      `workflow executor session ${sessionId} cannot complete because ${reason}${remedy ? ` To finish the run, ${remedy}.` : ""}`,
-    );
 }
 
 function requireOpenStep(id: number): WorkflowStepRow {
@@ -1319,23 +1250,10 @@ export interface CompleteStepInput {
    * ends `failed`), or the user cancelled the run and its turn was aborted
    * (the step then ends `cancelled`). Nothing else may set this.
    *
-   * The delegation invariant is then RECORDED rather than enforced. What that
-   * invariant protects against is a session claiming its step SUCCEEDED while
-   * children it owns are still working; a dead turn can never clear an
-   * obligation, so enforcing it here would leave the step running forever with
-   * no turn behind it — neither Resume nor Retry applies to a tail that never
-   * became terminal, and the run is stranded for good. The same is true of a
-   * cancellation: the user asked the run to stop, its turn was aborted, and
-   * refusing to settle it because a child it owns is unfinished leaves the run
-   * stuck CANCELLING until a restart — the boot path then bypasses the very
-   * check the live path could not. There is no invariant that a user-cancelled
-   * step must satisfy and a boot-abandoned one may skip.
-   *
-   * So this is accepted for `failed` and `cancelled` and NOTHING else: a turn
-   * nobody can submit for never ends in success, and the obligation it still
-   * held is written to the step's event log rather than silently dropped.
-   * `completed` and `blocked` stay refused — an exception for turns that are
-   * gone must not become a way to report an outcome for one that is not.
+   * This is accepted for `failed` and `cancelled` and NOTHING else: a turn
+   * nobody can submit for never ends in success. `completed` and `blocked`
+   * stay refused — an exception for turns that are gone must not become a way
+   * to report an outcome for one that is not.
    */
   abandonedTurn?: boolean;
   actor: WorkflowActor;
@@ -1370,14 +1288,6 @@ export function completeStep(
       throw new WorkflowValidationError(
         `workflow step ${stepId} cannot end as ${input.status} as an abandoned turn; a turn nobody can submit for ends in failure or cancellation`,
       );
-    let abandonedObligation: string | undefined;
-    if (step.executor?.kind === "session") {
-      if (input.abandonedTurn)
-        abandonedObligation = delegationObligationReason(
-          subagentStore.delegationObligations(step.executor.id),
-        );
-      else assertDelegationObligationsCleared(step.executor.id);
-    }
     if (input.raiseCeilings)
       applyCeilingRaise(
         step.runId,
@@ -1419,24 +1329,6 @@ export function completeStep(
           type: "observation-recorded",
           actor: input.actor,
           detail: input.observationDetail,
-        },
-        now,
-      );
-    // The obligation outlives the step, so it is written down where a reader
-    // looking at why this step failed will find it: the delegated work is still
-    // there to settle, this step simply stopped waiting for it.
-    if (abandonedObligation)
-      insertEvent(
-        {
-          runId: step.runId,
-          stepId,
-          type: "observation-recorded",
-          actor: input.actor,
-          detail: {
-            abandonedDelegationObligation: abandonedObligation,
-            sessionId:
-              step.executor?.kind === "session" ? step.executor.id : "",
-          },
         },
         now,
       );

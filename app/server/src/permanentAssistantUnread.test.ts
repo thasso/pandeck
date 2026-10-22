@@ -184,19 +184,11 @@ test("opening PA uses read dwell and publishes only its scalar unread state", as
             ),
         ),
     ).toBe(true);
-    const held = (connection as unknown as { heldSubagentThreads: Set<string> })
-      .heldSubagentThreads;
-    held.add("pa-child-thread");
-    const release = vi
-      .spyOn(hub, "releaseSubagentRunTopic")
-      .mockImplementation(() => {});
     await connection.handle({
       type: "releasePermanentAssistant",
       sessionId: id,
     });
     expect(connection.viewingSessionId()).toBeUndefined();
-    expect(held.size).toBe(0);
-    expect(release).toHaveBeenCalledWith("pa-child-thread");
   } finally {
     connection.dispose();
   }

@@ -488,8 +488,7 @@ level is for the sessions the user drives, so every peer a coordinator still
 owns folds under it however deep the chain runs. A cycle guard breaks a looping
 chain at a deterministic root, so every session still belongs to exactly one
 item. The card states the coordinator's own status plus a compact session count
-over every depth and renders no peer as a card of its own; this is not
-`delegation`, which counts subagent runs and is untouched. The disclosure itself
+over every depth and renders no peer as a card of its own. The disclosure itself
 states what the tree is doing right now — agents running a turn and background
 jobs, each an icon and a number counted over every peer — because a coordinator
 that has gone quiet under its peers has no provider state of its own, and "an
@@ -515,30 +514,30 @@ delivered or retried is not owed yet; one whose reply was cancelled or failed
 before it arrived still is. When a card's tree — the session and every peer
 folded under it — is owed a reply but nothing in it, nor any peer owing one, is
 moving (no turn, queued work — a reply still being delivered or retried counts —
-working subagent run, background job it waits on, or a retained host not kept up
-by services alone) or waiting on the user, the tree is STALLED: the card carries
-a warning chip, **No reply from «peer»** (`+N` when several owe, kept apart from
-the title so it never truncates), that opens that peer, says so in the card's
-spoken label, and rises to the attention tier. When the one owed the reply is
-the card's own session — a peer asked its coordinator, which went quiet — the
-chip names the peer that waits instead, **«peer» awaits a reply**, and opens it.
-It is judged over the whole tree, not request by request, because a coordinator
-often routes an implementer's report to a reviewer instead of to itself; while
-anything in the tree works, an open request is work in progress, not a stall. A
-peer that is archived, settled or gone owes nothing here — the user put it down;
-a peer the user took over still owes until it answers or is settled. A forwarded
-report on another chain than its handoff (the user prompted the forwarding peer
-in between, closing its chains), a forward of two or more hops, or a peer
-released with a plain message stays owed until that peer is settled or the
-request expires (30 days). The other way round, a peer that asked a sibling
-something on their shared chain is cleared by that sibling's own report, as if
-it had handed the work on. The composer ledge says the same for the chat on
-screen, judged over the tree that chat's card would fold — for a chat deep in a
-tree, its own subtree, so a coordinator still working above it does not hide its
-line though the top card shows no chip — a peer the user took over or a run's
-role is not this chat's work — and a chat that spawned no one but asked an
-existing session for a reply shows that line alone. A settled tree is on the
-shelf and raises nothing; one kept up by an unsettled peer still shows its chip.
+background job it waits on, or a retained host not kept up by services alone) or
+waiting on the user, the tree is STALLED: the card carries a warning chip, **No
+reply from «peer»** (`+N` when several owe, kept apart from the title so it
+never truncates), that opens that peer, says so in the card's spoken label, and
+rises to the attention tier. When the one owed the reply is the card's own
+session — a peer asked its coordinator, which went quiet — the chip names the
+peer that waits instead, **«peer» awaits a reply**, and opens it. It is judged
+over the whole tree, not request by request, because a coordinator often routes
+an implementer's report to a reviewer instead of to itself; while anything in
+the tree works, an open request is work in progress, not a stall. A peer that is
+archived, settled or gone owes nothing here — the user put it down; a peer the
+user took over still owes until it answers or is settled. A forwarded report on
+another chain than its handoff (the user prompted the forwarding peer in
+between, closing its chains), a forward of two or more hops, or a peer released
+with a plain message stays owed until that peer is settled or the request
+expires (30 days). The other way round, a peer that asked a sibling something on
+their shared chain is cleared by that sibling's own report, as if it had handed
+the work on. The composer ledge says the same for the chat on screen, judged
+over the tree that chat's card would fold — for a chat deep in a tree, its own
+subtree, so a coordinator still working above it does not hide its line though
+the top card shows no chip — a peer the user took over or a run's role is not
+this chat's work — and a chat that spawned no one but asked an existing session
+for a reply shows that line alone. A settled tree is on the shelf and raises
+nothing; one kept up by an unsettled peer still shows its chip.
 
 The other direction is the owing session's OWN condition. A request it neither
 answered nor settled after its last reply reminder (`unansweredRequestsFrom`,
@@ -970,12 +969,12 @@ PINNED past the page cutoff and scrolled to once the data arrives, and it
 overrides the list's remembered reading position: a deep link is a promise that
 the row it names is on the page it opens, and a target that is merely not
 rendered is a harder break than one that is not scrolled to. Background work is
-not a provider turn, so it is never merged into `/subagents` and never sets a
-session's run state: a session card shows it as its own chip, and the owning
-session's inspector shows it as its own section. Both, and the registry route,
-are the only surfaces that hold the `background` topic — the session list states
-the global count in its bar and per-session activity on the row, both derived
-from the session summaries it already has.
+not a provider turn, so it never sets a session's run state: a session card
+shows it as its own chip, and the owning session's inspector shows it as its own
+section. Both, and the registry route, are the only surfaces that hold the
+`background` topic — the session list states the global count in its bar and
+per-session activity on the row, both derived from the session summaries it
+already has.
 
 A part of an object is addressed by a URL FRAGMENT, never by another route
 shape: `/sessions/:id#m-<entryId>` names one message of a session, by our own

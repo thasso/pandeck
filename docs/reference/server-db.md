@@ -111,15 +111,17 @@ facade.
   prompt-condition JSON, the attached Task id) with the tombstone flag and the
   row's `scope` reported for the caller to refuse on.
 - `subagentStore.ts` owns the durable PA-subagent thread/run substrate
-  ([Task-493](pa://task/493), migration `0048_subagent_threads_runs.sql`). A
-  thread uniquely owns one `scope = 'subagent'` session beneath an ordinary user
-  session or persisted workflow-step executor (never another subagent) and
-  freezes the fully resolved role/slot/account/model/thinking/result-contract
-  profile in the same `BEGIN IMMEDIATE` transaction as its first run; incomplete
-  profiles never produce a row. Initial and continuation acceptance receive the
-  effective positive safe-integer parent limit from the caller, count accepted
-  nonterminal runs under that transaction, and import no policy default. Runs
-  have monotonic per-thread rounds, immutable terminal history, explicit
+  ([Task-493](pa://task/493), migration `0048_subagent_threads_runs.sql`). It is
+  retired with the registry ([Task-457](pa://task/457)): no production code
+  writes or reads it, and only its own tests import it. A thread uniquely owns
+  one `scope = 'subagent'` session beneath an ordinary user session or persisted
+  workflow-step executor (never another subagent) and freezes the fully resolved
+  role/slot/account/model/thinking/result-contract profile in the same
+  `BEGIN IMMEDIATE` transaction as its first run; incomplete profiles never
+  produce a row. Initial and continuation acceptance receive the effective
+  positive safe-integer parent limit from the caller, count accepted nonterminal
+  runs under that transaction, and import no policy default. Runs have monotonic
+  per-thread rounds, immutable terminal history, explicit
   status/execution-phase/watchdog machines, and a partial unique index that
   permits a successor only after the prior run is terminal and quiescent. Result
   acceptance and Stop are competing irreversible CAS decisions: result-first can
@@ -146,13 +148,8 @@ facade.
   session cumulative and derives the run delta from its frozen opening baseline;
   a duplicate completion identity is a no-op, while parent usage is computed on
   read from parent-own totals plus each thread cumulative exactly once.
-  `delegationSummaries()` is the single grouped read behind session-list
-  starting/working/awaiting-parent counts, and `delegationObligations(parent)`
-  projects active runs, accepted results not yet admitted to the parent
-  transcript, and still-owned `managed` worktrees. Those worktrees remain an
-  obligation until their linkage is explicitly removed as integrated/discarded;
-  terminal runs and usage/result envelopes otherwise remain retention-pinned
-  until the Task-490 parent-tree deletion seam.
+  `delegationSummaries()` and `delegationObligations(parent)` have no caller
+  outside the store's tests.
 - `backgroundWorkStore.ts` owns the durable provider-neutral background-work
   substrate ([Task-482](pa://task/482), migration `0054_background_work.sql`).
   One `background_work_items` row represents a Claude vendor task, a
@@ -311,15 +308,14 @@ facade.
   to the row's bounded `transitions_json` audit trail, exposed as
   `PeerPromptRecord.transitions`). It owns FIFO `queue_seq` allocation, drainer
   lease claim/release/expiry, boot recovery of in-flight rows, and retention
-  (`expireUnresolved`/`pruneTerminal`); terminal rows whose identity is still
-  referenced by a live `subagent_runs` row are excluded from pruning until the
-  Task-490 parent-tree deletion scrubs that run. `requeueExpiredLeases` (a hung
-  in-process dispatch lease past `lease_expires_at_ms`, independent of
-  `requeueDueRetries`'s `retryable_failed` path) and `expireUnresolved` drive
-  their per-row status changes through `transitionInTxn` (not a raw multi-row
-  SQL `UPDATE`) inside one transaction, so every requeued/expired row gets an
-  audited `transitions` entry and `expireUnresolved` returns the affected
-  `PeerPromptRecord[]` (not a bare count) so callers can broadcast per row.
+  (`expireUnresolved`/`pruneTerminal`, which deletes terminal rows by status and
+  age alone). `requeueExpiredLeases` (a hung in-process dispatch lease past
+  `lease_expires_at_ms`, independent of `requeueDueRetries`'s `retryable_failed`
+  path) and `expireUnresolved` drive their per-row status changes through
+  `transitionInTxn` (not a raw multi-row SQL `UPDATE`) inside one transaction,
+  so every requeued/expired row gets an audited `transitions` entry and
+  `expireUnresolved` returns the affected `PeerPromptRecord[]` (not a bare
+  count) so callers can broadcast per row.
   `unfinishedTurnCount(sender, recipient)` is the narrow read behind the
   directly spawned peers' concurrency cap ([Task-595](pa://task/595)): how many
   of one sender's messages to that recipient are still `queued`, `dispatching`,
@@ -510,12 +506,9 @@ facade.
   (`workflow_run`/`workflow_step`/ `workflow_event`), so a step's monotonic id
   IS its append order. The persisted step executor reference is also the durable
   Workflow run/step → executor-session ownership edge;
-  `workflowOwnershipForExecutor` queries its retained history so a subagent's
-  immediate parent stays that executor session while the engine remains
-  lifecycle authority. Completing a session-executed step or the whole run asks
-  the shared delegation-obligation predicate first, refusing while its child
-  work/result/worktree obligations remain. Pure persistence: which step comes
-  next is the recipe engine's decision, and row→wire projection lives in
+  `workflowOwnershipForExecutor` queries its retained history while the engine
+  remains lifecycle authority. Pure persistence: which step comes next is the
+  recipe engine's decision, and row→wire projection lives in
   `../workflowRuns.ts`.
 - `contactStore.ts` owns the `contacts` rows (migration `0026_contacts.sql`):
   the general people directory — `name`, `roles[]`,

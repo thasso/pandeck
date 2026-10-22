@@ -170,6 +170,9 @@ only binding rules; everything else lives here.
   with authoritative recovery, the batched `stateEvents` wire shape, the
   notify-with-ids revision bump on the server, the per-topic seq tripwire,
   digest resync, and the zero-identity-changes-on-echo enforcement.
+- `glossary.md` — the agreed domain terms (state topic, live projection,
+  revision, change set, state-change event, digest, peer session) and the words
+  to avoid in their place.
 - `usage.md` — subscription-usage indicators: the server-owned snapshot cache
   (ownership, persistence, TTL/refresh triggers, concurrency and backoff), the
   `usage` broadcast topic and its narrow `UsageIndicator` payload, and what each

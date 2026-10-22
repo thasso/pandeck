@@ -24,7 +24,6 @@ import { taskIndexVersion } from "./tasks.ts";
 import { projectStore } from "./db/projectStore.ts";
 import { taskStore } from "./db/taskStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
-import { subagentStore } from "./db/subagentStore.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
@@ -455,7 +454,6 @@ export async function listSessions(
   const awaitingReplies = awaitingRepliesBySender();
   const unansweredRequests = unansweredRequestsByRecipient();
   const hopRefusals = peerPromptStore.hopRefusalsBySender();
-  const delegationBySession = subagentStore.delegationSummaries();
   // A separate component from `isStreaming`/`runStartedAt`: background work is
   // the session's, not its provider turn's, so an idle session can own active
   // work and a working session can own none.
@@ -588,9 +586,6 @@ export async function listSessions(
         l?.forkAutoRenamePending ?? row.forkAutoRenamePending,
       isStreaming,
       ...runStatusFields(row.id, isStreaming),
-      ...(delegationBySession.has(row.id)
-        ? { delegation: delegationBySession.get(row.id)! }
-        : {}),
       ...(backgroundBySession.has(row.id)
         ? { backgroundActivity: backgroundBySession.get(row.id)! }
         : {}),
@@ -697,9 +692,6 @@ export async function listSessions(
       ...(l.forkOrigin !== undefined ? { forkOrigin: l.forkOrigin } : {}),
       ...(l.forkAutoRenamePending !== undefined
         ? { forkAutoRenamePending: l.forkAutoRenamePending }
-        : {}),
-      ...(delegationBySession.has(l.sessionId)
-        ? { delegation: delegationBySession.get(l.sessionId)! }
         : {}),
       ...(backgroundBySession.has(l.sessionId)
         ? { backgroundActivity: backgroundBySession.get(l.sessionId)! }

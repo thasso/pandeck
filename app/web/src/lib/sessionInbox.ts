@@ -149,19 +149,14 @@ export interface SpawnTreeStall {
 }
 
 /**
- * Whether a session is doing anything right now: a turn, queued work,
- * working subagent runs, or background work it waits on
- * ({@link backgroundWorkBusy}). A declared service — a dev server, a watcher —
+ * Whether a session is doing anything right now: a turn, queued work, or
+ * background work it waits on ({@link backgroundWorkBusy}). A declared service — a dev server, a watcher —
  * is running but not moving: nothing is waiting for it to end.
  */
 function isMoving(session: SessionListItem): boolean {
-  const delegation = session.delegation;
   return Boolean(
     session.isStreaming ||
     session.queuedWork ||
-    // Subagent child runs work on their own after the parent's turn ends; one
-    // waiting on its parent is stuck with it, not moving.
-    (delegation && delegation.workingCount + delegation.startingCount > 0) ||
     backgroundWorkBusy(session.backgroundActivity),
   );
 }
