@@ -1409,6 +1409,8 @@ try {
     "config/host-tools.json",
     "config/prompts/assistant.md",
     "config/stt-models.json",
+    "config/tts-models.json",
+    "speech/kokoroSidecar.py",
     "migrations.lock.json",
     "native/photon/photon_rs.js",
     "native/photon/photon_rs_bg.wasm",

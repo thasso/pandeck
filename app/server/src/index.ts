@@ -176,6 +176,9 @@ import { sttEngine } from "./speech/sttEngine.ts";
 import { streamingSttEngine } from "./speech/streamingSttEngine.ts";
 import { attachConversationSocket } from "./speech/conversationSocket.ts";
 import { probeStreamingRecognizer } from "./speech/streamingSttConfig.ts";
+import { probeTtsRuntime } from "./speech/ttsConfig.ts";
+import { ttsEngine } from "./speech/ttsEngine.ts";
+import { handleTtsRequest } from "./speech/ttsHttp.ts";
 import { getSettings } from "./settings.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
 import { handleWorktreeApi } from "./worktrees/worktreeHttp.ts";
@@ -1117,6 +1120,16 @@ async function handleRequest(
     return;
   }
 
+  if (requestUrl.pathname === "/api/speech/synthesize") {
+    await handleTtsRequest(
+      req,
+      res,
+      getSettings().speechSynthesis,
+      corsJsonHeaders(req),
+    );
+    return;
+  }
+
   /**
    * One-shot dictation fallback. The happy path streams audio over
    * `/ws/speech`, but the browser keeps the authoritative copy of the utterance
@@ -1726,6 +1739,7 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
   for (const ws of conversationWss.clients) ws.close(1012, "Server restarting");
   conversationWss.close();
   streamingSttEngine.dispose();
+  ttsEngine.dispose();
   speechWss.close((err) => {
     if (err)
       console.warn(
@@ -1878,6 +1892,7 @@ setModelProviderSync(syncConfiguredModelProviders);
 
 // Discover the optional streaming runtime once, without loading any weights.
 await probeStreamingRecognizer();
+await probeTtsRuntime();
 
 server.listen(PORT, HOST, () => {
   const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;

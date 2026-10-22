@@ -22,6 +22,7 @@ import type {
   SessionNamingSettings,
   SkillToggles,
   SpeechConversationSettings,
+  SpeechSynthesisSettings,
   SpeechToTextSettings,
   SpeechVocabularyEntry,
   TaskIntakeAgentSettings,
@@ -47,6 +48,9 @@ import {
   SPEECH_TO_TEXT_LIMITS,
   SPEECH_CONVERSATION_LIMITS,
   DEFAULT_SPEECH_CONVERSATION_SETTINGS,
+  DEFAULT_SPEECH_SYNTHESIS_SETTINGS,
+  SPEECH_SYNTHESIS_LIMITS,
+  KOKORO_ENGLISH_VOICES,
   THINKING_LEVELS,
   clampInt,
   clampNumber,
@@ -226,6 +230,40 @@ function normalizeSpeechToTextSettings(
       .map((entry) => ({ from: entry.from.trim(), to: entry.to.trim() }))
       .filter((entry) => entry.from.length > 0)
       .slice(0, SPEECH_TO_TEXT_LIMITS.vocabularyEntries),
+  };
+}
+
+function normalizeSpeechSynthesisSettings(
+  settings: Partial<SpeechSynthesisSettings> | undefined,
+): SpeechSynthesisSettings {
+  const defaults = DEFAULT_SPEECH_SYNTHESIS_SETTINGS;
+  const limits = SPEECH_SYNTHESIS_LIMITS;
+  return {
+    enabled:
+      typeof settings?.enabled === "boolean"
+        ? settings.enabled
+        : defaults.enabled,
+    voice: KOKORO_ENGLISH_VOICES.some((voice) => voice.name === settings?.voice)
+      ? settings!.voice!
+      : defaults.voice,
+    speed: clampNumber(
+      settings?.speed,
+      limits.speed.min,
+      limits.speed.max,
+      defaults.speed,
+    ),
+    numThreads: clampInt(
+      settings?.numThreads,
+      limits.numThreads.min,
+      limits.numThreads.max,
+      defaults.numThreads,
+    ),
+    idleShutdownSeconds: clampInt(
+      settings?.idleShutdownSeconds,
+      limits.idleShutdownSeconds.min,
+      limits.idleShutdownSeconds.max,
+      defaults.idleShutdownSeconds,
+    ),
   };
 }
 
@@ -599,6 +637,7 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
       ...(stored.promptRefinement ?? {}),
     },
     speechToText: normalizeSpeechToTextSettings(stored.speechToText),
+    speechSynthesis: normalizeSpeechSynthesisSettings(stored.speechSynthesis),
     speechConversation: normalizeSpeechConversationSettings(
       stored.speechConversation,
     ),
@@ -693,6 +732,13 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
       : {}),
     ...(patch.promptRefinement
       ? { promptRefinement: patch.promptRefinement }
+      : {}),
+    ...(patch.speechSynthesis
+      ? {
+          speechSynthesis: normalizeSpeechSynthesisSettings(
+            patch.speechSynthesis,
+          ),
+        }
       : {}),
     ...(patch.speechConversation
       ? {

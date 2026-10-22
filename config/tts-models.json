@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "id": "kokoro-v1-fp32",
+      "label": "Kokoro 82M v1.0 (English, fp32)",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2",
+      "sha256": "sha256-xffi0srwgrwdIPtwM0ph2Z0gtIRQCq0y58+EwSjqMpg=",
+      "stripPrefix": "kokoro-multi-lang-v1_0",
+      "required": [
+        "model.onnx",
+        "voices.bin",
+        "tokens.txt",
+        "lexicon-us-en.txt",
+        "lexicon-gb-en.txt",
+        "espeak-ng-data",
+        "dict"
+      ]
+    }
+  ]
+}

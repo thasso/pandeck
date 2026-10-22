@@ -89,9 +89,9 @@ Then every `onSettingsChanged` listener hears which sections were written. The
 hub forwards that to each connection's `settingsChanged`, which sends that
 client its own `settings` (OAuth redirect URIs depend on the connection's public
 URL), plus `models` after a `claudeSdk` or `openAiCompatible` write and
-`speechToTextStatus` after a `speechToText` or `speechConversation` write. The
-writer gets its echo the same way as everyone else, before the request's
-`mutationSettled`.
+`speechToTextStatus` after a `speechToText`, `speechConversation` or
+`speechSynthesis` write. The writer gets its echo the same way as everyone else,
+before the request's `mutationSettled`.
 
 Each effect and each listener runs on its own, so one failure never skips the
 rest or the announcement. A section counts as written once its writer has run,
@@ -137,6 +137,25 @@ conversation; starting a differently configured stream while another is active
 is refused rather than interrupting it. Vocabulary comes from the existing
 `speechToText.vocabulary` list and is captured at conversation start, so partial
 and final results use the same one-pass replacement engine as dictation.
+
+## Speech synthesis
+
+`speechSynthesis` uses the Dictation registry section independently of STT.
+Defaults are enabled, `af_heart`, speed 1, eight CPU threads and a 600-second
+idle shutdown. Speed accepts 0.5 to 2; threads accept 1 to 32; idle shutdown
+accepts 0 to 86400 seconds, with zero keeping the model resident. Normalization
+clamps numeric bounds and replaces unknown persisted voices with `af_heart`.
+Registry writes reject unknown voices or out-of-range numbers before saving.
+
+The shared `KOKORO_ENGLISH_VOICES` list contains the 28 named English speakers
+from sherpa-onnx's Kokoro v1.0 table, with explicit speaker ids and a pinned
+upstream source. The ready projection and `speechToTextStatus` echo report the
+independent host capability as `speechToText.tts`, including a reason when
+unavailable and the voice names for the picker. User enablement is separate from
+host capability. Thread changes reload the model on the next request; voice and
+speed changes reuse it. Preview requests may override voice/speed without saving
+settings, using
+[the synthesis endpoint](reference/server-speech.md#kokoro-synthesis).
 
 ## Personal Assistant working directory
 

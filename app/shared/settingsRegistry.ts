@@ -33,6 +33,10 @@ import {
   SPEECH_CONVERSATION_LIMITS,
 } from "./protocol.ts";
 import { THINKING_LEVELS } from "./thinkingLevels.ts";
+import {
+  KOKORO_ENGLISH_VOICES,
+  SPEECH_SYNTHESIS_LIMITS,
+} from "./speechSynthesis.ts";
 
 /** Every Settings page section, in navigation order. Routes are `/settings/<id>`. */
 export const SETTINGS_SECTION_IDS = [
@@ -500,6 +504,37 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Conversation trailing silence",
     { kind: "number", ...SPEECH_CONVERSATION_LIMITS.endpointSilenceSeconds },
     { hint: "Seconds of silence before sending a spoken turn." },
+  ),
+
+  setting("speechSynthesis.enabled", "dictation", "Spoken replies", BOOLEAN),
+  setting(
+    "speechSynthesis.voice",
+    "dictation",
+    "Kokoro voice",
+    oneOf(KOKORO_ENGLISH_VOICES.map((voice) => voice.name)),
+  ),
+  setting("speechSynthesis.speed", "dictation", "Speaking speed", {
+    kind: "number",
+    ...SPEECH_SYNTHESIS_LIMITS.speed,
+  }),
+  setting(
+    "speechSynthesis.numThreads",
+    "dictation",
+    "Synthesis threads",
+    integer(
+      SPEECH_SYNTHESIS_LIMITS.numThreads.min,
+      SPEECH_SYNTHESIS_LIMITS.numThreads.max,
+    ),
+  ),
+  setting(
+    "speechSynthesis.idleShutdownSeconds",
+    "dictation",
+    "Unload voice model after idle",
+    integer(
+      SPEECH_SYNTHESIS_LIMITS.idleShutdownSeconds.min,
+      SPEECH_SYNTHESIS_LIMITS.idleShutdownSeconds.max,
+    ),
+    { hint: "Seconds; 0 keeps Kokoro loaded." },
   ),
 
   // Developer workflow

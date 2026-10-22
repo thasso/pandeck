@@ -11,6 +11,11 @@ import type {
   TimelineCacheDescriptor,
 } from "./runtimeEvents.ts";
 import type { BuildInfo } from "./buildInfo.ts";
+import type {
+  SpeechSynthesisSettings,
+  SpeechSynthesisStatus,
+} from "./speechSynthesis.ts";
+export * from "./speechSynthesis.ts";
 import { CLAUDE_SDK_PROVIDER, type Harness } from "./harnesses.ts";
 import type {
   SessionCompactionWindow,
@@ -832,6 +837,8 @@ export interface SpeechToTextStatus {
   maxUtteranceSeconds: number;
   /** Separate optional host capability; offline dictation never uses it. */
   conversation?: SpeechConversationStatus;
+  /** Independent optional Kokoro host capability. */
+  tts?: SpeechSynthesisStatus;
 }
 
 /**
@@ -1546,6 +1553,7 @@ export interface AppSettings {
   promptRefinement: PromptRefinementSettings;
   speechToText: SpeechToTextSettings;
   speechConversation: SpeechConversationSettings;
+  speechSynthesis: SpeechSynthesisSettings;
   taskIntakeAgent: TaskIntakeAgentSettings;
   browserTools: BrowserToolSettings;
   /** Governance for session-owned background work ([Task-467](pa://task/467)). */

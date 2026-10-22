@@ -16,6 +16,7 @@
       # does NOT read it — dictation is an optional host capability there, so it
       # deploys no weights and only takes a directory path.
       sttCatalog = (builtins.fromJSON (builtins.readFile ./config/stt-models.json)).models;
+      ttsCatalog = (builtins.fromJSON (builtins.readFile ./config/tts-models.json)).models;
     in {
       packages = forAllSystems (pkgs:
         let
@@ -268,7 +269,25 @@
         in builtins.listToAttrs (map (entry: {
           name = "stt-model-${entry.id}";
           value = mkModel entry;
-        }) sttCatalog)));
+        }) sttCatalog))
+        // (builtins.listToAttrs (map (entry: {
+          name = "tts-model-${entry.id}";
+          value = pkgs.stdenvNoCC.mkDerivation {
+            pname = "tts-model-${entry.id}";
+            version = "1";
+            src = pkgs.fetchurl { inherit (entry) url; hash = entry.sha256; };
+            sourceRoot = entry.stripPrefix;
+            dontBuild = true;
+            dontFixup = true;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out"
+              cp -R . "$out/"
+              runHook postInstall
+            '';
+            meta.description = "sherpa-onnx speech synthesis model: ${entry.label}";
+          };
+        }) ttsCatalog)));
 
       checks = forAllSystems (pkgs:
         let
@@ -966,6 +985,22 @@ EOF
             # `nix build .#stt-model-<id>` remains a hash-verified way to obtain
             # weights; using it is the operator's choice, not this module's.
             speech = {
+              streamingModelDir = lib.mkOption {
+                type = lib.types.str;
+                default = "";
+                description = "Optional host-owned Nemotron streaming model directory, exported as ASSISTANT_STT_STREAMING_MODEL_DIR. No weights are installed by this module.";
+              };
+              ttsPython = lib.mkOption {
+                type = lib.types.str;
+                default = "";
+                example = "/run/current-system/sw/bin/python3";
+                description = "Optional host Python with python3Packages.sherpa-onnx, exported as ASSISTANT_TTS_PYTHON. The app closure contains neither Python nor sherpa-onnx.";
+              };
+              ttsModelDir = lib.mkOption {
+                type = lib.types.str;
+                default = "";
+                description = "Optional host-owned complete Kokoro fp32 directory, exported as ASSISTANT_TTS_MODEL_DIR. Use a stable host path or fixed-output derivation to avoid host-update restarts.";
+              };
               modelDir = lib.mkOption {
                 type = lib.types.str;
                 default = "";
@@ -1169,6 +1204,15 @@ EOF
                 # services.personal-assistant.speech.
                 // lib.optionalAttrs (cfg.speech.modelDir != "") {
                   ASSISTANT_STT_MODEL_DIR = cfg.speech.modelDir;
+                }
+                // lib.optionalAttrs (cfg.speech.streamingModelDir != "") {
+                  ASSISTANT_STT_STREAMING_MODEL_DIR = cfg.speech.streamingModelDir;
+                }
+                // lib.optionalAttrs (cfg.speech.ttsPython != "") {
+                  ASSISTANT_TTS_PYTHON = cfg.speech.ttsPython;
+                }
+                // lib.optionalAttrs (cfg.speech.ttsModelDir != "") {
+                  ASSISTANT_TTS_MODEL_DIR = cfg.speech.ttsModelDir;
                 }
                 # Hash-free forms of the two variables NixOS injects into EVERY
                 # unit via `systemd.globalEnvironment`: LOCALE_ARCHIVE from

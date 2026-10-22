@@ -70,6 +70,11 @@ test("generic settings include the streaming conversation controls", () => {
     "speechConversation.numThreads",
     "speechConversation.idleShutdownSeconds",
     "speechConversation.endpointSilenceSeconds",
+    "speechSynthesis.enabled",
+    "speechSynthesis.voice",
+    "speechSynthesis.speed",
+    "speechSynthesis.numThreads",
+    "speechSynthesis.idleShutdownSeconds",
     "tempo.authorAccountId",
   ]);
 });

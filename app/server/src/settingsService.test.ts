@@ -193,6 +193,52 @@ describe("settingsPatchForWrites", () => {
     refuse("peerSpawnRuntimes", "oops", /peerSpawnRuntimes must be an array/);
   });
 
+  test("synthesis settings validate named voices and normalize persisted bounds", async () => {
+    const before = getSettings().speechSynthesis;
+    try {
+      assert.equal(before.voice, "af_heart");
+      assert.equal(before.numThreads, 8);
+      assert.throws(
+        () =>
+          settingsPatchForWrites([
+            { path: "speechSynthesis.voice", value: "unknown" },
+          ]),
+        /must be one of/,
+      );
+      assert.throws(
+        () =>
+          settingsPatchForWrites([{ path: "speechSynthesis.speed", value: 0 }]),
+        /must be between/,
+      );
+      await saveSettings(
+        settingsPatchForWrites([
+          { path: "speechSynthesis.voice", value: "bm_lewis" },
+          { path: "speechSynthesis.speed", value: 1.2 },
+        ]),
+      );
+      assert.equal(getSettings().speechSynthesis.voice, "bm_lewis");
+      assert.equal(getSettings().speechSynthesis.speed, 1.2);
+      await saveSettings({
+        speechSynthesis: {
+          ...before,
+          voice: "bad",
+          speed: 99,
+          numThreads: 99,
+          idleShutdownSeconds: -1,
+        },
+      });
+      assert.deepEqual(getSettings().speechSynthesis, {
+        ...before,
+        voice: "af_heart",
+        speed: 2,
+        numThreads: 32,
+        idleShutdownSeconds: 0,
+      });
+    } finally {
+      await saveSettings({ speechSynthesis: before });
+    }
+  });
+
   test("conversation settings have bounded registry writes and normalized persistence", async () => {
     const before = getSettings().speechConversation;
     try {

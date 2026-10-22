@@ -91,6 +91,7 @@ import {
 } from "./settingsService.ts";
 import { describeSttAvailability } from "./speech/sttConfig.ts";
 import { describeConversationAvailability } from "./speech/streamingSttConfig.ts";
+import { describeTtsAvailability } from "./speech/ttsConfig.ts";
 import { testSlackSettings } from "./slackSettings.ts";
 import { testTempoSettings } from "./tempoSettings.ts";
 import { testConfluenceSettings } from "./confluenceSettings.ts";
@@ -663,6 +664,7 @@ export class Connection implements Viewer {
       serverBuild: serverBuildInfo(),
       speechToText: {
         ...describeSttAvailability(this.settings().speechToText),
+        tts: describeTtsAvailability(),
         conversation: describeConversationAvailability(
           this.settings().speechConversation,
         ),
@@ -3581,12 +3583,14 @@ export class Connection implements Viewer {
     // next reconnect.
     if (
       change.sections.includes("speechToText") ||
-      change.sections.includes("speechConversation")
+      change.sections.includes("speechConversation") ||
+      change.sections.includes("speechSynthesis")
     )
       this.send({
         type: "speechToTextStatus",
         status: {
           ...describeSttAvailability(settings.speechToText),
+          tts: describeTtsAvailability(),
           conversation: describeConversationAvailability(
             settings.speechConversation,
           ),

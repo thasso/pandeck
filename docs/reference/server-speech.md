@@ -135,6 +135,62 @@ cannot affect a later stream. A protocol or recognizer failure sends `error` and
 closes the browser socket. No audio is written to disk, no HTTP retry exists for
 this path, and no per-utterance state outlives the connection.
 
+## Kokoro synthesis
+
+`ttsConfig.ts` probes the configured Python's sherpa_onnx import at startup
+through the broker, and discovers the complete model directory from
+`ASSISTANT_TTS_MODEL_DIR` or the dev slot `DATA_DIR/models/tts/kokoro-v1-fp32`.
+The committed `config/tts-models.json` is shared by Nix and
+`pnpm run tts:model`. Status is independent of streaming/offline STT and user
+enablement, under `ready.speechToText.tts` and `speechToTextStatus.status.tts`.
+
+`ttsEngine.ts` owns one lazy warm Python child, loaded with eight CPU threads by
+default, one active sentence, and no queued work. A competing request gets 429.
+The engine waits for graph initialization's `ready` frame, bounds warm-up to 60
+seconds and generation to 30 seconds, backs off five seconds after a crash, and
+unloads after the configured idle interval. Thread changes terminate and wait
+for the old child before spawning another. Disposal rejects warm-up and active
+work. A failed termination escalates to SIGKILL after five seconds; no
+replacement spawns before exit. Warm model spawn uses the server's narrow
+PID-control exception, not per-request process spawning.
+
+`kokoroSidecar.py` uses the fp32 Kokoro model, English lexicon, espeak data and
+dictionaries, with `lang=en-us`. Its reader thread accepts newline-delimited
+JSON requests, each at most 8192 bytes:
+
+- `{type: "synthesize", id, text, sid, speed}`
+- `{type: "cancel", id}`
+
+The main thread alone calls `generate`. Cancellation sets an event read by the
+generation callback. If the callback stalls, Node terminates the child after two
+seconds. A successful cancellation acknowledges without unloading the model.
+Responses have a four-byte unsigned little-endian JSON-header length, then UTF-8
+JSON, then the declared PCM bytes for `audio` only:
+
+- `{type: "ready"}` after load and graph warm-up.
+- `{type: "audio", id, sampleRate: 24000, bytes}` plus mono PCM16 LE.
+- `{type: "cancelled", id}` or `{type: "error", id}`.
+
+`ttsProtocol.ts` bounds headers to 4096 bytes and PCM to 30 seconds. Arbitrary
+pipe chunk boundaries and coalesced frames are supported. Native stderr is
+drained without retaining input-bearing diagnostics; stdout is protocol only. No
+audio file or utterance/session record is created.
+
+`ttsHttp.ts` implements `POST /api/speech/synthesize` behind the existing API
+token/origin gate. Send `Content-Type: application/json` and
+`{text, voice?, speed?}`. Text must be nonblank and at most 500 JavaScript
+characters; the body is capped at 8192 bytes. Split longer prose in the client.
+Voice is a name from shared `KOKORO_ENGLISH_VOICES`, whose explicit ids come
+from the pinned sherpa-onnx Kokoro v1.0 generator. Optional voice/speed override
+settings only for that request, enabling unsaved previews. Speed is 0.5 to 2.
+Unknown fields, including model paths, are rejected. The response is mono PCM16
+WAV at 24 kHz with no-store caching. Error codes are 400 for validation, 403 for
+the user switch, 405 for method, 413 for body size, 415 for media type, 429 for
+busy and 503 for unavailable inference. Request disconnect/response close aborts
+synthesis. A 95-second request deadline also bounds body reads. M3 must abort
+the current fetch on barge-in and clear local queued playback; the server
+retains no conversation utterance state.
+
 ## Working notes
 
 - Measured on the deploy box (Ryzen 9 3900X, CPU-only, int8 Parakeet TDT 0.6B
