@@ -2270,28 +2270,28 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   error rather than an orphan in the sidebar. Rows are isolated — one failure
   annotates its own item and the batch continues — and the new session ids ride
   in `resultSummary`, which is what the outcome prompt hands the agent. These
-  are `scope = 'user'` sessions, NOT subagents; nothing here touches the
-  subagent registry. `spawnApprovedPeers` is the DIRECT path
-  ([Task-595](pa://task/595)): the same `validateStructure` gate, the same
-  `spawnOne` creation/link/context/delivery seam, but the runtime comes from the
-  user's approved roster instead of a card. Structural mistakes fail the whole
-  batch before anything exists (they are the agent's to fix); from there each
-  row resolves its own approved runtime, and then `spawnOne` RE-resolves it
-  through the `currentRuntime` hook as the last read before the creation side
-  effect. Both are needed: the early one keeps a roster mistake cheap, and the
-  late one is the authoritative read, because the awaits in between (worktree,
-  Task and Project revalidation) are exactly where a Settings save lands — a
-  runtime resolved before them is a claim about the past. A row disabled or
-  removed in that window is refused, a row re-pointed runs on the CURRENT
-  approval, and the result reports the runtime it actually started on. Nothing
-  yields to the event loop between that hook and `deps.create*`. A runtime,
-  creation or delivery failure annotates that row while the rest continue.
-  `responseRequested` defaults to TRUE here — the coordinator owns closure on
-  this path — and the opening prompt goes out through `withReportingRoute`, so
-  the child is told who to answer even when the coordinator forgot to say it.
-  The batch runs under one concurrency claim, released in a `finally`; a row
-  over the cap is created with its opening prompt `held` and reports its waiting
-  position (`heldDirectPeers.ts`, the same rank the session list shows).
+  are `scope = 'user'` sessions, NOT subagents. `spawnApprovedPeers` is the
+  DIRECT path ([Task-595](pa://task/595)): the same `validateStructure` gate,
+  the same `spawnOne` creation/link/context/delivery seam, but the runtime comes
+  from the user's approved roster instead of a card. Structural mistakes fail
+  the whole batch before anything exists (they are the agent's to fix); from
+  there each row resolves its own approved runtime, and then `spawnOne`
+  RE-resolves it through the `currentRuntime` hook as the last read before the
+  creation side effect. Both are needed: the early one keeps a roster mistake
+  cheap, and the late one is the authoritative read, because the awaits in
+  between (worktree, Task and Project revalidation) are exactly where a Settings
+  save lands — a runtime resolved before them is a claim about the past. A row
+  disabled or removed in that window is refused, a row re-pointed runs on the
+  CURRENT approval, and the result reports the runtime it actually started on.
+  Nothing yields to the event loop between that hook and `deps.create*`. A
+  runtime, creation or delivery failure annotates that row while the rest
+  continue. `responseRequested` defaults to TRUE here — the coordinator owns
+  closure on this path — and the opening prompt goes out through
+  `withReportingRoute`, so the child is told who to answer even when the
+  coordinator forgot to say it. The batch runs under one concurrency claim,
+  released in a `finally`; a row over the cap is created with its opening prompt
+  `held` and reports its waiting position (`heldDirectPeers.ts`, the same rank
+  the session list shows).
 - `peerSpawnRuntimes.ts` owns the approved peer-runtime roster
   ([Task-595](pa://task/595)) — the user's standing permission for agents to
   start ordinary peer sessions without a card per batch. `peerRuntimeRoster`

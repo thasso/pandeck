@@ -792,7 +792,7 @@ describe("peerPromptStore", () => {
     assert.equal(store.getById(unresolved.id)?.status, "queued");
   });
 
-  it("prunes aged terminal rows by status and age alone, without reading subagent_runs", () => {
+  it("prunes aged terminal rows by status and age alone", () => {
     const terminal = () => {
       const recipient = `r-${seq++}`;
       const m = enqueue(recipient);
@@ -811,18 +811,10 @@ describe("peerPromptStore", () => {
     age.run(aged.id);
     age.run(queued.id);
 
-    const db = getDb();
-    db.exec("BEGIN");
-    try {
-      // The registry table is about to be dropped; pruning must not need it.
-      db.exec("DROP TABLE subagent_runs");
-      assert.ok(store.pruneTerminal(Date.now() - 60_000) >= 1);
-      assert.equal(store.getById(aged.id), undefined);
-      assert.equal(store.getById(fresh.id)?.status, "completed");
-      assert.equal(store.getById(queued.id)?.status, "queued");
-    } finally {
-      db.exec("ROLLBACK");
-    }
+    assert.ok(store.pruneTerminal(Date.now() - 60_000) >= 1);
+    assert.equal(store.getById(aged.id), undefined);
+    assert.equal(store.getById(fresh.id)?.status, "completed");
+    assert.equal(store.getById(queued.id)?.status, "queued");
   });
 
   it("markDeliveryBatch records the batch's head id on every member without an audited transition, and listByBatchHead finds them all", () => {

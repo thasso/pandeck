@@ -13,8 +13,7 @@
  * - whether a coordinator's next direct peer turns start now or wait for a slot
  *   (`admitDirectPeerTurns`), a per-session cap excluding user-marked low-cost turns.
  *
- * It knows nothing about the subagent registry and must never import it: what
- * this roster starts is an ordinary `scope = "user"` session.
+ * What this roster starts is an ordinary `scope = "user"` session.
  */
 import type {
   AccountModelOption,

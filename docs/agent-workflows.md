@@ -419,8 +419,7 @@ the outcome:
 
 - **Subagents** means only the Claude SDK's native subagents
   ([glossary](glossary.md)). The PA-owned subagent registry
-  ([Task-457](pa://task/457)) is retired; peer sessions replaced it, and neither
-  lane above may import what remains of that domain.
+  ([Task-457](pa://task/457)) was removed; peer sessions replaced it.
 
 ## Foundation invariants
 

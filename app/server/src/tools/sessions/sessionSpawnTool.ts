@@ -22,7 +22,7 @@
  *   the user picks ([Task-795](pa://task/795), `docs/agent-definitions.md`).
  *
  * What either path creates is an ordinary session the user can read, re-prompt
- * and take over — never a subagent, and nothing here reaches that registry.
+ * and take over — never a subagent.
  */
 import { isSessionPeerTurnCap } from "@assistant/shared";
 import type { AgentModelChoice } from "../../agents/agentRuntime.ts";

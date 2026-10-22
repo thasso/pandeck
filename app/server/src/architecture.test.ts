@@ -371,29 +371,6 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-/**
- * Agent-spawned peer sessions ([Task-553](pa://task/553),
- * [Task-595](pa://task/595)) are ORDINARY user sessions. The lighter
- * experimentation lane must not quietly acquire governed-subagent semantics —
- * an ownership registry, a terminal result contract, a watchdog — and the way
- * that would happen first is an import.
- */
-test("the peer-spawn lane never reaches into the subagent domain", () => {
-  for (const file of [
-    "sessionSpawn.ts",
-    "peerSpawnRuntimes.ts",
-    "heldDirectPeers.ts",
-    "tools/sessions/sessionSpawnTool.ts",
-  ]) {
-    const source = readFileSync(join(SRC_ROOT, file), "utf8");
-    assert.equal(
-      /from\s+"[^"]*subagent/i.test(source),
-      false,
-      `${file} must not import the subagent registry or store`,
-    );
-  }
-});
-
 test("peer-prompt delivery never steers/interrupts a target or emits an info notice", () => {
   const engine = readFileSync(join(SRC_ROOT, "peerPrompt.ts"), "utf8");
   // Task 88: peer prompts are delivered as fresh turns; never steer/abort a busy

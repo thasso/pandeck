@@ -110,46 +110,6 @@ facade.
   before returning, and returns plain values (metadata, usage totals, the frozen
   prompt-condition JSON, the attached Task id) with the tombstone flag and the
   row's `scope` reported for the caller to refuse on.
-- `subagentStore.ts` owns the durable PA-subagent thread/run substrate
-  ([Task-493](pa://task/493), migration `0048_subagent_threads_runs.sql`). It is
-  retired with the registry ([Task-457](pa://task/457)): no production code
-  writes or reads it, and only its own tests import it. A thread uniquely owns
-  one `scope = 'subagent'` session beneath an ordinary user session or persisted
-  workflow-step executor (never another subagent) and freezes the fully resolved
-  role/slot/account/model/thinking/result-contract profile in the same
-  `BEGIN IMMEDIATE` transaction as its first run; incomplete profiles never
-  produce a row. Initial and continuation acceptance receive the effective
-  positive safe-integer parent limit from the caller, count accepted nonterminal
-  runs under that transaction, and import no policy default. Runs have monotonic
-  per-thread rounds, immutable terminal history, explicit
-  status/execution-phase/watchdog machines, and a partial unique index that
-  permits a successor only after the prior run is terminal and quiescent. Result
-  acceptance and Stop are competing irreversible CAS decisions: result-first can
-  end only `submitted`, Stop-first only `stopped`; persisted quiescence evidence
-  is required before either terminal write and is cleared whenever execution
-  resumes so only the newest completion can satisfy the gate. Required parent
-  responses retain exact message correlation and resume the same run, while
-  watchdog/nudge state advances `unused → reserved → admitted → completed` and
-  ordinary execution reconciliation cannot reset it. One authoritative usage
-  completion snapshot replaces (never callback-increments) the thread cumulative
-  mirror and run delta. Every mutation runs through `mutation` and
-  `markSubagentStateChanged`: one persisted `subagent_revision` value stamps
-  deduplicated run ids plus their containing threads inside the write
-  transaction, then one touched-id notification occurs after commit. Registry
-  membership and `deleted_at_ms` remain on scrubbed Task-490 parent-tree
-  tombstones, preserving id/session/ref and revision guards without retaining
-  user content or allowing resurrection. Parent lifecycle cascades call
-  `sessionStore` for root/child archive, settlement, and read-through semantics
-  while updating inherited thread flags in that same transaction;
-  restore/unsettle never rolls read time back. Reads include the unique
-  session-to-thread authorization/profile-resolution lookup and bounded
-  thread/run pagination; no projection or broadcast read occurs in SQL
-  transactions. Task-495's usage write accepts only the authoritative durable
-  session cumulative and derives the run delta from its frozen opening baseline;
-  a duplicate completion identity is a no-op, while parent usage is computed on
-  read from parent-own totals plus each thread cumulative exactly once.
-  `delegationSummaries()` and `delegationObligations(parent)` have no caller
-  outside the store's tests.
 - `backgroundWorkStore.ts` owns the durable provider-neutral background-work
   substrate ([Task-482](pa://task/482), migration `0054_background_work.sql`).
   One `background_work_items` row represents a Claude vendor task, a
@@ -523,6 +483,12 @@ facade.
   `sessionProjectIndex`/`worktreeIdBySession`/`objectRefsBySession` do) whenever
   a list resolves a relation for every row.
 - `migrations/` owns append-only SQL schema migrations.
+- `0097_drop_subagent_registry.sql` drops the retired PA subagent registry
+  (`subagent_runs`, then `subagent_threads`, and the `subagent_revision`
+  sequence row). A row in either table makes it abort with a `RAISE` from a TEMP
+  guard trigger, so the runner rolls back and the database is unchanged;
+  `subagentRegistryDropMigration.test.ts` covers both refusals and the clean
+  drop.
 - `migrations.lock.json` is the checked-in manifest of each migration's sha256
   (byte-for-byte the runtime checksum). `migrationsManifest.ts` owns the shared
   hashing/read/serialize helpers; `migrationsLock.test.ts` fails CI when a

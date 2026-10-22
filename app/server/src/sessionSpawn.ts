@@ -8,8 +8,7 @@
  * copying session ids by hand.
  *
  * These are ordinary `scope = 'user'` sessions — watchable, steerable and
- * re-promptable by the human — not subagents: nothing here belongs to the
- * subagent registry, and nothing here may import it.
+ * re-promptable by the human — not subagents.
  *
  * Two authorities are deliberately split. The AGENT owns what it can be held to:
  * the title, the persona, the target checkout and the opening prompt; a mistake
