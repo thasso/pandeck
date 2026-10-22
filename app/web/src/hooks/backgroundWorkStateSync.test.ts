@@ -1,7 +1,9 @@
 /**
  * The reducer half of the background registry ([Task-486](pa://task/486)): what
  * the `background` topic's snapshot and events do to held state, and what a
- * human Stop's answer is — and is not — allowed to change.
+ * human Stop's answer is — and is not — allowed to change. The generic event
+ * rules belong to the replica (`lib/stateReplica.test.ts`); this file keeps
+ * Background's own policy: placement, the window flag, and Stop.
  *   pnpm --filter @assistant/web test src/hooks/backgroundWorkStateSync.test.ts
  */
 import { describe, expect, it } from "vitest";
@@ -67,63 +69,18 @@ describe("the background registry projection", () => {
     ).toBe(false);
   });
 
-  it("keeps object identity for rows an event batch did not change", () => {
-    const seeded = apply(
-      undefined,
-      snapshot([item({ id: "a" }), item({ id: "b" })]),
-    );
-    const untouched = seeded.backgroundWorkItems.find((row) => row.id === "a");
-    const next = apply(seeded, {
-      type: "stateEvents",
-      topic: "background",
-      seq: 2,
-      events: [
-        {
-          kind: "upsert",
-          id: "b",
-          revision: 2,
-          item: item({ id: "b", state: "completed", terminalAt: NOW }),
-        },
-      ],
-    });
-    // The memoized rows hold on identity as well as content, so a batch that
-    // touched one row must not hand back a new object for its neighbour.
-    expect(next.backgroundWorkItems.find((row) => row.id === "a")).toBe(
-      untouched,
-    );
-    expect(next.backgroundWorkItems.find((row) => row.id === "b")?.state).toBe(
-      "completed",
-    );
-  });
-
-  it("ignores an event at or below the revision it already holds", () => {
-    const seeded = apply(undefined, snapshot([item({ id: "a" })]));
-    const stale = apply(seeded, {
-      type: "stateEvents",
-      topic: "background",
-      seq: 2,
-      events: [
-        {
-          kind: "upsert",
-          id: "a",
-          revision: 1,
-          item: item({ id: "a", label: "stale" }),
-        },
-      ],
-    });
-    expect(stale.backgroundWorkItems[0]?.label).toBe("pnpm run build");
-  });
-
-  it("drops a deleted row and remembers its revision", () => {
+  it("puts a row it has not held yet first", () => {
     const seeded = apply(undefined, snapshot([item({ id: "a" })]));
     const next = apply(seeded, {
       type: "stateEvents",
       topic: "background",
       seq: 2,
-      events: [{ kind: "delete", id: "a", revision: 2 }],
+      events: [
+        { kind: "upsert", id: "b", revision: 1, item: item({ id: "b" }) },
+      ],
     });
-    expect(next.backgroundWorkItems).toEqual([]);
-    expect(next.stateEventRevisions.background).toEqual({ a: 2 });
+    // New work is the newest work: the surfaces read the list newest first.
+    expect(next.backgroundWorkItems.map((row) => row.id)).toEqual(["b", "a"]);
   });
 });
 

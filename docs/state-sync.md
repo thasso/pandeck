@@ -131,10 +131,11 @@ failure, and explicit recovery reads.
 
 ## Client contract
 
-- One `applyEvent` seam in the reducer applies a batch: per event, apply iff
-  `revision` greater than the sidecar map's entry, and return changed | no-op
-  with identity preservation — an unchanged row keeps its object identity
-  (precedent: `reconcileTaskList` / `reconcileTaskDetails`).
+- One seam in the reducer applies a batch: the client replica (below) for a
+  migrated topic, `applyEvent` for the rest. Per event, apply iff `revision` is
+  greater than the sidecar map's entry, and return changed | no-op with identity
+  preservation — an unchanged row keeps its object identity (precedent:
+  `reconcileTaskList` / `reconcileTaskDetails`).
 - A mutation dispatches its optimistic event(s) locally and records a pending
   entry keyed by the mutation `requestId`, storing only the touched object ids
   and, for a create, the local temp id. The server never sees temp ids; the
@@ -186,6 +187,38 @@ failure, and explicit recovery reads.
   scheduled by what the rows would DRAW — which worktrees have a status and the
   shape each one gives its row — never by the counts inside it, which the
   watcher rewrites several times a second.
+
+## Client replica
+
+`app/web/src/lib/stateReplica.ts` is the client's one implementation of the
+generic mechanics for a migrated topic. Background is the only one so far;
+Tasks, Projects and Initiatives still use their own `useAssistant` code until
+they move. The module has no React and two halves, and `useAssistant` stays the
+single owner of both:
+
+- The DATA half is a pure reducer step,
+  `applyTopicMessage(descriptor, state, message)`, for a topic's snapshot answer
+  or `stateEvents` batch. A snapshot replaces the held items as given and parses
+  its revision sidecar; an invalid sidecar adopts the items with no revisions. A
+  batch applies the per-event revision rule above. A batch that applies nothing
+  returns the very same state object, and a value-equal echo advances only the
+  sidecar, keeping the item array and every row by identity.
+- A topic's DESCRIPTOR lends the replica its existing `UIState` fields through
+  `read`/`write` lenses, so no component changes. It adapts the topic's own list
+  message into the snapshot input (no wire change), and carries the topic's
+  policy as hooks: `place` decides where a newly seen member goes (Background
+  prepends), and `adoptSnapshot` sets topic-specific snapshot fields on the
+  already written state (Background's `truncated` window flag). `write` keeps
+  every slice it does not own by reference.
+- The TRANSPORT half is one object per hook instance, held in a ref. It owns the
+  last `seq` of each migrated topic: a snapshot rebaselines it, and a batch that
+  does not continue it warns and returns the unsubscribe and subscribe to send.
+  The gapped batch still applies. Like the hook's `topicSeqRef`, which holds the
+  topics not yet migrated, it never resets on disconnect. Each topic's `seq`
+  lives in exactly one of the two.
+
+Frame batching stays in `useAssistant`; the replica sees messages in the order
+they are applied.
 
 ## Resync
 

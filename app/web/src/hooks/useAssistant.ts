@@ -23,6 +23,14 @@ import { announceMessage } from "../lib/messageAnnounce.ts";
 import { sessionSettleCascade } from "../lib/sessionInbox.ts";
 import { collapseRequest, sameCollapsed } from "../lib/initiativeView.ts";
 import {
+  applyTopicMessage,
+  createReplicaTransport,
+  type ReplicaTransport,
+  revisionSidecar,
+  type TopicDescriptor,
+} from "../lib/stateReplica.ts";
+import { wireValueEqual } from "../lib/wireValueEqual.ts";
+import {
   arrivalHasHome,
   arrivalMessage,
   objectFailureFrom,
@@ -82,7 +90,6 @@ import type {
   PromptAttachment,
   PromptQueueCommand,
   ServerMessage,
-  StateDigestEntry,
   TimelineAnchorTarget,
   StateDigestMessage,
   StateEventsMessage,
@@ -1037,23 +1044,6 @@ function taskRevisionRecord(value: unknown): Record<string, number> | null {
   return revisions;
 }
 
-function taskDigestRecord(
-  entries: readonly StateDigestEntry[],
-): Record<string, number> | null {
-  const revisions: Record<string, number> = {};
-  for (const entry of entries) {
-    if (
-      !entry.id ||
-      !Number.isSafeInteger(entry.revision) ||
-      entry.revision < 0 ||
-      entry.id in revisions
-    )
-      return null;
-    revisions[entry.id] = entry.revision;
-  }
-  return revisions;
-}
-
 function taskListHasRevisionSidecar(
   list: TaskListResponse,
   revisions: Record<string, number> | undefined,
@@ -1236,40 +1226,6 @@ function upsertSessionListItem(
   const next = current.slice();
   next[idx] = incoming;
   return next.sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-/**
- * Structural equality for JSON wire values; Task summaries contain no cycles.
- *
- * A property whose value is `undefined` counts as ABSENT, because that is what
- * it is on the wire: `JSON.stringify` drops it. Optimistic projections are built
- * with spreads that leave such keys behind (`completedAt: undefined` when a Task
- * leaves `done`), and treating them as a difference would make the authoritative
- * echo of an unchanged row replace it — the one thing this comparison exists to
- * prevent.
- */
-function wireValueEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (typeof left !== "object" || left === null) return false;
-  if (typeof right !== "object" || right === null) return false;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right)) return false;
-    return (
-      left.length === right.length &&
-      left.every((value, index) => wireValueEqual(value, right[index]))
-    );
-  }
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const keys = definedKeys(leftRecord);
-  return (
-    keys.length === definedKeys(rightRecord).length &&
-    keys.every((key) => wireValueEqual(leftRecord[key], rightRecord[key]))
-  );
-}
-
-function definedKeys(record: Record<string, unknown>): string[] {
-  return Object.keys(record).filter((key) => record[key] !== undefined);
 }
 
 /** Preserve row identities across authoritative snapshots when content agrees. */
@@ -3651,6 +3607,40 @@ type BackgroundStateEventsMessage = StateEventsMessage<
   "background",
   BackgroundWorkItemSummary
 >;
+
+/**
+ * The `background` topic's replica lenses. A newly seen row goes FIRST, and a
+ * snapshot says whether it was a window over a longer history; its rows replace
+ * the held ones as given.
+ */
+const backgroundReplica: TopicDescriptor<
+  UIState,
+  BackgroundWorkItemSummary,
+  Extract<ServerMessage, { type: "backgroundWorkList" }>
+> = {
+  read: (state) => ({
+    items: state.backgroundWorkItems,
+    revisions: state.stateEventRevisions.background ?? {},
+  }),
+  write: (state, replica) => ({
+    ...state,
+    backgroundWorkItems: replica.items,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      background: replica.revisions,
+    },
+  }),
+  snapshot: (message) => ({
+    items: message.items,
+    revisions: message.revisions,
+  }),
+  place: (items, item) => [item, ...items],
+  adoptSnapshot: (state, message) => ({
+    ...state,
+    backgroundWorkTruncated: message.truncated === true,
+  }),
+};
+
 type TaskDigestMessage = StateDigestMessage<"tasks">;
 type ProjectDigestMessage = StateDigestMessage<"projects">;
 
@@ -3663,7 +3653,7 @@ function changedTaskIdsForDigest(
   message: TaskDigestMessage,
 ): string[] | null {
   if (!canUseTaskDigest(state) || !state.taskList) return null;
-  const digest = taskDigestRecord(message.entries);
+  const digest = revisionSidecar(message.entries);
   if (!digest) return null;
   const objectIds = new Set(state.taskList.items.map((item) => item.id));
   const revisions = state.stateEventRevisions.tasks!;
@@ -3707,7 +3697,7 @@ function applyTaskDigest(state: UIState, message: TaskDigestMessage): UIState {
     taskDetails: reconcileTaskDetailRevisions(
       state.taskDetails,
       state.taskDetailRevisions,
-      taskDigestRecord(message.entries) ?? {},
+      revisionSidecar(message.entries) ?? {},
     ),
     taskListFresh: changedIds.length === 0,
     taskStatuses,
@@ -3720,7 +3710,7 @@ function changedProjectIdsForDigest(
   message: ProjectDigestMessage,
 ): string[] | null {
   if (!canUseProjectDigest(state) || !state.projectList) return null;
-  const digest = taskDigestRecord(message.entries);
+  const digest = revisionSidecar(message.entries);
   if (!digest) return null;
   const ids = new Set(state.projectList.projects.map((project) => project.id));
   const revisions = state.stateEventRevisions.projects!;
@@ -3777,7 +3767,7 @@ function applyEvent(
   if (message.topic === "initiatives")
     return applyInitiativeEvent(state, message);
   if (message.topic === "background")
-    return applyBackgroundEvent(state, message);
+    return applyTopicMessage(backgroundReplica, state, message);
   const currentRevisions = state.stateEventRevisions[message.topic] ?? {};
   let revisions: Record<string, number> | null = null;
   let items = state.taskList?.items;
@@ -3993,40 +3983,6 @@ function pruneInitiativeDetails(
     initiativeDetails: kept(details),
     initiativeDetailRevisions: kept(revisions),
     initiativeDetailsLru: lru.filter((id) => keep.has(id)),
-  };
-}
-
-function applyBackgroundEvent(
-  state: UIState,
-  message: BackgroundStateEventsMessage,
-): UIState {
-  const current = state.stateEventRevisions.background ?? {};
-  let revisions: Record<string, number> | null = null;
-  let items = state.backgroundWorkItems;
-  for (const event of message.events) {
-    const known = revisions?.[event.id] ?? current[event.id] ?? -1;
-    if (event.revision <= known) continue;
-    revisions ??= { ...current };
-    revisions[event.id] = event.revision;
-    const index = items.findIndex((item) => item.id === event.id);
-    if (event.kind === "delete") {
-      if (index >= 0) items = items.filter((item) => item.id !== event.id);
-    } else if (index < 0) {
-      items = [event.item, ...items];
-    } else if (!wireValueEqual(items[index], event.item)) {
-      const next = items.slice();
-      next[index] = event.item;
-      items = next;
-    }
-  }
-  if (!revisions) return state;
-  return {
-    ...state,
-    backgroundWorkItems: items,
-    stateEventRevisions: {
-      ...state.stateEventRevisions,
-      background: revisions,
-    },
   };
 }
 
@@ -5799,18 +5755,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         error: null,
       };
     }
-    case "backgroundWorkList": {
-      const revisions = taskDigestRecord(msg.revisions);
-      return {
-        ...state,
-        backgroundWorkItems: msg.items,
-        backgroundWorkTruncated: msg.truncated === true,
-        stateEventRevisions: {
-          ...state.stateEventRevisions,
-          background: revisions ?? {},
-        },
-      };
-    }
+    case "backgroundWorkList":
+      return applyTopicMessage(backgroundReplica, state, msg);
     case "backgroundWorkStopAnswer": {
       // Control feedback only: it retires the pending flag on the button that
       // was pressed and records a deferred host close. Nothing here writes a
@@ -5841,14 +5787,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return applyInitiativeSnapshot(
         state,
         msg.items,
-        taskDigestRecord(msg.revisions) ?? {},
+        revisionSidecar(msg.revisions) ?? {},
       );
     case "initiativeDetail":
       // Correlated before reducer dispatch in the socket effect.
       return state;
     case "taskList": {
       const taskList = reconcileTaskList(state.taskList, msg.list);
-      const revisionRecord = taskDigestRecord(msg.revisions);
+      const revisionRecord = revisionSidecar(msg.revisions);
       const canonical =
         isCacheableTaskList(taskList) &&
         revisionRecord &&
@@ -5909,7 +5855,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // reducer/cache slot.
       if (!isCanonicalProjectList(msg.list)) return state;
       const projectList = reconcileProjectList(state.projectList, msg.list);
-      const revisionRecord = taskDigestRecord(msg.revisions);
+      const revisionRecord = revisionSidecar(msg.revisions);
       const revisions =
         revisionRecord &&
         projectListHasRevisionSidecar(projectList, revisionRecord)
@@ -7003,8 +6949,15 @@ export function useAssistant({
       if (timer !== undefined) clearTimeout(timer);
     };
   }, [viewedSessionId, viewedTimeline]);
-  /** Last `seq` seen per topic — the gap tripwire, never a replay cursor. */
+  /**
+   * Last `seq` seen per topic not yet on the replica transport (`tasks`,
+   * `projects`, `initiatives`) — the gap tripwire, never a replay cursor.
+   */
   const topicSeqRef = useRef<Partial<Record<BroadcastTopic, number>>>({});
+  /** The replica transport for migrated topics, built once per hook instance. */
+  const replicaTransportRef = useRef<ReplicaTransport | null>(null);
+  replicaTransportRef.current ??= createReplicaTransport(["background"]);
+  const replicaTransport = replicaTransportRef.current;
   /**
    * Optimistic mutations still waiting for their own outcome, keyed by the
    * `requestId` the command carried. Correlation is explicit because these
@@ -7486,7 +7439,7 @@ export function useAssistant({
         topicSeqRef.current.projects = msg.seq;
       }
       if (msg.type === "backgroundWorkList") {
-        topicSeqRef.current.background = msg.seq;
+        replicaTransport.snapshotReceived("background", msg.seq);
       }
       if (msg.type === "initiativeList") {
         topicSeqRef.current.initiatives = msg.seq;
@@ -8020,7 +7973,10 @@ export function useAssistant({
       // than in reducer state on purpose: two batches can arrive before React
       // re-renders, and comparing both against the same rendered `seq` would
       // report a gap that never happened.
-      if (msg.type === "stateEvents") {
+      if (msg.type === "stateEvents" && replicaTransport.owns(msg.topic)) {
+        for (const out of replicaTransport.eventsReceived(msg))
+          socket.send(out);
+      } else if (msg.type === "stateEvents") {
         const previous = topicSeqRef.current[msg.topic];
         topicSeqRef.current[msg.topic] = msg.seq;
         // A batch that does not continue the last one means an event was missed
@@ -8230,7 +8186,7 @@ export function useAssistant({
       offStatus();
       socket.dispose();
     };
-  }, [socket]);
+  }, [replicaTransport, socket]);
 
   const actions = useMemo<AssistantActions>(() => {
     const send = (msg: ClientMessage) => socketRef.current?.send(msg);

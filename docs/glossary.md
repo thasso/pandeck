@@ -29,6 +29,12 @@ _Avoid_: patch, delta
 which a reconnecting client compares against its cache.\
 _Avoid_: manifest, checksum
 
+**Replica**: The client's copy of one state topic: its live-projection objects
+and revision sidecar, kept by the replica module from snapshots and state-change
+events.\
+_Avoid_: cache, store, mirror. A cache is the shell cache, and a store is a
+server persistence layer.
+
 **Peer session**: A session started by another session that reports back through
 peer messages.\
 _Avoid_: subagent. That word means only the Claude SDK's native subagents.

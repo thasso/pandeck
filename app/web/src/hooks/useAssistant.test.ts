@@ -1815,61 +1815,6 @@ describe("useAssistant task reducer", () => {
     expect(stale).toBe(next);
   });
 
-  it("keeps background work echoes identity-stable and revision ordered", () => {
-    const item = {
-      id: "bgw-1",
-      ownerSessionId: "session-1",
-      backend: "host-process" as const,
-      kind: "shell" as const,
-      label: "pnpm run build",
-      state: "running" as const,
-      stopState: "none" as const,
-      createdAt: 1,
-      updatedAt: 2,
-      startedAt: 2,
-      deadlineAt: 1_000,
-      settingsGeneration: 1,
-    };
-    let state = apply({
-      type: "backgroundWorkList",
-      items: [item],
-      seq: 3,
-      revisions: [{ id: item.id, revision: 5 }],
-    });
-    expect(state.backgroundWorkItems[0]).toBe(item);
-    const echo = apply(
-      {
-        type: "stateEvents",
-        topic: "background",
-        seq: 4,
-        events: [{ kind: "upsert", id: item.id, revision: 5, item }],
-      },
-      state,
-    );
-    expect(echo).toBe(state);
-    const stale = apply(
-      {
-        type: "stateEvents",
-        topic: "background",
-        seq: 5,
-        events: [{ kind: "delete", id: item.id, revision: 4 }],
-      },
-      echo,
-    );
-    expect(stale).toBe(echo);
-    state = apply(
-      {
-        type: "stateEvents",
-        topic: "background",
-        seq: 6,
-        events: [{ kind: "delete", id: item.id, revision: 6 }],
-      },
-      stale,
-    );
-    expect(state.backgroundWorkItems).toEqual([]);
-    expect(state.stateEventRevisions.background).toEqual({ [item.id]: 6 });
-  });
-
   it("optimistic task saves use the current protocol shape", () => {
     const taskList: TaskListResponse = { request: {}, items: [], updatedAt: 1 };
     const state = { ...createInitialState(), taskList };
