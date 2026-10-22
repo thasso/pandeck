@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import {
   type AgentType,
   DEFAULT_SESSION_SCOPE,
-  type BrowserRuntimeInfo,
   type SessionForkOrigin,
   type SessionScope,
 } from "@assistant/shared";
@@ -27,7 +26,7 @@ import {
   claudeProfileSessionStore,
   removeClaudeSessionFromAllProfiles,
 } from "./profileSessionStore.ts";
-import { SessionHeldElsewhereError } from "../harness.ts";
+import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
   DEFAULT_CLAUDE_PROFILE_ID,
@@ -60,8 +59,8 @@ class ClaudeSdkSessionStore {
   /** Lazily-built real seam, shared by every live session. */
   private seamPromise: Promise<ClaudeSdkSeam> | undefined;
   private onChange: () => void = () => {};
-  private browserRuntimesFor: (sessionId: string) => BrowserRuntimeInfo[] =
-    () => [];
+  private browserRuntimeOwner: HarnessHost["browserRuntimeOwner"] = () =>
+    undefined;
 
   setOnChange(cb: () => void): void {
     this.onChange = cb;
@@ -72,12 +71,10 @@ class ClaudeSdkSessionStore {
     this.heldElsewhere = check;
   }
 
-  setBrowserRuntimesProvider(
-    cb: (sessionId: string) => BrowserRuntimeInfo[],
-  ): void {
-    this.browserRuntimesFor = cb;
+  setBrowserRuntimeOwner(cb: HarnessHost["browserRuntimeOwner"]): void {
+    this.browserRuntimeOwner = cb;
     for (const session of this.sessions.values())
-      session.browserRuntimesFor = cb;
+      session.browserRuntimeOwner = cb;
   }
 
   /** Inject a fake seam (tests only); defaults to the real installed SDK. */
@@ -223,8 +220,8 @@ class ClaudeSdkSessionStore {
     session.onChange = () => this.onChange();
     session.onPersist = () => this.persist(session);
     session.holdBy(() => this.evictIdle(session));
-    session.browserRuntimesFor = (sessionId) =>
-      this.browserRuntimesFor(sessionId);
+    session.browserRuntimeOwner = (sessionId) =>
+      this.browserRuntimeOwner(sessionId);
     if (loaded) this.logs.set(id, loaded.cursor);
     else this.logs.delete(id);
     // Scope BEFORE the live map: an id the session list can already see must
@@ -393,8 +390,8 @@ class ClaudeSdkSessionStore {
       session.onChange = () => this.onChange();
       session.onPersist = () => this.persist(session);
       session.holdBy(() => this.evictIdle(session));
-      session.browserRuntimesFor = (sessionId) =>
-        this.browserRuntimesFor(sessionId);
+      session.browserRuntimeOwner = (sessionId) =>
+        this.browserRuntimeOwner(sessionId);
       // A fork INHERITS its parent's scope, and claims it before the live map
       // can hand the child to the session list: forking is not a way for a
       // session outside the user's scope to produce one inside it.

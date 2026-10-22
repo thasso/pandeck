@@ -57,6 +57,7 @@ import {
 import { sessionToolExposure } from "./tools/sessionToolExposure.ts";
 import {
   buildToolExposure,
+  toolDefinitionChars,
   type BuildToolExposureInput,
 } from "./tools/toolExposure.ts";
 import { hasPendingApproval } from "./pendingApprovals.ts";
@@ -78,13 +79,16 @@ export interface SessionNativeFacts {
     | {
         canSteer: boolean;
         compactionWindow?: CompactionWindowHarnessStatus | undefined;
-        /** Lazy for engines that need frozen names to classify native commands. */
+        /** Read native history only when the frozen skill set is nonempty. */
         skillInvocationTranscript(
           frozenNames: readonly string[],
         ): SkillInvocationTranscript;
-        /** Native loading/usage and wire sizes; the owner computes usability. */
+        /** Native loading/usage; catalog sizes and usability belong here. */
         toolLoading?:
-          | Omit<BuildToolExposureInput, "agentType" | "usableToolNames">
+          | (Omit<BuildToolExposureInput, "agentType" | "usableToolNames"> & {
+              /** Native wire namespace, empty for unqualified tool names. */
+              definitionNamePrefix?: string;
+            })
           | undefined;
       }
     | undefined;
@@ -118,12 +122,35 @@ function toolExposureFor(sessionId: string, facts: SessionNativeFacts) {
     tools,
     integrated,
   );
+  const definitionCharsByName = new Map(
+    tools.map((tool) => [
+      tool.name,
+      toolDefinitionChars(
+        tool,
+        `${loading.definitionNamePrefix ?? ""}${tool.name}`,
+      ),
+    ]),
+  );
+  const catalogNames = new Set(
+    agentToolsFor(facts.kind).map((tool) => tool.name),
+  );
+  // Only native definitions outside the catalog, such as pi's loader, need overrides.
+  for (const [name, chars] of loading.definitionCharsByName ?? [])
+    if (!catalogNames.has(name)) definitionCharsByName.set(name, chars);
   return buildToolExposure({
     ...loading,
     agentType: facts.kind,
     usableToolNames: usable,
     loadedToolNames: new Set(
       [...loading.loadedToolNames].filter((name) => usable.has(name)),
+    ),
+    definitionCharsByName,
+    tokensByName: new Map(
+      [...(loading.tokensByName ?? [])].filter(
+        ([name]) =>
+          usable.has(name) ||
+          (loading.includeFindTools && name === "find_tools"),
+      ),
     ),
   });
 }

@@ -76,12 +76,20 @@ harness.**
 `buildSessionState(sessionId, facts)` in `app/server/src/sessionState.ts` owns
 state assembly. It composes the existing per-domain projections, including
 Tasks, queues, peers, skills and worktree status. `ViewSession.state()` supplies
-only its stored identity and configuration, with no live facts. Pi supplies
-native facts through `PiLiveSession.nativeFacts()`, and its temporary `state()`
-entry point delegates to the owner. Claude still assembles its own state until
-its migration. Enterprise restrictions are app-owned and read fresh from the
-stored row, including tombstones. A directly constructed view without a stored
-row cannot supply a restriction through captured metadata.
+only its stored identity and configuration, with no live facts. Both
+`PiLiveSession.nativeFacts()` and `ClaudeSdkSession.nativeFacts()` supply native
+model, mode, steering, compaction and tool-loading facts. Their temporary
+`state()` entry points delegate to the owner. Enterprise restrictions are
+app-owned and read fresh from the stored row, including tombstones. A directly
+constructed view without a stored row cannot supply a restriction through
+captured metadata.
+
+The owner computes catalog definition sizes and integration/mode usability.
+Claude supplies its native MCP name prefix, loaded/used names, token sizes and
+load events, not a catalog projection. Out-of-catalog native definitions, such
+as pi's loader, may supply their own definition-size overrides. Skill history is
+a lazy native callback. The owner calls it only for a nonempty frozen
+session-start skill set, passing those names rather than recomputing settings.
 
 A detached view is the case with no live part in the native facts. The owner
 OMITS what storage cannot answer rather than guessing: no `skillInvocations`, no
@@ -90,10 +98,12 @@ is not running. The upgrade fills them in. Optional fields are omitted when
 undefined. Safe Task and worktree reads log a failure once per failed read and
 fall back without losing the rest of the state. The detached JSON field order
 and values for stored sessions remain unchanged. Pi now includes `sessionFile`
-when its native session knows the path. The owner receives the browser-owner
-lookup from the host, so it never imports the engine registry. The live
-transcript callback receives frozen skill names; the owner requests it only when
-rendering a nonempty skill list. Detached state never reads a native transcript.
+when its native session knows the path. Claude uses the same omission and
+safe-read rules, including logging failed worktree reads. Its live compaction
+note comes from `getIncludingDeleted`, so a deleted session still resident in
+memory keeps the note with its stored window. The owner receives the
+browser-owner lookup from the host, so it never imports the engine registry.
+Detached state never reads a native transcript.
 
 Two consequences worth knowing:
 

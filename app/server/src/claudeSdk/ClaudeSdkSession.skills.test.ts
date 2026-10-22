@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import type { SessionSkillInvocation } from "@assistant/shared";
+import { skillInvocationTrail } from "../skills/skillInvocations.ts";
 import {
   skillRuntimePluginName,
   skillSetHash,
@@ -420,7 +421,6 @@ type Internals = {
   retainedEpochKey: string | undefined;
   queryEpochKey: string | undefined;
   skillTurnNativeResponse: boolean;
-  skillInvocations(names: string[]): SessionSkillInvocation[];
 };
 
 let skillSerial = 0;
@@ -514,10 +514,12 @@ function trails(h: SkillHarness): SessionSkillInvocation[][] {
     entries: h.session.toRecord().entries,
   });
   sessions.push(restored);
-  return [
-    h.internals.skillInvocations(FROZEN),
-    (restored as unknown as Internals).skillInvocations(FROZEN),
-  ];
+  return [h.session, restored].map((session) =>
+    skillInvocationTrail(
+      FROZEN,
+      session.nativeFacts().live!.skillInvocationTranscript(FROZEN),
+    ),
+  );
 }
 
 function nativeResponses(h: SkillHarness): number {
