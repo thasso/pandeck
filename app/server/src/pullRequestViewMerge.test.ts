@@ -24,6 +24,7 @@ import type { WorktreeRow } from "./db/worktreeStore.ts";
 import {
   invalidateRepositoryCapabilities,
   type GitHostingProvider,
+  type MergeRequestStatus,
 } from "./gitHosting.ts";
 import {
   createPullRequestCard,
@@ -836,6 +837,63 @@ test("an identity no checkout of the project publishes to is refused", async () 
 // answered: what IS this pull request. It attempts nothing — which is the whole
 // point, since a merge re-issued after the pull request turned into a draft (or
 // lost its method) would be refused by an authoritative guard forever.
+// A check about a pending merge also asks where its request stands: an open
+// pull request is not "did not merge" while that request may still land.
+test("a check about a pending merge reports where its request stands", async () => {
+  const path = repo();
+  const asked: string[] = [];
+  const check = (
+    provider: GitHostingProvider,
+    mergeRequestId: string | null = "req-1",
+  ) =>
+    checkPullRequestFromView(
+      {
+        projectId: PROJECT,
+        provider: "forgejo",
+        repositoryKey: REPOSITORY_KEY,
+        number: 7,
+        ...(mergeRequestId ? { mergeRequestId } : {}),
+      },
+      operations({
+        rows: [row(mainWorktreeId(PROJECT), path, "main")],
+        providers: { [path]: provider },
+      }),
+    );
+  const asking = (status: MergeRequestStatus) => ({
+    ...fakeProvider(),
+    mergeRequestStatus: async (_number: number, requestId: string) => {
+      asked.push(requestId);
+      return status;
+    },
+  });
+
+  assert.deepEqual((await check(asking({ status: "pending" }))).mergeRequest, {
+    status: "pending",
+  });
+  assert.deepEqual(asked, ["req-1"]);
+  assert.deepEqual(
+    (await check(asking({ status: "failed", message: "closed" }))).mergeRequest,
+    { status: "failed", message: "closed" },
+  );
+  // A provider that cannot say keeps it unknown, never "did not merge".
+  assert.deepEqual((await check(fakeProvider())).mergeRequest, {
+    status: "pending",
+    message: "its status cannot be asked",
+  });
+  // A terminal pull request answers for itself; nothing else is asked.
+  const terminal = await check({
+    ...asking({ status: "pending" }),
+    pullRequestDetail: async () => detail({ state: "merged", merged: true }),
+  });
+  assert.equal(terminal.mergeRequest, undefined);
+  // Without an id, the check is the ordinary one.
+  assert.equal(
+    (await check(asking({ status: "pending" }), null)).mergeRequest,
+    undefined,
+  );
+  assert.deepEqual(asked, ["req-1", "req-1"]);
+});
+
 test("a check answers the state under the lock and merges nothing", async () => {
   const path = repo();
   const merges: ProviderOptions["merges"] = [];

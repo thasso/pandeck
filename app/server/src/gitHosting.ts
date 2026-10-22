@@ -21,6 +21,7 @@ import {
   type PullRequestMergeMethod,
   type PullRequestMergeResult,
   type PullRequestRepositoryCapabilities,
+  type PullRequestStack,
   type PullRequestReviewThread,
   type PullRequestReviewVerdict,
   type PullRequestTimelineEntry,
@@ -126,8 +127,11 @@ export function forgejoRefChecksVerdict(
 }
 
 /** Bound each provider request while still honoring a long-running tool's cancellation. */
-function requestSignal(parentSignal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+function requestSignal(
+  parentSignal?: AbortSignal,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
   return parentSignal ? AbortSignal.any([parentSignal, timeout]) : timeout;
 }
 
@@ -245,6 +249,16 @@ export interface GitHostingProvider {
    * understand.
    */
   stackMembers?(stackNumber: number): Promise<PullRequestStackMembers>;
+  /**
+   * OPTIONAL: where one accepted asynchronous merge request stands, for a
+   * provider whose merges can come back pending (GitHub). `expired` = the
+   * provider no longer knows the request (GitHub drops a result 24 h after
+   * its last update). A THROW means it could not be asked.
+   */
+  mergeRequestStatus?(
+    prNumber: number,
+    requestId: string,
+  ): Promise<MergeRequestStatus>;
   createPullRequest(input: {
     title: string;
     body?: string;
@@ -311,6 +325,12 @@ export interface GitHostingProvider {
        * it just saw pointing somewhere else.
        */
       expectedBaseBranch?: string;
+      /**
+       * The native stack the caller bound (`null` = it proved there is none),
+       * checked by the same pre-merge read: one that finds a stack the caller
+       * did not bind refuses.
+       */
+      expectedStack?: PullRequestStack | null;
     },
   ): Promise<PullRequestMergeResult>;
   /**
@@ -1198,6 +1218,13 @@ async function resolveMergePreconditions(
   };
 }
 
+/** Where one accepted asynchronous merge request stands. */
+export interface MergeRequestStatus {
+  status: "pending" | "merged" | "failed" | "expired";
+  /** The provider's own words, for a failure. */
+  message?: string;
+}
+
 /** One provider-native stack's members, bottom to top, merged ones included. */
 export interface PullRequestStackMembers {
   number: number;
@@ -1704,23 +1731,35 @@ function githubMergeStateFrom(
 }
 
 /**
- * The waits between polls of an accepted GitHub merge, about 45 s in all:
- * the merge holds this pull request's mutation lock for that long at most,
- * and one still unfinished comes back PENDING for the watcher to settle.
+ * How long a GitHub merge waits for its own outcome, and the waits between
+ * polls (the last one repeats). The bound is ABSOLUTE — the PUT, every wait
+ * and every poll's own request time count against it — because the merge
+ * holds this pull request's mutation lock all along; one still unfinished
+ * comes back PENDING for the watcher to settle.
  */
-const GITHUB_MERGE_POLL_DELAYS_MS: readonly number[] = [
-  1_000, 2_000, 3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 4_000,
-];
-let githubMergePollDelaysMs = GITHUB_MERGE_POLL_DELAYS_MS;
-
-/** Test seam: shorten (or restore) the waits between merge polls. */
-export function setGithubMergePollDelaysForTests(
-  delays?: readonly number[],
-): void {
-  githubMergePollDelaysMs = delays ?? GITHUB_MERGE_POLL_DELAYS_MS;
+interface GithubMergeWait {
+  budgetMs: number;
+  delaysMs: readonly number[];
+  now: () => number;
+  /** Wait, or stop early when the caller gave up; `false` = cancelled. */
+  pause: (ms: number, signal?: AbortSignal) => Promise<boolean>;
 }
 
-/** Wait, or stop early when the caller gave up; `false` = cancelled. */
+const GITHUB_MERGE_WAIT: GithubMergeWait = {
+  budgetMs: 45_000,
+  delaysMs: [1_000, 2_000, 3_000, 5_000],
+  now: () => Date.now(),
+  pause,
+};
+let githubMergeWait = GITHUB_MERGE_WAIT;
+
+/** Test seam: replace (or restore) the merge wait's budget, steps and clock. */
+export function setGithubMergeWaitForTests(
+  wait?: Partial<GithubMergeWait>,
+): void {
+  githubMergeWait = { ...GITHUB_MERGE_WAIT, ...wait };
+}
+
 function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
   if (signal?.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
@@ -1734,6 +1773,42 @@ function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
     }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** Whether two reads describe the same native stack (or both none). */
+export function samePullRequestStack(
+  a: PullRequestStack | null | undefined,
+  b: PullRequestStack | null | undefined,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return (
+    a.number === b.number &&
+    a.size === b.size &&
+    a.position === b.position &&
+    a.baseBranch === b.baseBranch
+  );
+}
+
+/**
+ * A pre-merge read that happened anyway must not pass a pull request whose
+ * native stack is not the one the caller bound — including a stack that
+ * appeared after the caller looked: merging it would land the pull requests
+ * below it too.
+ */
+function requireBoundStack(
+  prNumber: number,
+  raw: unknown,
+  expected: PullRequestStack | null | undefined,
+): void {
+  const seen = githubStackFrom(raw);
+  if (seen.stackUnknownReason)
+    throw new Error(
+      `Pull request #${prNumber} was not merged: ${seen.stackUnknownReason}.`,
+    );
+  if (!samePullRequestStack(seen.stack, expected))
+    throw new Error(
+      `Pull request #${prNumber} is ${seen.stack ? `in stack ${seen.stack.number} (${seen.stack.position} of ${seen.stack.size} on ${seen.stack.baseBranch})` : "not in a stack"}, which is not what this merge was decided for; nothing was merged.`,
+    );
 }
 
 /**
@@ -2582,6 +2657,27 @@ export function githubProvider(
         }),
       };
     },
+    async mergeRequestStatus(prNumber, requestId) {
+      const res = await githubRequest<GithubMergeRequest>(
+        config,
+        "GET",
+        `${repoApi}/pulls/${prNumber}/merge-async/${encodeURIComponent(requestId)}`,
+        { acceptStatuses: [404], signal: signal() },
+      );
+      if (res.status === 404) return { status: "expired" };
+      const status = res.data?.status;
+      if (status === "merged") return { status: "merged" };
+      if (status === "failed")
+        return {
+          status: "failed",
+          message:
+            res.data?.details?.message ||
+            res.data?.message ||
+            "the merge request failed",
+        };
+      // `pending`, `enqueued`, or anything not yet settled.
+      return { status: "pending" };
+    },
     async mergePullRequest(prNumber, options) {
       // A caller that proved the head and, when deleting, its branch is merged
       // with NO read in between — that read is a round trip its identity check
@@ -2590,17 +2686,30 @@ export function githubProvider(
       const { headBranch, expectedHeadSha } = await resolveMergePreconditions(
         prNumber,
         options,
-        async () =>
-          (
-            await githubRequest<GithubPull>(
-              config,
-              "GET",
-              `${repoApi}/pulls/${prNumber}`,
-              { signal: signal() },
-            )
-          ).data ?? null,
+        async () => {
+          const pull =
+            (
+              await githubRequest<GithubPull>(
+                config,
+                "GET",
+                `${repoApi}/pulls/${prNumber}`,
+                { signal: signal() },
+              )
+            ).data ?? null;
+          requireBoundStack(prNumber, pull?.stack, options.expectedStack);
+          return pull;
+        },
       );
       const mergeApi = `${repoApi}/pulls/${prNumber}/merge-async`;
+      const wait = githubMergeWait;
+      const deadline = wait.now() + wait.budgetMs;
+      const remaining = () => deadline - wait.now();
+      // Every request inside the wait is cut to what is left of it.
+      const waitSignal = () =>
+        requestSignal(
+          parentSignal,
+          Math.max(1, Math.min(REQUEST_TIMEOUT_MS, remaining())),
+        );
       // `direct_merge` keeps the meaning "merge now": the default action
       // ENQUEUES on a base with a merge queue. `bypass_rules` is never sent —
       // the provider's rules are the authority on whether this may merge.
@@ -2617,7 +2726,7 @@ export function githubProvider(
           // Every refusal's body is read for GitHub's own words, and a 409
           // names the request already running for this pull request.
           acceptStatuses: GITHUB_MERGE_REFUSAL_STATUSES,
-          signal: signal(),
+          signal: waitSignal(),
         },
       );
       const ask: GithubMergeAsk = {
@@ -2630,10 +2739,12 @@ export function githubProvider(
         accepted.data,
         ask,
       );
-      for (const delay of githubMergePollDelaysMs) {
-        if (state.kind !== "poll") break;
+      for (let attempt = 0; state.kind === "poll"; attempt += 1) {
         const requestId = state.requestId;
-        if (!(await pause(delay, parentSignal))) {
+        if (remaining() <= 0) break;
+        const delay =
+          wait.delaysMs[Math.min(attempt, wait.delaysMs.length - 1)] ?? 0;
+        if (!(await wait.pause(Math.min(delay, remaining()), parentSignal))) {
           state = {
             kind: "pending",
             requestId,
@@ -2641,15 +2752,18 @@ export function githubProvider(
           };
           break;
         }
+        if (remaining() <= 0) break;
         let polled: GithubResponse<GithubMergeRequest>;
         try {
           polled = await githubRequest<GithubMergeRequest>(
             config,
             "GET",
             `${mergeApi}/${encodeURIComponent(requestId)}`,
-            { signal: signal() },
+            { signal: waitSignal() },
           );
         } catch (err) {
+          // A read the deadline cut short is the wait ending, not a failure.
+          if (remaining() <= 0) break;
           state = {
             kind: "pending",
             requestId,

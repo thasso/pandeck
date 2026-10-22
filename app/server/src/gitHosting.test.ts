@@ -25,7 +25,7 @@ import {
   parseRemoteUrl,
   pickBranchPull,
   repositoryCapabilitiesFor,
-  setGithubMergePollDelaysForTests,
+  setGithubMergeWaitForTests,
   type GitHostingProvider,
   type PullRequestStackMembers,
 } from "./gitHosting.ts";
@@ -775,6 +775,29 @@ async function withScriptedFetch(
   return calls;
 }
 
+/**
+ * The merge wait on a fake clock: every wait advances it, and `advance` lets a
+ * slow request do the same, so the absolute budget counts polls exactly.
+ */
+function fakeMergeWait(budgetMs = 10_000, delayMs = 1_000) {
+  let clock = 0;
+  setGithubMergeWaitForTests({
+    budgetMs,
+    delaysMs: [delayMs],
+    now: () => clock,
+    pause: async (ms, signal) => {
+      if (signal?.aborted) return false;
+      clock += ms;
+      return true;
+    },
+  });
+  return {
+    advance: (ms: number) => {
+      clock += ms;
+    },
+  };
+}
+
 const GITHUB_PULL_7 = {
   number: 7,
   state: "open",
@@ -814,7 +837,7 @@ function mergeCalls(calls: RecordedRequest[]): string[] {
 // its own API expects. GitHub merges asynchronously: the PUT is accepted, the
 // request is followed, and only a CONFIRMED merge deletes anything.
 test("GitHub merges through merge-async, follows the request, then deletes the head ref", async () => {
-  setGithubMergePollDelaysForTests([0, 0, 0]);
+  fakeMergeWait();
   const provider = githubTestProvider();
   let result: PullRequestMergeResult | undefined;
   try {
@@ -861,7 +884,7 @@ test("GitHub merges through merge-async, follows the request, then deletes the h
     assert.equal(result?.outcome, "merged");
     assert.equal(result?.outcome === "merged" && result.branchDeleted, true);
   } finally {
-    setGithubMergePollDelaysForTests();
+    setGithubMergeWaitForTests();
   }
 });
 
@@ -906,7 +929,7 @@ const DUPLICATE = {
 };
 
 test("a GitHub 409 adopts the request already running when it is this merge", async () => {
-  setGithubMergePollDelaysForTests([0]);
+  fakeMergeWait();
   const provider = githubTestProvider();
   let result: PullRequestMergeResult | undefined;
   try {
@@ -929,7 +952,7 @@ test("a GitHub 409 adopts the request already running when it is this merge", as
     ]);
     assert.equal(result?.outcome, "merged");
   } finally {
-    setGithubMergePollDelaysForTests();
+    setGithubMergeWaitForTests();
   }
 });
 
@@ -1007,7 +1030,7 @@ test("a GitHub refusal to merge throws with GitHub's message", async () => {
 // A draft BELOW the target is accepted and only fails on the poll; the
 // failure's own words are what the user needs.
 test("a GitHub merge request that failed throws with its details", async () => {
-  setGithubMergePollDelaysForTests([0]);
+  fakeMergeWait();
   const provider = githubTestProvider();
   try {
     const calls = await withScriptedFetch(
@@ -1039,17 +1062,16 @@ test("a GitHub merge request that failed throws with its details", async () => {
     );
     assert.ok(!calls.some((call) => call.method === "DELETE"));
   } finally {
-    setGithubMergePollDelaysForTests();
+    setGithubMergeWaitForTests();
   }
 });
 
 // Everything between "accepted" and "merged" is PENDING: never a merge, never
 // a refusal, and nothing that follows a merge — the branch above all.
-for (const [name, merges, delays, reason] of [
+for (const [name, merges, reason] of [
   [
     "queued instead of merged",
     [[200, { status: "enqueued", details: { uuid: "req-1" } }]],
-    [0],
     /merge queue/,
   ],
   [
@@ -1059,7 +1081,6 @@ for (const [name, merges, delays, reason] of [
       [200, { status: "pending", details: { uuid: "req-1" } }],
       [200, { status: "pending", details: { uuid: "req-1" } }],
     ],
-    [0, 0],
     /had not finished merging it/,
   ],
   [
@@ -1068,18 +1089,12 @@ for (const [name, merges, delays, reason] of [
       [202, { status: "pending", details: { uuid: "req-1" } }],
       [500, { message: "boom" }],
     ],
-    [0, 0],
     /status could not be read/,
   ],
-  [
-    "answered with no request to follow",
-    [[202, {}]],
-    [0],
-    /no request to follow/,
-  ],
+  ["answered with no request to follow", [[202, {}]], /no request to follow/],
 ] as const)
   test(`a GitHub merge ${name} comes back pending and deletes nothing`, async () => {
-    setGithubMergePollDelaysForTests(delays);
+    fakeMergeWait();
     const provider = githubTestProvider();
     let result: PullRequestMergeResult | undefined;
     try {
@@ -1106,9 +1121,131 @@ for (const [name, merges, delays, reason] of [
         ),
       );
     } finally {
-      setGithubMergePollDelaysForTests();
+      setGithubMergeWaitForTests();
     }
   });
+
+// The bound is absolute: each poll's own request time counts, so slow answers
+// cannot hold the pull request's lock for eleven request timeouts.
+test("a GitHub merge wait counts slow polls against its absolute budget", async () => {
+  const clock = fakeMergeWait(10_000, 1_000);
+  const provider = githubTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  try {
+    const calls = await withScriptedFetch(
+      (req) => {
+        if (req.method === "PUT")
+          return [202, { status: "pending", details: { uuid: "req-1" } }];
+        if (req.path.includes("/merge-async/")) {
+          clock.advance(4_000);
+          return [200, { status: "pending", details: { uuid: "req-1" } }];
+        }
+        return [200, GITHUB_PULL_7];
+      },
+      async () => {
+        result = await provider.mergePullRequest(7, {
+          method: "squash",
+          deleteBranch: false,
+          expectedHeadSha: "head-1",
+        });
+      },
+    );
+    // 1 s wait + 4 s poll, twice, is the whole 10 s budget.
+    assert.equal(
+      calls.filter((call) => call.path.includes("/merge-async/")).length,
+      2,
+    );
+    assert.equal(result?.outcome, "pending");
+    assert.match(
+      result?.outcome === "pending" ? result.pendingReason : "",
+      /had not finished merging it/,
+    );
+  } finally {
+    setGithubMergeWaitForTests();
+  }
+});
+
+// A read before the merge happens only for a caller that could not prove the
+// pull request. It must not pass a stack the caller did not bind: one created
+// around the pull request after the caller looked would merge the ones below.
+test("a GitHub fallback pre-merge read refuses a stack the caller did not bind", async () => {
+  const provider = githubTestProvider();
+  const stacked = {
+    ...GITHUB_PULL_7,
+    stack: { number: 3, size: 2, position: 2, base: { ref: "main" } },
+  };
+  for (const expectedStack of [undefined, null]) {
+    const calls = await withScriptedFetch(
+      () => [200, stacked],
+      async () => {
+        await assert.rejects(
+          provider.mergePullRequest(7, {
+            method: "squash",
+            deleteBranch: true,
+            expectedBaseBranch: "main",
+            ...(expectedStack === null ? { expectedStack } : {}),
+          }),
+          /is in stack 3 \(2 of 2 on main\), which is not what this merge was decided for; nothing was merged/,
+        );
+      },
+    );
+    assert.deepEqual(mergeCalls(calls), ["GET /repos/acme/repo/pulls/7"]);
+  }
+  // The stack the caller bound passes.
+  const calls = await withScriptedFetch(
+    (req) =>
+      req.method === "GET"
+        ? [200, stacked]
+        : [200, { status: "merged", details: {} }],
+    async () => {
+      await provider.mergePullRequest(7, {
+        method: "squash",
+        deleteBranch: false,
+        expectedBaseBranch: "main",
+        expectedStack: { number: 3, size: 2, position: 2, baseBranch: "main" },
+      });
+    },
+  );
+  assert.deepEqual(mergeCalls(calls), [
+    "GET /repos/acme/repo/pulls/7",
+    "PUT /repos/acme/repo/pulls/7/merge-async",
+  ]);
+});
+
+// The watcher follows a request that came back pending; GitHub forgets one
+// 24 h after its last update, which is an answer of its own.
+test("GitHub reports where an accepted merge request stands", async () => {
+  const provider = githubTestProvider();
+  const answers: Array<[number, unknown]> = [
+    [200, { status: "pending", details: { uuid: "req-1" } }],
+    [200, { status: "enqueued", details: { uuid: "req-1" } }],
+    [200, { status: "merged", details: { uuid: "req-1", sha: "landed" } }],
+    [
+      200,
+      {
+        status: "failed",
+        details: { uuid: "req-1", message: "Pull request is closed." },
+      },
+    ],
+    [404, { message: "Not Found" }],
+  ];
+  const seen: unknown[] = [];
+  const calls = await withScriptedFetch(
+    () => answers.shift(),
+    async () => {
+      for (let i = 0; i < 5; i += 1)
+        seen.push(await provider.mergeRequestStatus!(7, "req-1"));
+    },
+  );
+  assert.deepEqual(seen, [
+    { status: "pending" },
+    { status: "pending" },
+    { status: "merged" },
+    { status: "failed", message: "Pull request is closed." },
+    { status: "expired" },
+  ]);
+  assert.equal(calls[0]!.path, "/repos/acme/repo/pulls/7/merge-async/req-1");
+});
 
 test("a cancelled wait comes back pending with the request id", async () => {
   const controller = new AbortController();

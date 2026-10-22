@@ -532,21 +532,23 @@ revalidation is the same.
 A GitHub merge the provider ACCEPTED but has not confirmed (see the card actions
 below) comes back as `status: "merge-pending"`, the same partial convention as
 `retargeted-partial`: the pending reason, no branch or Task outcome, and a
-message telling the agent not to merge again or clean up until the pull request
-reports merged. A retry is safe anyway — it follows the request already running.
-The approval executor publishes the same sentence as its outcome and records no
-merged result. The completion and cleanup flags (`markTaskDone`,
-`removeWorktree`) are follow-ups of a CONFIRMED merge, so a pending one runs
-neither, on the direct path, the approval and merge when ready alike, and its
-message names the ones it did not do: removing the checkout of a merge that may
-never land would lose its work. Merge when ready ends its job with the same
-`merge-pending` payload; its outward-step commit has already happened by then,
-so a stopped job whose wait was cut short reports pending rather than "not
-merged". A stacked pull request above the bottom of its stack is refused by the
-seam on every path, the approval and merge when ready included
-([Native stacks](#native-stacks)). The stack reads and that refusal happen
-before the outward-step boundary, so a refused job commits nothing. Merge when
-ready does not yet WAIT for the pull requests below; it ends with the refusal.
+message pointing the agent at the pull-request card, which follows the request
+until it turns merged or states its failure with Merge on offer again (see the
+card actions below), and telling it to check that before cleaning up. A retry is
+safe anyway — it follows the request already running. The approval executor
+publishes the same sentence as its outcome and records no merged result. The
+completion and cleanup flags (`markTaskDone`, `removeWorktree`) are follow-ups
+of a CONFIRMED merge, so a pending one runs neither, on the direct path, the
+approval and merge when ready alike, and its message names the ones it did not
+do: removing the checkout of a merge that may never land would lose its work.
+Merge when ready ends its job with the same `merge-pending` payload; its
+outward-step commit has already happened by then, so a stopped job whose wait
+was cut short reports pending rather than "not merged". A stacked pull request
+above the bottom of its stack is refused by the seam on every path, the approval
+and merge when ready included ([Native stacks](#native-stacks)). The stack reads
+and that refusal happen before the outward-step boundary, so a refused job
+commits nothing. Merge when ready does not yet WAIT for the pull requests below;
+it ends with the refusal.
 
 The generic provider PR write tools are unchanged.
 
@@ -653,8 +655,16 @@ Run):
 - a pull request whose direct base is not the stack's base (a lower member
   merged and GitHub has not retargeted this one yet);
 - a stack or member list that could not be read, a member list that does not
-  contain this pull request, and a detail read that failed outright — ordinary
-  clicks included, which otherwise tolerate an unreadable provider.
+  contain this pull request, and a detail read that failed — the stack read or
+  the LAST identity read, its conflict-confirming retry included. Ordinary
+  clicks are no exception, although they otherwise tolerate an unreadable
+  provider: a stack can be created around a pull request after the evidence was
+  read, so the earlier answer never stands in for the last one.
+
+The provider's own pre-merge read, for a caller that could not prove the pull
+request, is bound the same way: the seam passes `expectedStack` (`null` = it
+proved there is none), and a read that finds any other stack — including one the
+caller never bound at all — refuses, like a moved base.
 
 GitHub's legacy `PUT /pulls/{n}/merge` refuses every stacked pull request, the
 bottom one included (403, "use the asynchronous merge endpoint"), which is one
@@ -1154,10 +1164,13 @@ a branch another surface just merged and deleted.
   `merge_action: "direct_merge"` (the default action ENQUEUES on a base with a
   merge queue, which is not "merge now") and never `bypass_rules`, and then
   polls `GET /pulls/{n}/merge-async/{uuid}` under the pull request's mutation
-  lock, backing off from 1 s to 5 s for about 45 s. A 409 names the request
-  already running for this pull request and is followed — making a retry after a
-  lost answer idempotent — but only when its `expected_head_sha`, `merge_method`
-  and `merge_action` are this merge's; someone else's request is refused. Every
+  lock, backing off from 1 s to 5 s within an ABSOLUTE 45 s budget: the PUT,
+  every wait and every poll's own request time count against it, each wait and
+  each request's timeout is cut to what is left, so slow answers cannot hold the
+  lock for a dozen request timeouts. A 409 names the request already running for
+  this pull request and is followed — making a retry after a lost answer
+  idempotent — but only when its `expected_head_sha`, `merge_method` and
+  `merge_action` are this merge's; someone else's request is refused. Every
   refusal body is JSON with `status` and `details.message`, which is what the
   user reads: a stale `sha` (400 "head branch was modified") reads as the
   ordinary moved-head refusal, and a request whose poll ends `failed` (a draft
@@ -1184,8 +1197,18 @@ a branch another surface just merged and deleted.
   merge first, and a read before the merge would sit in the identity window. A
   PENDING merge projects none of what follows a merge: no terminal card state,
   Task suggestion, Workflow record, base refresh or branch deletion. Its cards
-  keep `open`, get the outcome sentence as `actionMessage`, and are polled at
-  once; the PR view reports it as an unknown outcome (see
+  keep `open`, get the outcome sentence as `actionMessage`, and record the
+  request in their server-side context (`pendingMerge`: request id, conditioned
+  head, time, that message). The watcher then follows it on the fast cadence,
+  asking `mergeRequestStatus` BEFORE the detail read so the detail already
+  reflects a request that just finished: `merged` lets the ordinary merged
+  observation run, `failed` leaves the card open with the provider's reason as
+  `actionError` and Merge on offer again, `expired` (GitHub forgets a result 24
+  h after its last update) or a request older than that leaves the pull
+  request's own state to speak, and the pull request merging or closing settles
+  it as well. Whatever settles it clears the pending message (only that
+  message), and a confirmed merge from any surface clears the record. The PR
+  view reports a pending merge as an unknown outcome (see
   [Merge & clean up](#merge--clean-up)) and the worktree page as unconfirmed.
   The provider decides whether a merge is allowed — branch protection, required
   checks, stale mergeability — and its refusal surfaces as the card's error
@@ -1872,7 +1895,12 @@ server skips the cleanup (`cleanup.status: "skipped"` when one was asked for,
 since removing a checkout whose work may never land is not a cleanup), the
 dialog states the server's sentence, and the row offers only **Check again**. No
 check is issued automatically here: right after the wait ran out it would mostly
-find the pull request still open and call that "did not merge".
+find the pull request still open. The pending answer carries the provider's
+`requestId`, and **Check again** sends it back as `mergeRequestId`; for an OPEN
+pull request the check then also reports `mergeRequest`, where that request
+stands. `pending` — or a provider that could not be asked — keeps the outcome
+unknown, because the request may still land; only `failed` (with the provider's
+reason) or `expired` lets the check say it did not merge.
 
 The check's LOCAL answer has three values for the same reason the merge's
 cleanup does: `none`, `one` worktree, or `ambiguous` with its reason. Two

@@ -1353,7 +1353,7 @@ describe("merge into a non-default base", () => {
     assert.equal(payload.taskSuggestions, undefined);
     assert.match(
       String(payload.message),
-      /has not confirmed it.*Do not merge again or clean up yet/,
+      /has not confirmed it.*card follows the request: it turns merged once the provider confirms, or states the failure/,
     );
   });
 

@@ -2184,6 +2184,89 @@ for (const [name, options, pattern] of [
     assert.ok(!calls.includes("merge"));
   });
 
+// The stack evidence was fine, but the LAST read failed. A stack can have been
+// created around this pull request in between, so nothing may merge on the
+// earlier answer — a card click included, which otherwise tolerates a provider
+// that cannot be asked.
+test("a stacked provider whose last identity read fails merges nothing", async () => {
+  let reads = 0;
+  const { provider, calls } = stackedProvider({
+    details: [{ ...OPEN_DETAIL, baseBranch: "main" }],
+  });
+  const reading = provider.pullRequestDetail.bind(provider);
+  provider.pullRequestDetail = async (number) => {
+    reads += 1;
+    if (reads === 2) throw new Error("HTTP 502");
+    return reading(number);
+  };
+  await assert.rejects(
+    mergePullRequestAndProject({
+      provider,
+      repoPath: repo(),
+      number: 7,
+      headBranch: "feature-c",
+      baseBranch: "main",
+      method: "squash",
+    }),
+    /could not be re-read before merging \(HTTP 502\); nothing was merged/,
+  );
+  assert.ok(!calls.includes("merge"));
+});
+
+// The conflict confirmation retries the identity read. On a stacked provider
+// that retry IS the last read: when it fails, the first answer may not stand
+// in for it.
+test("a stacked provider whose conflict-confirming retry fails merges nothing", async () => {
+  let reads = 0;
+  const { provider, calls } = stackedProvider({
+    details: [{ ...OPEN_DETAIL, baseBranch: "main", mergeable: false }],
+  });
+  const reading = provider.pullRequestDetail.bind(provider);
+  provider.pullRequestDetail = async (number) => {
+    reads += 1;
+    if (reads === 3) throw new Error("HTTP 502");
+    return reading(number);
+  };
+  await assert.rejects(
+    mergePullRequestAndProject({
+      provider,
+      repoPath: repo(),
+      number: 7,
+      headBranch: "feature-c",
+      baseBranch: "main",
+      method: "squash",
+      expectedHeadSha: "head-7",
+      managedDecision: { baseIsDefaultBranch: false, defaultBranch: "main" },
+    }),
+    /could not be re-read before merging \(HTTP 502\); nothing was merged/,
+  );
+  assert.equal(reads, 3);
+  assert.ok(!calls.includes("merge"));
+});
+
+// The provider's own pre-merge read, when one happens, is told which stack was
+// bound; an unstacked pull request binds `null`.
+test("the seam hands the provider the stack it bound", async () => {
+  let expectedStack: unknown = "unset";
+  const { provider } = stackedProvider({
+    details: [{ ...OPEN_DETAIL, baseBranch: "main" }],
+  });
+  const merging = provider.mergePullRequest.bind(provider);
+  provider.mergePullRequest = async (number, options) => {
+    expectedStack = options.expectedStack;
+    return merging(number, options);
+  };
+  await mergePullRequestAndProject({
+    provider,
+    repoPath: repo(),
+    number: 7,
+    headBranch: "feature-c",
+    baseBranch: "main",
+    method: "squash",
+  });
+  assert.equal(expectedStack, null);
+});
+
 test("a card click whose stack cannot be read at all is refused", async () => {
   const provider: GitHostingProvider = {
     ...fakeProvider(),
@@ -2287,6 +2370,19 @@ test("a pending merge leaves the card open, says so, and polls it at once", asyn
     );
     assert.equal(readTask(task.id)?.statusSuggestion, undefined);
     assert.equal(nextPullRequestPollAt.get(card.id), 0);
+    // The request the watcher follows until it settles.
+    assert.deepEqual(
+      {
+        ...pullRequestCardRecord(card.id)?.context.pendingMerge,
+        requestedAt: 0,
+      },
+      {
+        requestId: "req-1",
+        expectedHeadSha: "head-7",
+        requestedAt: 0,
+        message: after.actionMessage,
+      },
+    );
   } finally {
     deleteTask(task.id);
   }

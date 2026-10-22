@@ -226,6 +226,16 @@ export async function checkPullRequestFromView(
           `Pull request #${request.number} could not be read from ${request.provider}; its state is still unknown.`,
           409,
         );
+      // A pending merge asked about: while the pull request is still open,
+      // only the request itself can say whether it may yet land.
+      const mergeRequest =
+        request.mergeRequestId && detail.state === "open"
+          ? await mergeRequestStanding(
+              repository.provider,
+              request.number,
+              request.mergeRequestId,
+            )
+          : undefined;
       const local = await resolveWorktree(
         request,
         detail.headBranch,
@@ -246,6 +256,7 @@ export async function checkPullRequestFromView(
         ...(detail.draft ? { draft: true } : {}),
         // Three-valued, so it travels whenever the detail answered at all.
         mergeable: detail.mergeable,
+        ...(mergeRequest ? { mergeRequest } : {}),
         // Three answers, never two: "two checkouts stand on this branch" is not
         // "there is no checkout", and a surface told the latter would announce
         // that nothing local is left while both are still there.
@@ -257,6 +268,28 @@ export async function checkPullRequestFromView(
       };
     },
   );
+}
+
+/**
+ * Where an accepted merge request stands. A provider that cannot say — no
+ * such method, or the read failed — leaves it `pending`: still unknown, which
+ * is the one answer that never claims it did not merge.
+ */
+async function mergeRequestStanding(
+  provider: GitHostingProvider,
+  number: number,
+  requestId: string,
+): Promise<NonNullable<PullRequestViewCheckResponse["mergeRequest"]>> {
+  if (!provider.mergeRequestStatus)
+    return { status: "pending", message: "its status cannot be asked" };
+  try {
+    return await provider.mergeRequestStatus(number, requestId);
+  } catch (err) {
+    return {
+      status: "pending",
+      message: `its status could not be read (${errorText(err)})`,
+    };
+  }
 }
 
 async function mergeAndCleanUp(
@@ -311,7 +344,13 @@ async function mergeAndCleanUp(
       forgetInventoryReads(request, repository, operations);
       return {
         number: request.number,
-        merge: { status: "pending", reason: projection.message },
+        merge: {
+          status: "pending",
+          reason: projection.message,
+          ...(projection.result.requestId
+            ? { requestId: projection.result.requestId }
+            : {}),
+        },
         cleanup: request.removeWorktree
           ? {
               status: "skipped",

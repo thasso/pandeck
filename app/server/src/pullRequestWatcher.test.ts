@@ -27,7 +27,10 @@ import {
   setPullRequestWatcherSessionOwnershipForTests,
   sweepPullRequestWatcherForTests,
 } from "./pullRequestWatcher.ts";
-import { scheduleImmediatePoll } from "./pullRequestPollSchedule.ts";
+import {
+  nextPullRequestPollAt,
+  scheduleImmediatePoll,
+} from "./pullRequestPollSchedule.ts";
 import type { AppWebPushNotification } from "./webPush.ts";
 import { createTask, deleteTask, readTask, taskSummaryOf } from "./tasks.ts";
 
@@ -813,4 +816,116 @@ test("a GitHub card polls on the slow cadence while CI runs and after a failure"
   } finally {
     vi.useRealTimers();
   }
+});
+
+/* -------------------- an accepted merge GitHub had not confirmed -------------------- */
+
+const PENDING_MESSAGE =
+  "GitHub accepted the merge of #42 into main (squash) but has not confirmed it: GitHub had not finished merging it when this stopped waiting.";
+
+/** A card carrying what the merge seam writes for a pending merge. */
+function pendingCard(requestedAt = Date.now()) {
+  const card = openCard();
+  patchPullRequestCard(
+    card.id,
+    { actionMessage: PENDING_MESSAGE },
+    {
+      pendingMerge: {
+        requestId: "req-1",
+        expectedHeadSha: "sha-1",
+        requestedAt,
+        message: PENDING_MESSAGE,
+      },
+    },
+  );
+  return card;
+}
+
+test("a pending merge that failed leaves the card open with the failure and Merge on offer", async () => {
+  const card = pendingCard();
+  const asked: string[] = [];
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async (_number, requestId) => {
+        asked.push(requestId);
+        return {
+          status: "failed",
+          message:
+            "Pull request must be open and not in draft mode in order to be merged.",
+        };
+      },
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+
+  await sweepPullRequestWatcherForTests();
+
+  assert.deepEqual(asked, ["req-1"]);
+  const after = pullRequestCardById(card.id)!;
+  assert.equal(after.status, "open");
+  assert.equal(after.actionMessage, undefined);
+  assert.match(
+    after.actionError ?? "",
+    /GitHub could not merge #42: Pull request must be open and not in draft mode.*merge it again/,
+  );
+  assert.equal(pullRequestCardRecord(card.id)?.context.pendingMerge, undefined);
+});
+
+test("a pending merge GitHub then confirms turns the card merged and clears the message", async () => {
+  const card = pendingCard();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => ({ status: "merged" }),
+      pullRequestDetail: async () => detail({ state: "merged", merged: true }),
+    }),
+  );
+
+  await sweepPullRequestWatcherForTests();
+
+  const after = pullRequestCardById(card.id)!;
+  assert.equal(after.status, "merged");
+  assert.equal(after.actionMessage, undefined);
+  assert.equal(after.actionError, undefined);
+  assert.equal(pullRequestCardRecord(card.id)?.context.pendingMerge, undefined);
+});
+
+// GitHub forgets a request's result 24 h after its last update; the pull
+// request's own state is then the only answer, and an open one simply offers
+// Merge again.
+test("an expired pending merge is cleared and the open pull request speaks for itself", async () => {
+  const card = pendingCard();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => ({ status: "expired" }),
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+
+  await sweepPullRequestWatcherForTests();
+
+  const after = pullRequestCardById(card.id)!;
+  assert.equal(after.status, "open");
+  assert.equal(after.actionMessage, undefined);
+  assert.equal(after.actionError, undefined);
+  assert.equal(pullRequestCardRecord(card.id)?.context.pendingMerge, undefined);
+});
+
+test("a merge request still running keeps its message and is asked again soon", async () => {
+  const card = pendingCard();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => ({ status: "pending" }),
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+
+  const before = Date.now();
+  await sweepPullRequestWatcherForTests();
+
+  const after = pullRequestCardById(card.id)!;
+  assert.equal(after.actionMessage, PENDING_MESSAGE);
+  assert.ok(pullRequestCardRecord(card.id)?.context.pendingMerge);
+  // GitHub's ordinary cadence is five minutes; a pending request is not.
+  const next = nextPullRequestPollAt.get(card.id) ?? 0;
+  assert.ok(next - before < 60_000, `next poll in ${next - before} ms`);
 });

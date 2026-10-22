@@ -5854,6 +5854,8 @@ export type PullRequestViewMergeOutcome =
        */
       status: "pending";
       reason: string;
+      /** The provider's id for the accepted request, when it reported one. */
+      requestId?: string;
     }
   | {
       /**
@@ -5933,6 +5935,11 @@ export interface PullRequestViewCheckRequest {
   /** `owner/repo`, lowercased — the same identity the merge request carries. */
   repositoryKey: string;
   number: number;
+  /**
+   * The accepted, unconfirmed merge request a `pending` merge answered with,
+   * when the check is about one: the check then also says where it stands.
+   */
+  mergeRequestId?: string;
 }
 
 /**
@@ -6054,6 +6061,15 @@ export interface PullRequestViewCheckResponse {
   mergeable?: boolean | null;
   /** The local checkout situation, which decides what cleanup still applies. */
   checkout: PullRequestViewCheckoutState;
+  /**
+   * Where the request named by `mergeRequestId` stands, for an OPEN pull
+   * request. `pending` (also: could not be asked) keeps the outcome unknown —
+   * it may still land; only `failed` or `expired` says it did not merge.
+   */
+  mergeRequest?: {
+    status: "pending" | "merged" | "failed" | "expired";
+    message?: string;
+  };
 }
 
 /**

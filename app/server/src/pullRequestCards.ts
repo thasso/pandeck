@@ -79,6 +79,23 @@ export interface PullRequestCardContext {
    * routine CI/review poll and would suppress a perfectly valid outcome.
    */
   actionToken?: string;
+  /**
+   * A merge the provider ACCEPTED but has not confirmed (`pullRequestMerge.ts`),
+   * followed by the watcher until it settles: confirmed, failed, expired, or
+   * overtaken by the pull request itself closing or merging.
+   */
+  pendingMerge?: PendingPullRequestMerge;
+}
+
+/** One accepted, unconfirmed merge request, as the watcher follows it. */
+export interface PendingPullRequestMerge {
+  /** The provider's id for the request; absent when it reported none. */
+  requestId?: string;
+  /** The head the merge was conditioned on. */
+  expectedHeadSha?: string;
+  requestedAt: number;
+  /** The card message it wrote, cleared once the request settles. */
+  message: string;
 }
 
 interface PullRequestCardRecord {

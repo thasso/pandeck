@@ -21,18 +21,26 @@
  * the process comes back up, so a conclusion that happened while the server was
  * down is not missed.
  */
-import type { PullRequestCard, PullRequestCardStatus } from "@assistant/shared";
+import type {
+  Patch,
+  PullRequestCard,
+  PullRequestCardStatus,
+  PullRequestDetail,
+} from "@assistant/shared";
 import {
   ciBesideReviewGates,
   hostingProviderForRepo,
   repositoryCapabilitiesFor,
   type GitHostingProvider,
+  type MergeRequestStatus,
 } from "./gitHosting.ts";
 import {
   beginPullRequestCardObservation,
   openPullRequestCards,
   patchPullRequestCardObservation,
   pullRequestCardRecord,
+  type PendingPullRequestMerge,
+  type PullRequestCardContext,
 } from "./pullRequestCards.ts";
 import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
 import {
@@ -244,6 +252,16 @@ async function pollCard(cardId: string): Promise<void> {
   }
   const observationToken = beginPullRequestCardObservation(cardId);
 
+  // An accepted, unconfirmed merge is asked about FIRST, so the detail read
+  // below already reflects a request that has just finished.
+  const pendingMerge = context.pendingMerge;
+  const mergeRequest =
+    pendingMerge?.requestId && provider.mergeRequestStatus
+      ? await provider
+          .mergeRequestStatus(number, pendingMerge.requestId)
+          .catch(() => undefined)
+      : undefined;
+
   const detail = await provider.pullRequestDetail(number);
   if (!detail) {
     nextPollAt.set(cardId, Date.now() + retryIntervalFor(card));
@@ -270,6 +288,14 @@ async function pollCard(cardId: string): Promise<void> {
   const nowConcluded = Boolean(ci) && ci!.state !== "pending";
   const shouldNotify =
     nowConcluded && context.notifiedHeadSha !== detail.headSha;
+
+  const settlement = settlePendingMerge(
+    card,
+    pendingMerge,
+    mergeRequest,
+    detail,
+    provider.kind === "github" ? "GitHub" : "Forgejo",
+  );
 
   const status: PullRequestCardStatus = detail.merged
     ? "merged"
@@ -313,8 +339,10 @@ async function pollCard(cardId: string): Promise<void> {
       ...(ci ? { ci } : {}),
       ...(review ? { review } : {}),
       ...(repositoryCapabilities ? { repositoryCapabilities } : {}),
+      ...settlement.card,
     },
     {
+      ...settlement.context,
       observedHeadSha: detail.headSha,
       ...(detail.baseBranch && detail.baseBranch !== context.baseBranch
         ? { baseBranch: detail.baseBranch }
@@ -350,7 +378,60 @@ async function pollCard(cardId: string): Promise<void> {
     forgetCard(cardId);
     return;
   }
-  nextPollAt.set(cardId, Date.now() + intervalFor(updated));
+  // A request still running is asked about again soon, not on the slow
+  // GitHub cadence: its card is telling the user it does not know yet.
+  nextPollAt.set(
+    cardId,
+    Date.now() +
+      (settlement.stillPending ? FAST_POLL_MS : intervalFor(updated)),
+  );
+}
+
+/** GitHub drops a merge request's result 24 h after its last update. */
+const PENDING_MERGE_LIFETIME_MS = 24 * 60 * 60_000;
+
+/**
+ * What this poll says about an accepted, unconfirmed merge
+ * (`PullRequestCardContext.pendingMerge`). The pull request itself merging or
+ * closing settles it, and so does the request ending: `failed` leaves an
+ * honest failure with Merge on offer again, `expired` (or a request older
+ * than the provider keeps) leaves the pull request's own state to speak. A
+ * request still running, or one that could not be asked, keeps it. Whatever
+ * settles it clears the card's pending message — only that message, never a
+ * later action's.
+ */
+function settlePendingMerge(
+  card: PullRequestCard,
+  pending: PendingPullRequestMerge | undefined,
+  request: MergeRequestStatus | undefined,
+  detail: PullRequestDetail,
+  providerName: string,
+): {
+  card: Patch<PullRequestCard>;
+  context: Patch<PullRequestCardContext>;
+  stillPending: boolean;
+} {
+  if (!pending) return { card: {}, context: {}, stillPending: false };
+  const clearMessage: Patch<PullRequestCard> =
+    card.actionMessage === pending.message ? { actionMessage: undefined } : {};
+  const settled = { pendingMerge: undefined };
+  if (
+    detail.merged ||
+    detail.state !== "open" ||
+    request?.status === "expired" ||
+    Date.now() - pending.requestedAt > PENDING_MERGE_LIFETIME_MS
+  )
+    return { card: clearMessage, context: settled, stillPending: false };
+  if (request?.status === "failed")
+    return {
+      card: {
+        ...clearMessage,
+        actionError: `${providerName} could not merge #${detail.number}: ${request.message ?? "the merge request failed"}. Nothing was merged; merge it again once that is fixed.`,
+      },
+      context: settled,
+      stillPending: false,
+    };
+  return { card: {}, context: {}, stillPending: true };
 }
 
 /** One sweep: poll every open card whose schedule is due, bounded concurrency. Awaitable for tests. */

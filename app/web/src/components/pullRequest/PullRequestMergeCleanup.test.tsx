@@ -714,6 +714,7 @@ it("treats a merge the provider has not confirmed as UNKNOWN, without checking a
     number: 7,
     merge: {
       status: "pending",
+      requestId: "req-1",
       reason:
         "GitHub accepted the merge of #7 into main (squash) but has not confirmed it: GitHub had not finished merging it when this stopped waiting. Nothing else was done yet; this updates when the provider reports the outcome.",
     },
@@ -741,4 +742,42 @@ it("treats a merge the provider has not confirmed as UNKNOWN, without checking a
     ),
   ).toBe(false);
   expect(button(/Check again/, host).disabled).toBe(false);
+
+  // Still open while the request runs is NOT "did not merge": the check asks
+  // about the request too, and the uncertainty stands.
+  checkQueue.push({
+    number: 7,
+    state: "open",
+    mergeable: true,
+    checkout: { status: "one", worktreeId: "wt-1" },
+    mergeRequest: { status: "pending" },
+  });
+  await click(button(/Check again/, host));
+  await click(confirm(/Check again/));
+  expect(checks).toEqual([{ ...TARGET, mergeRequestId: "req-1" }]);
+  expect(document.body.textContent).toContain(
+    "#7 is still open and its merge request has not finished",
+  );
+  expect(document.body.textContent).not.toContain("did not merge it");
+  await click(confirm(/Close/));
+  expect(button(/Check again/, host).disabled).toBe(false);
+
+  // A request that FAILED is the answer: open, not merged, decision back.
+  checkQueue.push({
+    number: 7,
+    state: "open",
+    mergeable: true,
+    checkout: { status: "one", worktreeId: "wt-1" },
+    mergeRequest: {
+      status: "failed",
+      message: "Pull request must be open and not in draft mode",
+    },
+  });
+  await click(button(/Check again/, host));
+  await click(confirm(/Check again/));
+  expect(checks).toHaveLength(2);
+  expect(document.body.textContent).toContain(
+    "#7 is still open; its merge request failed: Pull request must be open and not in draft mode",
+  );
+  expect(document.body.textContent).not.toContain("is still unknown");
 });

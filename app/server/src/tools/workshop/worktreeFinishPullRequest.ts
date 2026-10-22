@@ -1392,7 +1392,7 @@ async function runMerge(
       message: [
         projection.message,
         skippedFollowUps(request),
-        "Do not merge again or clean up yet: watch the pull request until it reports merged.",
+        "Its pull-request card follows the request: it turns merged once the provider confirms, or states the failure with Merge on offer again. Check the card or the pull request before cleaning up; a merge retried meanwhile follows the same request.",
       ]
         .filter(Boolean)
         .join(" "),
