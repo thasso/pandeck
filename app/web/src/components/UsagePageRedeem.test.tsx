@@ -98,6 +98,7 @@ it("turns a guarded 409 into the warned 'redeem anyway' confirmation", async () 
         now={Date.parse("2026-09-20T18:00:00Z")}
         onReload={async () => {}}
         profileId="openai"
+        openAiResetAutoRedeemHours={6}
       />,
     ),
   );

@@ -39,6 +39,7 @@ import { sessionStore } from "../db/sessionStore.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
 import {
   installAccountRecovery,
+  moveOffDisabledAccount,
   prepareAccountRecoveryTurn,
 } from "../sessionAccountSwitch.ts";
 import {
@@ -74,7 +75,12 @@ export interface RuntimePromptDriver {
     model?: { provider: string; id: string } | undefined;
     thinkingLevel?: ThinkingLevel | undefined;
   };
-  switchAccount?(profileId: string, admit: () => void): Promise<void>;
+  /** `allowWithoutHistory`: the turn has not started, so no history is lost. */
+  switchAccount?(
+    profileId: string,
+    admit: () => void,
+    allowWithoutHistory?: boolean,
+  ): Promise<void>;
   dropEncryptedReasoning?(admit: () => void): Promise<boolean>;
   contextInfo(): ContextInfo;
   broadcastState(): void;
@@ -335,13 +341,23 @@ export async function promptRuntimeSessionWithRuntime(
       await assertSkillInvocation(options, frozenSkills);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
+    // An account recovery continuation has already chosen its account.
+    const accountMove = accountRecovery
+      ? undefined
+      : await moveOffDisabledAccount(driver, () => {
+          assertTurnAllowed(driver.sessionId, options.resumeHold);
+          assertRecoveryAdmission();
+        });
+    assertTurnAllowed(driver.sessionId, options.resumeHold);
+    assertRecoveryAdmission();
     // Nothing below awaits before the append. The enterprise check runs before
     // `admit`, which must stay the last check: a peer admission reserves its
     // delivery, and a refusal after that reservation could strand the prompt.
     assertSessionEnterpriseAccount(driver);
     admit?.();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
-    prepareAccountRecoveryTurn(live, accountRecovery);
+    if (accountMove) live.appendNotice(accountMove.notice);
+    prepareAccountRecoveryTurn(live, accountRecovery, accountMove?.from);
     return await runPromptWithRuntime(
       runtime,
       driver,

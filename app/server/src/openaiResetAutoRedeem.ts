@@ -4,10 +4,10 @@
  *
  * A banked "Full reset" lapses thirty days after its grant, at the grant's
  * time-of-day in UTC — the small hours in Europe, when nobody is watching a
- * Usage page. An unspent credit is worth nothing, so inside the shared lead
- * (`OPENAI_RESET_AUTO_REDEEM_LEAD_MS`) the server spends it on whatever
- * window is open, applicability guard OFF: the worst case is the same as
- * letting it slip, and the best case is a weekly window back at zero.
+ * Usage page. An unspent credit is worth nothing, so inside the configured
+ * lead (`accountRouting.openAiResetAutoRedeemHours`, 0 = off) the server spends it on
+ * whatever window is open, applicability guard OFF: the worst case is the same
+ * as letting it slip, and the best case is a weekly window back at zero.
  *
  * This is the ONE piece of usage work that runs with no client attached, and
  * it has to be: the cache's no-headless rule exists for the Claude subprocess,
@@ -21,15 +21,15 @@
  */
 import { randomUUID } from "node:crypto";
 import type { CredentialProfileSummary } from "@assistant/shared";
-import {
-  OPENAI_RESET_AUTO_REDEEM_LEAD_MS,
-  type OpenAiResetCredit,
-  type OpenAiResetRedeemResult,
-  type OpenAiUsageSnapshot,
+import type {
+  OpenAiResetCredit,
+  OpenAiResetRedeemResult,
+  OpenAiUsageSnapshot,
 } from "@assistant/shared/usage";
 import { listCredentialProfiles } from "./credentialProfiles.ts";
 import { errorText } from "./errors.ts";
 import { redeemOpenAiResetCredit } from "./harnesses/usage.ts";
+import { getSettings } from "./settings.ts";
 import {
   peekUsageSnapshot,
   readUsageSnapshot,
@@ -50,6 +50,7 @@ const OPENAI_RESET_AUTO_REDEEM_SWEEP_INTERVAL_MS = 15 * 60_000;
 export function selectExpiringResetCredits(
   snapshot: OpenAiUsageSnapshot | null | undefined,
   now: number,
+  leadMs: number,
 ): OpenAiResetCredit[] {
   if (!snapshot?.available || !snapshot.resetCredits) return [];
   const due: (OpenAiResetCredit & { remaining: number })[] = [];
@@ -58,8 +59,7 @@ export function selectExpiringResetCredits(
     const at = Date.parse(credit.expiresAt);
     if (!Number.isFinite(at)) continue;
     const remaining = at - now;
-    if (remaining <= 0 || remaining > OPENAI_RESET_AUTO_REDEEM_LEAD_MS)
-      continue;
+    if (remaining <= 0 || remaining > leadMs) continue;
     due.push({ ...credit, remaining });
   }
   due.sort((a, b) => a.remaining - b.remaining);
@@ -110,6 +110,8 @@ export interface AutoRedeemDeps {
   /** A forced background refresh after a redemption reset a window. */
   revalidate: (profileId: string) => void;
   now: () => number;
+  /** The configured lead; 0 turns the sweep off. */
+  leadHours: () => number;
 }
 
 const realDeps: AutoRedeemDeps = {
@@ -135,6 +137,7 @@ const realDeps: AutoRedeemDeps = {
   revalidate: (profileId) =>
     revalidateUsage({ force: true, profileIds: [profileId] }),
   now: () => Date.now(),
+  leadHours: () => getSettings().accountRouting.openAiResetAutoRedeemHours,
 };
 
 /**
@@ -161,7 +164,7 @@ let sweepTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
  * Redeem, on every enabled OpenAI account, each still-available credit inside
- * the lead, and answer what was attempted.
+ * the lead, and answer what was attempted. Off, it reads and redeems nothing.
  *
  * Per account: look at the cache; refresh it when it is older than the lead
  * (a credit granted since the last look must be discovered before it can
@@ -177,8 +180,10 @@ export async function sweepOpenAiResetAutoRedeem(
   overrides: Partial<AutoRedeemDeps> = {},
 ): Promise<AutoRedeemOutcome[]> {
   if (sweepRunning) return [];
-  sweepRunning = true;
   const deps = { ...realDeps, ...overrides };
+  const leadMs = deps.leadHours() * 3_600_000;
+  if (!(leadMs > 0)) return [];
+  sweepRunning = true;
   const outcomes: AutoRedeemOutcome[] = [];
   try {
     const profiles = deps
@@ -190,9 +195,8 @@ export async function sweepOpenAiResetAutoRedeem(
       const now = deps.now();
       const cached = deps.peek(profile.id);
       const cachedSnapshot = cached?.snapshot ?? null;
-      const stale =
-        !cached || now - cached.fetchedAt > OPENAI_RESET_AUTO_REDEEM_LEAD_MS;
-      const expected = selectExpiringResetCredits(cachedSnapshot, now);
+      const stale = !cached || now - cached.fetchedAt > leadMs;
+      const expected = selectExpiringResetCredits(cachedSnapshot, now, leadMs);
       // Forced, not merely hard-invalid, whenever the answer has to be live:
       // an unforced read serves a fresh cache as is, and a fresh counts-only
       // snapshot is exactly the one that must not be served.
@@ -213,7 +217,11 @@ export async function sweepOpenAiResetAutoRedeem(
       // named, so those rows stay due alongside whatever the read did show.
       const dueById = new Map<string, OpenAiResetCredit>();
       if (live)
-        for (const credit of selectExpiringResetCredits(live, deps.now()))
+        for (const credit of selectExpiringResetCredits(
+          live,
+          deps.now(),
+          leadMs,
+        ))
           dueById.set(credit.id, credit);
       if (!live || resetInventoryIncomplete(live))
         for (const credit of expected) dueById.set(credit.id, credit);

@@ -37,6 +37,8 @@ export interface CredentialProfile {
   provider: CredentialProfileProvider;
   enabled: boolean;
   enterprise: boolean;
+  /** Automatic prefers higher among eligible accounts; absent means 0. */
+  priority?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -157,6 +159,7 @@ function readRegistry(): CredentialProfile[] {
           provider: p.provider,
           enabled: p.enabled !== false,
           enterprise: p.enterprise === true,
+          priority: Number.isSafeInteger(p.priority) ? p.priority! : 0,
           createdAt: createdAt as number,
           updatedAt: updatedAt as number,
         },
@@ -483,10 +486,15 @@ export function createCredentialProfile(input: {
 /** Validate the whole HTTP metadata patch before one write/publication. */
 export function patchCredentialProfile(
   id: string,
-  input: { name?: unknown; enabled?: unknown; enterprise?: unknown },
+  input: {
+    name?: unknown;
+    enabled?: unknown;
+    enterprise?: unknown;
+    priority?: unknown;
+  },
 ): CredentialProfileSummary {
   const changes: Partial<
-    Pick<CredentialProfile, "name" | "enabled" | "enterprise">
+    Pick<CredentialProfile, "name" | "enabled" | "enterprise" | "priority">
   > = {};
   if (input.name !== undefined) {
     if (typeof input.name !== "string")
@@ -507,9 +515,14 @@ export function patchCredentialProfile(
       throw new Error("Enterprise must be a boolean.");
     changes.enterprise = input.enterprise;
   }
+  if (input.priority !== undefined) {
+    if (!Number.isSafeInteger(input.priority))
+      throw new Error("Priority must be an integer.");
+    changes.priority = input.priority as number;
+  }
   if (!Object.keys(changes).length)
     throw new Error(
-      "A profile name, enabled state or enterprise flag is required.",
+      "A profile name, enabled state, enterprise flag or priority is required.",
     );
   const profiles = readRegistry();
   const index = profiles.findIndex((profile) => profile.id === id);

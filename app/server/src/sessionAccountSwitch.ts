@@ -54,7 +54,8 @@ interface Recovery {
 interface Controller {
   driver: RuntimePromptDriver;
   dispose: () => void;
-  prepare: (ticket?: AccountRecoveryTicket) => void;
+  /** `movedFrom`: the turn starts on an account it was just moved to. */
+  prepare: (ticket?: AccountRecoveryTicket, movedFrom?: string) => void;
 }
 const controllers = new WeakMap<LiveRuntimeSession, Controller>();
 function signature(selection: Selection | undefined): string {
@@ -66,12 +67,84 @@ function signature(selection: Selection | undefined): string {
   });
 }
 
+/**
+ * A turn starting on a disabled account first moves the idle session to the
+ * next eligible account within its enterprise requirement, through the same
+ * engine switch as limit failover. `admit` is the caller's side-effect-free
+ * turn admission, rechecked at every switch step with the target's health,
+ * bench and the model selection. Answers the display-only marker for the
+ * caller to append once the turn is admitted; with no eligible account the
+ * turn is refused. A running turn is never interrupted.
+ */
+export async function moveOffDisabledAccount(
+  driver: RuntimePromptDriver,
+  admit: () => void,
+): Promise<{ from: string; notice: string } | undefined> {
+  const source = driver.credentialProfileId
+    ? credentialProfileById(driver.credentialProfileId)
+    : undefined;
+  const selected = driver.modelSelection?.();
+  if (
+    !source ||
+    source.enabled ||
+    driver.isRunning ||
+    !driver.switchAccount ||
+    !selected?.model ||
+    !isSubscriptionAccountModel(source.provider, selected.model.provider)
+  )
+    return undefined;
+  const model = selected.model;
+  const pick = await pickAccount({
+    model: { provider: model.provider, modelId: model.id },
+    ...(selected.thinkingLevel
+      ? { thinkingLevel: selected.thinkingLevel }
+      : {}),
+    requiresEnterprise:
+      sessionStore.get(driver.id)?.requiresEnterprise === true,
+  });
+  const target =
+    pick.profileId && !pick.degraded
+      ? credentialProfileById(pick.profileId)
+      : undefined;
+  if (!target)
+    throw new Error(
+      `${source.name} is disabled and no other eligible account is available. Enable an account to continue this session.`,
+    );
+  await driver.switchAccount(
+    target.id,
+    () => {
+      admit();
+      assertSessionAccountSwitch(
+        driver.id,
+        source.id,
+        target.id,
+        source.provider,
+      );
+      if (
+        signature(driver.modelSelection?.()) !== signature(selected) ||
+        readAccountHealth(target.id, credentialProfileHasCredential(target.id))
+          .state === "needs-login" ||
+        readAccountBench(target.id, model.id)
+      )
+        throw new Error(
+          `${target.name} became unavailable while this session was moving off the disabled ${source.name}.`,
+        );
+    },
+    true,
+  );
+  return {
+    from: source.id,
+    notice: `Switched from ${source.name} to ${target.name} — ${source.name} is disabled.`,
+  };
+}
+
 /** Called immediately before runtime.prompt, after asynchronous admission. */
 export function prepareAccountRecoveryTurn(
   live: LiveRuntimeSession,
   ticket?: AccountRecoveryTicket,
+  movedFrom?: string,
 ): void {
-  controllers.get(live)?.prepare(ticket);
+  controllers.get(live)?.prepare(ticket, movedFrom);
 }
 
 /** Watches both facade prompts and provider-initiated runs on the same live wrapper. */
@@ -88,6 +161,7 @@ export function installAccountRecovery(
   previous?.dispose();
   let attempt: Attempt | undefined;
   let nextTicket: AccountRecoveryTicket | undefined;
+  let nextMovedFrom: string | undefined;
   let activeTicket: AccountRecoveryTicket | undefined;
   let candidate: Recovery | undefined;
   let pumping = false;
@@ -339,9 +413,12 @@ export function installAccountRecovery(
       if (!continuing) {
         visited.clear();
         stripped.clear();
-        moved = false;
+        // A pre-turn move is a cross-account move like failover's.
+        moved = nextMovedFrom !== undefined;
+        if (nextMovedFrom) visited.add(nextMovedFrom);
       }
       nextTicket = undefined;
+      nextMovedFrom = undefined;
       attempt = {
         runId: event.runId,
         profileId: driver.credentialProfileId,
@@ -409,8 +486,10 @@ export function installAccountRecovery(
   controllers.set(live, {
     driver,
     dispose: unsubscribe,
-    prepare: (ticket) => {
-      if (!live.isRunning) nextTicket = ticket;
+    prepare: (ticket, movedFrom) => {
+      if (live.isRunning) return;
+      nextTicket = ticket;
+      nextMovedFrom = movedFrom;
     },
   });
 }

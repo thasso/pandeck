@@ -911,6 +911,7 @@ async function handleRequest(
           name?: unknown;
           enabled?: unknown;
           enterprise?: unknown;
+          priority?: unknown;
         }>(req);
         const profile = patchCredentialProfile(profileId, body);
         res.writeHead(200, corsJsonHeaders(req));

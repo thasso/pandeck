@@ -1150,3 +1150,76 @@ test("real Claude store terminates its old epoch, copies JSONL/subagents and res
     profiles.setCredentialProfileEnabled(b, false);
   }
 });
+
+test("real Claude store moves a session with no native history off a disabled account", async () => {
+  const a = account("claude", "Fresh A");
+  const b = account("claude", "Fresh B");
+  const providerId = randomUUID();
+  const queries: ClaudeQueryParams[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      queries.push(params);
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (typeof params.prompt !== "string") {
+            const iterator = params.prompt[Symbol.asyncIterator]();
+            await iterator.next();
+            await iterator.return?.();
+          }
+          yield {
+            type: "system",
+            subtype: "init",
+            session_id: providerId,
+            uuid: randomUUID(),
+          } as ClaudeSdkMessage;
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: providerId,
+            uuid: randomUUID(),
+            total_cost_usd: 0,
+            modelUsage: {},
+          } as unknown as ClaudeSdkMessage;
+        },
+      };
+    },
+  };
+  const internals = claudeSdkStore as unknown as {
+    seam: () => Promise<ClaudeSdkSeam>;
+  };
+  const factory = vi.spyOn(internals, "seam").mockResolvedValue(seam);
+  const id = randomUUID();
+  try {
+    const live = await createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: a,
+      modelId: "sonnet",
+      thinkingLevel: "medium",
+      title: "Fresh Claude",
+    });
+    profiles.setCredentialProfileEnabled(a, false);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, live, "First turn");
+    assert.equal(live.credentialProfileId, b);
+    assert.equal(sessionStore.get(id)?.credentialProfileId, b);
+    assert.equal(queries.length, 1);
+    assert.equal(queries[0]!.options?.resume, undefined);
+    assert.equal(
+      queries[0]!.options?.env?.CLAUDE_CONFIG_DIR,
+      profiles.claudeConfigDir(b),
+    );
+    assert.ok(
+      JSON.stringify(sessionRuntime.get(id)!.clientTimeline()).includes(
+        "Switched from Fresh A to Fresh B — Fresh A is disabled.",
+      ),
+    );
+  } finally {
+    factory.mockRestore();
+    await sessionRuntime.disposeSession(id);
+    claudeSdkStore.remove(id);
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});

@@ -516,6 +516,7 @@ describe("account card enterprise flag", () => {
           connectionLabel="Reconnect"
           onToggle={() => {}}
           onToggleEnterprise={onToggleEnterprise}
+          onPriority={() => {}}
           onConnect={() => {}}
         />,
       ),

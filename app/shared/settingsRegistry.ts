@@ -318,6 +318,15 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
       hint: "Prefer accounts using less than this percentage of the weekly cap.",
     },
   ),
+  setting(
+    "accountRouting.openAiResetAutoRedeemHours",
+    "models",
+    "Auto-redeem OpenAI reset credits (hours before expiry)",
+    { kind: "number", min: 0, max: 168 },
+    {
+      hint: "An unspent reset credit is redeemed this many hours before it expires. 0 turns auto-redeem off.",
+    },
+  ),
   setting("claudeSdk.enabled", "claude-sdk", "Claude SDK harness", BOOLEAN),
   setting(
     "openAiCompatible.enabled",

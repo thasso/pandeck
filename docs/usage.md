@@ -192,10 +192,14 @@ row's `title`. Spent rows the backend still lists render dimmed as
 ### Auto-redeem
 
 `app/server/src/openaiResetAutoRedeem.ts` spends a still-available credit on its
-own once it is within `OPENAI_RESET_AUTO_REDEEM_LEAD_MS` (6 h) of expiry,
-applicability guard OFF: the worst case equals letting it slip, the best case is
-a weekly window back at zero. Six hours leaves the whole preceding day for a
-deliberate redemption and still absorbs a server that was down for an evening.
+own once it is within the lead of expiry, applicability guard OFF: the worst
+case equals letting it slip, the best case is a weekly window back at zero. The
+lead is `AppSettings.accountRouting.openAiResetAutoRedeemHours` (Settings →
+Models, 0–168, default `OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS` = 6). Six hours
+leaves the whole preceding day for a deliberate redemption and still absorbs a
+server that was down for an evening. **0 turns auto-redeem off**: the sweep then
+reads and redeems nothing, and the Usage page drops the `auto-redeems …` /
+`auto-redeem due` hints and says a credit lapses at expiry.
 
 This is the one usage job that runs with NO client attached, and it must: the
 no-headless rule exists for the Claude subprocess, while a 04:00 expiry is
@@ -210,7 +214,7 @@ exactly what a client-driven refresh never sees. Its cost is bounded:
   `fetchOpenAiUsage` degrades a failed detail read that way for the page, but
   for the sweep it is no answer about expiries). The last two force the read,
   since an unforced one serves a fresh cache as is. Idle, that is one sub-second
-  GET per account per six hours.
+  GET per account per lead interval.
 - A failed or counts-only re-read does not stop a redemption the cache calls
   for: cached due rows are kept, because the provider refuses a spent credit for
   free, whereas an unspent one lapses.

@@ -7,10 +7,9 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "vitest";
 import type { CredentialProfileSummary } from "@assistant/shared";
-import {
-  OPENAI_RESET_AUTO_REDEEM_LEAD_MS,
-  type OpenAiResetCredit,
-  type OpenAiUsageSnapshot,
+import type {
+  OpenAiResetCredit,
+  OpenAiUsageSnapshot,
 } from "@assistant/shared/usage";
 import {
   resetInventoryIncomplete,
@@ -22,6 +21,7 @@ import {
 
 const HOUR = 60 * 60_000;
 const NOW = Date.parse("2026-09-20T20:00:00Z");
+const LEAD = 6 * HOUR;
 
 const credit = (
   id: string,
@@ -82,21 +82,25 @@ afterEach(() => resetOpenAiResetAutoRedeemForTests());
 test("selects only available credits inside the lead, soonest first", () => {
   const rows = [
     credit("far", iso(NOW + 5 * 24 * HOUR)),
-    credit("later", iso(NOW + OPENAI_RESET_AUTO_REDEEM_LEAD_MS)),
+    credit("later", iso(NOW + LEAD)),
     credit("soon", iso(NOW + HOUR)),
     credit("gone", iso(NOW - HOUR)),
     credit("spent", iso(NOW + HOUR), "redeemed"),
     credit("unknown", null),
   ];
   assert.deepEqual(
-    selectExpiringResetCredits(snapshot(rows), NOW).map((c) => c.id),
+    selectExpiringResetCredits(snapshot(rows), NOW, LEAD).map((c) => c.id),
     ["soon", "later"],
   );
   assert.deepEqual(
-    selectExpiringResetCredits(snapshot(rows, { available: false }), NOW),
+    selectExpiringResetCredits(snapshot(rows, { available: false }), NOW, LEAD),
     [],
   );
-  assert.deepEqual(selectExpiringResetCredits(null, NOW), [], "no snapshot");
+  assert.deepEqual(
+    selectExpiringResetCredits(null, NOW, LEAD),
+    [],
+    "no snapshot",
+  );
 });
 
 /** A deps harness that records every call and answers from a scripted cache. */
@@ -105,6 +109,7 @@ function harness(options: {
   cached?: Record<string, { snapshot: OpenAiUsageSnapshot; fetchedAt: number }>;
   live?: Record<string, OpenAiUsageSnapshot | Error>;
   redeemError?: Error | undefined;
+  leadHours?: number;
 }) {
   const calls = {
     reads: [] as { profileId: string; force: boolean }[],
@@ -136,9 +141,37 @@ function harness(options: {
       calls.revalidated.push(profileId);
     },
     now: () => NOW,
+    leadHours: () => options.leadHours ?? 6,
   };
   return { deps, calls };
 }
+
+test("off: reads and redeems nothing, even with a credit about to lapse", async () => {
+  const due = credit("due", iso(NOW + HOUR));
+  const { deps, calls } = harness({
+    leadHours: 0,
+    cached: { acct: { snapshot: snapshot([due]), fetchedAt: NOW - LEAD * 2 } },
+  });
+  assert.deepEqual(await sweepOpenAiResetAutoRedeem(deps), []);
+  assert.deepEqual(calls.reads, []);
+  assert.deepEqual(calls.redeems, []);
+});
+
+test("honours the configured lead time", async () => {
+  const at = credit("at", iso(NOW + 10 * HOUR));
+  const cached = {
+    acct: { snapshot: snapshot([at]), fetchedAt: NOW - HOUR },
+  };
+  const short = harness({ leadHours: 6, cached });
+  await sweepOpenAiResetAutoRedeem(short.deps);
+  assert.deepEqual(short.calls.redeems, []);
+  const long = harness({ leadHours: 12, cached });
+  await sweepOpenAiResetAutoRedeem(long.deps);
+  assert.deepEqual(
+    long.calls.redeems.map((r) => r.creditId),
+    ["at"],
+  );
+});
 
 test("leaves a fresh cache with nothing due alone — no fetch, no POST", async () => {
   const { deps, calls } = harness({
@@ -203,7 +236,7 @@ test("refreshes a cache older than the lead so a newly granted credit is discove
     cached: {
       acct: {
         snapshot: snapshot([]),
-        fetchedAt: NOW - OPENAI_RESET_AUTO_REDEEM_LEAD_MS - 1,
+        fetchedAt: NOW - LEAD - 1,
       },
     },
     live: { acct: snapshot([credit("new", iso(NOW + HOUR))]) },

@@ -210,7 +210,11 @@ export const settingsFixture: AppSettings = {
     path: "",
     effectivePath: "/home/alex/assistant/knowledge",
   },
-  accountRouting: { fiveHourUsedThreshold: 90, weeklyUsedThreshold: 95 },
+  accountRouting: {
+    fiveHourUsedThreshold: 90,
+    weeklyUsedThreshold: 95,
+    openAiResetAutoRedeemHours: 6,
+  },
 };
 export const settingsPrefs: Prefs = {
   theme: "light",

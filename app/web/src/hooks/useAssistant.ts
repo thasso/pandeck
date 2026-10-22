@@ -373,7 +373,11 @@ const defaultSettings: AppSettings = {
     effectiveTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   },
   knowledgeBase: { enabled: true, path: "", effectivePath: "" },
-  accountRouting: { fiveHourUsedThreshold: 90, weeklyUsedThreshold: 95 },
+  accountRouting: {
+    fiveHourUsedThreshold: 90,
+    weeklyUsedThreshold: 95,
+    openAiResetAutoRedeemHours: 6,
+  },
 };
 
 export interface ForkDraft {

@@ -202,6 +202,7 @@ describe("OpenAI reset credits", () => {
   const card = (
     credits: NonNullable<OpenAiUsageSnapshot["resetCredits"]>["credits"],
     applicableCount = 0,
+    openAiResetAutoRedeemHours = 6,
   ): string =>
     renderToStaticMarkup(
       <OpenAiCreditsCard
@@ -221,6 +222,7 @@ describe("OpenAI reset credits", () => {
         now={NOW}
         onReload={async () => {}}
         profileId="openai"
+        openAiResetAutoRedeemHours={openAiResetAutoRedeemHours}
       />,
     );
   const credit = (
@@ -266,6 +268,17 @@ describe("OpenAI reset credits", () => {
     expect(html).toContain(
       `expires today ${clock(NOW + 2 * HOUR)} · in 2h · auto-redeem due`,
     );
+  });
+
+  it("promises no auto-redeem while it is off", () => {
+    const html = card(
+      [credit("c", new Date(NOW + 2 * HOUR).toISOString())],
+      0,
+      0,
+    );
+    expect(html).toContain(`expires today ${clock(NOW + 2 * HOUR)} · in 2h`);
+    expect(html).not.toContain("auto-redeem");
+    expect(html).toContain("Auto-redeem is off");
   });
 
   it("lets the user redeem without being rate-limited, and says what that means", () => {

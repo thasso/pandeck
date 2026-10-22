@@ -111,7 +111,9 @@ describe("disable impact", () => {
     });
     expect(lines[0]).toContain("1 settings slot pinned to it falls back");
     expect(lines[0]).toContain("Commit agent");
-    expect(lines[1]).toContain("3 existing sessions keep running on it");
+    expect(lines[1]).toContain(
+      "3 existing sessions move to another eligible account on their next turn",
+    );
     expect(lines).toHaveLength(2);
   });
 
