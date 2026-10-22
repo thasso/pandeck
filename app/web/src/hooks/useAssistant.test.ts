@@ -1,4 +1,4 @@
-import { applyPatch } from "@assistant/shared";
+import { applyPatch, taskSummaryOf } from "@assistant/shared";
 import type {
   ApprovalCard,
   ContextInfo,
@@ -9,7 +9,9 @@ import type {
   SessionListItem,
   SessionState,
   EntryLibraryList,
+  TaskItem,
   TaskListResponse,
+  TaskSummary,
 } from "@assistant/shared";
 import { describe, expect, it } from "vitest";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
@@ -1501,8 +1503,14 @@ describe("useAssistant pull request card reducer", () => {
         ],
       },
       {
-        kind: "taskRecoveryItems",
-        events: [{ kind: "upsert", id: task.id, revision: 7, item: task }],
+        kind: "replicaItems",
+        purpose: "recovery",
+        msg: {
+          type: "stateItems",
+          topic: "tasks",
+          requestId: "recovery-1",
+          events: [{ kind: "upsert", id: task.id, revision: 7, item: task }],
+        },
       },
     );
 
@@ -1782,26 +1790,127 @@ describe("useAssistant task reducer", () => {
     expect(next.taskList?.items[1]).not.toBe(first.items[1]);
   });
 
-  it("diffs a Task digest against warm objects and batch-applies only changed ids", () => {
-    const stable = {
-      id: "1",
-      title: "Stable",
-      status: "todo" as const,
-      createdAt: 1,
-      updatedAt: 1,
-      source: { createdBy: "user" as const },
-    };
-    const stale = { ...stable, id: "2", title: "Stale" };
-    const removed = { ...stable, id: "4", title: "Removed" };
+  const summary = (
+    id: string,
+    patch: Partial<TaskSummary> = {},
+  ): TaskSummary => ({
+    id,
+    title: `Task ${id}`,
+    status: "todo",
+    createdAt: 1,
+    updatedAt: 1,
+    source: { createdBy: "user" },
+    ...patch,
+  });
+  const body = (id: string, patch: Partial<TaskItem> = {}): TaskItem => ({
+    ...summary(id),
+    description: `Body ${id}`,
+    ...patch,
+  });
+  const tasks = (
+    items: TaskSummary[],
+    revisions: Array<{ id: string; revision: number }> = items.map(
+      ({ id }) => ({ id, revision: 1 }),
+    ),
+    request: TaskListResponse["request"] = {},
+  ): ServerMessage => ({
+    type: "taskList",
+    list: { request, items, updatedAt: 1 },
+    seq: 1,
+    revisions,
+  });
+  /** A `getTask` answer: the body, its status and its detail revision. */
+  const read = (state: UIState, item: TaskItem, revision?: number) =>
+    apply(
+      {
+        type: "taskDetail",
+        id: item.id,
+        item,
+        ...(revision !== undefined ? { revision } : {}),
+      },
+      state,
+    );
+  /** The shell cache's Task admission: a revision for every held row. */
+  const cacheAdmits = (state: UIState) =>
+    Boolean(
+      state.taskList?.items.every((item) =>
+        Number.isSafeInteger(state.stateEventRevisions.tasks?.[item.id]),
+      ),
+    );
+
+  it("judges bodies and statuses per applied event, even before any list", () => {
+    let state = createInitialState();
+    state = read(state, body("a"), 2);
+    state = read(state, body("b"));
+    state = read(state, body("c"));
+    expect(state.taskList).toBeNull();
+
+    const next = apply(
+      {
+        type: "stateEvents",
+        topic: "tasks",
+        seq: 1,
+        events: [
+          { kind: "upsert", id: "a", revision: 3, item: summary("a") },
+          { kind: "upsert", id: "b", revision: 3, item: summary("b") },
+          { kind: "delete", id: "c", revision: 4 },
+        ],
+      },
+      state,
+    );
+
+    expect(next.taskList).toBeNull();
+    expect(next.stateEventRevisions.tasks).toEqual({ a: 3, b: 3, c: 4 });
+    // Newer than the revision it was read at.
+    expect(next.taskDetails.a?.status).toBe("refreshing");
+    // Read without a revision: left to the `updatedAt` rule.
+    expect(next.taskDetails.b?.status).toBe("ready");
+    expect("c" in next.taskStatuses).toBe(false);
+    expect("a" in next.taskStatuses).toBe(true);
+  });
+
+  it("forgets only the statuses of held rows a canonical snapshot leaves out", () => {
+    let state = apply(tasks([summary("a"), summary("b")]));
+    state = read(state, body("a"), 1);
+    state = read(state, body("b"), 1);
+    // An archived body is never a list row; its status is not the list's.
+    state = read(state, body("x", { archivedAt: 5 }), 1);
+
+    const dropped = apply(tasks([summary("a")]), state);
+    expect(Object.keys(dropped.taskStatuses).sort()).toEqual(["a", "x"]);
+    expect(dropped.stateEventRevisions.tasks).toEqual({ a: 1 });
+    expect(dropped.taskDetails.b?.status).toBe("refreshing");
+
+    // A sidecar missing a row vouches for nothing: no status is forgotten and
+    // the bodies stay on the `updatedAt` rule.
+    const partial = apply(
+      tasks([summary("a"), summary("c")], [{ id: "a", revision: 1 }]),
+      state,
+    );
+    expect(partial.stateEventRevisions.tasks).toEqual({});
+    expect(Object.keys(partial.taskStatuses).sort()).toEqual(["a", "b", "x"]);
+    expect(partial.taskDetails.b?.status).toBe("ready");
+
+    // A filtered list is no snapshot of this topic.
+    expect(apply(tasks([summary("z")], [], { status: "todo" }), state)).toBe(
+      state,
+    );
+  });
+
+  it("prunes a digest's absent rows and statuses, then a catch-up freshens", () => {
+    const stable = summary("1");
+    const stale = summary("2", { title: "Stale" });
     let state: UIState = {
       ...createInitialState(),
       taskList: {
         request: {},
-        items: [stable, stale, removed],
+        items: [stable, stale, summary("4")],
         updatedAt: 1,
       },
       stateEventRevisions: { tasks: { "1": 5, "2": 6, "4": 7 } },
     };
+    state = read(state, body("4"), 7);
+    state = read(state, body("x", { archivedAt: 5 }), 1);
 
     state = apply(
       {
@@ -1822,23 +1931,29 @@ describe("useAssistant task reducer", () => {
     expect(state.taskListFresh).toBe(false);
     // Changed rows keep their old revision until the fetched event arrives.
     expect(state.stateEventRevisions.tasks).toEqual({ "1": 5, "2": 6 });
+    expect(Object.keys(state.taskStatuses)).toEqual(["x"]);
 
     const changed = { ...stale, title: "Fresh", updatedAt: 2 };
-    const added = { ...stable, id: "3", title: "Added", updatedAt: 2 };
-    state = apply(
+    const added = summary("3", { title: "Added", updatedAt: 2 });
+    state = reduceAssistantState(
+      { ...state, taskListError: "Failed to list tasks: boom" },
       {
-        type: "stateItems",
-        topic: "tasks",
-        requestId: "sync-1",
-        events: [
-          { kind: "upsert", id: "2", revision: 8, item: changed },
-          { kind: "upsert", id: "3", revision: 9, item: added },
-        ],
+        kind: "replicaItems",
+        purpose: "catchUp",
+        msg: {
+          type: "stateItems",
+          topic: "tasks",
+          requestId: "sync-1",
+          events: [
+            { kind: "upsert", id: "2", revision: 8, item: changed },
+            { kind: "upsert", id: "3", revision: 9, item: added },
+          ],
+        },
       },
-      state,
     );
 
     expect(state.taskListFresh).toBe(true);
+    expect(state.taskListError).toBeNull();
     expect(state.taskList?.items.find((item) => item.id === "1")).toBe(stable);
     expect(state.taskList?.items.find((item) => item.id === "2")).toBe(changed);
     expect(state.taskList?.items.find((item) => item.id === "3")).toBe(added);
@@ -1849,69 +1964,130 @@ describe("useAssistant task reducer", () => {
     });
   });
 
-  it("applies only newer Task events and keeps deletes revision-ordered", () => {
-    const taskList: TaskListResponse = {
-      request: {},
-      items: [
-        {
-          id: "1",
-          title: "First",
-          status: "todo",
-          createdAt: 1,
-          updatedAt: 1,
-          source: { createdBy: "user" },
-        },
-        {
-          id: "2",
-          title: "Second",
-          status: "todo",
-          createdAt: 1,
-          updatedAt: 1,
-          source: { createdBy: "user" },
-        },
-      ],
-      updatedAt: 1,
+  it("forgets a lost recovery's revisions so the list is no baseline", () => {
+    const state = apply(tasks([summary("a"), summary("b")]));
+    expect(cacheAdmits(state)).toBe(true);
+    const lost = reduceAssistantState(state, {
+      kind: "replicaBaselineLost",
+      topic: "tasks",
+      ids: ["a"],
+    });
+    expect(lost.stateEventRevisions.tasks).toEqual({ b: 1 });
+    expect(lost.taskList).toBe(state.taskList);
+    expect(cacheAdmits(lost)).toBe(false);
+  });
+
+  it("reconciles bodies by updatedAt only when an event changes the list", () => {
+    let changed = apply(tasks([summary("a")]));
+    changed = read(changed, body("a"));
+    changed = apply(
+      {
+        type: "stateEvents",
+        topic: "tasks",
+        seq: 2,
+        events: [
+          {
+            kind: "upsert",
+            id: "a",
+            revision: 2,
+            item: summary("a", { title: "Renamed", updatedAt: 2 }),
+          },
+        ],
+      },
+      changed,
+    );
+    expect(changed.taskDetails.a?.status).toBe("refreshing");
+
+    // A body older than its row, which nothing has judged yet: an equal echo
+    // changes no list, so it does not judge it either.
+    const x = summary("x", { updatedAt: 5 });
+    const fresh: UIState = {
+      ...createInitialState(),
+      taskList: { request: {}, items: [x], updatedAt: 1 },
+      stateEventRevisions: { tasks: { x: 1 } },
+      taskDetails: { x: ready<TaskItem | null>(body("x", { updatedAt: 3 })) },
     };
-    const state: UIState = { ...createInitialState(), taskList };
-    const next = apply(
+    const echoed = apply(
       {
         type: "stateEvents",
         topic: "tasks",
-        seq: 7,
-        events: [
-          {
-            kind: "upsert",
-            id: "1",
-            revision: 3,
-            item: { ...taskList.items[0]!, title: "Changed", updatedAt: 2 },
-          },
-          { kind: "delete", id: "2", revision: 4 },
-        ],
+        seq: 2,
+        events: [{ kind: "upsert", id: "x", revision: 2, item: { ...x } }],
       },
-      state,
+      fresh,
     );
+    expect(echoed.taskList).toBe(fresh.taskList);
+    expect(echoed.taskDetails).toBe(fresh.taskDetails);
+    expect(echoed.taskDetails.x?.status).toBe("ready");
+    expect(echoed.stateEventRevisions.tasks).toEqual({ x: 2 });
+  });
 
-    expect(next.taskList?.items.map((task) => task.title)).toEqual(["Changed"]);
-    expect(next.stateEventRevisions.tasks).toEqual({ "1": 3, "2": 4 });
+  it("settles a saved Task's row in place without touching revisions", () => {
+    const other = summary("o");
+    const temp = summary("optimistic-1", { title: "New" });
+    const saved = body("10", { title: "New", updatedAt: 3 });
+    const savedRow = taskSummaryOf(saved);
+    const start: UIState = {
+      ...createInitialState(),
+      taskList: { request: {}, items: [temp, other], updatedAt: 1 },
+      stateEventRevisions: { tasks: { o: 1 } },
+    };
+    const save = (state: UIState, item: TaskItem, tempId?: string): UIState =>
+      reduceAssistantState(state, {
+        kind: "taskSaved",
+        item,
+        revision: 3,
+        ...(tempId ? { tempId } : {}),
+      });
 
-    const stale = apply(
+    const settled = save(start, saved, "optimistic-1");
+    expect(settled.taskList?.items).toEqual([savedRow, other]);
+    expect(settled.taskList?.items[1]).toBe(other);
+    expect(settled.stateEventRevisions.tasks).toBe(
+      start.stateEventRevisions.tasks,
+    );
+    expect(dataOf(settled.taskDetails["10"]!)).toBe(saved);
+    expect(settled.taskDetailRevisions["10"]).toBe(3);
+    expect(settled.taskStatuses["10"]).toBeTruthy();
+    // The echo that follows meets an equal row and keeps it.
+    const echoed = apply(
       {
         type: "stateEvents",
         topic: "tasks",
-        seq: 8,
+        seq: 2,
         events: [
-          {
-            kind: "upsert",
-            id: "2",
-            revision: 3,
-            item: taskList.items[1]!,
-          },
+          { kind: "upsert", id: "10", revision: 3, item: { ...savedRow } },
         ],
       },
-      next,
+      settled,
     );
-    // A batch whose events are all stale is an exact no-op.
-    expect(stale).toBe(next);
+    expect(echoed.taskList?.items[0]).toBe(settled.taskList?.items[0]);
+
+    // Already equal: the list object stays.
+    const again = save(settled, saved);
+    expect(again.taskList).toBe(settled.taskList);
+    // Unknown: unshifted.
+    const unshifted = save(
+      { ...start, taskList: { request: {}, items: [other], updatedAt: 1 } },
+      saved,
+    );
+    expect(unshifted.taskList?.items).toEqual([savedRow, other]);
+    // Archived: its row leaves the live list.
+    const archived = save(settled, { ...saved, archivedAt: 4 });
+    expect(archived.taskList?.items).toEqual([other]);
+    // A filtered or absent list is left to the server.
+    const filtered: UIState = {
+      ...start,
+      taskList: { request: { status: "todo" }, items: [other], updatedAt: 1 },
+    };
+    expect(save(filtered, saved).taskList).toBe(filtered.taskList);
+    expect(
+      save({ ...start, taskList: null }, saved, "optimistic-1").taskList,
+    ).toBeNull();
+    for (const state of [again, unshifted, archived])
+      expect(state.stateEventRevisions.tasks).toBe(
+        start.stateEventRevisions.tasks,
+      );
   });
 
   it("optimistic task saves use the current protocol shape", () => {

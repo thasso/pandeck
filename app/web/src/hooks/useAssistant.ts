@@ -25,13 +25,9 @@ import { collapseRequest, sameCollapsed } from "../lib/initiativeView.ts";
 import {
   applyTopicMessage,
   createReplicaTransport,
-  digestChanges,
-  itemsComplete,
-  pruneToDigest,
   type ReplicaTransport,
   type RequestPurpose,
   revisionSidecar,
-  STATE_ITEMS_TIMEOUT_MS,
   type TopicDescriptor,
 } from "../lib/stateReplica.ts";
 import { wireValueEqual } from "../lib/wireValueEqual.ts";
@@ -96,7 +92,6 @@ import type {
   PromptQueueCommand,
   ServerMessage,
   TimelineAnchorTarget,
-  StateDigestMessage,
   StateEventsMessage,
   BackgroundWorkItemSummary,
   SlackConnectionStatus,
@@ -1239,20 +1234,19 @@ function upsertSessionListItem(
 
 /** Preserve row identities across authoritative snapshots when content agrees. */
 function reconcileTaskList(
-  current: TaskListResponse | null,
+  held: readonly TaskSummary[],
   incoming: TaskListResponse,
-): TaskListResponse {
-  if (!current || current.items.length === 0 || incoming.items.length === 0)
-    return incoming;
-  const currentById = new Map(current.items.map((item) => [item.id, item]));
+): TaskSummary[] {
+  if (held.length === 0 || incoming.items.length === 0) return incoming.items;
+  const heldById = new Map(held.map((item) => [item.id, item]));
   let reused = false;
   const items = incoming.items.map((item) => {
-    const existing = currentById.get(item.id);
+    const existing = heldById.get(item.id);
     if (!existing || !wireValueEqual(existing, item)) return item;
     reused = true;
     return existing;
   });
-  return reused ? { ...incoming, items } : incoming;
+  return reused ? items : incoming.items;
 }
 
 function reconcileProjects(
@@ -1660,12 +1654,6 @@ interface PendingMutation extends PendingMutationEffect {
   tempId?: string;
 }
 
-interface TaskDigestSync {
-  requestId: string;
-  expectedIds: ReadonlySet<string>;
-  timer: ReturnType<typeof setTimeout>;
-}
-
 interface TrackedPendingMutation extends PendingMutation {
   /**
    * Re-read the recorded objects from the authoritative source after failure.
@@ -1783,10 +1771,6 @@ type Action =
    */
   | { kind: "taskSaved"; item: TaskItem; revision?: number; tempId?: string }
   | {
-      kind: "taskRecoveryItems";
-      events: TaskStateEventsMessage["events"];
-    }
-  | {
       kind: "optimisticProjectSave";
       id: string;
       patch: Partial<ProjectRecord>;
@@ -1811,7 +1795,7 @@ type Action =
       purpose: RequestPurpose;
       msg: Extract<
         ServerMessage,
-        { type: "stateItems"; topic: "projects" | "initiatives" }
+        { type: "stateItems"; topic: "tasks" | "projects" | "initiatives" }
       >;
     }
   /** A recovery that could not complete: its rows lose their held revision. */
@@ -3819,72 +3803,187 @@ const initiativeReplica: TopicDescriptor<
   resubscribeOnlyWhileHeld: true,
 };
 
-type TaskDigestMessage = StateDigestMessage<"tasks">;
+type TaskListMessage = Extract<ServerMessage, { type: "taskList" }>;
+const NO_TASKS: TaskSummary[] = [];
 
 /**
- * Diff an authoritative live-projection digest against settled cached objects.
- * `null` means the cache cannot safely drive a digest and needs a full snapshot.
+ * The `tasks` topic's replica lenses over the canonical live list. Only an
+ * unfiltered list is this topic's snapshot; a newly seen row goes FIRST, and an
+ * event before any list was read advances only the sidecar. A snapshot or
+ * digest names the whole live projection, so it forgets the statuses of the
+ * held rows it leaves out (never a status an archived body recorded) and judges
+ * every held body; an event judges the bodies it names.
  */
-function changedTaskIdsForDigest(
-  state: UIState,
-  message: TaskDigestMessage,
-): string[] | null {
-  if (!canUseTaskDigest(state) || !state.taskList) return null;
-  return digestChanges(
-    {
-      items: state.taskList.items,
-      revisions: state.stateEventRevisions.tasks!,
-    },
-    message.entries,
-  );
-}
-
-/** Prune objects absent from a digest while stale changed rows remain visible. */
-function applyTaskDigest(state: UIState, message: TaskDigestMessage): UIState {
-  const changedIds = changedTaskIdsForDigest(state, message);
-  if (!changedIds || !state.taskList) return state;
-  const pruned = pruneToDigest(
-    {
-      items: state.taskList.items,
-      revisions: state.stateEventRevisions.tasks!,
-    },
-    message.entries,
-  );
-  const liveIds = new Set(message.entries.map((entry) => entry.id));
-  const taskStatuses = forgetTaskStatuses(
-    state.taskStatuses,
-    state.taskList.items
-      .filter((item) => !liveIds.has(item.id))
-      .map((item) => item.id),
-  );
-  return {
+const taskReplica: TopicDescriptor<UIState, TaskSummary, TaskListMessage> = {
+  read: (state) => ({
+    items: state.taskList?.items ?? NO_TASKS,
+    revisions: state.stateEventRevisions.tasks ?? {},
+  }),
+  write: (state, replica) => ({
     ...state,
     taskList:
-      pruned.items === state.taskList.items
-        ? state.taskList
-        : { ...state.taskList, items: pruned.items },
+      state.taskList && replica.items !== state.taskList.items
+        ? { ...state.taskList, items: replica.items }
+        : state.taskList,
     stateEventRevisions: {
       ...state.stateEventRevisions,
-      tasks: pruned.revisions,
+      tasks: replica.revisions,
     },
-    // The digest names only live rows; an archived Task's open body may have
-    // missed changes while this tab was away, and nothing else will say so.
-    taskDetails: reconcileTaskDetailRevisions(
-      state.taskDetails,
-      state.taskDetailRevisions,
-      revisionSidecar(message.entries) ?? {},
-    ),
-    taskListFresh: changedIds.length === 0,
-    taskStatuses,
-    error: null,
-  };
-}
+  }),
+  snapshot: (message, held) => {
+    if (!isCacheableTaskList(message.list)) return null;
+    const revisions = revisionSidecar(message.revisions);
+    return {
+      items: reconcileTaskList(held.items, message.list),
+      // A sidecar missing a row cannot vouch for the list: none is held.
+      revisions:
+        revisions && taskListHasRevisionSidecar(message.list, revisions)
+          ? message.revisions
+          : [],
+    };
+  },
+  place: (items, item) => [item, ...items],
+  adoptSnapshot: (state, message, held) => {
+    // A first answer had no list for `write` to put its rows in, and with
+    // nothing held to reuse they are the message's own.
+    const items = state.taskList?.items ?? message.list.items;
+    const taskList =
+      items === message.list.items ? message.list : { ...message.list, items };
+    const revisions = revisionSidecar(message.revisions);
+    const canonical =
+      revisions && taskListHasRevisionSidecar(message.list, revisions)
+        ? revisions
+        : null;
+    const byUpdatedAt = reconcileTaskDetails(state.taskDetails, taskList.items);
+    return {
+      ...state,
+      taskList,
+      // As a digest does: rows the canonical snapshot no longer lists left the
+      // live projection, so their recorded statuses are dropped.
+      taskStatuses: canonical
+        ? forgetTaskStatuses(
+            state.taskStatuses,
+            held.items
+              .map((item) => item.id)
+              .filter((id) => !(id in canonical)),
+          )
+        : state.taskStatuses,
+      taskListFresh: true,
+      taskListError: null,
+      // The snapshot advances the revision sidecar, so the events that would
+      // have marked a body stale will never be applied: compare here.
+      taskDetails: canonical
+        ? reconcileTaskDetailRevisions(
+            byUpdatedAt,
+            state.taskDetailRevisions,
+            canonical,
+          )
+        : byUpdatedAt,
+      error: null,
+    };
+  },
+  afterEvents: (state, applied, held) => {
+    let taskDetails = state.taskDetails;
+    let taskStatuses = state.taskStatuses;
+    for (const event of applied) {
+      // An event newer than the body is the only signal some body changes
+      // send: a linked Task's title or status moves this Task's revision, not
+      // its `updatedAt`, and often not its summary either. That includes a
+      // `delete` for a Task that was already archived: the list has nothing to
+      // drop, but an open body of it is stale. A body read without a revision
+      // (an older server) is left to the `updatedAt` reconciliation below.
+      const detail = taskDetails[event.id];
+      const detailRevision = state.taskDetailRevisions[event.id];
+      if (
+        detail &&
+        dataOf(detail) &&
+        detailRevision !== undefined &&
+        event.revision > detailRevision
+      ) {
+        if (taskDetails === state.taskDetails) taskDetails = { ...taskDetails };
+        taskDetails[event.id] = beginLoad(detail);
+      }
+      if (event.kind === "delete")
+        taskStatuses = forgetTaskStatuses(taskStatuses, [event.id]);
+    }
+    // A `delete` may name a Task that was ALREADY archived (its linked Task
+    // changed): a no-op on the list only because `taskList` is the canonical
+    // LIVE projection and never holds an archived row.
+    const items = state.taskList?.items;
+    if (items && items !== held.items)
+      taskDetails = reconcileTaskDetails(taskDetails, items);
+    return taskDetails === state.taskDetails &&
+      taskStatuses === state.taskStatuses
+      ? state
+      : { ...state, taskDetails, taskStatuses };
+  },
+  digest: {
+    baseline: canUseTaskDigest,
+    adoptDigest: (state, message, changedIds, held) => {
+      const live = new Set(message.entries.map((entry) => entry.id));
+      return {
+        ...state,
+        // The digest names only live rows; an archived Task's open body may
+        // have missed changes while this tab was away, and nothing else will
+        // say so.
+        taskDetails: reconcileTaskDetailRevisions(
+          state.taskDetails,
+          state.taskDetailRevisions,
+          revisionSidecar(message.entries) ?? {},
+        ),
+        taskListFresh: changedIds.length === 0,
+        taskStatuses: forgetTaskStatuses(
+          state.taskStatuses,
+          held.items
+            .filter((item) => !live.has(item.id))
+            .map((item) => item.id),
+        ),
+        error: null,
+      };
+    },
+    adoptItems: (state) => ({
+      ...state,
+      taskListFresh: true,
+      taskListError: null,
+      error: null,
+    }),
+  },
+  // The direct `saveTask` reply settles a create: the server has never heard
+  // of the browser-local temp id, so an upsert event alone would leave the
+  // optimistic row beside the real one forever. The temp row is replaced in
+  // place with the shared summary projection — the same narrowing the server
+  // broadcasts — so the echo that follows finds an equal row and keeps its
+  // identity.
+  settle: (state, { localId, id, item }) => {
+    const list = state.taskList;
+    // A filtered list is left to the server: an item that no longer matches
+    // its predicate must not be inserted into a view it does not belong in.
+    if (!list || !canOptimisticallyUpdateTaskList(list)) return state;
+    const index = list.items.findIndex(
+      (row) => row.id === localId || row.id === id,
+    );
+    if (item === null) {
+      // An archived Task is no row of the live list: saving one from its page
+      // (reached through a link) must not put it back.
+      if (index < 0) return state;
+      return {
+        ...state,
+        taskList: {
+          ...list,
+          items: list.items.filter((_, at) => at !== index),
+        },
+      };
+    }
+    if (index >= 0 && wireValueEqual(list.items[index], item)) return state;
+    const items = list.items.slice();
+    if (index >= 0) items[index] = item;
+    else items.unshift(item);
+    return { ...state, taskList: { ...list, items } };
+  },
+  resubscribeOnlyWhileHeld: true,
+};
 
-/**
- * Apply one server flush atomically through the state engine. A stale batch is
- * an exact no-op; a newer echo advances only the revision sidecar when its wire
- * value already matches, preserving both the list and row identities.
- */
+/** Apply one server flush atomically through its topic's replica. */
 function applyEvent(
   state: UIState,
   message:
@@ -3893,85 +3992,13 @@ function applyEvent(
     | InitiativeStateEventsMessage
     | BackgroundStateEventsMessage,
 ): UIState {
+  if (message.topic === "tasks")
+    return applyTopicMessage(taskReplica, state, message);
   if (message.topic === "projects")
     return applyTopicMessage(projectReplica, state, message);
   if (message.topic === "initiatives")
     return applyTopicMessage(initiativeReplica, state, message);
-  if (message.topic === "background")
-    return applyTopicMessage(backgroundReplica, state, message);
-  const currentRevisions = state.stateEventRevisions[message.topic] ?? {};
-  let revisions: Record<string, number> | null = null;
-  let items = state.taskList?.items;
-  let taskStatuses = state.taskStatuses;
-  let taskDetails = state.taskDetails;
-
-  for (const event of message.events) {
-    const knownRevision =
-      revisions?.[event.id] ?? currentRevisions[event.id] ?? -1;
-    if (event.revision <= knownRevision) continue;
-
-    revisions ??= { ...currentRevisions };
-    revisions[event.id] = event.revision;
-    // An event newer than the body is the only signal some body changes send:
-    // a linked Task's title or status moves this Task's revision, not its
-    // `updatedAt`, and often not its summary either. That includes a `delete`
-    // for a Task that was already archived: the list has nothing to drop, but
-    // an open body of it is stale. A body read without a revision (an older
-    // server) is left to the `updatedAt` reconciliation below.
-    const detail = taskDetails[event.id];
-    const detailRevision = state.taskDetailRevisions[event.id];
-    if (
-      detail &&
-      dataOf(detail) &&
-      detailRevision !== undefined &&
-      event.revision > detailRevision
-    ) {
-      if (taskDetails === state.taskDetails) taskDetails = { ...taskDetails };
-      taskDetails[event.id] = beginLoad(detail);
-    }
-    if (event.kind === "delete")
-      taskStatuses = forgetTaskStatuses(taskStatuses, [event.id]);
-    if (!items) continue;
-
-    const index = items.findIndex((item) => item.id === event.id);
-    // A `delete` may name a Task that was ALREADY archived (its linked Task
-    // changed): a no-op here only because `taskList` is the canonical LIVE
-    // projection and never holds an archived row. A list read with
-    // `includeArchived` must never be stored here, or this drops a real row.
-    if (event.kind === "delete") {
-      if (index >= 0) items = items.filter((item) => item.id !== event.id);
-      continue;
-    }
-    if (index < 0) {
-      items = [event.item, ...items];
-      continue;
-    }
-    if (wireValueEqual(items[index], event.item)) continue;
-    const next = items.slice();
-    next[index] = event.item;
-    items = next;
-  }
-
-  // A batch whose events were all stale is an exact no-op here; whether it
-  // ARRIVED is the tripwire's business, and the tripwire is transport state.
-  if (!revisions) return state;
-  const taskList =
-    state.taskList && items !== undefined && items !== state.taskList.items
-      ? { ...state.taskList, items }
-      : state.taskList;
-  return {
-    ...state,
-    stateEventRevisions: {
-      ...state.stateEventRevisions,
-      [message.topic]: revisions,
-    },
-    taskList,
-    taskDetails:
-      taskList === state.taskList
-        ? taskDetails
-        : reconcileTaskDetails(taskDetails, taskList?.items),
-    taskStatuses,
-  };
+  return applyTopicMessage(backgroundReplica, state, message);
 }
 
 /**
@@ -4210,47 +4237,30 @@ function applyTaskDetailAnswer(
 }
 
 /**
- * Adopt the mutator's direct reply to `saveTask`.
+ * The replica input for the mutator's direct reply to `saveTask`: the row it
+ * settles (`taskReplica.settle`), or none for an archived Task.
+ */
+function taskSavedSettle(item: TaskItem, tempId?: string) {
+  return {
+    kind: "settled",
+    ...(tempId !== undefined ? { localId: tempId } : {}),
+    id: item.id,
+    item: item.archivedAt !== undefined ? null : taskSummaryOf(item),
+  } as const;
+}
+
+/**
+ * Adopt the mutator's direct reply to `saveTask`, after its row settled.
  *
- * Two jobs the broadcast event cannot do. The full `item` becomes the cached
- * body, so a detail view never pays a refetch for the Task it just saved. And a
- * create SETTLES: the server has never heard of the browser-local temp id, so
- * an upsert event alone would leave the optimistic row beside the real one
- * forever. The temp row is replaced in place with the shared summary projection
- * — the same narrowing the server broadcasts — so the echo that follows finds an
- * equal row and keeps its identity.
+ * The one job the broadcast event cannot do besides the settle: the full
+ * `item` becomes the cached body, so a detail view never pays a refetch for the
+ * Task it just saved.
  */
 function applyTaskSaved(
   state: UIState,
   item: TaskItem,
-  tempId?: string,
   revision?: number,
 ): UIState {
-  const list = state.taskList;
-  const summary = taskSummaryOf(item);
-  let taskList = list;
-  // A filtered list is left to the server: an item that no longer matches its
-  // predicate must not be inserted into a view it does not belong in.
-  if (list && canOptimisticallyUpdateTaskList(list)) {
-    const index = list.items.findIndex(
-      (row) => row.id === tempId || row.id === item.id,
-    );
-    if (item.archivedAt !== undefined) {
-      // An archived Task is no row of the live list: saving one from its page
-      // (reached through a link) must not put it back.
-      if (index >= 0)
-        taskList = {
-          ...list,
-          items: list.items.filter((_, at) => at !== index),
-        };
-    } else {
-      const items = list.items.slice();
-      if (index >= 0) items[index] = summary;
-      else items.unshift(summary);
-      if (index < 0 || !wireValueEqual(list.items[index], summary))
-        taskList = { ...list, items };
-    }
-  }
   const detailLru = touchLru(state.taskDetailsLru, item.id);
   const detailCache = pruneProjectionCache(
     { ...state.taskDetails, [item.id]: ready(item) },
@@ -4260,7 +4270,6 @@ function applyTaskSaved(
   );
   return {
     ...state,
-    taskList,
     taskDetails: detailCache.cache,
     taskDetailRevisions: retainedTaskDetailRevisions(
       state.taskDetailRevisions,
@@ -4673,29 +4682,25 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       error: null,
     };
   }
-  if (action.kind === "taskRecoveryItems") {
-    const revisions = { ...(state.stateEventRevisions.tasks ?? {}) };
-    for (const event of action.events) delete revisions[event.id];
-    const recovered = applyEvent(
-      {
-        ...state,
-        stateEventRevisions: {
-          ...state.stateEventRevisions,
-          tasks: revisions,
-        },
-      },
-      { type: "stateEvents", topic: "tasks", seq: 0, events: action.events },
-    );
-    const pullRequestCards = reconcilePullRequestCardTaskRecovery(
-      recovered.pullRequestCards,
-      action.events,
-    );
-    return pullRequestCards === recovered.pullRequestCards
-      ? recovered
-      : withChat(recovered, { pullRequestCards });
-  }
   if (action.kind === "replicaItems") {
     const { msg, purpose } = action;
+    if (msg.topic === "tasks") {
+      const applied = applyTopicMessage(taskReplica, state, {
+        kind: "items",
+        purpose,
+        events: msg.events,
+      });
+      if (purpose !== "recovery") return applied;
+      // A recovered Task also restores the pull-request card whose write
+      // refused it; cross-domain, so it stays outside the replica.
+      const pullRequestCards = reconcilePullRequestCardTaskRecovery(
+        applied.pullRequestCards,
+        msg.events,
+      );
+      return pullRequestCards === applied.pullRequestCards
+        ? applied
+        : withChat(applied, { pullRequestCards });
+    }
     return msg.topic === "projects"
       ? applyTopicMessage(projectReplica, state, {
           kind: "items",
@@ -4710,6 +4715,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   }
   if (action.kind === "replicaBaselineLost") {
     const input = { kind: "baselineLost", ids: action.ids } as const;
+    if (action.topic === "tasks")
+      return applyTopicMessage(taskReplica, state, input);
     if (action.topic === "projects")
       return applyTopicMessage(projectReplica, state, input);
     if (action.topic === "initiatives")
@@ -5284,7 +5291,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     return taskList === state.taskList ? state : { ...state, taskList };
   }
   if (action.kind === "taskSaved") {
-    return applyTaskSaved(state, action.item, action.tempId, action.revision);
+    return applyTaskSaved(
+      applyTopicMessage(
+        taskReplica,
+        state,
+        taskSavedSettle(action.item, action.tempId),
+      ),
+      action.item,
+      action.revision,
+    );
   }
   if (action.kind === "taskDetailLoad") {
     const current = state.taskDetails[action.id] ?? idle<TaskItem | null>();
@@ -5751,26 +5766,13 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return applyEvent(state, msg);
     case "stateDigest":
       return msg.topic === "tasks"
-        ? applyTaskDigest(state, msg)
+        ? applyTopicMessage(taskReplica, state, msg)
         : msg.topic === "projects"
           ? applyTopicMessage(projectReplica, state, msg)
           : applyTopicMessage(initiativeReplica, state, msg);
-    case "stateItems": {
-      // Replica topics' answers arrive as `replicaItems`, tagged by purpose.
-      if (msg.topic !== "tasks") return state;
-      const applied = applyEvent(state, {
-        type: "stateEvents",
-        topic: "tasks",
-        seq: 0,
-        events: msg.events,
-      });
-      return {
-        ...applied,
-        taskListFresh: true,
-        taskListError: null,
-        error: null,
-      };
-    }
+    case "stateItems":
+      // Every answer arrives as `replicaItems`, tagged by its purpose.
+      return state;
     case "backgroundWorkList":
       return applyTopicMessage(backgroundReplica, state, msg);
     case "backgroundWorkStopAnswer": {
@@ -5804,51 +5806,10 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     case "initiativeDetail":
       // Correlated before reducer dispatch in the socket effect.
       return state;
-    case "taskList": {
-      const taskList = reconcileTaskList(state.taskList, msg.list);
-      const revisionRecord = revisionSidecar(msg.revisions);
-      const canonical =
-        isCacheableTaskList(taskList) &&
-        revisionRecord &&
-        taskListHasRevisionSidecar(taskList, revisionRecord)
-          ? revisionRecord
-          : null;
-      const byUpdatedAt = reconcileTaskDetails(
-        state.taskDetails,
-        taskList.items,
-      );
-      // As a digest does: rows the canonical snapshot no longer lists left the
-      // live projection, so their recorded statuses are dropped.
-      const taskStatuses = canonical
-        ? forgetTaskStatuses(
-            state.taskStatuses,
-            (state.taskList?.items ?? [])
-              .map((item) => item.id)
-              .filter((id) => !(id in canonical)),
-          )
-        : state.taskStatuses;
-      return {
-        ...state,
-        taskList,
-        taskStatuses,
-        taskListFresh: true,
-        taskListError: null,
-        stateEventRevisions: {
-          ...state.stateEventRevisions,
-          tasks: canonical ?? {},
-        },
-        // The snapshot advances the revision sidecar, so the events that would
-        // have marked a body stale will never be applied: compare here.
-        taskDetails: canonical
-          ? reconcileTaskDetailRevisions(
-              byUpdatedAt,
-              state.taskDetailRevisions,
-              canonical,
-            )
-          : byUpdatedAt,
-        error: null,
-      };
-    }
+    case "taskList":
+      // A filtered read is refused: `taskList` is only ever the canonical
+      // live projection.
+      return applyTopicMessage(taskReplica, state, msg);
     case "taskProjectsAssigned":
       // The assignment's rows arrive as `stateEvents`; this only confirms it,
       // and the moved rows are the receipt. The counter exists so the Backlog's
@@ -6082,7 +6043,11 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // ACTION instead, because only it can look up the create's temp id. This
       // is the same adoption without one, for any other dispatcher of the raw
       // message (tests, a replayed transcript of frames).
-      return applyTaskSaved(state, msg.item, undefined, msg.revision);
+      return applyTaskSaved(
+        applyTopicMessage(taskReplica, state, taskSavedSettle(msg.item)),
+        msg.item,
+        msg.revision,
+      );
     case "taskDetail":
       return applyTaskDetailAnswer(state, msg);
     case "forkedSession": {
@@ -6943,11 +6908,6 @@ export function useAssistant({
     };
   }, [viewedSessionId, viewedTimeline]);
   /**
-   * Last `seq` seen for `tasks`, the one topic not yet on the replica
-   * transport — the gap tripwire, never a replay cursor.
-   */
-  const topicSeqRef = useRef<Partial<Record<"tasks", number>>>({});
-  /**
    * Optimistic mutations still waiting for their own outcome, keyed by the
    * `requestId` the command carried. Correlation is explicit because these
    * domains also receive UNSOLICITED authoritative broadcasts (an agent editing
@@ -7016,13 +6976,6 @@ export function useAssistant({
   const projectMutationRequestsRef = useRef(new Map<string, string>());
   /** Compaction-window saves in flight: request id → session id. */
   const compactionWindowRequestsRef = useRef(new Map<string, string>());
-  /**
-   * One in-flight targeted catch-up for the latest Task digest. Tasks keep
-   * their own item requests until they move onto the replica transport.
-   */
-  const taskDigestSyncRef = useRef<TaskDigestSync | null>(null);
-  /** Explicit per-mutation item recoveries, independent of digest catch-up. */
-  const taskRecoveryItemsRef = useRef(new Map<string, ReadonlySet<string>>());
   const lazyBlockCacheRef = useRef(new Map<string, unknown>());
   /**
    * Durable-body reads in flight, by cache key. A read leaves this map when
@@ -7174,10 +7127,10 @@ export function useAssistant({
   replicaTransportRef.current ??= createReplicaTransport<UIState>({
     topics: {
       background: backgroundReplica,
+      tasks: taskReplica,
       projects: projectReplica,
       initiatives: initiativeReplica,
     },
-    taskBaseline: canUseTaskDigest,
     send: (message) => socketRef.current?.send(message),
     holds: (topic) => topicsRef.current.has(topic),
     // Subscribing is the Initiative list's read, so a held list refreshes.
@@ -7257,10 +7210,6 @@ export function useAssistant({
   }, [shellCacheWriter]);
 
   useEffect(() => {
-    // Held as a local so the cleanup clears the map this episode used. The ref
-    // is never reassigned, so this is the same object either way — but reading
-    // `.current` from a cleanup is the shape that silently stops being true.
-    const taskRecoveryItems = taskRecoveryItemsRef.current;
     let disposed = false;
     let frame: number | null = null;
     let pendingFrameMessages: ServerMessage[] = [];
@@ -7279,17 +7228,6 @@ export function useAssistant({
         frame = null;
       }
       flushFrameMessages();
-    };
-
-    const clearTaskDigestSync = () => {
-      const sync = taskDigestSyncRef.current;
-      if (sync) clearTimeout(sync.timer);
-      taskDigestSyncRef.current = null;
-    };
-    const fallbackFromTaskDigest = (reason: string) => {
-      clearTaskDigestSync();
-      console.warn(`[state-sync] tasks digest fallback: ${reason}`);
-      socket.send({ type: "listTasks", request: {} });
     };
 
     /** Retries scheduled by failed durable-body reads; torn down with the socket. */
@@ -7432,93 +7370,23 @@ export function useAssistant({
       // Preserve protocol order: a terminal frame must see all queued deltas first,
       // even if it lands before the next paint.
       flushFrameMessagesNow();
-      if (msg.type === "taskList") {
-        clearTaskDigestSync();
-        topicSeqRef.current.tasks = msg.seq;
-      }
+      if (msg.type === "taskList" && isCacheableTaskList(msg.list))
+        replicaTransport.snapshotReceived("tasks", msg.seq);
       if (msg.type === "projectList" && isCanonicalProjectList(msg.list))
         replicaTransport.snapshotReceived("projects", msg.seq);
       if (msg.type === "backgroundWorkList")
         replicaTransport.snapshotReceived("background", msg.seq);
       if (msg.type === "initiativeList")
         replicaTransport.snapshotReceived("initiatives", msg.seq);
-      if (msg.type === "stateDigest" && msg.topic === "tasks") {
-        clearTaskDigestSync();
-        topicSeqRef.current.tasks = msg.seq;
-        const changedIds = changedTaskIdsForDigest(stateRef.current, msg);
-        if (!changedIds) {
-          fallbackFromTaskDigest("cached objects or revisions were invalid");
-          return;
-        }
-        if (changedIds.length > 0) {
-          const requestId = createClientId();
-          const expectedIds = new Set(changedIds);
-          const timer = setTimeout(
-            () => fallbackFromTaskDigest("targeted item fetch timed out"),
-            STATE_ITEMS_TIMEOUT_MS,
-          );
-          taskDigestSyncRef.current = { requestId, expectedIds, timer };
-          socket.send({
-            type: "getStateItems",
-            topic: "tasks",
-            ids: changedIds,
-            requestId,
-          });
-        }
-      } else if (msg.type === "stateDigest") {
+      if (msg.type === "stateDigest") {
         // A digest the transport fell back from never reaches the reducer.
         const answer = replicaTransport.digestReceived(msg, stateRef.current);
         for (const out of answer.send) socket.send(out);
         if (!answer.apply) return;
       }
-      if (msg.type === "stateItems" && msg.topic === "tasks") {
-        const taskRecoveryIds = taskRecoveryItemsRef.current.get(msg.requestId);
-        if (taskRecoveryIds) {
-          taskRecoveryItemsRef.current.delete(msg.requestId);
-          if (!itemsComplete(taskRecoveryIds, msg.events)) {
-            socket.send({ type: "listTasks", request: {} });
-            return;
-          }
-          dispatch({ kind: "taskRecoveryItems", events: msg.events });
-          return;
-        }
-        const sync = taskDigestSyncRef.current;
-        if (!sync || msg.requestId !== sync.requestId) return;
-        if (!itemsComplete(sync.expectedIds, msg.events)) {
-          fallbackFromTaskDigest("targeted item response was incomplete");
-          return;
-        }
-        clearTaskDigestSync();
-      } else if (msg.type === "stateItems") {
+      if (msg.type === "stateItems") {
         const purpose = replicaTransport.itemsReceived(msg);
         if (purpose) dispatch({ kind: "replicaItems", purpose, msg });
-        return;
-      }
-      if (
-        msg.type === "error" &&
-        msg.requestId &&
-        taskRecoveryItemsRef.current.has(msg.requestId)
-      ) {
-        // A targeted authoritative restore that itself fails degrades to the
-        // existing full Task read; the original mutation failure already has
-        // its inline home on the card.
-        taskRecoveryItemsRef.current.delete(msg.requestId);
-        socket.send({ type: "listTasks", request: {} });
-        return;
-      }
-      // Only the failure OF the in-flight digest catch-up falls back to a full
-      // list read. The sync has to exist for that: an ordinary chat error
-      // carries no requestId, and comparing it against `…current?.requestId`
-      // with no sync in flight matched undefined to undefined — which swallowed
-      // every unaddressed error before the reducer could show it, and re-read
-      // the Task list for it.
-      const taskSync = taskDigestSyncRef.current;
-      if (
-        msg.type === "error" &&
-        taskSync &&
-        msg.requestId === taskSync.requestId
-      ) {
-        fallbackFromTaskDigest(msg.message);
         return;
       }
       // A replica request's failure is consumed by its own fallback, never
@@ -7801,9 +7669,17 @@ export function useAssistant({
       )
         episodeListReadsRef.current.worktrees = false;
       // Same for the Task list, so the Backlog's retry on that condition is a
-      // real read rather than a no-op behind the once-per-episode gate.
-      if (msg.type === "error" && msg.target?.type === "task" && !msg.target.id)
+      // real read rather than a no-op behind the once-per-episode gate. Unstamped,
+      // it is also how a resubscribe's snapshot read fails: the awaited answer
+      // will not come. It still reaches the reducer as `taskListError`.
+      if (
+        msg.type === "error" &&
+        msg.target?.type === "task" &&
+        !msg.target.id
+      ) {
         episodeListReadsRef.current.tasks = false;
+        if (!msg.requestId) replicaTransport.snapshotFailed("tasks");
+      }
       // And the project list: the Projects pane's note offers the same Retry,
       // and every collection whose note does has to reopen its gate — otherwise
       // the button calls a loader that returns early and the note is permanent
@@ -7947,25 +7823,6 @@ export function useAssistant({
       if (msg.type === "stateEvents" && replicaTransport.owns(msg.topic)) {
         for (const out of replicaTransport.eventsReceived(msg))
           socket.send(out);
-      } else if (msg.type === "stateEvents" && msg.topic === "tasks") {
-        const previous = topicSeqRef.current.tasks;
-        topicSeqRef.current.tasks = msg.seq;
-        // A batch that does not continue the last one means an event was missed
-        // while subscribed. `seq` never replays anything — it resubscribes for a
-        // fresh snapshot, loudly, because silence here is silent data loss.
-        if (previous !== undefined && msg.seq !== previous + 1) {
-          console.warn(
-            `[state-sync] ${msg.topic} event gap: expected seq ${previous + 1}, got ${msg.seq}; resubscribing.`,
-          );
-          socket.send({ type: "unsubscribe", topics: [msg.topic] });
-          socket.send(
-            replicaTransport.subscribeRequest(
-              [msg.topic],
-              stateRef.current,
-              pendingTopics(pendingMutationsRef.current),
-            ),
-          );
-        }
       }
       if (msg.type === "timelineBlockLoaded") {
         const key = lazyBlockCacheKey(
@@ -8073,8 +7930,6 @@ export function useAssistant({
         }
         transportHasConnectedRef.current = true;
       } else {
-        clearTaskDigestSync();
-        taskRecoveryItemsRef.current.clear();
         replicaTransport.dropRequests();
         commentResyncRef.current.clear();
         commentRequestsRef.current.clear();
@@ -8144,8 +7999,6 @@ export function useAssistant({
       disposed = true;
       if (frame !== null) window.cancelAnimationFrame(frame);
       pendingFrameMessages = [];
-      clearTaskDigestSync();
-      taskRecoveryItems.clear();
       replicaTransport.dropRequests();
       for (const timer of lazyBlockRetryTimers) clearTimeout(timer);
       lazyBlockRetryTimers.clear();
@@ -8255,13 +8108,16 @@ export function useAssistant({
         ),
       );
     };
-    const refetchTasks = () => send({ type: "listTasks", request: {} });
+    // A failed Task mutation re-reads through the transport's resync: one
+    // silent snapshot resubscribe while held, joined by later failures.
+    const resyncTasks = (mutation: PendingMutation) => {
+      const ids = [...new Set(mutation.objectIds)];
+      for (const message of replicaTransport.resync("tasks", ids))
+        send(message);
+    };
     const recoverTasks = (mutation: PendingMutation) => {
       const ids = [...new Set(mutation.objectIds)];
-      if (ids.length === 0) return;
-      const requestId = createClientId();
-      taskRecoveryItemsRef.current.set(requestId, new Set(ids));
-      send({ type: "getStateItems", topic: "tasks", ids, requestId });
+      if (ids.length > 0) send(replicaTransport.recoveryRequest("tasks", ids));
     };
     const recoverProjects = (mutation: PendingMutation) => {
       const ids = [...new Set(mutation.objectIds)];
@@ -8918,7 +8774,7 @@ export function useAssistant({
             objectIds: request.id ? [request.id] : [],
             ...(tempId ? { tempId } : {}),
           },
-          refetchTasks,
+          resyncTasks,
         );
         taskMutationRequestsRef.current.set(requestId, key);
         dispatch({ kind: "taskMutationStart", key });
@@ -8945,7 +8801,7 @@ export function useAssistant({
         }
         const requestId = trackMutation(
           { topic: "tasks", objectIds: updates.map((update) => update.id) },
-          refetchTasks,
+          resyncTasks,
         );
         // The request is what carries the answer back, so the Backlog learns
         // that AN ASSIGNMENT failed instead of recognising the server's
@@ -8977,7 +8833,7 @@ export function useAssistant({
       archiveTask: (id, archived = true) => {
         const requestId = trackMutation(
           { topic: "tasks", objectIds: [id] },
-          refetchTasks,
+          resyncTasks,
         );
         // Membership in the live projection is what the list shows: archiving
         // removes the row, restoring brings it back through the server event
@@ -8989,7 +8845,7 @@ export function useAssistant({
       deleteTask: (id) => {
         const requestId = trackMutation(
           { topic: "tasks", objectIds: [id] },
-          refetchTasks,
+          resyncTasks,
         );
         dispatch({ kind: "optimisticTaskRemove", id });
         dispatch({ kind: "clearObjectFailure", type: "task", id });
@@ -9014,7 +8870,7 @@ export function useAssistant({
             topic: "tasks",
             objectIds: placements?.map((p) => p.id) ?? orderedIds,
           },
-          refetchTasks,
+          resyncTasks,
         );
         taskMutationRequestsRef.current.set(requestId, key);
         dispatch({ kind: "taskMutationStart", key });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ClientMessage,
   PullRequestCard,
@@ -13,6 +13,7 @@ import {
   type ClientPullRequestCard,
   type UIState,
 } from "./hooks/useAssistant.ts";
+import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 import { getToasts } from "./lib/toast.ts";
 
 (
@@ -147,9 +148,14 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
-async function clickedCard(action: "mark-task-done" | "cleanup") {
+async function clickedCard(
+  action: "mark-task-done" | "cleanup",
+  beforeClick?: (socket: ScenarioSocket) => Promise<void>,
+) {
   await act(async () => root.render(<CardHarness />));
   const socket = ScenarioSocket.instances[0]!;
   await act(async () => {
@@ -157,6 +163,7 @@ async function clickedCard(action: "mark-task-done" | "cleanup") {
     socket.receive(readyMessage());
     socket.receive({ type: "pullRequestCardUpdate", sessionId: "s1", card });
   });
+  await beforeClick?.(socket);
   await act(async () =>
     latestActions.runPullRequestCardAction(card.id, action),
   );
@@ -471,4 +478,183 @@ it("does not settle a click on the refusal a retry was answering", async () => {
   );
   expect(sentAfter(mark, "listWorktrees")).toHaveLength(1);
   expect(sentAfter(mark, "listSessions")).toHaveLength(1);
+});
+
+describe("the linked Task's recovery from a warm Tasks baseline", () => {
+  const linkedId = card.linkedTask!.id;
+  const pair: ClientMessage[] = [
+    { type: "unsubscribe", topics: ["tasks"] },
+    { type: "subscribe", topics: ["tasks"] },
+  ];
+  const taskSubscribes = (messages: ClientMessage[]) =>
+    messages.filter(
+      (message) =>
+        message.type === "subscribe" && message.topics.includes("tasks"),
+    );
+  const canonicalTasks = (seq: number): ServerMessage => ({
+    type: "taskList",
+    list: {
+      request: {},
+      items: [card.linkedTask!, { ...card.linkedTask!, id: "626" }],
+      updatedAt: seq,
+    },
+    seq,
+    revisions: [
+      { id: linkedId, revision: 3 },
+      { id: "626", revision: 1 },
+    ],
+  });
+  /** Drop `tasks` and take it again; what the re-take sent. */
+  async function retake(socket: ScenarioSocket) {
+    await act(async () => latestActions.setTopics([]));
+    const at = socket.sent.length;
+    await act(async () => latestActions.setTopics(["tasks"]));
+    return taskSubscribes(socket.sent.slice(at));
+  }
+  /** Held `tasks` over a canonical list that covers the linked Task. */
+  async function warmBaseline(socket: ScenarioSocket) {
+    await act(async () => latestActions.setTopics(["tasks"]));
+    await act(async () => socket.receive(canonicalTasks(1)));
+    expect(latestState.stateEventRevisions.tasks).toHaveProperty(linkedId);
+    expect(await retake(socket)).toEqual([
+      { type: "subscribe", topics: ["tasks"], digests: ["tasks"] },
+    ]);
+  }
+  /** Refuse the click; the recovery fetch it opened. */
+  async function refused(socket: ScenarioSocket, requestId: string) {
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        requestId,
+        message: "The server is restarting. Try again.",
+      }),
+    );
+    const recovery = socket.sent.findLast(
+      (message) => message.type === "getStateItems",
+    );
+    if (recovery?.type !== "getStateItems") throw new Error("no recovery");
+    expect(recovery.ids).toEqual([linkedId]);
+    return recovery;
+  }
+
+  beforeEach(() => {
+    // No Task list survives from another case.
+    writeAppShellCacheRecord({
+      version: 1,
+      savedAt: Date.now(),
+      models: [],
+      agents: [],
+      sessions: [],
+      settings: {},
+      slashCommands: [],
+    });
+  });
+
+  it("resubscribes a held topic when the recovery answers incompletely", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { socket, requestId } = await clickedCard(
+      "mark-task-done",
+      warmBaseline,
+    );
+    const recovery = await refused(socket, requestId);
+    const mark = socket.sent.length;
+    await act(async () =>
+      socket.receive({
+        type: "stateItems",
+        topic: "tasks",
+        requestId: recovery.requestId,
+        events: [],
+      }),
+    );
+    expect(socket.sent.slice(mark)).toEqual(pair);
+    expect(warn).toHaveBeenCalledWith(
+      "[state-sync] tasks recovery fallback: targeted item response was incomplete",
+    );
+    expect(latestState.stateEventRevisions.tasks).not.toHaveProperty(linkedId);
+    expect(socket.sent.some((message) => message.type === "listTasks")).toBe(
+      false,
+    );
+  });
+
+  it("consumes a stamped recovery error into the same fallback", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { socket, requestId } = await clickedCard(
+      "mark-task-done",
+      warmBaseline,
+    );
+    const recovery = await refused(socket, requestId);
+    const errorBefore = latestState.error;
+    const mark = socket.sent.length;
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        requestId: recovery.requestId,
+        message: "Recovery read failed",
+      }),
+    );
+    expect(socket.sent.slice(mark)).toEqual(pair);
+    expect(warn).toHaveBeenCalledWith(
+      "[state-sync] tasks recovery fallback: Recovery read failed",
+    );
+    expect(latestState.error).toBe(errorBefore);
+    expect(latestState.error).not.toBe("Recovery read failed");
+    expect(latestState.stateEventRevisions.tasks).not.toHaveProperty(linkedId);
+    expect(socket.sent.some((message) => message.type === "listTasks")).toBe(
+      false,
+    );
+  });
+
+  it("times an unheld recovery out into a due snapshot, sending nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { socket, requestId } = await clickedCard(
+      "mark-task-done",
+      async (socket) => {
+        await warmBaseline(socket);
+        await act(async () => latestActions.setTopics([]));
+        vi.useFakeTimers();
+      },
+    );
+    await refused(socket, requestId);
+    const mark = socket.sent.length;
+    await act(async () => vi.advanceTimersByTime(9_999));
+    expect(socket.sent.slice(mark)).toEqual([]);
+    expect(latestState.stateEventRevisions.tasks).toHaveProperty(linkedId);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(socket.sent.slice(mark)).toEqual([]);
+    expect(latestState.stateEventRevisions.tasks).not.toHaveProperty(linkedId);
+
+    const takenAt = socket.sent.length;
+    await act(async () => latestActions.setTopics(["tasks"]));
+    expect(taskSubscribes(socket.sent.slice(takenAt))).toEqual([
+      { type: "subscribe", topics: ["tasks"] },
+    ]);
+    await act(async () => socket.receive(canonicalTasks(2)));
+    expect(await retake(socket)).toEqual([
+      { type: "subscribe", topics: ["tasks"], digests: ["tasks"] },
+    ]);
+  });
+
+  it("makes the reconnect a snapshot when the recovery is open at the disconnect", async () => {
+    const { socket, requestId } = await clickedCard(
+      "mark-task-done",
+      async (socket) => {
+        await warmBaseline(socket);
+        vi.useFakeTimers();
+      },
+    );
+    await refused(socket, requestId);
+    expect(latestState.stateEventRevisions.tasks).toHaveProperty(linkedId);
+    await act(async () => socket.close());
+    expect(latestState.stateEventRevisions.tasks).not.toHaveProperty(linkedId);
+    await act(async () => vi.advanceTimersByTime(1_000));
+    const next = ScenarioSocket.instances[1]!;
+    await act(async () => next.open());
+    expect(taskSubscribes(next.sent)).toEqual([
+      { type: "subscribe", topics: ["tasks"] },
+    ]);
+    await act(async () => next.receive(canonicalTasks(2)));
+    expect(await retake(next)).toEqual([
+      { type: "subscribe", topics: ["tasks"], digests: ["tasks"] },
+    ]);
+  });
 });
