@@ -249,7 +249,8 @@ export function useConversation(options: ConversationOptions) {
           const playback = player.echoText;
           if (playback && !run.segmentEcho.includes(playback))
             run.segmentEcho = `${run.segmentEcho} ${playback}`.slice(-8000);
-          const echo = text && isPlaybackEcho(text, run.segmentEcho);
+          const echo =
+            text && isPlaybackEcho(text, run.segmentEcho, !message.isFinal);
           if (message.isFinal) run.segmentEcho = "";
           if (echo) {
             if (message.isFinal) setPartial("");

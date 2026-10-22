@@ -260,7 +260,11 @@ function appendBounded(chunks: string[], value: string): void {
 /** Ignore recognizer feedback that is a prefix/subsequence of our own speech.
  * No grace interval: that would swallow a genuine short interruption such as stop.
  */
-export function isPlaybackEcho(transcript: string, spoken: string): boolean {
+export function isPlaybackEcho(
+  transcript: string,
+  spoken: string,
+  partial = false,
+): boolean {
   const normalize = (value: string) =>
     value
       .toLowerCase()
@@ -268,5 +272,12 @@ export function isPlaybackEcho(transcript: string, spoken: string): boolean {
       .trim();
   const heard = normalize(transcript);
   const said = normalize(spoken);
-  return heard.length > 0 && ` ${said} `.includes(` ${heard} `);
+  // Streaming recognition can end mid-word ("resp" before "responder").
+  // Only relax the last token after a complete preceding word. A short
+  // single-word interruption such as "stop" still needs an exact echo match.
+  const unfinished = partial && heard.includes(" ");
+  return (
+    heard.length > 0 &&
+    ` ${said} `.includes(` ${heard}${unfinished ? "" : " "}`)
+  );
 }

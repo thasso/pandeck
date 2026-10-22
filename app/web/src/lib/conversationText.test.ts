@@ -137,6 +137,15 @@ describe("spoken prose", () => {
     expect(isPlaybackEcho("Hello WORLD", "Hello, world. How are you?")).toBe(
       true,
     );
+    expect(
+      isPlaybackEcho("local test resp", "local test responder", true),
+    ).toBe(true);
+    expect(isPlaybackEcho("local test resp", "local test responder")).toBe(
+      false,
+    );
+    expect(isPlaybackEcho("he", "the world", true)).toBe(false);
+    expect(isPlaybackEcho("stop", "Hello, world.", true)).toBe(false);
+    expect(isPlaybackEcho("stop", "stopping soon", true)).toBe(false);
     expect(isPlaybackEcho("stop", "Hello, world.")).toBe(false);
     expect(isPlaybackEcho("he", "the world")).toBe(false);
     expect(isPlaybackEcho("", "Hello")).toBe(false);
