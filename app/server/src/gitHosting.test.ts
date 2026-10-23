@@ -6,7 +6,20 @@
  * does both in one request) are exactly what the seam exists to hide.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import type { GithubApiConfig } from "./githubClient.ts";
+import type { ForgejoApiConfig } from "./forgejoClient.ts";
+import { getGithubToolConfig } from "./githubSettings.ts";
+import { getForgejoToolConfig } from "./forgejoSettings.ts";
+
+vi.mock("./githubSettings.ts", async (importActual) => ({
+  ...(await importActual<typeof import("./githubSettings.ts")>()),
+  getGithubToolConfig: vi.fn(),
+}));
+vi.mock("./forgejoSettings.ts", async (importActual) => ({
+  ...(await importActual<typeof import("./forgejoSettings.ts")>()),
+  getForgejoToolConfig: vi.fn(),
+}));
 import type {
   PullRequestCloseResult,
   PullRequestDetail,
@@ -19,8 +32,8 @@ import {
   ciBesideReviewGates,
   forgejoPullRequestTitle,
   forgejoReadyPullRequestTitle,
-  forgejoProvider,
-  githubProvider,
+  hostingProviderFor,
+  type RemoteRepoRef,
   invalidateRepositoryCapabilities,
   parseRemoteUrl,
   pickBranchPull,
@@ -29,6 +42,30 @@ import {
   type GitHostingProvider,
   type PullRequestStackMembers,
 } from "./gitHosting.ts";
+
+// Local builders retain each fixture's config while exercising the public factory.
+function githubProvider(
+  ref: RemoteRepoRef,
+  config: GithubApiConfig,
+  signal?: AbortSignal,
+) {
+  vi.mocked(getGithubToolConfig).mockReturnValue(config);
+  return hostingProviderFor(
+    { service: "github", owner: ref.owner, repo: ref.repo },
+    signal,
+  );
+}
+function forgejoProvider(
+  ref: RemoteRepoRef,
+  config: ForgejoApiConfig,
+  signal?: AbortSignal,
+) {
+  vi.mocked(getForgejoToolConfig).mockReturnValue(config);
+  return hostingProviderFor(
+    { service: "forgejo", owner: ref.owner, repo: ref.repo },
+    signal,
+  );
+}
 
 test("parses ssh remotes with ports", () => {
   assert.deepEqual(

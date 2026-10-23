@@ -520,7 +520,7 @@ export async function finalizePullRequestCard(
       ...(bodyValue !== undefined ? { body: bodyValue } : {}),
       head: context.headBranch,
       base: context.baseBranch,
-      draft: context.draft,
+      ...(context.draft ? { draft: true } : {}),
     });
 
     let observed:

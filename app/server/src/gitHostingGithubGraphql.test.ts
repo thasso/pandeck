@@ -6,11 +6,30 @@
  * list's annotations are dropped by every write so a merge is never re-offered.
  */
 import assert from "node:assert/strict";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
+import type { GithubApiConfig } from "./githubClient.ts";
+import { getGithubToolConfig } from "./githubSettings.ts";
+vi.mock("./githubSettings.ts", async (importActual) => ({
+  ...(await importActual<typeof import("./githubSettings.ts")>()),
+  getGithubToolConfig: vi.fn(),
+}));
 import {
-  githubProvider,
+  hostingProviderFor,
+  type RemoteRepoRef,
   resetGithubOpenPullAnnotationsForTests,
 } from "./gitHosting.ts";
+
+function githubProvider(
+  ref: RemoteRepoRef,
+  config: GithubApiConfig,
+  signal?: AbortSignal,
+) {
+  vi.mocked(getGithubToolConfig).mockReturnValue(config);
+  return hostingProviderFor(
+    { service: "github", owner: ref.owner, repo: ref.repo },
+    signal,
+  );
+}
 
 const ref = { host: "github.com", owner: "acme", repo: "repo" };
 const config = { token: "t", apiBaseUrl: "https://api.github.com" };

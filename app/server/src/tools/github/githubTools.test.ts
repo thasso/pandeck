@@ -803,6 +803,53 @@ describe("github_get_pull_request", () => {
     expect(queries.find((q) => q.includes("reviews("))).toContain("last: 100");
   });
 
+  test("PR detail snapshots thread-provider settings before the first awaited GET", async () => {
+    vi.mocked(getGithubToolConfig).mockReturnValue(config);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const firstGet = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      calls.push(String(input));
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer ghp_test",
+      );
+      if (String(input).endsWith("/pulls/42")) {
+        started();
+        await held;
+        return jsonResponse({ number: 42 });
+      }
+      expect(String(input)).toBe("https://api.github.com/graphql");
+      return jsonResponse({
+        data: {
+          repository: {
+            pullRequest: { reviewThreads: { totalCount: 0, nodes: [] } },
+          },
+        },
+      });
+    }) as typeof fetch;
+    const running = githubGetPullRequestTool.execute(
+      { repo: "acme/app", number: 42, includeReviewThreads: true },
+      ctxFor("settings-snapshot"),
+    );
+    await firstGet;
+    vi.mocked(getGithubToolConfig).mockReturnValue({
+      token: "new-token",
+      apiBaseUrl: "https://new-api.example.invalid",
+    });
+    release();
+    await running;
+    expect(calls).toEqual([
+      "https://api.github.com/repos/acme/app/pulls/42",
+      "https://api.github.com/graphql",
+    ]);
+  });
+
   test.each([undefined, 2, 50])(
     "keeps the newest threads when maxReviews=%s limits the provider window",
     async (maxReviews) => {

@@ -127,6 +127,7 @@ function operations(
     editPullRequestBody: async (number: number, body: string) => {
       calls.writes.push({ number, body });
       stored = body;
+      return {};
     },
     ...options.provider,
   } as GitHostingProvider;
@@ -418,6 +419,7 @@ describe("worktree_update_pull_request_body", () => {
         editPullRequestBody: async (_number, body) => {
           ops.calls.writes.push({ number: 91, body });
           stored = body;
+          return {};
         },
       },
     });
@@ -507,7 +509,7 @@ describe("worktree_update_pull_request_body", () => {
     const differs = operations({
       provider: {
         pullRequestBody: async () => "Old body",
-        editPullRequestBody: async () => {},
+        editPullRequestBody: async () => ({}),
       },
     });
     const result = await tool(differs).execute(
@@ -526,7 +528,7 @@ describe("worktree_update_pull_request_body", () => {
           if (reads > 1) throw new Error("timeout");
           return "Old body";
         },
-        editPullRequestBody: async () => {},
+        editPullRequestBody: async () => ({}),
       },
     });
     const partial = await tool(unread).execute(

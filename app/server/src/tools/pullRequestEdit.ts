@@ -45,14 +45,13 @@ export function pullRequestEdit(params: PullRequestEditInput): {
  * pull request's hosted mutation lock — the one every managed merge, close and
  * retarget of the same pull request also holds — so an approved retarget
  * cannot land between a merge's identity read and the merge itself. A
- * description is not a merge decision and keeps its plain PATCH
- * (`patchDescription`). A description that fails after the base landed names
+ * description is not a merge decision and uses the provider's body-only PATCH
+ * without the retarget lock. A description that fails after the base landed names
  * the retarget rather than reading as "nothing happened".
  */
 export async function applyPullRequestEdit(
   provider: GitHostingProvider,
   b: PullRequestEditFields & { pullNumber: number },
-  patchDescription: (body: string) => Promise<string | undefined>,
 ): Promise<{ resultSummary: string; resultUrl?: string }> {
   const applied: string[] = [];
   if (b.base) {
@@ -71,7 +70,8 @@ export async function applyPullRequestEdit(
   let resultUrl: string | undefined;
   if (typeof b.prBody === "string") {
     try {
-      resultUrl = await patchDescription(b.prBody);
+      resultUrl = (await provider.editPullRequestBody(b.pullNumber, b.prBody))
+        .url;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(

@@ -37,7 +37,10 @@ import {
   normalizeForgejoBaseUrl,
   type ForgejoApiConfig,
 } from "../../forgejoClient.ts";
-import { forgejoProvider, forgejoRefChecksVerdict } from "../../gitHosting.ts";
+import {
+  hostingProviderFor,
+  forgejoRefChecksVerdict,
+} from "../../gitHosting.ts";
 import {
   executeRefCheckWait,
   refCheckWaitParameters,
@@ -97,9 +100,8 @@ export const forgejoWatchPullRequestChecksTool =
       const baseUrl = normalizeForgejoBaseUrl(config.baseUrl);
       return {
         repo: canonicalRepo,
-        provider: forgejoProvider(
-          { host: new URL(baseUrl).hostname, owner, repo },
-          config,
+        provider: hostingProviderFor(
+          { service: "forgejo", owner, repo },
           signal,
         ),
         pullRequestUrl: (number) =>

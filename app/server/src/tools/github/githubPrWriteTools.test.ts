@@ -224,10 +224,12 @@ describe("github PR write approvals (unified subsystem)", () => {
     globalThis.fetch = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {
         expect(String(input)).toContain("/repos/acme/app/pulls");
-        expect(JSON.parse(String(init?.body))).toMatchObject({
+        expect(JSON.parse(String(init?.body))).toEqual({
           title: "T",
           head: "feature",
           base: "main",
+          body: "",
+          draft: false,
         });
         return new Response(
           JSON.stringify({

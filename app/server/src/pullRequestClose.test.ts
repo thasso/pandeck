@@ -50,7 +50,7 @@ function fakeProvider(
     markPullRequestReady: async () => ({}),
     retargetPullRequest: async () => {},
     pullRequestBody: async () => "",
-    editPullRequestBody: async () => {},
+    editPullRequestBody: async () => ({}),
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),

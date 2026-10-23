@@ -11,7 +11,7 @@
  * `./forgejoTools.ts`, as the GitHub twin takes `resolveRepo` from its own.
  *
  * Forgejo's API is close to GitHub's but not identical, and the three
- * differences all live in the executor:
+ * differences live in the provider and the remaining raw review executor:
  *
  *  - `CreatePullRequestOption` has no `draft` field — a draft is the `WIP: `
  *    title prefix;
@@ -24,9 +24,8 @@ import { defineAgentTool } from "../../mcp/tool.ts";
 import { getForgejoToolConfig } from "../../forgejoSettings.ts";
 import { forgejoRequest, type ForgejoApiConfig } from "../../forgejoClient.ts";
 import {
-  forgejoProvider,
+  hostingProviderFor,
   forgejoPullRequestDescription,
-  forgejoPullRequestTitle,
 } from "../../gitHosting.ts";
 import { invalidateForgejoPullRequestWrite } from "../../pullRequestInventorySync.ts";
 import { resolveForgejoRepo } from "./forgejoTools.ts";
@@ -519,37 +518,35 @@ async function executeApprovedWrite(
   const base = `/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repoName!)}`;
 
   if (b.operation === "create") {
-    const res = await forgejoRequest<{ html_url?: string; number?: number }>(
-      config,
-      "POST",
-      `${base}/pulls`,
-      {
-        body: {
-          title: forgejoPullRequestTitle(b.title ?? "", b.draft === true),
-          head: b.head,
-          base: b.base,
-          body: b.prBody ?? "",
-        },
-      },
-    );
-    if (res.data.number !== undefined) b.resultNumber = res.data.number;
+    const provider = hostingProviderFor({
+      service: "forgejo",
+      owner: owner!,
+      repo: repoName!,
+    });
+    const created = await provider.createPullRequest({
+      title: b.title ?? "",
+      head: b.head!,
+      base: b.base!,
+      body: b.prBody ?? "",
+      draft: b.draft === true,
+    });
+    if (created.number !== undefined) b.resultNumber = created.number;
     return {
-      resultSummary: res.data.number
-        ? `Opened pull request #${res.data.number}`
+      resultSummary: created.number
+        ? `Opened pull request #${created.number}`
         : "Opened pull request",
-      ...(res.data.html_url !== undefined
-        ? { resultUrl: res.data.html_url }
-        : {}),
+      ...(created.url !== undefined ? { resultUrl: created.url } : {}),
     };
   }
 
   if (b.operation === "ready") {
     if (!Number.isInteger(b.pullNumber) || (b.pullNumber ?? 0) < 1)
       throw new Error("Ready proposal is missing its pull-request number.");
-    const provider = forgejoProvider(
-      { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
-      config,
-    );
+    const provider = hostingProviderFor({
+      service: "forgejo",
+      owner: owner!,
+      repo: repoName!,
+    });
     const detail = await provider.pullRequestDetail(b.pullNumber!);
     if (!detail || detail.state !== "open" || detail.merged || !detail.draft)
       throw new Error(
@@ -570,23 +567,15 @@ async function executeApprovedWrite(
       throw new Error(
         "Edit proposal is missing its pull-request number or its changes.",
       );
-    const provider = forgejoProvider(
-      { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
-      config,
-    );
-    const edited = await applyPullRequestEdit(
-      provider,
-      { ...b, pullNumber: b.pullNumber },
-      async (description) =>
-        (
-          await forgejoRequest<{ html_url?: string }>(
-            config,
-            "PATCH",
-            `${base}/pulls/${b.pullNumber}`,
-            { body: { body: description } },
-          )
-        ).data.html_url,
-    );
+    const provider = hostingProviderFor({
+      service: "forgejo",
+      owner: owner!,
+      repo: repoName!,
+    });
+    const edited = await applyPullRequestEdit(provider, {
+      ...b,
+      pullNumber: b.pullNumber,
+    });
     return {
       resultUrl: `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
       ...edited,

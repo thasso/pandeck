@@ -224,14 +224,34 @@ retarget it onto another `base` branch, or both; at least one is required. They
 also require approval; they accept a repository and PR number, not a
 managed-worktree identity. An approved base goes through the provider's
 `retargetPullRequest` under the pull request's hosted mutation lock (see "Card
-actions"); a description keeps its plain PATCH, and one that fails after the
-base landed names the retarget as already applied. `github_ready_pull_request`
-and `forgejo_ready_pull_request` are approval-gated draft-to-ready transitions
-by repository and PR number. The approved executor re-reads the PR and refuses a
-closed or already-ready PR. GitHub uses its GraphQL ready-for-review mutation;
-Forgejo removes the `WIP: ` or `[WIP] ` title marker through the provider seam.
-Neither tool merges or promises green checks. `/pr` remains the human all-in-one
-commit/push/create command and keeps its session-derived Task chooser behavior.
+actions"); a description uses the provider's body-only PATCH without the
+retarget lock, and one that fails after the base landed names the retarget as
+already applied. `github_ready_pull_request` and `forgejo_ready_pull_request`
+are approval-gated draft-to-ready transitions by repository and PR number. The
+approved executor re-reads the PR and refuses a closed or already-ready PR.
+GitHub uses its GraphQL ready-for-review mutation; Forgejo removes the `WIP: `
+or `[WIP] ` title marker through the provider seam. Neither tool merges or
+promises green checks. `/pr` remains the human all-in-one commit/push/create
+command and keeps its session-derived Task chooser behavior.
+
+Generic create, body edit and ready use `GitHostingProvider` through
+`hostingProviderFor({ service, owner, repo })`, which snapshots the selected
+integration's current tool settings at execution. It does not detect a remote,
+select another account or fall back to the other service. Managed paths keep
+`hostingProviderForRepo`, resolved from the checkout's selected push remote. The
+adapter constructors are private. Approval gating, result wording and API URL
+overrides remain tool-owned. Provider annotation caches invalidate in the
+provider; the generic executor invalidates PR inventory in `finally`, including
+a failed write; managed paths additionally own card projections and read-back.
+Review submission, comments/replies, reviewer/assignee changes and thread
+resolution still use raw provider clients pending Task-1096.
+
+Create and body edit use the port's eight-second per-request deadline, as ready
+and retarget already did. No write retries automatically. A create accepted
+remotely just before a timeout can exist even though its approval failed and its
+number is unknown. Inspect current pull requests for that repository/head before
+retrying, rather than treating failure as proof that nothing happened. Re-read
+an edit or ready transition whose outcome is uncertain too.
 
 ## Agent-facing managed body update
 

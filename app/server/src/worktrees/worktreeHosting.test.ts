@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
+import { updateGithubSettings } from "../githubSettings.ts";
+import { updateForgejoSettings } from "../forgejoSettings.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import {
   invalidateRepositoryCapabilities,
+  hostingProviderFor,
   type GitHostingProvider,
 } from "../gitHosting.ts";
 
@@ -32,6 +35,7 @@ vi.mock("../gitHosting.ts", async (importOriginal) => {
 
 import {
   invalidateWorktreeHosting,
+  createWorktreePullRequest,
   worktreeHostingStatus,
   worktreeHostingStatusesWithFailures,
 } from "./worktreeHosting.ts";
@@ -88,6 +92,45 @@ afterEach(() => {
   hoisted.provider.mockReset();
   hoisted.resolvePushTarget.mockReset();
 });
+
+test.each(["github", "forgejo"] as const)(
+  "actual worktree %s creation keeps draft omitted",
+  async (service) => {
+    updateGithubSettings({ enabled: true, token: "fixture" });
+    updateForgejoSettings({
+      enabled: true,
+      baseUrl: "https://git.example.com",
+      token: "fixture",
+    });
+    hoisted.provider.mockResolvedValue(
+      hostingProviderFor({ service, owner: "acme", repo: "fork" }),
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_input, init) => {
+        assert.equal(init?.method, "POST");
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          title: "T",
+          body: "B",
+          head: "feature",
+          base: "main",
+        });
+        return new Response(
+          JSON.stringify({ number: 12, title: "T", state: "open" }),
+        );
+      });
+    try {
+      const result = await createWorktreePullRequest(row, {
+        title: " T ",
+        body: " B ",
+      });
+      assert.equal(result.pr.number, 12);
+      assert.equal(fetch.mock.calls.length, 1);
+    } finally {
+      fetch.mockRestore();
+    }
+  },
+);
 
 test("spawned worktree hosting follows the branch's derived push remote", async () => {
   hoisted.resolvePushTarget.mockResolvedValue({

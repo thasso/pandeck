@@ -92,10 +92,11 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
         expect(String(input)).toBe(
           "https://git.example.com/api/v1/repos/acme/app/pulls",
         );
-        expect(JSON.parse(String(init?.body))).toMatchObject({
+        expect(JSON.parse(String(init?.body))).toEqual({
           title: "T",
           head: "feature",
           base: "main",
+          body: "",
         });
         return new Response(
           JSON.stringify({
