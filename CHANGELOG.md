@@ -3,6 +3,51 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.63.0] - 2026-10-23
+
+### Other changes
+
+- Route PR tool writes through the hosting provider
+  ([PR #233](https://github.com/thasso/pandeck/pull/233))
+- Centralize Task and Project mutation lifecycles
+  ([PR #234](https://github.com/thasso/pandeck/pull/234))
+- Add list toolbar actions slot and Pull Requests refresh
+  ([PR #232](https://github.com/thasso/pandeck/pull/232))
+- Document why peer recovery still needs canonical logs
+  ([PR #231](https://github.com/thasso/pandeck/pull/231))
+- Centralize peer and background delivery admission
+  ([PR #230](https://github.com/thasso/pandeck/pull/230))
+- Add hands-free voice conversations with streaming STT and Kokoro TTS
+  ([PR #229](https://github.com/thasso/pandeck/pull/229))
+- Remove queue and handoff admission locks
+  ([PR #228](https://github.com/thasso/pandeck/pull/228))
+- Deliver workflow assignments through the session scheduler
+  ([PR #227](https://github.com/thasso/pandeck/pull/227))
+- Return runtime prompt delivery receipts
+  ([PR #226](https://github.com/thasso/pandeck/pull/226))
+- Replace driver state with native facts
+  ([PR #225](https://github.com/thasso/pandeck/pull/225))
+- Add per-session delivery scheduling over existing drains
+  ([PR #222](https://github.com/thasso/pandeck/pull/222))
+- Fix queued message overflow on mobile
+  ([PR #224](https://github.com/thasso/pandeck/pull/224))
+- Build Claude session state through the shared owner
+  ([PR #223](https://github.com/thasso/pandeck/pull/223))
+- Build pi session state through the shared owner
+  ([PR #220](https://github.com/thasso/pandeck/pull/220))
+- Move Tasks onto the client replica
+  ([PR #221](https://github.com/thasso/pandeck/pull/221))
+- Reuse private JSON persistence for runtime stores
+  ([PR #219](https://github.com/thasso/pandeck/pull/219))
+- Add a session state owner for detached views
+  ([PR #217](https://github.com/thasso/pandeck/pull/217))
+- Require validator specs for every client message field
+  ([PR #218](https://github.com/thasso/pandeck/pull/218))
+- Centralize private JSON settings persistence
+  ([PR #216](https://github.com/thasso/pandeck/pull/216))
+- Move Projects and Initiatives onto the client replica
+  ([PR #215](https://github.com/thasso/pandeck/pull/215))
+
 ## [0.62.0] - 2026-10-22
 
 ### Upgrade notes
