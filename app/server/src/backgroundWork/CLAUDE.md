@@ -25,9 +25,9 @@
 - Persist terminal facts BEFORE delivery. Activity and completion share one
   bounded lossy queue; raw output never enters row or prompt. Completion uses
   its stable PA artifact, activity a turn-scoped file. Structured detail goes in
-  model-only context; render only the compact origin card. Await peer FIFO,
-  require idle, then use `promptRuntimeSession`; busy yields. Never add another
-  model path or count background execution in `hub.runningCount()`.
+  model-only context; render only the compact origin card. Scheduler admission
+  keeps peer FIFO first. Use only `promptRuntimeSession`; wakes may steer,
+  refusals yield. Exclude background execution from `hub.runningCount()`.
 - Only a MONITOR streams activity; a background shell command pushes nothing and
   is awaited at its EXIT. Both capture the artifact. A monitor's unit is a LINE,
   never a clock tick; exceeding its sustained rate STOPS the item, never mutes

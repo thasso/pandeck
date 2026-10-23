@@ -112,12 +112,12 @@ const script = `
     return drivers.get(id);
   };
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: async () => {},
-    held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,
     offer: notices.offerBackgroundCompletion(driverFor),
   });
+  const { installDeliveryTestScheduler } = await import(${JSON.stringify(url("./test/deliveryScheduler.ts"))});
+  installDeliveryTestScheduler({ background: delivery, live: (id) => drivers.get(id), acquire: driverFor });
   setDeferredBackgroundContextProvider((id) => delivery.claimDeferredContext(id));
   subscribeSessionRunEnded((id, outcome) => notices.settleBackgroundHandling(id, outcome));
 

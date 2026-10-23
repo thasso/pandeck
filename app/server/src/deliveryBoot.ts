@@ -1,32 +1,37 @@
 interface BootScheduler {
-  wake(sessionId: string): Promise<void>;
-  offerReminders(sessionId: string): Promise<void>;
-  boot(sessionIds: Iterable<string>): Promise<void>;
+  wake(sessionId: string, endedRunId?: string): Promise<void>;
+  offerReminders(sessionId: string, endedRunId?: string): Promise<void>;
 }
 
 /** Collect cheap recovery offers, not the operations recovery may execute. */
 export function createDeliveryBoot(scheduler: BootScheduler) {
   let collecting = true;
-  const sessions = new Map<string, boolean>();
+  const sessions = new Map<
+    string,
+    { reminders: boolean; endedRunId: string | undefined }
+  >();
   return {
-    offer(sessionId: string, reminders = false): void {
+    offer(sessionId: string, reminders = false, endedRunId?: string): void {
       if (collecting) {
-        sessions.set(sessionId, reminders || sessions.get(sessionId) === true);
-      } else if (reminders) void scheduler.offerReminders(sessionId);
-      else void scheduler.wake(sessionId);
+        const prior = sessions.get(sessionId);
+        sessions.set(sessionId, {
+          reminders: reminders || prior?.reminders === true,
+          endedRunId: prior ? undefined : endedRunId,
+        });
+      } else if (reminders)
+        void scheduler.offerReminders(sessionId, endedRunId);
+      else void scheduler.wake(sessionId, endedRunId);
     },
     release(): Promise<void> {
       if (!collecting) return Promise.resolve();
       collecting = false;
-      const plain: string[] = [];
-      const reminders: string[] = [];
-      for (const [id, enabled] of sessions)
-        (enabled ? reminders : plain).push(id);
+      const offers = [...sessions].map(([id, offer]) =>
+        offer.reminders
+          ? scheduler.offerReminders(id, offer.endedRunId)
+          : scheduler.wake(id, offer.endedRunId),
+      );
       sessions.clear();
-      return Promise.all([
-        scheduler.boot(plain),
-        ...reminders.map((id) => scheduler.offerReminders(id)),
-      ]).then(() => {});
+      return Promise.all(offers).then(() => {});
     },
   };
 }

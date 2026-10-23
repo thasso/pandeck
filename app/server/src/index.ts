@@ -211,13 +211,11 @@ import {
   closeChainsForHumanPrompt,
   drainAllQueuedOnBoot,
   drainJournaledFailureBacklog,
-  drainRecipient,
   installDelegationFailureNotices,
   installReplyReminders,
   recoverPeerPromptsOnBoot,
   RETRY_SWEEP_INTERVAL_MS,
   runPeerPromptRetention,
-  setReplyReminderHost,
   stopPeerPromptDelivery,
   sweepExpiredLeases,
   sweepPeerPromptRetries,
@@ -228,7 +226,6 @@ import {
   startHeldDirectPeersOnBoot,
 } from "./heldDirectPeers.ts";
 import {
-  agentHandoffOwed,
   recoverAgentHandoffsOnBoot,
   stopAgentHandoffDelivery,
 } from "./agentHandoffs.ts";
@@ -347,16 +344,7 @@ async function acquirePromptDriver(
 }
 
 const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
-  drainPeers: (sessionId, admission) => {
-    const live = hub.getLiveById(sessionId);
-    return drainRecipient(sessionId, {
-      phase: "all",
-      ...(isPromptQueueDriver(live) ? { driver: live } : {}),
-      ...admission,
-    });
-  },
   queueChanged: (sessionId) => backgroundUpdateQueueChanged(sessionId),
-  held: (sessionId) => automaticTurnsHeld(sessionId),
   offer: offerBackgroundCompletion(acquirePromptDriver),
   discard: (entry) => {
     const cleanupPath = entry.notice.output?.cleanupPath;
@@ -2079,13 +2067,6 @@ server.listen(PORT, HOST, () => {
   const deliveryBoot = createDeliveryBoot(deliveryScheduler);
   const offerDelivery = deliveryBoot.offer;
   setDeliveryWake(offerDelivery);
-  setReplyReminderHost({
-    handoffOwed: agentHandoffOwed,
-    wakeOwed: (sessionId) => backgroundCompletionDelivery.wakeOwed(sessionId),
-    requestIdleEdge: (sessionId) => {
-      offerDelivery(sessionId, true);
-    },
-  });
   setPromptQueueHost({
     live: (sessionId) => {
       const live = hub.getLiveById(sessionId);
@@ -2104,10 +2085,10 @@ server.listen(PORT, HOST, () => {
     // who owns a spawned session: that is the explicit Take over command.
     closeChainsForHumanPrompt,
   );
-  setSessionIdleHook((sessionId) => {
+  setSessionIdleHook((sessionId, endedRunId) => {
     // A direct child that went idle may free its coordinator's slot.
     nudgeHeldStartsForChild(sessionId);
-    offerDelivery(sessionId, true);
+    offerDelivery(sessionId, true, endedRunId);
   });
   setAutomaticTurnHoldHost({
     changed: (sessionId) => publishPromptQueue(sessionId),

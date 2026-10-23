@@ -34,7 +34,7 @@ const script = `
   const { sessionStore } = await import(${JSON.stringify(url("./db/sessionStore.ts"))});
   const { backgroundWorkStore } = await import(${JSON.stringify(url("./db/backgroundWorkStore.ts"))});
   const { backgroundDeliveryOutboxStore } = await import(${JSON.stringify(url("./db/backgroundDeliveryOutboxStore.ts"))});
-  const { BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./backgroundWork/completionDelivery.ts"))});
+  const { ScheduledBackgroundDelivery: BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./test/backgroundDelivery.ts"))});
   const { BackgroundWorkSupervisor } = await import(${JSON.stringify(url("./backgroundWork/supervisor.ts"))});
   const { stageSessionArtifact, sessionArtifactFile } = await import(${JSON.stringify(url("./mcp/toolGroups/packRuntime.ts"))});
   const { updateSettings } = await import(${JSON.stringify(url("./settings.ts"))});
@@ -43,7 +43,6 @@ const script = `
   const owners = ["crashed", "graced", "drained"];
   const offered = [];
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,

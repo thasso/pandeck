@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { PromptDeliveryReceipt } from "../session/runtime/promptDelivery.ts";
+import { ScheduledBackgroundDelivery as BackgroundCompletionDelivery } from "../test/backgroundDelivery.ts";
 
 function appendedReceipt(entryId: string, runId: string) {
   return new PromptDeliveryReceipt(async (receipt) => {
@@ -8,7 +9,6 @@ function appendedReceipt(entryId: string, runId: string) {
   });
 }
 import {
-  BackgroundCompletionDelivery,
   BackgroundCompletionTurnTracker,
   type BackgroundCompletionDeliveryOptions,
   type BackgroundCompletionOffer,
@@ -65,7 +65,6 @@ test("a competing ordinary turn stays protected until background admission", asy
 test("activity is externalized and carries bounded-buffer drops", async () => {
   let offered: BackgroundCompletionOffer | undefined;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: (_sessionId, signal) => {
       offered = signal;
       return Promise.resolve("delivered");
@@ -97,7 +96,6 @@ test("prompt caps omit whole updates, keep valid structured data, and owe the re
   let offered: BackgroundCompletionOffer | undefined;
   const all: string[][] = [];
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: (_sessionId, signal, _key, attempt) => {
       offered ??= signal;
       all.push(carried(signal));
@@ -135,7 +133,7 @@ test("completion replaces final activity when its artifact contains the output",
   const discarded: string[] = [];
   let releasePeers!: () => void;
   const held = new BackgroundCompletionDelivery({
-    drainPeers: () =>
+    beforeBackground: () =>
       new Promise<void>((resolve) => {
         releasePeers = resolve;
       }),
@@ -175,7 +173,6 @@ test("completion replaces final activity when its artifact contains the output",
 test("the card carries the command and description; the model block does not", async () => {
   let offered: BackgroundCompletionOffer | undefined;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: (_sessionId, signal) => {
       offered = signal;
       return Promise.resolve("delivered");
@@ -201,7 +198,6 @@ test("the card carries the command and description; the model block does not", a
 test("the card carries the outcome sentence, which is all a Claude job has", async () => {
   let offered: BackgroundCompletionOffer | undefined;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: (_sessionId, signal) => {
       offered = signal;
       return Promise.resolve("delivered");
@@ -227,7 +223,7 @@ test("truncated completion output does not hide pending activity", async () => {
   let offered: BackgroundCompletionOffer | undefined;
   let releasePeers!: () => void;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () =>
+    beforeBackground: () =>
       new Promise<void>((resolve) => {
         releasePeers = resolve;
       }),
@@ -268,7 +264,6 @@ test("a completion arriving during an offer is delivered by a later batch", asyn
   const offered: BackgroundCompletionOffer[] = [];
   let releaseFirst!: () => void;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: (_sessionId, signal) => {
       offered.push(signal);
       if (offered.length === 1)
@@ -295,7 +290,7 @@ test("stopping delivery while peer drain is in flight prevents a new turn", asyn
   let releasePeers!: () => void;
   let offers = 0;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () =>
+    beforeBackground: () =>
       new Promise((resolve) => {
         releasePeers = resolve;
       }),
@@ -316,7 +311,6 @@ test("background delivery yields instead of queueing into a busy session", async
   let busy = true;
   let offers = 0;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: () => {
       offers += 1;
       return Promise.resolve(busy ? "busy" : "delivered");
@@ -340,7 +334,6 @@ test("background delivery yields instead of queueing into a busy session", async
 test("a deferred completion offers no turn and rides the next prompt", async () => {
   let offers = 0;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: () => {
       offers += 1;
       return Promise.resolve("delivered");
@@ -364,7 +357,6 @@ test("a deferred completion offers no turn and rides the next prompt", async () 
 
 test("a claim refused before its append gives the fact back; an appended one keeps it from every other prompt", async () => {
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: () => Promise.resolve("delivered"),
     disposition: () => "defer",
   });
@@ -388,7 +380,6 @@ test("a claim refused before its append gives the fact back; an appended one kee
 
 test("a fact deferred after a claim is not taken with the claimed batch", async () => {
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: () => Promise.resolve("delivered"),
     disposition: () => "defer",
   });
@@ -413,7 +404,6 @@ test("a refused claim leaves the deferred fact where it was, in order", async ()
   const { outbox } = fakeOutbox();
   let refuse = true;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: () => Promise.resolve("delivered"),
     disposition: () => "defer",
     outbox: {
@@ -438,7 +428,6 @@ test("a refused claim leaves the deferred fact where it was, in order", async ()
 test("deferred output files are cleaned up once their block is exposed", async () => {
   const discarded: string[] = [];
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: () => Promise.resolve("delivered"),
     disposition: () => "defer",
     discard: (entry) => {
@@ -463,7 +452,6 @@ test("deferred output files are cleaned up once their block is exposed", async (
 test("stop() discards deferred facts as well as queued ones", async () => {
   const discarded: string[] = [];
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: () => Promise.resolve("delivered"),
     disposition: () => "defer",
     discard: (entry) => {
@@ -486,7 +474,6 @@ test("a Stop's hold keeps a completion pending, unoffered and unconsumed, until 
   const offered: string[] = [];
   const discarded: string[] = [];
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     held: () => held,
     offer: (_sessionId, offer) => {
       offered.push(carried(offer).join(","));
@@ -514,7 +501,6 @@ test("a Stop racing an offer leaves the completion for Resume instead of consumi
   let held = false;
   const offered: string[] = [];
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     held: () => held,
     offer: (_sessionId, offer) => {
       offered.push(carried(offer).join(","));
@@ -643,7 +629,6 @@ test("the outbox keeps an owed completion until the run it reached ends cleanly,
   let held = true;
   const { rows, outbox, settleRun, phaseOf } = fakeOutbox();
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     held: () => held,
     outbox,
     disposition: (n) => (n.stopRequested ? "defer" : "wake"),
@@ -684,7 +669,6 @@ test("the outbox keeps an owed completion until the run it reached ends cleanly,
 
   const other = fakeOutbox();
   const stopping = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     held: () => true,
     outbox: other.outbox,
     offer: () => Promise.resolve("delivered"),
@@ -704,7 +688,6 @@ test("a restored completion is not offered until a drain finds the session unhel
   const saved: string[] = [];
   const { outbox } = fakeOutbox();
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     held: () => held,
     outbox: {
       ...outbox,
@@ -734,7 +717,6 @@ test("an offer that fails or finds the session unavailable before exposure never
     const { rows, outbox, phaseOf } = fakeOutbox();
     const discarded: string[] = [];
     const delivery = new BackgroundCompletionDelivery({
-      drainPeers: () => Promise.resolve(),
       outbox,
       discard: (entry) => discarded.push(entry.notice.itemId),
       offer: () =>
@@ -771,7 +753,6 @@ test("the queued count follows real queued work and announces every change", asy
   let answer: "delivered" | "busy" = "busy";
   const delivery: BackgroundCompletionDelivery =
     new BackgroundCompletionDelivery({
-      drainPeers: () => Promise.resolve(),
       held: () => held,
       disposition: (n) => (n.itemId === "later" ? "defer" : "wake"),
       offer: () => Promise.resolve(answer),
@@ -809,7 +790,6 @@ test("under any cap every offered turn carries identities, oversized ones trimme
   const offers: Array<{ carried: string[]; block: string }> = [];
   const longId = (tag: string) => `${tag}-${"i".repeat(190)}`;
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: (_sessionId, offer, _key, attempt) => {
       offers.push({ carried: carried(offer), block: offer.contextBlock });
       attempt.reserve();
@@ -841,7 +821,6 @@ test("under any cap every offered turn carries identities, oversized ones trimme
 test("a cap that fits some but not all updates carries those whole and owes the rest", async () => {
   const offers: string[][] = [];
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
     offer: (_sessionId, offer, _key, attempt) => {
       offers.push(carried(offer));
       attempt.reserve();

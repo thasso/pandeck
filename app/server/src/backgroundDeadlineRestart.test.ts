@@ -39,7 +39,7 @@ const script = `
   const { sessionStore } = await import(${JSON.stringify(url("./db/sessionStore.ts"))});
   const { backgroundWorkStore } = await import(${JSON.stringify(url("./db/backgroundWorkStore.ts"))});
   const { backgroundDeliveryOutboxStore } = await import(${JSON.stringify(url("./db/backgroundDeliveryOutboxStore.ts"))});
-  const { BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./backgroundWork/completionDelivery.ts"))});
+  const { ScheduledBackgroundDelivery: BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./test/backgroundDelivery.ts"))});
   const { BackgroundWorkSupervisor } = await import(${JSON.stringify(url("./backgroundWork/supervisor.ts"))});
   const { updateSettings } = await import(${JSON.stringify(url("./settings.ts"))});
   const notices = await import(${JSON.stringify(url("./backgroundCompletionNotices.ts"))});
@@ -49,12 +49,12 @@ const script = `
   const answer = {};
   const hang = new Set();
   const delivery = new BackgroundCompletionDelivery({
-    // A hung peer phase is the process dying before the offer.
-    drainPeers: (sessionId) => hang.has(sessionId) ? new Promise(() => {}) : Promise.resolve(),
     held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,
     offer: async (sessionId, offer, _key, attempt) => {
+      // The process dies before a reserved fact can be exposed.
+      if (hang.has(sessionId)) await new Promise(() => {});
       const result = answer[sessionId] ?? "delivered";
       offered.push({ sessionId, result, block: offer.contextBlock });
       if (result === "delivered") handled(sessionId, attempt);

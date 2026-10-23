@@ -154,9 +154,9 @@ export function setHumanPromptHook(
  * drain regardless of which subsystem drove the turn (browser, permanent
  * assistant, …) and without a browser connection open.
  */
-let idleHook: ((sessionId: string) => void) | undefined;
+let idleHook: ((sessionId: string, endedRunId?: string) => void) | undefined;
 export function setSessionIdleHook(
-  fn: ((sessionId: string) => void) | undefined,
+  fn: ((sessionId: string, endedRunId?: string) => void) | undefined,
 ): void {
   idleHook = fn;
 }
@@ -875,7 +875,7 @@ export class LiveRuntimeSession {
     return this.runState === "running";
   }
 
-  private setRunning(running: boolean): void {
+  private setRunning(running: boolean, endedRunId?: string): void {
     const next: SnapshotRunState = running ? "running" : "idle";
     if (this.runState === next) return;
     this.runState = next;
@@ -887,7 +887,7 @@ export class LiveRuntimeSession {
     // peer prompts queued behind this turn, whatever drove it.
     if (next === "idle" && !this.tornDown) {
       try {
-        idleHook?.(this.sessionId);
+        idleHook?.(this.sessionId, endedRunId);
       } catch {
         /* best-effort */
       }
@@ -1296,7 +1296,7 @@ export class LiveRuntimeSession {
       // the adapter's own answer is how it ended.
       this.endTurn(settled, ownRunId);
       // A turn that opened after this one ended is not this prompt's to idle.
-      if (!this.turnOpen) this.setRunning(false);
+      if (!this.turnOpen) this.setRunning(false, ownRunId);
     }
     const deferred = ownRunId
       ? this.deferredSettlements.get(ownRunId)
@@ -1632,7 +1632,7 @@ export class LiveRuntimeSession {
           event.abortRequested === true,
           event.stopReason,
         );
-        this.setRunning(false);
+        this.setRunning(false, completedRunId);
         const deferred = completedRunId
           ? this.deferredSettlements.get(completedRunId)
           : undefined;
@@ -1709,8 +1709,9 @@ export class LiveRuntimeSession {
         // wrapper tool turn in the durable conversation, but it still closes
         // the boundary opened by the observed messageStarted event.
         this.streaming.clear();
+        const completedRunId = this.turnRunId;
         this.endTurn();
-        this.setRunning(false);
+        this.setRunning(false, completedRunId);
         return;
       }
       case "hostCommandResult": {
@@ -1731,8 +1732,9 @@ export class LiveRuntimeSession {
         // Host-command synthetic turns end with hostCommandResult instead of a
         // provider runCompleted event. Close the boundary so the next provider
         // run opens its own origin, baseline and durable run marker.
+        const completedRunId = this.turnRunId;
         this.endTurn();
-        this.setRunning(false);
+        this.setRunning(false, completedRunId);
         return;
       }
       case "sessionConfigChanged": {

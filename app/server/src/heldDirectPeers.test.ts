@@ -7,6 +7,9 @@
  */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { AccountModelOption, PeerSpawnRuntime } from "@assistant/shared";
+import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
+import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
 
 const { fakeDrivers, fakeHub } = vi.hoisted(() => {
   const fakeDrivers = new Map<string, unknown>();
@@ -233,6 +236,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setDeliveryWake(undefined);
   vi.restoreAllMocks();
   vi.useRealTimers();
   fakeDrivers.clear();
@@ -758,6 +762,11 @@ test("withdrawing a waiting opener delivers what was queued behind it", async ()
   });
   fakeDrivers.set(a.child, new FakeRuntimeDriver(a.child));
   drains.mockRestore();
+  installDeliveryTestScheduler({
+    live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
+    acquire: async (id) =>
+      (await fakeHub.acquireById(id)) as RuntimePromptDriver | undefined,
+  });
   withdrawQueuedPeerPrompt(
     a.child,
     peerPromptQueueField(a.child).queuedPeerPrompts![0]!.id,

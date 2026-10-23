@@ -15,19 +15,11 @@ import {
   captureHumanResume,
   spendHumanResume,
 } from "./automaticTurnHold.ts";
-import {
-  drainPromptQueue,
-  promptQueueHasPriority,
-  type PromptQueueDriver,
-} from "./promptQueue.ts";
+import type { PromptQueueDriver } from "./promptQueue.ts";
 import { wakeSessionDelivery } from "./deliveryWake.ts";
 import {
-  clearExplicitRecipientAuthority,
   hasExplicitRecipientAuthority,
-  markExplicitRecipientAuthority,
-  markExplicitRecipientWaiter,
-  releaseExplicitRecipientWaiter,
-  waitForExplicitRecipientAuthorityRelease,
+  withExplicitRecipientAuthority,
 } from "./recipientDrainAuthority.ts";
 import { existsSync, readFileSync } from "node:fs";
 import type {
@@ -402,7 +394,7 @@ export function cancelQueuedPeerPrompts(
   broadcastPeerPromptChanges(cancelled);
   // A cancelled held opener was the drain's barrier for what queued behind it.
   if (cancelled.some((r) => held.has(r.id)))
-    void drainRecipient(input.recipientSessionId).catch(() => {});
+    wakeRecipient(input.recipientSessionId);
   return cancelled;
 }
 
@@ -524,7 +516,7 @@ export function withdrawQueuedPeerPrompt(
   void broadcastCardUpdateFor(cancelled);
   // A withdrawn opening prompt that waited for a slot was the drain's barrier:
   // what was queued behind it is deliverable now.
-  if (row.status === "held") void drainRecipient(recipientId).catch(() => {});
+  if (row.status === "held") wakeRecipient(recipientId);
 }
 
 /**
@@ -546,7 +538,7 @@ export async function sendQueuedPeerPromptNow(
   // resumes a stopped session — the Stop that stood as they chose, never one
   // that lands while this waits for the recipient's authority.
   const resume = captureHumanResume(recipientId);
-  await withRecipientDrainLock(recipientId, async () => {
+  await withExplicitRecipientAuthority(recipientId, async () => {
     if (deliveryStopped) return;
     const row = undeliveredByKey(recipientId, key);
     if (!row || row.status === "dispatching") return;
@@ -634,6 +626,12 @@ async function steerPeerPrompt(
     unsubscribe = receipt.observe((event) => {
       if (event.type === "run-ended") runEnded(event.outcome);
       if (event.type !== "appended") return;
+      // Accepted deferred steers must name their joined bracket. Do not guess
+      // a later run's outcome if a driver violates that runtime invariant.
+      console.assert(
+        event.append.runId !== undefined,
+        "[peer] accepted steer has no joined run; reserved rows require boot recovery",
+      );
       admitted = true;
       // sendQueuedPeerPromptNow refuses steering into an existing peer context.
       activeContexts.set(driver.sessionId, context);
@@ -684,7 +682,7 @@ async function steerPeerPrompt(
     } else if (thrown instanceof SessionBusyError) {
       // Withdrawn unread, or the turn ended first: it waits as it did.
       peerPromptStore.releaseToQueue(m.id, claim);
-      void drainRecipient(driver.sessionId).catch(() => {});
+      wakeRecipient(driver.sessionId);
     } else {
       const reason = thrown instanceof Error ? thrown.message : String(thrown);
       retryOrFail(m.id, m.attempts, reason);
@@ -915,76 +913,14 @@ function firstTurnAttachments(
   return attachments.length > 0 ? { attachments } : undefined;
 }
 
-/** One in-flight drain per recipient; concurrent calls coalesce onto it. */
-const drainLocks = new Map<string, Promise<void>>();
 /** Whether a send-now is waiting for this recipient's authority. */
 function explicitSendWaiting(recipientId: string): boolean {
   return hasExplicitRecipientAuthority(recipientId);
 }
 
-/**
- * Run an explicit claim under the same recipient authority as automatic drains.
- * If a drain is in flight, wait for it and re-check: it may have delivered or
- * started the target turn. The reservation is installed synchronously before
- * awaiting the operation, so no automatic drain can slip between claim and
- * delivery.
- */
-async function withRecipientDrainLock<T>(
-  recipientId: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  markExplicitRecipientWaiter(recipientId);
-  while (drainLocks.has(recipientId))
-    await drainLocks.get(recipientId)?.catch(() => {});
-  releaseExplicitRecipientWaiter(recipientId);
-  let release!: () => void;
-  const reservation = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  drainLocks.set(recipientId, reservation);
-  markExplicitRecipientAuthority(recipientId);
-  try {
-    return await operation();
-  } finally {
-    clearExplicitRecipientAuthority(recipientId);
-    releaseRecipientReservation(recipientId, reservation, release);
-  }
-}
-
-/**
- * Give back a reservation taken in place of a drain: drains that coalesced
- * onto it resolve, and whatever arrived for the recipient meanwhile — a
- * peer prompt, or a notice whose wake found the reservation held — is
- * drained now, since nothing else would come back for it.
- */
-function releaseRecipientReservation(
-  recipientId: string,
-  reservation: Promise<void>,
-  release: () => void,
-): void {
-  if (drainLocks.get(recipientId) === reservation)
-    drainLocks.delete(recipientId);
-  release();
-  // Waiting explicit sends retain authority before ordinary FIFO draining.
-  // drainRecipient also checks this count for idle hooks racing the handoff.
-  if (!explicitSendWaiting(recipientId)) {
-    void drainRecipient(recipientId).catch(() => {});
-    if (drainWakesPending.delete(recipientId))
-      void drainRecipient(recipientId).catch(() => {});
-  }
-}
-/**
- * Sessions newly owed a notice, or sent a peer prompt, while their drain was
- * already in flight. That drain may be past the read that would find it — its
- * owed-notice read, or its FIFO while it awaits a notice turn — so coalescing
- * onto it would lose the wake (Task-973); it runs once more on release.
- */
-const drainWakesPending = new Set<string>();
-
-/** Drain now, or once more after the drain in flight (`drainWakesPending`). */
+/** Producers mark the scheduler even after this lane's read point. */
 function wakeRecipient(sessionId: string): void {
-  if (drainLocks.has(sessionId)) drainWakesPending.add(sessionId);
-  void drainRecipient(sessionId).catch(() => {});
+  wakeSessionDelivery(sessionId);
 }
 
 /**
@@ -1014,13 +950,8 @@ export function setPeerPromptDeliveryStoppedForTests(stopped: boolean): void {
 /**
  * Bounded automatic retry for an interruption notice the provider refused.
  *
- * Nothing else would come back for it. The runtime fires its idle hook from
- * inside `LiveRuntimeSession.prompt`'s `finally` — synchronously, while this module's
- * `drainLocks` entry for the session is still held — so the hook's own
- * `drainRecipient` coalesces onto the drain that is failing and starts nothing
- * new. After that the session is idle with no queue, so no further event exists
- * to ride: the notice would sit owed until an unrelated turn or the next boot,
- * which is the deadlock it was written to end.
+ * A refused notice keeps durable debt but does not trigger a debt-based
+ * scheduler loop. Its bounded timer supplies a fresh scheduler wake.
  *
  * A schedule rather than an immediate re-attempt, because the failure it
  * recovers from is a provider refusing a turn a moment ago. Bounded, because
@@ -1032,8 +963,10 @@ export function setPeerPromptDeliveryStoppedForTests(stopped: boolean): void {
 const NOTICE_RETRY_MAX_ATTEMPTS = 5;
 const noticeRetries = new Map<
   string,
-  { attempts: number; timer?: NodeJS.Timeout }
+  { attempts: number; eligible: boolean; timer?: NodeJS.Timeout }
 >();
+/** Exposed debt absorbs only the idle edge of its own receipt's run, once. */
+const failedRetirementRuns = new Map<string, string>();
 /** Test seam: collapse the backoff so a retry test does not sleep for seconds. */
 let noticeRetryDelayMsForTests: number | undefined;
 export function setInterruptionNoticeRetryDelayForTests(
@@ -1046,19 +979,33 @@ function scheduleInterruptionNoticeRetry(sessionId: string): void {
   const prior = noticeRetries.get(sessionId);
   if (prior?.timer) clearTimeout(prior.timer);
   const attempts = (prior?.attempts ?? 0) + 1;
-  if (deliveryStopped || attempts > NOTICE_RETRY_MAX_ATTEMPTS) {
-    // Remember the exhausted budget so a later failure cannot silently reset it.
-    noticeRetries.set(sessionId, { attempts });
-    return;
-  }
-  const timer = setTimeout(
+  const retry: { attempts: number; eligible: boolean; timer?: NodeJS.Timeout } =
+    {
+      attempts,
+      eligible: false,
+    };
+  noticeRetries.set(sessionId, retry);
+  // Keep exhausted debt ineligible until boot or an intentional public re-offer.
+  if (deliveryStopped || attempts > NOTICE_RETRY_MAX_ATTEMPTS) return;
+  retry.timer = setTimeout(
     () => {
-      void drainRecipient(sessionId).catch(() => {});
+      delete retry.timer;
+      retry.eligible = true;
+      wakeRecipient(sessionId);
     },
     noticeRetryDelayMsForTests ?? backoffMsFor(attempts),
   );
-  timer.unref();
-  noticeRetries.set(sessionId, { attempts, timer });
+  retry.timer.unref();
+}
+
+/** Public re-offers bypass backoff, but never replenish the automatic budget. */
+function reofferInterruptionNotice(sessionId: string): void {
+  failedRetirementRuns.delete(sessionId);
+  const retry = noticeRetries.get(sessionId);
+  if (!retry) return;
+  if (retry.timer) clearTimeout(retry.timer);
+  delete retry.timer;
+  retry.eligible = true;
 }
 
 /** A delivered notice returns the session's full retry budget for a future one. */
@@ -1073,132 +1020,43 @@ function cancelInterruptionNoticeRetries(): void {
   for (const state of noticeRetries.values())
     if (state.timer) clearTimeout(state.timer);
   noticeRetries.clear();
+  failedRetirementRuns.clear();
 }
 
 /**
  * Deliver queued peer prompts to a recipient without interrupting a running
- * turn. Idle/resumable targets receive one FIFO batch as a fresh turn. Concurrent
- * calls for the same recipient coalesce so competing drains cannot double-admit.
- *
- * The promise settles once this priority phase is over — the user's queued
- * message sent, or the peer FIFO drained — which is what the background phase
- * waits on before it offers a completion of its own.
+ * turn. Only a scheduler admission enters this lane; public automatic calls
+ * wake the scheduler. Explicit send-now retains its separate authority.
  */
 interface PeerLaneAdmission {
-  phase?: "fifo" | "notices" | "all";
-  driver?: PromptQueueDriver;
-  shouldStart?: () => boolean;
+  phase: "fifo" | "notices";
+  driver: PromptQueueDriver;
+  shouldStart: () => boolean;
 }
 
 export function drainRecipient(
   recipientId: string,
   admission?: PeerLaneAdmission,
 ): Promise<void> {
-  if (deliveryStopped) return Promise.resolve();
-  if (!admission && wakeSessionDelivery(recipientId)) return Promise.resolve();
-  // A send-now holds the recipient. Its release resumes the drain, and THAT
-  // drain is the phase a caller waits for: resolving on the release alone let
-  // a background completion take the turn the resumed drain was owed.
-  if (explicitSendWaiting(recipientId))
-    return waitForExplicitRecipientAuthorityRelease(recipientId).then(() =>
-      drainRecipient(recipientId, admission),
-    );
-  const existing = drainLocks.get(recipientId);
-  if (existing) {
-    if (admission) drainWakesPending.add(recipientId);
-    return existing;
+  if (!admission) {
+    reofferInterruptionNotice(recipientId);
+    wakeSessionDelivery(recipientId);
+    return Promise.resolve();
   }
-  const run = drainRecipientOnce(recipientId, admission).finally(() => {
-    drainLocks.delete(recipientId);
-    // A drain that yielded to a send-now leaves a pending wake for that
-    // send's release, which drains again once it is done.
-    if (
-      !explicitSendWaiting(recipientId) &&
-      drainWakesPending.delete(recipientId)
-    )
-      void drainRecipient(recipientId).catch(() => {});
-  });
-  drainLocks.set(recipientId, run);
-  return run;
+  return drainRecipientOnce(recipientId, admission);
 }
 
 async function drainRecipientOnce(
   recipientId: string,
-  admission?: PeerLaneAdmission,
+  admission: PeerLaneAdmission,
 ): Promise<void> {
-  // A Stop holds the session: nothing is claimed, and a cold one is not even
-  // resumed. Its rows wait, queued, for the user to resume it.
-  if (automaticTurnsHeld(recipientId)) return;
-  const hub = await getHub();
-  let live = admission?.driver ?? hub.getLiveById(recipientId);
-  // Nothing owed: do not open a harness for it. A drain runs on every session
-  // OPEN, and acquiring first would put the cost this avoids — parsing a
-  // provider transcript — back on the reader's navigation for every session
-  // that has no peer traffic at all, which is nearly all of them.
-  if (
-    !live &&
-    peerPromptStore.listPendingForRecipient(recipientId).length === 0 &&
-    !owesNotice(recipientId)
-  )
-    return;
-  if (!live) {
-    try {
-      live = await hub.acquireById(recipientId);
-    } catch (err) {
-      noteDrainTargetUnavailable(recipientId, err);
-      return;
-    }
-  }
-  if (!live) {
-    noteDrainTargetUnavailable(
-      recipientId,
-      new Error("target session could not be resumed"),
-    );
-    return;
-  }
-  if (!isRuntimePromptDriver(live)) {
-    noteDrainTargetUnavailable(
-      recipientId,
-      new Error("target session cannot be prompted by the runtime"),
-    );
-    return;
-  }
-  if (live.isRunning) return; // never steer/interrupt a busy target
-  // The user's own queued messages go first; their drain sends one now, and
-  // this session's next idle edge comes back here once none is owed.
-  if (promptQueueHasPriority(recipientId)) {
-    // The queue resolves its own driver asynchronously. Recheck recipient
-    // authority after that acquisition, or a send-now registered while this
-    // automatic drain was awaiting acquireById could lose the next turn.
-    // Awaited, so the phase covers that send: it settles once the message is
-    // in the session, before anything behind it is offered the idle edge.
-    await drainPromptQueue(
-      recipientId,
-      () =>
-        !hasExplicitRecipientAuthority(recipientId) &&
-        admission?.shouldStart?.() !== false,
-      admission?.driver,
-    );
-    return;
-  }
-
-  const driver = live;
+  const driver = admission.driver;
   // Drain FIFO batches until the queue is empty or the target starts running.
-  // Each batch is a whole turn, so a send-now can start waiting during one: it
-  // goes next, and its release drains again from the FIFO head. A Stop can land
-  // during one too, and the loop that awaited the stopped turn must not claim
-  // the next batch: the hold is read again at every claim.
+  // Each append fences this admission. A later batch needs a fresh scheduler
+  // pass; send-now authority still fences the claim immediately.
   for (;;) {
-    if (admission?.phase === "notices") break;
-    if (
-      admission?.shouldStart?.() === false ||
-      driver.isRunning ||
-      // Torn down (deleted, released): nothing more is sent to it.
-      driver.released ||
-      explicitSendWaiting(recipientId) ||
-      automaticTurnsHeld(recipientId)
-    )
-      return;
+    if (admission.phase === "notices") break;
+    if (!admission.shouldStart() || explicitSendWaiting(recipientId)) return;
     const batch = peerPromptStore.claimBatch(
       recipientId,
       "drainer",
@@ -1207,23 +1065,37 @@ async function drainRecipientOnce(
       BATCH_MAX_CHARS,
     );
     if (batch.length === 0) break;
-    await deliverBatch(driver, batch, admission?.shouldStart);
+    await deliverBatch(driver, batch, admission.shouldStart);
   }
   // Incoming work first: a session that is about to be told an old prompt died
   // should already be holding whatever arrived for it since.
   if (
-    admission?.phase === "fifo" ||
-    admission?.shouldStart?.() === false ||
-    explicitSendWaiting(recipientId) ||
-    automaticTurnsHeld(recipientId)
+    admission.phase === "fifo" ||
+    !admission.shouldStart() ||
+    explicitSendWaiting(recipientId)
   )
     return;
-  await deliverOwedNotices(driver, recipientId, admission?.shouldStart);
+  await deliverOwedNotices(driver, recipientId, admission.shouldStart);
 }
 
-/** Whether a session is owed a server-generated notice of either kind. */
+/** Priority debt persists even while the lane's retry policy delays its offer. */
 export function peerNoticeOwed(sessionId: string): boolean {
   return owesNotice(sessionId);
+}
+
+/** Only automatic offer eligibility consumes the precise self idle edge. */
+export function peerNoticeOfferable(
+  sessionId: string,
+  endedRunId?: string,
+): boolean {
+  if (
+    endedRunId !== undefined &&
+    failedRetirementRuns.get(sessionId) === endedRunId
+  ) {
+    failedRetirementRuns.delete(sessionId);
+    return false;
+  }
+  return noticeRetries.get(sessionId)?.eligible !== false;
 }
 
 export function peerFifoOwed(sessionId: string): boolean {
@@ -1268,7 +1140,10 @@ export function installDelegationFailureNotices(): () => void {
 }
 
 export function wakeForNotice(sessionIds: Iterable<string>): void {
-  for (const id of sessionIds) wakeRecipient(id);
+  for (const id of sessionIds) {
+    reofferInterruptionNotice(id);
+    wakeRecipient(id);
+  }
 }
 
 /**
@@ -1295,13 +1170,7 @@ async function deliverOwedNotices(
   // A notice whose delegation the user ended while the turn was being
   // admitted is rebuilt without it; this bounds how often that can repeat.
   for (let attempt = 0; attempt < NOTICE_ADMISSION_ATTEMPTS; attempt += 1) {
-    if (
-      deliveryStopped ||
-      driver.isRunning ||
-      driver.released ||
-      automaticTurnsHeld(sessionId)
-    )
-      return;
+    if (shouldStart?.() === false || explicitSendWaiting(sessionId)) return;
     const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
     const delegated = deliverableNotices(sessionId);
     if (owed.length === 0 && delegated.length === 0) return;
@@ -1321,7 +1190,7 @@ async function deliverOwedNotices(
       // leaving the sender waiting exactly as it was. Idempotence here is
       // `sender_notified_at_ms`, which is written only from an accepted turn,
       // and a delegation notice's `delivered_at_ms`, written as the turn is
-      // appended; concurrent drains for one session coalesce on `drainLocks`.
+      // appended; the scheduler serializes automatic admission.
       const receipt = promptRuntimeSession(
         driver,
         buildNotice(owed, delegated),
@@ -1347,15 +1216,22 @@ async function deliverOwedNotices(
           delegationFailureNoticeStore.markDelivered(
             delegated.map((n) => n.id),
           );
+          failedRetirementRuns.delete(sessionId);
         } catch (err) {
+          // The receipt names the run that opened this notice. Never absorb a
+          // later unrelated wake, including one coalesced with this self edge.
+          if (event.append.runId)
+            failedRetirementRuns.set(sessionId, event.append.runId);
           console.warn(
-            `[peer] could not retire failure notices for ${sessionId} (${failureLabel(err)})`,
+            `[peer] could not retire failure notices for ${sessionId} (${failureLabel(err)}); exposed debt absorbs its own run's idle edge once, then reoffers on later wakes`,
           );
         }
       });
       await receipt;
       // Only an accepted turn consumes the interruption notice.
       peerPromptStore.markSenderNotified(owed.map((m) => m.id));
+      // Success keeps the existing failed-retirement self-edge policy. A run
+      // that rejects instead must retain its attempts across retirement failures.
       clearInterruptionNoticeRetry(sessionId);
       return;
     } catch (err) {
@@ -1396,43 +1272,12 @@ class NoticeSetChangedError extends Error {
 /* ---------------------------- reply reminders ---------------------------- */
 
 /**
- * What the reply reminder needs from outside this module: whether the idle
- * edge still owes the session something that goes before it, and a way to
- * offer that edge again. Injected at boot (`index.ts`), so this module does
- * not depend on the handoff queue or background delivery.
- */
-export interface ReplyReminderHost {
-  /** A decision waits to reach the session, or is being delivered. */
-  handoffOwed(sessionId: string): boolean;
-  /** A background wake waits for the session, or is being offered. */
-  wakeOwed(sessionId: string): boolean;
-  /** Offer the session's whole idle edge again. */
-  requestIdleEdge(sessionId: string): void;
-}
-
-let reminderHost: ReplyReminderHost | undefined;
-export function setReplyReminderHost(
-  host: ReplyReminderHost | undefined,
-): void {
-  reminderHost = host;
-}
-
-/**
  * Sessions whose newest appended user entry is a reply reminder. No second
  * reminder follows until the session has handled something else, so a
  * session that ignores its reminders is not woken again and again. In memory:
  * a restart allows at most one more, still bounded by each request's count.
  */
 const reminderLast = new Set<string>();
-/**
- * How many times a session's reminder gave way to other work since its last
- * appended user entry. Each yield offers the idle edge again, so the work runs
- * first and the reminder follows; the bound stops a blocker that never clears
- * from offering the edge forever. The next real idle edge starts afresh.
- */
-const reminderYields = new Map<string, number>();
-const REMINDER_REOFFERS_MAX = 3;
-
 /** How much of each request a reminder quotes back. */
 const REMINDER_EXCERPT_MAX = 120;
 
@@ -1444,40 +1289,7 @@ const REMINDER_EXCERPT_MAX = 120;
 export function installReplyReminders(): () => void {
   return subscribeSessionUserEntry((sessionId) => {
     reminderLast.delete(sessionId);
-    reminderYields.delete(sessionId);
   });
-}
-
-/**
- * Why a reminder may not take the edge now. `stop`: nothing to do until
- * something else brings the session back — a Stop's Resume, the end of a
- * running turn, an entry other than a reminder. `yield`: other work is owed
- * first; it runs, and the edge is offered again.
- */
-type ReminderBlock = "stop" | "yield";
-
-function reminderBlock(
-  driver: RuntimePromptDriver,
-  sessionId: string,
-): ReminderBlock | undefined {
-  if (
-    deliveryStopped ||
-    driver.released ||
-    driver.isRunning ||
-    automaticTurnsHeld(sessionId) ||
-    reminderLast.has(sessionId)
-  )
-    return "stop";
-  if (
-    explicitSendWaiting(sessionId) ||
-    promptQueueHasPriority(sessionId) ||
-    peerPromptStore.listPendingForRecipient(sessionId).length > 0 ||
-    owesNotice(sessionId) ||
-    reminderHost?.handoffOwed(sessionId) === true ||
-    reminderHost?.wakeOwed(sessionId) === true
-  )
-    return "yield";
-  return undefined;
 }
 
 function dueReminders(sessionId: string, limit: number): PeerPromptRecord[] {
@@ -1505,37 +1317,21 @@ export async function offerReplyReminders(
   sessionId: string,
   admission?: { driver: RuntimePromptDriver; shouldStart(): boolean },
 ): Promise<void> {
+  if (!admission) {
+    wakeSessionDelivery(sessionId, true);
+    return;
+  }
   if (
-    deliveryStopped ||
-    automaticTurnsHeld(sessionId) ||
+    !admission.shouldStart() ||
+    explicitSendWaiting(sessionId) ||
     reminderLast.has(sessionId)
   )
     return;
-  const live = admission?.driver ?? (await getHub()).getLiveById(sessionId);
-  if (!live || !isRuntimePromptDriver(live)) return;
-  const limit = getSettings().sessionPeerPromptReminderLimit;
-  if (dueReminders(sessionId, limit).length === 0) return;
-  // The recipient's drain lock, so no peer batch or notice turn starts
-  // beside it; a drain asked for meanwhile coalesces onto the reservation
-  // and runs again at its release.
-  while (drainLocks.has(sessionId))
-    await drainLocks.get(sessionId)?.catch(() => {});
-  if (admission?.shouldStart() === false) return;
-  let release!: () => void;
-  const reservation = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  drainLocks.set(sessionId, reservation);
-  let block: ReminderBlock | undefined;
-  try {
-    block = await deliverReplyReminder(live, sessionId, admission?.shouldStart);
-  } finally {
-    releaseRecipientReservation(sessionId, reservation, release);
-  }
-  if (block !== "yield") return;
-  const yields = (reminderYields.get(sessionId) ?? 0) + 1;
-  reminderYields.set(sessionId, yields);
-  if (yields <= REMINDER_REOFFERS_MAX) reminderHost?.requestIdleEdge(sessionId);
+  await deliverReplyReminder(
+    admission.driver,
+    sessionId,
+    admission.shouldStart,
+  );
 }
 
 /** The reminder turn, rebuilt when its list changes during admission. */
@@ -1543,11 +1339,15 @@ async function deliverReplyReminder(
   driver: RuntimePromptDriver,
   sessionId: string,
   shouldStart?: () => boolean,
-): Promise<ReminderBlock | undefined> {
+): Promise<void> {
   const limit = getSettings().sessionPeerPromptReminderLimit;
   for (let attempt = 0; attempt < NOTICE_ADMISSION_ATTEMPTS; attempt += 1) {
-    const block = reminderBlock(driver, sessionId);
-    if (block) return block;
+    if (
+      shouldStart?.() === false ||
+      explicitSendWaiting(sessionId) ||
+      reminderLast.has(sessionId)
+    )
+      return;
     const due = dueReminders(sessionId, limit);
     if (due.length === 0) return undefined;
     const ids = due.map((r) => r.id).join();
@@ -1564,11 +1364,14 @@ async function deliverReplyReminder(
         // After the last await: anything owed first takes the edge, and the
         // list is what is still open now.
         admit: () => {
-          if (shouldStart?.() === false) throw new ReminderBlockedError("stop");
-          const late = reminderBlock(driver, sessionId);
-          if (late) throw new ReminderBlockedError(late);
+          if (
+            shouldStart?.() === false ||
+            explicitSendWaiting(sessionId) ||
+            reminderLast.has(sessionId)
+          )
+            throw new ReminderBlockedError();
           const now = dueReminders(sessionId, limit);
-          if (now.length === 0) throw new ReminderBlockedError(undefined);
+          if (now.length === 0) throw new ReminderBlockedError();
           if (now.map((r) => r.id).join() !== ids)
             throw new NoticeSetChangedError();
         },
@@ -1592,8 +1395,11 @@ async function deliverReplyReminder(
       return undefined;
     } catch (err) {
       if (err instanceof NoticeSetChangedError) continue;
-      if (err instanceof ReminderBlockedError) return err.block;
-      if (err instanceof AutomaticTurnsHeldError) return "stop";
+      if (
+        err instanceof ReminderBlockedError ||
+        err instanceof AutomaticTurnsHeldError
+      )
+        return;
       // Counted or not, nothing retries it: the next idle edge does.
       console.warn(
         `[peer] reply reminder for ${sessionId} was not delivered (${failureLabel(err)})`,
@@ -1608,7 +1414,7 @@ async function deliverReplyReminder(
 
 /** A reminder turn refused at admission: other work first, or nothing left. */
 class ReminderBlockedError extends Error {
-  constructor(readonly block: ReminderBlock | undefined) {
+  constructor() {
     super("The reply reminder gave way before its turn was appended.");
     this.name = "ReminderBlockedError";
   }
@@ -1877,7 +1683,7 @@ export function sweepPeerPromptRetries(now = Date.now()): void {
   const requeued = peerPromptStore.requeueDueRetries(now);
   for (const m of requeued) void broadcastCardUpdateFor(m);
   const recipients = new Set(requeued.map((m) => m.recipientSessionId));
-  for (const id of recipients) void drainRecipient(id).catch(() => {});
+  for (const id of recipients) wakeRecipient(id);
   // A failure the database refused when it happened is retried here too, a
   // bounded batch per sweep, from the journal that kept it
   // (`delegationFailureJournal.ts`). It reports its own trouble and never
@@ -2274,7 +2080,7 @@ function wakeSendersOwingNotice(
       .filter((m) => m.responseRequested && m.senderSessionId !== recipientId)
       .map((m) => m.senderSessionId),
   );
-  for (const id of senders) wakeRecipient(id);
+  wakeForNotice(senders);
 }
 
 const STRANDED_ADMISSION_REASON =
@@ -2398,7 +2204,7 @@ export function sweepExpiredLeases(now = Date.now()): void {
   const requeued = peerPromptStore.requeueExpiredLeases(now);
   for (const m of requeued) void broadcastCardUpdateFor(m);
   const recipients = new Set(requeued.map((m) => m.recipientSessionId));
-  for (const id of recipients) void drainRecipient(id).catch(() => {});
+  for (const id of recipients) wakeRecipient(id);
 }
 
 /**
@@ -2440,7 +2246,10 @@ export function drainAllQueuedOnBoot(
     ...peerPromptStore.senderIdsOwingNotice(),
     ...delegationFailureNoticeStore.coordinatorsWithPending(),
   ]);
-  for (const sessionId of sessions) offer(sessionId);
+  for (const sessionId of sessions) {
+    reofferInterruptionNotice(sessionId);
+    offer(sessionId);
+  }
 }
 
 /* ------------------------------- envelope -------------------------------- */

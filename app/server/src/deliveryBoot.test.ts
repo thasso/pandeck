@@ -7,6 +7,31 @@ import {
   type DeliverySession,
 } from "./deliveryScheduler.ts";
 
+test("boot preserves an idle identity only without a coalesced wake", async () => {
+  const offers: Array<[string, string | undefined]> = [];
+  const boot = createDeliveryBoot({
+    wake: async (id, runId) => {
+      offers.push([id, runId]);
+    },
+    offerReminders: async (id, runId) => {
+      offers.push([id, runId]);
+    },
+  });
+  boot.offer("self", true, "r1");
+  boot.offer("coalesced", true, "r2");
+  boot.offer("coalesced");
+  boot.offer("reverse");
+  boot.offer("reverse", true, "r3");
+  await boot.release();
+  boot.offer("released", true, "r4");
+  assert.deepEqual(offers, [
+    ["self", "r1"],
+    ["coalesced", undefined],
+    ["reverse", undefined],
+    ["released", "r4"],
+  ]);
+});
+
 test("boot collection preserves real idle, Resume and reminder re-offers without enabling boot reminders", async () => {
   const delivered: string[] = [];
   const reminder: DeliveryLane<DeliverySession> = {

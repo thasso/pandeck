@@ -444,7 +444,6 @@ function patchCard(
  * could resume after a reject completed and execute what the user just refused.
  * Serializing means the loser re-reads a resolved card and is told so, while a
  * `prepare` that throws still leaves the card pending for a real second attempt.
- * (`peerPrompt.ts`'s `drainLocks` is the same in-process pattern.)
  */
 const decisionLocks = new Map<string, Promise<void>>();
 

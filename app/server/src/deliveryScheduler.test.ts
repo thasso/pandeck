@@ -66,6 +66,7 @@ function fixture() {
   const scheduler = createDeliveryScheduler({
     lanes,
     reminder,
+    deferOnDecline: { queue: ["peer FIFO", "peer notices"] },
     settleEarlierDeliveries: (id) => settle(id),
     runAutoApprovals: (id) => approve(id),
     live: (id) => sessions.get(id),
@@ -137,6 +138,224 @@ test("scheduler contract: priority, no cold acquisition without debt, and restri
   assert.equal(f.delivered().at(-1), "reminders:s");
 });
 
+test.each(["declined", "emptied", "failed", "threw"] as const)(
+  "scheduler contract: %s queue defers only peers while still owed",
+  async (outcome) => {
+    const f = fixture();
+    f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: true });
+    f.oweAll();
+    const queue = f.lanes.find((lane) => lane.name === "queue")!;
+    queue.deliver = async () => {
+      f.calls.push("queue:s");
+      await Promise.resolve();
+      // A failed queue no longer owes priority, even while its row remains.
+      if (outcome === "emptied" || outcome === "failed")
+        f.debts.delete("queue:s");
+      if (outcome === "threw") throw new Error("queue rejected");
+      return "none";
+    };
+    await f.scheduler.wake("s");
+    assert.deepEqual(f.delivered(), [
+      "approvals:s",
+      "handoffs:s",
+      "queue:s",
+      "workflow:s",
+      ...(outcome === "declined" ? [] : ["peer FIFO:s", "peer notices:s"]),
+      "background:s",
+    ]);
+    assert.deepEqual(f.errors, outcome === "threw" ? ["queue"] : []);
+    if (outcome === "declined") {
+      assert.ok(f.debts.has("peer FIFO:s"));
+      assert.ok(f.debts.has("peer notices:s"));
+      f.debts.delete("queue:s");
+      await f.scheduler.wake("s");
+      assert.deepEqual(f.delivered().slice(-3), [
+        "approvals:s",
+        "peer FIFO:s",
+        "peer notices:s",
+      ]);
+    }
+  },
+);
+
+test.each([
+  "handoffs",
+  "queue",
+  "workflow",
+  "peer FIFO",
+  "peer notices",
+  "background",
+])(
+  "scheduler contract: a late %s offer outranks a reminder still preparing",
+  async (name) => {
+    const f = fixture();
+    f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+    f.debts.add("reminders:s");
+    const entered = deferred();
+    const prepared = deferred();
+    f.reminder.deliver = async (session, shouldStart) => {
+      entered.resolve();
+      await prepared.promise;
+      if (shouldStart() !== undefined) return "none";
+      f.calls.push(`reminders:${session.sessionId}`);
+      f.debts.delete("reminders:s");
+      return "turn";
+    };
+    const prior = f.lanes.find((lane) => lane.name === name)!;
+    prior.deliver = async () => {
+      f.calls.push(`${name}:s`);
+      f.debts.delete(`${name}:s`);
+      f.sessions.set("s", { sessionId: "s", isRunning: true, canSteer: false });
+      return "turn";
+    };
+    const run = f.scheduler.offerReminders("s");
+    await entered.promise;
+    f.debts.add(`${name}:s`);
+    const wake = f.scheduler.wake("s");
+    prepared.resolve();
+    await Promise.all([run, wake]);
+    assert.deepEqual(
+      f.delivered().filter((c) => !c.startsWith("approvals:")),
+      [`${name}:s`],
+    );
+    assert.ok(
+      f.debts.has("reminders:s"),
+      "the refused reminder spent no count",
+    );
+    f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+    await f.scheduler.offerReminders("s");
+    assert.equal(f.delivered().at(-1), "reminders:s");
+  },
+);
+
+test.each(["released", "held", "shutdown", "running"] as const)(
+  "scheduler contract: late admission reports %s from the shared check",
+  async (reason) => {
+    const f = fixture();
+    const session = {
+      sessionId: "s",
+      isRunning: false,
+      canSteer: false,
+      released: false,
+    };
+    f.sessions.set("s", session);
+    f.debts.add("peer FIFO:s");
+    f.lanes.find((lane) => lane.name === "peer FIFO")!.deliver = async (
+      _session,
+      checkAdmission,
+    ) => {
+      await Promise.resolve();
+      if (reason === "released") session.released = true;
+      if (reason === "held") f.held.add("s");
+      if (reason === "shutdown") f.stop();
+      if (reason === "running") session.isRunning = true;
+      assert.equal(checkAdmission(), reason);
+      return "none";
+    };
+    await f.scheduler.wake("s");
+    assert.ok(f.debts.has("peer FIFO:s"));
+  },
+);
+
+test("scheduler contract: persistent earlier debt blocks reminders without a re-offer loop", async () => {
+  const f = fixture();
+  f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+  f.debts.add("background:s");
+  f.debts.add("reminders:s");
+  const background = f.lanes.find((lane) => lane.name === "background")!;
+  background.deliver = async () => {
+    f.calls.push("background:s");
+    return "none";
+  };
+  f.reminder.deliver = async (_session, shouldStart) => {
+    assert.equal(shouldStart(), "earlier-debt");
+    return "none";
+  };
+  await f.scheduler.offerReminders("s");
+  assert.deepEqual(
+    f.delivered().filter((c) => !c.startsWith("approvals:")),
+    ["background:s"],
+  );
+  assert.equal(f.debts.size, 2);
+});
+
+test.each(["pending", "exhausted"] as const)(
+  "scheduler contract: %s retry debt retains priority without becoming an offer or cold acquisition",
+  async () => {
+    const f = fixture();
+    const notices = f.lanes.find((lane) => lane.name === "peer notices")!;
+    notices.offerable = () => false;
+    f.debts.add("peer notices:cold");
+    await f.scheduler.wake("cold");
+    assert.deepEqual(f.cold, []);
+    f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+    f.debts.add("peer notices:s");
+    f.debts.add("reminders:s");
+    const remind = f.reminder.deliver;
+    f.reminder.deliver = async (_session, checkAdmission) => {
+      assert.equal(checkAdmission(), "earlier-debt");
+      return "none";
+    };
+    await f.scheduler.offerReminders("s");
+    await f.scheduler.wake("s");
+    assert.deepEqual(f.delivered(), [
+      "approvals:cold",
+      "approvals:s",
+      "approvals:s",
+    ]);
+    assert.equal(f.errors.length, 0);
+    notices.offerable = () => true;
+    await f.scheduler.wake("s");
+    assert.equal(f.delivered().at(-1), "peer notices:s");
+    // An ordinary producer never makes a reminder eligible on its own.
+    await f.scheduler.wake("s");
+    assert.ok(f.debts.has("reminders:s"));
+    f.reminder.deliver = remind;
+    await f.scheduler.offerReminders("s");
+    assert.equal(f.delivered().at(-1), "reminders:s");
+  },
+);
+
+test.each(["peer notices", "background", "reminders"])(
+  "scheduler contract: a peer notice arriving after the %s read survives without another event",
+  async (name) => {
+    const f = fixture();
+    f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+    f.debts.add(`${name}:s`);
+    const entered = deferred();
+    const release = deferred();
+    const current =
+      name === "reminders"
+        ? f.reminder
+        : f.lanes.find((lane) => lane.name === name)!;
+    let first = true;
+    current.deliver = async () => {
+      f.calls.push(`${name}:s`);
+      f.debts.delete(`${name}:s`);
+      if (first) {
+        first = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return "turn";
+    };
+    const run =
+      name === "reminders"
+        ? f.scheduler.offerReminders("s")
+        : f.scheduler.wake("s");
+    await entered.promise;
+    f.debts.add("peer notices:s");
+    const wake = f.scheduler.wake("s");
+    release.resolve();
+    await Promise.all([run, wake]);
+    assert.deepEqual(
+      f.delivered().filter((c) => !c.startsWith("approvals:")),
+      [`${name}:s`, "peer notices:s"],
+    );
+    assert.equal(f.debts.size, 0);
+  },
+);
+
 test("scheduler contract: queued user turns precede workflow assignments, which precede peer FIFO", async () => {
   const f = fixture();
   for (const lane of f.lanes.filter((lane) =>
@@ -204,6 +423,40 @@ test("scheduler contract: mixed held backlog stays untouched and Resume delivers
   );
   assert.equal(f.debts.size, 0);
 });
+
+test.each(["self only", "self then other", "other then self"] as const)(
+  "scheduler contract: rerun retains only an uncoalesced idle identity, %s",
+  async (cause) => {
+    const f = fixture();
+    const entered = deferred();
+    const release = deferred();
+    f.debts.add("background:s");
+    f.lanes.find((lane) => lane.name === "background")!.deliver = async () => {
+      f.debts.delete("background:s");
+      entered.resolve();
+      await release.promise;
+      return "none";
+    };
+    const identities: Array<string | undefined> = [];
+    const notices = f.lanes.find((lane) => lane.name === "peer notices")!;
+    notices.owes = () => true;
+    notices.offerable = (_id, runId) => {
+      identities.push(runId);
+      return false;
+    };
+    const run = f.scheduler.wake("s");
+    await entered.promise;
+    if (cause === "other then self") void f.scheduler.wake("s");
+    void f.scheduler.offerReminders("s", "notice-run");
+    if (cause === "self then other") void f.scheduler.wake("s");
+    release.resolve();
+    await run;
+    assert.deepEqual(identities, [
+      undefined,
+      cause === "self only" ? "notice-run" : undefined,
+    ]);
+  },
+);
 
 test("scheduler contract: an arrival after a read point reruns from the top, without parallel admission", async () => {
   const f = fixture();
@@ -531,12 +784,12 @@ test("scheduler contract: boot is ordered per session, parallel across sessions,
   f.oweAll("slow");
   f.oweAll("fast");
   const handoffs = f.lanes[0]!.deliver;
-  f.lanes[0]!.deliver = async (s) => {
+  f.lanes[0]!.deliver = async (s, shouldStart) => {
     if (s.sessionId === "slow") {
       entered.resolve();
       await release.promise;
     }
-    return handoffs(s);
+    return handoffs(s, shouldStart);
   };
   const boot = f.scheduler.boot(["slow", "fast", "fast"]);
   await entered.promise;

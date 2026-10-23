@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { afterEach, beforeAll, describe, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, it, vi } from "vitest";
 import {
   PEER_PROMPT_EXCERPT_CHARS,
   peerPromptExcerpt,
@@ -18,10 +18,6 @@ import { BackgroundCompletionDelivery } from "./backgroundWork/completionDeliver
 import { createDeliveryScheduler } from "./deliveryScheduler.ts";
 import { setDeliveryWake } from "./deliveryWake.ts";
 import { sessionDeliveryLanes } from "./sessionDeliveryLanes.ts";
-import {
-  clearExplicitRecipientAuthority,
-  markExplicitRecipientAuthority,
-} from "./recipientDrainAuthority.ts";
 
 // `vi.mock` factories run hoisted, before normal top-level imports finish
 // initializing, so referencing the real `FakeRuntimeDriver` class here would
@@ -152,7 +148,7 @@ const {
   cancelQueuedPeerPrompts,
   closeChainsForHumanPrompt,
   drainAllQueuedOnBoot,
-  drainRecipient,
+  drainRecipient: requestRecipientDelivery,
   peerPromptAnchorFor,
   peerPromptQueueField,
   peerPromptThreadsFor,
@@ -161,7 +157,7 @@ const {
   runPeerPromptRetention,
   sendPeerPrompt,
   sendQueuedPeerPromptNow,
-  setHubForTests,
+  setHubForTests: setPeerHub,
   setPeerPromptAutoDeliverForTests,
   setInterruptionNoticeRetryDelayForTests,
   setPeerPromptDeliveryStoppedForTests,
@@ -185,7 +181,25 @@ const { automaticTurnHoldStore } =
 const handoffs = await import("./agentHandoffs.ts");
 const { agentHandoffStore } = await import("./db/agentHandoffStore.ts");
 
-setHubForTests(fakeHub as any);
+let activeHub = fakeHub;
+function setHubForTests(hub: typeof fakeHub) {
+  activeHub = hub;
+  setPeerHub(hub as any);
+}
+setHubForTests(fakeHub);
+let delivery: ReturnType<typeof installDeliveryTestScheduler>;
+beforeEach(() => {
+  delivery = installDeliveryTestScheduler({
+    live: (id) => activeHub.getLiveById(id) as RuntimePromptDriver | undefined,
+    acquire: async (id) =>
+      (await activeHub.acquireById(id)) as RuntimePromptDriver | undefined,
+  });
+  setSessionIdleHook((id) => void delivery.wake(id));
+});
+const drainRecipient = async (id: string) => {
+  await requestRecipientDelivery(id);
+  return delivery.drain(id);
+};
 
 let n = 0;
 const created: string[] = [];
@@ -984,13 +998,6 @@ describe("peer prompt engine", () => {
     );
   });
 
-  it("coalesces concurrent drains for the same recipient", () => {
-    const a = drainRecipient("nonexistent-recipient-xyz");
-    const b = drainRecipient("nonexistent-recipient-xyz");
-    assert.equal(a, b, "concurrent drains share one in-flight promise");
-    return Promise.all([a, b]);
-  });
-
   it("starts a new conversation when correlation is ambiguous", async () => {
     const me = seed("Me2");
     const other = seed("Other2");
@@ -1459,39 +1466,6 @@ describe("real delivery through a fake runtime driver", () => {
       final.transitions.map((t) => t.to),
       ["queued", "dispatching", "admitted", "acknowledged", "completed"],
     );
-  });
-
-  it("stops delivering new batches during graceful shutdown so the drain can settle", async () => {
-    const sender = seed("SenderShutdown");
-    const recipient = seed("RecipientShutdown");
-    driverFor(recipient).behavior = { mode: "success" };
-    const { message } = await sendPeerPrompt({
-      senderSessionId: sender,
-      targetSessionId: recipient,
-      prompt: "hello",
-      responseRequested: false,
-    });
-    // Shutdown requested: no new batch delivery must start, so the idle hook
-    // cannot re-drive the recipient and keep the process running.
-    stopPeerPromptDelivery();
-    try {
-      await drainRecipient(recipient);
-      const held = peerPromptStore.getById(message.id)!;
-      assert.equal(
-        held.status,
-        "queued",
-        "row must stay queued (undelivered) while delivery is stopped",
-      );
-      assert.deepEqual(
-        held.transitions.map((t) => t.to),
-        ["queued"],
-      );
-    } finally {
-      setPeerPromptDeliveryStoppedForTests(false);
-    }
-    // Delivery resumes normally after the flag is cleared (e.g. next boot).
-    await drainRecipient(recipient);
-    assert.equal(peerPromptStore.getById(message.id)!.status, "completed");
   });
 
   it("desensitizes the delivered origin: no raw sender session id in the recipient's canonical log", async () => {
@@ -2140,44 +2114,6 @@ async function waitFor(check: () => boolean, label: string): Promise<void> {
 describe("browser-independent drain triggers", () => {
   afterEach(() => setSessionIdleHook(undefined));
 
-  it("the idle-hook background phase waits for explicit peer authority", async () => {
-    const recipient = seed("Idle authority recipient");
-    let offers = 0;
-    const delivery = new BackgroundCompletionDelivery({
-      drainPeers: drainRecipient,
-      offer: async () => {
-        offers += 1;
-        return "delivered";
-      },
-    });
-    const driver = driverFor(recipient);
-    markExplicitRecipientAuthority(recipient);
-    delivery.enqueueActivity(recipient, {
-      itemId: "background-item",
-      eventId: "background-event",
-      label: "Background task",
-      lineCount: 1,
-      bytes: 1,
-      droppedEventCount: 0,
-      humanLink: "/background-tasks",
-    });
-    setSessionIdleHook((sessionId) => {
-      void delivery.drain(sessionId);
-    });
-
-    try {
-      // A non-steering runtime's idle hook invokes the lower-priority phase.
-      await promptRuntimeSession(driver, "automatic turn", {
-        origin: { kind: "system", source: "test" },
-      });
-      assert.equal(offers, 0);
-    } finally {
-      clearExplicitRecipientAuthority(recipient);
-    }
-    await delivery.drain(recipient);
-    assert.equal(offers, 1);
-  });
-
   it("drains a queued peer prompt once ANY prompt on the recipient session goes idle (non-web trigger)", async () => {
     const sender = seed("HookSender");
     const recipient = seed("HookRecipient");
@@ -2225,7 +2161,6 @@ describe("browser-independent drain triggers", () => {
     assert.equal(peerPromptStore.listPendingForRecipient(recipient).length, 1);
 
     const background = new BackgroundCompletionDelivery({
-      drainPeers: async () => {},
       offer: async () => "delivered",
     });
     const scheduler = createDeliveryScheduler({
@@ -2319,10 +2254,8 @@ describe("interruption notice to the sender", () => {
         });
         const removeDebt = vi.fn();
         const offer = vi.fn(async () => "unavailable" as const);
-        const drainPeers = vi.fn(async () => {});
         const discard = vi.fn();
         const background = new BackgroundCompletionDelivery({
-          drainPeers,
           offer,
           discard,
           outbox: {
@@ -2382,7 +2315,7 @@ describe("interruption notice to the sender", () => {
         });
         try {
           // The ordinary production entrypoint, not a direct call to the hook.
-          await drainRecipient(owner);
+          await requestRecipientDelivery(owner);
           await pass;
           assert.equal(acquisitions, 1);
           assert.equal(laneAcquire.mock.calls.length, 0);
@@ -2417,7 +2350,6 @@ describe("interruption notice to the sender", () => {
             "handoff and notice retain their own scheduled retries",
           );
           assert.equal(offer.mock.calls.length, 0);
-          assert.equal(drainPeers.mock.calls.length, 0);
           assert.equal(
             removeDebt.mock.calls.length,
             0,
@@ -2536,51 +2468,6 @@ describe("interruption notice to the sender", () => {
     assert.equal(
       peerPromptStore.getById(message.id)?.senderNotifiedAt !== undefined,
       true,
-    );
-  });
-
-  it("delivers a failure that lands while the sender's previous notice turn is running", async () => {
-    const sender = seed("BusySender");
-    const first = seed("FirstFailing");
-    const second = seed("SecondFailing");
-    const senderDriver = driverFor(sender);
-    senderDriver.behavior = { mode: "success" };
-    for (const id of [first, second])
-      driverFor(id).behavior = { mode: "error", message: `${id} refused` };
-    const a = await sendPeerPrompt({
-      senderSessionId: sender,
-      targetSessionId: first,
-      prompt: "first ask",
-      responseRequested: true,
-    });
-    const b = await sendPeerPrompt({
-      senderSessionId: sender,
-      targetSessionId: second,
-      prompt: "second ask",
-      responseRequested: true,
-    });
-
-    const release = senderDriver.holdTurns();
-    await drainRecipient(first);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(senderDriver.isRunning, true, "the first notice is mid-turn");
-    // Its owed-notice read is already behind it.
-    await drainRecipient(second);
-    release();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    for (const m of [a.message, b.message])
-      assert.notEqual(
-        peerPromptStore.getById(m.id)?.senderNotifiedAt,
-        undefined,
-        "a wake that coalesced onto the running drain is not lost",
-      );
-    assert.equal(senderDriver.promptOptions.length, 2);
-    assert.ok(
-      readFileSync(canonicalSessionLogPath(sender), "utf8").includes(
-        `session \`${second}\``,
-      ),
-      "the second notice names the second failed recipient",
     );
   });
 
@@ -2705,6 +2592,54 @@ describe("interruption notice to the sender", () => {
     );
   });
 
+  it("a refused notice's own idle wake and unrelated wakes cannot bypass its retry backoff", async () => {
+    vi.useFakeTimers();
+    const sender = seed("Backoff sender");
+    const recipient = seed("Backoff recipient");
+    const driver = driverFor(sender);
+    driver.behavior = { mode: "reject", message: "provider hiccup" };
+    const request = strandedRow(sender, recipient, "still owed");
+    setInterruptionNoticeRetryDelayForTests(100);
+    // One genuine self-generated idle edge is enough to expose the bug. Avoid
+    // generating an unbounded stream of synthetic edges if the policy regresses.
+    setSessionIdleHook((id) => {
+      setSessionIdleHook(undefined);
+      void delivery.wake(id);
+    });
+    try {
+      await drainRecipient(sender);
+      assert.equal(
+        driver.promptOptions.length,
+        1,
+        "its own idle edge is not a retry",
+      );
+      for (let i = 0; i < 5; i++) await delivery.wake(sender);
+      assert.equal(
+        driver.promptOptions.length,
+        1,
+        "unrelated wakes do not shorten backoff",
+      );
+      assert.equal(
+        peerPromptStore.getById(request.id)?.senderNotifiedAt,
+        undefined,
+      );
+      driver.behavior = { mode: "success" };
+      await vi.advanceTimersByTimeAsync(100);
+      await delivery.drain(sender);
+      assert.equal(
+        driver.promptOptions.length,
+        2,
+        "the scheduled retry reaches the provider",
+      );
+      assert.ok(peerPromptStore.getById(request.id)?.senderNotifiedAt);
+    } finally {
+      stopPeerPromptDelivery();
+      setPeerPromptDeliveryStoppedForTests(false);
+      setInterruptionNoticeRetryDelayForTests(undefined);
+      vi.useRealTimers();
+    }
+  });
+
   it("retries a refused notice on its own, with no further drain from anywhere", async () => {
     const sender = seed("RetrySender");
     const recipient = seed("RetryRecipient");
@@ -2713,10 +2648,8 @@ describe("interruption notice to the sender", () => {
     const m = strandedRow(sender, recipient, "needs a retry");
     setInterruptionNoticeRetryDelayForTests(5);
     try {
-      // The ONLY drain production performs. The runtime's idle hook fires inside
-      // `LiveRuntimeSession.prompt`'s finally, while this drain still holds its lock, so
-      // it coalesces and starts nothing; after this returns the sender is idle
-      // with an empty queue and no event left to ride.
+      // The runtime's own idle wake must honor the notice's retry backoff.
+      // After this returns, only the bounded timer may re-offer the notice.
       await drainRecipient(sender);
       assert.equal(driver.promptOptions.length, 1);
       assert.equal(peerPromptStore.getById(m.id)?.senderNotifiedAt, undefined);
@@ -2809,6 +2742,61 @@ describe("interruption notice to the sender", () => {
     }
   });
 
+  it("preserves public notice re-offers during backoff and after budget exhaustion", async () => {
+    vi.useFakeTimers();
+    const sender = seed("Manual retry sender");
+    const recipient = seed("Manual retry recipient");
+    const driver = driverFor(sender);
+    driver.behavior = { mode: "reject", message: "provider unavailable" };
+    const request = strandedRow(sender, recipient, "still owed");
+    setInterruptionNoticeRetryDelayForTests(100);
+    try {
+      await drainRecipient(sender);
+      assert.equal(driver.promptOptions.length, 1);
+      await drainRecipient(sender);
+      assert.equal(
+        driver.promptOptions.length,
+        2,
+        "public re-offer bypasses pending backoff",
+      );
+      for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(100);
+      assert.equal(
+        driver.promptOptions.length,
+        6,
+        "manual re-offers consume, not reset, retry budget",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      assert.equal(driver.promptOptions.length, 6);
+      for (let i = 0; i < 5; i++) await delivery.wake(sender);
+      assert.equal(
+        driver.promptOptions.length,
+        6,
+        "unrelated producer wakes cannot exceed the budget",
+      );
+      await drainRecipient(sender);
+      assert.equal(
+        driver.promptOptions.length,
+        7,
+        "public re-offer still attempts after exhaustion",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      assert.equal(
+        driver.promptOptions.length,
+        7,
+        "it does not restart automatic retries",
+      );
+      driver.behavior = { mode: "success" };
+      await drainRecipient(sender);
+      assert.equal(driver.promptOptions.length, 8);
+      assert.ok(peerPromptStore.getById(request.id)?.senderNotifiedAt);
+    } finally {
+      stopPeerPromptDelivery();
+      setPeerPromptDeliveryStoppedForTests(false);
+      setInterruptionNoticeRetryDelayForTests(undefined);
+      vi.useRealTimers();
+    }
+  });
+
   it("gathers several stranded requests into one notice rather than one wake each", async () => {
     const sender = seed("BatchNoticeSender");
     const a = seed("RecipientA");
@@ -2823,29 +2811,6 @@ describe("interruption notice to the sender", () => {
     assert.equal(driver.promptOptions.length, 1, "one turn, not two");
     const delivered = readFileSync(canonicalSessionLogPath(sender), "utf8");
     assert.ok(delivered.includes(a) && delivered.includes(b));
-  });
-
-  it("delivers incoming queued work before telling the sender an old prompt died", async () => {
-    const sender = seed("OrderSender");
-    const recipient = seed("OrderRecipient");
-    const other = seed("OrderOther");
-    const driver = driverFor(sender);
-    driver.behavior = { mode: "success" };
-    strandedRow(sender, recipient, "the stranded one");
-    await sendPeerPrompt({
-      senderSessionId: other,
-      targetSessionId: sender,
-      prompt: "something newer",
-      responseRequested: false,
-    });
-
-    await drainRecipient(sender);
-
-    const log = readFileSync(canonicalSessionLogPath(sender), "utf8");
-    assert.ok(
-      log.indexOf("something newer") < log.indexOf("Peer notice"),
-      "queued delivery comes first, so the notice lands on a session already holding its new work",
-    );
   });
 });
 
@@ -3151,6 +3116,13 @@ describe("waiting peer prompts in the composer queue", () => {
     const recipient = seed("R", { harness: "claude-sdk" });
     const r = steerableRecipient(recipient, { deferSteer: true });
     await r.startTurn();
+    const joinedRunId = sessionRuntime.get(recipient)!.currentRunId;
+    assert.ok(
+      joinedRunId,
+      "deferred acceptance starts inside an open run bracket",
+    );
+    const prompt = vi.spyOn(sessionRuntime, "deliverPrompt");
+    const invariant = vi.spyOn(console, "assert");
     const { message, card } = await sendPeerPrompt({
       senderSessionId: sender,
       targetSessionId: recipient,
@@ -3176,6 +3148,15 @@ describe("waiting peer prompts in the composer queue", () => {
 
     r.answerSteer({ stopReason: "end", steerDelivery: "steer" });
     await sent;
+    const receipt = prompt.mock.calls.at(-1)![3];
+    assert.equal(
+      receipt.append?.runId,
+      joinedRunId,
+      "O1: the peer receipt names the joined run, not a future end",
+    );
+    assert.equal(invariant.mock.calls.at(-1)?.[0], true);
+    prompt.mockRestore();
+    invariant.mockRestore();
     assert.equal(peerPromptStore.getById(message.id)!.status, "acknowledged");
     r.finishTurn();
     await until(
@@ -3222,7 +3203,7 @@ describe("waiting peer prompts in the composer queue", () => {
     r.finishTurn();
   });
 
-  it("serializes concurrent idle send-now deliveries through the recipient drain lock", async () => {
+  it("serializes concurrent idle send-now deliveries through explicit-send authority", async () => {
     const sender = seed("S");
     const recipient = seed("R");
     const driver = driverFor(recipient);

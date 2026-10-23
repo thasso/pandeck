@@ -6,6 +6,10 @@ import { promptQueueStore } from "./db/promptQueueStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
 import type { PromptQueueDriver } from "./promptQueue.ts";
+import {
+  reserveAccountRecovery,
+  releaseAccountRecovery,
+} from "./session/runtime/accountRecoveryAdmission.ts";
 
 const { drivers, fakeHub } = vi.hoisted(() => {
   const drivers = new Map<string, FakeRuntimeDriver & PromptQueueDriver>();
@@ -36,6 +40,8 @@ const { setDeliveryWake } = await import("./deliveryWake.ts");
 const { sessionDeliveryLanes } = await import("./sessionDeliveryLanes.ts");
 const { setWorkflowAssignmentDelivery } =
   await import("./workflow/assignmentDelivery.ts");
+const { markExplicitRecipientAuthority, clearExplicitRecipientAuthority } =
+  await import("./recipientDrainAuthority.ts");
 const { BackgroundCompletionDelivery } =
   await import("./backgroundWork/completionDelivery.ts");
 peer.setHubForTests(fakeHub);
@@ -92,27 +98,19 @@ function fixture() {
   const sender = seed();
   const errors: unknown[] = [];
   const offeredRunning: boolean[] = [];
-  let beforePeers = async () => {};
+  let beforePass = async () => {};
+  let beforeOffer = async () => {};
   const offer = offerBackgroundCompletion(async (id) => drivers.get(id));
   const background = new BackgroundCompletionDelivery({
-    held: hold.automaticTurnsHeld,
-    drainPeers: async (id, admission) => {
-      await beforePeers();
-      const live = drivers.get(id);
-      await peer.drainRecipient(id, {
-        phase: "all",
-        ...(live ? { driver: live } : {}),
-        ...admission,
-      });
-    },
-    offer: (...args) => {
+    offer: async (...args) => {
+      await beforeOffer();
       offeredRunning.push(driver.isRunning);
       return offer(...args);
     },
   });
   const scheduler = createDeliveryScheduler({
     ...sessionDeliveryLanes(background),
-    runAutoApprovals: async () => {},
+    runAutoApprovals: () => beforePass(),
     live: (id) => drivers.get(id),
     acquire: async (id) => drivers.get(id),
     held: hold.automaticTurnsHeld,
@@ -147,8 +145,11 @@ function fixture() {
     errors,
     offeredRunning,
     idlePass: () => idlePass,
-    setBeforePeers: (callback: () => Promise<void>) => {
-      beforePeers = callback;
+    setBeforePass: (callback: () => Promise<void>) => {
+      beforePass = callback;
+    },
+    setBeforeOffer: (callback: () => Promise<void>) => {
+      beforeOffer = callback;
     },
     send: (text: string) =>
       peer.sendPeerPrompt({
@@ -292,13 +293,13 @@ test("background debt survives replies arriving across two peer turns", async ()
   assert.deepEqual(f.errors, []);
 });
 
-test("background debt survives a reply arriving inside its peer phase", async () => {
+test("background debt survives a reply arriving before the scheduler reads its lanes", async () => {
   const f = fixture();
   const releaseUser = await f.startUser();
   f.enqueueBackground();
   const entered = deferred();
   const open = deferred();
-  f.setBeforePeers(async () => {
+  f.setBeforePass(async () => {
     entered.resolve();
     await open.promise;
   });
@@ -350,6 +351,57 @@ test("peer FIFO stays ahead of notices after an earlier FIFO admission", async (
   assert.deepEqual(f.errors, []);
 });
 
+test("explicit recipient authority fences background admission without a peer drain", async () => {
+  const f = fixture();
+  const id = f.driver.sessionId;
+  markExplicitRecipientAuthority(id);
+  try {
+    f.enqueueBackground();
+    await f.scheduler.wake(id);
+    assert.deepEqual(f.offeredRunning, []);
+    assert.ok(f.background.wakeOwed(id));
+  } finally {
+    clearExplicitRecipientAuthority(id);
+  }
+  await f.scheduler.wake(id);
+  await until(() => f.driver.promptTexts.length === 1);
+  assert.match(f.driver.promptTexts[0]!, /Background work updated/);
+  assert.deepEqual(f.errors, []);
+});
+
+test("send-now and scheduler passes await the same unfinished peer claim after idle", async () => {
+  const f = fixture();
+  const releaseTurn = holdTurn(f.driver);
+  const releaseSettle = f.driver.holdSettle();
+  releases.push(releaseSettle);
+  await f.send("automatic peer");
+  await until(() => f.driver.isRunning);
+  const chosen = await peer.sendPeerPrompt({
+    senderSessionId: seed().sessionId,
+    targetSessionId: f.driver.sessionId,
+    prompt: "chosen peer",
+    responseRequested: false,
+  });
+  const sending = peer.sendQueuedPeerPromptNow(
+    f.driver.sessionId,
+    chosen.card.messageKey,
+  );
+  releaseTurn();
+  await until(() => !f.driver.isRunning);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(peerPromptStore.getById(chosen.message.id)?.status, "queued");
+  assert.equal(
+    f.driver.promptTexts.length,
+    1,
+    "neither admission can overtake the unsettled claim",
+  );
+  releaseSettle();
+  await sending;
+  assert.equal(peerPromptStore.getById(chosen.message.id)?.status, "completed");
+  assert.match(f.driver.promptTexts[1]!, /chosen peer/);
+  assert.deepEqual(f.errors, []);
+});
+
 test("an idle settlement wait warns without releasing its admission gate", async () => {
   const f = fixture();
   const releaseUser = await f.startUser();
@@ -389,9 +441,9 @@ test("a preappend rejection settles once without debt spinning and a new wake ca
   const f = fixture();
   const releaseUser = await f.startUser();
   f.enqueueBackground();
-  const error = new Error("peer phase refused before append");
+  const error = new Error("background offer refused before append");
   let attempts = 0;
-  f.setBeforePeers(async () => {
+  f.setBeforeOffer(async () => {
     attempts++;
     throw error;
   });
@@ -402,7 +454,7 @@ test("a preappend rejection settles once without debt spinning and a new wake ca
   assert.deepEqual(f.errors, [error]);
   assert.deepEqual(f.driver.promptTexts, ["U"]);
   assert.equal(f.background.wakeOwed(f.driver.sessionId), true);
-  f.setBeforePeers(async () => {});
+  f.setBeforeOffer(async () => {});
   await f.scheduler.wake(f.driver.sessionId);
   await until(() => f.driver.promptTexts.length === 2);
   assert.match(f.driver.promptTexts[1]!, /Background work updated/);
@@ -418,7 +470,6 @@ test("a Stop during failed acquisition spends no handoff retry or queue failure"
   });
   promptQueueStore.append({ id: `queued-${id}`, sessionId: id, text: "Q" });
   const background = new BackgroundCompletionDelivery({
-    drainPeers: async () => {},
     offer: async () => "busy",
   });
   const scheduler = createDeliveryScheduler({
@@ -439,6 +490,77 @@ test("a Stop during failed acquisition spends no handoff retry or queue failure"
   assert.equal(promptQueueStore.list(id)[0]?.error, undefined);
   assert.deepEqual(driver.promptTexts, []);
   background.stop();
+});
+
+test("a failed user queue does not defer peer admission", async () => {
+  const f = fixture();
+  const releaseUser = await f.startUser();
+  queue.queuePrompt(f.driver.sessionId, {
+    text: "/unavailable-command",
+    command: { name: "unavailable-command", rawArgs: "" },
+  });
+  const sent = await f.send("peer after failed draft");
+  releaseUser();
+  await until(
+    () => peerPromptStore.getById(sent.message.id)?.status === "completed",
+  );
+  assert.equal(queue.promptQueueHasPriority(f.driver.sessionId), false);
+  assert.equal(promptQueueStore.state(f.driver.sessionId).paused, true);
+  assert.match(
+    promptQueueStore.list(f.driver.sessionId)[0]?.error ?? "",
+    /not available/,
+  );
+  assert.deepEqual(f.errors, []);
+  assert.match(f.driver.promptTexts[1]!, /peer after failed draft/);
+});
+
+test("a recovery reservation preserves background steering and the idle prepass", async () => {
+  const f = fixture();
+  const id = f.driver.sessionId;
+  Object.defineProperty(f.driver, "canSteer", { value: true });
+  const original = f.driver.createRuntimeAdapter.bind(f.driver);
+  f.driver.createRuntimeAdapter = () => {
+    const adapter = original();
+    adapter.capabilities.steer = true;
+    const prompt = adapter.prompt.bind(adapter);
+    adapter.prompt = async (text, options) => {
+      if (!options?.steer) return prompt(text, options);
+      f.driver.promptTexts.push(text);
+      return { stopReason: "end", steered: true };
+    };
+    return adapter;
+  };
+  let prepasses = 0;
+  f.setBeforePass(async () => {
+    prepasses++;
+  });
+  const ticket = reserveAccountRecovery(id);
+  let continuation: ReturnType<typeof promptRuntimeSession> | undefined;
+  const release = holdTurn(f.driver);
+  try {
+    await f.scheduler.wake(id);
+    assert.equal(prepasses, 1, "idle approval prepass runs under reservation");
+    continuation = promptRuntimeSession(f.driver, "recovery continuation", {
+      accountRecovery: ticket,
+    });
+    await until(() => f.driver.isRunning);
+    f.enqueueBackground();
+    await f.scheduler.wake(id);
+    assert.deepEqual(f.offeredRunning, [true]);
+    await until(() => !f.background.wakeOwed(id));
+    assert.equal(f.driver.promptTexts.length, 2);
+    assert.equal(f.driver.isRunning, true);
+    assert.equal(
+      prepasses,
+      1,
+      "running continuation does not run idle approvals",
+    );
+    assert.deepEqual(f.errors, []);
+  } finally {
+    releaseAccountRecovery(id, ticket);
+    release();
+    await continuation;
+  }
 });
 
 test("running joinable offers do not await the handoff turn they may steer", async () => {

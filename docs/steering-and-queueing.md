@@ -121,9 +121,14 @@ only shares the Stop hold and its Resume.
 ### Delivery scheduler
 
 `deliveryScheduler.ts` owns one admission gate per session. Producers call
-`wake(sessionId)` without a payload. A wake during a pass marks another pass
-from the top, including an arrival after a lane's read point. Wakes coalesce,
-but never disappear into a pass that has already read the old state.
+`wake(sessionId)` without delivery content. Real idle transitions optionally
+carry `endedRunId`, captured before the runtime closes the run. Reservation
+re-offers carry no run identity. Only the peer notice lane reads that identity,
+comparing it with its own prompt receipt. A wake during a pass marks another
+pass from the top, including an arrival after a lane's read point. Wakes
+coalesce, but never disappear into a pass that has already read the old state.
+If any other wake coalesces with an idle edge, the next pass is unrelated and
+carries no run identity. Reminder eligibility is independent of that identity.
 
 Each idle pass first waits for earlier admitted deliveries to settle. The
 scheduler then reads the shared state and owed lanes, so a Stop, shutdown,
@@ -136,26 +141,30 @@ session-granted cards only while idle, even under Stop, and only queues their
 handoffs. The lanes then run in order: handoffs, user queue, workflow
 assignments, peer FIFO, peer notices, background completions, reminders.
 
-A lane exposes a cheap `owes(sessionId)` without opening a harness, and
-`deliver(session)`. The scheduler acquires a cold session once, only when work
-is owed. An optional `unavailable(sessionId, failure)` hook receives a failed
-acquisition once per owed lane per pass, without another acquisition or a new
-scheduler retry loop. It distinguishes a thrown acquisition error from an
-unavailable or unpromptable result. Handoffs retain their retry budget and
-timer; the user queue pauses its row; peer FIFO records its retry while peer
-notices schedule their own retry. Background errors retain pending facts; an
-unavailable driver gives up the in-memory batch without retiring its durable
-outbox debt. Workflow acquisition failures pause the run with its reservation
-still pending. One scheduler-owned shared-check function evaluates shutdown,
-Stop-held, released, promptable and running state. It re-evaluates after each
-admission await: earlier settlement, the auto-approval pre-pass, cold
-acquisition and each lane delivery, including a rejection. It also runs
-immediately before each lane delivery. "Once per pass" means one owner, not one
-snapshot that stays valid across awaits. Auto-approvals still run under Stop; a
-shutdown during their await prevents lane admission. A successful acquisition
-after Stop, release or shutdown leaves the debt untouched. Failed acquisition
-still goes to the lanes' failure-accounting hooks, which cannot admit a
-delivery. Their Stop/shutdown accounting guards remain in place.
+A lane exposes cheap priority debt through `owes(sessionId)` without opening a
+harness, and `deliver(session)`. Optional `offerable(sessionId, endedRunId)`
+keeps lane retry and self-idle policy separate from that debt. The scheduler
+acquires a cold session once, only when work is both owed and offerable. A
+notice in backoff or with an exhausted budget still precedes reminders, without
+creating a retry wake or cold acquisition. An optional
+`unavailable(sessionId, failure)` hook receives a failed acquisition once per
+owed lane per pass, without another acquisition or a new scheduler retry loop.
+It distinguishes a thrown acquisition error from an unavailable or unpromptable
+result. Handoffs retain their retry budget and timer; the user queue pauses its
+row; peer FIFO records its retry while peer notices schedule their own retry.
+Background errors retain pending facts; an unavailable driver gives up the
+in-memory batch without retiring its durable outbox debt. Workflow acquisition
+failures pause the run with its reservation still pending. One scheduler-owned
+shared-check function evaluates shutdown, Stop-held, released, promptable and
+running state. It re-evaluates after each admission await: earlier settlement,
+the auto-approval pre-pass, cold acquisition and each lane delivery, including a
+rejection. It also runs immediately before each lane delivery. "Once per pass"
+means one owner, not one snapshot that stays valid across awaits. Auto-approvals
+still run under Stop; a shutdown during their await prevents lane admission. A
+successful acquisition after Stop, release or shutdown leaves the debt
+untouched. Failed acquisition still goes to the lanes' failure-accounting hooks,
+which cannot admit a delivery. Their Stop/shutdown accounting guards remain in
+place.
 
 While running, the scheduler asks only lanes whose delivery may join a running
 turn, and only if the driver can steer. A new running turn or lost steering
@@ -166,25 +175,62 @@ acquisition leaves queued drafts, host commands and handoffs for boot, without
 starting a turn or persisting a reload refusal as a queue pause.
 
 A new turn ends the pass; a steer does not. A failure before append is logged
-and the next lane is offered. Each lane keeps its own table, rendering,
-batching, retry, recovery and outcome interpretation. The current adapters
-observe the existing append hook, fence subsequent claims in a drain, and supply
-the scheduler's required `settleEarlierDeliveries(sessionId)` step. The wait
-spans all lanes, including a background drain's peer phase. A fenced drain
-therefore cannot consume a fresh offer or let a lower-priority lane overtake it.
+and the next lane is offered. One ordering rule preserves the former peer queue
+deferral: when the user queue declines delivery and still owes priority,
+`deferOnDecline` skips peer FIFO and notices for that pass. A failed or paused
+queue no longer owes priority and does not defer peers; a thrown delivery does
+not install a deferral either. Other lanes keep their own policy, and a later
+wake starts afresh. This is scheduler ordering, not a shared
+recovery-reservation block. An admitted recovery continuation still accepts
+genuine background steering; its idle auto-approval prepass still executes and
+queues outcomes. Each lane keeps its own table, rendering, batching, retry,
+recovery and outcome interpretation. The current adapters observe the existing
+append hook, fence subsequent claims in a drain, and supply the scheduler's
+required `settleEarlierDeliveries(sessionId)` step. One shared settlement
+tracker spans all lanes. Explicit peer send-now uses the same tracker for
+earlier peer and reminder claims, preserving its authority boundary. A fenced
+drain cannot consume a fresh offer or let a lower-priority lane overtake it.
 Running joinable offers do not wait for the turn they may steer. This adds no
 debt-based retry loop. An idle admission waiting over 30 seconds logs a
 diagnostic, but never times out and admits over a drain that still owns its
 claim. The drains interpret their prompt receipts as described below. The
 adapters still observe the session-wide append feed to fence admission. The user
-queue and handoffs have no private admission locks or rerun markers. Their
-public automatic drain entrypoints only wake the scheduler; only an admitted
-delivery enters the lane. Queue-specific pause and note checks, latest-head
-reads and explicit-recipient authority remain in the queue. Handoffs keep
-retry/backoff and delete-only recovery, with the same append/delete
-at-least-once window. Direct inline handoffs and explicit send-now keep their
-own authority. Peer and background locks, rerun markers and cross-path yield
-checks remain for the second [Task-1053](pa://task/1053) delivery.
+queue, handoffs, peer FIFO, notices, background and reminders have no private
+admission locks or rerun markers. Their public automatic drain entrypoints only
+wake the scheduler; without an installed scheduler they admit nothing. Only an
+admitted delivery enters a lane. The scheduler also supplies the late-admission
+guard, rechecking shared state after prompt preparation and reporting its
+refusal reason. Peers preserve the released-driver failure's existing retry
+accounting; other shared refusals leave the claim unspent. Reminder preparation
+yields to newly owed earlier lanes through that guard; a producer's wake retains
+reminder eligibility for the next pass. No lane reads another lane's debt.
+Queue-specific pause and note checks, latest-head reads and explicit-recipient
+authority remain in the queue. Handoffs keep retry/backoff and delete-only
+recovery, with the same append/delete at-least-once window. Peer leases and
+bounded retry sweeps, notice debt and reminder counts stay lane-owned. A refused
+notice is ineligible while its bounded retry timer is pending or exhausted. Its
+own idle wake and unrelated producer wakes cannot bypass that backoff. The timer
+re-enables one offer. An intentional public peer re-offer can try during backoff
+or after exhaustion, as before, without replenishing the automatic budget; a new
+notice can re-offer too. A successful notice run resets that budget. If durable
+retirement fails and the appended run then rejects, the lane retains its bounded
+timer and attempts, for six automatic attempts in total. This preserves the
+former private drain's bounded retry policy instead of the production scheduler
+base's unbounded self-idle retries. An exposed notice whose run succeeds but
+whose durable retirement fails absorbs only its own idle edge once, matched
+against the run named by its receipt's append rather than timing. Any later
+wake, including unrelated incoming work or a wake coalesced with that self edge,
+re-offers it as before. Public re-offer, new notices, and boot also retain that
+behavior. Retirement failures remain visible without provider-controlled error
+text. The at-least-once retirement window remains. Background keeps the outbox
+phases, deferred facts and rendering cap; leftover capped facts wake the
+scheduler again. It never drains peers itself. Direct inline handoffs and
+explicit send-now keep their own authority. Explicit peer sends serialize only
+other explicit sends, while their waiters fence automatic claims. An adapter
+reports that refusal as `deferred`; the scheduler retains any existing real-idle
+reminder eligibility until authority release wakes it again. That release does
+not enable reminders if no qualifying offer arrived, and retained eligibility
+never schedules a wake on its own.
 
 Workflow assignments to an existing role session use this lane, including idle
 and restart offers. `owes` reads pending reservation state without a harness.
@@ -252,11 +298,10 @@ restarts its reply deadline.
   of the user's own queue, because the user chose it. A running turn that cannot
   steer offers no send-now: the row is delivered when the turn ends. Send-now
   holds the recipient's delivery authority: one arriving during an automatic
-  delivery waits out that turn and goes before the drain claims its next batch,
-  which resumes from the FIFO head once the send is done. A peer drain held up
-  by a send-now settles only after that resumed drain (the user's queued message
-  sent, or the peer FIFO drained), so a background completion waiting on it
-  never takes their turn.
+  delivery waits out that admitted drain and goes before another automatic
+  claim. Concurrent explicit sends serialize. Release wakes the scheduler from
+  the top, so the user's queue and peer FIFO keep their priority over background
+  completions.
 - **How a delivered batch settles.** Right before its turn is appended — after
   the facade's last await, so nothing changes in between — the batch passes its
   claim (`admit` → `reserveAdmission`): every member must still be `dispatching`
@@ -387,10 +432,10 @@ unheld.
   here for Resume like any other update.
 - **Where.** `runtimePrompt.ts` refuses any turn on a held session that does not
   carry the user's resume authority for the current hold, at entry and again
-  after its last await. Each drain also reads the hold before it claims a batch
-  or cold-resumes a session, including a peer drain already awaiting the stopped
-  turn, which checks again before its next batch, and the Assistant's intake
-  loop, which checks before each item.
+  after its last await. The scheduler checks the hold before cold acquisition
+  and each automatic admission, including through the lane's late-admission
+  guard. A peer drain awaiting a stopped turn is fenced before another claim.
+  The separate Assistant intake loop checks the hold before each item.
 - **Nothing is lost or spent.** Held work stays where it was, in its order: peer
   rows queued (a batch refused between its claim and the append goes back with
   its attempt refunded), handoffs in their table, drafts in this queue, intake

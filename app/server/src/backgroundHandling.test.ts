@@ -7,6 +7,8 @@
  *   pnpm --filter @assistant/server test src/backgroundHandling.test.ts
  */
 import assert from "node:assert/strict";
+import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -205,11 +207,14 @@ function wire(
     return Promise.resolve(drivers.get(id));
   };
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
-    held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox,
     offer: notices.offerBackgroundCompletion(driverFor),
+  });
+  installDeliveryTestScheduler({
+    background: delivery,
+    live: (id) => drivers.get(id),
+    acquire: driverFor,
   });
   setDeferredBackgroundContextProvider((id) =>
     delivery.claimDeferredContext(id),
@@ -226,7 +231,10 @@ function wire(
   };
 }
 
-afterEach(() => setDeferredBackgroundContextProvider(undefined));
+afterEach(() => {
+  setDeferredBackgroundContextProvider(undefined);
+  setDeliveryWake(undefined);
+});
 
 type Phase = { itemId: string; phase: string; interruption: string | null };
 
@@ -1492,8 +1500,6 @@ test("more than 80 protected completion outputs, each captured before its termin
 test("a prompt cap lowered below any update still carries each presented fact by its identity, never as a count", async () => {
   const { id, provider } = session();
   const delivery = new BackgroundCompletionDelivery({
-    drainPeers: () => Promise.resolve(),
-    held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,
     offer: notices.offerBackgroundCompletion(async (sessionId) =>
@@ -1501,9 +1507,14 @@ test("a prompt cap lowered below any update still carries each presented fact by
     ),
     maxPromptChars: 160,
   });
+  const scheduler = installDeliveryTestScheduler({
+    background: delivery,
+    live: (key) => drivers.get(key),
+    acquire: async (key) => drivers.get(key),
+  });
   const item = finished(id, { outcome: "x".repeat(20_000) });
   notices.enqueueCompletionNotice(delivery, item, false);
-  await delivery.drain(id);
+  await scheduler.wake(id);
   await settle();
   assert.equal(provider.texts.length, 1);
   const json = JSON.parse(provider.texts[0]!.split("\n")[1]!) as {

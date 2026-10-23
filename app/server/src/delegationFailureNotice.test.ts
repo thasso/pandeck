@@ -7,6 +7,9 @@
  * `DATA_DIR` (`test/setup.ts`); no credential, provider or network is touched.
  */
 import assert from "node:assert/strict";
+import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
+import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -20,7 +23,15 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+  vi,
+} from "vitest";
 import type { AgentType, Harness } from "@assistant/shared";
 import type { PromptOrigin } from "@assistant/shared/session";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -79,13 +90,13 @@ const {
   cancelQueuedPeerPrompts,
   drainAllQueuedOnBoot,
   drainJournaledFailureBacklog,
-  drainRecipient,
+  drainRecipient: requestRecipientDelivery,
   installDelegationFailureNotices,
   runPeerPromptRetention,
   sendPeerPrompt,
   setHubForTests,
   setPeerPromptAutoDeliverForTests,
-  setPeerPromptDeliveryStoppedForTests,
+  setPeerPromptDeliveryStoppedForTests: setPeerDeliveryStopped,
   sweepPeerPromptRetries,
   wakeForNotice,
 } = await import("./peerPrompt.ts");
@@ -116,6 +127,25 @@ const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./tools/sessions/sessionControlTool.ts");
 
 setHubForTests(fakeHub as never);
+let delivery: ReturnType<typeof installDeliveryTestScheduler>;
+let deliveryStopped = false;
+function setPeerPromptDeliveryStoppedForTests(stopped: boolean) {
+  deliveryStopped = stopped;
+  setPeerDeliveryStopped(stopped);
+}
+beforeEach(() => {
+  delivery = installDeliveryTestScheduler({
+    live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
+    acquire: async (id) =>
+      (await fakeHub.acquireById(id)) as RuntimePromptDriver | undefined,
+    shutdown: () => deliveryStopped,
+  });
+  setSessionIdleHook((id, runId) => void delivery.wake(id, runId));
+});
+const drainRecipient = async (id: string) => {
+  await requestRecipientDelivery(id);
+  return delivery.drain(id);
+};
 
 /* ------------------------------- fixtures -------------------------------- */
 
@@ -499,7 +529,9 @@ beforeAll(() => {
 afterAll(() => uninstall());
 
 afterEach(async () => {
+  setDeliveryWake(undefined);
   setSessionIdleHook(undefined);
+  setPeerPromptAutoDeliverForTests(false);
   setPeerPromptDeliveryStoppedForTests(false);
   setSessionControlRuntimeForTests(undefined);
   await quiesce();
@@ -856,7 +888,7 @@ describe("what is not a failure, or not this coordinator's", () => {
 describe("delivery keeps the hold, busy and restart guarantees", () => {
   it("waits for a busy coordinator's idle edge instead of steering", async () => {
     const { id: coord, driver } = coordinator();
-    setSessionIdleHook((id) => void drainRecipient(id));
+    setSessionIdleHook((id) => void delivery.wake(id));
     const child = piChild(coord);
     const release = driver.holdTurns();
     const busy = promptRuntimeSession(driver, "busy", {
@@ -2030,7 +2062,7 @@ describe("a delegation the user ended after the failure is not announced", () =>
 
   it("drops it when the delegation ends while a busy coordinator finishes its turn", async () => {
     const { id: coord, driver } = coordinator();
-    setSessionIdleHook((id) => void drainRecipient(id));
+    setSessionIdleHook((id) => void delivery.wake(id));
     const child = piChild(coord);
     const release = driver.holdTurns();
     const busy = promptRuntimeSession(driver, "busy", {
@@ -2348,10 +2380,191 @@ function assertNothingHostileIn(calls: unknown[][]): void {
     assert.equal(logged.includes(secret), false, `logged: ${secret}`);
 }
 
-describe("nothing the provider said reaches a log line", () => {
-  it("logs fixed words when retiring a delivered notice fails with a hostile error", async () => {
-    const { id: coord } = coordinator();
+describe("notice retry after exposure", () => {
+  it("keeps six bounded attempts when retirement fails and the appended run then fails", async () => {
+    const peer = await import("./peerPrompt.ts");
+    const { id: coord, driver } = coordinator();
     const child = piChild(coord);
+    const record = (runId: string) =>
+      recordRunFailureNotices({
+        sessionId: child.sessionId,
+        runId,
+        origin: BACKGROUND,
+        errorMessage: QUOTA,
+        failure: { kind: "quota" },
+        at: Date.now(),
+      });
+    record("double-failure");
+    driver.behavior = { mode: "error", message: "503 Service Unavailable" };
+    const retire = vi
+      .spyOn(delegationFailureNoticeStore, "markDelivered")
+      .mockImplementation(() => {
+        throw new Error("retirement refused");
+      });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    peer.setInterruptionNoticeRetryDelayForTests(1_000);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 1);
+      assert.equal(
+        vi.getTimerCount(),
+        1,
+        "a failed receipt retains the lane timer despite failed retirement",
+      );
+      // Runtime self idle and ordinary producers cannot bypass the timer.
+      await delivery.wake(coord);
+      await vi.advanceTimersByTimeAsync(999);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 1);
+      await vi.advanceTimersByTimeAsync(1);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 2);
+      // A new producer intentionally re-offers but must not replenish the budget.
+      record("new-notice-during-backoff");
+      wakeForNotice([coord]);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 3);
+      for (let expected = 4; expected <= 6; expected++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await delivery.drain(coord);
+        assert.equal(noticesIn(coord).length, expected);
+      }
+      assert.equal(vi.getTimerCount(), 0, "the automatic budget is exhausted");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 6);
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 2);
+      // Public re-offers remain possible after exhaustion and retire recovered debt.
+      retire.mockRestore();
+      driver.behavior = { mode: "success" };
+      await drainRecipient(coord);
+      assert.equal(noticesIn(coord).length, 7);
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+    } finally {
+      retire.mockRestore();
+      warning.mockRestore();
+      setPeerPromptDeliveryStoppedForTests(true);
+      setPeerPromptDeliveryStoppedForTests(false);
+      peer.setInterruptionNoticeRetryDelayForTests(undefined);
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("nothing the provider said reaches a log line", () => {
+  it.each(["public re-offer", "new notice", "boot"] as const)(
+    "probes failed-retirement exits: %s",
+    async (exit) => {
+      const { id: coord } = coordinator();
+      const child = piChild(coord);
+      const retire = vi
+        .spyOn(delegationFailureNoticeStore, "markDelivered")
+        .mockImplementation(() => {
+          throw new Error("retirement refused");
+        });
+      try {
+        child.steps.push({ kind: "error", message: QUOTA });
+        await turn(child, "fails");
+        await until(() => noticesIn(coord).length === 1, "initial notice");
+        await quiesce();
+        assert.equal(
+          noticesIn(coord).length,
+          1,
+          "the old lane absorbs its own edge",
+        );
+        await sendPeerPrompt({
+          senderSessionId: piChild(undefined).sessionId,
+          targetSessionId: coord,
+          prompt: "unrelated incoming work",
+          responseRequested: false,
+        });
+        await drainRecipient(coord);
+        assert.equal(
+          noticesIn(coord).length,
+          2,
+          "base retries failed retirement on a later unrelated public drain",
+        );
+        retire.mockRestore();
+        if (exit === "public re-offer") await drainRecipient(coord);
+        if (exit === "new notice") {
+          const next = piChild(coord);
+          next.steps.push({ kind: "error", message: QUOTA });
+          await turn(next, "new failure");
+        }
+        if (exit === "boot") drainAllQueuedOnBoot();
+        await until(() => noticesIn(coord).length === 3, "reoffer notice");
+        assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+      } finally {
+        retire.mockRestore();
+      }
+    },
+  );
+
+  it.each(["unrelated wake", "incoming traffic", "coalesced wake"] as const)(
+    "failed retirement reoffers on %s, but not its own idle edge",
+    async (cause) => {
+      const { id: coord, driver } = coordinator();
+      const child = piChild(coord);
+      const retire = vi
+        .spyOn(delegationFailureNoticeStore, "markDelivered")
+        .mockImplementation(() => {
+          throw new Error("retirement refused");
+        });
+      let edges = 0;
+      setSessionIdleHook((id, runId) => {
+        if (id !== coord) return;
+        edges++;
+        void delivery.wake(id, runId);
+        if (cause === "coalesced wake" && edges === 1) void delivery.wake(id);
+      });
+      try {
+        child.steps.push({ kind: "error", message: QUOTA });
+        await turn(child, "fails");
+        await quiesce();
+        if (cause !== "coalesced wake") {
+          assert.equal(
+            driver.promptOptions.length,
+            1,
+            "only the notice's own edge is absorbed",
+          );
+          if (cause === "unrelated wake") await delivery.wake(coord);
+          else {
+            setPeerPromptAutoDeliverForTests(true);
+            await sendPeerPrompt({
+              senderSessionId: piChild(undefined).sessionId,
+              targetSessionId: coord,
+              prompt: "unrelated incoming work",
+              responseRequested: false,
+            });
+          }
+        }
+        await until(
+          () => noticesIn(coord).length === 2,
+          "unrelated offer repeats exposed debt",
+        );
+        await quiesce();
+        assert.equal(
+          noticesIn(coord).length,
+          2,
+          "each notice absorbs only its own edge",
+        );
+        assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
+      } finally {
+        retire.mockRestore();
+      }
+    },
+  );
+
+  it("logs fixed words when retiring a delivered notice fails with a hostile error", async () => {
+    const { id: coord, driver } = coordinator();
+    const child = piChild(coord);
+    // One self edge exposes a repeat without leaving a runaway fixture on failure.
+    setSessionIdleHook((id, runId) => {
+      if (id !== coord) return;
+      setSessionIdleHook(undefined);
+      void delivery.wake(id, runId);
+    });
     const spies = (["log", "warn", "error"] as const).map((m) =>
       vi.spyOn(console, m).mockImplementation(() => {}),
     );
@@ -2363,8 +2576,28 @@ describe("nothing the provider said reaches a log line", () => {
     try {
       child.steps.push({ kind: "error", message: QUOTA });
       await turn(child, "fails");
-      await until(() => noticesIn(coord).length === 1, "the notice");
+      await until(() => driver.promptOptions.length === 1, "initial notice");
       await quiesce();
+      assert.equal(
+        driver.promptOptions.length,
+        1,
+        "a failed retirement cannot replay on its own idle edge",
+      );
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
+      await drainRecipient(coord);
+      assert.equal(
+        driver.promptOptions.length,
+        2,
+        "an intentional public re-offer still attempts",
+      );
+      retire.mockRestore();
+      await drainRecipient(coord);
+      assert.equal(
+        driver.promptOptions.length,
+        3,
+        "successful retirement clears the debt",
+      );
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
       const calls = spies.flatMap((s) => s.mock.calls);
       assert.match(
         calls.flat().map(String).join(" "),
