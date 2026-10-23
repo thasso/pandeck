@@ -1,7 +1,8 @@
 # Web hooks
 
-- Do not duplicate global app state outside `useAssistant` unless it is strictly
-  a browser-local preference or cache.
+- `useAssistant` owns global state; only browser-local preferences and caches
+  may live elsewhere. Migrated mutation ids, timers and terminals use
+  `mutationLifecycle`; replica reads stay separate.
 - For the viewed chat, derive run state only from runtime snapshots/events —
   never from session-list rows. The transcript is a WINDOWED suffix: gapless,
   anchored to the live tail, extended only by a `loadTimelineRange` answer that

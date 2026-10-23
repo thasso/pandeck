@@ -169,6 +169,132 @@ afterEach(() => {
 });
 
 describe("Project socket/reducer scenario", () => {
+  it.each(["save", "clone", "remove"])(
+    "releases unknown %s, then recovers after subscribe with the current open detail",
+    async (operation) => {
+      const socket = await connected();
+      await act(async () => socket.receive(canonicalList(1)));
+      await act(async () => latestActions.setOpenProjectProjection("a"));
+      vi.useFakeTimers();
+      await act(async () => {
+        if (operation === "save")
+          latestActions.saveProject("a", { name: "Optimistic" });
+        if (operation === "clone") latestActions.provisionProjectRepo("a");
+        if (operation === "remove") latestActions.removeProjectRepo("a");
+      });
+      const oldCommand = socket.sent.at(-1)!;
+      await act(async () => socket.close());
+      expect(Object.values(latestState.projectMutations)[0]?.status).toBe(
+        "idle",
+      );
+      if (operation === "save") expect(projectName()).toBe("Optimistic");
+      expect(latestState.stateEventRevisions.projects?.a).toBeUndefined();
+      const at = socket.sent.length;
+      await act(async () => vi.advanceTimersByTime(900_000));
+      expect(socket.sent.slice(at)).toEqual([]);
+      expect(Object.values(latestState.projectMutations)[0]?.status).toBe(
+        "idle",
+      );
+      const next = ScenarioSocket.instances[1]!;
+      await act(async () => next.open());
+      expect(next.sent.map((message) => message.type)).toEqual([
+        "subscribe",
+        "getStateItems",
+        "getProject",
+      ]);
+      expect(next.sent[0]).toEqual({ type: "subscribe", topics: ["projects"] });
+      await act(async () => next.receive(canonicalList(2)));
+      const fetch = itemFetch(next.sent);
+      await act(async () =>
+        next.receive({
+          type: "stateItems",
+          topic: "projects",
+          requestId: fetch.requestId,
+          events: [
+            {
+              kind: "upsert",
+              id: "a",
+              revision: 1,
+              item: projectRow("Recovered"),
+            },
+          ],
+        }),
+      );
+      expect(projectName()).toBe("Recovered");
+      await act(async () =>
+        latestActions.saveProject("a", { name: "New attempt" }),
+      );
+      if ("requestId" in oldCommand && oldCommand.requestId)
+        await act(async () =>
+          next.receive({
+            type: "mutationSettled",
+            requestId: oldCommand.requestId!,
+          }),
+        );
+      expect(latestState.projectMutations["a:name"]?.status).toBe("loading");
+    },
+  );
+
+  it("never treats an authoritative snapshot or event as a control answer", async () => {
+    const socket = await connected();
+    await act(async () => socket.receive(canonicalList(1)));
+    await act(async () =>
+      latestActions.saveProject("a", { name: "Attempted" }),
+    );
+    await act(async () => socket.receive(canonicalList(2)));
+    expect(latestState.projectMutations["a:name"]?.status).toBe("loading");
+    await act(async () =>
+      socket.receive({
+        type: "stateEvents",
+        topic: "projects",
+        seq: 3,
+        events: [
+          {
+            kind: "upsert",
+            id: "a",
+            revision: 2,
+            item: projectRow("Other writer"),
+          },
+        ],
+      }),
+    );
+    expect(projectName()).toBe("Other writer");
+    expect(latestState.projectMutations["a:name"]?.status).toBe("loading");
+  });
+
+  it("recovers an unheld Project without re-holding it or reading a no-longer-open detail", async () => {
+    const socket = await connected();
+    await act(async () => socket.receive(canonicalList(1)));
+    vi.useFakeTimers();
+    await act(async () => latestActions.saveProject("a", { name: "Unknown" }));
+    await act(async () => socket.close());
+    await act(async () => root.render(<ProjectHarness held={false} />));
+    await act(async () => latestActions.setOpenProjectProjection("b"));
+    await act(async () => vi.advanceTimersByTime(1000));
+    const next = ScenarioSocket.instances[1]!;
+    await act(async () => next.open());
+    expect(projectSubscribes(next.sent)).toEqual([]);
+    expect(
+      next.sent.filter((message) => message.type === "getStateItems"),
+    ).toHaveLength(1);
+    expect(next.sent.some((message) => message.type === "getProject")).toBe(
+      false,
+    );
+    const fetch = itemFetch(next.sent);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await act(async () =>
+      next.receive({
+        type: "error",
+        requestId: fetch.requestId,
+        message: "Read failed",
+      }),
+    );
+    expect(projectSubscribes(next.sent)).toEqual([]);
+    await act(async () => root.render(<ProjectHarness />));
+    expect(projectSubscribes(next.sent)).toEqual([
+      { type: "subscribe", topics: ["projects"] },
+    ]);
+  });
   it("recovers a rejected save with targeted summary and open-detail reads", async () => {
     await act(async () => root.render(<ProjectHarness />));
     const socket = ScenarioSocket.instances[0]!;
@@ -228,7 +354,8 @@ describe("Project socket/reducer scenario", () => {
     expect(latestState.projectMutations["a:name"]?.status).toBe("error");
   });
 
-  it("settles concurrent repo operations only by their matching request", async () => {
+  it("keeps repo controls pending for 15 minutes and routes their outcomes locally", async () => {
+    vi.useFakeTimers();
     await act(async () => root.render(<ProjectHarness />));
     const socket = ScenarioSocket.instances[0]!;
     await act(async () => {
@@ -240,6 +367,7 @@ describe("Project socket/reducer scenario", () => {
     const clone = socket.sent.find(
       (message) => message.type === "provisionProjectRepo",
     );
+    await act(async () => vi.advanceTimersByTime(899_999));
     expect(latestState.projectMutations["a:clone"]?.status).toBe("loading");
     expect(latestState.projectMutations["b:remove"]?.status).toBe("loading");
     await act(async () => {
@@ -253,6 +381,26 @@ describe("Project socket/reducer scenario", () => {
     });
     expect(latestState.projectMutations["a:clone"]?.status).toBe("ready");
     expect(latestState.projectMutations["b:remove"]?.status).toBe("loading");
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(latestState.projectMutations["b:remove"]?.status).toBe("error");
+    expect(latestState.projectMutations["a:clone"]?.status).toBe("ready");
+    await act(async () => latestActions.provisionProjectRepo("a"));
+    const retry = socket.sent.findLast(
+      (message) => message.type === "provisionProjectRepo",
+    );
+    if (retry?.type !== "provisionProjectRepo")
+      throw new Error("no clone retry");
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        requestId: retry.requestId!,
+        message: "Clone refused",
+      }),
+    );
+    expect(latestState.projectMutations["a:clone"]).toMatchObject({
+      status: "error",
+      error: "Clone refused",
+    });
   });
 
   it("applies a complete digest catch-up and asks for nothing more", async () => {

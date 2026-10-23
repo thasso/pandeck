@@ -196,6 +196,45 @@ failure, and explicit recovery reads.
   shape each one gives its row — never by the counts inside it, which the
   watcher rewrites several times a second.
 
+### Client mutation lifecycle
+
+`lib/mutationLifecycle.ts` owns common mutation request identities, records and
+timers in one `useAssistant` ref. It removes a record and clears its timer
+before calling a terminal hook, so settle, stamped error and timeout retire it
+once. Descriptors keep domain deadlines, control keys, recovery and failure
+policy. Task and Project correlation lives in those records, not separate
+control maps. Replica item reads retain their own request table and deadlines.
+
+For Tasks and Projects, socket loss is terminal with **outcome unknown**. After
+dropping replica reads, the lifecycle removes their pending metadata and temp-id
+correlations, invalidates touched revisions synchronously and marks their topics
+due a snapshot, even for a create without canonical ids. Controls release to a
+fresh `idle`, silently. Dropping this overlay does not reverse rendered
+optimism; the authoritative reconnect snapshot or recovery corrects it. Unknown
+editors retain their drafts. An absent-entry first local-path save still closes
+immediately while connected; only a correlated unknown release restores that
+attempt, and never over a later user interaction.
+
+Only recovery obligations survive, without timers or control claims. Reconnect
+sends its subscription first, omitting digests for affected topics, then drains
+recovery once without replaying commands. A held affected Task snapshot is
+recorded before sending so Task `resync` joins it without another unsubscribe /
+subscribe pair. Unheld Tasks stay unheld and due a snapshot. Projects retain
+targeted `getStateItems` recovery and refresh only the currently open touched
+detail, even if the list is unheld. Snapshot failure releases the Task wait, not
+its invalidation, and starts no retry loop. Effect teardown abandons migrated
+records and recovery without future callbacks; the retained instance is
+reusable.
+
+Staged paths still use the same common identity/timer owner, but retain their
+existing outcome policies. Workflow delivery keeps its run-list/settle map and
+disconnect release until Task-1093. PR-card actions keep their two-signal map
+and wait-until-timeout disconnect policy until Task-1094, including linked-Task
+effects. Compaction keeps its separate control map and timer until Task-1093.
+Other tracker callers change storage only. Migration is selected by descriptor,
+never by a touched topic. Wire messages, 30-second and 15-minute deadlines,
+connected failure surfaces and replica read ownership are unchanged.
+
 ## Client replica
 
 `app/web/src/lib/stateReplica.ts` is the client's one implementation of the

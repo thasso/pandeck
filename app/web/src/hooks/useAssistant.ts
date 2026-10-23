@@ -19,6 +19,7 @@ import {
   writeAppShellCacheRecord,
 } from "../lib/appShellCacheStore.ts";
 import { createClientId } from "../lib/clientId.ts";
+import { createMutationLifecycle } from "../lib/mutationLifecycle.ts";
 import { localStore } from "../lib/localStore.ts";
 import { createIdleWriter, type IdleWriter } from "../lib/idleWriter.ts";
 import { announceMessage } from "../lib/messageAnnounce.ts";
@@ -203,6 +204,7 @@ import {
   dataOf,
   failFrom,
   idle,
+  isPending,
   ready,
   type LoadState,
 } from "../lib/loadState.ts";
@@ -1658,38 +1660,9 @@ interface PendingMutation extends PendingMutationEffect {
   tempId?: string;
 }
 
-interface TrackedPendingMutation extends PendingMutation {
-  /**
-   * Re-read the recorded objects from the authoritative source after failure.
-   * Never restore an inverse: a concurrent writer may have changed them since
-   * the optimistic apply. Snapshot transports remain until their domains
-   * migrate, but the queue already retains the per-object recovery boundary.
-   */
+interface MutationContext extends PendingMutation {
   recover: (mutation: PendingMutation) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/** The topics a pending mutation may still change: none may ask for a digest. */
-function pendingTopics(
-  pending: ReadonlyMap<string, TrackedPendingMutation>,
-): ReadonlySet<string> {
-  return new Set(
-    [...pending.values()].flatMap((entry) => [
-      entry.topic,
-      ...(entry.additionalEffects?.map((effect) => effect.topic) ?? []),
-    ]),
-  );
-}
-
-function settleMutation(
-  pending: Map<string, TrackedPendingMutation>,
-  requestId: string,
-): TrackedPendingMutation | undefined {
-  const entry = pending.get(requestId);
-  if (!entry) return undefined;
-  clearTimeout(entry.timer);
-  pending.delete(requestId);
-  return entry;
+  control?: { domain: "tasks" | "projects"; key?: string };
 }
 
 type OptimisticTimelineEntry = ClientTimelineEntry & {
@@ -1768,6 +1741,7 @@ type Action =
   | { kind: "unwatchComments"; target: CommentTarget }
   | { kind: "taskMutationStart"; key: string }
   | { kind: "taskMutationResult"; key: string; error?: string }
+  | { kind: "taskMutationRelease"; key: string }
   | { kind: "setOpenTaskProjection"; id: string | null }
   /**
    * The server's direct answer to `saveTask`, carrying the temp id its pending
@@ -1826,6 +1800,7 @@ type Action =
   | { kind: "initiativeListFailed"; message: string }
   | { kind: "projectMutationStart"; key: string }
   | { kind: "projectMutationResult"; key: string; error?: string }
+  | { kind: "projectMutationRelease"; key: string }
   | { kind: "worktreeListLoad" }
   /** A library subscribe went out: the server is scanning that library now. */
   | { kind: "libraryLoad"; library: LibraryTopic }
@@ -4902,6 +4877,17 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       },
     };
   }
+  if (action.kind === "projectMutationRelease") {
+    const current = state.projectMutations[action.key];
+    if (!current || !isPending(current)) return state;
+    return {
+      ...state,
+      projectMutations: {
+        ...state.projectMutations,
+        [action.key]: idle<true>(),
+      },
+    };
+  }
   if (action.kind === "projectMutationResult") {
     const current = state.projectMutations[action.key] ?? idle<true>();
     return {
@@ -5356,6 +5342,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           state.taskMutations[action.key] ?? idle<true>(),
         ),
       },
+    };
+  }
+  if (action.kind === "taskMutationRelease") {
+    const current = state.taskMutations[action.key];
+    if (!current || !isPending(current)) return state;
+    return {
+      ...state,
+      taskMutations: { ...state.taskMutations, [action.key]: idle<true>() },
     };
   }
   if (action.kind === "taskMutationResult") {
@@ -6919,7 +6913,9 @@ export function useAssistant({
    * that arrives" consumed the wrong snapshot and left a genuine failure with
    * nothing to restore.
    */
-  const pendingMutationsRef = useRef(new Map<string, TrackedPendingMutation>());
+  const mutationLifecycleRef = useRef(
+    createMutationLifecycle<MutationContext>(),
+  );
   /** Correlates card-local pending/error state with the generic mutation channel. */
   const pullRequestCardMutationRequestsRef = useRef(
     new Map<
@@ -6975,9 +6971,6 @@ export function useAssistant({
   const heldCommentTargetsRef = useRef(new Map<string, CommentTarget>());
   /** Per-target reconnect snapshots already requested by the socket episode. */
   const commentResyncRef = useRef(new Set<string>());
-  /** Correlates the generic mutation outcome channel to one Task control. */
-  const taskMutationRequestsRef = useRef(new Map<string, string>());
-  const projectMutationRequestsRef = useRef(new Map<string, string>());
   /** Compaction-window saves in flight: request id → session id. */
   const compactionWindowRequestsRef = useRef(new Map<string, string>());
   const lazyBlockCacheRef = useRef(new Map<string, unknown>());
@@ -7172,7 +7165,7 @@ export function useAssistant({
 
   useEffect(() => {
     if (isolated || state.hydrationSource !== "live") return;
-    if (pendingMutationsRef.current.size > 0) return;
+    if (mutationLifecycleRef.current.size > 0) return;
     // Scheduled through the ref on purpose: the whole `state` is what gets
     // cached, but the slices listed below are what should DECIDE to cache it.
     // Depending on `state` itself would schedule a write on every reducer
@@ -7214,6 +7207,7 @@ export function useAssistant({
   }, [shellCacheWriter]);
 
   useEffect(() => {
+    const mutationLifecycle = mutationLifecycleRef.current;
     let disposed = false;
     let frame: number | null = null;
     let pendingFrameMessages: ServerMessage[] = [];
@@ -7490,7 +7484,7 @@ export function useAssistant({
           workflowDeliveryRequestsRef.current.delete(requestId);
           // Answered either way, so the tracked mutation must stop counting
           // down towards "the server never replied".
-          settleMutation(pendingMutationsRef.current, requestId);
+          mutationLifecycleRef.current.finish(requestId, { type: "settled" });
           // A stated action already drops the overlay in the reducer; only the
           // settled-but-idle case still has a claim to retire.
           if (!busy)
@@ -7538,10 +7532,9 @@ export function useAssistant({
             // emitting a second generic error. Its authoritative outcome is
             // also the signal to restore this tab's optimistic domain effects.
             pullRequestCardMutationRequestsRef.current.delete(requestId);
-            const mutation = settleMutation(
-              pendingMutationsRef.current,
-              requestId,
-            );
+            const mutation = mutationLifecycleRef.current.finish(requestId, {
+              type: "settled",
+            });
             if (msg.card.actionError) mutation?.recover(mutation);
             dispatch({
               kind: "pullRequestCardActionResult",
@@ -7554,10 +7547,9 @@ export function useAssistant({
             // Remembering the busy echo makes this converge even when the
             // card update precedes mutationSettled.
             pullRequestCardMutationRequestsRef.current.delete(requestId);
-            const mutation = settleMutation(
-              pendingMutationsRef.current,
-              requestId,
-            );
+            const mutation = mutationLifecycleRef.current.finish(requestId, {
+              type: "settled",
+            });
             mutation?.recover(mutation);
             dispatch({
               kind: "pullRequestCardActionResult",
@@ -7593,9 +7585,9 @@ export function useAssistant({
           pullRequest.settledSeen = true;
           if (pullRequest.outcomeSeen || pullRequest.competingActionSeen) {
             pullRequestCardMutationRequestsRef.current.delete(msg.requestId);
-            const mutation = settleMutation(
-              pendingMutationsRef.current,
+            const mutation = mutationLifecycleRef.current.finish(
               msg.requestId,
+              { type: "settled" },
             );
             if (pullRequest.competingActionSeen) mutation?.recover(mutation);
             dispatch({
@@ -7630,7 +7622,7 @@ export function useAssistant({
               replicaTransport.subscribeRequest(
                 ["workflow"],
                 stateRef.current,
-                pendingTopics(pendingMutationsRef.current),
+                mutationLifecycleRef.current.pendingTopics(),
               ),
             );
           } else {
@@ -7638,29 +7630,21 @@ export function useAssistant({
               msg.requestId,
             )!;
             workflowDeliveryRequestsRef.current.delete(msg.requestId);
-            settleMutation(pendingMutationsRef.current, msg.requestId);
+            mutationLifecycleRef.current.finish(msg.requestId, {
+              type: "settled",
+            });
             dispatch({ kind: "workflowDeliveryResult", runId: pending.runId });
           }
         } else {
-          settleMutation(pendingMutationsRef.current, msg.requestId);
+          mutationLifecycleRef.current.finish(msg.requestId, {
+            type: "settled",
+          });
         }
         // A skill write is answered HERE, not by its settings echo: the settle
         // is the only message that names the request, and by now that echo has
         // been applied (the server sends it first). A settle for anything else,
         // or for a write a later one has already superseded, changes nothing.
         dispatch({ kind: "skillTogglesAnswered", requestId: msg.requestId });
-        const key = taskMutationRequestsRef.current.get(msg.requestId);
-        if (key) {
-          taskMutationRequestsRef.current.delete(msg.requestId);
-          dispatch({ kind: "taskMutationResult", key });
-        }
-        const projectKey = projectMutationRequestsRef.current.get(
-          msg.requestId,
-        );
-        if (projectKey) {
-          projectMutationRequestsRef.current.delete(msg.requestId);
-          dispatch({ kind: "projectMutationResult", key: projectKey });
-        }
         return;
       }
       // The once-per-episode worktree read did not land, so the next surface
@@ -7703,11 +7687,10 @@ export function useAssistant({
       if (msg.type === "error" && msg.requestId) {
         // The failure's announcement is raised at the arrival below; this only
         // re-reads the domain the optimistic change touched.
-        const mutation = settleMutation(
-          pendingMutationsRef.current,
-          msg.requestId,
-        );
-        mutation?.recover(mutation);
+        const mutation = mutationLifecycleRef.current.finish(msg.requestId, {
+          type: "error",
+          message: msg.message,
+        });
         const pullRequest = pullRequestCardMutationRequestsRef.current.get(
           msg.requestId,
         );
@@ -7753,10 +7736,11 @@ export function useAssistant({
           workflowDeliveryRequestsRef.current.delete(msg.requestId);
           dispatch({ kind: "workflowDeliveryResult", runId: delivery.runId });
         }
-        const key = taskMutationRequestsRef.current.get(msg.requestId);
+        const key =
+          mutation?.control?.domain === "tasks"
+            ? mutation.control.key
+            : undefined;
         if (key) {
-          taskMutationRequestsRef.current.delete(msg.requestId);
-          dispatch({ kind: "taskMutationResult", key, error: msg.message });
           // A project assignment is the one tracked Task write with no control
           // to report on: its receipt IS a toast, and the failure REPLACES that
           // receipt under the same key rather than being announced beside it.
@@ -7779,18 +7763,8 @@ export function useAssistant({
           announceArrival(msg, stateRef.current);
           return;
         }
-        const projectKey = projectMutationRequestsRef.current.get(
-          msg.requestId,
-        );
-        if (projectKey) {
-          projectMutationRequestsRef.current.delete(msg.requestId);
+        if (mutation?.control?.domain === "projects" && mutation.control.key)
           controlOwned = true;
-          dispatch({
-            kind: "projectMutationResult",
-            key: projectKey,
-            error: msg.message,
-          });
-        }
       }
       // A failed Initiative LIST read is a condition on that list, kept
       // for its panes to render with their Retry — and nothing else. It
@@ -7810,7 +7784,7 @@ export function useAssistant({
         // has no idea a browser-local row exists, so only this correlation can
         // retire it (see `applyTaskSaved`).
         const tempId = msg.requestId
-          ? pendingMutationsRef.current.get(msg.requestId)?.tempId
+          ? mutationLifecycleRef.current.get(msg.requestId)?.tempId
           : undefined;
         dispatch({
           kind: "taskSaved",
@@ -7906,14 +7880,21 @@ export function useAssistant({
         if (topics.includes("worktrees"))
           episodeListReadsRef.current.worktrees = true;
         if (transportHasConnectedRef.current) {
-          if (topics.length > 0)
+          if (topics.length > 0) {
+            if (
+              topics.includes("tasks") &&
+              mutationLifecycleRef.current.recoveryTopics().has("tasks")
+            )
+              replicaTransport.snapshotRequested("tasks");
             socket.send(
               replicaTransport.subscribeRequest(
                 topics,
                 stateRef.current,
-                pendingTopics(pendingMutationsRef.current),
+                mutationLifecycleRef.current.pendingTopics(),
               ),
             );
+          }
+          mutationLifecycleRef.current.reconnect();
           // The re-declared skills subscription re-scans on the server, and the
           // rows already on screen are the ones that scan may correct.
           for (const library of LIBRARY_TOPICS)
@@ -7935,6 +7916,7 @@ export function useAssistant({
         transportHasConnectedRef.current = true;
       } else {
         replicaTransport.dropRequests();
+        mutationLifecycleRef.current.disconnect();
         commentResyncRef.current.clear();
         commentRequestsRef.current.clear();
         for (const id of taskDetailRequestsRef.current.keys())
@@ -7975,7 +7957,7 @@ export function useAssistant({
           requestId,
           pending,
         ] of workflowDeliveryRequestsRef.current) {
-          settleMutation(pendingMutationsRef.current, requestId);
+          mutationLifecycleRef.current.finish(requestId, { type: "settled" });
           dispatch({ kind: "workflowDeliveryResult", runId: pending.runId });
         }
         workflowDeliveryRequestsRef.current.clear();
@@ -8004,6 +7986,7 @@ export function useAssistant({
       if (frame !== null) window.cancelAnimationFrame(frame);
       pendingFrameMessages = [];
       replicaTransport.dropRequests();
+      mutationLifecycle.cleanup();
       for (const timer of lazyBlockRetryTimers) clearTimeout(timer);
       lazyBlockRetryTimers.clear();
       offMsg();
@@ -8020,71 +8003,39 @@ export function useAssistant({
       recover: (mutation: PendingMutation) => void,
       timeoutMs = MUTATION_SETTLE_TIMEOUT_MS,
     ): string => {
-      const requestId = createClientId();
-      const timer = setTimeout(() => {
-        const pending = pendingMutationsRef.current.get(requestId);
-        pendingMutationsRef.current.delete(requestId);
-        pending?.recover(pending);
-        const pullRequest =
-          pullRequestCardMutationRequestsRef.current.get(requestId);
-        if (pullRequest) {
-          pullRequestCardMutationRequestsRef.current.delete(requestId);
-          dispatch({
-            kind: "pullRequestCardActionResult",
-            cardId: pullRequest.cardId,
-            error:
-              "The server did not answer this pull request action. Try again.",
-          });
-        }
-        // Only a click still WAITING says this. One the run list already
-        // answered — the server stated the action, or its outcome landed — is
-        // off the control, and a deadline reached long afterwards must not
-        // write a failure over a card that has moved on.
-        const delivery = workflowDeliveryRequestsRef.current.get(requestId);
-        if (delivery) {
-          workflowDeliveryRequestsRef.current.delete(requestId);
-          dispatch({
-            kind: "workflowDeliveryResult",
-            runId: delivery.runId,
-            error: "The server did not answer this delivery action. Try again.",
-          });
-        }
-        const key = taskMutationRequestsRef.current.get(requestId);
-        if (key) {
-          taskMutationRequestsRef.current.delete(requestId);
-          const error =
-            "The server did not answer this Task change. Try again.";
-          dispatch({ kind: "taskMutationResult", key, error });
-          // The deadline is this write's outcome, judged as a refusal is: in
-          // place while the Task's control is on screen, otherwise announced
-          // naming the Task — a shut panel would keep it silent.
-          const taskId = pending?.objectIds[0];
-          if (taskId && key.startsWith(`${taskId}:`))
-            announceArrival(
-              {
-                type: "error",
-                message: error,
-                target: { type: "task", id: taskId },
-              },
-              stateRef.current,
-            );
-        }
-        const projectKey = projectMutationRequestsRef.current.get(requestId);
-        if (projectKey) {
-          projectMutationRequestsRef.current.delete(requestId);
-          dispatch({
-            kind: "projectMutationResult",
-            key: projectKey,
-            error: "The server did not answer this Project change. Try again.",
-          });
-        }
-      }, timeoutMs);
-      pendingMutationsRef.current.set(requestId, {
-        ...mutation,
+      return mutationLifecycleRef.current.start({
+        context: { ...mutation, recover },
         recover,
-        timer,
+        timeoutMs,
+        terminal: (outcome, _pending, requestId) => {
+          if (outcome.type !== "timeout") return;
+          const pullRequest =
+            pullRequestCardMutationRequestsRef.current.get(requestId);
+          if (pullRequest) {
+            pullRequestCardMutationRequestsRef.current.delete(requestId);
+            dispatch({
+              kind: "pullRequestCardActionResult",
+              cardId: pullRequest.cardId,
+              error:
+                "The server did not answer this pull request action. Try again.",
+            });
+          }
+          // Only a click still WAITING says this. One the run list already
+          // answered — the server stated the action, or its outcome landed — is
+          // off the control, and a deadline reached long afterwards must not
+          // write a failure over a card that has moved on.
+          const delivery = workflowDeliveryRequestsRef.current.get(requestId);
+          if (delivery) {
+            workflowDeliveryRequestsRef.current.delete(requestId);
+            dispatch({
+              kind: "workflowDeliveryResult",
+              runId: delivery.runId,
+              error:
+                "The server did not answer this delivery action. Try again.",
+            });
+          }
+        },
       });
-      return requestId;
     };
     /** Ask where a jump target lives; the answer arrives as a `timelineAnchor`. */
     const requestReveal = (target: TimelineAnchorTarget) => {
@@ -8108,7 +8059,7 @@ export function useAssistant({
         replicaTransport.subscribeRequest(
           ["workflow"],
           stateRef.current,
-          pendingTopics(pendingMutationsRef.current),
+          mutationLifecycleRef.current.pendingTopics(),
         ),
       );
     };
@@ -8134,6 +8085,69 @@ export function useAssistant({
       dispatch({ kind: "projectDetailLoad", id: openId });
       send({ type: "getProject", id: openId, requestId });
     };
+    const trackDomainMutation = (
+      mutation: PendingMutation,
+      domain: "tasks" | "projects",
+      key?: string,
+      timeoutMs = MUTATION_SETTLE_TIMEOUT_MS,
+    ) => {
+      const recover = domain === "tasks" ? resyncTasks : recoverProjects;
+      const context: MutationContext = {
+        ...mutation,
+        objectIds: [...mutation.objectIds],
+        recover,
+        control: { domain, ...(key ? { key } : {}) },
+      };
+      return mutationLifecycleRef.current.start({
+        context,
+        timeoutMs,
+        recover,
+        disconnected: (entry) =>
+          replicaTransport.invalidate(domain, entry.objectIds),
+        terminal: (outcome) => {
+          if (!key) return;
+          if (outcome.type === "unknown") {
+            dispatch({
+              kind:
+                domain === "tasks"
+                  ? "taskMutationRelease"
+                  : "projectMutationRelease",
+              key,
+            });
+            return;
+          }
+          const error =
+            outcome.type === "error"
+              ? outcome.message
+              : outcome.type === "timeout"
+                ? `The server did not answer this ${domain === "tasks" ? "Task" : "Project"} change. Try again.`
+                : undefined;
+          dispatch({
+            kind:
+              domain === "tasks"
+                ? "taskMutationResult"
+                : "projectMutationResult",
+            key,
+            ...(error ? { error } : {}),
+          });
+          const taskId = mutation.objectIds[0];
+          if (
+            outcome.type === "timeout" &&
+            domain === "tasks" &&
+            taskId &&
+            key.startsWith(`${taskId}:`)
+          )
+            announceArrival(
+              {
+                type: "error",
+                message: error!,
+                target: { type: "task", id: taskId },
+              },
+              stateRef.current,
+            );
+        },
+      });
+    };
     const startProjectMutation = (
       id: string | null,
       operation: ProjectMutationOperation,
@@ -8144,12 +8158,12 @@ export function useAssistant({
       const current = stateRef.current.projectMutations[key];
       if (current?.status === "loading" || current?.status === "refreshing")
         return undefined;
-      const requestId = trackMutation(
+      const requestId = trackDomainMutation(
         { topic: "projects", objectIds },
-        recoverProjects,
+        "projects",
+        key,
         timeoutMs,
       );
-      projectMutationRequestsRef.current.set(requestId, key);
       dispatch({ kind: "projectMutationStart", key });
       // This project's own next write retires the failure it is carrying — the
       // retry, not someone else's traffic about it. A registry-wide write (a
@@ -8743,7 +8757,7 @@ export function useAssistant({
             replicaTransport.subscribeRequest(
               added,
               stateRef.current,
-              pendingTopics(pendingMutationsRef.current),
+              mutationLifecycleRef.current.pendingTopics(),
             ),
           );
         if (removed.length > 0) send({ type: "unsubscribe", topics: removed });
@@ -8772,15 +8786,15 @@ export function useAssistant({
           optimistic && !request.id
             ? `optimistic-${createClientId()}`
             : undefined;
-        const requestId = trackMutation(
+        const requestId = trackDomainMutation(
           {
             topic: "tasks",
             objectIds: request.id ? [request.id] : [],
             ...(tempId ? { tempId } : {}),
           },
-          resyncTasks,
+          "tasks",
+          key,
         );
-        taskMutationRequestsRef.current.set(requestId, key);
         dispatch({ kind: "taskMutationStart", key });
         // This Task's own next write retires the failure it is carrying.
         if (request.id)
@@ -8803,9 +8817,10 @@ export function useAssistant({
           send({ type: "assignTaskProjects", updates });
           return;
         }
-        const requestId = trackMutation(
+        const requestId = trackDomainMutation(
           { topic: "tasks", objectIds: updates.map((update) => update.id) },
-          resyncTasks,
+          "tasks",
+          taskMutationKey(null, "assignProjects"),
         );
         // The request is what carries the answer back, so the Backlog learns
         // that AN ASSIGNMENT failed instead of recognising the server's
@@ -8819,10 +8834,6 @@ export function useAssistant({
         // assignment has already overwritten — two overlapping assignments
         // share one receipt either way, and giving them separate ones is a
         // redesign of the receipt rather than of this correlation.
-        taskMutationRequestsRef.current.set(
-          requestId,
-          taskMutationKey(null, "assignProjects"),
-        );
         dispatch({
           kind: "taskMutationStart",
           key: taskMutationKey(null, "assignProjects"),
@@ -8835,9 +8846,9 @@ export function useAssistant({
         send({ type: "assignTaskProjects", updates, requestId });
       },
       archiveTask: (id, archived = true) => {
-        const requestId = trackMutation(
+        const requestId = trackDomainMutation(
           { topic: "tasks", objectIds: [id] },
-          resyncTasks,
+          "tasks",
         );
         // Membership in the live projection is what the list shows: archiving
         // removes the row, restoring brings it back through the server event
@@ -8847,9 +8858,9 @@ export function useAssistant({
         send({ type: "archiveTask", id, archived, requestId });
       },
       deleteTask: (id) => {
-        const requestId = trackMutation(
+        const requestId = trackDomainMutation(
           { topic: "tasks", objectIds: [id] },
-          resyncTasks,
+          "tasks",
         );
         dispatch({ kind: "optimisticTaskRemove", id });
         dispatch({ kind: "clearObjectFailure", type: "task", id });
@@ -8869,14 +8880,14 @@ export function useAssistant({
         const current = stateRef.current.taskMutations[key];
         if (current?.status === "loading" || current?.status === "refreshing")
           return;
-        const requestId = trackMutation(
+        const requestId = trackDomainMutation(
           {
             topic: "tasks",
             objectIds: placements?.map((p) => p.id) ?? orderedIds,
           },
-          resyncTasks,
+          "tasks",
+          key,
         );
-        taskMutationRequestsRef.current.set(requestId, key);
         dispatch({ kind: "taskMutationStart", key });
         if (placements?.length)
           dispatch({ kind: "optimisticTaskReorder", placements });
@@ -8946,7 +8957,7 @@ export function useAssistant({
           replicaTransport.subscribeRequest(
             ["initiatives"],
             stateRef.current,
-            pendingTopics(pendingMutationsRef.current),
+            mutationLifecycleRef.current.pendingTopics(),
           ),
         );
       },

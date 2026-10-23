@@ -89,6 +89,7 @@ function EditableTextEditor({
   // The submit must be seen pending before a settled state can close the
   // editor; the state it starts from may be a stale `ready`.
   const awaitingRef = useRef(false);
+  const submittedStateRef = useRef(submitState);
   const sawPendingRef = useRef(false);
   // Set once the editor closes: removing the focused field can fire a blur,
   // which must not commit a cancelled draft.
@@ -113,6 +114,7 @@ function EditableTextEditor({
       close();
       return;
     }
+    submittedStateRef.current = submitState;
     onSubmit(next);
     awaitingRef.current = true;
     sawPendingRef.current = false;
@@ -133,10 +135,15 @@ function EditableTextEditor({
       sawPendingRef.current = true;
       return;
     }
+    if (state.status === "idle" && state !== submittedStateRef.current) {
+      awaitingRef.current = false;
+      sawPendingRef.current = false;
+      return;
+    }
     if (!sawPendingRef.current) return;
     awaitingRef.current = false;
     sawPendingRef.current = false;
-    if (errorOf(state)) return;
+    if (state.status !== "ready") return;
     closedRef.current = true;
     onEditingChange(false);
   }, [pending, state, onEditingChange]);

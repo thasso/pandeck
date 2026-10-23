@@ -115,6 +115,22 @@ async function key(el: Element, init: KeyboardEventInit) {
 }
 
 describe("EditableText single-line", () => {
+  it("keeps an unknown attempt editable and closes only the later successful retry", async () => {
+    const onSubmit = vi.fn();
+    await render({ onSubmit, submitState: idle() });
+    const input = await open();
+    await type(input, "Attempted");
+    await key(input, { key: "Enter" });
+    await render({ onSubmit, submitState: loading() });
+    await render({ onSubmit, value: "Attempted", submitState: idle() });
+    expect(field()?.value).toBe("Attempted");
+    expect(field()?.readOnly).toBe(false);
+    expect(container.textContent).not.toContain("failed");
+    await key(field()!, { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    await settle({ onSubmit, value: "Attempted" });
+    expect(field()).toBeNull();
+  });
   it("focuses on open, saves on Enter and on blur, cancels on Escape", async () => {
     const onSubmit = vi.fn();
     await render({ onSubmit });

@@ -98,11 +98,34 @@ function readyMessage(): ServerMessage {
 let latestActions: AssistantActions;
 let latestState: UIState;
 
-function Harness() {
+let liveBacklog: ReturnType<typeof useBacklog>;
+function InteractiveBacklog({
+  state,
+  actions,
+}: {
+  state: UIState;
+  actions: AssistantActions;
+}) {
+  liveBacklog = useBacklog(
+    state,
+    actions,
+    {
+      backlogView: "backlog",
+      backlogViewMode: "normal",
+      backlogProjectFilter: ALL_PROJECT_FILTER,
+      backlogStatusFilter: ["todo", "doing", "done"],
+    } as Prefs,
+    () => {},
+  );
+  return null;
+}
+function Harness({ backlog = false }: { backlog?: boolean }) {
   const assistant = useAssistant();
   latestActions = assistant.actions;
   latestState = assistant.state;
-  return null;
+  return backlog ? (
+    <InteractiveBacklog state={assistant.state} actions={assistant.actions} />
+  ) : null;
 }
 
 let root: Root;
@@ -142,6 +165,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   resetFailureHomes();
 });
 
@@ -509,6 +533,75 @@ describe("the Backlog's project assignment", () => {
     );
     return null;
   }
+
+  it("silently drops real pending Undo on unknown without resurrecting it on later arrivals", async () => {
+    await act(async () => root.render(<Harness backlog />));
+    const item = {
+      id: "t1",
+      title: "Task one",
+      status: "todo" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      source: { createdBy: "user" as const },
+    };
+    await act(async () =>
+      socket.receive({
+        type: "taskList",
+        list: { request: {}, items: [item], updatedAt: 1 },
+        seq: 1,
+        revisions: [{ id: "t1", revision: 1 }],
+      }),
+    );
+    await act(async () =>
+      liveBacklog.assignProjectsForRoots(["t1"], {
+        projectId: "p1",
+        label: "One",
+      }),
+    );
+    await act(async () =>
+      liveBacklog.assignProjectsForRoots(["t1"], {
+        projectId: "p2",
+        label: "Two",
+      }),
+    );
+    expect(
+      socket.sent.filter((message) => message.type === "assignTaskProjects"),
+    ).toHaveLength(2);
+    expect(announced()).toEqual([]);
+    vi.useFakeTimers();
+    await act(async () => socket.close());
+    expect(
+      latestState.taskMutations[taskMutationKey(null, "assignProjects")]
+        ?.status,
+    ).toBe("idle");
+    expect(announced()).toEqual([]);
+    await act(async () => vi.advanceTimersByTime(1000));
+    const next = ScenarioSocket.instances[1]!;
+    await act(async () => next.open());
+    await act(async () =>
+      next.receive({
+        type: "taskList",
+        list: {
+          request: {},
+          items: [{ ...item, projectId: "p2" }],
+          updatedAt: 2,
+        },
+        seq: 2,
+        revisions: [{ id: "t1", revision: 2 }],
+      }),
+    );
+    await act(async () => next.receive({ type: "taskProjectsAssigned" }));
+    expect(announced()).toEqual([]);
+    await act(async () =>
+      liveBacklog.assignProjectsForRoots(["t1"], {
+        projectId: "p4",
+        label: "Four",
+      }),
+    );
+    await act(async () => next.receive({ type: "taskProjectsAssigned" }));
+    expect(announced()).toEqual(["Assigned 1 Task to Four."]);
+    expect(getToasts()[0]?.action?.label).toBe("Undo");
+  });
 
   it("says a failed assignment at the arrival that reports it", async () => {
     await act(async () =>
