@@ -35,6 +35,23 @@ events.\
 _Avoid_: cache, store, mirror. A cache is the shell cache, and a store is a
 server persistence layer.
 
+**Mutation lifecycle**: The client owner of a write's request identity, timer
+and once-only terminal transition. Domain descriptors decide recovery and
+control outcomes. A generic settle acknowledgement need not complete a domain
+that also waits for an authoritative object or list.\
+_Avoid_: request manager, mutation queue
+
+**Pending mutation**: A write still holding its request correlation and touched
+domain effects, including any browser-local create id. It suppresses digests for
+those topics; it is not a replica read request.\
+_Avoid_: overlay store, pending read
+
+**Outcome unknown**: A write whose socket was lost before its answer. Its
+pending claim releases without declaring success or failure, and reconnect reads
+determine what landed. The client neither rolls back an inverse nor resends the
+command.\
+_Avoid_: cancelled, failed, saved
+
 **Native facts**: A session's identity and engine configuration, plus live
 engine observations when it is resident. App-owned state such as Tasks, queues
 and approvals is not part of these facts.\

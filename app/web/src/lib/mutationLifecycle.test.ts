@@ -1,0 +1,161 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMutationLifecycle } from "./mutationLifecycle.ts";
+
+interface Context {
+  topic: string;
+  objectIds: readonly string[];
+  key: string;
+  tempId?: string;
+  additionalEffects?: readonly { topic: string }[];
+}
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+
+describe("client mutation lifecycle contract", () => {
+  const context = (key = "a:save"): Context => ({
+    topic: "tasks",
+    objectIds: ["a"],
+    key,
+  });
+  function fixture() {
+    const lifecycle = createMutationLifecycle<Context>();
+    const recover = vi.fn();
+    const terminal = vi.fn();
+    const disconnected = vi.fn();
+    const start = (value = context(), timeoutMs = 30_000, migrated = true) =>
+      lifecycle.start({
+        context: value,
+        timeoutMs,
+        recover,
+        terminal,
+        ...(migrated ? { disconnected } : {}),
+      });
+    return { lifecycle, recover, terminal, disconnected, start };
+  }
+
+  it("retains independent identities and context, including legacy effects and temp ids", () => {
+    const { lifecycle, start } = fixture();
+    const value = {
+      ...context(),
+      tempId: "optimistic-a",
+      additionalEffects: [{ topic: "sessions" }],
+    };
+    const first = start(value);
+    const second = start(context(), 30_000, false);
+    expect(first).not.toBe(second);
+    expect(lifecycle.get(first)).toBe(value);
+    expect(lifecycle.get(first)?.tempId).toBe("optimistic-a");
+    expect(lifecycle.size).toBe(2);
+    expect(lifecycle.pendingTopics()).toEqual(new Set(["tasks", "sessions"]));
+    lifecycle.finish(first, { type: "settled" });
+    expect(lifecycle.get(second)?.key).toBe("a:save");
+    expect(lifecycle.size).toBe(1);
+  });
+
+  it.each(["settled", "error", "timeout"] as const)(
+    "retires once on %s, before reentrant hooks",
+    (type) => {
+      const { lifecycle, start, recover, terminal } = fixture();
+      const id = lifecycle.start({
+        context: context(),
+        timeoutMs: 30_000,
+        recover,
+        terminal: (outcome) => {
+          expect(lifecycle.get(id)).toBeUndefined();
+          expect(lifecycle.size).toBe(0);
+          terminal(outcome);
+          start(context());
+        },
+      });
+      if (type === "timeout") vi.advanceTimersByTime(30_000);
+      else
+        lifecycle.finish(
+          id,
+          type === "error" ? { type, message: "Refused" } : { type },
+        );
+      lifecycle.finish(id, { type: "settled" });
+      lifecycle.finish(id, { type: "error", message: "Late" });
+      lifecycle.finish("unrelated", { type: "settled" });
+      expect(lifecycle.size).toBe(1);
+      expect(terminal).toHaveBeenCalledTimes(1);
+      expect(recover).toHaveBeenCalledTimes(type === "settled" ? 0 : 1);
+      if (type === "error")
+        expect(terminal).toHaveBeenCalledWith({ type, message: "Refused" });
+      // No cleared deadline can retire the new same-key request early.
+      if (type !== "timeout") vi.advanceTimersByTime(29_999);
+      expect(lifecycle.size).toBe(1);
+    },
+  );
+
+  it.each([30_000, 900_000])(
+    "keeps the %i ms descriptor deadline",
+    (deadline) => {
+      const { start, terminal, recover } = fixture();
+      start(context(), deadline);
+      vi.advanceTimersByTime(deadline - 1);
+      expect(terminal).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(terminal).toHaveBeenCalledTimes(1);
+      expect(recover).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(deadline);
+      expect(terminal).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("disconnect releases only opted-in records and drains recovery once after subscribe", () => {
+    const { lifecycle, start, terminal, recover, disconnected } = fixture();
+    const id = start({ ...context(), tempId: "optimistic-a" });
+    const legacy = start(
+      { ...context("legacy"), topic: "projects" },
+      900_000,
+      false,
+    );
+    const done = start();
+    lifecycle.finish(done, { type: "settled" });
+    terminal.mockClear();
+    lifecycle.disconnect();
+    lifecycle.disconnect();
+    expect(lifecycle.get(id)).toBeUndefined();
+    expect(lifecycle.get(legacy)).toBeDefined();
+    expect(lifecycle.pendingTopics()).toEqual(new Set(["projects"]));
+    expect(lifecycle.recoveryTopics()).toEqual(new Set(["tasks"]));
+    expect(lifecycle.size).toBe(1);
+    expect(disconnected).toHaveBeenCalledTimes(1);
+    expect(terminal).toHaveBeenCalledTimes(1);
+    expect(terminal.mock.calls[0]?.[0]).toEqual({ type: "unknown" });
+    vi.advanceTimersByTime(30_000);
+    expect(recover).not.toHaveBeenCalled();
+    const order: string[] = [];
+    recover.mockImplementation(() => order.push("recover"));
+    order.push("subscribe");
+    lifecycle.reconnect();
+    lifecycle.reconnect();
+    expect(order).toEqual(["subscribe", "recover"]);
+    expect(lifecycle.recoveryTopics().size).toBe(0);
+    lifecycle.finish(legacy, { type: "settled" });
+    vi.advanceTimersByTime(900_000);
+    expect(terminal).toHaveBeenCalledTimes(2);
+  });
+
+  it("cleanup drops migrated timers and obligations but leaves the instance reusable", () => {
+    const { lifecycle, start, terminal, recover } = fixture();
+    start();
+    lifecycle.disconnect();
+    start();
+    const legacy = start(context("legacy"), 900_000, false);
+    terminal.mockClear();
+    lifecycle.cleanup();
+    expect(terminal).toHaveBeenCalledTimes(1);
+    terminal.mockClear();
+    lifecycle.reconnect();
+    vi.advanceTimersByTime(30_000);
+    expect(recover).not.toHaveBeenCalled();
+    expect(terminal).not.toHaveBeenCalled();
+    expect(lifecycle.size).toBe(1);
+    lifecycle.finish(legacy, { type: "settled" });
+    const fresh = start();
+    lifecycle.finish(fresh, { type: "settled" });
+    expect(terminal).toHaveBeenCalledTimes(2);
+  });
+});

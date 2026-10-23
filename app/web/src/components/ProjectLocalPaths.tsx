@@ -55,28 +55,82 @@ export function ProjectLocalPathsSection({
   // discard what you typed), so cancelling has to win the race: a pointer press
   // on the header's X lands BEFORE the input's blur and suppresses that commit.
   const cancelRef = useRef(false);
-  const attemptedRef = useRef<ProjectLocalPath[] | null>(null);
-  const submit = (next: ProjectLocalPath[]) => {
-    attemptedRef.current = next;
+  const attemptedRef = useRef<{
+    paths: ProjectLocalPath[];
+    projectId: string;
+    draft: string | undefined;
+  } | null>(null);
+  // Only an unknown result may reopen an absent-entry first submission.
+  // Every later interaction invalidates this one bounded editor attempt.
+  const restorationRef = useRef<{
+    draft: string;
+    projectId: string;
+    before: LoadState<true> | undefined;
+  } | null>(null);
+  const submittedStateRef = useRef(mutationState);
+  const submit = (next: ProjectLocalPath[], restoreDraft?: string) => {
+    restorationRef.current =
+      restoreDraft === undefined
+        ? null
+        : {
+            draft: restoreDraft,
+            projectId: project.id,
+            before: mutationState,
+          };
+    submittedStateRef.current = mutationState;
+    attemptedRef.current = {
+      paths: next,
+      projectId: project.id,
+      draft: restoreDraft,
+    };
     onSave(next);
+  };
+  const supersedeDraft = () => {
+    restorationRef.current = null;
+    if (attemptedRef.current) attemptedRef.current.draft = undefined;
   };
   const awaitingAddRef = useRef(false);
   const sawPendingRef = useRef(false);
   const pending = mutationState ? isPending(mutationState) : false;
   const mutationError = mutationState ? errorOf(mutationState) : undefined;
   useEffect(() => {
+    if (attemptedRef.current?.projectId !== project.id)
+      attemptedRef.current = null;
+    const attempt = restorationRef.current;
+    if (attempt) {
+      if (attempt.projectId !== project.id) restorationRef.current = null;
+      else if (mutationState && mutationState !== attempt.before && !pending) {
+        restorationRef.current = null;
+        // A refusal keeps this attempt's draft for inline Retry. A known
+        // success or unknown release ends its restoration claim.
+        if (mutationState.status !== "error" && attemptedRef.current)
+          attemptedRef.current.draft = undefined;
+        if (mutationState.status === "idle") {
+          setDraft(attempt.draft);
+          setAdding(true);
+        }
+      }
+    }
     if (!awaitingAddRef.current) return;
     if (pending) {
       sawPendingRef.current = true;
       return;
     }
-    if (sawPendingRef.current && !mutationError) {
+    if (
+      mutationState?.status === "idle" &&
+      mutationState !== submittedStateRef.current
+    ) {
       awaitingAddRef.current = false;
       sawPendingRef.current = false;
-      setDraft("");
-      setAdding(false);
+    } else if (sawPendingRef.current && !mutationError) {
+      awaitingAddRef.current = false;
+      sawPendingRef.current = false;
+      if (mutationState?.status === "ready") {
+        setDraft("");
+        setAdding(false);
+      }
     }
-  }, [mutationError, pending]);
+  }, [mutationError, mutationState, pending, project.id]);
   const commitDraft = () => {
     if (cancelRef.current) {
       cancelRef.current = false;
@@ -85,7 +139,10 @@ export function ProjectLocalPathsSection({
     const path = draft.trim();
     if (!path || pending) return;
     if (mutationState) awaitingAddRef.current = true;
-    submit([...items, { path, kind: "repo", match: "prefix" }]);
+    submit(
+      [...items, { path, kind: "repo", match: "prefix" }],
+      !mutationState ? draft : undefined,
+    );
     if (!mutationState) {
       setDraft("");
       setAdding(false);
@@ -110,6 +167,8 @@ export function ProjectLocalPathsSection({
           <IconButton
             label={adding ? "Cancel adding a local path" : "Add a local path"}
             onClick={() => {
+              supersedeDraft();
+              awaitingAddRef.current = false;
               setAdding((previous) => !previous);
               setDraft("");
             }}
@@ -163,6 +222,7 @@ export function ProjectLocalPathsSection({
                   size="sm"
                   className="h-auto min-w-0 flex-1 justify-start break-all px-1 py-0.5 text-left font-mono"
                   onClick={() => {
+                    supersedeDraft();
                     setPathDraft(item.path);
                     setEditingIndex(index);
                   }}
@@ -216,9 +276,16 @@ export function ProjectLocalPathsSection({
             autoFocus
             disabled={pending}
             aria-busy={pending || undefined}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              supersedeDraft();
+              setDraft(event.target.value);
+            }}
             onKeyDown={(event) => {
-              if (event.key === "Escape") setAdding(false);
+              if (event.key === "Escape") {
+                supersedeDraft();
+                awaitingAddRef.current = false;
+                setAdding(false);
+              }
               if (event.key === "Enter") commitDraft();
             }}
             onBlur={commitDraft}
@@ -231,7 +298,9 @@ export function ProjectLocalPathsSection({
           <ErrorNote
             message={mutationError}
             onRetry={() => {
-              if (attemptedRef.current) onSave(attemptedRef.current);
+              const attempt = attemptedRef.current;
+              if (attempt?.projectId === project.id)
+                submit(attempt.paths, attempt.draft);
             }}
           />
         ) : null}

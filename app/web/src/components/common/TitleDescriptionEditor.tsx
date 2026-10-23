@@ -48,6 +48,7 @@ export function TitleDescriptionEditor({
   const [baseline] = useState({ title, description });
   const [submitted, setSubmitted] = useState(false);
   const awaitingRef = useRef(false);
+  const submittedStateRef = useRef(submitState);
   const sawPendingRef = useRef(false);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const state = submitState ?? idle<true>();
@@ -73,6 +74,7 @@ export function TitleDescriptionEditor({
       onClose();
       return;
     }
+    submittedStateRef.current = submitState;
     onSave(changes);
     awaitingRef.current = true;
     sawPendingRef.current = false;
@@ -85,10 +87,15 @@ export function TitleDescriptionEditor({
       sawPendingRef.current = true;
       return;
     }
+    if (state.status === "idle" && state !== submittedStateRef.current) {
+      awaitingRef.current = false;
+      sawPendingRef.current = false;
+      return;
+    }
     if (!sawPendingRef.current) return;
     awaitingRef.current = false;
     sawPendingRef.current = false;
-    if (!errorOf(state)) onClose();
+    if (state.status === "ready") onClose();
   }, [pending, state, onClose]);
 
   const onKeyDown = (event: ReactKeyboardEvent) => {

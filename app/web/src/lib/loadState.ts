@@ -17,7 +17,7 @@
  */
 
 export type LoadState<T> =
-  /** Nothing has been asked for yet (no key, or the surface is inactive). */
+  /** Unasked/inactive read, or a mutation control released without an outcome. */
   | { status: "idle" }
   /** A first fetch is running and there is nothing to show. */
   | { status: "loading" }

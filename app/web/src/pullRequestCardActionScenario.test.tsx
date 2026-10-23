@@ -177,6 +177,59 @@ async function clickedCard(
   return { socket, requestId: requestId!, mark: socket.sent.length };
 }
 
+it("keeps a legacy linked-Task claim across disconnect while ordinary Task controls release", async () => {
+  const { socket, requestId } = await clickedCard(
+    "mark-task-done",
+    async (socket) => {
+      await act(async () => {
+        latestActions.setTopics(["tasks"]);
+        socket.receive({
+          type: "taskList",
+          list: { request: {}, items: [card.linkedTask!], updatedAt: 1 },
+          seq: 1,
+          revisions: [{ id: "625", revision: 1 }],
+        });
+      });
+    },
+  );
+  vi.useFakeTimers();
+  await act(async () =>
+    latestActions.saveTask({
+      id: "625",
+      title: "Ordinary edit",
+      status: "todo",
+    }),
+  );
+  await act(async () => socket.close());
+  expect(Object.values(latestState.taskMutations)[0]?.status).toBe("idle");
+  expect(viewedCard()?.pendingAction).toBe("mark-task-done");
+  await act(async () => vi.advanceTimersByTime(1000));
+  const next = ScenarioSocket.instances[1]!;
+  await act(async () => next.open());
+  await act(async () =>
+    next.receive({
+      type: "taskList",
+      list: { request: {}, items: [card.linkedTask!], updatedAt: 2 },
+      seq: 2,
+      revisions: [{ id: "625", revision: 1 }],
+    }),
+  );
+  await act(async () => latestActions.setTopics([]));
+  await act(async () => latestActions.setTopics(["tasks"]));
+  expect(next.sent.at(-1)).toEqual({ type: "subscribe", topics: ["tasks"] });
+  await act(async () =>
+    next.receive({ type: "error", requestId, message: "Legacy refusal" }),
+  );
+  expect(viewedCard()?.pendingAction).toBeUndefined();
+  await act(async () => latestActions.setTopics([]));
+  await act(async () => latestActions.setTopics(["tasks"]));
+  expect(next.sent.at(-1)).toEqual({
+    type: "subscribe",
+    topics: ["tasks"],
+    digests: ["tasks"],
+  });
+});
+
 it("holds the click through a watcher echo carrying the last action's message", async () => {
   const { socket, requestId, mark } = await clickedCard("mark-task-done");
   expect(viewedCard()?.pendingAction).toBe("mark-task-done");

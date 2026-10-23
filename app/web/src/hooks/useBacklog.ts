@@ -391,6 +391,14 @@ export function useBacklog(
     });
   };
 
+  // Unknown releases the shared Undo slot before a reconnect list can revive
+  // it. Overlapping assignments still share one receipt, not one per request.
+  const assignmentMutation = state.taskMutations[ASSIGN_PROJECTS_MUTATION_KEY];
+  useEffect(() => {
+    if (assignmentMutation?.status !== "idle") return;
+    pendingProjectUndoRef.current = null;
+  }, [assignmentMutation]);
+
   // The write landing is an ARRIVAL, reported by the reducer's counter. This
   // used to watch for a notice whose wording it recognised — which is not an
   // interface, and broke as soon as that notice was deleted for announcing a
@@ -428,23 +436,8 @@ export function useBacklog(
     // this to one receipt per landed write, so listing it changes nothing.
   }, [state.taskProjectsAssignedSeq, state.taskList?.updatedAt, actions]);
 
-  // Bookkeeping, and deliberately NOT a message: the failure itself is said at
-  // its arrival (`useAssistant`, into this same toast slot), because a receipt
-  // raised from the stored record would be re-announced by every remount that
-  // found it still there. This only drops the Undo the failed write can no
-  // longer offer — without it, the receipt effect above pairs that dead
-  // snapshot with a later assignment's counter and offers an Undo of nothing.
-  //
-  // What this record isolates is THIS write from every other message, which is
-  // what the old text match could not do: reading a global carrier's CONTENT
-  // meant a later successful retry showed its Undo and then had it torn down
-  // again by the previous attempt's failure. It does NOT isolate one assignment
-  // from the next — the record is keyed by operation, and the pending snapshot
-  // beside it is a single slot the newer assignment has already overwritten. So
-  // two overlapping assignments share one receipt, and the failure of either
-  // ends it. Separating them means giving the receipt a snapshot per request,
-  // which is a change to the receipt, not to this teardown.
-  const assignmentMutation = state.taskMutations[ASSIGN_PROJECTS_MUTATION_KEY];
+  // Keep the connected refusal's existing arrival/receipt ordering. This only
+  // drops bookkeeping; useAssistant already announced into the receipt slot.
   useEffect(() => {
     if (assignmentMutation?.status !== "error") return;
     pendingProjectUndoRef.current = null;

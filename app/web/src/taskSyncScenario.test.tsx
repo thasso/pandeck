@@ -20,6 +20,7 @@ import {
   type UIState,
 } from "./hooks/useAssistant.ts";
 import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
+import { getToasts } from "./lib/toast.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -378,6 +379,190 @@ describe("Tasks on the replica transport", () => {
     );
     expect(socket.sent.slice(sentBefore)).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("unknown Task outcomes", () => {
+  it.each([
+    ["boot offline", "settle"],
+    ["boot offline", "timeout"],
+    ["boot offline", "disconnect"],
+    ["lost connection", "settle"],
+    ["lost connection", "timeout"],
+    ["lost connection", "disconnect"],
+  ])(
+    "keeps a queued create pending through failed attempts from %s, then %s",
+    async (origin, outcome) => {
+      vi.useFakeTimers();
+      if (origin === "boot offline") {
+        await act(async () => root.render(<TaskHarness />));
+      } else await connected();
+      await act(async () => ScenarioSocket.instances[0]!.close());
+      await act(async () =>
+        latestActions.saveTask({ title: "Queued", status: "todo" }),
+      );
+      const pending = latestState.taskMutations["new:create"];
+      expect(pending?.status).toBe("loading");
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await act(async () => vi.advanceTimersByTime(1000));
+        const failed = ScenarioSocket.instances[attempt]!;
+        await act(async () => failed.close());
+        expect(failed.sent).toEqual([]);
+        expect(latestState.taskMutations["new:create"]).toBe(pending);
+        await act(async () =>
+          latestActions.saveTask({ title: "Queued", status: "todo" }),
+        );
+      }
+      await act(async () => vi.advanceTimersByTime(1000));
+      const next = ScenarioSocket.instances[3]!;
+      await act(async () => next.open());
+      expect(next.sent.map((message) => message.type)).toEqual([
+        "subscribe",
+        "saveTask",
+      ]);
+      expect(latestState.taskMutations["new:create"]).toBe(pending);
+      const requestId = requestOf(next, "saveTask");
+      if (outcome === "settle") {
+        await act(async () =>
+          next.receive({ type: "mutationSettled", requestId }),
+        );
+        expect(latestState.taskMutations["new:create"]?.status).toBe("ready");
+      } else if (outcome === "timeout") {
+        await act(async () => vi.advanceTimersByTime(26_999));
+        expect(latestState.taskMutations["new:create"]).toBe(pending);
+        await act(async () => vi.advanceTimersByTime(1));
+        expect(latestState.taskMutations["new:create"]?.status).toBe("error");
+      } else {
+        await act(async () => next.close());
+        expect(latestState.taskMutations["new:create"]?.status).toBe("idle");
+        await act(async () => vi.advanceTimersByTime(30_000));
+        expect(latestState.taskMutations["new:create"]?.status).toBe("idle");
+      }
+      expect(
+        next.sent.filter((message) => message.type === "saveTask"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["edit", "create", "assignment", "reorder"])(
+    "releases %s and joins the reconnect snapshot without replay",
+    async (operation) => {
+      const socket = await connected();
+      await act(async () =>
+        socket.receive(snapshot(3, [summary("a"), summary("b")])),
+      );
+      vi.useFakeTimers();
+      const toasts = getToasts();
+      await act(async () => {
+        if (operation === "edit")
+          latestActions.saveTask({
+            id: "a",
+            title: "Optimistic",
+            status: "todo",
+          });
+        if (operation === "create")
+          latestActions.saveTask({ title: "New", status: "todo" });
+        if (operation === "assignment")
+          latestActions.assignTaskProjects([{ id: "a", projectId: "p" }]);
+        if (operation === "reorder")
+          latestActions.reorderTasks(
+            ["b", "a"],
+            [
+              { id: "b", parentId: null },
+              { id: "a", parentId: null },
+            ],
+          );
+      });
+      const optimisticIds = rowIds();
+      const optimisticRows = latestState.taskList?.items;
+      await act(async () => socket.close());
+      expect(
+        Object.values(latestState.taskMutations).map((value) => value.status),
+      ).toEqual(["idle"]);
+      expect(rowIds()).toEqual(optimisticIds);
+      expect(latestState.taskList?.items).toBe(optimisticRows);
+      expect(cacheAdmits()).toBe(false);
+      expect(getToasts()).toEqual(toasts);
+      const offlineAt = socket.sent.length;
+      await act(async () => vi.advanceTimersByTime(30_000));
+      expect(socket.sent.slice(offlineAt)).toEqual([]);
+      expect(Object.values(latestState.taskMutations)[0]?.status).toBe("idle");
+      const next = ScenarioSocket.instances[1]!;
+      await act(async () => next.open());
+      expect(next.sent).toEqual([{ type: "subscribe", topics: ["tasks"] }]);
+      await act(async () =>
+        next.receive(snapshot(4, [summary("a"), summary("b")])),
+      );
+      expect(latestState.taskList?.items).toEqual([summary("a"), summary("b")]);
+      expect(await retake(next)).toEqual([
+        { type: "subscribe", topics: ["tasks"], digests: ["tasks"] },
+      ]);
+      expect(getToasts()).toEqual(toasts);
+    },
+  );
+
+  it("drops an old snapshot wait, coalesces all recovery, and recovers membership-only writes", async () => {
+    const socket = await connected();
+    await act(async () =>
+      socket.receive(snapshot(3, [summary("a"), summary("b")])),
+    );
+    vi.useFakeTimers();
+    await act(async () => latestActions.saveTask({ id: "a", status: "doing" }));
+    await act(async () => reject(socket, "saveTask"));
+    await act(async () => {
+      latestActions.archiveTask("a");
+      latestActions.deleteTask("b");
+    });
+    expect(rowIds()).toEqual([]);
+    await act(async () => socket.close());
+    await act(async () => vi.advanceTimersByTime(1000));
+    const next = ScenarioSocket.instances[1]!;
+    await act(async () => next.open());
+    expect(next.sent).toEqual([{ type: "subscribe", topics: ["tasks"] }]);
+    await act(async () =>
+      next.receive({
+        type: "error",
+        message: "Read failed",
+        target: { type: "task" },
+      }),
+    );
+    expect(latestState.taskListError).toBe("Read failed");
+    expect(next.sent).toHaveLength(1);
+    await act(async () => latestActions.saveTask({ id: "a", status: "done" }));
+    const at = next.sent.length;
+    await act(async () => reject(next, "saveTask"));
+    expect(next.sent.slice(at)).toEqual(pair);
+    await act(async () => next.close());
+    await act(async () => vi.advanceTimersByTime(30_000));
+    const third = ScenarioSocket.instances[2]!;
+    await act(async () => third.open());
+    expect(third.sent).toEqual([{ type: "subscribe", topics: ["tasks"] }]);
+  });
+
+  it("does not revive an unheld topic and ignores a retired id beside a new same-key write", async () => {
+    const socket = await connected();
+    await act(async () => socket.receive(snapshot(3, [summary("a")])));
+    vi.useFakeTimers();
+    await act(async () =>
+      latestActions.saveTask({ id: "a", title: "Unknown", status: "todo" }),
+    );
+    const oldId = requestOf(socket, "saveTask");
+    await act(async () => latestActions.setTopics([]));
+    await act(async () => socket.close());
+    expect(cacheAdmits()).toBe(false);
+    await act(async () => vi.advanceTimersByTime(1000));
+    const next = ScenarioSocket.instances[1]!;
+    await act(async () => next.open());
+    expect(next.sent).toEqual([]);
+    await act(async () => latestActions.setTopics(["tasks"]));
+    expect(next.sent).toEqual([{ type: "subscribe", topics: ["tasks"] }]);
+    await act(async () =>
+      latestActions.saveTask({ id: "a", title: "Retry", status: "todo" }),
+    );
+    await act(async () =>
+      next.receive({ type: "mutationSettled", requestId: oldId }),
+    );
+    expect(Object.values(latestState.taskMutations)[0]?.status).toBe("loading");
   });
 });
 

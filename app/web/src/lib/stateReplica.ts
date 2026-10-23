@@ -447,6 +447,10 @@ export interface ReplicaTransport<State> {
    * unheld, nothing. Silent, unlike a fallback, and it touches no hold.
    */
   resync(topic: ItemTopic, ids: readonly string[]): ClientMessage[];
+  /** Forget unsafe optimism without sending or changing topic holds. */
+  invalidate(topic: ItemTopic, ids: readonly string[]): void;
+  /** Record a reconnect snapshot immediately before its subscribe is sent. */
+  snapshotRequested(topic: BroadcastTopic): void;
   /**
    * The snapshot read a resubscribe asked for failed: the awaited answer will
    * not come, so the next resync sends its own. Only that wait is released;
@@ -567,8 +571,17 @@ export function createReplicaTransport<State>(
   const baseline = (topic: ItemTopic, state: State) =>
     config.topics[topic]?.digest?.baseline(state) === true;
 
+  const invalidate = (topic: ItemTopic, ids: readonly string[]) => {
+    if (ids.length > 0) config.onBaselineLost(topic, ids);
+    snapshotRequired.add(topic);
+  };
+
   return {
     owns,
+    invalidate,
+    snapshotRequested(topic) {
+      awaitingSnapshot.add(topic);
+    },
     subscribeRequest(topics, state, pendingTopics) {
       const digests = DIGEST_ORDER.filter(
         (topic) =>
@@ -642,8 +655,7 @@ export function createReplicaTransport<State>(
       return true;
     },
     resync(topic, ids) {
-      if (ids.length > 0) config.onBaselineLost(topic, ids);
-      snapshotRequired.add(topic);
+      invalidate(topic, ids);
       // The awaited snapshot is read after this failure, so it answers both.
       if (awaitingSnapshot.has(topic)) return [];
       return resubscribeForSnapshot(topic);

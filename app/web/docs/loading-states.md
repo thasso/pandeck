@@ -24,7 +24,11 @@ it is in:
 `lib/loadState.ts` carries `idle | loading | ready | refreshing | error`, and
 `isEmpty(state, predicate)` answers the empty question only for data that
 actually arrived. `idle` is the fifth status and the sixth state of nothing: no
-key, no selection, an inactive pane — nothing was ever asked for.
+key, no selection, an inactive pane. For reads, nothing was ever asked for. For
+mutation controls, `idle` can also release a pending claim whose outcome is
+unknown after disconnect. It means neither saved nor failed: retain the draft,
+release busy, and let reconnect reads state what landed. There is no new
+notification or automatic retry.
 
 **Stale-while-refresh is the default.** A second fetch of the same query keeps
 what is on screen. Blanking is reserved for a different object.

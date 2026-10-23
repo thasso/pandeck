@@ -834,6 +834,64 @@ describe("the replica transport", () => {
     });
   });
 
+  describe("unknown-outcome snapshot coordination", () => {
+    it("invalidates silently even without ids, holds or a snapshot wait", () => {
+      vi.useFakeTimers();
+      const warn = warnSpy();
+      const { transport, held, sent, lost, log } = harness();
+      held.delete("tasks");
+      transport.invalidate("tasks", []);
+      transport.invalidate("projects", ["a"]);
+      expect(lost).toEqual([["projects", ["a"]]]);
+      expect(sent).toEqual([]);
+      expect(log).toEqual([]);
+      expect(held.has("tasks")).toBe(false);
+      vi.advanceTimersByTime(STATE_ITEMS_TIMEOUT_MS + 1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(
+        transport.subscribeRequest(["tasks", "projects"], safe(), new Set()),
+      ).toEqual({ type: "subscribe", topics: ["tasks", "projects"] });
+      held.add("tasks");
+      // Invalidate itself did not arm a wait.
+      expect(transport.resync("tasks", ["b"])).toEqual(pair("tasks"));
+    });
+
+    it.each(["snapshot", "digest", "failure", "disconnect"])(
+      "joins the recorded reconnect snapshot until %s",
+      (answer) => {
+        warnSpy();
+        const { transport, lost } = harness();
+        transport.invalidate("tasks", ["a"]);
+        transport.snapshotRequested("tasks");
+        expect(transport.resync("tasks", ["b"])).toEqual([]);
+        expect(lost).toEqual([
+          ["tasks", ["a"]],
+          ["tasks", ["b"]],
+        ]);
+        if (answer === "snapshot") transport.snapshotReceived("tasks", 1);
+        if (answer === "failure") transport.snapshotFailed("tasks");
+        if (answer === "disconnect") transport.dropRequests();
+        if (answer === "digest") {
+          expect(
+            transport.digestReceived(
+              {
+                type: "stateDigest",
+                topic: "tasks",
+                seq: 1,
+                entries: [at("a", 1)],
+              },
+              safe(),
+            ),
+          ).toEqual({ send: pair("tasks"), apply: false });
+          // The rejected unsafe digest replaced the old wait with its fallback.
+          expect(transport.resync("tasks", [])).toEqual([]);
+          transport.snapshotFailed("tasks");
+        }
+        expect(transport.resync("tasks", ["c"])).toEqual(pair("tasks"));
+      },
+    );
+  });
+
   describe("the mutation resync", () => {
     const tasksDigest = (
       entries: StateDigestEntry[],
