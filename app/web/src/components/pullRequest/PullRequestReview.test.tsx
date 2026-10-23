@@ -234,6 +234,8 @@ async function render(
         }}
         onStartSession={(worktreeId) => sessions.push(worktreeId)}
         onReload={onReload}
+        onRefresh={() => {}}
+        refreshing={false}
       />
     </PullRequestActionsProvider>
   );

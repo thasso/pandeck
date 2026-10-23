@@ -19,7 +19,7 @@
  * @related PullRequestBrowser, PullRequestInspector, PullRequestActions,
  * PullRequestConversation, pullRequestInbox (lib), WorktreeDetailPage
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CircleDot,
   ClipboardList,
@@ -939,18 +939,34 @@ export function PullRequestDetailPage({
  * a mounted detail page performs. Stories render `PullRequestDetailPage` with
  * a fixture instead.
  */
-export function PullRequestDetailRoute(
-  props: Omit<Props, "conversation" | "onReloadConversation">,
-) {
+export function PullRequestDetailRoute({
+  refreshCount,
+  ...props
+}: Omit<Props, "conversation" | "onReloadConversation"> & {
+  /**
+   * The inventory's Refresh presses (`usePullRequestInventory`). The
+   * conversation follows the inventory only when it reports a change, and a
+   * new comment need not be one, so a press re-reads it as well.
+   */
+  refreshCount: number;
+}) {
   const conversation = usePullRequestConversation(
     props.target,
     dataOf(props.state) ?? null,
   );
+  const reloadConversation = conversation.reload;
+  // The count on mount is a press that came before this page.
+  const seenRefresh = useRef(refreshCount);
+  useEffect(() => {
+    if (seenRefresh.current === refreshCount) return;
+    seenRefresh.current = refreshCount;
+    reloadConversation();
+  }, [refreshCount, reloadConversation]);
   return (
     <PullRequestDetailPage
       {...props}
       conversation={conversation.state}
-      onReloadConversation={conversation.reload}
+      onReloadConversation={reloadConversation}
     />
   );
 }

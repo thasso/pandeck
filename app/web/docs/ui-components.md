@@ -81,6 +81,7 @@ the same parts a shadcn example would.
 | Text an agent wrote (a title, a label, a reason, a summary)                     | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card                                                                       |
 | Menu of actions                                                                 | `DropdownMenu`, `ContextMenu`                                                                                                                            |
 | Secondary actions behind a `⋯`                                                  | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)                                                                         |
+| The bar above a sidebar browser (controls, filter, list actions)                | `common/ListToolbar` (`children` lead, `filter` at the right edge, `actions` as an `OverflowAction[]` in a trailing `⋯`)                                 |
 | Floating panel or hint                                                          | `Popover`, `HoverCard`, `Tooltip`                                                                                                                        |
 | Modal                                                                           | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                                                                                      |
 | Edge panel                                                                      | `Sheet`, `Drawer`                                                                                                                                        |
@@ -302,11 +303,24 @@ Use these compositions as examples, not as permission to copy their geometry.
 Storybook's `Common/ListRow` demonstrates the one-, two-, and three-line
 layouts.
 
+`common/ListToolbar` owns the bar above every sidebar browser (Sessions, Tasks,
+Pull Requests): its height, hairline and inset, and the ORDER of its three
+slots. `children` are the list's own leading controls; `filter` (normally
+`ListFilterPopover`) is pushed to the right edge; `actions` are actions on the
+whole list — never on one object — drawn as the bar's last control, an
+`OverflowMenu` named by `actionsLabel`. Actions are `OverflowAction` data, not
+nodes, and `OverflowActionItems` draws them, so busy (spinner, no click),
+disabled (with its reason as tooltip) and the trailing hint look the same here
+and in the page header's `⋯`. No actions renders no `⋯`. `inset="chip"` is for a
+bar that starts with badges rather than a ghost button. A browser never draws
+its own bar row beside it.
+
 `common/ListFilterPopover` owns browser filter chrome: the shared trigger,
 active-filter count, panel width and property-list layout. Tasks and Attention
 supply only their filter fields. Both use `BacklogProjectFilterPicker` for the
 same searchable Project selection; Attention supplies its own status choices
-without adopting Task statuses or Task view switching.
+without adopting Task statuses or Task view switching. Pull Requests supplies
+its project, reason and draft fields.
 
 An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control

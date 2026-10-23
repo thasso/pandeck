@@ -30,6 +30,7 @@ import {
   UserCheck,
   Waypoints,
   Workflow,
+  RefreshCw,
 } from "lucide-react";
 import {
   providerLabel,
@@ -2499,7 +2500,8 @@ export function pullRequestRelationGroups(
 /**
  * Inspector actions for a pull request: what you do WITH it, in the order the
  * other panels use — the session first, then the work, then the act that ends
- * it, then the link out.
+ * it, then Refresh (read the providers now, for this page and the list), then
+ * the link out.
  *
  * Nothing that cannot do what it says is offered. A terminal pull request has
  * normally had its head branch deleted, so Review and Create worktree exist
@@ -2526,6 +2528,9 @@ export function pullRequestInspectorActions(
      * the row asks what happened instead (`usePullRequestMergeCleanup`).
      */
     mergeSuspended?: boolean;
+    /** Read the providers now: the inventory and this page's conversation. */
+    onRefresh: () => void;
+    refreshBusy?: boolean;
     onOpenExternal: () => void;
   },
 ): InspectorAction[] {
@@ -2603,6 +2608,16 @@ export function pullRequestInspectorActions(
         ]
       : []),
     {
+      key: "refresh",
+      icon: <RefreshCw size={14} />,
+      label: "Refresh",
+      busy: handlers.refreshBusy ?? false,
+      // The rows it refreshes are the surface underneath; collapsing would
+      // hide the very update it was pressed for.
+      keepOpen: true,
+      onRun: handlers.onRefresh,
+    },
+    {
       key: "open-external",
       icon: <ExternalLink size={14} />,
       label: `Open on ${hostingProviderLabel(item.provider)}`,
@@ -2637,6 +2652,8 @@ export function PullRequestInspector({
   openers,
   onStartSession,
   onReload,
+  onRefresh,
+  refreshing,
 }: {
   /**
    * This pull request out of the app's inventory, WITH what is known about the
@@ -2652,6 +2669,10 @@ export function PullRequestInspector({
   onStartSession: (worktreeId: string) => void;
   /** Retry a failed inventory read. */
   onReload: () => void;
+  /** The Refresh action: read the providers now. */
+  onRefresh: () => void;
+  /** That refresh is running. */
+  refreshing: boolean;
 }) {
   const item = dataOf(state) ?? null;
   const error = errorOf(state);
@@ -2670,6 +2691,8 @@ export function PullRequestInspector({
           onMerge: acts.merge.open,
           mergeBusy: acts.merge.busy,
           mergeSuspended: acts.merge.suspended,
+          onRefresh,
+          refreshBusy: refreshing,
           onOpenExternal: () => window.open(item.url, "_blank", "noreferrer"),
         })
       : [];

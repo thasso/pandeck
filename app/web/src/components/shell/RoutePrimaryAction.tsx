@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { OverflowAction } from "../common/OverflowMenu.tsx";
 
 /**
  * What the object on screen leads with — "Start session with this entry", "Start
@@ -31,16 +32,7 @@ const RoutePrimaryActionContext = createContext<RoutePrimaryAction | null>(
 );
 
 /** A secondary object action rendered in a wide page header's overflow menu. */
-export interface RouteSecondaryAction {
-  key: string;
-  icon?: ReactNode;
-  label: string;
-  onRun: () => void;
-  busy?: boolean;
-  disabled?: boolean;
-  disabledReason?: string;
-  hint?: string;
-}
+export type RouteSecondaryAction = OverflowAction;
 
 const RouteSecondaryActionsContext = createContext<{
   hosted: boolean;

@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { ListFilterPopover } from "./common/ListFilterPopover.tsx";
+import { ListToolbar } from "./common/ListToolbar.tsx";
 import type { ProjectRecord, TaskStatus } from "@assistant/shared";
 import {
   BacklogProjectFilterControl,
@@ -92,25 +93,28 @@ export function BacklogToolbar({
   // wrapped onto two to four lines in the rail.
   if (bar && !hideProjectControls)
     return (
-      <div className="flex h-11 items-center gap-1 border-b border-border bg-card px-1.5 sm:px-2">
+      <ListToolbar
+        filter={
+          <BacklogFilterPopover
+            view={view}
+            byProject={byProject}
+            onViewModeChange={onViewModeChange}
+            projectFilter={projectFilter}
+            projectFilterOptions={projectFilterOptions}
+            projectsById={projectsById}
+            projectsLoaded={projectsLoaded}
+            onProjectFilterChange={onProjectFilterChange}
+            statuses={statuses}
+            onStatusFilterChange={onStatusFilterChange}
+          />
+        }
+      >
         <BacklogViewMenu
           view={view}
           onChange={onViewChange}
           inboxWaiting={inboxWaiting}
         />
-        <BacklogFilterPopover
-          view={view}
-          byProject={byProject}
-          onViewModeChange={onViewModeChange}
-          projectFilter={projectFilter}
-          projectFilterOptions={projectFilterOptions}
-          projectsById={projectsById}
-          projectsLoaded={projectsLoaded}
-          onProjectFilterChange={onProjectFilterChange}
-          statuses={statuses}
-          onStatusFilterChange={onStatusFilterChange}
-        />
-      </div>
+      </ListToolbar>
     );
 
   return (

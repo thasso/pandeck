@@ -1,8 +1,9 @@
 /**
  * The Pull Requests view's reads — `GET /api/pull-requests`, the inventory, and
  * `GET /api/pull-requests/conversation`, one pull request's description,
- * conversation and checks for its detail page — and its writes:
- * `POST /api/pull-requests/merge` and `POST /api/pull-requests/checkout`.
+ * conversation and checks for its detail page — its writes:
+ * `POST /api/pull-requests/merge` and `POST /api/pull-requests/checkout` — and
+ * `POST /api/pull-requests/refresh`, the user's "read the providers now".
  *
  * Not worktree endpoints, so they do not live in `worktrees.ts`. The server
  * builds the whole inventory — selection, CI, review, mergeability and the
@@ -31,6 +32,20 @@ export async function fetchPullRequestInventory(
     await fetch(`${serverHttpOrigin()}/api/pull-requests`, {
       headers: { ...authHeaders() },
       ...(signal ? { signal } : {}),
+    }),
+  );
+}
+
+/**
+ * Rebuild the inventory from the providers now, past the server's provider
+ * caches, and answer with the snapshot that build wrote. Slow by nature (one
+ * provider read per registered repository); the poll never calls it.
+ */
+export async function refreshPullRequestInventory(): Promise<PullRequestInventoryResponse> {
+  return json(
+    await fetch(`${serverHttpOrigin()}/api/pull-requests/refresh`, {
+      method: "POST",
+      headers: { ...authHeaders() },
     }),
   );
 }

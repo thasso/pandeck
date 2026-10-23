@@ -182,6 +182,8 @@ async function render(item: PullRequestInventoryItem): Promise<void> {
         }}
         onStartSession={() => {}}
         onReload={onReload}
+        onRefresh={() => {}}
+        refreshing={false}
       />
     </PullRequestActionsProvider>
   );

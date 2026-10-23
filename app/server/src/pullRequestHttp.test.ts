@@ -14,6 +14,10 @@ vi.mock("./gitHosting.ts", async (importOriginal) => {
 });
 
 const { handlePullRequestApi } = await import("./pullRequestHttp.ts");
+const {
+  resetPullRequestInventorySyncForTests,
+  setPullRequestInventorySyncOperationsForTests,
+} = await import("./pullRequestInventorySync.ts");
 
 function item(): PullRequestInventoryItem {
   return {
@@ -38,7 +42,10 @@ beforeEach(() => {
   resetPullRequestInventorySnapshotForTests();
   hoisted.provider.mockReset();
 });
-afterEach(resetPullRequestInventorySnapshotForTests);
+afterEach(() => {
+  resetPullRequestInventorySnapshotForTests();
+  resetPullRequestInventorySyncForTests();
+});
 
 async function getInventory(): Promise<{ status: number; body: unknown }> {
   let status = 0;
@@ -83,6 +90,82 @@ test("GET serves the persisted snapshot without a provider call", async () => {
     body: { status: "ready", items: [item()], fetchedAt: 123 },
   });
   assert.equal(hoisted.provider.mock.calls.length, 0);
+});
+
+async function callRefresh(
+  method: string,
+): Promise<{ status: number; body: unknown }> {
+  let status = 0;
+  let body = "";
+  const res = {
+    writeHead(next: number) {
+      status = next;
+      return this;
+    },
+    end(value?: string) {
+      body = value ?? "";
+      return this;
+    },
+  } as unknown as ServerResponse;
+  await handlePullRequestApi(
+    { method } as IncomingMessage,
+    res,
+    new URL("http://localhost/api/pull-requests/refresh"),
+    () => ({ "content-type": "application/json" }),
+  );
+  return { status, body: JSON.parse(body) as unknown };
+}
+
+test("POST refresh rebuilds from the providers and answers the written snapshot", async () => {
+  let written: unknown;
+  setPullRequestInventorySyncOperationsForTests({
+    build: async () => ({
+      items: [item()],
+      projectIds: ["pa"],
+      failedProjectIds: [],
+    }),
+    read: () => null,
+    write: (snapshot) => {
+      written = snapshot;
+    },
+    now: () => 456,
+  });
+
+  assert.deepEqual(await callRefresh("POST"), {
+    status: 200,
+    body: { status: "ready", items: [item()], fetchedAt: 456 },
+  });
+  assert.deepEqual(written, {
+    version: 1,
+    builtAt: 456,
+    projects: { pa: { items: [item()], fetchedAt: 456 } },
+  });
+});
+
+test("a refresh no provider answered is a failure, not an empty inventory", async () => {
+  setPullRequestInventorySyncOperationsForTests({
+    build: async () => ({
+      items: [],
+      projectIds: ["pa"],
+      failedProjectIds: ["pa"],
+    }),
+    read: () => null,
+    write: () => {
+      throw new Error("must not write");
+    },
+    now: () => 456,
+  });
+
+  const answer = await callRefresh("POST");
+  assert.equal(answer.status, 500);
+  assert.match(
+    (answer.body as { error: string }).error,
+    /No pull request provider answered/,
+  );
+});
+
+test("refresh is POST only", async () => {
+  assert.equal((await callRefresh("GET")).status, 405);
 });
 
 test("the conversation route refuses an incomplete identity before any provider read", async () => {

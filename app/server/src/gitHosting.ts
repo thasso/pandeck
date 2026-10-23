@@ -2153,6 +2153,15 @@ const openPullAnnotations = new Map<
   { at: number; byNumber: Map<number, OpenPullRequestAnnotation> }
 >();
 const openPullAnnotationGenerations = new Map<string, number>();
+/**
+ * Bumped by `forgetAllOpenPullAnnotations`: a repository's read in flight may
+ * have no generation entry yet, so only a global one can retract it.
+ */
+let openPullAnnotationEpoch = 0;
+
+function openPullAnnotationGeneration(key: string): string {
+  return `${openPullAnnotationEpoch}:${openPullAnnotationGenerations.get(key) ?? 0}`;
+}
 
 function githubRepoKey(ref: RemoteRepoRef): string {
   return `${ref.owner}/${ref.repo}`.toLowerCase();
@@ -2169,6 +2178,12 @@ export function forgetOpenPullAnnotations(ref: RemoteRepoRef): void {
     key,
     (openPullAnnotationGenerations.get(key) ?? 0) + 1,
   );
+}
+
+/** Drop every repository's annotations, for a user-requested refresh. */
+export function forgetAllOpenPullAnnotations(): void {
+  openPullAnnotationEpoch += 1;
+  openPullAnnotations.clear();
 }
 
 /** Drop every cached annotation; the seam a test resets between cases. */
@@ -2265,7 +2280,7 @@ async function githubOpenPullRequests(
   signal: AbortSignal,
 ): Promise<HostedPullRequest[]> {
   const key = githubRepoKey(ref);
-  const generation = openPullAnnotationGenerations.get(key) ?? 0;
+  const generation = openPullAnnotationGeneration(key);
   const data = await githubGraphql<{
     viewer?: { login?: string };
     repository?: {
@@ -2316,7 +2331,7 @@ async function githubOpenPullRequests(
       review: reviewFromGithubGraphql(pull),
     });
   }
-  if ((openPullAnnotationGenerations.get(key) ?? 0) === generation)
+  if (openPullAnnotationGeneration(key) === generation)
     openPullAnnotations.set(key, { at: Date.now(), byNumber });
   const reviewRequested = new Set<number>();
   if (login)

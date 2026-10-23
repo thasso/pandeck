@@ -147,13 +147,22 @@ const detailReads = readStore<PullRequestDetail>();
 const ciReads = readStore<ProviderCiStatus | null>();
 const reviewReads = readStore<WorktreePullRequestReview>();
 
-/** Drop every cached read; the seam a test resets between cases. */
-export function resetPullRequestInventoryCacheForTests(): void {
+/**
+ * Drop every cached and in-flight read, for a user-requested refresh: the user
+ * asked for the provider's answer NOW, and a read standing for the sync period
+ * would hand back the one they are trying to replace.
+ */
+export function invalidateAllPullRequestInventoryReads(): void {
   for (const store of [detailReads, ciReads, reviewReads]) {
     store.values.clear();
     store.inFlight.clear();
     store.generation += 1;
   }
+}
+
+/** Drop every cached read; the seam a test resets between cases. */
+export function resetPullRequestInventoryCacheForTests(): void {
+  invalidateAllPullRequestInventoryReads();
 }
 
 /**

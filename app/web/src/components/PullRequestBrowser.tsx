@@ -7,7 +7,7 @@ import {
   Layers,
   CalendarDays,
   ListFilter,
-  SlidersHorizontal,
+  RefreshCw,
   CircleCheck,
   CircleDashed,
   CircleDot,
@@ -76,12 +76,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
-import {
-  PROPERTY_TRIGGER,
-  PropertyLabel,
-  PropertyList,
-} from "./common/PropertyList.tsx";
+import { PROPERTY_TRIGGER, PropertyLabel } from "./common/PropertyList.tsx";
+import { ListFilterPopover } from "./common/ListFilterPopover.tsx";
+import { ListToolbar } from "./common/ListToolbar.tsx";
+import type { OverflowAction } from "./common/OverflowMenu.tsx";
 
 const PULL_REQUEST_SHORTCUTS: ShortcutGroup = {
   title: "Pull Requests",
@@ -713,18 +711,31 @@ const GROUP_BY_META: Record<
  * `PullRequestBrowser` draws with the same view.
  * @intent The view lives in browser-local prefs, so the bar and the list read
  * and write one value. The project options are the projects that HAVE pull
- * requests listed — a filter offering an empty project offers nothing.
+ * requests listed — a filter offering an empty project offers nothing. Its
+ * `⋯` offers Refresh: the browser's poll only re-reads the server's snapshot,
+ * which the server rebuilds every five minutes, so a change made on the
+ * provider a minute ago needs an explicit "read the providers now". The hint
+ * says how old the shown answer is, which is what decides whether to press it.
  */
 export const PullRequestListToolbar = memo(function PullRequestListToolbar({
   view,
   onChange,
   inventory,
   projects,
+  fetchedAt,
+  refreshing,
+  onRefresh,
 }: {
   view: PullRequestListView;
   onChange: (patch: Partial<PullRequestListView>) => void;
   inventory: LoadState<PullRequestInventoryItem[]>;
   projects: ProjectRecord[];
+  /** When the shown inventory was read from the providers. */
+  fetchedAt: number | undefined;
+  /** An explicit provider refresh is running. */
+  refreshing: boolean;
+  /** Read the providers now (`usePullRequestInventory().refresh`). */
+  onRefresh: () => void;
 }) {
   const items = dataOf(inventory);
   const projectOptions = useMemo(() => {
@@ -746,8 +757,40 @@ export const PullRequestListToolbar = memo(function PullRequestListToolbar({
     (project) => project.id === view.projectId,
   );
   const reasonsFiltered = reasonFilterActive(view.reasons);
+  // Re-labelled whenever the bar renders, which every poll answer causes, so
+  // the hint is never more than a poll behind.
+  const updated = fetchedAt === undefined ? undefined : relativeTime(fetchedAt);
+  const actions = useMemo<OverflowAction[]>(
+    () => [
+      {
+        key: "refresh",
+        icon: <RefreshCw />,
+        label: "Refresh",
+        onRun: onRefresh,
+        busy: refreshing,
+        ...(updated
+          ? { hint: updated === "now" ? "just now" : `${updated} ago` }
+          : {}),
+      },
+    ],
+    [onRefresh, refreshing, updated],
+  );
   return (
-    <div className="flex h-11 items-center gap-1 border-b border-border bg-card px-1.5 sm:px-2">
+    <ListToolbar
+      actions={actions}
+      actionsLabel="More pull request actions"
+      filter={
+        <ListFilterPopover active={active} label="Filters">
+          <PullRequestFilterFields
+            view={view}
+            onChange={onChange}
+            projectOptions={projectOptions}
+            chosenProject={chosenProject}
+            reasonsFiltered={reasonsFiltered}
+          />
+        </ListFilterPopover>
+      }
+    >
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
@@ -788,145 +831,145 @@ export const PullRequestListToolbar = memo(function PullRequestListToolbar({
           })}
         </DropdownMenuContent>
       </DropdownMenu>
-      {/* R2: a poll keeps the rows and says so here. */}
-      {isPending(inventory) ? (
+      {/* R2: a poll or an explicit refresh keeps the rows and says so here. */}
+      {isPending(inventory) || refreshing ? (
         <RefreshIndicator label="Refreshing pull requests" />
       ) : null}
-      <Popover>
-        <PopoverTrigger
+    </ListToolbar>
+  );
+});
+
+interface FilterProjectOption {
+  id: string;
+  key: string;
+  name: string;
+  color: string;
+}
+
+/** The fields of the Pull Requests filter panel. */
+function PullRequestFilterFields({
+  view,
+  onChange,
+  projectOptions,
+  chosenProject,
+  reasonsFiltered,
+}: {
+  view: PullRequestListView;
+  onChange: (patch: Partial<PullRequestListView>) => void;
+  projectOptions: FilterProjectOption[];
+  chosenProject: FilterProjectOption | undefined;
+  reasonsFiltered: boolean;
+}) {
+  return (
+    <>
+      <PropertyLabel>Project</PropertyLabel>
+      <DropdownMenu>
+        <DropdownMenuTrigger
           render={
             <Button
               variant="ghost"
               size="sm"
-              className="ml-auto gap-1 text-muted-foreground"
-              aria-label={active ? `Filters (${active} active)` : "Filters"}
+              aria-label="Filter by project"
+              className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
             />
           }
         >
-          <SlidersHorizontal />
-          {active ? (
-            <span className="min-w-4 rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums">
-              {active}
-            </span>
-          ) : null}
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-72">
-          <PropertyList>
-            <PropertyLabel>Project</PropertyLabel>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label="Filter by project"
-                    className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
-                  />
-                }
-              >
-                {chosenProject ? (
-                  <>
-                    <FolderKanban style={{ color: chosenProject.color }} />
-                    <span className="min-w-0 truncate">
-                      {chosenProject.name}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <FolderKanban className="text-muted-foreground" />
-                    <span className="text-muted-foreground">All projects</span>
-                  </>
-                )}
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuItem
-                  aria-current={view.projectId === null || undefined}
-                  onClick={() => onChange({ projectId: null })}
-                >
-                  <FolderKanban className="text-muted-foreground" />
-                  All projects
-                </DropdownMenuItem>
-                {projectOptions.map((project) => (
-                  <DropdownMenuItem
-                    key={project.id}
-                    aria-current={view.projectId === project.id || undefined}
-                    onClick={() => onChange({ projectId: project.id })}
-                  >
-                    <FolderKanban style={{ color: project.color }} />
-                    <span className="min-w-0 flex-1 truncate">
-                      {project.name}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {project.key}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {chosenProject ? (
+            <>
+              <FolderKanban style={{ color: chosenProject.color }} />
+              <span className="min-w-0 truncate">{chosenProject.name}</span>
+            </>
+          ) : (
+            <>
+              <FolderKanban className="text-muted-foreground" />
+              <span className="text-muted-foreground">All projects</span>
+            </>
+          )}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuItem
+            aria-current={view.projectId === null || undefined}
+            onClick={() => onChange({ projectId: null })}
+          >
+            <FolderKanban className="text-muted-foreground" />
+            All projects
+          </DropdownMenuItem>
+          {projectOptions.map((project) => (
+            <DropdownMenuItem
+              key={project.id}
+              aria-current={view.projectId === project.id || undefined}
+              onClick={() => onChange({ projectId: project.id })}
+            >
+              <FolderKanban style={{ color: project.color }} />
+              <span className="min-w-0 flex-1 truncate">{project.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {project.key}
+              </span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
 
-            <PropertyLabel>Show</PropertyLabel>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label="Filter by reason"
-                    className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
-                  />
-                }
-              >
-                <ListFilter className="text-muted-foreground" />
-                <span
-                  className={`min-w-0 truncate ${reasonsFiltered ? "" : "text-muted-foreground"}`}
-                >
-                  {reasonsFiltered
-                    ? PULL_REQUEST_GROUPS.filter((group) =>
-                        view.reasons.includes(group.id),
-                      )
-                        .map((group) => group.title)
-                        .join(", ") || "Nothing"
-                    : "Every reason"}
-                </span>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                {PULL_REQUEST_GROUPS.map((group) => (
-                  <DropdownMenuCheckboxItem
-                    key={group.id}
-                    checked={view.reasons.includes(group.id)}
-                    closeOnClick={false}
-                    onCheckedChange={(checked) =>
-                      onChange({
-                        reasons: checked
-                          ? [...view.reasons, group.id]
-                          : view.reasons.filter(
-                              (id: PullRequestGroupId) => id !== group.id,
-                            ),
-                      })
-                    }
-                  >
-                    {group.title}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <PropertyLabel>Drafts</PropertyLabel>
+      <PropertyLabel>Show</PropertyLabel>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
             <Button
               variant="ghost"
               size="sm"
-              className={`${PROPERTY_TRIGGER} justify-start`}
-              aria-pressed={view.hideDrafts}
-              onClick={() => onChange({ hideDrafts: !view.hideDrafts })}
+              aria-label="Filter by reason"
+              className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
+            />
+          }
+        >
+          <ListFilter className="text-muted-foreground" />
+          <span
+            className={`min-w-0 truncate ${reasonsFiltered ? "" : "text-muted-foreground"}`}
+          >
+            {reasonsFiltered
+              ? PULL_REQUEST_GROUPS.filter((group) =>
+                  view.reasons.includes(group.id),
+                )
+                  .map((group) => group.title)
+                  .join(", ") || "Nothing"
+              : "Every reason"}
+          </span>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          {PULL_REQUEST_GROUPS.map((group) => (
+            <DropdownMenuCheckboxItem
+              key={group.id}
+              checked={view.reasons.includes(group.id)}
+              closeOnClick={false}
+              onCheckedChange={(checked) =>
+                onChange({
+                  reasons: checked
+                    ? [...view.reasons, group.id]
+                    : view.reasons.filter(
+                        (id: PullRequestGroupId) => id !== group.id,
+                      ),
+                })
+              }
             >
-              <GitPullRequestDraft className="text-muted-foreground" />
-              <span className={view.hideDrafts ? "" : "text-muted-foreground"}>
-                {view.hideDrafts ? "Hidden" : "Shown"}
-              </span>
-            </Button>
-          </PropertyList>
-        </PopoverContent>
-      </Popover>
-    </div>
+              {group.title}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <PropertyLabel>Drafts</PropertyLabel>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={`${PROPERTY_TRIGGER} justify-start`}
+        aria-pressed={view.hideDrafts}
+        onClick={() => onChange({ hideDrafts: !view.hideDrafts })}
+      >
+        <GitPullRequestDraft className="text-muted-foreground" />
+        <span className={view.hideDrafts ? "" : "text-muted-foreground"}>
+          {view.hideDrafts ? "Hidden" : "Shown"}
+        </span>
+      </Button>
+    </>
   );
-});
+}

@@ -3699,6 +3699,13 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       openWorktree,
     ],
   );
+  // The user's Refresh, from the list's bar or the detail page's menu: the
+  // providers are read again, and the idle half of the cleanup queue with them.
+  const refreshPullRequestInventory = pullRequestInventory.refresh;
+  const refreshPullRequests = useCallback(() => {
+    refreshPullRequestInventory();
+    reloadIdleWorktrees();
+  }, [refreshPullRequestInventory, reloadIdleWorktrees]);
   const openPullRequest = useCallback(
     (target: PullRequestTarget) => navigate(pullRequestPath(target)),
     [navigate],
@@ -7203,6 +7210,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onSetInboxPositions={setInboxPositions}
         pullRequestInventory={pullRequestInventory.state}
         onReloadPullRequests={pullRequestInventory.reload}
+        pullRequestsFetchedAt={pullRequestInventory.fetchedAt}
+        pullRequestsRefreshing={pullRequestInventory.refreshing}
+        onRefreshPullRequests={refreshPullRequests}
         idleWorktrees={idleWorktreesProps}
         selectedPullRequest={pullRequestTarget}
         onOpenPullRequest={openPullRequest}
@@ -7601,6 +7611,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           openers={inspectorOpeners}
           onStartSession={startSessionInWorktree}
           onReload={pullRequestInventory.reload}
+          onRefresh={refreshPullRequests}
+          refreshing={pullRequestInventory.refreshing}
         />
       ) : (
         <Inspector relations={[]} actions={[]} />
@@ -8091,6 +8103,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             target={pullRequestTarget}
                             state={pullRequestDetail}
                             onReload={pullRequestInventory.reload}
+                            refreshCount={pullRequestInventory.refreshCount}
                             projects={projects}
                             // ONE mapping, in a tested pure function: the lists AND what is
                             // known about their currency travel together, so a later tidy
