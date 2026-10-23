@@ -385,6 +385,24 @@ restarts its reply deadline.
   nothing was sent — a Stop at the door, a stale claim, a busy session, a
   withdrawal the provider confirmed unread — puts the row back unreserved.
 
+  Boot keeps canonical-log reconciliation and JSONL parsing. The canonical JSONL
+  append and peer admission database transaction are separate writes. A crash
+  after append but before the receipt reports it, or before the admission write
+  commits, leaves the entry on disk without the database admission fact. Saving
+  the receipt's entry and run IDs would still follow the append and leave that
+  gap. The synchronous receipt lives in memory, not a durable journal. Boot
+  parses `peerMessageIds` to recover batch membership; live run attribution
+  comes from the receipt.
+
+  A reservation prevents replay but does not prove append. Without the log, boot
+  cannot distinguish a delivered batch from one reserved but never appended.
+  Interrupting both would avoid replay but discard recovered delivery evidence
+  and change unreadable-log handling. Handoffs deliberately tolerate duplicate
+  delivery in their append/delete at-least-once window; peers must not replay
+  admitted work. Task-1055 therefore retains parsing and existing-row recovery
+  unchanged, with no new columns, migration or behavior change. Removing parsing
+  would require a durable append protocol, not another receipt observer.
+
   An answer sent before the Stop keeps the request `replied`. Each settlement is
   a compare-and-set from the admitted states, so a duplicate or late callback,
   or a straggler of an older run, never rewrites a newer outcome. Resume drains
