@@ -3,7 +3,8 @@
  * inventory in one request, POST `/api/pull-requests/merge` and
  * `/api/pull-requests/checkout`, its two actions, and
  * POST `/api/pull-requests/check`, the state read that answers a client whose
- * action went unanswered.
+ * action went unanswered, and POST `/api/pull-requests/refresh`, the user's
+ * explicit "read the providers now".
  *
  * The GET is a local persisted-snapshot read. Provider calls belong to
  * `pullRequestInventorySync.ts`, which refreshes that cache independently of
@@ -34,7 +35,10 @@ import {
   pullRequestInventoryResponse,
   readPullRequestInventorySnapshot,
 } from "./pullRequestInventorySnapshot.ts";
-import { refreshPullRequestInventorySnapshot } from "./pullRequestInventorySync.ts";
+import {
+  refreshPullRequestInventoryNow,
+  refreshPullRequestInventorySnapshot,
+} from "./pullRequestInventorySync.ts";
 import { readPullRequestConversation } from "./pullRequestConversation.ts";
 import { checkoutPullRequestFromView } from "./pullRequestViewCheckout.ts";
 import {
@@ -61,6 +65,10 @@ export async function handlePullRequestApi(
   }
   if (url.pathname === "/api/pull-requests/checkout") {
     await handleCheckout(req, res, headers);
+    return;
+  }
+  if (url.pathname === "/api/pull-requests/refresh") {
+    await handleRefresh(req, res, headers);
     return;
   }
   if (url.pathname === "/api/pull-requests/conversation") {
@@ -178,6 +186,22 @@ async function handleCheckout(
  * the same four components as the actions (query parameters). `fresh=1`
  * skips the short server cache.
  */
+/**
+ * Rebuild the inventory from the providers, skipping their caches, and answer
+ * with the snapshot it wrote — the same body `GET /api/pull-requests` serves.
+ */
+async function handleRefresh(
+  req: IncomingMessage,
+  res: ServerResponse,
+  headers: HeaderFactory,
+): Promise<void> {
+  if (req.method !== "POST") {
+    json(req, res, headers, 405, { error: "Method not allowed" });
+    return;
+  }
+  await answer(req, res, headers, refreshPullRequestInventoryNow);
+}
+
 async function handleConversation(
   req: IncomingMessage,
   res: ServerResponse,

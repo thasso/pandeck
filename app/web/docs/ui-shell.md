@@ -374,6 +374,16 @@ the shared sticky group header and icon. Settled paging and lazy archive loading
 stay owned by `SessionInbox`. There is no session search: finding a session by
 title is the shelves' job, and the field cost a permanent row of chrome for it.
 
+Every browser bar — Sessions, Tasks and Pull Requests — is one
+`common/ListToolbar`, drawn above the browser's scroll container at the compact
+header's `h-11`. Its slots fix the order: the list's own controls lead (a view
+or grouping switch, counts, the refresh indicator), the filter sits at the right
+edge, and a `⋯` of actions on the WHOLE list comes last. A section adds such an
+action as data (`OverflowAction`: label, icon, busy, disabled, hint) and the
+menu appears only once a section has one; Pull Requests' Refresh is the first.
+An action about one object never goes here: it belongs to the object's page
+header, whose `⋯` the inspector fills (Inspector, above).
+
 Attention adds the same `ListFilterPopover` used by Tasks to that fixed bar. Its
 Project picker is shared with Tasks, including All projects and Unassigned.
 Status filters use attention groups: Needs you, Updates / issues, Working, Idle,
@@ -795,7 +805,10 @@ The browser lists what wants something from you, never a repository's whole open
 list (that is the Project page). A toolbar above it groups and filters, like the
 Tasks list: group by reason (the default), by project or by date of the last
 update; filter by project, by reason and by hiding drafts. The choices are
-browser-local preferences. By reason, the groups are, in this order:
+browser-local preferences. The bar's `⋯` holds **Refresh**, with the shown
+answer's age as its hint (`docs/pull-requests.md`, The Pull Requests view); the
+detail page offers the same Refresh among its object actions. By reason, the
+groups are, in this order:
 
 1. **Needs your review** — your review was requested. It leads because somebody
    else is blocked on it, and a review request outranks your own authorship on

@@ -4,8 +4,11 @@ import { Button } from "../ui/button.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
+import { Spinner } from "./load.tsx";
 
 /**
  * @component OverflowMenu
@@ -67,4 +70,52 @@ export function OverflowMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+/**
+ * One secondary action as DATA, for a host that collects actions from
+ * elsewhere and draws them in its own `⋯` — the wide page header (published by
+ * the inspector, `shell/RoutePrimaryAction`) and a browser's `ListToolbar`.
+ * Hold the array stable while it says the same thing: both hosts sit under
+ * memoized chrome.
+ */
+export interface OverflowAction {
+  /** Unique within its menu; also what a publisher re-addresses `onRun` by. */
+  key: string;
+  icon?: ReactNode;
+  /** Imperative, about the object or list: "Refresh", "Merge & clean up…". */
+  label: string;
+  onRun: () => void;
+  /** The action is running: the row shows the spinner and takes no click. */
+  busy?: boolean;
+  disabled?: boolean;
+  /** Why it is disabled; the row's tooltip. */
+  disabledReason?: string;
+  /** A short fact drawn at the row's end: "#42", "5m ago". */
+  hint?: string;
+}
+
+/**
+ * The rows of an `OverflowMenu` built from `OverflowAction`s, so every host
+ * draws busy, disabled and hint the same way.
+ */
+export function OverflowActionItems({
+  actions,
+}: {
+  actions: readonly OverflowAction[];
+}) {
+  return actions.map((action) => (
+    <DropdownMenuItem
+      key={action.key}
+      disabled={action.busy || action.disabled}
+      title={action.disabledReason}
+      onClick={action.onRun}
+    >
+      {action.busy ? <Spinner size="xs" /> : action.icon}
+      <span className="min-w-0 flex-1 truncate">{action.label}</span>
+      {action.hint ? (
+        <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
+      ) : null}
+    </DropdownMenuItem>
+  ));
 }

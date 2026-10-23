@@ -9,11 +9,15 @@
 import type { PullRequestInventoryResponse } from "@assistant/shared";
 import { BACKGROUND_PR_SYNC_ENABLED } from "./config.ts";
 import { errorText } from "./errors.ts";
-import { forgetOpenPullAnnotations } from "./gitHosting.ts";
+import {
+  forgetAllOpenPullAnnotations,
+  forgetOpenPullAnnotations,
+} from "./gitHosting.ts";
 import { GITHUB_WEB_BASE } from "./githubClient.ts";
 import { normalizeForgejoBaseUrl } from "./forgejoClient.ts";
 import {
   buildPullRequestInventory,
+  invalidateAllPullRequestInventoryReads,
   invalidatePullRequestInventoryReads,
   type PullRequestInventoryBuild,
 } from "./pullRequestInventory.ts";
@@ -201,6 +205,23 @@ export function mergePullRequestInventoryBuild(
     throw new Error("No pull request provider answered the inventory refresh.");
 
   return { version: 1, builtAt, projects };
+}
+
+/**
+ * The user asked for the providers' answer now ("Refresh" in the Pull Requests
+ * view). Every provider cache the build would otherwise reuse — the project
+ * lists, GitHub's open-list annotations, the per-pull-request reads — is
+ * dropped first, and an in-flight build is made obsolete because it may already
+ * have consumed them; then this joins the one coalesced refresh. It runs
+ * whatever `BACKGROUND_PR_SYNC_ENABLED` says: that flag decides who owns the
+ * TIMER, and one explicit request cannot multiply provider traffic.
+ */
+export function refreshPullRequestInventoryNow(): Promise<PullRequestInventoryResponse> {
+  invalidateProjectPullRequests();
+  forgetAllOpenPullAnnotations();
+  invalidateAllPullRequestInventoryReads();
+  obsoletePullRequestInventoryBuild();
+  return refreshPullRequestInventorySnapshot();
 }
 
 /**

@@ -126,6 +126,8 @@ function panel(item: PullRequestInventoryItem) {
         }}
         onStartSession={() => {}}
         onReload={() => {}}
+        onRefresh={() => {}}
+        refreshing={false}
       />
     </PullRequestActionsProvider>
   );
@@ -194,6 +196,7 @@ it("publishes the disabled session action to the header menu while no worktree e
     "review",
     "checkout",
     "merge",
+    "refresh",
     "open-external",
   ]);
   expect(published[0]?.disabled).toBe(true);
@@ -207,6 +210,7 @@ it("leaves the session action to the primary slot once the route publishes it", 
     "review",
     "checkout",
     "merge",
+    "refresh",
     "open-external",
   ]);
 });

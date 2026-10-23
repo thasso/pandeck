@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PullRequestInventoryItem,
   PullRequestInventoryResponse,
 } from "@assistant/shared";
 import { useFetchState } from "./useFetchState.ts";
-import { fetchPullRequestInventory } from "../lib/pullRequestsApi.ts";
+import {
+  fetchPullRequestInventory,
+  refreshPullRequestInventory,
+} from "../lib/pullRequestsApi.ts";
 import { failed, loading, mapData, type LoadState } from "../lib/loadState.ts";
+import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 
 /**
  * While a Pull Requests surface is on screen. This polls the server's local
@@ -24,6 +28,19 @@ export interface PullRequestInventory {
   fetchedAt: number | undefined;
   /** Refetch now, keeping what is on screen (R2) — the retry behind an `ErrorNote`. */
   reload: () => void;
+  /**
+   * Have the server read the PROVIDERS now, past its caches, then refetch.
+   * `reload` only re-reads the server's snapshot, which it rebuilds every five
+   * minutes; this is the user's Refresh. A press while one runs is ignored.
+   */
+  refresh: () => void;
+  /** A `refresh` is running; rows stay on screen under the indicator (R2). */
+  refreshing: boolean;
+  /**
+   * Counts `refresh` presses, bumped when one STARTS: a surface with reads of
+   * its own (the detail page's conversation) re-reads them on a change.
+   */
+  refreshCount: number;
 }
 
 /**
@@ -78,5 +95,42 @@ export function usePullRequestInventory(active: boolean): PullRequestInventory {
     state.data.status === "ready"
       ? state.data.fetchedAt
       : undefined;
-  return { state: items, fetchedAt, reload };
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshCount, setRefreshCount] = useState(0);
+  // The guard is a ref: two presses inside one render would both read a
+  // stale `refreshing`.
+  const refreshingRef = useRef(false);
+  const refresh = useCallback(() => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    setRefreshCount((count) => count + 1);
+    void refreshPullRequestInventory()
+      .then(
+        // The answer IS the new snapshot, but it reaches the screen through
+        // the one keyed read, so the poll and this cannot disagree.
+        () => reload(),
+        (err: unknown) => {
+          showToast(
+            `Pull requests could not be refreshed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { tone: "error", durationMs: TOAST_DWELL_MS },
+          );
+        },
+      )
+      .finally(() => {
+        refreshingRef.current = false;
+        setRefreshing(false);
+      });
+  }, [reload]);
+  return {
+    state: items,
+    fetchedAt,
+    reload,
+    refresh,
+    refreshing,
+    refreshCount,
+  };
 }

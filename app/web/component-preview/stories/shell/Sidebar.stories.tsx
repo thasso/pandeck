@@ -94,6 +94,9 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         onSetInboxPositions={noop}
         pullRequestInventory={ready([])}
         onReloadPullRequests={noop}
+        pullRequestsFetchedAt={undefined}
+        pullRequestsRefreshing={false}
+        onRefreshPullRequests={noop}
         onOpenPullRequest={noop}
         knowledgeEnabled
         knowledgeView="files"

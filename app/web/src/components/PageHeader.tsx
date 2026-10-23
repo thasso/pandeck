@@ -18,11 +18,7 @@ import {
 import { IconButton } from "./common/IconButton.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { OverflowMenu } from "./common/OverflowMenu.tsx";
-import {
-  DropdownMenuItem,
-  DropdownMenuShortcut,
-} from "@/components/ui/dropdown-menu";
+import { OverflowActionItems, OverflowMenu } from "./common/OverflowMenu.tsx";
 
 /**
  * @component PageHeader
@@ -255,20 +251,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
           size="icon"
           contentClassName="min-w-48"
         >
-          {secondary.map((action) => (
-            <DropdownMenuItem
-              key={action.key}
-              disabled={action.busy || action.disabled}
-              title={action.disabledReason}
-              onClick={action.onRun}
-            >
-              {action.icon}
-              <span className="min-w-0 flex-1 truncate">{action.label}</span>
-              {action.hint ? (
-                <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
-              ) : null}
-            </DropdownMenuItem>
-          ))}
+          <OverflowActionItems actions={secondary} />
         </OverflowMenu>
       ) : null}
     </div>

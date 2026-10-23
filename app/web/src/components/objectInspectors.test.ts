@@ -507,6 +507,7 @@ describe("pullRequestInspectorActions", () => {
     onReview: () => {},
     onCheckout: () => {},
     onMerge: () => {},
+    onRefresh: () => {},
     onOpenExternal: () => {},
   };
   const base: PullRequestInventoryItem = {
@@ -536,12 +537,13 @@ describe("pullRequestInspectorActions", () => {
   const action = (item: PullRequestInventoryItem, key: string) =>
     pullRequestInspectorActions(item, handlers).find((a) => a.key === key);
 
-  it("leads with the session, then the checkout acts, the merge, the link out", () => {
+  it("leads with the session, then the checkout acts, the merge, refresh, the link out", () => {
     expect(keys(base)).toEqual([
       "start-session",
       "review",
       "checkout",
       "merge",
+      "refresh",
       "open-external",
     ]);
   });
@@ -572,10 +574,11 @@ describe("pullRequestInspectorActions", () => {
   // A terminal pull request's head branch is normally gone, so neither a
   // review nor a checkout is an offer; a checkout it still has is cleaned up,
   // and with none left there is nothing local to do but open it.
-  it("offers a terminal pull request only its cleanup and the link out", () => {
+  it("offers a terminal pull request only its cleanup, refresh and the link out", () => {
     expect(keys({ ...base, state: "merged", worktreeId: "wt1" })).toEqual([
       "start-session",
       "merge",
+      "refresh",
       "open-external",
     ]);
     expect(
@@ -583,6 +586,7 @@ describe("pullRequestInspectorActions", () => {
     ).toBe("Clean up…");
     expect(keys({ ...base, state: "closed" })).toEqual([
       "start-session",
+      "refresh",
       "open-external",
     ]);
   });

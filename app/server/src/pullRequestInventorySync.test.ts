@@ -6,6 +6,7 @@ import {
   invalidatePullRequestInventorySnapshot,
   mergePullRequestInventoryBuild,
   obsoletePullRequestInventoryBuild,
+  refreshPullRequestInventoryNow,
   refreshPullRequestInventorySnapshot,
   requestPullRequestInventoryRefresh,
   resetPullRequestInventorySyncForTests,
@@ -134,6 +135,41 @@ test("invalidation discards an older in-flight build and rebuilds", async () => 
 
   assert.equal(calls, 2);
   assert.deepEqual(response.items, [item("pa", 2)]);
+  assert.equal(vi.mocked(operations.write).mock.calls.length, 1);
+});
+
+test("an explicit refresh supersedes an in-flight build, whatever the deployment gate says", async () => {
+  // The tests run with the timer gate off: an explicit refresh still builds.
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const operations: PullRequestInventorySyncOperations = {
+    async build() {
+      calls += 1;
+      if (calls === 1) await gate;
+      return {
+        items: [item("pa", calls)],
+        projectIds: ["pa"],
+        failedProjectIds: [],
+      };
+    },
+    read: emptySnapshot,
+    write: vi.fn(),
+    now: () => 790,
+  };
+
+  setPullRequestInventorySyncOperationsForTests(operations);
+  const background = refreshPullRequestInventorySnapshot();
+  const explicit = refreshPullRequestInventoryNow();
+  release();
+
+  // One coalesced refresh, answered by the build that started after the click:
+  // the first may have read the caches the click dropped.
+  assert.equal(await explicit, await background);
+  assert.equal(calls, 2);
+  assert.deepEqual((await explicit).items, [item("pa", 2)]);
   assert.equal(vi.mocked(operations.write).mock.calls.length, 1);
 });
 

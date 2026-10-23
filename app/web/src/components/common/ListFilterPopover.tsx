@@ -4,7 +4,10 @@ import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { PropertyList } from "./PropertyList.tsx";
 
-/** Shared browser filter trigger, active count and property-list panel. */
+/**
+ * Shared browser filter trigger, active count and property-list panel. Pass it
+ * as `ListToolbar`'s `filter`, which places it at the bar's right edge.
+ */
 export function ListFilterPopover({
   active,
   label = "Filters and grouping",
@@ -21,7 +24,7 @@ export function ListFilterPopover({
           <Button
             variant="ghost"
             size="sm"
-            className="ml-auto cursor-pointer gap-1 text-muted-foreground"
+            className="cursor-pointer gap-1 text-muted-foreground"
             aria-label={active ? `Filters (${active} active)` : label}
           />
         }

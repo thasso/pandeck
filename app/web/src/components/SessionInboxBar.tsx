@@ -1,5 +1,6 @@
 import { useSyncExternalStore, type ReactNode } from "react";
 import { Activity, CircleDashed, CircleHelp } from "lucide-react";
+import { ListToolbar } from "./common/ListToolbar.tsx";
 import { Spinner } from "./common/load.tsx";
 import { Badge } from "@/components/ui/badge";
 import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
@@ -40,7 +41,8 @@ interface Props {
  * glyph is the one the app already uses for that state — `CircleHelp` for a
  * session waiting on you, the spinner for a running turn, `Activity` for
  * background work, which is also the icon of the registry it opens.
- * @related SessionInbox, ActiveSessionCard, backgroundWork (lib), AppStatus
+ * @related ListToolbar, SessionInbox, ActiveSessionCard, backgroundWork (lib),
+ * AppStatus
  */
 export function SessionInboxBar({
   needsYou,
@@ -52,14 +54,9 @@ export function SessionInboxBar({
 }: Props) {
   const { activeCount, ownerCount } = background;
   return (
-    // Above the list's scroll container, not a row in it (`Sidebar.tsx` gives
-    // it a slot there): a header that scrolls away is a header the list can
-    // still push around, and a sticky one inside the scroller has the
-    // scrollbar running through it. The height is a constant rather than
-    // padding around content for the same reason the counts never unmount,
-    // and it is the compact `PageHeader`'s `h-11` so its border lines up with
-    // the chat title bar's.
-    <div className="flex h-11 items-center gap-1 border-b border-border bg-card px-2 sm:px-3">
+    // `ListToolbar` is drawn above the list's scroll container at a constant
+    // height, for the same reason the counts never unmount.
+    <ListToolbar inset="chip" filter={filterControl}>
       <Chip
         label={
           needsYou === 0
@@ -98,8 +95,7 @@ export function SessionInboxBar({
       >
         <Activity aria-hidden />
       </Chip>
-      {filterControl}
-    </div>
+    </ListToolbar>
   );
 }
 

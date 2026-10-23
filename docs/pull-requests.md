@@ -1629,6 +1629,24 @@ The browser's local polling stops the moment nothing shows the inventory, while
 the server refresh continues. Moving between the index and a detail route keeps
 ONE fetch key, so that navigation never blanks the surface.
 
+**Refresh is the user's "read the providers now".** The poll above re-reads only
+the snapshot, so a change made on the provider can take up to the five-minute
+build period to appear. The list bar's `⋯` and the detail page's object actions
+offer **Refresh** (`usePullRequestInventory().refresh`), which calls
+`POST /api/pull-requests/refresh` (`refreshPullRequestInventoryNow`). That drops
+every provider cache the build would reuse — the project lists, GitHub's
+open-list annotations and the per-pull-request reads — marks an in-flight build
+obsolete because it may already have read them, joins the one coalesced refresh
+and answers with the snapshot it wrote (the `GET` body). It runs regardless of
+`ASSISTANT_BACKGROUND_PR_SYNC`, which decides who owns the timer; one explicit
+request cannot multiply provider traffic. The client then refetches through the
+same keyed read as the poll, also reloads the idle-worktree half of the cleanup
+queue, and an open detail page re-reads its conversation with `fresh=1`: a new
+comment need not change anything the inventory carries. While it runs the rows
+stay under the bar's refresh indicator and the action is busy; a failure is an
+error toast and the shown inventory stays. The action's hint is the shown
+answer's age (`fetchedAt`), which is what decides whether to press it.
+
 **Grouping, ordering and the row vocabulary are pure**
 (`lib/pullRequestInbox.ts`) because every rule in them fails invisibly. By
 reason, a row is filed under its STRONGEST reason — **Needs your review**,

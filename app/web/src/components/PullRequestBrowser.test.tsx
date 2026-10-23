@@ -174,6 +174,9 @@ describe("PullRequestBrowser", () => {
         onChange={NOOP}
         inventory={refreshing([pr({ number: 5 })])}
         projects={PROJECTS}
+        fetchedAt={undefined}
+        refreshing={false}
+        onRefresh={NOOP}
       />,
     );
     expect(bar.textContent).toContain("Refreshing pull requests");
@@ -470,5 +473,58 @@ describe("PullRequestBrowser keeps a bulk retirement across the inventory answer
     expect(document.body.textContent).toContain(
       "0 retired; 1 refused — done-branch: a session is live there",
     );
+  });
+});
+
+describe("PullRequestListToolbar", () => {
+  function refreshItem(): HTMLElement | undefined {
+    const trigger = container!.querySelector<HTMLButtonElement>(
+      'button[aria-label="More pull request actions"]',
+    );
+    act(() => trigger!.click());
+    return [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].find((item) => item.textContent?.includes("Refresh"));
+  }
+
+  it("offers Refresh in its actions menu, with the age of the shown answer", () => {
+    const onRefresh = vi.fn();
+    render(
+      <PullRequestListToolbar
+        view={DEFAULT_PULL_REQUEST_VIEW}
+        onChange={NOOP}
+        inventory={ready([pr({ number: 5 })])}
+        projects={PROJECTS}
+        fetchedAt={Date.now() - 5 * 60_000}
+        refreshing={false}
+        onRefresh={onRefresh}
+      />,
+    );
+    const item = refreshItem();
+    expect(item?.textContent).toContain("5m ago");
+    act(() => item!.click());
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  // The provider read takes seconds: the bar says so, and a second press
+  // cannot start another.
+  it("marks a running refresh and takes no press while it runs", () => {
+    const onRefresh = vi.fn();
+    const el = render(
+      <PullRequestListToolbar
+        view={DEFAULT_PULL_REQUEST_VIEW}
+        onChange={NOOP}
+        inventory={ready([pr({ number: 5 })])}
+        projects={PROJECTS}
+        fetchedAt={undefined}
+        refreshing
+        onRefresh={onRefresh}
+      />,
+    );
+    expect(el.textContent).toContain("Refreshing pull requests");
+    const item = refreshItem();
+    expect(item?.hasAttribute("data-disabled")).toBe(true);
+    act(() => item!.click());
+    expect(onRefresh).not.toHaveBeenCalled();
   });
 });

@@ -238,6 +238,12 @@ interface Props {
   pullRequestInventory: LoadState<PullRequestInventoryItem[]>;
   /** Retry that read, behind the browser's inline failure. */
   onReloadPullRequests: () => void;
+  /** When the shown inventory was read from the providers. */
+  pullRequestsFetchedAt: number | undefined;
+  /** An explicit provider refresh is running. */
+  pullRequestsRefreshing: boolean;
+  /** The Pull Requests bar's Refresh: read the providers now. */
+  onRefreshPullRequests: () => void;
   /** The cleanup queue's worktree half, under the pull requests. */
   idleWorktrees?: IdleWorktreesProps | undefined;
   /** The pull request open in the detail route, for highlighting. */
@@ -512,6 +518,9 @@ function SidebarImpl({
   onSetInboxPositions,
   pullRequestInventory,
   onReloadPullRequests,
+  pullRequestsFetchedAt,
+  pullRequestsRefreshing,
+  onRefreshPullRequests,
   idleWorktrees,
   selectedPullRequest,
   onOpenPullRequest,
@@ -895,6 +904,9 @@ function SidebarImpl({
             onChange={setPullRequestListView}
             inventory={pullRequestInventory}
             projects={projects}
+            fetchedAt={pullRequestsFetchedAt}
+            refreshing={pullRequestsRefreshing}
+            onRefresh={onRefreshPullRequests}
           />
         </div>
       ) : section === "tasks" ? (
