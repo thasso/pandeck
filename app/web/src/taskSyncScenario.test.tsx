@@ -383,6 +383,67 @@ describe("Tasks on the replica transport", () => {
 });
 
 describe("unknown Task outcomes", () => {
+  it.each([
+    ["boot offline", "settle"],
+    ["boot offline", "timeout"],
+    ["boot offline", "disconnect"],
+    ["lost connection", "settle"],
+    ["lost connection", "timeout"],
+    ["lost connection", "disconnect"],
+  ])(
+    "keeps a queued create pending through failed attempts from %s, then %s",
+    async (origin, outcome) => {
+      vi.useFakeTimers();
+      if (origin === "boot offline") {
+        await act(async () => root.render(<TaskHarness />));
+      } else await connected();
+      await act(async () => ScenarioSocket.instances[0]!.close());
+      await act(async () =>
+        latestActions.saveTask({ title: "Queued", status: "todo" }),
+      );
+      const pending = latestState.taskMutations["new:create"];
+      expect(pending?.status).toBe("loading");
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await act(async () => vi.advanceTimersByTime(1000));
+        const failed = ScenarioSocket.instances[attempt]!;
+        await act(async () => failed.close());
+        expect(failed.sent).toEqual([]);
+        expect(latestState.taskMutations["new:create"]).toBe(pending);
+        await act(async () =>
+          latestActions.saveTask({ title: "Queued", status: "todo" }),
+        );
+      }
+      await act(async () => vi.advanceTimersByTime(1000));
+      const next = ScenarioSocket.instances[3]!;
+      await act(async () => next.open());
+      expect(next.sent.map((message) => message.type)).toEqual([
+        "subscribe",
+        "saveTask",
+      ]);
+      expect(latestState.taskMutations["new:create"]).toBe(pending);
+      const requestId = requestOf(next, "saveTask");
+      if (outcome === "settle") {
+        await act(async () =>
+          next.receive({ type: "mutationSettled", requestId }),
+        );
+        expect(latestState.taskMutations["new:create"]?.status).toBe("ready");
+      } else if (outcome === "timeout") {
+        await act(async () => vi.advanceTimersByTime(26_999));
+        expect(latestState.taskMutations["new:create"]).toBe(pending);
+        await act(async () => vi.advanceTimersByTime(1));
+        expect(latestState.taskMutations["new:create"]?.status).toBe("error");
+      } else {
+        await act(async () => next.close());
+        expect(latestState.taskMutations["new:create"]?.status).toBe("idle");
+        await act(async () => vi.advanceTimersByTime(30_000));
+        expect(latestState.taskMutations["new:create"]?.status).toBe("idle");
+      }
+      expect(
+        next.sent.filter((message) => message.type === "saveTask"),
+      ).toHaveLength(1);
+    },
+  );
+
   it.each(["edit", "create", "assignment", "reorder"])(
     "releases %s and joins the reconnect snapshot without replay",
     async (operation) => {

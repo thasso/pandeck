@@ -169,6 +169,52 @@ afterEach(() => {
 });
 
 describe("Project socket/reducer scenario", () => {
+  it.each(["boot offline", "lost connection"])(
+    "keeps a queued Project save guarded through failed attempts from %s",
+    async (origin) => {
+      vi.useFakeTimers();
+      if (origin === "boot offline") {
+        await act(async () => root.render(<ProjectHarness />));
+      } else await connected();
+      await act(async () => ScenarioSocket.instances[0]!.close());
+      await act(async () => latestActions.saveProject("a", { name: "Queued" }));
+      const control = () => latestState.projectMutations["a:name"];
+      const pending = control();
+      expect(pending?.status).toBe("loading");
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await act(async () => vi.advanceTimersByTime(1000));
+        const failed = ScenarioSocket.instances[attempt]!;
+        await act(async () => failed.close());
+        expect(failed.sent).toEqual([]);
+        expect(control()).toBe(pending);
+        await act(async () =>
+          latestActions.saveProject("a", { name: "Queued" }),
+        );
+      }
+      await act(async () => vi.advanceTimersByTime(1000));
+      const next = ScenarioSocket.instances[3]!;
+      await act(async () => next.open());
+      // No unknown recovery should precede the still-unsent save at first open.
+      expect(next.sent.map((message) => message.type)).toEqual([
+        "subscribe",
+        "saveProject",
+      ]);
+      expect(control()).toBe(pending);
+      const save = next.sent.find((message) => message.type === "saveProject")!;
+      await act(async () =>
+        next.receive({ type: "mutationSettled", requestId: save.requestId! }),
+      );
+      expect(control()?.status).toBe("ready");
+      await act(async () =>
+        latestActions.saveProject("a", { name: "In flight" }),
+      );
+      await act(async () => next.close());
+      expect(control()?.status).toBe("idle");
+      await act(async () => vi.advanceTimersByTime(30_000));
+      expect(control()?.status).toBe("idle");
+    },
+  );
+
   it.each(["save", "clone", "remove"])(
     "releases unknown %s, then recovers after subscribe with the current open detail",
     async (operation) => {

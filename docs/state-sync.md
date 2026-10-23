@@ -205,15 +205,21 @@ once. Descriptors keep domain deadlines, control keys, recovery and failure
 policy. Task and Project correlation lives in those records, not separate
 control maps. Replica item reads retain their own request table and deadlines.
 
-For Tasks and Projects, socket loss is terminal with **outcome unknown**. After
-dropping replica reads, the lifecycle removes their pending metadata and temp-id
-correlations, invalidates touched revisions synchronously and marks their topics
-due a snapshot, even for a create without canonical ids. Controls release to a
-fresh `idle`, silently. Dropping this overlay does not reverse rendered
-optimism; the authoritative reconnect snapshot or recovery corrects it. Unknown
-editors retain their drafts. An absent-entry first local-path save still closes
-immediately while connected; only a correlated unknown release restores that
-attempt, and never over a later user interaction.
+For Tasks and Projects, loss of a connected socket is terminal with **outcome
+unknown**. Failed connection attempts do not retire queued, unsent writes: their
+control claims, duplicate guards and deadlines remain unchanged. Once the socket
+opens, queued writes are in flight and a later connection loss retires them.
+After dropping replica reads, the lifecycle removes their pending metadata and
+temp-id correlations, invalidates touched revisions synchronously and marks
+their topics due a snapshot, even for a create without canonical ids. Controls
+release to a fresh `idle`, silently. Dropping this overlay does not reverse
+rendered optimism; the authoritative reconnect snapshot or recovery corrects it.
+Unknown editors retain their drafts. An absent-entry first local-path save still
+closes immediately while connected; only a correlated unknown release restores
+that attempt, and never over a later user interaction. A known refusal retains
+the current attempted draft for inline Retry, which arms the same unknown
+protection. A newer interaction, operation or Project discards that draft
+protection; no later authoritative row reconstructs it.
 
 Only recovery obligations survive, without timers or control claims. Reconnect
 sends its subscription first, omitting digests for affected topics, then drains

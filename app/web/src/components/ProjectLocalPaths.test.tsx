@@ -30,11 +30,15 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
 });
-async function render(mutationState?: LoadState<true>, id = "a") {
+async function render(
+  mutationState?: LoadState<true>,
+  id = "a",
+  localPaths: ProjectLocalPath[] = [],
+) {
   await act(async () =>
     root.render(
       <ProjectLocalPathsSection
-        project={{ ...project, id }}
+        project={{ ...project, id, localPaths }}
         onSave={onSave}
         mutationState={mutationState}
       />,
@@ -111,6 +115,84 @@ describe("local path add outcome policy", () => {
     await render(idle());
     expect(field()).toBeNull();
   });
+
+  it.each([false, true])(
+    "restores the current refused add after Retry becomes unknown, batched=%s",
+    async (batched) => {
+      await begin();
+      await render(loading());
+      await render(failed("Refused"));
+      await act(async () => button("Retry").click());
+      expect(onSave).toHaveBeenCalledTimes(2);
+      if (!batched) await render(loading());
+      await render(idle());
+      expect(field()?.value).toBe(" /attempted/path ");
+      expect(field()?.disabled).toBe(false);
+      expect(container.textContent).not.toContain("Retry");
+    },
+  );
+
+  it("keeps a repeated known Retry refusal retryable, without opening the draft", async () => {
+    await begin();
+    await render(failed("Refused"));
+    await act(async () => button("Retry").click());
+    await render(loading());
+    await render(failed("Still refused"));
+    expect(field()).toBeNull();
+    expect(container.textContent).toContain("Still refused");
+    await act(async () => button("Retry").click());
+    await render(idle());
+    expect(onSave).toHaveBeenCalledTimes(3);
+    expect(field()?.value).toBe(" /attempted/path ");
+  });
+
+  it.each(["cancel", "draft", "project", "submit"])(
+    "never restores a retried add over a newer %s interaction",
+    async (interaction) => {
+      await begin();
+      await render(failed("Refused"));
+      await act(async () => button("Retry").click());
+      if (interaction === "project") {
+        await render(undefined, "b");
+        await render(idle(), "b");
+        expect(field()).toBeNull();
+        return;
+      }
+      await act(async () => button("Add a local path").click());
+      if (interaction === "cancel") await key("Escape");
+      else {
+        await type("/newer/draft");
+        if (interaction === "submit") await key("Enter");
+      }
+      await render(idle());
+      expect(field()?.value ?? null).toBe(
+        interaction === "cancel" ? null : "/newer/draft",
+      );
+    },
+  );
+
+  it.each(["remove", "kind", "match", "edit"])(
+    "does not restore an old add on Retry of a later %s operation",
+    async (operation) => {
+      await begin();
+      const paths: ProjectLocalPath[] = [{ path: "/existing" }];
+      await render(failed("Refused"), "a", paths);
+      await act(async () => {
+        if (operation === "remove") button("Remove local path").click();
+        if (operation === "kind") button("repo").click();
+        if (operation === "match") button("prefix").click();
+        if (operation === "edit") button("/existing").click();
+      });
+      if (operation === "edit") await act(async () => button("Save").click());
+      const latestAttempt = onSave.mock.calls.at(-1)![0];
+      await render(loading(), "a", paths);
+      await render(failed("Later refused"), "a", paths);
+      await act(async () => button("Retry").click());
+      expect(onSave).toHaveBeenLastCalledWith(latestAttempt);
+      await render(idle(), "a", paths);
+      expect(field()).toBeNull();
+    },
+  );
 
   it("does not reinterpret an untracked caller or a known success as unknown", async () => {
     await begin();

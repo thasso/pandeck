@@ -7209,6 +7209,7 @@ export function useAssistant({
   useEffect(() => {
     const mutationLifecycle = mutationLifecycleRef.current;
     let disposed = false;
+    let socketConnected = false;
     let frame: number | null = null;
     let pendingFrameMessages: ServerMessage[] = [];
 
@@ -7867,6 +7868,8 @@ export function useAssistant({
       });
     });
     const offStatus = socket.onStatus((connected) => {
+      const lostConnection = socketConnected && !connected;
+      socketConnected = connected;
       flushFrameMessagesNow();
       // Subscriptions live on the connection, so a RECONNECT re-declares them
       // and receives a fresh snapshot. The first connection does not: setTopics
@@ -7916,7 +7919,9 @@ export function useAssistant({
         transportHasConnectedRef.current = true;
       } else {
         replicaTransport.dropRequests();
-        mutationLifecycleRef.current.disconnect();
+        // Failed connection attempts also emit false. Their queued, unsent
+        // writes keep their claims and deadlines until a real socket is lost.
+        if (lostConnection) mutationLifecycleRef.current.disconnect();
         commentResyncRef.current.clear();
         commentRequestsRef.current.clear();
         for (const id of taskDetailRequestsRef.current.keys())
