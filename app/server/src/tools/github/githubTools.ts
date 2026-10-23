@@ -26,7 +26,10 @@ import {
   type GithubApiConfig,
   type GithubResponse,
 } from "../../githubClient.ts";
-import { githubProvider, githubRefChecksVerdict } from "../../gitHosting.ts";
+import {
+  hostingProviderFor,
+  githubRefChecksVerdict,
+} from "../../gitHosting.ts";
 import {
   executeRefCheckWait,
   refCheckWaitParameters,
@@ -629,6 +632,10 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
     const { owner, repo } = resolveRepo(params.repo);
     const number = clamp(params.number, 0, 1, Number.MAX_SAFE_INTEGER);
     const includeBody = params.includeBody !== false;
+    const threadProvider =
+      params.includeReviewThreads === true
+        ? hostingProviderFor({ service: "github", owner, repo }, ctx.signal)
+        : null;
     const prBase = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`;
 
     const prRes = await githubRequest<Record<string, any>>(
@@ -679,12 +686,10 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
               ctx.signal,
             )
           : Promise.resolve(null),
-        params.includeReviewThreads === true
-          ? githubProvider(
-              { host: "github.com", owner, repo },
-              config,
-              ctx.signal,
-            ).pullRequestConversation(number, { threadsOnly: true })
+        threadProvider
+          ? threadProvider.pullRequestConversation(number, {
+              threadsOnly: true,
+            })
           : Promise.resolve(null),
       ]);
 
@@ -1762,14 +1767,13 @@ export const githubWatchPullRequestChecksTool = createPullRequestCheckWatchTool(
     providerName: "GitHub",
     repoDescription: "Repository as 'owner/repo'.",
     resolve(repoInput, signal) {
-      const config = getGithubToolConfig();
+      getGithubToolConfig();
       const { owner, repo } = resolveRepo(repoInput);
       const canonicalRepo = `${owner}/${repo}`;
       return {
         repo: canonicalRepo,
-        provider: githubProvider(
-          { host: "github.com", owner, repo },
-          config,
+        provider: hostingProviderFor(
+          { service: "github", owner, repo },
           signal,
         ),
         pullRequestUrl: (number) =>

@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import type { WorktreeRow } from "./db/worktreeStore.ts";
-import type { GitHostingProvider } from "./gitHosting.ts";
+import { hostingProviderFor, type GitHostingProvider } from "./gitHosting.ts";
+import { updateGithubSettings } from "./githubSettings.ts";
+import { updateForgejoSettings } from "./forgejoSettings.ts";
 import {
   hostSlashCommandRunner,
   runPrForHost,
@@ -347,7 +349,7 @@ function fakeProvider(impl: Partial<GitHostingProvider>): GitHostingProvider {
     markPullRequestReady: async () => ({}),
     retargetPullRequest: async () => {},
     pullRequestBody: async () => "",
-    editPullRequestBody: async () => {},
+    editPullRequestBody: async () => ({}),
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -415,6 +417,68 @@ afterEach(() => {
   resetPullRequestCardsStoreForTests();
 });
 
+test.each([
+  { service: "github" as const, draft: false },
+  { service: "github" as const, draft: true },
+  { service: "forgejo" as const, draft: false },
+  { service: "forgejo" as const, draft: true },
+])(
+  "actual PR workflow preserves $service draft=$draft HTTP payload",
+  async ({ service, draft }) => {
+    const repo = branchRepo();
+    const originalFetch = globalThis.fetch;
+    try {
+      execFileSync("git", ["branch", "main", "HEAD"], { cwd: repo });
+      updateGithubSettings({ enabled: true, token: "fixture" });
+      updateForgejoSettings({
+        enabled: true,
+        baseUrl: "https://git.example.com",
+        token: "fixture",
+      });
+      hoisted.hostingProviderForRepo.mockResolvedValue(
+        hostingProviderFor({ service, owner: "acme", repo: "repo" }),
+      );
+      const writes: unknown[] = [];
+      globalThis.fetch = vi.fn(async (_input, init) => {
+        if (init?.method === "POST") {
+          writes.push(JSON.parse(String(init.body)));
+          return new Response(
+            JSON.stringify({
+              number: 42,
+              html_url: "https://example.invalid/pr/42",
+              title: "T",
+              state: "open",
+            }),
+          );
+        }
+        return new Response("[]");
+      }) as typeof fetch;
+      const result = await beginPullRequestCard({
+        repoRoot: repo,
+        sessionKind: "developer",
+        sessionId: `real-port-${service}-${draft}`,
+        title: "T",
+        body: "B",
+        args: { ...prArgs, draft },
+      });
+      assert.equal(result.status, "created");
+      assert.deepEqual(writes, [
+        {
+          title: service === "forgejo" && draft ? "WIP: T" : "T",
+          body: "B",
+          head: "feature",
+          base: "main",
+          ...(service === "github" && draft ? { draft: true } : {}),
+        },
+      ]);
+      assert.equal(pullRequestCardRecord(result.cardId)!.context.draft, draft);
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(repo, { recursive: true, force: true });
+    }
+  },
+);
+
 test("the PR agent title remains the default with a linked Jira Task", async () => {
   const repo = branchRepo();
   try {
@@ -462,6 +526,7 @@ test("the PR agent title remains the default with a linked Jira Task", async () 
 
     assert.equal(result.status, "created");
     assert.equal(authored?.title, generatedTitle);
+    assert.ok(!Object.hasOwn(authored!, "draft"));
     assert.equal(
       authored?.title,
       "NEB-1407: Fix pull-request title overrides",

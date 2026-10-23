@@ -1,6 +1,7 @@
 /**
  * Provider-abstract git hosting seam: pull requests and CI status for the
- * repository behind a checkout's selected push remote (`origin` by default).
+ * repository behind a checkout's selected push remote (`origin` by default),
+ * or an explicitly named integration repository via `hostingProviderFor`.
  *
  * The provider is DETECTED from the remote push URL host — Forgejo when it matches
  * the Forgejo integration's configured instance base URL (Settings → Forgejo),
@@ -30,7 +31,10 @@ import {
   type WorktreePullRequestReview,
 } from "@assistant/shared";
 import { gitOptional } from "./gitExec.ts";
-import { getGithubConfigIfAvailable } from "./githubSettings.ts";
+import {
+  getGithubConfigIfAvailable,
+  getGithubToolConfig,
+} from "./githubSettings.ts";
 import {
   GITHUB_WEB_BASE,
   githubGraphql,
@@ -45,7 +49,10 @@ import {
   isFailedGitCheckStatus,
   isTerminalGitCheckStatus,
 } from "./gitCheckStatus.ts";
-import { getForgejoConfigIfAvailable } from "./forgejoSettings.ts";
+import {
+  getForgejoConfigIfAvailable,
+  getForgejoToolConfig,
+} from "./forgejoSettings.ts";
 import {
   type ForgejoApiConfig,
   type ForgejoRefChecksSummary,
@@ -281,9 +288,13 @@ export interface GitHostingProvider {
   /**
    * Replace a pull request's description. Like a retarget it has no
    * precondition, so the caller proves the pull request's identity before and
-   * reads {@link pullRequestBody} back after.
+   * reads {@link pullRequestBody} back after. Returns the API URL when supplied;
+   * a successful body-only response need not contain a URL or a full PR.
    */
-  editPullRequestBody(prNumber: number, body: string): Promise<void>;
+  editPullRequestBody(
+    prNumber: number,
+    body: string,
+  ): Promise<{ url?: string }>;
   /**
    * Merge one pull request and, when asked, delete its remote head branch — as
    * ONE call. Deleting the branch is part of merging, not a second step a
@@ -1530,6 +1541,42 @@ function standingChangeRequests(reviews: ProviderReview[]): ProviderReview[] {
 }
 
 /**
+ * Build a provider for an explicit integration repository using current tool
+ * settings. Throws the integration's settings error, without remote detection
+ * or fallback. Construct at the caller's settings-snapshot boundary.
+ */
+export function hostingProviderFor(
+  input: { service: GitHostingProviderKind; owner: string; repo: string },
+  signal?: AbortSignal,
+): GitHostingProvider {
+  const { owner, repo } = input;
+  switch (input.service) {
+    case "github":
+      return githubProvider(
+        { host: "github.com", owner, repo },
+        getGithubToolConfig(),
+        signal,
+      );
+    case "forgejo": {
+      const config = getForgejoToolConfig();
+      return forgejoProvider(
+        {
+          host: new URL(normalizeForgejoBaseUrl(config.baseUrl)).host,
+          owner,
+          repo,
+        },
+        config,
+        signal,
+      );
+    }
+    default:
+      throw new Error(
+        `Unsupported git hosting service: ${String(input.service)}`,
+      );
+  }
+}
+
+/**
  * Resolve the provider for one named remote of the repo containing `repoPath`.
  * The push URL is authoritative: a remote may fetch from one repository while
  * publishing to another, and PR creation must follow the latter.
@@ -2433,8 +2480,7 @@ export async function forgejoPullRequestDescription(
   return res.data?.body ?? "";
 }
 
-/** Exported for tests: build the GitHub provider without resolving a remote. */
-export function githubProvider(
+function githubProvider(
   ref: RemoteRepoRef,
   config: GithubApiConfig,
   parentSignal?: AbortSignal,
@@ -2546,7 +2592,7 @@ export function githubProvider(
             body: input.body ?? "",
             head: input.head,
             base: input.base,
-            ...(input.draft ? { draft: true } : {}),
+            ...(input.draft !== undefined ? { draft: input.draft } : {}),
           },
           signal: signal(),
         },
@@ -2612,10 +2658,18 @@ export function githubProvider(
       return res.data?.body ?? "";
     },
     async editPullRequestBody(prNumber, body) {
-      await githubRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
-        body: { body },
-        signal: signal(),
-      });
+      const res = await githubRequest<{ html_url?: string }>(
+        config,
+        "PATCH",
+        `${repoApi}/pulls/${prNumber}`,
+        {
+          body: { body },
+          signal: signal(),
+        },
+      );
+      return {
+        ...(res.data?.html_url !== undefined ? { url: res.data.html_url } : {}),
+      };
     },
     async pullRequestDetail(prNumber) {
       const res = await githubRequest<GithubPull>(
@@ -3188,8 +3242,7 @@ function toPullRequestInfo(pull: ForgejoPull): WorktreePullRequestInfo {
   };
 }
 
-/** Exported for tests: build the Forgejo provider without resolving a remote. */
-export function forgejoProvider(
+function forgejoProvider(
   ref: RemoteRepoRef,
   config: ForgejoApiConfig,
   parentSignal?: AbortSignal,
@@ -3355,10 +3408,18 @@ export function forgejoProvider(
         throw new Error(
           "A Forgejo access token is not configured. Add one in Settings → Forgejo.",
         );
-      await forgejoRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
-        body: { body },
-        signal: signal(),
-      });
+      const res = await forgejoRequest<{ html_url?: string }>(
+        config,
+        "PATCH",
+        `${repoApi}/pulls/${prNumber}`,
+        {
+          body: { body },
+          signal: signal(),
+        },
+      );
+      return {
+        ...(res.data?.html_url !== undefined ? { url: res.data.html_url } : {}),
+      };
     },
     async pullRequestDetail(prNumber) {
       const res = await forgejoRequest<ForgejoPull>(

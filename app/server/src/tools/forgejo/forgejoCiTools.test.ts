@@ -122,6 +122,48 @@ describe("forgejo_watch_pull_request_checks", () => {
     expect(payload.mergeBlockers).toEqual([]);
   });
 
+  test("watch factory preserves configured port/path, default owner and current credentials", async () => {
+    const baseUrl = "https://git.example.com:8443/root";
+    vi.mocked(getForgejoToolConfig).mockReturnValue({
+      baseUrl,
+      token: "current",
+    });
+    vi.mocked(getForgejoDefaultOwner).mockReturnValue("acme");
+    const urls: string[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      urls.push(url);
+      expect(url.startsWith(`${baseUrl}/api/v1/repos/acme/app/`)).toBe(true);
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "token current",
+      );
+      if (url.endsWith("/reviews")) return jsonResponse([]);
+      if (url.includes("/commits/"))
+        return jsonResponse(
+          { sha: "abc123", statuses: [{ context: "ci", status: "success" }] },
+          { "x-total-count": "1" },
+        );
+      return jsonResponse({
+        number: 12,
+        title: "T",
+        state: "open",
+        merged: false,
+        mergeable: true,
+        head: { ref: "feature", sha: "abc123" },
+        base: { ref: "main" },
+      });
+    }) as typeof fetch;
+    const payload = parse(
+      await forgejoWatchPullRequestChecksTool.execute(
+        { repo: "app", number: 12 },
+        ctxFor("watch-port"),
+      ),
+    );
+    expect(payload.pullRequest.url).toBe(`${baseUrl}/acme/app/pulls/12`);
+    expect(payload.repo).toBe("acme/app");
+    expect(urls.length).toBeGreaterThan(0);
+  });
+
   test("returns the failed status run URL as the Forgejo log handoff", async () => {
     const fetchMock = routedFetch([
       ["/pulls/12/reviews", () => jsonResponse([])],
