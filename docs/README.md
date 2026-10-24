@@ -284,6 +284,11 @@ only binding rules; everything else lives here.
 - `document-presentation.md` — the typed internal document targets, the
   link/card/embed intent boundary, worktree file and explicit-diff links, line
   anchors, source-preserving resolution, and the shared viewer navigation shell.
+- `adr/` — architecture decision records: one short file per decision that is
+  hard to reverse and would surprise a reader, with the alternatives it
+  rejected. `0001`–`0003` cover the Worker split: the Worker hosts the engine,
+  agents keep the human's account while the server gets its own, and the Worker
+  owns every checkout operation.
 
 ## Implementation reference
 

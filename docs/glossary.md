@@ -80,3 +80,21 @@ and run outcome, for each lane to interpret. A receipt distinguishes delivery
 from handling and records uncertainty rather than treating resolution as
 success.\
 _Avoid_: success flag, delivery acknowledgment
+
+**Worker**: A separately deployed process that hosts agent sessions' engines and
+native tools under an OS account other than the server's, and reaches the server
+only through the worker protocol. The server can restart while its Workers keep
+running.\
+_Avoid_: agent server, runner, node. A web worker or diff worker is the browser
+thread, always named with its qualifier.
+
+**Worker protocol**: The versioned contract between the server and its Workers,
+versioned separately from the app release. A Worker dials the server, never the
+reverse. Minor versions add without breaking either side; a major mismatch means
+the Worker finishes what it runs and takes nothing new.\
+_Avoid_: worker API, RPC, agent bridge
+
+**Credential lease**: A Worker's right to use one credential profile for one
+session, granted and revoked by the server, which stays the profile's owner. A
+live account switch ends one lease and grants another.\
+_Avoid_: credential copy, token share, synced profile
