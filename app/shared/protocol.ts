@@ -3519,7 +3519,8 @@ export type GithubPrMutationOperation =
   | "review"
   | "comment"
   | "assign"
-  | "resolveThread";
+  | "resolveThread"
+  | "close";
 export type GithubPrReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
 
 /** One inline review comment in a `github_review_pull_request` proposal. */
@@ -3533,7 +3534,7 @@ export interface GithubPrInlineCommentDisplay {
 }
 
 export type ForgejoPrMutationOperation =
-  "create" | "edit" | "ready" | "review" | "comment";
+  "create" | "edit" | "ready" | "review" | "comment" | "close";
 /**
  * Forgejo's `ReviewStateType`, which is NOT GitHub's review event vocabulary:
  * the approving verdict is `APPROVED` (not `APPROVE`) and asking for changes is
@@ -3633,6 +3634,14 @@ export interface GithubPullRequestApprovalBody {
   removeReviewerTeams?: string[];
   addAssignees?: string[];
   removeAssignees?: string[];
+  /**
+   * close: the head the user decided about, read when proposed. Approval
+   * closes only while the pull request is still open at exactly this commit;
+   * `commentBody`, when present, is posted first.
+   */
+  headSha?: string;
+  /** close: also delete the head branch after a confirmed close. */
+  deleteBranch?: boolean;
   resultNumber?: number;
 }
 
@@ -3743,6 +3752,10 @@ export interface ForgejoPullRequestApprovalBody {
   replyPath?: string;
   replyLine?: number;
   replySide?: "LEFT" | "RIGHT";
+  /** close: as {@link GithubPullRequestApprovalBody.headSha}. */
+  headSha?: string;
+  /** close: as {@link GithubPullRequestApprovalBody.deleteBranch}. */
+  deleteBranch?: boolean;
   resultNumber?: number;
 }
 
@@ -5614,6 +5627,16 @@ export interface PullRequestCloseResult {
   headSha: string;
   /** The write landed but its confirmation could not be completed; why. */
   unconfirmedReason?: string;
+  /** The comment posted on the pull request before closing, when one was asked for. */
+  commentUrl?: string;
+  /**
+   * Head branch deletion, reported only when it was asked for. Deletion runs
+   * only after a CONFIRMED close; `branchKeptReason` says why it was skipped
+   * on purpose, `branchDeleteError` why an attempted deletion failed.
+   */
+  branchDeleted?: boolean;
+  branchDeleteError?: string;
+  branchKeptReason?: string;
 }
 
 /**

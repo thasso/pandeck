@@ -25,6 +25,7 @@ const {
   forgejoReadyPullRequestTool,
   forgejoReviewPullRequestTool,
   forgejoCommentPullRequestTool,
+  forgejoClosePullRequestTool,
 } = await import("./forgejoPrWriteTools.ts");
 const { resolveApproval, approvalsForSession, setApprovalBroadcastForTests } =
   await import("../../pendingApprovals.ts");
@@ -630,5 +631,85 @@ describe("forgejo PR writes invalidate what the inventory remembers", () => {
       [config.baseUrl, "acme", "app", 42],
       [config.baseUrl, "acme", "app", 43],
     ]);
+  });
+});
+
+describe("forgejo close pull request approvals", () => {
+  test("binds the head when proposed, then comments and closes on approval", async () => {
+    const sessionId = "fj-close";
+    const calls: string[] = [];
+    let closed = false;
+    globalThis.fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        calls.push(`${method} ${url}`);
+        if (method === "POST")
+          return new Response(
+            JSON.stringify({
+              html_url: "https://git.example.com/acme/app/pulls/42#c1",
+            }),
+            { status: 201 },
+          );
+        if (method === "PATCH") closed = true;
+        return new Response(
+          JSON.stringify({
+            number: 42,
+            state: closed ? "closed" : "open",
+            merged: false,
+            head: {
+              ref: "feature",
+              sha: "abc",
+              repo: { full_name: "acme/app" },
+            },
+            base: { ref: "main" },
+          }),
+          { status: 200 },
+        );
+      },
+    ) as unknown as typeof fetch;
+    await forgejoClosePullRequestTool.execute(
+      { repo: "acme/app", number: 42, comment: "Not needed." } as never,
+      ctxFor(sessionId) as never,
+    );
+    expect(calls.every((call) => call.startsWith("GET "))).toBe(true);
+    const card = latest(sessionId);
+    expect(card.title).toBe("Close pull request");
+    expect(card.body).toMatchObject({
+      kind: "forgejoPullRequest",
+      operation: "close",
+      pullNumber: 42,
+      headSha: "abc",
+      commentBody: "Not needed.",
+    });
+    expect((card.body as ForgejoPullRequestApprovalBody).deleteBranch).toBe(
+      undefined,
+    );
+    const { card: done } = await resolveApproval(card.id, "approved");
+    expect(done.status).toBe("executed");
+    expect(done.resultSummary).toBe(
+      "Closed #42 without merging. Posted the comment.",
+    );
+    expect(calls.filter((call) => !call.startsWith("GET "))).toEqual([
+      "POST https://git.example.com/api/v1/repos/acme/app/issues/42/comments",
+      "PATCH https://git.example.com/api/v1/repos/acme/app/pulls/42",
+    ]);
+    expect(invalidateForgejoPullRequestWrite).toHaveBeenCalledWith(
+      config.baseUrl,
+      "acme",
+      "app",
+      42,
+    );
+  });
+
+  test("an empty comment is refused rather than closing silently", async () => {
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    await expect(
+      forgejoClosePullRequestTool.execute(
+        { repo: "acme/app", number: 42, comment: "   " } as never,
+        ctxFor("fj-close-empty") as never,
+      ),
+    ).rejects.toThrow(/comment must not be empty/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

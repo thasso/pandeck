@@ -1,6 +1,7 @@
 /**
  * GitHub PR write tools (coding personas only, gate `github`): approval-gated
- * pull-request creation, description edits, reviews, comments, and reviewer/assignee changes. These
+ * pull-request creation, description edits, reviews, comments, reviewer/assignee changes,
+ * and closing without merging. These
  * tools NEVER write during the model turn — each stages a PENDING approval via
  * the shared `../../pendingApprovals.ts` subsystem and returns a bounded
  * summary; the write executes server-side only after the user approves the card
@@ -27,6 +28,10 @@ import {
 } from "../../gitHosting.ts";
 import { resolveRepo } from "./githubTools.ts";
 import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
+import {
+  applyPullRequestClose,
+  pullRequestCloseProposal,
+} from "../pullRequestClose.ts";
 import type {
   ApprovalCard,
   GithubPrInlineCommentDisplay,
@@ -67,6 +72,12 @@ type ResolveReviewThreadParams = {
   number: number;
   threadId: string;
   resolved: boolean;
+};
+type ClosePullRequestParams = {
+  repo: string;
+  number: number;
+  comment?: string;
+  deleteBranch?: boolean;
 };
 type AssignPullRequestParams = {
   repo: string;
@@ -721,6 +732,67 @@ export const githubAssignPullRequestTool =
     },
   });
 
+export const githubClosePullRequestTool =
+  defineAgentTool<ClosePullRequestParams>({
+    name: "github_close_pull_request",
+    label: "GitHub: Close Pull Request",
+    description:
+      "Prepare closing an open GitHub pull request WITHOUT merging, for the user to approve: optionally post a comment first and delete the head branch after. The card binds the current head; approval closes only if the pull request is still open at that commit. Never writes until approved. For a managed worktree's pull request, use worktree_finish_pull_request with action close.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["repo", "number"],
+      properties: {
+        repo: { type: "string", description: "Repository as 'owner/repo'." },
+        number: { type: "number", description: "Pull-request number." },
+        comment: {
+          type: "string",
+          description:
+            "Comment (Markdown) posted on the pull request before it closes, usually why. If it cannot be posted, nothing is closed.",
+        },
+        deleteBranch: {
+          type: "boolean",
+          description:
+            "Also delete the head branch after a confirmed close. Defaults to false. Kept anyway when it lives on a fork, moved past the closed head, or another open pull request targets it.",
+        },
+      },
+    },
+    async execute(params, ctx) {
+      getGithubToolConfig();
+      const { owner, repo } = resolveRepo(params.repo);
+      const provider = hostingProviderFor(
+        { service: "github", owner, repo },
+        ctx.signal,
+      );
+      const fields = await pullRequestCloseProposal(provider, params);
+      const body: GithubPullRequestApprovalBody = {
+        kind: "githubPullRequest",
+        operation: "close",
+        repo: `${owner}/${repo}`,
+        ...fields,
+      };
+      const card = createApproval({
+        sessionId: ctx.session.sessionId,
+        kind: "githubPullRequest",
+        title: fields.deleteBranch
+          ? "Close pull request and delete branch"
+          : "Close pull request",
+        summary: `${owner}/${repo}#${fields.pullNumber}: ${fields.head} → ${fields.base}`,
+        sourceToolCallId: ctx.toolCallId,
+        body,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Prepared closing ${owner}/${repo}#${fields.pullNumber} without merging pending your approval. ${PENDING_NOTE} ${approvalCardReference(card)}`,
+          },
+        ],
+        terminate: true,
+      };
+    },
+  });
+
 /** Execute an approved GitHub PR write against the API. */
 registerApprovalExecutor("githubPullRequest", {
   async execute(card: ApprovalCard) {
@@ -783,6 +855,34 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
       resultSummary: `${b.resolved ? "Resolved" : "Reopened"} review thread on #${b.pullNumber}`,
       resultUrl: `https://github.com/${b.repo}/pull/${b.pullNumber}`,
     };
+  }
+
+  if (b.operation === "close") {
+    if (
+      !Number.isInteger(b.pullNumber) ||
+      (b.pullNumber ?? 0) < 1 ||
+      !b.headSha
+    )
+      throw new Error(
+        "Close proposal is missing its pull-request number or bound head.",
+      );
+    const provider = hostingProviderFor({
+      service: "github",
+      owner: owner!,
+      repo: repoName!,
+    });
+    return applyPullRequestClose(
+      provider,
+      {
+        pullNumber: b.pullNumber!,
+        head: b.head ?? "",
+        base: b.base ?? "",
+        headSha: b.headSha,
+        ...(b.commentBody ? { commentBody: b.commentBody } : {}),
+        ...(b.deleteBranch ? { deleteBranch: true } : {}),
+      },
+      `${provider.repoWebUrl}/pull/${b.pullNumber}`,
+    );
   }
 
   if (b.operation === "ready") {
@@ -937,4 +1037,5 @@ export const githubPrWriteTools = [
   githubCommentPullRequestTool,
   githubResolveReviewThreadTool,
   githubAssignPullRequestTool,
+  githubClosePullRequestTool,
 ];

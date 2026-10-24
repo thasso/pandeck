@@ -26,6 +26,7 @@ import {
   GitBranch,
   GitMerge,
   GitPullRequestArrow,
+  GitPullRequestClosed,
   KeyRound,
   MessageSquare,
   SquarePen,
@@ -210,7 +211,9 @@ function headerIcon(body: ApprovalCardData["body"]): LucideIcon {
       ? MessageSquare
       : body.operation === "assign"
         ? UserPlus
-        : GitPullRequestArrow;
+        : body.operation === "close"
+          ? GitPullRequestClosed
+          : GitPullRequestArrow;
   if (body.kind === "githubIssue")
     return body.operation === "comment"
       ? MessageSquare
@@ -306,6 +309,41 @@ function PullRequestBody({
             empty="Clears the description."
             onDecide={onDecide}
           />
+        )}
+      </>
+    );
+  }
+  if (body.operation === "close") {
+    return (
+      <>
+        <Fact label="Close without merging">
+          {target} · <span className="font-mono">{body.head}</span> →{" "}
+          <span className="font-mono">{body.base}</span>
+          {body.headSha ? (
+            <span className="font-mono text-xs">
+              {" "}
+              @ {body.headSha.slice(0, 7)}
+            </span>
+          ) : null}
+        </Fact>
+        <Fact label="Head branch">
+          {body.deleteBranch ? "delete after closing" : "keep"}
+        </Fact>
+        {body.commentBody ? (
+          <ProposedMarkdown
+            text={body.commentBody}
+            title={`Closing comment on ${target}`}
+            readLabel="Read full comment"
+            context={
+              <p>
+                Approving closes {target} without merging
+                {body.deleteBranch ? ` and deletes ${body.head}` : ""}.
+              </p>
+            }
+            onDecide={onDecide}
+          />
+        ) : (
+          <p className="text-muted-foreground">No comment.</p>
         )}
       </>
     );

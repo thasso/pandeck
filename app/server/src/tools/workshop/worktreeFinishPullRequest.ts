@@ -17,7 +17,9 @@
  *
  * Closing is direct for either base: it abandons the work rather than landing
  * it, so it requires an explicit reason (audited on the card and in the result)
- * and keeps the branch, the worktree and the linked Task exactly as they are.
+ * and keeps the worktree, its local branch and the linked Task exactly as they
+ * are. It may post a comment on the pull request and, only when asked, delete
+ * the remote branch.
  */
 import { randomUUID } from "node:crypto";
 import type {
@@ -110,6 +112,7 @@ import {
 } from "./mergeWhenReady.ts";
 
 const MAX_REASON_CHARS = 1_000;
+const MAX_COMMENT_CHARS = 65_536;
 const BUSY_REFUSAL = new WorktreeBusyError().message;
 
 export const managedMergeCore = {
@@ -269,6 +272,7 @@ export type WorktreeFinishPullRequestParams = {
   markTaskDone?: boolean;
   removeWorktree?: boolean;
   reason?: string;
+  comment?: string;
   whenReady?: boolean;
   timeoutSeconds?: number;
 };
@@ -288,7 +292,7 @@ const finishSchema = {
       type: "string",
       enum: ["merge", "close"],
       description:
-        "merge — merge the derived managed pull request. close — close it without merging, keeping the branch, the worktree and the linked Task untouched.",
+        "merge — merge the derived managed pull request. close — close it without merging, keeping the worktree, its local branch and the linked Task untouched.",
     },
     method: {
       type: "string",
@@ -298,9 +302,8 @@ const finishSchema = {
     },
     deleteRemoteBranch: {
       type: "boolean",
-      default: true,
       description:
-        "Delete the remote head branch as part of the merge. Defaults to true; refused for close, which always keeps the branch.",
+        "Delete the remote head branch. Merge defaults to true. Close defaults to false; true deletes it only after a confirmed close and only while it is still at the closed head and no other open pull request targets it.",
     },
     markTaskDone: {
       type: "boolean",
@@ -328,7 +331,13 @@ const finishSchema = {
       type: "string",
       maxLength: MAX_REASON_CHARS,
       description:
-        "Why this pull request is being finished. REQUIRED for close — closing abandons the work, and the reason is recorded on the card and in this result.",
+        "Why this pull request is being finished. REQUIRED for close — closing abandons the work, and the reason is recorded on the card and in this result. It is not posted to the pull request; use comment for that.",
+    },
+    comment: {
+      type: "string",
+      maxLength: MAX_COMMENT_CHARS,
+      description:
+        "Close only: Markdown comment posted on the pull request before closing it. If it cannot be posted, nothing is closed.",
     },
   },
 } as const;
@@ -698,6 +707,7 @@ interface FinishRequest {
   markTaskDone: boolean;
   removeWorktree: boolean;
   reason?: string;
+  comment?: string;
 }
 
 function validateRequest(
@@ -725,10 +735,9 @@ function validateRequest(
       throw new Error(
         "method applies to merge only; a close never merges anything.",
       );
-    if (params.deleteRemoteBranch !== undefined)
-      throw new Error(
-        "deleteRemoteBranch applies to merge only; a close always keeps the remote branch.",
-      );
+    const comment = params.comment?.trim();
+    if (comment && comment.length > MAX_COMMENT_CHARS)
+      throw new Error(`comment exceeds ${MAX_COMMENT_CHARS} characters.`);
     if (
       params.markTaskDone !== undefined ||
       params.removeWorktree !== undefined
@@ -742,12 +751,15 @@ function validateRequest(
       worktreeId,
       action,
       reason,
-      deleteRemoteBranch: false,
+      ...(comment ? { comment } : {}),
+      deleteRemoteBranch: params.deleteRemoteBranch === true,
       markTaskDone: false,
       removeWorktree: false,
     };
   }
 
+  if (params.comment !== undefined)
+    throw new Error("comment applies to close only.");
   const method = params.method;
   if (!method || !PULL_REQUEST_MERGE_METHODS.includes(method))
     throw new Error(
@@ -1214,25 +1226,36 @@ async function runClose(
     baseBranch: target.baseBranch,
     expectedHeadSha: target.headSha,
     reason,
+    ...(request.comment ? { comment: request.comment } : {}),
+    ...(request.deleteRemoteBranch ? { deleteRemoteBranch: true } : {}),
     worktreeId: target.row.id,
   });
+  const { result } = projection;
   return jsonResult({
     action: "close" as const,
-    status: projection.result.closed ? "closed" : "close-unconfirmed",
+    status: result.closed ? "closed" : "close-unconfirmed",
     provider: target.hosted.provider.kind,
     number: target.number,
     url: target.url,
     head: { ref: target.headBranch, sha: target.headSha },
     base: { ref: target.baseBranch },
     reason,
-    remoteBranchKept: true,
+    ...(result.commentUrl !== undefined ? { commentPosted: true } : {}),
+    ...(result.commentUrl ? { commentUrl: result.commentUrl } : {}),
+    remoteBranchKept: result.branchDeleted !== true,
+    ...(result.branchKeptReason
+      ? { remoteBranchKeptReason: result.branchKeptReason }
+      : {}),
+    ...(result.branchDeleteError
+      ? { remoteBranchDeleteError: result.branchDeleteError }
+      : {}),
     localBranchKept: true,
     worktreeKept: true,
     linkedTaskUnchanged: true,
     cardIds: projection.cardIds,
     message: projection.message,
-    ...(projection.result.unconfirmedReason
-      ? { unconfirmed: projection.result.unconfirmedReason }
+    ...(result.unconfirmedReason
+      ? { unconfirmed: result.unconfirmedReason }
       : {}),
   });
 }

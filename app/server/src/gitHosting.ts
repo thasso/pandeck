@@ -353,10 +353,23 @@ export interface GitHostingProvider {
    * already closed, a head that moved) THROWS with the provider's own message;
    * a write that landed but could not be confirmed comes back as a result with
    * `closed: false` and `unconfirmedReason`, never as an invented success.
+   *
+   * A `comment` is posted after the head check and BEFORE the state
+   * transition, so the pull request reads "why" above "closed"; a comment that
+   * cannot be posted refuses the close, and the head is proven again after it.
+   * `deleteBranch` removes the head branch only after a CONFIRMED close, only
+   * when it is this repository's own branch (never a fork's), still at the
+   * closed head, no other open pull request is opened from it, and none
+   * targets it as its base. Like a merge, the deletion fails softly: the close
+   * has landed by then.
    */
   closePullRequest(
     prNumber: number,
-    options: { expectedHeadSha: string },
+    options: {
+      expectedHeadSha: string;
+      comment?: string;
+      deleteBranch?: boolean;
+    },
   ): Promise<PullRequestCloseResult>;
   /**
    * What this repository allows for pull requests: its exact default branch,
@@ -1251,8 +1264,8 @@ type BranchDeletionOutcome = Pick<
 >;
 
 /**
- * Delete a MERGED pull request's head branch — unless another open pull
- * request still targets it as its base.
+ * Delete a MERGED or CLOSED pull request's head branch — unless another open
+ * pull request still targets it as its base.
  *
  * That is what a stack looks like, native or not: the branch just merged is
  * the base of the pull request above it. A native stack's is retargeted by
@@ -1261,7 +1274,7 @@ type BranchDeletionOutcome = Pick<
  * the branch, and so does a dependents read that failed: a kept branch costs
  * a later cleanup, a closed pull request costs the work on it.
  */
-async function deleteMergedHeadBranch(
+async function deleteFinishedHeadBranch(
   headBranch: string,
   openPullsTargeting: (branch: string) => Promise<number[]>,
   remove: () => Promise<BranchDeletionOutcome>,
@@ -1335,6 +1348,143 @@ function closeResultFrom(
     unconfirmedReason: `the close was sent but the pull request still reports state ${after.state || "unknown"}.`,
   };
 }
+
+/** The provider steps {@link closePullRequestWith} orders for both backends. */
+interface CloseSteps<Pull> {
+  read(): Promise<Pull | null>;
+  postComment(body: string): Promise<{ url?: string }>;
+  close(): Promise<void>;
+  /** The post-write state, in the shape {@link closeResultFrom} reads. */
+  state(pull: Pull | null): { state: string; merged: boolean; headSha: string };
+  openPullsTargeting(branch: string): Promise<number[]>;
+  /** Open pull requests whose head is this repository's `branch`. */
+  openPullsHeadedBy(branch: string): Promise<number[]>;
+  /** Delete `branch` only while it still points at `headSha`. */
+  removeBranch(branch: string, headSha: string): Promise<BranchDeletionOutcome>;
+}
+
+/**
+ * Close one pull request: prove the head, post the comment, prove the head
+ * again, close, confirm, then delete the head branch when asked. Both
+ * providers share this order; only the HTTP calls differ.
+ */
+async function closePullRequestWith<
+  Pull extends {
+    state?: string;
+    merged?: boolean;
+    head?: {
+      ref?: string;
+      sha?: string;
+      repo?: { full_name?: string } | null;
+    };
+  },
+>(
+  prNumber: number,
+  options: Parameters<GitHostingProvider["closePullRequest"]>[1],
+  ref: RemoteRepoRef,
+  steps: CloseSteps<Pull>,
+): Promise<PullRequestCloseResult> {
+  let before = await steps.read();
+  requireClosablePull(prNumber, before, options.expectedHeadSha);
+  const comment = options.comment?.trim();
+  let commentUrl: string | undefined;
+  /** Appended to a refusal once the comment is already on the pull request. */
+  let commentNote = "";
+  if (comment) {
+    try {
+      commentUrl = (await steps.postComment(comment)).url ?? "";
+    } catch (err) {
+      throw new Error(
+        `The closing comment on pull request #${prNumber} could not be posted (${errorText(err)}); nothing was closed.`,
+      );
+    }
+    commentNote = ` The closing comment was already posted${commentUrl ? ` (${commentUrl})` : ""}.`;
+    // Posting is a full round trip after the head check: prove the head again
+    // so a push that landed meanwhile is refused, not closed unseen.
+    try {
+      before = await steps.read();
+      requireClosablePull(prNumber, before, options.expectedHeadSha);
+    } catch (err) {
+      throw new Error(`${errorText(err)}${commentNote}`);
+    }
+  }
+  const commented = commentUrl !== undefined ? { commentUrl } : {};
+  // A failed close request does not prove the close did not land (a reset
+  // connection, an unreadable answer), so the read below decides.
+  let closeError: unknown;
+  try {
+    await steps.close();
+  } catch (err) {
+    closeError = err;
+  }
+  let result: PullRequestCloseResult;
+  try {
+    const after = steps.state(await steps.read());
+    if (closeError !== undefined && after.state !== "closed")
+      throw new CloseRefused(
+        `${errorText(closeError)} Pull request #${prNumber} is still ${after.merged ? "merged" : after.state || "not closed"}.${commentNote}`,
+      );
+    result = {
+      ...closeResultFrom(prNumber, options.expectedHeadSha, after),
+      ...commented,
+    };
+  } catch (err) {
+    if (err instanceof CloseRefused) throw new Error(err.message);
+    result = {
+      number: prNumber,
+      closed: false,
+      headSha: options.expectedHeadSha,
+      unconfirmedReason:
+        closeError !== undefined
+          ? `the close request failed (${errorText(closeError)}) and whether it landed could not be confirmed (${errorText(err)}).`
+          : `the close was sent but its state could not be confirmed (${errorText(err)}).`,
+      ...commented,
+    };
+  }
+  if (options.deleteBranch !== true) return result;
+  return { ...result, ...(await deleteClosedHeadBranch()) };
+
+  async function deleteClosedHeadBranch(): Promise<BranchDeletionOutcome> {
+    const headBranch = before?.head?.ref ?? "";
+    if (!result.closed)
+      return {
+        branchDeleted: false,
+        branchKeptReason: "closure was not confirmed",
+      };
+    if (!headBranch || !headIsOwnBranch(before!, headBranch, ref))
+      return {
+        branchDeleted: false,
+        branchKeptReason:
+          "the head branch is not one of this repository's own branches (a fork, or unreported)",
+      };
+    // Deleting a branch closes every open pull request whose head it is, so
+    // another one opened from the same branch keeps it, as a dependent does.
+    let sharing: number[];
+    try {
+      sharing = (await steps.openPullsHeadedBy(headBranch)).filter(
+        (number) => number !== prNumber,
+      );
+    } catch (err) {
+      return {
+        branchDeleted: false,
+        branchKeptReason: `whether another open pull request uses it as head could not be checked (${errorText(err)})`,
+      };
+    }
+    if (sharing.length > 0) {
+      const list = sharing.map((number) => `#${number}`).join(", ");
+      return {
+        branchDeleted: false,
+        branchKeptReason: `${list} still ${sharing.length === 1 ? "uses" : "use"} it as head, and deleting it would close ${sharing.length === 1 ? "that pull request" : "them"}`,
+      };
+    }
+    return deleteFinishedHeadBranch(headBranch, steps.openPullsTargeting, () =>
+      steps.removeBranch(headBranch, options.expectedHeadSha),
+    );
+  }
+}
+
+/** A close request that failed and whose pull request reads as still open. */
+class CloseRefused extends Error {}
 
 /**
  * Turn a provider's allow-flags into the supported set, in the shared
@@ -1628,7 +1778,11 @@ interface GithubPull {
   /** `null` while GitHub is still computing it. */
   mergeable?: boolean | null;
   /** `repo` is null when the head fork was deleted; it never proves ownership. */
-  head?: { ref?: string; sha?: string; repo?: { full_name?: string } | null };
+  head?: {
+    ref?: string;
+    sha?: string;
+    repo?: { full_name?: string; node_id?: string } | null;
+  };
   base?: { ref?: string };
   user?: { login?: string };
   requested_reviewers?: Array<{ login?: string }>;
@@ -2480,6 +2634,41 @@ export async function forgejoPullRequestDescription(
   return res.data?.body ?? "";
 }
 
+const ZERO_OID = "0".repeat(40);
+
+/**
+ * Delete `branch` only if it still points at `expectedSha`. REST
+ * `DELETE /git/refs` takes no expected value, so a push landing between a read
+ * and that call would delete the NEW tip; GraphQL `updateRefs` checks
+ * `beforeOid` atomically on GitHub's side and rejects a moved ref.
+ */
+export async function githubDeleteBranchAt(
+  config: GithubApiConfig,
+  repositoryId: string,
+  branch: string,
+  expectedSha: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await githubGraphql(
+    config,
+    `mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }`,
+    {
+      input: {
+        repositoryId,
+        refUpdates: [
+          {
+            name: `refs/heads/${branch}`,
+            beforeOid: expectedSha,
+            afterOid: ZERO_OID,
+            force: true,
+          },
+        ],
+      },
+    },
+    signal,
+  );
+}
+
 function githubProvider(
   ref: RemoteRepoRef,
   config: GithubApiConfig,
@@ -2488,6 +2677,40 @@ function githubProvider(
   const repoApi = `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`;
   const repoWebUrl = `${GITHUB_WEB_BASE}/${ref.owner}/${ref.repo}`;
   const signal = () => requestSignal(parentSignal);
+  /** Open pull requests based on `branch`, which keep it from being deleted. */
+  const openPullsTargeting = async (branch: string): Promise<number[]> =>
+    requirePullRequestList<GithubPull>(
+      requireData(
+        await githubRequest<GithubPull[]>(config, "GET", `${repoApi}/pulls`, {
+          // Any one is enough to keep the branch; the page only bounds how
+          // many the outcome sentence names.
+          query: { state: "open", base: branch, per_page: 10 },
+          signal: signal(),
+        }),
+        "open pull requests",
+      ),
+      "open pull requests",
+    ).map((pull) => pull.number);
+  /** Open pull requests opened from this repository's `branch`. */
+  const openPullsHeadedBy = async (branch: string): Promise<number[]> =>
+    requirePullRequestList<GithubPull>(
+      requireData(
+        await githubRequest<GithubPull[]>(config, "GET", `${repoApi}/pulls`, {
+          // GitHub's head filter names the owner, so a fork's same-named
+          // branch is not listed; the ownership check below still decides.
+          query: {
+            state: "open",
+            head: `${ref.owner}:${branch}`,
+            per_page: 10,
+          },
+          signal: signal(),
+        }),
+        "open pull requests",
+      ),
+      "open pull requests",
+    )
+      .filter((pull) => headIsOwnBranch(pull, branch, ref))
+      .map((pull) => pull.number);
   /**
    * The BOUNDED newest-first read behind the tolerant single-result lookup.
    * `state: all` so a merged pull request — the one thing that ends a branch —
@@ -2863,26 +3086,9 @@ function githubProvider(
         };
       const deletion: BranchDeletionOutcome =
         options.deleteBranch && headBranch
-          ? await deleteMergedHeadBranch(
+          ? await deleteFinishedHeadBranch(
               headBranch,
-              async (branch) =>
-                requirePullRequestList<GithubPull>(
-                  requireData(
-                    await githubRequest<GithubPull[]>(
-                      config,
-                      "GET",
-                      `${repoApi}/pulls`,
-                      {
-                        // Any one is enough to keep the branch; the page only
-                        // bounds how many the outcome sentence names.
-                        query: { state: "open", base: branch, per_page: 10 },
-                        signal: signal(),
-                      },
-                    ),
-                    "open pull requests",
-                  ),
-                  "open pull requests",
-                ).map((pull) => pull.number),
+              openPullsTargeting,
               async () => {
                 try {
                   await githubRequest(
@@ -2912,41 +3118,64 @@ function githubProvider(
     async closePullRequest(prNumber, options) {
       // GitHub's PR update has no head precondition, so the exact head is
       // proven by the read immediately before the write.
-      const before = (
-        await githubRequest<GithubPull>(
-          config,
-          "GET",
-          `${repoApi}/pulls/${prNumber}`,
-          { signal: signal() },
-        )
-      ).data;
-      requireClosablePull(prNumber, before ?? null, options.expectedHeadSha);
-      await githubRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
-        body: { state: "closed" },
-        signal: signal(),
-      });
-      try {
-        const after = (
-          await githubRequest<GithubPull>(
+      let repositoryId: string | undefined;
+      return closePullRequestWith<GithubPull>(prNumber, options, ref, {
+        async read() {
+          const pull =
+            (
+              await githubRequest<GithubPull>(
+                config,
+                "GET",
+                `${repoApi}/pulls/${prNumber}`,
+                { signal: signal() },
+              )
+            ).data ?? null;
+          repositoryId ??= pull?.head?.repo?.node_id;
+          return pull;
+        },
+        async postComment(body) {
+          const res = await githubRequest<{ html_url?: string }>(
             config,
-            "GET",
-            `${repoApi}/pulls/${prNumber}`,
-            { signal: signal() },
-          )
-        ).data;
-        return closeResultFrom(prNumber, options.expectedHeadSha, {
+            "POST",
+            `${repoApi}/issues/${prNumber}/comments`,
+            { body: { body }, signal: signal() },
+          );
+          return res.data?.html_url ? { url: res.data.html_url } : {};
+        },
+        async close() {
+          await githubRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
+            body: { state: "closed" },
+            signal: signal(),
+          });
+        },
+        state: (after) => ({
           state: after?.state ?? "",
           merged: after?.merged === true || Boolean(after?.merged_at),
           headSha: after?.head?.sha ?? "",
-        });
-      } catch (err) {
-        return {
-          number: prNumber,
-          closed: false,
-          headSha: options.expectedHeadSha,
-          unconfirmedReason: `the close was sent but its state could not be confirmed (${errorText(err)}).`,
-        };
-      }
+        }),
+        openPullsTargeting,
+        openPullsHeadedBy,
+        async removeBranch(branch, headSha) {
+          if (!repositoryId)
+            return {
+              branchDeleted: false,
+              branchDeleteError:
+                "GitHub reported no repository id for the head branch, so none was deleted.",
+            };
+          try {
+            await githubDeleteBranchAt(
+              config,
+              repositoryId,
+              branch,
+              headSha,
+              signal(),
+            );
+            return { branchDeleted: true };
+          } catch (err) {
+            return { branchDeleted: false, branchDeleteError: errorText(err) };
+          }
+        },
+      });
     },
     async repositoryCapabilities() {
       const repo = requireData(
@@ -3193,8 +3422,14 @@ function forgejoMergeStyle(
   return PULL_REQUEST_MERGE_METHODS.find((method) => method === style);
 }
 
+/** Branch names keep their `/` separators as path segments. */
+function encodeBranch(branch: string): string {
+  return branch.split("/").map(encodeURIComponent).join("/");
+}
+
 /**
- * Did the head branch of a just-merged Forgejo pull request really go away?
+ * Did the head branch of a just-merged or just-closed Forgejo pull request
+ * really go away?
  * `deleted` is claimed ONLY for a 404 on the branch; every other answer,
  * including one we could not obtain, reports why it is unconfirmed.
  */
@@ -3208,7 +3443,7 @@ async function confirmForgejoBranchDeleted(
     await forgejoRequest(
       config,
       "GET",
-      `${repoApi}/branches/${headRef.split("/").map(encodeURIComponent).join("/")}`,
+      `${repoApi}/branches/${encodeBranch(headRef)}`,
       { signal: signal() },
     );
     return {
@@ -3250,6 +3485,78 @@ function forgejoProvider(
   const repoApi = `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`;
   const repoWebUrl = `${normalizeForgejoBaseUrl(config.baseUrl)}/${ref.owner}/${ref.repo}`;
   const signal = () => requestSignal(parentSignal);
+  /**
+   * Open pull requests matching `keep`. Forgejo cannot filter by base or head,
+   * so the open set is paged and filtered here; one that cannot be exhausted
+   * proves nothing.
+   */
+  const openPullsWhere = async (
+    keep: (pull: ForgejoPull) => boolean,
+  ): Promise<number[]> => {
+    const matches: number[] = [];
+    for (let page = 1; page <= OPEN_PULL_REQUEST_PAGE_CAP; page += 1) {
+      const res = await forgejoRequest<ForgejoPull[]>(
+        config,
+        "GET",
+        `${repoApi}/pulls`,
+        {
+          query: { state: "open", limit: MAX_PULL_REQUESTS, page },
+          signal: signal(),
+        },
+      );
+      const pulls = requirePullRequestList<ForgejoPull>(
+        requireData(res, "open pull requests"),
+        "open pull requests",
+      );
+      for (const pull of pulls) if (keep(pull)) matches.push(pull.number);
+      if (pulls.length < MAX_PULL_REQUESTS) return matches;
+    }
+    throw new Error(
+      `Forgejo still reported open pull requests after ${OPEN_PULL_REQUEST_PAGE_CAP} pages`,
+    );
+  };
+  /** Open pull requests based on `branch`, which keep it from being deleted. */
+  const openPullsTargeting = (branch: string) =>
+    openPullsWhere((pull) => pull.base?.ref === branch);
+  /** Open pull requests opened from this repository's `branch`. */
+  const openPullsHeadedBy = (branch: string) =>
+    openPullsWhere((pull) => headIsOwnBranch(pull, branch, ref));
+  /** Delete one branch and confirm it is gone. */
+  const removeBranch = async (
+    branch: string,
+  ): Promise<BranchDeletionOutcome> => {
+    try {
+      await forgejoRequest(
+        config,
+        "DELETE",
+        `${repoApi}/branches/${encodeBranch(branch)}`,
+        { signal: signal() },
+      );
+    } catch (err) {
+      // A refusal (a protected branch) leaves it in place, which the
+      // confirmation below reports in its own words.
+      if (!(err instanceof ForgejoHttpError))
+        return {
+          branchDeleted: false,
+          branchDeleteError: `the branch deletion failed (${errorText(err)}).`,
+        };
+    }
+    // Exactly ONE outcome means "deleted": a 404 on the branch. Everything
+    // else — the branch still there, an unauthorized/500/timeout answer — is
+    // reported as NOT confirmed, because a check that could not be completed
+    // must not invent the answer it was for. The merge or close itself already
+    // landed either way.
+    const confirmed = await confirmForgejoBranchDeleted(
+      config,
+      repoApi,
+      signal,
+      branch,
+    );
+    return {
+      branchDeleted: confirmed.deleted,
+      ...(confirmed.reason ? { branchDeleteError: confirmed.reason } : {}),
+    };
+  };
   /**
    * The BOUNDED newest-first read behind the tolerant single-result lookup.
    * Forgejo's list takes no head filter, so the branch (and its head
@@ -3516,73 +3823,10 @@ function forgejoProvider(
           branchDeleteError:
             "the pull request reported no head branch, so none was deleted.",
         };
-      const encodedHead = headBranch
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/");
-      const deletion = await deleteMergedHeadBranch(
+      const deletion = await deleteFinishedHeadBranch(
         headBranch,
-        async (branch) => {
-          // Forgejo cannot filter by base, so the open set is paged and
-          // filtered here; one that cannot be exhausted proves nothing.
-          const dependents: number[] = [];
-          for (let page = 1; page <= OPEN_PULL_REQUEST_PAGE_CAP; page += 1) {
-            const res = await forgejoRequest<ForgejoPull[]>(
-              config,
-              "GET",
-              `${repoApi}/pulls`,
-              {
-                query: { state: "open", limit: MAX_PULL_REQUESTS, page },
-                signal: signal(),
-              },
-            );
-            const pulls = requirePullRequestList<ForgejoPull>(
-              requireData(res, "open pull requests"),
-              "open pull requests",
-            );
-            for (const pull of pulls)
-              if (pull.base?.ref === branch) dependents.push(pull.number);
-            if (pulls.length < MAX_PULL_REQUESTS) return dependents;
-          }
-          throw new Error(
-            `Forgejo still reported open pull requests after ${OPEN_PULL_REQUEST_PAGE_CAP} pages`,
-          );
-        },
-        async () => {
-          try {
-            await forgejoRequest(
-              config,
-              "DELETE",
-              `${repoApi}/branches/${encodedHead}`,
-              { signal: signal() },
-            );
-          } catch (err) {
-            // A refusal (a protected branch) leaves it in place, which the
-            // confirmation below reports in its own words.
-            if (!(err instanceof ForgejoHttpError))
-              return {
-                branchDeleted: false,
-                branchDeleteError: `the branch deletion failed (${errorText(err)}).`,
-              };
-          }
-          // Exactly ONE outcome means "deleted": a 404 on the branch. Everything
-          // else — the branch still there, an unauthorized/500/timeout answer —
-          // is reported as NOT confirmed, because a check that could not be
-          // completed must not invent the answer it was for. The merge itself
-          // already landed either way.
-          const confirmed = await confirmForgejoBranchDeleted(
-            config,
-            repoApi,
-            signal,
-            headBranch,
-          );
-          return {
-            branchDeleted: confirmed.deleted,
-            ...(confirmed.reason
-              ? { branchDeleteError: confirmed.reason }
-              : {}),
-          };
-        },
+        openPullsTargeting,
+        () => removeBranch(headBranch),
       );
       return {
         outcome: "merged",
@@ -3596,43 +3840,74 @@ function forgejoProvider(
         throw new Error(
           "A Forgejo access token is not configured. Add one in Settings → Forgejo.",
         );
-      const before = (
-        await forgejoRequest<ForgejoPull>(
-          config,
-          "GET",
-          `${repoApi}/pulls/${prNumber}`,
-          { signal: signal() },
-        )
-      ).data;
-      requireClosablePull(prNumber, before ?? null, options.expectedHeadSha);
-      // Forgejo closes a pull request through the same state transition as an
-      // issue, on the pulls endpoint's edit option.
-      await forgejoRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
-        body: { state: "closed" },
-        signal: signal(),
-      });
-      try {
-        const after = (
-          await forgejoRequest<ForgejoPull>(
+      return closePullRequestWith<ForgejoPull>(prNumber, options, ref, {
+        async read() {
+          return (
+            (
+              await forgejoRequest<ForgejoPull>(
+                config,
+                "GET",
+                `${repoApi}/pulls/${prNumber}`,
+                { signal: signal() },
+              )
+            ).data ?? null
+          );
+        },
+        async postComment(body) {
+          // A pull request's conversation is its issue's comments.
+          const res = await forgejoRequest<{ html_url?: string }>(
             config,
-            "GET",
+            "POST",
+            `${repoApi}/issues/${prNumber}/comments`,
+            { body: { body }, signal: signal() },
+          );
+          return res.data?.html_url ? { url: res.data.html_url } : {};
+        },
+        async close() {
+          // Forgejo closes a pull request through the same state transition as
+          // an issue, on the pulls endpoint's edit option.
+          await forgejoRequest(
+            config,
+            "PATCH",
             `${repoApi}/pulls/${prNumber}`,
-            { signal: signal() },
-          )
-        ).data;
-        return closeResultFrom(prNumber, options.expectedHeadSha, {
+            { body: { state: "closed" }, signal: signal() },
+          );
+        },
+        state: (after) => ({
           state: after?.state ?? "",
           merged: after?.merged === true,
           headSha: after?.head?.sha ?? "",
-        });
-      } catch (err) {
-        return {
-          number: prNumber,
-          closed: false,
-          headSha: options.expectedHeadSha,
-          unconfirmedReason: `the close was sent but its state could not be confirmed (${errorText(err)}).`,
-        };
-      }
+        }),
+        openPullsTargeting,
+        openPullsHeadedBy,
+        async removeBranch(branch, headSha) {
+          // Forgejo's branch delete takes no expected commit, so the tip is
+          // read first: a branch someone pushed to since the close is kept.
+          // A push between this read and the delete is the remaining window.
+          let tip: string | undefined;
+          try {
+            tip = (
+              await forgejoRequest<{ commit?: { id?: string } }>(
+                config,
+                "GET",
+                `${repoApi}/branches/${encodeBranch(branch)}`,
+                { signal: signal() },
+              )
+            ).data?.commit?.id;
+          } catch (err) {
+            return {
+              branchDeleted: false,
+              branchDeleteError: `the branch tip could not be read (${errorText(err)}).`,
+            };
+          }
+          if (tip?.toLowerCase() !== headSha.toLowerCase())
+            return {
+              branchDeleted: false,
+              branchKeptReason: `it moved to ${tip || "an unreported commit"} after the closed head ${headSha}`,
+            };
+          return removeBranch(branch);
+        },
+      });
     },
     async repositoryCapabilities() {
       const repo = requireData(

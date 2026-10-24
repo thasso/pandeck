@@ -236,6 +236,7 @@ describe("integration tool exposure", () => {
         .filter((name) => name.startsWith("forgejo_"))
         .sort(),
       [
+        "forgejo_close_pull_request",
         "forgejo_comment_pull_request",
         "forgejo_create_pull_request",
         "forgejo_create_release",

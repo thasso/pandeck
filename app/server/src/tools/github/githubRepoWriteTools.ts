@@ -12,11 +12,8 @@
  */
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { getGithubToolConfig } from "../../githubSettings.ts";
-import {
-  githubGraphql,
-  githubRequest,
-  type GithubApiConfig,
-} from "../../githubClient.ts";
+import { githubRequest, type GithubApiConfig } from "../../githubClient.ts";
+import { githubDeleteBranchAt } from "../../gitHosting.ts";
 import {
   approvalCardReference,
   createApproval,
@@ -168,39 +165,6 @@ async function repositoryOf(
     defaultBranch: res.data.default_branch ?? null,
     nodeId: res.data.node_id ?? null,
   };
-}
-
-const ZERO_OID = "0".repeat(40);
-
-/**
- * Delete `branch` only if it still points at `expectedSha`. REST
- * `DELETE /git/refs` takes no expected value, so a push landing between a read
- * and that call would delete the NEW tip; GraphQL `updateRefs` checks
- * `beforeOid` atomically on GitHub's side and rejects a moved ref.
- */
-async function deleteBranchAt(
-  config: GithubApiConfig,
-  repositoryId: string,
-  branch: string,
-  expectedSha: string,
-): Promise<void> {
-  await githubGraphql(
-    config,
-    `mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }`,
-    {
-      input: {
-        repositoryId,
-        refUpdates: [
-          {
-            name: `refs/heads/${branch}`,
-            beforeOid: expectedSha,
-            afterOid: ZERO_OID,
-            force: true,
-          },
-        ],
-      },
-    },
-  );
 }
 
 /**
@@ -387,7 +351,7 @@ registerApprovalExecutor("githubBranchDelete", {
           );
         // The read above names a move in words; the atomic check is what
         // stops one that lands between that read and this write.
-        await deleteBranchAt(config, nodeId, item.branch, item.headSha);
+        await githubDeleteBranchAt(config, nodeId, item.branch, item.headSha);
         item.deleted = true;
         delete item.error;
       } catch (error) {

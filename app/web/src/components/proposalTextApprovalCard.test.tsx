@@ -81,6 +81,35 @@ test.each([true, false])(
   },
 );
 
+test.each([
+  ["githubPullRequest", true],
+  ["forgejoPullRequest", false],
+] as const)(
+  "a %s close shows the bound head, the branch decision and the comment",
+  (kind, deleteBranch) => {
+    const html = renderToStaticMarkup(
+      <ApprovalCard
+        approval={card({
+          kind,
+          operation: "close",
+          repo: "acme/app",
+          pullNumber: 42,
+          head: "feature",
+          base: "main",
+          headSha: "abcdef1234567",
+          commentBody: "Superseded by **#43**.",
+          ...(deleteBranch ? { deleteBranch } : {}),
+        })}
+      />,
+    );
+    expect(html).toContain("Close without merging");
+    expect(html).toContain("acme/app#42");
+    expect(html).toContain("abcdef1");
+    expect(html).toContain(deleteBranch ? "delete after closing" : "keep");
+    expect(html).toContain("<strong>#43</strong>");
+  },
+);
+
 test("an edit renders the new description as Markdown and offers the change", () => {
   const html = renderToStaticMarkup(<ApprovalCard approval={card(editBody)} />);
   expect(html).toContain("<strong>2.1.6</strong>");
