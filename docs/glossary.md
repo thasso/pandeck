@@ -94,7 +94,20 @@ reverse. Minor versions add without breaking either side; a major mismatch means
 the Worker finishes what it runs and takes nothing new.\
 _Avoid_: worker API, RPC, agent bridge
 
-**Credential lease**: A Worker's right to use one credential profile for one
-session, granted and revoked by the server, which stays the profile's owner. A
-live account switch ends one lease and grants another.\
+**Credential lease**: A Worker's right to use one credential profile for one of
+the sessions placed on it, granted and revoked by the server, which stays the
+profile's owner. Sessions on one Worker that lease the same profile share its
+materialized copy. A live account switch ends one lease and grants another.\
 _Avoid_: credential copy, token share, synced profile
+
+**Placement**: The one Worker a checkout lives on or a session runs on. A
+worktree session's placement follows its checkout's. A Project may have clones
+on several Workers, each placed separately. Changing a checkout's placement is
+an explicit move.\
+_Avoid_: affinity, pinning, home worker
+
+**Worker id**: The readable name a Worker is enrolled under, carried by
+placements, served-file URLs and logs. It is unique and never changes or gets
+reused; moving a Worker to new hardware keeps it. A Worker's display name is
+separate and may change.\
+_Avoid_: hostname, worker name
