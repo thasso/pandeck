@@ -1960,7 +1960,7 @@ test("Forgejo reports an unconfirmed close honestly", async () => {
 
 test("GitHub posts the comment before closing and deletes the closed head", async () => {
   const provider = githubTestProvider();
-  let reads = 0;
+  let closed = false;
   let result: PullRequestCloseResult | undefined;
   const calls = await withRecordedFetch(
     (req) => {
@@ -1968,12 +1968,14 @@ test("GitHub posts the comment before closing and deletes the closed head", asyn
         return { data: { updateRefs: { clientMutationId: null } } };
       if (req.method === "POST")
         return { html_url: "https://github.com/acme/repo/pull/7#c1" };
-      if (req.method === "PATCH") return { number: 7, state: "closed" };
+      if (req.method === "PATCH") {
+        closed = true;
+        return { number: 7, state: "closed" };
+      }
       if (req.path === "/repos/acme/repo/pulls") return [];
-      reads += 1;
       return {
         number: 7,
-        state: reads === 1 ? "open" : "closed",
+        state: closed ? "closed" : "open",
         head: {
           ref: "feature",
           sha: "head-1",
@@ -1994,16 +1996,19 @@ test("GitHub posts the comment before closing and deletes the closed head", asyn
     [
       "GET /repos/acme/repo/pulls/7",
       "POST /repos/acme/repo/issues/7/comments",
+      "GET /repos/acme/repo/pulls/7",
       "PATCH /repos/acme/repo/pulls/7",
       "GET /repos/acme/repo/pulls/7",
+      "GET /repos/acme/repo/pulls",
       "GET /repos/acme/repo/pulls",
       "POST /graphql",
     ],
   );
   assert.deepEqual(calls[1]!.body, { body: "Superseded by #8." });
-  assert.equal(calls[4]!.query.base, "feature");
+  assert.equal(calls[5]!.query.head, "acme:feature");
+  assert.equal(calls[6]!.query.base, "feature");
   const update = (
-    calls[5]!.body as {
+    calls[7]!.body as {
       variables: {
         input: {
           repositoryId: string;
@@ -2108,7 +2113,7 @@ test("an unconfirmed close keeps the head branch", async () => {
 
 test("Forgejo deletes the closed head branch and confirms it is gone", async () => {
   const provider = forgejoTestProvider();
-  let pullReads = 0;
+  let closed = false;
   let branchReads = 0;
   let result: PullRequestCloseResult | undefined;
   const calls = await withScriptedFetch(
@@ -2118,7 +2123,10 @@ test("Forgejo deletes the closed head branch and confirms it is gone", async () 
           201,
           { html_url: "https://git.example.com/acme/repo/pulls/7#c" },
         ];
-      if (req.method === "PATCH") return [201, {}];
+      if (req.method === "PATCH") {
+        closed = true;
+        return [201, {}];
+      }
       if (req.method === "DELETE") return [200, {}];
       if (req.path.endsWith("/branches/team/feature")) {
         branchReads += 1;
@@ -2127,12 +2135,11 @@ test("Forgejo deletes the closed head branch and confirms it is gone", async () 
           : [404, { message: "not found" }];
       }
       if (req.path === "/api/v1/repos/acme/repo/pulls") return [200, []];
-      pullReads += 1;
       return [
         200,
         {
           number: 7,
-          state: pullReads === 1 ? "open" : "closed",
+          state: closed ? "closed" : "open",
           merged: false,
           head: {
             ref: "team/feature",
@@ -2155,8 +2162,10 @@ test("Forgejo deletes the closed head branch and confirms it is gone", async () 
     [
       "GET /api/v1/repos/acme/repo/pulls/7",
       "POST /api/v1/repos/acme/repo/issues/7/comments",
+      "GET /api/v1/repos/acme/repo/pulls/7",
       "PATCH /api/v1/repos/acme/repo/pulls/7",
       "GET /api/v1/repos/acme/repo/pulls/7",
+      "GET /api/v1/repos/acme/repo/pulls",
       "GET /api/v1/repos/acme/repo/pulls",
       "GET /api/v1/repos/acme/repo/branches/team/feature",
       "DELETE /api/v1/repos/acme/repo/branches/team/feature",
@@ -2200,6 +2209,115 @@ test("Forgejo keeps a head branch that moved past the closed head", async () => 
   assert.ok(!calls.some((call) => call.method === "DELETE"));
   assert.equal(result?.branchDeleted, false);
   assert.match(result?.branchKeptReason ?? "", /moved to newer/);
+});
+
+// Deleting a branch closes every open pull request opened from it, so a second
+// pull request from the same head keeps it, on either provider.
+test("a head branch another open pull request still uses is kept", async () => {
+  for (const [name, build, listPath] of [
+    ["GitHub", githubTestProvider, "/repos/acme/repo/pulls"],
+    ["Forgejo", forgejoTestProvider, "/api/v1/repos/acme/repo/pulls"],
+  ] as const) {
+    let closed = false;
+    let result: PullRequestCloseResult | undefined;
+    const head = { ref: "feature", sha: "h", repo: { full_name: "acme/repo" } };
+    const calls = await withRecordedFetch(
+      (req) => {
+        if (req.method === "PATCH") {
+          closed = true;
+          return {};
+        }
+        if (req.path === listPath)
+          return req.query.base
+            ? []
+            : [
+                { number: 7, state: "open", head, base: { ref: "main" } },
+                { number: 8, state: "open", head, base: { ref: "release" } },
+              ];
+        return { number: 7, state: closed ? "closed" : "open", head };
+      },
+      async () => {
+        result = await build().closePullRequest(7, {
+          expectedHeadSha: "h",
+          deleteBranch: true,
+        });
+      },
+    );
+    assert.equal(result?.closed, true, name);
+    assert.equal(result?.branchDeleted, false, name);
+    assert.match(
+      result?.branchKeptReason ?? "",
+      /#8 still uses it as head/,
+      name,
+    );
+    assert.ok(
+      !calls.some(
+        (call) => call.method === "DELETE" || call.path === "/graphql",
+      ),
+      `${name} must not delete a branch #8 is open from`,
+    );
+  }
+});
+
+test("a push while the comment posts refuses the close", async () => {
+  const provider = githubTestProvider();
+  let pushed = false;
+  const calls = await withRecordedFetch(
+    (req) => {
+      if (req.method === "POST") {
+        pushed = true;
+        return { html_url: "https://github.com/acme/repo/pull/7#c1" };
+      }
+      return { number: 7, state: "open", head: { sha: pushed ? "h2" : "h1" } };
+    },
+    async () => {
+      await assert.rejects(
+        provider.closePullRequest(7, { expectedHeadSha: "h1", comment: "x" }),
+        /head moved from h1 to h2.*closing comment was already posted/,
+      );
+    },
+  );
+  assert.ok(!calls.some((call) => call.method === "PATCH"));
+});
+
+test("a close whose answer was lost but which landed is confirmed by the read", async () => {
+  const provider = githubTestProvider();
+  let closed = false;
+  let result: PullRequestCloseResult | undefined;
+  await withScriptedFetch(
+    (req) => {
+      if (req.method === "PATCH") {
+        closed = true;
+        return [502, { message: "Bad gateway" }];
+      }
+      return [
+        200,
+        { number: 7, state: closed ? "closed" : "open", head: { sha: "h" } },
+      ];
+    },
+    async () => {
+      result = await provider.closePullRequest(7, { expectedHeadSha: "h" });
+    },
+  );
+  assert.deepEqual(result, { number: 7, closed: true, headSha: "h" });
+});
+
+test("a failed close that left the pull request open says so, comment included", async () => {
+  const provider = githubTestProvider();
+  await withScriptedFetch(
+    (req) => {
+      if (req.method === "PATCH") return [403, { message: "Forbidden" }];
+      if (req.method === "POST")
+        return [201, { html_url: "https://github.com/acme/repo/pull/7#c1" }];
+      return [200, { number: 7, state: "open", head: { sha: "h" } }];
+    },
+    async () => {
+      await assert.rejects(
+        provider.closePullRequest(7, { expectedHeadSha: "h", comment: "x" }),
+        /Forbidden.*still open\. The closing comment was already posted/s,
+      );
+    },
+  );
 });
 
 test("Forgejo refuses to close without a configured token", async () => {

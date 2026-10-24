@@ -499,12 +499,16 @@ invalidates worktree hosting caches, and drives the ordinary workflow
 observation with the `closed` outcome. It never suggests the linked Task done,
 records a merge, or removes the local branch or worktree. The `reason` stays
 Pandeck's record; a `comment` is what the pull request shows. The provider's
-`closePullRequest` posts the comment after its head check and before the state
-transition, and a comment that cannot be posted refuses the close. With
+`closePullRequest` posts the comment after its head check, then proves the head
+again before the state transition, so a push that landed while the comment
+posted is refused rather than closed. A comment that cannot be posted refuses
+the close. A close request that errors is followed by a read: closed counts as
+closed, still open is a refusal, unreadable is an unconfirmed partial. With
 `deleteRemoteBranch: true` it deletes the head branch only after a CONFIRMED
 close, only when the head is this repository's own branch (never a fork's),
 still at the closed head (GitHub: GraphQL `updateRefs` with `beforeOid`;
-Forgejo: a tip read before the delete, then a 404 confirmation), and no other
+Forgejo: a tip read before the delete, then a 404 confirmation), no other open
+pull request is opened from it (deleting it would close that one too), and no
 open pull request targets it as its base. A kept or failed deletion is reported
 beside the close, never as a failed close. A close that landed but could not be
 confirmed is reported as an honest partial and reconciled by the watcher/boot
