@@ -880,6 +880,7 @@ describe("input contract", () => {
       "whenReady",
       "timeoutSeconds",
       "reason",
+      "comment",
     ]);
   });
 
@@ -903,20 +904,23 @@ describe("input contract", () => {
       /method applies to merge only/,
     );
     await assert.rejects(
-      tool.execute(
+      tool.execute({ worktreeId: row.id, action: "close" }, context()),
+      /reason is required/,
+    );
+  });
+
+  test("merge refuses a closing comment", async () => {
+    await assert.rejects(
+      createWorktreeFinishPullRequestTool(operations()).execute(
         {
           worktreeId: row.id,
-          action: "close",
-          deleteRemoteBranch: true,
-          reason: "x",
+          action: "merge",
+          method: "squash",
+          comment: "bye",
         },
         context(),
       ),
-      /deleteRemoteBranch applies to merge only/,
-    );
-    await assert.rejects(
-      tool.execute({ worktreeId: row.id, action: "close" }, context()),
-      /reason is required/,
+      /comment applies to close only/,
     );
   });
 
@@ -980,7 +984,86 @@ describe("close", () => {
     assert.equal(payload.remoteBranchKept, true);
     assert.equal(payload.worktreeKept, true);
     assert.equal(payload.linkedTaskUnchanged, true);
+    assert.equal(payload.commentPosted, undefined);
     assert.equal(result.terminate, undefined);
+  });
+
+  test("close forwards a comment and an opt-in remote branch deletion", async () => {
+    const seen: Array<{ comment?: string; deleteRemoteBranch?: boolean }> = [];
+    const ops = operations({
+      close: async (input) => {
+        seen.push({
+          ...(input.comment !== undefined ? { comment: input.comment } : {}),
+          ...(input.deleteRemoteBranch !== undefined
+            ? { deleteRemoteBranch: input.deleteRemoteBranch }
+            : {}),
+        });
+        return {
+          result: {
+            number: input.number,
+            closed: true,
+            headSha: input.expectedHeadSha,
+            commentUrl: "https://example.test/pr/91#c1",
+            branchDeleted: true,
+          },
+          message: "Closed.",
+          cardIds: [],
+        };
+      },
+    });
+    const payload = details(
+      await createWorktreeFinishPullRequestTool(ops).execute(
+        {
+          worktreeId: row.id,
+          action: "close",
+          reason: "superseded",
+          comment: "  Superseded by #95.  ",
+          deleteRemoteBranch: true,
+        },
+        context(),
+      ),
+    );
+    assert.deepEqual(seen, [
+      { comment: "Superseded by #95.", deleteRemoteBranch: true },
+    ]);
+    assert.equal(payload.commentPosted, true);
+    assert.equal(payload.commentUrl, "https://example.test/pr/91#c1");
+    assert.equal(payload.remoteBranchKept, false);
+    assert.equal(payload.localBranchKept, true);
+    assert.equal(payload.worktreeKept, true);
+  });
+
+  test("close reports a kept remote branch beside the close", async () => {
+    const ops = operations({
+      close: async (input) => ({
+        result: {
+          number: input.number,
+          closed: true,
+          headSha: input.expectedHeadSha,
+          branchDeleted: false,
+          branchKeptReason: "#92 still targets it as base",
+        },
+        message: "Closed.",
+        cardIds: [],
+      }),
+    });
+    const payload = details(
+      await createWorktreeFinishPullRequestTool(ops).execute(
+        {
+          worktreeId: row.id,
+          action: "close",
+          reason: "dead end",
+          deleteRemoteBranch: true,
+        },
+        context(),
+      ),
+    );
+    assert.equal(payload.status, "closed");
+    assert.equal(payload.remoteBranchKept, true);
+    assert.equal(
+      payload.remoteBranchKeptReason,
+      "#92 still targets it as base",
+    );
   });
 
   // Abandoning is the point: a dirty tree, a missing upstream or a red build

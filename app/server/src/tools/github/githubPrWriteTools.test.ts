@@ -25,6 +25,7 @@ const {
   githubCommentPullRequestTool,
   githubResolveReviewThreadTool,
   githubAssignPullRequestTool,
+  githubClosePullRequestTool,
 } = await import("./githubPrWriteTools.ts");
 const {
   resolveApproval,
@@ -856,5 +857,126 @@ describe("github PR writes invalidate what the inventory remembers", () => {
     expect(vi.mocked(invalidateGithubPullRequestWrite).mock.calls).toEqual([
       ["acme", "app", 7],
     ]);
+  });
+});
+
+describe("github close pull request approvals", () => {
+  /** A fetch double for one pull request whose head is `head()` at each read. */
+  function closeFetch(head: () => string, state = "open") {
+    const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+    let closed = false;
+    globalThis.fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        calls.push({
+          method,
+          url,
+          ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
+        });
+        if (url.endsWith("/graphql"))
+          return new Response(
+            JSON.stringify({
+              data: { updateRefs: { clientMutationId: null } },
+            }),
+            { status: 200 },
+          );
+        if (method === "POST")
+          return new Response(
+            JSON.stringify({
+              html_url: "https://github.com/acme/app/pull/42#issuecomment-1",
+            }),
+            { status: 201 },
+          );
+        if (method === "PATCH") closed = true;
+        if (url.includes("/pulls?")) return new Response("[]", { status: 200 });
+        return new Response(
+          JSON.stringify({
+            number: 42,
+            state: closed ? "closed" : state,
+            merged: false,
+            draft: false,
+            head: {
+              ref: "feature",
+              sha: head(),
+              repo: { full_name: "acme/app", node_id: "R_app" },
+            },
+            base: { ref: "main" },
+          }),
+          { status: 200 },
+        );
+      },
+    ) as typeof fetch;
+    return calls;
+  }
+
+  test("binds the head when proposed, then comments, closes and deletes on approval", async () => {
+    const sessionId = "gh-close";
+    const calls = closeFetch(() => "abc");
+    await githubClosePullRequestTool.execute(
+      {
+        repo: "acme/app",
+        number: 42,
+        comment: "Superseded by #43.",
+        deleteBranch: true,
+      } as never,
+      ctxFor(sessionId) as never,
+    );
+    expect(calls.map((call) => call.method)).toEqual(["GET"]);
+    const card = latest(sessionId);
+    expect(card.title).toBe("Close pull request and delete branch");
+    expect(card.body).toMatchObject({
+      operation: "close",
+      pullNumber: 42,
+      head: "feature",
+      base: "main",
+      headSha: "abc",
+      commentBody: "Superseded by #43.",
+      deleteBranch: true,
+    });
+    const { card: done } = await resolveApproval(card.id, "approved");
+    expect(done.status).toBe("executed");
+    expect(done.resultSummary).toBe(
+      "Closed #42 without merging. Posted the comment. Deleted feature.",
+    );
+    expect(done.resultUrl).toBe(
+      "https://github.com/acme/app/pull/42#issuecomment-1",
+    );
+    const writes = calls.filter((call) => call.method !== "GET");
+    expect(writes.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "POST https://api.github.com/repos/acme/app/issues/42/comments",
+      "PATCH https://api.github.com/repos/acme/app/pulls/42",
+      "POST https://api.github.com/graphql",
+    ]);
+    expect(invalidateGithubPullRequestWrite).toHaveBeenCalledWith(
+      "acme",
+      "app",
+      42,
+    );
+  });
+
+  test("refuses to propose closing a pull request that is not open", async () => {
+    closeFetch(() => "abc", "closed");
+    await expect(
+      githubClosePullRequestTool.execute(
+        { repo: "acme/app", number: 42 } as never,
+        ctxFor("gh-close-closed") as never,
+      ),
+    ).rejects.toThrow(/already closed/);
+  });
+
+  test("a push while the card waits fails the approval without writing", async () => {
+    const sessionId = "gh-close-moved";
+    let head = "abc";
+    const calls = closeFetch(() => head);
+    await githubClosePullRequestTool.execute(
+      { repo: "acme/app", number: 42 } as never,
+      ctxFor(sessionId) as never,
+    );
+    head = "def";
+    const { card } = await resolveApproval(latest(sessionId).id, "approved");
+    expect(card.status).toBe("failed");
+    expect(card.error).toMatch(/head moved from abc to def/);
+    expect(calls.filter((call) => call.method !== "GET")).toEqual([]);
   });
 });

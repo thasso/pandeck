@@ -196,6 +196,72 @@ test("a close never suggests the linked Task done", async () => {
   }
 });
 
+test("a comment and branch deletion reach the provider and the card message", async () => {
+  const path = repo();
+  const created = card(path);
+  let sent: Parameters<GitHostingProvider["closePullRequest"]>[1] | undefined;
+  const projection = await closePullRequestAndProject({
+    provider: fakeProvider({
+      closePullRequest: async (number, options) => {
+        sent = options;
+        return {
+          number,
+          closed: true,
+          headSha: options.expectedHeadSha,
+          commentUrl: "https://github.com/o/r/pull/42#issuecomment-1",
+          branchDeleted: true,
+        };
+      },
+    }),
+    repoPath: path,
+    number: 42,
+    headBranch: "feature",
+    baseBranch: "main",
+    expectedHeadSha: HEAD,
+    reason: "superseded",
+    comment: "Superseded by #43.",
+    deleteRemoteBranch: true,
+  });
+  assert.deepEqual(sent, {
+    expectedHeadSha: HEAD,
+    comment: "Superseded by #43.",
+    deleteBranch: true,
+  });
+  assert.match(projection.message, /Posted the closing comment/);
+  assert.match(projection.message, /Deleted the remote branch feature/);
+  assert.match(
+    pullRequestCardById(created.id)?.actionMessage ?? "",
+    /Deleted the remote branch feature; the local worktree was kept/,
+  );
+});
+
+test("a kept remote branch names why beside the close", async () => {
+  const path = repo();
+  card(path);
+  const projection = await closePullRequestAndProject({
+    provider: fakeProvider({
+      closePullRequest: async (number, options) => ({
+        number,
+        closed: true,
+        headSha: options.expectedHeadSha,
+        branchDeleted: false,
+        branchKeptReason: "#44 still targets it as base",
+      }),
+    }),
+    repoPath: path,
+    number: 42,
+    headBranch: "feature",
+    baseBranch: "main",
+    expectedHeadSha: HEAD,
+    reason: "abandoned",
+    deleteRemoteBranch: true,
+  });
+  assert.match(
+    projection.message,
+    /remote branch feature and the local worktree were kept \(deletion was not done: #44 still targets it as base\)/,
+  );
+});
+
 test("a same-numbered pull request in another repository is left alone", async () => {
   const mine = repo();
   const theirs = repo();

@@ -1,6 +1,6 @@
 /**
  * Forgejo PR write tools (coding personas only, gate `forgejo`): approval-gated
- * pull-request creation, description edits, reviews, and comments against a self-hosted
+ * pull-request creation, description edits, reviews, comments, and closing without merging against a self-hosted
  * Gitea-compatible instance. Same contract as the GitHub twins in
  * `../github/githubPrWriteTools.ts` — these NEVER write during the model turn:
  * each stages a PENDING approval via the shared `../../pendingApprovals.ts`
@@ -30,6 +30,10 @@ import {
 import { invalidateForgejoPullRequestWrite } from "../../pullRequestInventorySync.ts";
 import { resolveForgejoRepo } from "./forgejoTools.ts";
 import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
+import {
+  applyPullRequestClose,
+  pullRequestCloseProposal,
+} from "../pullRequestClose.ts";
 import {
   approvalCardReference,
   createApproval,
@@ -73,6 +77,12 @@ type CommentPullRequestParams = {
   replyPath?: string;
   replyLine?: number;
   replySide?: "LEFT" | "RIGHT";
+};
+type ClosePullRequestParams = {
+  repo: string;
+  number: number;
+  comment?: string;
+  deleteBranch?: boolean;
 };
 
 const PENDING_NOTE =
@@ -486,6 +496,67 @@ function reviewCommentPayload(comment: {
 }
 
 /** Execute an approved Forgejo PR write against the API. */
+export const forgejoClosePullRequestTool =
+  defineAgentTool<ClosePullRequestParams>({
+    name: "forgejo_close_pull_request",
+    label: "Forgejo: Close Pull Request",
+    description:
+      "Prepare closing an open Forgejo pull request WITHOUT merging, for the user to approve: optionally post a comment first and delete the head branch after. The card binds the current head; approval closes only if the pull request is still open at that commit. Never writes until approved. For a managed worktree's pull request, use worktree_finish_pull_request with action close.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["repo", "number"],
+      properties: {
+        repo: { type: "string", description: "Repository as 'owner/repo'." },
+        number: { type: "number", description: "Pull-request index/number." },
+        comment: {
+          type: "string",
+          description:
+            "Comment (Markdown) posted on the pull request before it closes, usually why. If it cannot be posted, nothing is closed.",
+        },
+        deleteBranch: {
+          type: "boolean",
+          description:
+            "Also delete the head branch after a confirmed close. Defaults to false. Kept anyway when it lives on a fork, moved past the closed head, or another open pull request targets it.",
+        },
+      },
+    },
+    async execute(params, ctx) {
+      getForgejoToolConfig();
+      const { owner, repo } = resolveForgejoRepo(params.repo);
+      const provider = hostingProviderFor(
+        { service: "forgejo", owner, repo },
+        ctx.signal,
+      );
+      const fields = await pullRequestCloseProposal(provider, params);
+      const body: ForgejoPullRequestApprovalBody = {
+        kind: "forgejoPullRequest",
+        operation: "close",
+        repo: `${owner}/${repo}`,
+        ...fields,
+      };
+      const card = createApproval({
+        sessionId: ctx.session.sessionId,
+        kind: "forgejoPullRequest",
+        title: fields.deleteBranch
+          ? "Close pull request and delete branch"
+          : "Close pull request",
+        summary: `${owner}/${repo}#${fields.pullNumber}: ${fields.head} → ${fields.base}`,
+        sourceToolCallId: ctx.toolCallId,
+        body,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Prepared closing ${owner}/${repo}#${fields.pullNumber} without merging pending your approval. ${PENDING_NOTE} ${approvalCardReference(card)}`,
+          },
+        ],
+        terminate: true,
+      };
+    },
+  });
+
 registerApprovalExecutor("forgejoPullRequest", {
   async execute(card: ApprovalCard) {
     if (card.body.kind !== "forgejoPullRequest")
@@ -537,6 +608,34 @@ async function executeApprovedWrite(
         : "Opened pull request",
       ...(created.url !== undefined ? { resultUrl: created.url } : {}),
     };
+  }
+
+  if (b.operation === "close") {
+    if (
+      !Number.isInteger(b.pullNumber) ||
+      (b.pullNumber ?? 0) < 1 ||
+      !b.headSha
+    )
+      throw new Error(
+        "Close proposal is missing its pull-request number or bound head.",
+      );
+    const provider = hostingProviderFor({
+      service: "forgejo",
+      owner: owner!,
+      repo: repoName!,
+    });
+    return applyPullRequestClose(
+      provider,
+      {
+        pullNumber: b.pullNumber!,
+        head: b.head ?? "",
+        base: b.base ?? "",
+        headSha: b.headSha,
+        ...(b.commentBody ? { commentBody: b.commentBody } : {}),
+        ...(b.deleteBranch ? { deleteBranch: true } : {}),
+      },
+      `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
+    );
   }
 
   if (b.operation === "ready") {
@@ -652,4 +751,5 @@ export const forgejoPrWriteTools = [
   forgejoReadyPullRequestTool,
   forgejoReviewPullRequestTool,
   forgejoCommentPullRequestTool,
+  forgejoClosePullRequestTool,
 ];

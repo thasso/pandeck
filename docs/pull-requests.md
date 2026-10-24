@@ -231,8 +231,16 @@ are approval-gated draft-to-ready transitions by repository and PR number. The
 approved executor re-reads the PR and refuses a closed or already-ready PR.
 GitHub uses its GraphQL ready-for-review mutation; Forgejo removes the `WIP: `
 or `[WIP] ` title marker through the provider seam. Neither tool merges or
-promises green checks. `/pr` remains the human all-in-one commit/push/create
-command and keeps its session-derived Task chooser behavior.
+promises green checks. `github_close_pull_request` and
+`forgejo_close_pull_request` are the approval-gated close for any pull request
+by repository and number, with the same optional `comment` and opt-in
+`deleteBranch` as the managed close. The proposal reads the pull request,
+refuses one that is not open, and binds its head SHA; the approved executor
+closes through the same provider `closePullRequest` under the hosted mutation
+lock, so a pull request pushed to while the card waited is refused. Their grant
+keys (`github:close`, `forgejo:close`) are card-only. `/pr` remains the human
+all-in-one commit/push/create command and keeps its session-derived Task chooser
+behavior.
 
 Generic create, body edit and ready use `GitHostingProvider` through
 `hostingProviderFor({ service, owner, repo })`, which snapshots the selected
@@ -416,12 +424,13 @@ before `worktree_finish_pull_request`.
 `worktree_finish_pull_request` is the last managed-delivery step, an external
 side effect available in Build mode. Its input is a worktree id, an `action` of
 `merge` or `close`, a `method` for merges only, an optional `deleteRemoteBranch`
-(default true, merges only), optional `markTaskDone` and `removeWorktree` flags
-(default false, merges only), and a bounded `reason` that is REQUIRED for a
-close and retained in the tool result and transcript. It accepts no repository,
-provider, pull-request number, ref, SHA, base/default-branch claim, path or
-credential; a close that carries merge fields, and a close with no reason, are
-refused outright.
+(default true for a merge, false for a close), optional `markTaskDone` and
+`removeWorktree` flags (default false, merges only), a bounded `reason` that is
+REQUIRED for a close and retained in the tool result and transcript, and an
+optional `comment` (closes only) posted on the pull request. It accepts no
+repository, provider, pull-request number, ref, SHA, base/default-branch claim,
+path or credential; a close that carries merge fields, and a close with no
+reason, are refused outright.
 
 After the provider confirms a merge, `markTaskDone: true` applies an ordinary
 agent `done` write to the unique Task linked on the managed PR cards, with the
@@ -488,9 +497,18 @@ lock: it patches every matching live card to `closed` with the reason, clears
 busy/error state (the watcher stops polling a card that left `open`),
 invalidates worktree hosting caches, and drives the ordinary workflow
 observation with the `closed` outcome. It never suggests the linked Task done,
-records a merge, deletes the remote branch, or removes the local branch or
-worktree. A close that landed but could not be confirmed is reported as an
-honest partial and reconciled by the watcher/boot paths.
+records a merge, or removes the local branch or worktree. The `reason` stays
+Pandeck's record; a `comment` is what the pull request shows. The provider's
+`closePullRequest` posts the comment after its head check and before the state
+transition, and a comment that cannot be posted refuses the close. With
+`deleteRemoteBranch: true` it deletes the head branch only after a CONFIRMED
+close, only when the head is this repository's own branch (never a fork's),
+still at the closed head (GitHub: GraphQL `updateRefs` with `beforeOid`;
+Forgejo: a tip read before the delete, then a 404 confirmation), and no other
+open pull request targets it as its base. A kept or failed deletion is reported
+beside the close, never as a failed close. A close that landed but could not be
+confirmed is reported as an honest partial and reconciled by the watcher/boot
+paths; its branch is always kept.
 
 Merging first requires a non-draft open pull request, a clean worktree on the
 row branch at exact local HEAD, a same-named upstream, and an authoritative

@@ -305,6 +305,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   github_comment_pull_request: "external",
   github_resolve_review_thread: "external",
   github_assign_pull_request: "external",
+  github_close_pull_request: "external",
   github_mutate_issue: "external",
   github_rerun_actions_run: "external",
   github_delete_branch: "external",
@@ -313,6 +314,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   forgejo_ready_pull_request: "external",
   forgejo_review_pull_request: "external",
   forgejo_comment_pull_request: "external",
+  forgejo_close_pull_request: "external",
   forgejo_create_release: "external",
   container_image_pull: "local",
   background_tasks: "local",
@@ -908,7 +910,7 @@ function codingToolGroups(): UnclassifiedToolGroup[] {
       id: "github-pr-writes",
       label: "GitHub PR writes",
       description:
-        "GitHub: approval-gated pull-request creation, draft-to-ready transitions, description edits, reviews, comments, thread resolve/reopen, and reviewer/assignee changes (coding personas only).",
+        "GitHub: approval-gated pull-request creation, draft-to-ready transitions, description edits, reviews, comments, thread resolve/reopen, reviewer/assignee changes, and closing without merging (coding personas only).",
       loading: "deferred",
       family: "integration",
       gate: "github",
@@ -928,7 +930,7 @@ function codingToolGroups(): UnclassifiedToolGroup[] {
       id: "forgejo-pr-writes",
       label: "Forgejo PR writes",
       description:
-        "Forgejo: approval-gated pull-request creation, WIP-to-ready transitions, description edits, reviews, and comments on the configured self-hosted instance (coding personas only).",
+        "Forgejo: approval-gated pull-request creation, WIP-to-ready transitions, description edits, reviews, comments, and closing without merging on the configured self-hosted instance (coding personas only).",
       loading: "deferred",
       family: "integration",
       gate: "forgejo",

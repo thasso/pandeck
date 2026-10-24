@@ -9,9 +9,12 @@
  * work, so it:
  *   - never suggests the linked Task `done` — nothing landed;
  *   - never records a merge in a Workflow Run, only the observed closure;
- *   - never deletes the remote branch, the local branch or the worktree. The
- *     branch is what the work still lives in, and reopening/cleanup are the
- *     user's decisions on their own surfaces.
+ *   - never deletes the local branch or the worktree, and deletes the remote
+ *     branch only when the caller asked for it. The branch is what the work
+ *     still lives in, and reopening/cleanup are the user's decisions.
+ *
+ * An optional comment is posted on the pull request before it closes; the
+ * reason stays Pandeck's own record, on the card and in the result.
  *
  * A close that LANDED but whose confirmation or projection failed is an honest
  * partial success: the provider write is not retried and not disowned, and the
@@ -51,6 +54,10 @@ export interface ClosePullRequestInput {
   expectedHeadSha: string;
   /** The caller's stated reason, retained on the card and in the transcript. */
   reason: string;
+  /** Posted on the pull request immediately before the close. */
+  comment?: string;
+  /** Delete the remote head branch after a confirmed close. */
+  deleteRemoteBranch?: boolean;
   /** Worktree whose hosting cache must be dropped, when the caller knows it. */
   worktreeId?: string;
 }
@@ -136,13 +143,22 @@ async function closeAndProject(
 
   const result = await input.provider.closePullRequest(input.number, {
     expectedHeadSha: detail.headSha,
+    ...(input.comment ? { comment: input.comment } : {}),
+    ...(input.deleteRemoteBranch ? { deleteBranch: true } : {}),
   });
 
   const message = [
     result.closed
       ? `Closed #${input.number} (${input.headBranch} → ${input.baseBranch}) without merging: ${input.reason}`
       : `Sent a request to close #${input.number} (${input.headBranch} → ${input.baseBranch}) without merging, but closure is unconfirmed: ${input.reason}`,
-    `The remote branch ${input.headBranch} and the local worktree were kept.`,
+    ...(result.commentUrl !== undefined
+      ? [
+          `Posted the closing comment${result.commentUrl ? ` (${result.commentUrl})` : ""}.`,
+        ]
+      : []),
+    result.branchDeleted
+      ? `Deleted the remote branch ${input.headBranch}; the local worktree was kept.`
+      : `The remote branch ${input.headBranch} and the local worktree were kept${remoteBranchKeptBecause(result)}.`,
     ...(result.unconfirmedReason ? [result.unconfirmedReason] : []),
   ].join(" ");
 
@@ -199,4 +215,10 @@ async function closeAndProject(
   // A confirmed card left `open`, so its watcher stops; a partial stays open.
 
   return { result, message, cardIds: cards.map((card) => card.id) };
+}
+
+/** Why a requested remote branch deletion did not happen, or nothing. */
+function remoteBranchKeptBecause(result: PullRequestCloseResult): string {
+  const why = result.branchKeptReason ?? result.branchDeleteError;
+  return why ? ` (deletion was not done: ${why.replace(/\.$/, "")})` : "";
 }

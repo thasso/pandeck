@@ -106,6 +106,12 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
     "GitHub: assign pull requests",
     "Set a pull request's assignees.",
   ),
+  op(
+    "github:close",
+    "GitHub: close pull requests",
+    "Close pull requests without merging, optionally with a comment and deleting the head branch.",
+    true,
+  ),
   op("githubIssue:create", "GitHub: open issues", "Open new issues."),
   op(
     "githubIssue:edit",
@@ -146,6 +152,12 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
     "forgejo:comment",
     "Forgejo: comment on pull requests",
     "Post comments on pull requests.",
+  ),
+  op(
+    "forgejo:close",
+    "Forgejo: close pull requests",
+    "Close pull requests without merging, optionally with a comment and deleting the head branch.",
+    true,
   ),
   op("jira:create", "Jira: create issues", "Create new Jira issues."),
   op("jira:edit", "Jira: edit issues", "Change fields of existing issues."),

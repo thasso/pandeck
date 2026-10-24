@@ -297,12 +297,14 @@ persona toolsets.
   `github_create_pull_request`, `github_review_pull_request` (verdict +
   summary + inline comments; a `suggestion` renders GitHub's fenced
   ```suggestion block), `github_comment_pull_request` (timeline comment or a
-  reply to a review comment), and `github_assign_pull_request` (review requests
-  and assignees — two independent lists, each with an add and a remove arm, plus
-  org team review requests by slug; the `@`-prefixed `@me` — and only that form,
-  since `me` is a real account — resolves to the token's own login when the
-  proposal is staged, so the card names a real user). These NEVER write during
-  the model turn — each stages a PENDING `ApprovalCard` via the shared
+  reply to a review comment), `github_close_pull_request` (close without
+  merging, bound to the proposed head, with an optional comment first and an
+  opt-in head-branch deletion after), and `github_assign_pull_request` (review
+  requests and assignees — two independent lists, each with an add and a remove
+  arm, plus org team review requests by slug; the `@`-prefixed `@me` — and only
+  that form, since `me` is a real account — resolves to the token's own login
+  when the proposal is staged, so the card names a real user). These NEVER write
+  during the model turn — each stages a PENDING `ApprovalCard` via the shared
   `../../pendingApprovals.ts` subsystem (`createApproval`, kind
   `githubPullRequest`) and returns a bounded summary + `terminate`. The module
   also registers the `githubPullRequest` executor (`registerApprovalExecutor`)
@@ -430,25 +432,26 @@ persona toolsets.
 - `forgejo/forgejoPrWriteTools.ts` is the GitHub PR-write family against a
   self-hosted Gitea-compatible instance (catalog group `forgejo-pr-writes`,
   coding personas only, deferred, gate `forgejo` = `isForgejoConfigured()`):
-  `forgejo_create_pull_request`, `forgejo_review_pull_request`, and
-  `forgejo_comment_pull_request`, staging kind `forgejoPullRequest` and
-  registering its executor. Uses the read family's `resolveForgejoRepo` rather
-  than the github.com-specific `resolveRepo`: the instance host is user config,
-  so an absolute URL resolves only when its host matches `getForgejoBaseUrl()`
-  and a foreign host is an ERROR — reading any host's first two path segments
-  would silently retarget a pasted `https://github.com/owner/repo` at the
-  same-named repo on this instance, plausibly a different repository. Three API
-  translations live in the executor and are the reason this is not a shared
-  module with the GitHub twin: `CreatePullRequestOption` has no `draft` field,
-  so a draft is the `WIP: ` title prefix (not re-applied when the title already
-  carries a WIP marker); `CreatePullReviewComment` anchors with
-  `new_position`/`old_position`, so `side: RIGHT`/`LEFT` is mapped at execution
-  rather than sent; and a review `event` is a `ReviewStateType`
-  (`APPROVED`/`COMMENT`/`REQUEST_CHANGES`), not GitHub's
-  `APPROVE`/`CHANGES_REQUESTED`. Forgejo has no reply-to-comment endpoint, so
-  the reply arm posts to `POST /pulls/{index}/reviews/{id}/comments` — a comment
-  on the REVIEW that owns the thread — and therefore requires its own
-  `replyPath` + `replyLine` anchor.
+  `forgejo_create_pull_request`, `forgejo_review_pull_request`,
+  `forgejo_comment_pull_request`, and `forgejo_close_pull_request`, staging kind
+  `forgejoPullRequest` and registering its executor. Uses the read family's
+  `resolveForgejoRepo` rather than the github.com-specific `resolveRepo`: the
+  instance host is user config, so an absolute URL resolves only when its host
+  matches `getForgejoBaseUrl()` and a foreign host is an ERROR — reading any
+  host's first two path segments would silently retarget a pasted
+  `https://github.com/owner/repo` at the same-named repo on this instance,
+  plausibly a different repository. Three API translations live in the executor
+  and are the reason this is not a shared module with the GitHub twin:
+  `CreatePullRequestOption` has no `draft` field, so a draft is the `WIP: `
+  title prefix (not re-applied when the title already carries a WIP marker);
+  `CreatePullReviewComment` anchors with `new_position`/`old_position`, so
+  `side: RIGHT`/`LEFT` is mapped at execution rather than sent; and a review
+  `event` is a `ReviewStateType` (`APPROVED`/`COMMENT`/`REQUEST_CHANGES`), not
+  GitHub's `APPROVE`/`CHANGES_REQUESTED`. Forgejo has no reply-to-comment
+  endpoint, so the reply arm posts to
+  `POST /pulls/{index}/reviews/{id}/comments` — a comment on the REVIEW that
+  owns the thread — and therefore requires its own `replyPath` + `replyLine`
+  anchor.
 - `forgejo/forgejoReleaseTools.ts` owns `forgejo_create_release` (catalog group
   `forgejo-releases`, coding personas only, deferred, gate `forgejo`), staging
   kind `forgejoRelease` and registering its executor. A repository can deploy

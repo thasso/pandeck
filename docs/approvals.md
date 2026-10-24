@@ -10,10 +10,10 @@ hidden prompt through `agentHandoffs.ts`.
 
 | Card kind                 | Raised by                                                                                                         | Grant keys                                                             |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `githubPullRequest`       | `github_{create,edit,review,comment,assign}_pull_request`                                                         | `github:create` … `github:assign`                                      |
+| `githubPullRequest`       | `github_{create,edit,review,comment,assign,close}_pull_request`                                                   | `github:create` … `github:close`                                       |
 | `githubIssue`             | `github_mutate_issue`                                                                                             | `githubIssue:create` … `githubIssue:label`                             |
 | `githubBranchDelete`      | `github_delete_branch`                                                                                            | `githubBranchDelete`                                                   |
-| `forgejoPullRequest`      | `forgejo_{create,edit,review,comment}_pull_request`                                                               | `forgejo:create` … `forgejo:comment`                                   |
+| `forgejoPullRequest`      | `forgejo_{create,edit,review,comment,close}_pull_request`                                                         | `forgejo:create` … `forgejo:close`                                     |
 | `forgejoRelease`          | `forgejo_create_release`                                                                                          | `forgejoRelease`                                                       |
 | `jiraIssue`               | `jira_mutate_issue`                                                                                               | `jira:edit`, `jira:create`, `jira:comment`, `jira:rank`, `jira:sprint` |
 | `confluencePage`          | `confluence_mutate_page`                                                                                          | `confluence:create`, `…:edit`, `…:comment`, `…:delete`                 |
@@ -140,10 +140,11 @@ ignores a for-session decision on such a card.
   (`grantApprovalForSession.inheritable`). A grant request card sets the scope
   per key (Requesting grants up front, below).
 - **Card-only keys.** `GrantableOperation.cardOnly` marks the operations hardest
-  to undo: `managedPullRequestMerge`, `githubBranchDelete`, `forgejoRelease`,
-  `confluence:delete` and `confluence:deleteAttachment`. They are approved only
-  on a card, either their own or an up-front grant request card, and never from
-  the inspector (`grantableAheadOfTime` refuses them).
+  to undo: `managedPullRequestMerge`, `githubBranchDelete`, `github:close`,
+  `forgejo:close`, `forgejoRelease`, `confluence:delete` and
+  `confluence:deleteAttachment`. They are approved only on a card, either their
+  own or an up-front grant request card, and never from the inspector
+  (`grantableAheadOfTime` refuses them).
 - **Re-granting only widens.** Approving for session a key the session already
   holds keeps the original grant (its time and source card) and widens it when
   the user chose "the sessions it starts". It never narrows one: that is an
