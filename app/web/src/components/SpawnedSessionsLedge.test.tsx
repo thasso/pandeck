@@ -255,6 +255,12 @@ describe("the composer's spawned-session ledge", () => {
     ].find((button) => button.textContent === "1 more");
     act(() => more?.click());
     expect(bubbles()).toHaveLength(4);
+    // Bounded and scrolling, with the toggle outside it, so a long list can
+    // never push the most urgent peers off a phone's clipped shell.
+    const list = container.querySelector("[data-spawned-sessions-bubbles]");
+    expect(list?.className).toMatch(/\bmax-h-\d+\b/);
+    expect(list?.className).toContain("overflow-y-auto");
+    expect(list?.contains(more ?? null)).toBe(false);
     act(() => bubbles()[3]?.click());
     expect(opened).toHaveLength(1);
   });

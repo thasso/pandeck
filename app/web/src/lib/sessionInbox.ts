@@ -2088,16 +2088,19 @@ export function spawnedSessionsKey(
     String(view.settled),
     view.stall ? stallKey(view.stall) : "",
     view.settledShown ? "1" : "",
-    // The bubbles' own facts are keyed raw as well. Their labels are
-    // time-free today; a bubbled peer that ever carried an elapsed one would
-    // otherwise freeze, and the peers that bubble are idle, so nothing here
-    // churns.
+    // A bubble draws only its label and tone (`sessionClusterBubbleLabel`:
+    // status and title, both time-free) and carries its dismissal identity, so
+    // that is all it is keyed by. Never the whole peer row: a peer owing a
+    // reply bubbles while it runs, and its `updatedAt` moving on every token
+    // broadcast would rebuild the strip and the composer under it.
     String(view.bubbles.length),
     ...view.bubbles.map(
       (card) =>
-        `${spawnedPeerKey(card)}:${clusterBubbleDismissible(card) ? "1" : ""}:${
-          card.session.lastError?.at ?? ""
-        }:${card.session.outcomeAttention?.revision ?? 0}`,
+        `${card.session.id}:${card.status}:${card.session.title}:${
+          clusterBubbleDismissible(card) ? "1" : ""
+        }:${card.session.lastError?.at ?? ""}:${
+          card.session.outcomeAttention?.revision ?? 0
+        }`,
     ),
     ...(open ? view.rows.map(spawnedPeerKey) : []),
   ].join("\u0000");

@@ -287,7 +287,10 @@ const BUBBLE_LIMIT = 3;
  * first: the way from this chat to the session that is waiting. A long list
  * names the first few and folds the rest behind "N more", which lists them
  * all in place rather than opening the tree, where they would be scattered
- * among every other peer.
+ * among every other peer. That list scrolls in a box of bounded height, like
+ * the tree's, with the toggle outside it: the composer dock is anchored to the
+ * bottom of a clipped shell, so an unbounded list would push the most urgent
+ * peers off the top of a phone with no way to reach them.
  */
 function PeerBubbles({
   bubbles,
@@ -304,57 +307,59 @@ function PeerBubbles({
   const shown = all ? bubbles : bubbles.slice(0, BUBBLE_LIMIT);
   const hidden = bubbles.length - shown.length;
   return (
-    <div
-      data-spawned-sessions-bubbles
-      className="flex min-w-0 flex-col items-start gap-1 px-3 pb-1.5"
-    >
-      {shown.map((bubbled) => {
-        const tone = sessionStatusBadge(
-          bubbled.session,
-          bubbled.status,
-          now,
-        )?.tone;
-        const title = bubbled.session.title.trim() || "Untitled session";
-        return (
-          <div
-            key={bubbled.session.id}
-            className="flex max-w-full min-w-0 items-center gap-1"
-          >
-            <Button
-              variant={tone === "danger" ? "destructive" : "secondary"}
-              size="xs"
-              // `shrink` undoes Button's `shrink-0`, so a long peer title
-              // truncates inside the button instead of running off a phone.
-              className="max-w-full min-w-0 shrink"
-              title={`Open “${title}”`}
-              onClick={() => onOpenSession(bubbled.session.id)}
+    <div className="flex min-w-0 flex-col items-start gap-1 px-3 pb-1.5">
+      <ul
+        data-spawned-sessions-bubbles
+        className="flex max-h-40 w-full min-w-0 flex-col items-start gap-1 overflow-y-auto"
+      >
+        {shown.map((bubbled) => {
+          const tone = sessionStatusBadge(
+            bubbled.session,
+            bubbled.status,
+            now,
+          )?.tone;
+          const title = bubbled.session.title.trim() || "Untitled session";
+          return (
+            <li
+              key={bubbled.session.id}
+              className="flex max-w-full min-w-0 items-center gap-1"
             >
-              <span className="min-w-0 truncate">
-                {sessionClusterBubbleLabel(bubbled, now)}
-              </span>
-            </Button>
-            {/* A peer failure the user has moved on from is dismissed WHERE it
+              <Button
+                variant={tone === "danger" ? "destructive" : "secondary"}
+                size="xs"
+                // `shrink` undoes Button's `shrink-0`, so a long peer title
+                // truncates inside the button instead of running off a phone.
+                className="max-w-full min-w-0 shrink"
+                title={`Open “${title}”`}
+                onClick={() => onOpenSession(bubbled.session.id)}
+              >
+                <span className="min-w-0 truncate">
+                  {sessionClusterBubbleLabel(bubbled, now)}
+                </span>
+              </Button>
+              {/* A peer failure the user has moved on from is dismissed WHERE it
                 is shown, exactly as on the cluster card: the failure goes and
                 the bubble with it, while the peer is neither settled, archived
                 nor deleted. */}
-            {clusterBubbleDismissible(bubbled) ? (
-              <IconButton
-                size="icon-xs"
-                label={`Dismiss the failure in “${title}”`}
-                onClick={() =>
-                  onDismissSessionFailure(
-                    bubbled.session.id,
-                    bubbled.session.lastError?.at,
-                    bubbled.session.outcomeAttention?.revision ?? 0,
-                  )
-                }
-              >
-                <X aria-hidden />
-              </IconButton>
-            ) : null}
-          </div>
-        );
-      })}
+              {clusterBubbleDismissible(bubbled) ? (
+                <IconButton
+                  size="icon-xs"
+                  label={`Dismiss the failure in “${title}”`}
+                  onClick={() =>
+                    onDismissSessionFailure(
+                      bubbled.session.id,
+                      bubbled.session.lastError?.at,
+                      bubbled.session.outcomeAttention?.revision ?? 0,
+                    )
+                  }
+                >
+                  <X aria-hidden />
+                </IconButton>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
       {hidden > 0 || all ? (
         <Button
           variant="ghost"

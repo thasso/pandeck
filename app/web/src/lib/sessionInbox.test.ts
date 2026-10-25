@@ -2542,6 +2542,28 @@ describe("spawnedSessionsView", () => {
     ).toBe("background updates it was given were not handled.");
   });
 
+  it("keys a closed strip's bubbles by what they draw, not a running peer's clock", () => {
+    const shaped = (updatedAt: number) =>
+      view([
+        session({ id: "root" }),
+        peer("asking", "root", { attention: "question" }),
+        // Owes a reply while it runs: it bubbles, and its row moves on
+        // every token broadcast.
+        peer("running", "root", {
+          isStreaming: true,
+          unansweredRequestsFrom: ["root"],
+          updatedAt,
+        }),
+      ]);
+    expect(shaped(NOW).bubbles.map((card) => card.session.id)).toEqual([
+      "asking",
+      "running",
+    ]);
+    expect(spawnedSessionsKey(shaped(NOW - 2_000), false)).toBe(
+      spawnedSessionsKey(shaped(NOW - 1_000), false),
+    );
+  });
+
   it("takes the peers of one session, the one asking first, then newest created", () => {
     const shaped = view([
       session({ id: "root" }),
