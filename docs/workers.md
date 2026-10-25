@@ -248,8 +248,11 @@ it.
   libraries, and the app's own tree run git through the server-local executor
   family, `serverRepoGit.ts`. That includes the KB when it is browsed or
   committed as a checkout: the adapter keeps any path inside the Knowledge Base
-  root (as named, or as its real path) on the server. W3 replaces that path rule
-  with a typed choice made from the KB row.
+  root (as named, or as its real path) on the server. If KB settings cannot be
+  read, the adapter has no matching KB placement and routes checkout git to the
+  default Worker; settings and KB readers still report their original error.
+  Readable settings restore KB-local routing on the next call. W3 replaces that
+  path rule with a typed choice made from the KB row.
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the

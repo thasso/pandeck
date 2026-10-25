@@ -31,7 +31,15 @@ function contains(root: string, path: string): boolean {
  * real path; a sibling such as `knowledge-old` does not.
  */
 function insideKnowledgeBase(cwd: string): boolean {
-  const root = resolve(knowledgeBaseRoot());
+  let root: string;
+  try {
+    root = resolve(knowledgeBaseRoot());
+  } catch {
+    // Settings may be unreadable or invalid during an operator edit. This
+    // optional KB match must not make unrelated checkout git depend on them.
+    // The settings/KB readers still report the original error themselves.
+    return false;
+  }
   const path = resolve(cwd);
   if (contains(root, path)) return true;
   let real: string;
