@@ -20,13 +20,25 @@
  * to retry — but only after the broker's process group is sent SIGKILL, so
  * nothing it started keeps running once the caller moves on. Requests queued before
  * the broker reported ready never reached it, so they run in-process instead.
+ *
+ * A request may ask for an EXIT RECEIPT (`awaitExit`): its reply then waits
+ * until the child itself has exited, not just until `execFile` answered — an
+ * aborted `execFile` calls back before its child is gone. A cancelled child
+ * that ignores SIGTERM for {@link EXIT_ESCALATION_MS} gets SIGKILL, and its
+ * exit is still awaited. Only the child is covered: processes it started (git
+ * hooks, ssh) are not, as they are not on any cancel. The Worker's checkout git
+ * asks for it (`docs/workers.md`); every other caller keeps the plain timing.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { runInThisContext } from "node:vm";
 
+/** How long a cancelled child with an exit receipt has before SIGKILL. */
+const EXIT_ESCALATION_MS = 2_000;
+
 /** Creates `handle(message)`; replies go to `send`. Plain JS by design. */
 const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
+  const EXIT_ESCALATION_MS = ${EXIT_ESCALATION_MS};
   const { execFile, spawn } = require("node:child_process");
   const { StringDecoder } = require("node:string_decoder");
   const fs = require("node:fs");
@@ -50,6 +62,50 @@ const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
     }
   }
 
+  // With m.awaitExit, holds a reply until the child has exited as well:
+  // execFile answers an abort before its child is gone. A cancelled child
+  // still running after EXIT_ESCALATION_MS gets SIGKILL.
+  function exitReceipt(id) {
+    let child;
+    let reply;
+    let exited = false;
+    let escalation;
+    const flush = () => {
+      if (!reply || !exited) return;
+      if (escalation) clearTimeout(escalation);
+      running.delete(id);
+      send(reply);
+    };
+    return {
+      watch(started) {
+        child = started;
+        // No pid: the spawn failed and no process exists.
+        if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
+          exited = true;
+        else
+          child.once("exit", () => {
+            exited = true;
+            flush();
+          });
+        flush();
+      },
+      escalate() {
+        if (exited || escalation || !child) return;
+        escalation = setTimeout(() => {
+          if (exited) return;
+          try {
+            child.kill("SIGKILL");
+          } catch (_) {}
+        }, EXIT_ESCALATION_MS);
+        if (escalation.unref) escalation.unref();
+      },
+      settle(message) {
+        reply = message;
+        flush();
+      },
+    };
+  }
+
   function errorOf(err) {
     const code = err && err.code;
     return {
@@ -60,7 +116,11 @@ const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
 
   function exec(m) {
     const controller = new AbortController();
-    running.set(m.id, () => controller.abort());
+    const receipt = m.awaitExit ? exitReceipt(m.id) : undefined;
+    running.set(m.id, () => {
+      controller.abort();
+      if (receipt) receipt.escalate();
+    });
     const buffer = m.encoding === "buffer";
     let child;
     try {
@@ -75,13 +135,15 @@ const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
           signal: controller.signal,
         },
         (err, stdout, stderr) => {
-          running.delete(m.id);
-          send({
+          const reply = {
             id: m.id,
             error: err ? errorOf(err) : null,
             stdout: buffer ? Buffer.from(stdout || "").toString("base64") : stdout || "",
             stderr: buffer ? Buffer.from(stderr || "").toString("utf8") : stderr || "",
-          });
+          };
+          if (receipt) return receipt.settle(reply);
+          running.delete(m.id);
+          send(reply);
         },
       );
     } catch (err) {
@@ -89,6 +151,7 @@ const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
       send({ id: m.id, error: errorOf(err), stdout: "", stderr: "" });
       return;
     }
+    if (receipt) receipt.watch(child);
     release(child);
     if (m.input !== undefined && m.input !== null && child.stdin) {
       // A command that exits before consuming input may close the pipe early;
@@ -104,11 +167,14 @@ const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
     let patch = "";
     let totalChars = 0;
     let stderr = "";
+    const receipt = m.awaitExit ? exitReceipt(m.id) : undefined;
     const finish = (reply) => {
       if (done) return;
       done = true;
+      const message = Object.assign({ id: m.id, patch, totalChars, stderr, aborted }, reply);
+      if (receipt) return receipt.settle(message);
       running.delete(m.id);
-      send(Object.assign({ id: m.id, patch, totalChars, stderr, aborted }, reply));
+      send(message);
     };
     let child;
     try {
@@ -118,13 +184,16 @@ const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
+      if (receipt) receipt.watch(undefined);
       finish({ spawnError: errorOf(err).message, code: null });
       return;
     }
+    if (receipt) receipt.watch(child);
     release(child);
     running.set(m.id, () => {
       aborted = true;
       child.kill("SIGTERM");
+      if (receipt) receipt.escalate();
     });
     const out = new StringDecoder("utf8");
     const err = new StringDecoder("utf8");
@@ -189,6 +258,8 @@ export interface BrokerExecRequest {
   encoding: "utf8" | "buffer";
   input?: string | Buffer;
   signal?: AbortSignal;
+  /** Reply only once the child has exited, escalating a cancel to SIGKILL. */
+  awaitExit?: boolean;
 }
 
 /** What `execFile`'s callback saw, with `stdout` as a string or raw bytes. */
@@ -206,6 +277,8 @@ export interface BrokerBoundedRequest {
   maxChars: number;
   maxStderr: number;
   signal?: AbortSignal;
+  /** Reply only once the child has exited, escalating a cancel to SIGKILL. */
+  awaitExit?: boolean;
 }
 
 export interface BrokerBoundedOutcome {
@@ -474,6 +547,7 @@ export async function brokerExecFile(
       ...(req.input !== undefined
         ? { input: Buffer.from(req.input).toString("base64") }
         : {}),
+      ...(req.awaitExit ? { awaitExit: true } : {}),
     },
     req.signal,
   );
@@ -503,6 +577,7 @@ export async function brokerBoundedStdout(
       env: req.env,
       maxChars: req.maxChars,
       maxStderr: req.maxStderr,
+      ...(req.awaitExit ? { awaitExit: true } : {}),
     },
     req.signal,
   );

@@ -29,7 +29,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AGENT_TYPES } from "./agentTypes.ts";
 import type { AgentType } from "@assistant/shared";
-import { gitOptional } from "./gitExec.ts";
+import { gitOptional } from "./serverRepoGit.ts";
 import { PI_PACKAGE_LABEL } from "./piSdk/piPromptMeasure.ts";
 import {
   INVENTORY_HARNESSES,

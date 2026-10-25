@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4000 reason="Guard credential origins, harness boundaries, storage-only views and spawn admission. A 51 MB transcript cost 1.7s; forking this 1.3 GB server froze connections." task=agent-harnesses date=2026-10-04 -->
+<!-- instruction-budget: bytes=4096 reason="Guard credential origins, harness boundaries, storage-only views, spawn admission. 51 MB transcript: 1.7s; a 1.3 GB server fork froze connections." task=1168 date=2026-10-25 -->
 
 # Server modules
 
@@ -46,6 +46,8 @@
   `baseCheckoutRefresh.ts` and `pullRequestViewCheckout.ts`; a fetch writing a
   local branch is locked. New exceptions belong HERE with their isolation
   argument; children may not loosen this.
+- Checkout git uses `gitExec.ts`; `DATA_DIR` and app-tree repos use
+  `serverRepoGit.ts`. `worker/` imports no server state.
 - Pull-request provider calls use only `gitHosting.ts`.
 - LIST broadcasts are addressed by topic (`hub.broadcastTopic`), each domain
   seam exposing exactly one `broadcast` — never a `broadcastAll`. Per-object

@@ -10,7 +10,7 @@
  */
 import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
-import { gitOptional } from "../gitExec.ts";
+import { gitOptional } from "../serverRepoGit.ts";
 import { KnowledgeBaseStore } from "../knowledgeBaseStore.ts";
 import { knowledgeBaseEnabled } from "../knowledgeBaseSettings.ts";
 import { resolveWorktreeRow } from "./worktreeResolve.ts";

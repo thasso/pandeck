@@ -1,7 +1,8 @@
 /**
  * Server code the packaged Bun runtime must run the way Node runs it, driven
- * directly because a booted server reaches none of it on demand: git through
- * the spawn broker (its cancel and its group kill), the in-process fallback,
+ * directly because a booted server reaches none of it on demand: checkout git
+ * through the in-process Worker and the spawn broker (its cancel, its exit
+ * receipt, its group kill, exact UTF-16 text), the in-process fallback,
  * a watcher subscribed with a git-derived ignore set, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
@@ -13,6 +14,7 @@
  */
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -36,7 +38,12 @@ import {
   outgoingByType,
 } from "../app/server/src/db/links.ts";
 import { sessionStore } from "../app/server/src/db/sessionStore.ts";
-import { GitCommandError, git } from "../app/server/src/gitExec.ts";
+import {
+  GitCommandError,
+  git,
+  gitBoundedStdout,
+  gitWithInputOptional,
+} from "../app/server/src/gitExec.ts";
 import { readInitiativeMap } from "../app/server/src/initiativeLayout.ts";
 import { stopInitiativeLayoutWorker } from "../app/server/src/initiativeLayoutRunner.ts";
 import { createInitiative } from "../app/server/src/initiatives.ts";
@@ -129,6 +136,68 @@ function sleeperScript(pidFile) {
   return `echo $$ > ${JSON.stringify(pidFile)}; exec sleep 30`;
 }
 
+/**
+ * Checkout git crosses the in-process Worker: a bounded read cut inside a
+ * surrogate pair keeps the lone high surrogate (UTF-16LE on the wire), and an
+ * aborted git settles only once its child has exited — a stand-in `git` that
+ * handles SIGTERM writes for a while, then `done`, and the caller sees the
+ * rejection only after that.
+ */
+async function checkWorkerGit(repo) {
+  const blob = await gitWithInputOptional(
+    ["hash-object", "-w", "--stdin"],
+    repo,
+    "\u{1F600}abc",
+  );
+  const cut = await gitBoundedStdout(
+    ["cat-file", "blob", blob.stdout.trim()],
+    repo,
+    1,
+  );
+  assert(
+    cut.patch.length === 1 &&
+      cut.patch.charCodeAt(0) === 0xd83d &&
+      cut.totalChars === 5 &&
+      cut.truncated,
+    `A cut surrogate pair came back as ${JSON.stringify(cut)}.`,
+  );
+
+  const dir = join(scratch, "standin");
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  const log = join(dir, "log");
+  writeFileSync(
+    join(dir, "bin", "git"),
+    [
+      "#!/bin/sh",
+      `log='${log}'`,
+      'on_term() { echo term >> "$log"; sleep 0.5; echo done >> "$log"; exit 0; }',
+      "trap on_term TERM",
+      'echo started >> "$log"',
+      "while :; do sleep 0.05; done",
+    ].join("\n"),
+  );
+  chmodSync(join(dir, "bin", "git"), 0o755);
+  const controller = new globalThis.AbortController();
+  const run = git(["standin"], repo, controller.signal, {
+    PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+  }).then(
+    () => undefined,
+    (error) => error,
+  );
+  const logged = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
+  await until(() => logged().includes("started"), "the stand-in git");
+  controller.abort();
+  const error = await run;
+  assert(
+    error instanceof GitCommandError,
+    `An aborted checkout git answered ${error}.`,
+  );
+  assert(
+    logged().includes("done"),
+    `An aborted checkout git settled before its child exited: ${logged()}`,
+  );
+}
+
 async function checkGit() {
   const brokerPid = await spawnBrokerPidForTests();
   const parent = Number((await sh("echo $PPID")).stdout.trim());
@@ -176,6 +245,8 @@ async function checkGit() {
     `A cancelled request answered ${JSON.stringify(outcome.error)}.`,
   );
   await until(() => !alive(cancelledPid), "the cancelled child to exit");
+
+  await checkWorkerGit(repo);
 
   if (mode !== "broker") return;
 

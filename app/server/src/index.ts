@@ -29,6 +29,7 @@ import { DATA_DIR, HOST, IS_PROD, PORT, PUBLIC_BASE_URL } from "./config.ts";
 import { authTokenStartupMessage, resolveAuthToken } from "./authToken.ts";
 import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
+import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
 import { assertPromptAssets } from "./promptAssets.ts";
@@ -1855,6 +1856,9 @@ if (scrubbed.length > 0)
 // the last fork of the server that anything pays for, and it must come after
 // the scrub so the helper does not carry this instance's identity either.
 startSpawnBroker();
+// Checkout git crosses the worker protocol to this process's own Worker
+// (docs/workers.md); dial it now rather than on the first checkout call.
+startInProcessWorker();
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.
 startChildOomScoreRelease();

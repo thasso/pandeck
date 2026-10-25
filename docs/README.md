@@ -284,15 +284,17 @@ only binding rules; everything else lives here.
 - `document-presentation.md` — the typed internal document targets, the
   link/card/embed intent boundary, worktree file and explicit-diff links, line
   anchors, source-preserving resolution, and the shared viewer navigation shell.
-- `workers.md` — the agreed Worker design, not yet implemented: what runs in a
+- `workers.md` — the agreed Worker design, phase 1 under way: what runs in a
   Worker, on the server and in the credential gateway, the isolation boundary
   and its server-host and desktop implementations, the secret store, the
   root-equivalent access rule, agent-supplied paths in app tools, checkout
   placement, the server as system of record, the worker protocol's direction,
   versioning and trust scoping, enrollment, device pairing and Worker ids, one
   refresher per credential profile, server restarts and boot recovery, Worker
-  loss, served-file routes, deployment, bundled desktop mode, and the six
-  phases.
+  loss, served-file routes, deployment, bundled desktop mode, the six phases,
+  the protocol as phase 1 runs it (framing, lossless payloads, handshake,
+  in-process transport, placement, what stays on the server, no rejection before
+  quiescence) and phase 1's slice status.
 - `adr/` — architecture decision records: one short file per decision that is
   hard to reverse and would surprise a reader, with the alternatives it
   rejected. `0001`–`0003` cover the Worker split: the Worker hosts the engine,

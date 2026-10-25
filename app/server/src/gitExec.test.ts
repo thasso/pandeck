@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { afterAll, test } from "vitest";
 import {
   GitCommandError,
+  countGitExecutionsForTests,
   git,
   gitBoundedStdout,
   gitOptional,
@@ -23,6 +24,7 @@ import {
   gitWithInputOptional,
   repoLockKey,
 } from "./gitExec.ts";
+import { git as serverRepoGit } from "./serverRepoGit.ts";
 import { setChildProcessEnvOverlay } from "./subprocessEnv.ts";
 
 const missingCwd = join(tmpdir(), `git-exec-missing-${randomUUID()}`);
@@ -426,5 +428,116 @@ test("a path below a checkout root is not memoized, so it follows its repository
     assert.equal(await repoLockKey(nested), realpathSync(join(other, ".git")));
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("only git processes count, each in the scope that started it, across the Worker", async () => {
+  const cwd = process.cwd();
+  const { executions } = await countGitExecutionsForTests(async () => {
+    await git(["--version"], cwd);
+    return undefined;
+  });
+  assert.equal(executions, 1, "checkout git");
+  assert.equal(
+    (
+      await countGitExecutionsForTests(() =>
+        gitBoundedStdout(["--version"], cwd, 100),
+      )
+    ).executions,
+    1,
+    "gitBoundedStdout",
+  );
+  assert.equal(
+    (await countGitExecutionsForTests(() => gitRawStdout(["--version"], cwd)))
+      .executions,
+    0,
+    "gitRawStdout",
+  );
+  assert.equal(
+    (
+      await countGitExecutionsForTests(() =>
+        gitWithInputOptional(["hash-object", "--stdin"], cwd, "x"),
+      )
+    ).executions,
+    0,
+    "gitWithInputOptional",
+  );
+  assert.equal(
+    (await countGitExecutionsForTests(() => serverRepoGit(["--version"], cwd)))
+      .executions,
+    1,
+    "the local family",
+  );
+
+  // Hold every read slot, outside any scope, then cancel a read while queued.
+  const hold = ["-c", "alias.hold=!sleep 0.3", "hold"];
+  let slotsFreed = false;
+  const busy = Promise.all(
+    Array.from({ length: 6 }, () => gitBoundedStdout(hold, cwd, 100)),
+  ).finally(() => {
+    slotsFreed = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const controller = new AbortController();
+  const queued = await countGitExecutionsForTests(async () => {
+    const read = gitBoundedStdout(
+      ["--version"],
+      cwd,
+      100,
+      controller.signal,
+    ).catch((error: unknown) => error);
+    controller.abort();
+    return read;
+  });
+  assert.ok(queued.result instanceof GitCommandError);
+  assert.equal(slotsFreed, false, "it settled while still queued");
+  assert.equal(queued.executions, 0, "a read cancelled while queued");
+  await busy;
+
+  // Two scopes in flight at once, over the same Worker connection.
+  const [two, three] = await Promise.all(
+    [2, 3].map((n) =>
+      countGitExecutionsForTests(async () => {
+        await Promise.all(
+          Array.from({ length: n }, () => git(["--version"], cwd)),
+        );
+        return n;
+      }),
+    ),
+  );
+  assert.deepEqual(two, { result: 2, executions: 2 });
+  assert.deepEqual(three, { result: 3, executions: 3 });
+});
+
+test("an env override removes, replaces and empties variables across the Worker", async () => {
+  const env = ["-c", "alias.pa-env=!env", "pa-env"];
+  process.env.PA_GIT_INHERITED_PROBE = "inherited";
+  setChildProcessEnvOverlay({
+    PA_GIT_OVERLAY_REMOVED: "overlay",
+    PA_GIT_OVERLAY_REPLACED: "overlay",
+  });
+  try {
+    const { stdout } = await git(env, process.cwd(), undefined, {
+      PA_GIT_INHERITED_PROBE: undefined,
+      PA_GIT_OVERLAY_REMOVED: undefined,
+      PA_GIT_OVERLAY_REPLACED: "override",
+      PA_GIT_EMPTY_PROBE: "",
+    });
+    const lines = stdout.split("\n");
+    assert.ok(
+      !lines.some((line) => line.startsWith("PA_GIT_INHERITED_PROBE=")),
+    );
+    assert.ok(
+      !lines.some((line) => line.startsWith("PA_GIT_OVERLAY_REMOVED=")),
+    );
+    assert.ok(lines.includes("PA_GIT_OVERLAY_REPLACED=override"));
+    assert.ok(lines.includes("PA_GIT_EMPTY_PROBE="));
+    // Without the overrides, both reach git: the removal is what hid them.
+    const plain = (await git(env, process.cwd())).stdout.split("\n");
+    assert.ok(plain.includes("PA_GIT_INHERITED_PROBE=inherited"));
+    assert.ok(plain.includes("PA_GIT_OVERLAY_REMOVED=overlay"));
+  } finally {
+    delete process.env.PA_GIT_INHERITED_PROBE;
+    setChildProcessEnvOverlay(null);
   }
 });

@@ -35,7 +35,7 @@ import {
   gitOptional,
   repoLockKey,
   withRepoLock,
-} from "./gitExec.ts";
+} from "./serverRepoGit.ts";
 import {
   isHiddenKnowledgePath,
   normalizeKnowledgeRelativePath,
