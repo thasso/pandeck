@@ -266,15 +266,21 @@ it.
 - **Failure and restart: broker death.** A dead broker cannot report its child's
   exit. A request with the exit receipt then answers only once the broker's
   whole process group has exited: signal 0 to the group finds no member (ESRCH),
-  or a complete `/proc` scan sees only zombies. Any other answer, an unreadable
-  `/proc` included, counts as members remaining. The guarantee stays the
-  immediate git child's exit; waiting for the group is only how a dead broker's
-  child is observed. A group member in uninterruptible sleep, including a
-  sibling request's child or a git hook, may therefore hold that call, its repo
-  lock and the Worker's quiescence indefinitely. This fails closed, like a child
-  in uninterruptible sleep on any cancel, and logs one warning at 10 s naming
-  the group and its survivors' states. There is no release deadline. Requests
-  without the receipt fail at once, as before.
+  or a complete `/proc` scan proves every member has exited. A zombie leader
+  alone is not proof: the scan reads its `/proc/<pid>/task` entries and then
+  requires a still-dead leader with `num_threads=1`. This final count prevents a
+  task born during enumeration from being missed. Unreadable, missing or
+  malformed task data fails closed until a later scan or probe. Any other
+  uncertain answer, an unreadable `/proc` included, counts as members remaining.
+  The guarantee stays the immediate git child's exit; waiting for the group is
+  only how a dead broker's child is observed. A group member in uninterruptible
+  sleep, including a sibling request's child or a git hook, may therefore hold
+  that call, its repo lock and the Worker's quiescence indefinitely. This fails
+  closed, like a child in uninterruptible sleep on any cancel, and logs one
+  warning at 10 s naming the group and its survivors' process or thread states.
+  Synchronous scans start after a 20 ms grace and run at most once per second;
+  the warning uses the latest scan under that same limit. There is no release
+  deadline. Requests without the receipt fail at once, as before.
 - **Decisions kept for phase 1.** Engine transcripts and records keep their
   current write path; streaming them over the protocol comes in phase 2 (D1).
   The Worker id is derived, with no worktree-row column (D2).

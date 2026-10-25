@@ -254,8 +254,8 @@ test.skipIf(process.platform !== "linux")(
 );
 
 const errno = (code: string) => Object.assign(new Error(code), { code });
-const statLine = (pid: number, state: string, pgrp: number) =>
-  `${pid} (git (x) y) ${state} 1 ${pgrp} ${pgrp} 0 -1 4194304`;
+const statLine = (pid: number, state: string, pgrp: number, threads = 1) =>
+  `${pid} (git (x) y) ${state} 1 ${pgrp} ${pgrp} 0 -1 4194304 0 0 0 0 0 0 0 0 0 0 ${threads}`;
 const settles = (promise: Promise<unknown>, ms: number) =>
   Promise.race([
     promise.then(() => true),
@@ -273,6 +273,13 @@ function fakeGroupIo(
     scannable: true,
     list: () => ["self", ...Object.keys(procs)],
     stat: (pid) => {
+      const line = procs[pid];
+      if (line === undefined) throw errno("ENOENT");
+      return line;
+    },
+    tasks: (pid) => [pid],
+    taskStat: (pid, tid) => {
+      assert.equal(tid, pid);
       const line = procs[pid];
       if (line === undefined) throw errno("ENOENT");
       return line;
@@ -349,6 +356,169 @@ test("any uncertainty about a dead broker's group keeps waiting", async () => {
     const { io } = fakeGroupIo(over);
     // Past the grace and a second scan.
     assert.equal(await settles(awaitGroupExit(7, io), 1_200), false, name);
+  }
+});
+
+test("a zombie leader cannot prove exit while sibling threads live or task data is uncertain", async () => {
+  vi.useFakeTimers();
+  try {
+    const dead = statLine(8, "Z", 7);
+    const cases: Record<string, Partial<GroupIo>> = {
+      "a sleeping sibling behind a zombie leader": {
+        stat: () => statLine(8, "Z", 7, 2),
+        tasks: () => ["8", "9"],
+        taskStat: (_pid, tid) =>
+          statLine(Number(tid), tid === "8" ? "Z" : "S", 7),
+      },
+      "an uninterruptible sibling behind a zombie leader": {
+        stat: () => statLine(8, "Z", 7, 2),
+        tasks: () => ["8", "9"],
+        taskStat: (_pid, tid) =>
+          statLine(Number(tid), tid === "8" ? "Z" : "D", 7),
+      },
+      "a task missed by enumeration but counted in stat": {
+        stat: () => statLine(8, "Z", 7, 2),
+      },
+      "multiple dead tasks without a final single-thread count": {
+        stat: () => statLine(8, "Z", 7, 2),
+        tasks: () => ["8", "9"],
+        taskStat: (_pid, tid) => statLine(Number(tid), "Z", 7),
+      },
+      "a disappearing task directory": {
+        tasks: () => {
+          throw errno("ENOENT");
+        },
+      },
+      "an unreadable task directory": {
+        tasks: () => {
+          throw errno("EACCES");
+        },
+      },
+      "an empty task directory": { tasks: () => [] },
+      "a task directory without its leader": { tasks: () => ["9"] },
+      "a disappearing individual task": {
+        taskStat: () => {
+          throw errno("ENOENT");
+        },
+      },
+      "an unreadable individual task": {
+        taskStat: () => {
+          throw errno("EACCES");
+        },
+      },
+      "a malformed individual task": { taskStat: () => "8 (git) ?" },
+      "an individual task with the wrong identity": {
+        taskStat: () => statLine(9, "Z", 7),
+      },
+      "an individual task with the wrong group": {
+        taskStat: () => statLine(8, "Z", 3),
+      },
+      "a leader with no thread count": { stat: () => "8 (git) Z 1 7" },
+      "a leader with zero threads": { stat: () => statLine(8, "Z", 7, 0) },
+      "a leader with the wrong identity": { stat: () => statLine(9, "Z", 7) },
+      "an uncertain probe despite dead tasks": {
+        probe: () => {
+          throw errno("EPERM");
+        },
+      },
+      "an unexpected probe error despite dead tasks": {
+        probe: () => {
+          throw errno("EINVAL");
+        },
+      },
+    };
+    for (const [name, over] of Object.entries(cases)) {
+      const { io } = fakeGroupIo({ procs: { 8: dead }, ...over });
+      let done = false;
+      const pending = awaitGroupExit(7, io).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_200);
+      assert.equal(done, false, name);
+      io.probe = () => {
+        throw errno("ESRCH");
+      };
+      await vi.advanceTimersByTimeAsync(50);
+      await pending;
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("task enumeration is revalidated before a zombie-only absence proof", async () => {
+  vi.useFakeTimers();
+  try {
+    for (const changed of ["gone", "running", "more threads", "other group"]) {
+      let reads = 0;
+      const { io } = fakeGroupIo({
+        procs: { 8: statLine(8, "Z", 7) },
+        stat: () => {
+          if (++reads % 2 === 1) return statLine(8, "Z", 7);
+          if (changed === "gone") throw errno("ENOENT");
+          return statLine(
+            8,
+            changed === "running" ? "R" : "Z",
+            changed === "other group" ? 3 : 7,
+            changed === "more threads" ? 2 : 1,
+          );
+        },
+      });
+      let done = false;
+      const pending = awaitGroupExit(7, io).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_200);
+      assert.equal(done, false, changed);
+      io.probe = () => {
+        throw errno("ESRCH");
+      };
+      await vi.advanceTimersByTimeAsync(50);
+      await pending;
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the warning shares the once-per-second scan limit and reports live threads", async () => {
+  vi.useFakeTimers();
+  try {
+    const scans: number[] = [];
+    const { io, warnings } = fakeGroupIo({
+      procs: { 8: statLine(8, "Z", 7, 2) },
+      list: () => {
+        scans.push(Date.now());
+        return ["8"];
+      },
+      tasks: () => ["8", "9"],
+      taskStat: (_pid, tid) =>
+        statLine(Number(tid), tid === "8" ? "Z" : "D", 7),
+    });
+    const started = Date.now();
+    const pending = awaitGroupExit(7, io);
+    await vi.advanceTimersByTimeAsync(10_100);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] ?? "", /8\/9:D/);
+    assert.ok(scans.length >= 10);
+    assert.ok(scans[0] !== undefined && scans[0] >= started + 20);
+    for (let i = 1; i < scans.length; i++) {
+      const previous = scans[i - 1];
+      const current = scans[i];
+      assert.ok(
+        previous !== undefined &&
+          current !== undefined &&
+          current - previous >= 1_000,
+        `scans ${previous}, ${current}`,
+      );
+    }
+    io.probe = () => {
+      throw errno("ESRCH");
+    };
+    await vi.advanceTimersByTimeAsync(50);
+    await pending;
+  } finally {
+    vi.useRealTimers();
   }
 });
 

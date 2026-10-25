@@ -171,11 +171,47 @@ function walk(value: unknown, visit: (node: AstNode) => void): void {
     if (key !== "type") walk(child, visit);
 }
 
-/**
- * The names a module loads CommonJS modules through: `require`, and every
- * variable bound to `createRequire(…)`, wherever it is declared.
- */
-function requireNames(program: unknown): Set<string> {
+/** Ordinary imported createRequire bindings, direct calls and bound loaders. */
+function commonJsLoader(program: unknown): (callee: unknown) => boolean {
+  const factories = new Set<string>();
+  const modules = new Set<string>();
+  walk(program, (node) => {
+    if (
+      node.type !== "ImportDeclaration" ||
+      node.importKind === "type" ||
+      !["module", "node:module"].includes(constantString(node.source) ?? "")
+    )
+      return;
+    for (const specifier of node.specifiers as AstNode[]) {
+      if (!isNode(specifier.local) || specifier.importKind === "type") continue;
+      const local = specifier.local.name as string;
+      if (specifier.type === "ImportSpecifier") {
+        const imported = specifier.imported;
+        if (
+          isNode(imported) &&
+          (imported.name ?? imported.value) === "createRequire"
+        )
+          factories.add(local);
+      } else modules.add(local);
+    }
+  });
+  const isFactory = (callee: unknown): boolean => {
+    if (!isNode(callee)) return false;
+    if (callee.type === "Identifier")
+      return factories.has(callee.name as string);
+    if (
+      callee.type !== "MemberExpression" ||
+      !isNode(callee.object) ||
+      callee.object.type !== "Identifier" ||
+      !modules.has(callee.object.name as string)
+    )
+      return false;
+    return (
+      (callee.computed
+        ? constantString(callee.property)
+        : calleeName(callee)) === "createRequire"
+    );
+  };
   const names = new Set(["require"]);
   walk(program, (node) => {
     if (
@@ -184,11 +220,14 @@ function requireNames(program: unknown): Set<string> {
       node.id.type === "Identifier" &&
       isNode(node.init) &&
       node.init.type === "CallExpression" &&
-      calleeName(node.init.callee) === "createRequire"
+      isFactory(node.init.callee)
     )
       names.add(node.id.name as string);
   });
-  return names;
+  return (callee) =>
+    isNode(callee) &&
+    ((callee.type === "Identifier" && names.has(callee.name as string)) ||
+      (callee.type === "CallExpression" && isFactory(callee.callee)));
 }
 
 function scanModule(file: string): ModuleScan {
@@ -232,12 +271,7 @@ function scanSource(file: string, source: string): ModuleScan {
         (specifier) => specifier[kind] === "type",
       ));
 
-  const loaders = requireNames(parsed.program);
-  const isLoad = (callee: unknown): boolean =>
-    isNode(callee) &&
-    ((callee.type === "Identifier" && loaders.has(callee.name as string)) ||
-      (callee.type === "CallExpression" &&
-        calleeName(callee.callee) === "createRequire"));
+  const isLoad = commonJsLoader(parsed.program);
 
   walk(parsed.program, (value) => {
     switch (value.type) {
@@ -392,6 +426,59 @@ test("every module reading checkouts on the server is pinned to its slice", () =
       `${module} no longer reads the filesystem: delete its pin`,
     );
   }
+});
+
+test("ordinary createRequire aliases count in both directions, bound and direct", () => {
+  const factories = [
+    [
+      'import { createRequire as makeRequire } from "node:module";',
+      "makeRequire",
+    ],
+    ['import { createRequire } from "module";', "createRequire"],
+    ['import * as mod from "node:module";', "mod.createRequire"],
+    ['import * as mod from "module";', 'mod["createRequire"]'],
+    ['import mod from "node:module";', 'mod["createRequire"]'],
+    ['import mod from "module";', "mod.createRequire"],
+  ] as const;
+  for (const [declaration, factory] of factories) {
+    for (const [file, specifier, target] of [
+      [
+        "worker/loadsServerState.ts",
+        "../db/sessionStore.ts",
+        "db/sessionStore.ts",
+      ],
+      ["startsWorker.ts", "./worker/worker.ts", "worker/worker.ts"],
+    ] as const) {
+      for (const call of [
+        `const load = ${factory}(import.meta.url); load(${JSON.stringify(specifier)});`,
+        `${factory}(import.meta.url)(${JSON.stringify(specifier)});`,
+      ]) {
+        const scan = scanSource(
+          join(SRC_ROOT, file),
+          `${declaration}\n${call}`,
+        );
+        assert.ok(scan.imports.has(target), `${factory}: ${call}`);
+        assert.ok(scan.valueImports.has(target));
+        assert.equal(scan.computedImports, 0);
+      }
+      const computed = scanSource(
+        join(SRC_ROOT, file),
+        `${declaration}\nconst load = ${factory}(import.meta.url); load(path);`,
+      );
+      assert.equal(computed.computedImports, 1, factory);
+    }
+  }
+  const method = scanSource(
+    join(SRC_ROOT, "ordinaryMethods.ts"),
+    `
+    const service = { createRequire: () => (id: string) => id, require: (id: string) => id };
+    const load = service.createRequire();
+    load("./worker/worker.ts");
+    service.createRequire()("./worker/worker.ts");
+    service.require("./worker/worker.ts");
+  `,
+  );
+  assert.equal(method.imports.size, 0);
 });
 
 test("literal CommonJS loads count as imports, into and out of the Worker side", () => {

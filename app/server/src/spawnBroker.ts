@@ -479,6 +479,10 @@ export interface GroupIo {
   list(): string[];
   /** `/proc/<pid>/stat`. */
   stat(pid: string): string;
+  /** The entries of `/proc/<pid>/task`. */
+  tasks(pid: string): string[];
+  /** `/proc/<pid>/task/<tid>/stat`. */
+  taskStat(pid: string, tid: string): string;
   warn(message: string): void;
 }
 
@@ -487,6 +491,9 @@ const systemGroupIo: GroupIo = {
   scannable: process.platform === "linux",
   list: () => readdirSync("/proc"),
   stat: (pid) => readFileSync(`/proc/${pid}/stat`, "latin1"),
+  tasks: (pid) => readdirSync(`/proc/${pid}/task`),
+  taskStat: (pid, tid) =>
+    readFileSync(`/proc/${pid}/task/${tid}/stat`, "latin1"),
   warn: (message) => console.warn(message),
 };
 let groupIo = systemGroupIo;
@@ -500,11 +507,38 @@ function errorCode(err: unknown): unknown {
   return (err as { code?: unknown } | null)?.code;
 }
 
+/** Parse identity, state, pgrp and num_threads, not the parenthesized comm. */
+function procStat(text: string, id: string) {
+  const at = text.lastIndexOf(")");
+  if (!text.startsWith(`${id} (`) || at < 0 || text[at + 1] !== " ")
+    return undefined;
+  const fields = text
+    .slice(at + 2)
+    .trim()
+    .split(/\s+/);
+  const [state, ppid, pgrp] = fields;
+  const threads = fields[17];
+  if (
+    !/^[A-Za-z]$/.test(state ?? "") ||
+    !/^\d+$/.test(ppid ?? "") ||
+    !/^\d+$/.test(pgrp ?? "") ||
+    !/^\d+$/.test(threads ?? "") ||
+    !Number.isSafeInteger(Number(pgrp)) ||
+    !Number.isSafeInteger(Number(threads)) ||
+    Number(threads) < 1
+  )
+    return undefined;
+  return { state, pgrp: Number(pgrp), threads: Number(threads) };
+}
+
+const deadState = (state: string | undefined) => state === "Z" || state === "X";
+
 /**
- * One complete `/proc` scan for the group: how many members it saw, and those
- * that have not exited as `pid:state`; `undefined` when it cannot tell. A pid
- * that vanished between listing and reading (ENOENT) is no member; any other
- * failure to read or parse leaves the answer unknown.
+ * One complete `/proc` scan. Dead leaders need a complete task scan and a
+ * final single-thread count: readdir alone can miss a concurrently born task.
+ * A Z/X leader with num_threads=1 cannot create another thread. Task read and
+ * enumeration races, including ENOENT, are unknown until a later scan/probe.
+ * Only a top-level pid that vanished before its first stat is skipped.
  */
 function scanGroup(
   pgid: number,
@@ -527,19 +561,33 @@ function scanGroup(
       if (errorCode(err) === "ENOENT") continue;
       return undefined;
     }
-    // `pid (comm) state ppid pgrp …`; comm may hold spaces and parentheses.
-    const at = text.lastIndexOf(")");
-    const [state, ppid, pgrp] = at < 0 ? [] : text.slice(at + 2).split(" ");
-    if (
-      !state ||
-      !/^[A-Za-z]$/.test(state) ||
-      !/^\d+$/.test(ppid ?? "") ||
-      !/^\d+$/.test(pgrp ?? "")
-    )
-      return undefined;
-    if (Number(pgrp) !== pgid) continue;
+    const leader = procStat(text, name);
+    if (!leader) return undefined;
+    if (leader.pgrp !== pgid) continue;
     members += 1;
-    if (state !== "Z" && state !== "X") running.push(`${name}:${state}`);
+    if (!deadState(leader.state)) {
+      running.push(`${name}:${leader.state}`);
+      continue;
+    }
+    try {
+      const tids = io.tasks(name);
+      if (!tids.includes(name) || tids.some((tid) => !/^\d+$/.test(tid)))
+        return undefined;
+      for (const tid of tids) {
+        const task = procStat(io.taskStat(name, tid), tid);
+        if (!task || task.pgrp !== pgid) return undefined;
+        if (!deadState(task.state))
+          running.push(`${name}/${tid}:${task.state}`);
+      }
+      // Do not infer a lifetime proof from sequential task reads. In
+      // particular, a live thread can clone and exit during enumeration.
+      const final = procStat(io.stat(name), name);
+      if (!final || final.pgrp !== pgid) return undefined;
+      if (!deadState(final.state) || final.threads !== 1)
+        running.push(`${name}:${final.state}/threads=${final.threads}`);
+    } catch {
+      return undefined;
+    }
   }
   return { members, running };
 }
@@ -547,11 +595,12 @@ function scanGroup(
 /**
  * Resolves once no member of process group `pgid` is left unexited: signal 0
  * to the group finds none (ESRCH), or a complete `/proc` scan sees members and
- * all of them are zombies — exited processes an orphan reaper has not
- * collected yet. Anything else means members remain: an unexpected errno, or a
- * scan that sees no member though the probe found one (hidden by `hidepid`,
- * another pid namespace, or reaped since, which the next probe shows). It never sends a
- * real signal and never gives up: a member in uninterruptible sleep keeps it
+ * all of them have dead leaders with no sibling threads left. A zombie leader
+ * alone is not an exited process. Anything uncertain means members remain: an
+ * unexpected errno, task read/parse races, or a scan that sees no member though
+ * the probe found one (hidden by `hidepid`, another pid namespace, or reaped
+ * since, which the next probe shows). It never sends a real signal and never
+ * gives up: a member in uninterruptible sleep keeps it
  * waiting, with one warning at {@link GROUP_EXIT_WARN_MS}.
  *
  * A group id is not reused while a member, zombie or not, still holds it, so
@@ -564,10 +613,22 @@ export function awaitGroupExit(
 ): Promise<void> {
   const started = Date.now();
   let lastScan: number | undefined;
+  let scan: ReturnType<typeof scanGroup>;
+  const scanIfDue = (): void => {
+    const now = Date.now();
+    if (
+      io.scannable &&
+      now - started >= GROUP_SCAN_GRACE_MS &&
+      (lastScan === undefined || now - lastScan >= GROUP_SCAN_INTERVAL_MS)
+    ) {
+      lastScan = now;
+      scan = scanGroup(pgid, io);
+    }
+  };
   let delay = 1;
   return new Promise((resolve) => {
     const warning = setTimeout(() => {
-      const scan = io.scannable ? scanGroup(pgid, io) : undefined;
+      scanIfDue();
       const running = scan?.running.length ? scan.running.join(", ") : "";
       io.warn(
         `[spawn-broker] process group ${pgid} has not exited ` +
@@ -577,6 +638,7 @@ export function awaitGroupExit(
     }, GROUP_EXIT_WARN_MS);
     warning.unref();
     const poll = (): void => {
+      let certain = true;
       try {
         io.probe(pgid);
       } catch (err) {
@@ -585,20 +647,15 @@ export function awaitGroupExit(
           resolve();
           return;
         }
+        certain = false;
       }
-      const now = Date.now();
-      if (
-        io.scannable &&
-        now - started >= GROUP_SCAN_GRACE_MS &&
-        (lastScan === undefined || now - lastScan >= GROUP_SCAN_INTERVAL_MS)
-      ) {
-        lastScan = now;
-        const scan = scanGroup(pgid, io);
-        if (scan && scan.members > 0 && scan.running.length === 0) {
-          clearTimeout(warning);
-          resolve();
-          return;
-        }
+      // A cached all-dead scan is stable: its leaders had no other threads
+      // left to fork. A probe error still prevents using it as a receipt.
+      scanIfDue();
+      if (certain && scan && scan.members > 0 && scan.running.length === 0) {
+        clearTimeout(warning);
+        resolve();
+        return;
       }
       // Ref'd: a request still waiting must keep its process alive.
       setTimeout(poll, delay);
