@@ -10,10 +10,7 @@
  */
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { getGithubToolConfig } from "../../githubSettings.ts";
-import {
-  githubRequest,
-  resolveAuthenticatedLogin,
-} from "../../githubClient.ts";
+import { resolveAuthenticatedLogin } from "../../githubClient.ts";
 import {
   approvalCardReference,
   createApproval,
@@ -24,7 +21,8 @@ import { invalidateGithubPullRequestWrite } from "../../pullRequestInventorySync
 import {
   hostingProviderFor,
   githubPullRequestDescription,
-  githubSetReviewThreadResolved,
+  type PullRequestReviewersInput,
+  type PullRequestAssigneesInput,
 } from "../../gitHosting.ts";
 import { resolveRepo } from "./githubTools.ts";
 import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
@@ -555,13 +553,10 @@ export function isSelfAlias(value: string): boolean {
   return /^@me$/i.test(String(value).trim());
 }
 
-type AssignmentStep = {
-  label: string;
-  method: "POST" | "DELETE";
-  /** Review requests and assignees live on different endpoints. */
-  target: "reviewers" | "assignees";
-  payload: Record<string, string[]>;
-};
+type AssignmentStep = { label: string } & (
+  | { target: "reviewers"; input: PullRequestReviewersInput }
+  | { target: "assignees"; input: PullRequestAssigneesInput }
+);
 
 /**
  * The people changes an `assign` proposal carries, in execution order and
@@ -574,8 +569,8 @@ function assignmentSteps(
   const reviewers = (logins?: string[], teams?: string[]) => ({
     names: [...(logins ?? []), ...(teams ?? []).map((slug) => `team:${slug}`)],
     payload: {
-      ...(logins?.length ? { reviewers: logins } : {}),
-      ...(teams?.length ? { team_reviewers: teams } : {}),
+      ...(logins?.length ? { users: logins } : {}),
+      ...(teams?.length ? { teams } : {}),
     },
   });
   const requested = reviewers(body.addReviewers, body.addReviewerTeams);
@@ -583,33 +578,29 @@ function assignmentSteps(
   return [
     {
       label: `request review: ${requested.names.join(", ")}`,
-      method: "POST" as const,
       target: "reviewers" as const,
-      payload: requested.payload,
+      input: { action: "add" as const, ...requested.payload },
     },
     {
       label: `cancel review request: ${unrequested.names.join(", ")}`,
-      method: "DELETE" as const,
       target: "reviewers" as const,
-      payload: unrequested.payload,
+      input: { action: "remove" as const, ...unrequested.payload },
     },
     {
       label: `assign: ${(body.addAssignees ?? []).join(", ")}`,
-      method: "POST" as const,
       target: "assignees" as const,
-      payload: body.addAssignees?.length
-        ? { assignees: body.addAssignees }
-        : {},
+      input: { action: "add" as const, names: body.addAssignees ?? [] },
     },
     {
       label: `unassign: ${(body.removeAssignees ?? []).join(", ")}`,
-      method: "DELETE" as const,
       target: "assignees" as const,
-      payload: body.removeAssignees?.length
-        ? { assignees: body.removeAssignees }
-        : {},
+      input: { action: "remove" as const, names: body.removeAssignees ?? [] },
     },
-  ].filter((step) => Object.keys(step.payload).length > 0);
+  ].filter((step) =>
+    step.target === "assignees"
+      ? step.input.names.length > 0
+      : Boolean(step.input.users?.length || step.input.teams?.length),
+  );
 }
 
 export const githubAssignPullRequestTool =
@@ -817,16 +808,14 @@ registerApprovalExecutor("githubPullRequest", {
 });
 
 async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
-  const config = getGithubToolConfig();
   const [owner, repoName] = b.repo.split("/");
-  const base = `/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repoName!)}`;
+  const provider = hostingProviderFor({
+    service: "github",
+    owner: owner!,
+    repo: repoName!,
+  });
 
   if (b.operation === "create") {
-    const provider = hostingProviderFor({
-      service: "github",
-      owner: owner!,
-      repo: repoName!,
-    });
     const created = await provider.createPullRequest({
       title: b.title!,
       head: b.head!,
@@ -844,9 +833,9 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
   }
 
   if (b.operation === "resolveThread") {
-    await githubSetReviewThreadResolved(
-      { owner: owner!, repo: repoName! },
-      config,
+    if (!provider.setPullRequestReviewThreadResolved)
+      throw new Error("Provider does not support review-thread resolution.");
+    await provider.setPullRequestReviewThreadResolved(
       b.pullNumber!,
       b.threadId!,
       b.resolved!,
@@ -866,11 +855,6 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
       throw new Error(
         "Close proposal is missing its pull-request number or bound head.",
       );
-    const provider = hostingProviderFor({
-      service: "github",
-      owner: owner!,
-      repo: repoName!,
-    });
     return applyPullRequestClose(
       provider,
       {
@@ -888,11 +872,6 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
   if (b.operation === "ready") {
     if (!Number.isInteger(b.pullNumber) || (b.pullNumber ?? 0) < 1)
       throw new Error("Ready proposal is missing its pull-request number.");
-    const provider = hostingProviderFor({
-      service: "github",
-      owner: owner!,
-      repo: repoName!,
-    });
     const detail = await provider.pullRequestDetail(b.pullNumber!);
     if (!detail || detail.state !== "open" || detail.merged || !detail.draft)
       throw new Error(
@@ -913,11 +892,6 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
       throw new Error(
         "Edit proposal is missing its pull-request number or its changes.",
       );
-    const provider = hostingProviderFor({
-      service: "github",
-      owner: owner!,
-      repo: repoName!,
-    });
     const edited = await applyPullRequestEdit(provider, {
       ...b,
       pullNumber: b.pullNumber,
@@ -931,31 +905,14 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
   if (b.operation === "review") {
     if (typeof b.pullNumber !== "number")
       throw new Error("Review proposal is missing a pull-request number.");
-    const comments = (b.inlineComments ?? []).map((c) => ({
-      path: c.path,
-      line: c.line,
-      side: c.side ?? "RIGHT",
-      body: c.suggestion
-        ? `${c.body}\n\n\`\`\`suggestion\n${c.suggestion}\n\`\`\``
-        : c.body,
-    }));
-    const res = await githubRequest<{ html_url?: string }>(
-      config,
-      "POST",
-      `${base}/pulls/${b.pullNumber}/reviews`,
-      {
-        body: {
-          event: b.reviewEvent ?? "COMMENT",
-          ...(b.reviewSummary ? { body: b.reviewSummary } : {}),
-          ...(comments.length ? { comments } : {}),
-        },
-      },
-    );
+    const result = await provider.submitPullRequestReview(b.pullNumber, {
+      event: b.reviewEvent ?? "COMMENT",
+      ...(b.reviewSummary !== undefined ? { body: b.reviewSummary } : {}),
+      ...(b.inlineComments ? { comments: b.inlineComments } : {}),
+    });
     return {
       resultSummary: `Submitted ${b.reviewEvent ?? "COMMENT"} review on #${b.pullNumber}`,
-      ...(res.data.html_url !== undefined
-        ? { resultUrl: res.data.html_url }
-        : {}),
+      ...(result.url !== undefined ? { resultUrl: result.url } : {}),
     };
   }
 
@@ -963,22 +920,32 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
     if (typeof b.pullNumber !== "number")
       throw new Error("Assignment proposal is missing a pull-request number.");
     const steps = assignmentSteps(b);
-    const path = (step: AssignmentStep) =>
-      step.target === "reviewers"
-        ? `${base}/pulls/${b.pullNumber}/requested_reviewers`
-        : `${base}/issues/${b.pullNumber}/assignees`;
+    // Preflight every needed capability before any of the ordered writes.
+    if (
+      steps.some((step) => step.target === "reviewers") &&
+      !provider.updatePullRequestReviewers
+    )
+      throw new Error("Provider does not support reviewer assignment.");
+    if (
+      steps.some((step) => step.target === "assignees") &&
+      !provider.updatePullRequestAssignees
+    )
+      throw new Error("Provider does not support assignee assignment.");
     let url: string | undefined;
     const applied: string[] = [];
     for (const step of steps) {
       try {
-        const res = await githubRequest<{ html_url?: string }>(
-          config,
-          step.method,
-          path(step),
-          { body: step.payload },
-        );
-        if (!url && typeof res.data.html_url === "string")
-          url = res.data.html_url;
+        const result =
+          step.target === "reviewers"
+            ? await provider.updatePullRequestReviewers!(
+                b.pullNumber,
+                step.input,
+              )
+            : await provider.updatePullRequestAssignees!(
+                b.pullNumber,
+                step.input,
+              );
+        if (!url && typeof result.url === "string") url = result.url;
         applied.push(step.label);
       } catch (error) {
         // Each step is its own request, so earlier ones already landed on
@@ -1002,30 +969,25 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
   if (typeof b.pullNumber !== "number")
     throw new Error("Comment proposal is missing a pull-request number.");
   if (typeof b.replyToCommentId === "number") {
-    const res = await githubRequest<{ html_url?: string }>(
-      config,
-      "POST",
-      `${base}/pulls/${b.pullNumber}/comments/${b.replyToCommentId}/replies`,
-      { body: { body: b.commentBody ?? "" } },
+    if (!provider.replyToPullRequestReviewComment)
+      throw new Error("Provider does not support replies to review comments.");
+    const result = await provider.replyToPullRequestReviewComment(
+      b.pullNumber,
+      b.replyToCommentId,
+      b.commentBody ?? "",
     );
     return {
       resultSummary: `Replied to review comment on #${b.pullNumber}`,
-      ...(res.data.html_url !== undefined
-        ? { resultUrl: res.data.html_url }
-        : {}),
+      ...(result.url !== undefined ? { resultUrl: result.url } : {}),
     };
   }
-  const res = await githubRequest<{ html_url?: string }>(
-    config,
-    "POST",
-    `${base}/issues/${b.pullNumber}/comments`,
-    { body: { body: b.commentBody ?? "" } },
+  const result = await provider.commentPullRequest(
+    b.pullNumber,
+    b.commentBody ?? "",
   );
   return {
     resultSummary: `Commented on #${b.pullNumber}`,
-    ...(res.data.html_url !== undefined
-      ? { resultUrl: res.data.html_url }
-      : {}),
+    ...(result.url !== undefined ? { resultUrl: result.url } : {}),
   };
 }
 

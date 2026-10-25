@@ -279,9 +279,9 @@ export function forgetWorktreeInPullRequestInventory(worktreeId: string): void {
 
 /**
  * A GitHub pull-request write from the generic PR tools. Inventory invalidation
- * stays here whether the write uses the provider port or a remaining raw review
- * client. Forget what the open list,
- * its annotations and the per-pull-request reads hold for that repository and
+ * stays here while provider annotations are also evicted by port mutators.
+ * Forget what the open list, its annotations and the per-pull-request reads hold
+ * for that repository and
  * rebuild now, rather than showing the old state for a whole sync period.
  */
 export function invalidateGithubPullRequestWrite(

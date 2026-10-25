@@ -1834,6 +1834,79 @@ test("a repository without a reported default branch throws", async () => {
   );
 });
 
+/* ------------------------- standalone / close comments ---------------------- */
+
+for (const service of ["github", "forgejo"] as const) {
+  test.each([
+    {},
+    { html_url: "" },
+    { html_url: "https://returned.invalid/comment" },
+    null,
+  ])(
+    `${service} shares comment transport but not standalone/close response policy: %j`,
+    async (response) => {
+      const provider =
+        service === "github" ? githubTestProvider() : forgejoTestProvider();
+      const posts: Array<{
+        url: string;
+        body: unknown;
+        authorization: string | null;
+      }> = [];
+      let closed = false;
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (input, init) => {
+        if (init?.method === "POST") {
+          posts.push({
+            url: String(input),
+            body: JSON.parse(String(init.body)),
+            authorization: new Headers(init.headers).get("authorization"),
+          });
+          return new Response(JSON.stringify(response));
+        }
+        if (init?.method === "PATCH") {
+          closed = true;
+          return new Response("{}");
+        }
+        return new Response(
+          JSON.stringify({
+            number: 7,
+            state: closed ? "closed" : "open",
+            head: { sha: "h" },
+          }),
+        );
+      }) as typeof fetch;
+      try {
+        if (response === null)
+          await assert.rejects(provider.commentPullRequest(7, "hello"));
+        else
+          assert.deepEqual(
+            await provider.commentPullRequest(7, "hello"),
+            "html_url" in response ? { url: response.html_url } : {},
+          );
+        const result = await provider.closePullRequest(7, {
+          expectedHeadSha: "h",
+          comment: "hello",
+        });
+        assert.equal(result.closed, true);
+        assert.equal(result.commentUrl, response?.html_url || "");
+        assert.deepEqual(
+          posts,
+          Array.from({ length: 2 }, () => ({
+            url:
+              service === "github"
+                ? "https://api.github.com/repos/acme/repo/issues/7/comments"
+                : "https://git.example.com/api/v1/repos/acme/repo/issues/7/comments",
+            body: { body: "hello" },
+            authorization: service === "github" ? "Bearer t" : "token t",
+          })),
+        );
+      } finally {
+        globalThis.fetch = original;
+      }
+    },
+  );
+}
+
 /* -------------------------------- closing ----------------------------------- */
 
 test("GitHub closes an open pull request at the exact head", async () => {

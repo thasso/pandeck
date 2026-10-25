@@ -11,7 +11,7 @@
  * `./forgejoTools.ts`, as the GitHub twin takes `resolveRepo` from its own.
  *
  * Forgejo's API is close to GitHub's but not identical, and the three
- * differences live in the provider and the remaining raw review executor:
+ * differences live in the provider:
  *
  *  - `CreatePullRequestOption` has no `draft` field — a draft is the `WIP: `
  *    title prefix;
@@ -22,7 +22,6 @@
  */
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { getForgejoToolConfig } from "../../forgejoSettings.ts";
-import { forgejoRequest, type ForgejoApiConfig } from "../../forgejoClient.ts";
 import {
   hostingProviderFor,
   forgejoPullRequestDescription,
@@ -476,25 +475,6 @@ export const forgejoCommentPullRequestTool =
     },
   });
 
-/** Position-anchored `CreatePullReviewComment` payload for one inline comment. */
-function reviewCommentPayload(comment: {
-  path: string;
-  line: number;
-  side?: "LEFT" | "RIGHT";
-  body: string;
-  suggestion?: string;
-}): Record<string, unknown> {
-  return {
-    path: comment.path,
-    body: comment.suggestion
-      ? `${comment.body}\n\n\`\`\`suggestion\n${comment.suggestion}\n\`\`\``
-      : comment.body,
-    ...(comment.side === "LEFT"
-      ? { old_position: comment.line }
-      : { new_position: comment.line }),
-  };
-}
-
 /** Execute an approved Forgejo PR write against the API. */
 export const forgejoClosePullRequestTool =
   defineAgentTool<ClosePullRequestParams>({
@@ -564,7 +544,7 @@ registerApprovalExecutor("forgejoPullRequest", {
     const b = card.body;
     const config = getForgejoToolConfig();
     try {
-      return await executeApprovedWrite(b, config);
+      return await executeApprovedWrite(b);
     } finally {
       // Also after a failure: an edit's retarget may have landed before its
       // description. A plain comment changes nothing the inventory shows.
@@ -581,19 +561,15 @@ registerApprovalExecutor("forgejoPullRequest", {
   },
 });
 
-async function executeApprovedWrite(
-  b: ForgejoPullRequestApprovalBody,
-  config: ForgejoApiConfig,
-) {
+async function executeApprovedWrite(b: ForgejoPullRequestApprovalBody) {
   const [owner, repoName] = b.repo.split("/");
-  const base = `/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repoName!)}`;
+  const provider = hostingProviderFor({
+    service: "forgejo",
+    owner: owner!,
+    repo: repoName!,
+  });
 
   if (b.operation === "create") {
-    const provider = hostingProviderFor({
-      service: "forgejo",
-      owner: owner!,
-      repo: repoName!,
-    });
     const created = await provider.createPullRequest({
       title: b.title ?? "",
       head: b.head!,
@@ -619,11 +595,6 @@ async function executeApprovedWrite(
       throw new Error(
         "Close proposal is missing its pull-request number or bound head.",
       );
-    const provider = hostingProviderFor({
-      service: "forgejo",
-      owner: owner!,
-      repo: repoName!,
-    });
     return applyPullRequestClose(
       provider,
       {
@@ -641,11 +612,6 @@ async function executeApprovedWrite(
   if (b.operation === "ready") {
     if (!Number.isInteger(b.pullNumber) || (b.pullNumber ?? 0) < 1)
       throw new Error("Ready proposal is missing its pull-request number.");
-    const provider = hostingProviderFor({
-      service: "forgejo",
-      owner: owner!,
-      repo: repoName!,
-    });
     const detail = await provider.pullRequestDetail(b.pullNumber!);
     if (!detail || detail.state !== "open" || detail.merged || !detail.draft)
       throw new Error(
@@ -666,11 +632,6 @@ async function executeApprovedWrite(
       throw new Error(
         "Edit proposal is missing its pull-request number or its changes.",
       );
-    const provider = hostingProviderFor({
-      service: "forgejo",
-      owner: owner!,
-      repo: repoName!,
-    });
     const edited = await applyPullRequestEdit(provider, {
       ...b,
       pullNumber: b.pullNumber,
@@ -684,24 +645,15 @@ async function executeApprovedWrite(
   if (b.operation === "review") {
     if (typeof b.pullNumber !== "number")
       throw new Error("Review proposal is missing a pull-request number.");
-    const comments = (b.inlineComments ?? []).map(reviewCommentPayload);
-    const res = await forgejoRequest<{ html_url?: string }>(
-      config,
-      "POST",
-      `${base}/pulls/${b.pullNumber}/reviews`,
-      {
-        body: {
-          event: b.reviewEvent ?? "COMMENT",
-          ...(b.reviewSummary ? { body: b.reviewSummary } : {}),
-          ...(comments.length ? { comments } : {}),
-        },
-      },
-    );
+    const result = await provider.submitPullRequestReview(b.pullNumber, {
+      event:
+        b.reviewEvent === "APPROVED" ? "APPROVE" : (b.reviewEvent ?? "COMMENT"),
+      ...(b.reviewSummary !== undefined ? { body: b.reviewSummary } : {}),
+      ...(b.inlineComments ? { comments: b.inlineComments } : {}),
+    });
     return {
       resultSummary: `Submitted ${b.reviewEvent ?? "COMMENT"} review on #${b.pullNumber}`,
-      ...(res.data.html_url !== undefined
-        ? { resultUrl: res.data.html_url }
-        : {}),
+      ...(result.url !== undefined ? { resultUrl: result.url } : {}),
     };
   }
 
@@ -711,37 +663,30 @@ async function executeApprovedWrite(
   if (typeof b.replyToReviewId === "number") {
     if (!b.replyPath || typeof b.replyLine !== "number")
       throw new Error("Reply proposal is missing its file/line anchor.");
-    const res = await forgejoRequest<{ html_url?: string }>(
-      config,
-      "POST",
-      `${base}/pulls/${b.pullNumber}/reviews/${b.replyToReviewId}/comments`,
+    if (!provider.commentOnPullRequestReview)
+      throw new Error("Provider does not support anchored review comments.");
+    const result = await provider.commentOnPullRequestReview(
+      b.pullNumber,
+      b.replyToReviewId,
       {
-        body: reviewCommentPayload({
-          path: b.replyPath,
-          line: b.replyLine,
-          ...(b.replySide ? { side: b.replySide } : {}),
-          body: b.commentBody ?? "",
-        }),
+        path: b.replyPath,
+        line: b.replyLine,
+        ...(b.replySide ? { side: b.replySide } : {}),
+        body: b.commentBody ?? "",
       },
     );
     return {
       resultSummary: `Replied on review ${b.replyToReviewId} of #${b.pullNumber}`,
-      ...(res.data.html_url !== undefined
-        ? { resultUrl: res.data.html_url }
-        : {}),
+      ...(result.url !== undefined ? { resultUrl: result.url } : {}),
     };
   }
-  const res = await forgejoRequest<{ html_url?: string }>(
-    config,
-    "POST",
-    `${base}/issues/${b.pullNumber}/comments`,
-    { body: { body: b.commentBody ?? "" } },
+  const result = await provider.commentPullRequest(
+    b.pullNumber,
+    b.commentBody ?? "",
   );
   return {
     resultSummary: `Commented on #${b.pullNumber}`,
-    ...(res.data.html_url !== undefined
-      ? { resultUrl: res.data.html_url }
-      : {}),
+    ...(result.url !== undefined ? { resultUrl: result.url } : {}),
   };
 }
 

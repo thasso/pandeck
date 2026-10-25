@@ -202,6 +202,31 @@ export interface GitHostingRefChecks {
   truncated?: boolean;
 }
 
+export interface PullRequestReviewCommentInput {
+  path: string;
+  line: number;
+  side?: "LEFT" | "RIGHT";
+  body: string;
+  suggestion?: string;
+}
+
+interface PullRequestReviewInput {
+  event?: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+  body?: string;
+  comments?: PullRequestReviewCommentInput[];
+}
+
+export interface PullRequestReviewersInput {
+  action: "add" | "remove";
+  users?: string[];
+  teams?: string[];
+}
+
+export interface PullRequestAssigneesInput {
+  action: "add" | "remove";
+  names: string[];
+}
+
 export interface GitHostingProvider {
   kind: GitHostingProviderKind;
   /** Parsed repository identity used to bind managed push and PR targets. */
@@ -295,6 +320,38 @@ export interface GitHostingProvider {
     prNumber: number,
     body: string,
   ): Promise<{ url?: string }>;
+  submitPullRequestReview(
+    prNumber: number,
+    input: PullRequestReviewInput,
+  ): Promise<{ url?: string }>;
+  /** Standalone timeline comment, distinct from close's guarded comment step. */
+  commentPullRequest(prNumber: number, body: string): Promise<{ url?: string }>;
+  /** GitHub's reply to one numeric parent review-comment id. */
+  replyToPullRequestReviewComment?(
+    prNumber: number,
+    commentId: number,
+    body: string,
+  ): Promise<{ url?: string }>;
+  /** Forgejo's file/line-anchored comment on an existing review. */
+  commentOnPullRequestReview?(
+    prNumber: number,
+    reviewId: number,
+    comment: PullRequestReviewCommentInput,
+  ): Promise<{ url?: string }>;
+  updatePullRequestReviewers?(
+    prNumber: number,
+    input: PullRequestReviewersInput,
+  ): Promise<{ url?: string }>;
+  updatePullRequestAssignees?(
+    prNumber: number,
+    input: PullRequestAssigneesInput,
+  ): Promise<{ url?: string }>;
+  /** Validate thread membership, then set and confirm its resolved state. */
+  setPullRequestReviewThreadResolved?(
+    prNumber: number,
+    threadId: string,
+    resolved: boolean,
+  ): Promise<void>;
   /**
    * Merge one pull request and, when asked, delete its remote head branch — as
    * ONE call. Deleting the branch is part of merging, not a second step a
@@ -692,7 +749,7 @@ async function githubPullRequestConversation(
 }
 
 /** Resolve or reopen only a review thread belonging to the approved repository and PR. */
-export async function githubSetReviewThreadResolved(
+async function githubSetReviewThreadResolved(
   ref: Pick<RemoteRepoRef, "owner" | "repo">,
   config: GithubApiConfig,
   prNumber: number,
@@ -2369,8 +2426,8 @@ function githubRepoKey(ref: RemoteRepoRef): string {
 }
 
 /**
- * Drop one repository's annotations. Exported for GitHub writes that bypass
- * the provider seam (the generic PR tools); the provider's own writes call it.
+ * Drop one repository's annotations and invalidate list reads in flight.
+ * Provider mutators call this in finally; inventory invalidation also uses it.
  */
 export function forgetOpenPullAnnotations(ref: RemoteRepoRef): void {
   const key = githubRepoKey(ref);
@@ -2669,6 +2726,27 @@ export async function githubDeleteBranchAt(
   );
 }
 
+function reviewCommentBody(comment: PullRequestReviewCommentInput): string {
+  return comment.suggestion
+    ? `${comment.body}\n\n\`\`\`suggestion\n${comment.suggestion}\n\`\`\``
+    : comment.body;
+}
+
+function forgejoReviewCommentPayload(comment: PullRequestReviewCommentInput) {
+  return {
+    path: comment.path,
+    body: reviewCommentBody(comment),
+    ...(comment.side === "LEFT"
+      ? { old_position: comment.line }
+      : { new_position: comment.line }),
+  };
+}
+
+/** Generic writes deliberately reject JSON null and retain explicit empty URLs. */
+function pullRequestWriteResult(data: { html_url?: string }): { url?: string } {
+  return data.html_url !== undefined ? { url: data.html_url } : {};
+}
+
 function githubProvider(
   ref: RemoteRepoRef,
   config: GithubApiConfig,
@@ -2677,6 +2755,14 @@ function githubProvider(
   const repoApi = `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`;
   const repoWebUrl = `${GITHUB_WEB_BASE}/${ref.owner}/${ref.repo}`;
   const signal = () => requestSignal(parentSignal);
+  // Shared HTTP only: standalone comments and close retain distinct policies.
+  const postPullRequestComment = (prNumber: number, body: string) =>
+    githubRequest<{ html_url?: string }>(
+      config,
+      "POST",
+      `${repoApi}/issues/${prNumber}/comments`,
+      { body: { body }, signal: signal() },
+    );
   /** Open pull requests based on `branch`, which keep it from being deleted. */
   const openPullsTargeting = async (branch: string): Promise<number[]> =>
     requirePullRequestList<GithubPull>(
@@ -2742,8 +2828,87 @@ function githubProvider(
     // named branch comes back too; the head repository is what settles it.
     return pulls.filter((pull) => headIsOwnBranch(pull, headBranch, ref));
   };
-  const provider: GitHostingProvider = {
+  const provider: GitHostingProvider &
+    Required<
+      Pick<
+        GitHostingProvider,
+        | "replyToPullRequestReviewComment"
+        | "updatePullRequestReviewers"
+        | "updatePullRequestAssignees"
+        | "setPullRequestReviewThreadResolved"
+      >
+    > = {
     kind: "github",
+    async submitPullRequestReview(prNumber, input) {
+      const comments = (input.comments ?? []).map((comment) => ({
+        path: comment.path,
+        line: comment.line,
+        side: comment.side ?? "RIGHT",
+        body: reviewCommentBody(comment),
+      }));
+      const res = await githubRequest<{ html_url?: string }>(
+        config,
+        "POST",
+        `${repoApi}/pulls/${prNumber}/reviews`,
+        {
+          body: {
+            event: input.event ?? "COMMENT",
+            ...(input.body ? { body: input.body } : {}),
+            ...(comments.length ? { comments } : {}),
+          },
+          signal: signal(),
+        },
+      );
+      return pullRequestWriteResult(res.data);
+    },
+    async commentPullRequest(prNumber, body) {
+      return pullRequestWriteResult(
+        (await postPullRequestComment(prNumber, body)).data,
+      );
+    },
+    async replyToPullRequestReviewComment(prNumber, commentId, body) {
+      const res = await githubRequest<{ html_url?: string }>(
+        config,
+        "POST",
+        `${repoApi}/pulls/${prNumber}/comments/${commentId}/replies`,
+        { body: { body }, signal: signal() },
+      );
+      return pullRequestWriteResult(res.data);
+    },
+    async updatePullRequestReviewers(prNumber, input) {
+      const res = await githubRequest<{ html_url?: string }>(
+        config,
+        input.action === "add" ? "POST" : "DELETE",
+        `${repoApi}/pulls/${prNumber}/requested_reviewers`,
+        {
+          body: {
+            ...(input.users?.length ? { reviewers: input.users } : {}),
+            ...(input.teams?.length ? { team_reviewers: input.teams } : {}),
+          },
+          signal: signal(),
+        },
+      );
+      return pullRequestWriteResult(res.data);
+    },
+    async updatePullRequestAssignees(prNumber, input) {
+      const res = await githubRequest<{ html_url?: string }>(
+        config,
+        input.action === "add" ? "POST" : "DELETE",
+        `${repoApi}/issues/${prNumber}/assignees`,
+        { body: { assignees: input.names }, signal: signal() },
+      );
+      return pullRequestWriteResult(res.data);
+    },
+    async setPullRequestReviewThreadResolved(prNumber, threadId, resolved) {
+      await githubSetReviewThreadResolved(
+        ref,
+        config,
+        prNumber,
+        threadId,
+        resolved,
+        parentSignal,
+      );
+    },
     repository: ref,
     repoWebUrl,
     async findPullRequestsForBranch(headBranch) {
@@ -3134,12 +3299,7 @@ function githubProvider(
           return pull;
         },
         async postComment(body) {
-          const res = await githubRequest<{ html_url?: string }>(
-            config,
-            "POST",
-            `${repoApi}/issues/${prNumber}/comments`,
-            { body: { body }, signal: signal() },
-          );
+          const res = await postPullRequestComment(prNumber, body);
           return res.data?.html_url ? { url: res.data.html_url } : {};
         },
         async close() {
@@ -3329,6 +3489,22 @@ function githubProvider(
   provider.editPullRequestBody = forgetting(provider.editPullRequestBody);
   provider.mergePullRequest = forgetting(provider.mergePullRequest);
   provider.closePullRequest = forgetting(provider.closePullRequest);
+  provider.submitPullRequestReview = forgetting(
+    provider.submitPullRequestReview,
+  );
+  provider.commentPullRequest = forgetting(provider.commentPullRequest);
+  provider.replyToPullRequestReviewComment = forgetting(
+    provider.replyToPullRequestReviewComment,
+  );
+  provider.updatePullRequestReviewers = forgetting(
+    provider.updatePullRequestReviewers,
+  );
+  provider.updatePullRequestAssignees = forgetting(
+    provider.updatePullRequestAssignees,
+  );
+  provider.setPullRequestReviewThreadResolved = forgetting(
+    provider.setPullRequestReviewThreadResolved,
+  );
   return provider;
 }
 
@@ -3485,6 +3661,14 @@ function forgejoProvider(
   const repoApi = `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`;
   const repoWebUrl = `${normalizeForgejoBaseUrl(config.baseUrl)}/${ref.owner}/${ref.repo}`;
   const signal = () => requestSignal(parentSignal);
+  // No token guard here: generic comments retain anonymous HTTP attempts.
+  const postPullRequestComment = (prNumber: number, body: string) =>
+    forgejoRequest<{ html_url?: string }>(
+      config,
+      "POST",
+      `${repoApi}/issues/${prNumber}/comments`,
+      { body: { body }, signal: signal() },
+    );
   /**
    * Open pull requests matching `keep`. Forgejo cannot filter by base or head,
    * so the open set is paged and filtered here; one that cannot be exhausted
@@ -3588,6 +3772,40 @@ function forgejoProvider(
   };
   return {
     kind: "forgejo",
+    async submitPullRequestReview(prNumber, input) {
+      const comments = (input.comments ?? []).map(forgejoReviewCommentPayload);
+      const res = await forgejoRequest<{ html_url?: string }>(
+        config,
+        "POST",
+        `${repoApi}/pulls/${prNumber}/reviews`,
+        {
+          body: {
+            event:
+              input.event === "APPROVE"
+                ? "APPROVED"
+                : (input.event ?? "COMMENT"),
+            ...(input.body ? { body: input.body } : {}),
+            ...(comments.length ? { comments } : {}),
+          },
+          signal: signal(),
+        },
+      );
+      return pullRequestWriteResult(res.data);
+    },
+    async commentPullRequest(prNumber, body) {
+      return pullRequestWriteResult(
+        (await postPullRequestComment(prNumber, body)).data,
+      );
+    },
+    async commentOnPullRequestReview(prNumber, reviewId, comment) {
+      const res = await forgejoRequest<{ html_url?: string }>(
+        config,
+        "POST",
+        `${repoApi}/pulls/${prNumber}/reviews/${reviewId}/comments`,
+        { body: forgejoReviewCommentPayload(comment), signal: signal() },
+      );
+      return pullRequestWriteResult(res.data);
+    },
     repository: ref,
     repoWebUrl,
     async findPullRequestsForBranch(headBranch) {
@@ -3854,13 +4072,7 @@ function forgejoProvider(
           );
         },
         async postComment(body) {
-          // A pull request's conversation is its issue's comments.
-          const res = await forgejoRequest<{ html_url?: string }>(
-            config,
-            "POST",
-            `${repoApi}/issues/${prNumber}/comments`,
-            { body: { body }, signal: signal() },
-          );
+          const res = await postPullRequestComment(prNumber, body);
           return res.data?.html_url ? { url: res.data.html_url } : {};
         },
         async close() {

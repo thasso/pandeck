@@ -350,6 +350,8 @@ function fakeProvider(impl: Partial<GitHostingProvider>): GitHostingProvider {
     retargetPullRequest: async () => {},
     pullRequestBody: async () => "",
     editPullRequestBody: async () => ({}),
+    submitPullRequestReview: async () => ({}),
+    commentPullRequest: async () => ({}),
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),

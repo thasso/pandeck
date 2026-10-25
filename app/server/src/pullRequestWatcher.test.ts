@@ -82,6 +82,8 @@ function fakeProvider(
     retargetPullRequest: async () => {},
     pullRequestBody: async () => "",
     editPullRequestBody: async () => ({}),
+    submitPullRequestReview: async () => ({}),
+    commentPullRequest: async () => ({}),
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
