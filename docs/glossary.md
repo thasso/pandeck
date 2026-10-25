@@ -95,10 +95,16 @@ the Worker finishes what it runs and takes nothing new.\
 _Avoid_: worker API, RPC, agent bridge
 
 **Credential lease**: A Worker's right to use one credential profile for one of
-the sessions placed on it, granted and revoked by the server, which stays the
-profile's owner. Sessions on one Worker that lease the same profile share its
-materialized copy. A live account switch ends one lease and grants another.\
+the sessions placed on it, granted and revoked by the server. Each profile has
+exactly one refresher at a time, and a lease never makes the Worker a second
+one. A live account switch ends one lease and grants another.\
 _Avoid_: credential copy, token share, synced profile
+
+**Credential gateway**: The long-lived service under the server's account that
+holds the live model credentials, is their only refresher, and forwards every
+engine's model requests in exchange for a lease token.\
+_Avoid_: model proxy, LLM proxy. The package proxy is a separate function that
+happens to run in the same service.
 
 **Placement**: The one Worker a checkout lives on or a session runs on. A
 worktree session's placement follows its checkout's. A Project may have clones

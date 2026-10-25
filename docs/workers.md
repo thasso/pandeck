@@ -4,9 +4,10 @@ Agent sessions run in Workers: separately deployed processes, under an OS
 account other than the server's, that host the engines and native tools and
 reach the server only through the worker protocol. This document is the agreed
 design. None of it is implemented yet; "Phases" gives the order it ships in. The
-terms (Worker, worker protocol, credential lease, placement, Worker id) are
-defined in [glossary.md](glossary.md), and the three decisions that are hard to
-reverse are recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
+terms (Worker, worker protocol, credential lease, credential gateway, placement,
+Worker id) are defined in [glossary.md](glossary.md), and the three decisions
+that are hard to reverse are recorded in
+[ADR-0001](adr/0001-worker-hosts-the-engine.md),
 [ADR-0002](adr/0002-server-runs-under-its-own-account.md) and
 [ADR-0003](adr/0003-worker-owns-checkout-operations.md).
 
@@ -30,26 +31,35 @@ design.
 
 ## What runs where
 
-| Worker                                                            | Server                                                         |
-| ----------------------------------------------------------------- | -------------------------------------------------------------- |
-| Every session's engine: pi's loop, the Claude CLI and its hooks   | `DATA_DIR`, the database and every store in it                 |
-| Native tools: shell, files, search, Monitor                       | App tools (`pa`), approvals, Tasks, the Knowledge Base         |
-| Every checkout operation: git, status, diff, watcher, served file | One-shot runs: naming, the status card, commit messages        |
-| Worktree creation and removal, commit, push                       | Credential profiles and account routing                        |
-| Agent processes: background work, stop before removal, OOM sweep  | External MCP servers, the package proxy, container pulls       |
-| Container residue cleanup                                         | Browser tools, desktop port forwarding, the web client and API |
+Three services, each with its own lifetime:
+
+- **Worker**, under the Worker's account: every session's engine (pi's loop, the
+  Claude CLI and its hooks); native tools (shell, files, search, Monitor); every
+  checkout operation (git, status, diff, the watcher, served files, worktree
+  creation and removal, commit, push); the agent processes it starts (background
+  work, stopping them before a removal, the OOM score sweep, container residue
+  cleanup); and the full output of native tools.
+- **Server**, under the server's account: `DATA_DIR` and every store in it, app
+  tools (`pa`), approvals, Tasks, the Knowledge Base, one-shot runs, credential
+  profile metadata, account routing and login flows, external MCP servers,
+  container image pulls, browser tools, desktop port forwarding, and the web
+  client and API.
+- **Credential gateway**, also under the server's account, on the server's host:
+  the live model credentials and their only refresher, every model request any
+  engine makes, and the package proxy.
 
 Every session runs on a Worker, including Assistant sessions without native
 tools and the Personal Assistant, so every session survives a server restart.
-One-shot runs stay on the server: they carry no tools, finish in seconds and use
-credentials the server already holds.
+One-shot runs stay on the server. They have no native tools, at most a bounded
+allowlist of app tools (task intake's research tools, for example), finish in
+seconds, and reach the model through the gateway like everything else.
 
-Helpers that hold Pandeck secrets stay on the server: the package proxy (real
-registry credentials behind placeholder tokens), container image pulls (the
-registry credential), and external MCP servers (integration credentials through
-`trustedEnv`). Agents see the MCP servers only as tools. A Worker-side MCP
-server, for one that must read the Worker's files, is an explicit exception and
-not the default.
+Helpers that hold Pandeck secrets stay on the server's account: container image
+pulls (the registry credential) and external MCP servers (integration
+credentials through `trustedEnv`) on the server, the package proxy (real
+registry credentials behind placeholder tokens) in the gateway. Agents see the
+MCP servers only as tools. A Worker-side MCP server, for one that must read the
+Worker's files, is an explicit exception and not the default.
 
 The Knowledge Base and the skills and agent libraries are git repositories
 inside `DATA_DIR`. They are Pandeck data, not checkouts, and stay outside
@@ -57,16 +67,38 @@ placement, reachable only through their tools.
 
 ## Accounts and secrets
 
-The server runs under a dedicated account. `DATA_DIR` belongs to it, mode 0700,
-and the server refuses to boot when the Worker account can read `DATA_DIR` or
-the server's environment file. Moving an existing `DATA_DIR` to the new account
-is a runbook step the operator performs once, never an automatic migration.
+The server and the gateway run under a dedicated account. `DATA_DIR` belongs to
+it, mode 0700, and the server refuses to boot when the Worker account can read
+`DATA_DIR` or the server's environment file. Moving an existing `DATA_DIR` to
+the new account is a runbook step the operator performs once, never an automatic
+migration.
 
 The Worker runs under an account the operator chooses. For a personal deployment
 the intended default is the human user's own account: agents then use the user's
 home, tools and credentials such as SSH keys, and the boundary protects
 Pandeck's secrets, not the user's home. A dedicated agent account works too, at
 the cost of granting it every repository and push credential explicitly.
+
+**The boundary holds only if the Worker's account has no root-equivalent access
+to the server's host.** Membership in a group that reaches a rootful Docker
+daemon, or passwordless `sudo`, lets an agent mount `DATA_DIR` and read it as
+root. The Worker reports its account's groups and whether it can reach a rootful
+daemon or `sudo` without a password, and Settings warns when it can. The
+recommended container setup for a Worker account is rootless Docker or Podman;
+container residue cleanup then reclaims files through that daemon's user
+namespace instead of a rootful `chown`.
+
+### File paths in app tools
+
+App tools run as the server, so an app tool must never open a path an agent
+supplies. Every agent-supplied filesystem source resolves on the session's own
+Worker, through the checkout port or the Worker's file access, or through a
+scoped server-owned door such as attachments or the Knowledge Base. An absolute
+path on the server's host is refused. Today several tools read such paths
+directly as the server: Confluence attachment upload stages any absolute path as
+a session attachment before approval, and `show_files`, the converters and
+uploads take host paths too. Phase 3 does not ship until every such tool is
+inventoried and moved.
 
 ## Checkouts and placement
 
@@ -76,10 +108,13 @@ it. A worktree is made only from a base clone on the same Worker. A Project may
 have base clones on several Workers, each placed separately; until phase 4, each
 Project has one.
 
-A worktree session's placement follows its checkout. A session without a
-worktree has its own placement, by default the configured default Worker; there
-is no load balancing until there is more than one Worker to balance. Moving a
-checkout to another Worker is an explicit act, never automatic.
+A session whose working directory is a placed checkout runs on that checkout's
+Worker. That covers worktree sessions and sessions working in a base clone, such
+as the merge and squash conflict agents, which have no worktree link. Only a
+session without a checkout has its own placement, by default the configured
+default Worker; there is no load balancing until there is more than one Worker
+to balance. Moving a checkout to another Worker is an explicit act, never
+automatic.
 
 A Project's local path is per Worker: the registry records one for each Worker
 that holds a clone, and the Personal Assistant's working directory is a path on
@@ -89,10 +124,22 @@ its default Worker.
 
 The server stays the system of record for everything durable about a session:
 the app log, the engine's own record and resume handle, the Claude CLI's native
-transcript and pi's session file. The Worker keeps a working copy, streams
-changes to the server and rehydrates from the server when it takes a session. A
-Worker's disk therefore holds nothing that cannot be rebuilt, which is what lets
-a Worker be replaced, and later be an ephemeral container or microVM.
+transcript, pi's session file, and the full output of native tools that the
+transcript refers to. The Worker keeps a working copy, streams changes to the
+server and rehydrates from the server when it takes a session. Native tool
+output is written on the Worker first and uploaded through the same spool; until
+the upload is acknowledged, the agent reads it on the Worker, and a reference
+never points into `DATA_DIR` from the Worker's side.
+
+What a Worker's disk holds falls in two classes:
+
+- **Replicated session state and caches**: working copies of session state,
+  materialized skill bundles, spooled output. All of it can be rebuilt from the
+  server, which is what lets a Worker restart anywhere and later run as an
+  ephemeral container or microVM.
+- **Checkouts**: persistent storage. Unpushed commits, uncommitted changes and
+  ignored local files exist only there, so a checkout's disk needs the care a
+  developer's working copy does, and moving a checkout carries them along.
 
 Skills, agent definitions and prompt assets stay server-owned. A session's
 frozen skill layout reaches its Worker as a content-addressed bundle, which the
@@ -113,9 +160,9 @@ ones and is replaced.
 under the Worker's account, so it can read the Worker's credential, connect to
 the socket itself or read the Worker's memory: whatever the Worker may do, an
 agent may do. A Worker may act only for sessions and checkouts placed on it,
-request credential leases only for those sessions, and call app tools only with
-the authority each session has today. A compromised agent then gains nothing
-beyond what its own Worker already runs.
+hold credential leases only for those sessions, and call app tools only with the
+authority each session has today. A compromised agent then gains nothing beyond
+what its own Worker already runs.
 
 ### Enrollment and identity
 
@@ -131,28 +178,62 @@ is not the machine's hostname: moving a Worker to new hardware re-enrolls the
 same Worker under the same id with a fresh credential. The display name is
 separate and free to change.
 
-## Credential leases
+## Credentials
 
-The server owns every credential profile. A Worker receives a lease for one
-session's profile; it never holds the profile store. The lease is per session,
-but the Worker materializes one copy per profile it holds leases on, shared by
-its sessions on that profile, as sessions share one profile directory today. The
-engines refresh tokens there, and the Worker writes refreshed tokens back to the
-server. A live account switch ends one lease and grants another.
+Each credential profile has exactly one refresher at a time. An OAuth refresh
+usually rotates the refresh token, so a second holder refreshing on its own
+would invalidate the first. Today that holds only because every holder shares
+one directory on one disk: the Claude CLI refreshes `.credentials.json` under
+its `CLAUDE_CONFIG_DIR`, pi refreshes the profile's `auth.json`.
 
-An agent can read the profiles in use on its own Worker; it cannot read the
-others.
+The target is the **credential gateway**. Engines send their model requests to
+it with a lease token instead of a credential; the gateway checks the lease and
+forwards the request with the real one. It owns the live tokens and is their
+only refresher. The server keeps profile metadata, account routing and the login
+flows, and hands freshly obtained tokens to the gateway; its own one-shot runs
+and usage queries go through the gateway too. Engines hold no refresh token, so
+the number of Workers and machines never changes the refresh story, and an agent
+can read no model credential at all.
+
+The server pushes leases and revocations to the gateway, which keeps them and
+checks lease tokens locally. Model requests therefore keep working while the
+server restarts, and a revocation takes effect as soon as the push arrives. A
+live account switch ends one lease and grants another inside the gateway.
+
+The gateway runs centrally, on the server's host, as its own long-lived service
+under the server's account; remote Workers reach it over TLS. A gateway on every
+Worker host would put model credentials on each of those machines. The package
+proxy lives in the same service, so builds keep working through server deploys
+and remote Workers reach registries the same way. Its public trust material
+lives outside `DATA_DIR`, where the Worker's account can read it.
+
+The gateway depends on both engines accepting a custom endpoint with a bearer
+token on subscription credentials. Phase 3 starts with a spike that tests this.
+If it fails, the fallback is **exclusive leases**: one Worker, or the server,
+holds a profile at a time, refreshes it and writes the result back; sessions on
+that account then run only on its holder, and server one-shots borrow the
+holder's current token. In that case the package proxy stays in the server
+process, and builds through it fail for the few seconds a server restart takes.
 
 ## When the server is down
 
-A running turn keeps going. Native tools never need the server, so most of a
-coding turn proceeds untouched. The Worker spools the session's events and
-record changes durably until the server acknowledges them. App tool calls and
-approval hooks wait for the server for a bound of about ten minutes, which
-covers a normal deploy, and then fail as an ordinary tool error the agent sees.
+A running turn keeps going. Native tools never need the server, and model
+requests go through the gateway, so most of a coding turn proceeds untouched.
+The Worker spools the session's events, record changes and native output durably
+until the server acknowledges them. App tool calls and approval hooks wait for
+the server for a bound of about ten minutes and then fail as an ordinary tool
+error the agent sees.
 
 When the spool reaches its size cap, the Worker holds the turn before its next
 model request until the server is back, rather than drop events.
+
+When the server starts, it does not assume that nothing is running. Today's boot
+recovery marks every open run interrupted, reconciles background work as lost
+and admits new work at once. With Workers, recovery waits until each Worker that
+was connected reports what it runs, or until a reconnect deadline passes. Runs
+and Worker connections carry epochs, so the server fences a stale Worker's late
+reports, deduplicates replayed spool entries, and marks a run interrupted only
+when its Worker has said it is gone or never came back.
 
 ## When a Worker stops
 
@@ -162,25 +243,28 @@ it up; they reattach to the restarted Worker or to another one, since the server
 holds their state.
 
 When a Worker dies or vanishes, its running turns end as interrupted turns
-([interrupted-turns.md](interrupted-turns.md)). Sessions without a worktree can
-resume on any Worker. Worktree sessions wait for their Worker, or for an
-explicit move of their checkout.
+([interrupted-turns.md](interrupted-turns.md)). Sessions without a checkout can
+resume on any Worker. Sessions in a checkout wait for their Worker, or for an
+explicit move of the checkout.
 
 ## Served files
 
-A served-file URL names the Worker id, `/api/files/<worker id>/<absolute path>`,
-and the server streams the bytes from that Worker. An unqualified
-`/api/files/<absolute path>` link, the form in existing transcripts and
-documents, resolves on the default Worker. Session artifacts and attachments
-stay server-side, as [served-files.md](served-files.md) describes.
+A Worker's files have their own route,
+`/api/workers/<worker id>/files/<absolute path>`, and the server streams the
+bytes from that Worker. Typed file targets carry the Worker id. The unqualified
+`/api/files/<absolute path>`, the form in existing transcripts and documents,
+means the default Worker. A separate route needs no reserved names: a Worker id
+can never be mistaken for the first segment of a path. Session artifacts and
+attachments stay server-side, as [served-files.md](served-files.md) describes.
 
 ## Deployment
 
-The Worker ships in the same release artifact as the server, with its own entry
-point and its own service unit, and the server never starts or stops a Worker
-process. A Worker started by the server would share its cgroup and stop with
-every deploy. A deploy does not restart Workers implicitly: the operator
-restarts one on purpose, or when the server reports a major protocol mismatch.
+The Worker and the gateway ship in the same release artifact as the server, each
+with its own entry point and its own service unit, and the server never starts
+or stops either. A Worker started by the server would share its cgroup and stop
+with every deploy. A deploy does not restart Workers or the gateway implicitly:
+the operator restarts one on purpose, or when the server reports a major
+protocol mismatch. The server no longer needs to drain turns before a restart.
 The drain and out-of-memory rules in [deployment.md](deployment.md) move to the
 Worker's unit, since that is where the agent processes run.
 
@@ -191,9 +275,9 @@ its own Worker beside its server and never shares production's.
 ## What the user sees
 
 Each session shows its Worker. Settings has a Workers page: health, version,
-protocol version, sessions, placed checkouts, and revoking enrollment. An
-offline Worker or a protocol mismatch is a condition in the app status slot
-([messaging.md](messaging.md)).
+protocol version, sessions, placed checkouts, root-equivalent access warnings,
+and revoking enrollment. An offline Worker or a protocol mismatch is a condition
+in the app status slot ([messaging.md](messaging.md)).
 
 ## Phases
 
@@ -201,21 +285,24 @@ offline Worker or a protocol mismatch is a condition in the app status slot
    or reads checkouts, and an engine-host interface, served by an in-process
    Worker over the real protocol codec. No behavior change.
 2. **The Worker as its own process and unit, same account.** Turns survive a
-   server restart (goal 2).
-3. **The server under its own account.** `DATA_DIR` moves, the boot check lands,
-   credential leases replace the shared profile store (goal 1). It comes after
-   phase 2 because before it, the server would have nothing to hand checkout
-   work to.
+   server restart (goal 2). Done when the server's boot recovery waits for
+   Worker inventories and fences stale reports, rather than marking live Worker
+   runs interrupted.
+3. **The server under its own account** (goal 1). Starts with the gateway spike,
+   then ships the credential gateway (or exclusive leases), moves `DATA_DIR`,
+   adds the boot check and the root-equivalent access warning, and moves every
+   app tool that opens agent-supplied paths. It comes after phase 2 because
+   before it, the server would have nothing to hand checkout work to.
 4. **Several Workers, then remote Workers** over TCP with TLS, with tunnels for
    the server's loopback features.
 5. **Isolation levels** inside a Worker: bubblewrap, containers, microVMs.
 
 ## Open questions
 
-- **One refresher per profile across Workers.** Two Workers on the same profile
-  would each refresh its OAuth token, and a provider that rotates refresh tokens
-  would invalidate the other copy. Phase 4 decides between the server refreshing
-  and handing out access tokens, and leasing a profile to one Worker at a time.
-  It needs a test of how the Claude CLI behaves first.
+- **The gateway spike.** Whether the Claude CLI and pi run on subscription
+  credentials through a custom endpoint, how each behaves on a 401 and in a
+  long-running process, and whether the provider's terms allow routing the
+  operator's own subscription through the operator's own gateway. The answer
+  picks between the gateway and exclusive leases.
 - **Remote reach for loopback features.** Desktop port forwarding and browser
   tools reach Worker processes over loopback until phase 4 adds tunnels.

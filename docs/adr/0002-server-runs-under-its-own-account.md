@@ -12,8 +12,11 @@ can read, and Workers run under a different account the operator chooses. The
 intended default for a personal deployment is the human user's own account:
 agents then work the way the user does, with their home, tools and credentials
 such as SSH keys, and the boundary protects Pandeck's secrets rather than the
-user's home. A Worker receives model credentials one session at a time through
-credential leases, never the whole profile store.
+user's home. Model credentials stay under the server's account too, in the
+credential gateway; Workers use them through leases and never hold the profile
+store. The boundary holds only while the Worker's account has no root-equivalent
+access to the server's host, such as a rootful Docker daemon or passwordless
+`sudo`.
 
 ## Considered options
 

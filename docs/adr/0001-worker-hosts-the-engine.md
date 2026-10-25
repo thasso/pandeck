@@ -18,5 +18,6 @@ records included.
   calls to the Worker. Rejected: every server restart still ends every turn.
 - **Self-contained Worker**: the Worker owns its sessions' state and the server
   aggregates. Rejected: it splits `DATA_DIR`'s one writer and every state-sync
-  contract, and a Worker's disk becomes something to back up and migrate, which
-  rules out ephemeral containers and microVMs.
+  contract, and session state on a Worker's disk would need backup and
+  migration, which rules out ephemeral containers and microVMs. Checkouts stay
+  the one thing on a Worker's disk the server cannot rebuild.
