@@ -94,6 +94,20 @@ export function createMutationLifecycle<
         )
           finish(requestId, { type: "settled" }, observation);
     },
+    /** Raw object broadcasts belong to the oldest matching write only. */
+    observeFirst(
+      observation: Observation,
+      matches: (context: Context) => boolean,
+    ) {
+      for (const [requestId, entry] of pending) {
+        if (!matches(entry.context)) continue;
+        if (entry.done?.(entry.settled, observation))
+          finish(requestId, { type: "settled" }, observation);
+        // Even an incomplete or reentrant completion must not expose the next
+        // same-object write to this uncorrelated observation.
+        break;
+      }
+    },
     get: (requestId: string) => pending.get(requestId)?.context,
     get size() {
       return pending.size;
@@ -122,7 +136,7 @@ export function createMutationLifecycle<
       recoveries = [];
       for (const { context, recover } of queued) recover(context);
     },
-    /** Effect teardown abandons migrated writes, not the staged legacy paths. */
+    /** Effect teardown abandons opted-in writes and their recovery obligations. */
     cleanup() {
       for (const [requestId, entry] of [...pending])
         if (entry.disconnected) finish(requestId, { type: "unknown" });

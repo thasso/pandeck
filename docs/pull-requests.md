@@ -1200,6 +1200,15 @@ restart or crash and records that the action was INTERRUPTED (it may or may not
 have landed) rather than silently forgetting it — otherwise the card would
 refuse every later click forever.
 
+The browser's [mutation lifecycle](state-sync.md#client-mutation-lifecycle)
+releases its local pending claim and embedded Task optimism silently on genuine
+connection loss. This does not clear durable busy or cancel server work.
+Reconnect reads determine what landed, with action-specific recovery after
+subscription send and no automatic retry. Mounted merge-method and branch-delete
+choices remain current. Connected completion, the durable gate, and the
+start-based 30-second linked-Task / 15-minute remote-action deadlines are
+unchanged.
+
 The two local actions also refuse a card whose `baseBranch` is not the
 worktree's: `/pr --base <branch>` can target a base the checkout does not track,
 and rebasing onto (or verifying containment against) the worktree's base while

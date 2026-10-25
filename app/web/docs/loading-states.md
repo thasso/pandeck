@@ -38,6 +38,14 @@ newer requests, session changes and unmount invalidate it. A batched start/loss
 needs no rendered busy frame. Clear invents no draft, and authoritative stored
 or provider-applied values never serve as proof of a local attempt's outcome.
 
+PR-card actions also release local pending and embedded linked-Task optimism
+silently on genuine connection loss. Durable server busy remains authoritative,
+so release does not promise the button is available or cancel the action.
+Canonical optimistic lists await recovery rather than an inverse rollback.
+Mounted merge-method and branch-delete choices survive refusal, manual retry and
+reconnect; unsupported methods still fall back to an offered method. No new
+loading state, notification or automatic retry is added.
+
 **Stale-while-refresh is the default.** A second fetch of the same query keeps
 what is on screen. Blanking is reserved for a different object.
 

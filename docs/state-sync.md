@@ -204,9 +204,9 @@ before calling a terminal hook, so completion, stamped error, timeout and
 unknown retire it once. The core owns each record's settled bit; a descriptor
 can wait for fresh authoritative evidence after settle without resetting the
 deadline. Its first-settle hook runs once. Descriptors keep domain deadlines,
-control keys, recovery and failure policy. Task, Project, workflow delivery and
-compaction correlation live in those records, not separate control maps. Replica
-item reads retain their own request table and deadlines.
+control keys, recovery and failure policy. Task, Project, workflow delivery,
+compaction and PR-card correlation live in those records, not separate control
+maps. Replica item reads retain their own request table and deadlines.
 
 For Tasks and Projects, loss of a connected socket is terminal with **outcome
 unknown**. Failed connection attempts do not retire queued, unsent writes: their
@@ -260,12 +260,38 @@ replays, since the normal subscription supplies run/session authority. It must
 not release a newer offline claim for the same run. Teardown cancels migrated
 timers and drops recovery obligations. Workflow cards are not boot-cache data.
 
-PR-card actions still use the common identity/timer owner but keep their legacy
-two-signal map, explicit final finish and wait-until-timeout disconnect policy
-until Task-1094, including linked-Task effects. Other tracker callers change
-storage only. Migration is selected by descriptor, never by a touched topic.
-Wire messages, 30-second and 15-minute deadlines, connected failure surfaces and
-replica read ownership are unchanged.
+PR-card descriptors remember own busy, outcome and the raw competing card;
+settled state remains in the core. Each raw card broadcast reaches only the
+oldest pending request for that card, before reducer transformation, even when
+it cannot complete that request. Matching busy proves dequeue and forgets an
+earlier competitor, but does not complete a PR request. Previous watcher
+outcomes are ignored until own busy was seen. Its clear, including a fieldless
+clear or a newer different busy, records the outcome. Success needs settle too;
+a durable refusal can finish and recover before settle. A competing action
+before own busy needs settle, then restores the raw competing card and recovers
+once. Stamped errors belong to the card; only a placed transcript row suppresses
+the generic chat failure. Deadlines remain start-based: 30 seconds for
+mark-task-done and 15 minutes for merge, update-with-main and cleanup.
+
+Genuine loss retires PR correlation and timers silently, drops local
+pendingAction and embedded optimisticLinkedTask, and leaves durable busy,
+outcome and server work alone. Canonical optimistic rows are not inversely
+rolled back. Failed attempts leave queued-unsent claims intact. Linked-Task loss
+invalidates touched revisions synchronously; after reconnect subscription send
+it always issues targeted getStateItems, even beside a snapshot or while Tasks
+is unheld. This is not ordinary Task resync. Equal-revision targeted authority
+repairs canonical and embedded Task data. Cleanup releases worktree and
+sibling-session effects together and recovers both the worktree list and the
+currently selected live/archived session collection after subscribe. Other
+session-only card actions add no recovery reads.
+
+Deferred recovery never dispatches a card result or restores an old competitor
+over a newer offline click. Authoritative reads may still replace that click's
+Task data and remove embedded optimism without releasing its pendingAction;
+there is no request-aware rebase. Teardown cancels timers and discards recovery.
+Other tracker callers retain their own policies. Migration is selected by
+descriptor, never by a touched topic. Wire messages, connected failure surfaces
+and replica read ownership are unchanged.
 
 ## Client replica
 
