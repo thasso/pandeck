@@ -536,8 +536,8 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
   });
 });
 
-// These writes bypass the provider seam, so the inventory, the open list and
-// its annotations would otherwise show the old state for a whole sync period.
+// Inventory refresh remains tool-owned. Comments and replies deliberately
+// do not schedule a refresh, even though other approved writes do.
 describe("forgejo PR writes invalidate what the inventory remembers", () => {
   const invalidations = () =>
     vi.mocked(invalidateForgejoPullRequestWrite).mock.calls;

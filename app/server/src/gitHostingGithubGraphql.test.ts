@@ -15,6 +15,7 @@ vi.mock("./githubSettings.ts", async (importActual) => ({
 }));
 import {
   hostingProviderFor,
+  type GitHostingProvider,
   type RemoteRepoRef,
   resetGithubOpenPullAnnotationsForTests,
 } from "./gitHosting.ts";
@@ -478,6 +479,181 @@ test("a write drops the repository's annotations", async () => {
 
   assert.equal(provider.openPullRequestAnnotation!(7), undefined);
 });
+
+test("close's private comment does not evict before the single outer close boundary", async () => {
+  stubFetch(openListAnswer);
+  const provider = githubProvider(ref, config);
+  await provider.listOpenPullRequests();
+  let closed = false;
+  const methods: string[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    // The cached annotation must survive the internal comment and confirmation.
+    assert.ok(provider.openPullRequestAnnotation!(7));
+    methods.push(init?.method ?? "GET");
+    if (init?.method === "POST") return new Response("null");
+    if (init?.method === "PATCH") {
+      closed = true;
+      return new Response("{}");
+    }
+    return new Response(
+      JSON.stringify({
+        number: 7,
+        state: closed ? "closed" : "open",
+        head: { sha: "h" },
+      }),
+    );
+  }) as typeof fetch;
+  const result = await provider.closePullRequest(7, {
+    expectedHeadSha: "h",
+    comment: "hello",
+  });
+  assert.equal(result.closed, true);
+  assert.equal(result.commentUrl, "");
+  assert.deepEqual(methods, ["GET", "POST", "GET", "PATCH", "GET"]);
+  assert.equal(provider.openPullRequestAnnotation!(7), undefined);
+});
+
+const annotationMutations: Array<{
+  name: string;
+  write: (provider: GitHostingProvider) => Promise<unknown>;
+}> = [
+  { name: "body edit", write: (p) => p.editPullRequestBody(7, "new") },
+  {
+    name: "review",
+    write: (p) => p.submitPullRequestReview(7, { event: "APPROVE" }),
+  },
+  { name: "timeline comment", write: (p) => p.commentPullRequest(7, "hello") },
+  {
+    name: "review reply",
+    write: (p) => p.replyToPullRequestReviewComment!(7, 9, "hello"),
+  },
+  ...(["add", "remove"] as const).flatMap((action) => [
+    {
+      name: `${action} reviewers`,
+      write: (p: GitHostingProvider) =>
+        p.updatePullRequestReviewers!(7, {
+          action,
+          users: ["alice"],
+          teams: ["dev"],
+        }),
+    },
+    {
+      name: `${action} assignees`,
+      write: (p: GitHostingProvider) =>
+        p.updatePullRequestAssignees!(7, { action, names: ["alice"] }),
+    },
+  ]),
+  ...([true, false] as const).map((resolved) => ({
+    name: resolved ? "resolve thread" : "reopen thread",
+    write: (p: GitHostingProvider) =>
+      p.setPullRequestReviewThreadResolved!(7, "PRRT_one", resolved),
+  })),
+];
+
+for (const { name, write } of annotationMutations) {
+  test.each([false, true])(
+    `${name} evicts populated provider annotations on failure=%s, including a late list`,
+    async (fail) => {
+      stubFetch(openListAnswer);
+      const provider = githubProvider(ref, config);
+      const second = githubProvider(ref, config);
+      await provider.listOpenPullRequests();
+      assert.ok(provider.openPullRequestAnnotation!(7));
+      assert.ok(second.openPullRequestAnnotation!(7));
+
+      let finishList!: (response: Response) => void;
+      let listStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        listStarted = resolve;
+      });
+      globalThis.fetch = (async (_input, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.query?.includes("pullRequests(")) {
+          listStarted();
+          return new Promise<Response>((resolve) => {
+            finishList = resolve;
+          });
+        }
+        if (fail)
+          return new Response(JSON.stringify({ message: "rejected" }), {
+            status: 422,
+          });
+        if (body.query?.startsWith("query"))
+          return new Response(
+            JSON.stringify({
+              data: {
+                node: {
+                  __typename: "PullRequestReviewThread",
+                  id: "PRRT_one",
+                  isResolved: name === "reopen thread",
+                  pullRequest: {
+                    number: 7,
+                    repository: { nameWithOwner: "acme/repo" },
+                  },
+                },
+              },
+            }),
+          );
+        if (body.query?.startsWith("mutation")) {
+          const resolved = name === "resolve thread";
+          return new Response(
+            JSON.stringify({
+              data: {
+                [resolved ? "resolveReviewThread" : "unresolveReviewThread"]: {
+                  thread: { id: "PRRT_one", isResolved: resolved },
+                },
+              },
+            }),
+          );
+        }
+        return new Response("{}");
+      }) as typeof fetch;
+      const pendingList = provider.listOpenPullRequests();
+      await started;
+      if (fail) await assert.rejects(write(provider), /rejected/);
+      else await write(provider);
+      assert.equal(provider.openPullRequestAnnotation!(7), undefined);
+      assert.equal(second.openPullRequestAnnotation!(7), undefined);
+      finishList(new Response(JSON.stringify(openListAnswer())));
+      await pendingList;
+      assert.equal(provider.openPullRequestAnnotation!(7), undefined);
+      assert.equal(second.openPullRequestAnnotation!(7), undefined);
+    },
+  );
+}
+
+test.each(["same-state", "confirmation refusal"])(
+  "thread %s also evicts provider annotations",
+  async (mode) => {
+    stubFetch(openListAnswer);
+    const provider = githubProvider(ref, config);
+    await provider.listOpenPullRequests();
+    assert.ok(provider.openPullRequestAnnotation!(7));
+    stubFetch((request) => ({
+      data: request.body?.query?.startsWith("query")
+        ? {
+            node: {
+              __typename: "PullRequestReviewThread",
+              id: "PRRT_one",
+              isResolved: mode === "same-state",
+              pullRequest: {
+                number: 7,
+                repository: { nameWithOwner: "acme/repo" },
+              },
+            },
+          }
+        : {},
+    }));
+    const result = provider.setPullRequestReviewThreadResolved!(
+      7,
+      "PRRT_one",
+      true,
+    );
+    if (mode === "same-state") await result;
+    else await assert.rejects(result, /confirm/);
+    assert.equal(provider.openPullRequestAnnotation!(7), undefined);
+  },
+);
 
 // `headRefName` matches same-named branches on every fork. A full page with
 // fork pull requests on it cannot prove ours is absent, so the owner-filtered

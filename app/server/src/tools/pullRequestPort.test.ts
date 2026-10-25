@@ -42,15 +42,19 @@ vi.mock("../pullRequestInventorySync.ts", async (importActual) => ({
 }));
 
 let sequence = 0;
-const context = () => ({
-  toolCallId: "port",
-  session: {
-    sessionId: `port-${++sequence}`,
-    harness: "pi" as const,
-    agentType: "developer" as const,
-  },
-  signal: new AbortController().signal,
-});
+const context = () => {
+  const controller = new AbortController();
+  return {
+    toolCallId: "port",
+    session: {
+      sessionId: `port-${++sequence}`,
+      harness: "pi" as const,
+      agentType: "developer" as const,
+    },
+    signal: controller.signal,
+    controller,
+  };
+};
 const latest = (id: string) => approvalsForSession(id).at(-1)!;
 const cases = [
   {
@@ -135,7 +139,7 @@ for (const entry of cases) {
         baseUrl: "https://new-forgejo.example.invalid:8443/root",
       });
       // The proposal signal is not retained after approval.
-      ctx.signal = AbortSignal.abort();
+      ctx.controller.abort();
       const { card } = await resolveApproval(
         latest(ctx.session.sessionId).id,
         "approved",

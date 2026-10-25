@@ -815,8 +815,8 @@ describe("github_assign_pull_request", () => {
   });
 });
 
-// These writes bypass the provider seam, so the inventory, the open list and
-// its annotations would otherwise show the old state for a whole sync period.
+// Inventory refresh remains tool-owned, separate from provider annotation
+// eviction. Comments and replies deliberately do not schedule a refresh.
 describe("github PR writes invalidate what the inventory remembers", () => {
   test("an approved review invalidates that pull request; a comment does not", async () => {
     globalThis.fetch = vi.fn(

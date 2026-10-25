@@ -242,24 +242,51 @@ keys (`github:close`, `forgejo:close`) are card-only. `/pr` remains the human
 all-in-one commit/push/create command and keeps its session-derived Task chooser
 behavior.
 
-Generic create, body edit and ready use `GitHostingProvider` through
-`hostingProviderFor({ service, owner, repo })`, which snapshots the selected
-integration's current tool settings at execution. It does not detect a remote,
-select another account or fall back to the other service. Managed paths keep
-`hostingProviderForRepo`, resolved from the checkout's selected push remote. The
-adapter constructors are private. Approval gating, result wording and API URL
-overrides remain tool-owned. Provider annotation caches invalidate in the
-provider; the generic executor invalidates PR inventory in `finally`, including
-a failed write; managed paths additionally own card projections and read-back.
-Review submission, comments/replies, reviewer/assignee changes and thread
-resolution still use raw provider clients pending Task-1096.
+All generic PR writes, including create, edit, ready, close, reviews,
+comments/replies, GitHub reviewer/assignee changes and thread resolution, use
+`GitHostingProvider` through `hostingProviderFor({ service, owner, repo })`,
+which snapshots the selected integration's current tool settings at execution.
+It does not detect a remote, select another account or fall back to the other
+service. Managed paths keep `hostingProviderForRepo`, resolved from the
+checkout's selected push remote. The adapter constructors are private. Approval
+gating, result wording and API URL overrides remain tool-owned. Every GitHub
+port mutator drops provider annotations in `finally`, including standalone
+comments, failed writes and same-state thread operations. The generic executor
+separately invalidates PR inventory in `finally`, except for standalone timeline
+comments and review replies. A close with an internal comment still invalidates
+inventory as one close operation. Managed paths additionally own card
+projections and read-back.
 
-Create and body edit use the port's eight-second per-request deadline, as ready
-and retarget already did. No write retries automatically. A create accepted
-remotely just before a timeout can exist even though its approval failed and its
-number is unknown. Inspect current pull requests for that repository/head before
+Both adapters support review submission and timeline comments. GitHub supports
+replies to numeric review-comment ids, reviewer users/teams, assignees and
+guarded thread resolve/reopen. Forgejo instead supports file/line-anchored
+comments on an existing review. Those distinct reply and assignment/thread
+operations are optional port methods; a missing capability fails before any
+write, with no raw fallback. Assignment orchestration stays in the tool: request
+reviews, cancel review requests, assign, then unassign, skipping empty lists and
+preflighting all needed capabilities before the first request. A failure names
+only the earlier confirmed steps.
+
+Each adapter shares one private timeline-comment HTTP transport between
+standalone comments and close. Response policy remains caller-specific: a
+generic write rejects literal JSON null and retains explicit empty API URLs,
+while close counts a successful comment POST as posted even without a usable
+URL. Close keeps its token guard, head proofs, confirmation/deletion lifecycle
+and single outer annotation-eviction boundary. Newly port-backed Forgejo
+review/comment writes still attempt anonymous HTTP when no token is configured;
+close refuses before any read. The approval store continues to omit empty result
+URLs.
+
+These writes use the port's eight-second per-request deadline, not an overall
+operation deadline. No write retries automatically. A create accepted remotely
+just before a timeout can exist even though its approval failed and its number
+is unknown. Inspect current pull requests for that repository/head before
 retrying, rather than treating failure as proof that nothing happened. Re-read
-an edit or ready transition whose outcome is uncertain too.
+an edit or ready transition whose outcome is uncertain too. Likewise inspect
+reviews, comments and people lists before retrying a failed review/comment or
+partial assignment: a timed-out step may have landed, and repeating a comment
+can post it twice. Close retains its separate confirmation and recovery behavior
+below.
 
 ## Agent-facing managed body update
 
@@ -1567,13 +1594,15 @@ holds fork pull requests cannot prove ours absent: that branch falls back to the
 owner-filtered REST lookup. A GraphQL answer with any `errors` entry, without a
 node list or without a branch page's `hasNextPage` fails the batch rather than
 reading as "no pull request", and review requests beyond the first hundred are
-settled by the REST list paged to its end (ten pages, then unknown). The generic
-GitHub PR tools write outside the provider seam, so an approved create, review
-or reviewer/assignee change (even one that failed part-way) calls
-`invalidateGithubPullRequestWrite`, which drops the list, the annotations and
-that pull request's reads and rebuilds the inventory. The Forgejo PR tools do
-the same through `invalidateForgejoPullRequestWrite` after every approved write
-except a plain comment or review-thread reply.
+settled by the REST list paged to its end (ten pages, then unknown). All generic
+PR tools write through the provider seam. GitHub mutators evict annotations even
+on failure and prevent a list read started before the write from restoring stale
+annotations. The approved executor also calls `invalidateGithubPullRequestWrite`
+to drop the list and that pull request's reads and rebuild the inventory.
+Forgejo uses `invalidateForgejoPullRequestWrite`. Both tools do this after every
+approved operation, even a partial failure, except standalone timeline comments
+and review replies. Closing with a comment is still one inventory-invalidating
+operation.
 
 `pullRequestInventorySync.ts` builds this projection once at server startup and
 five minutes after each completed build, independent of whether the Pull
