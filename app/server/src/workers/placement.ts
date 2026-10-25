@@ -10,9 +10,8 @@
  * a typed choice made from the KB row, and W6 deletes this adapter once every
  * caller passes its own location.
  */
-import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { knowledgeBaseRoot } from "../knowledgeBaseSettings.ts";
+import { knowledgeBasePlacementRoots } from "../knowledgeBaseSettings.ts";
 import type { CheckoutLocation } from "../workerProtocol/checkoutMethods.ts";
 
 /** The Worker every checkout is placed on in phase 1. */
@@ -26,30 +25,14 @@ function contains(root: string, path: string): boolean {
   );
 }
 
-/**
- * Whether `cwd` lies inside the Knowledge Base folder, as named or as its
- * real path; a sibling such as `knowledge-old` does not.
- */
+/** Root history and fallback policy come from the owning settings reader. */
 function insideKnowledgeBase(cwd: string): boolean {
-  let root: string;
-  try {
-    root = resolve(knowledgeBaseRoot());
-  } catch {
-    // Settings may be unreadable or invalid during an operator edit. This
-    // optional KB match must not make unrelated checkout git depend on them.
-    // The settings/KB readers still report the original error themselves.
-    return false;
-  }
   const path = resolve(cwd);
-  if (contains(root, path)) return true;
-  let real: string;
-  try {
-    real = realpathSync(root);
-  } catch {
-    // No folder yet: nothing can be inside its real path.
-    return false;
-  }
-  return real !== root && contains(real, path);
+  return knowledgeBasePlacementRoots().some(
+    (root) =>
+      contains(root.path, path) ||
+      (root.real !== undefined && contains(root.real, path)),
+  );
 }
 
 /** The location git in `cwd` runs at; undefined keeps it on the server. */

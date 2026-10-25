@@ -249,10 +249,18 @@ it.
   family, `serverRepoGit.ts`. That includes the KB when it is browsed or
   committed as a checkout: the adapter keeps any path inside the Knowledge Base
   root (as named, or as its real path) on the server. If KB settings cannot be
-  read, the adapter has no matching KB placement and routes checkout git to the
-  default Worker; settings and KB readers still report their original error.
-  Readable settings restore KB-local routing on the next call. W3 replaces that
-  path rule with a typed choice made from the KB row.
+  read, the adapter keeps lexical and observed realpath matches for the last
+  successfully resolved root from any KB/settings reader and the default KB root
+  local. The owning settings module keeps this history; placement has no
+  separate cache. Other paths still reach the default Worker, so unrelated
+  checkout git keeps working. One warning logs per failure episode; a successful
+  settings read resets it. Readable settings are authoritative again, even if
+  the configured root changed. Settings and KB readers still report their
+  original errors. On a cold start, an unknown custom root cannot be recognized
+  while settings are unreadable. This residual is accepted only in phase 1,
+  where the Worker shares the server process and account. It MUST be closed
+  before the Worker leaves that process. W3 replaces the path rule with a typed
+  choice made from the KB row.
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the
