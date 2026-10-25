@@ -563,28 +563,30 @@ Workflow Run role sessions are the run's item and raise no chip of their own. A
 card with no chip and nothing moving is done.
 
 What the fold may never hide is the work that needs a human. A folded peer
-asking, awaiting approval, waiting on a Task choice or holding an unresolved
-failure LIFTS the whole cluster to that tier, is named on the card, and opens
-from it in one action — and it keeps the cluster in the working set even when
-the coordinator itself is settled, so a settled coordinator can never bury a
-peer's question or failure. A failure here is the FAILED BADGE. A later run
-start may clear the failure's message, but the unacknowledged failed outcome
-keeps the session classified as `failed`, so the cluster still counts and
-bubbles it. More generally, a settled coordinator with an UNSETTLED peer folded
-anywhere under it stays a card in the working set, because work the user has not
-put down may never be folded into a row that is; otherwise it and every session
-folded under it take the shelf, each as its own shelf row, so none of them
-leaves the shelf while a peer runs. A settled peer merely running again does not
-bring it back: it runs from the shelf raising no outcome, exactly as the
-coordinator's own next turn does, so the card does not come and go with every
-peer turn. The coordinator's composer ledge still shows that run. The same rule
-holds inside the tree: a settled peer folds only while live work hangs below it,
-so a live peer it spawned stays under the coordinator above instead of surfacing
-as a card of its own. A settled peer its coordinator sets going again — a turn,
-or background jobs — is live work itself: it runs from the shelf raising no
-outcome, so it folds, counts under running (a turn), jobs (background work it
-waits on) or services, refuses the coordinator's Settle in its own wording like
-any busy peer, and returns to history when it goes quiet
+asking, awaiting approval, waiting on a Task choice, holding background updates
+a turn did not handle (**Not handled**: Recover or Dismiss them in its queue
+strip; a settled peer holding them is not shelved, `isShelvedSession`) or
+holding an unresolved failure LIFTS the whole cluster to that tier, is named on
+the card, and opens from it in one action — and it keeps the cluster in the
+working set even when the coordinator itself is settled, so a settled
+coordinator can never bury a peer's question or failure. A failure here is the
+FAILED BADGE. A later run start may clear the failure's message, but the
+unacknowledged failed outcome keeps the session classified as `failed`, so the
+cluster still counts and bubbles it. More generally, a settled coordinator with
+an UNSETTLED peer folded anywhere under it stays a card in the working set,
+because work the user has not put down may never be folded into a row that is;
+otherwise it and every session folded under it take the shelf, each as its own
+shelf row, so none of them leaves the shelf while a peer runs. A settled peer
+merely running again does not bring it back: it runs from the shelf raising no
+outcome, exactly as the coordinator's own next turn does, so the card does not
+come and go with every peer turn. The coordinator's composer ledge still shows
+that run. The same rule holds inside the tree: a settled peer folds only while
+live work hangs below it, so a live peer it spawned stays under the coordinator
+above instead of surfacing as a card of its own. A settled peer its coordinator
+sets going again — a turn, or background jobs — is live work itself: it runs
+from the shelf raising no outcome, so it folds, counts under running (a turn),
+jobs (background work it waits on) or services, refuses the coordinator's Settle
+in its own wording like any busy peer, and returns to history when it goes quiet
 (`isDormantInSpawnTree`). A settled session kept up that way shows no failure:
 the server withholds `settledAt` from a row whose latest outcome is open, so a
 shelved row's stored error is one the user already acknowledged, and it neither
@@ -619,6 +621,13 @@ completion leaves it there: that result is the coordinator's to act on, and the
 coordinator's own outcome is what brings the cluster back. The settled
 coordinator rule above is therefore for a peer that came back on its own, or was
 spawned after the coordinator was put down.
+
+The card names the most urgent such peer. The composer's spawned-sessions ledge
+names EVERY one, most urgent first, each opening its session: the first three
+under its collapsed line and the rest behind **N more**, which lists them in
+place. In a big tree the chat is where the user goes to find what is waiting,
+and naming one at a time would surface the next only after the first is dealt
+with.
 
 A bubbled FAILURE is also dismissible from the card itself and from the
 composer's spawned-sessions ledge, which is where the user meets it. Dismissing

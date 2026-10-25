@@ -1100,6 +1100,16 @@ export const spawnedSessions: SessionListItem[] = [
         "Docs: release notes",
         { lastError: { at: NOW - 1_000, message: "Provider overloaded" } },
       ],
+      [
+        "fixer",
+        "Fixer: canonical image guard and installed module provenance",
+        { unhandledBackgroundUpdates: 5 },
+      ],
+      [
+        "deploy",
+        "Fixer: deploy workflows fix 3",
+        { unhandledBackgroundUpdates: 1 },
+      ],
     ] as const
   ).map(
     ([id, title, extra]) =>
