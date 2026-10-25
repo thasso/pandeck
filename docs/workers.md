@@ -59,7 +59,10 @@ pulls (the registry credential) and external MCP servers (integration
 credentials through `trustedEnv`) on the server, the package proxy (real
 registry credentials behind placeholder tokens) in the gateway. Agents see the
 MCP servers only as tools. A Worker-side MCP server, for one that must read the
-Worker's files, is an explicit exception and not the default.
+Worker's files, is an explicit exception and not the default. A pulled image
+reaches a Worker as image bytes the server streams into that Worker's own
+container daemon, so private images work with a rootless daemon and the registry
+credential never reaches a Worker.
 
 The Knowledge Base and the skills and agent libraries are git repositories
 inside `DATA_DIR`. They are Pandeck data, not checkouts, and stay outside
@@ -133,10 +136,14 @@ never points into `DATA_DIR` from the Worker's side.
 
 What a Worker's disk holds falls in two classes:
 
-- **Replicated session state and caches**: working copies of session state,
-  materialized skill bundles, spooled output. All of it can be rebuilt from the
-  server, which is what lets a Worker restart anywhere and later run as an
-  ephemeral container or microVM.
+- **Replicas and caches**: acknowledged working copies of session state and
+  materialized skill bundles. All of it can be rebuilt from the server, which is
+  what lets a Worker restart anywhere and later run as an ephemeral container or
+  microVM.
+- **The spool**: events, record changes and native output the server has not
+  acknowledged yet. A planned restart or replacement drains it first. A Worker
+  lost while the server is down loses what its spool held; that is the one crash
+  loss this design accepts.
 - **Checkouts**: persistent storage. Unpushed commits, uncommitted changes and
   ignored local files exist only there, so a checkout's disk needs the care a
   developer's working copy does, and moving a checkout carries them along.
