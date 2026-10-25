@@ -34,19 +34,19 @@ design.
 
 Three services, each with its own lifetime:
 
-- **Worker**, under the Worker's account: every session's engine (pi's loop, the
-  Claude CLI and its hooks); native tools (shell, files, search, Monitor); every
-  checkout operation (git, status, diff, the watcher, served files, worktree
-  creation and removal, commit, push); the agent processes it starts (background
-  work, stopping them before a removal, the OOM score sweep, container residue
-  cleanup); and the full output of native tools.
-- **Server**, under the server's account: `DATA_DIR` and every store in it, app
-  tools (`pa`), approvals, Tasks, the Knowledge Base, one-shot runs, credential
-  profile metadata, account routing and login flows, external MCP servers,
-  container image pulls, browser tools, desktop port forwarding, and the web
-  client and API.
-- **Credential gateway**, also under the server's account, on the server's host:
-  the live model credentials and their only refresher, every model request any
+- **Worker**, on the Worker's side of the isolation boundary: every session's
+  engine (pi's loop, the Claude CLI and its hooks); native tools (shell, files,
+  search, Monitor); every checkout operation (git, status, diff, the watcher,
+  served files, worktree creation and removal, commit, push); the agent
+  processes it starts (background work, stopping them before a removal, the OOM
+  score sweep, container residue cleanup); and the full output of native tools.
+- **Server**, on the server's side of the boundary: `DATA_DIR` and every store
+  in it, app tools (`pa`), approvals, Tasks, the Knowledge Base, one-shot runs,
+  credential profile metadata, account routing and login flows, external MCP
+  servers, container image pulls, browser tools, desktop port forwarding, and
+  the web client and API.
+- **Credential gateway**, also on the server's side, on the server's host: the
+  live model credentials and their only refresher, every model request any
   engine makes, and the package proxy.
 
 Every session runs on a Worker, including Assistant sessions without native
@@ -55,7 +55,7 @@ One-shot runs stay on the server. They have no native tools, at most a bounded
 allowlist of app tools (task intake's research tools, for example), finish in
 seconds, and reach the model through the gateway like everything else.
 
-Helpers that hold Pandeck secrets stay on the server's account: container image
+Helpers that hold Pandeck secrets stay on the server's side: container image
 pulls (the registry credential) and external MCP servers (integration
 credentials through `trustedEnv`) on the server, the package proxy (real
 registry credentials behind placeholder tokens) in the gateway. Agents see the
@@ -77,12 +77,26 @@ host, described here, and separately signed processes with the platform key
 store on a single-user desktop ("Bundled desktop mode" below). Nothing outside
 these implementations assumes either one.
 
-Every secret lives behind one **secret store** port: model tokens (read only by
-the credential gateway), integration OAuth results, the auth token, the APNs key
-and the secrets the server's environment file supplies today. `DATA_DIR` holds
-no secrets, so a copy of it carries no credentials. On a server host the store
-is files only the server's account can read; on a desktop it is the platform key
-store.
+Every app-managed credential and key lives behind one **secret store** port:
+model tokens (read only by the credential gateway), integration OAuth results,
+API keys and personal access tokens (GitHub, Atlassian, Brave, Context7 and the
+like), device and Worker credentials' server-side halves, the APNs key, the Web
+Push VAPID private key and subscription secrets, the package proxy's CA private
+key, and the secrets the server's environment file supplies today. `DATA_DIR`
+then holds no app-managed secrets, so a copy of it carries none; what users and
+agents write into transcripts and attachments is theirs and may contain
+anything. On a server host the store is files only the server's account can
+read; on a desktop it is the platform key store.
+
+**A secret is stored with the destination it may be sent to**, such as an
+integration's origin, and the server never sends a secret to a destination read
+from anywhere else. Settings files can then name an origin for display, but
+cannot redirect a token.
+
+Two kinds of credential live on the Worker's side on purpose, as named
+exceptions: a Worker's own enrollment credential, and, under the exclusive-lease
+fallback, the live token of a profile the Worker holds. Both are scoped and
+revocable, and neither grants more than the Worker's placements.
 
 ### On a server host
 
@@ -171,35 +185,46 @@ Worker caches by hash and fetches only when missing.
 ## Worker protocol
 
 A Worker dials the server; the server never dials a Worker and keeps no list of
-Worker addresses. The first transport is a Unix socket both accounts can reach,
-and TCP with TLS comes with remote Workers.
+Worker addresses. The first transport is local, a Unix socket on a server host
+whose permissions the host implementation sets, and TCP with TLS comes with
+remote Workers.
 
 The protocol is versioned `major.minor`, separately from the app release. Minor
 versions add without breaking either side. On a major mismatch the Worker
 finishes the sessions it runs on the version it already speaks, takes no new
 ones and is replaced.
 
-**The server trusts no Worker request beyond its placements.** An agent runs
-under the Worker's account, so it can read the Worker's credential, connect to
-the socket itself or read the Worker's memory: whatever the Worker may do, an
-agent may do. A Worker may act only for sessions and checkouts placed on it,
-hold credential leases only for those sessions, and call app tools only with the
-authority each session has today. A compromised agent then gains nothing beyond
-what its own Worker already runs.
+**The server trusts no Worker request beyond its placements.** An agent runs on
+the Worker's side of the boundary, so it can read the Worker's credential,
+connect to the socket itself or read the Worker's memory: whatever the Worker
+may do, an agent may do. A Worker may act only for sessions and checkouts placed
+on it, hold credential leases only for those sessions, and call app tools only
+with the authority each session has today. A compromised agent then gains
+nothing beyond what its own Worker already runs.
 
 ### Enrollment and identity
 
 The operator adds a Worker in Settings, choosing its Worker id, and gets a
-one-time, short-lived code. Run under the Worker's account, the Worker's enroll
-command exchanges the code for the Worker's credential, stored in the Worker's
-config directory with mode 0600. Revoking a Worker in Settings ends its
-credential and every lease it holds. Revocation and server-side scoping are the
-defense, not the secrecy of that file.
+one-time, short-lived code. Run as the Worker, the Worker's enroll command
+exchanges the code for the Worker's credential, stored in the Worker's config
+directory with mode 0600. Revoking a Worker in Settings ends its credential and
+every lease it holds. Revocation and server-side scoping are the defense, not
+the secrecy of that file.
 
 A Worker id is short and readable, unique, and never changes or gets reused. It
 is not the machine's hostname: moving a Worker to new hardware re-enrolls the
 same Worker under the same id with a fresh credential. The display name is
 separate and free to change.
+
+### Device pairing
+
+Browsers and apps pair the way Workers enroll. A new device gets a one-time
+code, shown on a device that is already paired or printed by a server command,
+and exchanges it for its own credential: an HttpOnly cookie in a browser, the
+Keychain in the macOS app. Each device can be revoked in Settings. There is no
+shared auth token, and the served web shell carries none: anything that can
+reach the server's port, a Worker on the same host included, gets nothing from
+fetching a page.
 
 ## Credentials
 
@@ -224,11 +249,11 @@ server restarts, and a revocation takes effect as soon as the push arrives. A
 live account switch ends one lease and grants another inside the gateway.
 
 The gateway runs centrally, on the server's host, as its own long-lived service
-under the server's account; remote Workers reach it over TLS. A gateway on every
-Worker host would put model credentials on each of those machines. The package
-proxy lives in the same service, so builds keep working through server deploys
-and remote Workers reach registries the same way. Its public trust material
-lives outside `DATA_DIR`, where the Worker's account can read it.
+on the server's side of the boundary; remote Workers reach it over TLS. A
+gateway on every Worker host would put model credentials on each of those
+machines. The package proxy lives in the same service, so builds keep working
+through server deploys and remote Workers reach registries the same way. Its
+public trust material lives outside `DATA_DIR`, where Workers can read it.
 
 The gateway depends on both engines accepting a custom endpoint with a bearer
 token on subscription credentials. Phase 3 starts with a spike that tests this.
@@ -322,19 +347,37 @@ from what macOS enforces between processes of the same user:
   read their memory.
 - **Separate launchd jobs.** The Worker and the gateway are separately signed
   launchd agents the app registers, so they keep running when the app quits or
-  updates, and a Worker's processes are not attributed to the app and inherit
-  none of its permissions. The server lives with the app. Stopping the agents
-  entirely is an explicit menu action.
+  updates. The server lives with the app. Stopping the agents entirely is an
+  explicit menu action. A Worker's processes must not be attributed to the app
+  or inherit any of its permissions; registration alone does not guarantee that,
+  so the desktop spike has to show a topology that does.
+- **Launch constraints.** The entitled server and gateway binaries may be
+  started only by the app and launchd, never by an agent with hostile arguments,
+  environment or configuration.
+- **The app is the only paired device.** Its credential stays in the Keychain,
+  and the webview's session stays in memory, never in WebKit's on-disk storage,
+  which agents of the same user can read.
 
 ADR-0003 is what makes this feasible: the server never touches checkouts, so it
 needs only its own data, the network and the key store.
 
-**Desktop mode protects secrets, not data.** `DATA_DIR` stays readable by
-agents: keeping it out of their reach would rely on App Sandbox container
-protection, which is a prompt the user can dismiss and depends on process
-attribution and the macOS version. Since `DATA_DIR` holds no secrets, what an
-agent can read there is the user's own sessions and Tasks, which agents reach
-through tools anyway.
+**Desktop mode protects secrets, not data.** `DATA_DIR` stays readable and
+writable by agents: keeping it out of their reach would rely on App Sandbox
+container protection, which is a prompt the user can dismiss and depends on
+process attribution and the macOS version. Since `DATA_DIR` holds no app-managed
+secrets, what an agent can read there is the user's own sessions and Tasks,
+which agents reach through tools anyway.
+
+Because agents can write it, `DATA_DIR` is untrusted input on desktop.
+Everything that decides what the trusted side executes or where a secret goes,
+such as external MCP launch configurations, helper paths and integration
+origins, lives in the secret store or is sealed with a key held there. The rule
+that a secret travels only to its stored destination covers the rest.
+
+If the gateway spike fails, desktop mode accepts the exclusive-lease fallback:
+the Worker holds the live model token and agents can read it, while integration
+secrets stay protected. On one machine with one Worker exclusive leases are the
+natural shape anyway.
 
 ## Phases
 
@@ -348,8 +391,10 @@ through tools anyway.
    Worker inventories and fences stale reports, rather than marking live Worker
    runs interrupted.
 3. **The server under its own account** (goal 1). Starts with the gateway spike,
-   then ships the credential gateway (or exclusive leases), moves every secret
-   behind the secret store, moves `DATA_DIR`, adds the boot check and the
+   then ships the credential gateway (or exclusive leases), moves every
+   app-managed secret behind the secret store with its destination binding in an
+   audited migration that removes the old plaintext copies, replaces the shared
+   auth token with device pairing, moves `DATA_DIR`, adds the boot check and the
    root-equivalent access warning, and moves every app tool that opens
    agent-supplied paths. It comes after phase 2 because before it, the server
    would have nothing to hand checkout work to.
@@ -367,9 +412,12 @@ through tools anyway.
   operator's own subscription through the operator's own gateway. The answer
   picks between the gateway and exclusive leases.
 - **The desktop spike.** Before phase 6: whether a Developer ID build can use a
-  Keychain access group without a provisioning profile, whether the hardened
+  Keychain access group without a provisioning profile; whether the hardened
   runtime keeps same-user processes out of the server's and the gateway's
-  memory, and whether launchd jobs registered by the app keep a Worker's
-  processes from being attributed to the app.
+  memory; which launchd registration topology keeps a Worker's processes from
+  being attributed to the app; whether launch constraints keep agents from
+  starting the entitled binaries; whether the webview session can stay out of
+  on-disk storage; and hostile tests that rewrite `DATA_DIR` and launch the
+  entitled binaries with hostile arguments and environment.
 - **Remote reach for loopback features.** Desktop port forwarding and browser
   tools reach Worker processes over loopback until phase 4 adds tunnels.

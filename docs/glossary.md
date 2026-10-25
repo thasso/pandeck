@@ -124,8 +124,15 @@ out of Pandeck's secrets: separate OS accounts on a server host, or separately
 signed processes and the platform key store on a single-user desktop.\
 _Avoid_: sandbox. A sandbox is a per-session isolation level inside a Worker.
 
-**Secret store**: The one place Pandeck keeps secrets, readable only from the
-server's side of the isolation boundary. Files only the server's account can
-read on a server host, the platform key store on a desktop. `DATA_DIR` holds no
-secrets.\
+**Secret store**: The one place Pandeck keeps app-managed credentials and keys,
+each with the destination it may be sent to, readable only from the server's
+side of the isolation boundary: files only the server's account can read on a
+server host, the platform key store on a desktop. A Worker's enrollment
+credential and an exclusively leased token are the named exceptions held on the
+Worker's side.\
 _Avoid_: vault, keyring, credential file
+
+**Device pairing**: How a browser or app obtains its own revocable credential,
+by exchanging a one-time code. Worker enrollment is the same exchange for a
+Worker.\
+_Avoid_: login, auth token. There is no shared token.
