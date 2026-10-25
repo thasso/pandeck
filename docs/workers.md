@@ -134,7 +134,7 @@ output is written on the Worker first and uploaded through the same spool; until
 the upload is acknowledged, the agent reads it on the Worker, and a reference
 never points into `DATA_DIR` from the Worker's side.
 
-What a Worker's disk holds falls in two classes:
+What a Worker's disk holds falls in three classes:
 
 - **Replicas and caches**: acknowledged working copies of session state and
   materialized skill bundles. All of it can be rebuilt from the server, which is
