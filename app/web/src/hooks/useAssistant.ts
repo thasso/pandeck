@@ -1662,7 +1662,7 @@ interface PendingMutation extends PendingMutationEffect {
 
 type MutationContext =
   | (PendingMutation & {
-      recover: (mutation: PendingMutation) => void;
+      pullRequestCardId?: string;
       control?: { domain: "tasks" | "projects"; key?: string };
       compactionSessionId?: never;
     })
@@ -1672,7 +1672,7 @@ type MutationContext =
       objectIds?: never;
       tempId?: never;
       control?: never;
-      recover: (mutation: PendingMutation) => void;
+      pullRequestCardId?: never;
     };
 
 type OptimisticTimelineEntry = ClientTimelineEntry & {
@@ -6930,25 +6930,10 @@ export function useAssistant({
   const mutationLifecycleRef = useRef(
     createMutationLifecycle<
       MutationContext,
-      Extract<ServerMessage, { type: "workflowRunList" }>
-    >(),
-  );
-  /** Correlates card-local pending/error state with the generic mutation channel. */
-  const pullRequestCardMutationRequestsRef = useRef(
-    new Map<
-      string,
-      {
-        cardId: string;
-        action: PullRequestCardAction;
-        /** The server has dequeued this action, so the card speaks for it. */
-        serverBusySeen: boolean;
-        outcomeSeen: boolean;
-        settledSeen: boolean;
-        /** A different actor currently owns the durable action gate. */
-        competingActionSeen: boolean;
-        /** Its raw server card, before local linked-Task preservation. */
-        competingCard?: PullRequestCard;
-      }
+      Extract<
+        ServerMessage,
+        { type: "workflowRunList" | "pullRequestCardUpdate" }
+      >
     >(),
   );
   /** Latest in-flight keyed reads; a superseded same-id answer is ignored. */
@@ -7474,106 +7459,13 @@ export function useAssistant({
       // and the settle asks for one rather than trusting a broadcast to arrive.
       if (msg.type === "workflowRunList")
         mutationLifecycleRef.current.observe(msg);
-      if (msg.type === "pullRequestCardUpdate") {
-        const entry = [...pullRequestCardMutationRequestsRef.current].find(
-          ([, pending]) => pending.cardId === msg.card.id,
+      if (msg.type === "pullRequestCardUpdate")
+        mutationLifecycleRef.current.observeFirst(
+          msg,
+          (context) => context.pullRequestCardId === msg.card.id,
         );
-        if (entry) {
-          const [requestId, pending] = entry;
-          if (msg.card.busyAction === pending.action) {
-            // This click eventually acquired the gate after any earlier actor.
-            // From here, an older competing snapshot must never settle it.
-            pending.serverBusySeen = true;
-            pending.competingActionSeen = false;
-            delete pending.competingCard;
-          } else if (msg.card.busyAction) {
-            if (pending.serverBusySeen) {
-              // A later action can own the gate only after this one finished;
-              // it is newer authoritative state, not evidence this click lost.
-              pending.outcomeSeen = true;
-            } else {
-              pending.competingActionSeen = true;
-              pending.competingCard = msg.card;
-            }
-          }
-          // Only the server's own dequeue proves the card's action fields
-          // describe THIS action: that write is what clears the previous
-          // outcome (`pullRequestActions.ts`). Until it lands, a routine watcher
-          // patch still carries the old `actionError`/`actionMessage` — and a
-          // newer `updatedAt`, which the watcher bumps on every poll — so
-          // consuming either would revert valid optimism and re-surface an
-          // answered refusal while the action is still running. Once the busy
-          // flag has been seen, its CLEARING is the outcome, whatever fields
-          // come with it: an action whose result changes no card field must
-          // settle too.
-          else if (pending.serverBusySeen && !msg.card.busyAction)
-            pending.outcomeSeen = true;
-          if (
-            pending.outcomeSeen &&
-            (msg.card.actionError || pending.settledSeen)
-          ) {
-            // Card actions keep refusals on the durable card rather than
-            // emitting a second generic error. Its authoritative outcome is
-            // also the signal to restore this tab's optimistic domain effects.
-            pullRequestCardMutationRequestsRef.current.delete(requestId);
-            const mutation = mutationLifecycleRef.current.finish(requestId, {
-              type: "settled",
-            });
-            if (msg.card.actionError && mutation?.topic)
-              mutation.recover(mutation);
-            dispatch({
-              kind: "pullRequestCardActionResult",
-              cardId: pending.cardId,
-              ...(msg.card.actionError ? { error: msg.card.actionError } : {}),
-            });
-          } else if (pending.settledSeen && pending.competingActionSeen) {
-            // Another actor won the server's durable action gate. This click
-            // settled without running, so its domain optimism must not stand.
-            // Remembering the busy echo makes this converge even when the
-            // card update precedes mutationSettled.
-            pullRequestCardMutationRequestsRef.current.delete(requestId);
-            const mutation = mutationLifecycleRef.current.finish(requestId, {
-              type: "settled",
-            });
-            if (mutation?.topic) mutation.recover(mutation);
-            dispatch({
-              kind: "pullRequestCardActionResult",
-              cardId: pending.cardId,
-              ...(pending.competingCard
-                ? { authoritativeCard: pending.competingCard }
-                : {}),
-            });
-          }
-        }
-      }
       if (msg.type === "mutationSettled") {
-        // Card broadcasts are best-effort async sends and can follow this
-        // generic settle. Keep their recovery alive until the matching durable
-        // outcome arrives; a timeout remains the final backstop.
-        const pullRequest = pullRequestCardMutationRequestsRef.current.get(
-          msg.requestId,
-        );
-        if (pullRequest) {
-          pullRequest.settledSeen = true;
-          if (pullRequest.outcomeSeen || pullRequest.competingActionSeen) {
-            pullRequestCardMutationRequestsRef.current.delete(msg.requestId);
-            const mutation = mutationLifecycleRef.current.finish(
-              msg.requestId,
-              { type: "settled" },
-            );
-            if (pullRequest.competingActionSeen && mutation?.topic)
-              mutation.recover(mutation);
-            dispatch({
-              kind: "pullRequestCardActionResult",
-              cardId: pullRequest.cardId,
-              ...(pullRequest.competingCard
-                ? { authoritativeCard: pullRequest.competingCard }
-                : {}),
-            });
-          }
-        } else {
-          mutationLifecycleRef.current.settle(msg.requestId);
-        }
+        mutationLifecycleRef.current.settle(msg.requestId);
         // A skill write is answered HERE, not by its settings echo: the settle
         // is the only message that names the request, and by now that echo has
         // been applied (the server sends it first). A settle for anything else,
@@ -7625,22 +7517,16 @@ export function useAssistant({
           type: "error",
           message: msg.message,
         });
-        const pullRequest = pullRequestCardMutationRequestsRef.current.get(
-          msg.requestId,
-        );
-        if (pullRequest) {
-          pullRequestCardMutationRequestsRef.current.delete(msg.requestId);
-          dispatch({
-            kind: "pullRequestCardActionResult",
-            cardId: pullRequest.cardId,
-            error: msg.message,
-          });
+        if (mutation?.pullRequestCardId) {
           // The card is this failure's R5 home. If it is still on screen, do
           // not also turn the same refusal into the chat's global error. The
           // store holds cards the loaded window has not placed, so a row is
           // what counts (`loadedHistoryStart`).
           if (
-            clientPullRequestCard(stateRef.current.messages, pullRequest.cardId)
+            clientPullRequestCard(
+              stateRef.current.messages,
+              mutation.pullRequestCardId,
+            )
           )
             return;
         }
@@ -7905,25 +7791,12 @@ export function useAssistant({
       timeoutMs = MUTATION_SETTLE_TIMEOUT_MS,
     ): string => {
       return mutationLifecycleRef.current.start({
-        context: { ...mutation, recover },
+        context: mutation,
         recover: (entry) => {
           if (entry.topic) recover(entry);
         },
         timeoutMs,
-        terminal: (outcome, _pending, requestId) => {
-          if (outcome.type !== "timeout") return;
-          const pullRequest =
-            pullRequestCardMutationRequestsRef.current.get(requestId);
-          if (pullRequest) {
-            pullRequestCardMutationRequestsRef.current.delete(requestId);
-            dispatch({
-              kind: "pullRequestCardActionResult",
-              cardId: pullRequest.cardId,
-              error:
-                "The server did not answer this pull request action. Try again.",
-            });
-          }
-        },
+        terminal: () => {},
       });
     };
     /** Ask where a jump target lives; the answer arrives as a `timelineAnchor`. */
@@ -7984,7 +7857,6 @@ export function useAssistant({
       const context: MutationContext = {
         ...mutation,
         objectIds: [...mutation.objectIds],
-        recover,
         control: { domain, ...(key ? { key } : {}) },
       };
       return mutationLifecycleRef.current.start({
@@ -8089,7 +7961,6 @@ export function useAssistant({
         context: {
           topic: "workflow",
           objectIds: [runId],
-          recover: () => {},
         },
         timeoutMs: LONG_MUTATION_SETTLE_TIMEOUT_MS,
         // Reconnect already subscribes to authority. Release belongs ONLY to
@@ -8099,12 +7970,17 @@ export function useAssistant({
         firstSettled: refetchWorkflowRuns,
         done: (settled, list) =>
           list
-            ? Boolean(list.cards[runId]?.pullRequest?.delivery?.busyAction) ||
-              settled
+            ? list.type === "workflowRunList" &&
+              (Boolean(list.cards[runId]?.pullRequest?.delivery?.busyAction) ||
+                settled)
             : settled && !topicsRef.current.has("workflow"),
         terminal: (outcome, _context, _requestId, list) => {
           // Busy authority itself discards the overlay in the list reducer.
-          if (list?.cards[runId]?.pullRequest?.delivery?.busyAction) return;
+          if (
+            list?.type === "workflowRunList" &&
+            list.cards[runId]?.pullRequest?.delivery?.busyAction
+          )
+            return;
           dispatch({
             kind: "workflowDeliveryResult",
             runId,
@@ -8962,7 +8838,7 @@ export function useAssistant({
         send({ type: "setApprovalGrantScope", sessionId, keys, inheritable }),
       setCompactionWindow: (sessionId, tokens) => {
         const requestId = mutationLifecycleRef.current.start({
-          context: { compactionSessionId: sessionId, recover: () => {} },
+          context: { compactionSessionId: sessionId },
           timeoutMs: MUTATION_SETTLE_TIMEOUT_MS,
           recover: () => {},
           disconnected: () => {},
@@ -9026,24 +8902,69 @@ export function useAssistant({
             refetchSessions();
           }
         };
-        const requestId = trackMutation(
-          mutation,
-          recover,
-          // Everything but the linked-Task write is real remote work — a merge,
-          // a rebase and force-push, a worktree retirement — and the server
-          // answers `mutationSettled` only when it COMPLETES. The short timeout
-          // would fire mid-action there and claim the server never answered.
-          action === "mark-task-done"
-            ? MUTATION_SETTLE_TIMEOUT_MS
-            : LONG_MUTATION_SETTLE_TIMEOUT_MS,
-        );
-        pullRequestCardMutationRequestsRef.current.set(requestId, {
-          cardId,
-          action,
-          serverBusySeen: false,
-          outcomeSeen: false,
-          settledSeen: false,
-          competingActionSeen: false,
+        // Domain evidence survives either signal order; the core alone owns
+        // settled state, identity and the original deadline.
+        let serverBusySeen = false;
+        let outcomeSeen = false;
+        let competingCard: PullRequestCard | undefined;
+        const requestId = mutationLifecycleRef.current.start({
+          context: { ...mutation, pullRequestCardId: cardId },
+          timeoutMs:
+            action === "mark-task-done"
+              ? MUTATION_SETTLE_TIMEOUT_MS
+              : LONG_MUTATION_SETTLE_TIMEOUT_MS,
+          recover: () => recover(mutation),
+          disconnected: () => {
+            if (mutation.topic === "tasks")
+              replicaTransport.invalidate("tasks", mutation.objectIds);
+          },
+          done: (settled, observation) => {
+            if (observation) {
+              if (
+                observation.type !== "pullRequestCardUpdate" ||
+                observation.card.id !== cardId
+              )
+                return false;
+              const observed = observation.card;
+              if (observed.busyAction === action) {
+                serverBusySeen = true;
+                competingCard = undefined;
+              } else if (observed.busyAction) {
+                if (serverBusySeen) outcomeSeen = true;
+                else competingCard = observed;
+              } else if (serverBusySeen) outcomeSeen = true;
+              // A watcher still carrying a previous result is not evidence.
+              // Own dequeue followed by a fieldless clear IS an outcome.
+              if (outcomeSeen && observed.actionError) return true;
+            }
+            return settled && (outcomeSeen || competingCard !== undefined);
+          },
+          terminal: (outcome, _context, _id, observation) => {
+            const durableError =
+              outcome.type === "settled" &&
+              outcomeSeen &&
+              observation?.type === "pullRequestCardUpdate"
+                ? observation.card.actionError
+                : undefined;
+            if (outcome.type === "settled" && (durableError || competingCard))
+              recover(mutation);
+            const error =
+              outcome.type === "error"
+                ? outcome.message
+                : outcome.type === "timeout"
+                  ? "The server did not answer this pull request action. Try again."
+                  : durableError;
+            // Unknown release happens now, never in deferred recovery, which
+            // could otherwise release a newer offline click on this card.
+            dispatch({
+              kind: "pullRequestCardActionResult",
+              cardId,
+              ...(error ? { error } : {}),
+              ...(outcome.type === "settled" && competingCard
+                ? { authoritativeCard: competingCard }
+                : {}),
+            });
+          },
         });
         dispatch({ kind: "optimisticPullRequestCardAction", cardId, action });
         if (action === "mark-task-done" && linkedTaskId)

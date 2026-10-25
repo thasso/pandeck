@@ -34,7 +34,7 @@ describe("client mutation lifecycle contract", () => {
     return { lifecycle, recover, terminal, disconnected, start };
   }
 
-  it("retains independent identities and context, including legacy effects and temp ids", () => {
+  it("retains independent identities and context, including multi-domain effects and temp ids", () => {
     const { lifecycle, start } = fixture();
     const value = {
       ...context(),
@@ -105,9 +105,13 @@ describe("client mutation lifecycle contract", () => {
 
   it("disconnect releases only opted-in records and drains recovery once after subscribe", () => {
     const { lifecycle, start, terminal, recover, disconnected } = fixture();
-    const id = start({ ...context(), tempId: "optimistic-a" });
-    const legacy = start(
-      { ...context("legacy"), topic: "projects" },
+    const id = start({
+      ...context(),
+      tempId: "optimistic-a",
+      additionalEffects: [{ topic: "sessions" }],
+    });
+    const unrelated = start(
+      { ...context("unrelated"), topic: "projects" },
       900_000,
       false,
     );
@@ -117,7 +121,7 @@ describe("client mutation lifecycle contract", () => {
     lifecycle.disconnect();
     lifecycle.disconnect();
     expect(lifecycle.get(id)).toBeUndefined();
-    expect(lifecycle.get(legacy)).toBeDefined();
+    expect(lifecycle.get(unrelated)).toBeDefined();
     expect(lifecycle.pendingTopics()).toEqual(new Set(["projects"]));
     expect(lifecycle.recoveryTopics()).toEqual(new Set(["tasks"]));
     expect(lifecycle.size).toBe(1);
@@ -133,7 +137,7 @@ describe("client mutation lifecycle contract", () => {
     lifecycle.reconnect();
     expect(order).toEqual(["subscribe", "recover"]);
     expect(lifecycle.recoveryTopics().size).toBe(0);
-    lifecycle.finish(legacy, { type: "settled" });
+    lifecycle.finish(unrelated, { type: "settled" });
     vi.advanceTimersByTime(900_000);
     expect(terminal).toHaveBeenCalledTimes(2);
   });
@@ -261,6 +265,78 @@ describe("client mutation lifecycle contract", () => {
     lifecycle.cleanup();
     vi.advanceTimersByTime(30_000);
     expect(terminal).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([false, true])(
+    "remembers domain outcome before settle, with early refusal=%s",
+    (refused) => {
+      const lifecycle = createMutationLifecycle<Context, "busy" | "outcome">();
+      const terminal = vi.fn();
+      const recover = vi.fn();
+      let outcomeSeen = false;
+      const id = lifecycle.start({
+        context: { ...context(), additionalEffects: [{ topic: "sessions" }] },
+        timeoutMs: 30_000,
+        recover,
+        disconnected: () => {},
+        done: (settled, observation) => {
+          if (observation === "outcome") outcomeSeen = true;
+          return outcomeSeen && (settled || refused);
+        },
+        terminal: () => {
+          expect(lifecycle.pendingTopics().size).toBe(0);
+          if (refused) recover();
+          terminal();
+        },
+      });
+      lifecycle.observe("busy");
+      expect(lifecycle.pendingTopics()).toEqual(new Set(["tasks", "sessions"]));
+      vi.advanceTimersByTime(29_999);
+      lifecycle.observe("outcome");
+      expect(terminal).toHaveBeenCalledTimes(refused ? 1 : 0);
+      lifecycle.settle(id);
+      lifecycle.settle(id);
+      lifecycle.observe("outcome");
+      vi.advanceTimersByTime(1);
+      expect(terminal).toHaveBeenCalledTimes(1);
+      expect(recover).toHaveBeenCalledTimes(refused ? 1 : 0);
+    },
+  );
+
+  it("selects only the oldest matching context, even when incomplete or reentrant", () => {
+    const lifecycle = createMutationLifecycle<Context, string>();
+    const calls: string[] = [];
+    let complete = false;
+    const start = (key: string) =>
+      lifecycle.start({
+        context: context(key),
+        timeoutMs: 30_000,
+        recover: vi.fn(),
+        done: (_settled, observation) => {
+          calls.push(key);
+          return observation === "card" && complete;
+        },
+        terminal: () => {
+          start("card");
+        },
+      });
+    start("workflow");
+    const a = start("card");
+    const b = start("card");
+    const match = (value: Context) => value.key === "card";
+    lifecycle.observeFirst("card", match);
+    expect(calls).toEqual(["card"]);
+    expect(lifecycle.get(a)).toBeDefined();
+    complete = true;
+    lifecycle.observeFirst("card", match);
+    expect(calls).toEqual(["card", "card"]);
+    expect(lifecycle.get(a)).toBeUndefined();
+    expect(lifecycle.get(b)).toBeDefined();
+    lifecycle.observeFirst("card", match);
+    expect(lifecycle.get(b)).toBeUndefined();
+    expect(calls).toEqual(["card", "card", "card"]);
+    lifecycle.observeFirst("other", (value) => value.key === "other");
+    expect(calls).toHaveLength(3);
   });
 
   it("cleanup drops migrated timers and obligations but leaves the instance reusable", () => {
