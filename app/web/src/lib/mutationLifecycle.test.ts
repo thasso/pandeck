@@ -138,6 +138,131 @@ describe("client mutation lifecycle contract", () => {
     expect(terminal).toHaveBeenCalledTimes(2);
   });
 
+  it("holds a settled record for fresh evidence, with first-settle policy once", () => {
+    const lifecycle = createMutationLifecycle<Context, "idle" | "busy">();
+    const terminal = vi.fn();
+    const firstSettled = vi.fn();
+    const start = () =>
+      lifecycle.start({
+        context: context(),
+        timeoutMs: 900_000,
+        recover: vi.fn(),
+        terminal,
+        firstSettled,
+        done: (settled, signal) =>
+          signal === "busy" || (settled && signal === "idle"),
+      });
+    const a = start();
+    lifecycle.observe("idle");
+    lifecycle.settle(a);
+    lifecycle.settle(a);
+    expect(firstSettled).toHaveBeenCalledTimes(1);
+    expect(lifecycle.get(a)).toBeDefined();
+    expect(lifecycle.pendingTopics()).toEqual(new Set(["tasks"]));
+    const b = start();
+    lifecycle.observe("idle");
+    expect(lifecycle.get(a)).toBeUndefined();
+    expect(lifecycle.get(b)).toBeDefined();
+    lifecycle.observe("busy");
+    expect(lifecycle.size).toBe(0);
+    expect(terminal).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(900_000);
+    expect(terminal).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["error", "timeout", "unknown"] as const)(
+    "retires a second-signal wait on %s before reentrant hooks",
+    (type) => {
+      const lifecycle = createMutationLifecycle<Context, boolean>();
+      const firstSettled = vi.fn();
+      const recover = vi.fn();
+      const terminal = vi.fn();
+      const start = () =>
+        lifecycle.start({
+          context: context(),
+          timeoutMs: 900_000,
+          recover,
+          disconnected: () => {},
+          firstSettled,
+          done: (settled, signal) => settled && signal === true,
+          terminal: (outcome) => {
+            expect(lifecycle.pendingTopics().size).toBe(0);
+            terminal(outcome);
+            start();
+          },
+        });
+      const a = start();
+      vi.advanceTimersByTime(899_999);
+      lifecycle.settle(a);
+      lifecycle.settle(a);
+      expect(terminal).not.toHaveBeenCalled();
+      if (type === "timeout") vi.advanceTimersByTime(1);
+      else if (type === "unknown") lifecycle.disconnect();
+      else lifecycle.finish(a, { type, message: "Refused" });
+      expect(terminal).toHaveBeenCalledTimes(1);
+      expect(firstSettled).toHaveBeenCalledTimes(1);
+      lifecycle.settle(a);
+      expect(lifecycle.size).toBe(1);
+      lifecycle.observe(true); // The new same-key write is not settled.
+      expect(lifecycle.size).toBe(1);
+      if (type === "unknown") {
+        expect(recover).not.toHaveBeenCalled();
+        lifecycle.reconnect();
+        lifecycle.reconnect();
+      }
+      expect(recover).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not observe records started reentrantly in the same pass", () => {
+    const lifecycle = createMutationLifecycle<Context, boolean>();
+    const start = () =>
+      lifecycle.start({
+        context: context(),
+        timeoutMs: 30_000,
+        recover: vi.fn(),
+        done: (_settled, signal) => signal === true,
+        terminal: () => {
+          start();
+        },
+      });
+    start();
+    lifecycle.observe(true);
+    expect(lifecycle.size).toBe(1);
+  });
+
+  it("settles simple records immediately and gives receipt-only records no effects", () => {
+    const lifecycle = createMutationLifecycle<{
+      topic?: string;
+      key: string;
+    }>();
+    const terminal = vi.fn();
+    const start = (topic?: string) =>
+      lifecycle.start({
+        context: { key: "receipt", ...(topic ? { topic } : {}) },
+        timeoutMs: 30_000,
+        recover: vi.fn(),
+        terminal,
+        disconnected: () => {},
+      });
+    const receipt = start();
+    expect(lifecycle.size).toBe(1);
+    expect(lifecycle.pendingTopics().size).toBe(0);
+    lifecycle.disconnect();
+    expect(lifecycle.recoveryTopics().size).toBe(0);
+    expect(terminal.mock.calls[0]?.[0]).toEqual({ type: "unknown" });
+    lifecycle.settle(receipt);
+    const ordinary = start("projects");
+    start();
+    expect(lifecycle.pendingTopics()).toEqual(new Set(["projects"]));
+    lifecycle.settle(ordinary);
+    expect(lifecycle.pendingTopics().size).toBe(0);
+    expect(lifecycle.size).toBe(1);
+    lifecycle.cleanup();
+    vi.advanceTimersByTime(30_000);
+    expect(terminal).toHaveBeenCalledTimes(3);
+  });
+
   it("cleanup drops migrated timers and obligations but leaves the instance reusable", () => {
     const { lifecycle, start, terminal, recover } = fixture();
     start();

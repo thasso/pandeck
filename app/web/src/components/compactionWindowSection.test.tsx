@@ -46,16 +46,21 @@ function render(
     harness?: Harness;
     edit?: CompactionWindowEdit;
     saved?: Array<number | null>;
+    requestId?: string;
+    sessionId?: string;
   } = {},
 ) {
   act(() =>
     root!.render(
       <CompactionWindowSection
-        sessionId="s1"
+        sessionId={options.sessionId ?? "s1"}
         harness={options.harness ?? "claude-sdk"}
         window={window}
         edit={options.edit}
-        onSave={(tokens) => options.saved?.push(tokens)}
+        onSave={(tokens) => {
+          options.saved?.push(tokens);
+          return options.requestId;
+        }}
       />,
     ),
   );
@@ -139,6 +144,86 @@ it("shows the server's refusal and a failed apply in place", () => {
   );
   expect(text()).toContain("Saving failed: disk");
   expect(text()).toContain("pi did not take it");
+});
+
+const inputValue = () => container!.querySelector("input")!.value;
+
+it.each([true, false])(
+  "restores exact raw input for its unknown receipt, rendered busy=%s",
+  (renderBusy) => {
+    render(claude, { requestId: "a" });
+    type(" 200_000 ");
+    click("Save");
+    expect(inputValue()).toBe("");
+    if (renderBusy) render(claude, { edit: { requestId: "a", busy: true } });
+    render(claude, { edit: { requestId: "a", busy: false, unknown: true } });
+    expect(inputValue()).toBe(" 200_000 ");
+    expect(container!.querySelector("input")!.disabled).toBe(false);
+  },
+);
+
+it.each([undefined, "Refused"])(
+  "does not restore a known result %s and re-arms manual resubmission",
+  (error) => {
+    render(claude, { requestId: "a" });
+    type("200000");
+    click("Save");
+    render(claude, {
+      requestId: "b",
+      edit: { requestId: "a", busy: false, ...(error ? { error } : {}) },
+    });
+    expect(inputValue()).toBe("");
+    type("250,000");
+    click("Save");
+    render(claude, { edit: { requestId: "b", busy: false, unknown: true } });
+    expect(inputValue()).toBe("250,000");
+  },
+);
+
+it.each([
+  "typing",
+  "clear",
+  "different request",
+  "session",
+  "unmount",
+  "untracked",
+])("does not revive a draft after %s", (interaction) => {
+  render(claude, interaction === "untracked" ? {} : { requestId: "a" });
+  type("200000");
+  click("Save");
+  if (interaction === "typing") type("300000");
+  if (interaction === "clear") {
+    type("300000");
+    click("Clear");
+  }
+  if (interaction === "different request")
+    render(claude, { edit: { requestId: "other", busy: true } });
+  if (interaction === "session") {
+    render(claude, { sessionId: "s2" });
+    render(claude, { sessionId: "s1" });
+  }
+  if (interaction === "unmount") {
+    act(() => root!.unmount());
+    root = createRoot(container!);
+  }
+  render(claude, { edit: { requestId: "a", busy: false, unknown: true } });
+  expect(inputValue()).toBe(
+    interaction === "typing" || interaction === "clear" ? "300000" : "",
+  );
+});
+
+it("a newer submission owns recovery and Clear leaves existing input alone", () => {
+  render(claude, { requestId: "a" });
+  type("200000");
+  click("Save");
+  render(claude, { requestId: "b" });
+  type("300_000");
+  click("Save");
+  render(claude, { edit: { requestId: "b", busy: false, unknown: true } });
+  expect(inputValue()).toBe("300_000");
+  click("Clear");
+  render(claude, { edit: { requestId: "clear", busy: false, unknown: true } });
+  expect(inputValue()).toBe("300_000");
 });
 
 it("pi shows the summary-cost note beside the control", () => {

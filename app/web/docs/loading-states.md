@@ -30,6 +30,14 @@ unknown after disconnect. It means neither saved nor failed: retain the draft,
 release busy, and let reconnect reads state what landed. There is no new
 notification or automatic retry.
 
+Receipt-based inspector controls follow the same unknown policy without a new
+`LoadState` variant. Compaction Save keeps its connected immediate input clear,
+but restores only the exact current numeric attempt's raw text on a locally
+correlated unknown receipt. Known answers discard protection; typing, Clear,
+newer requests, session changes and unmount invalidate it. A batched start/loss
+needs no rendered busy frame. Clear invents no draft, and authoritative stored
+or provider-applied values never serve as proof of a local attempt's outcome.
+
 **Stale-while-refresh is the default.** A second fetch of the same query keeps
 what is on screen. Blanking is reserved for a different object.
 

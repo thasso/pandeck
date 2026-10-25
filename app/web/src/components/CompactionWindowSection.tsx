@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Shrink } from "lucide-react";
 import { Markdown } from "./Markdown.tsx";
 import {
@@ -40,10 +40,39 @@ export function CompactionWindowSection({
   harness: Harness;
   window: SessionCompactionWindow;
   edit?: CompactionWindowEdit | undefined;
-  onSave?: ((tokens: number | null) => void) | undefined;
+  onSave?: ((tokens: number | null) => string | void) | undefined;
 }) {
   const [draft, setDraft] = useState("");
   const [refusal, setRefusal] = useState<string | null>(null);
+  const generation = useRef(0);
+  const viewedSession = useRef(sessionId);
+  const attempt = useRef<{
+    raw: string;
+    requestId: string | undefined;
+    sessionId: string;
+    generation: number;
+  } | null>(null);
+  if (viewedSession.current !== sessionId) {
+    viewedSession.current = sessionId;
+    generation.current++;
+    attempt.current = null;
+  }
+  useEffect(() => {
+    const current = attempt.current;
+    if (!current?.requestId || !edit) return;
+    if (current.requestId !== edit.requestId) {
+      attempt.current = null;
+      return;
+    }
+    if (edit.busy) return;
+    attempt.current = null;
+    if (
+      edit.unknown &&
+      current.sessionId === sessionId &&
+      current.generation === generation.current
+    )
+      setDraft(current.raw);
+  }, [edit, sessionId]);
   const capability = HARNESSES[harness].compactionWindow;
   const busy = edit?.busy === true;
   const available = window.range
@@ -56,7 +85,16 @@ export function CompactionWindowSection({
     const reason = compactionWindowUserRefusal(available, tokens);
     setRefusal(reason ?? null);
     if (reason || !onSave) return;
-    onSave(tokens);
+    const current = {
+      raw: draft,
+      sessionId,
+      generation: ++generation.current,
+      requestId: undefined as string | undefined,
+    };
+    attempt.current = current;
+    const requestId = onSave(tokens);
+    if (typeof requestId === "string") current.requestId = requestId;
+    else attempt.current = null;
     setDraft("");
   };
 
@@ -122,6 +160,8 @@ export function CompactionWindowSection({
             value={draft}
             disabled={busy || !window.range}
             onChange={(event) => {
+              generation.current++;
+              attempt.current = null;
               setDraft(event.target.value);
               setRefusal(null);
             }}
@@ -140,6 +180,8 @@ export function CompactionWindowSection({
             variant="outline"
             disabled={busy || window.tokens === undefined}
             onClick={() => {
+              generation.current++;
+              attempt.current = null;
               setRefusal(null);
               onSave(null);
             }}

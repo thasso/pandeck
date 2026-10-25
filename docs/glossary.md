@@ -41,9 +41,11 @@ control outcomes. A generic settle acknowledgement need not complete a domain
 that also waits for an authoritative object or list.\
 _Avoid_: request manager, mutation queue
 
-**Pending mutation**: A write still holding its request correlation and touched
-domain effects, including any browser-local create id. It suppresses digests for
-those topics; it is not a replica read request.\
+**Pending mutation**: A write still holding its request correlation and timer,
+with any touched domain effects and browser-local create id. Effects suppress
+digests for their topics and block optimistic shell-cache writes. Receipt-only
+records, such as compaction, have no list effects or digest/cache claim. A
+pending mutation is not a replica read request.\
 _Avoid_: overlay store, pending read
 
 **Outcome unknown**: A write whose socket was lost before its answer. Its
