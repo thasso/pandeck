@@ -94,9 +94,13 @@ from anywhere else. Settings files can then name an origin for display, but
 cannot redirect a token.
 
 Two kinds of credential live on the Worker's side on purpose, as named
-exceptions: a Worker's own enrollment credential, and, under the exclusive-lease
-fallback, the live token of a profile the Worker holds. Both are scoped and
-revocable, and neither grants more than the Worker's placements.
+exceptions. A Worker's own enrollment credential is a Pandeck capability: the
+server enforces its scope and revoking it ends it. Under the exclusive-lease
+fallback, the Worker also holds a profile's live provider token, and that is
+different: the provider knows nothing of placements, so an agent that copies the
+token holds the profile's full provider authority outside Pandeck, and ending
+the lease does not revoke the copy. Only rotating or revoking the token at the
+provider does.
 
 ### On a server host
 
@@ -225,6 +229,14 @@ Keychain in the macOS app. Each device can be revoked in Settings. There is no
 shared auth token, and the served web shell carries none: anything that can
 reach the server's port, a Worker on the same host included, gets nothing from
 fetching a page.
+
+A cookie is ambient: the browser attaches it to requests that other pages start,
+and cookies are not scoped by port. So a cookie-authenticated request, the
+WebSocket upgrade included, is accepted only from the exact origins the operator
+configured, never from any loopback origin or any port of the server's hostname
+as today's origin check allows, and a mutation also carries a CSRF token tied to
+the device's session. A malicious page served by an agent's dev server on the
+same host, on another port, gets nothing.
 
 ## Credentials
 
@@ -394,10 +406,11 @@ natural shape anyway.
    then ships the credential gateway (or exclusive leases), moves every
    app-managed secret behind the secret store with its destination binding in an
    audited migration that removes the old plaintext copies, replaces the shared
-   auth token with device pairing, moves `DATA_DIR`, adds the boot check and the
-   root-equivalent access warning, and moves every app tool that opens
-   agent-supplied paths. It comes after phase 2 because before it, the server
-   would have nothing to hand checkout work to.
+   auth token with device pairing (gated on a hostile same-host, different-port
+   page test), moves `DATA_DIR`, adds the boot check and the root-equivalent
+   access warning, and moves every app tool that opens agent-supplied paths. It
+   comes after phase 2 because before it, the server would have nothing to hand
+   checkout work to.
 4. **Several Workers, then remote Workers** over TCP with TLS, with tunnels for
    the server's loopback features.
 5. **Isolation levels** inside a Worker: bubblewrap, containers, microVMs.
