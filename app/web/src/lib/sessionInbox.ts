@@ -60,6 +60,11 @@ export type SessionInboxStatus =
   | "task-choice"
   /** A refused peer send needs a human to reset the chain. */
   | "peer-limit"
+  /**
+   * Background updates were given to a turn that did not finish handling them.
+   * Nothing sends them again by itself: the user Recovers or Dismisses them.
+   */
+  | "updates"
   /** The last run failed and nothing has superseded it. */
   | "failed"
   /** A turn was cut off mid-flight by a restart and is waiting to be continued. */
@@ -82,6 +87,7 @@ const TIER_BY_STATUS: Record<SessionInboxStatus, SessionInboxTier> = {
   approval: "needs-you",
   "task-choice": "needs-you",
   "peer-limit": "needs-you",
+  updates: "needs-you",
   failed: "attention",
   interrupted: "attention",
   unread: "attention",
@@ -427,7 +433,7 @@ interface SessionInboxCluster {
 
 /**
  * The human DECISIONS a folded child lifts its whole cluster for — the same
- * three that override the Settled shelf for a session's own row
+ * ones that override the Settled shelf for a session's own row
  * ({@link isShelvedSession}).
  */
 const GATE_STATUSES: ReadonlySet<SessionInboxStatus> = new Set([
@@ -435,6 +441,7 @@ const GATE_STATUSES: ReadonlySet<SessionInboxStatus> = new Set([
   "approval",
   "task-choice",
   "peer-limit",
+  "updates",
 ]);
 
 /**
@@ -734,6 +741,10 @@ export function classifySessionStatus(
     return "question";
   if (session.peerPromptHopRefusal) return "peer-limit";
   if (session.isStreaming) return "running";
+  // After running: Recover waits for the running turn to end. Before a
+  // failure: the failure can be dismissed from the cluster, these cannot, and
+  // until they are handled the session (and its coordinator) cannot settle.
+  if (session.unhandledBackgroundUpdates) return "updates";
   // A real failure outranks a cut turn: one says something broke, the other says
   // work is waiting. Both are `attention`, so this only decides which sentence
   // the card shows.
@@ -807,6 +818,8 @@ export function sessionStatusBadge(
       return { label: "Pick task", tone: "accent" };
     case "peer-limit":
       return { label: "Reset chain", tone: "warning" };
+    case "updates":
+      return { label: "Not handled", tone: "warning" };
     case "failed":
       return { label: "Failed", tone: "danger" };
     // `warning`, not `danger`: nothing is broken and nothing needs deciding —
@@ -865,6 +878,12 @@ export function sessionStatusDetail(
       return session.peerPromptHopRefusal
         ? peerPromptHopRefusalMessage(session.peerPromptHopRefusal)
         : undefined;
+    case "updates": {
+      const count = session.unhandledBackgroundUpdates ?? 0;
+      return count === 1
+        ? "1 background update was not handled — Recover or Dismiss it"
+        : `${count} background updates were not handled — Recover or Dismiss them`;
+    }
     case "failed":
       return bounded(session.lastError?.message ?? "The last run failed.");
     case "interrupted":
@@ -1789,12 +1808,14 @@ export interface SpawnedSessionsView {
    */
   stall?: SpawnTreeStall;
   /**
-   * The peer that speaks for the set — one waiting on a human, or one holding
-   * a failure. Named on the collapsed line for the same reason a cluster card
-   * names it: a summary may hide how much is running, never what needs
-   * answering.
+   * EVERY live peer that needs the user — waiting on a human, holding a
+   * failure, owing a reply — most urgent first. Named on the collapsed line for
+   * the same reason a cluster card names its first: a summary may hide how
+   * much is running, never what needs answering. All of them, not one: in a
+   * big tree the next one would otherwise surface only after the first is
+   * dealt with, and the chat is where the user goes to find them.
    */
-  bubbled?: SessionInboxCard;
+  bubbles: SessionInboxCard[];
 }
 
 /**
@@ -1821,8 +1842,8 @@ export interface SpawnedSessionsView {
  * activity alone, newest first, because the ledge is read as "what just
  * happened among my peers", and the tiering the inbox sorts by is already
  * stated on this strip's collapsed line — as the counts, and as the bubbled
- * peer, which is still picked in tier order so the one that needs answering
- * is named whatever it last did.
+ * peers, which are listed in tier order so the ones that need answering are
+ * named whatever they last did.
  */
 export function spawnedSessionsView(options: {
   sessions: readonly SessionListItem[];
@@ -1877,6 +1898,7 @@ export function spawnedSessionsView(options: {
       counts: zeroCounts(),
       settled: 0,
       settledShown: includeSettled,
+      bubbles: [],
       ...(stall ? { stall } : {}),
     };
   }
@@ -1960,7 +1982,7 @@ export function spawnedSessionsView(options: {
     .filter((id) => live.has(id))
     .map((id) => cards.get(id) as SessionInboxCard)
     .sort(compareSessionCards);
-  const bubbled = firstBubble(liveCards);
+  const bubbled = liveCards.filter(bubbles);
   // The stall is judged over the tree the inbox CARD folds — this chat and
   // the coordinator-owned peers under it — not this strip's ownership-blind
   // rows: a peer the user took over, or a run's role, is not this chat's work,
@@ -1979,8 +2001,8 @@ export function spawnedSessionsView(options: {
     counts: clusterCounts(liveCards),
     settled: order.length - live.size,
     settledShown: includeSettled,
+    bubbles: bubbled,
     ...(stall ? { stall } : {}),
-    ...(bubbled ? { bubbled } : {}),
   };
 }
 
@@ -2066,16 +2088,17 @@ export function spawnedSessionsKey(
     String(view.settled),
     view.stall ? stallKey(view.stall) : "",
     view.settledShown ? "1" : "",
-    // The bubble's own facts are keyed raw as well. Its label is time-free
-    // today; a bubbled peer that ever carried an elapsed one would otherwise
-    // freeze, and the peers that bubble are idle, so nothing here churns.
-    view.bubbled
-      ? `${spawnedPeerKey(view.bubbled)}:${
-          clusterBubbleDismissible(view.bubbled) ? "1" : ""
-        }:${view.bubbled.session.lastError?.at ?? ""}:${
-          view.bubbled.session.outcomeAttention?.revision ?? 0
-        }`
-      : "",
+    // The bubbles' own facts are keyed raw as well. Their labels are
+    // time-free today; a bubbled peer that ever carried an elapsed one would
+    // otherwise freeze, and the peers that bubble are idle, so nothing here
+    // churns.
+    String(view.bubbles.length),
+    ...view.bubbles.map(
+      (card) =>
+        `${spawnedPeerKey(card)}:${clusterBubbleDismissible(card) ? "1" : ""}:${
+          card.session.lastError?.at ?? ""
+        }:${card.session.outcomeAttention?.revision ?? 0}`,
+    ),
     ...(open ? view.rows.map(spawnedPeerKey) : []),
   ].join("\u0000");
 }

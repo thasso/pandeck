@@ -81,6 +81,21 @@ function session(
 }
 
 describe("classifySessionStatus", () => {
+  it("asks for unhandled background updates once no turn is running", () => {
+    const row = session({ id: "a", unhandledBackgroundUpdates: 2 });
+    expect(classifySessionStatus(row)).toBe("updates");
+    expect(sessionStatusBadge(row, "updates", NOW)).toEqual({
+      label: "Not handled",
+      tone: "warning",
+    });
+    // Recover waits for the running turn, so the turn is what the row says.
+    expect(classifySessionStatus({ ...row, isStreaming: true })).toBe(
+      "running",
+    );
+    // Settled before the updates were cut off: still not put down.
+    expect(isShelvedSession({ ...row, settledAt: NOW })).toBe(false);
+  });
+
   it("puts a human decision ahead of everything else", () => {
     expect(
       classifySessionStatus(
@@ -2499,6 +2514,34 @@ describe("spawnedSessionsView", () => {
   const view = (sessions: SessionListItem[], includeSettled = false) =>
     spawnedSessionsView({ sessions, coordinatorId: "root", includeSettled });
 
+  it("names every peer that needs the user, most urgent first", () => {
+    const shaped = view([
+      session({ id: "root" }),
+      peer("quiet", "root"),
+      peer("failed", "root", { lastError: { at: NOW, message: "boom" } }),
+      peer("updates", "root", { unhandledBackgroundUpdates: 1 }),
+      // Settled before its updates were cut off: live, and named.
+      peer("deep", "quiet", { unhandledBackgroundUpdates: 3, settledAt: NOW }),
+      peer("asking", "root", { attention: "question" }),
+    ]);
+    expect(shaped.bubbles.map((card) => card.session.id).sort()).toEqual([
+      "asking",
+      "deep",
+      "failed",
+      "updates",
+    ]);
+    // A decision outranks a failure.
+    expect(shaped.bubbles.at(-1)?.session.id).toBe("failed");
+    const deep = shaped.bubbles.find((card) => card.session.id === "deep");
+    expect(sessionClusterBubbleLabel(deep as SessionInboxCard, NOW)).toBe(
+      "Not handled in “deep”",
+    );
+    // The coordinator's Settle is refused in the deep peer's words.
+    expect(
+      shaped.rows.find((card) => card.session.id === "quiet")?.settleBlocked,
+    ).toBe("background updates it was given were not handled.");
+  });
+
   it("takes the peers of one session, the one asking first, then newest created", () => {
     const shaped = view([
       session({ id: "root" }),
@@ -2526,7 +2569,7 @@ describe("spawnedSessionsView", () => {
       "quiet",
       "working",
     ]);
-    expect(shaped.bubbled?.session.id).toBe("asking");
+    expect(shaped.bubbles[0]?.session.id).toBe("asking");
     expect(shaped.counts).toEqual({
       services: 0,
       total: 3,
@@ -2647,9 +2690,9 @@ describe("spawnedSessionsView", () => {
     expect(shaped.rows).toHaveLength(3);
     expect(shaped.counts.total).toBe(3);
     expect(shaped.counts.failed).toBe(1);
-    expect(shaped.bubbled?.session.id).toBe("c");
+    expect(shaped.bubbles[0]?.session.id).toBe("c");
     expect(
-      sessionClusterBubbleLabel(shaped.bubbled as SessionInboxCard, NOW),
+      sessionClusterBubbleLabel(shaped.bubbles[0] as SessionInboxCard, NOW),
     ).toBe("Failed in “Reviewer”");
   });
 
@@ -2948,11 +2991,11 @@ describe("peer trees without a depth cap", () => {
       peer("busy", "failed", { isStreaming: true }),
     ];
     const view = spawnedSessionsView({ sessions, coordinatorId: "root" });
-    expect(view.bubbled?.session.id).toBe("failed");
-    expect(view.bubbled?.settleBlocked).toBe("it is still running.");
+    expect(view.bubbles[0]?.session.id).toBe("failed");
+    expect(view.bubbles[0]?.settleBlocked).toBe("it is still running.");
     // Live work below the failed peer blocks its Settle, never the dismissal
     // of its own failure.
-    expect(clusterBubbleDismissible(view.bubbled as SessionInboxCard)).toBe(
+    expect(clusterBubbleDismissible(view.bubbles[0] as SessionInboxCard)).toBe(
       true,
     );
     expect(sessionSettleCascade("failed", sessions, null, {}).blocked).toBe(
@@ -2969,8 +3012,8 @@ describe("peer trees without a depth cap", () => {
       ],
       coordinatorId: "root",
     });
-    expect(mine.bubbled?.settleBlocked).toBe(undefined);
-    expect(clusterBubbleDismissible(mine.bubbled as SessionInboxCard)).toBe(
+    expect(mine.bubbles[0]?.settleBlocked).toBe(undefined);
+    expect(clusterBubbleDismissible(mine.bubbles[0] as SessionInboxCard)).toBe(
       true,
     );
   });
@@ -2990,7 +3033,7 @@ describe("peer trees without a depth cap", () => {
     expect(card.cluster?.bubbled).toBe(undefined);
     const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
     expect(ledge.counts.failed).toBe(0);
-    expect(ledge.bubbled).toBe(undefined);
+    expect(ledge.bubbles).toEqual([]);
     // A failure the user has NOT acknowledged unsettles the row, and still
     // counts and bubbles.
     const fresh = allCards(

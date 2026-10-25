@@ -4,6 +4,7 @@ import {
   Fragment,
   memo,
   useContext,
+  useState,
   type ReactNode,
 } from "react";
 import {
@@ -120,9 +121,9 @@ export interface SpawnedSessionsLedgeProps {
  * history: never counted, and listed only behind a "Show N settled" at the
  * foot of the list. A settled peer running or holding jobs again is live, and
  * is listed and counted like any other.
- * A peer waiting on a human or holding a failure is NAMED on the collapsed
- * line, because a summary may hide how much is running and never what needs
- * answering — and, when that is a failure the user has moved on from, dismissed
+ * EVERY peer waiting on a human or holding a failure is NAMED under the
+ * collapsed line, each one a way to open it, because a summary may hide how
+ * much is running and never what needs answering — and, when that is a failure the user has moved on from, dismissed
  * from here, which is the cluster card's own dismissal (never a Settle).
  * Nothing else lifecycle-shaped is here: Archive, Delete and a peer's own
  * Settle stay in the inbox, and what this strip owns is the link.
@@ -142,14 +143,6 @@ export function SpawnedSessionsLedge({
   const working = view.counts.working > 0;
   const now = useElapsedNow(working);
   const summary = spawnedSessionsSummary(view);
-  const bubbled = view.bubbled;
-  const bubbleTone = bubbled
-    ? sessionStatusBadge(bubbled.session, bubbled.status, now)?.tone
-    : undefined;
-  const bubbleTitle = bubbled
-    ? bubbled.session.title.trim() || "Untitled session"
-    : "";
-  const dismissBubble = bubbled ? clusterBubbleDismissible(bubbled) : false;
   const Chevron = open ? ChevronDown : ChevronRight;
   // The tree has stopped and a peer still owes this chat a reply: on a line
   // of its own, like the bubble, naming the peer to poke.
@@ -220,41 +213,16 @@ export function SpawnedSessionsLedge({
         <Chevron aria-hidden="true" />
       </Button>
       {/* Under the summary rather than beside it, exactly as the cluster card
-          places it: a line of its own costs height only while a peer needs
-          answering, and it keeps the two strips' chevrons in one column. */}
-      {bubbled ? (
-        <div className="flex min-w-0 items-center gap-1 px-3 pb-1.5">
-          <Button
-            variant={bubbleTone === "danger" ? "destructive" : "secondary"}
-            size="xs"
-            className="min-w-0"
-            title={`Open “${bubbleTitle}”`}
-            onClick={() => onOpenSession(bubbled.session.id)}
-          >
-            <span className="min-w-0 truncate">
-              {sessionClusterBubbleLabel(bubbled, now)}
-            </span>
-          </Button>
-          {/* A peer failure the user has moved on from is dismissed WHERE it is
-              shown, exactly as on the cluster card: the failure goes and the
-              bubble with it, while the peer is neither settled, archived nor
-              deleted. */}
-          {dismissBubble ? (
-            <IconButton
-              size="icon-xs"
-              label={`Dismiss the failure in “${bubbleTitle}”`}
-              onClick={() =>
-                onDismissSessionFailure(
-                  bubbled.session.id,
-                  bubbled.session.lastError?.at,
-                  bubbled.session.outcomeAttention?.revision ?? 0,
-                )
-              }
-            >
-              <X aria-hidden />
-            </IconButton>
-          ) : null}
-        </div>
+          places its bubble: lines of their own cost height only while a peer
+          needs answering, and they keep the two strips' chevrons in one
+          column. */}
+      {view.bubbles.length > 0 ? (
+        <PeerBubbles
+          bubbles={view.bubbles}
+          now={now}
+          onOpenSession={onOpenSession}
+          onDismissSessionFailure={onDismissSessionFailure}
+        />
       ) : null}
       {stallLine}
       {open ? (
@@ -306,6 +274,97 @@ export function SpawnedSessionsLedge({
             </Button>
           ) : null}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** How many bubbled peers the collapsed strip names before "N more". */
+const BUBBLE_LIMIT = 3;
+
+/**
+ * Every peer that needs the user, one openable button each, most urgent
+ * first: the way from this chat to the session that is waiting. A long list
+ * names the first few and folds the rest behind "N more", which lists them
+ * all in place rather than opening the tree, where they would be scattered
+ * among every other peer.
+ */
+function PeerBubbles({
+  bubbles,
+  now,
+  onOpenSession,
+  onDismissSessionFailure,
+}: {
+  bubbles: readonly SessionInboxCard[];
+  now: number;
+  onOpenSession: (sessionId: string) => void;
+  onDismissSessionFailure: SpawnedSessionsLedgeProps["onDismissSessionFailure"];
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? bubbles : bubbles.slice(0, BUBBLE_LIMIT);
+  const hidden = bubbles.length - shown.length;
+  return (
+    <div
+      data-spawned-sessions-bubbles
+      className="flex min-w-0 flex-col items-start gap-1 px-3 pb-1.5"
+    >
+      {shown.map((bubbled) => {
+        const tone = sessionStatusBadge(
+          bubbled.session,
+          bubbled.status,
+          now,
+        )?.tone;
+        const title = bubbled.session.title.trim() || "Untitled session";
+        return (
+          <div
+            key={bubbled.session.id}
+            className="flex max-w-full min-w-0 items-center gap-1"
+          >
+            <Button
+              variant={tone === "danger" ? "destructive" : "secondary"}
+              size="xs"
+              // `shrink` undoes Button's `shrink-0`, so a long peer title
+              // truncates inside the button instead of running off a phone.
+              className="max-w-full min-w-0 shrink"
+              title={`Open “${title}”`}
+              onClick={() => onOpenSession(bubbled.session.id)}
+            >
+              <span className="min-w-0 truncate">
+                {sessionClusterBubbleLabel(bubbled, now)}
+              </span>
+            </Button>
+            {/* A peer failure the user has moved on from is dismissed WHERE it
+                is shown, exactly as on the cluster card: the failure goes and
+                the bubble with it, while the peer is neither settled, archived
+                nor deleted. */}
+            {clusterBubbleDismissible(bubbled) ? (
+              <IconButton
+                size="icon-xs"
+                label={`Dismiss the failure in “${title}”`}
+                onClick={() =>
+                  onDismissSessionFailure(
+                    bubbled.session.id,
+                    bubbled.session.lastError?.at,
+                    bubbled.session.outcomeAttention?.revision ?? 0,
+                  )
+                }
+              >
+                <X aria-hidden />
+              </IconButton>
+            ) : null}
+          </div>
+        );
+      })}
+      {hidden > 0 || all ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          aria-expanded={all}
+          onClick={() => setAll((value) => !value)}
+        >
+          {all ? "Show fewer" : `${hidden} more`}
+        </Button>
       ) : null}
     </div>
   );

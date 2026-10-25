@@ -2181,10 +2181,11 @@ export function workflowRunOwnerBySession(
 
 /**
  * Whether this row sits on the Settled shelf RIGHT NOW: the user put it down,
- * and it is not blocking on a human decision. A question, an approval and a
- * pull request waiting for a Task choice keep their own forced visibility —
- * whatever the shelf says, work that cannot proceed without an answer must
- * never be hidden inside a collapsed row.
+ * and it is not blocking on a human decision. A question, an approval, a
+ * pull request waiting for a Task choice and background updates a turn did
+ * not handle (Recover or Dismiss) keep their own forced visibility — whatever
+ * the shelf says, work that cannot proceed without an answer must never be
+ * hidden inside a collapsed row.
  *
  * RUNNING is deliberately not on that list. A settled session's next turn
  * starting is not news (the server raises no attention for it), so it stays on
@@ -2206,7 +2207,8 @@ export function isShelvedSession(session: SessionListItem): boolean {
     session.attention === "task-choice" ||
     session.attention === "question" ||
     session.awaitingInput ||
-    session.peerPromptHopRefusal
+    session.peerPromptHopRefusal ||
+    (session.unhandledBackgroundUpdates ?? 0) > 0
   );
 }
 

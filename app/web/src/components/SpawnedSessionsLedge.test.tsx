@@ -225,6 +225,40 @@ describe("the composer's spawned-session ledge", () => {
     expect(opened).toEqual(["a", "asks"]);
   });
 
+  it("names every peer that needs the user, folding a long list behind N more", () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    const opened: string[] = [];
+    act(() => {
+      root?.render(
+        ledge(
+          [
+            session("idle"),
+            ...["u1", "u2", "u3", "u4"].map((id) =>
+              session(id, { unhandledBackgroundUpdates: 1 }),
+            ),
+          ],
+          { onOpenSession: (id) => opened.push(id) },
+        ),
+      );
+    });
+    const bubbles = () => [
+      ...(container?.querySelectorAll<HTMLButtonElement>(
+        "[data-spawned-sessions-bubbles] button[title^='Open']",
+      ) ?? []),
+    ];
+    expect(bubbles()).toHaveLength(3);
+    expect(bubbles()[0]?.textContent).toMatch(/^Not handled in “Session u\d”$/);
+    const more = [
+      ...(container?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+    ].find((button) => button.textContent === "1 more");
+    act(() => more?.click());
+    expect(bubbles()).toHaveLength(4);
+    act(() => bubbles()[3]?.click());
+    expect(opened).toHaveLength(1);
+  });
+
   it("lists the peer waiting on the user first, then the newest created", () => {
     const markup = renderToStaticMarkup(
       ledge(

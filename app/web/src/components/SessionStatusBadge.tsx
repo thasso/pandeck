@@ -5,6 +5,7 @@ import {
   CircleHelp,
   CircleStop,
   ListChecks,
+  RotateCcw,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const STATUS_ICON: Partial<Record<SessionInboxStatus, LucideIcon>> = {
   approval: CircleCheck,
   "task-choice": ListChecks,
   "peer-limit": CircleStop,
+  updates: RotateCcw,
   failed: X,
   interrupted: CircleStop,
   unread: Check,
