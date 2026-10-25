@@ -263,6 +263,18 @@ it.
   (hooks, ssh) are not covered, as they are not when a caller cancels.
   In-process, the server observes the Worker's quiescence directly; phase 2's
   plan must replace that with fencing for a Worker in another process.
+- **Failure and restart: broker death.** A dead broker cannot report its child's
+  exit. A request with the exit receipt then answers only once the broker's
+  whole process group has exited: signal 0 to the group finds no member (ESRCH),
+  or a complete `/proc` scan sees only zombies. Any other answer, an unreadable
+  `/proc` included, counts as members remaining. The guarantee stays the
+  immediate git child's exit; waiting for the group is only how a dead broker's
+  child is observed. A group member in uninterruptible sleep, including a
+  sibling request's child or a git hook, may therefore hold that call, its repo
+  lock and the Worker's quiescence indefinitely. This fails closed, like a child
+  in uninterruptible sleep on any cancel, and logs one warning at 10 s naming
+  the group and its survivors' states. There is no release deadline. Requests
+  without the receipt fail at once, as before.
 - **Decisions kept for phase 1.** Engine transcripts and records keep their
   current write path; streaming them over the protocol comes in phase 2 (D1).
   The Worker id is derived, with no worktree-row column (D2).

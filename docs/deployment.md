@@ -203,16 +203,19 @@ surrogate pair must come back with the lone high surrogate, and an aborted
 checkout git whose stand-in handles SIGTERM must settle only after the stand-in
 has written its `done` marker and exited (the Worker's exit receipt). Killing
 the broker must fail the lost request as an execution failure and kill the
-grandchild git started, and the broker must come back for the next call. A
-second run under `ASSISTANT_SPAWN_BROKER=0` checks the in-process fallback, the
-exit receipt and the surrogate included. The probe derives a tree-watch ignore
-set from a small repository's `.gitignore`, one ignored directory at the root
-and one nested. It subscribes the packaged watcher with that set, which must
-report the watched edits and none under the ignored directories. It runs the
-SQLite paths the shim must carry: `inDbTransaction` nested in a transaction, the
-links memo invalidated by another connection's commit (`PRAGMA data_version`)
-and never kept from a rolled-back transaction, and the session delete rolling
-its tombstone back when the session write fails. A synchronous spawn must see a
+grandchild git started, and the broker must come back for the next call. Signal
+0 to an empty process group must throw `ESRCH` and to a live one must not. A
+checkout git lost with its broker, with the Worker connection kept and with it
+ending, must reject only once its stand-in child is gone or a zombie. A second
+run under `ASSISTANT_SPAWN_BROKER=0` checks the in-process fallback, the exit
+receipt and the surrogate included. The probe derives a tree-watch ignore set
+from a small repository's `.gitignore`, one ignored directory at the root and
+one nested. It subscribes the packaged watcher with that set, which must report
+the watched edits and none under the ignored directories. It runs the SQLite
+paths the shim must carry: `inDbTransaction` nested in a transaction, the links
+memo invalidated by another connection's commit (`PRAGMA data_version`) and
+never kept from a rolled-back transaction, and the session delete rolling its
+tombstone back when the session write fails. A synchronous spawn must see a
 variable deleted from `process.env` as gone. The probe starts the real package
 proxy, which must leave `process.env` untouched. The proxy answers plain HTTP
 with 501 for every host, so the probe's own `fetch` and `node:http` requests to
@@ -557,8 +560,9 @@ The server needs no special handling when something is killed:
 - A shell or tool whose child is killed reports exit 137 or "killed by a
   signal".
 - A killed Claude CLI fails its turn and marks its background work host-lost.
-- A killed spawn broker SIGKILLs its process group, fails in-flight requests,
-  and restarts on the next request.
+- A killed spawn broker SIGKILLs its process group, fails in-flight requests (an
+  exit-receipt request once the group has exited), and restarts on the next
+  request.
 
 `unitConfig.StartLimitBurst`/`StartLimitIntervalSec` (5 in 300s) make the unit
 give up rather than retry a failure restarting cannot fix — the pre-bind

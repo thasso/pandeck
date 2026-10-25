@@ -14,7 +14,9 @@
  * both inventories are empty.
  *
  * Scope: every non-test `.ts` module under `app/server/src`. Imports are read
- * from a parsed syntax tree (oxc), so comments and strings never count.
+ * from a parsed syntax tree (oxc), so comments and strings never count. A
+ * CommonJS load — `require(…)`, or a function made by `createRequire(…)` —
+ * counts as an import like any other.
  */
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -49,11 +51,12 @@ const GIT_PROCESS_USERS = ["gitExec.ts", "serverRepoGit.ts"];
 
 /**
  * Modules that load something by a path the scan cannot read: pi's installed
- * prompt builder, never app code (`harnessBoundary.test.ts` pins it too, with
- * the `require` loads this scan leaves to it).
+ * prompt builder (`harnessBoundary.test.ts` pins it too) and the file watcher's
+ * native addon, by package path. Neither is app code.
  */
 const COMPUTED_IMPORTS: Record<string, number> = {
   "piSdk/piPromptMeasure.ts": 1,
+  "parcelWatcher.ts": 3,
 };
 
 /**
@@ -156,8 +159,44 @@ interface ModuleScan {
   gitSpawns: number;
 }
 
+/** Visits every syntax node under `value`. */
+function walk(value: unknown, visit: (node: AstNode) => void): void {
+  if (Array.isArray(value)) {
+    for (const item of value) walk(item, visit);
+    return;
+  }
+  if (!isNode(value)) return;
+  visit(value);
+  for (const [key, child] of Object.entries(value))
+    if (key !== "type") walk(child, visit);
+}
+
+/**
+ * The names a module loads CommonJS modules through: `require`, and every
+ * variable bound to `createRequire(…)`, wherever it is declared.
+ */
+function requireNames(program: unknown): Set<string> {
+  const names = new Set(["require"]);
+  walk(program, (node) => {
+    if (
+      node.type === "VariableDeclarator" &&
+      isNode(node.id) &&
+      node.id.type === "Identifier" &&
+      isNode(node.init) &&
+      node.init.type === "CallExpression" &&
+      calleeName(node.init.callee) === "createRequire"
+    )
+      names.add(node.id.name as string);
+  });
+  return names;
+}
+
 function scanModule(file: string): ModuleScan {
-  const source = readFileSync(file, "utf8");
+  return scanSource(file, readFileSync(file, "utf8"));
+}
+
+/** Scans `source` as if it were the module at `file`. */
+function scanSource(file: string, source: string): ModuleScan {
   const parsed = parseSync(file, source, { lang: "ts", sourceType: "module" });
   assert.deepEqual(
     parsed.errors.map((error) => error.message),
@@ -193,12 +232,14 @@ function scanModule(file: string): ModuleScan {
         (specifier) => specifier[kind] === "type",
       ));
 
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    if (!isNode(value)) return;
+  const loaders = requireNames(parsed.program);
+  const isLoad = (callee: unknown): boolean =>
+    isNode(callee) &&
+    ((callee.type === "Identifier" && loaders.has(callee.name as string)) ||
+      (callee.type === "CallExpression" &&
+        calleeName(callee.callee) === "createRequire"));
+
+  walk(parsed.program, (value) => {
     switch (value.type) {
       case "ImportDeclaration":
         add(value.source, isTypeOnly(value, "importKind"));
@@ -215,6 +256,8 @@ function scanModule(file: string): ModuleScan {
       case "NewExpression": {
         const name = calleeName(value.callee);
         const first = (value.arguments as unknown[])[0];
+        if (value.type === "CallExpression" && isLoad(value.callee))
+          add(first ?? null, false);
         const command = constantString(first);
         if (
           name &&
@@ -233,10 +276,7 @@ function scanModule(file: string): ModuleScan {
         break;
       }
     }
-    for (const [key, child] of Object.entries(value))
-      if (key !== "type") visit(child);
-  };
-  visit(parsed.program);
+  });
   return scan;
 }
 
@@ -352,4 +392,34 @@ test("every module reading checkouts on the server is pinned to its slice", () =
       `${module} no longer reads the filesystem: delete its pin`,
     );
   }
+});
+
+test("literal CommonJS loads count as imports, into and out of the Worker side", () => {
+  const fromWorker = scanSource(
+    join(SRC_ROOT, "worker/loadsServerState.ts"),
+    [
+      'import { createRequire } from "node:module";',
+      "const load = createRequire(import.meta.url);",
+      'load("../db/sessionStore.ts");',
+      'createRequire(import.meta.url)("../index.ts");',
+    ].join("\n"),
+  );
+  for (const target of ["db/sessionStore.ts", "index.ts"]) {
+    assert.ok(fromWorker.imports.has(target), target);
+    assert.ok(fromWorker.valueImports.has(target), target);
+  }
+  assert.equal(fromWorker.computedImports, 0);
+
+  const intoWorker = scanSource(
+    join(SRC_ROOT, "startsWorker.ts"),
+    'require("./worker/worker.ts");',
+  );
+  assert.ok(intoWorker.valueImports.has("worker/worker.ts"));
+
+  // A method that happens to be called `require` loads nothing.
+  const method = scanSource(
+    join(SRC_ROOT, "method.ts"),
+    'export const session = { require: (id: string) => id }.require("worker/worker.ts");',
+  );
+  assert.equal(method.imports.size, 0);
 });

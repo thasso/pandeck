@@ -37,14 +37,18 @@ directly.
   failure, because only the caller may decide to retry a mutation. The broker
   runs in its own process group, and that group is sent SIGKILL before any
   in-flight request is answered, so no child it started keeps writing once a
-  caller releases its repo lock. A failed start is retried after a minute.
-  `ASSISTANT_SPAWN_BROKER=0` disables it.
+  caller releases its repo lock. A request with an exit receipt (the Worker's
+  checkout git) is answered only once that group has exited (`docs/workers.md`,
+  "Failure and restart: broker death"); every other request fails at once. A
+  failed start is retried after a minute. `ASSISTANT_SPAWN_BROKER=0` disables
+  it.
 - The package's install check runs this under the packaged Bun: the broker's
   executable and process group, a cancel, a broker killed while git's own child
-  runs (the whole group dies and the broker restarts), and the in-process
-  fallback (`docs/deployment.md#bun-package`). The tests run it on Node. In the
-  package, synchronous spawns go through a `child_process` shim, because Bun
-  would otherwise start them with the environment from before the boot scrub.
+  runs (the whole group dies and the broker restarts), a checkout git lost with
+  its broker rejecting only after its child exited, and the in-process fallback
+  (`docs/deployment.md#bun-package`). The tests run it on Node. In the package,
+  synchronous spawns go through a `child_process` shim, because Bun would
+  otherwise start them with the environment from before the boot scrub.
 - `gitExec.ts` is the broker's first client and the only one today. Claude
   sessions fork once per run to start the CLI (its tools are the CLI's own
   children); pi runs agent commands in-process and still forks per command.

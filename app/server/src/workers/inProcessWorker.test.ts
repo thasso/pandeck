@@ -44,6 +44,7 @@ import {
   getWorktreeTree,
 } from "../worktrees/worktreeDiff.ts";
 import { computeWorktreeStatus } from "../worktrees/worktreeStatus.ts";
+import { spawnBrokerPidForTests } from "../spawnBroker.ts";
 import { commitWorktree } from "../worktrees/worktreeWrite.ts";
 import {
   inProcessWorkerEpochForTests,
@@ -362,6 +363,138 @@ describe.each(["broker", "in-process"] as const)(
       assert.equal(run.atRejection.alive, false);
       assert.ok(run.secondSaw.rejected);
       assert.equal(inProcessWorkerEpochForTests(), epoch, "same connection");
+    });
+  },
+);
+
+/** A process's `/proc` state letter and process group; `gone` once reaped. */
+function procStat(pid: number): { state: string; pgrp?: number } {
+  let text: string;
+  try {
+    text = readFileSync(`/proc/${pid}/stat`, "latin1");
+  } catch {
+    return { state: "gone" };
+  }
+  const [state, , pgrp] = text.slice(text.lastIndexOf(")") + 2).split(" ");
+  return { state: state ?? "?", pgrp: Number(pgrp) };
+}
+
+/** Gone, a zombie or dead: the process has exited and runs nothing more. */
+const hasExited = (state: string) => ["gone", "Z", "X"].includes(state);
+
+describe.skipIf(process.platform !== "linux")(
+  "a spawn broker that dies under a running checkout call",
+  () => {
+    let saved: string | undefined;
+    beforeAll(() => {
+      saved = process.env.ASSISTANT_SPAWN_BROKER;
+      delete process.env.ASSISTANT_SPAWN_BROKER;
+    });
+    afterAll(() => {
+      if (saved !== undefined) process.env.ASSISTANT_SPAWN_BROKER = saved;
+    });
+
+    /**
+     * Run a SIGTERM-ignoring stand-in under the repo lock with a second
+     * holder queued, then SIGKILL the broker (after ending the connection,
+     * with `endConnection`). Records the stand-in's state when the call
+     * rejects and when the second holder starts.
+     */
+    async function brokerDeath(name: string, endConnection: boolean) {
+      const repo = await makeRepo(name);
+      const fake = standIn(`${name}-standin`, TERM_IGNORING);
+      const key = await repoLockKey(repo);
+      let atRejection: { state: string; log: string } | undefined;
+      const first = withRepoLock(key, async () => {
+        try {
+          await git(["standin"], repo, undefined, fake.env);
+        } catch (error) {
+          atRejection = { state: procStat(fake.pid()).state, log: fake.log() };
+          return error;
+        }
+        assert.fail("the stand-in run must not succeed");
+      });
+      let secondState: string | undefined;
+      const second = withRepoLock(key, async () => {
+        secondState = procStat(fake.pid()).state;
+      });
+      try {
+        await until("the stand-in to start", () =>
+          fake.log().includes("started"),
+        );
+        const broker = await spawnBrokerPidForTests();
+        assert.ok(broker, "the broker runs");
+        assert.equal(
+          procStat(fake.pid()).pgrp,
+          broker,
+          "the stand-in is in the broker's process group",
+        );
+        if (endConnection) writeAsInProcessWorkerForTests(INVALID_FRAME);
+        process.kill(broker, "SIGKILL");
+        const error = await first;
+        await second;
+        await sleep(300);
+        return {
+          error,
+          atRejection: atRejection!,
+          secondState: secondState!,
+          fake,
+        };
+      } finally {
+        try {
+          process.kill(fake.pid(), "SIGKILL");
+        } catch {
+          // Already gone — the expected case.
+        }
+      }
+    }
+
+    test("with the connection ending too, the call rejects only after its child exited", async () => {
+      const early: string[] = [];
+      for (let trial = 0; trial < 10; trial++) {
+        await git(["--version"], scratch);
+        const epoch = inProcessWorkerEpochForTests();
+        assert.ok(epoch);
+        const run = await brokerDeath(`broker-death-end-${trial}`, true);
+        assert.ok(run.error instanceof GitCommandError, String(run.error));
+        assert.equal(run.error.failureKind, "execution");
+        assert.match(
+          run.error.message,
+          /^git standin failed: .*protocol error/,
+        );
+        if (!hasExited(run.atRejection.state) || !hasExited(run.secondState))
+          early.push(`${trial}: ${run.atRejection.state}/${run.secondState}`);
+        assert.equal(
+          run.fake.log(),
+          run.atRejection.log,
+          "nothing wrote after",
+        );
+        const after = await git(["--version"], scratch);
+        assert.match(after.stdout, /^git version/);
+        assert.equal(inProcessWorkerEpochForTests(), epoch + 1);
+      }
+      assert.deepEqual(early, [], "a running stand-in when the lock passed on");
+    });
+
+    test("with the connection kept, the call rejects only after its child exited", async () => {
+      const early: string[] = [];
+      for (let trial = 0; trial < 10; trial++) {
+        await git(["--version"], scratch);
+        const epoch = inProcessWorkerEpochForTests();
+        const run = await brokerDeath(`broker-death-kept-${trial}`, false);
+        assert.ok(run.error instanceof GitCommandError, String(run.error));
+        assert.equal(run.error.failureKind, "execution");
+        assert.match(run.error.message, /exited before answering/);
+        if (!hasExited(run.atRejection.state) || !hasExited(run.secondState))
+          early.push(`${trial}: ${run.atRejection.state}/${run.secondState}`);
+        assert.equal(
+          run.fake.log(),
+          run.atRejection.log,
+          "nothing wrote after",
+        );
+        assert.equal(inProcessWorkerEpochForTests(), epoch, "same connection");
+      }
+      assert.deepEqual(early, [], "a running stand-in when the lock passed on");
     });
   },
 );

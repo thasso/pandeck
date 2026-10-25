@@ -28,13 +28,29 @@
  * exit is still awaited. Only the child is covered: processes it started (git
  * hooks, ssh) are not, as they are not on any cancel. The Worker's checkout git
  * asks for it (`docs/workers.md`); every other caller keeps the plain timing.
+ *
+ * A dead broker cannot report its child's exit, so on broker death a request
+ * with an exit receipt fails only once nothing of the broker's process group is
+ * left unexited ({@link awaitGroupExit}) — its child included, whatever the
+ * child's pid. A member SIGKILL cannot end (uninterruptible sleep) holds it
+ * indefinitely, failing closed, with one warning after
+ * {@link GROUP_EXIT_WARN_MS}.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInThisContext } from "node:vm";
 
 /** How long a cancelled child with an exit receipt has before SIGKILL. */
 const EXIT_ESCALATION_MS = 2_000;
+/** Longest pause between probes of a dead broker's process group. */
+const GROUP_POLL_MAX_MS = 50;
+/** When `/proc` is first scanned for a group that is not yet empty… */
+const GROUP_SCAN_GRACE_MS = 20;
+/** …and how often at most after that: a scan reads every process. */
+const GROUP_SCAN_INTERVAL_MS = 1_000;
+/** When a group still not exited is reported, once. */
+const GROUP_EXIT_WARN_MS = 10_000;
 
 /** Creates `handle(message)`; replies go to `send`. Plain JS by design. */
 const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
@@ -431,16 +447,165 @@ function startBroker(): typeof broker {
     }
     // Never reached the broker: safe to run here instead.
     for (const entry of state.queued.splice(0)) runLocally(entry);
-    // Reached it, outcome unknown.
-    for (const entry of state.pending.values())
-      entry.fail(new Error("The process broker exited before answering."));
+    // Reached it, outcome unknown. An exit receipt was asked for: the broker
+    // can no longer give one, so the group's exit stands in for it.
+    const gone = new Error("The process broker exited before answering.");
+    const group = child.pid;
+    const receipts: Pending[] = [];
+    for (const entry of state.pending.values()) {
+      if (entry.message.awaitExit && group !== undefined) receipts.push(entry);
+      else entry.fail(gone);
+    }
     state.pending.clear();
+    if (group !== undefined && receipts.length > 0)
+      void awaitGroupExit(group, groupIo).then(() => {
+        for (const entry of receipts) entry.fail(gone);
+      });
   };
   child.once("exit", onGone);
   child.once("error", onGone);
   child.stdin?.on("error", () => undefined);
   setRef(child, false);
   return state;
+}
+
+/** How {@link awaitGroupExit} looks at processes; a seam for tests. */
+export interface GroupIo {
+  /** `process.kill(-pgid, 0)`. */
+  probe(pgid: number): void;
+  /** Whether `/proc` can be scanned. */
+  scannable: boolean;
+  /** The entries of `/proc`. */
+  list(): string[];
+  /** `/proc/<pid>/stat`. */
+  stat(pid: string): string;
+  warn(message: string): void;
+}
+
+const systemGroupIo: GroupIo = {
+  probe: (pgid) => process.kill(-pgid, 0),
+  scannable: process.platform === "linux",
+  list: () => readdirSync("/proc"),
+  stat: (pid) => readFileSync(`/proc/${pid}/stat`, "latin1"),
+  warn: (message) => console.warn(message),
+};
+let groupIo = systemGroupIo;
+
+/** Test seam: replace how a dead broker's group is observed; reset with none. */
+export function setGroupIoForTests(io?: Partial<GroupIo>): void {
+  groupIo = io ? { ...systemGroupIo, ...io } : systemGroupIo;
+}
+
+function errorCode(err: unknown): unknown {
+  return (err as { code?: unknown } | null)?.code;
+}
+
+/**
+ * One complete `/proc` scan for the group: how many members it saw, and those
+ * that have not exited as `pid:state`; `undefined` when it cannot tell. A pid
+ * that vanished between listing and reading (ENOENT) is no member; any other
+ * failure to read or parse leaves the answer unknown.
+ */
+function scanGroup(
+  pgid: number,
+  io: GroupIo,
+): { members: number; running: string[] } | undefined {
+  let names: string[];
+  try {
+    names = io.list();
+  } catch {
+    return undefined;
+  }
+  let members = 0;
+  const running: string[] = [];
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    let text: string;
+    try {
+      text = io.stat(name);
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") continue;
+      return undefined;
+    }
+    // `pid (comm) state ppid pgrp …`; comm may hold spaces and parentheses.
+    const at = text.lastIndexOf(")");
+    const [state, ppid, pgrp] = at < 0 ? [] : text.slice(at + 2).split(" ");
+    if (
+      !state ||
+      !/^[A-Za-z]$/.test(state) ||
+      !/^\d+$/.test(ppid ?? "") ||
+      !/^\d+$/.test(pgrp ?? "")
+    )
+      return undefined;
+    if (Number(pgrp) !== pgid) continue;
+    members += 1;
+    if (state !== "Z" && state !== "X") running.push(`${name}:${state}`);
+  }
+  return { members, running };
+}
+
+/**
+ * Resolves once no member of process group `pgid` is left unexited: signal 0
+ * to the group finds none (ESRCH), or a complete `/proc` scan sees members and
+ * all of them are zombies — exited processes an orphan reaper has not
+ * collected yet. Anything else means members remain: an unexpected errno, or a
+ * scan that sees no member though the probe found one (hidden by `hidepid`,
+ * another pid namespace, or reaped since, which the next probe shows). It never sends a
+ * real signal and never gives up: a member in uninterruptible sleep keeps it
+ * waiting, with one warning at {@link GROUP_EXIT_WARN_MS}.
+ *
+ * A group id is not reused while a member, zombie or not, still holds it, so
+ * every member seen is the broker's; reuse after the group emptied can only
+ * make this wait longer.
+ */
+export function awaitGroupExit(
+  pgid: number,
+  io: GroupIo = systemGroupIo,
+): Promise<void> {
+  const started = Date.now();
+  let lastScan: number | undefined;
+  let delay = 1;
+  return new Promise((resolve) => {
+    const warning = setTimeout(() => {
+      const scan = io.scannable ? scanGroup(pgid, io) : undefined;
+      const running = scan?.running.length ? scan.running.join(", ") : "";
+      io.warn(
+        `[spawn-broker] process group ${pgid} has not exited ` +
+          `${GROUP_EXIT_WARN_MS / 1000} s after its broker died; ` +
+          `still running: ${running || "unknown"}`,
+      );
+    }, GROUP_EXIT_WARN_MS);
+    warning.unref();
+    const poll = (): void => {
+      try {
+        io.probe(pgid);
+      } catch (err) {
+        if (errorCode(err) === "ESRCH") {
+          clearTimeout(warning);
+          resolve();
+          return;
+        }
+      }
+      const now = Date.now();
+      if (
+        io.scannable &&
+        now - started >= GROUP_SCAN_GRACE_MS &&
+        (lastScan === undefined || now - lastScan >= GROUP_SCAN_INTERVAL_MS)
+      ) {
+        lastScan = now;
+        const scan = scanGroup(pgid, io);
+        if (scan && scan.members > 0 && scan.running.length === 0) {
+          clearTimeout(warning);
+          resolve();
+          return;
+        }
+      }
+      // Ref'd: a request still waiting must keep its process alive.
+      setTimeout(poll, delay);
+      delay = Math.min(delay * 2, GROUP_POLL_MAX_MS);
+    };
+    poll();
+  });
 }
 
 function write(state: NonNullable<typeof broker>, entry: Pending): void {
