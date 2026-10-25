@@ -110,7 +110,8 @@ interface SessionContextSectionsProps {
   compactionWindow?: SessionCompactionWindow | undefined;
   /** The inspector's last compaction-window save for this session. */
   compactionWindowEdit?: CompactionWindowEdit | undefined;
-  onSetCompactionWindow?: ((tokens: number | null) => void) | undefined;
+  onSetCompactionWindow?:
+    ((tokens: number | null) => string | void) | undefined;
   /** Frozen library skill names; defined (possibly empty) for coding sessions. */
   activeSkills?: string[] | undefined;
   /** Loads of those skills' bodies, newest last. */

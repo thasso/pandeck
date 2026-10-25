@@ -1660,10 +1660,20 @@ interface PendingMutation extends PendingMutationEffect {
   tempId?: string;
 }
 
-interface MutationContext extends PendingMutation {
-  recover: (mutation: PendingMutation) => void;
-  control?: { domain: "tasks" | "projects"; key?: string };
-}
+type MutationContext =
+  | (PendingMutation & {
+      recover: (mutation: PendingMutation) => void;
+      control?: { domain: "tasks" | "projects"; key?: string };
+      compactionSessionId?: never;
+    })
+  | {
+      compactionSessionId: string;
+      topic?: never;
+      objectIds?: never;
+      tempId?: never;
+      control?: never;
+      recover: (mutation: PendingMutation) => void;
+    };
 
 type OptimisticTimelineEntry = ClientTimelineEntry & {
   optimisticSessionId?: string;
@@ -1864,6 +1874,7 @@ type Action =
       sessionId: string;
       requestId: string;
       error?: string;
+      unknown?: true;
     }
   /**
    * Sessions inbox items dragged to a new place: sessions and runs in ONE
@@ -4435,6 +4446,8 @@ export interface CompactionWindowEdit {
   requestId: string;
   busy: boolean;
   error?: string;
+  /** Local outcome of a genuine connection loss, not provider applied state. */
+  unknown?: true;
 }
 
 /**
@@ -4971,6 +4984,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           requestId: action.requestId,
           busy: false,
           ...(action.error !== undefined ? { error: action.error } : {}),
+          ...(action.unknown ? { unknown: true } : {}),
         },
       },
     };
@@ -6746,7 +6760,7 @@ export interface AssistantActions {
     inheritable: boolean,
   ) => void;
   /** Set (`tokens`) or clear (`null`) a session's compaction window. */
-  setCompactionWindow: (sessionId: string, tokens: number | null) => void;
+  setCompactionWindow: (sessionId: string, tokens: number | null) => string;
   /** Answer a `choosing-task` pull-request card's Task-disambiguation prompt. */
   choosePullRequestTask: (cardId: string, taskId: string | null) => void;
   /**
@@ -6914,7 +6928,10 @@ export function useAssistant({
    * nothing to restore.
    */
   const mutationLifecycleRef = useRef(
-    createMutationLifecycle<MutationContext>(),
+    createMutationLifecycle<
+      MutationContext,
+      Extract<ServerMessage, { type: "workflowRunList" }>
+    >(),
   );
   /** Correlates card-local pending/error state with the generic mutation channel. */
   const pullRequestCardMutationRequestsRef = useRef(
@@ -6931,24 +6948,6 @@ export function useAssistant({
         competingActionSeen: boolean;
         /** Its raw server card, before local linked-Task preservation. */
         competingCard?: PullRequestCard;
-      }
-    >(),
-  );
-  /**
-   * Correlates a Workflow card's delivery click with the generic mutation
-   * channel: which run is waiting on which answer, and how far that answer has
-   * got. The run list is the authoritative outcome here — the server
-   * re-broadcasts it whether the action lands or is refused — so the two flags
-   * only decide WHEN the click may stop claiming the control, never what the
-   * control says afterwards.
-   */
-  const workflowDeliveryRequestsRef = useRef(
-    new Map<
-      string,
-      {
-        runId: string;
-        /** The command's handler resolved; its broadcast may still be in flight. */
-        settledSeen: boolean;
       }
     >(),
   );
@@ -6971,8 +6970,6 @@ export function useAssistant({
   const heldCommentTargetsRef = useRef(new Map<string, CommentTarget>());
   /** Per-target reconnect snapshots already requested by the socket episode. */
   const commentResyncRef = useRef(new Set<string>());
-  /** Compaction-window saves in flight: request id → session id. */
-  const compactionWindowRequestsRef = useRef(new Map<string, string>());
   const lazyBlockCacheRef = useRef(new Map<string, unknown>());
   /**
    * Durable-body reads in flight, by cache key. A read leaves this map when
@@ -7165,7 +7162,7 @@ export function useAssistant({
 
   useEffect(() => {
     if (isolated || state.hydrationSource !== "live") return;
-    if (mutationLifecycleRef.current.size > 0) return;
+    if (mutationLifecycleRef.current.pendingTopics().size > 0) return;
     // Scheduled through the ref on purpose: the whole `state` is what gets
     // cached, but the slices listed below are what should DECIDE to cache it.
     // Depending on `state` itself would schedule a write on every reducer
@@ -7476,21 +7473,7 @@ export function useAssistant({
       // the stores as they stand when it is sent, so its CAUSE does not matter,
       // and the settle asks for one rather than trusting a broadcast to arrive.
       if (msg.type === "workflowRunList")
-        for (const [requestId, pending] of [
-          ...workflowDeliveryRequestsRef.current,
-        ]) {
-          const busy =
-            msg.cards[pending.runId]?.pullRequest?.delivery?.busyAction;
-          if (!busy && !pending.settledSeen) continue;
-          workflowDeliveryRequestsRef.current.delete(requestId);
-          // Answered either way, so the tracked mutation must stop counting
-          // down towards "the server never replied".
-          mutationLifecycleRef.current.finish(requestId, { type: "settled" });
-          // A stated action already drops the overlay in the reducer; only the
-          // settled-but-idle case still has a claim to retire.
-          if (!busy)
-            dispatch({ kind: "workflowDeliveryResult", runId: pending.runId });
-        }
+        mutationLifecycleRef.current.observe(msg);
       if (msg.type === "pullRequestCardUpdate") {
         const entry = [...pullRequestCardMutationRequestsRef.current].find(
           ([, pending]) => pending.cardId === msg.card.id,
@@ -7536,7 +7519,8 @@ export function useAssistant({
             const mutation = mutationLifecycleRef.current.finish(requestId, {
               type: "settled",
             });
-            if (msg.card.actionError) mutation?.recover(mutation);
+            if (msg.card.actionError && mutation?.topic)
+              mutation.recover(mutation);
             dispatch({
               kind: "pullRequestCardActionResult",
               cardId: pending.cardId,
@@ -7551,7 +7535,7 @@ export function useAssistant({
             const mutation = mutationLifecycleRef.current.finish(requestId, {
               type: "settled",
             });
-            mutation?.recover(mutation);
+            if (mutation?.topic) mutation.recover(mutation);
             dispatch({
               kind: "pullRequestCardActionResult",
               cardId: pending.cardId,
@@ -7560,19 +7544,6 @@ export function useAssistant({
                 : {}),
             });
           }
-        }
-      }
-      if (msg.type === "mutationSettled") {
-        const windowSession = compactionWindowRequestsRef.current.get(
-          msg.requestId,
-        );
-        if (windowSession !== undefined) {
-          compactionWindowRequestsRef.current.delete(msg.requestId);
-          dispatch({
-            kind: "compactionWindowAnswered",
-            sessionId: windowSession,
-            requestId: msg.requestId,
-          });
         }
       }
       if (msg.type === "mutationSettled") {
@@ -7590,7 +7561,8 @@ export function useAssistant({
               msg.requestId,
               { type: "settled" },
             );
-            if (pullRequest.competingActionSeen) mutation?.recover(mutation);
+            if (pullRequest.competingActionSeen && mutation?.topic)
+              mutation.recover(mutation);
             dispatch({
               kind: "pullRequestCardActionResult",
               cardId: pullRequest.cardId,
@@ -7599,47 +7571,8 @@ export function useAssistant({
                 : {}),
             });
           }
-        } else if (workflowDeliveryRequestsRef.current.has(msg.requestId)) {
-          // A delivery action settles when its handler resolves, but the run
-          // list stating what it CAME TO is an async broadcast that can follow
-          // this message. Retiring the click here would hand the control back
-          // for that gap: Merge offered again over a merged pull request, and
-          // the previous action's failure re-exposed as if it were the answer.
-          //
-          // So the settle records itself and ASKS for the list rather than
-          // waiting for one. That broadcast is best-effort (`void broadcast` in
-          // `pullRequestCards.ts`, failures swallowed), so a click that waited
-          // for it could wait for a message that was never sent — until the
-          // deadline turned a finished merge into "the server did not answer".
-          // A subscribe answers from the stores as they stand, which is the
-          // same authority with none of the delivery risk; the resync is the
-          // per-topic one a state-event gap uses. A surface no longer holding
-          // the topic gets no list at all, so its click is simply released.
-          workflowDeliveryRequestsRef.current.get(msg.requestId)!.settledSeen =
-            true;
-          if (topicsRef.current.has("workflow")) {
-            socket.send({ type: "unsubscribe", topics: ["workflow"] });
-            socket.send(
-              replicaTransport.subscribeRequest(
-                ["workflow"],
-                stateRef.current,
-                mutationLifecycleRef.current.pendingTopics(),
-              ),
-            );
-          } else {
-            const pending = workflowDeliveryRequestsRef.current.get(
-              msg.requestId,
-            )!;
-            workflowDeliveryRequestsRef.current.delete(msg.requestId);
-            mutationLifecycleRef.current.finish(msg.requestId, {
-              type: "settled",
-            });
-            dispatch({ kind: "workflowDeliveryResult", runId: pending.runId });
-          }
         } else {
-          mutationLifecycleRef.current.finish(msg.requestId, {
-            type: "settled",
-          });
+          mutationLifecycleRef.current.settle(msg.requestId);
         }
         // A skill write is answered HERE, not by its settings echo: the settle
         // is the only message that names the request, and by now that echo has
@@ -7718,24 +7651,9 @@ export function useAssistant({
         // block as well would be the duplicate `docs/messaging.md` forbids.
         // A compaction-window refusal belongs to the inspector control that
         // sent it, never to the viewed chat's generic error.
-        const windowSession = compactionWindowRequestsRef.current.get(
-          msg.requestId,
-        );
-        if (windowSession !== undefined) {
-          compactionWindowRequestsRef.current.delete(msg.requestId);
-          dispatch({
-            kind: "compactionWindowAnswered",
-            sessionId: windowSession,
-            requestId: msg.requestId,
-            error: msg.message,
-          });
+        if (mutation?.compactionSessionId !== undefined) {
           announceArrival(msg, stateRef.current);
           return;
-        }
-        const delivery = workflowDeliveryRequestsRef.current.get(msg.requestId);
-        if (delivery) {
-          workflowDeliveryRequestsRef.current.delete(msg.requestId);
-          dispatch({ kind: "workflowDeliveryResult", runId: delivery.runId });
         }
         const key =
           mutation?.control?.domain === "tasks"
@@ -7951,28 +7869,6 @@ export function useAssistant({
             error: "Connection lost while loading this Initiative.",
           });
         initiativeDetailRequestsRef.current.clear();
-        // A delivery click belongs to the connection it was sent on: its
-        // `mutationSettled` and any stamped refusal can only arrive there, and
-        // the reconnect answers with a fresh run list instead. So the claim is
-        // handed back now rather than left to a deadline that would eventually
-        // write "the server did not answer" over an action that may well have
-        // landed. The action itself is unaffected — it is the server's, and the
-        // snapshot states it, `busyAction` included if it is still running.
-        for (const [
-          requestId,
-          pending,
-        ] of workflowDeliveryRequestsRef.current) {
-          mutationLifecycleRef.current.finish(requestId, { type: "settled" });
-          dispatch({ kind: "workflowDeliveryResult", runId: pending.runId });
-        }
-        workflowDeliveryRequestsRef.current.clear();
-        // The reconnect's state says what landed; the control stops waiting.
-        for (const [
-          requestId,
-          sessionId,
-        ] of compactionWindowRequestsRef.current)
-          dispatch({ kind: "compactionWindowAnswered", sessionId, requestId });
-        compactionWindowRequestsRef.current.clear();
         episodeListReadsRef.current = {
           tasks: false,
           projects: false,
@@ -8010,7 +7906,9 @@ export function useAssistant({
     ): string => {
       return mutationLifecycleRef.current.start({
         context: { ...mutation, recover },
-        recover,
+        recover: (entry) => {
+          if (entry.topic) recover(entry);
+        },
         timeoutMs,
         terminal: (outcome, _pending, requestId) => {
           if (outcome.type !== "timeout") return;
@@ -8023,20 +7921,6 @@ export function useAssistant({
               cardId: pullRequest.cardId,
               error:
                 "The server did not answer this pull request action. Try again.",
-            });
-          }
-          // Only a click still WAITING says this. One the run list already
-          // answered — the server stated the action, or its outcome landed — is
-          // off the control, and a deadline reached long afterwards must not
-          // write a failure over a card that has moved on.
-          const delivery = workflowDeliveryRequestsRef.current.get(requestId);
-          if (delivery) {
-            workflowDeliveryRequestsRef.current.delete(requestId);
-            dispatch({
-              kind: "workflowDeliveryResult",
-              runId: delivery.runId,
-              error:
-                "The server did not answer this delivery action. Try again.",
             });
           }
         },
@@ -8106,9 +7990,11 @@ export function useAssistant({
       return mutationLifecycleRef.current.start({
         context,
         timeoutMs,
-        recover,
-        disconnected: (entry) =>
-          replicaTransport.invalidate(domain, entry.objectIds),
+        recover: (entry) => {
+          if (entry.topic) recover(entry);
+        },
+        disconnected: () =>
+          replicaTransport.invalidate(domain, context.objectIds),
         terminal: (outcome) => {
           if (!key) return;
           if (outcome.type === "unknown") {
@@ -8199,17 +8085,37 @@ export function useAssistant({
         stateRef.current.workflowCards[runId]?.pullRequest?.delivery;
       if (!delivery || delivery.busyAction || delivery.pendingAction)
         return undefined;
-      const requestId = trackMutation(
-        { topic: "workflow", objectIds: [runId] },
-        () => dispatch({ kind: "workflowDeliveryResult", runId }),
-        // A merge talks to the provider and a cleanup refreshes the base and
-        // removes a checkout: the short deadline would fire mid-action and
-        // claim the server never answered.
-        LONG_MUTATION_SETTLE_TIMEOUT_MS,
-      );
-      workflowDeliveryRequestsRef.current.set(requestId, {
-        runId,
-        settledSeen: false,
+      const requestId = mutationLifecycleRef.current.start({
+        context: {
+          topic: "workflow",
+          objectIds: [runId],
+          recover: () => {},
+        },
+        timeoutMs: LONG_MUTATION_SETTLE_TIMEOUT_MS,
+        // Reconnect already subscribes to authority. Release belongs ONLY to
+        // terminal, never recovery: a newer offline click may own this run.
+        recover: () => {},
+        disconnected: () => {},
+        firstSettled: refetchWorkflowRuns,
+        done: (settled, list) =>
+          list
+            ? Boolean(list.cards[runId]?.pullRequest?.delivery?.busyAction) ||
+              settled
+            : settled && !topicsRef.current.has("workflow"),
+        terminal: (outcome, _context, _requestId, list) => {
+          // Busy authority itself discards the overlay in the list reducer.
+          if (list?.cards[runId]?.pullRequest?.delivery?.busyAction) return;
+          dispatch({
+            kind: "workflowDeliveryResult",
+            runId,
+            ...(outcome.type === "timeout"
+              ? {
+                  error:
+                    "The server did not answer this delivery action. Try again.",
+                }
+              : {}),
+          });
+        },
       });
       dispatch({ kind: "optimisticWorkflowDelivery", runId, action });
       return requestId;
@@ -9055,19 +8961,27 @@ export function useAssistant({
       setApprovalGrantScope: (sessionId, keys, inheritable) =>
         send({ type: "setApprovalGrantScope", sessionId, keys, inheritable }),
       setCompactionWindow: (sessionId, tokens) => {
-        const requestId = createClientId();
-        compactionWindowRequestsRef.current.set(requestId, sessionId);
+        const requestId = mutationLifecycleRef.current.start({
+          context: { compactionSessionId: sessionId, recover: () => {} },
+          timeoutMs: MUTATION_SETTLE_TIMEOUT_MS,
+          recover: () => {},
+          disconnected: () => {},
+          terminal: (outcome, _context, id) =>
+            dispatch({
+              kind: "compactionWindowAnswered",
+              sessionId,
+              requestId: id,
+              ...(outcome.type === "unknown" ? { unknown: true } : {}),
+              ...(outcome.type === "error"
+                ? { error: outcome.message }
+                : outcome.type === "timeout"
+                  ? { error: "The server did not answer. Try again." }
+                  : {}),
+            }),
+        });
         dispatch({ kind: "compactionWindowRequested", sessionId, requestId });
-        setTimeout(() => {
-          if (!compactionWindowRequestsRef.current.delete(requestId)) return;
-          dispatch({
-            kind: "compactionWindowAnswered",
-            sessionId,
-            requestId,
-            error: "The server did not answer. Try again.",
-          });
-        }, MUTATION_SETTLE_TIMEOUT_MS);
         send({ type: "setCompactionWindow", sessionId, tokens, requestId });
+        return requestId;
       },
       choosePullRequestTask: (cardId, taskId) =>
         send({ type: "resolvePullRequestCardTask", cardId, taskId }),

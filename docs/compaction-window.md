@@ -187,7 +187,34 @@ It sets and clears the value through
 `setCompactionWindow { sessionId, tokens, requestId }`. An out-of-range value is
 refused before sending, with the server's wording
 (`compactionWindowUserRefusal`). A server refusal arrives as an `error` with the
-request id and a session target, and is shown in place.
+request id and a session target, and is shown in place. Arrival announcements
+keep their existing failure-home policy; a correlated refusal never populates or
+stops the viewed chat's generic error/run state.
+
+The client mutation lifecycle owns the request id and original 30-second
+deadline. These are receipt-only records, with no list optimism, digest claim or
+shell-cache block. The latest request per session alone can release its busy
+receipt. Settle and refusal dispatch that release immediately, without a 0 ms
+release timer; timeout says "The server did not answer. Try again." An
+authoritative state update is not a receipt.
+
+Genuine connected loss releases busy with a local unknown marker, silently.
+Repeated failed connection attempts leave queued-unsent Save/Clear receipts and
+their original deadlines intact. Reconnect's normal session authority decides
+what landed; recovery adds no read, replay or rollback. Teardown abandons these
+correlations and timers.
+
+A valid numeric Save still clears the input immediately while connected. The
+section retains one raw attempt, correlated by the locally returned request id,
+session and interaction generation. Only that exact current attempt's unknown
+receipt restores its raw text, even if Requested/Answered were batched without a
+busy render. Known success/refusal does not restore it. Every manual
+resubmission re-arms protection. Typing, Clear, a newer submission, another
+request, session change or unmount invalidates it; returning to a session cannot
+revive it. Untracked callbacks cannot infer unknown. Clear leaves current input
+alone and creates no numeric restoration. This local unknown is not the
+provider's `applied: unknown` state, and stored/applied values never reconstruct
+a draft.
 
 ## Evidence
 

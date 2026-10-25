@@ -200,7 +200,70 @@ it("keeps a legacy linked-Task claim across disconnect while ordinary Task contr
       status: "todo",
     }),
   );
+  let windowRequest = "";
+  await act(async () => {
+    socket.receive({
+      type: "workflowRunList",
+      updatedAt: 10,
+      runs: [
+        {
+          id: "run-1",
+          taskId: "625",
+          recipeId: "code-delivery",
+          recipeVersion: 1,
+          branch: "feature",
+          lifecycle: "paused",
+          limits: { maxIterations: 3, maxReviewPasses: 1 },
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      cards: {
+        "run-1": {
+          runId: "run-1",
+          phase: "merge",
+          iterationsUsed: 1,
+          nextAction: "merge",
+          mergeDecisionReady: true,
+          canRebaseAndReview: false,
+          canRetry: false,
+          canResume: false,
+          pullRequest: {
+            cardId: "workflow-pr",
+            sessionId: "impl-1",
+            number: 7,
+            url: "https://example.test/pull/7",
+            delivery: {
+              canMerge: true,
+              canCleanUp: false,
+              settleStillNeeded: false,
+              mergeMethods: ["squash"],
+              defaultMergeMethod: "squash",
+            },
+          },
+        },
+      },
+    });
+  });
+  await act(async () => {
+    windowRequest = latestActions.setCompactionWindow("s1", 200_000);
+    latestActions.mergeWorkflowRun("run-1", {
+      mergeMethod: "squash",
+      deleteBranch: true,
+    });
+  });
+  expect(
+    latestState.workflowCards["run-1"]?.pullRequest?.delivery?.pendingAction,
+  ).toBe("merge");
   await act(async () => socket.close());
+  expect(latestState.compactionWindowEdits.s1).toEqual({
+    requestId: windowRequest,
+    busy: false,
+    unknown: true,
+  });
+  expect(
+    latestState.workflowCards["run-1"]?.pullRequest?.delivery?.pendingAction,
+  ).toBeUndefined();
   expect(Object.values(latestState.taskMutations)[0]?.status).toBe("idle");
   expect(viewedCard()?.pendingAction).toBe("mark-task-done");
   await act(async () => vi.advanceTimersByTime(1000));

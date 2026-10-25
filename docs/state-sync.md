@@ -200,10 +200,13 @@ failure, and explicit recovery reads.
 
 `lib/mutationLifecycle.ts` owns common mutation request identities, records and
 timers in one `useAssistant` ref. It removes a record and clears its timer
-before calling a terminal hook, so settle, stamped error and timeout retire it
-once. Descriptors keep domain deadlines, control keys, recovery and failure
-policy. Task and Project correlation lives in those records, not separate
-control maps. Replica item reads retain their own request table and deadlines.
+before calling a terminal hook, so completion, stamped error, timeout and
+unknown retire it once. The core owns each record's settled bit; a descriptor
+can wait for fresh authoritative evidence after settle without resetting the
+deadline. Its first-settle hook runs once. Descriptors keep domain deadlines,
+control keys, recovery and failure policy. Task, Project, workflow delivery and
+compaction correlation live in those records, not separate control maps. Replica
+item reads retain their own request table and deadlines.
 
 For Tasks and Projects, loss of a connected socket is terminal with **outcome
 unknown**. Failed connection attempts do not retire queued, unsent writes: their
@@ -232,14 +235,37 @@ its invalidation, and starts no retry loop. Effect teardown abandons migrated
 records and recovery without future callbacks; the retained instance is
 reusable.
 
-Staged paths still use the same common identity/timer owner, but retain their
-existing outcome policies. Workflow delivery keeps its run-list/settle map and
-disconnect release until Task-1093. PR-card actions keep their two-signal map
-and wait-until-timeout disconnect policy until Task-1094, including linked-Task
-effects. Compaction keeps its separate control map and timer until Task-1093.
-Other tracker callers change storage only. Migration is selected by descriptor,
-never by a touched topic. Wire messages, 30-second and 15-minute deadlines,
-connected failure surfaces and replica read ownership are unchanged.
+Workflow delivery uses the core's settled bit and its descriptor's run-list
+predicate. An authoritative busy action hands off early, before settle; an idle
+list completes only an already settled request. An earlier idle list is not
+remembered. First settle while held sends the existing unsubscribe/subscribe
+pair, retaining the claim and original 15-minute deadline until the list
+answers. Unheld settle releases without subscribing. Busy handoff lets the list
+reducer remove the overlay without an extra control-result dispatch. Pre-card
+refusals release only the click and retain the existing Task failure route.
+
+Compaction is receipt-only: identity and the 30-second timer, but no
+touched-list effects, optimistic row or digest claim. Only effect-bearing
+pending work blocks shell-cache admission. A matching settle/refusal/timeout
+releases the latest receipt immediately, without a separate release timer.
+Refusals stay in the inspector and retain arrival announcement policy, never
+becoming a viewed-chat runtime failure. See
+[compaction window](compaction-window.md#inspector) for exact-id, unknown-only
+raw draft recovery.
+
+Workflow and compaction also retire unknown only on genuine connected loss.
+Queued-unsent claims survive failed attempts with their original deadlines.
+Their terminal hooks release controls once; reconnect recovery adds no reads or
+replays, since the normal subscription supplies run/session authority. It must
+not release a newer offline claim for the same run. Teardown cancels migrated
+timers and drops recovery obligations. Workflow cards are not boot-cache data.
+
+PR-card actions still use the common identity/timer owner but keep their legacy
+two-signal map, explicit final finish and wait-until-timeout disconnect policy
+until Task-1094, including linked-Task effects. Other tracker callers change
+storage only. Migration is selected by descriptor, never by a touched topic.
+Wire messages, 30-second and 15-minute deadlines, connected failure surfaces and
+replica read ownership are unchanged.
 
 ## Client replica
 

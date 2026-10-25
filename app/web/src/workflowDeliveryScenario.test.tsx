@@ -158,7 +158,7 @@ beforeEach(() => {
   // The click's deadline is 15 minutes — long enough that a merge talking to a
   // provider is never cut short — so the tests that ask what happens at it
   // drive the clock rather than wait.
-  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.useFakeTimers();
   vi.stubGlobal("WebSocket", ScenarioSocket);
   window.localStorage.clear();
   container = document.createElement("div");
@@ -199,6 +199,272 @@ async function clickedMerge() {
   expect(requestId).toBeTypeOf("string");
   return { socket, requestId: requestId!, mark: socket.sent.length };
 }
+
+it("does not bank a pre-settle idle list or repeat a settled relist", async () => {
+  const { socket, requestId } = await clickedMerge();
+  await act(async () => socket.receive(runList(mergeable, 11)));
+  const mark = socket.sent.length;
+  await act(async () => socket.receive({ type: "mutationSettled", requestId }));
+  expect(viewedDelivery()?.pendingAction).toBe("merge");
+  expect(socket.sent.slice(mark)).toEqual([
+    { type: "unsubscribe", topics: ["workflow"] },
+    { type: "subscribe", topics: ["workflow"] },
+  ]);
+  await act(async () => vi.advanceTimersByTime(899_999));
+  await act(async () => socket.receive({ type: "mutationSettled", requestId }));
+  expect(viewedDelivery()?.pendingAction).toBe("merge");
+  expect(socket.sent.slice(mark)).toHaveLength(2);
+  await act(async () => vi.advanceTimersByTime(1));
+  expect(viewedDelivery()?.pendingAction).toBeUndefined();
+  expect(viewedDelivery()?.error).toBe(
+    "The server did not answer this delivery action. Try again.",
+  );
+});
+
+function runsList(
+  deliveries: Record<string, WorkflowRunDelivery>,
+  updatedAt: number,
+): ServerMessage {
+  const base = runList(mergeable);
+  if (base.type !== "workflowRunList")
+    throw new Error("Expected workflow list");
+  const template = base.cards["7"]!;
+  return {
+    type: "workflowRunList",
+    updatedAt,
+    runs: Object.keys(deliveries).map((id) => ({ ...run, id })),
+    cards: Object.fromEntries(
+      Object.entries(deliveries).map(([id, delivery]) => [
+        id,
+        {
+          ...template,
+          runId: id,
+          pullRequest: {
+            ...template.pullRequest!,
+            cardId: `pr-${id}`,
+            delivery,
+          },
+        },
+      ]),
+    ),
+  };
+}
+
+it("resolves two runs independently and ignores late addressed settles for a newer click", async () => {
+  const { socket, requestId: old } = await clickedMerge();
+  await act(async () =>
+    socket.receive(runsList({ "7": mergeable, "8": mergeable }, 11)),
+  );
+  await act(async () => latestActions.cleanUpWorkflowRun("8"));
+  expect(
+    latestState.workflowCards["8"]?.pullRequest?.delivery?.pendingAction,
+  ).toBe("cleanup");
+  await act(async () =>
+    socket.receive(
+      runsList(
+        { "7": mergeable, "8": { ...mergeable, busyAction: "cleanup" } },
+        12,
+      ),
+    ),
+  );
+  expect(viewedDelivery()?.pendingAction).toBe("merge");
+  expect(
+    latestState.workflowCards["8"]?.pullRequest?.delivery?.pendingAction,
+  ).toBeUndefined();
+  await act(async () =>
+    socket.receive({ type: "mutationSettled", requestId: old }),
+  );
+  await act(async () =>
+    socket.receive(
+      runsList(
+        { "7": { ...mergeable, error: "durable refusal" }, "8": mergeable },
+        13,
+      ),
+    ),
+  );
+  expect(viewedDelivery()?.error).toBe("durable refusal");
+  await act(async () => latestActions.cleanUpWorkflowRun("7"));
+  const current = socket.sent
+    .filter((msg) => msg.type === "cleanUpWorkflowRun")
+    .find((msg) => msg.runId === "7")!;
+  expect(current.requestId).not.toBe(old);
+  const mark = socket.sent.length;
+  await act(async () =>
+    socket.receive({ type: "mutationSettled", requestId: old }),
+  );
+  expect(socket.sent).toHaveLength(mark);
+  expect(viewedDelivery()?.pendingAction).toBe("cleanup");
+  await act(async () =>
+    socket.receive(
+      runsList(
+        {
+          "7": {
+            ...mergeable,
+            busyAction: "merge",
+            canMerge: false,
+            error: "authority",
+          },
+          "8": mergeable,
+        },
+        14,
+      ),
+    ),
+  );
+  expect(viewedDelivery()).toMatchObject({
+    busyAction: "merge",
+    canMerge: false,
+    error: "authority",
+  });
+  expect(viewedDelivery()?.pendingAction).toBeUndefined();
+});
+
+it("loss while settled-awaiting-list releases before reconnect and never relists twice", async () => {
+  const { socket, requestId } = await clickedMerge();
+  await act(async () => socket.receive({ type: "mutationSettled", requestId }));
+  expect(viewedDelivery()?.pendingAction).toBe("merge");
+  await act(async () => {
+    socket.close();
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(viewedDelivery()?.pendingAction).toBeUndefined();
+  const next = ScenarioSocket.instances.at(-1)!;
+  expect(next.sent).toEqual([]);
+  await act(async () => {
+    next.open();
+    next.receive(readyMessage());
+    next.receive(runList({ ...mergeable, error: "fresh refusal" }, 20));
+  });
+  expect(next.sent).toEqual([{ type: "subscribe", topics: ["workflow"] }]);
+  expect(viewedDelivery()?.error).toBe("fresh refusal");
+  await act(async () => vi.advanceTimersByTime(900_000));
+  expect(viewedDelivery()?.error).toBe("fresh refusal");
+});
+
+it.each([false, true])(
+  "queued offline action survives failed attempts, previouslyConnected=%s",
+  async (previouslyConnected) => {
+    await act(async () => root.render(<DeliveryHarness />));
+    let socket = ScenarioSocket.instances[0]!;
+    if (previouslyConnected)
+      await act(async () => {
+        socket.open();
+        socket.receive(readyMessage());
+      });
+    await act(async () => latestActions.setTopics(["workflow"]));
+    // Never-connected state is explicitly synthetic. Workflow cards are NOT a
+    // boot-cache slice; a prior live connection is the other fixture's source.
+    await act(async () => socket.receive(runList(mergeable)));
+    if (previouslyConnected) {
+      await act(async () => {
+        socket.close();
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      socket = ScenarioSocket.instances.at(-1)!;
+    }
+    await act(async () => latestActions.cleanUpWorkflowRun("7"));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await act(async () => {
+        socket.close();
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      socket = ScenarioSocket.instances.at(-1)!;
+    }
+    expect(viewedDelivery()?.pendingAction).toBe("cleanup");
+    await act(async () => latestActions.cleanUpWorkflowRun("7"));
+    expect(socket.sent).toEqual([]);
+    await act(async () => socket.open());
+    const commands = socket.sent.filter(
+      (msg) => msg.type === "cleanUpWorkflowRun",
+    );
+    expect(commands).toHaveLength(1);
+    const requestId = commands[0]!.requestId!;
+    expect(socket.sent.filter((msg) => msg.type !== "subscribe")).toEqual(
+      commands,
+    );
+    await act(async () =>
+      socket.receive({ type: "mutationSettled", requestId }),
+    );
+    expect(viewedDelivery()?.pendingAction).toBe("cleanup");
+    await act(async () =>
+      socket.receive(
+        runList({ ...mergeable, canCleanUp: false, error: "finished" }, 20),
+      ),
+    );
+    expect(viewedDelivery()?.pendingAction).toBeUndefined();
+    expect(viewedDelivery()?.error).toBe("finished");
+  },
+);
+
+it("A unknown recovery never releases B queued offline for the same run", async () => {
+  const { socket, requestId: a } = await clickedMerge();
+  await act(async () => {
+    socket.close();
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  const next = ScenarioSocket.instances.at(-1)!;
+  await act(async () => latestActions.cleanUpWorkflowRun("7"));
+  expect(viewedDelivery()?.pendingAction).toBe("cleanup");
+  await act(async () => next.open());
+  expect(viewedDelivery()?.pendingAction).toBe("cleanup");
+  const b = next.sent.find((msg) => msg.type === "cleanUpWorkflowRun")!;
+  expect(b.requestId).not.toBe(a);
+  await act(async () =>
+    next.receive({ type: "mutationSettled", requestId: a }),
+  );
+  expect(viewedDelivery()?.pendingAction).toBe("cleanup");
+  await act(async () => next.close());
+  expect(viewedDelivery()?.pendingAction).toBeUndefined();
+  await act(async () => vi.advanceTimersByTime(900_000));
+  expect(viewedDelivery()?.error).not.toContain("did not answer");
+});
+
+it("offline failed attempts preserve the original cleanup deadline", async () => {
+  await act(async () => root.render(<DeliveryHarness />));
+  let socket = ScenarioSocket.instances[0]!;
+  await act(async () => {
+    latestActions.setTopics(["workflow"]);
+    socket.receive(runList(mergeable));
+  });
+  await act(async () => latestActions.cleanUpWorkflowRun("7"));
+  await act(async () => {
+    socket.close();
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  socket = ScenarioSocket.instances.at(-1)!;
+  await act(async () => socket.open());
+  await act(async () => vi.advanceTimersByTime(898_999));
+  expect(viewedDelivery()?.pendingAction).toBe("cleanup");
+  await act(async () => vi.advanceTimersByTime(1));
+  expect(viewedDelivery()?.pendingAction).toBeUndefined();
+  expect(viewedDelivery()?.error).toBe(
+    "The server did not answer this delivery action. Try again.",
+  );
+});
+
+it("cleanup pre-card refusal releases silently and follows the Task error route", async () => {
+  const { socket } = await clickedMerge();
+  await act(async () =>
+    socket.receive(runList({ ...mergeable, busyAction: "merge" }, 11)),
+  );
+  await act(async () => socket.receive(runList(mergeable, 12)));
+  await act(async () => latestActions.cleanUpWorkflowRun("7"));
+  const command = socket.sent.find((msg) => msg.type === "cleanUpWorkflowRun")!;
+  await act(async () =>
+    socket.receive({
+      type: "error",
+      requestId: command.requestId!,
+      target: { type: "task", id: "370" },
+      message: "Workflow delivery failed: cleanup refused",
+    }),
+  );
+  expect(viewedDelivery()?.pendingAction).toBeUndefined();
+  expect(viewedDelivery()?.error).not.toBe(
+    "Workflow delivery failed: cleanup refused",
+  );
+  expect(latestState.objectFailures.task?.["370"]).toBe(
+    "Workflow delivery failed: cleanup refused",
+  );
+});
 
 it("holds the click through a run-list broadcast that is about something else", async () => {
   const { socket } = await clickedMerge();
