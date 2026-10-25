@@ -82,9 +82,9 @@ success.\
 _Avoid_: success flag, delivery acknowledgment
 
 **Worker**: A separately deployed process that hosts agent sessions' engines and
-native tools under an OS account other than the server's, and reaches the server
-only through the worker protocol. The server can restart while its Workers keep
-running.\
+native tools on the far side of the isolation boundary from the server, and
+reaches the server only through the worker protocol. The server can restart
+while its Workers keep running.\
 _Avoid_: agent server, runner, node. A web worker or diff worker is the browser
 thread, always named with its qualifier.
 
@@ -100,9 +100,10 @@ exactly one refresher at a time, and a lease never makes the Worker a second
 one. A live account switch ends one lease and grants another.\
 _Avoid_: credential copy, token share, synced profile
 
-**Credential gateway**: The long-lived service under the server's account that
-holds the live model credentials, is their only refresher, and forwards every
-engine's model requests in exchange for a lease token.\
+**Credential gateway**: The long-lived service on the server's side of the
+isolation boundary that holds the live model credentials, is their only
+refresher, and forwards every engine's model requests in exchange for a lease
+token.\
 _Avoid_: model proxy, LLM proxy. The package proxy is a separate function that
 happens to run in the same service.
 
@@ -117,3 +118,14 @@ placements, served-file URLs and logs. It is unique and never changes or gets
 reused; moving a Worker to new hardware keeps it. A Worker's display name is
 separate and may change.\
 _Avoid_: hostname, worker name
+
+**Isolation boundary**: What keeps Worker processes, and the agents they run,
+out of Pandeck's secrets: separate OS accounts on a server host, or separately
+signed processes and the platform key store on a single-user desktop.\
+_Avoid_: sandbox. A sandbox is a per-session isolation level inside a Worker.
+
+**Secret store**: The one place Pandeck keeps secrets, readable only from the
+server's side of the isolation boundary. Files only the server's account can
+read on a server host, the platform key store on a desktop. `DATA_DIR` holds no
+secrets.\
+_Avoid_: vault, keyring, credential file

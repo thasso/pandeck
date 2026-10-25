@@ -20,6 +20,11 @@ profile's live token. The boundary holds only while the Worker's account has no
 root-equivalent access to the server's host, such as a rootful Docker daemon or
 passwordless `sudo`.
 
+This is the server-host implementation of the isolation boundary. A single-user
+desktop has no second account and builds the boundary from signed processes and
+the platform key store instead
+([workers.md](../workers.md#bundled-desktop-mode)).
+
 ## Considered options
 
 - **One account for both**: the starting point. Rejected: no boundary at all.

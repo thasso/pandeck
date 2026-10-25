@@ -1,12 +1,13 @@
 # Workers
 
-Agent sessions run in Workers: separately deployed processes, under an OS
-account other than the server's, that host the engines and native tools and
-reach the server only through the worker protocol. This document is the agreed
-design. None of it is implemented yet; "Phases" gives the order it ships in. The
-terms (Worker, worker protocol, credential lease, credential gateway, placement,
-Worker id) are defined in [glossary.md](glossary.md), and the decisions that are
-hard to reverse are recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
+Agent sessions run in Workers: separately deployed processes, on the far side of
+an isolation boundary from the server, that host the engines and native tools
+and reach the server only through the worker protocol. This document is the
+agreed design. None of it is implemented yet; "Phases" gives the order it ships
+in. The terms (Worker, worker protocol, credential lease, credential gateway,
+placement, Worker id, isolation boundary, secret store) are defined in
+[glossary.md](glossary.md), and the decisions that are hard to reverse are
+recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
 [ADR-0002](adr/0002-server-runs-under-its-own-account.md),
 [ADR-0003](adr/0003-worker-owns-checkout-operations.md) and, proposed,
 [ADR-0004](adr/0004-credential-gateway.md).
@@ -68,7 +69,22 @@ The Knowledge Base and the skills and agent libraries are git repositories
 inside `DATA_DIR`. They are Pandeck data, not checkouts, and stay outside
 placement, reachable only through their tools.
 
-## Accounts and secrets
+## Isolation boundary and secrets
+
+The isolation boundary is what keeps Worker processes, and so agents, out of
+Pandeck's secrets. It has two implementations: separate OS accounts on a server
+host, described here, and separately signed processes with the platform key
+store on a single-user desktop ("Bundled desktop mode" below). Nothing outside
+these implementations assumes either one.
+
+Every secret lives behind one **secret store** port: model tokens (read only by
+the credential gateway), integration OAuth results, the auth token, the APNs key
+and the secrets the server's environment file supplies today. `DATA_DIR` holds
+no secrets, so a copy of it carries no credentials. On a server host the store
+is files only the server's account can read; on a desktop it is the platform key
+store.
+
+### On a server host
 
 The server and the gateway run under a dedicated account. `DATA_DIR` belongs to
 it, mode 0700, and the server refuses to boot when the Worker account can read
@@ -286,23 +302,62 @@ protocol version, sessions, placed checkouts, root-equivalent access warnings,
 and revoking enrollment. An offline Worker or a protocol mismatch is a condition
 in the app status slot ([messaging.md](messaging.md)).
 
+## Bundled desktop mode
+
+A future mode of the macOS app runs the whole application on the user's machine
+instead of connecting to a remote server. iOS stays a thin client, and the
+desktop app can still connect to a remote server as it does today. Bundled mode
+is a deployment of this design, not a fork: the same three services, the same
+protocol, one machine and one user.
+
+With one user there is no second account, so the isolation boundary is built
+from what macOS enforces between processes of the same user:
+
+- **Secrets in the Keychain.** The secret store is the Keychain, in an access
+  group only the server's and the gateway's signed binaries are entitled to. The
+  Worker's binary carries no such entitlement, and neither does anything an
+  agent runs.
+- **Hardened runtime.** The server and the gateway run with the hardened runtime
+  and without debugging entitlements, so another process of the same user cannot
+  read their memory.
+- **Separate launchd jobs.** The Worker and the gateway are separately signed
+  launchd agents the app registers, so they keep running when the app quits or
+  updates, and a Worker's processes are not attributed to the app and inherit
+  none of its permissions. The server lives with the app. Stopping the agents
+  entirely is an explicit menu action.
+
+ADR-0003 is what makes this feasible: the server never touches checkouts, so it
+needs only its own data, the network and the key store.
+
+**Desktop mode protects secrets, not data.** `DATA_DIR` stays readable by
+agents: keeping it out of their reach would rely on App Sandbox container
+protection, which is a prompt the user can dismiss and depends on process
+attribution and the macOS version. Since `DATA_DIR` holds no secrets, what an
+agent can read there is the user's own sessions and Tasks, which agents reach
+through tools anyway.
+
 ## Phases
 
 1. **Seams in-process.** A checkout port in front of every module that runs git
    or reads checkouts, and an engine-host interface, served by an in-process
-   Worker over the real protocol codec. No behavior change.
+   Worker over the real protocol codec. No behavior change. The isolation
+   boundary and the secret store are ports from the start, so nothing in phases
+   1–3 assumes "a different account" outside the server-host implementation.
 2. **The Worker as its own process and unit, same account.** Turns survive a
    server restart (goal 2). Done when the server's boot recovery waits for
    Worker inventories and fences stale reports, rather than marking live Worker
    runs interrupted.
 3. **The server under its own account** (goal 1). Starts with the gateway spike,
-   then ships the credential gateway (or exclusive leases), moves `DATA_DIR`,
-   adds the boot check and the root-equivalent access warning, and moves every
-   app tool that opens agent-supplied paths. It comes after phase 2 because
-   before it, the server would have nothing to hand checkout work to.
+   then ships the credential gateway (or exclusive leases), moves every secret
+   behind the secret store, moves `DATA_DIR`, adds the boot check and the
+   root-equivalent access warning, and moves every app tool that opens
+   agent-supplied paths. It comes after phase 2 because before it, the server
+   would have nothing to hand checkout work to.
 4. **Several Workers, then remote Workers** over TCP with TLS, with tunnels for
    the server's loopback features.
 5. **Isolation levels** inside a Worker: bubblewrap, containers, microVMs.
+6. **Bundled desktop mode**, not scheduled. Starts with the desktop spike under
+   "Open questions".
 
 ## Open questions
 
@@ -311,5 +366,10 @@ in the app status slot ([messaging.md](messaging.md)).
   long-running process, and whether the provider's terms allow routing the
   operator's own subscription through the operator's own gateway. The answer
   picks between the gateway and exclusive leases.
+- **The desktop spike.** Before phase 6: whether a Developer ID build can use a
+  Keychain access group without a provisioning profile, whether the hardened
+  runtime keeps same-user processes out of the server's and the gateway's
+  memory, and whether launchd jobs registered by the app keep a Worker's
+  processes from being attributed to the app.
 - **Remote reach for loopback features.** Desktop port forwarding and browser
   tools reach Worker processes over loopback until phase 4 adds tunnels.
