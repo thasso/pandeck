@@ -5,11 +5,11 @@ account other than the server's, that host the engines and native tools and
 reach the server only through the worker protocol. This document is the agreed
 design. None of it is implemented yet; "Phases" gives the order it ships in. The
 terms (Worker, worker protocol, credential lease, credential gateway, placement,
-Worker id) are defined in [glossary.md](glossary.md), and the three decisions
-that are hard to reverse are recorded in
-[ADR-0001](adr/0001-worker-hosts-the-engine.md),
-[ADR-0002](adr/0002-server-runs-under-its-own-account.md) and
-[ADR-0003](adr/0003-worker-owns-checkout-operations.md).
+Worker id) are defined in [glossary.md](glossary.md), and the decisions that are
+hard to reverse are recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
+[ADR-0002](adr/0002-server-runs-under-its-own-account.md),
+[ADR-0003](adr/0003-worker-owns-checkout-operations.md) and, proposed,
+[ADR-0004](adr/0004-credential-gateway.md).
 
 ## Goals
 

@@ -295,7 +295,8 @@ only binding rules; everything else lives here.
   hard to reverse and would surprise a reader, with the alternatives it
   rejected. `0001`–`0003` cover the Worker split: the Worker hosts the engine,
   the server runs under its own account apart from agents, and the Worker owns
-  every checkout operation.
+  every checkout operation. `0004` (proposed) makes a credential gateway the
+  only refresher of model credentials.
 
 ## Implementation reference
 
