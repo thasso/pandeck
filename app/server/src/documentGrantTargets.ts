@@ -8,6 +8,7 @@ import {
 } from "node:path";
 import type { DocumentTarget } from "@assistant/shared/documentTargets";
 import type { MintFileGrantRequest } from "@assistant/shared/servedFiles";
+import { containedRealPath } from "./checkoutFileAccess.ts";
 import { DATA_DIR } from "./config.ts";
 import { mintDocumentGrant, type MintedDocument } from "./directFileGrants.ts";
 import {
@@ -15,7 +16,6 @@ import {
   servedSideOf,
   type ServedSide,
 } from "./servedFileAccess.ts";
-import { containedRealPath } from "./worktrees/worktreeDiff.ts";
 import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 
 interface ResolvedGrantSource {
@@ -179,7 +179,7 @@ async function resolveDocumentGrantSource(
       const row = await dependencies.resolveWorktree(target.worktreeId);
       if (!row || row.status !== "active") throw new Error("Unknown worktree.");
       return {
-        filePath: containedRealPath(row.path, target.path),
+        filePath: await containedRealPath(row.path, target.path),
         root: row.path,
         sourceKey: `worktree:${row.id}`,
       };

@@ -1,6 +1,7 @@
 /**
- * The server's side of the file methods: a served-file read for a path placed
- * on a Worker becomes a request to that Worker (`docs/workers.md`).
+ * The server's side of the file methods: a served-file or checkout read for a
+ * path placed on a Worker becomes a request to that Worker
+ * (`docs/workers.md`).
  *
  * A handle is bound to the exact connection that opened it. Its reads and its
  * close go only there: never re-resolved, never re-dialed, so a handle from an
@@ -9,19 +10,33 @@
  * nothing, because the Worker closed the handle at the end.
  *
  * Any failure to get an answer — the connection ending, an unknown Worker id,
- * a protocol error, the Worker refusing the location — rejects with an error
- * that has no filesystem `code`. There is no local fallback.
+ * a refused request of any code, a malformed answer — rejects with an error
+ * branded as a Worker failure ({@link isWorkerFailure}): the brand marks where
+ * the error came from, never what `code` it carries. A filesystem failure the
+ * Worker answered is an `AnsweredFileFailure` and is never branded. There is
+ * no local fallback.
  */
-import type { FileOpenOutcome, FileStat } from "../fileReads.ts";
+import type {
+  DirectoryEntry,
+  FileOpenOutcome,
+  FileStat,
+  PathInspection,
+} from "../fileReads.ts";
+import type { Payload } from "../workerProtocol/codec.ts";
 import type { WorkerConnection } from "../workerProtocol/connection.ts";
 import {
   FILE_METHODS,
+  MalformedWorkerAnswerError,
   decodeBytes,
   decodeClosed,
+  decodeEntries,
+  decodeExists,
+  decodeInspection,
   decodeOpenOutcome,
   decodeRealpath,
   decodeStat,
   encodeHandle,
+  encodeInspect,
   encodeLocation,
   encodeOpen,
   encodeRead,
@@ -35,25 +50,109 @@ export interface WorkerFileHandle {
   close(): Promise<void>;
 }
 
-export async function statOnWorker(
-  location: WorkerFileLocation,
-): Promise<FileStat> {
-  return decodeStat(
-    await workerConnection(location.workerId).request(
-      FILE_METHODS.stat,
-      encodeLocation(location),
-    ),
+const workerFailures = new WeakSet<object>();
+
+/** Whether `error` is a Worker failure: no answer was obtained for it. */
+export function isWorkerFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && workerFailures.has(error)
   );
 }
 
-export async function realpathOnWorker(
+/** Brands `error` in place; a non-object is wrapped in an `Error` first. */
+function branded(error: unknown): unknown {
+  const failure =
+    typeof error === "object" && error !== null
+      ? error
+      : new Error(String(error));
+  workerFailures.add(failure);
+  return failure;
+}
+
+function connectionTo(workerId: string): WorkerConnection {
+  try {
+    return workerConnection(workerId);
+  } catch (error) {
+    throw branded(error);
+  }
+}
+
+async function requestOn(
+  connection: WorkerConnection,
+  method: string,
+  payload: Payload,
+): Promise<Payload> {
+  try {
+    return await connection.request(method, payload);
+  } catch (error) {
+    throw branded(error);
+  }
+}
+
+/** The decoded answer; a malformed one is branded, anything else rethrown. */
+function decoded<T>(answer: Payload, decode: (answer: Payload) => T): T {
+  try {
+    return decode(answer);
+  } catch (error) {
+    if (error instanceof MalformedWorkerAnswerError) throw branded(error);
+    throw error;
+  }
+}
+
+async function ask<T>(
+  location: WorkerFileLocation,
+  method: string,
+  payload: Payload,
+  decode: (answer: Payload) => T,
+): Promise<T> {
+  const connection = connectionTo(location.workerId);
+  return decoded(await requestOn(connection, method, payload), decode);
+}
+
+export function statOnWorker(location: WorkerFileLocation): Promise<FileStat> {
+  return ask(location, FILE_METHODS.stat, encodeLocation(location), decodeStat);
+}
+
+export function realpathOnWorker(
   location: WorkerFileLocation,
 ): Promise<string> {
-  return decodeRealpath(
-    await workerConnection(location.workerId).request(
-      FILE_METHODS.realpath,
-      encodeLocation(location),
-    ),
+  return ask(
+    location,
+    FILE_METHODS.realpath,
+    encodeLocation(location),
+    decodeRealpath,
+  );
+}
+
+export function existsOnWorker(location: WorkerFileLocation): Promise<boolean> {
+  return ask(
+    location,
+    FILE_METHODS.exists,
+    encodeLocation(location),
+    decodeExists,
+  );
+}
+
+export function inspectOnWorker(
+  location: WorkerFileLocation,
+  follow: boolean,
+): Promise<PathInspection> {
+  return ask(
+    location,
+    FILE_METHODS.inspect,
+    encodeInspect(location, follow),
+    decodeInspection,
+  );
+}
+
+export function readdirOnWorker(
+  location: WorkerFileLocation,
+): Promise<DirectoryEntry[]> {
+  return ask(
+    location,
+    FILE_METHODS.readdir,
+    encodeLocation(location),
+    decodeEntries,
   );
 }
 
@@ -65,9 +164,10 @@ export async function openOnWorker(
   location: WorkerFileLocation,
   stat: boolean,
 ): Promise<FileOpenOutcome<WorkerFileHandle>> {
-  const connection = workerConnection(location.workerId);
-  const outcome = decodeOpenOutcome(
-    await connection.request(FILE_METHODS.open, encodeOpen(location, stat)),
+  const connection = connectionTo(location.workerId);
+  const outcome = decoded(
+    await requestOn(connection, FILE_METHODS.open, encodeOpen(location, stat)),
+    decodeOpenOutcome,
   );
   if ("error" in outcome) return outcome;
   const file = boundHandle(connection, {
@@ -83,18 +183,21 @@ function boundHandle(
 ): WorkerFileHandle {
   return {
     async read(position, length) {
-      return decodeBytes(
-        await connection.request(
+      return decoded(
+        await requestOn(
+          connection,
           FILE_METHODS.read,
           encodeRead(ref, position, length),
         ),
+        decodeBytes,
       );
     },
     async close() {
       if (connection.isEnded) return;
       try {
-        decodeClosed(
-          await connection.request(FILE_METHODS.close, encodeHandle(ref)),
+        decoded(
+          await requestOn(connection, FILE_METHODS.close, encodeHandle(ref)),
+          decodeClosed,
         );
       } catch (error) {
         if (!connection.isEnded) throw error;

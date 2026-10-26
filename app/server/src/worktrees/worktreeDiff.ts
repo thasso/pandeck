@@ -6,9 +6,7 @@
  *
  * Read-only throughout — no repo lock needed; git handles concurrent readers.
  */
-import { realpathSync } from "node:fs";
-import { lstat, readFile, readdir } from "node:fs/promises";
-import { extname, isAbsolute, join, relative, sep } from "node:path";
+import { extname, join } from "node:path";
 import type {
   WorktreeChangeStatus,
   WorktreeChangeFile,
@@ -23,6 +21,15 @@ import type {
   WorktreeLogResponse,
   WorktreeTreeEntry,
 } from "@assistant/shared";
+import {
+  checkLexicalPath,
+  checkoutFailureOf,
+  containedRealPath,
+  inspectCheckoutPath,
+  readCheckoutDir,
+  readCheckoutFile,
+  realpathInCheckout,
+} from "../checkoutFileAccess.ts";
 import { git, gitOptional, gitRawStdout } from "../gitExec.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 
@@ -32,40 +39,6 @@ const MAX_DIFF_CHARS = 700_000;
 /** A ref must look like a git rev; blocks option injection (`--foo`) and paths. */
 export function isSafeRef(ref: string): boolean {
   return /^[0-9A-Za-z._/~^-]{1,128}$/.test(ref) && !ref.startsWith("-");
-}
-
-function safePath(root: string, relPath: string): string {
-  if (!relPath || isAbsolute(relPath)) throw new Error("Invalid file path.");
-  const abs = join(root, relPath);
-  const back = relative(root, abs);
-  if (!back || back.startsWith("..") || isAbsolute(back))
-    throw new Error("Invalid file path.");
-  return abs;
-}
-
-/**
- * Resolve a repo-relative path for READING file content. {@link safePath} is
- * lexical only; file reads follow symlinks, so a repo containing
- * `secret -> /etc/passwd` would otherwise leak content outside the worktree.
- * The resolved real path must stay inside the (real) worktree root.
- */
-export function containedRealPath(root: string, relPath: string): string {
-  const abs = safePath(root, relPath);
-  let real: string;
-  try {
-    real = realpathSync(abs);
-  } catch {
-    return abs; // missing file — the read fails naturally
-  }
-  let realRoot: string;
-  try {
-    realRoot = realpathSync(root);
-  } catch {
-    realRoot = root;
-  }
-  if (real !== realRoot && !real.startsWith(realRoot + sep))
-    throw new Error("Invalid file path.");
-  return real;
 }
 
 function assertScope(scope: WorktreeDiffScope): void {
@@ -380,7 +353,7 @@ export async function getWorktreeFileDiff(
   scope: WorktreeDiffScope,
 ): Promise<WorktreeFileDiffResponse> {
   assertScope(scope);
-  safePath(row.path, path);
+  checkLexicalPath(row.path, path);
   const changes = await getWorktreeChanges(row, scope);
   const file = changes.files.find(
     (item) => item.path === path || item.oldPath === path,
@@ -513,19 +486,31 @@ async function showFile(cwd: string, source: string): Promise<TextContent> {
   return { text, binary: false, truncated };
 }
 
+/**
+ * A working-tree file as text. A filesystem failure or the containment
+ * verdict reads as empty; a Worker failure or anything else rejects
+ * (`docs/workers.md`, "Checkout files").
+ */
 async function readWorkingFile(
   root: string,
   relPath: string,
 ): Promise<TextContent> {
+  let buffer: Buffer;
   try {
-    const buffer = await readFile(containedRealPath(root, relPath));
-    const truncated = buffer.length > MAX_TEXT_BYTES;
-    const slice = truncated ? buffer.subarray(0, MAX_TEXT_BYTES) : buffer;
-    if (slice.includes(0)) return { text: "", binary: true, truncated };
-    return { text: slice.toString("utf8"), binary: false, truncated };
-  } catch {
+    buffer = await readCheckoutFile(
+      root,
+      await containedRealPath(root, relPath),
+      MAX_TEXT_BYTES + 1,
+    );
+  } catch (error) {
+    const origin = checkoutFailureOf(error);
+    if (origin !== "filesystem" && origin !== "verdict") throw error;
     return { text: "", binary: false, truncated: false };
   }
+  const truncated = buffer.length > MAX_TEXT_BYTES;
+  const slice = truncated ? buffer.subarray(0, MAX_TEXT_BYTES) : buffer;
+  if (slice.includes(0)) return { text: "", binary: true, truncated };
+  return { text: slice.toString("utf8"), binary: false, truncated };
 }
 
 async function untrackedStats(
@@ -546,7 +531,7 @@ export async function getWorktreeFileContent(
 ): Promise<WorktreeFileResponse> {
   if (ref !== undefined && !isSafeRef(ref))
     throw new Error("Invalid revision.");
-  safePath(row.path, path);
+  checkLexicalPath(row.path, path);
   const content = ref
     ? await showFile(row.path, `${ref}:${path}`)
     : await readWorkingFile(row.path, path);
@@ -584,7 +569,7 @@ export async function getWorktreeFileRaw(
 ): Promise<WorktreeRawFile> {
   if (ref !== undefined && !isSafeRef(ref))
     throw new Error("Invalid revision.");
-  safePath(row.path, path);
+  checkLexicalPath(row.path, path);
   let content: Buffer;
   if (ref) {
     const res = await gitRawStdout(
@@ -595,9 +580,13 @@ export async function getWorktreeFileRaw(
     if (res.code !== 0) throw new Error("File not found at that revision.");
     content = res.content;
   } else {
-    content = await readFile(containedRealPath(row.path, path)).catch(() => {
-      throw new Error("File not found.");
-    });
+    const real = await containedRealPath(row.path, path);
+    content = await readCheckoutFile(row.path, real, MAX_RAW_BYTES + 1).catch(
+      (error: unknown) => {
+        if (checkoutFailureOf(error) !== "filesystem") throw error;
+        throw new Error("File not found.");
+      },
+    );
   }
   if (content.length > MAX_RAW_BYTES)
     throw new Error("File is too large to serve raw.");
@@ -693,7 +682,7 @@ export async function getWorktreeFileLog(
   path: string,
   limit: number,
 ): Promise<WorktreeFileLogResponse> {
-  safePath(row.path, path);
+  checkLexicalPath(row.path, path);
   const capped = Math.max(1, Math.min(limit || 50, 200));
   const res = await gitOptional(
     [
@@ -747,6 +736,25 @@ export async function getWorktreeFileLog(
 /* ---------------------------------- tree ----------------------------------- */
 
 /**
+ * A tree entry's size, or undefined when the filesystem cannot say. lstat,
+ * not stat: a repo symlink must not disclose metadata (size / existence) of a
+ * target outside the worktree.
+ */
+async function entrySize(
+  root: string,
+  path: string,
+): Promise<number | undefined> {
+  try {
+    return Number(
+      (await inspectCheckoutPath(root, path, { follow: false })).size,
+    );
+  } catch (error) {
+    if (checkoutFailureOf(error) !== "filesystem") throw error;
+    return undefined;
+  }
+}
+
+/**
  * One directory level of the worktree's working tree. The default is
  * gitignore-aware; `includeIgnored` adds ignored files to the same tracked and
  * untracked listing.
@@ -763,25 +771,22 @@ export async function getWorktreeTree(
     // Read the requested directory directly instead: the HTTP contract asks for
     // one level, and this also preserves empty ignored directories.
     const absoluteDir = normalizedDir
-      ? containedRealPath(row.path, normalizedDir)
-      : realpathSync(row.path);
-    const entries = (
-      await readdir(absoluteDir, { withFileTypes: true })
-    ).filter((entry) => entry.name !== ".git");
+      ? await containedRealPath(row.path, normalizedDir)
+      : await realpathInCheckout(row.path, row.path);
+    const entries = (await readCheckoutDir(row.path, absoluteDir)).filter(
+      (entry) => entry.name !== ".git",
+    );
     const sizes = await Promise.all(
-      entries.map(async (entry) => {
-        if (entry.isDirectory()) return undefined;
-        try {
-          return (await lstat(join(absoluteDir, entry.name))).size;
-        } catch {
-          return undefined;
-        }
-      }),
+      entries.map(async (entry) =>
+        entry.directory
+          ? undefined
+          : entrySize(row.path, join(absoluteDir, entry.name)),
+      ),
     );
     const visible = entries.map((entry, index): WorktreeTreeEntry => ({
       name: entry.name,
       path: `${prefix}${entry.name}`,
-      kind: entry.isDirectory() ? "dir" : "file",
+      kind: entry.directory ? "dir" : "file",
       ...(sizes[index] !== undefined ? { size: sizes[index] } : {}),
     }));
     return visible.sort((a, b) => {
@@ -790,7 +795,7 @@ export async function getWorktreeTree(
     });
   }
 
-  if (normalizedDir) safePath(row.path, normalizedDir);
+  if (normalizedDir) checkLexicalPath(row.path, normalizedDir);
   const res = await git(
     [
       "ls-files",
@@ -815,15 +820,7 @@ export async function getWorktreeTree(
     }
   }
   const sizes = await Promise.all(
-    files.map(async (file) => {
-      try {
-        // lstat, not stat: a repo symlink must not disclose metadata (size /
-        // existence) of a target outside the worktree.
-        return (await lstat(join(row.path, file.path))).size;
-      } catch {
-        return undefined;
-      }
-    }),
+    files.map((file) => entrySize(row.path, join(row.path, file.path))),
   );
   files.forEach((file, index) => {
     if (sizes[index] !== undefined) file.size = sizes[index];

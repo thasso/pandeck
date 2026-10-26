@@ -8,6 +8,8 @@
  * Only the modules `workerBoundary.test.ts` pins may import it; everything
  * else runs git in checkouts, through `gitExec.ts`.
  */
+import { readLocally } from "./checkoutFileAccess.ts";
+import { inspectPath, realpathFile } from "./fileReads.ts";
 import { createGitFamily } from "./gitFamily.ts";
 import { localGitRunner } from "./gitProcess.ts";
 
@@ -19,4 +21,7 @@ export const {
   gitOptional,
   gitOptionalExit,
   repoLockKey,
-} = createGitFamily(localGitRunner);
+} = createGitFamily(localGitRunner, {
+  inspect: (_cwd, path) => readLocally(() => inspectPath(path, true)),
+  realpath: (_cwd, path) => readLocally(() => realpathFile(path)),
+});

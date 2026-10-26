@@ -7,7 +7,11 @@
  * server's own process (`workers/inProcessWorker.ts`); phase 2 moves this
  * folder into a process of its own (`docs/workers.md`).
  */
-import { WorkerConnection } from "../workerProtocol/connection.ts";
+import type { Payload } from "../workerProtocol/codec.ts";
+import {
+  WorkerConnection,
+  type MethodHandler,
+} from "../workerProtocol/connection.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
 import { fileHandlers } from "./files.ts";
@@ -25,12 +29,26 @@ export interface RunningWorker {
   fileHandles(): number;
 }
 
+/**
+ * Test seam: serves one request in place of its handler, which it receives so
+ * it can run the real effect first. Its answer or failure goes back over the
+ * real codec like the handler's would.
+ */
+export type SubstituteHandler = (
+  payload: Payload,
+  signal: AbortSignal,
+  real: MethodHandler,
+) => Promise<Payload>;
+
 export function startWorker(options: {
   workerId: string;
   /** The Worker's end of a stream the server accepts. */
   transport: ByteEndpoint;
-  /** Test seam: sees each request the Worker decoded and serves. */
-  onRequest?: (method: string) => void;
+  /**
+   * Test seam: sees each request the Worker decoded and serves, and may
+   * answer a substitute that serves that one request instead.
+   */
+  onRequest?: (method: string) => SubstituteHandler | undefined;
 }): RunningWorker {
   const files = fileHandlers(options.workerId);
   const handlers = Object.fromEntries(
@@ -39,9 +57,11 @@ export function startWorker(options: {
       ...files.handlers,
     }).map(([method, handler]) => [
       method,
-      (...args: Parameters<typeof handler>) => {
-        options.onRequest?.(method);
-        return handler(...args);
+      (payload: Payload, signal: AbortSignal) => {
+        const substitute = options.onRequest?.(method);
+        return substitute
+          ? substitute(payload, signal, handler)
+          : handler(payload, signal);
       },
     ]),
   );

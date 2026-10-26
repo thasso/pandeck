@@ -1,19 +1,23 @@
 /**
- * The file methods of worker protocol 1.1 and their wire shapes, shared by the
+ * The file methods of worker protocol 1.2 and their wire shapes, shared by the
  * server's client (`workers/fileClient.ts`) and the Worker's handlers
- * (`worker/files.ts`). Served files read through them (`docs/workers.md`).
+ * (`worker/files.ts`). Served files and checkout reads go through them
+ * (`docs/workers.md`).
  *
  * Every request names its Worker, which refuses another Worker's id before it
  * touches anything. A file is read through a handle: `files.open` makes one,
  * `files.read` pulls a bounded piece by position, `files.close` ends it. A
- * handle belongs to the connection that opened it.
+ * handle belongs to the connection that opened it. The path methods
+ * (`files.stat`, `files.realpath`, `files.exists`, `files.inspect`,
+ * `files.readdir`) hold nothing.
  *
  * A filesystem failure is an answer, not a protocol failure: `{error:{code}}`
- * with the message as text, rebuilt by the client as an `Error` with the same
- * `code` and `message`. Paths ride in the JSON body, whose escapes keep lone
- * surrogates.
+ * with the message as text, rebuilt by the client as an
+ * {@link AnsweredFileFailure} with the same `code` and `message`. An answer
+ * that is not what its method answers is a {@link MalformedWorkerAnswerError}.
+ * Paths ride in the JSON body, whose escapes keep lone surrogates.
  */
-import type { FileStat } from "../fileReads.ts";
+import type { DirectoryEntry, FileStat, PathInspection } from "../fileReads.ts";
 import { INVALID_PARAMS } from "./checkoutMethods.ts";
 import type { Payload } from "./codec.ts";
 import { WorkerMethodError } from "./connection.ts";
@@ -29,6 +33,12 @@ export const FILE_METHODS = {
   read: "files.read",
   /** Close a handle; an unknown or closed handle is already closed. */
   close: "files.close",
+  /** Whether a path exists, as `existsSync` answers; never a failure. */
+  exists: "files.exists",
+  /** A path's kind and full-precision identity, following links or not. */
+  inspect: "files.inspect",
+  /** A directory's entries in `readdir` order, each with its own type. */
+  readdir: "files.readdir",
 } as const;
 
 /** The error code of a handle the Worker does not hold. */
@@ -50,8 +60,16 @@ function invalid(what: string): never {
   throw new WorkerMethodError(INVALID_PARAMS, `Invalid ${what}.`);
 }
 
+/** A filesystem failure the Worker answered: the call ran there and failed. */
+export class AnsweredFileFailure extends Error {}
+
+/** An answer that is not what its method answers: no answer was obtained. */
+export class MalformedWorkerAnswerError extends Error {}
+
 function malformed(what: string): never {
-  throw new Error(`The Worker answered a malformed ${what}.`);
+  throw new MalformedWorkerAnswerError(
+    `The Worker answered a malformed ${what}.`,
+  );
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -105,6 +123,28 @@ export function decodeOpen(payload: Payload): {
   return { location, stat };
 }
 
+export function encodeInspect(
+  location: WorkerFileLocation,
+  follow: boolean,
+): Payload {
+  return {
+    json: {
+      location: { workerId: location.workerId, path: location.path },
+      follow,
+    },
+  };
+}
+
+export function decodeInspect(payload: Payload): {
+  location: WorkerFileLocation;
+  follow: boolean;
+} {
+  const location = decodeLocationOf(payload.json);
+  const follow = record(payload.json)?.follow;
+  if (typeof follow !== "boolean") invalid("follow choice");
+  return { location, follow };
+}
+
 export function encodeRead(
   ref: WorkerFileHandleRef,
   position: number,
@@ -156,7 +196,7 @@ export function encodeFailure(
 }
 
 /** The failure an answer carries, rebuilt; undefined when it carries none. */
-function decodeFailure(payload: Payload): Error | undefined {
+function decodeFailure(payload: Payload): AnsweredFileFailure | undefined {
   const failure = record(record(payload.json)?.error);
   if (!failure) return undefined;
   const message = payload.text?.message;
@@ -165,7 +205,7 @@ function decodeFailure(payload: Payload): Error | undefined {
     (typeof failure.code !== "string" && failure.code !== null)
   )
     malformed("file failure");
-  const error = new Error(message);
+  const error = new AnsweredFileFailure(message);
   return failure.code === null
     ? error
     : Object.assign(error, { code: failure.code });
@@ -217,6 +257,74 @@ export function decodeRealpath(payload: Payload): string {
   const { path } = settled(payload);
   if (typeof path !== "string") malformed("canonical path");
   return path;
+}
+
+export function encodeExists(exists: boolean): Payload {
+  return { json: { exists } };
+}
+
+/** `files.exists` never answers a failure: one is a malformed answer. */
+export function decodeExists(payload: Payload): boolean {
+  const exists = record(payload.json)?.exists;
+  if (typeof exists !== "boolean") malformed("existence answer");
+  return exists;
+}
+
+export function encodeInspection(inspection: PathInspection): Payload {
+  return { json: { inspection } };
+}
+
+const INSPECTED_KINDS: readonly string[] = [
+  "file",
+  "directory",
+  "symlink",
+  "other",
+] satisfies PathInspection["kind"][];
+
+const isDecimal = (value: unknown): value is string =>
+  typeof value === "string" && /^(0|[1-9]\d*)$/.test(value);
+
+/**
+ * Node's `bigint` stat holds every field in 64 signed bits: a time before 1970
+ * is negative, and so is a `dev` or `ino` at or above 2^63. Only `size` is
+ * never negative.
+ */
+const isSignedDecimal = (value: unknown): value is string =>
+  typeof value === "string" && /^(0|-?[1-9]\d*)$/.test(value);
+
+export function decodeInspection(payload: Payload): PathInspection {
+  const inspection = record(settled(payload).inspection);
+  if (
+    typeof inspection?.kind !== "string" ||
+    !INSPECTED_KINDS.includes(inspection.kind) ||
+    !isSignedDecimal(inspection.dev) ||
+    !isSignedDecimal(inspection.ino) ||
+    !isDecimal(inspection.size) ||
+    !isSignedDecimal(inspection.mtimeNs)
+  )
+    malformed("path inspection");
+  return {
+    kind: inspection.kind as PathInspection["kind"],
+    dev: inspection.dev,
+    ino: inspection.ino,
+    size: inspection.size,
+    mtimeNs: inspection.mtimeNs,
+  };
+}
+
+export function encodeEntries(entries: DirectoryEntry[]): Payload {
+  return { json: { entries } };
+}
+
+export function decodeEntries(payload: Payload): DirectoryEntry[] {
+  const { entries } = settled(payload);
+  if (!Array.isArray(entries)) malformed("directory listing");
+  return entries.map((value: unknown) => {
+    const entry = record(value);
+    if (typeof entry?.name !== "string" || typeof entry.directory !== "boolean")
+      malformed("directory entry");
+    return { name: entry.name, directory: entry.directory };
+  });
 }
 
 /** What `files.open` answers: a handle, or the step that failed. */

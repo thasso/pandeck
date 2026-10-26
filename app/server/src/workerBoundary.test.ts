@@ -75,17 +75,14 @@ const GIT_SPAWNS: Record<string, number> = {
  * directly. Each names the slice that moves those reads behind the Worker.
  */
 const CHECKOUT_FS_INVENTORY: Record<string, string> = {
-  "commitWorkflow.ts": "W3",
-  "workflow/operationTriage.ts": "W3",
-  "workflow/rebaseRepair.ts": "W3",
-  "worktrees/worktreeComments.ts": "W3",
-  "worktrees/worktreeDiff.ts": "W3",
-  "worktrees/worktreeResolve.ts": "W3",
-  "worktrees/worktreeStatus.ts": "W3",
-  // W3 classifies these reads.
-  "worktrees/worktreeFetch.ts": "W3",
-  "worktrees/worktreeMerge.ts": "W3",
-  "worktrees/worktreeSync.ts": "W3",
+  "commitWorkflow.ts": "W3b",
+  "workflow/operationTriage.ts": "W3b",
+  "workflow/rebaseRepair.ts": "W3b",
+  "worktrees/worktreeResolve.ts": "W3d",
+  // Classified as checkout reads by the W3 plan.
+  "worktrees/worktreeFetch.ts": "W3b",
+  "worktrees/worktreeMerge.ts": "W3b",
+  "worktrees/worktreeSync.ts": "W3b",
   "worktrees/worktreeWatcher.ts": "W4",
   "projectProvision.ts": "W5",
   "tools/core/projectCreateTool.ts": "W5",
@@ -97,12 +94,23 @@ const CHECKOUT_FS_INVENTORY: Record<string, string> = {
  * `node:fs` until its slice lands.
  */
 const NAMED_CHECKOUT_READERS: Record<string, string> = {
-  // `repoLockKey`'s directory identity, for both families.
-  "gitFamily.ts": "W3",
-  "worktrees/sessionCwd.ts": "W3",
+  "worktrees/sessionCwd.ts": "W3d",
   "worktrees/checkoutProcesses.ts": "W5",
   "worktrees/idleWorktrees.ts": "W5",
 };
+
+/**
+ * Modules that read checkouts only through the checkout-file access
+ * (`checkoutFileAccess.ts`, itself included): none imports `node:fs`.
+ * `gitFamily.ts` reads through what its family is given.
+ */
+const MIGRATED_CHECKOUT_READERS = [
+  "checkoutFileAccess.ts",
+  "gitFamily.ts",
+  "worktrees/worktreeComments.ts",
+  "worktrees/worktreeDiff.ts",
+  "worktrees/worktreeStatus.ts",
+];
 
 /**
  * The served-file modules (W2): every read they make goes through
@@ -425,18 +433,30 @@ test("served files read only through the served-file access", () => {
       ![...scans.get(module)!.imports].some(isFs),
       `${module} reads the filesystem itself`,
     );
-  // The file primitives run on the server only for the server's own data, and
-  // the Worker's file methods are reached only through the same access.
+  // The file primitives run on the server only for the server's own data and
+  // repositories, and the Worker's file methods are reached only through the
+  // served-file and checkout-file accesses.
   assert.deepEqual(
     importersOf((target) => target === "fileReads.ts", "valueImports").filter(
       (module) => !module.startsWith("worker/"),
     ),
-    ["servedFileAccess.ts"],
+    ["checkoutFileAccess.ts", "servedFileAccess.ts", "serverRepoGit.ts"],
   );
   assert.deepEqual(
     importersOf((target) => target === "workers/fileClient.ts"),
-    ["servedFileAccess.ts"],
+    ["checkoutFileAccess.ts", "servedFileAccess.ts"],
   );
+});
+
+test("migrated checkout readers read only through the checkout-file access", () => {
+  for (const module of MIGRATED_CHECKOUT_READERS) {
+    const scan = scans.get(module);
+    assert.ok(scan, `${module} is gone: delete it from the list`);
+    assert.ok(
+      ![...scan.imports].some(isFs),
+      `${module} reads the filesystem itself`,
+    );
+  }
 });
 
 test("every module reading checkouts on the server is pinned to its slice", () => {

@@ -12,6 +12,8 @@ import {
   gitRawStdout,
   gitWithInputOptional,
 } from "../gitExec.ts";
+import { readLocally } from "../checkoutFileAccess.ts";
+import { inspectPath, realpathFile } from "../fileReads.ts";
 import { createGitFamily } from "../gitFamily.ts";
 import { localGitRunner } from "../gitProcess.ts";
 import { WRONG_WORKER, encodeRun } from "../workerProtocol/checkoutMethods.ts";
@@ -22,8 +24,11 @@ import {
 } from "../workers/inProcessWorker.ts";
 import { getWorktreeFileRaw } from "../worktrees/worktreeDiff.ts";
 
-/** The same executors over a runner that never leaves this process. */
-const local = createGitFamily(localGitRunner);
+/** The same executors as the server runs them for its own repositories. */
+const local = createGitFamily(localGitRunner, {
+  inspect: (_cwd, path) => readLocally(() => inspectPath(path, true)),
+  realpath: (_cwd, path) => readLocally(() => realpathFile(path)),
+});
 const MiB = 1024 * 1024;
 const MAX_RAW_BYTES = 20 * MiB;
 

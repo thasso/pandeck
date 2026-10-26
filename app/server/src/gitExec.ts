@@ -13,6 +13,10 @@
  * user-driven merges. Read-only commands (status/diff/log) stay lock-free; git
  * handles concurrent readers.
  */
+import {
+  inspectCheckoutPath,
+  realpathInCheckout,
+} from "./checkoutFileAccess.ts";
 import { createGitFamily } from "./gitFamily.ts";
 import { localGitRunner, type GitRunner } from "./gitProcess.ts";
 import { workerGitRunner } from "./workers/checkoutClient.ts";
@@ -51,7 +55,11 @@ const checkoutRunner: GitRunner = {
   },
 };
 
-const checkout = createGitFamily(checkoutRunner);
+/** `repoLockKey`'s reads, on the side its `cwd` is placed on. */
+const checkout = createGitFamily(checkoutRunner, {
+  inspect: (cwd, path) => inspectCheckoutPath(cwd, path, { follow: true }),
+  realpath: realpathInCheckout,
+});
 
 export const {
   git,

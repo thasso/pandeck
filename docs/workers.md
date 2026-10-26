@@ -208,12 +208,12 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.1` (`1.0` plus the file methods), between the
-server and the in-process Worker. The code lives in
-`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
-which imports no server state) and `workers/` (the server's side and placement);
-`workerBoundary.test.ts` keeps that split. The protocol stays out of
-`app/shared/`: the web client never speaks it.
+What runs today is protocol `1.2` (`1.0` plus the file methods, and `1.2`'s path
+methods for checkout reads), between the server and the in-process Worker. The
+code lives in `app/server/src/workerProtocol/` (the protocol), `worker/` (the
+Worker's side, which imports no server state) and `workers/` (the server's side
+and placement); `workerBoundary.test.ts` keeps that split. The protocol stays
+out of `app/shared/`: the web client never speaks it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -262,7 +262,7 @@ which imports no server state) and `workers/` (the server's side and placement);
   before the Worker leaves that process. W3 replaces the path rule with a typed
   choice made from the KB row.
 - **Served files.** `/api/files`, document grants and `show_files` read through
-  `servedFileAccess.ts`, the only caller of the file methods `files.stat`,
+  `servedFileAccess.ts`, which calls the file methods `files.stat`,
   `files.realpath`, `files.open`, `files.read` and `files.close`
   (`workerProtocol/fileMethods.ts`). Each names a Worker id, which a Worker
   refuses when it is not its own, before touching the filesystem or its handle
@@ -290,6 +290,71 @@ which imports no server state) and `workers/` (the server's side and placement);
   following an agent's symlink there would let the server read for the agent
   what the Worker may not. When the Worker fails, the read fails; there is no
   local fallback.
+- **Checkout files.** Checkout surfaces read checkout files only through
+  `checkoutFileAccess.ts`. Protocol `1.2` adds three path methods beside W2's:
+  `files.exists` answers as `existsSync` does and never a failure;
+  `files.inspect` answers an entry's kind with `dev`, `ino`, `size` and
+  `mtimeNs` as decimal strings from a `bigint` `stat` or `lstat`, signed as Node
+  holds them (only `size` is never negative); and `files.readdir` answers names
+  in `readdir` order, each with its own directory type, never followed. Each
+  names a Worker id, refused before any filesystem call. The side comes from the
+  checkout ROOT through the same placement as checkout git (`placeGitCwd`, with
+  the Knowledge Base rule), never from the path being read. Errors are
+  categorized where their origin is known: a **Worker failure** (no answer: the
+  connection ended or was refused, a request refused with any code, an unknown
+  Worker id, a malformed answer), which the client brands and is never a
+  filesystem answer; a **filesystem failure**, marked only for a failure the
+  Worker answered (coded or not), an open's failure outcome, or a local
+  primitive's rejection carrying a native string `code` and numeric `errno`; and
+  the server's own **verdict**, `Invalid file path.`. Anything else propagates.
+  A whole-file read follows production's `readFile` on the pinned Bun: it opens
+  without a descriptor stat, applies no size limit, and reads 8 MiB requests
+  until one comes back short; a capped read is one request for cap + 1 bytes.
+  The file is always closed, and when the read and the close both fail, a Worker
+  failure wins, then an unclassified error, then the read's filesystem failure,
+  then the close's. The path methods hold no handle and take no cancellation: on
+  connection end the caller is rejected once the handler settles, as for
+  `files.stat`. Whole-file reads use `files.open` with `stat: false` and keep
+  the handle rules above. On the dev and test runtime (Node), this means the
+  reader does not stop at a file's opening size and reads files over 2 GiB,
+  which Node's own `readFile` refuses.
+
+  The worktree surfaces read through it: text, raw and tree reads with their
+  containment (`worktreeDiff.ts`), comment working sources
+  (`worktreeComments.ts`), status's existence check (`worktreeStatus.ts`) and
+  worktree document grants. `repoLockKey`'s identity stat and common-dir
+  canonicalization take injected reads (`gitFamily.ts`): `gitExec.ts` passes the
+  placed ones, `serverRepoGit.ts` local reads marked by the same rule. Each
+  surface maps only a filesystem failure or the verdict, exactly where base
+  mapped its errors to a value. A public path that aggregates reads (the comment
+  re-anchor pass) carries every other checkout-read error to its result: a
+  listing rejects, retention counts the checkout failed and deletes nothing, and
+  the pass forgets the HEAD it recorded, so the next listing runs it again.
+  Roots written before the failing one stay written and are broadcast. Failures
+  of the pass that are not checkout reads (git, the database) keep their old
+  handling. Recorded exceptions to "no behavior change", with their limits:
+  - **E1, FIFOs in a checkout.** With no writer, the open waits on the Worker,
+    not the server thread, and a connection end abandons it; the orphaned open
+    holds one threadpool slot until a writer appears (as Task-1181). With a
+    writer, the positional read answers `ESPIPE` where base read the piped
+    bytes; the surfaces map it as any read failure (empty text,
+    `File not found.`, no comment source).
+  - **E2, runtimes.** The reader follows the pinned Bun's `readFile`, so on Node
+    it no longer stats the descriptor, stops at the opening size or refuses
+    files over 2 GiB. Bun's own single internal `fstat` after its first 256 KiB
+    is not made, so only a failure of that call could differ. `repoLockKey`'s
+    identity stat reads only `ENOENT` as absence, as Bun's
+    `statSync(…, {throwIfNoEntry: false})` does, and rejects `ENOTDIR` (a
+    checkout path at or below a regular file). Node's base answered that path
+    with the path itself, so on Node such a `repoLockKey` now rejects.
+  - **E3, a ref anchor's post-insert remap.** A Worker failure there stays best
+    effort: the comment is returned with its seeded position, no verdict is
+    written for that root, and the cleared HEAD guard makes the next listing
+    fail closed while the Worker is down.
+  - **RD-W3-7.** Any other error in that remap, which only a programming error
+    produces, reports the stored comment and then rejects the add; the row is
+    kept, so a retry can create a duplicate comment.
+
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the
@@ -547,16 +612,19 @@ natural shape anyway.
 
 Phase 1 ships as slices; each keeps behavior unchanged.
 
-| Slice  | Change                                                                                 | State   |
-| ------ | -------------------------------------------------------------------------------------- | ------- |
-| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it   | landed  |
-| W2     | Served files (`/api/files`, `show_files`) read through the Worker                      | landed  |
-| W3     | Checkout reads in surfaces and workflows through the Worker; the KB row's typed choice | planned |
-| W4     | The worktree watcher on the Worker                                                     | planned |
-| W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker     | planned |
-| W6     | Callers pass their own placement; the path-only adapter and both pin lists are gone    | planned |
-| W7–W10 | The engine host: app tools, approvals and hooks, then pi and Claude sessions           | planned |
-| W11    | Isolation boundary and secret store ports                                              | planned |
+| Slice  | Change                                                                               | State   |
+| ------ | ------------------------------------------------------------------------------------ | ------- |
+| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it | landed  |
+| W2     | Served files (`/api/files`, `show_files`) read through the Worker                    | landed  |
+| W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)       | landed  |
+| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | planned |
+| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | planned |
+| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | planned |
+| W4     | The worktree watcher on the Worker                                                   | planned |
+| W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker   | planned |
+| W6     | Callers pass their own placement; the path-only adapter and both pin lists are gone  | planned |
+| W7–W10 | The engine host: app tools, approvals and hooks, then pi and Claude sessions         | planned |
+| W11    | Isolation boundary and secret store ports                                            | planned |
 
 `workerBoundary.test.ts` pins every module that still reads a checkout on the
 server's filesystem to the slice that moves it; W6 is done when those lists are

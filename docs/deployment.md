@@ -209,11 +209,16 @@ connection ended must fail without affecting one opened on the next connection.
 On both served-file routes, a native open blocked by a FIFO substituted after
 lookup must not hold unrelated request rejection or the connection's descriptor
 sweep; a later FIFO writer must leave only the replacement connection's live
-handle, which still reads its own bytes. Over a real local socket, both
-served-file routes must send the whole file to a client that stays. A client
-gone before the handler runs, or while its open is held, must cost at most one
-chunk read and close what was opened once. One gone mid-body must end the
-handler before the file's end, with its file closed once. Killing the broker
+handle, which still reads its own bytes. In a temporary checkout, the worktree
+surfaces' checkout reads through the Worker must answer as Bun's own `fs` does
+on the same paths (existence, bigint identity, Dirent kinds, `repoLockKey`, and
+whole and capped reads compared with `readFile` and `readFileSync`), and map a
+directory, a FIFO with a writer, a malformed answer, a refusal and an escaping
+link as `docs/workers.md` "Checkout files" states. Over a real local socket,
+both served-file routes must send the whole file to a client that stays. A
+client gone before the handler runs, or while its open is held, must cost at
+most one chunk read and close what was opened once. One gone mid-body must end
+the handler before the file's end, with its file closed once. Killing the broker
 must fail the lost request as an execution failure and kill the grandchild git
 started, and the broker must come back for the next call. Signal 0 to an empty
 process group must throw `ESRCH` and to a live one must not. A checkout git lost

@@ -17,8 +17,9 @@
  * commands (status/diff/log) stay lock-free; git handles concurrent readers.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { realpathSync, statSync } from "node:fs";
+import { checkoutFailureOf } from "./checkoutFileAccess.ts";
 import { errorText } from "./errors.ts";
+import type { PathInspection } from "./fileReads.ts";
 import type { GitRunner } from "./gitProcess.ts";
 import type { BrokerExecOutcome } from "./spawnBroker.ts";
 
@@ -189,21 +190,60 @@ export async function countGitExecutionsForTests<T>(
 }
 
 /**
+ * The filesystem reads {@link createGitFamily}'s `repoLockKey` makes. Each runs
+ * on the side of the `cwd` it is asked for, never chosen by `path`, and marks
+ * its errors as the checkout-file access does (`checkoutFailureOf`).
+ */
+export interface GitFamilyReads {
+  /** `path`'s full-precision `stat`, following links. */
+  inspect(cwd: string, path: string): Promise<PathInspection>;
+  /** `path`'s canonical path. */
+  realpath(cwd: string, path: string): Promise<string>;
+}
+
+/**
+ * `path`'s `stat`, or undefined where Bun's `statSync(…, {throwIfNoEntry:
+ * false})` answers undefined: a filesystem failure ENOENT. Anything else,
+ * ENOTDIR included, throws (Node answers undefined for ENOTDIR too; see
+ * docs/workers.md, E2).
+ */
+async function statOrAbsent(
+  reads: GitFamilyReads,
+  cwd: string,
+  path: string,
+): Promise<PathInspection | undefined> {
+  try {
+    return await reads.inspect(cwd, path);
+  } catch (error) {
+    if (
+      checkoutFailureOf(error) === "filesystem" &&
+      (error as { code?: unknown }).code === "ENOENT"
+    )
+      return undefined;
+    throw error;
+  }
+}
+
+/**
  * What must stay the same for a remembered key to still hold: the directory
  * itself (a removed checkout's path reused is a new directory) and its `.git`
  * entry — a re-initialised repository is a new `.git` directory, and a linked
  * worktree repointed at another repository rewrites its `.git` pointer file.
  * Only checkout roots have one; any other path is answered by git every time.
  */
-function directoryIdentity(path: string): string | undefined {
-  const dir = statSync(path, { throwIfNoEntry: false, bigint: true });
-  const git = statSync(`${path}/.git`, { throwIfNoEntry: false, bigint: true });
+async function directoryIdentity(
+  reads: GitFamilyReads,
+  path: string,
+): Promise<string | undefined> {
+  const dir = await statOrAbsent(reads, path, path);
+  const git = await statOrAbsent(reads, path, `${path}/.git`);
   // Below a checkout root there is no `.git` to stamp, and the directory alone
   // cannot tell whether its containing repository was replaced: not memoized.
   if (!dir || !git) return undefined;
-  const gitStamp = git.isFile()
-    ? `${git.dev}:${git.ino}:${git.size}:${git.mtimeNs}`
-    : `${git.dev}:${git.ino}`;
+  const gitStamp =
+    git.kind === "file"
+      ? `${git.dev}:${git.ino}:${git.size}:${git.mtimeNs}`
+      : `${git.dev}:${git.ino}`;
   return `${dir.dev}:${dir.ino}|${gitStamp}`;
 }
 
@@ -236,8 +276,11 @@ export async function withRepoLock<T>(
   return next;
 }
 
-/** The executors, each starting its process through `runner`. */
-export function createGitFamily(runner: GitRunner) {
+/**
+ * The executors, each starting its process through `runner`; `repoLockKey`
+ * reads the filesystem through `reads`.
+ */
+export function createGitFamily(runner: GitRunner, reads: GitFamilyReads) {
   /**
    * Run git in `cwd`; rejects with {@link GitCommandError} on a non-zero exit or
    * an execution failure.
@@ -505,7 +548,7 @@ export function createGitFamily(runner: GitRunner) {
     // locked mutation and watch registration: remember each ANSWERED path. A
     // path that is not (yet) a repository is asked again next time, and so is
     // one whose directory or `.git` was replaced ({@link directoryIdentity}).
-    const identity = directoryIdentity(cwd);
+    const identity = await directoryIdentity(reads, cwd);
     const known = repoLockKeys.get(cwd);
     if (known && identity && known.identity === identity) return known.key;
     const res = await gitOptional(
@@ -516,9 +559,10 @@ export function createGitFamily(runner: GitRunner) {
     if (!dir) return cwd;
     let key = dir;
     try {
-      key = realpathSync(dir);
-    } catch {
-      // Keep git's spelling.
+      key = await reads.realpath(cwd, dir);
+    } catch (error) {
+      // Keep git's spelling when the filesystem cannot resolve it.
+      if (checkoutFailureOf(error) !== "filesystem") throw error;
     }
     if (!identity) return key;
     if (repoLockKeys.size >= MAX_REPO_LOCK_KEYS) repoLockKeys.clear();

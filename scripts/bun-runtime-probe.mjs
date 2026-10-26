@@ -4,7 +4,8 @@
  * through the in-process Worker and the spawn broker (its cancel, its exit
  * receipt, its group kill, the receipt on broker death, exact UTF-16 text),
  * the in-process fallback, served-file bytes read through the Worker's file
- * methods, served-file requests whose client leaves early,
+ * methods, served-file requests whose client leaves early, the worktree
+ * surfaces' checkout reads against Bun's own `fs`,
  * a watcher subscribed with a git-derived ignore set, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
@@ -17,21 +18,38 @@
 import { execFileSync, execSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createServer, get as httpGet } from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  checkoutFailureOf,
+  checkoutPathExists,
+  inspectCheckoutPath,
+  readCheckoutDir,
+  readCheckoutFile,
+} from "../app/server/src/checkoutFileAccess.ts";
 import { DATA_DIR } from "../app/server/src/config.ts";
 import { backgroundWorkStore } from "../app/server/src/db/backgroundWorkStore.ts";
 import {
@@ -51,14 +69,18 @@ import {
 } from "../app/server/src/directFileGrants.ts";
 import { handleDirectFileRequest } from "../app/server/src/directFileHttp.ts";
 import {
+  failFileForTests,
+  fileFaultArmedForTests,
   fileReadsCountsForTests,
   holdFileForTests,
 } from "../app/server/src/fileReads.ts";
 import {
   GitCommandError,
+  clearRepoLockKeysForTests,
   git,
   gitBoundedStdout,
   gitWithInputOptional,
+  repoLockKey,
 } from "../app/server/src/gitExec.ts";
 import { readInitiativeMap } from "../app/server/src/initiativeLayout.ts";
 import { stopInitiativeLayoutWorker } from "../app/server/src/initiativeLayoutRunner.ts";
@@ -82,13 +104,20 @@ import {
 import { childProcessEnv } from "../app/server/src/subprocessEnv.ts";
 import { createTask, updateTask } from "../app/server/src/tasks.ts";
 import { MAX_FRAME_PAYLOAD_BYTES } from "../app/server/src/workerProtocol/codec.ts";
+import { WorkerMethodError } from "../app/server/src/workerProtocol/connection.ts";
+import { isWorkerFailure } from "../app/server/src/workers/fileClient.ts";
 import {
+  answerNextInProcessWorkerCallForTests,
   ensureInProcessWorker,
   inProcessWorkerFileHandlesForTests,
   inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
 } from "../app/server/src/workers/inProcessWorker.ts";
 import { treeIgnoreForTests } from "../app/server/src/worktrees/worktreeWatcher.ts";
+import {
+  getWorktreeFileContent,
+  getWorktreeFileRaw,
+} from "../app/server/src/worktrees/worktreeDiff.ts";
 import { checkWorkerFileOpenEnd } from "./worker-file-open-end-probe.ts";
 
 const mode = process.argv[2];
@@ -332,6 +361,361 @@ async function checkWorkerFiles() {
 }
 
 /**
+ * The worktree surfaces' checkout reads cross the in-process Worker and
+ * answer as Bun's own `fs` does on the same paths, re-observing the
+ * verifier's baseline in place (`docs/workers.md`, "Checkout files"). A
+ * mismatch is a contract question, never a value to adopt.
+ */
+async function checkWorkerCheckoutReads() {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), `bun-probe-checkout-${mode}-`)),
+  );
+  const served = (method) => inProcessWorkerServedMethodForTests(method);
+  /** Runs `run`, requiring each named method to have crossed the Worker. */
+  const crossing = async (methods, what, run) => {
+    const before = methods.map(served);
+    const result = await run();
+    methods.forEach((method, at) =>
+      assert(served(method) > before[at], `${what}: no ${method} crossed.`),
+    );
+    return result;
+  };
+  const rejection = async (promise) => {
+    try {
+      await promise;
+    } catch (error) {
+      return error;
+    }
+    throw new Error("Expected a rejection.");
+  };
+  const row = {
+    id: "bun-probe-checkout",
+    projectId: "bun-probe",
+    path: root,
+    mainRepoRoot: root,
+    branch: "main",
+    baseBranch: "main",
+    baseCommit: "",
+    status: "active",
+    mergeStateJson: null,
+    branchCleanupOid: null,
+    createdAt: 1,
+    updatedAt: 1,
+    removedAt: null,
+  };
+  try {
+    await git(["init", "-q", "-b", "main"], root);
+    writeFileSync(join(root, "three"), "abc");
+    writeFileSync(join(root, "empty"), "");
+    await git(["add", "three", "empty"], root);
+    await git([...identity, "commit", "-q", "-m", "probe"], root);
+    const outside = mkdtempSync(join(tmpdir(), `bun-probe-outside-${mode}-`));
+    writeFileSync(join(outside, "secret"), "SECRET");
+    symlinkSync(join(outside, "secret"), join(root, "escape"));
+    mkdirSync(join(root, "dir"));
+    symlinkSync(join(root, "dir"), join(root, "dir-link"));
+    symlinkSync(join(root, "three"), join(root, "three-link"));
+
+    // Existence, as `existsSync` answers it.
+    const locked = join(root, "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, "inside"), "x");
+    const unreadable = process.getuid?.() !== 0;
+    if (unreadable) chmodSync(locked, 0o000);
+    try {
+      for (const path of [
+        join(root, "three"),
+        join(root, "missing"),
+        join(root, "three", "child"),
+        ...(unreadable ? [join(locked, "inside")] : []),
+      ]) {
+        const answer = await crossing(["files.exists"], path, () =>
+          checkoutPathExists(root, path),
+        );
+        assert(
+          answer === existsSync(path),
+          `exists(${path}) answered ${answer}, Bun's existsSync ${existsSync(path)}.`,
+        );
+      }
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+
+    // Identity digits, both ways on a link.
+    const link = join(root, "three-link");
+    for (const [follow, oracle] of [
+      [true, statSync(link, { bigint: true })],
+      [false, lstatSync(link, { bigint: true })],
+    ]) {
+      const inspection = await crossing(["files.inspect"], link, () =>
+        inspectCheckoutPath(root, link, { follow }),
+      );
+      for (const field of ["dev", "ino", "size", "mtimeNs"])
+        assert(
+          inspection[field] === String(oracle[field]),
+          `inspect(follow=${follow}).${field} is ${inspection[field]}, Bun's ${oracle[field]}.`,
+        );
+    }
+
+    // Absence (an answered ENOENT) exactly where Bun's non-throwing stat
+    // answers undefined; where it throws, the same code as a filesystem
+    // failure. Bun throws ENOTDIR, which Node reads as absent (E2).
+    /** What Bun's `statSync(path, {throwIfNoEntry:false})` answers. */
+    const bunStat = (path) => {
+      try {
+        return statSync(path, { throwIfNoEntry: false, bigint: true })
+          ? "stats"
+          : "absent";
+      } catch (error) {
+        return `throws ${error.code}`;
+      }
+    };
+    for (const path of [
+      join(root, "missing"),
+      join(root, "three", "child"),
+      join(root, "three"),
+    ]) {
+      const error = await crossing(["files.inspect"], path, () =>
+        inspectCheckoutPath(root, path, { follow: true }).then(
+          () => undefined,
+          (failure) => failure,
+        ),
+      );
+      const answered =
+        error === undefined
+          ? "stats"
+          : checkoutFailureOf(error) !== "filesystem"
+            ? `not a filesystem failure: ${error}`
+            : error.code === "ENOENT"
+              ? "absent"
+              : `throws ${error.code}`;
+      assert(
+        answered === bunStat(path),
+        `inspect(${path}) answered ${answered}, Bun's statSync ${bunStat(path)}.`,
+      );
+    }
+    // Base's identity stats `path` and `path/.git` and throws what they throw;
+    // with no identity and no repository, the key is the path.
+    clearRepoLockKeysForTests();
+    for (const path of [join(root, "missing"), join(root, "three")]) {
+      const base =
+        [path, join(path, ".git")]
+          .map(bunStat)
+          .find((answer) => answer.startsWith("throws")) ?? path;
+      const answered = await repoLockKey(path).then(
+        (key) => key,
+        (error) =>
+          checkoutFailureOf(error) === "filesystem"
+            ? `throws ${error.code}`
+            : `not a filesystem failure: ${error}`,
+      );
+      assert(
+        answered === base,
+        `repoLockKey(${path}) answered ${answered}, Bun's base ${base}.`,
+      );
+    }
+
+    // Dirent kinds: a directory link is not a directory.
+    const listing = await crossing(["files.readdir"], "readdir", () =>
+      readCheckoutDir(root, root),
+    );
+    const oracleListing = readdirSync(root, { withFileTypes: true }).map(
+      (entry) => ({ name: entry.name, directory: entry.isDirectory() }),
+    );
+    assert(
+      JSON.stringify(listing) === JSON.stringify(oracleListing),
+      `readdir answered ${JSON.stringify(listing)}, Bun's ${JSON.stringify(oracleListing)}.`,
+    );
+
+    // The repo key for a main checkout and a linked worktree.
+    const linked = join(outside, "linked");
+    await git(["worktree", "add", "-q", linked], root);
+    const common = realpathSync(join(root, ".git"));
+    for (const cwd of [root, linked]) {
+      clearRepoLockKeysForTests();
+      const key = await crossing(
+        ["files.inspect", "files.realpath"],
+        `repoLockKey(${cwd})`,
+        () => repoLockKey(cwd),
+      );
+      assert(key === common, `repoLockKey(${cwd}) is ${key}, not ${common}.`);
+    }
+
+    // Whole and capped reads equal both oracle readers.
+    const sizes = {
+      three: 3,
+      empty: 0,
+      "300k": 300 * 1024,
+      "64m": 64 * 1024 * 1024,
+    };
+    for (const [name, size] of Object.entries(sizes)) {
+      const path = join(root, name);
+      if (!existsSync(path)) {
+        const bytes = Buffer.alloc(size);
+        for (let at = 0; at < size; at += 1) bytes[at] = (at * 151 + 7) & 0xff;
+        writeFileSync(path, bytes);
+      }
+      const read = await crossing(
+        ["files.open", "files.read", "files.close"],
+        name,
+        () => readCheckoutFile(root, path),
+      );
+      for (const oracle of [await readFile(path), readFileSync(path)])
+        assert(
+          read.length === oracle.length && sha256(read) === sha256(oracle),
+          `A ${name} checkout read differs from Bun's readFile.`,
+        );
+    }
+    const cap = 512 * 1024;
+    const capped = await readCheckoutFile(root, join(root, "64m"), cap + 1);
+    const prefix = readFileSync(join(root, "64m")).subarray(0, cap + 1);
+    assert(
+      capped.length === cap + 1 && sha256(capped) === sha256(prefix),
+      "A capped checkout read is not the oracle's first cap + 1 bytes.",
+    );
+
+    // A directory: both oracles refuse EISDIR, the Worker answers it, the
+    // file surface is empty and raw is not found.
+    for (const oracle of [
+      () => readFile(join(root, "dir")),
+      async () => readFileSync(join(root, "dir")),
+    ]) {
+      const refused = await rejection(oracle());
+      assert(
+        refused.code === "EISDIR",
+        `Bun read a directory as ${refused.code}.`,
+      );
+    }
+    const answeredCode = async (run) => {
+      let code;
+      answerNextInProcessWorkerCallForTests(
+        "files.read",
+        async (payload, signal, real) => {
+          const answer = await real(payload, signal);
+          code = answer.json?.error?.code;
+          return answer;
+        },
+      );
+      const result = await run();
+      return { result, code };
+    };
+    const directoryText = await answeredCode(() =>
+      getWorktreeFileContent(row, "dir"),
+    );
+    assert(
+      directoryText.code === "EISDIR" &&
+        directoryText.result.content === "" &&
+        !directoryText.result.binary,
+      `A directory read answered ${directoryText.code} and ${JSON.stringify(directoryText.result.content)}.`,
+    );
+    const directoryRaw = await answeredCode(() =>
+      rejection(getWorktreeFileRaw(row, "dir")),
+    );
+    assert(
+      directoryRaw.code === "EISDIR" &&
+        directoryRaw.result.message === "File not found.",
+      `A directory raw read answered ${directoryRaw.code} and ${directoryRaw.result}.`,
+    );
+
+    // No descriptor stat: an armed stat fault stays armed.
+    const unstatted = join(root, "three");
+    failFileForTests(unstatted, { phase: "stat", code: "EIO" });
+    const stats = fileReadsCountsForTests().descriptorStats;
+    const whole = await readCheckoutFile(root, unstatted);
+    assert(whole.toString() === "abc", "An unstatted read lost its bytes.");
+    assert(
+      fileFaultArmedForTests(unstatted) &&
+        fileReadsCountsForTests().descriptorStats === stats,
+      "A checkout read stat its descriptor.",
+    );
+
+    // Read until 0: bytes appended after the open are included.
+    const growing = join(root, "growing");
+    writeFileSync(growing, "abc");
+    const held = holdFileForTests(growing, "after-open");
+    const pending = readCheckoutFile(root, growing);
+    await held.reached;
+    appendFileSync(growing, "def");
+    held.release();
+    assert(
+      (await pending).toString() === "abcdef",
+      "A grown file was cut at its opening size.",
+    );
+
+    // E1 (2): a FIFO with a writer answers ESPIPE, mapped as a read failure.
+    const fifo = join(root, "fifo");
+    execFileSync("mkfifo", [fifo]);
+    const writeOnceRead = async () => {
+      await until(() => {
+        try {
+          const fd = openSync(
+            fifo,
+            fsConstants.O_WRONLY | fsConstants.O_NONBLOCK,
+          );
+          writeSync(fd, "x");
+          closeSync(fd);
+          return true;
+        } catch (error) {
+          if (error.code !== "ENXIO") throw error;
+          return false;
+        }
+      }, "a reader on the FIFO");
+    };
+    for (const [surface, run, mapped] of [
+      [
+        "file",
+        () => getWorktreeFileContent(row, "fifo"),
+        (r) => r.content === "" && !r.binary,
+      ],
+      [
+        "raw",
+        () => rejection(getWorktreeFileRaw(row, "fifo")),
+        (r) => r.message === "File not found.",
+      ],
+    ]) {
+      const answered = answeredCode(run);
+      await writeOnceRead();
+      const { result, code } = await answered;
+      assert(
+        code === "ESPIPE" && mapped(result),
+        `A FIFO ${surface} read answered ${code}.`,
+      );
+    }
+
+    // A malformed answer and a coded refusal reject the surface, branded.
+    answerNextInProcessWorkerCallForTests("files.open", async () => ({
+      json: { opened: { handle: 0 } },
+    }));
+    const malformed = await rejection(getWorktreeFileContent(row, "three"));
+    assert(
+      isWorkerFailure(malformed),
+      `A malformed open answered ${malformed}.`,
+    );
+    answerNextInProcessWorkerCallForTests("files.open", async () => {
+      throw new WorkerMethodError("wrong_worker", "Not here.");
+    });
+    const refusedOpen = await rejection(getWorktreeFileContent(row, "three"));
+    assert(
+      isWorkerFailure(refusedOpen) && refusedOpen.code === "wrong_worker",
+      `A refused open answered ${refusedOpen}.`,
+    );
+
+    // An escaping link is the server's verdict.
+    const escaped = await crossing(["files.realpath"], "escape", () =>
+      rejection(getWorktreeFileRaw(row, "escape")),
+    );
+    assert(
+      escaped.message === "Invalid file path.",
+      `An escaping link answered ${escaped}.`,
+    );
+    await git(["worktree", "remove", "--force", linked], root);
+    rmSync(outside, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
  * A client that leaves a served-file request stops its reads under Bun too,
  * which reports the disconnect on the request and its socket but never closes
  * the response. On both routes, a client gone before the handler runs, or while
@@ -543,6 +927,7 @@ async function checkGit() {
   await checkWorkerFiles();
   await checkWorkerFileOpenEnd();
   await checkServedFileCancellation();
+  await checkWorkerCheckoutReads();
 
   if (mode !== "broker") return;
 
