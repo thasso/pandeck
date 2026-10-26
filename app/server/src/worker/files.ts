@@ -18,6 +18,7 @@ import {
   inspectPath,
   openFile,
   readDirectory,
+  readlinkPath,
   realpathFile,
   statFile,
   type OpenedFile,
@@ -40,6 +41,7 @@ import {
   encodeExists,
   encodeFailure,
   encodeInspection,
+  encodeLinkTarget,
   encodeOpened,
   encodeRealpath,
   encodeStat,
@@ -117,6 +119,15 @@ export function fileHandlers(workerId: string): FileTable {
       here(location.workerId, location.path);
       try {
         return encodeEntries(await readDirectory(location.path));
+      } catch (error) {
+        return encodeFailure(error);
+      }
+    },
+    [FILE_METHODS.readlink]: async (payload) => {
+      const location = decodeLocation(payload);
+      here(location.workerId, location.path);
+      try {
+        return encodeLinkTarget(await readlinkPath(location.path));
       } catch (error) {
         return encodeFailure(error);
       }

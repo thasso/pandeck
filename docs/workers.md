@@ -208,9 +208,10 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.2` (`1.0` plus the file methods, and `1.2`'s path
-methods for checkout reads), between the server and the in-process Worker. The
-code lives in `app/server/src/workerProtocol/` (the protocol), `worker/` (the
+What runs today is protocol `1.3` (`1.0` plus the file methods, `1.2`'s path
+methods for checkout reads, and `1.3`'s `files.readlink` and inspect `mode` for
+the workflows' reads), between the server and the in-process Worker. The code
+lives in `app/server/src/workerProtocol/` (the protocol), `worker/` (the
 Worker's side, which imports no server state) and `workers/` (the server's side
 and placement); `workerBoundary.test.ts` keeps that split. The protocol stays
 out of `app/shared/`: the web client never speaks it.
@@ -317,7 +318,12 @@ out of `app/shared/`: the web client never speaks it.
   `files.stat`. Whole-file reads use `files.open` with `stat: false` and keep
   the handle rules above. On the dev and test runtime (Node), this means the
   reader does not stop at a file's opening size and reads files over 2 GiB,
-  which Node's own `readFile` refuses.
+  which Node's own `readFile` refuses. Protocol `1.3` adds `files.readlink`, a
+  path method answering a symlink's target text as `readlink` decodes it, with
+  the same Worker-id refusal; and an optional `mode` on `files.inspect`'s
+  answer, from the same `bigint` stat as a decimal string. An answer without
+  `mode` still decodes; only a caller asking for it (the commit fingerprint)
+  treats its absence as a malformed answer.
 
   The worktree surfaces read through it: text, raw and tree reads with their
   containment (`worktreeDiff.ts`), comment working sources
@@ -346,7 +352,10 @@ out of `app/shared/`: the web client never speaks it.
     identity stat reads only `ENOENT` as absence, as Bun's
     `statSync(…, {throwIfNoEntry: false})` does, and rejects `ENOTDIR` (a
     checkout path at or below a regular file). Node's base answered that path
-    with the path itself, so on Node such a `repoLockKey` now rejects.
+    with the path itself, so on Node such a `repoLockKey` now rejects. The
+    commit workflow's untracked summaries follow the same reader: on Node, a
+    file over 2 GiB, which base refused (`could not read: File size …`), is now
+    read whole and summarized as `large file (N bytes)`, as Bun's base does.
   - **E3, a ref anchor's post-insert remap.** A Worker failure there stays best
     effort: the comment is returned with its seeded position, no verdict is
     written for that root, and the cleared HEAD guard makes the next listing
@@ -354,6 +363,42 @@ out of `app/shared/`: the web client never speaks it.
   - **RD-W3-7.** Any other error in that remap, which only a programming error
     produces, reports the stored comment and then rejects the add; the row is
     kept, so a retry can create a duplicate comment.
+
+  The checkout workflows read through it too, each placed by the checkout root
+  its git runs in: the commit workflow's untracked fingerprint (`inspect` with
+  `mode`, then `readlink` for a link) and untracked summaries (`inspect`, then
+  `readlink` or a whole-file read), read one path at a time in base's order, and
+  its operation-in-progress markers (`commitWorkflow.ts`); the merge, sync and
+  rebase-repair sequencer probes (`worktreeMerge.ts`, `worktreeSync.ts`,
+  `workflow/rebaseRepair.ts`); triage's operation markers
+  (`workflow/operationTriage.ts`); and a by-path remote's existence check
+  (`worktreeFetch.ts`). Read order, short circuits and git calls are base's; the
+  synchronous findings take the awaited marker answer. The fingerprint maps only
+  a filesystem failure (to `unreadable`), the summaries likewise (to
+  `could not read: …`); every other site maps nothing, as `existsSync` threw
+  nothing. `MERGE_HEAD` is probed as before: a linked worktree's `.git` gitfile
+  still reads as no merge (Task-1185). The commit message file stays
+  server-written (`commitMessageFile.ts`, which `workerBoundary.test.ts` keeps
+  free of checkout imports) and is read by the Worker's git through
+  `git commit -F`; phase 3 must settle that (Task-1154). Known limits of this
+  move:
+  - A Worker failure or an unclassified error at a former `existsSync` site
+    rejects the operation instead of answering. In a restore
+    (`restoreAfterRebaseFailure`, rebase repair's failed or blocked recovery,
+    triage's abort and restore) it skips the rest of the restore and leaves the
+    sequencer state to the existing recovery paths, as a Worker failure of the
+    restore's own git already does.
+  - Outer workflow failure handling (cancellation, boot recovery, a prompt
+    failure in `workflow/engine.ts` and `workflow/agentExecutor.ts`) is
+    unchanged; nothing promises a successful restoration after any error.
+  - `reconcileWorktreeMergesOnBoot` stops at the first row whose probe rejects
+    and logs it; later rows keep their phase until the next boot.
+  - A rejection of the merge's conflict probe or the rebase's in-progress probe
+    ends the merge `failed` with that message; whatever git left in the main
+    checkout stays, as after a non-conflict merge failure.
+  - The summaries read each untracked file whole into memory, including files
+    over 256,000 bytes, to report the exact length, as base did.
+  - W2's limit for a stuck path call applies to `files.readlink`.
 
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
@@ -617,7 +662,7 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it | landed  |
 | W2     | Served files (`/api/files`, `show_files`) read through the Worker                    | landed  |
 | W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)       | landed  |
-| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | planned |
+| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | landed  |
 | W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | planned |
 | W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | planned |
 | W4     | The worktree watcher on the Worker                                                   | planned |

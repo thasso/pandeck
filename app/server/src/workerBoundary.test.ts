@@ -75,14 +75,7 @@ const GIT_SPAWNS: Record<string, number> = {
  * directly. Each names the slice that moves those reads behind the Worker.
  */
 const CHECKOUT_FS_INVENTORY: Record<string, string> = {
-  "commitWorkflow.ts": "W3b",
-  "workflow/operationTriage.ts": "W3b",
-  "workflow/rebaseRepair.ts": "W3b",
   "worktrees/worktreeResolve.ts": "W3d",
-  // Classified as checkout reads by the W3 plan.
-  "worktrees/worktreeFetch.ts": "W3b",
-  "worktrees/worktreeMerge.ts": "W3b",
-  "worktrees/worktreeSync.ts": "W3b",
   "worktrees/worktreeWatcher.ts": "W4",
   "projectProvision.ts": "W5",
   "tools/core/projectCreateTool.ts": "W5",
@@ -106,11 +99,40 @@ const NAMED_CHECKOUT_READERS: Record<string, string> = {
  */
 const MIGRATED_CHECKOUT_READERS = [
   "checkoutFileAccess.ts",
+  "commitWorkflow.ts",
   "gitFamily.ts",
+  "workflow/operationTriage.ts",
+  "workflow/rebaseRepair.ts",
   "worktrees/worktreeComments.ts",
   "worktrees/worktreeDiff.ts",
+  "worktrees/worktreeFetch.ts",
+  "worktrees/worktreeMerge.ts",
   "worktrees/worktreeStatus.ts",
+  "worktrees/worktreeSync.ts",
 ];
+
+/**
+ * Server-written files a Worker's git reads, each with the slice that must
+ * settle where it is written. Each imports `node:fs` and nothing of the
+ * checkout family, and only its one caller imports it.
+ */
+const SERVER_WRITTEN_GIT_INPUTS: Record<
+  string,
+  { settledBy: string; importers: string[] }
+> = {
+  "commitMessageFile.ts": {
+    settledBy: "phase 3 (Task-1154)",
+    importers: ["commitWorkflow.ts"],
+  },
+};
+
+const isCheckoutFamily = (target: string): boolean =>
+  [
+    "gitExec.ts",
+    "gitFamily.ts",
+    "checkoutFileAccess.ts",
+    "fileReads.ts",
+  ].includes(target) || target.startsWith("workers/");
 
 /**
  * The served-file modules (W2): every read they make goes through
@@ -455,6 +477,28 @@ test("migrated checkout readers read only through the checkout-file access", () 
     assert.ok(
       ![...scan.imports].some(isFs),
       `${module} reads the filesystem itself`,
+    );
+  }
+});
+
+test("server-written files a Worker's git reads are pinned to phase 3", () => {
+  for (const [module, { importers }] of Object.entries(
+    SERVER_WRITTEN_GIT_INPUTS,
+  )) {
+    const scan = scans.get(module);
+    assert.ok(scan, `${module} is gone: delete it from the list`);
+    assert.ok(
+      [...scan.imports].some(isFs),
+      `${module} no longer writes the file itself: delete it from the list`,
+    );
+    assert.deepEqual(
+      [...scan.imports].filter(isCheckoutFamily),
+      [],
+      `${module} reaches the checkout family`,
+    );
+    assert.deepEqual(
+      importersOf((target) => target === module),
+      importers,
     );
   }
 });

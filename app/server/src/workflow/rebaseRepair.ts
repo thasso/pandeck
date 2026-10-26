@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowResultStatus } from "@assistant/shared";
+import { checkoutPathExists } from "../checkoutFileAccess.ts";
 import { getWorktree } from "../db/worktreeStore.ts";
 import type { WorkflowRunRow, WorkflowStepRow } from "../db/workflowStore.ts";
 import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
@@ -14,8 +14,8 @@ async function rebaseInProgress(cwd: string): Promise<boolean> {
   if (result.code !== 0) return false;
   const dir = result.stdout.trim();
   return (
-    existsSync(join(dir, "rebase-merge")) ||
-    existsSync(join(dir, "rebase-apply"))
+    (await checkoutPathExists(cwd, join(dir, "rebase-merge"))) ||
+    (await checkoutPathExists(cwd, join(dir, "rebase-apply")))
   );
 }
 

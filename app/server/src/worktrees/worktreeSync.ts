@@ -7,12 +7,12 @@
  * merge similarly verifies/restores the main checkout before returning an
  * error. No conflict-resolution agent is involved.
  */
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
   WorktreeSyncOperation,
   WorktreeSyncResponse,
 } from "@assistant/shared";
+import { checkoutPathExists } from "../checkoutFileAccess.ts";
 import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
 import { getWorktree, type WorktreeRow } from "../db/worktreeStore.ts";
 import { invalidateWorktreeStatus } from "./worktreeStatus.ts";
@@ -156,8 +156,8 @@ async function rebaseInProgress(cwd: string): Promise<boolean> {
   if (result.code !== 0) return false;
   const dir = result.stdout.trim();
   return (
-    existsSync(join(dir, "rebase-merge")) ||
-    existsSync(join(dir, "rebase-apply"))
+    (await checkoutPathExists(cwd, join(dir, "rebase-merge"))) ||
+    (await checkoutPathExists(cwd, join(dir, "rebase-apply")))
   );
 }
 

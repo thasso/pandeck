@@ -20,7 +20,11 @@ let remoteFetchMinutes = 10;
 async function loadWith(enabled: boolean, minutes = 10) {
   remoteFetchMinutes = minutes;
   vi.resetModules();
-  vi.doMock("../config.ts", () => ({ BACKGROUND_FETCH_ENABLED: enabled }));
+  // The rest of the real config: the checkout-file access places by DATA_DIR.
+  vi.doMock("../config.ts", async (importActual) => ({
+    ...(await importActual<typeof import("../config.ts")>()),
+    BACKGROUND_FETCH_ENABLED: enabled,
+  }));
   vi.doMock("../settings.ts", () => ({
     getSettings: () => ({ worktrees: { remoteFetchMinutes } }),
   }));

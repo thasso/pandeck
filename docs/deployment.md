@@ -214,7 +214,13 @@ surfaces' checkout reads through the Worker must answer as Bun's own `fs` does
 on the same paths (existence, bigint identity, Dirent kinds, `repoLockKey`, and
 whole and capped reads compared with `readFile` and `readFileSync`), and map a
 directory, a FIFO with a writer, a malformed answer, a refusal and an escaping
-link as `docs/workers.md` "Checkout files" states. Over a real local socket,
+link as `docs/workers.md` "Checkout files" states. The checkout workflows' reads
+must also answer as Bun's own sync `fs`: inspect kinds and modes against
+`lstatSync`, link targets (dangling, non-ASCII, invalid UTF-8) against
+`readlinkSync`, failure codes and messages against the sync call's throw, and
+each operation marker against `existsSync` in a main and a linked checkout. A
+dry-run commit workflow over untracked fixtures must give the prompt the
+summaries a copy of base's synchronous reader gives. Over a real local socket,
 both served-file routes must send the whole file to a client that stays. A
 client gone before the handler runs, or while its open is held, must cost at
 most one chunk read and close what was opened once. One gone mid-body must end

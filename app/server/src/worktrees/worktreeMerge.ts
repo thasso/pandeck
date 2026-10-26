@@ -17,7 +17,6 @@
  * The state machine is persisted in the row's `merge_state_json` so a dev
  * reload can restore an in-flight conflict (`reconcileWorktreeMergesOnBoot`).
  */
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   boundMergeMessage,
@@ -26,6 +25,7 @@ import {
   type WorktreeMergeStrategy,
 } from "@assistant/shared";
 import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
+import { checkoutPathExists } from "../checkoutFileAccess.ts";
 import { getSettings } from "../settings.ts";
 import {
   formatCommitMessage,
@@ -129,8 +129,9 @@ async function unmergedPaths(path: string): Promise<string[]> {
     .filter(Boolean);
 }
 
-function mergeInProgress(repoRoot: string): boolean {
-  return existsSync(join(repoRoot, ".git", "MERGE_HEAD"));
+/** Misses a gitfile `.git`, where MERGE_HEAD lives elsewhere (Task-1185). */
+function mergeInProgress(repoRoot: string): Promise<boolean> {
+  return checkoutPathExists(repoRoot, join(repoRoot, ".git", "MERGE_HEAD"));
 }
 
 async function rebaseInProgress(worktreePath: string): Promise<boolean> {
@@ -141,8 +142,8 @@ async function rebaseInProgress(worktreePath: string): Promise<boolean> {
   if (gitDir.code !== 0) return false;
   const dir = gitDir.stdout.trim();
   return (
-    existsSync(join(dir, "rebase-merge")) ||
-    existsSync(join(dir, "rebase-apply"))
+    (await checkoutPathExists(worktreePath, join(dir, "rebase-merge"))) ||
+    (await checkoutPathExists(worktreePath, join(dir, "rebase-apply")))
   );
 }
 
@@ -170,7 +171,11 @@ async function mergeWorktreeClaimed(
   strategyInput?: WorktreeMergeStrategy,
 ): Promise<void> {
   const initial = getWorktree(worktreeId);
-  if (!initial || initial.status !== "active" || !existsSync(initial.path))
+  if (
+    !initial ||
+    initial.status !== "active" ||
+    !(await checkoutPathExists(initial.path, initial.path))
+  )
     throw new Error("Unknown worktree.");
   const strategy =
     strategyInput ?? getSettings().worktrees.defaultMergeStrategy;
@@ -196,7 +201,7 @@ async function mergeWorktreeClaimed(
           currentRow.path !== initial.path ||
           currentRow.branch !== initial.branch ||
           currentRow.mainRepoRoot !== initial.mainRepoRoot ||
-          !existsSync(currentRow.path)
+          !(await checkoutPathExists(currentRow.path, currentRow.path))
         )
           throw new Error("Unknown worktree.");
         row = currentRow;
@@ -291,7 +296,7 @@ async function runStrategy(
     );
     if (merge.code !== 0) {
       const paths = await unmergedPaths(row.mainRepoRoot);
-      if (paths.length || mergeInProgress(row.mainRepoRoot)) {
+      if (paths.length || (await mergeInProgress(row.mainRepoRoot))) {
         return {
           paths,
           message: `Merging ${row.branch} into ${row.baseBranch} hit conflicts.`,
@@ -584,7 +589,7 @@ async function verifyMergeResolution(
     }
   } else {
     if (
-      mergeInProgress(row.mainRepoRoot) ||
+      (await mergeInProgress(row.mainRepoRoot)) ||
       (await unmergedPaths(row.mainRepoRoot)).length > 0
     )
       return;
@@ -670,7 +675,7 @@ export async function reconcileWorktreeMergesOnBoot(): Promise<void> {
       state.strategy === "rebase"
         ? (await rebaseInProgress(row.path)) ||
           (await unmergedPaths(row.path)).length > 0
-        : mergeInProgress(row.mainRepoRoot) ||
+        : (await mergeInProgress(row.mainRepoRoot)) ||
           (await unmergedPaths(row.mainRepoRoot)).length > 0;
     if (stillConflicted) {
       setMergeState(row.id, {

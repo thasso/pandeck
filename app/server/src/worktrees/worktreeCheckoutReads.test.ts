@@ -62,6 +62,7 @@ import { isWorkerFailure } from "../workers/fileClient.ts";
 import {
   answerNextInProcessWorkerCallForTests,
   inProcessWorkerFileHandlesForTests,
+  inProcessWorkerQuiescentForTests,
   inProcessWorkerServedForTests,
   inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
@@ -527,6 +528,8 @@ describe("AC7b a Worker failure rejects every surface", () => {
       const error = await pending;
       assert.match(String(error), /The Worker connection ended/);
       assert.ok(isWorkerFailure(error));
+      // Had the open started, the end would orphan it, outside quiescence.
+      if (site.phase === "before-open") await held.disposed;
     },
   );
 });
@@ -687,8 +690,11 @@ describe("AC7e unclassified errors and cleanup precedence", () => {
     const error = await rejection(getWorktreeFileContent(workerRow, "a.txt"));
     assert.equal((error as Error).message, "No such handle.");
     assert.ok(isWorkerFailure(error));
+    // The sweep closes the handle the refused close left; its quiescence
+    // waits for the native close, which settling rounds do not.
+    const quiescent = inProcessWorkerQuiescentForTests();
     writeAsInProcessWorkerForTests(INVALID_FRAME);
-    await settle();
+    await quiescent;
     assert.equal(inProcessWorkerFileHandlesForTests(), 0);
   });
 

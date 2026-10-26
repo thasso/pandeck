@@ -1,5 +1,5 @@
 /**
- * The file methods of worker protocol 1.2 and their wire shapes, shared by the
+ * The file methods of worker protocol 1.3 and their wire shapes, shared by the
  * server's client (`workers/fileClient.ts`) and the Worker's handlers
  * (`worker/files.ts`). Served files and checkout reads go through them
  * (`docs/workers.md`).
@@ -9,7 +9,7 @@
  * `files.read` pulls a bounded piece by position, `files.close` ends it. A
  * handle belongs to the connection that opened it. The path methods
  * (`files.stat`, `files.realpath`, `files.exists`, `files.inspect`,
- * `files.readdir`) hold nothing.
+ * `files.readdir`, `files.readlink`) hold nothing.
  *
  * A filesystem failure is an answer, not a protocol failure: `{error:{code}}`
  * with the message as text, rebuilt by the client as an
@@ -39,6 +39,8 @@ export const FILE_METHODS = {
   inspect: "files.inspect",
   /** A directory's entries in `readdir` order, each with its own type. */
   readdir: "files.readdir",
+  /** A symlink's target text, as `readlink` decodes it. */
+  readlink: "files.readlink",
 } as const;
 
 /** The error code of a handle the Worker does not hold. */
@@ -292,6 +294,10 @@ const isDecimal = (value: unknown): value is string =>
 const isSignedDecimal = (value: unknown): value is string =>
   typeof value === "string" && /^(0|-?[1-9]\d*)$/.test(value);
 
+/**
+ * `mode` is optional (protocol 1.3): an inspection without it decodes, and
+ * one whose `mode` is not an unsigned decimal is malformed.
+ */
 export function decodeInspection(payload: Payload): PathInspection {
   const inspection = record(settled(payload).inspection);
   if (
@@ -300,16 +306,30 @@ export function decodeInspection(payload: Payload): PathInspection {
     !isSignedDecimal(inspection.dev) ||
     !isSignedDecimal(inspection.ino) ||
     !isDecimal(inspection.size) ||
-    !isSignedDecimal(inspection.mtimeNs)
+    !isSignedDecimal(inspection.mtimeNs) ||
+    (inspection.mode !== undefined && !isDecimal(inspection.mode))
   )
     malformed("path inspection");
-  return {
+  const decoded: PathInspection = {
     kind: inspection.kind as PathInspection["kind"],
     dev: inspection.dev,
     ino: inspection.ino,
     size: inspection.size,
     mtimeNs: inspection.mtimeNs,
   };
+  return inspection.mode === undefined
+    ? decoded
+    : { ...decoded, mode: inspection.mode };
+}
+
+export function encodeLinkTarget(target: string): Payload {
+  return { json: { target } };
+}
+
+export function decodeLinkTarget(payload: Payload): string {
+  const { target } = settled(payload);
+  if (typeof target !== "string") malformed("link target");
+  return target;
 }
 
 export function encodeEntries(entries: DirectoryEntry[]): Payload {

@@ -1,14 +1,4 @@
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import type { AgentSession, SessionManager } from "./harnesses/piSession.ts";
 import type { ToolSessionManager } from "./mcp/tool.ts";
@@ -19,6 +9,14 @@ import type {
   CommitTotals,
   TaskSummary,
 } from "@assistant/shared";
+import {
+  checkoutFailureOf,
+  checkoutPathExists,
+  inspectCheckoutPath,
+  readCheckoutFile,
+  readCheckoutLink,
+} from "./checkoutFileAccess.ts";
+import { commitWithMessageFile } from "./commitMessageFile.ts";
 import { CWD } from "./config.ts";
 import {
   git,
@@ -318,22 +316,54 @@ async function fingerprintUntrackedFiles(
   files: string[],
   signal?: AbortSignal,
 ): Promise<string> {
+  return (await untrackedFingerprint(repoRoot, files, signal)).digest;
+}
+
+/** Test seam: each untracked path's fingerprint value, and the digest. */
+export function untrackedFingerprintForTests(
+  repoRoot: string,
+  files: string[],
+): Promise<{ values: Map<string, string>; digest: string }> {
+  return untrackedFingerprint(repoRoot, files);
+}
+
+/**
+ * Each path is read in `files` order, one at a time, on the side of the
+ * checkout at `repoRoot`. Only a filesystem failure is `unreadable`; any other
+ * error rejects.
+ */
+async function untrackedFingerprint(
+  repoRoot: string,
+  files: string[],
+  signal?: AbortSignal,
+): Promise<{ values: Map<string, string>; digest: string }> {
   const values = new Map<string, string>();
   const regularFiles: Array<{ path: string; executable: boolean }> = [];
   for (const path of files) {
+    const absolute = join(repoRoot, path);
     try {
-      const stat = lstatSync(join(repoRoot, path));
-      if (stat.isSymbolicLink()) {
+      const stat = await inspectCheckoutPath(repoRoot, absolute, {
+        follow: false,
+        mode: true,
+      });
+      if (stat.kind === "symlink") {
         // Git commits the link text, not the referent. Hashing the referent
         // would fail for a dangling link and make external content part of the
         // worktree fingerprint for an ordinary link.
-        values.set(path, `symlink:${readlinkSync(join(repoRoot, path))}`);
-      } else if (stat.isFile()) {
-        regularFiles.push({ path, executable: Boolean(stat.mode & 0o111) });
+        values.set(
+          path,
+          `symlink:${await readCheckoutLink(repoRoot, absolute)}`,
+        );
+      } else if (stat.kind === "file") {
+        regularFiles.push({
+          path,
+          executable: Boolean(Number(stat.mode) & 0o111),
+        });
       } else {
         values.set(path, `special:${stat.mode}`);
       }
-    } catch {
+    } catch (error) {
+      if (checkoutFailureOf(error) !== "filesystem") throw error;
       // A temp file can disappear after ls-files. Keep that state in the
       // fingerprint rather than failing the whole human or agent workflow.
       values.set(path, "unreadable");
@@ -387,7 +417,7 @@ async function fingerprintUntrackedFiles(
       .update("\0")
       .update(values.get(path) ?? "unreadable")
       .update("\0");
-  return fingerprint.digest("hex");
+  return { values, digest: fingerprint.digest("hex") };
 }
 
 function isProbablyText(buffer: Buffer): boolean {
@@ -400,24 +430,34 @@ function isProbablyText(buffer: Buffer): boolean {
   }
 }
 
-function readUntrackedSummaries(
+/**
+ * The first 80 paths, read one at a time in order, on the side of the checkout
+ * at `repoRoot`. Only a filesystem failure becomes `could not read`; any other
+ * error rejects.
+ */
+async function readUntrackedSummaries(
   repoRoot: string,
   files: string[],
-): UntrackedSummary[] {
+): Promise<UntrackedSummary[]> {
   const summaries: UntrackedSummary[] = [];
   let remaining = MAX_UNTRACKED_TOTAL_CHARS;
   for (const path of files.slice(0, 80)) {
     const absolute = join(repoRoot, path);
     try {
-      if (lstatSync(absolute).isSymbolicLink()) {
+      const inspection = await inspectCheckoutPath(repoRoot, absolute, {
+        follow: false,
+      });
+      if (inspection.kind === "symlink") {
         summaries.push({
           path,
           included: true,
-          content: readlinkSync(absolute),
+          content: await readCheckoutLink(repoRoot, absolute),
         });
         continue;
       }
-      const buffer = readFileSync(absolute);
+      // Whole, as production's readFile reads it: the reason below carries
+      // the full length.
+      const buffer = await readCheckoutFile(repoRoot, absolute);
       if (buffer.length === 0) {
         summaries.push({ path, included: true, content: "" });
         continue;
@@ -447,6 +487,7 @@ function readUntrackedSummaries(
       remaining -= shown.length;
       summaries.push({ path, included: true, content: shown });
     } catch (err) {
+      if (checkoutFailureOf(err) !== "filesystem") throw err;
       summaries.push({
         path,
         included: false,
@@ -599,10 +640,14 @@ function suspiciousPath(path: string): string | undefined {
   return undefined;
 }
 
-function gitOperationInProgress(gitDir: string): boolean {
-  return ["MERGE_HEAD", "rebase-merge", "rebase-apply"].some((path) =>
-    existsSync(join(gitDir, path)),
-  );
+/** The first marker found answers; read on the side of `repoRoot`. */
+async function gitOperationInProgress(
+  repoRoot: string,
+  gitDir: string,
+): Promise<boolean> {
+  for (const path of ["MERGE_HEAD", "rebase-merge", "rebase-apply"])
+    if (await checkoutPathExists(repoRoot, join(gitDir, path))) return true;
+  return false;
 }
 
 function collectDeterministicFindings(args: {
@@ -610,7 +655,7 @@ function collectDeterministicFindings(args: {
   diff: string;
   untracked: string[];
   untrackedSummaries: UntrackedSummary[];
-  gitDir: string;
+  operationInProgress: boolean;
 }): { blockers: CommitAgentBlocker[]; warnings: string[] } {
   const blockers: CommitAgentBlocker[] = [];
   const warnings: string[] = [];
@@ -627,7 +672,7 @@ function collectDeterministicFindings(args: {
     });
   }
 
-  if (gitOperationInProgress(args.gitDir)) {
+  if (args.operationInProgress) {
     blockers.push({
       kind: "unsafe",
       reason: "A merge or rebase appears to be in progress.",
@@ -1171,7 +1216,7 @@ async function gatherDiffContext(
     untracked,
     signal,
   );
-  const untrackedSummaries = readUntrackedSummaries(repoRoot, untracked);
+  const untrackedSummaries = await readUntrackedSummaries(repoRoot, untracked);
   const untrackedText = renderUntrackedSummaries(untrackedSummaries);
   const fullDiff = [diffRes.stdout, untrackedText].filter(Boolean).join("\n\n");
   const fullDiffHash = fingerprintContent(
@@ -1183,7 +1228,7 @@ async function gatherDiffContext(
     diff: fullDiff,
     untracked,
     untrackedSummaries,
-    gitDir,
+    operationInProgress: await gitOperationInProgress(repoRoot, gitDir),
   });
   const truncated = truncate(diffRes.stdout, MAX_AGENT_DIFF_CHARS);
   return {
@@ -1217,16 +1262,6 @@ async function stagedDiff(
     diffStat: diffStat.stdout,
     diff: diff.stdout,
   };
-}
-
-function writeCommitMessageFile(
-  message: string,
-): Promise<{ dir: string; file: string }> {
-  return mkdtemp(join(tmpdir(), "assistant-commit-")).then((dir) => {
-    const file = join(dir, "COMMIT_MESSAGE");
-    writeFileSync(file, `${message.trim()}\n`, "utf8");
-    return { dir, file };
-  });
 }
 
 function appendCustomResult(
@@ -1502,7 +1537,7 @@ export async function runCommitWorkflow(
             repoRoot,
             options.signal,
           );
-          if (gitOperationInProgress(gitDir.stdout.trim())) {
+          if (await gitOperationInProgress(repoRoot, gitDir.stdout.trim())) {
             return {
               blocked: {
                 kind: "unsafe" as const,
@@ -1520,26 +1555,16 @@ export async function runCommitWorkflow(
           return "empty" as const;
 
         options.onProgress?.("Creating git commit…");
-        const { dir, file } = await writeCommitMessageFile(commitMessage);
-        try {
+        await commitWithMessageFile(
+          commitMessage,
           // A caller's or user-approved message is the exact text: git's
           // cleanup (or a configured `commit.cleanup=strip`) would drop `#`
           // lines and blank runs the caller wrote. Generated ones keep it.
-          await git(
-            [
-              "commit",
-              ...(options.callerMessage !== undefined || options.approvedChange
-                ? ["--cleanup=verbatim"]
-                : []),
-              "-F",
-              file,
-            ],
-            repoRoot,
-            options.signal,
-          );
-        } finally {
-          rmSync(dir, { recursive: true, force: true });
-        }
+          options.callerMessage !== undefined || options.approvedChange
+            ? "verbatim"
+            : "git-default",
+          (args) => git(args, repoRoot, options.signal),
+        );
         return "committed" as const;
       },
     );
@@ -1723,12 +1748,9 @@ export async function acceptCommitDryRun(options: {
           await git(["add", "-A"], repoRoot, options.signal);
         }
         options.onProgress?.("Creating git commit…");
-        const { dir, file } = await writeCommitMessageFile(acceptedMessage);
-        try {
-          await git(["commit", "-F", file], repoRoot, options.signal);
-        } finally {
-          rmSync(dir, { recursive: true, force: true });
-        }
+        await commitWithMessageFile(acceptedMessage, "git-default", (args) =>
+          git(args, repoRoot, options.signal),
+        );
         return "committed" as const;
       },
     );

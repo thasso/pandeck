@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -18,7 +19,7 @@ import {
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, test, vi } from "vitest";
 import {
   checkLexicalPath,
   checkoutFailureOf,
@@ -27,6 +28,7 @@ import {
   inspectCheckoutPath,
   readCheckoutDir,
   readCheckoutFile,
+  readCheckoutLink,
   realpathInCheckout,
   throwInCheckoutReadForTests,
 } from "./checkoutFileAccess.ts";
@@ -46,6 +48,7 @@ import { isWorkerFailure } from "./workers/fileClient.ts";
 import {
   answerNextInProcessWorkerCallForTests,
   inProcessWorkerFileHandlesForTests,
+  inProcessWorkerQuiescentForTests,
   inProcessWorkerServedForTests,
   inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
@@ -58,6 +61,31 @@ import {
  * the real handlers' seams or the Worker's one-shot answer substitution,
  * never a mock transport.
  */
+
+// Passthrough `node:fs/promises`, except that a held native close of a
+// handle `fileReads.ts` opened waits for its release (`holdNextNativeClose`).
+const nativeClose = vi.hoisted(() => ({
+  hold: undefined as
+    { reached: () => void; released: Promise<void> } | undefined,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      const close = handle.close;
+      handle.close = () => {
+        const hold = nativeClose.hold;
+        nativeClose.hold = undefined;
+        if (!hold) return close();
+        hold.reached();
+        return hold.released.then(() => close());
+      };
+      return handle;
+    },
+  };
+});
 
 const INVALID_FRAME = new Uint8Array(8);
 const MIB = 1024 * 1024;
@@ -97,6 +125,33 @@ afterEach(assertNothingHeld);
 async function settle(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i += 1)
     await new Promise<void>((done) => setImmediate(done));
+}
+
+/**
+ * Ends the Worker connection and waits for its quiescence: the sweep has
+ * closed every descriptor the Worker's handles held. Settling rounds are no
+ * barrier: the native close runs on the threadpool.
+ */
+async function endConnection(): Promise<void> {
+  const quiescent = inProcessWorkerQuiescentForTests();
+  writeAsInProcessWorkerForTests(INVALID_FRAME);
+  await quiescent;
+}
+
+/**
+ * The next native `FileHandle.close` waits for `release` before it closes.
+ * Only that one call is held.
+ */
+function holdNextNativeClose(): {
+  reached: Promise<void>;
+  release: () => void;
+} {
+  let release!: () => void;
+  const released = new Promise<void>((done) => (release = done));
+  const reached = new Promise<void>(
+    (done) => (nativeClose.hold = { reached: done, released }),
+  );
+  return { reached, release };
 }
 
 const SIDES = [
@@ -163,6 +218,8 @@ describe("each read runs on the side of its checkout root", () => {
   test("a checkout outside the Knowledge Base reads through the Worker", async () => {
     const file = fixture(onWorker, "routed/a.txt", "alpha\n");
     const dir = join(onWorker, "routed");
+    const link = join(onWorker, "routed-link");
+    symlinkSync("routed/a.txt", link);
     const cases: [string, () => Promise<unknown>, unknown][] = [
       [FILE_METHODS.exists, () => checkoutPathExists(onWorker, file), true],
       [
@@ -172,9 +229,25 @@ describe("each read runs on the side of its checkout root", () => {
         "file",
       ],
       [
+        FILE_METHODS.inspect,
+        async () =>
+          (
+            await inspectCheckoutPath(onWorker, file, {
+              follow: false,
+              mode: true,
+            })
+          ).mode,
+        String(lstatSync(file, { bigint: true }).mode),
+      ],
+      [
         FILE_METHODS.readdir,
         () => readCheckoutDir(onWorker, dir),
         [{ name: "a.txt", directory: false }],
+      ],
+      [
+        FILE_METHODS.readlink,
+        () => readCheckoutLink(onWorker, link),
+        "routed/a.txt",
       ],
       [
         FILE_METHODS.realpath,
@@ -201,6 +274,8 @@ describe("each read runs on the side of its checkout root", () => {
 
   test("the Knowledge Base reads on the server and sends the Worker nothing", async () => {
     const file = fixture(onServer, "routed/a.txt", "alpha\n");
+    const link = join(onServer, "routed-link");
+    symlinkSync("routed/a.txt", link);
     const before = inProcessWorkerServedForTests();
     const pathCalls = fileReadsCountsForTests().pathCalls;
     assert.equal(await checkoutPathExists(onServer, file), true);
@@ -213,12 +288,13 @@ describe("each read runs on the side of its checkout root", () => {
       [{ name: "a.txt", directory: false }],
     );
     assert.equal(await realpathInCheckout(onServer, file), realpathSync(file));
+    assert.equal(await readCheckoutLink(onServer, link), readlinkSync(link));
     assert.equal(
       (await readCheckoutFile(onServer, file)).toString(),
       "alpha\n",
     );
     assert.equal(inProcessWorkerServedForTests(), before, "no Worker request");
-    assert.equal(fileReadsCountsForTests().pathCalls, pathCalls + 4);
+    assert.equal(fileReadsCountsForTests().pathCalls, pathCalls + 5);
   });
 
   test.each(SIDES)(
@@ -241,6 +317,7 @@ describe("each read runs on the side of its checkout root", () => {
           ino: String(oracle.ino),
           size: String(oracle.size),
           mtimeNs: String(oracle.mtimeNs),
+          mode: String(oracle.mode),
         });
       }
     },
@@ -284,6 +361,8 @@ describe("where an error came from", () => {
         await rejection(readCheckoutDir(root(), file)),
         await rejection(realpathInCheckout(root(), missing)),
         await rejection(readCheckoutFile(root(), missing)),
+        await rejection(readCheckoutLink(root(), missing)),
+        await rejection(readCheckoutLink(root(), file)),
       ]) {
         assert.equal(checkoutFailureOf(error), "filesystem", String(error));
         assert.equal(isWorkerFailure(error), false);
@@ -334,6 +413,35 @@ describe("where an error came from", () => {
     });
     const refused = await rejection(readCheckoutDir(onWorker, onWorker));
     assert.equal(checkoutFailureOf(refused), "worker");
+
+    // A Worker before 1.3 answers no mode: malformed only when it is required.
+    const modeless = {
+      json: {
+        inspection: {
+          kind: "file",
+          dev: "1",
+          ino: "2",
+          size: "1",
+          mtimeNs: "3",
+        },
+      },
+    };
+    answerNextInProcessWorkerCallForTests(
+      FILE_METHODS.inspect,
+      async () => modeless,
+    );
+    assert.equal(
+      (await inspectCheckoutPath(onWorker, file, { follow: true })).mode,
+      undefined,
+    );
+    answerNextInProcessWorkerCallForTests(
+      FILE_METHODS.inspect,
+      async () => modeless,
+    );
+    const noMode = await rejection(
+      inspectCheckoutPath(onWorker, file, { follow: true, mode: true }),
+    );
+    assert.equal(checkoutFailureOf(noMode), "worker");
 
     const held = holdFileForTests(file, "inspect");
     const pending = rejection(
@@ -568,6 +676,8 @@ describe("readCheckoutFile follows production's readFile", () => {
     held.release();
     const error = await pending;
     assert.equal(checkoutFailureOf(error), "worker");
+    // Had the open started, the end would orphan it, outside quiescence.
+    await held.disposed;
   });
 });
 
@@ -631,7 +741,31 @@ describe("read and close failures", () => {
     assert.equal(checkoutFailureOf(error), "worker");
     // The refused close left the handle; a connection end sweeps it.
     assert.equal(inProcessWorkerFileHandlesForTests(), 1);
+    await endConnection();
+  });
+
+  test("a connection end's sweep is quiescent only once its native close finished", async () => {
+    const file = fixture(onWorker, "pair-sweep.txt", "x");
+    answerNextInProcessWorkerCallForTests(FILE_METHODS.close, async () => {
+      throw new WorkerMethodError("unknown_handle", "No such handle.");
+    });
+    await readCheckoutFile(onWorker, file).catch(() => undefined);
+    assert.equal(inProcessWorkerFileHandlesForTests(), 1);
+    const close = holdNextNativeClose();
+    const quiescent = inProcessWorkerQuiescentForTests();
+    let isQuiescent = false;
+    void quiescent.then(() => (isQuiescent = true));
     writeAsInProcessWorkerForTests(INVALID_FRAME);
+    await close.reached;
+    await settle();
+    // The table is swept while its descriptor is still open: settling rounds
+    // alone would assert too early.
+    assert.equal(inProcessWorkerFileHandlesForTests(), 0);
+    assert.equal(fileReadsCountsForTests().liveDescriptors, 1);
+    assert.equal(isQuiescent, false, "quiescent before the native close");
+    close.release();
+    await quiescent;
+    assert.equal(fileReadsCountsForTests().liveDescriptors, 0);
   });
 
   test("(iii) a good read with a close answered EIO is the close's filesystem failure", async () => {
@@ -684,6 +818,6 @@ describe("read and close failures", () => {
     const error = await rejection(readCheckoutFile(onWorker, file));
     assert.match(String(error), /malformed file answer/);
     assert.equal(checkoutFailureOf(error), "worker");
-    writeAsInProcessWorkerForTests(INVALID_FRAME);
+    await endConnection();
   });
 });

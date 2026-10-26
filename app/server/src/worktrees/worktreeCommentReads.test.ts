@@ -349,7 +349,10 @@ describe("AC7b the comment source rejects on a Worker failure", () => {
           await held.reached;
           writeAsInProcessWorkerForTests(INVALID_FRAME);
           held.release();
-          return pending;
+          const error = await pending;
+          // Had the open started, the end would orphan it, outside quiescence.
+          await held.disposed;
+          return error;
         },
         (error) => {
           assert.match(String(error), /The Worker connection ended/);
@@ -669,13 +672,19 @@ describe("AC14 (1) a FIFO without a writer (E1)", () => {
     assert.ok(isWorkerFailure(error));
     assert.equal(listComments(at.id).length, 0);
 
+    // The end orphaned the native open, which the Worker's quiescence does not
+    // wait for. It has no descriptor yet, so a zero count is no receipt: only
+    // the barrier's disposal follows the late descriptor's close.
+    let disposed = false;
+    void held.disposed.then(() => (disposed = true));
+    await settle();
+    assert.equal(fileReadsCountsForTests().liveDescriptors, 0);
+    assert.equal(disposed, false, "disposed before the orphan settled");
+
     // A writer lets the orphaned open finish; its descriptor is closed.
     const writer = openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK);
     closeSync(writer);
-    const deadline = Date.now() + 10_000;
-    while (fileReadsCountsForTests().liveDescriptors !== 0) {
-      if (Date.now() > deadline) assert.fail("the orphan stayed open");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await held.disposed;
+    assert.equal(fileReadsCountsForTests().liveDescriptors, 0);
   });
 });

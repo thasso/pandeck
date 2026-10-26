@@ -1,6 +1,8 @@
 /**
- * Every filesystem read the checkout surfaces make of a checkout, on the side
- * where that checkout's git runs (`docs/workers.md`, "Checkout files").
+ * Every filesystem read the checkout surfaces and the checkout workflows
+ * (commit, merge, sync, fetch, rebase repair, triage) make of a checkout, on
+ * the side where that checkout's git runs (`docs/workers.md`, "Checkout
+ * files").
  *
  * Each function takes the checkout root, and the root alone picks the side,
  * through the same placement as checkout git (`placeGitCwd`): the server never
@@ -27,6 +29,7 @@ import {
   inspectPath,
   openFile,
   readDirectory,
+  readlinkPath,
   realpathFile,
   type DirectoryEntry,
   type FileOpenOutcome,
@@ -42,6 +45,7 @@ import {
   isWorkerFailure,
   openOnWorker,
   readdirOnWorker,
+  readlinkOnWorker,
   realpathOnWorker,
 } from "./workers/fileClient.ts";
 import { placeGitCwd } from "./workers/placement.ts";
@@ -126,17 +130,26 @@ export function checkoutPathExists(
   return placed(root, path, existsPath, existsOnWorker);
 }
 
+/** With `mode`, the answer carries the mode bits; a Worker must send them. */
 export function inspectCheckoutPath(
   root: string,
   path: string,
-  options: { follow: boolean },
+  options: { follow: boolean; mode?: boolean },
 ): Promise<PathInspection> {
   return placed(
     root,
     path,
     (path) => inspectPath(path, options.follow),
-    (location) => inspectOnWorker(location, options.follow),
+    (location) =>
+      inspectOnWorker(location, options.follow, {
+        mode: options.mode === true,
+      }),
   );
+}
+
+/** A symlink's target text, as `readlink` decodes it. */
+export function readCheckoutLink(root: string, path: string): Promise<string> {
+  return placed(root, path, readlinkPath, readlinkOnWorker);
 }
 
 export function readCheckoutDir(

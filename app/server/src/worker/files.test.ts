@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -42,6 +43,7 @@ let dir: string;
 let small: string;
 let fifo: string;
 let sub: string;
+let link: string;
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "worker-files-"));
@@ -51,6 +53,8 @@ beforeAll(() => {
   execFileSync("mkfifo", [fifo]);
   sub = join(dir, "sub");
   mkdirSync(sub);
+  link = join(dir, "to-small.link");
+  symlinkSync(small, link);
 });
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -142,8 +146,9 @@ describe("addressing", () => {
       [FILE_METHODS.inspect, { follow: true }, "inspect"],
       [FILE_METHODS.inspect, { follow: false }, "inspect"],
       [FILE_METHODS.readdir, {}, "readdir"],
+      [FILE_METHODS.readlink, {}, "readlink"],
     ] as const;
-    for (const path of [fifo, sub, small])
+    for (const path of [fifo, sub, small, link])
       for (const [method, extra, phase] of methods) {
         const held = holdFileForTests(path, phase);
         let reached = false;
@@ -215,6 +220,13 @@ describe("params", () => {
       [FILE_METHODS.readdir, null],
       [FILE_METHODS.readdir, { location: { workerId: DEFAULT_WORKER_ID } }],
       [FILE_METHODS.readdir, { location: "x" }],
+      [FILE_METHODS.readlink, null],
+      [FILE_METHODS.readlink, {}],
+      [FILE_METHODS.readlink, { location: { path: link } }],
+      [
+        FILE_METHODS.readlink,
+        { location: { workerId: DEFAULT_WORKER_ID, path: 5 } },
+      ],
     ] as const)
       await rejectsWith(ask(method, json), "invalid_params");
     assert.equal(fileReadsCountsForTests().pathCalls, before);
@@ -348,14 +360,13 @@ describe("path methods on the wire", () => {
     }
   });
 
-  test("inspect answers kind and full-precision identity, both ways on a link", async () => {
-    const link = join(dir, "small.link");
-    symlinkSync(small, link);
+  test("inspect answers kind, mode and full-precision identity, both ways on a link", async () => {
     const digits = (stats: BigIntStats) => ({
       dev: String(stats.dev),
       ino: String(stats.ino),
       size: String(stats.size),
       mtimeNs: String(stats.mtimeNs),
+      mode: String(stats.mode),
     });
     for (const [path, follow, kind, oracle] of [
       [link, true, "file", statSync(link, { bigint: true })],
@@ -378,6 +389,31 @@ describe("path methods on the wire", () => {
       });
       assert.deepEqual(answer.json, { error: { code } });
       assert.match(answer.text?.message ?? "", new RegExp(`^${code}: `));
+    }
+  });
+
+  test("readlink answers the link text as readlinkSync, a failure with its code", async () => {
+    const before = fileReadsCountsForTests().pathCalls;
+    assert.deepEqual(
+      (await ask(FILE_METHODS.readlink, { location: here(link) })).json,
+      { target: readlinkSync(link) },
+    );
+    assert.equal(fileReadsCountsForTests().pathCalls, before + 1);
+    for (const [path, code] of [
+      [small, "EINVAL"],
+      [join(dir, "missing"), "ENOENT"],
+      [join(small, "below-a-file"), "ENOTDIR"],
+    ] as const) {
+      let oracle: NodeJS.ErrnoException | undefined;
+      try {
+        readlinkSync(path);
+      } catch (error) {
+        oracle = error as NodeJS.ErrnoException;
+      }
+      assert.equal(oracle?.code, code, `oracle for ${path}`);
+      const answer = await ask(FILE_METHODS.readlink, { location: here(path) });
+      assert.deepEqual(answer.json, { error: { code } });
+      assert.equal(answer.text?.message, oracle?.message);
     }
   });
 
@@ -413,6 +449,16 @@ describe("path methods on the wire", () => {
     });
     assert.deepEqual(answer.json, { error: { code: "EIO" } });
     assert.match(answer.text?.message ?? "", /^EIO: injected fault, stat /);
+
+    failFileForTests(link, { phase: "readlink", code: "EIO" });
+    const linkAnswer = await ask(FILE_METHODS.readlink, {
+      location: here(link),
+    });
+    assert.deepEqual(linkAnswer.json, { error: { code: "EIO" } });
+    assert.match(
+      linkAnswer.text?.message ?? "",
+      /^EIO: injected fault, readlink /,
+    );
   });
 });
 
@@ -421,6 +467,7 @@ describe("quiescence of the path methods", () => {
     [FILE_METHODS.exists, {}, "exists"],
     [FILE_METHODS.inspect, { follow: true }, "inspect"],
     [FILE_METHODS.readdir, {}, "readdir"],
+    [FILE_METHODS.readlink, {}, "readlink"],
   ] as const)(
     "%s held at connection end rejects only after release, while a replacement serves",
     async (method, extra, phase) => {
