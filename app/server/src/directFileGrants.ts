@@ -32,7 +32,6 @@
  * Grants are in-memory and re-mintable by the trusted web client at view time,
  * so an old transcript's link keeps working without persisting anything.
  */
-import { open, realpath, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
@@ -43,6 +42,14 @@ import {
   type FileGrantScope,
 } from "@assistant/shared/servedFiles";
 import { parseByteRange } from "./directFileHttp.ts";
+import {
+  openServedFile,
+  realpathServedFile,
+  sameServedSide,
+  servedSideOf,
+  statServedFile,
+  type ServedSide,
+} from "./servedFileAccess.ts";
 
 type Headers = Record<string, string>;
 
@@ -62,6 +69,11 @@ interface FileGrant {
   id: string;
   /** Typed authority identity; grants from different sources never coalesce. */
   sourceKey: string;
+  /**
+   * Where the grant's files are read, fixed at mint. Part of reuse, so a
+   * server grant and a Worker grant over one spelling never merge.
+   */
+  side: ServedSide;
   /** Canonical (symlink-resolved) directory this grant reaches. */
   directory: string;
   /** A browser-open/download grant may address only its original file. */
@@ -107,7 +119,13 @@ export async function mintDocumentGrant(
   filePath: string,
   scope: FileGrantScope = "directory",
   delivery: FileGrantDeliveryMode = "inline",
-  authority: { root: string; sourceKey: string; fresh?: boolean } = {
+  authority: {
+    root: string;
+    sourceKey: string;
+    fresh?: boolean;
+    /** Where to read; by default, where the requested path is placed. */
+    side?: ServedSide;
+  } = {
     root: sep,
     sourceKey: "host",
   },
@@ -115,16 +133,19 @@ export async function mintDocumentGrant(
   if (delivery === "attachment" && scope !== "file")
     throw new Error("Attachment grants must be scoped to one file.");
   sweepExpiredGrants();
+  // One side for the whole grant, decided from the path as requested: the
+  // server never resolves it to choose (`servedFileAccess.ts`).
+  const side = authority.side ?? servedSideOf(resolve(filePath));
   // The DOCUMENT has to exist, not just its directory: a grant is minted to
   // show one file, and an iframe pointed at a missing one would 404 inside the
   // frame with nothing on the page to say why.
   const [documentPath, authorityRoot] = await Promise.all([
-    realpath(resolve(filePath)),
-    realpath(resolve(authority.root)),
+    realpathServedFile(resolve(filePath), side),
+    realpathServedFile(resolve(authority.root), side),
   ]);
   if (documentPath !== authorityRoot && !isInside(authorityRoot, documentPath))
     throw new Error("Document is outside its source authority.");
-  if (!(await stat(documentPath)).isFile())
+  if (!(await statServedFile(documentPath, side)).isFile)
     throw new Error(`Not a file: ${documentPath}`);
   // Directory scope grants every sibling under the canonical parent. Only a
   // canonical runnable HTML document can justify that authority: checking the
@@ -136,6 +157,7 @@ export async function mintDocumentGrant(
   const directory = segments.join(sep) || sep;
   const grant = grantForDirectory(
     authority.sourceKey,
+    side,
     directory,
     scope === "file" ? name : undefined,
     delivery,
@@ -152,6 +174,7 @@ export async function mintDocumentGrant(
 
 function grantForDirectory(
   sourceKey: string,
+  side: ServedSide,
   directory: string,
   fileName: string | undefined,
   delivery: FileGrantDeliveryMode,
@@ -162,6 +185,7 @@ function grantForDirectory(
     for (const grant of grants.values()) {
       if (
         grant.sourceKey === sourceKey &&
+        sameServedSide(grant.side, side) &&
         grant.directory === directory &&
         grant.fileName === fileName &&
         grant.delivery === delivery &&
@@ -178,6 +202,7 @@ function grantForDirectory(
   const grant: FileGrant = {
     id: randomBytes(24).toString("base64url"),
     sourceKey,
+    side,
     directory,
     ...(fileName ? { fileName } : {}),
     delivery,
@@ -205,6 +230,8 @@ export interface FileGrantTarget {
   scope: FileGrantScope;
   /** Canonical basename used only when delivery is attachment. */
   fileName: string;
+  /** Where the grant reads its files. */
+  side: ServedSide;
 }
 
 /**
@@ -250,10 +277,10 @@ export async function resolveFileGrantTarget(
   if (!isInside(grant.directory, lexical)) return undefined;
 
   try {
-    const canonical = await realpath(lexical);
+    const canonical = await realpathServedFile(lexical, grant.side);
     if (!isInside(grant.directory, canonical)) return undefined;
-    const stats = await stat(canonical);
-    if (!stats.isFile()) return undefined;
+    const stats = await statServedFile(canonical, grant.side);
+    if (!stats.isFile) return undefined;
     return {
       path: canonical,
       size: stats.size,
@@ -262,6 +289,7 @@ export async function resolveFileGrantTarget(
       delivery: grant.delivery,
       scope: grant.fileName === undefined ? "directory" : "file",
       fileName: canonical.split(sep).pop() ?? "download",
+      side: grant.side,
     };
   } catch {
     return undefined;
@@ -375,16 +403,25 @@ export async function handleFileGrantRequest(
     return;
   }
 
+  // Watched before the open: a client gone while it runs gets no answer and
+  // no stream, and the file the open made is closed.
+  const gone = new AbortController();
+  res.on("close", () => gone.abort());
+
   // Opened, then re-identified: the bytes that go out belong to the exact file
   // containment passed, even if the name was pointed elsewhere in between.
-  const handle = await open(target.path, "r").catch(() => undefined);
+  const handle = await openServedFile(target.path, {
+    stat: true,
+    side: target.side,
+    signal: gone.signal,
+  }).catch(() => undefined);
   if (!handle) {
-    fail(404, `No such file: ${target.path}`);
+    if (!gone.signal.aborted) fail(404, `No such file: ${target.path}`);
     return;
   }
   const opened = await handle.stat().catch(() => undefined);
   if (
-    !opened?.isFile() ||
+    !opened?.isFile ||
     opened.dev !== target.dev ||
     opened.ino !== target.ino
   ) {
@@ -427,13 +464,17 @@ export async function handleFileGrantRequest(
     res.end();
     return;
   }
+  if (gone.signal.aborted) {
+    await handle.close().catch(() => undefined);
+    return;
+  }
   // Read from the DESCRIPTOR, not the path, so the identity checked above is
   // the identity streamed — and stop at the length already in the headers. An
   // unbounded stream over a file being appended to sends MORE than
   // `content-length` promised, which breaks response framing on a keep-alive
-  // connection. `autoClose: false` keeps the descriptor ours, so it is closed
-  // exactly once, below.
-  const stream = handle.createReadStream({ start, end, autoClose: false });
+  // connection. The stream never closes the file, so it is closed exactly
+  // once, below.
+  const stream = handle.createReadStream({ start, end });
   await new Promise<void>((done) => {
     const finish = () => {
       stream.destroy();

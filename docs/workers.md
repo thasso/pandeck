@@ -208,12 +208,12 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is the protocol's first version, `1.0`, between the server and
-the in-process Worker. The code lives in `app/server/src/workerProtocol/` (the
-protocol), `worker/` (the Worker's side, which imports no server state) and
-`workers/` (the server's side and placement); `workerBoundary.test.ts` keeps
-that split. The protocol stays out of `app/shared/`: the web client never speaks
-it.
+What runs today is protocol `1.1` (`1.0` plus the file methods), between the
+server and the in-process Worker. The code lives in
+`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
+which imports no server state) and `workers/` (the server's side and placement);
+`workerBoundary.test.ts` keeps that split. The protocol stays out of
+`app/shared/`: the web client never speaks it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -261,6 +261,29 @@ it.
   where the Worker shares the server process and account. It MUST be closed
   before the Worker leaves that process. W3 replaces the path rule with a typed
   choice made from the KB row.
+- **Served files.** `/api/files`, document grants and `show_files` read through
+  `servedFileAccess.ts`, the only caller of the file methods `files.stat`,
+  `files.realpath`, `files.open`, `files.read` and `files.close`
+  (`workerProtocol/fileMethods.ts`). Each names a Worker id, which a Worker
+  refuses when it is not its own, before touching the filesystem or its handle
+  table. `files.open` says whether to stat the opened descriptor (grants do,
+  `/api/files` does not) and answers either a handle or a failure tagged with
+  the phase that failed, `open` or `stat`; a filesystem failure is an answer
+  carrying its `code` and message, not a protocol error. Handles are bound to
+  the connection that opened them: their reads and closes never reach another
+  connection, ids are never reused, an open finishing after its connection ended
+  is closed at once, and the Worker closes every handle it still holds before
+  its quiescence resolves. A caller that gives up during an open closes the
+  handle when it arrives. Reads are positional and bounded; a stream pulls one
+  chunk of at most 1 MiB, one `data` frame, only when its consumer has room.
+  Placement keeps a path named inside `DATA_DIR` or the Knowledge Base (as named
+  or as its observed real path, with the settings fallback above) on the server,
+  which reads it with the same `fileReads.ts`; session artifacts are server data
+  by kind, whatever their path. Every other path goes to the default Worker as
+  named: the server never resolves a requested path to choose its side, since
+  following an agent's symlink there would let the server read for the agent
+  what the Worker may not. When the Worker fails, the read fails; there is no
+  local fallback.
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the
@@ -515,7 +538,7 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | Slice  | Change                                                                                 | State   |
 | ------ | -------------------------------------------------------------------------------------- | ------- |
 | W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it   | landed  |
-| W2     | Served files (`/api/files`, `show_files`) read through the Worker                      | planned |
+| W2     | Served files (`/api/files`, `show_files`) read through the Worker                      | landed  |
 | W3     | Checkout reads in surfaces and workflows through the Worker; the KB row's typed choice | planned |
 | W4     | The worktree watcher on the Worker                                                     | planned |
 | W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker     | planned |

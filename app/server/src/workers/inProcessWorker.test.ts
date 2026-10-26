@@ -499,15 +499,25 @@ describe.skipIf(process.platform !== "linux")(
   },
 );
 
-test("a script that ran checkout and local git exits on its own", async () => {
+test("a script that ran checkout and local git, and read a served file, exits on its own", async () => {
   const src = dirname(dirname(fileURLToPath(import.meta.url)));
   const repo = await makeRepo("natural-exit");
+  const head = join(repo, ".git", "HEAD");
   const script = `
     import { git } from ${JSON.stringify(pathToFileURL(join(src, "gitExec.ts")).href)};
     import { gitOptional } from ${JSON.stringify(pathToFileURL(join(src, "serverRepoGit.ts")).href)};
+    import { openServedFile, statServedFile } from ${JSON.stringify(pathToFileURL(join(src, "servedFileAccess.ts")).href)};
     const checkout = await git(["rev-parse", "HEAD"], ${JSON.stringify(repo)});
     const local = await gitOptional(["rev-parse", "HEAD"], ${JSON.stringify(repo)});
     if (checkout.stdout !== local.stdout) throw new Error("different answers");
+    const { size } = await statServedFile(${JSON.stringify(head)});
+    const file = await openServedFile(${JSON.stringify(head)}, { stat: false });
+    const chunks = [];
+    for await (const chunk of file.createReadStream({ start: 0, end: size - 1 }))
+      chunks.push(chunk);
+    await file.close();
+    if (!Buffer.concat(chunks).toString().startsWith("ref: "))
+      throw new Error("not the file's bytes");
   `;
   const started = Date.now();
   const code = await new Promise<number | null>((resolve, reject) => {

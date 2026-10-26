@@ -3,7 +3,8 @@
  * directly because a booted server reaches none of it on demand: checkout git
  * through the in-process Worker and the spawn broker (its cancel, its exit
  * receipt, its group kill, the receipt on broker death, exact UTF-16 text),
- * the in-process fallback,
+ * the in-process fallback, served-file bytes read through the Worker's file
+ * methods,
  * a watcher subscribed with a git-derived ignore set, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
@@ -14,16 +15,20 @@
  * `broker`, and `in-process` under `ASSISTANT_SPAWN_BROKER=0`.
  */
 import { execFileSync, execSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readlinkSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { get as httpGet } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { DATA_DIR } from "../app/server/src/config.ts";
@@ -60,9 +65,18 @@ import {
   brokerExecFile,
   spawnBrokerPidForTests,
 } from "../app/server/src/spawnBroker.ts";
+import {
+  openServedFile,
+  statServedFile,
+} from "../app/server/src/servedFileAccess.ts";
 import { childProcessEnv } from "../app/server/src/subprocessEnv.ts";
 import { createTask, updateTask } from "../app/server/src/tasks.ts";
-import { writeAsInProcessWorkerForTests } from "../app/server/src/workers/inProcessWorker.ts";
+import { MAX_FRAME_PAYLOAD_BYTES } from "../app/server/src/workerProtocol/codec.ts";
+import {
+  ensureInProcessWorker,
+  inProcessWorkerServedMethodForTests,
+  writeAsInProcessWorkerForTests,
+} from "../app/server/src/workers/inProcessWorker.ts";
 import { treeIgnoreForTests } from "../app/server/src/worktrees/worktreeWatcher.ts";
 
 const mode = process.argv[2];
@@ -210,6 +224,90 @@ async function checkWorkerGit(repo) {
   );
 }
 
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+async function readServed(file, start, end) {
+  const chunks = [];
+  for await (const chunk of file.createReadStream({ start, end }))
+    chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Served files cross the in-process Worker as bytes: a binary file outside
+ * `DATA_DIR` comes back exact, whole and in a range across a chunk edge, in
+ * more than one read; a request naming another Worker is refused; and a handle
+ * whose connection ended fails without touching the one that replaced it.
+ */
+async function checkWorkerFiles() {
+  const chunk = MAX_FRAME_PAYLOAD_BYTES;
+  const size = 3 * chunk + 7;
+  const bytes = Buffer.alloc(size);
+  for (let at = 0; at < size; at += 1) bytes[at] = (at * 151 + 7) & 0xff;
+  const outside = mkdtempSync(join(tmpdir(), `bun-probe-files-${mode}-`));
+  const path = join(outside, "served.bin");
+  writeFileSync(path, bytes);
+
+  const reads = () => inProcessWorkerServedMethodForTests("files.read");
+  const before = reads();
+  assert(
+    (await statServedFile(path)).size === size,
+    "A served stat lost the size.",
+  );
+  const file = await openServedFile(path, { stat: false });
+  const whole = await readServed(file, 0, size - 1);
+  const start = chunk - 5;
+  const end = 2 * chunk + 3;
+  const range = await readServed(file, start, end);
+  await file.close();
+  assert(
+    sha256(whole) === sha256(bytes),
+    "A served file came back changed through the Worker.",
+  );
+  assert(
+    range.equals(bytes.subarray(start, end + 1)),
+    "A served range across a chunk edge came back changed.",
+  );
+  assert(reads() - before >= 6, "Served bytes did not cross the Worker.");
+
+  let refused;
+  try {
+    await ensureInProcessWorker().request("files.stat", {
+      json: { location: { workerId: "elsewhere", path } },
+    });
+  } catch (error) {
+    refused = error;
+  }
+  assert(
+    refused?.code === "wrong_worker",
+    `A file request for another Worker answered ${refused}.`,
+  );
+
+  const stale = await openServedFile(path, { stat: false });
+  const ending = ensureInProcessWorker();
+  writeAsInProcessWorkerForTests(new Uint8Array(8));
+  await ending.ended;
+  let failed;
+  try {
+    await readServed(stale, 0, 10);
+  } catch (error) {
+    failed = error;
+  }
+  assert(
+    /The Worker connection ended/.test(String(failed)),
+    `A handle from an ended connection answered ${failed}.`,
+  );
+  await stale.close();
+  const fresh = await openServedFile(path, { stat: false });
+  const again = await readServed(fresh, 0, size - 1);
+  await fresh.close();
+  assert(
+    sha256(again) === sha256(bytes),
+    "A new handle after the connection ended came back changed.",
+  );
+  rmSync(outside, { recursive: true, force: true });
+}
+
 async function checkGit() {
   const brokerPid = await spawnBrokerPidForTests();
   const parent = Number((await sh("echo $PPID")).stdout.trim());
@@ -259,6 +357,7 @@ async function checkGit() {
   await until(() => !alive(cancelledPid), "the cancelled child to exit");
 
   await checkWorkerGit(repo);
+  await checkWorkerFiles();
 
   if (mode !== "broker") return;
 

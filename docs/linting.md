@@ -653,8 +653,9 @@ apply.
 It carries only what knip does not already infer: the codemod entry points,
 which no `package.json` script names; the server's `check*`/`measure*` scripts;
 the Initiative layout worker, which a `Worker` starts by path rather than an
-import; the `project` globs; and `ignoreBinaries` for `nix` and `vitest`, which
-`scripts/` shells out to and no manifest here provides.
+import; the `project` globs; `ignoreBinaries` for `nix` and `vitest`, which
+`scripts/` shells out to and no manifest here provides; and `ignoreBinaries` for
+`mkfifo`, the system tool server tests use to make a FIFO, which Node cannot.
 
 Keep it **hint-free**. `pnpm exec knip` prints a "Configuration hints" section
 for a pattern it would have inferred anyway, and every one of those is config

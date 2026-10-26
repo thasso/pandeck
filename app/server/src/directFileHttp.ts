@@ -15,8 +15,6 @@
  * execute on the API origin, because the token travels in `?token=` for
  * header-less contexts and a script that can read its own URL can steal it.
  */
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, resolve } from "node:path";
 import {
@@ -26,6 +24,7 @@ import {
   type ServedFileDelivery,
 } from "@assistant/shared/servedFiles";
 import { errorText } from "./errors.ts";
+import { openServedFile, statServedFile } from "./servedFileAccess.ts";
 
 type Headers = Record<string, string>;
 
@@ -185,12 +184,12 @@ export async function handleDirectFileRequest(
   try {
     // `stat`, not `lstat`: a symlink to a readable file is a readable file, and
     // with no allow-list there is no containment for it to escape.
-    const stats = await stat(path);
-    if (stats.isDirectory()) {
+    const stats = await statServedFile(path);
+    if (stats.isDirectory) {
       fail(400, `Not a file: ${path}`);
       return;
     }
-    if (!stats.isFile()) {
+    if (!stats.isFile) {
       fail(400, `Not a regular file: ${path}`);
       return;
     }
@@ -250,6 +249,11 @@ export async function handleDirectFileRequest(
   const end = range?.end ?? Math.max(0, size - 1);
   const length = size === 0 ? 0 : end - start + 1;
 
+  // Watched before the open: a client gone while it runs gets no stream, and
+  // the file the open made is closed.
+  const gone = new AbortController();
+  res.on("close", () => gone.abort());
+
   res.writeHead(status, {
     ...base,
     "content-length": String(length),
@@ -261,17 +265,34 @@ export async function handleDirectFileRequest(
     return;
   }
 
-  await new Promise<void>((done) => {
-    const stream = createReadStream(path, { start, end });
-    stream.on("error", () => {
-      res.destroy();
-      done();
+  // Opened without a descriptor stat, as a path stream opens: the path stat
+  // above is this route's only one.
+  const file = await openServedFile(path, {
+    stat: false,
+    signal: gone.signal,
+  }).catch(() => undefined);
+  if (!file) {
+    // An open failure after the headers ends the response, as a stream's own
+    // open error does.
+    res.destroy();
+    return;
+  }
+  try {
+    if (gone.signal.aborted) return;
+    await new Promise<void>((done) => {
+      const stream = file.createReadStream({ start, end });
+      stream.on("error", () => {
+        res.destroy();
+        done();
+      });
+      res.on("close", () => {
+        stream.destroy();
+        done();
+      });
+      stream.pipe(res);
+      stream.on("end", done);
     });
-    res.on("close", () => {
-      stream.destroy();
-      done();
-    });
-    stream.pipe(res);
-    stream.on("end", done);
-  });
+  } finally {
+    await file.close().catch(() => undefined);
+  }
 }

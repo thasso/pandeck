@@ -13,7 +13,7 @@
  *
  * The only module that imports `worker/` (`workerBoundary.test.ts`).
  */
-import { startWorker } from "../worker/worker.ts";
+import { startWorker, type RunningWorker } from "../worker/worker.ts";
 import type { WorkerConnection } from "../workerProtocol/connection.ts";
 import {
   createInProcessTransport,
@@ -23,8 +23,14 @@ import { DEFAULT_WORKER_ID } from "./placement.ts";
 import { workerRegistry } from "./workerRegistry.ts";
 
 let current:
-  { connection: WorkerConnection; workerEnd: ByteEndpoint } | undefined;
+  | {
+      connection: WorkerConnection;
+      workerEnd: ByteEndpoint;
+      worker: RunningWorker;
+    }
+  | undefined;
 let served = 0;
+const servedByMethod = new Map<string, number>();
 
 /** The server's connection to the in-process Worker, dialing one if needed. */
 export function ensureInProcessWorker(): WorkerConnection {
@@ -35,14 +41,16 @@ export function ensureInProcessWorker(): WorkerConnection {
   const connection = workerRegistry.accept(serverEnd, {
     quiescence: () => quiescent,
   });
-  ({ quiescent } = startWorker({
+  const worker = startWorker({
     workerId: DEFAULT_WORKER_ID,
     transport: workerEnd,
-    onRequest: () => {
+    onRequest: (method) => {
       served += 1;
+      servedByMethod.set(method, (servedByMethod.get(method) ?? 0) + 1);
     },
-  }));
-  current = { connection, workerEnd };
+  });
+  ({ quiescent } = worker);
+  current = { connection, workerEnd, worker };
   return connection;
 }
 
@@ -54,6 +62,16 @@ export function startInProcessWorker(): void {
 /** Test seam: how many requests in-process Workers have decoded and served. */
 export function inProcessWorkerServedForTests(): number {
   return served;
+}
+
+/** Test seam: how many `method` requests in-process Workers have served. */
+export function inProcessWorkerServedMethodForTests(method: string): number {
+  return servedByMethod.get(method) ?? 0;
+}
+
+/** Test seam: the file handles the current in-process Worker holds. */
+export function inProcessWorkerFileHandlesForTests(): number {
+  return current?.worker.fileHandles() ?? 0;
 }
 
 /** Test seam: the connection epoch of the open in-process connection. */

@@ -1,4 +1,3 @@
-import { realpath } from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -11,6 +10,11 @@ import type { DocumentTarget } from "@assistant/shared/documentTargets";
 import type { MintFileGrantRequest } from "@assistant/shared/servedFiles";
 import { DATA_DIR } from "./config.ts";
 import { mintDocumentGrant, type MintedDocument } from "./directFileGrants.ts";
+import {
+  realpathServedFile,
+  servedSideOf,
+  type ServedSide,
+} from "./servedFileAccess.ts";
 import { containedRealPath } from "./worktrees/worktreeDiff.ts";
 import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 
@@ -20,6 +24,8 @@ interface ResolvedGrantSource {
   root: string;
   /** Source identity participates in grant reuse; aliases never merge powers. */
   sourceKey: string;
+  /** Set when the source decides where it is read, whatever its path. */
+  side?: ServedSide;
 }
 
 function recordOf(value: unknown): Record<string, unknown> | null {
@@ -145,10 +151,15 @@ async function resolveDocumentGrantSource(
       return { filePath: target.path, root: "/", sourceKey: "host" };
     case "sessionArtifact": {
       assertArtifactSessionId(target.sessionId);
-      const artifactsRoot = await realpath(
+      // Session artifacts are server data by kind, wherever `dataDir` is.
+      const artifactsRoot = await realpathServedFile(
         join(dependencies.dataDir, "session-artifacts"),
+        "server",
       );
-      const root = await realpath(join(artifactsRoot, target.sessionId));
+      const root = await realpathServedFile(
+        join(artifactsRoot, target.sessionId),
+        "server",
+      );
       // A session folder is an authority boundary, not an alias to another
       // session (or outside DATA_DIR).
       if (
@@ -161,6 +172,7 @@ async function resolveDocumentGrantSource(
         filePath: containedPath(root, target.path),
         root,
         sourceKey: `artifact:${target.sessionId}`,
+        side: "server",
       };
     }
     case "worktreeFile": {
@@ -195,11 +207,14 @@ export async function mintDocumentTargetGrant(
     dependencies,
   );
   // Canonicalizing the authority here lets the generic grant layer compare the
-  // same filesystem spelling it uses for the document and every sibling.
-  const root = await realpath(resolved.root);
+  // same filesystem spelling it uses for the document and every sibling, read
+  // on the side the grant will read from.
+  const side = resolved.side ?? servedSideOf(resolve(resolved.filePath));
+  const root = await realpathServedFile(resolved.root, side);
   return mintDocumentGrant(resolved.filePath, request.scope, request.delivery, {
     root,
     sourceKey: resolved.sourceKey,
+    side,
     ...(request.fresh === true ? { fresh: true } : {}),
   });
 }

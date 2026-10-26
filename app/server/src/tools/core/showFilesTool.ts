@@ -11,7 +11,6 @@
  * (`app/web/src/components/ServedFileCard.tsx`). The snippet in the payload is
  * the agent's own copy, for placing the file inside its reply.
  */
-import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import {
   basename,
@@ -28,6 +27,11 @@ import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import { CWD, DATA_DIR } from "../../config.ts";
 import { directFileUrlPath } from "../../directFileHttp.ts";
 import { assertArtifactSessionId } from "../../documentGrantTargets.ts";
+import {
+  realpathServedFile,
+  statServedFile,
+  type ServedSide,
+} from "../../servedFileAccess.ts";
 
 type ShowFilesParams = {
   paths: string[];
@@ -70,16 +74,19 @@ export const showFilesTool = defineAgentTool<ShowFilesParams>({
 
     for (const raw of paths) {
       if (ctx.signal?.aborted) throw new Error("Operation aborted");
-      const { path, url } = await resolveShowTarget(raw, cwd);
-      const stats = await stat(path).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") throw new Error(`File not found: ${path}`);
-        throw error;
-      });
+      const { path, url, side } = await resolveShowTarget(raw, cwd);
+      const stats = await statServedFile(path, side).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT")
+            throw new Error(`File not found: ${path}`);
+          throw error;
+        },
+      );
       // The same bar the HTTP route holds: a directory, a socket or a device
       // is not something the reader can be shown.
-      if (!stats.isFile())
+      if (!stats.isFile)
         throw new Error(
-          stats.isDirectory()
+          stats.isDirectory
             ? `Not a file: ${path} is a directory.`
             : `Not a regular file: ${path}`,
         );
@@ -119,7 +126,7 @@ function markdownText(value: string): string {
 }
 
 /**
- * The file to stat and the address the card is built from.
+ * The file to stat, where to stat it, and the address the card is built from.
  *
  * An input the app already serves keeps its own source identity — a captured
  * artifact stays an artifact, with its `/artifacts/...` viewer — so the address
@@ -129,7 +136,7 @@ function markdownText(value: string): string {
 async function resolveShowTarget(
   input: string,
   cwd: string,
-): Promise<{ path: string; url: string }> {
+): Promise<{ path: string; url: string; side?: ServedSide }> {
   const raw = input.trim();
   if (!raw) throw new Error("A file path is required.");
   if (raw.startsWith(HOST_URL_PREFIX) || raw.startsWith(ARTIFACT_URL_PREFIX)) {
@@ -149,6 +156,8 @@ async function resolveShowTarget(
       return {
         path,
         url: sessionArtifactUrlPath(target.sessionId, relativePath),
+        // Server data by kind, read where it lives.
+        side: "server",
       };
     }
     throw new Error(`Not a file this app serves: ${raw}`);
@@ -215,11 +224,13 @@ async function sessionArtifactPath(
 
 /** `realpath`, reporting a missing link target as the ordinary not-found error. */
 async function canonicalPath(path: string, requested: string): Promise<string> {
-  return realpath(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT")
-      throw new Error(`File not found: ${requested}`);
-    throw error;
-  });
+  return realpathServedFile(path, "server").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT")
+        throw new Error(`File not found: ${requested}`);
+      throw error;
+    },
+  );
 }
 
 function sessionArtifactUrlPath(sessionId: string, path: string): string {

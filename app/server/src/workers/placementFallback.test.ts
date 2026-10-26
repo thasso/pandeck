@@ -18,7 +18,12 @@ import {
 import { git } from "../gitExec.ts";
 import { knowledgeBaseSettingsProjection } from "../knowledgeBaseSettings.ts";
 import { inProcessWorkerServedForTests } from "./inProcessWorker.ts";
-import { DEFAULT_WORKER_ID, placeGitCwd } from "./placement.ts";
+import { DATA_DIR } from "../config.ts";
+import {
+  DEFAULT_WORKER_ID,
+  placeGitCwd,
+  placeServedPath,
+} from "./placement.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "placement-fallback-"));
 const defaultRoot = knowledgeBaseSettingsProjection(undefined).effectivePath;
@@ -212,3 +217,35 @@ for (const mode of ["broker", "in-process"]) {
     });
   });
 }
+
+test("served files are placed as checkout git is, through settings failure", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const real = join(scratch, "served", "real-notes");
+  const alias = join(scratch, "served", "notes");
+  const defaultReal = join(scratch, "served", "default-notes");
+  const other = join(scratch, "served", "checkout");
+  for (const dir of [real, defaultReal, other])
+    mkdirSync(join(dir, "sub"), { recursive: true });
+  symlinkSync(real, alias);
+  symlinkSync(defaultReal, defaultRoot);
+  ownsDefaultLink = true;
+  settings(configured(alias));
+  assert.equal(placeServedPath(join(alias, "page.md")), undefined);
+  settings("{ not json");
+  // The same function, under the same single condition: no new one.
+  for (const path of [alias, real, defaultReal].flatMap((root) => [
+    root,
+    join(root, "page.md"),
+    join(root, "not-created", "page.md"),
+  ])) {
+    assert.equal(placeServedPath(path), undefined, path);
+    assert.deepEqual(placeServedPath(path), placeGitCwd(path), path);
+  }
+  for (const path of [join(other, "page.md"), `${alias}-old/page.md`]) {
+    assert.deepEqual(placeServedPath(path), onWorker(path), path);
+    assert.deepEqual(placeServedPath(path), placeGitCwd(path), path);
+  }
+  // The default root lives in DATA_DIR, which stays local by itself.
+  assert.ok(defaultRoot.startsWith(`${DATA_DIR}/`));
+  assert.equal(placeServedPath(join(defaultRoot, "page.md")), undefined);
+});

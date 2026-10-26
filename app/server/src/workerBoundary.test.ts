@@ -38,6 +38,7 @@ const SERVER_REPO_GIT_USERS = [
 /** What `worker/` may import besides itself and `workerProtocol/`. */
 const WORKER_ALLOWED = new Set([
   "errors.ts",
+  "fileReads.ts",
   "gitProcess.ts",
   "spawnBroker.ts",
   "subprocessEnv.ts",
@@ -96,15 +97,23 @@ const CHECKOUT_FS_INVENTORY: Record<string, string> = {
  * `node:fs` until its slice lands.
  */
 const NAMED_CHECKOUT_READERS: Record<string, string> = {
-  "directFileGrants.ts": "W2",
-  "directFileHttp.ts": "W2",
-  "tools/core/showFilesTool.ts": "W2",
   // `repoLockKey`'s directory identity, for both families.
   "gitFamily.ts": "W3",
   "worktrees/sessionCwd.ts": "W3",
   "worktrees/checkoutProcesses.ts": "W5",
   "worktrees/idleWorktrees.ts": "W5",
 };
+
+/**
+ * The served-file modules (W2): every read they make goes through
+ * `servedFileAccess.ts`, which picks the Worker or the server for it.
+ */
+const SERVED_FILE_MODULES = [
+  "directFileGrants.ts",
+  "directFileHttp.ts",
+  "documentGrantTargets.ts",
+  "tools/core/showFilesTool.ts",
+];
 
 const CHILD_PROCESS_STARTERS = new Set([
   "exec",
@@ -407,6 +416,26 @@ test("only the executor families and the Worker run git processes", () => {
         .map(([module, scan]) => [module, scan.gitSpawns]),
     ),
     GIT_SPAWNS,
+  );
+});
+
+test("served files read only through the served-file access", () => {
+  for (const module of SERVED_FILE_MODULES)
+    assert.ok(
+      ![...scans.get(module)!.imports].some(isFs),
+      `${module} reads the filesystem itself`,
+    );
+  // The file primitives run on the server only for the server's own data, and
+  // the Worker's file methods are reached only through the same access.
+  assert.deepEqual(
+    importersOf((target) => target === "fileReads.ts", "valueImports").filter(
+      (module) => !module.startsWith("worker/"),
+    ),
+    ["servedFileAccess.ts"],
+  );
+  assert.deepEqual(
+    importersOf((target) => target === "workers/fileClient.ts"),
+    ["servedFileAccess.ts"],
   );
 });
 

@@ -16,6 +16,7 @@ import {
   createInProcessTransport,
   type ByteEndpoint,
 } from "../workerProtocol/inProcessTransport.ts";
+import { WORKER_PROTOCOL_VERSION } from "../workerProtocol/version.ts";
 import { WorkerRegistry } from "./workerRegistry.ts";
 
 /** Let every queued in-process delivery run. */
@@ -45,7 +46,7 @@ test("a Worker on another protocol major is refused and served nothing", async (
   const early = connection.request("checkout.git.run", { json: {} });
   const received = rawWorker(workerEnd, "2.0");
   await assert.rejects(early, /The Worker connection ended: refused: /);
-  assert.match(await connection.ended, /cannot talk to 1\.0/);
+  assert.match(await connection.ended, /cannot talk to 1\.1/);
   assert.deepEqual(
     received.map((frame) => frame.type),
     ["refused"],
@@ -60,7 +61,7 @@ test("a Worker on a higher minor is welcomed and served", async () => {
   const registry = new WorkerRegistry();
   const [serverEnd, workerEnd] = createInProcessTransport();
   const connection = registry.accept(serverEnd, quiet);
-  const received = rawWorker(workerEnd, "1.1");
+  const received = rawWorker(workerEnd, "1.2");
   void connection.request("checkout.git.run", { json: {} });
   await settle();
   assert.deepEqual(
@@ -69,6 +70,20 @@ test("a Worker on a higher minor is welcomed and served", async () => {
   );
   assert.equal(registry.connection("w"), connection);
   assert.equal(registry.epoch("w"), 1);
+  assert.equal(connection.isEnded, false);
+});
+
+test("the server speaks 1.1 and still welcomes a 1.0 Worker", async () => {
+  assert.equal(WORKER_PROTOCOL_VERSION, "1.1");
+  const registry = new WorkerRegistry();
+  const [serverEnd, workerEnd] = createInProcessTransport();
+  const connection = registry.accept(serverEnd, quiet);
+  const received = rawWorker(workerEnd, "1.0");
+  await settle();
+  assert.deepEqual(
+    received.map((frame) => frame.type),
+    ["welcome"],
+  );
   assert.equal(connection.isEnded, false);
 });
 

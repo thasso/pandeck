@@ -183,6 +183,35 @@ describe("show_files", () => {
     );
   });
 
+  // Characterization: the exact texts of base 2190c21, before `show_files`
+  // stated through the Worker; they must not change with it.
+  test("names each refusal in the same words", async () => {
+    const missing = join(dir, "absent.md");
+    await assert.rejects(() => run({ paths: [missing] }), {
+      message: `File not found: ${missing}`,
+    });
+    await assert.rejects(() => run({ paths: [dir] }), {
+      message: `Not a file: ${dir} is a directory.`,
+    });
+    const socketPath = join(dir, "exact.sock");
+    const server = createServer();
+    await new Promise<void>((done) => server.listen(socketPath, done));
+    try {
+      await assert.rejects(() => run({ paths: [socketPath] }), {
+        message: `Not a regular file: ${socketPath}`,
+      });
+    } finally {
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+    mkdirSync(join(DATA_DIR, "session-artifacts", "s-exact"), {
+      recursive: true,
+    });
+    await assert.rejects(
+      () => run({ paths: ["/api/session-artifacts/s-exact/gone.png"] }),
+      { message: "File not found: gone.png" },
+    );
+  });
+
   test("throws on a missing file and on a directory", async () => {
     await assert.rejects(
       () => run({ paths: [join(dir, "gone.md")] }),
