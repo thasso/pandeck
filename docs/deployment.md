@@ -206,6 +206,10 @@ file outside `DATA_DIR`, holding every byte value, must come back through the
 Worker's file methods with the same SHA-256, whole and in a range across a chunk
 edge; a file request naming another Worker must be refused; and a handle whose
 connection ended must fail without affecting one opened on the next connection.
+Over a real local socket, both served-file routes must send the whole file to a
+client that stays. A client gone before the handler runs, or while its open is
+held, must cost at most one chunk read and close what was opened once. One gone
+mid-body must end the handler before the file's end, with its file closed once.
 Killing the broker must fail the lost request as an execution failure and kill
 the grandchild git started, and the broker must come back for the next call.
 Signal 0 to an empty process group must throw `ESRCH` and to a live one must

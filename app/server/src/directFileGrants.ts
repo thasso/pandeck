@@ -400,7 +400,8 @@ export async function handleFileGrantRequest(
   // Watched from the start: a client gone at any point, the grant's
   // resolution included, gets no answer and no stream, and a file opened for
   // it is closed.
-  const gone = clientGone(res);
+  const gone = clientGone(req, res);
+  if (gone.aborted) return;
   const target = await resolveFileGrantTarget(requestUrl.pathname);
   if (!target) {
     fail(404, "This document link has expired. Open the file again from chat.");
@@ -473,7 +474,7 @@ export async function handleFileGrantRequest(
   // `content-length` promised, which breaks response framing on a keep-alive
   // connection. The stream never closes the file, so it is closed exactly
   // once, below.
-  const stream = handle.createReadStream({ start, end });
+  const stream = handle.createReadStream({ start, end }, gone);
   await new Promise<void>((done) => {
     const finish = () => {
       stream.destroy();
@@ -483,7 +484,7 @@ export async function handleFileGrantRequest(
       res.destroy();
       finish();
     });
-    gone.addEventListener("abort", finish);
+    gone.signal.addEventListener("abort", finish);
     stream.pipe(res);
     stream.on("end", done);
   });

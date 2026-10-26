@@ -58,10 +58,24 @@ export function realpathServedFile(
     : realpathOnWorker({ workerId: side.workerId, path });
 }
 
+/**
+ * Whether the caller still wants the file, read afresh at each step: an
+ * `AbortSignal`, or a check that looks again every time (`clientGone`).
+ */
+interface Cancellation {
+  readonly aborted: boolean;
+}
+
 /** An open served file, streamed by range; the caller closes it. */
 export interface ServedFileHandle {
-  /** The bytes `start`..`end` inclusive; ends early at end of file. */
-  createReadStream(range: { start: number; end: number }): Readable;
+  /**
+   * The bytes `start`..`end` inclusive; ends early at end of file. Once
+   * `cancel` reads aborted, before a chunk is read, the stream is destroyed.
+   */
+  createReadStream(
+    range: { start: number; end: number },
+    cancel?: Cancellation,
+  ): Readable;
   close(): Promise<void>;
 }
 
@@ -73,8 +87,11 @@ export interface StatServedFileHandle extends ServedFileHandle {
 
 interface OpenOptions {
   side?: ServedSide;
-  /** Aborted: the open still settles, and a file it made is closed. */
-  signal?: AbortSignal;
+  /**
+   * Read before the open and once it settles. Aborted: the open still settles,
+   * and a file it made is closed.
+   */
+  signal?: Cancellation;
 }
 
 interface ReadableFile {
@@ -136,7 +153,8 @@ function handleOf(
   stat: FileStat | undefined,
 ): ServedFileHandle | StatServedFileHandle {
   const handle: ServedFileHandle = {
-    createReadStream: ({ start, end }) => new FileRangeStream(file, start, end),
+    createReadStream: ({ start, end }, cancel) =>
+      new FileRangeStream(file, start, end, cancel),
     close: () => file.close(),
   };
   return stat ? { ...handle, stat: () => Promise.resolve(stat) } : handle;
@@ -157,9 +175,10 @@ const CHUNK_BYTES = MAX_FRAME_PAYLOAD_BYTES;
 
 /**
  * Pulls one chunk at a time, only when the consumer has room: at most one
- * read in flight and one chunk buffered. A read still in flight when the
- * stream is destroyed settles, and its bytes are dropped. The stream never
- * closes the file.
+ * read in flight and one chunk buffered. Before each read it asks `cancel`,
+ * and destroys itself once that reads aborted. A read still in flight when
+ * the stream is destroyed settles, and its bytes are dropped. The stream
+ * never closes the file.
  */
 class FileRangeStream extends Readable {
   private position: number;
@@ -169,6 +188,7 @@ class FileRangeStream extends Readable {
     private readonly file: ReadableFile,
     start: number,
     private readonly end: number,
+    private readonly cancel?: Cancellation,
   ) {
     super({ highWaterMark: CHUNK_BYTES });
     this.position = start;
@@ -176,6 +196,10 @@ class FileRangeStream extends Readable {
 
   override _read(): void {
     if (this.reading) return;
+    if (this.cancel?.aborted) {
+      this.destroy();
+      return;
+    }
     const length = Math.min(CHUNK_BYTES, this.end - this.position + 1);
     if (length <= 0) {
       this.push(null);

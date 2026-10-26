@@ -150,22 +150,62 @@ interface DirectFileMeta {
   contentType: string;
 }
 
+/** Whether a request's client has left, for a handler to ask at each step. */
+export interface ClientGone {
+  /**
+   * Looks again at the request, the response and the socket on every read,
+   * and aborts `signal` once they show the client gone.
+   */
+  readonly aborted: boolean;
+  /** Aborts once the client is seen gone, by an event or by `aborted`. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Watches for the client leaving, including before this was called: a handler
+ * takes this on its first line and reads `aborted` before each step.
+ *
+ * Node closes the response when its client leaves. Bun 1.3 never does: it
+ * marks the request aborted and its socket destroyed, and emits the request's
+ * `aborted` and `close`. Any of these counts while the response is unfinished,
+ * and none once it has finished, since Node then destroys and closes the
+ * request too. A destroyed request counts only if its body was not read to
+ * the end.
+ */
+export function clientGone(
+  req: IncomingMessage,
+  res: ServerResponse,
+): ClientGone {
+  const controller = new AbortController();
+  const look = () => {
+    if (controller.signal.aborted) return true;
+    const left =
+      !res.writableFinished &&
+      (res.closed ||
+        res.destroyed ||
+        req.aborted ||
+        (req.destroyed && !req.readableEnded) ||
+        res.socket?.destroyed === true);
+    if (left) controller.abort();
+    return left;
+  };
+  if (!look()) {
+    res.once("close", look);
+    req.once("aborted", look);
+    req.once("close", look);
+  }
+  return {
+    get aborted() {
+      return look();
+    },
+    signal: controller.signal,
+  };
+}
+
 /**
  * Serve one absolute path: `?meta=1` answers JSON metadata, everything else
  * streams the bytes with range support (a 2 GB capture must not be buffered).
  */
-/**
- * Aborts once the client is gone, including when it left before this was
- * called: a response closes once, so a handler watches from its first line,
- * and no lookup it awaits can let that one `close` pass unseen.
- */
-export function clientGone(res: ServerResponse): AbortSignal {
-  const gone = new AbortController();
-  if (res.closed || res.destroyed) gone.abort();
-  else res.once("close", () => gone.abort());
-  return gone.signal;
-}
-
 export async function handleDirectFileRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -175,7 +215,7 @@ export async function handleDirectFileRequest(
   const path = directFilePath(requestUrl.pathname);
   // Watched from the start: a client gone at any point, the stat included,
   // gets no stream, and no file is left open for it.
-  const gone = clientGone(res);
+  const gone = clientGone(req, res);
   const fail = (status: number, message: string) => {
     res.writeHead(status, {
       "content-type": "text/plain; charset=utf-8",
@@ -193,6 +233,8 @@ export async function handleDirectFileRequest(
     fail(405, "Method not allowed.");
     return;
   }
+
+  if (gone.aborted) return;
 
   let size: number;
   let modifiedMs: number;
@@ -290,12 +332,12 @@ export async function handleDirectFileRequest(
   try {
     if (gone.aborted) return;
     await new Promise<void>((done) => {
-      const stream = file.createReadStream({ start, end });
+      const stream = file.createReadStream({ start, end }, gone);
       stream.on("error", () => {
         res.destroy();
         done();
       });
-      gone.addEventListener("abort", () => {
+      gone.signal.addEventListener("abort", () => {
         stream.destroy();
         done();
       });

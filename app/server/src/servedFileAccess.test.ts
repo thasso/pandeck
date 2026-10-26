@@ -188,6 +188,42 @@ describe("streaming pulls one chunk at a time", () => {
     }
   });
 
+  test("a stream asks its caller before each read, and reads nothing once it is gone", async () => {
+    const path = fixture("asked.bin", binary(4 * CHUNK));
+    const file = await openServedFile(path, { stat: false });
+    try {
+      const reads = () =>
+        inProcessWorkerServedMethodForTests(FILE_METHODS.read);
+      const before = reads();
+      let asked = 0;
+      let gone = false;
+      const stream = file.createReadStream(
+        { start: 0, end: 4 * CHUNK - 1 },
+        {
+          get aborted() {
+            asked += 1;
+            return gone;
+          },
+        },
+      );
+      stream.pause();
+      stream.read(0);
+      await once(stream, "readable");
+      await settle();
+      assert.equal(reads() - before, 1);
+      assert.equal(asked, 1, "asked before the first read");
+      gone = true;
+      // Taking the buffered chunk makes room for the next read.
+      stream.read();
+      await settle();
+      assert.equal(asked, 2, "asked before the next read");
+      assert.equal(stream.destroyed, true);
+      assert.equal(reads() - before, 1, "no read once the caller is gone");
+    } finally {
+      await file.close();
+    }
+  });
+
   test("a paused, then draining client gets every byte with no extra reads", async () => {
     const size = 64 * CHUNK;
     const bytes = binary(size);

@@ -4,7 +4,7 @@
  * through the in-process Worker and the spawn broker (its cancel, its exit
  * receipt, its group kill, the receipt on broker death, exact UTF-16 text),
  * the in-process fallback, served-file bytes read through the Worker's file
- * methods,
+ * methods, served-file requests whose client leaves early,
  * a watcher subscribed with a git-derived ignore set, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
@@ -27,7 +27,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { get as httpGet } from "node:http";
+import { createServer, get as httpGet } from "node:http";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -44,6 +45,15 @@ import {
   outgoingByType,
 } from "../app/server/src/db/links.ts";
 import { sessionStore } from "../app/server/src/db/sessionStore.ts";
+import {
+  handleFileGrantRequest,
+  mintDocumentGrant,
+} from "../app/server/src/directFileGrants.ts";
+import { handleDirectFileRequest } from "../app/server/src/directFileHttp.ts";
+import {
+  fileReadsCountsForTests,
+  holdFileForTests,
+} from "../app/server/src/fileReads.ts";
 import {
   GitCommandError,
   git,
@@ -74,6 +84,7 @@ import { createTask, updateTask } from "../app/server/src/tasks.ts";
 import { MAX_FRAME_PAYLOAD_BYTES } from "../app/server/src/workerProtocol/codec.ts";
 import {
   ensureInProcessWorker,
+  inProcessWorkerFileHandlesForTests,
   inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
 } from "../app/server/src/workers/inProcessWorker.ts";
@@ -319,6 +330,166 @@ async function checkWorkerFiles() {
   rmSync(outside, { recursive: true, force: true });
 }
 
+/**
+ * A client that leaves a served-file request stops its reads under Bun too,
+ * which reports the disconnect on the request and its socket but never closes
+ * the response. On both routes, a client gone before the handler runs, or while
+ * its open is held, costs at most one chunk read and no more than one close of
+ * what was opened; one gone mid-body ends the handler before the file's end,
+ * with its file closed once; a client that stays gets every byte.
+ */
+async function checkServedFileCancellation() {
+  const size = 4 * MAX_FRAME_PAYLOAD_BYTES;
+  const bytes = Buffer.alloc(size);
+  for (let at = 0; at < size; at += 1) bytes[at] = (at * 31 + 3) & 0xff;
+  const outside = mkdtempSync(join(tmpdir(), `bun-probe-cancel-${mode}-`));
+  const path = join(outside, "served.bin");
+  writeFileSync(path, bytes);
+  const longChunks = 32;
+  const long = join(outside, "long.bin");
+  writeFileSync(long, Buffer.alloc(longChunks * MAX_FRAME_PAYLOAD_BYTES, 5));
+  const routes = {
+    direct: [`/api/files${path}`, `/api/files${long}`],
+    grant: [
+      (await mintDocumentGrant(path, "file", "inline")).url,
+      (await mintDocumentGrant(long, "file", "inline")).url,
+    ],
+  };
+
+  let arrived;
+  const server = createServer((req, res) => arrived(req, res));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const handle = (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    return url.pathname.startsWith("/api/file-grants/")
+      ? handleFileGrantRequest(req, res, url)
+      : handleDirectFileRequest(req, res, url, {});
+  };
+  /** The request as the server sees it, once its client has sent it. */
+  const send = (url) => {
+    const seen = new Promise((resolve) => {
+      arrived = (req, res) => resolve({ req, res });
+    });
+    const chunks = [];
+    const socket = connect(port, "127.0.0.1", () =>
+      socket.write(
+        `GET ${url} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
+      ),
+    );
+    socket.on("error", () => undefined);
+    socket.on("data", (chunk) => chunks.push(chunk));
+    const received = new Promise((resolve) =>
+      socket.on("close", () => resolve(Buffer.concat(chunks))),
+    );
+    return { socket, seen, received };
+  };
+  /** Ends the client, and resolves once the server has seen it go. */
+  const leave = async (socket, req) => {
+    const gone = new Promise((resolve) => req.once("close", resolve));
+    socket.destroy();
+    await gone;
+  };
+  const counts = () =>
+    ["files.open", "files.read", "files.close"].map((method) =>
+      inProcessWorkerServedMethodForTests(method),
+    );
+  const settles = (handled, what) =>
+    Promise.race([
+      handled.then(() => true),
+      sleep(5000).then(() => false),
+    ]).then((settled) =>
+      assert(settled, `${what}: the handler never settled.`),
+    );
+  /** What one abandoned request cost, and that it left nothing open. */
+  const abandoned = async (what, before, received) => {
+    const [opens, reads, closes] = counts().map((n, at) => n - before[at]);
+    console.log(
+      `Served-file cancellation (${mode}), ${what}: opens=${opens} reads=${reads} closes=${closes}.`,
+    );
+    assert(reads <= 1, `${what}: ${reads} chunk reads for a client gone.`);
+    assert(
+      opens === closes && opens <= 1,
+      `${what}: ${opens} opens closed ${closes} times.`,
+    );
+    assert(
+      (await received).byteLength === 0,
+      `${what}: a client gone got bytes.`,
+    );
+    assert(
+      inProcessWorkerFileHandlesForTests() === 0 &&
+        fileReadsCountsForTests().liveDescriptors === 0,
+      `${what}: a file was left open.`,
+    );
+  };
+
+  for (const [route, [url, longUrl]] of Object.entries(routes)) {
+    // A client that stays gets the whole file: nothing reads as abandoned.
+    let before = counts();
+    let request = send(url);
+    let { req, res } = await request.seen;
+    await settles(handle(req, res), `${route} kept`);
+    const response = await request.received;
+    const split = response.indexOf("\r\n\r\n");
+    assert(
+      /^HTTP\/1\.1 200 /.test(response.subarray(0, split).toString()) &&
+        sha256(response.subarray(split + 4)) === sha256(bytes),
+      `${route}: a client that stayed did not get the whole file.`,
+    );
+    const [, reads] = counts().map((n, at) => n - before[at]);
+    assert(reads === 4, `${route}: a kept request made ${reads} reads.`);
+
+    // Gone before the handler runs.
+    before = counts();
+    request = send(url);
+    ({ req, res } = await request.seen);
+    await leave(request.socket, req);
+    await settles(handle(req, res), `${route} gone before the handler`);
+    await abandoned(
+      `${route} gone before the handler`,
+      before,
+      request.received,
+    );
+
+    // Gone while the open is held, the handler having started at once.
+    before = counts();
+    const held = holdFileForTests(path, "after-open");
+    request = send(url);
+    ({ req, res } = await request.seen);
+    const handled = handle(req, res);
+    await held.reached;
+    await leave(request.socket, req);
+    held.release();
+    await held.disposed;
+    await settles(handled, `${route} gone during the open`);
+    await abandoned(`${route} gone during the open`, before, request.received);
+
+    // Gone mid-body: the client leaves at its first bytes.
+    before = counts();
+    request = send(longUrl);
+    ({ req, res } = await request.seen);
+    const streaming = handle(req, res);
+    await new Promise((resolve) => request.socket.once("data", resolve));
+    await leave(request.socket, req);
+    await settles(streaming, `${route} gone mid-body`);
+    const [opens, partial, closes] = counts().map((n, at) => n - before[at]);
+    console.log(
+      `Served-file cancellation (${mode}), ${route} gone mid-body: opens=${opens} reads=${partial} closes=${closes}.`,
+    );
+    assert(
+      opens === 1 && closes === 1 && partial < longChunks,
+      `${route} gone mid-body: ${opens} opens, ${partial} reads of ${longChunks}, ${closes} closes.`,
+    );
+    assert(
+      inProcessWorkerFileHandlesForTests() === 0 &&
+        fileReadsCountsForTests().liveDescriptors === 0,
+      `${route} gone mid-body: a file was left open.`,
+    );
+  }
+  await new Promise((resolve) => server.close(resolve));
+  rmSync(outside, { recursive: true, force: true });
+}
+
 async function checkGit() {
   const brokerPid = await spawnBrokerPidForTests();
   const parent = Number((await sh("echo $PPID")).stdout.trim());
@@ -369,6 +540,7 @@ async function checkGit() {
 
   await checkWorkerGit(repo);
   await checkWorkerFiles();
+  await checkServedFileCancellation();
 
   if (mode !== "broker") return;
 

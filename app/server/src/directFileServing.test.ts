@@ -14,7 +14,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { once } from "node:events";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1157,6 +1162,7 @@ describe("a client gone while its open is held", () => {
   async function abandon(url: string, path: string): Promise<void> {
     const connection = ensureInProcessWorker();
     const held = holdFileForTests(path, "after-open");
+    const reads = servedOf(FILE_METHODS.read);
     const { socket, received } = rawRequest(url);
     await held.reached;
     const res = lastResponse!;
@@ -1166,6 +1172,7 @@ describe("a client gone while its open is held", () => {
     await held.disposed;
     assert.equal((await received).byteLength, 0);
     await assertNothingLeaked();
+    assert.equal(servedOf(FILE_METHODS.read) - reads, 0, "nothing read");
     assert.equal(connection.isEnded, false);
     const next = await fetch(filesUrl(path));
     assert.equal(await next.text(), "held");
@@ -1189,7 +1196,12 @@ describe("a client gone before its file is opened", () => {
   let early: Server;
   let earlyPort: number;
   /** When this server's client leaves, relative to its handler. */
-  let leave: "before the handler" | "during the lookup";
+  let leave:
+    | "before the handler"
+    | "during the lookup"
+    | "on its own, before the handler";
+  /** Runs the waiting handler, when the client leaves on its own. */
+  let arrived: (request: { req: IncomingMessage; run: () => void }) => void;
   let handled: Promise<{ res: ServerResponse; handled: Promise<void> }>;
   let started: (request: {
     res: ServerResponse;
@@ -1212,7 +1224,9 @@ describe("a client gone before its file is opened", () => {
             ? handleFileGrantRequest(req, res, url)
             : handleDirectFileRequest(req, res, url, {}),
         });
-      if (leave === "during the lookup") {
+      if (leave === "on its own, before the handler") {
+        arrived({ req, run });
+      } else if (leave === "during the lookup") {
         run();
         req.socket.destroy();
       } else {
@@ -1235,13 +1249,31 @@ describe("a client gone before its file is opened", () => {
   };
 
   for (const [route, urlFor] of Object.entries(routes)) {
-    for (const when of ["before the handler", "during the lookup"] as const) {
+    for (const when of [
+      "before the handler",
+      "during the lookup",
+      "on its own, before the handler",
+    ] as const) {
       test(`${route}: a client gone ${when} leaves nothing open`, async () => {
         const url = await urlFor(fixturePath);
         leave = when;
         handled = new Promise((resolve) => (started = resolve));
         const opens = servedOf(FILE_METHODS.open);
-        const { received } = rawRequest(url, earlyPort);
+        const reads = servedOf(FILE_METHODS.read);
+        const waiting = new Promise<{ req: IncomingMessage; run: () => void }>(
+          (resolve) => (arrived = resolve),
+        );
+        const { socket, received } = rawRequest(url, earlyPort);
+        if (when === "on its own, before the handler") {
+          // The real client ends its socket; the handler runs only once the
+          // server has seen it go.
+          const { req, run } = await waiting;
+          // Not `once`: the request emits its `aborted` error first.
+          const seen = new Promise((done) => req.once("close", done));
+          socket.destroy();
+          await seen;
+          run();
+        }
         const request = await handled;
         const settled = await Promise.race([
           request.handled.then(() => true),
@@ -1251,6 +1283,7 @@ describe("a client gone before its file is opened", () => {
         assert.equal(request.res.closed, true);
         assert.equal((await received).byteLength, 0);
         assert.equal(servedOf(FILE_METHODS.open) - opens, 0, "nothing opened");
+        assert.equal(servedOf(FILE_METHODS.read) - reads, 0, "nothing read");
         assert.equal(inProcessWorkerFileHandlesForTests(), 0, "handles held");
         assert.equal(
           fileReadsCountsForTests().liveDescriptors,
