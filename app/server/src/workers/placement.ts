@@ -9,10 +9,16 @@
  * surfaces browse and commit it as a checkout. W3 replaces that path rule with
  * a typed choice made from the KB row, and W6 deletes this adapter once every
  * caller passes its own location.
+ *
+ * {@link placeServedPath} places a served file the same way, with `DATA_DIR`
+ * kept on the server too.
  */
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { DATA_DIR } from "../config.ts";
 import { knowledgeBasePlacementRoots } from "../knowledgeBaseSettings.ts";
 import type { CheckoutLocation } from "../workerProtocol/checkoutMethods.ts";
+import type { WorkerFileLocation } from "../workerProtocol/fileMethods.ts";
 
 /** The Worker every checkout is placed on in phase 1. */
 export const DEFAULT_WORKER_ID = "local";
@@ -39,4 +45,40 @@ function insideKnowledgeBase(cwd: string): boolean {
 export function placeGitCwd(cwd: string): CheckoutLocation | undefined {
   if (insideKnowledgeBase(cwd)) return undefined;
   return { workerId: DEFAULT_WORKER_ID, path: cwd };
+}
+
+/** `DATA_DIR`'s real path, once observed; it does not move while we run. */
+let dataDirReal: string | undefined;
+
+function insideDataDir(path: string): boolean {
+  if (dataDirReal === undefined)
+    try {
+      dataDirReal = realpathSync(DATA_DIR);
+    } catch {
+      // Not created yet: the name still matches.
+    }
+  return (
+    contains(resolve(DATA_DIR), path) ||
+    (dataDirReal !== undefined && contains(dataDirReal, path))
+  );
+}
+
+/**
+ * Where a served file is read; undefined reads it on the server. A path named
+ * inside `DATA_DIR` or the Knowledge Base, by its own spelling or by their
+ * observed real paths, stays on the server (B6); every other path is read by
+ * the default Worker.
+ *
+ * The requested path itself is never resolved here. A link from outside both
+ * roots into them is read by the Worker with the Worker's own rights: were the
+ * server to follow links from checkout content into `DATA_DIR`, it would serve
+ * a target an agent chose with the server's privileges, a confused deputy.
+ * Once accounts are separate, the Worker cannot read `DATA_DIR`, so such a
+ * link fails closed (`docs/workers.md`).
+ */
+export function placeServedPath(path: string): WorkerFileLocation | undefined {
+  const resolved = resolve(path);
+  if (insideDataDir(resolved) || insideKnowledgeBase(resolved))
+    return undefined;
+  return { workerId: DEFAULT_WORKER_ID, path };
 }

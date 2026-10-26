@@ -129,6 +129,26 @@ appended to would put extra bytes on the wire after a fixed length, which is the
 next response's framing on a keep-alive connection rather than merely a longer
 document.
 
+Where the bytes come from: `/api/files`, grants and `show_files` read through
+the default Worker ([workers.md](workers.md#protocol-in-phase-1)), which holds
+the opened descriptor and streams it back one chunk at a time, so the identity
+check and the bounded read above run on the descriptor the Worker opened. A path
+named inside `DATA_DIR` or the Knowledge Base, and every session artifact, is
+read on the server instead. A Worker that cannot answer fails the read with the
+route's usual error; nothing falls back to reading on the server.
+
+A client that leaves cancels its request at any point, including while the path
+is still being stat'ed or the grant resolved. Both handlers start watching on
+their first line and look again before the lookup, around the open and before
+each chunk read, because a lookup awaited before the watch began would otherwise
+let the one disconnect event pass unseen. Bun never closes the response when its
+client leaves, but marks the request aborted and its socket destroyed, so those
+count too, though only while the response is unfinished: Node also destroys the
+request of a response that finished normally. A request abandoned before its
+open makes no open. One abandoned after it closes its file exactly once and
+leaves nothing in the Worker's handle table. A response the client stays for is
+unchanged, byte for byte and header for header.
+
 `expiresAt` is fixed when the grant is minted. A READ never moves it — the
 reader is unauthenticated, so a sliding window would let anyone holding a leaked
 id keep it alive forever, which is precisely the case the hour exists for. The

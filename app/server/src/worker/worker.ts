@@ -10,14 +10,19 @@
 import { WorkerConnection } from "../workerProtocol/connection.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
+import { fileHandlers } from "./files.ts";
 
 export interface RunningWorker {
   /**
    * Resolves once the connection has ended and every request the Worker was
    * serving has settled: with the exit receipt, once every git child it
-   * started has exited.
+   * started has exited, and once every file handle it held is closed. Native
+   * opens still awaiting a descriptor are orphaned on end; their eventual
+   * descriptors close without registration and do not hold this promise.
    */
   readonly quiescent: Promise<void>;
+  /** Test seam: how many file handles the Worker holds. */
+  fileHandles(): number;
 }
 
 export function startWorker(options: {
@@ -27,22 +32,28 @@ export function startWorker(options: {
   /** Test seam: sees each request the Worker decoded and serves. */
   onRequest?: (method: string) => void;
 }): RunningWorker {
+  const files = fileHandlers(options.workerId);
   const handlers = Object.fromEntries(
-    Object.entries(checkoutGitHandlers(options.workerId)).map(
-      ([method, handler]) => [
-        method,
-        (...args: Parameters<typeof handler>) => {
-          options.onRequest?.(method);
-          return handler(...args);
-        },
-      ],
-    ),
+    Object.entries({
+      ...checkoutGitHandlers(options.workerId),
+      ...files.handlers,
+    }).map(([method, handler]) => [
+      method,
+      (...args: Parameters<typeof handler>) => {
+        options.onRequest?.(method);
+        return handler(...args);
+      },
+    ]),
   );
   const connection = new WorkerConnection(options.transport, {
     handshake: { role: "worker", workerId: options.workerId },
     handlers,
+    onEnd: () => files.end(),
   });
   return {
-    quiescent: connection.ended.then(() => connection.handlersSettled()),
+    quiescent: connection.ended
+      .then(() => connection.handlersSettled())
+      .then(() => files.sweep()),
+    fileHandles: () => files.size,
   };
 }

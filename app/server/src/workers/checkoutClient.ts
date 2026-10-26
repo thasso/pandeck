@@ -39,7 +39,8 @@ import { workerRegistry } from "./workerRegistry.ts";
 /** What a spawn broker answers for a request cancelled before it ran. */
 const NOT_STARTED = { code: "ABORT_ERR", message: "The operation was aborted" };
 
-function connectionFor(workerId: string): WorkerConnection {
+/** The server's connection to `workerId`, dialing the in-process Worker if needed. */
+export function workerConnection(workerId: string): WorkerConnection {
   if (workerId === DEFAULT_WORKER_ID) return ensureInProcessWorker();
   const connection = workerRegistry.connection(workerId);
   if (!connection) throw new Error(`Worker "${workerId}" is not connected.`);
@@ -60,7 +61,7 @@ async function ask<T>(
 ): Promise<T> {
   let answer: Payload;
   try {
-    answer = await connectionFor(location.workerId).request(
+    answer = await workerConnection(location.workerId).request(
       method,
       payload,
       signal,

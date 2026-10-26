@@ -1,7 +1,7 @@
 /**
- * The checkout git methods of worker protocol 1.0 and their wire shapes, shared
- * by the server's client (`workers/checkoutClient.ts`) and the Worker's
- * handlers (`worker/checkoutGit.ts`).
+ * The checkout git methods of the worker protocol (since 1.0) and their wire
+ * shapes, shared by the server's client (`workers/checkoutClient.ts`) and the
+ * Worker's handlers (`worker/checkoutGit.ts`).
  *
  * Every request names a {@link CheckoutLocation}; the Worker refuses one that
  * names another Worker. Results are the runner's raw outcome, settled by the
@@ -36,7 +36,8 @@ export const CHECKOUT_GIT_METHODS = {
 
 /** The error code of a request that names another Worker's checkout. */
 export const WRONG_WORKER = "wrong_worker";
-const INVALID_PARAMS = "invalid_params";
+/** The error code of a request whose params do not decode. */
+export const INVALID_PARAMS = "invalid_params";
 
 /**
  * Overrides of the child environment: a name set to a string (empty allowed),

@@ -20,7 +20,8 @@
         "src/measure*.ts",
         "src/initiativeLayoutWorker.ts"
       ],
-      "project": "src/**/*.ts"
+      "project": "src/**/*.ts",
+      "ignoreBinaries": ["mkfifo"]
     },
     "app/web": {
       "entry": [
