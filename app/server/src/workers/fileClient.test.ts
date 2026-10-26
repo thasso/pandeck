@@ -21,6 +21,7 @@ import {
   isWorkerFailure,
   openOnWorker,
   readdirOnWorker,
+  readlinkOnWorker,
   realpathOnWorker,
   statOnWorker,
   type WorkerFileHandle,
@@ -107,6 +108,8 @@ const PATH_CALLS: Record<string, (workerId: string) => Promise<unknown>> = {
     inspectOnWorker({ workerId, path: "/p" }, false),
   [FILE_METHODS.readdir]: (workerId) =>
     readdirOnWorker({ workerId, path: "/p" }),
+  [FILE_METHODS.readlink]: (workerId) =>
+    readlinkOnWorker({ workerId, path: "/p" }),
   [FILE_METHODS.open]: (workerId) =>
     openOnWorker({ workerId, path: "/p" }, false),
 };
@@ -209,6 +212,8 @@ describe("Worker failures are branded", () => {
       [FILE_METHODS.inspect, inspected({ size: "-1" })],
       [FILE_METHODS.readdir, { json: { entries: [{ name: 1 }] } }],
       [FILE_METHODS.readdir, { json: { entries: "a" } }],
+      [FILE_METHODS.readlink, { json: { target: 5 } }],
+      [FILE_METHODS.readlink, { json: {} }],
       [FILE_METHODS.open, { json: { opened: { handle: 0 } } }],
       [
         FILE_METHODS.open,
@@ -249,6 +254,50 @@ describe("Worker failures are branded", () => {
       await inspectOnWorker({ workerId: dial.id, path: "/p" }, true),
       signed,
     );
+  });
+
+  test("an inspection's mode is optional unless the caller requires it", async () => {
+    const dial = await testWorker();
+    const location = { workerId: dial.id, path: "/p" };
+    const fields = {
+      kind: "file",
+      dev: "1",
+      ino: "2",
+      size: "3",
+      mtimeNs: "4",
+    };
+    // A 1.2 Worker's answer: W3a's callers decode it as before.
+    dial.handlers[FILE_METHODS.inspect] = answer(inspected({}));
+    assert.deepEqual(await inspectOnWorker(location, false), fields);
+    assert.deepEqual(
+      await inspectOnWorker(location, false, { mode: false }),
+      fields,
+    );
+    await rejectsBranded(
+      inspectOnWorker(location, false, { mode: true }),
+      (error) =>
+        assert.ok(error instanceof MalformedWorkerAnswerError, String(error)),
+    );
+
+    dial.handlers[FILE_METHODS.inspect] = answer(inspected({ mode: "33188" }));
+    for (const mode of [false, true])
+      assert.deepEqual(await inspectOnWorker(location, false, { mode }), {
+        ...fields,
+        mode: "33188",
+      });
+
+    for (const bad of ["-1", "01", 5, ...NOT_DECIMAL]) {
+      dial.handlers[FILE_METHODS.inspect] = answer(inspected({ mode: bad }));
+      for (const mode of [false, true])
+        await rejectsBranded(
+          inspectOnWorker(location, false, { mode }),
+          (error) =>
+            assert.ok(
+              error instanceof MalformedWorkerAnswerError,
+              String(error),
+            ),
+        );
+    }
   });
 
   test("an ended connection and an unknown Worker id", async () => {
@@ -319,6 +368,7 @@ describe("answered filesystem failures are never branded", () => {
         FILE_METHODS.realpath,
         FILE_METHODS.inspect,
         FILE_METHODS.readdir,
+        FILE_METHODS.readlink,
       ]) {
         dial.handlers[method] = answer(failure);
         await assert.rejects(PATH_CALLS[method]!(dial.id), answeredAs(failure));

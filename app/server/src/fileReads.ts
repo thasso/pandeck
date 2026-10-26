@@ -17,6 +17,7 @@ import {
   lstat,
   open,
   readdir,
+  readlink,
   realpath,
   stat,
   type FileHandle,
@@ -106,6 +107,8 @@ export interface PathInspection {
   ino: string;
   size: string;
   mtimeNs: string;
+  /** The mode bits, type included; always set here, optional on the wire. */
+  mode?: string;
 }
 
 function kindOf(stats: BigIntStats): PathInspection["kind"] {
@@ -133,7 +136,17 @@ export async function inspectPath(
     ino: String(stats.ino),
     size: String(stats.size),
     mtimeNs: String(stats.mtimeNs),
+    mode: String(stats.mode),
   };
+}
+
+/** A symlink's target text, as `readlink` decodes it (UTF-8). */
+export async function readlinkPath(path: string): Promise<string> {
+  await barrier(path, "readlink");
+  const fault = takeFault(path, "readlink");
+  if (fault) throw fault;
+  pathCalls += 1;
+  return readlink(path);
 }
 
 /** One directory entry; `directory` is the entry's own type, never followed. */
@@ -304,7 +317,7 @@ let pathCalls = 0;
 
 /**
  * Test seam: descriptors open now, descriptor stats ever made, and native
- * path calls ever made (stat, realpath, exists, inspect, readdir).
+ * path calls ever made (stat, realpath, exists, inspect, readdir, readlink).
  */
 export function fileReadsCountsForTests(): {
   liveDescriptors: number;
@@ -320,6 +333,7 @@ type BarrierPhase =
   | "exists"
   | "inspect"
   | "readdir"
+  | "readlink"
   | "before-open"
   | "after-open";
 
@@ -359,10 +373,10 @@ export interface FileBarrierForTests {
 
 /**
  * Test seam: hold the next call on `path` at `phase` — `stat`, `realpath`,
- * `exists`, `inspect` or `readdir` before that path call, `before-open`
- * before the native open, `after-open` once the descriptor (and with
- * `stat: true` its stat) exists and before the outcome goes to its owner.
- * One-shot.
+ * `exists`, `inspect`, `readdir` or `readlink` before that path call,
+ * `before-open` before the native open, `after-open` once the descriptor (and
+ * with `stat: true` its stat) exists and before the outcome goes to its
+ * owner. One-shot.
  */
 export function holdFileForTests(
   path: string,
@@ -395,7 +409,8 @@ async function barrier(
   return armed;
 }
 
-type FaultPhase = "open" | "stat" | "realpath" | "inspect" | "readdir";
+type FaultPhase =
+  "open" | "stat" | "realpath" | "inspect" | "readdir" | "readlink";
 
 interface Fault {
   phase: FaultPhase;
@@ -412,13 +427,15 @@ const FAULT_SYSCALLS: Record<FaultPhase, string> = {
   realpath: "realpath",
   inspect: "stat",
   readdir: "scandir",
+  readlink: "readlink",
 };
 
 /**
  * Test seam: fail the next native open (`open`), descriptor stat (`stat`),
- * `realpath`, `inspect` or `readdir` of `path` with `code`. The error carries
- * the negative `errno` of `code`, as a native one does, unless `bare`.
- * One-shot; an open that makes no descriptor stat leaves a `stat` fault armed.
+ * `realpath`, `inspect`, `readdir` or `readlink` of `path` with `code`. The
+ * error carries the negative `errno` of `code`, as a native one does, unless
+ * `bare`. One-shot; an open that makes no descriptor stat leaves a `stat`
+ * fault armed.
  */
 export function failFileForTests(path: string, fault: Fault): void {
   if (

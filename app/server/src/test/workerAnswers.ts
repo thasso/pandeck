@@ -59,4 +59,5 @@ export const MALFORMED_ANSWERS: Record<string, Payload> = {
   [FILE_METHODS.readdir]: { json: { entries: "a" } },
   [FILE_METHODS.realpath]: { json: { path: 5 } },
   [FILE_METHODS.open]: { json: { opened: { handle: 0 } } },
+  [FILE_METHODS.readlink]: { json: { target: 5 } },
 };

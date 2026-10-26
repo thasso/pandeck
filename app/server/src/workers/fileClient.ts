@@ -32,6 +32,7 @@ import {
   decodeEntries,
   decodeExists,
   decodeInspection,
+  decodeLinkTarget,
   decodeOpenOutcome,
   decodeRealpath,
   decodeStat,
@@ -133,15 +134,38 @@ export function existsOnWorker(location: WorkerFileLocation): Promise<boolean> {
   );
 }
 
+/**
+ * With `mode` required, an inspection without it is a malformed answer: a
+ * Worker older than protocol 1.3 never sends one.
+ */
 export function inspectOnWorker(
   location: WorkerFileLocation,
   follow: boolean,
+  options: { mode?: boolean } = {},
 ): Promise<PathInspection> {
   return ask(
     location,
     FILE_METHODS.inspect,
     encodeInspect(location, follow),
-    decodeInspection,
+    (answer) => {
+      const inspection = decodeInspection(answer);
+      if (options.mode && inspection.mode === undefined)
+        throw new MalformedWorkerAnswerError(
+          "The Worker answered a path inspection without its mode.",
+        );
+      return inspection;
+    },
+  );
+}
+
+export function readlinkOnWorker(
+  location: WorkerFileLocation,
+): Promise<string> {
+  return ask(
+    location,
+    FILE_METHODS.readlink,
+    encodeLocation(location),
+    decodeLinkTarget,
   );
 }
 

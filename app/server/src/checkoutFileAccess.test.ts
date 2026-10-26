@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -27,6 +28,7 @@ import {
   inspectCheckoutPath,
   readCheckoutDir,
   readCheckoutFile,
+  readCheckoutLink,
   realpathInCheckout,
   throwInCheckoutReadForTests,
 } from "./checkoutFileAccess.ts";
@@ -163,6 +165,8 @@ describe("each read runs on the side of its checkout root", () => {
   test("a checkout outside the Knowledge Base reads through the Worker", async () => {
     const file = fixture(onWorker, "routed/a.txt", "alpha\n");
     const dir = join(onWorker, "routed");
+    const link = join(onWorker, "routed-link");
+    symlinkSync("routed/a.txt", link);
     const cases: [string, () => Promise<unknown>, unknown][] = [
       [FILE_METHODS.exists, () => checkoutPathExists(onWorker, file), true],
       [
@@ -172,9 +176,25 @@ describe("each read runs on the side of its checkout root", () => {
         "file",
       ],
       [
+        FILE_METHODS.inspect,
+        async () =>
+          (
+            await inspectCheckoutPath(onWorker, file, {
+              follow: false,
+              mode: true,
+            })
+          ).mode,
+        String(lstatSync(file, { bigint: true }).mode),
+      ],
+      [
         FILE_METHODS.readdir,
         () => readCheckoutDir(onWorker, dir),
         [{ name: "a.txt", directory: false }],
+      ],
+      [
+        FILE_METHODS.readlink,
+        () => readCheckoutLink(onWorker, link),
+        "routed/a.txt",
       ],
       [
         FILE_METHODS.realpath,
@@ -201,6 +221,8 @@ describe("each read runs on the side of its checkout root", () => {
 
   test("the Knowledge Base reads on the server and sends the Worker nothing", async () => {
     const file = fixture(onServer, "routed/a.txt", "alpha\n");
+    const link = join(onServer, "routed-link");
+    symlinkSync("routed/a.txt", link);
     const before = inProcessWorkerServedForTests();
     const pathCalls = fileReadsCountsForTests().pathCalls;
     assert.equal(await checkoutPathExists(onServer, file), true);
@@ -213,12 +235,13 @@ describe("each read runs on the side of its checkout root", () => {
       [{ name: "a.txt", directory: false }],
     );
     assert.equal(await realpathInCheckout(onServer, file), realpathSync(file));
+    assert.equal(await readCheckoutLink(onServer, link), readlinkSync(link));
     assert.equal(
       (await readCheckoutFile(onServer, file)).toString(),
       "alpha\n",
     );
     assert.equal(inProcessWorkerServedForTests(), before, "no Worker request");
-    assert.equal(fileReadsCountsForTests().pathCalls, pathCalls + 4);
+    assert.equal(fileReadsCountsForTests().pathCalls, pathCalls + 5);
   });
 
   test.each(SIDES)(
@@ -241,6 +264,7 @@ describe("each read runs on the side of its checkout root", () => {
           ino: String(oracle.ino),
           size: String(oracle.size),
           mtimeNs: String(oracle.mtimeNs),
+          mode: String(oracle.mode),
         });
       }
     },
@@ -284,6 +308,8 @@ describe("where an error came from", () => {
         await rejection(readCheckoutDir(root(), file)),
         await rejection(realpathInCheckout(root(), missing)),
         await rejection(readCheckoutFile(root(), missing)),
+        await rejection(readCheckoutLink(root(), missing)),
+        await rejection(readCheckoutLink(root(), file)),
       ]) {
         assert.equal(checkoutFailureOf(error), "filesystem", String(error));
         assert.equal(isWorkerFailure(error), false);
@@ -334,6 +360,35 @@ describe("where an error came from", () => {
     });
     const refused = await rejection(readCheckoutDir(onWorker, onWorker));
     assert.equal(checkoutFailureOf(refused), "worker");
+
+    // A Worker before 1.3 answers no mode: malformed only when it is required.
+    const modeless = {
+      json: {
+        inspection: {
+          kind: "file",
+          dev: "1",
+          ino: "2",
+          size: "1",
+          mtimeNs: "3",
+        },
+      },
+    };
+    answerNextInProcessWorkerCallForTests(
+      FILE_METHODS.inspect,
+      async () => modeless,
+    );
+    assert.equal(
+      (await inspectCheckoutPath(onWorker, file, { follow: true })).mode,
+      undefined,
+    );
+    answerNextInProcessWorkerCallForTests(
+      FILE_METHODS.inspect,
+      async () => modeless,
+    );
+    const noMode = await rejection(
+      inspectCheckoutPath(onWorker, file, { follow: true, mode: true }),
+    );
+    assert.equal(checkoutFailureOf(noMode), "worker");
 
     const held = holdFileForTests(file, "inspect");
     const pending = rejection(
