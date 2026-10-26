@@ -284,15 +284,23 @@ const INSPECTED_KINDS: readonly string[] = [
 const isDecimal = (value: unknown): value is string =>
   typeof value === "string" && /^(0|[1-9]\d*)$/.test(value);
 
+/**
+ * Node's `bigint` stat holds every field in 64 signed bits: a time before 1970
+ * is negative, and so is a `dev` or `ino` at or above 2^63. Only `size` is
+ * never negative.
+ */
+const isSignedDecimal = (value: unknown): value is string =>
+  typeof value === "string" && /^(0|-?[1-9]\d*)$/.test(value);
+
 export function decodeInspection(payload: Payload): PathInspection {
   const inspection = record(settled(payload).inspection);
   if (
     typeof inspection?.kind !== "string" ||
     !INSPECTED_KINDS.includes(inspection.kind) ||
-    !isDecimal(inspection.dev) ||
-    !isDecimal(inspection.ino) ||
+    !isSignedDecimal(inspection.dev) ||
+    !isSignedDecimal(inspection.ino) ||
     !isDecimal(inspection.size) ||
-    !isDecimal(inspection.mtimeNs)
+    !isSignedDecimal(inspection.mtimeNs)
   )
     malformed("path inspection");
   return {

@@ -294,30 +294,30 @@ out of `app/shared/`: the web client never speaks it.
   `checkoutFileAccess.ts`. Protocol `1.2` adds three path methods beside W2's:
   `files.exists` answers as `existsSync` does and never a failure;
   `files.inspect` answers an entry's kind with `dev`, `ino`, `size` and
-  `mtimeNs` as decimal strings from a `bigint` `stat` or `lstat`; and
-  `files.readdir` answers names in `readdir` order, each with its own directory
-  type, never followed. Each names a Worker id, refused before any filesystem
-  call. The side comes from the checkout ROOT through the same placement as
-  checkout git (`placeGitCwd`, with the Knowledge Base rule), never from the
-  path being read. Errors are categorized where their origin is known: a
-  **Worker failure** (no answer: the connection ended or was refused, a request
-  refused with any code, an unknown Worker id, a malformed answer), which the
-  client brands and is never a filesystem answer; a **filesystem failure**,
-  marked only for a failure the Worker answered (coded or not), an open's
-  failure outcome, or a local primitive's rejection carrying a native string
-  `code` and numeric `errno`; and the server's own **verdict**,
-  `Invalid file path.`. Anything else propagates. A whole-file read follows
-  production's `readFile` on the pinned Bun: it opens without a descriptor stat,
-  applies no size limit, and reads 8 MiB requests until one comes back short; a
-  capped read is one request for cap + 1 bytes. The file is always closed, and
-  when the read and the close both fail, a Worker failure wins, then an
-  unclassified error, then the read's filesystem failure, then the close's. The
-  path methods hold no handle and take no cancellation: on connection end the
-  caller is rejected once the handler settles, as for `files.stat`. Whole-file
-  reads use `files.open` with `stat: false` and keep the handle rules above. On
-  the dev and test runtime (Node), this means the reader does not stop at a
-  file's opening size and reads files over 2 GiB, which Node's own `readFile`
-  refuses.
+  `mtimeNs` as decimal strings from a `bigint` `stat` or `lstat`, signed as Node
+  holds them (only `size` is never negative); and `files.readdir` answers names
+  in `readdir` order, each with its own directory type, never followed. Each
+  names a Worker id, refused before any filesystem call. The side comes from the
+  checkout ROOT through the same placement as checkout git (`placeGitCwd`, with
+  the Knowledge Base rule), never from the path being read. Errors are
+  categorized where their origin is known: a **Worker failure** (no answer: the
+  connection ended or was refused, a request refused with any code, an unknown
+  Worker id, a malformed answer), which the client brands and is never a
+  filesystem answer; a **filesystem failure**, marked only for a failure the
+  Worker answered (coded or not), an open's failure outcome, or a local
+  primitive's rejection carrying a native string `code` and numeric `errno`; and
+  the server's own **verdict**, `Invalid file path.`. Anything else propagates.
+  A whole-file read follows production's `readFile` on the pinned Bun: it opens
+  without a descriptor stat, applies no size limit, and reads 8 MiB requests
+  until one comes back short; a capped read is one request for cap + 1 bytes.
+  The file is always closed, and when the read and the close both fail, a Worker
+  failure wins, then an unclassified error, then the read's filesystem failure,
+  then the close's. The path methods hold no handle and take no cancellation: on
+  connection end the caller is rejected once the handler settles, as for
+  `files.stat`. Whole-file reads use `files.open` with `stat: false` and keep
+  the handle rules above. On the dev and test runtime (Node), this means the
+  reader does not stop at a file's opening size and reads files over 2 GiB,
+  which Node's own `readFile` refuses.
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the

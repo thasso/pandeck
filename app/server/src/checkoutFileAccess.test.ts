@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  lstatSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   truncateSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -216,6 +220,31 @@ describe("each read runs on the side of its checkout root", () => {
     assert.equal(inProcessWorkerServedForTests(), before, "no Worker request");
     assert.equal(fileReadsCountsForTests().pathCalls, pathCalls + 4);
   });
+
+  test.each(SIDES)(
+    "%s: an entry modified before 1970 inspects to its native digits, both ways on a link",
+    async (_side, root) => {
+      const file = fixture(root(), "pre-epoch/a.txt", "x");
+      const link = join(root(), "pre-epoch/a.link");
+      symlinkSync(file, link);
+      const before1970 = new Date("1960-01-01T00:00:00Z");
+      utimesSync(file, before1970, before1970);
+      lutimesSync(link, before1970, before1970);
+      for (const [follow, kind, oracle] of [
+        [true, "file", statSync(link, { bigint: true })],
+        [false, "symlink", lstatSync(link, { bigint: true })],
+      ] as const) {
+        assert.ok(oracle.mtimeNs < 0n, "the fixture predates the epoch");
+        assert.deepEqual(await inspectCheckoutPath(root(), link, { follow }), {
+          kind,
+          dev: String(oracle.dev),
+          ino: String(oracle.ino),
+          size: String(oracle.size),
+          mtimeNs: String(oracle.mtimeNs),
+        });
+      }
+    },
+  );
 });
 
 describe("where an error came from", () => {

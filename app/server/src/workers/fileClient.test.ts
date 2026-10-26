@@ -74,6 +74,23 @@ const answer =
   async () =>
     payload;
 
+/** A `files.inspect` answer, well-formed but for `fields`. */
+const inspected = (fields: Record<string, unknown>): Payload => ({
+  json: {
+    inspection: {
+      kind: "file",
+      dev: "1",
+      ino: "2",
+      size: "3",
+      mtimeNs: "4",
+      ...fields,
+    },
+  },
+});
+
+/** Not a canonical decimal, signed or not. */
+const NOT_DECIMAL = ["", "-", "-0", "01", "-01", "+1", "1.5", "1e3", " 1"];
+
 /** A handler that never answers until the request is cancelled. */
 const hang: MethodHandler = (_payload, signal) =>
   new Promise((_resolve, reject) =>
@@ -179,20 +196,17 @@ describe("Worker failures are branded", () => {
           },
         },
       ],
-      [
-        FILE_METHODS.inspect,
-        {
-          json: {
-            inspection: {
-              kind: "file",
-              dev: 1,
-              ino: "2",
-              size: "3",
-              mtimeNs: "4",
-            },
-          },
-        },
-      ],
+      [FILE_METHODS.inspect, inspected({ dev: 1 })],
+      ...NOT_DECIMAL.flatMap((digits) =>
+        (["dev", "ino", "size", "mtimeNs"] as const).map(
+          (field): [string, Payload] => [
+            FILE_METHODS.inspect,
+            inspected({ [field]: digits }),
+          ],
+        ),
+      ),
+      // A size is never negative.
+      [FILE_METHODS.inspect, inspected({ size: "-1" })],
       [FILE_METHODS.readdir, { json: { entries: [{ name: 1 }] } }],
       [FILE_METHODS.readdir, { json: { entries: "a" } }],
       [FILE_METHODS.open, { json: { opened: { handle: 0 } } }],
@@ -217,6 +231,24 @@ describe("Worker failures are branded", () => {
         assert.ok(error instanceof MalformedWorkerAnswerError, String(error)),
       );
     }
+  });
+
+  test("a negative identity or time is no malformed answer", async () => {
+    // Node's `bigint` stat holds every field in 64 signed bits: a time before
+    // 1970 is negative, and so is a `dev` or `ino` at or above 2^63.
+    const dial = await testWorker();
+    const signed = {
+      kind: "file",
+      dev: "-1",
+      ino: "-9223372036854775808",
+      size: "0",
+      mtimeNs: "-315619200000000000",
+    };
+    dial.handlers[FILE_METHODS.inspect] = answer(inspected(signed));
+    assert.deepEqual(
+      await inspectOnWorker({ workerId: dial.id, path: "/p" }, true),
+      signed,
+    );
   });
 
   test("an ended connection and an unknown Worker id", async () => {
