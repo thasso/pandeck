@@ -16,7 +16,9 @@ export interface RunningWorker {
   /**
    * Resolves once the connection has ended and every request the Worker was
    * serving has settled: with the exit receipt, once every git child it
-   * started has exited, and once every file handle it held is closed.
+   * started has exited, and once every file handle it held is closed. Native
+   * opens still awaiting a descriptor are orphaned on end; their eventual
+   * descriptors close without registration and do not hold this promise.
    */
   readonly quiescent: Promise<void>;
   /** Test seam: how many file handles the Worker holds. */

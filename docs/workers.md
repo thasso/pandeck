@@ -273,13 +273,19 @@ which imports no server state) and `workers/` (the server's side and placement);
   the connection that opened them: their reads and closes never reach another
   connection, ids are never reused, an open finishing after its connection ended
   is closed at once, and the Worker closes every handle it still holds before
-  its quiescence resolves. A caller that gives up during an open closes the
-  handle when it arrives. Reads are positional and bounded; a stream pulls one
-  chunk of at most 1 MiB, one `data` frame, only when its consumer has room.
-  Placement keeps a path named inside `DATA_DIR` or the Knowledge Base (as named
-  or as its observed real path, with the settings fallback above) on the server,
-  which reads it with the same `fileReads.ts`; session artifacts are server data
-  by kind, whatever their path. Every other path goes to the default Worker as
+  its quiescence resolves. On connection end, a native open still awaiting a
+  descriptor is orphaned and no longer holds file-handler settlement or the
+  sweep. The native call is not cancelled: if it later returns a descriptor,
+  that descriptor is closed immediately without a stat or registration on either
+  the old or replacement connection. Descriptors already returned, including
+  their pending stats and reads, still settle and close before quiescence. A
+  caller that gives up during an open on a live connection closes the handle
+  when it arrives. Reads are positional and bounded; a stream pulls one chunk of
+  at most 1 MiB, one `data` frame, only when its consumer has room. Placement
+  keeps a path named inside `DATA_DIR` or the Knowledge Base (as named or as its
+  observed real path, with the settings fallback above) on the server, which
+  reads it with the same `fileReads.ts`; session artifacts are server data by
+  kind, whatever their path. Every other path goes to the default Worker as
   named: the server never resolves a requested path to choose its side, since
   following an agent's symlink there would let the server read for the agent
   what the Worker may not. When the Worker fails, the read fails; there is no
@@ -293,10 +299,16 @@ which imports no server state) and `workers/` (the server's side and placement);
   child's actual exit, and a child still running 2 s after SIGTERM gets SIGKILL.
   When a connection ends, a request the Worker received is rejected only after
   the Worker reports that everything it started has settled, so a caller never
-  releases its repo lock beside a running git child. Processes git itself starts
-  (hooks, ssh) are not covered, as they are not when a caller cancels.
-  In-process, the server observes the Worker's quiescence directly; phase 2's
-  plan must replace that with fencing for a Worker in another process.
+  releases its repo lock beside a running git child. For file methods this means
+  handler settlement plus the completed handle sweep, excluding native opens
+  orphaned before returning a descriptor as described above. Those uncancellable
+  opens retain only their pending native operation and late-close owner, not
+  other handles or unrelated requests. A FIFO substituted between stat and open
+  can still block that native operation until a writer arrives, as before. Git's
+  exit-receipt requirement is unchanged. Processes git itself starts (hooks,
+  ssh) are not covered, as they are not when a caller cancels. In-process, the
+  server observes the Worker's quiescence directly; phase 2's plan must replace
+  that with fencing for a Worker in another process.
 - **Failure and restart: broker death.** A dead broker cannot report its child's
   exit. A request with the exit receipt then answers only once the broker's
   whole process group has exited: signal 0 to the group finds no member (ESRCH),

@@ -68,35 +68,85 @@ export async function realpathFile(path: string): Promise<string> {
 /**
  * Opens `path` read-only and, with `stat`, stats the descriptor. The outcome
  * goes to `dispose`, which owns it from then on — registers the file, closes
- * it, or reports the failure — and whose result this answers. No descriptor
- * exists that `dispose` did not receive.
+ * it, or reports the failure — and whose result this answers. With
+ * `orphanOnEnd`, a native open still awaiting a descriptor is abandoned when
+ * the connection ends. Its eventual descriptor is closed here, never passed
+ * to `dispose`. This does not cancel the native call or ordinary caller aborts.
  */
 export async function openFile<T>(
   path: string,
-  options: { stat: boolean },
+  options: { stat: boolean; orphanOnEnd?: AbortSignal },
   dispose: (outcome: FileOpenOutcome<OpenedFile>) => Promise<T> | T,
 ): Promise<T> {
   let held: Barrier | undefined;
+  let orphaned: Promise<void> | undefined;
   try {
     held = await barrier(path, "before-open");
-    const outcome = await openOutcome(path, options.stat);
+    const outcome = await openOutcome(path, options.stat, options.orphanOnEnd);
+    if ("orphaned" in outcome) {
+      orphaned = outcome.orphaned;
+      return await dispose({ error: connectionEnded(), phase: "open" });
+    }
     if (!("error" in outcome && outcome.phase === "open"))
       held = (await barrier(path, "after-open")) ?? held;
     return await dispose(outcome);
   } finally {
-    held?.disposed.resolve();
+    // A test's disposal receipt includes the late native descriptor's close,
+    // even though that orphan no longer holds the Worker's handler settlement.
+    if (orphaned) void orphaned.then(() => held?.disposed.resolve());
+    else held?.disposed.resolve();
+  }
+}
+
+function connectionEnded(): Error {
+  return new Error("The Worker connection ended.");
+}
+
+interface OrphanedOpen {
+  orphaned: Promise<void>;
+}
+
+/** Only the wait for a native open, before any descriptor is returned. */
+async function openNative(
+  path: string,
+  orphanOnEnd?: AbortSignal,
+): Promise<FileHandle | OrphanedOpen> {
+  if (orphanOnEnd?.aborted) throw connectionEnded();
+  const opening = open(path, "r");
+  if (!orphanOnEnd) return opening;
+  let onEnd!: () => void;
+  const ended = new Promise<undefined>((resolve) => {
+    onEnd = () => resolve(undefined);
+    orphanOnEnd.addEventListener("abort", onEnd, { once: true });
+  });
+  try {
+    const handle = await Promise.race([opening, ended]);
+    if (handle) return handle;
+    return {
+      orphaned: opening
+        .then(async (late) => {
+          live += 1;
+          await openedFile(late).close();
+        })
+        .catch(() => undefined),
+    };
+  } finally {
+    orphanOnEnd.removeEventListener("abort", onEnd);
   }
 }
 
 async function openOutcome(
   path: string,
   withStat: boolean,
-): Promise<FileOpenOutcome<OpenedFile>> {
+  orphanOnEnd?: AbortSignal,
+): Promise<FileOpenOutcome<OpenedFile> | OrphanedOpen> {
   let handle: FileHandle;
   try {
     const fault = takeFault(path, "open");
     if (fault) throw fault;
-    handle = await open(path, "r");
+    const result = await openNative(path, orphanOnEnd);
+    if ("orphaned" in result) return result;
+    handle = result;
   } catch (error) {
     return { error: error as Error, phase: "open" };
   }

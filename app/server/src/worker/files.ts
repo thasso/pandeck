@@ -5,9 +5,11 @@
  * A handle's descriptor is closed exactly once: by `files.close`, after the
  * handle's reads in flight have settled; at once, by an open that finishes
  * after the connection ended; or by the sweep once the connection has ended
- * and every request has settled. Ids count up and are never reused within a
- * table. A cancel cannot interrupt a filesystem call: the handler finishes and
- * answers (`docs/workers.md`).
+ * and every non-orphaned request has settled. A native open still awaiting a
+ * descriptor is orphaned on end: its handler settles, and its eventual
+ * descriptor closes without registration. Ids count up and are never reused
+ * within a table. A cancel cannot interrupt a filesystem call: the handler
+ * finishes and answers (`docs/workers.md`).
  */
 import {
   openFile,
@@ -49,6 +51,7 @@ export function fileHandlers(workerId: string): FileTable {
   const table = new Map<number, OpenedFile>();
   let nextHandle = 1;
   let ended = false;
+  const pendingOpens = new Set<AbortController>();
 
   const here = (id: string, what: string): void => {
     if (id !== workerId)
@@ -89,19 +92,30 @@ export function fileHandlers(workerId: string): FileTable {
     [FILE_METHODS.open]: async (payload) => {
       const { location, stat } = decodeOpen(payload);
       here(location.workerId, location.path);
-      return openFile(location.path, { stat }, async (outcome) => {
-        if ("error" in outcome)
-          return encodeFailure(outcome.error, { phase: outcome.phase });
-        if (ended) {
-          await outcome.file.close();
-          return encodeFailure(new Error("The Worker connection ended."), {
-            phase: "open",
-          });
-        }
-        const handle = nextHandle++;
-        table.set(handle, outcome.file);
-        return encodeOpened(handle, outcome.stat);
-      });
+      const connectionEnd = new AbortController();
+      pendingOpens.add(connectionEnd);
+      if (ended) connectionEnd.abort();
+      try {
+        return await openFile(
+          location.path,
+          { stat, orphanOnEnd: connectionEnd.signal },
+          async (outcome) => {
+            if ("error" in outcome)
+              return encodeFailure(outcome.error, { phase: outcome.phase });
+            if (ended) {
+              await outcome.file.close();
+              return encodeFailure(new Error("The Worker connection ended."), {
+                phase: "open",
+              });
+            }
+            const handle = nextHandle++;
+            table.set(handle, outcome.file);
+            return encodeOpened(handle, outcome.stat);
+          },
+        );
+      } finally {
+        pendingOpens.delete(connectionEnd);
+      }
     },
     [FILE_METHODS.read]: async (payload) => {
       const { workerId: id, handle, position, length } = decodeRead(payload);
@@ -132,6 +146,7 @@ export function fileHandlers(workerId: string): FileTable {
     handlers,
     end() {
       ended = true;
+      for (const open of pendingOpens) open.abort();
     },
     async sweep() {
       const files = [...table.values()];

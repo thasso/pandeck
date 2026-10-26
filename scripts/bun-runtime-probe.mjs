@@ -89,6 +89,7 @@ import {
   writeAsInProcessWorkerForTests,
 } from "../app/server/src/workers/inProcessWorker.ts";
 import { treeIgnoreForTests } from "../app/server/src/worktrees/worktreeWatcher.ts";
+import { checkWorkerFileOpenEnd } from "./worker-file-open-end-probe.ts";
 
 const mode = process.argv[2];
 if (mode !== "broker" && mode !== "in-process")
@@ -540,6 +541,7 @@ async function checkGit() {
 
   await checkWorkerGit(repo);
   await checkWorkerFiles();
+  await checkWorkerFileOpenEnd();
   await checkServedFileCancellation();
 
   if (mode !== "broker") return;
