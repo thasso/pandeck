@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   mkdirSync,
   mkdtempSync,
@@ -19,11 +21,7 @@ import { git } from "../gitExec.ts";
 import { knowledgeBaseSettingsProjection } from "../knowledgeBaseSettings.ts";
 import { inProcessWorkerServedForTests } from "./inProcessWorker.ts";
 import { DATA_DIR } from "../config.ts";
-import {
-  DEFAULT_WORKER_ID,
-  placeGitCwd,
-  placeServedPath,
-} from "./placement.ts";
+import { DEFAULT_WORKER_ID, placeServedPath } from "./placement.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "placement-fallback-"));
 const defaultRoot = knowledgeBaseSettingsProjection(undefined).effectivePath;
@@ -64,7 +62,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 for (const mode of ["broker", "in-process"]) {
   describe(mode, () => {
-    test("known and default KB aliases stay local through settings failure and recovery", async () => {
+    test("served files under known and default KB aliases stay local through settings failure and recovery", async () => {
       process.env.ASSISTANT_SPAWN_BROKER = mode === "broker" ? "1" : "0";
       const warning = vi
         .spyOn(console, "warn")
@@ -80,29 +78,22 @@ for (const mode of ["broker", "in-process"]) {
       ownsDefaultLink = true;
       settings(configured(alias));
       assert.equal(
-        placeGitCwd(alias),
+        placeServedPath(alias),
         undefined,
         "remember a successful root and its real path",
       );
       assert.deepEqual(
-        placeGitCwd(defaultReal),
+        placeServedPath(defaultReal),
         onWorker(defaultReal),
         "readable custom settings are authoritative",
       );
       settings("{ not json");
-      for (const cwd of [alias, real, defaultRoot, defaultReal]) {
-        assert.equal(placeGitCwd(cwd), undefined, cwd);
-        assert.equal(placeGitCwd(`${cwd}/sub/../sub`), undefined);
+      for (const path of [alias, real, defaultRoot, defaultReal]) {
+        assert.equal(placeServedPath(path), undefined, path);
+        assert.equal(placeServedPath(`${path}/sub/../sub`), undefined);
         assert.equal(
-          placeGitCwd(join(cwd, "not-created", "nested")),
+          placeServedPath(join(path, "not-created", "nested")),
           undefined,
-        );
-        const before = inProcessWorkerServedForTests();
-        assert.match((await git(["--version"], cwd)).stdout, /^git version/);
-        assert.equal(
-          inProcessWorkerServedForTests(),
-          before,
-          `${cwd} never reaches the Worker`,
         );
       }
       assert.equal(
@@ -114,31 +105,31 @@ for (const mode of ["broker", "in-process"]) {
         () => readStoredAppSettings(),
         /Failed to read app settings/,
       );
-      for (const cwd of [other, `${alias}-old`, `${defaultRoot}-old`])
-        assert.deepEqual(placeGitCwd(cwd), onWorker(cwd));
-      let before = inProcessWorkerServedForTests();
-      await git(["--version"], other);
-      assert.equal(
-        inProcessWorkerServedForTests() - before,
-        1,
-        "unrelated checkout still crosses the transport",
-      );
+      // `${defaultRoot}-old` lies in DATA_DIR, local by that rule alone.
+      for (const path of [other, `${alias}-old`])
+        assert.deepEqual(placeServedPath(path), onWorker(path));
+      // Checkout git reads no KB setting: a bare cwd in the KB is a checkout.
+      const before = inProcessWorkerServedForTests();
+      for (const cwd of [alias, real, defaultReal, other])
+        assert.match((await git(["--version"], cwd)).stdout, /^git version/);
+      assert.equal(inProcessWorkerServedForTests() - before, 4);
+      assert.equal(warning.mock.calls.length, 1);
 
       rmSync(alias);
       unlinkSync(defaultRoot);
       ownsDefaultLink = false;
       assert.equal(
-        placeGitCwd(real),
+        placeServedPath(real),
         undefined,
         "retain the known real path when its alias disappears",
       );
       assert.equal(
-        placeGitCwd(defaultReal),
+        placeServedPath(defaultReal),
         undefined,
         "retain the observed default real path too",
       );
       settings("{ still broken");
-      assert.equal(placeGitCwd(real), undefined);
+      assert.equal(placeServedPath(real), undefined);
       assert.equal(
         warning.mock.calls.length,
         1,
@@ -148,41 +139,34 @@ for (const mode of ["broker", "in-process"]) {
       const replacement = join(scratch, mode, "replacement");
       mkdirSync(replacement);
       settings(configured(replacement));
-      assert.equal(placeGitCwd(replacement), undefined);
-      for (const cwd of [alias, real, defaultRoot, defaultReal])
+      assert.equal(placeServedPath(replacement), undefined);
+      // The default root itself lives in DATA_DIR, local by that rule alone.
+      for (const path of [alias, real, defaultReal])
         assert.deepEqual(
-          placeGitCwd(cwd),
-          onWorker(cwd),
+          placeServedPath(path),
+          onWorker(path),
           "do not keep obsolete roots when settings are readable",
         );
-      before = inProcessWorkerServedForTests();
-      await git(["--version"], real);
-      await git(["--version"], replacement);
-      assert.equal(
-        inProcessWorkerServedForTests() - before,
-        1,
-        "only the obsolete root reaches the Worker",
-      );
 
       settings("{ broken again");
       assert.equal(
-        placeGitCwd(replacement),
+        placeServedPath(replacement),
         undefined,
         "a failed read cannot poison the new last-successful root",
       );
-      assert.equal(placeGitCwd(defaultReal), undefined);
+      assert.equal(placeServedPath(defaultReal), undefined);
       assert.deepEqual(
-        placeGitCwd(real),
+        placeServedPath(real),
         onWorker(real),
         "failure retains only the most recent custom root",
       );
       assert.equal(warning.mock.calls.length, 2);
       const missing = join(scratch, mode, "not-created");
       settings(configured(missing));
-      assert.equal(placeGitCwd(join(missing, "nested")), undefined);
+      assert.equal(placeServedPath(join(missing, "nested")), undefined);
       settings("{ broken once more");
       assert.equal(
-        placeGitCwd(join(missing, "nested")),
+        placeServedPath(join(missing, "nested")),
         undefined,
         "a nonexistent root still matches lexically",
       );
@@ -196,29 +180,33 @@ for (const mode of ["broker", "in-process"]) {
         .mockImplementation(() => undefined);
       const outside = join(scratch, mode, "warning-checkout");
       mkdirSync(outside, { recursive: true });
+      const served = join(outside, "page.md");
       settings("{}");
-      assert.deepEqual(placeGitCwd(outside), onWorker(outside));
+      assert.deepEqual(placeServedPath(served), onWorker(served));
       settings("{ not json");
+      // Checkout git reads no KB setting and so never warns (E-W3c-2).
       for (let i = 0; i < 3; i++) await git(["--version"], outside);
+      assert.equal(warning.mock.calls.length, 0);
+      for (let i = 0; i < 3; i++) placeServedPath(served);
       assert.equal(warning.mock.calls.length, 1);
       assert.match(
         String(warning.mock.calls[0]?.[0]),
-        /Knowledge Base.*settings/i,
+        /Knowledge Base settings unavailable.*for served files/,
       );
       assert.ok(
         !String(warning.mock.calls[0]?.[0]).includes(APP_SETTINGS_PATH),
         "do not log raw settings paths/errors",
       );
       settings("{}");
-      await git(["--version"], outside);
+      placeServedPath(served);
       settings("{ not json");
-      for (let i = 0; i < 3; i++) await git(["--version"], outside);
+      for (let i = 0; i < 3; i++) placeServedPath(served);
       assert.equal(warning.mock.calls.length, 2);
     });
   });
 }
 
-test("served files are placed as checkout git is, through settings failure", () => {
+test("served files keep the Knowledge Base path rule through settings failure", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const real = join(scratch, "served", "real-notes");
   const alias = join(scratch, "served", "notes");
@@ -232,20 +220,106 @@ test("served files are placed as checkout git is, through settings failure", () 
   settings(configured(alias));
   assert.equal(placeServedPath(join(alias, "page.md")), undefined);
   settings("{ not json");
-  // The same function, under the same single condition: no new one.
   for (const path of [alias, real, defaultReal].flatMap((root) => [
     root,
     join(root, "page.md"),
     join(root, "not-created", "page.md"),
-  ])) {
+  ]))
     assert.equal(placeServedPath(path), undefined, path);
-    assert.deepEqual(placeServedPath(path), placeGitCwd(path), path);
-  }
-  for (const path of [join(other, "page.md"), `${alias}-old/page.md`]) {
+  for (const path of [join(other, "page.md"), `${alias}-old/page.md`])
     assert.deepEqual(placeServedPath(path), onWorker(path), path);
-    assert.deepEqual(placeServedPath(path), placeGitCwd(path), path);
-  }
   // The default root lives in DATA_DIR, which stays local by itself.
   assert.ok(defaultRoot.startsWith(`${DATA_DIR}/`));
   assert.equal(placeServedPath(join(defaultRoot, "page.md")), undefined);
+});
+
+/** One GET through the worktree API handler of the module graph given. */
+async function get(
+  handle: typeof import("../worktrees/worktreeHttp.ts").handleWorktreeApi,
+  path: string,
+): Promise<{ status: number; body: { error?: string } }> {
+  let status = 0;
+  let text = "";
+  const res = {
+    writeHead(code: number) {
+      status = code;
+    },
+    end(chunk?: string | Buffer) {
+      text = String(chunk ?? "");
+    },
+  } as unknown as ServerResponse;
+  const req = { method: "GET" } as unknown as IncomingMessage;
+  await handle(req, res, new URL(`http://x${path}`), () => ({}));
+  return { status, body: JSON.parse(text) as { error?: string } };
+}
+
+test("checkout git and reads read no KB setting, from a cold start with settings unreadable", async () => {
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  // A project's checkout at the custom KB root nobody can read any more.
+  const custom = join(scratch, "cold", "custom-notes");
+  mkdirSync(custom, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: custom });
+  writeFileSync(join(custom, "page.md"), "page\n");
+  settings(configured(custom));
+  settings("{ not json");
+  vi.resetModules();
+  let placementReads = 0;
+  vi.doMock("../knowledgeBaseSettings.ts", async (importActual) => {
+    const actual =
+      await importActual<typeof import("../knowledgeBaseSettings.ts")>();
+    return {
+      ...actual,
+      knowledgeBasePlacementRoots: () => {
+        placementReads += 1;
+        return actual.knowledgeBasePlacementRoots();
+      },
+    };
+  });
+  try {
+    const checkoutGit = await import("../gitExec.ts");
+    const files = await import("../checkoutFileAccess.ts");
+    const { checkoutSideOf } =
+      await import("../worktrees/knowledgeCheckout.ts");
+    const { handleWorktreeApi } = await import("../worktrees/worktreeHttp.ts");
+    const { inProcessWorkerServedForTests: served } =
+      await import("./inProcessWorker.ts");
+
+    let before = served();
+    const top = await checkoutGit.gitOptional(
+      ["rev-parse", "--show-toplevel"],
+      custom,
+    );
+    assert.equal(top.code, 0, top.stderr);
+    assert.equal(served() - before, 1, "string git runs on the Worker");
+    const project = checkoutSideOf({ id: "main:notes" });
+    assert.deepEqual(project, { workerId: DEFAULT_WORKER_ID });
+    before = served();
+    assert.equal(
+      (await checkoutGit.checkoutGitOn(project).gitOptional(["status"], custom))
+        .code,
+      0,
+    );
+    assert.equal(served() - before, 1, "a project's side is the Worker");
+    before = served();
+    const page = join(custom, "page.md");
+    assert.equal(await files.checkoutPathExists(custom, page), true);
+    assert.equal(
+      (await files.readCheckoutFile(custom, page)).toString(),
+      "page\n",
+    );
+    assert.ok(served() - before >= 2, "checkout reads run on the Worker");
+
+    // The KB itself fails as in base: its row cannot be resolved.
+    before = served();
+    const kb = await get(handleWorktreeApi, "/api/worktrees/knowledge/status");
+    assert.equal(kb.status, 500);
+    assert.match(kb.body.error ?? "", /Failed to read app settings/);
+    assert.equal(served(), before, "the KB surface sends the Worker nothing");
+
+    assert.equal(placementReads, 0, "checkout placement reads no setting");
+    assert.equal(warning.mock.calls.length, 0);
+  } finally {
+    vi.doUnmock("../knowledgeBaseSettings.ts");
+    vi.resetModules();
+  }
 });

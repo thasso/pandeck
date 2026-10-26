@@ -69,11 +69,13 @@ import { registerWorktree, unregisterWorktree } from "./worktreeWatcher.ts";
 import { worktreeBranchDelivered } from "./worktreeDelivery.ts";
 import {
   isMainWorktreeId,
+  mainWorktreeId,
   noMainRepoMessage,
   resolveMainRepo,
   resolveMainWorktreeRow,
   type MainRepoInfo,
 } from "./worktreeResolve.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { stopCheckoutProcesses } from "./checkoutProcesses.ts";
 
 /**
@@ -235,7 +237,11 @@ export async function createWorktree(
   // Reuse the background fetch's gate, cadence, coalescing and honest freshness
   // stamp. It is deliberately fire-and-forget before the repository lock; the
   // fork point below remains the local base whatever the fetch later finds.
-  fetchRepoIfDue(mainRepoKey, main.root);
+  fetchRepoIfDue(
+    checkoutSideOf({ id: mainWorktreeId(project.id) }),
+    mainRepoKey,
+    main.root,
+  );
 
   const root = worktreeRootFor(project);
   mkdirSync(root, { recursive: true });

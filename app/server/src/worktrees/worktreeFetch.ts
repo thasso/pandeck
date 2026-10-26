@@ -46,11 +46,13 @@
  */
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkoutPathExists } from "../checkoutFileAccess.ts";
+import { checkoutFilesOn } from "../checkoutFileAccess.ts";
 import { BACKGROUND_FETCH_ENABLED } from "../config.ts";
-import { gitOptional, repoLockKey } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { getSettings } from "../settings.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { baseBranchRemote, remoteNames } from "./worktreeRemote.ts";
 
 const MINUTE_MS = 60_000;
@@ -87,6 +89,8 @@ const FETCH_ENV = {
  * unreachable remote or a head whose object is absent locally proves nothing.
  */
 export async function remoteDeliveryHeads(row: WorktreeRow): Promise<string[]> {
+  const side = checkoutSideOf(row);
+  const { gitOptional, repoLockKey } = checkoutGitOn(side);
   const context = { ...row, path: row.mainRepoRoot };
   const ownKey = await repoLockKey(context.path);
   const heads = new Set<string>();
@@ -109,7 +113,7 @@ export async function remoteDeliveryHeads(row: WorktreeRow): Promise<string[]> {
     // local remote is read on the checkout's side.
     if (
       localPath &&
-      (await checkoutPathExists(row.mainRepoRoot, localPath)) &&
+      (await checkoutFilesOn(side).pathExists(row.mainRepoRoot, localPath)) &&
       (await repoLockKey(localPath)) === ownKey
     )
       continue;
@@ -141,6 +145,7 @@ export async function remoteDeliveryHeads(row: WorktreeRow): Promise<string[]> {
 export async function refreshRemovalBase(
   row: WorktreeRow,
 ): Promise<string | undefined> {
+  const { gitOptional } = checkoutGitOn(checkoutSideOf(row));
   const context = { ...row, path: row.mainRepoRoot };
   const remote = await baseBranchRemote(context);
   if (!remote) return undefined;
@@ -169,6 +174,8 @@ export async function refreshRemovalBase(
 }
 
 interface RepoState {
+  /** The side the repo was noted on; every sweep of it runs there. */
+  side: CheckoutSide;
   path: string;
   /** When a surface last read a status from this repo. */
   interestAt: number;
@@ -176,8 +183,17 @@ interface RepoState {
   fetchedAt?: number;
 }
 
+/**
+ * Both keyed by side and repo key ({@link stateKey}): a folder that is both the
+ * Knowledge Base and a registered checkout is fetched once per side.
+ */
 const repos = new Map<string, RepoState>();
 const inFlight = new Map<string, Promise<void>>();
+
+/** One entry per side and repository; repo locks stay shared across sides. */
+function stateKey(side: CheckoutSide, repoKey: string): string {
+  return `${checkoutGitOn(side).sideKey}\0${repoKey}`;
+}
 let sweeper: ReturnType<typeof setInterval> | undefined;
 
 /**
@@ -189,15 +205,25 @@ let sweeper: ReturnType<typeof setInterval> | undefined;
  * quietly dropped — the open surface goes stale precisely because it is calm.
  * Asking who is watching cannot decay.
  */
-let interestSource: (() => string[]) | undefined;
+let interestSource: (() => WatchedRepo[]) | undefined;
+
+/** A watched main-repo root and the side it is watched on. */
+export interface WatchedRepo {
+  side: CheckoutSide;
+  root: string;
+}
 
 export function setFetchInterestSource(
-  source: (() => string[]) | undefined,
+  source: (() => WatchedRepo[]) | undefined,
 ): void {
   interestSource = source;
 }
 
-type FetchListener = (repoPath: string, fetchedAt: number) => void;
+type FetchListener = (
+  side: CheckoutSide,
+  repoPath: string,
+  fetchedAt: number,
+) => void;
 const completionListeners = new Set<FetchListener>();
 
 /**
@@ -219,21 +245,26 @@ export function onFetchCompleted(listener: FetchListener): () => void {
  * one place that knows a surface actually wants these numbers.
  */
 export function noteRepoInterest(
+  side: CheckoutSide,
   repoKey: string,
   repoPath: string,
 ): number | undefined {
-  const existing = repos.get(repoKey);
+  const key = stateKey(side, repoKey);
+  const existing = repos.get(key);
   if (existing) {
     existing.interestAt = Date.now();
     return existing.fetchedAt;
   }
-  repos.set(repoKey, { path: repoPath, interestAt: Date.now() });
+  repos.set(key, { side, path: repoPath, interestAt: Date.now() });
   return undefined;
 }
 
 /** When this repo's remote-tracking refs were last refreshed, if ever. */
-export function repoFetchedAt(repoKey: string): number | undefined {
-  return repos.get(repoKey)?.fetchedAt;
+export function repoFetchedAt(
+  side: CheckoutSide,
+  repoKey: string,
+): number | undefined {
+  return repos.get(stateKey(side, repoKey))?.fetchedAt;
 }
 
 /**
@@ -253,20 +284,23 @@ export function backgroundFetchArgs(): string[] {
  * saying "as of then" instead of claiming currency it does not have.
  */
 export function fetchRepoRemotes(
+  side: CheckoutSide,
   repoKey: string,
   repoPath: string,
 ): Promise<void> {
-  const running = inFlight.get(repoKey);
+  const key = stateKey(side, repoKey);
+  const running = inFlight.get(key);
   if (running) return running;
 
   const promise = (async () => {
-    const res = await gitOptional(
+    const res = await checkoutGitOn(side).gitOptional(
       backgroundFetchArgs(),
       repoPath,
       AbortSignal.timeout(FETCH_TIMEOUT_MS),
       FETCH_ENV,
     );
-    const state = repos.get(repoKey) ?? {
+    const state = repos.get(key) ?? {
+      side,
       path: repoPath,
       interestAt: Date.now(),
     };
@@ -274,42 +308,47 @@ export function fetchRepoRemotes(
     // present stale counts as fresh, which is the one thing this must not do.
     if (res.code === 0) {
       state.fetchedAt = Date.now();
-      repos.set(repoKey, state);
+      repos.set(key, state);
       // Announce it even when nothing moved — see `onFetchCompleted`.
       for (const listener of completionListeners) {
         try {
-          listener(repoPath, state.fetchedAt);
+          listener(state.side, repoPath, state.fetchedAt);
         } catch {
           // A listener must never be able to break the fetch loop.
         }
       }
       return;
     }
-    repos.set(repoKey, state);
+    repos.set(key, state);
   })()
     .catch(() => undefined)
-    .finally(() => inFlight.delete(repoKey));
+    .finally(() => inFlight.delete(key));
 
-  inFlight.set(repoKey, promise);
+  inFlight.set(key, promise);
   return promise;
 }
 
 /** Fetch now if due, without making a status or creation caller wait for it. */
-export function fetchRepoIfDue(repoKey: string, repoPath: string): void {
+export function fetchRepoIfDue(
+  side: CheckoutSide,
+  repoKey: string,
+  repoPath: string,
+): void {
   if (!BACKGROUND_FETCH_ENABLED) return;
   const fetchInterval = fetchIntervalMs();
   if (fetchInterval === 0) return;
-  const state = repos.get(repoKey);
+  const state = repos.get(stateKey(side, repoKey));
   if (state?.fetchedAt && Date.now() - state.fetchedAt < fetchInterval) return;
-  void fetchRepoRemotes(repoKey, repoPath);
+  void fetchRepoRemotes(side, repoKey, repoPath);
 }
 
 /** Resolve a checkout path to its repo key and record interest in one step. */
 export async function noteWorktreeInterest(
+  side: CheckoutSide,
   repoPath: string,
 ): Promise<string | undefined> {
   try {
-    return await repoLockKey(repoPath);
+    return await checkoutGitOn(side).repoLockKey(repoPath);
   } catch {
     return undefined;
   }
@@ -324,15 +363,15 @@ function sweep(): void {
   // Anything a client is watching RIGHT NOW is interesting, whatever the
   // recorded timestamps say. This is the half that cannot decay under an idle
   // but open surface.
-  const watched = new Set(interestSource?.() ?? []);
-  for (const path of watched) {
-    const existing = [...repos.entries()].find(
-      ([, state]) => state.path === path,
-    );
-    if (existing) existing[1].interestAt = now;
-  }
+  const watched = new Set(
+    (interestSource?.() ?? []).map(({ side, root }) => stateKey(side, root)),
+  );
+  const isWatched = (state: RepoState) =>
+    watched.has(stateKey(state.side, state.path));
+  for (const state of repos.values())
+    if (isWatched(state)) state.interestAt = now;
   for (const [key, state] of repos) {
-    if (!watched.has(state.path) && now - state.interestAt > interestTtl) {
+    if (!isWatched(state) && now - state.interestAt > interestTtl) {
       // Nobody is watching and nobody has looked in a while: stop fetching, and
       // forget the repo so a long-lived process does not accumulate every repo
       // it has ever seen.
@@ -340,8 +379,13 @@ function sweep(): void {
       continue;
     }
     if (state.fetchedAt && now - state.fetchedAt < fetchInterval) continue;
-    void fetchRepoRemotes(key, state.path);
+    void fetchRepoRemotes(state.side, repoKeyOf(key), state.path);
   }
+}
+
+/** The repo key inside a {@link stateKey}. */
+function repoKeyOf(key: string): string {
+  return key.slice(key.indexOf("\0") + 1);
 }
 
 /** Start the sweeper. A no-op unless this instance is the one that fetches. */

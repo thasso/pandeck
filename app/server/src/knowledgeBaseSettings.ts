@@ -106,7 +106,8 @@ function current() {
 }
 
 /**
- * Placement's only best-effort read: valid settings are authoritative. During
+ * Served-file placement's only best-effort read (checkout placement reads no
+ * settings): valid settings are authoritative. During
  * failure, retain the last successful root and the default, warning once until
  * any direct/settings read succeeds. Other KB readers keep their own errors.
  */
@@ -119,7 +120,7 @@ export function knowledgeBasePlacementRoots(): readonly ResolvedRoot[] {
     if (!placementWarned) {
       placementWarned = true;
       console.warn(
-        "[workers] Knowledge Base settings unavailable; keeping known/default KB paths local and using the default Worker for other checkout git.",
+        "[workers] Knowledge Base settings unavailable; keeping known/default KB paths local for served files.",
       );
     }
     return lastRoot ? [lastRoot, defaultRoot] : [defaultRoot];

@@ -11,16 +11,14 @@
  * and root-map presence.
  */
 import type { WorktreeChangeFile, WorktreeGitStatus } from "@assistant/shared";
-import { checkoutPathExists } from "../checkoutFileAccess.ts";
-import {
-  gitOptionalExit,
-  gitReadOnlyOptional,
-  gitReadOnlyOptionalExit,
-  repoLockKey,
-  type GitResult,
-} from "../gitExec.ts";
+import { checkoutFilesOn } from "../checkoutFileAccess.ts";
+import { checkoutGitOn, type GitResult } from "../gitExec.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
-import { resolveReadableWorktreeRow } from "./knowledgeCheckout.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import {
+  checkoutSideOf,
+  resolveReadableWorktreeRow,
+} from "./knowledgeCheckout.ts";
 import { workingTreeFilesFromPorcelainV2 } from "./worktreeDiff.ts";
 import {
   fetchRepoIfDue,
@@ -38,8 +36,14 @@ interface CacheEntry {
   referenceStale: boolean;
 }
 
+/**
+ * Keyed by row id: the Knowledge Base row's id is its own, so its entries are
+ * never a checkout's. The caches below are shared by repository or tips and
+ * are keyed by side too ({@link sideKeyed}).
+ */
 const cache = new Map<string, CacheEntry>();
 const inFlight = new Map<string, Promise<WorktreeGitStatus>>();
+/** Side-keyed. */
 const mergedByTips = new Map<string, Promise<boolean>>();
 
 interface BranchTracking {
@@ -58,10 +62,24 @@ interface BranchUpstreamCacheEntry {
   upstreams: BranchUpstreams;
   cachedAt: number;
 }
+/** Side-keyed, by repository. */
 const branchUpstreamsByRepo = new Map<string, BranchUpstreamCacheEntry>();
-/** Last relationship map by watched root; targeting survives the short TTL. */
+/**
+ * Last relationship map by side and watched root; targeting survives the short
+ * TTL.
+ */
 const branchUpstreamsByRoot = new Map<string, BranchUpstreams>();
+/** Side-keyed, by repository. */
 const branchUpstreamsInFlight = new Map<string, Promise<BranchUpstreams>>();
+
+/**
+ * `key` on `side`. A folder that is both the Knowledge Base and a registered
+ * checkout keeps one entry per side, so a KB read never causes or joins a
+ * Worker read (RD-W3c-1); repository lock keys stay shared.
+ */
+function sideKeyed(side: CheckoutSide, key: string): string {
+  return `${checkoutGitOn(side).sideKey}\0${key}`;
+}
 let fullStatusComputes = 0;
 let workingTreeStatusComputes = 0;
 let branchUpstreamMapComputes = 0;
@@ -332,10 +350,16 @@ export async function stampWorktreeStatusFetchedAt(
  * local refs for which a remote-only move is not patch-safe.
  */
 export async function readRepoBranchUpstreams(
+  side: CheckoutSide,
   mainRepoRoot: string,
   opts: { force?: boolean; repoKey?: string } = {},
 ): Promise<BranchUpstreams> {
-  const repoKey = opts.repoKey ?? (await repoLockKey(mainRepoRoot));
+  const git = checkoutGitOn(side);
+  const repoKey = sideKeyed(
+    side,
+    opts.repoKey ?? (await git.repoLockKey(mainRepoRoot)),
+  );
+  const rootKey = sideKeyed(side, mainRepoRoot);
   const now = Date.now();
   const cached = branchUpstreamsByRepo.get(repoKey);
   if (!opts.force && cached && now - cached.cachedAt < STATUS_CACHE_MS)
@@ -350,7 +374,7 @@ export async function readRepoBranchUpstreams(
 
   const promise = (async (): Promise<BranchUpstreams> => {
     branchUpstreamMapComputes += 1;
-    const result = await gitReadOnlyOptional(
+    const result = await git.gitReadOnlyOptional(
       [
         "for-each-ref",
         "--format=%(refname)%09%(upstream)%09%(upstream:track)%09%(symref)%09%(upstream:short)",
@@ -361,9 +385,9 @@ export async function readRepoBranchUpstreams(
       { LC_ALL: "C" },
     );
     if (result.code !== 0) {
-      const previous = branchUpstreamsByRoot.get(mainRepoRoot);
+      const previous = branchUpstreamsByRoot.get(rootKey);
       branchUpstreamsByRepo.delete(repoKey);
-      branchUpstreamsByRoot.delete(mainRepoRoot);
+      branchUpstreamsByRoot.delete(rootKey);
       return previous ?? new Map();
     }
 
@@ -383,7 +407,7 @@ export async function readRepoBranchUpstreams(
       upstreams,
       cachedAt: Date.now(),
     });
-    branchUpstreamsByRoot.set(mainRepoRoot, upstreams);
+    branchUpstreamsByRoot.set(rootKey, upstreams);
     return upstreams;
   })().finally(() => {
     if (branchUpstreamsInFlight.get(repoKey) === promise)
@@ -395,9 +419,10 @@ export async function readRepoBranchUpstreams(
 
 /** Latest relationship map for watcher targeting, without spawning git. */
 export function cachedRepoBranchUpstreams(
+  side: CheckoutSide,
   mainRepoRoot: string,
 ): BranchUpstreams | undefined {
-  return branchUpstreamsByRoot.get(mainRepoRoot);
+  return branchUpstreamsByRoot.get(sideKeyed(side, mainRepoRoot));
 }
 
 function countersOf(
@@ -450,7 +475,7 @@ async function readContextBranchTracking(
   row: WorktreeRow,
   branch: string,
 ): Promise<{ ok: boolean; tracking?: BranchTracking }> {
-  const result = await gitReadOnlyOptional(
+  const result = await checkoutGitOn(checkoutSideOf(row)).gitReadOnlyOptional(
     [
       "for-each-ref",
       "--format=%(refname)%09%(upstream)%09%(upstream:track)%09%(symref)%09%(upstream:short)",
@@ -522,8 +547,10 @@ async function compute(
   suppliedBranchUpstreams?: BranchUpstreams,
   forceBranchUpstreams = false,
 ): Promise<WorktreeGitStatus> {
+  const side = checkoutSideOf(row);
   const gone =
-    row.status !== "active" || !(await checkoutPathExists(row.path, row.path));
+    row.status !== "active" ||
+    !(await checkoutFilesOn(side).pathExists(row.path, row.path));
   if (gone) {
     captureWorkingTree?.({ files: [], branch: row.branch, head: null });
     return {
@@ -542,7 +569,7 @@ async function compute(
     };
   }
 
-  const repoKey = await noteWorktreeInterest(row.mainRepoRoot);
+  const repoKey = await noteWorktreeInterest(side, row.mainRepoRoot);
   const workingTree = await readWorkingTree(row);
   captureWorkingTree?.(workingTree);
   const { snapshot, additions, deletions } = workingTree;
@@ -552,11 +579,11 @@ async function compute(
     suppliedBranchUpstreams ??
     (row.path === row.mainRepoRoot
       ? new Map()
-      : await readRepoBranchUpstreams(row.mainRepoRoot, {
+      : await readRepoBranchUpstreams(side, row.mainRepoRoot, {
           force: forceBranchUpstreams,
           ...(repoKey ? { repoKey } : {}),
         }));
-  const aheadBehindRes = await gitReadOnlyOptional(
+  const aheadBehindRes = await checkoutGitOn(side).gitReadOnlyOptional(
     ["rev-list", "--left-right", "--count", `${row.baseBranch}...${branchTip}`],
     row.mainRepoRoot,
   );
@@ -587,8 +614,8 @@ async function compute(
   // broadcasts a fresh status once new refs land.
   let fetchedAt: number | undefined;
   if (repoKey) {
-    fetchedAt = noteRepoInterest(repoKey, row.mainRepoRoot);
-    fetchRepoIfDue(repoKey, row.mainRepoRoot);
+    fetchedAt = noteRepoInterest(side, repoKey, row.mainRepoRoot);
+    fetchRepoIfDue(side, repoKey, row.mainRepoRoot);
   }
 
   return withBaseUpstream(
@@ -628,7 +655,7 @@ async function computeWorkingTree(
 ): Promise<WorktreeGitStatus> {
   if (
     row.status !== "active" ||
-    !(await checkoutPathExists(row.path, row.path))
+    !(await checkoutFilesOn(checkoutSideOf(row)).pathExists(row.path, row.path))
   ) {
     captureWorkingTree?.({ files: [], branch: row.branch, head: null });
     return {
@@ -668,6 +695,7 @@ async function readWorkingTree(row: WorktreeRow): Promise<{
   branch: string | null;
   head: string | null;
 }> {
+  const { gitReadOnlyOptional } = checkoutGitOn(checkoutSideOf(row));
   const [statusRes, numstatRes] = await Promise.all([
     gitReadOnlyOptional(
       [
@@ -787,7 +815,7 @@ async function recordedBranchOid(
 ): Promise<string | undefined> {
   if (snapshot.branch === row.branch || row.path === row.mainRepoRoot)
     return snapshot.oid;
-  const ref = await gitReadOnlyOptionalExit(
+  const ref = await checkoutGitOn(checkoutSideOf(row)).gitReadOnlyOptionalExit(
     ["rev-parse", "--verify", `refs/heads/${row.branch}^{commit}`],
     row.mainRepoRoot,
   );
@@ -796,7 +824,7 @@ async function recordedBranchOid(
 
 /** The base branch's commit oid, or `""` when the ref resolves to nothing. */
 async function resolveBaseCommit(row: WorktreeRow): Promise<string> {
-  const base = await gitReadOnlyOptionalExit(
+  const base = await checkoutGitOn(checkoutSideOf(row)).gitReadOnlyOptionalExit(
     ["rev-parse", "--verify", `${row.baseBranch}^{commit}`],
     row.mainRepoRoot,
   );
@@ -820,7 +848,8 @@ async function isMerged(
   const baseOid = await resolveBaseCommit(row);
   if (!baseOid) return false;
 
-  const key = `${branchOid}:${baseOid}`;
+  const side = checkoutSideOf(row);
+  const key = sideKeyed(side, `${branchOid}:${baseOid}`);
   const cached = mergedByTips.get(key);
   if (cached) {
     mergedByTips.delete(key);
@@ -835,7 +864,7 @@ async function isMerged(
     row.mainRepoRoot,
     branchOid,
     baseOid,
-    gitReadOnlyOptionalExit,
+    checkoutGitOn(side).gitReadOnlyOptionalExit,
   ).catch((err: unknown) => {
     mergedByTips.delete(key);
     throw err;
@@ -846,11 +875,17 @@ async function isMerged(
 
 /** Branch work is contained in a base branch or exact target commit. */
 export async function branchContainedInBase(
+  side: CheckoutSide,
   repoRoot: string,
   branch: string,
   baseTarget: string,
 ): Promise<boolean> {
-  return branchContained(repoRoot, branch, baseTarget, gitOptionalExit);
+  return branchContained(
+    repoRoot,
+    branch,
+    baseTarget,
+    checkoutGitOn(side).gitOptionalExit,
+  );
 }
 
 type OptionalExit = (args: string[], cwd: string) => Promise<GitResult>;

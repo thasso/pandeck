@@ -23,6 +23,7 @@ import { afterAll, afterEach, beforeAll, describe, test, vi } from "vitest";
 import {
   checkLexicalPath,
   checkoutFailureOf,
+  checkoutFilesOn,
   checkoutPathExists,
   containedRealPath,
   inspectCheckoutPath,
@@ -45,6 +46,7 @@ import {
   FILE_METHODS,
 } from "./workerProtocol/fileMethods.ts";
 import { isWorkerFailure } from "./workers/fileClient.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 import {
   answerNextInProcessWorkerCallForTests,
   inProcessWorkerFileHandlesForTests,
@@ -55,11 +57,11 @@ import {
 } from "./workers/inProcessWorker.ts";
 
 /**
- * The checkout-file access on both sides: a checkout outside the Knowledge
- * Base reads through the in-process Worker over the real codec, and the
- * Knowledge Base on the server through `fileReads.ts`. Faults go in through
- * the real handlers' seams or the Worker's one-shot answer substitution,
- * never a mock transport.
+ * The checkout-file access on both sides: the default Worker's reads, which
+ * the root-taking functions are, go through the in-process Worker over the
+ * real codec, and the server side's (the Knowledge Base row's) through
+ * `fileReads.ts`. Faults go in through the real handlers' seams or the
+ * Worker's one-shot answer substitution, never a mock transport.
  */
 
 // Passthrough `node:fs/promises`, except that a held native close of a
@@ -93,7 +95,7 @@ const MIB = 1024 * 1024;
 let scratch: string;
 /** A checkout read by the Worker. */
 let onWorker: string;
-/** The Knowledge Base, read on the server. */
+/** The configured Knowledge Base root, which the server side reads. */
 let onServer: string;
 
 beforeAll(() => {
@@ -154,9 +156,10 @@ function holdNextNativeClose(): {
   return { reached, release };
 }
 
+/** Each side's reads; the server's are the Knowledge Base row's. */
 const SIDES = [
-  ["Worker", () => onWorker],
-  ["server", () => onServer],
+  ["Worker", () => onWorker, checkoutFilesOn(DEFAULT_WORKER_SIDE)],
+  ["server", () => onServer, checkoutFilesOn("server")],
 ] as const;
 
 function fixture(root: string, name: string, bytes: Buffer | string): string {
@@ -214,7 +217,7 @@ function rejectionSync(run: () => unknown): unknown {
   assert.fail("expected a throw");
 }
 
-describe("each read runs on the side of its checkout root", () => {
+describe("each read runs on its side", () => {
   test("a checkout outside the Knowledge Base reads through the Worker", async () => {
     const file = fixture(onWorker, "routed/a.txt", "alpha\n");
     const dir = join(onWorker, "routed");
@@ -272,34 +275,55 @@ describe("each read runs on the side of its checkout root", () => {
     });
   });
 
-  test("the Knowledge Base reads on the server and sends the Worker nothing", async () => {
+  test("the server side reads locally and sends the Worker nothing", async () => {
+    const server = checkoutFilesOn("server");
     const file = fixture(onServer, "routed/a.txt", "alpha\n");
     const link = join(onServer, "routed-link");
     symlinkSync("routed/a.txt", link);
     const before = inProcessWorkerServedForTests();
     const pathCalls = fileReadsCountsForTests().pathCalls;
-    assert.equal(await checkoutPathExists(onServer, file), true);
+    assert.equal(await server.pathExists(onServer, file), true);
     assert.equal(
-      (await inspectCheckoutPath(onServer, file, { follow: true })).kind,
+      (await server.inspect(onServer, file, { follow: true })).kind,
       "file",
     );
-    assert.deepEqual(
-      await readCheckoutDir(onServer, join(onServer, "routed")),
-      [{ name: "a.txt", directory: false }],
-    );
-    assert.equal(await realpathInCheckout(onServer, file), realpathSync(file));
-    assert.equal(await readCheckoutLink(onServer, link), readlinkSync(link));
-    assert.equal(
-      (await readCheckoutFile(onServer, file)).toString(),
-      "alpha\n",
-    );
+    assert.deepEqual(await server.readDir(onServer, join(onServer, "routed")), [
+      { name: "a.txt", directory: false },
+    ]);
+    assert.equal(await server.realpath(onServer, file), realpathSync(file));
+    assert.equal(await server.readLink(onServer, link), readlinkSync(link));
+    assert.equal((await server.readFile(onServer, file)).toString(), "alpha\n");
     assert.equal(inProcessWorkerServedForTests(), before, "no Worker request");
     assert.equal(fileReadsCountsForTests().pathCalls, pathCalls + 5);
   });
 
+  test("a root inside the Knowledge Base root, read by root, goes to the Worker", async () => {
+    // Placement is typed: no path keeps a checkout on the server (RD-W3-1).
+    const file = fixture(onServer, "by-root/a.txt", "alpha\n");
+    const { served } = await servedBy(
+      [FILE_METHODS.exists, FILE_METHODS.realpath, FILE_METHODS.open],
+      async () => {
+        assert.equal(await checkoutPathExists(onServer, file), true);
+        assert.equal(
+          await realpathInCheckout(onServer, file),
+          realpathSync(file),
+        );
+        assert.equal(
+          (await readCheckoutFile(onServer, file)).toString(),
+          "alpha\n",
+        );
+      },
+    );
+    assert.deepEqual(served, {
+      [FILE_METHODS.exists]: 1,
+      [FILE_METHODS.realpath]: 1,
+      [FILE_METHODS.open]: 1,
+    });
+  });
+
   test.each(SIDES)(
     "%s: an entry modified before 1970 inspects to its native digits, both ways on a link",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const file = fixture(root(), "pre-epoch/a.txt", "x");
       const link = join(root(), "pre-epoch/a.link");
       symlinkSync(file, link);
@@ -311,7 +335,7 @@ describe("each read runs on the side of its checkout root", () => {
         [false, "symlink", lstatSync(link, { bigint: true })],
       ] as const) {
         assert.ok(oracle.mtimeNs < 0n, "the fixture predates the epoch");
-        assert.deepEqual(await inspectCheckoutPath(root(), link, { follow }), {
+        assert.deepEqual(await files.inspect(root(), link, { follow }), {
           kind,
           dev: String(oracle.dev),
           ino: String(oracle.ino),
@@ -353,16 +377,16 @@ describe("where an error came from", () => {
 
   test.each(SIDES)(
     "%s: a filesystem failure is marked where it was answered",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const missing = join(root(), "missing");
       const file = fixture(root(), "marked.txt", "x");
       for (const error of [
-        await rejection(inspectCheckoutPath(root(), missing, { follow: true })),
-        await rejection(readCheckoutDir(root(), file)),
-        await rejection(realpathInCheckout(root(), missing)),
-        await rejection(readCheckoutFile(root(), missing)),
-        await rejection(readCheckoutLink(root(), missing)),
-        await rejection(readCheckoutLink(root(), file)),
+        await rejection(files.inspect(root(), missing, { follow: true })),
+        await rejection(files.readDir(root(), file)),
+        await rejection(files.realpath(root(), missing)),
+        await rejection(files.readFile(root(), missing)),
+        await rejection(files.readLink(root(), missing)),
+        await rejection(files.readLink(root(), file)),
       ]) {
         assert.equal(checkoutFailureOf(error), "filesystem", String(error));
         assert.equal(isWorkerFailure(error), false);
@@ -377,7 +401,7 @@ describe("where an error came from", () => {
           }),
         );
         const error = await rejection(
-          inspectCheckoutPath(root(), file, { follow: true }),
+          files.inspect(root(), file, { follow: true }),
         );
         assert.equal(checkoutFailureOf(error), "filesystem");
         assert.equal("code" in (error as object), false);
@@ -386,15 +410,16 @@ describe("where an error came from", () => {
   );
 
   test("a local rejection is the filesystem's only with a native errno", async () => {
+    const server = checkoutFilesOn("server");
     const file = fixture(onServer, "errno.txt", "x");
     failFileForTests(file, { phase: "inspect", code: "EIO" });
     const native = await rejection(
-      inspectCheckoutPath(onServer, file, { follow: false }),
+      server.inspect(onServer, file, { follow: false }),
     );
     assert.equal(checkoutFailureOf(native), "filesystem");
     failFileForTests(file, { phase: "inspect", code: "EIO", bare: true });
     const bare = await rejection(
-      inspectCheckoutPath(onServer, file, { follow: false }),
+      server.inspect(onServer, file, { follow: false }),
     );
     assert.equal((bare as NodeJS.ErrnoException).code, "EIO");
     assert.equal(checkoutFailureOf(bare), undefined);
@@ -459,25 +484,25 @@ describe("where an error came from", () => {
 describe("containedRealPath", () => {
   test.each(SIDES)(
     "%s: inside, missing and escaping, as base",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const file = fixture(root(), "contained/in.txt", "x");
       assert.equal(
-        await containedRealPath(root(), "contained/in.txt"),
+        await files.containedRealPath(root(), "contained/in.txt"),
         realpathSync(file),
       );
       // A missing file answers its lexical path, without resolving the root.
       const { result, served } = await servedBy([FILE_METHODS.realpath], () =>
-        containedRealPath(root(), "contained/missing.txt"),
+        files.containedRealPath(root(), "contained/missing.txt"),
       );
       assert.equal(result, join(root(), "contained/missing.txt"));
       assert.equal(served[FILE_METHODS.realpath], root() === onWorker ? 1 : 0);
       symlinkSync(scratch, join(root(), "contained/out"));
       const escape = await rejection(
-        containedRealPath(root(), "contained/out"),
+        files.containedRealPath(root(), "contained/out"),
       );
       assert.equal(checkoutFailureOf(escape), "verdict");
       assert.equal((escape as Error).message, "Invalid file path.");
-      const lexical = await rejection(containedRealPath(root(), "../kb"));
+      const lexical = await rejection(files.containedRealPath(root(), "../kb"));
       assert.equal(checkoutFailureOf(lexical), "verdict");
     },
   );
@@ -541,9 +566,12 @@ describe("containedRealPath", () => {
   });
 
   test("an unclassified local realpath failure propagates", async () => {
+    const server = checkoutFilesOn("server");
     const file = fixture(onServer, "bare/in.txt", "x");
     failFileForTests(file, { phase: "realpath", code: "ENOENT", bare: true });
-    const error = await rejection(containedRealPath(onServer, "bare/in.txt"));
+    const error = await rejection(
+      server.containedRealPath(onServer, "bare/in.txt"),
+    );
     assert.equal(checkoutFailureOf(error), undefined);
     assert.equal((error as NodeJS.ErrnoException).code, "ENOENT");
   });
@@ -557,13 +585,13 @@ describe("readCheckoutFile follows production's readFile", () => {
 
   test.each(SIDES)(
     "%s: no descriptor stat, and the content",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const file = fixture(root(), "nostat.bin", binary(3000));
       failFileForTests(file, { phase: "stat", code: "EIO" });
       const stats = fileReadsCountsForTests().descriptorStats;
-      assert.ok((await readCheckoutFile(root(), file)).equals(binary(3000)));
+      assert.ok((await files.readFile(root(), file)).equals(binary(3000)));
       assert.ok(
-        (await readCheckoutFile(root(), file, 100)).equals(
+        (await files.readFile(root(), file, 100)).equals(
           binary(3000).subarray(0, 100),
         ),
       );
@@ -575,10 +603,10 @@ describe("readCheckoutFile follows production's readFile", () => {
 
   test.each(SIDES)(
     "%s: bytes appended after the open are read, up to the limit",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const file = fixture(root(), "grow.txt", "abc");
       const held = holdFileForTests(file, "after-open");
-      const reading = readCheckoutFile(root(), file);
+      const reading = files.readFile(root(), file);
       await held.reached;
       appendFileSync(file, "def");
       held.release();
@@ -586,7 +614,7 @@ describe("readCheckoutFile follows production's readFile", () => {
 
       writeFileSync(file, "abc");
       const capped = holdFileForTests(file, "after-open");
-      const limited = readCheckoutFile(root(), file, 5);
+      const limited = files.readFile(root(), file, 5);
       await capped.reached;
       appendFileSync(file, "def");
       capped.release();
@@ -596,25 +624,25 @@ describe("readCheckoutFile follows production's readFile", () => {
 
   test.each(SIDES)(
     "%s: a file shrunk after the open reads short; an empty one reads nothing",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const file = fixture(root(), "shrink.txt", "abcdef");
       const held = holdFileForTests(file, "after-open");
-      const reading = readCheckoutFile(root(), file);
+      const reading = files.readFile(root(), file);
       await held.reached;
       truncateSync(file, 2);
       held.release();
       assert.equal((await reading).toString(), "ab");
       const empty = fixture(root(), "empty.txt", "");
-      assert.equal((await readCheckoutFile(root(), empty)).byteLength, 0);
-      assert.equal((await readCheckoutFile(root(), empty, 10)).byteLength, 0);
+      assert.equal((await files.readFile(root(), empty)).byteLength, 0);
+      assert.equal((await files.readFile(root(), empty, 10)).byteLength, 0);
     },
   );
 
   test.each(SIDES)(
     "%s: a directory is the filesystem's EISDIR",
-    async (_side, root) => {
+    async (_side, root, files) => {
       for (const limit of [undefined, 10]) {
-        const error = await rejection(readCheckoutFile(root(), root(), limit));
+        const error = await rejection(files.readFile(root(), root(), limit));
         assert.equal((error as NodeJS.ErrnoException).code, "EISDIR");
         assert.equal(checkoutFailureOf(error), "filesystem");
       }
@@ -684,25 +712,25 @@ describe("readCheckoutFile follows production's readFile", () => {
 describe("read and close failures", () => {
   test.each(SIDES)(
     "%s: an error thrown by the reader's own logic is never mapped",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const file = fixture(root(), "sentinel.txt", "x");
       const sentinel = new TypeError("sentinel");
       throwInCheckoutReadForTests(sentinel, { at: "read" });
-      assert.equal(await rejection(readCheckoutFile(root(), file)), sentinel);
+      assert.equal(await rejection(files.readFile(root(), file)), sentinel);
       // A successful read with an unclassified close error throws it.
       throwInCheckoutReadForTests(sentinel, { at: "close" });
-      assert.equal(await rejection(readCheckoutFile(root(), file)), sentinel);
+      assert.equal(await rejection(files.readFile(root(), file)), sentinel);
       assert.equal(checkoutFailureOf(sentinel), undefined);
     },
   );
 
   test.each(SIDES)(
     "%s: (iv) a filesystem read failure loses to an unclassified close error",
-    async (_side, root) => {
+    async (_side, root, files) => {
       const sentinel = new TypeError("sentinel");
       throwInCheckoutReadForTests(sentinel, { at: "close" });
       // The read of a directory fails EISDIR, answered or native.
-      assert.equal(await rejection(readCheckoutFile(root(), root())), sentinel);
+      assert.equal(await rejection(files.readFile(root(), root())), sentinel);
     },
   );
 

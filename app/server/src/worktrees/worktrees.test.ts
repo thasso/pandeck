@@ -54,6 +54,7 @@ const {
   invalidateMainRepo,
 } = await import("./worktreeResolve.ts");
 const { branchContainedInBase } = await import("./worktreeStatus.ts");
+const { DEFAULT_WORKER_SIDE } = await import("../workers/placement.ts");
 const { setWorktreeBroadcaster } = await import("./worktreeEvents.ts");
 const { mergeWorktree } = await import("./worktreeMerge.ts");
 const {
@@ -1882,7 +1883,13 @@ test("containment guards propagate git execution failures", async () => {
 
   await assert.rejects(() => hasUnmergedCommits(row), /git show-ref .*failed/);
   await assert.rejects(
-    () => branchContainedInBase(missingRepo, "feature", "main"),
+    () =>
+      branchContainedInBase(
+        DEFAULT_WORKER_SIDE,
+        missingRepo,
+        "feature",
+        "main",
+      ),
     /git merge-base .*failed/,
   );
 });
@@ -2085,7 +2092,12 @@ test("merged card proves the delivered head after later same-file base changes, 
   sh(repoPath, "add", "-A");
   sh(repoPath, "commit", "-m", "move base onward");
   assert.equal(
-    await branchContainedInBase(repoPath, record.branch, "main"),
+    await branchContainedInBase(
+      DEFAULT_WORKER_SIDE,
+      repoPath,
+      record.branch,
+      "main",
+    ),
     false,
   );
   assert.equal(await hasUnmergedCommits(getWorktree(record.id)!), false);

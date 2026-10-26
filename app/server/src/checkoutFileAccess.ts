@@ -6,12 +6,12 @@
  *
  * {@link checkoutFilesOn} reads on a given side: the modules that can hold
  * the Knowledge Base row pass the row's typed side (`checkoutSideOf`). The
- * root-taking functions below pick the side from the checkout root alone,
- * through the same placement as the string git executors (`placeGitCwd`).
- * Either way the server never resolves a path it reads to choose where to read
- * it. The server side reads through `fileReads.ts`; a Worker side goes to its
- * Worker through the file methods (`workers/fileClient.ts`). When the Worker
- * fails, the read fails: there is no local fallback.
+ * root-taking functions below are the default Worker's, like the string git
+ * executors: no path chooses a side, and the server never resolves a path it
+ * reads to choose where to read it. The server side reads through
+ * `fileReads.ts`; a Worker side goes to its Worker through the file methods
+ * (`workers/fileClient.ts`). When the Worker fails, the read fails: there is
+ * no local fallback.
  *
  * Callers map errors by where they came from, through
  * {@link checkoutFailureOf}, and by nothing else:
@@ -51,8 +51,8 @@ import {
   realpathOnWorker,
 } from "./workers/fileClient.ts";
 import {
+  DEFAULT_WORKER_SIDE,
   checkoutSideKey,
-  placeGitCwd,
   type CheckoutSide,
 } from "./workers/placement.ts";
 
@@ -93,8 +93,10 @@ function isNativeFailure(error: unknown): error is Error {
 }
 
 /**
- * One local primitive call; only a native rejection is a filesystem failure.
- * Also the rule for the server's own repositories' reads (`serverRepoGit.ts`).
+ * One local primitive call; only a native rejection is a filesystem failure,
+ * so a server-side read never yields a `"worker"` failure. The server side's
+ * rule (the Knowledge Base row), and the server's own repositories' reads
+ * (`serverRepoGit.ts`).
  */
 export async function readLocally<T>(call: () => Promise<T>): Promise<T> {
   try {
@@ -113,12 +115,6 @@ async function remote<T>(call: () => Promise<T>): Promise<T> {
     if (error instanceof AnsweredFileFailure) filesystemFailure(error);
     throw error;
   }
-}
-
-/** The side placement gives the checkout at `root`. */
-function placedSide(root: string): CheckoutSide {
-  const location = placeGitCwd(root);
-  return location ? { workerId: location.workerId } : "server";
 }
 
 /** Runs one primitive for `path` on `side`. */
@@ -170,7 +166,7 @@ export function checkoutPathExists(
   root: string,
   path: string,
 ): Promise<boolean> {
-  return existsOn(placedSide(root), path);
+  return onDefaultWorker().pathExists(root, path);
 }
 
 /** With `mode`, the answer carries the mode bits; a Worker must send them. */
@@ -179,26 +175,26 @@ export function inspectCheckoutPath(
   path: string,
   options: { follow: boolean; mode?: boolean },
 ): Promise<PathInspection> {
-  return inspectOn(placedSide(root), path, options);
+  return onDefaultWorker().inspect(root, path, options);
 }
 
 /** A symlink's target text, as `readlink` decodes it. */
 export function readCheckoutLink(root: string, path: string): Promise<string> {
-  return readLinkOn(placedSide(root), path);
+  return onDefaultWorker().readLink(root, path);
 }
 
 export function readCheckoutDir(
   root: string,
   dir: string,
 ): Promise<DirectoryEntry[]> {
-  return readDirOn(placedSide(root), dir);
+  return onDefaultWorker().readDir(root, dir);
 }
 
 export function realpathInCheckout(
   root: string,
   path: string,
 ): Promise<string> {
-  return realpathOn(placedSide(root), path);
+  return onDefaultWorker().realpath(root, path);
 }
 
 /**
@@ -227,7 +223,7 @@ export function containedRealPath(
   root: string,
   relPath: string,
 ): Promise<string> {
-  return containedRealPathOn(placedSide(root), root, relPath);
+  return onDefaultWorker().containedRealPath(root, relPath);
 }
 
 async function containedRealPathOn(
@@ -278,7 +274,7 @@ export function readCheckoutFile(
   path: string,
   limit?: number,
 ): Promise<Buffer> {
-  return readFileOn(placedSide(root), path, limit);
+  return onDefaultWorker().readFile(root, path, limit);
 }
 
 async function readFileOn(
@@ -366,6 +362,14 @@ export interface CheckoutFiles {
 }
 
 const filesBySide = new Map<string, CheckoutFiles>();
+
+/**
+ * The default Worker's reads, behind the root-taking functions: a checkout
+ * reached by a bare root is never the Knowledge Base row.
+ */
+function onDefaultWorker(): CheckoutFiles {
+  return checkoutFilesOn(DEFAULT_WORKER_SIDE);
+}
 
 /** The checkout reads on `side`, one instance per side. */
 export function checkoutFilesOn(side: CheckoutSide): CheckoutFiles {

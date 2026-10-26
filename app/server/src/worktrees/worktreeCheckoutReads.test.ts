@@ -80,9 +80,9 @@ import {
 
 /**
  * The worktree surfaces' checkout reads (`docs/workers.md`, "Checkout
- * files"): a checkout outside the Knowledge Base reads through the in-process
- * Worker over the real codec, the Knowledge Base on the server. Every expected
- * value is base's: its `readFile`, `lstat`, `readdir` and `realpathSync`.
+ * files"): every checkout reads through the in-process Worker over the real
+ * codec, the Knowledge Base row on the server, by kind. Every expected value
+ * is base's: its `readFile`, `lstat`, `readdir` and `realpathSync`.
  */
 
 const INVALID_FRAME = new Uint8Array(8);
@@ -231,6 +231,35 @@ const text = (row: WorktreeRow, path: string) =>
     truncated,
   }));
 const EMPTY = { content: "", binary: false, truncated: false };
+
+describe("RD-W3-1 the side comes from the row, never its path", () => {
+  test("a worktree row at the Knowledge Base root reads and runs git on the Worker", async () => {
+    const atKbRoot = rowOf("worktree-in-kb", serverRow.path);
+    const served = inProcessWorkerServedForTests();
+    assert.deepEqual(await text(atKbRoot, "a.txt"), {
+      ...EMPTY,
+      content: "alpha\n",
+    });
+    const onWorker = await computeWorktreeStatus(atKbRoot);
+    assert.ok(inProcessWorkerServedForTests() > served);
+    // The KB row at the same path sends the Worker nothing.
+    const kbServed = inProcessWorkerServedForTests();
+    assert.deepEqual(await text(serverRow, "a.txt"), {
+      ...EMPTY,
+      content: "alpha\n",
+    });
+    const onServer = await computeWorktreeStatus(serverRow);
+    assert.equal(inProcessWorkerServedForTests(), kbServed);
+    // Both answer as the same checkout does.
+    for (const field of [
+      "branch",
+      "head",
+      "filesChanged",
+      "untracked",
+    ] as const)
+      assert.equal(onWorker[field], onServer[field], field);
+  });
+});
 
 describe("AC3 working-tree text at the 512 KiB boundary", () => {
   test.each(SIDES)("%s", async (_side, row) => {

@@ -24,7 +24,6 @@ import { knowledgeBaseRoot } from "../knowledgeBaseSettings.ts";
 import * as serverLocal from "../serverRepoGit.ts";
 import { getSettings } from "../settings.ts";
 import { inProcessWorkerServedForTests } from "./inProcessWorker.ts";
-import { DEFAULT_WORKER_ID, placeGitCwd } from "./placement.ts";
 
 /** The family as the server runs it for its own repositories. */
 const local = createGitFamily(localGitRunner, {
@@ -51,8 +50,6 @@ afterEach(() => {
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-const onWorker = { workerId: DEFAULT_WORKER_ID, path: repo };
-
 for (const mode of ["broker", "in-process"]) {
   describe(mode, () => {
     for (const fault of ["invalid JSON", "unreadable directory", "EACCES"]) {
@@ -65,7 +62,6 @@ for (const mode of ["broker", "in-process"]) {
           const valid = JSON.stringify({ knowledgeBase: { path: custom } });
           settings(valid);
           assert.equal(knowledgeBaseRoot(), custom, "prime the settings cache");
-          assert.equal(placeGitCwd(custom), undefined);
           await local.git(["init", "-q"], repo);
 
           try {
@@ -86,7 +82,6 @@ for (const mode of ["broker", "in-process"]) {
               () => knowledgeBaseRoot(),
               /Failed to read app settings/,
             );
-            assert.deepEqual(placeGitCwd(repo), onWorker);
 
             const before = inProcessWorkerServedForTests();
             const success = ["rev-parse", "--git-dir"];
@@ -148,17 +143,15 @@ for (const mode of ["broker", "in-process"]) {
             custom,
             "repair recovers without invalidating the cache manually",
           );
-          assert.equal(
-            placeGitCwd(custom),
-            undefined,
-            "the recovered KB stays local",
-          );
-          assert.deepEqual(placeGitCwd(repo), onWorker);
-          const beforeLocal = inProcessWorkerServedForTests();
+          // Checkout placement is typed: a bare cwd at the KB root is a
+          // checkout, on the Worker (RD-W3-1).
+          const beforeKbRoot = inProcessWorkerServedForTests();
           assert.equal(
             (await checkout.gitOptional(["--version"], custom)).code,
             0,
           );
+          assert.equal(inProcessWorkerServedForTests() - beforeKbRoot, 1);
+          const beforeLocal = inProcessWorkerServedForTests();
           assert.equal(
             (await serverLocal.gitOptional(["--version"], repo)).code,
             0,
@@ -171,11 +164,6 @@ for (const mode of ["broker", "in-process"]) {
 
           rmSync(APP_SETTINGS_PATH);
           assert.equal(knowledgeBaseRoot(), join(DATA_DIR, "knowledge"));
-          assert.equal(
-            placeGitCwd(join(DATA_DIR, "knowledge", "missing")),
-            undefined,
-          );
-          assert.deepEqual(placeGitCwd(repo), onWorker);
         },
       );
     }

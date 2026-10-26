@@ -603,3 +603,638 @@ test("literal CommonJS loads count as imports, into and out of the Worker side",
   );
   assert.equal(method.imports.size, 0);
 });
+
+/* ------------------------- the side-bound ratchet (§5) ------------------------ */
+
+/**
+ * Every module that can hold the Knowledge Base row and does checkout work with
+ * it. Each must run that work on the row's own side, so its value imports are
+ * closed: a KB row leaves these modules only through the side-bound allowance,
+ * another member, or a reviewed external symbol pinned to its declaration.
+ */
+const SIDE_BOUND_MODULES = [
+  "documentGrantTargets.ts",
+  "worktrees/worktreeDiff.ts",
+  "worktrees/worktreeFetch.ts",
+  "worktrees/worktreeRemote.ts",
+  "worktrees/worktreeStatus.ts",
+  "worktrees/worktreeWatcher.ts",
+  "worktrees/worktreeWrite.ts",
+];
+
+/**
+ * What a side-bound module may never import: the default Worker's string API
+ * (by symbol) and every executor or primitive below the families (`"*"`).
+ */
+const SIDE_BOUND_FORBIDDEN: Record<string, readonly string[] | "*"> = {
+  "gitExec.ts": [
+    "git",
+    "gitBoundedStdout",
+    "gitWithInputOptional",
+    "gitRawStdout",
+    "gitOptional",
+    "gitReadOnlyOptional",
+    "gitOptionalExit",
+    "gitReadOnlyOptionalExit",
+    "resolveRepoRoot",
+    "repoLockKey",
+  ],
+  "checkoutFileAccess.ts": [
+    "checkoutPathExists",
+    "inspectCheckoutPath",
+    "readCheckoutLink",
+    "readCheckoutDir",
+    "realpathInCheckout",
+    "containedRealPath",
+    "readCheckoutFile",
+  ],
+  "workers/placement.ts": ["DEFAULT_WORKER_ID", "DEFAULT_WORKER_SIDE"],
+  "gitProcess.ts": "*",
+  "fileReads.ts": "*",
+  "workers/fileClient.ts": "*",
+  "workers/checkoutClient.ts": "*",
+  "serverRepoGit.ts": "*",
+};
+
+/** The side-bound and pure allowance: every symbol, or the listed ones. */
+const SIDE_BOUND_ALLOWED: Record<string, readonly string[] | "*"> = {
+  "gitExec.ts": ["checkoutGitOn", "withRepoLock", "GitCommandError"],
+  "checkoutFileAccess.ts": [
+    "checkoutFilesOn",
+    "checkLexicalPath",
+    "checkoutFailureOf",
+    "CheckoutPathVerdict",
+  ],
+  "worktrees/knowledgeCheckout.ts": [
+    "checkoutSideOf",
+    "resolveReadableWorktreeRow",
+  ],
+  "@assistant/shared": "*",
+  "node:path": "*",
+  "node:url": "*",
+};
+
+type ExternalKind = "function" | "typed-const" | "scalar" | "server-fs";
+
+interface ExternalImport {
+  importer: string;
+  module: string;
+  symbol: string;
+  kind: ExternalKind;
+  /**
+   * `function`: the parameters and return type; `typed-const`: the annotation;
+   * `scalar`: the whole statement; `server-fs`: none. Whitespace-normalized.
+   */
+  pin: string;
+}
+
+/**
+ * Every other value import of a side-bound module, pinned to its declaration
+ * so that a KB row it is handed cannot reach a Worker unseen. The `server-fs`
+ * primitives run only on the server's own filesystem, so they cannot drop the
+ * KB row's server side; for other rows they are W4's pinned checkout debt.
+ */
+const SIDE_BOUND_EXTERNAL_IMPORTS: ExternalImport[] = [
+  {
+    importer: "worktrees/worktreeFetch.ts",
+    module: "settings.ts",
+    symbol: "getSettings",
+    kind: "function",
+    pin: "(publicBaseUrl?: string): AppSettings",
+  },
+  {
+    importer: "worktrees/worktreeFetch.ts",
+    module: "config.ts",
+    symbol: "BACKGROUND_FETCH_ENABLED",
+    kind: "scalar",
+    pin: 'export const BACKGROUND_FETCH_ENABLED = process.env.ASSISTANT_BACKGROUND_FETCH === "1";',
+  },
+  {
+    importer: "documentGrantTargets.ts",
+    module: "config.ts",
+    symbol: "DATA_DIR",
+    kind: "scalar",
+    pin: "export const DATA_DIR = resolvePath(process.env.DATA_DIR ?? file.dataDir ?? DEFAULTS.dataDir);",
+  },
+  {
+    importer: "documentGrantTargets.ts",
+    module: "servedFileAccess.ts",
+    symbol: "servedSideOf",
+    kind: "function",
+    pin: "(path: string): ServedSide",
+  },
+  {
+    importer: "documentGrantTargets.ts",
+    module: "servedFileAccess.ts",
+    symbol: "realpathServedFileOn",
+    kind: "function",
+    pin: "(path: string, side: ServedSide): Promise<string>",
+  },
+  {
+    importer: "documentGrantTargets.ts",
+    module: "directFileGrants.ts",
+    symbol: "mintDocumentGrantOn",
+    kind: "function",
+    pin: "(filePath: string, scope: FileGrantScope, delivery: FileGrantDeliveryMode, authority: { root: string; sourceKey: string; fresh?: boolean; side: ServedSide; }): Promise<MintedDocument>",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "db/worktreeStore.ts",
+    symbol: "listWorktrees",
+    kind: "function",
+    pin: "(filter: { projectId?: string; includeRemoved?: boolean } = {}): WorktreeRow[]",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "db/worktreeStore.ts",
+    symbol: "worktreeIdBySession",
+    kind: "typed-const",
+    pin: "() => ReadonlyMap<string, string>",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "worktrees/worktreeResolve.ts",
+    symbol: "canonicalWorktreeId",
+    kind: "function",
+    pin: "(id: string): string",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "worktrees/worktreeResolve.ts",
+    symbol: "worktreeExistsSync",
+    kind: "function",
+    pin: "(id: string): boolean",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "worktrees/worktreeEvents.ts",
+    symbol: "worktreeBroadcaster",
+    kind: "function",
+    pin: "(): WorktreeBroadcaster",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "node:fs",
+    symbol: "existsSync",
+    kind: "server-fs",
+    pin: "",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "node:fs",
+    symbol: "readFileSync",
+    kind: "server-fs",
+    pin: "",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "node:fs/promises",
+    symbol: "readdir",
+    kind: "server-fs",
+    pin: "",
+  },
+  {
+    importer: "worktrees/worktreeWatcher.ts",
+    module: "parcelWatcher.ts",
+    symbol: "default",
+    kind: "server-fs",
+    pin: "",
+  },
+];
+
+/** The modules that may hand out the KB row: the gate and three side-bound. */
+const KB_ROW_PRODUCERS = [
+  "documentGrantTargets.ts",
+  "worktrees/worktreeHttp.ts",
+  "worktrees/worktreeStatus.ts",
+  "worktrees/worktreeWatcher.ts",
+];
+
+const SERVER_FS_MODULES = new Set(["node:fs", "node:fs/promises"]);
+
+/** One value binding a module takes from (or re-exports out of) another. */
+interface SymbolImport {
+  module: string;
+  /** `default`, `*` for a namespace or `export *`, or the imported name. */
+  symbol: string;
+  form: "import" | "re-export" | "dynamic" | "require";
+}
+
+function parseModule(file: string, source: string): AstNode {
+  const parsed = parseSync(file, source, { lang: "ts", sourceType: "module" });
+  assert.deepEqual(
+    parsed.errors.map((error) => error.message),
+    [],
+    `${file} must parse for the side-bound scan`,
+  );
+  return parsed.program as unknown as AstNode;
+}
+
+function moduleTarget(file: string, specifier: string): string {
+  return specifier.startsWith(".")
+    ? relative(SRC_ROOT, resolve(dirname(join(SRC_ROOT, file)), specifier))
+    : specifier;
+}
+
+const nameOf = (node: unknown): string =>
+  isNode(node) ? String(node.name ?? node.value) : "";
+
+/** Every value binding `source` (the module at `file`) imports or re-exports. */
+function symbolImports(file: string, source: string): SymbolImport[] {
+  const program = parseModule(file, source);
+  const found: SymbolImport[] = [];
+  const isLoad = commonJsLoader(program);
+  walk(program, (node) => {
+    switch (node.type) {
+      case "ImportDeclaration": {
+        if (node.importKind === "type") return;
+        const module = moduleTarget(file, constantString(node.source) ?? "");
+        for (const specifier of node.specifiers as AstNode[]) {
+          if (specifier.importKind === "type") continue;
+          const symbol =
+            specifier.type === "ImportDefaultSpecifier"
+              ? "default"
+              : specifier.type === "ImportNamespaceSpecifier"
+                ? "*"
+                : nameOf(specifier.imported);
+          found.push({ module, symbol, form: "import" });
+        }
+        return;
+      }
+      case "ExportNamedDeclaration": {
+        if (node.source == null || node.exportKind === "type") return;
+        const module = moduleTarget(file, constantString(node.source) ?? "");
+        for (const specifier of node.specifiers as AstNode[])
+          if (specifier.exportKind !== "type")
+            found.push({
+              module,
+              symbol: nameOf(specifier.local),
+              form: "re-export",
+            });
+        return;
+      }
+      case "ExportAllDeclaration":
+        if (node.exportKind === "type") return;
+        found.push({
+          module: moduleTarget(file, constantString(node.source) ?? ""),
+          symbol: "*",
+          form: "re-export",
+        });
+        return;
+      case "ImportExpression":
+        found.push({
+          module: constantString(node.source) ?? "<computed>",
+          symbol: "*",
+          form: "dynamic",
+        });
+        return;
+      case "CallExpression":
+        if (isLoad(node.callee))
+          found.push({
+            module:
+              constantString((node.arguments as unknown[])[0]) ?? "<computed>",
+            symbol: "*",
+            form: "require",
+          });
+        return;
+    }
+  });
+  return found;
+}
+
+const listed = (
+  table: Record<string, readonly string[] | "*">,
+  { module, symbol }: SymbolImport,
+): boolean => {
+  const symbols = table[module];
+  return symbols === "*" || (symbols?.includes(symbol) ?? false);
+};
+
+/**
+ * What breaks the side-bound rules in `source`, read as the side-bound module
+ * at `file`: a forbidden symbol (a), an import off the closed surface (b), an
+ * unsupported import form (c), or a hand-built Worker side (g).
+ */
+function sideBoundViolations(file: string, source: string): string[] {
+  const violations: string[] = [];
+  for (const ref of symbolImports(file, source)) {
+    const label = `${file}: ${ref.form} ${ref.symbol} from ${ref.module}`;
+    if (ref.form === "dynamic" || ref.form === "require") {
+      violations.push(`${label} (unsupported form)`);
+      continue;
+    }
+    if (listed(SIDE_BOUND_FORBIDDEN, ref)) {
+      violations.push(`${label} (forbidden)`);
+      continue;
+    }
+    if (SIDE_BOUND_MODULES.includes(ref.module) && ref.symbol !== "*") continue;
+    if (listed(SIDE_BOUND_ALLOWED, ref) && ref.symbol !== "*") continue;
+    const entry = SIDE_BOUND_EXTERNAL_IMPORTS.find(
+      (candidate) =>
+        candidate.importer === file &&
+        candidate.module === ref.module &&
+        candidate.symbol === ref.symbol,
+    );
+    if (!entry || ref.form !== "import" || ref.symbol === "*") {
+      violations.push(`${label} (not on the closed surface)`);
+      continue;
+    }
+    if (entry.kind === "server-fs" && !(file in CHECKOUT_FS_INVENTORY))
+      violations.push(`${label} (server-fs outside the W4 inventory)`);
+  }
+  walk(parseModule(file, source), (node) => {
+    if (
+      node.type === "Property" &&
+      isNode(node.key) &&
+      nameOf(node.key) === "workerId"
+    )
+      violations.push(`${file}: an object literal names a workerId`);
+  });
+  return violations;
+}
+
+const normalized = (text: string): string =>
+  text.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/,? \)/g, ")").trim();
+
+/**
+ * Why `entry` does not hold against `source`, its declaring module's text:
+ * the symbol must be declared there, in the entry's kind, with the pinned
+ * text. A re-export or an `export *` in the declaring module fails closed.
+ */
+function externalEntryViolation(
+  entry: ExternalImport,
+  source: string | undefined,
+): string | undefined {
+  const label = `${entry.module}#${entry.symbol} (${entry.kind})`;
+  if (entry.kind === "server-fs") {
+    if (SERVER_FS_MODULES.has(entry.module)) return undefined;
+    if (entry.module !== "parcelWatcher.ts" || entry.symbol !== "default")
+      return `${label}: not a server filesystem primitive`;
+  }
+  if (source === undefined) return `${label}: the declaring module is gone`;
+  const program = parseModule(entry.module, source);
+  let found: string | undefined;
+  for (const node of program.body as AstNode[]) {
+    if (node.type === "ExportAllDeclaration")
+      return `${label}: the declaring module has an export *`;
+    if (entry.kind === "server-fs") {
+      if (node.type === "ExportDefaultDeclaration") found = "server-fs";
+      continue;
+    }
+    if (node.type !== "ExportNamedDeclaration") continue;
+    if (node.source != null || node.declaration == null) {
+      for (const specifier of node.specifiers as AstNode[])
+        if (nameOf(specifier.exported) === entry.symbol)
+          return `${label}: re-exported, not declared`;
+      continue;
+    }
+    const declaration = node.declaration as AstNode;
+    if (
+      declaration.type === "FunctionDeclaration" &&
+      nameOf(declaration.id) === entry.symbol
+    ) {
+      const id = declaration.id as { end: number };
+      const body = declaration.body as { start: number };
+      found = `function ${normalized(source.slice(id.end, body.start))}`;
+    }
+    if (declaration.type === "VariableDeclaration")
+      for (const declarator of declaration.declarations as AstNode[]) {
+        const id = declarator.id as AstNode & {
+          typeAnnotation?: { start: number; end: number } | null;
+        };
+        if (nameOf(id) !== entry.symbol) continue;
+        const init = declarator.init as AstNode | null;
+        if (id.typeAnnotation && declaration.kind === "const")
+          found = `typed-const ${normalized(
+            source
+              .slice(id.typeAnnotation.start, id.typeAnnotation.end)
+              .replace(/^:/, ""),
+          )}`;
+        else if (
+          declaration.kind === "const" &&
+          init &&
+          !["ArrowFunctionExpression", "FunctionExpression"].includes(init.type)
+        )
+          found = `scalar ${normalized(
+            source.slice(node.start as number, node.end as number),
+          )}`;
+        else found = "unsupported declaration";
+      }
+  }
+  const expected =
+    entry.kind === "server-fs" ? "server-fs" : `${entry.kind} ${entry.pin}`;
+  if (found === undefined) return `${label}: not declared there`;
+  return found === expected ? undefined : `${label}: declared as ${found}`;
+}
+
+const sourceOf = (module: string): string | undefined => {
+  try {
+    return readFileSync(join(SRC_ROOT, module), "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+/** The modules value-importing `resolveReadableWorktreeRow`. */
+function kbRowProducers(sources: Map<string, string>): string[] {
+  return [...sources]
+    .filter(([file, source]) =>
+      symbolImports(file, source).some(
+        (ref) =>
+          ref.module === "worktrees/knowledgeCheckout.ts" &&
+          (ref.symbol === "resolveReadableWorktreeRow" || ref.symbol === "*"),
+      ),
+    )
+    .map(([file]) => file)
+    .sort();
+}
+
+const moduleSources = new Map(
+  [...scans.keys()].map((module) => [module, sourceOf(module)!]),
+);
+
+test("side-bound modules import only their side-bound surface", () => {
+  for (const module of SIDE_BOUND_MODULES) {
+    assert.ok(scans.has(module), `${module} is gone: delete it from the list`);
+    assert.deepEqual(sideBoundViolations(module, sourceOf(module)!), []);
+  }
+});
+
+test("every side-bound external import is needed and pinned to its declaration", () => {
+  const used = SIDE_BOUND_MODULES.flatMap((module) =>
+    symbolImports(module, sourceOf(module)!)
+      .filter(
+        (ref) =>
+          !SIDE_BOUND_MODULES.includes(ref.module) &&
+          !listed(SIDE_BOUND_ALLOWED, ref),
+      )
+      .map((ref) => `${module} ${ref.module}#${ref.symbol}`),
+  ).sort();
+  assert.deepEqual(
+    used,
+    SIDE_BOUND_EXTERNAL_IMPORTS.map(
+      (entry) => `${entry.importer} ${entry.module}#${entry.symbol}`,
+    ).sort(),
+    "an entry the code no longer needs, or an import without one",
+  );
+  for (const entry of SIDE_BOUND_EXTERNAL_IMPORTS)
+    assert.equal(
+      externalEntryViolation(entry, sourceOf(entry.module)),
+      undefined,
+    );
+});
+
+test("only the gate and three side-bound modules produce the KB row", () => {
+  assert.deepEqual(kbRowProducers(moduleSources), KB_ROW_PRODUCERS);
+});
+
+test("the side-bound ratchet flags each way around it (S1–S10)", () => {
+  const status = "worktrees/worktreeStatus.ts";
+  const flags = (file: string, source: string, why: RegExp): void => {
+    const violations = sideBoundViolations(file, source);
+    assert.ok(
+      violations.some((violation) => why.test(violation)),
+      `${source} → ${JSON.stringify(violations)}`,
+    );
+  };
+  const entry = (symbol: string): ExternalImport =>
+    SIDE_BOUND_EXTERNAL_IMPORTS.find(
+      (candidate) => candidate.symbol === symbol,
+    )!;
+
+  // S1: the default Worker's string API, imported directly.
+  flags(status, 'import { git } from "../gitExec.ts";', /forbidden/);
+  // S2: a two-hop wrapper the lists do not know.
+  flags(
+    status,
+    'import { wrap } from "./newHelper.ts";',
+    /not on the closed surface/,
+  );
+  // S3: a pinned function's parameters change.
+  assert.match(
+    externalEntryViolation(
+      entry("canonicalWorktreeId"),
+      "export function canonicalWorktreeId(id: string, path: string): string { return id + path; }",
+    ) ?? "",
+    /declared as function/,
+  );
+  // S4: a new KB-row producer.
+  assert.notDeepEqual(
+    kbRowProducers(
+      new Map([
+        ...moduleSources,
+        [
+          "connection.ts",
+          'import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";',
+        ],
+      ]),
+    ),
+    KB_ROW_PRODUCERS,
+  );
+  // S5: the default Worker's side, named in a side-bound module.
+  flags(
+    status,
+    'import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";',
+    /forbidden/,
+  );
+  // S6: the string API, value-re-exported.
+  flags(status, 'export { gitOptional } from "../gitExec.ts";', /forbidden/);
+  // S7: declaration forms and unsupported import forms.
+  assert.match(
+    externalEntryViolation(
+      entry("worktreeIdBySession"),
+      "export const worktreeIdBySession: (path: string) => ReadonlyMap<string, string> = make();",
+    ) ?? "",
+    /declared as typed-const/,
+  );
+  assert.match(
+    externalEntryViolation(
+      entry("BACKGROUND_FETCH_ENABLED"),
+      'export const BACKGROUND_FETCH_ENABLED = process.env.ASSISTANT_BACKGROUND_FETCH !== "0";',
+    ) ?? "",
+    /declared as scalar/,
+  );
+  flags(
+    status,
+    'import { existsSync } from "node:fs";',
+    /not on the closed surface/,
+  );
+  flags(
+    "worktrees/worktreeFetch.ts",
+    'import { existsSync } from "node:fs";',
+    /not on the closed surface/,
+  );
+  const fsEntry = {
+    ...entry("existsSync"),
+    importer: status,
+  };
+  SIDE_BOUND_EXTERNAL_IMPORTS.push(fsEntry);
+  try {
+    flags(
+      status,
+      'import { existsSync } from "node:fs";',
+      /server-fs outside the W4 inventory/,
+    );
+  } finally {
+    SIDE_BOUND_EXTERNAL_IMPORTS.splice(
+      SIDE_BOUND_EXTERNAL_IMPORTS.indexOf(fsEntry),
+      1,
+    );
+  }
+  flags(
+    status,
+    'import * as settings from "../settings.ts";',
+    /not on the closed surface/,
+  );
+  flags(
+    status,
+    'import * as git from "../gitExec.ts";',
+    /not on the closed surface/,
+  );
+  flags(status, 'export * from "./worktreeDiff.ts";', /not on the closed/);
+  assert.match(
+    externalEntryViolation(
+      entry("getSettings"),
+      'export * from "./elsewhere.ts";\nexport function getSettings(publicBaseUrl?: string): AppSettings { return load(publicBaseUrl); }',
+    ) ?? "",
+    /export \*/,
+  );
+  flags(
+    status,
+    'const m = await import("../settings.ts");',
+    /unsupported form/,
+  );
+  flags(status, 'require("../gitExec.ts");', /unsupported form/);
+  flags(
+    status,
+    'import settings from "../settings.ts";',
+    /not on the closed surface/,
+  );
+  // S8: a served call that may drop its side. (The adapters' own types make an
+  // omitted side a compile error: `documentGrantSides.test.ts`.)
+  for (const symbol of ["realpathServedFile", "statServedFile"])
+    flags(
+      "documentGrantTargets.ts",
+      `import { ${symbol} } from "./servedFileAccess.ts";`,
+      /not on the closed surface/,
+    );
+  flags(
+    "documentGrantTargets.ts",
+    'import { mintDocumentGrant } from "./directFileGrants.ts";',
+    /not on the closed surface/,
+  );
+  // S9: a hand-built Worker side.
+  flags(
+    status,
+    'export const side = { workerId: "local" } as const;',
+    /workerId/,
+  );
+  // S10: the named module re-exports the symbol instead of declaring it.
+  assert.match(
+    externalEntryViolation(
+      entry("getSettings"),
+      'export { getSettings } from "./settingsCore.ts";',
+    ) ?? "",
+    /re-exported, not declared/,
+  );
+});
