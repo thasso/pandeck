@@ -142,7 +142,6 @@ import {
   resumeAutomaticTurns,
 } from "./automaticTurnHold.ts";
 import { forgetPlanHintState } from "./session/planHint.ts";
-import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { liveUserSession } from "./delegationFailureNotice.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
@@ -295,7 +294,7 @@ import {
   acknowledgeMissingSessionWorktree,
   sessionWorktreeMissing,
 } from "./worktrees/sessionCwd.ts";
-import { computeWorktreeStatus } from "./worktrees/worktreeStatus.ts";
+import { readableWorktreeStatus } from "./worktrees/worktreeStatus.ts";
 import {
   addWorktreeViewer,
   removeWorktreeViewer,
@@ -1368,9 +1367,8 @@ export class Connection implements Viewer {
           void (async () => {
             await addWorktreeViewer(watchId);
             if (!this.watchedWorktrees.has(watchId)) return;
-            const row = await resolveReadableWorktreeRow(watchId);
-            if (!row || row.status !== "active") return;
-            const status = await computeWorktreeStatus(row);
+            const status = await readableWorktreeStatus(watchId);
+            if (!status) return;
             if (this.watchedWorktrees.has(watchId))
               this.send({ type: "worktreeStatus", status });
           })().catch(() => undefined);

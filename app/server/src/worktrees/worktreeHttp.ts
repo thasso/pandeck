@@ -25,6 +25,7 @@ import type { WorktreeRow } from "../db/worktreeStore.ts";
 import { listWorktreeRows } from "./worktrees.ts";
 import { idleWorktrees } from "./idleWorktrees.ts";
 import { resolveReadableWorktreeRow } from "./knowledgeCheckout.ts";
+import { resolveWorktreeRow } from "./worktreeResolve.ts";
 import { computeWorktreeStatus } from "./worktreeStatus.ts";
 import {
   getWorktreeChanges,
@@ -36,12 +37,8 @@ import {
   getWorktreeTree,
   isSafeRef,
 } from "./worktreeDiff.ts";
-import {
-  autoCommitWorktree,
-  cleanWorktree,
-  commitWorktree,
-  pushWorktree,
-} from "./worktreeWrite.ts";
+import { cleanWorktree, commitWorktree } from "./worktreeWrite.ts";
+import { autoCommitWorktree, pushWorktree } from "./worktreeWorkflowWrite.ts";
 import {
   createWorktreePullRequest,
   worktreeHostingStatus,
@@ -68,8 +65,9 @@ const POST_VERBS = new Set([
 /**
  * What the Knowledge Base checkout answers: reading its files and committing
  * its uncommitted edits. Delivery and history rewriting never apply to it.
+ * Only these verbs resolve the KB row.
  */
-const KNOWLEDGE_VERBS = new Set([
+export const KNOWLEDGE_VERBS: ReadonlySet<string> = new Set([
   "status",
   "changes",
   "file-diff",
@@ -188,7 +186,10 @@ export async function handleWorktreeApi(
   }
 
   try {
-    const row = await resolveReadableWorktreeRow(worktreeId);
+    // Every other verb resolves through the seam that never yields the KB row.
+    const row = KNOWLEDGE_VERBS.has(verb!)
+      ? await resolveReadableWorktreeRow(worktreeId)
+      : await resolveWorktreeRow(worktreeId);
     if (!row) {
       respond(404, { error: "Unknown worktree" });
       return;

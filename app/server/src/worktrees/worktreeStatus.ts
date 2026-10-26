@@ -20,6 +20,7 @@ import {
   type GitResult,
 } from "../gitExec.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
+import { resolveReadableWorktreeRow } from "./knowledgeCheckout.ts";
 import { workingTreeFilesFromPorcelainV2 } from "./worktreeDiff.ts";
 import {
   fetchRepoIfDue,
@@ -209,6 +210,19 @@ function startStatusCompute(
     });
   inFlight.set(row.id, promise);
   return promise;
+}
+
+/**
+ * The status a watcher of `id` is sent first: the Knowledge Base's or a
+ * worktree's, resolved here so the row never leaves this module; undefined
+ * unless the row exists and is active.
+ */
+export async function readableWorktreeStatus(
+  id: string,
+): Promise<WorktreeGitStatus | undefined> {
+  const row = await resolveReadableWorktreeRow(id);
+  if (!row || row.status !== "active") return undefined;
+  return computeWorktreeStatus(row);
 }
 
 export async function computeWorktreeStatus(

@@ -3,12 +3,16 @@
  * default Worker, the in-process one; its id is derived, not stored, until
  * phase 4 (`docs/workers.md`).
  *
+ * A {@link CheckoutSide} is the typed choice: the modules that can hold the
+ * Knowledge Base row take it from the row (`checkoutSideOf`) and run on
+ * `checkoutGitOn`/`checkoutFilesOn` for it.
+ *
  * {@link placeGitCwd} is the TRANSITIONAL path-only adapter behind the
  * existing `(args, cwd)` executors in `gitExec.ts`. It keeps the Knowledge
  * Base on the server: the KB is a server repository even where the worktree
- * surfaces browse and commit it as a checkout. W3 replaces that path rule with
- * a typed choice made from the KB row, and W6 deletes this adapter once every
- * caller passes its own location.
+ * surfaces browse and commit it as a checkout. W3c removes that path rule once
+ * every module that can hold the KB row runs on its typed side, and W6 removes
+ * the string executors once every caller passes its own side.
  *
  * {@link placeServedPath} places a served file the same way, with `DATA_DIR`
  * kept on the server too.
@@ -22,6 +26,22 @@ import type { WorkerFileLocation } from "../workerProtocol/fileMethods.ts";
 
 /** The Worker every checkout is placed on in phase 1. */
 export const DEFAULT_WORKER_ID = "local";
+
+/**
+ * Where a checkout's git and reads run, chosen by type: the server for the
+ * Knowledge Base row (`checkoutSideOf`), else a Worker. Never from a path.
+ */
+export type CheckoutSide = "server" | { readonly workerId: string };
+
+/** The side of every checkout that is not the Knowledge Base row. */
+export const DEFAULT_WORKER_SIDE: CheckoutSide = {
+  workerId: DEFAULT_WORKER_ID,
+};
+
+/** One string per side, for maps keyed by it. */
+export function checkoutSideKey(side: CheckoutSide): string {
+  return side === "server" ? "server" : `worker:${side.workerId}`;
+}
 
 function contains(root: string, path: string): boolean {
   const rel = relative(root, path);

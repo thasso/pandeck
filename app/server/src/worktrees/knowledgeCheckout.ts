@@ -7,13 +7,32 @@
  * spawning, agent worktree tools, comments and delivery resolve worktree ids
  * through that, and none of them may ever act on the KB. Only the surfaces
  * that call {@link resolveReadableWorktreeRow} see it.
+ *
+ * The KB is a server repository even where those surfaces browse and commit
+ * it as a checkout, so its row runs its git and reads on the server, by kind:
+ * {@link checkoutSideOf}.
  */
 import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import { gitOptional } from "../serverRepoGit.ts";
 import { KnowledgeBaseStore } from "../knowledgeBaseStore.ts";
 import { knowledgeBaseEnabled } from "../knowledgeBaseSettings.ts";
+import {
+  DEFAULT_WORKER_SIDE,
+  type CheckoutSide,
+} from "../workers/placement.ts";
 import { resolveWorktreeRow } from "./worktreeResolve.ts";
+
+/**
+ * Where a row's checkout git and reads run: the server for the Knowledge Base
+ * row, the default Worker for every other. By the row's kind, never its path:
+ * a project or worktree inside the KB root or `DATA_DIR` is a checkout. DB ids
+ * are uuids and synthetic mains `main:<projectId>`, so no other row has the
+ * KB's id, and `{...row, path}` spreads keep it.
+ */
+export function checkoutSideOf(row: Pick<WorktreeRow, "id">): CheckoutSide {
+  return row.id === KNOWLEDGE_WORKTREE_ID ? "server" : DEFAULT_WORKER_SIDE;
+}
 
 /**
  * The KB checkout's row: like a project's main checkout, its own branch is its

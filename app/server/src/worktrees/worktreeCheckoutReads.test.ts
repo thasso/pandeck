@@ -22,6 +22,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, test } from "vitest";
+import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import {
   checkoutFailureOf,
   throwInCheckoutReadForTests,
@@ -147,7 +148,8 @@ beforeAll(() => {
     knowledgeBase: { enabled: true, path: onServer, effectivePath: "ignored" },
   });
   workerRow = rowOf("worktree-on-worker", onWorker);
-  serverRow = rowOf("worktree-on-server", onServer);
+  // The server side is the Knowledge Base row's, by kind (`checkoutSideOf`).
+  serverRow = rowOf(KNOWLEDGE_WORKTREE_ID, onServer);
 });
 
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

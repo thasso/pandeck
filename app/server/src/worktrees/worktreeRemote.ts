@@ -1,7 +1,10 @@
+/** A row's remotes, read with git on the row's side (`checkoutSideOf`). */
 import type { WorktreeRow } from "../db/worktreeStore.ts";
-import { gitOptional } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 
 export async function remoteNames(row: WorktreeRow): Promise<string[]> {
+  const { gitOptional } = checkoutGitOn(checkoutSideOf(row));
   return (await gitOptional(["remote"], row.path)).stdout
     .split("\n")
     .map((line) => line.trim())
@@ -12,6 +15,7 @@ export async function remoteNames(row: WorktreeRow): Promise<string[]> {
 export async function baseBranchRemote(
   row: WorktreeRow,
 ): Promise<string | undefined> {
+  const { gitOptional } = checkoutGitOn(checkoutSideOf(row));
   const configured = (
     await gitOptional(
       ["config", "--get", `branch.${row.baseBranch}.remote`],

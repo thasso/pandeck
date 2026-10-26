@@ -102,6 +102,21 @@ export interface MintedDocument {
   delivery: FileGrantDeliveryMode;
 }
 
+/** {@link mintDocumentGrant} on a side the caller must name. */
+export function mintDocumentGrantOn(
+  filePath: string,
+  scope: FileGrantScope,
+  delivery: FileGrantDeliveryMode,
+  authority: {
+    root: string;
+    sourceKey: string;
+    fresh?: boolean;
+    side: ServedSide;
+  },
+): Promise<MintedDocument> {
+  return mintDocumentGrant(filePath, scope, delivery, authority);
+}
+
 /**
  * Mint a grant for `filePath` itself or its containing directory — the path
  * must be an existing file — and return the URL of that document under it.

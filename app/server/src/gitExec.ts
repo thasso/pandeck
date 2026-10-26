@@ -4,6 +4,10 @@
  * worker protocol to the Worker its checkout is placed on, which starts the
  * process (`docs/workers.md`); a caller sees exactly what a local run returns.
  *
+ * {@link checkoutGitOn} runs on a given side, the server included for the
+ * Knowledge Base row: the modules that can hold that row take their side from
+ * it (`checkoutSideOf`). The string executors exported below choose by path.
+ *
  * The executors, their failure shapes, the read fan-out bound, the execution
  * counter and {@link withRepoLock} belong to the executor family
  * (`gitFamily.ts`), shared with `serverRepoGit.ts`, the family for the
@@ -14,13 +18,18 @@
  * handles concurrent readers.
  */
 import {
+  checkoutFilesOn,
   inspectCheckoutPath,
   realpathInCheckout,
 } from "./checkoutFileAccess.ts";
 import { createGitFamily } from "./gitFamily.ts";
 import { localGitRunner, type GitRunner } from "./gitProcess.ts";
 import { workerGitRunner } from "./workers/checkoutClient.ts";
-import { placeGitCwd } from "./workers/placement.ts";
+import {
+  checkoutSideKey,
+  placeGitCwd,
+  type CheckoutSide,
+} from "./workers/placement.ts";
 
 export {
   GitCommandError,
@@ -73,3 +82,38 @@ export const {
   resolveRepoRoot,
   repoLockKey,
 } = checkout;
+
+type CheckoutGit = ReturnType<typeof createGitFamily>;
+
+const familiesBySide = new Map<string, CheckoutGit>();
+
+/** Every git request goes to Worker `workerId`, in the request's `cwd`. */
+function workerRunner(workerId: string): GitRunner {
+  return {
+    run: (req) => workerGitRunner.run({ workerId, path: req.cwd }, req),
+    raw: (req) => workerGitRunner.raw({ workerId, path: req.cwd }, req),
+    bounded: (req) => workerGitRunner.bounded({ workerId, path: req.cwd }, req),
+  };
+}
+
+/**
+ * The executors on `side`, one instance per side. `repoLockKey` reads on the
+ * same side; its remembered keys, the locks, the read bound and the counter
+ * are the family module's, shared by every side.
+ */
+export function checkoutGitOn(side: CheckoutSide): CheckoutGit {
+  const key = checkoutSideKey(side);
+  let family = familiesBySide.get(key);
+  if (!family) {
+    const files = checkoutFilesOn(side);
+    family = createGitFamily(
+      side === "server" ? localGitRunner : workerRunner(side.workerId),
+      {
+        inspect: (cwd, path) => files.inspect(cwd, path, { follow: true }),
+        realpath: files.realpath,
+      },
+    );
+    familiesBySide.set(key, family);
+  }
+  return family;
+}

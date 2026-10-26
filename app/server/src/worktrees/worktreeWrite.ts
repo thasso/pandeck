@@ -1,27 +1,23 @@
 /**
- * User-initiated git WRITE operations on a worktree: manual/agent-generated
- * commit, HEAD-scoped clean, and push (worktreeHttp.ts).
+ * User-initiated git WRITE operations on a worktree: manual commit and
+ * HEAD-scoped clean (worktreeHttp.ts). Auto-commit and push run whole app
+ * workflows on the checkout path and live in `worktreeWorkflowWrite.ts`.
  *
  * Commit/clean mutate under the per-repository lock (agents may be committing
- * or merging concurrently). Push reuses the app-side push workflow
- * the `/push` slash command uses (non-interactive ssh env, upstream
- * resolution/setup, force-with-lease) and intentionally runs WITHOUT the repo
- * lock — see pushWorkflow.ts for why that is safe.
+ * or merging concurrently). Both run on the row's side (`checkoutSideOf`):
+ * the Knowledge Base row commits on the server.
  *
  * Both are permitted on the synthetic `main:<projectId>` checkout: unlike
  * merge/remove (agent-lifecycle operations that stay rejected for main),
- * commit/auto-commit/clean/push are explicit user actions on the user's checkout.
+ * commit/clean are explicit user actions on the user's checkout.
  */
 import type {
-  WorktreeAutoCommitResponse,
   WorktreeCleanResponse,
   WorktreeCommitResponse,
-  WorktreePushResponse,
 } from "@assistant/shared";
-import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
-import { runCommitWorkflow, toCommitDisplay } from "../commitWorkflow.ts";
-import { runPushWorkflow } from "../pushWorkflow.ts";
+import { checkoutGitOn, withRepoLock } from "../gitExec.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { invalidateWorktreeStatus } from "./worktreeStatus.ts";
 
 const MAX_COMMIT_MESSAGE_CHARS = 10_000;
@@ -48,6 +44,7 @@ export async function commitWorktree(
   if (message.length > MAX_COMMIT_MESSAGE_CHARS)
     throw new Error("Commit message is too long.");
   const paths = validatedPaths(input.paths);
+  const { git, gitOptional, repoLockKey } = checkoutGitOn(checkoutSideOf(row));
 
   return withRepoLock(await repoLockKey(row.path), async () => {
     if (paths.length > 0) await git(["add", "--", ...paths], row.path);
@@ -71,24 +68,10 @@ export async function commitWorktree(
   });
 }
 
-export async function autoCommitWorktree(
-  row: WorktreeRow,
-  input: { force?: boolean },
-): Promise<WorktreeAutoCommitResponse> {
-  // Deliberately do not guess a linked session: the diff is authoritative and
-  // the same commit workflow still performs its deterministic + agent checks.
-  const result = await runCommitWorkflow({
-    source: "tool",
-    cwd: row.path,
-    force: Boolean(input.force),
-  });
-  invalidateWorktreeStatus(row.id);
-  return { worktreeId: row.id, result: toCommitDisplay(result) };
-}
-
 export async function cleanWorktree(
   row: WorktreeRow,
 ): Promise<WorktreeCleanResponse> {
+  const { git, repoLockKey } = checkoutGitOn(checkoutSideOf(row));
   return withRepoLock(await repoLockKey(row.path), async () => {
     const before = await git(
       ["status", "--porcelain=v1", "--untracked-files=all"],
@@ -109,24 +92,4 @@ export async function cleanWorktree(
     invalidateWorktreeStatus(row.id);
     return { worktreeId: row.id, status: "cleaned", filesDiscarded };
   });
-}
-
-export async function pushWorktree(
-  row: WorktreeRow,
-  input: { force?: boolean },
-): Promise<WorktreePushResponse> {
-  const result = await runPushWorkflow({
-    cwd: row.path,
-    force: Boolean(input.force),
-  });
-  invalidateWorktreeStatus(row.id);
-  return {
-    worktreeId: row.id,
-    status: result.status,
-    ...(result.remote !== undefined ? { remote: result.remote } : {}),
-    ...(result.branch !== undefined ? { branch: result.branch } : {}),
-    setUpstream: result.setUpstream,
-    output: result.output,
-    ...(result.error ? { error: result.error } : {}),
-  };
 }

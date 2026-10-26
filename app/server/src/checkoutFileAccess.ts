@@ -4,12 +4,14 @@
  * the side where that checkout's git runs (`docs/workers.md`, "Checkout
  * files").
  *
- * Each function takes the checkout root, and the root alone picks the side,
- * through the same placement as checkout git (`placeGitCwd`): the server never
- * resolves a path it reads to choose where to read it. A root kept on the
- * server reads through `fileReads.ts`; any other goes to its Worker through
- * the file methods (`workers/fileClient.ts`). When the Worker fails, the read
- * fails: there is no local fallback.
+ * {@link checkoutFilesOn} reads on a given side: the modules that can hold
+ * the Knowledge Base row pass the row's typed side (`checkoutSideOf`). The
+ * root-taking functions below pick the side from the checkout root alone,
+ * through the same placement as the string git executors (`placeGitCwd`).
+ * Either way the server never resolves a path it reads to choose where to read
+ * it. The server side reads through `fileReads.ts`; a Worker side goes to its
+ * Worker through the file methods (`workers/fileClient.ts`). When the Worker
+ * fails, the read fails: there is no local fallback.
  *
  * Callers map errors by where they came from, through
  * {@link checkoutFailureOf}, and by nothing else:
@@ -48,7 +50,11 @@ import {
   readlinkOnWorker,
   realpathOnWorker,
 } from "./workers/fileClient.ts";
-import { placeGitCwd } from "./workers/placement.ts";
+import {
+  checkoutSideKey,
+  placeGitCwd,
+  type CheckoutSide,
+} from "./workers/placement.ts";
 
 /** The server's own verdict on a checkout path: it lies outside the root. */
 export class CheckoutPathVerdict extends Error {
@@ -109,35 +115,35 @@ async function remote<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Runs one primitive for `path` on the side of the checkout at `root`. */
-async function placed<T>(
-  root: string,
+/** The side placement gives the checkout at `root`. */
+function placedSide(root: string): CheckoutSide {
+  const location = placeGitCwd(root);
+  return location ? { workerId: location.workerId } : "server";
+}
+
+/** Runs one primitive for `path` on `side`. */
+async function onSide<T>(
+  side: CheckoutSide,
   path: string,
   onServer: (path: string) => Promise<T>,
   onWorker: (location: WorkerFileLocation) => Promise<T>,
 ): Promise<T> {
-  const location = placeGitCwd(root);
-  return location
-    ? remote(() => onWorker({ workerId: location.workerId, path }))
-    : readLocally(() => onServer(path));
+  return side === "server"
+    ? readLocally(() => onServer(path))
+    : remote(() => onWorker({ workerId: side.workerId, path }));
 }
 
-/** Whether `path` exists, as `existsSync` answers it. */
-export function checkoutPathExists(
-  root: string,
-  path: string,
-): Promise<boolean> {
-  return placed(root, path, existsPath, existsOnWorker);
+function existsOn(side: CheckoutSide, path: string): Promise<boolean> {
+  return onSide(side, path, existsPath, existsOnWorker);
 }
 
-/** With `mode`, the answer carries the mode bits; a Worker must send them. */
-export function inspectCheckoutPath(
-  root: string,
+function inspectOn(
+  side: CheckoutSide,
   path: string,
   options: { follow: boolean; mode?: boolean },
 ): Promise<PathInspection> {
-  return placed(
-    root,
+  return onSide(
+    side,
     path,
     (path) => inspectPath(path, options.follow),
     (location) =>
@@ -147,23 +153,52 @@ export function inspectCheckoutPath(
   );
 }
 
+function readLinkOn(side: CheckoutSide, path: string): Promise<string> {
+  return onSide(side, path, readlinkPath, readlinkOnWorker);
+}
+
+function readDirOn(side: CheckoutSide, dir: string): Promise<DirectoryEntry[]> {
+  return onSide(side, dir, readDirectory, readdirOnWorker);
+}
+
+function realpathOn(side: CheckoutSide, path: string): Promise<string> {
+  return onSide(side, path, realpathFile, realpathOnWorker);
+}
+
+/** Whether `path` exists, as `existsSync` answers it. */
+export function checkoutPathExists(
+  root: string,
+  path: string,
+): Promise<boolean> {
+  return existsOn(placedSide(root), path);
+}
+
+/** With `mode`, the answer carries the mode bits; a Worker must send them. */
+export function inspectCheckoutPath(
+  root: string,
+  path: string,
+  options: { follow: boolean; mode?: boolean },
+): Promise<PathInspection> {
+  return inspectOn(placedSide(root), path, options);
+}
+
 /** A symlink's target text, as `readlink` decodes it. */
 export function readCheckoutLink(root: string, path: string): Promise<string> {
-  return placed(root, path, readlinkPath, readlinkOnWorker);
+  return readLinkOn(placedSide(root), path);
 }
 
 export function readCheckoutDir(
   root: string,
   dir: string,
 ): Promise<DirectoryEntry[]> {
-  return placed(root, dir, readDirectory, readdirOnWorker);
+  return readDirOn(placedSide(root), dir);
 }
 
 export function realpathInCheckout(
   root: string,
   path: string,
 ): Promise<string> {
-  return placed(root, path, realpathFile, realpathOnWorker);
+  return realpathOn(placedSide(root), path);
 }
 
 /**
@@ -188,21 +223,29 @@ export function checkLexicalPath(root: string, relPath: string): string {
  * answers its lexical path (the read then fails naturally), an unresolvable
  * root itself.
  */
-export async function containedRealPath(
+export function containedRealPath(
+  root: string,
+  relPath: string,
+): Promise<string> {
+  return containedRealPathOn(placedSide(root), root, relPath);
+}
+
+async function containedRealPathOn(
+  side: CheckoutSide,
   root: string,
   relPath: string,
 ): Promise<string> {
   const abs = checkLexicalPath(root, relPath);
   let real: string;
   try {
-    real = await realpathInCheckout(root, abs);
+    real = await realpathOn(side, abs);
   } catch (error) {
     if (checkoutFailureOf(error) !== "filesystem") throw error;
     return abs;
   }
   let realRoot: string;
   try {
-    realRoot = await realpathInCheckout(root, root);
+    realRoot = await realpathOn(side, root);
   } catch (error) {
     if (checkoutFailureOf(error) !== "filesystem") throw error;
     realRoot = root;
@@ -230,20 +273,28 @@ interface ReadableFile {
  * error thrown is the first of: a Worker failure, an unclassified error, the
  * read's filesystem failure, the close's.
  */
-export async function readCheckoutFile(
+export function readCheckoutFile(
   root: string,
+  path: string,
+  limit?: number,
+): Promise<Buffer> {
+  return readFileOn(placedSide(root), path, limit);
+}
+
+async function readFileOn(
+  side: CheckoutSide,
   path: string,
   limit?: number,
 ): Promise<Buffer> {
   const armed = readThrow;
   readThrow = undefined;
-  const location = placeGitCwd(root);
-  const guard = location ? remote : readLocally;
-  const outcome: FileOpenOutcome<ReadableFile> = location
-    ? await remote(() =>
-        openOnWorker({ workerId: location.workerId, path }, false),
-      )
-    : await openFile(path, { stat: false }, (opened) => opened);
+  const guard = side === "server" ? readLocally : remote;
+  const outcome: FileOpenOutcome<ReadableFile> =
+    side === "server"
+      ? await openFile(path, { stat: false }, (opened) => opened)
+      : await remote(() =>
+          openOnWorker({ workerId: side.workerId, path }, false),
+        );
   if ("error" in outcome) throw filesystemFailure(outcome.error);
   const { file } = outcome;
   let bytes: Buffer | undefined;
@@ -296,12 +347,56 @@ function asBuffer(bytes: Uint8Array): Buffer {
     : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
+/**
+ * The reads of the checkouts on one side, each taking `(root, path, …)` as the
+ * root-taking functions above do; the side, not the root, says where they run.
+ */
+export interface CheckoutFiles {
+  pathExists(root: string, path: string): Promise<boolean>;
+  inspect(
+    root: string,
+    path: string,
+    options: { follow: boolean; mode?: boolean },
+  ): Promise<PathInspection>;
+  readLink(root: string, path: string): Promise<string>;
+  readDir(root: string, dir: string): Promise<DirectoryEntry[]>;
+  realpath(root: string, path: string): Promise<string>;
+  containedRealPath(root: string, relPath: string): Promise<string>;
+  readFile(root: string, path: string, limit?: number): Promise<Buffer>;
+}
+
+const filesBySide = new Map<string, CheckoutFiles>();
+
+/** The checkout reads on `side`, one instance per side. */
+export function checkoutFilesOn(side: CheckoutSide): CheckoutFiles {
+  const key = checkoutSideKey(side);
+  let files = filesBySide.get(key);
+  if (!files) {
+    // A copy: the caller's object is not this instance's to keep.
+    const bound: CheckoutSide =
+      side === "server" ? "server" : { workerId: side.workerId };
+    files = {
+      pathExists: (_root, path) => existsOn(bound, path),
+      inspect: (_root, path, options) => inspectOn(bound, path, options),
+      readLink: (_root, path) => readLinkOn(bound, path),
+      readDir: (_root, dir) => readDirOn(bound, dir),
+      realpath: (_root, path) => realpathOn(bound, path),
+      containedRealPath: (root, relPath) =>
+        containedRealPathOn(bound, root, relPath),
+      readFile: (_root, path, limit) => readFileOn(bound, path, limit),
+    };
+    filesBySide.set(key, files);
+  }
+  return files;
+}
+
 // --- Test seams -----------------------------------------------------------
 
 let readThrow: { error: unknown; at: "read" | "close" } | undefined;
 
 /**
- * Test seam: the next {@link readCheckoutFile} throws `error` from its own
+ * Test seam: the next whole-file checkout read ({@link readCheckoutFile} or
+ * a side's `readFile`) throws `error` from its own
  * logic — at `read`, once the read primitive answered, before the bytes are
  * returned; at `close`, as the close step's error once the primitive close
  * settled. One-shot, taken by that call even when it never reaches the point.
