@@ -249,11 +249,14 @@ describe("handles belong to the connection that opened them", () => {
     streamA.read(0);
     await once(streamA, "readable");
 
-    // A request held on the old connection settles only once that Worker is
+    // An open held on the old connection settles only once that Worker is
     // quiescent: its handles swept, its descriptors closed.
+    const probe = fixture("quiescence-probe.bin", binary(10));
     const connection = ensureInProcessWorker();
-    const held = holdFileForTests(a, "stat");
-    const swept = statServedFile(a).catch((error: Error) => error);
+    const held = holdFileForTests(probe, "after-open");
+    const swept = openServedFile(probe, { stat: false }).catch(
+      (error: Error) => error,
+    );
     await held.reached;
     const oldEpoch = inProcessWorkerEpochForTests();
     writeAsInProcessWorkerForTests(INVALID_FRAME);

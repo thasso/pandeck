@@ -287,6 +287,14 @@ async function checkWorkerFiles() {
   const ending = ensureInProcessWorker();
   writeAsInProcessWorkerForTests(new Uint8Array(8));
   await ending.ended;
+  // The replacement handle exists before the stale one is used or closed, and
+  // the new connection's table may hold the very id the stale one carries.
+  const fresh = await openServedFile(path, { stat: false });
+  const sent = () =>
+    ["files.read", "files.close"].map((method) =>
+      inProcessWorkerServedMethodForTests(method),
+    );
+  const untouched = sent();
   let failed;
   try {
     await readServed(stale, 0, 10);
@@ -298,12 +306,15 @@ async function checkWorkerFiles() {
     `A handle from an ended connection answered ${failed}.`,
   );
   await stale.close();
-  const fresh = await openServedFile(path, { stat: false });
+  assert(
+    sent().join() === untouched.join(),
+    "A stale handle's read or close reached the replacement connection.",
+  );
   const again = await readServed(fresh, 0, size - 1);
   await fresh.close();
   assert(
     sha256(again) === sha256(bytes),
-    "A new handle after the connection ended came back changed.",
+    "A handle opened before a stale close came back changed after it.",
   );
   rmSync(outside, { recursive: true, force: true });
 }

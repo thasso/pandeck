@@ -41,7 +41,7 @@ import {
   type FileGrantDeliveryMode,
   type FileGrantScope,
 } from "@assistant/shared/servedFiles";
-import { parseByteRange } from "./directFileHttp.ts";
+import { clientGone, parseByteRange } from "./directFileHttp.ts";
 import {
   openServedFile,
   realpathServedFile,
@@ -397,26 +397,25 @@ export async function handleFileGrantRequest(
     fail(405, "Method not allowed.");
     return;
   }
+  // Watched from the start: a client gone at any point, the grant's
+  // resolution included, gets no answer and no stream, and a file opened for
+  // it is closed.
+  const gone = clientGone(res);
   const target = await resolveFileGrantTarget(requestUrl.pathname);
   if (!target) {
     fail(404, "This document link has expired. Open the file again from chat.");
     return;
   }
 
-  // Watched before the open: a client gone while it runs gets no answer and
-  // no stream, and the file the open made is closed.
-  const gone = new AbortController();
-  res.on("close", () => gone.abort());
-
   // Opened, then re-identified: the bytes that go out belong to the exact file
   // containment passed, even if the name was pointed elsewhere in between.
   const handle = await openServedFile(target.path, {
     stat: true,
     side: target.side,
-    signal: gone.signal,
+    signal: gone,
   }).catch(() => undefined);
   if (!handle) {
-    if (!gone.signal.aborted) fail(404, `No such file: ${target.path}`);
+    if (!gone.aborted) fail(404, `No such file: ${target.path}`);
     return;
   }
   const opened = await handle.stat().catch(() => undefined);
@@ -464,7 +463,7 @@ export async function handleFileGrantRequest(
     res.end();
     return;
   }
-  if (gone.signal.aborted) {
+  if (gone.aborted) {
     await handle.close().catch(() => undefined);
     return;
   }
@@ -484,7 +483,7 @@ export async function handleFileGrantRequest(
       res.destroy();
       finish();
     });
-    res.on("close", finish);
+    gone.addEventListener("abort", finish);
     stream.pipe(res);
     stream.on("end", done);
   });

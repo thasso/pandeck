@@ -154,6 +154,18 @@ interface DirectFileMeta {
  * Serve one absolute path: `?meta=1` answers JSON metadata, everything else
  * streams the bytes with range support (a 2 GB capture must not be buffered).
  */
+/**
+ * Aborts once the client is gone, including when it left before this was
+ * called: a response closes once, so a handler watches from its first line,
+ * and no lookup it awaits can let that one `close` pass unseen.
+ */
+export function clientGone(res: ServerResponse): AbortSignal {
+  const gone = new AbortController();
+  if (res.closed || res.destroyed) gone.abort();
+  else res.once("close", () => gone.abort());
+  return gone.signal;
+}
+
 export async function handleDirectFileRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -161,6 +173,9 @@ export async function handleDirectFileRequest(
   corsHeaders: Headers,
 ): Promise<void> {
   const path = directFilePath(requestUrl.pathname);
+  // Watched from the start: a client gone at any point, the stat included,
+  // gets no stream, and no file is left open for it.
+  const gone = clientGone(res);
   const fail = (status: number, message: string) => {
     res.writeHead(status, {
       "content-type": "text/plain; charset=utf-8",
@@ -249,11 +264,6 @@ export async function handleDirectFileRequest(
   const end = range?.end ?? Math.max(0, size - 1);
   const length = size === 0 ? 0 : end - start + 1;
 
-  // Watched before the open: a client gone while it runs gets no stream, and
-  // the file the open made is closed.
-  const gone = new AbortController();
-  res.on("close", () => gone.abort());
-
   res.writeHead(status, {
     ...base,
     "content-length": String(length),
@@ -269,7 +279,7 @@ export async function handleDirectFileRequest(
   // above is this route's only one.
   const file = await openServedFile(path, {
     stat: false,
-    signal: gone.signal,
+    signal: gone,
   }).catch(() => undefined);
   if (!file) {
     // An open failure after the headers ends the response, as a stream's own
@@ -278,14 +288,14 @@ export async function handleDirectFileRequest(
     return;
   }
   try {
-    if (gone.signal.aborted) return;
+    if (gone.aborted) return;
     await new Promise<void>((done) => {
       const stream = file.createReadStream({ start, end });
       stream.on("error", () => {
         res.destroy();
         done();
       });
-      res.on("close", () => {
+      gone.addEventListener("abort", () => {
         stream.destroy();
         done();
       });

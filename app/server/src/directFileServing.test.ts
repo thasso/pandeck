@@ -35,7 +35,7 @@ import {
   openFile,
   statFile,
 } from "./fileReads.ts";
-import { statServedFile } from "./servedFileAccess.ts";
+import { openServedFile } from "./servedFileAccess.ts";
 import { FILE_METHODS } from "./workerProtocol/fileMethods.ts";
 import {
   ensureInProcessWorker,
@@ -753,11 +753,13 @@ const fileMethodCounts = () => ({
 
 /** Ends the in-process Worker connection, and resolves once it is quiescent. */
 async function endWorkerConnection(probe: string): Promise<void> {
-  // A request held on the connection settles only after its quiescence, so
+  // An open held on the connection settles only after its quiescence, so
   // after the Worker has swept its handles.
   const connection = ensureInProcessWorker();
-  const held = holdFileForTests(probe, "stat");
-  const settled = statServedFile(probe).catch((error: Error) => error);
+  const held = holdFileForTests(probe, "after-open");
+  const settled = openServedFile(probe, { stat: false }).catch(
+    (error: Error) => error,
+  );
   await held.reached;
   writeAsInProcessWorkerForTests(INVALID_FRAME);
   await connection.ended;
@@ -766,12 +768,15 @@ async function endWorkerConnection(probe: string): Promise<void> {
 }
 
 /** A raw request whose socket the test ends; resolves with what it received. */
-function rawRequest(path: string): {
+function rawRequest(
+  path: string,
+  to = port,
+): {
   socket: Socket;
   received: Promise<Buffer>;
 } {
   const chunks: Buffer[] = [];
-  const socket = connect(port, "127.0.0.1", () => {
+  const socket = connect(to, "127.0.0.1", () => {
     socket.write(
       `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
     );
@@ -1178,4 +1183,81 @@ describe("a client gone while its open is held", () => {
     writeFileSync(path, "held");
     await abandon((await mintDocumentGrant(path, "file")).url, path);
   });
+});
+
+describe("a client gone before its file is opened", () => {
+  let early: Server;
+  let earlyPort: number;
+  /** When this server's client leaves, relative to its handler. */
+  let leave: "before the handler" | "during the lookup";
+  let handled: Promise<{ res: ServerResponse; handled: Promise<void> }>;
+  let started: (request: {
+    res: ServerResponse;
+    handled: Promise<void>;
+  }) => void;
+  let fixturePath: string;
+
+  beforeAll(async () => {
+    fixturePath = join(dir, "left-early.bin");
+    writeFileSync(fixturePath, binaryFixture(8 * CHUNK));
+    // The client leaves from the server's side, at a chosen point. A socket's
+    // close is a next-tick event, so leaving "during the lookup" closes the
+    // response before any filesystem answer the handler awaits can arrive.
+    early = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      const run = () =>
+        started({
+          res,
+          handled: url.pathname.startsWith("/api/file-grants/")
+            ? handleFileGrantRequest(req, res, url)
+            : handleDirectFileRequest(req, res, url, {}),
+        });
+      if (leave === "during the lookup") {
+        run();
+        req.socket.destroy();
+      } else {
+        req.socket.destroy();
+        void once(res, "close").then(run);
+      }
+    });
+    await new Promise<void>((done) => early.listen(0, "127.0.0.1", done));
+    const address = early.address();
+    earlyPort = typeof address === "object" && address ? address.port : 0;
+  });
+  afterAll(async () => {
+    await new Promise<void>((done) => early.close(() => done()));
+  });
+
+  const routes = {
+    "by absolute path": async (path: string) => `/api/files${path}`,
+    "under a grant": async (path: string) =>
+      (await mintDocumentGrant(path, "file", "inline")).url,
+  };
+
+  for (const [route, urlFor] of Object.entries(routes)) {
+    for (const when of ["before the handler", "during the lookup"] as const) {
+      test(`${route}: a client gone ${when} leaves nothing open`, async () => {
+        const url = await urlFor(fixturePath);
+        leave = when;
+        handled = new Promise((resolve) => (started = resolve));
+        const opens = servedOf(FILE_METHODS.open);
+        const { received } = rawRequest(url, earlyPort);
+        const request = await handled;
+        const settled = await Promise.race([
+          request.handled.then(() => true),
+          new Promise<false>((done) => setTimeout(() => done(false), 2000)),
+        ]);
+        assert.equal(settled, true, "the handler settled");
+        assert.equal(request.res.closed, true);
+        assert.equal((await received).byteLength, 0);
+        assert.equal(servedOf(FILE_METHODS.open) - opens, 0, "nothing opened");
+        assert.equal(inProcessWorkerFileHandlesForTests(), 0, "handles held");
+        assert.equal(
+          fileReadsCountsForTests().liveDescriptors,
+          0,
+          "descriptors open",
+        );
+      });
+    }
+  }
 });
