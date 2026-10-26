@@ -8,7 +8,7 @@
         "scripts/codemods/*.mjs"
       ],
       "project": ["scripts/**/*.mjs"],
-      "ignoreBinaries": ["nix", "vitest"]
+      "ignoreBinaries": ["mkfifo", "nix", "vitest"]
     },
     "app/shared": {
       "project": "**/*.ts",
