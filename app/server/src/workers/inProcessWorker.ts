@@ -82,6 +82,16 @@ export function inProcessWorkerFileHandlesForTests(): number {
   return current?.worker.fileHandles() ?? 0;
 }
 
+/**
+ * Test seam: the current in-process Worker's quiescence, which resolves once
+ * its connection has ended, every request has settled and the sweep has
+ * closed every descriptor its handles held. Read it before ending the
+ * connection: the next request dials a new Worker.
+ */
+export function inProcessWorkerQuiescentForTests(): Promise<void> {
+  return current?.worker.quiescent ?? Promise.resolve();
+}
+
 /** Test seam: the connection epoch of the open in-process connection. */
 export function inProcessWorkerEpochForTests(): number | undefined {
   return workerRegistry.epoch(DEFAULT_WORKER_ID);
