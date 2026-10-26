@@ -1,6 +1,8 @@
 /**
- * The Worker's file methods: served files read here, through `fileReads.ts`,
- * from a table of handles that belongs to one connection.
+ * The Worker's file methods: served files and checkout files read here,
+ * through `fileReads.ts`, from a table of handles that belongs to one
+ * connection. The path methods hold no handle: on connection end their
+ * handlers settle like any other before the Worker is quiescent.
  *
  * A handle's descriptor is closed exactly once: by `files.close`, after the
  * handle's reads in flight have settled; at once, by an open that finishes
@@ -12,7 +14,10 @@
  * finishes and answers (`docs/workers.md`).
  */
 import {
+  existsPath,
+  inspectPath,
   openFile,
+  readDirectory,
   realpathFile,
   statFile,
   type OpenedFile,
@@ -26,11 +31,15 @@ import {
   FILE_METHODS,
   UNKNOWN_HANDLE,
   decodeHandle,
+  decodeInspect,
   decodeLocation,
   decodeOpen,
   decodeRead,
   encodeBytes,
+  encodeEntries,
+  encodeExists,
   encodeFailure,
+  encodeInspection,
   encodeOpened,
   encodeRealpath,
   encodeStat,
@@ -85,6 +94,29 @@ export function fileHandlers(workerId: string): FileTable {
       here(location.workerId, location.path);
       try {
         return encodeRealpath(await realpathFile(location.path));
+      } catch (error) {
+        return encodeFailure(error);
+      }
+    },
+    [FILE_METHODS.exists]: async (payload) => {
+      const location = decodeLocation(payload);
+      here(location.workerId, location.path);
+      return encodeExists(await existsPath(location.path));
+    },
+    [FILE_METHODS.inspect]: async (payload) => {
+      const { location, follow } = decodeInspect(payload);
+      here(location.workerId, location.path);
+      try {
+        return encodeInspection(await inspectPath(location.path, follow));
+      } catch (error) {
+        return encodeFailure(error);
+      }
+    },
+    [FILE_METHODS.readdir]: async (payload) => {
+      const location = decodeLocation(payload);
+      here(location.workerId, location.path);
+      try {
+        return encodeEntries(await readDirectory(location.path));
       } catch (error) {
         return encodeFailure(error);
       }

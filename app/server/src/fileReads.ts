@@ -1,16 +1,27 @@
 /**
- * The filesystem reads behind served files, shared by both sides of the
- * Worker boundary: the Worker's file methods (`worker/files.ts`) and the
- * server-local reads of `DATA_DIR`, the Knowledge Base and session artifacts
- * (`servedFileAccess.ts`). One implementation, so a path answers the same
- * wherever it is read (`docs/workers.md`).
+ * The filesystem reads behind served files and checkout reads, shared by both
+ * sides of the Worker boundary: the Worker's file methods (`worker/files.ts`)
+ * and the server-local reads of `DATA_DIR`, the Knowledge Base and session
+ * artifacts (`servedFileAccess.ts`, `checkoutFileAccess.ts`). One
+ * implementation, so a path answers the same wherever it is read
+ * (`docs/workers.md`).
  *
  * Imports only Node built-ins: `worker/` may import it.
  *
  * The `…ForTests` exports are seams for the descriptor-lifetime tests. They
  * are inert unless a test arms them.
  */
-import { open, realpath, stat, type FileHandle } from "node:fs/promises";
+import { constants, type BigIntStats } from "node:fs";
+import {
+  access,
+  lstat,
+  open,
+  readdir,
+  realpath,
+  stat,
+  type FileHandle,
+} from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 
 /** What a stat answers, as plain values that cross the wire unchanged. */
 export interface FileStat {
@@ -58,11 +69,90 @@ function fileStatOf(stats: Awaited<ReturnType<typeof stat>>): FileStat {
 /** Stats `path`, following symlinks as `stat` does. */
 export async function statFile(path: string): Promise<FileStat> {
   await barrier(path, "stat");
+  pathCalls += 1;
   return fileStatOf(await stat(path));
 }
 
 export async function realpathFile(path: string): Promise<string> {
+  await barrier(path, "realpath");
+  const fault = takeFault(path, "realpath");
+  if (fault) throw fault;
+  pathCalls += 1;
   return realpath(path);
+}
+
+/**
+ * Whether `path` exists, as `existsSync` answers it: true when
+ * `access(path, F_OK)` resolves, false on any rejection. Never rejects.
+ */
+export async function existsPath(path: string): Promise<boolean> {
+  await barrier(path, "exists");
+  pathCalls += 1;
+  try {
+    await access(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An entry's kind and identity at full precision, from a `bigint` stat; the
+ * numbers are decimal strings so they cross the wire unchanged.
+ */
+export interface PathInspection {
+  kind: "file" | "directory" | "symlink" | "other";
+  dev: string;
+  ino: string;
+  size: string;
+  mtimeNs: string;
+}
+
+function kindOf(stats: BigIntStats): PathInspection["kind"] {
+  if (stats.isFile()) return "file";
+  if (stats.isDirectory()) return "directory";
+  if (stats.isSymbolicLink()) return "symlink";
+  return "other";
+}
+
+/** Stats `path`, following symlinks with `follow` (`stat`), else `lstat`. */
+export async function inspectPath(
+  path: string,
+  follow: boolean,
+): Promise<PathInspection> {
+  await barrier(path, "inspect");
+  const fault = takeFault(path, "inspect");
+  if (fault) throw fault;
+  pathCalls += 1;
+  const stats = follow
+    ? await stat(path, { bigint: true })
+    : await lstat(path, { bigint: true });
+  return {
+    kind: kindOf(stats),
+    dev: String(stats.dev),
+    ino: String(stats.ino),
+    size: String(stats.size),
+    mtimeNs: String(stats.mtimeNs),
+  };
+}
+
+/** One directory entry; `directory` is the entry's own type, never followed. */
+export interface DirectoryEntry {
+  name: string;
+  directory: boolean;
+}
+
+/** The entries of `path` in `readdir` order. */
+export async function readDirectory(path: string): Promise<DirectoryEntry[]> {
+  await barrier(path, "readdir");
+  const fault = takeFault(path, "readdir");
+  if (fault) throw fault;
+  pathCalls += 1;
+  const entries = await readdir(path, { withFileTypes: true });
+  return entries.map((entry) => ({
+    name: entry.name,
+    directory: entry.isDirectory(),
+  }));
 }
 
 /**
@@ -210,16 +300,28 @@ function openedFile(handle: FileHandle): OpenedFile {
 
 let live = 0;
 let descriptorStats = 0;
+let pathCalls = 0;
 
-/** Test seam: descriptors open now, and descriptor stats ever made. */
+/**
+ * Test seam: descriptors open now, descriptor stats ever made, and native
+ * path calls ever made (stat, realpath, exists, inspect, readdir).
+ */
 export function fileReadsCountsForTests(): {
   liveDescriptors: number;
   descriptorStats: number;
+  pathCalls: number;
 } {
-  return { liveDescriptors: live, descriptorStats };
+  return { liveDescriptors: live, descriptorStats, pathCalls };
 }
 
-type BarrierPhase = "stat" | "before-open" | "after-open";
+type BarrierPhase =
+  | "stat"
+  | "realpath"
+  | "exists"
+  | "inspect"
+  | "readdir"
+  | "before-open"
+  | "after-open";
 
 interface Deferred {
   promise: Promise<void>;
@@ -256,10 +358,11 @@ export interface FileBarrierForTests {
 }
 
 /**
- * Test seam: hold the next call on `path` at `phase` — `stat` before a path
- * stat, `before-open` before the native open, `after-open` once the
- * descriptor (and with `stat: true` its stat) exists and before the outcome
- * goes to its owner. One-shot.
+ * Test seam: hold the next call on `path` at `phase` — `stat`, `realpath`,
+ * `exists`, `inspect` or `readdir` before that path call, `before-open`
+ * before the native open, `after-open` once the descriptor (and with
+ * `stat: true` its stat) exists and before the outcome goes to its owner.
+ * One-shot.
  */
 export function holdFileForTests(
   path: string,
@@ -292,17 +395,38 @@ async function barrier(
   return armed;
 }
 
-const faults = new Map<string, { phase: "open" | "stat"; code: string }>();
+type FaultPhase = "open" | "stat" | "realpath" | "inspect" | "readdir";
+
+interface Fault {
+  phase: FaultPhase;
+  code: string;
+  /** Leave out the native `errno`, so only the `code` is set. */
+  bare?: boolean;
+}
+
+const faults = new Map<string, Fault>();
+
+const FAULT_SYSCALLS: Record<FaultPhase, string> = {
+  open: "open",
+  stat: "fstat",
+  realpath: "realpath",
+  inspect: "stat",
+  readdir: "scandir",
+};
 
 /**
- * Test seam: fail the next native open (`open`) or descriptor stat (`stat`)
- * of `path` with `code`. One-shot; an open that makes no descriptor stat
- * leaves a `stat` fault armed.
+ * Test seam: fail the next native open (`open`), descriptor stat (`stat`),
+ * `realpath`, `inspect` or `readdir` of `path` with `code`. The error carries
+ * the negative `errno` of `code`, as a native one does, unless `bare`.
+ * One-shot; an open that makes no descriptor stat leaves a `stat` fault armed.
  */
-export function failFileForTests(
-  path: string,
-  fault: { phase: "open" | "stat"; code: string },
-): void {
+export function failFileForTests(path: string, fault: Fault): void {
+  if (
+    !fault.bare &&
+    osConstants.errno[fault.code as keyof typeof osConstants.errno] ===
+      undefined
+  )
+    throw new Error(`No errno for ${fault.code}; arm it bare.`);
   faults.set(path, fault);
 }
 
@@ -311,13 +435,17 @@ export function fileFaultArmedForTests(path: string): boolean {
   return faults.has(path);
 }
 
-function takeFault(path: string, phase: "open" | "stat"): Error | undefined {
+function takeFault(path: string, phase: FaultPhase): Error | undefined {
   const fault = faults.get(path);
   if (fault?.phase !== phase) return undefined;
   faults.delete(path);
-  const syscall = phase === "open" ? "open" : "fstat";
-  return Object.assign(
-    new Error(`${fault.code}: injected fault, ${syscall} '${path}'`),
+  const error = Object.assign(
+    new Error(
+      `${fault.code}: injected fault, ${FAULT_SYSCALLS[phase]} '${path}'`,
+    ),
     { code: fault.code },
   );
+  if (fault.bare) return error;
+  const errno = osConstants.errno[fault.code as keyof typeof osConstants.errno];
+  return Object.assign(error, { errno: -errno });
 }

@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+  type BigIntStats,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, test } from "vitest";
@@ -8,6 +19,7 @@ import {
   failFileForTests,
   fileFaultArmedForTests,
   fileReadsCountsForTests,
+  holdFileForTests,
 } from "../fileReads.ts";
 import { WRONG_WORKER } from "../workerProtocol/checkoutMethods.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
@@ -15,7 +27,9 @@ import { WorkerRequestError } from "../workerProtocol/connection.ts";
 import { FILE_METHODS, UNKNOWN_HANDLE } from "../workerProtocol/fileMethods.ts";
 import {
   ensureInProcessWorker,
+  inProcessWorkerEpochForTests,
   inProcessWorkerFileHandlesForTests,
+  writeAsInProcessWorkerForTests,
 } from "../workers/inProcessWorker.ts";
 import { DEFAULT_WORKER_ID } from "../workers/placement.ts";
 
@@ -26,11 +40,17 @@ import { DEFAULT_WORKER_ID } from "../workers/placement.ts";
 
 let dir: string;
 let small: string;
+let fifo: string;
+let sub: string;
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "worker-files-"));
   small = join(dir, "small.bin");
   writeFileSync(small, Buffer.from([0, 1, 2, 0xff, 0xfe, 0, 7]));
+  fifo = join(dir, "never-opened.fifo");
+  execFileSync("mkfifo", [fifo]);
+  sub = join(dir, "sub");
+  mkdirSync(sub);
 });
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -46,6 +66,14 @@ function assertNothingHeld(): void {
 }
 
 afterEach(assertNothingHeld);
+
+const INVALID_FRAME = new Uint8Array(8);
+
+/** Let in-process deliveries and filesystem callbacks run. */
+async function settle(rounds = 20): Promise<void> {
+  for (let i = 0; i < rounds; i += 1)
+    await new Promise<void>((done) => setImmediate(done));
+}
 
 const ask = (method: string, json: unknown): Promise<Payload> =>
   ensureInProcessWorker().request(method, { json });
@@ -71,8 +99,6 @@ async function rejectsWith(
 
 describe("addressing", () => {
   test("every method refuses another Worker's id and touches nothing", async () => {
-    const fifo = join(dir, "never-opened.fifo");
-    execFileSync("mkfifo", [fifo]);
     const other = { workerId: "elsewhere", path: fifo };
     const handle = await openHandle(small);
     const before = fileReadsCountsForTests();
@@ -109,6 +135,39 @@ describe("addressing", () => {
 
     await ask(FILE_METHODS.close, { workerId: DEFAULT_WORKER_ID, handle });
   });
+
+  test("the path methods refuse another Worker's id before any path call", async () => {
+    const methods = [
+      [FILE_METHODS.exists, {}, "exists"],
+      [FILE_METHODS.inspect, { follow: true }, "inspect"],
+      [FILE_METHODS.inspect, { follow: false }, "inspect"],
+      [FILE_METHODS.readdir, {}, "readdir"],
+    ] as const;
+    for (const path of [fifo, sub, small])
+      for (const [method, extra, phase] of methods) {
+        const held = holdFileForTests(path, phase);
+        let reached = false;
+        void held.reached.then(() => (reached = true));
+        const before = fileReadsCountsForTests();
+        await rejectsWith(
+          ask(method, { location: { workerId: "elsewhere", path }, ...extra }),
+          WRONG_WORKER,
+        );
+        await settle();
+        assert.deepEqual(fileReadsCountsForTests(), before, method);
+        assert.equal(reached, false, `${method} reached ${path}`);
+        // Disarm, as the positive control: a well-formed call takes the
+        // barrier and makes its path call.
+        held.release();
+        await ask(method, { location: here(path), ...extra });
+        assert.equal(reached, true);
+        assert.equal(
+          fileReadsCountsForTests().pathCalls,
+          before.pathCalls + 1,
+          `${method} made its path call`,
+        );
+      }
+  });
 });
 
 describe("params", () => {
@@ -138,6 +197,27 @@ describe("params", () => {
       [FILE_METHODS.close, { workerId: DEFAULT_WORKER_ID, handle: 0 }],
     ] as const)
       await rejectsWith(ask(method, json), "invalid_params");
+  });
+
+  test("the path methods refuse malformed params before any path call", async () => {
+    const before = fileReadsCountsForTests().pathCalls;
+    for (const [method, json] of [
+      [FILE_METHODS.exists, null],
+      [FILE_METHODS.exists, {}],
+      [FILE_METHODS.exists, { location: { path: small } }],
+      [
+        FILE_METHODS.exists,
+        { location: { workerId: DEFAULT_WORKER_ID, path: 5 } },
+      ],
+      [FILE_METHODS.inspect, { location: here(small) }],
+      [FILE_METHODS.inspect, { location: here(small), follow: "yes" }],
+      [FILE_METHODS.inspect, { follow: true }],
+      [FILE_METHODS.readdir, null],
+      [FILE_METHODS.readdir, { location: { workerId: DEFAULT_WORKER_ID } }],
+      [FILE_METHODS.readdir, { location: "x" }],
+    ] as const)
+      await rejectsWith(ask(method, json), "invalid_params");
+    assert.equal(fileReadsCountsForTests().pathCalls, before);
   });
 
   test("closing twice, or a handle never issued, is fine", async () => {
@@ -248,4 +328,124 @@ describe("reads", () => {
     assert.equal(past.bytes?.data?.byteLength, 0, "empty means end of file");
     await ask(FILE_METHODS.close, { workerId: DEFAULT_WORKER_ID, handle });
   });
+});
+
+describe("path methods on the wire", () => {
+  test("exists answers as existsSync, never a failure", async () => {
+    for (const [path, exists] of [
+      [small, true],
+      [sub, true],
+      [fifo, true],
+      [join(dir, "missing"), false],
+      [join(small, "below-a-file"), false],
+    ] as const) {
+      assert.equal(existsSync(path), exists, `oracle for ${path}`);
+      assert.deepEqual(
+        (await ask(FILE_METHODS.exists, { location: here(path) })).json,
+        { exists },
+        path,
+      );
+    }
+  });
+
+  test("inspect answers kind and full-precision identity, both ways on a link", async () => {
+    const link = join(dir, "small.link");
+    symlinkSync(small, link);
+    const digits = (stats: BigIntStats) => ({
+      dev: String(stats.dev),
+      ino: String(stats.ino),
+      size: String(stats.size),
+      mtimeNs: String(stats.mtimeNs),
+    });
+    for (const [path, follow, kind, oracle] of [
+      [link, true, "file", statSync(link, { bigint: true })],
+      [link, false, "symlink", lstatSync(link, { bigint: true })],
+      [sub, true, "directory", statSync(sub, { bigint: true })],
+      [fifo, false, "other", lstatSync(fifo, { bigint: true })],
+    ] as const)
+      assert.deepEqual(
+        (await ask(FILE_METHODS.inspect, { location: here(path), follow }))
+          .json,
+        { inspection: { kind, ...digits(oracle) } },
+      );
+    for (const [path, code] of [
+      [join(dir, "missing"), "ENOENT"],
+      [join(small, "below-a-file"), "ENOTDIR"],
+    ] as const) {
+      const answer = await ask(FILE_METHODS.inspect, {
+        location: here(path),
+        follow: true,
+      });
+      assert.deepEqual(answer.json, { error: { code } });
+      assert.match(answer.text?.message ?? "", new RegExp(`^${code}: `));
+    }
+  });
+
+  test("readdir answers entries in readdir order, a directory link as not a directory", async () => {
+    const listed = join(dir, "listed");
+    mkdirSync(join(listed, "inner"), { recursive: true });
+    writeFileSync(join(listed, "file.txt"), "x");
+    symlinkSync(join(listed, "inner"), join(listed, "inner.link"));
+    const answer = await ask(FILE_METHODS.readdir, { location: here(listed) });
+    const { entries } = answer.json as {
+      entries: { name: string; directory: boolean }[];
+    };
+    assert.deepEqual(
+      entries,
+      readdirSync(listed, { withFileTypes: true }).map((entry) => ({
+        name: entry.name,
+        directory: entry.isDirectory(),
+      })),
+    );
+    assert.deepEqual(
+      Object.fromEntries(entries.map((e) => [e.name, e.directory])),
+      { "file.txt": false, inner: true, "inner.link": false },
+    );
+    const notDir = await ask(FILE_METHODS.readdir, { location: here(small) });
+    assert.deepEqual(notDir.json, { error: { code: "ENOTDIR" } });
+  });
+
+  test("an injected path fault answers its code, as a native failure does", async () => {
+    failFileForTests(small, { phase: "inspect", code: "EIO" });
+    const answer = await ask(FILE_METHODS.inspect, {
+      location: here(small),
+      follow: false,
+    });
+    assert.deepEqual(answer.json, { error: { code: "EIO" } });
+    assert.match(answer.text?.message ?? "", /^EIO: injected fault, stat /);
+  });
+});
+
+describe("quiescence of the path methods", () => {
+  test.each([
+    [FILE_METHODS.exists, {}, "exists"],
+    [FILE_METHODS.inspect, { follow: true }, "inspect"],
+    [FILE_METHODS.readdir, {}, "readdir"],
+  ] as const)(
+    "%s held at connection end rejects only after release, while a replacement serves",
+    async (method, extra, phase) => {
+      const held = holdFileForTests(sub, phase);
+      const epoch = inProcessWorkerEpochForTests();
+      let settled = false;
+      const pending = ask(method, { location: here(sub), ...extra }).finally(
+        () => (settled = true),
+      );
+      await held.reached;
+      writeAsInProcessWorkerForTests(INVALID_FRAME);
+      await settle();
+      assert.equal(settled, false, "held until the handler settles");
+
+      // A new epoch serves meanwhile.
+      const replacement = await ask(FILE_METHODS.exists, {
+        location: here(small),
+      });
+      assert.deepEqual(replacement.json, { exists: true });
+      assert.ok(epoch !== undefined);
+      assert.equal(inProcessWorkerEpochForTests(), epoch + 1);
+      assert.equal(settled, false);
+
+      held.release();
+      await assert.rejects(pending, /The Worker connection ended/);
+    },
+  );
 });

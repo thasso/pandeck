@@ -108,6 +108,12 @@ const NAMED_CHECKOUT_READERS: Record<string, string> = {
  * The served-file modules (W2): every read they make goes through
  * `servedFileAccess.ts`, which picks the Worker or the server for it.
  */
+/**
+ * Modules that read checkouts only through the checkout-file access
+ * (`checkoutFileAccess.ts`, itself included): none imports `node:fs`.
+ */
+const MIGRATED_CHECKOUT_READERS = ["checkoutFileAccess.ts"];
+
 const SERVED_FILE_MODULES = [
   "directFileGrants.ts",
   "directFileHttp.ts",
@@ -426,17 +432,29 @@ test("served files read only through the served-file access", () => {
       `${module} reads the filesystem itself`,
     );
   // The file primitives run on the server only for the server's own data, and
-  // the Worker's file methods are reached only through the same access.
+  // the Worker's file methods are reached only through the served-file and
+  // checkout-file accesses.
   assert.deepEqual(
     importersOf((target) => target === "fileReads.ts", "valueImports").filter(
       (module) => !module.startsWith("worker/"),
     ),
-    ["servedFileAccess.ts"],
+    ["checkoutFileAccess.ts", "servedFileAccess.ts"],
   );
   assert.deepEqual(
     importersOf((target) => target === "workers/fileClient.ts"),
-    ["servedFileAccess.ts"],
+    ["checkoutFileAccess.ts", "servedFileAccess.ts"],
   );
+});
+
+test("migrated checkout readers read only through the checkout-file access", () => {
+  for (const module of MIGRATED_CHECKOUT_READERS) {
+    const scan = scans.get(module);
+    assert.ok(scan, `${module} is gone: delete it from the list`);
+    assert.ok(
+      ![...scan.imports].some(isFs),
+      `${module} reads the filesystem itself`,
+    );
+  }
 });
 
 test("every module reading checkouts on the server is pinned to its slice", () => {
