@@ -528,6 +528,8 @@ describe("AC7b a Worker failure rejects every surface", () => {
       const error = await pending;
       assert.match(String(error), /The Worker connection ended/);
       assert.ok(isWorkerFailure(error));
+      // Had the open started, the end would orphan it, outside quiescence.
+      if (site.phase === "before-open") await held.disposed;
     },
   );
 });

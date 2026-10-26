@@ -676,6 +676,8 @@ describe("readCheckoutFile follows production's readFile", () => {
     held.release();
     const error = await pending;
     assert.equal(checkoutFailureOf(error), "worker");
+    // Had the open started, the end would orphan it, outside quiescence.
+    await held.disposed;
   });
 });
 
