@@ -30,8 +30,11 @@ const { resolveReadableWorktreeRow } = await import("./knowledgeCheckout.ts");
 const { mainWorktreeId, resolveWorktreeRow } =
   await import("./worktreeResolve.ts");
 const { setWorktreeBroadcaster } = await import("./worktreeEvents.ts");
-const { computeWorktreeStatus, readableWorktreeStatus } =
-  await import("./worktreeStatus.ts");
+const {
+  computeWorktreeStatus,
+  readableWorktreeStatus,
+  refreshWorktreeRemotePatch,
+} = await import("./worktreeStatus.ts");
 const { getWorktreeChanges } = await import("./worktreeDiff.ts");
 const { commitWorktree } = await import("./worktreeWrite.ts");
 const {
@@ -198,6 +201,31 @@ test("AC3: the KB row's watch, viewer, scans, fetch and a late sweep stay on the
 
   assert.equal(inProcessWorkerServedForTests() - before, 0);
   removeWorktreeViewer(KNOWLEDGE_WORKTREE_ID);
+});
+
+test("B6: the KB row's context tracking read and base probe stay on the server", async () => {
+  const row = await resolveReadableWorktreeRow(KNOWLEDGE_WORKTREE_ID);
+  assert.ok(row, "the KB checkout row");
+  const before = inProcessWorkerServedForTests();
+
+  // A remote-ref patch whose upstream map lacks the KB branch asks Git for the
+  // branch's tracking in the row's own context.
+  assert.ok(await computeWorktreeStatus(row, { force: true }));
+  const patched = await refreshWorktreeRemotePatch(row, new Map());
+  assert.ok(patched, "the context read answered");
+
+  // The base ref goes away between resolving the row and scanning it: the
+  // rev-list fails, and the scan probes the base on its own.
+  sh(row.path, "branch", "-m", row.branch, "w3c-renamed");
+  try {
+    const status = await computeWorktreeStatus(row, { force: true });
+    assert.equal(status.baseUnresolved, true);
+  } finally {
+    sh(row.path, "branch", "-m", "w3c-renamed", row.branch);
+  }
+
+  assert.equal(inProcessWorkerServedForTests() - before, 0);
+  assert.ok(await computeWorktreeStatus(row, { force: true }));
 });
 
 test("AC8: a project at the KB root runs on the Worker without the KB row causing or joining it", async () => {

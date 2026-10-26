@@ -302,25 +302,19 @@ function scanSource(file: string, source: string): ModuleScan {
     scan.imports.add(target);
     if (!typeOnly) scan.valueImports.add(target);
   };
-  const isTypeOnly = (node: AstNode, kind: string): boolean =>
-    node[kind] === "type" ||
-    (Array.isArray(node.specifiers) &&
-      node.specifiers.length > 0 &&
-      (node.specifiers as AstNode[]).every(
-        (specifier) => specifier[kind] === "type",
-      ));
-
   const isLoad = commonJsLoader(parsed.program);
 
+  // `verbatimModuleSyntax` erases only a type-only declaration: an
+  // `import { type X }` still runs its module, as `import {}`.
   walk(parsed.program, (value) => {
     switch (value.type) {
       case "ImportDeclaration":
-        add(value.source, isTypeOnly(value, "importKind"));
+        add(value.source, value.importKind === "type");
         break;
       case "ExportNamedDeclaration":
       case "ExportAllDeclaration":
         if (value.source != null)
-          add(value.source, isTypeOnly(value, "exportKind"));
+          add(value.source, value.exportKind === "type");
         break;
       case "ImportExpression":
         add(value.source, false);
@@ -812,12 +806,18 @@ const KB_ROW_PRODUCERS = [
 
 const SERVER_FS_MODULES = new Set(["node:fs", "node:fs/promises"]);
 
-/** One value binding a module takes from (or re-exports out of) another. */
+/**
+ * One value binding a module takes from (or re-exports out of) another, or a
+ * `side-effect` import or re-export that binds nothing but still runs it.
+ */
 interface SymbolImport {
   module: string;
-  /** `default`, `*` for a namespace or `export *`, or the imported name. */
+  /**
+   * `default`, `*` for a namespace, a load or `export *`, the imported name,
+   * or empty for a `side-effect` edge.
+   */
   symbol: string;
-  form: "import" | "re-export" | "dynamic" | "require";
+  form: "import" | "re-export" | "side-effect" | "dynamic" | "require";
 }
 
 function parseModule(file: string, source: string): AstNode {
@@ -830,9 +830,15 @@ function parseModule(file: string, source: string): AstNode {
   return parsed.program as unknown as AstNode;
 }
 
-function moduleTarget(file: string, specifier: string): string {
+/** The module `source` names from `file`, as `scanSource` resolves it. */
+function moduleTarget(file: string, source: unknown): string {
+  const specifier = constantString(source);
+  if (specifier === undefined) return "<computed>";
   return specifier.startsWith(".")
-    ? relative(SRC_ROOT, resolve(dirname(join(SRC_ROOT, file)), specifier))
+    ? relative(
+        SRC_ROOT,
+        resolve(dirname(join(SRC_ROOT, file)), specifier),
+      ).replace(/\.js$/, ".ts")
     : specifier;
 }
 
@@ -848,9 +854,11 @@ function symbolImports(file: string, source: string): SymbolImport[] {
     switch (node.type) {
       case "ImportDeclaration": {
         if (node.importKind === "type") return;
-        const module = moduleTarget(file, constantString(node.source) ?? "");
-        for (const specifier of node.specifiers as AstNode[]) {
-          if (specifier.importKind === "type") continue;
+        const module = moduleTarget(file, node.source);
+        const values = (node.specifiers as AstNode[]).filter(
+          (specifier) => specifier.importKind !== "type",
+        );
+        for (const specifier of values) {
           const symbol =
             specifier.type === "ImportDefaultSpecifier"
               ? "default"
@@ -859,31 +867,37 @@ function symbolImports(file: string, source: string): SymbolImport[] {
                 : nameOf(specifier.imported);
           found.push({ module, symbol, form: "import" });
         }
+        if (values.length === 0)
+          found.push({ module, symbol: "", form: "side-effect" });
         return;
       }
       case "ExportNamedDeclaration": {
         if (node.source == null || node.exportKind === "type") return;
-        const module = moduleTarget(file, constantString(node.source) ?? "");
-        for (const specifier of node.specifiers as AstNode[])
-          if (specifier.exportKind !== "type")
-            found.push({
-              module,
-              symbol: nameOf(specifier.local),
-              form: "re-export",
-            });
+        const module = moduleTarget(file, node.source);
+        const values = (node.specifiers as AstNode[]).filter(
+          (specifier) => specifier.exportKind !== "type",
+        );
+        for (const specifier of values)
+          found.push({
+            module,
+            symbol: nameOf(specifier.local),
+            form: "re-export",
+          });
+        if (values.length === 0)
+          found.push({ module, symbol: "", form: "side-effect" });
         return;
       }
       case "ExportAllDeclaration":
         if (node.exportKind === "type") return;
         found.push({
-          module: moduleTarget(file, constantString(node.source) ?? ""),
+          module: moduleTarget(file, node.source),
           symbol: "*",
           form: "re-export",
         });
         return;
       case "ImportExpression":
         found.push({
-          module: constantString(node.source) ?? "<computed>",
+          module: moduleTarget(file, node.source),
           symbol: "*",
           form: "dynamic",
         });
@@ -891,8 +905,7 @@ function symbolImports(file: string, source: string): SymbolImport[] {
       case "CallExpression":
         if (isLoad(node.callee))
           found.push({
-            module:
-              constantString((node.arguments as unknown[])[0]) ?? "<computed>",
+            module: moduleTarget(file, (node.arguments as unknown[])[0]),
             symbol: "*",
             form: "require",
           });
@@ -918,7 +931,7 @@ const listed = (
 function sideBoundViolations(file: string, source: string): string[] {
   const violations: string[] = [];
   for (const ref of symbolImports(file, source)) {
-    const label = `${file}: ${ref.form} ${ref.symbol} from ${ref.module}`;
+    const label = `${file}: ${[ref.form, ref.symbol].filter(Boolean).join(" ")} from ${ref.module}`;
     if (ref.form === "dynamic" || ref.form === "require") {
       violations.push(`${label} (unsupported form)`);
       continue;
@@ -1236,5 +1249,105 @@ test("the side-bound ratchet flags each way around it (S1–S10)", () => {
       'export { getSettings } from "./settingsCore.ts";',
     ) ?? "",
     /re-exported, not declared/,
+  );
+});
+
+test("an import that binds nothing still runs its module (S11)", () => {
+  const status = "worktrees/worktreeStatus.ts";
+  const closed = (source: string): boolean =>
+    sideBoundViolations(status, source).some((violation) =>
+      /not on the closed surface|forbidden/.test(violation),
+    );
+  // `verbatimModuleSyntax` keeps `import { type X }` as `import {}`: only an
+  // `import type` or `export type` declaration is erased.
+  assert.deepEqual(
+    [
+      'import "./newHelper.ts";',
+      'import {} from "./newHelper.ts";',
+      'import { type Wrap } from "./newHelper.ts";',
+      'export {} from "./newHelper.ts";',
+      'export { type Wrap } from "./newHelper.ts";',
+      'import "../settings.ts";',
+      'import "../gitExec.ts";',
+      'import "../gitProcess.ts";',
+    ].filter((source) => !closed(source)),
+    [],
+    "an unlisted module runs unseen",
+  );
+  // Erased declarations, and modules already on the closed surface.
+  assert.deepEqual(
+    [
+      'import type { Wrap } from "./newHelper.ts";',
+      'import type {} from "./newHelper.ts";',
+      'export type { Wrap } from "./newHelper.ts";',
+      'import "./worktreeDiff.ts";',
+      'import "node:path";',
+    ].filter((source) => sideBoundViolations(status, source).length > 0),
+    [],
+  );
+
+  const runs = (source: string): boolean =>
+    scanSource(join(SRC_ROOT, "newModule.ts"), source).valueImports.has(
+      "gitProcess.ts",
+    );
+  assert.deepEqual(
+    [
+      runs('import { type GitResult } from "./gitProcess.ts";'),
+      runs('export { type GitResult } from "./gitProcess.ts";'),
+      runs('import type { GitResult } from "./gitProcess.ts";'),
+      runs('export type { GitResult } from "./gitProcess.ts";'),
+    ],
+    [true, true, false, false],
+  );
+});
+
+test("the KB-row producer pin sees every load form, from any directory (S12)", () => {
+  const produces = (file: string, source: string): boolean =>
+    kbRowProducers(new Map([[file, source]])).includes(file);
+  const kb = "../worktrees/knowledgeCheckout.ts";
+  assert.deepEqual(
+    (
+      [
+        [
+          "newKbCaller.ts",
+          'const { resolveReadableWorktreeRow } = await import("./worktrees/knowledgeCheckout.ts");',
+        ],
+        ["tools/newKbCaller.ts", `const m = await import("${kb}");`],
+        ["tools/newKbCaller.ts", `const m = await import(\`${kb}\`);`],
+        ["worktrees/newKbCaller.ts", 'await import("./knowledgeCheckout.ts");'],
+        [
+          "newKbCaller.ts",
+          'const { resolveReadableWorktreeRow } = require("./worktrees/knowledgeCheckout.ts");',
+        ],
+        [
+          "tools/newKbCaller.ts",
+          `import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nload("${kb}");`,
+        ],
+        [
+          "tools/newKbCaller.ts",
+          'import { resolveReadableWorktreeRow } from "../worktrees/knowledgeCheckout.js";',
+        ],
+        ["tools/newKbCaller.ts", `import * as kb from "${kb}";`],
+        [
+          "tools/newKbCaller.ts",
+          `export { resolveReadableWorktreeRow } from "${kb}";`,
+        ],
+        ["tools/newKbCaller.ts", `export * from "${kb}";`],
+      ] as const
+    )
+      .filter(([file, source]) => !produces(file, source))
+      .map(([file, source]) => `${file}: ${source}`),
+    [],
+    "a KB-row producer escapes the pin",
+  );
+  // Types and the other symbols hand out no row.
+  assert.deepEqual(
+    [
+      `import type { resolveReadableWorktreeRow } from "${kb}";`,
+      `type Kb = typeof import("${kb}");`,
+      `import { checkoutSideOf } from "${kb}";`,
+      `import "${kb}";`,
+    ].filter((source) => produces("tools/newKbCaller.ts", source)),
+    [],
   );
 });
