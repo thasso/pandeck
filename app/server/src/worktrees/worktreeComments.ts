@@ -20,7 +20,6 @@
  * when HEAD moved since the last pass.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type {
   NewWorktreeCommentAnchor,
   ReviewSeverity,
@@ -33,6 +32,11 @@ import type {
   PositionSelector,
   SelectorBundle,
 } from "@assistant/shared/comments";
+import {
+  checkoutFailureOf,
+  containedRealPath,
+  readCheckoutFile,
+} from "../checkoutFileAccess.ts";
 import { resolveAnchor } from "../comments/resolveAnchor.ts";
 import {
   gitOptional,
@@ -60,7 +64,7 @@ import {
   type WorktreeRow,
 } from "../db/worktreeStore.ts";
 import { onWorktreeGitStateChange } from "./worktreeWatcher.ts";
-import { containedRealPath, isSafeRef } from "./worktreeDiff.ts";
+import { isSafeRef } from "./worktreeDiff.ts";
 import {
   isMainWorktreeId,
   mainWorktreeId,
@@ -88,14 +92,22 @@ interface AnchorContext {
 /** HEAD oid the last re-anchor pass ran against, per worktree. */
 const lastReanchorHead = new Map<string, string>();
 
+/** Test seam: the HEAD a listing would not re-anchor for. */
+export function lastReanchorHeadForTests(
+  worktreeId: string,
+): string | undefined {
+  return lastReanchorHead.get(worktreeId);
+}
+
 // Agents auto-commit; every detected HEAD move re-anchors that worktree's
 // comments. Subscribed at module load (the connection layer imports this
 // module before any comment can exist).
 onWorktreeGitStateChange((worktreeId) => {
   void reanchorWorktreeCommentPass(worktreeId)
-    .then(async ({ changedRootIds }) => {
+    .then(async ({ changedRootIds, readFailure }) => {
       if (changedRootIds.length)
         await broadcastComments(worktreeId, changedRootIds);
+      if (readFailure) throw readFailure.error;
     })
     .catch((err) =>
       console.warn(
@@ -110,20 +122,43 @@ interface WorkingSource {
   lines: string[];
 }
 
-function readWorkingSource(
+/**
+ * A working file's bytes and lines; undefined for a binary file, a filesystem
+ * failure or the containment verdict. A Worker failure or anything else
+ * rejects, and its callers let it reach their public result
+ * (`docs/workers.md`, "Checkout files").
+ */
+async function readWorkingSource(
   row: WorktreeRow,
   path: string,
-): WorkingSource | undefined {
+): Promise<WorkingSource | undefined> {
+  let content: Buffer;
   try {
     // containedRealPath: lexical containment + symlink resolution, so a repo
     // symlink cannot anchor comments to (and snapshot lines from) files
     // outside the worktree.
-    const content = readFileSync(containedRealPath(row.path, path));
-    if (content.includes(0)) return undefined;
-    return { content, lines: content.toString("utf8").split("\n") };
-  } catch {
+    content = await readCheckoutFile(
+      row.path,
+      await containedRealPath(row.path, path),
+    );
+  } catch (error) {
+    const origin = checkoutFailureOf(error);
+    if (origin !== "filesystem" && origin !== "verdict") throw error;
     return undefined;
   }
+  if (content.includes(0)) return undefined;
+  return { content, lines: content.toString("utf8").split("\n") };
+}
+
+/** Errors of a working-source read that stopped a re-anchor pass. */
+const checkoutReadFailures = new WeakSet<object>();
+
+function isCheckoutReadFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    checkoutReadFailures.has(error)
+  );
 }
 
 async function hashSource(
@@ -289,7 +324,7 @@ async function selectorBundleForRead(
   ) {
     // Rows created before dirty blobs were written may still be recoverable
     // while the working file is byte-identical to the snapshot hash.
-    const currentSource = readWorkingSource(worktree, comment.anchorPath);
+    const currentSource = await readWorkingSource(worktree, comment.anchorPath);
     const currentBlob = currentSource
       ? await hashSource(worktree, currentSource, false)
       : undefined;
@@ -440,8 +475,16 @@ export async function addWorktreeComment(
   insertComment(comment);
   // A ref anchor was snapshotted at an older commit, so its seeded `current`
   // position may already be stale; map it to current content immediately.
+  // Best effort, as for any failure of the pass, but for a read that failed
+  // other than for the Worker: the stored comment is still reported, then the
+  // add rejects with that error.
+  let remapFailure: { error: unknown } | undefined;
   if (input.anchor?.ref !== undefined)
-    await reanchorWorktreeComments(worktreeId).catch(() => false);
+    await reanchorWorktreeComments(worktreeId).catch((error: unknown) => {
+      if (isCheckoutReadFailure(error) && checkoutFailureOf(error) !== "worker")
+        remapFailure = { error };
+      return false;
+    });
   const target = {
     kind: "worktree" as const,
     worktreeId,
@@ -452,6 +495,7 @@ export async function addWorktreeComment(
   reportCommentChanges(target, [input.parentId ?? comment.id]);
   if (affectedReviewSetId)
     reportCommentMetadataChanges(target, [affectedReviewSetId]);
+  if (remapFailure) throw remapFailure.error;
   const stored = getComment(comment.id) ?? comment;
   return toProtocol(stored);
 }
@@ -513,7 +557,9 @@ async function buildAnchor(
   await afterAnchorHeadForTests?.();
 
   const workingSource =
-    anchor.side === "new" ? readWorkingSource(row, anchor.path) : undefined;
+    anchor.side === "new"
+      ? await readWorkingSource(row, anchor.path)
+      : undefined;
   const lines =
     anchor.side === "new"
       ? workingSource?.lines
@@ -786,7 +832,12 @@ export async function listWorktreeComments(
     );
     const head = headRes.code === 0 ? headRes.stdout.trim() : "";
     if (head && lastReanchorHead.get(worktreeId) !== head) {
-      await reanchorWorktreeComments(worktreeId).catch(() => false);
+      // A failed checkout read reaches the listing; any other failure of the
+      // pass leaves the comments as they were.
+      await reanchorWorktreeComments(worktreeId).catch((error: unknown) => {
+        if (isCheckoutReadFailure(error)) throw error;
+        return false;
+      });
     }
   }
   return protocolComments(listComments(worktreeId), row);
@@ -879,6 +930,11 @@ async function runMainWorktreeCommentRetention(
       const row = await resolveWorktreeRow(worktreeId);
       if (!row || row.status !== "active" || row.id !== worktreeId) continue;
       const reanchored = await reanchorWorktreeCommentPass(worktreeId);
+      if (reanchored.readFailure) {
+        if (reanchored.changedRootIds.length)
+          await broadcastComments(worktreeId, reanchored.changedRootIds);
+        throw reanchored.readFailure.error;
+      }
       result.checkedWorktrees += 1;
 
       // No await between the fresh pass and this synchronous transaction: an
@@ -1002,15 +1058,29 @@ interface ReanchorPassResult {
   changedRootIds: string[];
   /** Roots for which this pass had enough immutable anchor data to evaluate. */
   evaluatedRootIds: string[];
+  /**
+   * A working-source read that failed, stopping the pass at its root before
+   * anything was written for it; the roots before it stay written.
+   */
+  readFailure?: { error: unknown };
 }
 
-/** Re-anchor all thread roots of a worktree; returns true when anything changed. */
+/**
+ * Re-anchor all thread roots of a worktree; returns true when anything changed.
+ * Rejects with a failed working-source read, marked for its callers.
+ */
 export async function reanchorWorktreeComments(
   worktreeId: string,
 ): Promise<boolean> {
-  return (await reanchorWorktreeCommentPass(worktreeId)).changed;
+  const pass = await reanchorWorktreeCommentPass(worktreeId);
+  if (pass.readFailure) throw pass.readFailure.error;
+  return pass.changed;
 }
 
+/**
+ * One pass over a worktree's roots. A failed pass, thrown or with a
+ * `readFailure`, forgets the HEAD it recorded, so the next listing runs again.
+ */
 async function reanchorWorktreeCommentPass(
   worktreeId: string,
 ): Promise<ReanchorPassResult> {
@@ -1023,7 +1093,24 @@ async function reanchorWorktreeCommentPass(
   );
   const head = headRes.code === 0 ? headRes.stdout.trim() : "";
   if (head) lastReanchorHead.set(worktreeId, head);
+  const forgetHead = () => {
+    if (head && lastReanchorHead.get(worktreeId) === head)
+      lastReanchorHead.delete(worktreeId);
+  };
+  try {
+    const pass = await reanchorRoots(worktreeId, row);
+    if (pass.readFailure) forgetHead();
+    return pass;
+  } catch (error) {
+    forgetHead();
+    throw error;
+  }
+}
 
+async function reanchorRoots(
+  worktreeId: string,
+  row: WorktreeRow,
+): Promise<ReanchorPassResult> {
   const roots = listComments(worktreeId).filter(
     (comment) => comment.parentId === null && comment.anchorPath !== null,
   );
@@ -1053,7 +1140,10 @@ async function reanchorWorktreeCommentPass(
   let changed = false;
   const changedRootIds: string[] = [];
   const evaluatedRootIds: string[] = [];
-  const workingSourceCache = new Map<string, WorkingSource | undefined>();
+  const workingSourceCache = new Map<
+    string,
+    Promise<WorkingSource | undefined>
+  >();
   const hunksCache = new Map<string, Hunk[] | undefined>();
 
   for (const comment of roots) {
@@ -1089,9 +1179,24 @@ async function reanchorWorktreeCommentPass(
       comment.anchorDirty && comment.anchorBlob
         ? comment.anchorBlob
         : undefined;
-    if (!workingSourceCache.has(path))
-      workingSourceCache.set(path, readWorkingSource(row, path));
-    const workingSource = workingSourceCache.get(path);
+    let sourcePromise = workingSourceCache.get(path);
+    if (!sourcePromise) {
+      sourcePromise = readWorkingSource(row, path);
+      workingSourceCache.set(path, sourcePromise);
+    }
+    let workingSource: WorkingSource | undefined;
+    try {
+      workingSource = await sourcePromise;
+    } catch (error) {
+      if (typeof error === "object" && error !== null)
+        checkoutReadFailures.add(error);
+      return {
+        changed,
+        changedRootIds,
+        evaluatedRootIds,
+        readFailure: { error },
+      };
+    }
     const cacheKey = `${dirtySource ?? `${anchorCommit}:${comment.anchorPath}`}->${path}`;
     if (!hunksCache.has(cacheKey)) {
       let hunks: Hunk[] | undefined;

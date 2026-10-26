@@ -11,7 +11,7 @@
  * and root-map presence.
  */
 import type { WorktreeChangeFile, WorktreeGitStatus } from "@assistant/shared";
-import { existsSync } from "node:fs";
+import { checkoutPathExists } from "../checkoutFileAccess.ts";
 import {
   gitOptionalExit,
   gitReadOnlyOptional,
@@ -508,7 +508,8 @@ async function compute(
   suppliedBranchUpstreams?: BranchUpstreams,
   forceBranchUpstreams = false,
 ): Promise<WorktreeGitStatus> {
-  const gone = row.status !== "active" || !existsSync(row.path);
+  const gone =
+    row.status !== "active" || !(await checkoutPathExists(row.path, row.path));
   if (gone) {
     captureWorkingTree?.({ files: [], branch: row.branch, head: null });
     return {
@@ -611,7 +612,10 @@ async function computeWorkingTree(
   reference: WorktreeGitStatus,
   captureWorkingTree?: CaptureWorkingTree,
 ): Promise<WorktreeGitStatus> {
-  if (row.status !== "active" || !existsSync(row.path)) {
+  if (
+    row.status !== "active" ||
+    !(await checkoutPathExists(row.path, row.path))
+  ) {
     captureWorkingTree?.({ files: [], branch: row.branch, head: null });
     return {
       ...reference,

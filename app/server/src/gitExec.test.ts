@@ -6,12 +6,14 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, test } from "vitest";
+import { checkoutFailureOf } from "./checkoutFileAccess.ts";
 import {
   GitCommandError,
   countGitExecutionsForTests,
@@ -24,8 +26,16 @@ import {
   gitWithInputOptional,
   repoLockKey,
 } from "./gitExec.ts";
-import { git as serverRepoGit } from "./serverRepoGit.ts";
+import {
+  git as serverRepoGit,
+  repoLockKey as serverRepoKey,
+} from "./serverRepoGit.ts";
 import { setChildProcessEnvOverlay } from "./subprocessEnv.ts";
+import { FILE_METHODS } from "./workerProtocol/fileMethods.ts";
+import {
+  inProcessWorkerServedForTests,
+  inProcessWorkerServedMethodForTests,
+} from "./workers/inProcessWorker.ts";
 
 const missingCwd = join(tmpdir(), `git-exec-missing-${randomUUID()}`);
 
@@ -426,6 +436,72 @@ test("a path below a checkout root is not memoized, so it follows its repository
       readFileSync(join(linked, ".git"), "utf8"),
     );
     assert.equal(await repoLockKey(nested), realpathSync(join(other, ".git")));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Node answers undefined for ENOTDIR as well, so base on Node read a path below
+// a file as absent; production Bun throws ENOTDIR, the rule the families follow
+// (docs/workers.md, E2). This pins the Node side of that difference.
+test("Node pin: statSync without throwing answers undefined for ENOENT and ENOTDIR", () => {
+  const base = mkdtempSync(join(tmpdir(), "repo-key-absent-pin-"));
+  try {
+    const file = join(base, "file");
+    writeFileSync(file, "x");
+    assert.throws(() => statSync(join(base, "missing")), { code: "ENOENT" });
+    assert.throws(() => statSync(join(file, ".git")), { code: "ENOTDIR" });
+    for (const path of [join(base, "missing"), join(file, ".git")])
+      assert.equal(statSync(path, { throwIfNoEntry: false }), undefined, path);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("both families read a missing checkout as absent and reject one below a file, each on its side", async () => {
+  const base = mkdtempSync(join(tmpdir(), "repo-key-absent-"));
+  try {
+    const file = join(base, "file");
+    writeFileSync(file, "x");
+    const repo = join(base, "repo");
+    mkdirSync(repo);
+    await git(["init", "-q"], repo);
+    // No identity, no git answer: the key is the path itself, as in base.
+    const missing = join(base, "missing");
+    let served = inProcessWorkerServedMethodForTests(FILE_METHODS.inspect);
+    assert.equal(await repoLockKey(missing), missing);
+    assert.equal(
+      inProcessWorkerServedMethodForTests(FILE_METHODS.inspect) - served,
+      2,
+      "the checkout family's identity reads cross",
+    );
+    let before = inProcessWorkerServedForTests();
+    assert.equal(await serverRepoKey(missing), missing);
+    assert.equal(inProcessWorkerServedForTests(), before, "server reads");
+
+    // `file/.git` fails ENOTDIR: a filesystem failure, as Bun's base threw.
+    const notDirectory = (error: unknown) => {
+      assert.equal((error as { code?: unknown }).code, "ENOTDIR");
+      assert.equal(checkoutFailureOf(error), "filesystem");
+      return true;
+    };
+    served = inProcessWorkerServedMethodForTests(FILE_METHODS.inspect);
+    const { executions } = await countGitExecutionsForTests(() =>
+      assert.rejects(repoLockKey(file), notDirectory),
+    );
+    assert.equal(executions, 0, "no git once the identity read fails");
+    assert.equal(
+      inProcessWorkerServedMethodForTests(FILE_METHODS.inspect) - served,
+      2,
+      "the checkout family's identity reads cross",
+    );
+    before = inProcessWorkerServedForTests();
+    await assert.rejects(serverRepoKey(file), notDirectory);
+    assert.equal(inProcessWorkerServedForTests(), before, "server reads");
+
+    before = inProcessWorkerServedForTests();
+    assert.equal(await serverRepoKey(repo), realpathSync(join(repo, ".git")));
+    assert.equal(inProcessWorkerServedForTests(), before, "no Worker request");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

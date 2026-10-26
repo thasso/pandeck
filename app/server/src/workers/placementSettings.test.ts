@@ -16,6 +16,8 @@ import {
 } from "../appSettingsFile.ts";
 import { DATA_DIR } from "../config.ts";
 import * as checkout from "../gitExec.ts";
+import { readLocally } from "../checkoutFileAccess.ts";
+import { inspectPath, realpathFile } from "../fileReads.ts";
 import { createGitFamily } from "../gitFamily.ts";
 import { localGitRunner } from "../gitProcess.ts";
 import { knowledgeBaseRoot } from "../knowledgeBaseSettings.ts";
@@ -24,7 +26,11 @@ import { getSettings } from "../settings.ts";
 import { inProcessWorkerServedForTests } from "./inProcessWorker.ts";
 import { DEFAULT_WORKER_ID, placeGitCwd } from "./placement.ts";
 
-const local = createGitFamily(localGitRunner);
+/** The family as the server runs it for its own repositories. */
+const local = createGitFamily(localGitRunner, {
+  inspect: (_cwd, path) => readLocally(() => inspectPath(path, true)),
+  realpath: (_cwd, path) => readLocally(() => realpathFile(path)),
+});
 const scratch = mkdtempSync(join(tmpdir(), "placement-settings-"));
 const repo = join(scratch, "repo");
 mkdirSync(repo);

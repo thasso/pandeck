@@ -3,9 +3,11 @@ import { spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -29,12 +31,19 @@ import {
   resolveRepoRoot,
   withRepoLock,
 } from "../gitExec.ts";
+import { readLocally } from "../checkoutFileAccess.ts";
+import { inspectPath, realpathFile } from "../fileReads.ts";
+import type { WorktreeRow } from "../db/worktreeStore.ts";
+import { projectStore } from "../db/projectStore.ts";
+import { mintDocumentTargetGrant } from "../documentGrantTargets.ts";
 import { createGitFamily } from "../gitFamily.ts";
 import { localGitRunner } from "../gitProcess.ts";
 import { KnowledgeBaseStore } from "../knowledgeBaseStore.ts";
 import { LibraryStore } from "../library/libraryStore.ts";
 import { skillKind } from "../skills/skillLibrary.ts";
+import { FILE_METHODS } from "../workerProtocol/fileMethods.ts";
 import { resolveReadableWorktreeRow } from "../worktrees/knowledgeCheckout.ts";
+import { addWorktreeComment } from "../worktrees/worktreeComments.ts";
 import {
   getWorktreeChanges,
   getWorktreeFileContent,
@@ -43,17 +52,22 @@ import {
   getWorktreeLog,
   getWorktreeTree,
 } from "../worktrees/worktreeDiff.ts";
+import { mainWorktreeId } from "../worktrees/worktreeResolve.ts";
 import { computeWorktreeStatus } from "../worktrees/worktreeStatus.ts";
 import { spawnBrokerPidForTests } from "../spawnBroker.ts";
 import { commitWorktree } from "../worktrees/worktreeWrite.ts";
 import {
   inProcessWorkerEpochForTests,
   inProcessWorkerServedForTests,
+  inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
 } from "./inProcessWorker.ts";
 
-/** The same executors over a runner that never leaves this process. */
-const local = createGitFamily(localGitRunner);
+/** The same executors as the server runs them for its own repositories. */
+const local = createGitFamily(localGitRunner, {
+  inspect: (_cwd, path) => readLocally(() => inspectPath(path, true)),
+  realpath: (_cwd, path) => readLocally(() => realpathFile(path)),
+});
 
 const scratch = mkdtempSync(join(tmpdir(), "in-process-worker-"));
 const identity = {
@@ -89,7 +103,15 @@ async function served<T>(
 test("every caller-facing checkout executor crosses the Worker and answers as a local run", async () => {
   const repo = await makeRepo("routing");
   const head = ["rev-parse", "HEAD"];
-  const cases: [string, () => Promise<unknown>, () => Promise<unknown>][] = [
+  // Each case sends one request, but a cold `repoLockKey`: its identity reads
+  // (`inspect` of the checkout and its `.git`) and the common dir's
+  // canonicalization cross as well.
+  const cases: [
+    string,
+    () => Promise<unknown>,
+    () => Promise<unknown>,
+    number?,
+  ][] = [
     ["git", () => git(head, repo), () => local.git(head, repo)],
     [
       "gitOptional",
@@ -141,14 +163,183 @@ test("every caller-facing checkout executor crosses the Worker and answers as a 
         clearRepoLockKeysForTests();
         return local.repoLockKey(repo);
       },
+      4,
     ],
   ];
-  for (const [name, checkout, here] of cases) {
+  for (const [name, checkout, here, requests = 1] of cases) {
     const crossed = await served(checkout);
-    assert.equal(crossed.requests, 1, `${name} sent one request`);
+    assert.equal(crossed.requests, requests, `${name} requests`);
     const stayed = await served(here);
     assert.equal(stayed.requests, 0, `${name} on the local family`);
     assert.deepEqual(crossed.result, stayed.result, name);
+  }
+});
+
+/** The file requests the in-process Worker served for `run`, by method. */
+async function filesServed<T>(
+  run: () => Promise<T>,
+): Promise<{ result: T; methods: Record<string, number> }> {
+  const methods = Object.values(FILE_METHODS);
+  const before = methods.map(inProcessWorkerServedMethodForTests);
+  const result = await run();
+  return {
+    result,
+    methods: Object.fromEntries(
+      methods
+        .map((method, at): [string, number] => [
+          method,
+          inProcessWorkerServedMethodForTests(method) - before[at]!,
+        ])
+        .filter(([, count]) => count > 0),
+    ),
+  };
+}
+
+test("every checkout surface reads a checkout's files through the Worker", async () => {
+  const repo = realpathSync(await makeRepo("surfaces"));
+  writeFileSync(join(repo, "new.txt"), "x\ny\n");
+  const row = {
+    id: "surfaces",
+    projectId: "surfaces",
+    path: repo,
+    mainRepoRoot: repo,
+    branch: "main",
+    baseBranch: "main",
+    baseCommit: "",
+    status: "active",
+    mergeStateJson: null,
+    branchCleanupOid: null,
+    createdAt: 1,
+    updatedAt: 1,
+    removedAt: null,
+  } satisfies WorktreeRow;
+  const now = new Date().toISOString();
+  projectStore.put({
+    id: "surfaces",
+    name: "Surfaces",
+    key: "SURFACES",
+    description: "",
+    status: "active",
+    localPaths: [{ path: repo, kind: "repo", match: "prefix" }],
+    worktreeRoot: join(scratch, "surfaces-worktrees"),
+    createdAt: now,
+    updatedAt: now,
+  });
+  const read = { open: 1, read: 1, close: 1 };
+  const contained = { realpath: 2 };
+  const size = (name: string) => lstatSync(join(repo, name)).size;
+  const cases: [string, () => Promise<unknown>, unknown, object][] = [
+    [
+      "status",
+      async () => (await computeWorktreeStatus(row, { force: true })).dirty,
+      true,
+      // The untracked file's lines are counted, and the repo key asked cold.
+      { exists: 1, ...contained, ...read, inspect: 2, realpath: 3 },
+    ],
+    [
+      "changes with an untracked file",
+      async () =>
+        (await getWorktreeChanges(row, { kind: "workingTree" })).files.map(
+          (file) => [file.path, file.additions],
+        ),
+      [["new.txt", 2]],
+      { ...contained, ...read },
+    ],
+    [
+      "file",
+      async () => (await getWorktreeFileContent(row, "a.txt")).content,
+      "alpha\n",
+      { ...contained, ...read },
+    ],
+    [
+      "raw",
+      async () => (await getWorktreeFileRaw(row, "a.txt")).content.toString(),
+      "alpha\n",
+      { ...contained, ...read },
+    ],
+    [
+      "tree",
+      () => getWorktreeTree(row, ""),
+      [
+        { name: "a.txt", path: "a.txt", kind: "file", size: size("a.txt") },
+        {
+          name: "new.txt",
+          path: "new.txt",
+          kind: "file",
+          size: size("new.txt"),
+        },
+      ],
+      { inspect: 2 },
+    ],
+    [
+      "tree with ignored files",
+      async () => (await getWorktreeTree(row, "", true)).map((e) => e.name),
+      ["a.txt", "new.txt"],
+      { realpath: 1, readdir: 1, inspect: 2 },
+    ],
+    [
+      "a comment's working source",
+      async () =>
+        (
+          await addWorktreeComment({
+            worktreeId: mainWorktreeId("surfaces"),
+            body: "routed",
+            author: { kind: "user" },
+            anchor: { path: "a.txt", side: "new", line: 1 },
+          })
+        ).anchor?.selectors.quote.exact,
+      "alpha",
+      // The add asks the repo key, remembered by now: identity reads only.
+      { ...contained, ...read, inspect: 2 },
+    ],
+    [
+      "a worktreeFile grant",
+      async () =>
+        typeof (
+          await mintDocumentTargetGrant(
+            {
+              target: {
+                kind: "worktreeFile",
+                worktreeId: row.id,
+                path: "a.txt",
+                view: "file",
+              },
+              scope: "file",
+              delivery: "attachment",
+            },
+            {
+              dataDir: join(scratch, "data"),
+              resolveWorktree: async () => row,
+            },
+          )
+        ).grantId,
+      "string",
+      // Containment's two, then the grant layer's own served reads (W2).
+      { realpath: 5, stat: 1 },
+    ],
+    [
+      "repoLockKey",
+      () => {
+        clearRepoLockKeysForTests();
+        return repoLockKey(repo);
+      },
+      realpathSync(join(repo, ".git")),
+      { inspect: 2, realpath: 1 },
+    ],
+  ];
+  for (const [name, run, expected, methods] of cases) {
+    const { result, methods: served } = await filesServed(run);
+    assert.deepEqual(result, expected, name);
+    assert.deepEqual(
+      served,
+      Object.fromEntries(
+        Object.entries(methods).map(([method, count]) => [
+          `files.${method}`,
+          count,
+        ]),
+      ),
+      name,
+    );
   }
 });
 
@@ -174,6 +365,21 @@ test("the Knowledge Base and the libraries never reach the Worker", async () => 
   assert.ok(content);
   const raw = await getWorktreeFileRaw(row, "first.md", "HEAD");
   assert.equal(raw.content.toString("utf8"), "first\n");
+  const working = await getWorktreeFileRaw(row, "note.md");
+  assert.equal(working.content.toString("utf8"), "# Note\n");
+  const listing = await getWorktreeTree(row, "", true);
+  assert.ok(listing.some((entry) => entry.path === "note.md"));
+  const grant = await mintDocumentTargetGrant({
+    target: {
+      kind: "worktreeFile",
+      worktreeId: KNOWLEDGE_WORKTREE_ID,
+      path: "first.md",
+      view: "file",
+    },
+    scope: "file",
+    delivery: "attachment",
+  });
+  assert.ok(grant.grantId);
   assert.ok((await getWorktreeLog(row, 10)).entries.length >= 2);
   assert.ok((await getWorktreeFileLog(row, "first.md", 10)).entries.length);
   const committed = await commitWorktree(row, { message: "Add note" });

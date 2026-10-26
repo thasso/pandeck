@@ -82,8 +82,11 @@ function isNativeFailure(error: unknown): error is Error {
   );
 }
 
-/** One local primitive call; only a native rejection is a filesystem failure. */
-async function local<T>(call: () => Promise<T>): Promise<T> {
+/**
+ * One local primitive call; only a native rejection is a filesystem failure.
+ * Also the rule for the server's own repositories' reads (`serverRepoGit.ts`).
+ */
+export async function readLocally<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
@@ -112,7 +115,7 @@ async function placed<T>(
   const location = placeGitCwd(root);
   return location
     ? remote(() => onWorker({ workerId: location.workerId, path }))
-    : local(() => onServer(path));
+    : readLocally(() => onServer(path));
 }
 
 /** Whether `path` exists, as `existsSync` answers it. */
@@ -222,7 +225,7 @@ export async function readCheckoutFile(
   const armed = readThrow;
   readThrow = undefined;
   const location = placeGitCwd(root);
-  const guard = location ? remote : local;
+  const guard = location ? remote : readLocally;
   const outcome: FileOpenOutcome<ReadableFile> = location
     ? await remote(() =>
         openOnWorker({ workerId: location.workerId, path }, false),
