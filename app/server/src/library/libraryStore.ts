@@ -30,7 +30,7 @@ import {
   gitOptionalExit,
   repoLockKey,
   withRepoLock,
-} from "../gitExec.ts";
+} from "../serverRepoGit.ts";
 
 const bootstrapLocks = new Map<string, Promise<unknown>>();
 

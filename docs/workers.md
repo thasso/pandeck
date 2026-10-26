@@ -3,11 +3,11 @@
 Agent sessions run in Workers: separately deployed processes, on the far side of
 an isolation boundary from the server, that host the engines and native tools
 and reach the server only through the worker protocol. This document is the
-agreed design. None of it is implemented yet; "Phases" gives the order it ships
-in. The terms (Worker, worker protocol, credential lease, credential gateway,
-placement, Worker id, isolation boundary, secret store) are defined in
-[glossary.md](glossary.md), and the decisions that are hard to reverse are
-recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
+agreed design. Phase 1 is under way: "Phases" gives the order it ships in and
+"Phase 1 status" what has landed. The terms (Worker, worker protocol, credential
+lease, credential gateway, placement, Worker id, isolation boundary, secret
+store) are defined in [glossary.md](glossary.md), and the decisions that are
+hard to reverse are recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
 [ADR-0002](adr/0002-server-runs-under-its-own-account.md),
 [ADR-0003](adr/0003-worker-owns-checkout-operations.md) and, proposed,
 [ADR-0004](adr/0004-credential-gateway.md).
@@ -205,6 +205,97 @@ may do, an agent may do. A Worker may act only for sessions and checkouts placed
 on it, hold credential leases only for those sessions, and call app tools only
 with the authority each session has today. A compromised agent then gains
 nothing beyond what its own Worker already runs.
+
+### Protocol in phase 1
+
+What runs today is the protocol's first version, `1.0`, between the server and
+the in-process Worker. The code lives in `app/server/src/workerProtocol/` (the
+protocol), `worker/` (the Worker's side, which imports no server state) and
+`workers/` (the server's side and placement); `workerBoundary.test.ts` keeps
+that split. The protocol stays out of `app/shared/`: the web client never speaks
+it.
+
+- **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
+  (header length, payload length), a UTF-8 JSON header, then the payload. A
+  frame's header is capped at 64 KiB and its payload at 1 MiB, checked on the
+  length prefix before anything is buffered. A message is not capped: its
+  streams travel as numbered `data` frames before the `request` or `response`
+  frame that completes it, so only an executor's own parameters (`maxBuffer`,
+  `maxChars`, the caller's input) bound what one moves. Anything malformed, out
+  of sequence or over a cap is a protocol error that ends the connection.
+- **Lossless payloads.** Byte streams (raw stdout, stdin) travel as bytes. Every
+  string an executor produced (stdout, stderr, a truncated patch, an error
+  message) travels as UTF-16LE, so it arrives code unit for code unit, lone
+  surrogates included; UTF-8 is never used for them.
+- **Handshake.** The Worker sends `hello` with its Worker id and version. The
+  server answers `welcome` on the same major (a higher minor included) or
+  `refused`, and closes. A second connection under a connected Worker id is
+  refused. Requests made before the handshake wait for it. Either side may send
+  requests; an unknown method gets a typed `unknown_method` error and the
+  connection stays open.
+- **Transport.** Phase 1 uses an in-process pair of byte endpoints:
+  asynchronous, never re-entrant, holding no handle, so an idle pair never keeps
+  a process alive. Tests and dev keep it after phase 2. The server dials the
+  in-process Worker at boot and again on the first request after a connection
+  ended, on a new connection epoch.
+- **Placement.** Every checkout method names a
+  `CheckoutLocation { workerId, path }`, and a Worker refuses a location naming
+  another Worker id. The Worker id is derived until phase 4 (D2): every checkout
+  is placed on the default Worker, `local`. The existing `(args, cwd)` executors
+  in `gitExec.ts` reach it through a transitional path-only adapter
+  (`workers/placement.ts`); W6 deletes it once callers pass their own location.
+- **What stays on the server.** The Knowledge Base, the skills and agent
+  libraries, and the app's own tree run git through the server-local executor
+  family, `serverRepoGit.ts`. That includes the KB when it is browsed or
+  committed as a checkout: the adapter keeps any path inside the Knowledge Base
+  root (as named, or as its real path) on the server. If KB settings cannot be
+  read, the adapter keeps lexical and observed realpath matches for the last
+  successfully resolved root from any KB/settings reader and the default KB root
+  local. The owning settings module keeps this history; placement has no
+  separate cache. Other paths still reach the default Worker, so unrelated
+  checkout git keeps working. One warning logs per failure episode; a successful
+  settings read resets it. Readable settings are authoritative again, even if
+  the configured root changed. Settings and KB readers still report their
+  original errors. On a cold start, an unknown custom root cannot be recognized
+  while settings are unreadable. This residual is accepted only in phase 1,
+  where the Worker shares the server process and account. It MUST be closed
+  before the Worker leaves that process. W3 replaces the path rule with a typed
+  choice made from the KB row.
+- **Executors.** Both families share one implementation (`gitFamily.ts`) over a
+  runner that only starts the process: one read fan-out bound of six, one repo
+  lock map, one execution counter and one error class. The fan-out bound and the
+  counting stay on the server in phase 1.
+- **No rejection before quiescence.** The Worker runs git through the spawn
+  broker with an exit receipt: the broker answers only once it has seen the
+  child's actual exit, and a child still running 2 s after SIGTERM gets SIGKILL.
+  When a connection ends, a request the Worker received is rejected only after
+  the Worker reports that everything it started has settled, so a caller never
+  releases its repo lock beside a running git child. Processes git itself starts
+  (hooks, ssh) are not covered, as they are not when a caller cancels.
+  In-process, the server observes the Worker's quiescence directly; phase 2's
+  plan must replace that with fencing for a Worker in another process.
+- **Failure and restart: broker death.** A dead broker cannot report its child's
+  exit. A request with the exit receipt then answers only once the broker's
+  whole process group has exited: signal 0 to the group finds no member (ESRCH),
+  or a complete `/proc` scan proves every member has exited. A zombie leader
+  alone is not proof: the scan reads its `/proc/<pid>/task` entries and then
+  requires a still-dead leader with `num_threads=1`. This final count prevents a
+  task born during enumeration from being missed. Unreadable, missing or
+  malformed task data fails closed until a later scan or probe. Any other
+  uncertain answer, an unreadable `/proc` included, counts as members remaining.
+  The guarantee stays the immediate git child's exit; waiting for the group is
+  only how a dead broker's child is observed. A group member in uninterruptible
+  sleep, including a sibling request's child or a git hook, may therefore hold
+  that call, its repo lock and the Worker's quiescence indefinitely. This fails
+  closed, like a child in uninterruptible sleep on any cancel, and logs one
+  warning at 10 s naming the group and its survivors' process or thread states.
+  Synchronous scans start after a 20 ms grace and run at most once per second;
+  the warning uses the latest scan under that same limit. There is no release
+  deadline. Requests without the receipt fail at once, as before.
+- **Decisions kept for phase 1.** Engine transcripts and records keep their
+  current write path; streaming them over the protocol comes in phase 2 (D1).
+  The Worker id is derived, with no worktree-row column (D2).
+  `/api/workers/<id>/files` arrives in phase 4 (D3).
 
 ### Enrollment and identity
 
@@ -416,6 +507,25 @@ natural shape anyway.
 5. **Isolation levels** inside a Worker: bubblewrap, containers, microVMs.
 6. **Bundled desktop mode**, not scheduled. Starts with the desktop spike under
    "Open questions".
+
+### Phase 1 status
+
+Phase 1 ships as slices; each keeps behavior unchanged.
+
+| Slice  | Change                                                                                 | State   |
+| ------ | -------------------------------------------------------------------------------------- | ------- |
+| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it   | landed  |
+| W2     | Served files (`/api/files`, `show_files`) read through the Worker                      | planned |
+| W3     | Checkout reads in surfaces and workflows through the Worker; the KB row's typed choice | planned |
+| W4     | The worktree watcher on the Worker                                                     | planned |
+| W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker     | planned |
+| W6     | Callers pass their own placement; the path-only adapter and both pin lists are gone    | planned |
+| W7–W10 | The engine host: app tools, approvals and hooks, then pi and Claude sessions           | planned |
+| W11    | Isolation boundary and secret store ports                                              | planned |
+
+`workerBoundary.test.ts` pins every module that still reads a checkout on the
+server's filesystem to the slice that moves it; W6 is done when those lists are
+empty.
 
 ## Open questions
 

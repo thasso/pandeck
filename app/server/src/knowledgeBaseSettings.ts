@@ -8,7 +8,7 @@
  * identity (inode + size + mtime) revalidates each use, and the settings
  * write replaces the file (a new inode).
  */
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { KnowledgeBaseSettings } from "@assistant/shared";
@@ -47,17 +47,83 @@ export function knowledgeBaseSettingsProjection(
   return { ...settings, effectivePath: knowledgeBaseFolder(settings.path) };
 }
 
+interface ResolvedRoot {
+  readonly path: string;
+  readonly real?: string;
+}
+
+function observeRoot(path: string): ResolvedRoot {
+  const normalized = resolve(path);
+  try {
+    return { path: normalized, real: realpathSync(normalized) };
+  } catch {
+    // A missing/inaccessible folder still has a lexical match.
+    return { path: normalized };
+  }
+}
+
+// History belongs here, shared by direct KB readers and the settings projection
+// of an already-read file. Failed reads and cache invalidation cannot erase it.
+const defaultRootPath = knowledgeBaseFolder("");
+let defaultRoot = observeRoot(defaultRootPath);
+let lastRoot: ResolvedRoot | undefined;
+let placementWarned = false;
 let cached: { identity: string; settings: KnowledgeBaseSettings } | null = null;
 
-function current(): KnowledgeBaseSettings {
+function remember(settings: KnowledgeBaseSettings) {
+  const root = observeRoot(settings.effectivePath);
+  // History may keep a known physical path when the same alias disappears.
+  // The fresh root returned below still governs readable-settings placement.
+  if (
+    root.real === undefined &&
+    lastRoot?.path === root.path &&
+    lastRoot.real !== undefined
+  )
+    lastRoot = { path: root.path, real: lastRoot.real };
+  else lastRoot = root;
+  if (root.path === defaultRoot.path && root.real !== undefined)
+    defaultRoot = root;
+  placementWarned = false;
+  return { settings, root };
+}
+
+/** Project a successfully read settings section and remember its KB root. */
+export function knowledgeBaseSettingsFromStored(
+  stored: Partial<KnowledgeBaseSettings> | undefined,
+): KnowledgeBaseSettings {
+  return remember(knowledgeBaseSettingsProjection(stored)).settings;
+}
+
+function current() {
   const stat = statSync(APP_SETTINGS_PATH, { throwIfNoEntry: false });
   const identity = stat ? `${stat.ino}:${stat.size}:${stat.mtimeMs}` : "absent";
-  if (cached?.identity === identity) return cached.settings;
+  if (cached?.identity === identity) return remember(cached.settings);
   const settings = knowledgeBaseSettingsProjection(
     readStoredAppSettings().knowledgeBase,
   );
   cached = { identity, settings };
-  return settings;
+  return remember(settings);
+}
+
+/**
+ * Placement's only best-effort read: valid settings are authoritative. During
+ * failure, retain the last successful root and the default, warning once until
+ * any direct/settings read succeeds. Other KB readers keep their own errors.
+ */
+export function knowledgeBasePlacementRoots(): readonly ResolvedRoot[] {
+  try {
+    return [current().root];
+  } catch {
+    const observed = observeRoot(defaultRootPath);
+    if (observed.real !== undefined) defaultRoot = observed;
+    if (!placementWarned) {
+      placementWarned = true;
+      console.warn(
+        "[workers] Knowledge Base settings unavailable; keeping known/default KB paths local and using the default Worker for other checkout git.",
+      );
+    }
+    return lastRoot ? [lastRoot, defaultRoot] : [defaultRoot];
+  }
 }
 
 /** Drop the cached section; the in-process settings write calls this. */
@@ -67,10 +133,10 @@ export function invalidateKnowledgeBaseSettingsCache(): void {
 
 /** Whether the app offers the Knowledge Base at all. */
 export function knowledgeBaseEnabled(): boolean {
-  return current().enabled;
+  return current().settings.enabled;
 }
 
 /** The Knowledge Base folder in effect. */
 export function knowledgeBaseRoot(): string {
-  return current().effectivePath;
+  return current().settings.effectivePath;
 }

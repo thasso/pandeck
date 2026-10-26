@@ -72,7 +72,7 @@ import { getTempoSettings } from "./tempoSettings.ts";
 import { sanitizeSlotPinsDeep } from "./settingsModelSlots.ts";
 import {
   invalidateKnowledgeBaseSettingsCache,
-  knowledgeBaseSettingsProjection,
+  knowledgeBaseSettingsFromStored,
   normalizeKnowledgeBaseSettings,
 } from "./knowledgeBaseSettings.ts";
 import {
@@ -664,7 +664,7 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
     skills: normalizeSkillToggles(stored.skills),
     appearance: normalizeAppearanceSettings(stored.appearance),
     profile: profileSettingsProjection(stored.profile),
-    knowledgeBase: knowledgeBaseSettingsProjection(stored.knowledgeBase),
+    knowledgeBase: knowledgeBaseSettingsFromStored(stored.knowledgeBase),
     // Integration settings and secrets have dedicated private storage under
     // DATA_DIR/settings and their own update functions, so they are read here
     // rather than from the app-settings file.

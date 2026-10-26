@@ -1,7 +1,9 @@
 /**
  * Server code the packaged Bun runtime must run the way Node runs it, driven
- * directly because a booted server reaches none of it on demand: git through
- * the spawn broker (its cancel and its group kill), the in-process fallback,
+ * directly because a booted server reaches none of it on demand: checkout git
+ * through the in-process Worker and the spawn broker (its cancel, its exit
+ * receipt, its group kill, the receipt on broker death, exact UTF-16 text),
+ * the in-process fallback,
  * a watcher subscribed with a git-derived ignore set, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
@@ -11,8 +13,9 @@
  * server's own plugins and runs it with the packaged Bun, once per mode:
  * `broker`, and `in-process` under `ASSISTANT_SPAWN_BROKER=0`.
  */
-import { execFileSync, execSync, spawnSync } from "node:child_process";
+import { execFileSync, execSync, spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -36,7 +39,12 @@ import {
   outgoingByType,
 } from "../app/server/src/db/links.ts";
 import { sessionStore } from "../app/server/src/db/sessionStore.ts";
-import { GitCommandError, git } from "../app/server/src/gitExec.ts";
+import {
+  GitCommandError,
+  git,
+  gitBoundedStdout,
+  gitWithInputOptional,
+} from "../app/server/src/gitExec.ts";
 import { readInitiativeMap } from "../app/server/src/initiativeLayout.ts";
 import { stopInitiativeLayoutWorker } from "../app/server/src/initiativeLayoutRunner.ts";
 import { createInitiative } from "../app/server/src/initiatives.ts";
@@ -54,6 +62,7 @@ import {
 } from "../app/server/src/spawnBroker.ts";
 import { childProcessEnv } from "../app/server/src/subprocessEnv.ts";
 import { createTask, updateTask } from "../app/server/src/tasks.ts";
+import { writeAsInProcessWorkerForTests } from "../app/server/src/workers/inProcessWorker.ts";
 import { treeIgnoreForTests } from "../app/server/src/worktrees/worktreeWatcher.ts";
 
 const mode = process.argv[2];
@@ -84,6 +93,16 @@ function alive(pid) {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** A process's `/proc` state letter; `gone` once reaped. */
+function procState(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+  } catch {
+    return "gone";
   }
 }
 
@@ -127,6 +146,68 @@ async function makeRepo(name, files) {
 /** Start `sh` in the background, recording the pid its exec'd sleep keeps. */
 function sleeperScript(pidFile) {
   return `echo $$ > ${JSON.stringify(pidFile)}; exec sleep 30`;
+}
+
+/**
+ * Checkout git crosses the in-process Worker: a bounded read cut inside a
+ * surrogate pair keeps the lone high surrogate (UTF-16LE on the wire), and an
+ * aborted git settles only once its child has exited — a stand-in `git` that
+ * handles SIGTERM writes for a while, then `done`, and the caller sees the
+ * rejection only after that.
+ */
+async function checkWorkerGit(repo) {
+  const blob = await gitWithInputOptional(
+    ["hash-object", "-w", "--stdin"],
+    repo,
+    "\u{1F600}abc",
+  );
+  const cut = await gitBoundedStdout(
+    ["cat-file", "blob", blob.stdout.trim()],
+    repo,
+    1,
+  );
+  assert(
+    cut.patch.length === 1 &&
+      cut.patch.charCodeAt(0) === 0xd83d &&
+      cut.totalChars === 5 &&
+      cut.truncated,
+    `A cut surrogate pair came back as ${JSON.stringify(cut)}.`,
+  );
+
+  const dir = join(scratch, "standin");
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  const log = join(dir, "log");
+  writeFileSync(
+    join(dir, "bin", "git"),
+    [
+      "#!/bin/sh",
+      `log='${log}'`,
+      'on_term() { echo term >> "$log"; sleep 0.5; echo done >> "$log"; exit 0; }',
+      "trap on_term TERM",
+      'echo started >> "$log"',
+      "while :; do sleep 0.05; done",
+    ].join("\n"),
+  );
+  chmodSync(join(dir, "bin", "git"), 0o755);
+  const controller = new globalThis.AbortController();
+  const run = git(["standin"], repo, controller.signal, {
+    PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+  }).then(
+    () => undefined,
+    (error) => error,
+  );
+  const logged = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
+  await until(() => logged().includes("started"), "the stand-in git");
+  controller.abort();
+  const error = await run;
+  assert(
+    error instanceof GitCommandError,
+    `An aborted checkout git answered ${error}.`,
+  );
+  assert(
+    logged().includes("done"),
+    `An aborted checkout git settled before its child exited: ${logged()}`,
+  );
 }
 
 async function checkGit() {
@@ -177,6 +258,8 @@ async function checkGit() {
   );
   await until(() => !alive(cancelledPid), "the cancelled child to exit");
 
+  await checkWorkerGit(repo);
+
   if (mode !== "broker") return;
 
   // A broker that dies takes its whole process group with it, grandchildren
@@ -212,6 +295,74 @@ async function checkGit() {
     (await git(["rev-parse", "HEAD"], repo)).stdout.trim() === head,
     "git through the restarted broker failed.",
   );
+
+  await checkBrokerDeathReceipt(repo);
+}
+
+/**
+ * On broker death, an exit-receipt request waits for the broker's process
+ * group to exit, which it observes with signal 0 to the negative pgid. Bun
+ * must report an empty group as ESRCH and a live one without throwing, and a
+ * checkout git lost with its broker must reject only once its stand-in child
+ * is gone or a zombie — with the Worker connection kept and with it ending.
+ */
+async function checkBrokerDeathReceipt(repo) {
+  const solo = spawn("true", [], { detached: true, stdio: "ignore" });
+  await new Promise((resolve) => solo.once("exit", resolve));
+  let code;
+  try {
+    process.kill(-solo.pid, 0);
+  } catch (error) {
+    code = error?.code;
+  }
+  assert(code === "ESRCH", `Signal 0 to an empty group threw ${code}.`);
+  const live = await spawnBrokerPidForTests();
+  process.kill(-live, 0);
+
+  const dir = join(scratch, "broker-death");
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  const pidFile = join(dir, "pid");
+  writeFileSync(
+    join(dir, "bin", "git"),
+    [
+      "#!/bin/sh",
+      `echo $$ > '${pidFile}'`,
+      "trap '' TERM",
+      "while :; do sleep 0.05; done",
+    ].join("\n"),
+  );
+  chmodSync(join(dir, "bin", "git"), 0o755);
+  for (const endConnection of [false, true, false, true]) {
+    writeFileSync(pidFile, "");
+    let state;
+    const run = git(["standin"], repo, undefined, {
+      PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+    }).then(
+      () => undefined,
+      (error) => {
+        state = procState(Number(readFileSync(pidFile, "utf8")));
+        return error;
+      },
+    );
+    await until(() => readFileSync(pidFile, "utf8") !== "", "the stand-in");
+    const child = Number(readFileSync(pidFile, "utf8"));
+    const broker = await spawnBrokerPidForTests();
+    assert(
+      processGroup(child) === broker,
+      "The stand-in left the broker's process group.",
+    );
+    if (endConnection) writeAsInProcessWorkerForTests(new Uint8Array(8));
+    process.kill(broker, "SIGKILL");
+    const error = await run;
+    assert(
+      error instanceof GitCommandError && error.failureKind === "execution",
+      `A checkout git lost with its broker answered ${error}.`,
+    );
+    assert(
+      ["gone", "Z", "X"].includes(state),
+      `A checkout git lost with its broker rejected while its child was ${state}.`,
+    );
+  }
 }
 
 async function checkWatcher() {
