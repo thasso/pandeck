@@ -1,6 +1,8 @@
 /**
- * Every filesystem read the checkout surfaces make of a checkout, on the side
- * where that checkout's git runs (`docs/workers.md`, "Checkout files").
+ * Every filesystem read the checkout surfaces and the checkout workflows
+ * (commit, merge, sync, fetch, rebase repair, triage) make of a checkout, on
+ * the side where that checkout's git runs (`docs/workers.md`, "Checkout
+ * files").
  *
  * Each function takes the checkout root, and the root alone picks the side,
  * through the same placement as checkout git (`placeGitCwd`): the server never

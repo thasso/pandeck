@@ -11,6 +11,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
+import { holdFileForTests } from "../fileReads.ts";
+import {
+  MALFORMED_ANSWERS,
+  answerForPathForTests,
+  recordServedForTests,
+  type ServedRequest,
+} from "../test/workerAnswers.ts";
+import { CHECKOUT_GIT_METHODS } from "../workerProtocol/checkoutMethods.ts";
+import {
+  WorkerMethodError,
+  WorkerRequestError,
+} from "../workerProtocol/connection.ts";
+import {
+  FILE_METHODS,
+  MalformedWorkerAnswerError,
+} from "../workerProtocol/fileMethods.ts";
+import { isWorkerFailure } from "../workers/fileClient.ts";
+import { writeAsInProcessWorkerForTests } from "../workers/inProcessWorker.ts";
 import { backgroundFetchArgs } from "./worktreeFetch.ts";
 import {
   baseBranchTarget,
@@ -539,4 +557,132 @@ test("pull initializes a submodule added upstream after the clone", async () => 
     existsSync(join(repo.work, "sub", "subfile.txt")),
     "newly added submodule initialized on pull",
   );
+});
+
+/* ---------------- checkout reads (`docs/workers.md`, W3b) ----------------- */
+
+const INVALID_FRAME = new Uint8Array(8);
+const GIT_METHODS = Object.values(CHECKOUT_GIT_METHODS);
+
+/** A pull with rebase that stops on a conflict in `file.txt`. */
+function pullConflict(name: string) {
+  const repo = setup(name);
+  const other = cloneRemote(repo.root, repo.remote, "feature");
+  writeFileSync(join(repo.feature, "file.txt"), "local conflict\n");
+  sh(repo.feature, "commit", "-qam", "local conflict");
+  writeFileSync(join(other, "file.txt"), "remote conflict\n");
+  sh(other, "commit", "-qam", "remote conflict");
+  sh(other, "push", "-q");
+  const gitDir = sh(repo.feature, "rev-parse", "--absolute-git-dir").trim();
+  return { ...repo, rebaseMerge: join(gitDir, "rebase-merge") };
+}
+
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  assert.fail("expected a rejection");
+}
+
+/** The served git requests and marker probes, in order, as short labels. */
+const labels = (served: ServedRequest[]) =>
+  served.map((request) =>
+    request.args
+      ? `git ${request.args.join(" ")}`
+      : `${request.method} ${request.path}`,
+  );
+
+test("a pull-rebase conflict serves rebase-merge right after the rebase", async () => {
+  const repo = pullConflict("served-283");
+  const recorder = recordServedForTests([...GIT_METHODS, FILE_METHODS.exists]);
+  try {
+    await assert.rejects(
+      () => syncWorktree(repo.row, "pull-rebase"),
+      WorktreeSyncConflictError,
+    );
+  } finally {
+    recorder.stop();
+  }
+  const served = labels(recorder.served);
+  const rebase = served.findIndex((label) =>
+    /^git -c rebase\.autoStash=false rebase /.test(label),
+  );
+  assert.ok(rebase >= 0, served.join("\n"));
+  assert.deepEqual(served.slice(rebase + 1, rebase + 3), [
+    "git rev-parse --absolute-git-dir",
+    `${FILE_METHODS.exists} ${repo.rebaseMerge}`,
+  ]);
+});
+
+/** Each Worker failure at 283; the expected error's test. */
+const FAILURES_283 = [
+  {
+    name: "a malformed answer",
+    arm: (path: string, served: ServedRequest[]) =>
+      answerForPathForTests(FILE_METHODS.exists, path, async () => {
+        served.push({ method: "failed", path });
+        return MALFORMED_ANSWERS[FILE_METHODS.exists]!;
+      }),
+    expect: (error: unknown) =>
+      error instanceof MalformedWorkerAnswerError && isWorkerFailure(error),
+  },
+  {
+    name: "a coded refusal",
+    arm: (path: string, served: ServedRequest[]) =>
+      answerForPathForTests(FILE_METHODS.exists, path, async () => {
+        served.push({ method: "failed", path });
+        throw new WorkerMethodError("wrong_worker", "Not here.");
+      }),
+    expect: (error: unknown) =>
+      error instanceof WorkerRequestError &&
+      error.code === "wrong_worker" &&
+      isWorkerFailure(error),
+  },
+];
+
+test.each(FAILURES_283)(
+  "$name at 283 rejects; no abort runs, the rebase stays, the lock is released",
+  async ({ name, arm, expect }) => {
+    const repo = pullConflict(`failed-283-${name.replace(/\W/g, "-")}`);
+    const recorder = recordServedForTests(GIT_METHODS);
+    const disarm = arm(repo.rebaseMerge, recorder.served);
+    let error: unknown;
+    try {
+      error = await rejection(syncWorktree(repo.row, "pull-rebase"));
+    } finally {
+      disarm();
+      recorder.stop();
+    }
+    assert.ok(expect(error), String(error));
+    // Nothing ran from the failed probe on: no `rebase --abort`, no reset.
+    assert.deepEqual(
+      labels(recorder.served).at(-1),
+      `failed ${repo.rebaseMerge}`,
+    );
+    assert.ok(existsSync(repo.rebaseMerge), "the stopped rebase stays");
+
+    // The lock was released: the next sync runs (and restores as base).
+    sh(repo.feature, "rebase", "--abort");
+    await assert.rejects(
+      () => syncWorktree(repo.row, "pull-rebase"),
+      WorktreeSyncConflictError,
+    );
+    assert.equal(existsSync(repo.rebaseMerge), false);
+  },
+);
+
+test("a held probe at 283, a connection end, then release, rejects", async () => {
+  const repo = pullConflict("held-283");
+  const held = holdFileForTests(repo.rebaseMerge, "exists");
+  const pending = rejection(syncWorktree(repo.row, "pull-rebase"));
+  await held.reached;
+  writeAsInProcessWorkerForTests(INVALID_FRAME);
+  held.release();
+  const error = await pending;
+  assert.match(String(error), /The Worker connection ended/);
+  assert.ok(isWorkerFailure(error));
+  assert.ok(existsSync(repo.rebaseMerge));
+  sh(repo.feature, "rebase", "--abort");
 });

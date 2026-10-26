@@ -17,9 +17,9 @@
  * settles against the state the triage was handed.
  */
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowResultStatus } from "@assistant/shared";
+import { checkoutPathExists } from "../checkoutFileAccess.ts";
 import {
   appendEvent,
   listEvents,
@@ -62,7 +62,7 @@ async function gitDir(cwd: string): Promise<string> {
 async function inProgressOperation(cwd: string): Promise<string | undefined> {
   const dir = await gitDir(cwd);
   for (const [marker, label] of IN_PROGRESS_MARKERS)
-    if (existsSync(join(dir, marker))) return label;
+    if (await checkoutPathExists(cwd, join(dir, marker))) return label;
   return undefined;
 }
 

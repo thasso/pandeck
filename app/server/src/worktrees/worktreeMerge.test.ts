@@ -6,7 +6,13 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
@@ -325,3 +331,305 @@ test("a pi merge agent is recorded as pi and linked like a Claude one", async ()
   sh(record.path, "rebase", "--abort");
   updateWorktree(record.id, { mergeStateJson: null });
 });
+
+/* ---------------- checkout reads (`docs/workers.md`, W3b) ----------------- */
+
+const {
+  MALFORMED_ANSWERS,
+  answerForPathForTests,
+  answering,
+  recordServedForTests,
+} = await import("../test/workerAnswers.ts");
+const { FILE_METHODS } = await import("../workerProtocol/fileMethods.ts");
+const { WorkerMethodError } = await import("../workerProtocol/connection.ts");
+const { isWorkerFailure } = await import("../workers/fileClient.ts");
+const { checkoutPathExists } = await import("../checkoutFileAccess.ts");
+const { holdFileForTests } = await import("../fileReads.ts");
+const { writeAsInProcessWorkerForTests } =
+  await import("../workers/inProcessWorker.ts");
+
+const INVALID_FRAME = new Uint8Array(8);
+const mainMergeHead = join(repoPath, ".git", "MERGE_HEAD");
+
+/** A worktree with one commit of its own on a new file. */
+async function committedWorktree(name: string) {
+  const record = await createWorktree({ projectId: "mg-proj", name });
+  writeFileSync(join(record.path, `${name}.txt`), `${name}\n`);
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", `${name} work`);
+  return record;
+}
+
+/** The error a malformed answer to `files.exists` of `path` gives. */
+async function malformedExists(root: string, path: string): Promise<unknown> {
+  const disarm = answerForPathForTests(
+    FILE_METHODS.exists,
+    path,
+    answering(MALFORMED_ANSWERS[FILE_METHODS.exists]!),
+  );
+  try {
+    await checkoutPathExists(root, path);
+  } catch (error) {
+    assert.ok(isWorkerFailure(error), String(error));
+    return error;
+  } finally {
+    disarm();
+  }
+  assert.fail("expected a malformed answer");
+}
+
+/** The `nth` `files.exists` of `path` answered malformed. */
+function malformedAt(path: string, nth = 1): () => void {
+  let disarm = () => {};
+  const at = (left: number): (() => void) =>
+    answerForPathForTests(
+      FILE_METHODS.exists,
+      path,
+      left === 1
+        ? answering(MALFORMED_ANSWERS[FILE_METHODS.exists]!)
+        : (payload, signal, real) => {
+            disarm = at(left - 1);
+            return real(payload, signal);
+          },
+    );
+  disarm = at(nth);
+  return () => disarm();
+}
+
+/** A `commit-msg` hook in the main checkout that refuses every commit. */
+function refusingCommits(): () => void {
+  const hook = join(repoPath, ".git", "hooks", "commit-msg");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  return () => rmSync(hook, { force: true });
+}
+
+const stateOf = (id: string) =>
+  JSON.parse(getWorktree(id)!.mergeStateJson ?? "null") as {
+    phase: string;
+    conflictPaths?: string[];
+    message?: string;
+  } | null;
+
+test("a merge serves the worktree's presence twice, before and under the lock", async () => {
+  const record = await committedWorktree("presence-served");
+  const recorder = recordServedForTests([FILE_METHODS.exists]);
+  try {
+    await mergeWorktree(record.id, "squash");
+  } finally {
+    recorder.stop();
+  }
+  assert.equal(mergePhase(record.id), "done");
+  // The merge's two; then the finished merge's status refresh
+  // (`worktreeStatus.ts`) reads it once more.
+  assert.deepEqual(
+    recorder
+      .pathsOf(FILE_METHODS.exists)
+      .filter((path) => path === record.path),
+    [record.path, record.path, record.path],
+  );
+});
+
+test("a merge of a worktree whose directory is gone is refused as unknown", async () => {
+  const record = await committedWorktree("presence-gone");
+  rmSync(record.path, { recursive: true, force: true });
+  try {
+    await assert.rejects(
+      () => mergeWorktree(record.id, "squash"),
+      /^Error: Unknown worktree\.$/,
+    );
+    assert.equal(getWorktree(record.id)!.mergeStateJson, null);
+  } finally {
+    sh(repoPath, "worktree", "prune");
+  }
+});
+
+test("a merge commit a hook refuses stays in conflicts with no paths, its MERGE_HEAD served", async () => {
+  const record = await committedWorktree("hook-refused");
+  const restore = refusingCommits();
+  const recorder = recordServedForTests([FILE_METHODS.exists]);
+  try {
+    await mergeWorktree(record.id, "merge");
+  } finally {
+    recorder.stop();
+    restore();
+  }
+  try {
+    assert.ok(recorder.pathsOf(FILE_METHODS.exists).includes(mainMergeHead));
+    assert.equal(stateOf(record.id)?.phase, "conflicts");
+    assert.deepEqual(stateOf(record.id)?.conflictPaths, []);
+  } finally {
+    sh(repoPath, "merge", "--abort");
+    updateWorktree(record.id, { mergeStateJson: null });
+  }
+});
+
+test("a rebase a pre-rebase hook refuses fails, its markers served absent", async () => {
+  const record = await committedWorktree("rebase-refused");
+  writeFileSync(join(repoPath, "rebase-refused-main.txt"), "main moved\n");
+  sh(repoPath, "add", "-A");
+  sh(repoPath, "commit", "-m", "main moves past the worktree's base");
+  // In the common hooks directory, which the worktree's rebase runs.
+  const hook = join(repoPath, ".git", "hooks", "pre-rebase");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const gitDir = sh(record.path, "rev-parse", "--absolute-git-dir").trim();
+  const recorder = recordServedForTests([FILE_METHODS.exists]);
+  try {
+    await mergeWorktree(record.id, "rebase");
+  } finally {
+    recorder.stop();
+    rmSync(hook, { force: true });
+  }
+  assert.deepEqual(
+    recorder
+      .pathsOf(FILE_METHODS.exists)
+      .filter((path) => path.startsWith(`${gitDir}/`)),
+    [join(gitDir, "rebase-merge"), join(gitDir, "rebase-apply")],
+  );
+  assert.equal(stateOf(record.id)?.phase, "failed");
+  updateWorktree(record.id, { mergeStateJson: null });
+});
+
+test("boot reconciliation serves each strategy's markers", async () => {
+  const merged = await committedWorktree("boot-merge-served");
+  const rebased = await committedWorktree("boot-rebase-served");
+  const gitDir = sh(rebased.path, "rev-parse", "--absolute-git-dir").trim();
+  const conflicts = (strategy: string) =>
+    JSON.stringify({ strategy, phase: "conflicts", startedAt: Date.now() });
+  updateWorktree(merged.id, { mergeStateJson: conflicts("merge") });
+  updateWorktree(rebased.id, { mergeStateJson: conflicts("rebase") });
+  const recorder = recordServedForTests([FILE_METHODS.exists]);
+  try {
+    await reconcileWorktreeMergesOnBoot();
+  } finally {
+    recorder.stop();
+    updateWorktree(merged.id, { mergeStateJson: null });
+    updateWorktree(rebased.id, { mergeStateJson: null });
+  }
+  const served = recorder.pathsOf(FILE_METHODS.exists);
+  assert.ok(served.includes(mainMergeHead));
+  assert.deepEqual(
+    served.filter((path) => path.startsWith(`${gitDir}/`)),
+    [join(gitDir, "rebase-merge"), join(gitDir, "rebase-apply")],
+  );
+});
+
+test("a Worker failure at the presence check rejects, and releases the claim", async () => {
+  const record = await committedWorktree("presence-malformed");
+  const expected = await malformedExists(record.path, record.path);
+  const disarm = malformedAt(record.path);
+  try {
+    await assert.rejects(
+      () => mergeWorktree(record.id, "squash"),
+      (error) =>
+        error instanceof Error && error.message === errorMessage(expected),
+    );
+  } finally {
+    disarm();
+  }
+  assert.equal(getWorktree(record.id)!.mergeStateJson, null);
+  // Not refused as already in progress: the pre-lock claim was released.
+  await mergeWorktree(record.id, "squash");
+  assert.equal(mergePhase(record.id), "done");
+});
+
+test("a coded refusal at the presence check rejects", async () => {
+  const record = await committedWorktree("presence-refused");
+  const disarm = answerForPathForTests(
+    FILE_METHODS.exists,
+    record.path,
+    async () => {
+      throw new WorkerMethodError("wrong_worker", "Not here.");
+    },
+  );
+  try {
+    const error = await mergeWorktree(record.id, "squash").then(
+      () => assert.fail("expected a rejection"),
+      (error: unknown) => error,
+    );
+    assert.ok(isWorkerFailure(error), String(error));
+  } finally {
+    disarm();
+  }
+  assert.equal(getWorktree(record.id)!.mergeStateJson, null);
+});
+
+test("a held presence check, a connection end, then release, rejects", async () => {
+  const record = await committedWorktree("presence-held");
+  const held = holdFileForTests(record.path, "exists");
+  const pending = mergeWorktree(record.id, "squash").then(
+    () => assert.fail("expected a rejection"),
+    (error: unknown) => error,
+  );
+  await held.reached;
+  writeAsInProcessWorkerForTests(INVALID_FRAME);
+  held.release();
+  const error = await pending;
+  assert.match(String(error), /The Worker connection ended/);
+  assert.ok(isWorkerFailure(error));
+  assert.equal(getWorktree(record.id)!.mergeStateJson, null);
+});
+
+test("a Worker failure at the presence check under the lock rejects with no state", async () => {
+  const record = await committedWorktree("locked-presence-malformed");
+  const expected = await malformedExists(record.path, record.path);
+  const disarm = malformedAt(record.path, 2);
+  try {
+    await assert.rejects(
+      () => mergeWorktree(record.id, "squash"),
+      (error) =>
+        error instanceof Error && error.message === errorMessage(expected),
+    );
+  } finally {
+    disarm();
+  }
+  assert.equal(getWorktree(record.id)!.mergeStateJson, null);
+  assert.equal(mergePhase(record.id), "idle");
+});
+
+test("a Worker failure at the merge's MERGE_HEAD probe fails the merge, git state kept", async () => {
+  const record = await committedWorktree("hook-malformed");
+  const expected = await malformedExists(repoPath, mainMergeHead);
+  const restore = refusingCommits();
+  const disarm = malformedAt(mainMergeHead);
+  try {
+    await mergeWorktree(record.id, "merge");
+  } finally {
+    disarm();
+    restore();
+  }
+  try {
+    assert.equal(stateOf(record.id)?.phase, "failed");
+    assert.equal(stateOf(record.id)?.message, errorMessage(expected));
+    assert.ok(existsSync(mainMergeHead));
+  } finally {
+    sh(repoPath, "merge", "--abort");
+    updateWorktree(record.id, { mergeStateJson: null });
+  }
+});
+
+test("a Worker failure at boot reconciliation's MERGE_HEAD probe rejects it", async () => {
+  const record = await committedWorktree("boot-malformed");
+  updateWorktree(record.id, {
+    mergeStateJson: JSON.stringify({
+      strategy: "merge",
+      phase: "conflicts",
+      startedAt: Date.now(),
+    }),
+  });
+  const expected = await malformedExists(repoPath, mainMergeHead);
+  const disarm = malformedAt(mainMergeHead);
+  try {
+    await assert.rejects(
+      () => reconcileWorktreeMergesOnBoot(),
+      (error) =>
+        error instanceof Error && error.message === errorMessage(expected),
+    );
+  } finally {
+    disarm();
+    updateWorktree(record.id, { mergeStateJson: null });
+  }
+});
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

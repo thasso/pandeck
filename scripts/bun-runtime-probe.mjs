@@ -5,7 +5,7 @@
  * receipt, its group kill, the receipt on broker death, exact UTF-16 text),
  * the in-process fallback, served-file bytes read through the Worker's file
  * methods, served-file requests whose client leaves early, the worktree
- * surfaces' checkout reads against Bun's own `fs`,
+ * surfaces' and checkout workflows' reads against Bun's own `fs`,
  * a watcher subscribed with a git-derived ignore set, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
@@ -49,7 +49,12 @@ import {
   inspectCheckoutPath,
   readCheckoutDir,
   readCheckoutFile,
+  readCheckoutLink,
 } from "../app/server/src/checkoutFileAccess.ts";
+import {
+  runCommitWorkflow,
+  setCommitMessageGeneratorForTests,
+} from "../app/server/src/commitWorkflow.ts";
 import { DATA_DIR } from "../app/server/src/config.ts";
 import { backgroundWorkStore } from "../app/server/src/db/backgroundWorkStore.ts";
 import {
@@ -360,6 +365,27 @@ async function checkWorkerFiles() {
   rmSync(outside, { recursive: true, force: true });
 }
 
+const served = (method) => inProcessWorkerServedMethodForTests(method);
+
+/** Runs `run`, requiring each named method to have crossed the Worker. */
+async function crossing(methods, what, run) {
+  const before = methods.map(served);
+  const result = await run();
+  methods.forEach((method, at) =>
+    assert(served(method) > before[at], `${what}: no ${method} crossed.`),
+  );
+  return result;
+}
+
+async function rejection(promise) {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected a rejection.");
+}
+
 /**
  * The worktree surfaces' checkout reads cross the in-process Worker and
  * answer as Bun's own `fs` does on the same paths, re-observing the
@@ -370,24 +396,6 @@ async function checkWorkerCheckoutReads() {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), `bun-probe-checkout-${mode}-`)),
   );
-  const served = (method) => inProcessWorkerServedMethodForTests(method);
-  /** Runs `run`, requiring each named method to have crossed the Worker. */
-  const crossing = async (methods, what, run) => {
-    const before = methods.map(served);
-    const result = await run();
-    methods.forEach((method, at) =>
-      assert(served(method) > before[at], `${what}: no ${method} crossed.`),
-    );
-    return result;
-  };
-  const rejection = async (promise) => {
-    try {
-      await promise;
-    } catch (error) {
-      return error;
-    }
-    throw new Error("Expected a rejection.");
-  };
   const row = {
     id: "bun-probe-checkout",
     projectId: "bun-probe",
@@ -715,6 +723,352 @@ async function checkWorkerCheckoutReads() {
   }
 }
 
+/** `IN_PROGRESS_MARKERS` (`workflow/operationTriage.ts`), every marker read. */
+const OPERATION_MARKERS = [
+  "MERGE_HEAD",
+  "rebase-merge",
+  "rebase-apply",
+  "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
+  "BISECT_LOG",
+];
+
+/** What a sync `fs` call throws, as code and exact message; or `answers`. */
+function syncFailure(call) {
+  try {
+    call();
+    return "answers";
+  } catch (error) {
+    return `${error.code}: ${error.message}`;
+  }
+}
+
+/** The same for a checkout read, which must fail as a filesystem failure. */
+async function readFailure(what, methods, read) {
+  const error = await crossing(methods, what, () =>
+    read().then(
+      () => undefined,
+      (failure) => failure,
+    ),
+  );
+  if (error === undefined) return "answers";
+  assert(
+    checkoutFailureOf(error) === "filesystem",
+    `${what} failed outside the filesystem: ${error}`,
+  );
+  return `${error.code}: ${error.message}`;
+}
+
+/**
+ * Base's untracked summaries (main 0fc22f5, `commitWorkflow.ts`), verbatim
+ * over Bun's sync `fs`: the oracle for the commit agent's prompt.
+ */
+function baseUntrackedSummaries(repoRoot, files) {
+  const MAX_UNTRACKED_FILE_CHARS = 12_000;
+  const MAX_UNTRACKED_TOTAL_CHARS = 60_000;
+  const errorText = (err) => (err instanceof Error ? err.message : String(err));
+  const isProbablyText = (buffer) => {
+    if (buffer.includes(0)) return false;
+    try {
+      new globalThis.TextDecoder("utf-8", { fatal: true }).decode(buffer);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const summaries = [];
+  let remaining = MAX_UNTRACKED_TOTAL_CHARS;
+  for (const path of files.slice(0, 80)) {
+    const absolute = join(repoRoot, path);
+    try {
+      if (lstatSync(absolute).isSymbolicLink()) {
+        summaries.push({
+          path,
+          included: true,
+          content: readlinkSync(absolute),
+        });
+        continue;
+      }
+      const buffer = readFileSync(absolute);
+      if (buffer.length === 0) {
+        summaries.push({ path, included: true, content: "" });
+        continue;
+      }
+      if (buffer.length > 256_000) {
+        summaries.push({
+          path,
+          included: false,
+          reason: `large file (${buffer.length} bytes)`,
+        });
+        continue;
+      }
+      if (!isProbablyText(buffer.subarray(0, Math.min(buffer.length, 8192)))) {
+        summaries.push({
+          path,
+          included: false,
+          reason: `binary or non-UTF-8 file (${buffer.length} bytes)`,
+        });
+        continue;
+      }
+      const max = Math.min(MAX_UNTRACKED_FILE_CHARS, Math.max(0, remaining));
+      const content = buffer.toString("utf8");
+      const truncated = content.length > max;
+      const shown = truncated
+        ? `${content.slice(0, max)}\n[TRUNCATED ${content.length - max} characters]`
+        : content;
+      remaining -= shown.length;
+      summaries.push({ path, included: true, content: shown });
+    } catch (err) {
+      summaries.push({
+        path,
+        included: false,
+        reason: `could not read: ${errorText(err)}`,
+      });
+    }
+  }
+  if (files.length > 80) {
+    summaries.push({
+      path: `... ${files.length - 80} more untracked files`,
+      included: false,
+      reason: "not listed",
+    });
+  }
+  if (summaries.length === 0) return "";
+  return summaries
+    .map((item) => {
+      if (!item.included)
+        return `Untracked file: ${item.path}\n[content omitted: ${item.reason ?? "not included"}]`;
+      return [
+        `Untracked file: ${item.path}`,
+        "```",
+        item.content ?? "",
+        "```",
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+/**
+ * The checkout workflows' reads (commit, merge, sync, fetch, rebase repair,
+ * triage) cross the in-process Worker and answer as base's synchronous `fs`
+ * does under Bun on the same paths: an untracked path's kind and mode, a
+ * link's text, a failure's code and message, every operation marker in a
+ * main checkout and a linked worktree, and the commit agent's untracked
+ * summaries end to end (`docs/workers.md`, "Checkout files"). A mismatch is
+ * a contract question, never a value to adopt.
+ */
+async function checkWorkerWorkflowReads() {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), `bun-probe-workflow-${mode}-`)),
+  );
+  const at = (name) => join(root, name);
+  try {
+    await git(["init", "-q", "-b", "main"], root);
+    writeFileSync(at("tracked"), "tracked\n");
+    await git(["add", "tracked"], root);
+    await git([...identity, "commit", "-q", "-m", "probe"], root);
+    writeFileSync(at("plain"), "plain\n");
+    chmodSync(at("plain"), 0o644);
+    writeFileSync(at("run.sh"), "#!/bin/sh\n");
+    chmodSync(at("run.sh"), 0o755);
+    writeFileSync(at("empty"), "");
+    mkdirSync(at("dir"));
+    mkdirSync(at("nested"));
+    await git(["init", "-q", "-b", "main"], at("nested"));
+    writeFileSync(at("nested/inner"), "inner\n");
+    symlinkSync("plain", at("link"));
+    symlinkSync("missing-target", at("dangling"));
+    symlinkSync("zielé-ü", at("non-ascii"));
+    symlinkSync(Buffer.from([0x62, 0x61, 0x64, 0xff]), at("bad-utf8"));
+    execFileSync("mkfifo", [at("fifo")]);
+
+    // Kind and mode, from the one lstat, as Bun's lstatSync has them.
+    const kindOf = (stats) =>
+      stats.isFile()
+        ? "file"
+        : stats.isDirectory()
+          ? "directory"
+          : stats.isSymbolicLink()
+            ? "symlink"
+            : "other";
+    for (const name of [
+      "plain",
+      "run.sh",
+      "empty",
+      "dir",
+      "nested/",
+      "link",
+      "fifo",
+    ]) {
+      const path = at(name);
+      const inspection = await crossing(["files.inspect"], name, () =>
+        inspectCheckoutPath(root, path, { follow: false, mode: true }),
+      );
+      const oracle = lstatSync(path, { bigint: true });
+      assert(
+        inspection.kind === kindOf(oracle) &&
+          inspection.mode === String(oracle.mode),
+        `inspect(${name}) is ${inspection.kind} ${inspection.mode}, Bun's lstatSync ${kindOf(oracle)} ${oracle.mode}.`,
+      );
+    }
+
+    // Link text, decoded as Bun's readlinkSync decodes it.
+    for (const name of ["link", "dangling", "non-ascii", "bad-utf8"]) {
+      const target = await crossing(["files.readlink"], name, () =>
+        readCheckoutLink(root, at(name)),
+      );
+      assert(
+        target === readlinkSync(at(name)),
+        `readlink(${name}) is ${JSON.stringify(target)}, Bun's ${JSON.stringify(readlinkSync(at(name)))}.`,
+      );
+    }
+
+    // Failures: the code and the exact message base's sync call throws.
+    const failures = [
+      [
+        "readlink of a file",
+        ["files.readlink"],
+        "plain",
+        readCheckoutLink,
+        readlinkSync,
+      ],
+      [
+        "readlink of a missing path",
+        ["files.readlink"],
+        "missing",
+        readCheckoutLink,
+        readlinkSync,
+      ],
+      [
+        "lstat of a missing path",
+        ["files.inspect"],
+        "missing",
+        (root, path) =>
+          inspectCheckoutPath(root, path, { follow: false, mode: true }),
+        lstatSync,
+      ],
+      [
+        "lstat under a file",
+        ["files.inspect"],
+        "plain/child",
+        (root, path) =>
+          inspectCheckoutPath(root, path, { follow: false, mode: true }),
+        lstatSync,
+      ],
+      [
+        "read of nested/",
+        ["files.open", "files.read"],
+        "nested/",
+        readCheckoutFile,
+        readFileSync,
+      ],
+      [
+        "read of a missing path",
+        ["files.open"],
+        "missing",
+        readCheckoutFile,
+        readFileSync,
+      ],
+    ];
+    for (const [what, methods, name, read, oracle] of failures) {
+      const answered = await readFailure(what, methods, () =>
+        read(root, at(name)),
+      );
+      const base = syncFailure(() => oracle(at(name)));
+      assert(
+        base !== "answers" && answered === base,
+        `${what} answered ${answered}, Bun's sync call ${base}.`,
+      );
+    }
+
+    // Every marker, absent and present, in a main checkout and a linked one.
+    const linked = `${root}-linked`;
+    await git(["worktree", "add", "-q", "-b", "linked", linked], root);
+    try {
+      for (const cwd of [root, linked]) {
+        const gitDir = (
+          await git(["rev-parse", "--absolute-git-dir"], cwd)
+        ).stdout.trim();
+        for (const marker of OPERATION_MARKERS) {
+          const path = join(gitDir, marker);
+          for (const present of [false, true]) {
+            if (present && marker.startsWith("rebase-")) mkdirSync(path);
+            else if (present) writeFileSync(path, "");
+            const answer = await crossing(["files.exists"], path, () =>
+              checkoutPathExists(cwd, path),
+            );
+            assert(
+              answer === existsSync(path) && answer === present,
+              `exists(${path}) answered ${answer}, Bun's existsSync ${existsSync(path)}.`,
+            );
+          }
+          rmSync(path, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      await git(["worktree", "remove", "--force", linked], root);
+    }
+
+    // The commit agent's untracked summaries, end to end.
+    rmSync(at("fifo"));
+    rmSync(at("dir"), { recursive: true });
+    writeFileSync(at("binary"), Buffer.from([0x61, 0x00, 0x62]));
+    writeFileSync(at("large"), "x".repeat(256_001));
+    let prompt;
+    setCommitMessageGeneratorForTests(async (text) => {
+      prompt = text;
+      return {
+        status: "commit",
+        subject: "Probe",
+        body: [],
+        blockers: [],
+        warnings: [],
+      };
+    });
+    let result;
+    try {
+      result = await crossing(
+        [
+          "files.inspect",
+          "files.readlink",
+          "files.open",
+          "files.read",
+          "files.close",
+          "files.exists",
+        ],
+        "a commit dry run",
+        () => runCommitWorkflow({ source: "tool", cwd: root, dryRun: true }),
+      );
+    } finally {
+      setCommitMessageGeneratorForTests(null);
+    }
+    assert(
+      result.status === "dry-run",
+      `The commit dry run ended ${result.status}: ${result.error}`,
+    );
+    const untracked = (
+      await git(["ls-files", "--others", "--exclude-standard", "-z"], root)
+    ).stdout
+      .split("\0")
+      .filter(Boolean);
+    assert(untracked.includes("nested/"), `ls-files listed ${untracked}.`);
+    const expected = baseUntrackedSummaries(root, untracked);
+    assert(
+      typeof prompt === "string" && prompt.includes(expected),
+      `The commit agent's untracked summaries differ from Bun's base:\n${expected}\n--- prompt ---\n${prompt}`,
+    );
+    assert(
+      inProcessWorkerFileHandlesForTests() === 0,
+      "The commit dry run left a Worker file handle open.",
+    );
+    console.log(
+      `Worker workflow reads (${mode}): kinds, modes, link texts, failures, ${OPERATION_MARKERS.length} markers in two checkouts and ${untracked.length} untracked summaries match Bun's fs.`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 /**
  * A client that leaves a served-file request stops its reads under Bun too,
  * which reports the disconnect on the request and its socket but never closes
@@ -928,6 +1282,7 @@ async function checkGit() {
   await checkWorkerFileOpenEnd();
   await checkServedFileCancellation();
   await checkWorkerCheckoutReads();
+  await checkWorkerWorkflowReads();
 
   if (mode !== "broker") return;
 

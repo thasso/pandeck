@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import {
   acceptCommitDryRun,
@@ -258,6 +265,34 @@ test("caller and approved messages survive git cleanup verbatim", async () => {
   });
   assert.equal(approved.status, "committed");
   assert.equal(lastMessage(), `${message}\n\n`);
+});
+
+test("a commit a commit-msg hook refuses leaves no message file behind", async () => {
+  const cwd = repo();
+  const tmp = mkdtempSync(join(tmpdir(), "pa-commit-message-tmp-"));
+  repos.push(tmp);
+  const seen = join(tmp, "..", `${basename(tmp)}.seen`);
+  repos.push(seen);
+  // The hook records what the message file's TMPDIR held while git ran.
+  writeFileSync(
+    join(cwd, ".git", "hooks", "commit-msg"),
+    `#!/bin/sh\nls "${tmp}" > "${seen}"\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  writeFileSync(join(cwd, "file.txt"), "refused\n");
+  setCommitMessageGeneratorForTests(async () => generated);
+  const saved = process.env.TMPDIR;
+  process.env.TMPDIR = tmp;
+  try {
+    const result = await runCommitWorkflow({ source: "tool", cwd });
+    assert.equal(result.status, "failed");
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
+  assert.match(readFileSync(seen, "utf8"), /^assistant-commit-.{6}\n$/);
+  assert.deepEqual(readdirSync(tmp), []);
+  assert.equal(git(cwd, "log", "--oneline").split("\n").length, 1);
 });
 
 test("tool callers contribute session prompts, touched paths, context and a checkpoint entry", async () => {

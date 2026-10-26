@@ -299,3 +299,122 @@ test.each(["interrupted", "live"] as const)(
     );
   },
 );
+
+/* ---------------- checkout reads (`docs/workers.md`, W3b) ----------------- */
+
+const { MALFORMED_ANSWERS, answerForPathForTests, recordServedForTests } =
+  await import("../test/workerAnswers.ts");
+const { CHECKOUT_GIT_METHODS } =
+  await import("../workerProtocol/checkoutMethods.ts");
+const { WorkerMethodError, WorkerRequestError } =
+  await import("../workerProtocol/connection.ts");
+const { FILE_METHODS, MalformedWorkerAnswerError } =
+  await import("../workerProtocol/fileMethods.ts");
+const { isWorkerFailure } = await import("../workers/fileClient.ts");
+const { holdFileForTests } = await import("../fileReads.ts");
+const { writeAsInProcessWorkerForTests } =
+  await import("../workers/inProcessWorker.ts");
+const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
+
+const INVALID_FRAME = new Uint8Array(8);
+const GIT_METHODS = Object.values(CHECKOUT_GIT_METHODS);
+
+/** A repair whose rebase stopped on a conflict; its rebase-merge path. */
+function stoppedRepair(name: string) {
+  const rig = fixture(name);
+  const rebase = spawnSync("git", ["rebase", "main"], {
+    cwd: rig.feature,
+    encoding: "utf8",
+  });
+  assert.notEqual(rebase.status, 0);
+  const gitDir = git(rig.feature, "rev-parse", "--absolute-git-dir").trim();
+  return { ...rig, rebaseMerge: join(gitDir, "rebase-merge") };
+}
+
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  assert.fail("expected a rejection");
+}
+
+test("a failed repair serves rebase-merge before its abort", async () => {
+  const rig = stoppedRepair("served-96");
+  const recorder = recordServedForTests([...GIT_METHODS, FILE_METHODS.exists]);
+  try {
+    await finalizeRebaseRepair(rig.run, rig.step, "failed");
+  } finally {
+    recorder.stop();
+  }
+  const served = recorder.served.map((request) =>
+    request.args ? request.args.join(" ") : request.path,
+  );
+  const probe = served.indexOf(rig.rebaseMerge);
+  assert.ok(probe >= 0, served.join("\n"));
+  assert.equal(served[probe + 1], "rebase --abort");
+});
+
+test.each([
+  {
+    name: "a malformed answer",
+    answer: async () => MALFORMED_ANSWERS[FILE_METHODS.exists]!,
+    expect: (error: unknown) => error instanceof MalformedWorkerAnswerError,
+  },
+  {
+    name: "a coded refusal",
+    answer: async (): Promise<never> => {
+      throw new WorkerMethodError("wrong_worker", "Not here.");
+    },
+    expect: (error: unknown) =>
+      error instanceof WorkerRequestError && error.code === "wrong_worker",
+  },
+])(
+  "$name at 96 rejects; no abort runs, the rebase stays, the lock is released",
+  async ({ name, answer, expect }) => {
+    const rig = stoppedRepair(`failed-96-${name.replace(/\W/g, "-")}`);
+    const recorder = recordServedForTests(GIT_METHODS);
+    const disarm = answerForPathForTests(
+      FILE_METHODS.exists,
+      rig.rebaseMerge,
+      async () => {
+        recorder.served.push({ method: "failed", path: rig.rebaseMerge });
+        return answer();
+      },
+    );
+    let error: unknown;
+    try {
+      error = await rejection(
+        finalizeRebaseRepair(rig.run, rig.step, "failed"),
+      );
+    } finally {
+      disarm();
+      recorder.stop();
+    }
+    assert.ok(expect(error) && isWorkerFailure(error), String(error));
+    // Nothing ran from the failed probe on: no abort, checkout, reset or clean.
+    assert.deepEqual(recorder.served.at(-1), {
+      method: "failed",
+      path: rig.rebaseMerge,
+    });
+    assert.ok(existsSync(rig.rebaseMerge), "the stopped rebase stays");
+    await withRepoLock(await repoLockKey(rig.main), async () => {});
+    git(rig.feature, "rebase", "--abort");
+  },
+);
+
+test("a held probe at 96, a connection end, then release, rejects", async () => {
+  const rig = stoppedRepair("held-96");
+  const held = holdFileForTests(rig.rebaseMerge, "exists");
+  const pending = rejection(finalizeRebaseRepair(rig.run, rig.step, "failed"));
+  await held.reached;
+  writeAsInProcessWorkerForTests(INVALID_FRAME);
+  held.release();
+  const error = await pending;
+  assert.match(String(error), /The Worker connection ended/);
+  assert.ok(isWorkerFailure(error));
+  assert.ok(existsSync(rig.rebaseMerge));
+  await withRepoLock(await repoLockKey(rig.main), async () => {});
+  git(rig.feature, "rebase", "--abort");
+});

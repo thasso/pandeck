@@ -2460,3 +2460,162 @@ test("a locked worktree whose folder is gone refuses instead of finalizing", asy
   assert.equal(sh(repoPath, "worktree", "list").includes(record.path), false);
   assert.equal(sh(repoPath, "branch", "--list", record.branch).trim(), "");
 });
+
+/* ---------------- checkout reads (`docs/workers.md`, W3b) ----------------- */
+
+const { remoteDeliveryHeads } = await import("./worktreeFetch.ts");
+const {
+  MALFORMED_ANSWERS,
+  answerForPathForTests,
+  answering,
+  recordServedForTests,
+} = await import("../test/workerAnswers.ts");
+const { CHECKOUT_GIT_METHODS } =
+  await import("../workerProtocol/checkoutMethods.ts");
+const { WorkerMethodError, WorkerRequestError } =
+  await import("../workerProtocol/connection.ts");
+const { FILE_METHODS, MalformedWorkerAnswerError } =
+  await import("../workerProtocol/fileMethods.ts");
+const { isWorkerFailure } = await import("../workers/fileClient.ts");
+const { holdFileForTests } = await import("../fileReads.ts");
+const { writeAsInProcessWorkerForTests } =
+  await import("../workers/inProcessWorker.ts");
+
+/** A worktree with work no remote holds, and `remotes` added to the main checkout. */
+async function undeliveredWithRemotes(
+  name: string,
+  remotes: Record<string, string>,
+) {
+  const record = await createWorktree({ projectId: "wt-proj", name });
+  writeFileSync(join(record.path, `${name}.txt`), "undelivered\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "undelivered work");
+  for (const [remote, url] of Object.entries(remotes))
+    sh(repoPath, "remote", "add", remote, url);
+  const cleanup = async () => {
+    for (const remote of Object.keys(remotes))
+      sh(repoPath, "remote", "remove", remote);
+    await removeWorktree(record.id, { deleteBranch: true, force: true });
+  };
+  return { record, cleanup };
+}
+
+test("delivery heads read a local remote's presence on the checkout's side", async () => {
+  const fileRemote = join(tmp, "file-proof.git");
+  const plainRemote = join(tmp, "plain-proof.git");
+  sh(tmp, "init", "--bare", fileRemote);
+  sh(tmp, "init", "--bare", plainRemote);
+  const missing = join(tmp, "missing-proof.git");
+  const { record, cleanup } = await undeliveredWithRemotes("local-proofs", {
+    "by-url": `file://${fileRemote}`,
+    // Relative: resolved against the main checkout.
+    "by-path": `../${basename(plainRemote)}`,
+    gone: missing,
+  });
+  const recorder = recordServedForTests([
+    ...Object.values(CHECKOUT_GIT_METHODS),
+    FILE_METHODS.exists,
+  ]);
+  try {
+    assert.deepEqual(await remoteDeliveryHeads(getWorktree(record.id)!), []);
+  } finally {
+    recorder.stop();
+    await cleanup();
+  }
+  const served = recorder.served.map((request) =>
+    request.args ? request.args.join(" ") : `exists ${request.path}`,
+  );
+  for (const [remote, path] of [
+    ["by-url", fileRemote],
+    ["by-path", plainRemote],
+    ["gone", missing],
+  ] as const) {
+    const probe = served.indexOf(`exists ${path}`);
+    assert.ok(probe >= 0, served.join("\n"));
+    // A present one is compared by repository identity first; a missing one
+    // goes straight on to `ls-remote`, as in base.
+    assert.equal(
+      served.slice(probe + 1).find((label) => label.startsWith("ls-remote")),
+      `ls-remote --heads -- ${remote}`,
+    );
+  }
+  assert.equal(
+    served[served.indexOf(`exists ${missing}`) + 1],
+    "ls-remote --heads -- gone",
+  );
+});
+
+test.each([
+  {
+    name: "a malformed answer",
+    answer: answering(MALFORMED_ANSWERS[FILE_METHODS.exists]!),
+    expect: (error: unknown) => error instanceof MalformedWorkerAnswerError,
+  },
+  {
+    name: "a coded refusal",
+    answer: async (): Promise<never> => {
+      throw new WorkerMethodError("wrong_worker", "Not here.");
+    },
+    expect: (error: unknown) =>
+      error instanceof WorkerRequestError && error.code === "wrong_worker",
+  },
+])(
+  "$name at a local remote's presence rejects delivery heads and the removal",
+  async ({ name, answer, expect }) => {
+    const remote = join(tmp, `failed-proof-${name.replace(/\W/g, "-")}.git`);
+    sh(tmp, "init", "--bare", remote);
+    const { record, cleanup } = await undeliveredWithRemotes(
+      `failed-proof-${name.replace(/\W/g, "-")}`,
+      { proof: remote },
+    );
+    try {
+      const head = sh(record.path, "rev-parse", "HEAD").trim();
+      for (const run of [
+        () => remoteDeliveryHeads(getWorktree(record.id)!),
+        () => removeWorktree(record.id, { deleteBranch: true }),
+      ]) {
+        const disarm = answerForPathForTests(
+          FILE_METHODS.exists,
+          remote,
+          answer,
+        );
+        try {
+          await assert.rejects(run, (error) => {
+            assert.ok(expect(error) && isWorkerFailure(error), String(error));
+            return true;
+          });
+        } finally {
+          disarm();
+        }
+      }
+      assert.equal(getWorktree(record.id)?.status, "active");
+      assert.ok(existsSync(record.path));
+      assert.equal(sh(repoPath, "rev-parse", record.branch).trim(), head);
+    } finally {
+      await cleanup();
+    }
+  },
+);
+
+test("a held local remote presence, a connection end, then release, rejects", async () => {
+  const remote = join(tmp, "held-proof.git");
+  sh(tmp, "init", "--bare", remote);
+  const { record, cleanup } = await undeliveredWithRemotes("held-proof", {
+    proof: remote,
+  });
+  try {
+    const held = holdFileForTests(remote, "exists");
+    const pending = remoteDeliveryHeads(getWorktree(record.id)!).then(
+      () => assert.fail("expected a rejection"),
+      (error: unknown) => error,
+    );
+    await held.reached;
+    writeAsInProcessWorkerForTests(new Uint8Array(8));
+    held.release();
+    const error = await pending;
+    assert.match(String(error), /The Worker connection ended/);
+    assert.ok(isWorkerFailure(error));
+  } finally {
+    await cleanup();
+  }
+});

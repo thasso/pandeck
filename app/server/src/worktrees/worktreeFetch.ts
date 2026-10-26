@@ -44,9 +44,9 @@
  * `--no-write-fetch-head` and reads `FETCH_HEAD` never. See
  * {@link backgroundFetchArgs}.
  */
-import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkoutPathExists } from "../checkoutFileAccess.ts";
 import { BACKGROUND_FETCH_ENABLED } from "../config.ts";
 import { gitOptional, repoLockKey } from "../gitExec.ts";
 import { getSettings } from "../settings.ts";
@@ -105,10 +105,11 @@ export async function remoteDeliveryHeads(row: WorktreeRow): Promise<string[]> {
       localPath = resolve(context.path, url);
     }
     // A remote that points back into this common object store cannot back up
-    // the ref we are about to delete, including linked-worktree aliases.
+    // the ref we are about to delete, including linked-worktree aliases. A
+    // local remote is read on the checkout's side.
     if (
       localPath &&
-      existsSync(localPath) &&
+      (await checkoutPathExists(row.mainRepoRoot, localPath)) &&
       (await repoLockKey(localPath)) === ownKey
     )
       continue;

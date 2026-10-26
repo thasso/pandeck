@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -361,4 +362,170 @@ test("anything but a triage assignment is left alone by both halves", async () =
       ).length,
     0,
   );
+});
+
+/* ---------------- checkout reads (`docs/workers.md`, W3b) ----------------- */
+
+const { MALFORMED_ANSWERS, answerForPathForTests, recordServedForTests } =
+  await import("../test/workerAnswers.ts");
+const { WorkerMethodError, WorkerRequestError } =
+  await import("../workerProtocol/connection.ts");
+const { FILE_METHODS, MalformedWorkerAnswerError } =
+  await import("../workerProtocol/fileMethods.ts");
+const { isWorkerFailure } = await import("../workers/fileClient.ts");
+const { holdFileForTests } = await import("../fileReads.ts");
+const { writeAsInProcessWorkerForTests } =
+  await import("../workers/inProcessWorker.ts");
+const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
+
+const INVALID_FRAME = new Uint8Array(8);
+/** `IN_PROGRESS_MARKERS`, in its order. */
+const TRIAGE_MARKERS = [
+  ["rebase-merge", "a rebase"],
+  ["rebase-apply", "a rebase"],
+  ["MERGE_HEAD", "a merge"],
+  ["CHERRY_PICK_HEAD", "a cherry-pick"],
+  ["REVERT_HEAD", "a revert"],
+  ["BISECT_LOG", "a bisect"],
+] as const;
+
+const gitDirOf = (cwd: string) =>
+  git(cwd, "rev-parse", "--absolute-git-dir").trim();
+
+/** Places `marker` in the git dir as git would: a directory or a file. */
+function placeTriageMarker(gitDir: string, marker: string): () => void {
+  const path = join(gitDir, marker);
+  if (marker.startsWith("rebase-")) mkdirSync(path);
+  else writeFileSync(path, "0000000000000000000000000000000000000000\n");
+  return () => rmSync(path, { recursive: true, force: true });
+}
+
+const snapshotEvents = (runId: number) =>
+  store
+    .listEvents(runId)
+    .filter(
+      (event) =>
+        typeof event.detail === "object" &&
+        event.detail !== null &&
+        "operationTriageSnapshot" in event.detail,
+    );
+
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  assert.fail("expected a rejection");
+}
+
+test("a dispatch onto a stopped rebase serves the first marker, and only it", async () => {
+  const rig = fixture("served-162");
+  const rebase = spawnSync("git", ["rebase", "main"], {
+    cwd: rig.feature,
+    encoding: "utf8",
+  });
+  assert.notEqual(rebase.status, 0);
+  const gitDir = gitDirOf(rig.feature);
+  const recorder = recordServedForTests([FILE_METHODS.exists]);
+  try {
+    await assert.rejects(
+      recordOperationTriageSnapshot(rig.run, rig.step),
+      /cannot start while a rebase is in progress/,
+    );
+  } finally {
+    recorder.stop();
+    spawnSync("git", ["rebase", "--abort"], { cwd: rig.feature });
+  }
+  assert.deepEqual(recorder.pathsOf(FILE_METHODS.exists), [
+    join(gitDir, "rebase-merge"),
+  ]);
+});
+
+test("each marker refuses a dispatch with its label; the first in order wins", async () => {
+  const rig = fixture("each-marker");
+  const gitDir = gitDirOf(rig.feature);
+  for (const [marker, label] of TRIAGE_MARKERS) {
+    const remove = placeTriageMarker(gitDir, marker);
+    try {
+      await assert.rejects(
+        recordOperationTriageSnapshot(rig.run, rig.step),
+        (error: Error) =>
+          error.message ===
+          `a workflow triage cannot start while ${label} is in progress`,
+      );
+    } finally {
+      remove();
+    }
+  }
+  for (const [first, second, label] of [
+    ["CHERRY_PICK_HEAD", "REVERT_HEAD", "a cherry-pick"],
+    ["MERGE_HEAD", "BISECT_LOG", "a merge"],
+    ["rebase-apply", "MERGE_HEAD", "a rebase"],
+  ] as const) {
+    // Placed latest-first, so creation order cannot decide.
+    const removeSecond = placeTriageMarker(gitDir, second);
+    const removeFirst = placeTriageMarker(gitDir, first);
+    try {
+      await assert.rejects(
+        recordOperationTriageSnapshot(rig.run, rig.step),
+        (error: Error) => error.message.includes(`while ${label} is`),
+      );
+    } finally {
+      removeFirst();
+      removeSecond();
+    }
+  }
+  assert.deepEqual(snapshotEvents(rig.run.id), []);
+  await recordOperationTriageSnapshot(rig.run, rig.step);
+  assert.equal(snapshotEvents(rig.run.id).length, 1);
+});
+
+test.each([
+  {
+    name: "a malformed answer",
+    answer: async () => MALFORMED_ANSWERS[FILE_METHODS.exists]!,
+    expect: (error: unknown) => error instanceof MalformedWorkerAnswerError,
+  },
+  {
+    name: "a coded refusal",
+    answer: async (): Promise<never> => {
+      throw new WorkerMethodError("wrong_worker", "Not here.");
+    },
+    expect: (error: unknown) =>
+      error instanceof WorkerRequestError && error.code === "wrong_worker",
+  },
+])(
+  "$name at 162 refuses the dispatch: no snapshot, the lock released",
+  async ({ name, answer, expect }) => {
+    const rig = fixture(`failed-162-${name.replace(/\W/g, "-")}`);
+    const first = join(gitDirOf(rig.feature), "rebase-merge");
+    const disarm = answerForPathForTests(FILE_METHODS.exists, first, answer);
+    let error: unknown;
+    try {
+      error = await rejection(recordOperationTriageSnapshot(rig.run, rig.step));
+    } finally {
+      disarm();
+    }
+    assert.ok(expect(error) && isWorkerFailure(error), String(error));
+    assert.deepEqual(snapshotEvents(rig.run.id), []);
+    await withRepoLock(await repoLockKey(rig.main), async () => {});
+  },
+);
+
+test("a held probe at 162, a connection end, then release, refuses the dispatch", async () => {
+  const rig = fixture("held-162");
+  const held = holdFileForTests(
+    join(gitDirOf(rig.feature), "rebase-merge"),
+    "exists",
+  );
+  const pending = rejection(recordOperationTriageSnapshot(rig.run, rig.step));
+  await held.reached;
+  writeAsInProcessWorkerForTests(INVALID_FRAME);
+  held.release();
+  const error = await pending;
+  assert.match(String(error), /The Worker connection ended/);
+  assert.ok(isWorkerFailure(error));
+  assert.deepEqual(snapshotEvents(rig.run.id), []);
+  await withRepoLock(await repoLockKey(rig.main), async () => {});
 });

@@ -34,6 +34,79 @@ export function answerForPathForTests(
   };
 }
 
+/** One request the in-process Worker served, by the path it named. */
+export interface ServedRequest {
+  method: string;
+  path: string;
+  /** A checkout git request's arguments. */
+  args?: string[];
+}
+
+/**
+ * Records every request of `methods` the in-process Worker serves, each
+ * passed through to the real handler. A read or close names a handle, not a
+ * path: it is recorded under the path an open recorded here answered that
+ * handle for, else as `handle:<n>`. Answers the requests so far and the stop.
+ */
+export function recordServedForTests(methods: readonly string[]): {
+  served: ServedRequest[];
+  pathsOf: (method: string) => string[];
+  stop: () => void;
+} {
+  const served: ServedRequest[] = [];
+  const opened = new Map<number, string>();
+  const disarms = new Map<string, () => void>();
+  let recording = true;
+  const arm = (method: string) => {
+    const substitute: Substitute = async (payload, signal, real) => {
+      if (recording)
+        disarms.set(
+          method,
+          answerNextInProcessWorkerCallForTests(method, substitute),
+        );
+      const json = (payload.json ?? {}) as {
+        location?: { path?: unknown };
+        handle?: unknown;
+        args?: unknown;
+      };
+      const named = json.location?.path;
+      const path =
+        typeof named === "string"
+          ? named
+          : typeof json.handle === "number"
+            ? (opened.get(json.handle) ?? `handle:${json.handle}`)
+            : "";
+      served.push({
+        method,
+        path,
+        ...(Array.isArray(json.args) ? { args: json.args as string[] } : {}),
+      });
+      const answer = await real(payload, signal);
+      const handle = (answer.json as { opened?: { handle?: unknown } } | null)
+        ?.opened?.handle;
+      if (typeof handle === "number" && typeof named === "string")
+        opened.set(handle, named);
+      return answer;
+    };
+    disarms.set(
+      method,
+      answerNextInProcessWorkerCallForTests(method, substitute),
+    );
+  };
+  for (const method of methods) arm(method);
+  return {
+    served,
+    pathsOf: (method) =>
+      served
+        .filter((request) => request.method === method)
+        .map(({ path }) => path),
+    stop: () => {
+      recording = false;
+      for (const disarm of disarms.values()) disarm();
+    },
+  };
+}
+
 /** A substitute answering `payload` without touching the filesystem. */
 export const answering =
   (payload: Payload): Substitute =>
