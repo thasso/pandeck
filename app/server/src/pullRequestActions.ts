@@ -71,6 +71,7 @@ import {
   resolveWorktreeRow,
 } from "./worktrees/worktreeResolve.ts";
 import { branchContainedInBase } from "./worktrees/worktreeStatus.ts";
+import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
 import {
   baseBranchTarget,
   syncWorktree,
@@ -180,7 +181,12 @@ const defaultOperations: PullRequestActionOperations = {
   },
   refreshBase: baseBranchTarget,
   branchContained: (row, baseTarget) =>
-    branchContainedInBase(row.mainRepoRoot, row.branch, baseTarget),
+    branchContainedInBase(
+      checkoutSideOf(row),
+      row.mainRepoRoot,
+      row.branch,
+      baseTarget,
+    ),
   // No `force`: containment is verified first, and a forced removal is exactly
   // the loss this action exists to prevent.
   removeWorktree: (worktreeId, options) =>

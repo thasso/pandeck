@@ -125,11 +125,14 @@ interface Checkout {
 
 let projects = 0;
 
-/** A project's main checkout holding `code.ts`; in the Knowledge Base on `server`. */
-function checkout(side: "Worker" | "server" = "Worker"): Checkout {
+/**
+ * A project's main checkout holding `code.ts`, inside the Knowledge Base root
+ * on `KB root`. Either way a checkout: its reads run on the Worker (RD-W3-1).
+ */
+function checkout(place: "elsewhere" | "KB root" = "elsewhere"): Checkout {
   projects += 1;
   const projectId = `reads-${projects}`;
-  const path = join(side === "server" ? kbRoot : scratch, projectId);
+  const path = join(place === "KB root" ? kbRoot : scratch, projectId);
   mkdirSync(path);
   sh(path, "init", "-q", "-b", "main");
   writeFileSync(join(path, "code.ts"), CODE);
@@ -163,7 +166,7 @@ function prependTwoLines(at: Checkout): string {
   return sh(at.path, "rev-parse", "HEAD").trim();
 }
 
-const SIDES = [["Worker"], ["server"]] as const;
+const PLACES = [["elsewhere"], ["KB root"]] as const;
 
 const add = (at: Checkout, line: number, path = "code.ts", ref?: string) =>
   addWorktreeComment({
@@ -393,17 +396,17 @@ describe("AC7c and AC7d the comment source maps as base", () => {
     assert.equal(listed?.anchorState, "orphaned");
   });
 
-  test.each(SIDES)("%s: an escaping link is no source", async (side) => {
-    const at = checkout(side);
+  test.each(PLACES)("%s: an escaping link is no source", async (place) => {
+    const at = checkout(place);
     await assert.rejects(add(at, 1, "escape.ts"), { message: NO_LINE });
   });
 });
 
 describe("AC7e unclassified errors at the comment source", () => {
-  test.each(SIDES)(
+  test.each(PLACES)(
     "%s: the reader's own error rejects the add",
-    async (side) => {
-      const at = checkout(side);
+    async (place) => {
+      const at = checkout(place);
       const sentinel = new TypeError("sentinel");
       throwInCheckoutReadForTests(sentinel, { at: "read" });
       assert.equal(await rejection(add(at, 2)), sentinel);
@@ -411,10 +414,10 @@ describe("AC7e unclassified errors at the comment source", () => {
     },
   );
 
-  test.each(SIDES)(
+  test.each(PLACES)(
     "%s: (iv) a directory read loses to an unclassified close error",
-    async (side) => {
-      const at = checkout(side);
+    async (place) => {
+      const at = checkout(place);
       mkdirSync(join(at.path, "dir"));
       const sentinel = new TypeError("sentinel");
       throwInCheckoutReadForTests(sentinel, { at: "close" });
@@ -581,8 +584,8 @@ describe("AC7f a ref anchor's post-insert pass", () => {
 });
 
 describe("AC13 the comment source follows production base", () => {
-  test.each(SIDES)("%s: no descriptor stat", async (side) => {
-    const at = checkout(side);
+  test.each(PLACES)("%s: no descriptor stat", async (place) => {
+    const at = checkout(place);
     failFileForTests(at.file, { phase: "stat", code: "EIO" });
     const stats = fileReadsCountsForTests().descriptorStats;
     await add(at, 2);
@@ -590,8 +593,8 @@ describe("AC13 the comment source follows production base", () => {
     assert.equal(fileReadsCountsForTests().descriptorStats, stats);
   });
 
-  test.each(SIDES)("%s: growth and shrink after the open", async (side) => {
-    const at = checkout(side);
+  test.each(PLACES)("%s: growth and shrink after the open", async (place) => {
+    const at = checkout(place);
     writeFileSync(at.file, "one\n");
     let held = holdFileForTests(at.file, "after-open");
     let pending = add(at, 3);
@@ -608,24 +611,24 @@ describe("AC13 the comment source follows production base", () => {
     await assert.rejects(pending, { message: NO_LINE });
   });
 
-  test.each(SIDES)("%s: an empty file is a source", async (side) => {
-    const at = checkout(side);
+  test.each(PLACES)("%s: an empty file is a source", async (place) => {
+    const at = checkout(place);
     writeFileSync(at.file, "");
     // No source at all is refused (above); an empty one has a first line.
     const created = await add(at, 1);
     assert.equal(created.anchor?.line, 1);
   });
 
-  test.each(SIDES)("%s: a directory is no source", async (side) => {
-    const at = checkout(side);
+  test.each(PLACES)("%s: a directory is no source", async (place) => {
+    const at = checkout(place);
     mkdirSync(join(at.path, "dir"));
     await assert.rejects(add(at, 1, "dir"), { message: NO_LINE });
   });
 
-  test.each(SIDES)(
+  test.each(PLACES)(
     "%s: an uncapped 20 MiB + 3 source is read whole",
-    async (side) => {
-      const at = checkout(side);
+    async (place) => {
+      const at = checkout(place);
       const line = `${"x".repeat(1023)}\n`;
       const bytes = Buffer.from(line.repeat(20 * 1024) + "end");
       assert.equal(bytes.length, 20 * MIB + 3);
@@ -640,8 +643,8 @@ describe("AC13 the comment source follows production base", () => {
       assert.equal(getComment(created.id)?.anchorBlob, expected);
       assert.equal(
         inProcessWorkerServedMethodForTests(FILE_METHODS.read) - reads,
-        side === "Worker" ? 3 : 0,
-        "8 MiB, 8 MiB, then the short answer",
+        3,
+        "8 MiB, 8 MiB, then the short answer, on the Worker",
       );
     },
   );

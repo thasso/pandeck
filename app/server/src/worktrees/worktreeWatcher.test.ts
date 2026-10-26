@@ -37,6 +37,7 @@ const {
   unregisterWorktree,
 } = await import("./worktreeWatcher.ts");
 const { default: parcelWatcher } = await import("../parcelWatcher.ts");
+const { DEFAULT_WORKER_SIDE } = await import("../workers/placement.ts");
 const { setWorktreeBroadcaster } = await import("./worktreeEvents.ts");
 const { getWorktree, linkSessionToWorktree } =
   await import("../db/worktreeStore.ts");
@@ -256,7 +257,11 @@ test("branch upstream map distinguishes every track shape, including gone", asyn
   sh(formatRepo, "config", "branch.gone.remote", "origin");
   sh(formatRepo, "config", "branch.gone.merge", "refs/heads/gone");
 
-  const upstreams = await readRepoBranchUpstreams(formatRepo, { force: true });
+  const upstreams = await readRepoBranchUpstreams(
+    DEFAULT_WORKER_SIDE,
+    formatRepo,
+    { force: true },
+  );
   assert.equal(upstreams.get("no-upstream")?.upstreamRef, undefined);
   assert.deepEqual(upstreams.get("sync"), {
     ahead: 0,
@@ -354,12 +359,12 @@ test("branch upstream map distinguishes every track shape, including gone", asyn
   assert.equal(consumerPatch?.baseUpstream?.name, syncFull.upstream?.name);
 
   const failedRoot = join(tmp, "missing-track-format-repo");
-  await readRepoBranchUpstreams(failedRoot, {
+  await readRepoBranchUpstreams(DEFAULT_WORKER_SIDE, failedRoot, {
     force: true,
     repoKey: "missing-track-format-key",
   });
   assert.equal(
-    cachedRepoBranchUpstreams(failedRoot),
+    cachedRepoBranchUpstreams(DEFAULT_WORKER_SIDE, failedRoot),
     undefined,
     "a failed priming read must remain cold rather than cache an empty map",
   );
@@ -392,7 +397,7 @@ test("remote-only ref batches patch every tracked base with one map and no full 
   clearWorktreeStatusMemoryForTests();
   clearRepoLockKeysForTests();
   const coldUnaffected = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests(rows, repoPath, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, rows, repoPath, [
       join(repoPath, ".git", "refs", "remotes", "origin", "unrelated"),
     ]),
   );
@@ -409,7 +414,7 @@ test("remote-only ref batches patch every tracked base with one map and no full 
   resetWorktreeStatusComputeCountsForTests();
   clearRepoLockKeysForTests();
   const submoduleConfig = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests(rows, repoPath, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, rows, repoPath, [
       join(repoPath, ".git", "modules", "sub", "config"),
     ]),
   );
@@ -422,7 +427,7 @@ test("remote-only ref batches patch every tracked base with one map and no full 
   resetWorktreeStatusComputeCountsForTests();
   clearRepoLockKeysForTests();
   const configRefresh = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests(rows, repoPath, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, rows, repoPath, [
       join(repoPath, ".git", "config"),
     ]),
   );
@@ -440,7 +445,7 @@ test("remote-only ref batches patch every tracked base with one map and no full 
   resetWorktreeStatusComputeCountsForTests();
   clearRepoLockKeysForTests();
   const ownUpstreamMove = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests(rows, repoPath, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, rows, repoPath, [
       join(repoPath, ".git", "refs", "remotes", "origin", "remote-one"),
     ]),
   );
@@ -461,7 +466,7 @@ test("remote-only ref batches patch every tracked base with one map and no full 
   resetWorktreeStatusComputeCountsForTests();
   clearRepoLockKeysForTests();
   const unaffected = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests(rows, repoPath, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, rows, repoPath, [
       join(repoPath, ".git", "refs", "remotes", "origin", "unrelated"),
     ]),
   );
@@ -503,6 +508,7 @@ test("remote-only ref batches patch every tracked base with one map and no full 
   clearRepoLockKeysForTests();
   const patchedBatch = await countGitExecutionsForTests(() =>
     refreshGitStatusesForTests(
+      DEFAULT_WORKER_SIDE,
       rows,
       repoPath,
       [remotePathEvent],
@@ -545,7 +551,7 @@ test("remote-only ref batches patch every tracked base with one map and no full 
   );
 
   resetWorktreeStatusComputeCountsForTests();
-  await refreshGitStatusesForTests(rows, repoPath, [
+  await refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, rows, repoPath, [
     join(repoPath, ".git", "refs", "heads", "main"),
   ]);
   assert.deepEqual(worktreeStatusComputeCountsForTests(), {
@@ -590,9 +596,12 @@ test("symbolic branch refs force full-scan equivalence on remote-only moves", as
   sh(repoPath, "update-ref", "refs/remotes/origin/main", remoteTip);
 
   resetWorktreeStatusComputeCountsForTests();
-  const refreshed = await refreshGitStatusesForTests([row], repoPath, [
-    join(repoPath, ".git", "refs", "remotes", "origin", "main"),
-  ]);
+  const refreshed = await refreshGitStatusesForTests(
+    DEFAULT_WORKER_SIDE,
+    [row],
+    repoPath,
+    [join(repoPath, ".git", "refs", "remotes", "origin", "main")],
+  );
   assert.deepEqual(worktreeStatusComputeCountsForTests(), {
     full: 1,
     workingTree: 0,
@@ -657,9 +666,12 @@ test("a local symbolic branch/base is refreshed by any local ref move", async ()
   sh(repoPath, "update-ref", "refs/heads/delegate", moved);
 
   resetWorktreeStatusComputeCountsForTests();
-  const refreshed = await refreshGitStatusesForTests([row], repoPath, [
-    join(repoPath, ".git", "refs", "heads", "delegate"),
-  ]);
+  const refreshed = await refreshGitStatusesForTests(
+    DEFAULT_WORKER_SIDE,
+    [row],
+    repoPath,
+    [join(repoPath, ".git", "refs", "heads", "delegate")],
+  );
   assert.deepEqual(worktreeStatusComputeCountsForTests(), {
     full: 1,
     workingTree: 0,
@@ -724,7 +736,11 @@ test("linked-context include tracking is resolved by porcelain", async () => {
     includePath,
   );
 
-  const rootMap = await readRepoBranchUpstreams(contextRepo, { force: true });
+  const rootMap = await readRepoBranchUpstreams(
+    DEFAULT_WORKER_SIDE,
+    contextRepo,
+    { force: true },
+  );
   assert.equal(
     rootMap.get(row.branch)?.upstreamRef,
     undefined,
@@ -764,7 +780,7 @@ test("linked-context include tracking is resolved by porcelain", async () => {
   resetWorktreeStatusComputeCountsForTests();
   clearRepoLockKeysForTests();
   const refreshed = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests([row], contextRepo, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, [row], contextRepo, [
       join(contextRepo, ".git", "refs", "remotes", "origin", row.branch),
     ]),
   );
@@ -794,7 +810,7 @@ test("linked-context include tracking is resolved by porcelain", async () => {
   resetWorktreeStatusComputeCountsForTests();
   clearRepoLockKeysForTests();
   const refreshedAgain = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests([row], contextRepo, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, [row], contextRepo, [
       join(contextRepo, ".git", "refs", "remotes", "origin", row.branch),
     ]),
   );
@@ -844,7 +860,7 @@ test("linked-context include tracking is resolved by porcelain", async () => {
   resetWorktreeStatusComputeCountsForTests();
   clearRepoLockKeysForTests();
   const privateRefreshed = await countGitExecutionsForTests(() =>
-    refreshGitStatusesForTests([row], contextRepo, [
+    refreshGitStatusesForTests(DEFAULT_WORKER_SIDE, [row], contextRepo, [
       join(contextRepo, ".git", "refs", "remotes", "origin", "main"),
     ]),
   );
@@ -1039,7 +1055,7 @@ test("a tree watch ignores what git ignores and submodules, by path, never by gl
   }
   sh(repo, "add", ".gitignore", ".gitmodules", "src/main.py", "app/web");
 
-  const ignore = await treeIgnoreForTests(repo);
+  const ignore = await treeIgnoreForTests(DEFAULT_WORKER_SIDE, repo);
   // Parcel matches a glob as a regex against every crawled path; paths only.
   assert.ok(
     ignore.every((entry) => !/[*?[\]{}]/.test(entry)),

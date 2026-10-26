@@ -23,7 +23,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 for (const mode of ["broker", "in-process"]) {
   describe(mode, () => {
     for (const reader of ["knowledgeBaseRoot", "getSettings"]) {
-      test(`a direct ${reader} read seeds history before the first placement call`, async () => {
+      test(`a direct ${reader} read seeds history before the first served placement call`, async () => {
         // Existing module-isolation seam, not a production history-reset API.
         vi.resetModules();
         process.env.ASSISTANT_SPAWN_BROKER = mode === "broker" ? "1" : "0";
@@ -63,30 +63,30 @@ for (const mode of ["broker", "in-process"]) {
           assert.equal(read(), alias);
           settings("{ not json");
           rmSync(alias);
-          // Neither placeGitCwd nor checkout git has run in this module graph.
-          const { placeGitCwd, DEFAULT_WORKER_ID } =
+          // Neither served placement nor checkout git has run in this module
+          // graph.
+          const { placeServedPath, DEFAULT_WORKER_ID } =
             await import("./placement.ts");
           assert.equal(
-            placeGitCwd(alias),
+            placeServedPath(alias),
             undefined,
             "keep the reader's lexical root",
           );
           assert.equal(
-            placeGitCwd(real),
+            placeServedPath(real),
             undefined,
             "keep its realpath snapshot after the alias disappears",
           );
+          assert.equal(warning.mock.calls.length, 1);
+          // Checkout git is typed: it reads no KB setting, so a bare cwd in
+          // the KB runs on the Worker and the outage adds no warning.
           const { git } = await import("../gitExec.ts");
           const { inProcessWorkerServedForTests: served } =
             await import("./inProcessWorker.ts");
           let before = served();
           await git(["--version"], real);
           await git(["--version"], outside);
-          assert.equal(
-            served() - before,
-            1,
-            "only the non-KB call crosses the real transport",
-          );
+          assert.equal(served() - before, 2, "both cross the real transport");
           assert.equal(warning.mock.calls.length, 1);
 
           const nextReal = join(dir, "next-real");
@@ -101,8 +101,8 @@ for (const mode of ["broker", "in-process"]) {
           assert.equal(read(), alias);
           settings("{ broken again");
           rmSync(alias);
-          assert.equal(placeGitCwd(real), undefined);
-          assert.deepEqual(placeGitCwd(nextReal), {
+          assert.equal(placeServedPath(real), undefined);
+          assert.deepEqual(placeServedPath(nextReal), {
             workerId: DEFAULT_WORKER_ID,
             path: nextReal,
           });
@@ -114,7 +114,8 @@ for (const mode of ["broker", "in-process"]) {
           before = served();
           await git(["--version"], real);
           await git(["--version"], nextReal);
-          assert.equal(served() - before, 1);
+          assert.equal(served() - before, 2);
+          assert.equal(warning.mock.calls.length, 2);
           assert.throws(read, /Failed to read app settings/);
 
           // A readable configuration remains authoritative even with a missing
@@ -122,16 +123,16 @@ for (const mode of ["broker", "in-process"]) {
           // a subsequent outage of that same configured lexical root.
           settings(configured(alias));
           assert.equal(read(), alias);
-          assert.deepEqual(placeGitCwd(real), {
+          assert.deepEqual(placeServedPath(real), {
             workerId: DEFAULT_WORKER_ID,
             path: real,
           });
           settings("{ third outage");
-          assert.equal(placeGitCwd(real), undefined);
+          assert.equal(placeServedPath(real), undefined);
           assert.equal(warning.mock.calls.length, 3);
           before = served();
           await git(["--version"], real);
-          assert.equal(served(), before);
+          assert.equal(served() - before, 1);
         } finally {
           if (ownsSettings) rmSync(APP_SETTINGS_PATH, { force: true });
         }

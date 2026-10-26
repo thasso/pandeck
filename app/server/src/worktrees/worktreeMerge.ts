@@ -39,6 +39,7 @@ import {
   type WorktreeRow,
 } from "../db/worktreeStore.ts";
 import { isMainWorktreeId } from "./worktreeResolve.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import {
   branchContainedInBase,
   invalidateWorktreeStatus,
@@ -636,7 +637,12 @@ async function mergeConflictResolved(
   state: MergeState,
 ): Promise<boolean> {
   if (state.strategy === "merge" || !state.mainHeadAtConflict) {
-    return branchContainedInBase(row.mainRepoRoot, row.branch, row.baseBranch);
+    return branchContainedInBase(
+      checkoutSideOf(row),
+      row.mainRepoRoot,
+      row.branch,
+      row.baseBranch,
+    );
   }
   const headRes = await gitOptional(
     ["rev-parse", "--verify", "HEAD"],
@@ -697,6 +703,7 @@ export async function reconcileWorktreeMergesOnBoot(): Promise<void> {
     } else if (
       state.strategy === "rebase" &&
       (await branchContainedInBase(
+        checkoutSideOf(row),
         row.mainRepoRoot,
         row.branch,
         row.baseBranch,

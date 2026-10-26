@@ -23,12 +23,7 @@ import watcher, { type AsyncSubscription } from "../parcelWatcher.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
-import {
-  gitOptional,
-  gitReadOnlyOptional,
-  gitWithInputOptional,
-  repoLockKey,
-} from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import {
   listWorktrees,
   worktreeIdBySession,
@@ -36,7 +31,11 @@ import {
 } from "../db/worktreeStore.ts";
 import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import { canonicalWorktreeId, worktreeExistsSync } from "./worktreeResolve.ts";
-import { resolveReadableWorktreeRow } from "./knowledgeCheckout.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import {
+  checkoutSideOf,
+  resolveReadableWorktreeRow,
+} from "./knowledgeCheckout.ts";
 import {
   cachedRepoBranchUpstreams,
   computeWorktreeStatus,
@@ -46,7 +45,11 @@ import {
   refreshWorktreeWorkingTree,
   stampWorktreeStatusFetchedAt,
 } from "./worktreeStatus.ts";
-import { onFetchCompleted, setFetchInterestSource } from "./worktreeFetch.ts";
+import {
+  onFetchCompleted,
+  setFetchInterestSource,
+  type WatchedRepo,
+} from "./worktreeFetch.ts";
 import {
   getWorktreeChanges,
   worktreeChangesFromSnapshot,
@@ -110,8 +113,10 @@ const GLOB_LIKE = /[*?[\]{}()!|\\]/;
  * {@link MAX_TREE_IGNORES} cut, as they usually hold the most.
  */
 async function treeIgnore(
+  side: CheckoutSide,
   root: string,
 ): Promise<{ ignore: string[]; complete: boolean }> {
+  const { gitReadOnlyOptional, gitWithInputOptional } = checkoutGitOn(side);
   const [others, modules] = await Promise.all([
     gitReadOnlyOptional(
       [
@@ -170,9 +175,12 @@ async function treeIgnore(
   };
 }
 
-/** Test seam: the ignore list a tree watch of `root` subscribes with. */
-export async function treeIgnoreForTests(root: string): Promise<string[]> {
-  return (await treeIgnore(root)).ignore;
+/** Test seam: the ignore list a tree watch of `root` on `side` subscribes with. */
+export async function treeIgnoreForTests(
+  side: CheckoutSide,
+  root: string,
+): Promise<string[]> {
+  return (await treeIgnore(side, root)).ignore;
 }
 
 /**
@@ -210,6 +218,9 @@ export function gitDirIgnoreForTests(gitDir: string): Promise<string[]> {
 type GitStateListener = (worktreeId: string, newHead: string) => void;
 
 interface RepoWatch {
+  /** The side every row it holds runs its git on: part of its key. */
+  side: CheckoutSide;
+  mainRepoRoot: string;
   subscription: AsyncSubscription | undefined;
   /** Initialization subscribes first, then snapshots branch relationships. */
   ready: Promise<void>;
@@ -229,6 +240,8 @@ interface TreeWatch {
   id: string;
   /** Checkout path, set once the id resolved to an active row. */
   path: string | undefined;
+  /** The row's side, set with {@link path}. */
+  side: CheckoutSide | undefined;
   subscription: AsyncSubscription | undefined;
   /** Ignore list {@link subscription} was made with. */
   ignore: string[] | undefined;
@@ -276,8 +289,18 @@ interface TreeWatch {
   settlesPending: number;
 }
 
+/**
+ * Keyed by side and main-repo root ({@link repoWatchKey}): a folder that is
+ * both the Knowledge Base and a registered checkout has one watch per side, so
+ * a KB scan never runs on a Worker. Tree watches are keyed by row id, which
+ * already tells the KB row from every checkout.
+ */
 const repoWatches = new Map<string, RepoWatch>();
 const treeWatches = new Map<string, TreeWatch>();
+
+function repoWatchKey(side: CheckoutSide, mainRepoRoot: string): string {
+  return `${checkoutGitOn(side).sideKey}\0${mainRepoRoot}`;
+}
 const gitStateListeners = new Set<GitStateListener>();
 
 /** Subscribe to per-worktree HEAD-oid changes (commit detection). */
@@ -311,19 +334,29 @@ function isRelevantGitPath(mainRepoRoot: string, path: string): boolean {
 
 /* ------------------------------ git-state tier ----------------------------- */
 
-async function currentHead(path: string): Promise<string | undefined> {
-  const res = await gitOptional(["rev-parse", "--verify", "HEAD"], path);
+async function currentHead(
+  side: CheckoutSide,
+  path: string,
+): Promise<string | undefined> {
+  const res = await checkoutGitOn(side).gitOptional(
+    ["rev-parse", "--verify", "HEAD"],
+    path,
+  );
   return res.code === 0 ? res.stdout.trim() : undefined;
 }
 
 async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
-  let repo = repoWatches.get(row.mainRepoRoot);
+  const side = checkoutSideOf(row);
+  const key = repoWatchKey(side, row.mainRepoRoot);
+  let repo = repoWatches.get(key);
   if (!repo) {
     let markReady!: () => void;
     const ready = new Promise<void>((resolve) => {
       markReady = resolve;
     });
     repo = {
+      side,
+      mainRepoRoot: row.mainRepoRoot,
       subscription: undefined,
       ready,
       repoKey: undefined,
@@ -334,7 +367,7 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
       debounce: undefined,
       scans: new Set(),
     };
-    repoWatches.set(row.mainRepoRoot, repo);
+    repoWatches.set(key, repo);
     const gitDir = join(row.mainRepoRoot, ".git");
     if (existsSync(gitDir)) {
       try {
@@ -345,7 +378,7 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
             const paths = events
               .map((event) => event.path)
               .filter((path) => isRelevantGitPath(row.mainRepoRoot, path));
-            if (paths.length > 0) scheduleRepoScan(row.mainRepoRoot, paths);
+            if (paths.length > 0) scheduleRepoScan(key, paths);
           },
           { ignore: await gitDirIgnore(gitDir) },
         );
@@ -357,8 +390,8 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
       }
     }
     try {
-      repo.repoKey = await repoLockKey(row.mainRepoRoot);
-      await readRepoBranchUpstreams(row.mainRepoRoot, {
+      repo.repoKey = await checkoutGitOn(side).repoLockKey(row.mainRepoRoot);
+      await readRepoBranchUpstreams(side, row.mainRepoRoot, {
         force: true,
         repoKey: repo.repoKey,
       });
@@ -370,7 +403,7 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
   }
   repo.worktreeIds.add(row.id);
   repo.gitDirNames.set(row.id, linkedGitDirName(row));
-  const head = await currentHead(row.path);
+  const head = await currentHead(repo.side, row.path);
   if (head) repo.lastHeads.set(row.id, head);
 }
 
@@ -389,8 +422,8 @@ function linkedGitDirName(row: WorktreeRow): string | undefined {
   }
 }
 
-function scheduleRepoScan(mainRepoRoot: string, paths: string[]): void {
-  const repo = repoWatches.get(mainRepoRoot);
+function scheduleRepoScan(key: string, paths: string[]): void {
+  const repo = repoWatches.get(key);
   if (!repo) return;
   for (const path of paths) repo.pendingGitPaths.add(path);
   if (repo.debounce) clearTimeout(repo.debounce);
@@ -398,7 +431,7 @@ function scheduleRepoScan(mainRepoRoot: string, paths: string[]): void {
     repo.debounce = undefined;
     const pendingPaths = [...repo.pendingGitPaths];
     repo.pendingGitPaths.clear();
-    const scan = scanRepo(mainRepoRoot, pendingPaths);
+    const scan = scanRepo(key, pendingPaths);
     repo.scans.add(scan);
     void scan
       .catch((err) => {
@@ -583,6 +616,7 @@ interface GitStatusBatchRefresh {
 }
 
 async function refreshGitStatuses(
+  side: CheckoutSide,
   rows: WorktreeRow[],
   mainRepoRoot: string,
   paths: string[],
@@ -605,7 +639,7 @@ async function refreshGitStatuses(
   );
   const previousBranchUpstreams =
     configPresent || refPathsPresent
-      ? cachedRepoBranchUpstreams(mainRepoRoot)
+      ? cachedRepoBranchUpstreams(side, mainRepoRoot)
       : undefined;
   let branchUpstreams = previousBranchUpstreams;
   const linkedGitDirExists = (name: string) =>
@@ -632,8 +666,9 @@ async function refreshGitStatuses(
 
   // One authoritative ref map is shared by every row in the batch. This keeps
   // a fetch across N linked worktrees at one process rather than N scans.
-  const repoKey = suppliedRepoKey ?? (await repoLockKey(mainRepoRoot));
-  branchUpstreams = await readRepoBranchUpstreams(mainRepoRoot, {
+  const repoKey =
+    suppliedRepoKey ?? (await checkoutGitOn(side).repoLockKey(mainRepoRoot));
+  branchUpstreams = await readRepoBranchUpstreams(side, mainRepoRoot, {
     force: true,
     repoKey,
   });
@@ -702,8 +737,12 @@ async function refreshGitStatuses(
   return { statuses, fullyScanned };
 }
 
-/** Test seam for count-based git-batch assertions without watcher timing. */
+/**
+ * Test seam for count-based git-batch assertions without watcher timing. The
+ * rows share one side, as a repo watch's do.
+ */
 export async function refreshGitStatusesForTests(
+  side: CheckoutSide,
   rows: WorktreeRow[],
   mainRepoRoot: string,
   paths: string[],
@@ -712,6 +751,7 @@ export async function refreshGitStatusesForTests(
 ): Promise<Map<string, Awaited<ReturnType<typeof computeWorktreeStatus>>>> {
   return (
     await refreshGitStatuses(
+      side,
       rows,
       mainRepoRoot,
       paths,
@@ -721,9 +761,10 @@ export async function refreshGitStatusesForTests(
   ).statuses;
 }
 
-async function scanRepo(mainRepoRoot: string, paths: string[]): Promise<void> {
-  const repo = repoWatches.get(mainRepoRoot);
+async function scanRepo(key: string, paths: string[]): Promise<void> {
+  const repo = repoWatches.get(key);
   if (!repo) return;
+  const { side, mainRepoRoot } = repo;
   const rows: WorktreeRow[] = [];
   for (const worktreeId of [...repo.worktreeIds]) {
     const row = await resolveReadableWorktreeRow(worktreeId);
@@ -736,6 +777,7 @@ async function scanRepo(mainRepoRoot: string, paths: string[]): Promise<void> {
     rows.push(row);
   }
   const refreshed = await refreshGitStatuses(
+    side,
     rows,
     mainRepoRoot,
     paths,
@@ -754,7 +796,7 @@ async function scanRepo(mainRepoRoot: string, paths: string[]): Promise<void> {
     // A remote-tracking ref cannot move a local HEAD. The cheap tier ends here:
     // no rev-parse, listener fan-out or change-list scan after an interval fetch.
     if (remoteOnly && !refreshed.fullyScanned.has(row.id)) continue;
-    const head = await currentHead(row.path);
+    const head = await currentHead(side, row.path);
     const lastHead = repo.lastHeads.get(row.id);
     if (head && head !== lastHead) {
       repo.lastHeads.set(row.id, head);
@@ -932,8 +974,10 @@ function sameIgnore(a: string[], b: string[] | undefined): boolean {
  */
 async function settleTree(tree: TreeWatch): Promise<void> {
   const path = tree.path;
+  // Set together with the path, so a watch with a path has its side.
+  const side = tree.side;
   const present = path !== undefined && existsSync(path);
-  if (!path || !present || !holdsWatchSlot(tree)) {
+  if (!path || !side || !present || !holdsWatchSlot(tree)) {
     if (tree.refs === 0) retireTree(tree);
     else if (path && isActive(tree))
       noteUnwatched(tree, present ? "cap" : "missing");
@@ -967,7 +1011,7 @@ async function settleTree(tree: TreeWatch): Promise<void> {
   tree.ignoreStale = false;
   tree.ignoreRefreshedAt = Date.now();
   try {
-    const { ignore, complete } = await treeIgnore(path);
+    const { ignore, complete } = await treeIgnore(side, path);
     if (!complete) tree.ignoreStale = true;
     if (tree.subscription && (!complete || sameIgnore(ignore, tree.ignore)))
       return;
@@ -1159,6 +1203,7 @@ export async function addWorktreeViewer(worktreeId: string): Promise<void> {
     tree = {
       id,
       path: undefined,
+      side: undefined,
       subscription: undefined,
       ignore: undefined,
       reconciling: Promise.resolve(),
@@ -1208,6 +1253,7 @@ export async function addWorktreeViewer(worktreeId: string): Promise<void> {
   // that in-flight scan, then takes its own fresh working-tree snapshot. A
   // lingering watch is already live and costs no crawl.
   tree.path = row.path; // row.id === id (canonical), so scans/teardown key match
+  tree.side = checkoutSideOf(row);
   reconcileTrees();
   await tree.reconciling;
   if (!isActive(tree) || tree.refs === 0) return;
@@ -1258,19 +1304,21 @@ export function rescanSessionWorktree(sessionId: string): void {
 }
 
 /**
- * Main-repo roots of the worktrees a client is watching right now. This is the
- * background fetch's interest signal: it is asked on every sweep and therefore
- * cannot age out under a surface that is open but quiet.
+ * Main-repo roots of the worktrees a client is watching right now, each with
+ * the side it is watched on. This is the background fetch's interest signal:
+ * it is asked on every sweep and therefore cannot age out under a surface that
+ * is open but quiet.
  */
-export function watchedRepoRoots(): string[] {
-  const roots = new Set<string>();
+export function watchedRepoRoots(): WatchedRepo[] {
+  const roots = new Map<string, WatchedRepo>();
   for (const [worktreeId, tree] of treeWatches) {
     if (tree.refs <= 0 || tree.retired) continue;
-    for (const [root, repo] of repoWatches) {
-      if (repo.worktreeIds.has(worktreeId)) roots.add(root);
+    for (const [key, repo] of repoWatches) {
+      if (repo.worktreeIds.has(worktreeId))
+        roots.set(key, { side: repo.side, root: repo.mainRepoRoot });
     }
   }
-  return [...roots];
+  return [...roots.values()];
 }
 
 /** Test hook: current viewer refcount for a worktree id (0 if none). */
@@ -1356,7 +1404,7 @@ export async function registerWorktree(row: WorktreeRow): Promise<void> {
 
 /** Stop tracking a removed worktree (its repo watch stays for siblings). */
 export async function unregisterWorktree(worktreeId: string): Promise<void> {
-  for (const [root, repo] of repoWatches) {
+  for (const [key, repo] of repoWatches) {
     if (!repo.worktreeIds.delete(worktreeId)) continue;
     repo.gitDirNames.delete(worktreeId);
     repo.lastHeads.delete(worktreeId);
@@ -1364,7 +1412,7 @@ export async function unregisterWorktree(worktreeId: string): Promise<void> {
       // Remove the root first so a subscription callback already queued by the
       // platform cannot schedule another scan while teardown is settling the
       // scans launched before this point.
-      repoWatches.delete(root);
+      repoWatches.delete(key);
       if (repo.debounce) clearTimeout(repo.debounce);
       await repo.subscription?.unsubscribe().catch(() => undefined);
       await Promise.allSettled([...repo.scans]);
@@ -1389,8 +1437,8 @@ export async function unregisterWorktree(worktreeId: string): Promise<void> {
  */
 function connectBackgroundFetch(): void {
   setFetchInterestSource(watchedRepoRoots);
-  onFetchCompleted((repoPath: string, fetchedAt: number) => {
-    const repo = repoWatches.get(repoPath);
+  onFetchCompleted((side, repoPath, fetchedAt) => {
+    const repo = repoWatches.get(repoWatchKey(side, repoPath));
     if (!repo) return;
     // Ref moves are targeted by the filesystem events above. A no-op fetch has
     // no such event, so update only the freshness stamp in cached statuses.

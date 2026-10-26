@@ -4,6 +4,7 @@ import { listWorktrees } from "../db/worktreeStore.ts";
 import { pullRequestCardStore } from "../db/pullRequestCardStore.ts";
 import type { PullRequestCardContext } from "../pullRequestCards.ts";
 import { gitOptionalExit } from "../gitExec.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { branchContainedInBase } from "./worktreeStatus.ts";
 
 export async function worktreeBranchDelivered(
@@ -14,7 +15,14 @@ export async function worktreeBranchDelivered(
 ): Promise<boolean> {
   // Keep semantic containment BASE-specific. Equal patches on an arbitrary
   // sibling or backup branch are not evidence of delivery into this base.
-  if (await branchContainedInBase(row.mainRepoRoot, tip, containmentBase))
+  if (
+    await branchContainedInBase(
+      checkoutSideOf(row),
+      row.mainRepoRoot,
+      tip,
+      containmentBase,
+    )
+  )
     return true;
 
   // Only heads just advertised by another repository count. Tracking refs

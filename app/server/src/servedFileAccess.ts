@@ -58,6 +58,14 @@ export function realpathServedFile(
     : realpathOnWorker({ workerId: side.workerId, path });
 }
 
+/** {@link realpathServedFile} on a side the caller must name. */
+export function realpathServedFileOn(
+  path: string,
+  side: ServedSide,
+): Promise<string> {
+  return realpathServedFile(path, side);
+}
+
 /**
  * Whether the caller still wants the file, read afresh at each step: an
  * `AbortSignal`, or a check that looks again every time (`clientGone`).

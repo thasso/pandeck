@@ -8,15 +8,21 @@ import {
 } from "node:path";
 import type { DocumentTarget } from "@assistant/shared/documentTargets";
 import type { MintFileGrantRequest } from "@assistant/shared/servedFiles";
-import { containedRealPath } from "./checkoutFileAccess.ts";
+import { checkoutFilesOn } from "./checkoutFileAccess.ts";
 import { DATA_DIR } from "./config.ts";
-import { mintDocumentGrant, type MintedDocument } from "./directFileGrants.ts";
 import {
-  realpathServedFile,
+  mintDocumentGrantOn,
+  type MintedDocument,
+} from "./directFileGrants.ts";
+import {
+  realpathServedFileOn,
   servedSideOf,
   type ServedSide,
 } from "./servedFileAccess.ts";
-import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
+import {
+  checkoutSideOf,
+  resolveReadableWorktreeRow,
+} from "./worktrees/knowledgeCheckout.ts";
 
 interface ResolvedGrantSource {
   filePath: string;
@@ -152,11 +158,11 @@ async function resolveDocumentGrantSource(
     case "sessionArtifact": {
       assertArtifactSessionId(target.sessionId);
       // Session artifacts are server data by kind, wherever `dataDir` is.
-      const artifactsRoot = await realpathServedFile(
+      const artifactsRoot = await realpathServedFileOn(
         join(dependencies.dataDir, "session-artifacts"),
         "server",
       );
-      const root = await realpathServedFile(
+      const root = await realpathServedFileOn(
         join(artifactsRoot, target.sessionId),
         "server",
       );
@@ -178,10 +184,17 @@ async function resolveDocumentGrantSource(
     case "worktreeFile": {
       const row = await dependencies.resolveWorktree(target.worktreeId);
       if (!row || row.status !== "active") throw new Error("Unknown worktree.");
+      // The Knowledge Base row is server data by kind, like session artifacts;
+      // any other checkout's file is served where its path is placed.
+      const side = checkoutSideOf(row);
       return {
-        filePath: await containedRealPath(row.path, target.path),
+        filePath: await checkoutFilesOn(side).containedRealPath(
+          row.path,
+          target.path,
+        ),
         root: row.path,
         sourceKey: `worktree:${row.id}`,
+        ...(side === "server" ? { side: "server" as const } : {}),
       };
     }
   }
@@ -210,11 +223,16 @@ export async function mintDocumentTargetGrant(
   // same filesystem spelling it uses for the document and every sibling, read
   // on the side the grant will read from.
   const side = resolved.side ?? servedSideOf(resolve(resolved.filePath));
-  const root = await realpathServedFile(resolved.root, side);
-  return mintDocumentGrant(resolved.filePath, request.scope, request.delivery, {
-    root,
-    sourceKey: resolved.sourceKey,
-    side,
-    ...(request.fresh === true ? { fresh: true } : {}),
-  });
+  const root = await realpathServedFileOn(resolved.root, side);
+  return mintDocumentGrantOn(
+    resolved.filePath,
+    request.scope,
+    request.delivery,
+    {
+      root,
+      sourceKey: resolved.sourceKey,
+      side,
+      ...(request.fresh === true ? { fresh: true } : {}),
+    },
+  );
 }

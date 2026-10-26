@@ -14,8 +14,7 @@ symlinkSync(dataReal, join(tmp, "assistant-data"));
 
 const { updateSettings } = await import("../settings.ts");
 const { DATA_DIR } = await import("../config.ts");
-const { DEFAULT_WORKER_ID, placeGitCwd, placeServedPath } =
-  await import("./placement.ts");
+const { DEFAULT_WORKER_ID, placeServedPath } = await import("./placement.ts");
 
 afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
@@ -23,7 +22,9 @@ afterAll(() => {
 
 const onWorker = (path: string) => ({ workerId: DEFAULT_WORKER_ID, path });
 
-test("git inside the Knowledge Base stays on the server, by name or by real path", () => {
+// Checkout placement is typed and reads no path (`knowledgeCheckout.test.ts`);
+// only served files keep the Knowledge Base path rule.
+test("a served file inside the Knowledge Base stays on the server, by name or by real path", () => {
   const real = join(tmp, "real", "notes");
   mkdirSync(join(real, "sub"), { recursive: true });
   const link = join(tmp, "notes");
@@ -42,7 +43,7 @@ test("git inside the Knowledge Base stays on the server, by name or by real path
     // Not created: containment is a path question, not a lookup.
     join(link, "missing", "deeper"),
   ])
-    assert.equal(placeGitCwd(inside), undefined, inside);
+    assert.equal(placeServedPath(inside), undefined, inside);
 
   for (const outside of [
     join(tmp, "notes-old"),
@@ -52,17 +53,17 @@ test("git inside the Knowledge Base stays on the server, by name or by real path
     `${link}/..`,
     "/",
   ])
-    assert.deepEqual(placeGitCwd(outside), onWorker(outside), outside);
+    assert.deepEqual(placeServedPath(outside), onWorker(outside), outside);
 });
 
-test("a Knowledge Base folder not created yet still keeps its own path local", () => {
+test("a Knowledge Base folder not created yet still keeps its served files local", () => {
   const missing = join(tmp, "later");
   updateSettings({
     knowledgeBase: { enabled: true, path: missing, effectivePath: "ignored" },
   });
-  assert.equal(placeGitCwd(join(missing, "x")), undefined);
+  assert.equal(placeServedPath(join(missing, "x")), undefined);
   assert.deepEqual(
-    placeGitCwd(join(tmp, "later-old")),
+    placeServedPath(join(tmp, "later-old")),
     onWorker(join(tmp, "later-old")),
   );
 });
@@ -85,7 +86,7 @@ test("a served file named inside DATA_DIR stays on the server, by name or by rea
     assert.deepEqual(placeServedPath(outside), onWorker(outside), outside);
 });
 
-test("a served file in a custom Knowledge Base stays on the server, as checkout git does", () => {
+test("a served file in a custom Knowledge Base stays on the server, by name or by real path", () => {
   const real = join(tmp, "served-real", "notes");
   mkdirSync(real, { recursive: true });
   const link = join(tmp, "served-notes");
@@ -97,11 +98,13 @@ test("a served file in a custom Knowledge Base stays on the server, as checkout 
     join(link, "page.md"),
     join(real, "page.md"),
     join(link, "missing", "deeper.md"),
+  ])
+    assert.equal(placeServedPath(path), undefined, path);
+  for (const path of [
     join(tmp, "served-notes-old", "page.md"),
     join(tmp, "served-real", "page.md"),
   ])
-    assert.deepEqual(placeServedPath(path), placeGitCwd(path), path);
-  assert.equal(placeServedPath(join(real, "page.md")), undefined);
+    assert.deepEqual(placeServedPath(path), onWorker(path), path);
 });
 
 test("a link from outside into DATA_DIR is read by the Worker, never resolved here", () => {

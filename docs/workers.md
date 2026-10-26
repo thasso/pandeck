@@ -65,9 +65,15 @@ reaches a Worker as image bytes the server streams into that Worker's own
 container daemon, so private images work with a rootless daemon and the registry
 credential never reaches a Worker.
 
-The Knowledge Base and the skills and agent libraries are git repositories
-inside `DATA_DIR`. They are Pandeck data, not checkouts, and stay outside
-placement, reachable only through their tools.
+The Knowledge Base, the skills and agent libraries, and the app's own tree are
+server repositories by kind: Pandeck data, not checkouts. They stay outside
+checkout placement, reachable only through their tools and, for the Knowledge
+Base row, the worktree file surfaces. Checkout placement is typed and has no
+path rule.
+
+Registering the Knowledge Base folder, or anything inside `DATA_DIR`, as a
+project makes it a checkout with checkout rights. Its git and reads run on the
+Worker like any project's; nothing refuses or warns.
 
 ## Isolation boundary and secrets
 
@@ -242,26 +248,51 @@ out of `app/shared/`: the web client never speaks it.
 - **Placement.** Every checkout method names a
   `CheckoutLocation { workerId, path }`, and a Worker refuses a location naming
   another Worker id. The Worker id is derived until phase 4 (D2): every checkout
-  is placed on the default Worker, `local`. The existing `(args, cwd)` executors
-  in `gitExec.ts` reach it through a transitional path-only adapter
-  (`workers/placement.ts`); W6 deletes it once callers pass their own location.
+  is placed on the default Worker, `local`. A checkout's side is typed
+  (`CheckoutSide`, `workers/placement.ts`), and `checkoutGitOn(side)` and
+  `checkoutFilesOn(side)` run on it. Until W6, the `(args, cwd)` executors in
+  `gitExec.ts` and the root-taking reads of `checkoutFileAccess.ts` remain as
+  the default Worker's adapter, with no path rule: every checkout reached by a
+  bare cwd runs there.
 - **What stays on the server.** The Knowledge Base, the skills and agent
   libraries, and the app's own tree run git through the server-local executor
-  family, `serverRepoGit.ts`. That includes the KB when it is browsed or
-  committed as a checkout: the adapter keeps any path inside the Knowledge Base
-  root (as named, or as its real path) on the server. If KB settings cannot be
-  read, the adapter keeps lexical and observed realpath matches for the last
+  family, `serverRepoGit.ts`. The Knowledge Base _row_, browsed or committed as
+  a checkout through the worktree file surfaces, runs its checkout git and reads
+  on the server by kind: `checkoutSideOf(row)` answers the server for the row's
+  id and the default Worker for every other row, never from a path or a setting.
+  The modules that can hold that row take their side from it and are pinned
+  symbol by symbol in `workerBoundary.test.ts`, so no KB-row request causes or
+  joins Worker work. The KB's document grant is server-side by kind, beside
+  session artifacts, and every served call there names its side by type. W3c
+  replaced checkout placement's path rule with this typed choice, so checkout
+  git and reads read no setting.
+- **Served files keep their path rule.** If KB settings cannot be read,
+  served-file placement keeps lexical and observed realpath matches for the last
   successfully resolved root from any KB/settings reader and the default KB root
   local. The owning settings module keeps this history; placement has no
-  separate cache. Other paths still reach the default Worker, so unrelated
-  checkout git keeps working. One warning logs per failure episode; a successful
-  settings read resets it. Readable settings are authoritative again, even if
-  the configured root changed. Settings and KB readers still report their
-  original errors. On a cold start, an unknown custom root cannot be recognized
-  while settings are unreadable. This residual is accepted only in phase 1,
-  where the Worker shares the server process and account. It MUST be closed
-  before the Worker leaves that process. W3 replaces the path rule with a typed
-  choice made from the KB row.
+  separate cache. One warning logs per failure episode; a successful settings
+  read resets it. Readable settings are authoritative again, even if the
+  configured root changed. Settings and KB readers still report their original
+  errors. On a cold start, an unknown custom root cannot be recognized for a
+  served file while settings are unreadable. This residual concerns served files
+  only and is accepted only in phase 1, where the Worker shares the server
+  process and account. It MUST be closed before the Worker leaves that process.
+- **Known limits of the typed side.**
+  - A project registered at the KB root is two rows for one repository: the KB
+    row on the server and the project on the Worker. Fetch, watch and upstream
+    reads run once per side, while both sides share the repository's one
+    `withRepoLock` key, so a KB commit and a project commit serialize.
+  - The served-file settings warning names served files: "Knowledge Base
+    settings unavailable; keeping known/default KB paths local for served
+    files."
+  - Residuals the ratchet leaves to review: a pinned symbol that starts deriving
+    a KB path from its non-path arguments (R1); a side-bound module passing a
+    literal server side for a non-KB checkout, which is more local than RD-W3-1
+    allows but cannot reach a Worker (R2); path data carried out through
+    externally registered callbacks or broadcast payloads (R3); and a future
+    KB-kind served source that sets no side and relies on the served path rule
+    (R4). W6 removes the string executors and so closes only R1's string-API
+    reach.
 - **Served files.** `/api/files`, document grants and `show_files` read through
   `servedFileAccess.ts`, which calls the file methods `files.stat`,
   `files.realpath`, `files.open`, `files.read` and `files.close`
@@ -284,13 +315,13 @@ out of `app/shared/`: the web client never speaks it.
   when it arrives. Reads are positional and bounded; a stream pulls one chunk of
   at most 1 MiB, one `data` frame, only when its consumer has room. Placement
   keeps a path named inside `DATA_DIR` or the Knowledge Base (as named or as its
-  observed real path, with the settings fallback above) on the server, which
-  reads it with the same `fileReads.ts`; session artifacts are server data by
-  kind, whatever their path. Every other path goes to the default Worker as
-  named: the server never resolves a requested path to choose its side, since
-  following an agent's symlink there would let the server read for the agent
-  what the Worker may not. When the Worker fails, the read fails; there is no
-  local fallback.
+  observed real path, with the served-file settings fallback above) on the
+  server, which reads it with the same `fileReads.ts`; session artifacts are
+  server data by kind, whatever their path. Every other path goes to the default
+  Worker as named: the server never resolves a requested path to choose its
+  side, since following an agent's symlink there would let the server read for
+  the agent what the Worker may not. When the Worker fails, the read fails;
+  there is no local fallback.
 - **Checkout files.** Checkout surfaces read checkout files only through
   `checkoutFileAccess.ts`. Protocol `1.2` adds three path methods beside W2's:
   `files.exists` answers as `existsSync` does and never a failure;
@@ -298,9 +329,9 @@ out of `app/shared/`: the web client never speaks it.
   `mtimeNs` as decimal strings from a `bigint` `stat` or `lstat`, signed as Node
   holds them (only `size` is never negative); and `files.readdir` answers names
   in `readdir` order, each with its own directory type, never followed. Each
-  names a Worker id, refused before any filesystem call. The side comes from the
-  checkout ROOT through the same placement as checkout git (`placeGitCwd`, with
-  the Knowledge Base rule), never from the path being read. Errors are
+  names a Worker id, refused before any filesystem call. The side is the
+  checkout's typed side, the same as its git's (the server for the Knowledge
+  Base row, else the default Worker), never from the path being read. Errors are
   categorized where their origin is known: a **Worker failure** (no answer: the
   connection ended or was refused, a request refused with any code, an unknown
   Worker id, a malformed answer), which the client brands and is never a
@@ -663,17 +694,18 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W2     | Served files (`/api/files`, `show_files`) read through the Worker                    | landed  |
 | W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)       | landed  |
 | W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | landed  |
-| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | planned |
+| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | landed  |
 | W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | planned |
 | W4     | The worktree watcher on the Worker                                                   | planned |
 | W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker   | planned |
-| W6     | Callers pass their own placement; the path-only adapter and both pin lists are gone  | planned |
+| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | planned |
 | W7–W10 | The engine host: app tools, approvals and hooks, then pi and Claude sessions         | planned |
 | W11    | Isolation boundary and secret store ports                                            | planned |
 
 `workerBoundary.test.ts` pins every module that still reads a checkout on the
 server's filesystem to the slice that moves it; W6 is done when those lists are
-empty.
+empty. It also closes the value imports of the modules that can hold the
+Knowledge Base row, each external symbol pinned to its declaration.
 
 ## Open questions
 

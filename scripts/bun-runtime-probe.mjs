@@ -118,6 +118,7 @@ import {
   inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
 } from "../app/server/src/workers/inProcessWorker.ts";
+import { DEFAULT_WORKER_SIDE } from "../app/server/src/workers/placement.ts";
 import { treeIgnoreForTests } from "../app/server/src/worktrees/worktreeWatcher.ts";
 import {
   getWorktreeFileContent,
@@ -1401,7 +1402,7 @@ async function checkWatcher() {
   mkdirSync(join(root, "nested", "cache"), { recursive: true });
   writeFileSync(join(root, "build", "seed.txt"), "seed\n");
   writeFileSync(join(root, "nested", "cache", "seed.txt"), "seed\n");
-  const ignore = await treeIgnoreForTests(root);
+  const ignore = await treeIgnoreForTests(DEFAULT_WORKER_SIDE, root);
   for (const expected of [".git", "build", "nested/cache"])
     assert(
       ignore.includes(expected),

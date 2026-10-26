@@ -9,10 +9,17 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 
 const gitOptional = vi.fn();
 
+/** Every side's executors run this mock; each side keeps its own key. */
 vi.mock("../gitExec.ts", () => ({
-  gitOptional: (...args: unknown[]) => gitOptional(...args),
-  repoLockKey: async (path: string) => `key:${path}`,
+  checkoutGitOn: (side: "server" | { workerId: string }) => ({
+    sideKey: side === "server" ? "server" : `worker:${side.workerId}`,
+    gitOptional: (...args: unknown[]) => gitOptional(...args),
+    repoLockKey: async (path: string) => `key:${path}`,
+  }),
 }));
+
+/** The side every repo below is noted on: a checkout's. */
+const side = { workerId: "local" } as const;
 
 let mod: typeof import("./worktreeFetch.ts");
 let remoteFetchMinutes = 10;
@@ -20,7 +27,7 @@ let remoteFetchMinutes = 10;
 async function loadWith(enabled: boolean, minutes = 10) {
   remoteFetchMinutes = minutes;
   vi.resetModules();
-  // The rest of the real config: the checkout-file access places by DATA_DIR.
+  // The rest of the real config: served placement reads DATA_DIR.
   vi.doMock("../config.ts", async (importActual) => ({
     ...(await importActual<typeof import("../config.ts")>()),
     BACKGROUND_FETCH_ENABLED: enabled,
@@ -45,9 +52,9 @@ afterEach(() => {
 
 test("a successful fetch stamps fetchedAt", async () => {
   const m = await loadWith(true);
-  m.noteRepoInterest("key:/repo", "/repo");
-  await m.fetchRepoRemotes("key:/repo", "/repo");
-  const at = m.repoFetchedAt("key:/repo");
+  m.noteRepoInterest(side, "key:/repo", "/repo");
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
+  const at = m.repoFetchedAt(side, "key:/repo");
   assert.ok(at && at > 0, "expected a stamp after a clean fetch");
 });
 
@@ -66,7 +73,7 @@ test("the sweep asks git not to write FETCH_HEAD", async () => {
     "--all",
   ]);
 
-  await m.fetchRepoRemotes("key:/repo", "/repo");
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
   assert.deepEqual(
     gitOptional.mock.calls[0]?.[0],
     m.backgroundFetchArgs(),
@@ -78,8 +85,8 @@ test("the sweep asks git not to write FETCH_HEAD", async () => {
 // are. Stamping a failed fetch would present stale counts as fresh.
 test("a FAILED fetch leaves the previous stamp alone", async () => {
   const m = await loadWith(true);
-  await m.fetchRepoRemotes("key:/repo", "/repo");
-  const first = m.repoFetchedAt("key:/repo");
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
+  const first = m.repoFetchedAt(side, "key:/repo");
   assert.ok(first);
 
   gitOptional.mockResolvedValue({
@@ -87,9 +94,9 @@ test("a FAILED fetch leaves the previous stamp alone", async () => {
     stdout: "",
     stderr: "could not read from remote",
   });
-  await m.fetchRepoRemotes("key:/repo", "/repo");
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
   assert.equal(
-    m.repoFetchedAt("key:/repo"),
+    m.repoFetchedAt(side, "key:/repo"),
     first,
     "a failure must not refresh the stamp",
   );
@@ -107,18 +114,18 @@ test("a failing on-demand fetch remains fire-and-forget", async () => {
       ),
   );
 
-  assert.equal(m.fetchRepoIfDue("key:/repo", "/repo"), undefined);
+  assert.equal(m.fetchRepoIfDue(side, "key:/repo", "/repo"), undefined);
   assert.equal(gitOptional.mock.calls.length, 1);
   release?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(m.repoFetchedAt("key:/repo"), undefined);
+  assert.equal(m.repoFetchedAt(side, "key:/repo"), undefined);
 });
 
 test("a never-fetched repo reports no stamp at all", async () => {
   const m = await loadWith(true);
   gitOptional.mockResolvedValue({ code: 128, stdout: "", stderr: "no remote" });
-  await m.fetchRepoRemotes("key:/repo", "/repo");
-  assert.equal(m.repoFetchedAt("key:/repo"), undefined);
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
+  assert.equal(m.repoFetchedAt(side, "key:/repo"), undefined);
 });
 
 test("concurrent fetches of one repo coalesce into a single git call", async () => {
@@ -131,8 +138,8 @@ test("concurrent fetches of one repo coalesce into a single git call", async () 
           (release = () => resolve({ code: 0, stdout: "", stderr: "" })),
       ),
   );
-  const a = m.fetchRepoRemotes("key:/repo", "/repo");
-  const b = m.fetchRepoRemotes("key:/repo", "/repo");
+  const a = m.fetchRepoRemotes(side, "key:/repo", "/repo");
+  const b = m.fetchRepoRemotes(side, "key:/repo", "/repo");
   assert.equal(a, b, "the second caller must join the in-flight fetch");
   release?.();
   await a;
@@ -144,15 +151,15 @@ test("fetch due-ness uses the interval from settings", async () => {
   try {
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const m = await loadWith(true, 10);
-    await m.fetchRepoRemotes("key:/repo", "/repo");
+    await m.fetchRepoRemotes(side, "key:/repo", "/repo");
     assert.equal(gitOptional.mock.calls.length, 1);
 
     vi.setSystemTime(new Date("2026-01-01T00:09:59Z"));
-    m.fetchRepoIfDue("key:/repo", "/repo");
+    m.fetchRepoIfDue(side, "key:/repo", "/repo");
     assert.equal(gitOptional.mock.calls.length, 1, "still within ten minutes");
 
     vi.setSystemTime(new Date("2026-01-01T00:10:00Z"));
-    m.fetchRepoIfDue("key:/repo", "/repo");
+    m.fetchRepoIfDue(side, "key:/repo", "/repo");
     assert.equal(gitOptional.mock.calls.length, 2, "due at ten minutes");
   } finally {
     vi.useRealTimers();
@@ -164,23 +171,23 @@ test("zero disables watched and on-demand background fetches", async () => {
   try {
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const m = await loadWith(true, 1);
-    m.noteRepoInterest("key:/repo", "/repo");
-    await m.fetchRepoRemotes("key:/repo", "/repo");
-    const fetchedAt = m.repoFetchedAt("key:/repo");
+    m.noteRepoInterest(side, "key:/repo", "/repo");
+    await m.fetchRepoRemotes(side, "key:/repo", "/repo");
+    const fetchedAt = m.repoFetchedAt(side, "key:/repo");
     remoteFetchMinutes = 0;
 
     vi.setSystemTime(new Date("2026-01-01T01:00:00Z"));
-    m.setFetchInterestSource(() => ["/repo"]);
-    m.fetchRepoIfDue("key:/repo", "/repo");
+    m.setFetchInterestSource(() => [{ side, root: "/repo" }]);
+    m.fetchRepoIfDue(side, "key:/repo", "/repo");
     m.sweepBackgroundFetchForTests();
 
     assert.equal(gitOptional.mock.calls.length, 1);
     assert.equal(
-      m.repoFetchedAt("key:/repo"),
+      m.repoFetchedAt(side, "key:/repo"),
       fetchedAt,
       "disabling must preserve freshness state",
     );
-    assert.equal(await m.noteWorktreeInterest("/repo"), "key:/repo");
+    assert.equal(await m.noteWorktreeInterest(side, "/repo"), "key:/repo");
   } finally {
     vi.useRealTimers();
   }
@@ -191,8 +198,8 @@ test("a settings change takes effect without recreating the sweeper", async () =
   try {
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const m = await loadWith(true, 0);
-    m.noteRepoInterest("key:/repo", "/repo");
-    m.setFetchInterestSource(() => ["/repo"]);
+    m.noteRepoInterest(side, "key:/repo", "/repo");
+    m.setFetchInterestSource(() => [{ side, root: "/repo" }]);
     m.startBackgroundFetch();
     await vi.advanceTimersByTimeAsync(15_000);
     assert.equal(gitOptional.mock.calls.length, 0);
@@ -217,9 +224,9 @@ test("the instance gate wins for on-demand and swept fetches", async () => {
   try {
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const m = await loadWith(false, 1);
-    m.noteRepoInterest("key:/repo", "/repo");
-    m.setFetchInterestSource(() => ["/repo"]);
-    m.fetchRepoIfDue("key:/repo", "/repo");
+    m.noteRepoInterest(side, "key:/repo", "/repo");
+    m.setFetchInterestSource(() => [{ side, root: "/repo" }]);
+    m.fetchRepoIfDue(side, "key:/repo", "/repo");
     m.sweepBackgroundFetchForTests();
     m.startBackgroundFetch();
     await vi.advanceTimersByTimeAsync(2 * 60_000);
@@ -231,7 +238,7 @@ test("the instance gate wins for on-demand and swept fetches", async () => {
 
 test("the fetch runs non-interactively so it cannot hang on a prompt", async () => {
   const m = await loadWith(true);
-  await m.fetchRepoRemotes("key:/repo", "/repo");
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
   const [args, cwd, , env] = gitOptional.mock.calls[0] as [
     string[],
     string,
@@ -250,17 +257,17 @@ test("the fetch runs non-interactively so it cannot hang on a prompt", async () 
 test("a fetch that changes nothing still announces its freshness", async () => {
   const m = await loadWith(true);
   const seen: string[] = [];
-  m.onFetchCompleted((repoPath) => seen.push(repoPath));
-  await m.fetchRepoRemotes("key:/repo", "/repo");
+  m.onFetchCompleted((_side, repoPath) => seen.push(repoPath));
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
   assert.deepEqual(seen, ["/repo"], "a clean no-op fetch must still notify");
 });
 
 test("a failed fetch announces nothing", async () => {
   const m = await loadWith(true);
   const seen: string[] = [];
-  m.onFetchCompleted((repoPath) => seen.push(repoPath));
+  m.onFetchCompleted((_side, repoPath) => seen.push(repoPath));
   gitOptional.mockResolvedValue({ code: 128, stdout: "", stderr: "boom" });
-  await m.fetchRepoRemotes("key:/repo", "/repo");
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
   assert.deepEqual(seen, []);
 });
 
@@ -269,20 +276,20 @@ test("a failed fetch announces nothing", async () => {
 // out, and the repo is dropped exactly because the surface is calm.
 test("a continuously watched repo is never forgotten, however long it is quiet", async () => {
   const m = await loadWith(true);
-  m.noteRepoInterest("key:/repo", "/repo");
-  await m.fetchRepoRemotes("key:/repo", "/repo");
-  const firstStamp = m.repoFetchedAt("key:/repo");
+  m.noteRepoInterest(side, "key:/repo", "/repo");
+  await m.fetchRepoRemotes(side, "key:/repo", "/repo");
+  const firstStamp = m.repoFetchedAt(side, "key:/repo");
   assert.ok(firstStamp);
 
   // Nobody reads a status again, and far more than the interest TTL passes.
   vi.useFakeTimers();
   try {
     vi.setSystemTime(Date.now() + 60 * 60_000);
-    m.setFetchInterestSource(() => ["/repo"]);
+    m.setFetchInterestSource(() => [{ side, root: "/repo" }]);
     m.sweepBackgroundFetchForTests();
     await vi.waitFor(() => assert.equal(gitOptional.mock.calls.length, 2));
     assert.ok(
-      (m.repoFetchedAt("key:/repo") ?? 0) > (firstStamp ?? 0),
+      (m.repoFetchedAt(side, "key:/repo") ?? 0) > (firstStamp ?? 0),
       "the watched repo must have been refreshed",
     );
   } finally {
@@ -295,15 +302,15 @@ test("interest lifetime scales beyond a longer fetch interval", async () => {
   try {
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const m = await loadWith(true, 20);
-    m.noteRepoInterest("key:/repo", "/repo");
-    await m.fetchRepoRemotes("key:/repo", "/repo");
+    m.noteRepoInterest(side, "key:/repo", "/repo");
+    await m.fetchRepoRemotes(side, "key:/repo", "/repo");
 
     vi.setSystemTime(new Date("2026-01-01T00:21:00Z"));
     m.setFetchInterestSource(() => []);
     m.sweepBackgroundFetchForTests();
     await vi.waitFor(() => assert.equal(gitOptional.mock.calls.length, 2));
     assert.ok(
-      m.repoFetchedAt("key:/repo"),
+      m.repoFetchedAt(side, "key:/repo"),
       "the repo must survive the old 15-minute TTL to reach its next fetch",
     );
   } finally {
@@ -313,13 +320,13 @@ test("interest lifetime scales beyond a longer fetch interval", async () => {
 
 test("a repo nobody watches or reads is forgotten", async () => {
   const m = await loadWith(true);
-  m.noteRepoInterest("key:/repo", "/repo");
+  m.noteRepoInterest(side, "key:/repo", "/repo");
   vi.useFakeTimers();
   try {
     vi.setSystemTime(Date.now() + 60 * 60_000);
     m.setFetchInterestSource(() => []);
     m.sweepBackgroundFetchForTests();
-    assert.equal(m.repoFetchedAt("key:/repo"), undefined);
+    assert.equal(m.repoFetchedAt(side, "key:/repo"), undefined);
     assert.equal(
       gitOptional.mock.calls.length,
       0,

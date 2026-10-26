@@ -31,11 +31,7 @@ import {
   type CommitWorkflowResult,
 } from "./commitWorkflow.ts";
 import { errorText } from "./errors.ts";
-import {
-  failFileForTests,
-  fileReadsCountsForTests,
-  holdFileForTests,
-} from "./fileReads.ts";
+import { fileReadsCountsForTests, holdFileForTests } from "./fileReads.ts";
 import { updateSettings } from "./settings.ts";
 import {
   MALFORMED_ANSWERS,
@@ -55,33 +51,21 @@ import {
 
 /**
  * The commit workflow's checkout reads (`docs/workers.md`, "Checkout files"):
- * a checkout outside the Knowledge Base reads through the in-process Worker
- * over the real codec, the Knowledge Base on the server. Every expected value
- * is base's, computed below by verbatim copies of base's code over sync `fs`.
+ * every checkout reads through the in-process Worker over the real codec, one
+ * inside the Knowledge Base root too, since placement is typed and the
+ * workflow never holds the KB row. Every expected value is base's, computed
+ * below by verbatim copies of base's code over sync `fs`.
  */
 
-// Passthrough git seam with two hooks: right before the workflow takes the
-// repository lock, and before each `hash-object` (the fingerprint's reads
-// are done, the summaries' not yet begun).
+// Passthrough git seam with one hook: right before the workflow takes the
+// repository lock.
 const gitHooks = vi.hoisted(() => ({
   beforeLock: undefined as (() => void) | undefined,
-  beforeHashObject: undefined as (() => void) | undefined,
 }));
 vi.mock("./gitExec.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./gitExec.ts")>();
   return {
     ...actual,
-    gitOptional: async (args: string[], ...rest: unknown[]) => {
-      if (args[0] === "hash-object") {
-        const hook = gitHooks.beforeHashObject;
-        gitHooks.beforeHashObject = undefined;
-        hook?.();
-      }
-      return (actual.gitOptional as (...all: unknown[]) => unknown)(
-        args,
-        ...rest,
-      );
-    },
     withRepoLock: async <T>(key: string, fn: () => Promise<T>) => {
       const hook = gitHooks.beforeLock;
       gitHooks.beforeLock = undefined;
@@ -117,7 +101,6 @@ async function settle(rounds = 20): Promise<void> {
 
 afterEach(async () => {
   gitHooks.beforeLock = undefined;
-  gitHooks.beforeHashObject = undefined;
   setCommitMessageGeneratorForTests(null);
   await settle();
   assert.equal(inProcessWorkerFileHandlesForTests(), 0, "handles held");
@@ -464,16 +447,14 @@ describe("AC1 the commit's reads reach the Worker", () => {
     ]);
   });
 
-  test("a Knowledge Base dry run sends the Worker nothing", async () => {
+  test("a project inside the Knowledge Base root reads on the Worker", async () => {
     const cwd = repo(kb);
     writeFileSync(join(cwd, "note.txt"), "note\n");
     symlinkSync("note.txt", join(cwd, "link"));
     const served = inProcessWorkerServedForTests();
-    const calls = fileReadsCountsForTests().pathCalls;
     const { result, prompt } = await dryRun(cwd);
     assert.equal(result.status, "dry-run");
-    assert.equal(inProcessWorkerServedForTests(), served);
-    assert.ok(fileReadsCountsForTests().pathCalls > calls);
+    assert.ok(inProcessWorkerServedForTests() > served);
     assert.ok(prompt?.includes("Untracked file: link\n```\nnote.txt\n```"));
   });
 });
@@ -800,46 +781,6 @@ describe("AC6 only an established filesystem failure maps", () => {
       assert.ok(prompt?.includes(omitted(name, message)), prompt);
     },
   );
-
-  test.each([
-    ["inspect", "note.txt", "ENOENT", "stat"],
-    ["readlink", "link", "EIO", "readlink"],
-  ] as const)(
-    "server: an injected %s %s maps",
-    async (phase, name, code, syscall) => {
-      const cwd = commitFixture();
-      const local = join(kb, `local-${(next += 1)}`);
-      rmSync(local, { recursive: true, force: true });
-      execFileSync("cp", ["-a", cwd, local]);
-      const path = join(local, name);
-      const message = `${code}: injected fault, ${syscall} '${path}'`;
-
-      failFileForTests(path, { phase, code });
-      const fingerprint = await untrackedFingerprintForTests(
-        local,
-        untracked(local),
-      );
-      assert.equal(fingerprint.values.get(name), "unreadable");
-
-      // Armed once the fingerprint's reads are done: the summary's read.
-      gitHooks.beforeHashObject = () => failFileForTests(path, { phase, code });
-      const { result, prompt } = await dryRun(local);
-      assert.equal(result.status, "dry-run");
-      assert.ok(prompt?.includes(omitted(name, message)), prompt);
-    },
-  );
-
-  test("server: a bare injected failure is unclassified and fails the commit", async () => {
-    const cwd = commitFixture();
-    const local = join(kb, `local-${(next += 1)}`);
-    execFileSync("cp", ["-a", cwd, local]);
-    const path = join(local, "note.txt");
-    failFileForTests(path, { phase: "inspect", code: "ENOENT", bare: true });
-    const { result } = await dryRun(local);
-    assert.equal(result.status, "failed");
-    assert.equal(result.error, `ENOENT: injected fault, stat '${path}'`);
-    assertNothingCommitted(local);
-  });
 
   test("the reader's own error fails the commit", async () => {
     const cwd = commitFixture();

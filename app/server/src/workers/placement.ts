@@ -1,27 +1,41 @@
 /**
- * Where a checkout operation runs. In phase 1 every checkout is placed on the
- * default Worker, the in-process one; its id is derived, not stored, until
- * phase 4 (`docs/workers.md`).
+ * Where a checkout operation or a served file read runs. In phase 1 every
+ * checkout is placed on the default Worker, the in-process one; its id is
+ * derived, not stored, until phase 4 (`docs/workers.md`).
  *
- * {@link placeGitCwd} is the TRANSITIONAL path-only adapter behind the
- * existing `(args, cwd)` executors in `gitExec.ts`. It keeps the Knowledge
- * Base on the server: the KB is a server repository even where the worktree
- * surfaces browse and commit it as a checkout. W3 replaces that path rule with
- * a typed choice made from the KB row, and W6 deletes this adapter once every
- * caller passes its own location.
+ * A checkout's place is typed only, a {@link CheckoutSide}: the modules that
+ * can hold the Knowledge Base row take it from the row (`checkoutSideOf`) and
+ * run on `checkoutGitOn`/`checkoutFilesOn` for it, and everything reached by a
+ * bare cwd runs on {@link DEFAULT_WORKER_SIDE}. No path and no setting chooses
+ * a checkout's side: a project inside the KB root or `DATA_DIR` is a checkout.
  *
- * {@link placeServedPath} places a served file the same way, with `DATA_DIR`
- * kept on the server too.
+ * {@link placeServedPath} places a served file by its path: inside `DATA_DIR`
+ * or the Knowledge Base it stays on the server.
  */
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { DATA_DIR } from "../config.ts";
 import { knowledgeBasePlacementRoots } from "../knowledgeBaseSettings.ts";
-import type { CheckoutLocation } from "../workerProtocol/checkoutMethods.ts";
 import type { WorkerFileLocation } from "../workerProtocol/fileMethods.ts";
 
 /** The Worker every checkout is placed on in phase 1. */
 export const DEFAULT_WORKER_ID = "local";
+
+/**
+ * Where a checkout's git and reads run, chosen by type: the server for the
+ * Knowledge Base row (`checkoutSideOf`), else a Worker. Never from a path.
+ */
+export type CheckoutSide = "server" | { readonly workerId: string };
+
+/** The side of every checkout that is not the Knowledge Base row. */
+export const DEFAULT_WORKER_SIDE: CheckoutSide = {
+  workerId: DEFAULT_WORKER_ID,
+};
+
+/** One string per side, for maps keyed by it. */
+export function checkoutSideKey(side: CheckoutSide): string {
+  return side === "server" ? "server" : `worker:${side.workerId}`;
+}
 
 function contains(root: string, path: string): boolean {
   const rel = relative(root, path);
@@ -31,20 +45,16 @@ function contains(root: string, path: string): boolean {
   );
 }
 
-/** Root history and fallback policy come from the owning settings reader. */
-function insideKnowledgeBase(cwd: string): boolean {
-  const path = resolve(cwd);
+/**
+ * For served files only. Root history and fallback policy come from the owning
+ * settings reader.
+ */
+function insideKnowledgeBase(path: string): boolean {
   return knowledgeBasePlacementRoots().some(
     (root) =>
       contains(root.path, path) ||
       (root.real !== undefined && contains(root.real, path)),
   );
-}
-
-/** The location git in `cwd` runs at; undefined keeps it on the server. */
-export function placeGitCwd(cwd: string): CheckoutLocation | undefined {
-  if (insideKnowledgeBase(cwd)) return undefined;
-  return { workerId: DEFAULT_WORKER_ID, path: cwd };
 }
 
 /** `DATA_DIR`'s real path, once observed; it does not move while we run. */

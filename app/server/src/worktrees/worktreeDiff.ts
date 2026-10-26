@@ -5,6 +5,8 @@
  * directory listings — all parameterized by worktree row + {@link WorktreeDiffScope}.
  *
  * Read-only throughout — no repo lock needed; git handles concurrent readers.
+ * Every git call and checkout read runs on the row's side (`checkoutSideOf`):
+ * the Knowledge Base row reads on the server.
  */
 import { extname, join } from "node:path";
 import type {
@@ -24,14 +26,20 @@ import type {
 import {
   checkLexicalPath,
   checkoutFailureOf,
-  containedRealPath,
-  inspectCheckoutPath,
-  readCheckoutDir,
-  readCheckoutFile,
-  realpathInCheckout,
+  checkoutFilesOn,
+  type CheckoutFiles,
 } from "../checkoutFileAccess.ts";
-import { git, gitOptional, gitRawStdout } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
+
+type CheckoutGit = ReturnType<typeof checkoutGitOn>;
+
+/** The row's git and checkout reads, on its side. */
+function sideOf(row: WorktreeRow) {
+  const side = checkoutSideOf(row);
+  return { ...checkoutGitOn(side), files: checkoutFilesOn(side) };
+}
 
 const MAX_TEXT_BYTES = 512 * 1024;
 const MAX_DIFF_CHARS = 700_000;
@@ -62,6 +70,7 @@ export async function getWorktreeChanges(
     scope.kind === "workingTree"
       ? await workingTreeFiles(row)
       : await rangeFiles(row, scope.from, scope.to);
+  const { gitOptional } = sideOf(row);
   const [branchRes, headRes] = await Promise.all([
     gitOptional(["rev-parse", "--abbrev-ref", "HEAD"], row.path),
     gitOptional(["rev-parse", "--short", "HEAD"], row.path),
@@ -121,6 +130,7 @@ function changesResponse(
 async function workingTreeFiles(
   row: WorktreeRow,
 ): Promise<WorktreeChangeFile[]> {
+  const { git, gitOptional } = sideOf(row);
   const [statusRes, numstatRes] = await Promise.all([
     git(["status", "--porcelain=v1", "--untracked-files=all", "-z"], row.path),
     gitOptional(["diff", "--numstat", "-z", "HEAD", "--"], row.path),
@@ -153,6 +163,7 @@ async function hydrateWorkingTreeFiles(
     Pick<WorktreeChangeFile, "additions" | "deletions" | "binary">
   >,
 ): Promise<WorktreeChangeFile[]> {
+  const access = sideOf(row).files;
   await Promise.all(
     files.map(async (file) => {
       const found =
@@ -160,7 +171,7 @@ async function hydrateWorkingTreeFiles(
         (file.oldPath ? stats.get(file.oldPath) : undefined);
       if (found) Object.assign(file, found);
       if (file.status === "untracked")
-        Object.assign(file, await untrackedStats(row.path, file.path));
+        Object.assign(file, await untrackedStats(access, row.path, file.path));
     }),
   );
   return files;
@@ -172,6 +183,7 @@ async function rangeFiles(
   to?: string,
 ): Promise<WorktreeChangeFile[]> {
   const range = to ? [from, to] : [from];
+  const { git, gitOptional } = sideOf(row);
   const [nameStatusRes, numstatRes] = await Promise.all([
     git(["diff", "--name-status", "--find-renames", ...range, "--"], row.path),
     gitOptional(["diff", "--numstat", ...range, "--"], row.path),
@@ -354,6 +366,7 @@ export async function getWorktreeFileDiff(
 ): Promise<WorktreeFileDiffResponse> {
   assertScope(scope);
   checkLexicalPath(row.path, path);
+  const { gitOptional, files } = sideOf(row);
   const changes = await getWorktreeChanges(row, scope);
   const file = changes.files.find(
     (item) => item.path === path || item.oldPath === path,
@@ -374,12 +387,12 @@ export async function getWorktreeFileDiff(
         : file.path;
 
   const oldContent = oldSource
-    ? await showFile(row.path, oldSource)
+    ? await showFile(gitOptional, row.path, oldSource)
     : { text: "", binary: false, truncated: false };
   const newContent = newSource
     ? newRef
-      ? await showFile(row.path, newSource)
-      : await readWorkingFile(row.path, file.path)
+      ? await showFile(gitOptional, row.path, newSource)
+      : await readWorkingFile(files, row.path, file.path)
     : { text: "", binary: false, truncated: false };
 
   const binary = file.binary || oldContent.binary || newContent.binary;
@@ -477,7 +490,11 @@ interface TextContent {
   truncated: boolean;
 }
 
-async function showFile(cwd: string, source: string): Promise<TextContent> {
+async function showFile(
+  gitOptional: CheckoutGit["gitOptional"],
+  cwd: string,
+  source: string,
+): Promise<TextContent> {
   const res = await gitOptional(["show", source], cwd);
   if (res.code !== 0) return { text: "", binary: false, truncated: false };
   const truncated = res.stdout.length > MAX_TEXT_BYTES;
@@ -492,14 +509,15 @@ async function showFile(cwd: string, source: string): Promise<TextContent> {
  * (`docs/workers.md`, "Checkout files").
  */
 async function readWorkingFile(
+  files: CheckoutFiles,
   root: string,
   relPath: string,
 ): Promise<TextContent> {
   let buffer: Buffer;
   try {
-    buffer = await readCheckoutFile(
+    buffer = await files.readFile(
       root,
-      await containedRealPath(root, relPath),
+      await files.containedRealPath(root, relPath),
       MAX_TEXT_BYTES + 1,
     );
   } catch (error) {
@@ -514,10 +532,11 @@ async function readWorkingFile(
 }
 
 async function untrackedStats(
+  files: CheckoutFiles,
   root: string,
   relPath: string,
 ): Promise<Pick<WorktreeChangeFile, "additions" | "deletions" | "binary">> {
-  const file = await readWorkingFile(root, relPath);
+  const file = await readWorkingFile(files, root, relPath);
   if (file.binary) return { additions: 0, deletions: 0, binary: true };
   return { additions: countLines(file.text), deletions: 0, binary: false };
 }
@@ -532,9 +551,10 @@ export async function getWorktreeFileContent(
   if (ref !== undefined && !isSafeRef(ref))
     throw new Error("Invalid revision.");
   checkLexicalPath(row.path, path);
+  const { gitOptional, files } = sideOf(row);
   const content = ref
-    ? await showFile(row.path, `${ref}:${path}`)
-    : await readWorkingFile(row.path, path);
+    ? await showFile(gitOptional, row.path, `${ref}:${path}`)
+    : await readWorkingFile(files, row.path, path);
   return {
     worktreeId: row.id,
     path,
@@ -570,6 +590,7 @@ export async function getWorktreeFileRaw(
   if (ref !== undefined && !isSafeRef(ref))
     throw new Error("Invalid revision.");
   checkLexicalPath(row.path, path);
+  const { gitRawStdout, files } = sideOf(row);
   let content: Buffer;
   if (ref) {
     const res = await gitRawStdout(
@@ -580,13 +601,13 @@ export async function getWorktreeFileRaw(
     if (res.code !== 0) throw new Error("File not found at that revision.");
     content = res.content;
   } else {
-    const real = await containedRealPath(row.path, path);
-    content = await readCheckoutFile(row.path, real, MAX_RAW_BYTES + 1).catch(
-      (error: unknown) => {
+    const real = await files.containedRealPath(row.path, path);
+    content = await files
+      .readFile(row.path, real, MAX_RAW_BYTES + 1)
+      .catch((error: unknown) => {
         if (checkoutFailureOf(error) !== "filesystem") throw error;
         throw new Error("File not found.");
-      },
-    );
+      });
   }
   if (content.length > MAX_RAW_BYTES)
     throw new Error("File is too large to serve raw.");
@@ -627,6 +648,7 @@ export async function getWorktreeLog(
   limit: number,
 ): Promise<WorktreeLogResponse> {
   const capped = Math.max(1, Math.min(limit || 50, 200));
+  const { gitOptional } = sideOf(row);
   const logRes = await gitOptional(
     [
       "log",
@@ -684,6 +706,7 @@ export async function getWorktreeFileLog(
 ): Promise<WorktreeFileLogResponse> {
   checkLexicalPath(row.path, path);
   const capped = Math.max(1, Math.min(limit || 50, 200));
+  const { gitOptional } = sideOf(row);
   const res = await gitOptional(
     [
       "-c",
@@ -741,13 +764,12 @@ export async function getWorktreeFileLog(
  * target outside the worktree.
  */
 async function entrySize(
+  files: CheckoutFiles,
   root: string,
   path: string,
 ): Promise<number | undefined> {
   try {
-    return Number(
-      (await inspectCheckoutPath(root, path, { follow: false })).size,
-    );
+    return Number((await files.inspect(root, path, { follow: false })).size);
   } catch (error) {
     if (checkoutFailureOf(error) !== "filesystem") throw error;
     return undefined;
@@ -766,21 +788,22 @@ export async function getWorktreeTree(
 ): Promise<WorktreeTreeEntry[]> {
   const normalizedDir = dir.replace(/\/+$/, "");
   const prefix = normalizedDir ? `${normalizedDir}/` : "";
+  const { git, files: access } = sideOf(row);
   if (includeIgnored) {
     // Git can include ignored files only by recursively enumerating every path.
     // Read the requested directory directly instead: the HTTP contract asks for
     // one level, and this also preserves empty ignored directories.
     const absoluteDir = normalizedDir
-      ? await containedRealPath(row.path, normalizedDir)
-      : await realpathInCheckout(row.path, row.path);
-    const entries = (await readCheckoutDir(row.path, absoluteDir)).filter(
+      ? await access.containedRealPath(row.path, normalizedDir)
+      : await access.realpath(row.path, row.path);
+    const entries = (await access.readDir(row.path, absoluteDir)).filter(
       (entry) => entry.name !== ".git",
     );
     const sizes = await Promise.all(
       entries.map(async (entry) =>
         entry.directory
           ? undefined
-          : entrySize(row.path, join(absoluteDir, entry.name)),
+          : entrySize(access, row.path, join(absoluteDir, entry.name)),
       ),
     );
     const visible = entries.map((entry, index): WorktreeTreeEntry => ({
@@ -820,7 +843,7 @@ export async function getWorktreeTree(
     }
   }
   const sizes = await Promise.all(
-    files.map((file) => entrySize(row.path, join(row.path, file.path))),
+    files.map((file) => entrySize(access, row.path, join(row.path, file.path))),
   );
   files.forEach((file, index) => {
     if (sizes[index] !== undefined) file.size = sizes[index];
