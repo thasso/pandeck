@@ -1289,6 +1289,8 @@ async function settleTree(tree: TreeWatch): Promise<void> {
   const path = tree.path;
   // Set together with the path, so a watch with a path has its side.
   const side = tree.side;
+  // Only a loss sets it while a step runs: see the check before subscribing.
+  const resuming = tree.resumeScan;
   // Undefined when the Worker failed to answer: never "missing".
   let present: boolean | undefined = false;
   let failure: unknown;
@@ -1358,6 +1360,10 @@ async function settleTree(tree: TreeWatch): Promise<void> {
       tree.backingOff = tree.retry !== undefined;
       return;
     }
+    // The subscription was lost during this step's awaits, and the loss chose
+    // the next attempt: at once, after its backoff, or at the next viewer.
+    // Subscribing here would pre-empt that and bypass the flapping bound.
+    if (tree.resumeScan && !resuming) return;
     if (!canSubscribe()) return;
     tree.subscribing = true;
     let subscription: CheckoutWatchSubscription | undefined;

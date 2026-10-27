@@ -53,8 +53,11 @@ const {
   inProcessWorkerWatchesForTests,
   writeAsInProcessWorkerForTests,
 } = await import("../workers/inProcessWorker.ts");
-const { holdWatchDeliveriesForTests, recordWatchDeliveriesForTests } =
-  await import("../workers/watchDeliveries.ts");
+const {
+  holdWatchDeliveriesForTests,
+  recordWatchDeliveriesForTests,
+  watchesOn,
+} = await import("../workers/watchDeliveries.ts");
 const { isWorkerFailure, openOnWorker } =
   await import("../workers/fileClient.ts");
 const {
@@ -994,6 +997,136 @@ test(
     assert.equal(made(gitDir), 8, "the spy started after the git dir's first");
   },
 );
+
+/**
+ * Flags the open connection's first read of its `gone`: an unsubscribe of a
+ * handle whose connection has ended awaits it.
+ */
+function awaitingRelease(): () => boolean {
+  const watches = watchesOn(ensureInProcessWorker())!;
+  const gone = watches.gone;
+  let read = false;
+  Object.defineProperty(watches, "gone", {
+    get: () => {
+      read = true;
+      return gone;
+    },
+  });
+  return () => read;
+}
+
+for (const parkedIn of ["ignore read", "release"] as const)
+  test(
+    `AC14: a quick loss during a settle step's ${parkedIn} waits for its backoff`,
+    { timeout: 60_000 },
+    async () => {
+      const name = parkedIn === "release" ? "ac14-release" : "ac14-ignore";
+      const { id } = project(name);
+      const record = await worktree(id, `${name}-wt`);
+      // Untracked, so each .gitignore below changes the ignore set.
+      for (const dir of ["dir2", "dir3"]) {
+        mkdirSync(join(record.path, dir));
+        writeFileSync(join(record.path, dir, "x.txt"), "x\n");
+      }
+      const native = nativeWatches(record.path);
+      const made = () => native.made.get(record.path) ?? 0;
+      const tree = () => treeActivityForTests(record.id)!;
+      await addWorktreeViewer(record.id);
+      await until("the view settled", () => settled(record.id));
+      // Only Date: no retry timer elapses, and the thresholds are production.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      cleanups.push(() => vi.useRealTimers());
+      vi.setSystemTime(Date.now());
+
+      // Loss 1 is not quick: it recovers at once and starts the run.
+      await endConnection().released;
+      await until(
+        "loss 1: the immediate recovery",
+        () => tree().recoveries === 1 && settled(record.id),
+      );
+      let recoveredAt = Date.now();
+
+      for (const [index, retryMs] of [5_000, 10_000].entries()) {
+        const n = index + 2;
+        // A .gitignore edit marks the set stale, refreshed only 30 s after
+        // the recovery's read.
+        vi.setSystemTime(recoveredAt + 1_000);
+        writeFileSync(
+          join(record.path, ".gitignore"),
+          ["dir2/", "dir3/"].slice(0, n - 1).join("\n") + "\n",
+        );
+        await until(
+          `loss ${n}: the refresh retry armed`,
+          () => tree().retryArmed && settled(record.id),
+        );
+
+        // The old Worker's release is held past the end.
+        const release = holdNativeUnsubscribeForTests();
+        const reading = awaitingRelease();
+        const { ended, released } = endConnection();
+        await ended;
+        const releasing = track(released);
+        let parked = false;
+        let unpark = () => {};
+        if (parkedIn === "ignore read") {
+          const gate = new Promise<void>((resolve) => (unpark = resolve));
+          const stop = intercept(
+            CHECKOUT_GIT_METHODS.run,
+            (payload, signal, real) => {
+              const args = (payload.json as { args?: string[] }).args;
+              if (
+                pathOf(payload) !== record.path ||
+                !args?.includes("--ignored")
+              )
+                return undefined;
+              parked = true;
+              stop();
+              return gate.then(() => real(payload, signal));
+            },
+          );
+          cleanups.push(stop);
+        }
+
+        // Still a quick loss when it lands: the refresh is due, the run is not.
+        vi.setSystemTime(recoveredAt + 30_000);
+        const scans = tree().scansScheduled;
+        const before = made();
+        fireTreeRetriesForTests();
+        await until(`loss ${n}: the step parked in its ${parkedIn}`, () =>
+          parkedIn === "release" ? reading() : parked,
+        );
+        assert.equal(releasing.settled, false, "the release is still held");
+
+        release();
+        await released;
+        await until(
+          `loss ${n}: the backoff armed`,
+          () => tree().retryArmed && tree().retryMs === retryMs,
+        );
+        unpark();
+        await until(`loss ${n}: the step finished`, () => settled(record.id));
+        assert.equal(
+          made(),
+          before,
+          `loss ${n}: no subscribe before the retry`,
+        );
+        assert.equal(tree().recoveries, n - 1, `loss ${n}: no recovery yet`);
+        assert.equal(tree().scansScheduled, scans, `loss ${n}: no rescan yet`);
+        assert.equal(tree().retryMs, retryMs, `loss ${n}: the backoff is kept`);
+
+        fireTreeRetriesForTests();
+        fireRepoRetriesForTests();
+        await until(
+          `loss ${n}: the retried recovery`,
+          () => tree().recoveries === n && settled(record.id),
+        );
+        recoveredAt = Date.now();
+        assert.equal(made(), before + 1, `loss ${n}: one subscribe`);
+        assert.equal(tree().scansScheduled, scans + 1, `loss ${n}: one rescan`);
+        assert.equal(tree().retryArmed, false, `loss ${n}: no retry left`);
+      }
+    },
+  );
 
 // --- AC16 -----------------------------------------------------------------
 
