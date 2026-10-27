@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
 import { checkoutFailureOf } from "../checkoutFileAccess.ts";
 import parcelWatcher from "../parcelWatcher.ts";
 import {
@@ -33,8 +33,8 @@ import { DEFAULT_WORKER_ID } from "./placement.ts";
 import { subscribeOnWorker } from "./watchClient.ts";
 import {
   holdWatchDeliveriesForTests,
+  recordWatchDeliveriesForTests,
   watchDeliveries,
-  watchEventsReceivedForTests,
   watchesOn,
 } from "./watchDeliveries.ts";
 
@@ -65,7 +65,14 @@ async function endConnection(): Promise<void> {
   await released;
 }
 
+let recorder: ReturnType<typeof recordWatchDeliveriesForTests>;
+
+beforeEach(() => {
+  recorder = recordWatchDeliveriesForTests();
+});
+
 afterEach(async () => {
+  recorder.stop();
   await endConnection();
   vi.restoreAllMocks();
 });
@@ -161,7 +168,7 @@ async function connectedEpoch(): Promise<number> {
   return inProcessWorkerEpochForTests()!;
 }
 
-const deliveredIds = () => watchEventsReceivedForTests().map(({ id }) => id);
+const deliveredIds = () => recorder.records().map(({ id }) => id);
 
 function scratchDir(name: string): string {
   const path = join(dir, name);
@@ -259,6 +266,88 @@ test("a delivery for an id the server does not hold is acknowledged and dropped"
     worker.end("test over");
     server.end("test over");
   }
+});
+
+test("deliveries leave a record only while a test recorder is armed", async () => {
+  recorder.stop();
+  /** One real-codec connection pair with a live subscription; its delivery. */
+  const epoch = () => {
+    const [serverEnd, workerEnd] = createInProcessTransport();
+    const deliveries = watchDeliveries();
+    const server = new WorkerConnection(serverEnd, {
+      handshake: { role: "server", admit: () => undefined },
+      handlers: deliveries.handlers,
+    });
+    deliveries.attach(server, Promise.resolve());
+    const worker = new WorkerConnection(workerEnd, {
+      handshake: { role: "worker", workerId: "w" },
+    });
+    const { seen, callback, listeners } = listener();
+    const watches = watchesOn(server)!;
+    const id = watches.add({ callback, ...listeners });
+    watches.setState(id, "live");
+    return {
+      seen,
+      id,
+      deliver: (count: number) =>
+        worker.request(
+          WATCH_METHODS.events,
+          encodeEvents({
+            id,
+            batches: [
+              { paths: Array.from({ length: count }, (_, i) => `/${i}`) },
+            ],
+            overflow: false,
+          }),
+        ),
+      end: async () => {
+        worker.end("epoch over");
+        server.end("epoch over");
+        await server.ended;
+      },
+    };
+  };
+
+  // Unarmed, as in production: callbacks run and nothing is kept, across
+  // ended connections.
+  for (let round = 0; round < 3; round += 1) {
+    const unarmed = epoch();
+    for (let i = 0; i < 50; i += 1) await unarmed.deliver(1);
+    assert.equal(unarmed.seen.events.length, 50);
+    await unarmed.end();
+  }
+  const first = recordWatchDeliveriesForTests();
+  const second = recordWatchDeliveriesForTests();
+  try {
+    assert.deepEqual(first.records(), [], "no earlier delivery was kept");
+    const armed = epoch();
+    await armed.deliver(2);
+    first.stop();
+    await armed.deliver(3);
+    await armed.end();
+    const next = epoch();
+    await next.deliver(4);
+    await next.end();
+    assert.deepEqual(first.records(), [
+      { id: armed.id, batchCounts: [2], overflow: false },
+    ]);
+    assert.deepEqual(
+      second.records().map(({ batchCounts }) => batchCounts),
+      [[2], [3], [4]],
+      "a recorder outlives a connection",
+    );
+    assert.deepEqual(armed.seen.events, [
+      ["/0", "/1"],
+      ["/0", "/1", "/2"],
+    ]);
+  } finally {
+    first.stop();
+    second.stop();
+  }
+  const after = epoch();
+  await after.deliver(1);
+  await after.end();
+  assert.equal(second.records().length, 3, "a stopped recorder stays stopped");
 });
 
 test("each batch reaches the callback in order; errors and overflow reach their listeners", async () => {

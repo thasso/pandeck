@@ -101,8 +101,16 @@ export function watchesOn(
   return watchesByConnection.get(connection);
 }
 
+/** What a test recorder keeps of one delivery. */
+interface DeliveryRecord {
+  id: number;
+  batchCounts: number[];
+  overflow: boolean;
+}
+
 let deliveryHold: Promise<void> | undefined;
-const received: { id: number; batchCounts: number[]; overflow: boolean }[] = [];
+/** The armed test recorders; with none armed, deliveries leave no record. */
+const recorders = new Set<DeliveryRecord[]>();
 
 /**
  * The server's handler table for one Worker connection, and `attach`, which
@@ -120,13 +128,16 @@ export function watchDeliveries(): {
       // synchronous effects.
       [WATCH_METHODS.events]: async (payload) => {
         const delivery = decodeEvents(payload);
-        received.push({
-          id: delivery.id,
-          batchCounts: delivery.batches.map((batch) =>
-            batch.error !== undefined ? 1 : batch.paths.length,
-          ),
-          overflow: delivery.overflow,
-        });
+        if (recorders.size > 0) {
+          const record: DeliveryRecord = {
+            id: delivery.id,
+            batchCounts: delivery.batches.map((batch) =>
+              batch.error !== undefined ? 1 : batch.paths.length,
+            ),
+            overflow: delivery.overflow,
+          };
+          for (const records of recorders) records.push(record);
+        }
         watches?.deliver(delivery.id, (entry) => {
           for (const batch of delivery.batches)
             if (batch.error !== undefined)
@@ -166,11 +177,21 @@ export function holdWatchDeliveriesForTests(): () => void {
   };
 }
 
-/** Test seam: one record per delivery the server handled, in order. */
-export function watchEventsReceivedForTests(): readonly {
-  id: number;
-  batchCounts: number[];
-  overflow: boolean;
-}[] {
-  return [...received];
+/**
+ * Test seam: from now until `stop()`, one record per delivery the server
+ * handles, in order. Recorders are independent; a stopped one keeps what it
+ * recorded and records nothing more.
+ */
+export function recordWatchDeliveriesForTests(): {
+  records(): readonly DeliveryRecord[];
+  stop(): void;
+} {
+  const records: DeliveryRecord[] = [];
+  recorders.add(records);
+  return {
+    records: () => [...records],
+    stop: () => {
+      recorders.delete(records);
+    },
+  };
 }

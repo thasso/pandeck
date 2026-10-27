@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
 import parcelWatcher from "../parcelWatcher.ts";
 import {
   INVALID_PARAMS,
@@ -32,7 +32,7 @@ import {
 import { DEFAULT_WORKER_ID } from "../workers/placement.ts";
 import {
   holdWatchDeliveriesForTests,
-  watchEventsReceivedForTests,
+  recordWatchDeliveriesForTests,
 } from "../workers/watchDeliveries.ts";
 import { fileHandlers } from "./files.ts";
 import {
@@ -60,7 +60,14 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const INVALID_FRAME = new Uint8Array(8);
 
+let recorder: ReturnType<typeof recordWatchDeliveriesForTests>;
+
+beforeEach(() => {
+  recorder = recordWatchDeliveriesForTests();
+});
+
 afterEach(async () => {
+  recorder.stop();
   // Every case ends on a fresh connection whose Worker released everything.
   ensureInProcessWorker();
   const { released } = inProcessWorkerWatchesForTests();
@@ -128,7 +135,7 @@ function refusedWith(code: string) {
 }
 
 const deliveredFor = (id: number) =>
-  watchEventsReceivedForTests().filter((record) => record.id === id);
+  recorder.records().filter((record) => record.id === id);
 
 test("a subscribe naming another Worker or a bad or held id is refused before any native call", async () => {
   const native = countNativeSubscribes();
