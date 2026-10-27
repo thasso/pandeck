@@ -1128,6 +1128,96 @@ for (const parkedIn of ["ignore read", "release"] as const)
     },
   );
 
+/**
+ * A viewed spawned worktree past its first (immediate) recovery, `Date`
+ * frozen at the recovery, then a quick loss at R + 1 s with its 5 s backoff
+ * armed.
+ */
+async function quicklyLost(projectId: string, record: { id: string }) {
+  await addWorktreeViewer(record.id);
+  await until("the view settled", () => settled(record.id));
+  vi.useFakeTimers({ toFake: ["Date"] });
+  cleanups.push(() => vi.useRealTimers());
+  vi.setSystemTime(Date.now());
+  const tree = () => treeActivityForTests(record.id)!;
+  await endConnection().released;
+  await until(
+    `${projectId}: the immediate recovery`,
+    () => tree().recoveries === 1 && settled(record.id),
+  );
+  vi.setSystemTime(Date.now() + 1_000);
+  await endConnection().released;
+  await until(
+    `${projectId}: the backoff armed`,
+    () => tree().retryMs === 5_000 && settled(record.id),
+  );
+  assert.equal(tree().recoveries, 1);
+  return tree;
+}
+
+test("AC14: a quick loss of a tree its last viewer leaves waits for the next viewer", async () => {
+  const { id } = project("ac14-linger");
+  const record = await worktree(id, "ac14-linger-wt");
+  const native = nativeWatches(record.path);
+  const made = () => native.made.get(record.path) ?? 0;
+  const tree = await quicklyLost(id, record);
+  const before = made();
+  const scans = tree().scansScheduled;
+
+  // Leaving re-ranks every watch; the lingering tree must not resubscribe.
+  removeWorktreeViewer(record.id);
+  await until("the re-rank settled", () => settled(record.id));
+  assert.equal(made(), before, "no subscribe while nobody views it");
+  assert.equal(tree().recoveries, 1);
+
+  await addWorktreeViewer(record.id);
+  await until(
+    "the viewer's recovery",
+    () => tree().recoveries === 2 && settled(record.id),
+  );
+  assert.equal(made(), before + 1, "one subscribe");
+  assert.equal(tree().scansScheduled, scans + 1, "one rescan");
+});
+
+test("AC14: a quick loss keeps its backoff when a re-rank takes and returns the slot", async () => {
+  const { id } = project("ac14-rerank");
+  limits({ maxWatches: 1 });
+  const lost = await worktree(id, "ac14-rerank-lost");
+  const other = await worktree(id, "ac14-rerank-other");
+  const native = nativeWatches(lost.path, other.path);
+  const made = (path: string) => native.made.get(path) ?? 0;
+  const tree = await quicklyLost(id, lost);
+  const before = made(lost.path);
+  const scans = tree().scansScheduled;
+
+  // A later view ranks first and takes the free slot.
+  await addWorktreeViewer(other.id);
+  await until("the other view settled", () => settled(other.id));
+  assert.equal(made(other.path), 1);
+  assert.equal(tree().retryMs, 5_000, "the re-rank kept the backoff");
+
+  // Its viewer leaves: the slot returns once its release lands, and the idle
+  // watch that lost its slot is forgotten.
+  removeWorktreeViewer(other.id);
+  await until(
+    "the other released",
+    () =>
+      native.live === 0 && !treeActivityForTests(other.id) && settled(lost.id),
+  );
+  assert.equal(made(lost.path), before, "no subscribe before the retry");
+  assert.equal(tree().recoveries, 1);
+  assert.equal(tree().scansScheduled, scans, "no rescan before the retry");
+  assert.equal(tree().retryMs, 5_000);
+
+  fireTreeRetriesForTests();
+  await until(
+    "the retried recovery",
+    () => tree().recoveries === 2 && settled(lost.id),
+  );
+  assert.equal(made(lost.path), before + 1, "one subscribe");
+  assert.equal(tree().scansScheduled, scans + 1, "one rescan");
+});
+
 // --- AC16 -----------------------------------------------------------------
 
 /** A `watch.subscribe` substitute: the real handler, then `after`. */

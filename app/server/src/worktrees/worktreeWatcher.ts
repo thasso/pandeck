@@ -1307,8 +1307,10 @@ async function settleTree(tree: TreeWatch): Promise<void> {
     else if (path && isActive(tree))
       noteUnwatched(tree, present === false ? "missing" : "cap");
     // Only its armed timer retries a failed release: a re-rank must not
-    // hammer a native unsubscribe that keeps failing.
-    if (tree.subscription && tree.backingOff) return;
+    // hammer a native unsubscribe that keeps failing. Nor may it cancel the
+    // backoff of a tree that holds nothing, which the slot's return would
+    // then skip.
+    if (tree.backingOff && (tree.subscription || !tree.retired)) return;
     clearRetry(tree);
     const released = tree.subscription !== undefined;
     if (!(await releaseSubscription(tree))) {
@@ -1334,6 +1336,9 @@ async function settleTree(tree: TreeWatch): Promise<void> {
   tree.unwatched = undefined;
   if (tree.subscription && !tree.ignoreStale) return;
   if (tree.backingOff) return;
+  // A quick loss arms nothing for a tree nobody views: its next viewer
+  // resubscribes it, never another watch's re-rank.
+  if (tree.resumeScan && tree.refs === 0 && quickLoss(tree)) return;
   const wait = tree.ignoreRefreshedAt + treeIgnoreRefreshMs - Date.now();
   if (tree.subscription && wait > 0) {
     retryTree(tree, wait);
