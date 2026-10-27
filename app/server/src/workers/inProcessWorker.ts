@@ -9,7 +9,9 @@
  * once it reports quiescence — every git child it started has exited — so a
  * caller never releases a repo lock beside a running git. In-process, the
  * server observes that directly; an out-of-process Worker (phase 2) needs
- * fencing instead.
+ * fencing instead. The Worker's native watches are released apart from that
+ * quiescence: a lost watch subscription is reported only once the old Worker
+ * holds no native watch (`watchDeliveries.ts`).
  *
  * The only module that imports `worker/` (`workerBoundary.test.ts`).
  */
@@ -18,12 +20,14 @@ import {
   type RunningWorker,
   type SubstituteHandler,
 } from "../worker/worker.ts";
+import type { WatchSnapshot } from "../worker/watch.ts";
 import type { WorkerConnection } from "../workerProtocol/connection.ts";
 import {
   createInProcessTransport,
   type ByteEndpoint,
 } from "../workerProtocol/inProcessTransport.ts";
 import { DEFAULT_WORKER_ID } from "./placement.ts";
+import { watchDeliveries } from "./watchDeliveries.ts";
 import { workerRegistry } from "./workerRegistry.ts";
 
 let current:
@@ -43,8 +47,10 @@ export function ensureInProcessWorker(): WorkerConnection {
   const [serverEnd, workerEnd] = createInProcessTransport();
   // Accept first, as a listening socket would, then let the Worker dial.
   let quiescent: Promise<void> = Promise.resolve();
+  const deliveries = watchDeliveries();
   const connection = workerRegistry.accept(serverEnd, {
     quiescence: () => quiescent,
+    handlers: deliveries.handlers,
   });
   const worker = startWorker({
     workerId: DEFAULT_WORKER_ID,
@@ -58,6 +64,7 @@ export function ensureInProcessWorker(): WorkerConnection {
     },
   });
   ({ quiescent } = worker);
+  deliveries.attach(connection, worker.watchesReleased);
   current = { connection, workerEnd, worker };
   return connection;
 }
@@ -80,6 +87,21 @@ export function inProcessWorkerServedMethodForTests(method: string): number {
 /** Test seam: the file handles the current in-process Worker holds. */
 export function inProcessWorkerFileHandlesForTests(): number {
   return current?.worker.fileHandles() ?? 0;
+}
+
+/**
+ * Test seam: the native watch subscriptions the current in-process Worker
+ * holds, and its watch release. Read `released` before ending the
+ * connection: the next request dials a new Worker.
+ */
+export function inProcessWorkerWatchesForTests(): {
+  subscriptions: WatchSnapshot[];
+  released: Promise<void>;
+} {
+  return {
+    subscriptions: current?.worker.watches() ?? [],
+    released: current?.worker.watchesReleased ?? Promise.resolve(),
+  };
 }
 
 /**

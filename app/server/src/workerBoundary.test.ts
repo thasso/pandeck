@@ -35,11 +35,17 @@ const SERVER_REPO_GIT_USERS = [
   "worktrees/knowledgeCheckout.ts",
 ];
 
-/** What `worker/` may import besides itself and `workerProtocol/`. */
+/**
+ * What `worker/` may import besides itself and `workerProtocol/`.
+ * `parcelWatcher.ts` loads the native watcher; it imports only
+ * `runtimeAssets.ts`, which reads the environment and asset paths, not server
+ * state.
+ */
 const WORKER_ALLOWED = new Set([
   "errors.ts",
   "fileReads.ts",
   "gitProcess.ts",
+  "parcelWatcher.ts",
   "spawnBroker.ts",
   "subprocessEnv.ts",
 ]);
@@ -460,7 +466,7 @@ test("served files read only through the served-file access", () => {
   );
   assert.deepEqual(
     importersOf((target) => target === "workers/fileClient.ts"),
-    ["checkoutFileAccess.ts", "servedFileAccess.ts"],
+    ["checkoutFileAccess.ts", "servedFileAccess.ts", "workers/watchClient.ts"],
   );
 });
 
