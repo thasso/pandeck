@@ -685,6 +685,101 @@ test("AC9 I4: a Worker failure or an unclassified error on the .git pointer leav
   assert.ok(repoActivityForTests(row.id));
 });
 
+/**
+ * Hold the next `.git` pointer read of `path` after the Worker answered it,
+ * until `release`.
+ */
+function holdPointerRead(path: string) {
+  const pointer = join(path, ".git");
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const held = new Promise<void>((resolve) => (entered = resolve));
+  const stop = intercept(FILE_METHODS.open, (payload, signal, real) => {
+    if (pathOf(payload) !== pointer) return undefined;
+    stop();
+    return real(payload, signal).then(async (answer) => {
+      entered();
+      await gate;
+      return answer;
+    });
+  });
+  cleanups.push(() => {
+    stop();
+    release();
+  });
+  return { held, release: () => release() };
+}
+
+test("I4 removal: a pointer read pending past a row's removal never brings it back", async () => {
+  const { id, gitDir } = project("i4removed");
+  const native = nativeWatches(gitDir);
+  const a = await createWorktree({ projectId: id, name: "i4-removed-a" });
+  const b = await createWorktree({ projectId: id, name: "i4-removed-b" });
+  assert.equal(native.live, 1);
+
+  const read = holdPointerRead(a.path);
+  const viewing = addWorktreeViewer(a.id);
+  await read.held;
+  await removeWorktree(a.id, { force: true, deleteBranch: true });
+  assert.equal(repoActivityForTests(a.id), undefined);
+  read.release();
+  await viewing;
+  assert.equal(repoActivityForTests(a.id), undefined, "a stays removed");
+  assert.ok(repoActivityForTests(b.id), "b still holds the repo watch");
+  assert.equal(native.live, 1);
+
+  await removeWorktree(b.id, { force: true, deleteBranch: true });
+  assert.equal(native.live, 0, "the last removal releases the git-dir watch");
+});
+
+test("I4 removal: the last row's removal waits for a sibling still joining", async () => {
+  const { id, gitDir } = project("i4joining");
+  const native = nativeWatches(gitDir);
+  const a = await createWorktree({ projectId: id, name: "i4-joining-a" });
+  const b = await createWorktree({ projectId: id, name: "i4-joining-b" });
+  const rowB = getWorktree(b.id)!;
+  await unregisterWorktree(b.id);
+  assert.equal(native.live, 1);
+
+  const read = holdPointerRead(b.path);
+  const joining = registerWorktree(rowB);
+  await read.held;
+  await removeWorktree(a.id, { force: true, deleteBranch: true });
+  assert.equal(native.live, 1, "b's pending join keeps the watch");
+  read.release();
+  await joining;
+  assert.ok(repoActivityForTests(b.id), "b joined the live repo watch");
+  assert.equal(native.live, 1);
+
+  await removeWorktree(b.id, { force: true, deleteBranch: true });
+  assert.equal(native.live, 0);
+});
+
+test("I4 removal: a first join that fails leaves no repo watch behind", async () => {
+  const { id, gitDir } = project("i4failed");
+  const native = nativeWatches(gitDir);
+  const record = await createWorktree({ projectId: id, name: "i4-failed" });
+  const row = getWorktree(record.id)!;
+  await unregisterWorktree(record.id);
+  assert.equal(native.live, 0);
+
+  failFileCallOnce(FILE_METHODS.open, join(row.path, ".git"), "refused");
+  const error = await registerWorktree(row).then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  assert.ok(isWorkerFailure(error), "the Worker failure still rejects");
+  assert.equal(repoActivityForTests(record.id), undefined, "the row is out");
+  assert.equal(native.live, 0, "nothing holds the git-dir watch");
+
+  await registerWorktree(row);
+  assert.ok(repoActivityForTests(record.id));
+  assert.equal(native.live, 1);
+  await removeWorktree(record.id, { force: true, deleteBranch: true });
+  assert.equal(native.live, 0);
+});
+
 test("AC9 I5: a Worker failure on a linked admin dir fails the scan, with no broadcast", async () => {
   const { id, gitDir } = project("ac9i5");
   const native = capture();

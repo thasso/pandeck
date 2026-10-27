@@ -288,6 +288,12 @@ interface RepoWatch extends LossRecovery {
   ready: Promise<void>;
   repoKey: string | undefined;
   worktreeIds: Set<string>;
+  /**
+   * Registrations still reading before their row joins. Unregistering a row
+   * drops its own, so a read pending past the removal cannot bring the row
+   * back, and the watch is released only once none is left.
+   */
+  joining: Set<RepoJoin>;
   /** Linked-worktree git-dir name per id; absent means the main checkout. */
   gitDirNames: Map<string, string | undefined>;
   /** Last seen HEAD oid per worktree, to tell real commits from ref noise. */
@@ -296,6 +302,10 @@ interface RepoWatch extends LossRecovery {
   debounce: ReturnType<typeof setTimeout> | undefined;
   /** Launched scans; teardown waits them out after stopping new callbacks. */
   scans: Set<Promise<void>>;
+}
+
+interface RepoJoin {
+  worktreeId: string;
 }
 
 interface TreeWatch extends LossRecovery {
@@ -413,8 +423,9 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
   const side = checkoutSideOf(row);
   const key = repoWatchKey(side, row.mainRepoRoot);
   let repo = repoWatches.get(key);
+  const created = !repo;
+  let markReady!: () => void;
   if (!repo) {
-    let markReady!: () => void;
     const ready = new Promise<void>((resolve) => {
       markReady = resolve;
     });
@@ -426,6 +437,7 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
       ready,
       repoKey: undefined,
       worktreeIds: new Set(),
+      joining: new Set(),
       gitDirNames: new Map(),
       lastHeads: new Map(),
       pendingGitPaths: new Set(),
@@ -442,25 +454,52 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
       recoveries: 0,
     };
     repoWatches.set(key, repo);
-    await subscribeRepo(repo);
-    try {
-      repo.repoKey = await checkoutGitOn(side).repoLockKey(row.mainRepoRoot);
-      await readRepoBranchUpstreams(side, row.mainRepoRoot, {
-        force: true,
-        repoKey: repo.repoKey,
-      });
-    } finally {
-      markReady();
-    }
-  } else {
-    await repo.ready;
   }
-  // Read before the row joins: a Worker failure leaves it out.
-  const gitDirName = await linkedGitDirName(repo.side, row);
-  repo.worktreeIds.add(row.id);
-  repo.gitDirNames.set(row.id, gitDirName);
-  const head = await currentHead(repo.side, row.path);
-  if (head) repo.lastHeads.set(row.id, head);
+  const join: RepoJoin = { worktreeId: row.id };
+  repo.joining.add(join);
+  try {
+    if (created) {
+      await subscribeRepo(repo);
+      try {
+        repo.repoKey = await checkoutGitOn(side).repoLockKey(row.mainRepoRoot);
+        await readRepoBranchUpstreams(side, row.mainRepoRoot, {
+          force: true,
+          repoKey: repo.repoKey,
+        });
+      } finally {
+        markReady();
+      }
+    } else {
+      await repo.ready;
+    }
+    // Read before the row joins: a Worker failure leaves it out.
+    const gitDirName = await linkedGitDirName(repo.side, row);
+    // Unregistered meanwhile: the row stays out.
+    if (!repo.joining.has(join)) return;
+    repo.worktreeIds.add(row.id);
+    repo.gitDirNames.set(row.id, gitDirName);
+    const head = await currentHead(repo.side, row.path);
+    if (head && repo.joining.has(join)) repo.lastHeads.set(row.id, head);
+  } finally {
+    repo.joining.delete(join);
+    await releaseUnusedRepo(repo);
+  }
+}
+
+/**
+ * Tear down a repo watch that no row holds and none is joining. The root goes
+ * first so a subscription callback already queued by the platform cannot
+ * schedule another scan while teardown is settling the scans launched before
+ * this point.
+ */
+async function releaseUnusedRepo(repo: RepoWatch): Promise<void> {
+  if (repo.worktreeIds.size > 0 || repo.joining.size > 0) return;
+  if (repoWatches.get(repo.key) !== repo) return;
+  repoWatches.delete(repo.key);
+  if (repo.debounce) clearTimeout(repo.debounce);
+  clearRepoRetry(repo);
+  await repo.subscription?.unsubscribe().catch(() => undefined);
+  await Promise.allSettled([...repo.scans]);
 }
 
 /**
@@ -1785,20 +1824,17 @@ export async function registerWorktree(row: WorktreeRow): Promise<void> {
 
 /** Stop tracking a removed worktree (its repo watch stays for siblings). */
 export async function unregisterWorktree(worktreeId: string): Promise<void> {
-  for (const [key, repo] of repoWatches) {
-    if (!repo.worktreeIds.delete(worktreeId)) continue;
+  for (const repo of repoWatches.values()) {
+    let held = repo.worktreeIds.delete(worktreeId);
+    for (const join of repo.joining)
+      if (join.worktreeId === worktreeId) {
+        repo.joining.delete(join);
+        held = true;
+      }
+    if (!held) continue;
     repo.gitDirNames.delete(worktreeId);
     repo.lastHeads.delete(worktreeId);
-    if (repo.worktreeIds.size === 0) {
-      // Remove the root first so a subscription callback already queued by the
-      // platform cannot schedule another scan while teardown is settling the
-      // scans launched before this point.
-      repoWatches.delete(key);
-      if (repo.debounce) clearTimeout(repo.debounce);
-      clearRepoRetry(repo);
-      await repo.subscription?.unsubscribe().catch(() => undefined);
-      await Promise.allSettled([...repo.scans]);
-    }
+    await releaseUnusedRepo(repo);
   }
   const tree = treeWatches.get(worktreeId);
   if (tree) {
