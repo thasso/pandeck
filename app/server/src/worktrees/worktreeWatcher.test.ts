@@ -1092,13 +1092,16 @@ test("a git-state watch skips every object store by path", async () => {
   ])
     writeFileSync(join(gitDir, head), "ref: refs/heads/main\n");
 
-  assert.deepEqual((await gitDirIgnoreForTests(gitDir)).sort(), [
-    "lfs",
-    "modules/extern/lib/modules/nested/objects",
-    "modules/extern/lib/objects",
-    "objects",
-    "worktrees/wt/modules/sub/objects",
-  ]);
+  assert.deepEqual(
+    (await gitDirIgnoreForTests(DEFAULT_WORKER_SIDE, gitDir)).sort(),
+    [
+      "lfs",
+      "modules/extern/lib/modules/nested/objects",
+      "modules/extern/lib/objects",
+      "objects",
+      "worktrees/wt/modules/sub/objects",
+    ],
+  );
 });
 
 /** Parcel subscriptions made for one checkout path since `spy` started. */

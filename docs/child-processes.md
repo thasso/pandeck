@@ -93,11 +93,15 @@ directly.
 `worktrees/worktreeWatcher.ts` watches with @parcel/watcher: one always-on
 subscription per repository's `.git` dir (commits, ref moves), and a recursive
 tree subscription per checkout someone is viewing (edits, rescanned as
-`git status`). A tree subscribe crawls the whole checkout on the libuv pool that
-file I/O and WebSocket compression share, holds one inotify watch per directory,
-and keeps an in-memory tree of every entry it crawled. On production, 47,000
-watches were held, most of them in build output, virtualenvs, data directories
-and submodules.
+`git status`). The Worker that runs a checkout's git makes its subscriptions and
+reads its ignore files and `HEAD`s (`checkoutWatchOn`, `docs/workers.md`,
+"Watches"); the Knowledge Base row's are made on the server by kind. Git-dir
+watches are kept per side, so a project registered at the KB root has one on
+each. A tree subscribe crawls the whole checkout on the libuv pool that file I/O
+and WebSocket compression share, holds one inotify watch per directory, and
+keeps an in-memory tree of every entry it crawled. On production, 47,000 watches
+were held, most of them in build output, virtualenvs, data directories and
+submodules.
 
 - **Only what can change `git status` is watched.** The tree tier ignores `.git`
   plus, at the root, `node_modules`, `dist` and `.DS_Store`. It also ignores
@@ -133,7 +137,7 @@ and submodules.
   a newly un-ignored directory. `.git/info/exclude` and a global excludes file
   are read at subscribe time only. The Bun install check derives this set for a
   repository with a root and a nested ignored directory and subscribes the
-  packaged watcher with it.
+  packaged watcher with it through the Worker.
 - **A viewer leaving does not end the watch.** A tree subscription outlives its
   last viewer by ten minutes, so moving between sessions costs no re-crawl.
   Events on an idle subscription schedule no scan: nobody would receive it, and
@@ -169,7 +173,25 @@ and submodules.
   path. A release that never succeeds keeps its old subscription, and its slot,
   until restart. The first failure is logged, and every tenth after it. A viewed
   tree without a watch is logged once, naming the reason: the cap, or a checkout
-  that is gone.
+  that is gone. A Worker failure is never read as a checkout that is gone: a
+  presence check the Worker could not answer takes the same failed step and
+  backoff, and keeps the tree's slot.
+- **A watch lost with its Worker connection recovers.** The server learns of the
+  loss only after the Worker released the native subscription, so the cap still
+  counts truly. The first loss resubscribes at once on the new connection (a
+  tree only while it ranks for a slot) and rescans in full: every viewed tree's
+  status and changes, and for a git dir every row's status and its upstreams. A
+  loss within 60 s of the last recovery is quick, and waits 5 s, then 10, 20, 40
+  and 60 s on successive quick losses; a watch that stayed live 60 s or more
+  starts again from an immediate resubscribe. A git-dir subscribe that fails for
+  a Worker failure retries on the same backoff, while one the filesystem refused
+  (a native failure) is logged and, as before, not retried. A recovery
+  broadcasts once per tier even when nothing changed.
+- **A burst too big to queue is a bulk batch.** The Worker queues at most 20,000
+  paths per subscription awaiting delivery, with one delivery in flight. Above
+  that the queue collapses into an overflow marker: a tree treats it as a batch
+  of 1,000 or more events (one scan, ignore set marked stale), and a git dir
+  rescans in full. A burst never causes fewer scans than its events would.
 - **Agent edits do not depend on the watch.** Every finished tool call of a
   session linked to a worktree (`subscribeSessionToolCompleted`) schedules that
   worktree's scan while anyone views it. It shares the watch's 400 ms debounce,

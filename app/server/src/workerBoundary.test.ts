@@ -82,7 +82,6 @@ const GIT_SPAWNS: Record<string, number> = {
  */
 const CHECKOUT_FS_INVENTORY: Record<string, string> = {
   "worktrees/worktreeResolve.ts": "W3d",
-  "worktrees/worktreeWatcher.ts": "W4",
   "projectProvision.ts": "W5",
   "tools/core/projectCreateTool.ts": "W5",
   "worktrees/worktrees.ts": "W5",
@@ -115,6 +114,7 @@ const MIGRATED_CHECKOUT_READERS = [
   "worktrees/worktreeMerge.ts",
   "worktrees/worktreeStatus.ts",
   "worktrees/worktreeSync.ts",
+  "worktrees/worktreeWatcher.ts",
 ];
 
 /**
@@ -470,6 +470,22 @@ test("served files read only through the served-file access", () => {
   );
 });
 
+test("native watches are made only through the checkout-watch access", () => {
+  // The server side's (the KB row) and the Worker's, each by side.
+  assert.deepEqual(
+    importersOf((target) => target === "parcelWatcher.ts"),
+    ["checkoutWatchAccess.ts", "worker/watch.ts"],
+  );
+  assert.deepEqual(
+    importersOf((target) => target === "workers/watchClient.ts"),
+    ["checkoutWatchAccess.ts"],
+  );
+  assert.deepEqual(
+    importersOf((target) => target === "workers/watchDeliveries.ts"),
+    ["workers/inProcessWorker.ts", "workers/watchClient.ts"],
+  );
+});
+
 test("migrated checkout readers read only through the checkout-file access", () => {
   for (const module of MIGRATED_CHECKOUT_READERS) {
     const scan = scans.get(module);
@@ -654,6 +670,9 @@ const SIDE_BOUND_FORBIDDEN: Record<string, readonly string[] | "*"> = {
   "workers/fileClient.ts": "*",
   "workers/checkoutClient.ts": "*",
   "serverRepoGit.ts": "*",
+  "parcelWatcher.ts": "*",
+  "workers/watchClient.ts": "*",
+  "workers/watchDeliveries.ts": "*",
 };
 
 /** The side-bound and pure allowance: every symbol, or the listed ones. */
@@ -665,6 +684,7 @@ const SIDE_BOUND_ALLOWED: Record<string, readonly string[] | "*"> = {
     "checkoutFailureOf",
     "CheckoutPathVerdict",
   ],
+  "checkoutWatchAccess.ts": ["checkoutWatchOn"],
   "worktrees/knowledgeCheckout.ts": [
     "checkoutSideOf",
     "resolveReadableWorktreeRow",
@@ -674,7 +694,7 @@ const SIDE_BOUND_ALLOWED: Record<string, readonly string[] | "*"> = {
   "node:url": "*",
 };
 
-type ExternalKind = "function" | "typed-const" | "scalar" | "server-fs";
+type ExternalKind = "function" | "typed-const" | "scalar";
 
 interface ExternalImport {
   importer: string;
@@ -683,7 +703,7 @@ interface ExternalImport {
   kind: ExternalKind;
   /**
    * `function`: the parameters and return type; `typed-const`: the annotation;
-   * `scalar`: the whole statement; `server-fs`: none. Whitespace-normalized.
+   * `scalar`: the whole statement. Whitespace-normalized.
    */
   pin: string;
 }
@@ -772,34 +792,6 @@ const SIDE_BOUND_EXTERNAL_IMPORTS: ExternalImport[] = [
     kind: "function",
     pin: "(): WorktreeBroadcaster",
   },
-  {
-    importer: "worktrees/worktreeWatcher.ts",
-    module: "node:fs",
-    symbol: "existsSync",
-    kind: "server-fs",
-    pin: "",
-  },
-  {
-    importer: "worktrees/worktreeWatcher.ts",
-    module: "node:fs",
-    symbol: "readFileSync",
-    kind: "server-fs",
-    pin: "",
-  },
-  {
-    importer: "worktrees/worktreeWatcher.ts",
-    module: "node:fs/promises",
-    symbol: "readdir",
-    kind: "server-fs",
-    pin: "",
-  },
-  {
-    importer: "worktrees/worktreeWatcher.ts",
-    module: "parcelWatcher.ts",
-    symbol: "default",
-    kind: "server-fs",
-    pin: "",
-  },
 ];
 
 /** The modules that may hand out the KB row: the gate and three side-bound. */
@@ -809,8 +801,6 @@ const KB_ROW_PRODUCERS = [
   "worktrees/worktreeStatus.ts",
   "worktrees/worktreeWatcher.ts",
 ];
-
-const SERVER_FS_MODULES = new Set(["node:fs", "node:fs/promises"]);
 
 /**
  * One value binding a module takes from (or re-exports out of) another, or a
@@ -958,8 +948,6 @@ function sideBoundViolations(file: string, source: string): string[] {
       violations.push(`${label} (not on the closed surface)`);
       continue;
     }
-    if (entry.kind === "server-fs" && !(file in CHECKOUT_FS_INVENTORY))
-      violations.push(`${label} (server-fs outside the W4 inventory)`);
   }
   walk(parseModule(file, source), (node) => {
     if (
@@ -985,21 +973,12 @@ function externalEntryViolation(
   source: string | undefined,
 ): string | undefined {
   const label = `${entry.module}#${entry.symbol} (${entry.kind})`;
-  if (entry.kind === "server-fs") {
-    if (SERVER_FS_MODULES.has(entry.module)) return undefined;
-    if (entry.module !== "parcelWatcher.ts" || entry.symbol !== "default")
-      return `${label}: not a server filesystem primitive`;
-  }
   if (source === undefined) return `${label}: the declaring module is gone`;
   const program = parseModule(entry.module, source);
   let found: string | undefined;
   for (const node of program.body as AstNode[]) {
     if (node.type === "ExportAllDeclaration")
       return `${label}: the declaring module has an export *`;
-    if (entry.kind === "server-fs") {
-      if (node.type === "ExportDefaultDeclaration") found = "server-fs";
-      continue;
-    }
     if (node.type !== "ExportNamedDeclaration") continue;
     if (node.source != null || node.declaration == null) {
       for (const specifier of node.specifiers as AstNode[])
@@ -1040,8 +1019,7 @@ function externalEntryViolation(
         else found = "unsupported declaration";
       }
   }
-  const expected =
-    entry.kind === "server-fs" ? "server-fs" : `${entry.kind} ${entry.pin}`;
+  const expected = `${entry.kind} ${entry.pin}`;
   if (found === undefined) return `${label}: not declared there`;
   return found === expected ? undefined : `${label}: declared as ${found}`;
 }
@@ -1183,23 +1161,22 @@ test("the side-bound ratchet flags each way around it (S1–S10)", () => {
     'import { existsSync } from "node:fs";',
     /not on the closed surface/,
   );
-  const fsEntry = {
-    ...entry("existsSync"),
-    importer: status,
-  };
-  SIDE_BOUND_EXTERNAL_IMPORTS.push(fsEntry);
-  try {
-    flags(
-      status,
-      'import { existsSync } from "node:fs";',
-      /server-fs outside the W4 inventory/,
-    );
-  } finally {
-    SIDE_BOUND_EXTERNAL_IMPORTS.splice(
-      SIDE_BOUND_EXTERNAL_IMPORTS.indexOf(fsEntry),
-      1,
-    );
-  }
+  // The watcher reads and watches only through its side (W4).
+  flags(
+    "worktrees/worktreeWatcher.ts",
+    'import { existsSync } from "node:fs";',
+    /not on the closed surface/,
+  );
+  flags(
+    "worktrees/worktreeWatcher.ts",
+    'import watcher from "../parcelWatcher.ts";',
+    /forbidden/,
+  );
+  flags(
+    "worktrees/worktreeWatcher.ts",
+    'import { subscribeOnWorker } from "../workers/watchClient.ts";',
+    /forbidden/,
+  );
   flags(
     status,
     'import * as settings from "../settings.ts";',

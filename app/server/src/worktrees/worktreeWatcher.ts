@@ -17,12 +17,21 @@
  *    reused. A linked session's finished tool call rescans too
  *    ({@link rescanSessionWorktree}), so agent edits never depend on it.
  *
+ * Each checkout's subscriptions and reads run on its side
+ * (`checkoutWatchOn`, `checkoutFilesOn`): the Worker that owns the checkout,
+ * or the server for the Knowledge Base row. Debounce, scan scheduling, the cap
+ * and retries stay here. A subscription lost with its Worker connection
+ * resubscribes once the Worker released it, and rescans in full
+ * ({@link LOSS_STABLE_MS} bounds a flapping connection).
+ *
  * All pushes go through the {@link worktreeBroadcaster} seam.
  */
-import watcher, { type AsyncSubscription } from "../parcelWatcher.ts";
-import { existsSync, readFileSync } from "node:fs";
-import { readdir } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
+import { checkoutFailureOf, checkoutFilesOn } from "../checkoutFileAccess.ts";
+import {
+  checkoutWatchOn,
+  type CheckoutWatchSubscription,
+} from "../checkoutWatchAccess.ts";
 import { checkoutGitOn } from "../gitExec.ts";
 import {
   listWorktrees,
@@ -78,6 +87,13 @@ let treeIgnoreRefreshMs = 30_000;
 /** First retry of a failed tree subscribe; doubles up to 60 s. */
 let treeRetryBaseMs = 5_000;
 const TREE_RETRY_MAX_MS = 60_000;
+/**
+ * A subscription lost within this long of its last recovery is a quick loss:
+ * it waits out the backoff instead of resubscribing at once, so a flapping
+ * Worker connection cannot drive unbounded rescans. A minute without a loss
+ * resets the run.
+ */
+const LOSS_STABLE_MS = 60_000;
 /**
  * Ignored subtrees of a watched checkout, as PATHS. @parcel/watcher resolves a
  * plain name against the root, and matches a glob as a regex against every
@@ -187,41 +203,87 @@ export async function treeIgnoreForTests(
  * Object stores under a git dir, as explicit paths: the main store, LFS, and
  * each submodule's (`modules/…`, also under a linked worktree's admin dir).
  * No relevant ref or HEAD lives there, and they hold most of its directories.
+ * Read on the repo's side: a directory the filesystem cannot list adds
+ * nothing, as an unreadable `HEAD` is no file; a Worker failure rejects.
  */
-async function gitDirIgnore(gitDir: string): Promise<string[]> {
+async function gitDirIgnore(
+  side: CheckoutSide,
+  gitDir: string,
+): Promise<string[]> {
+  const files = checkoutFilesOn(side);
+  const answered =
+    <T>(fallback: T) =>
+    (err: unknown) => {
+      if (checkoutFailureOf(err) === "filesystem") return fallback;
+      throw err;
+    };
   const ignore = ["objects", "lfs"];
+  const entriesOf = (dir: string) =>
+    files.readDir(gitDir, join(gitDir, dir)).catch(answered([]));
   const walk = async (dir: string, depth: number): Promise<void> => {
-    const entries = await readdir(join(gitDir, dir), {
-      withFileTypes: true,
-    }).catch(() => []);
-    if (entries.some((entry) => entry.name === "HEAD" && entry.isFile()))
+    const entries = await entriesOf(dir);
+    if (
+      entries.some((entry) => entry.name === "HEAD" && !entry.directory) &&
+      (await files
+        .inspect(gitDir, join(gitDir, dir, "HEAD"), { follow: false })
+        .then((head) => head.kind === "file", answered(false)))
+    )
       ignore.push(`${dir}/objects`);
     if (depth >= 6) return;
     for (const entry of entries) {
-      if (!entry.isDirectory() || GIT_DIR_SKIP.has(entry.name)) continue;
+      if (!entry.directory || GIT_DIR_SKIP.has(entry.name)) continue;
       if (!GLOB_LIKE.test(entry.name))
         await walk(`${dir}/${entry.name}`, depth + 1);
     }
   };
   await walk("modules", 0);
-  for (const linked of await readdir(join(gitDir, "worktrees")).catch(() => []))
-    if (!GLOB_LIKE.test(linked)) await walk(`worktrees/${linked}/modules`, 0);
+  for (const linked of await entriesOf("worktrees"))
+    if (!GLOB_LIKE.test(linked.name))
+      await walk(`worktrees/${linked.name}/modules`, 0);
   return ignore;
 }
 /** Git-dir children that never contain another submodule's git dir. */
 const GIT_DIR_SKIP = new Set(["objects", "refs", "logs", "hooks", "info"]);
 
-/** Test seam: the ignore list the git-state watch of `gitDir` uses. */
-export function gitDirIgnoreForTests(gitDir: string): Promise<string[]> {
-  return gitDirIgnore(gitDir);
+/** Test seam: the ignore list the git-state watch of `gitDir` on `side` uses. */
+export function gitDirIgnoreForTests(
+  side: CheckoutSide,
+  gitDir: string,
+): Promise<string[]> {
+  return gitDirIgnore(side, gitDir);
 }
 type GitStateListener = (worktreeId: string, newHead: string) => void;
 
-interface RepoWatch {
+/**
+ * How a watch recovers a lost subscription (`docs/child-processes.md`). Both
+ * tiers keep it beside their own retry state.
+ */
+interface LossRecovery {
+  /** Consecutive quick losses; see {@link LOSS_STABLE_MS}. */
+  lossRun: number;
+  /** When a resubscribe after a loss last succeeded. */
+  recoveredAt: number | undefined;
+  /** The next successful subscribe follows a loss: it rescans in full. */
+  resumeScan: boolean;
+  /** Successful resubscribes after a loss, for the test seams. */
+  recoveries: number;
+}
+
+interface RepoWatch extends LossRecovery {
+  /** Its {@link repoWatches} key. */
+  key: string;
   /** The side every row it holds runs its git on: part of its key. */
   side: CheckoutSide;
   mainRepoRoot: string;
-  subscription: AsyncSubscription | undefined;
+  subscription: CheckoutWatchSubscription | undefined;
+  /** The next subscribe attempt after a Worker failure or a quick loss. */
+  retry: ReturnType<typeof setTimeout> | undefined;
+  retryMs: number | undefined;
+  /** Consecutive failed subscribes; only the first of a run is logged. */
+  failures: number;
+  /** The next scan reads every row in full (overflow, recovery). */
+  fullRescan: boolean;
+  fullRescans: number;
   /** Initialization subscribes first, then snapshots branch relationships. */
   ready: Promise<void>;
   repoKey: string | undefined;
@@ -236,13 +298,13 @@ interface RepoWatch {
   scans: Set<Promise<void>>;
 }
 
-interface TreeWatch {
+interface TreeWatch extends LossRecovery {
   id: string;
   /** Checkout path, set once the id resolved to an active row. */
   path: string | undefined;
   /** The row's side, set with {@link path}. */
   side: CheckoutSide | undefined;
-  subscription: AsyncSubscription | undefined;
+  subscription: CheckoutWatchSubscription | undefined;
   /** Ignore list {@link subscription} was made with. */
   ignore: string[] | undefined;
   /**
@@ -263,6 +325,8 @@ interface TreeWatch {
   ignoreRefreshedAt: number;
   /** Next {@link settleTree} of a throttled refresh or a failed step. */
   retry: ReturnType<typeof setTimeout> | undefined;
+  /** The delay {@link retry} was armed with. */
+  retryMs: number | undefined;
   /** {@link retry} releases a subscription, so it outlives the viewers. */
   retryRelease: boolean;
   /** Consecutive failed subscribes/releases; only the first is logged. */
@@ -355,6 +419,7 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
       markReady = resolve;
     });
     repo = {
+      key,
       side,
       mainRepoRoot: row.mainRepoRoot,
       subscription: undefined,
@@ -366,29 +431,18 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
       pendingGitPaths: new Set(),
       debounce: undefined,
       scans: new Set(),
+      retry: undefined,
+      retryMs: undefined,
+      failures: 0,
+      fullRescan: false,
+      fullRescans: 0,
+      lossRun: 0,
+      recoveredAt: undefined,
+      resumeScan: false,
+      recoveries: 0,
     };
     repoWatches.set(key, repo);
-    const gitDir = join(row.mainRepoRoot, ".git");
-    if (existsSync(gitDir)) {
-      try {
-        repo.subscription = await watcher.subscribe(
-          gitDir,
-          (err, events) => {
-            if (err) return;
-            const paths = events
-              .map((event) => event.path)
-              .filter((path) => isRelevantGitPath(row.mainRepoRoot, path));
-            if (paths.length > 0) scheduleRepoScan(key, paths);
-          },
-          { ignore: await gitDirIgnore(gitDir) },
-        );
-      } catch (err) {
-        console.warn(
-          "[worktrees] failed to watch git dir:",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    }
+    await subscribeRepo(repo);
     try {
       repo.repoKey = await checkoutGitOn(side).repoLockKey(row.mainRepoRoot);
       await readRepoBranchUpstreams(side, row.mainRepoRoot, {
@@ -401,25 +455,178 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
   } else {
     await repo.ready;
   }
+  // Read before the row joins: a Worker failure leaves it out.
+  const gitDirName = await linkedGitDirName(repo.side, row);
   repo.worktreeIds.add(row.id);
-  repo.gitDirNames.set(row.id, linkedGitDirName(row));
+  repo.gitDirNames.set(row.id, gitDirName);
   const head = await currentHead(repo.side, row.path);
   if (head) repo.lastHeads.set(row.id, head);
 }
 
-function linkedGitDirName(row: WorktreeRow): string | undefined {
-  if (row.path === row.mainRepoRoot) return undefined;
+/**
+ * One subscribe attempt of a repo watch's git dir. It never rejects: an
+ * answered native failure is logged and not retried, as a failed git-dir
+ * watch always was; a Worker failure (or a read failure that is no
+ * filesystem answer) retries on the backoff, and its success rescans in full.
+ */
+async function subscribeRepo(repo: RepoWatch): Promise<void> {
+  const { side, mainRepoRoot } = repo;
+  const gitDir = join(mainRepoRoot, ".git");
+  let subscription: CheckoutWatchSubscription | undefined;
+  let lostEarly = false;
   try {
-    const pointer = readFileSync(join(row.path, ".git"), "utf8").trim();
-    const normalized = pointer.split(sep).join("/");
-    const marker = "/worktrees/";
-    const start = normalized.lastIndexOf(marker);
-    return start >= 0
-      ? normalized.slice(start + marker.length).split("/")[0]
-      : undefined;
-  } catch {
-    return undefined;
+    if (!(await checkoutFilesOn(side).pathExists(mainRepoRoot, gitDir))) return;
+    const ignore = await gitDirIgnore(side, gitDir);
+    try {
+      subscription = await checkoutWatchOn(side).subscribe(
+        mainRepoRoot,
+        gitDir,
+        (err, events) => {
+          if (err) return;
+          const paths = events
+            .map((event) => event.path)
+            .filter((path) => isRelevantGitPath(mainRepoRoot, path));
+          if (paths.length > 0) scheduleRepoScan(repo.key, paths);
+        },
+        {
+          ignore,
+          onOverflow: () => requestFullRescan(repo),
+          onLost: () => {
+            if (subscription) onRepoLost(repo, subscription);
+            else lostEarly = true;
+          },
+        },
+      );
+    } catch (err) {
+      if (checkoutFailureOf(err) !== "filesystem") throw err;
+      console.warn(
+        "[worktrees] failed to watch git dir:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+  } catch (err) {
+    repo.resumeScan = true;
+    armRepoRetry(repo, repoBackoff(repo, err));
+    return;
   }
+  // Removed or replaced while subscribing: nothing holds it any more.
+  if (repoWatches.get(repo.key) !== repo) {
+    await subscription.unsubscribe().catch(() => undefined);
+    return;
+  }
+  repo.subscription = subscription;
+  repo.failures = 0;
+  if (lostEarly) {
+    onRepoLost(repo, subscription);
+    return;
+  }
+  if (repo.resumeScan) {
+    repo.resumeScan = false;
+    repo.recoveredAt = Date.now();
+    repo.recoveries += 1;
+    requestFullRescan(repo);
+  }
+}
+
+/** Count a failure (logging only the first of a run); the next retry delay. */
+function repoBackoff(repo: RepoWatch, err?: unknown): number {
+  if (err !== undefined) {
+    repo.failures += 1;
+    if (repo.failures === 1 || repo.failures % 10 === 0)
+      console.warn(
+        `[worktrees] git-dir watch of ${repo.mainRepoRoot} failed ${repo.failures}x (retrying):`,
+        err instanceof Error ? err.message : String(err),
+      );
+  }
+  return retryDelay(repo.failures);
+}
+
+function armRepoRetry(repo: RepoWatch, ms: number): void {
+  if (repoWatches.get(repo.key) !== repo) return;
+  clearRepoRetry(repo);
+  repo.retryMs = ms;
+  repo.retry = setTimeout(() => runRepoRetry(repo), ms);
+}
+
+function runRepoRetry(repo: RepoWatch): void {
+  repo.retry = undefined;
+  repo.retryMs = undefined;
+  if (repoWatches.get(repo.key) === repo && !repo.subscription)
+    void subscribeRepo(repo);
+}
+
+function clearRepoRetry(repo: RepoWatch): void {
+  if (repo.retry) clearTimeout(repo.retry);
+  repo.retry = undefined;
+  repo.retryMs = undefined;
+}
+
+/**
+ * The connection that held the git-dir subscription ended, and its Worker
+ * released it: resubscribe now, or after the backoff when the last recovery
+ * was less than {@link LOSS_STABLE_MS} ago.
+ */
+function onRepoLost(
+  repo: RepoWatch,
+  subscription: CheckoutWatchSubscription,
+): void {
+  if (repo.subscription !== subscription) return;
+  repo.subscription = undefined;
+  repo.resumeScan = true;
+  if (repoWatches.get(repo.key) !== repo) return;
+  if (quickLoss(repo)) {
+    repo.lossRun += 1;
+    repo.failures = repo.lossRun;
+    armRepoRetry(repo, repoBackoff(repo));
+    return;
+  }
+  repo.lossRun = 0;
+  void subscribeRepo(repo);
+}
+
+function quickLoss(watch: LossRecovery): boolean {
+  return (
+    watch.recoveredAt !== undefined &&
+    Date.now() - watch.recoveredAt < LOSS_STABLE_MS
+  );
+}
+
+/** The retry delay after `failures` consecutive failures: 5 s doubling to 60 s. */
+function retryDelay(failures: number): number {
+  return Math.min(
+    treeRetryBaseMs * 2 ** Math.max(0, failures - 1),
+    TREE_RETRY_MAX_MS,
+  );
+}
+
+/**
+ * Where a linked worktree's admin directory lives, from its `.git` pointer;
+ * undefined for the main checkout, or a pointer the filesystem cannot read.
+ * A Worker failure rejects.
+ */
+async function linkedGitDirName(
+  side: CheckoutSide,
+  row: WorktreeRow,
+): Promise<string | undefined> {
+  if (row.path === row.mainRepoRoot) return undefined;
+  let pointer: string;
+  try {
+    pointer = (
+      await checkoutFilesOn(side).readFile(row.path, join(row.path, ".git"))
+    )
+      .toString("utf8")
+      .trim();
+  } catch (err) {
+    if (checkoutFailureOf(err) === "filesystem") return undefined;
+    throw err;
+  }
+  const normalized = pointer.split(sep).join("/");
+  const marker = "/worktrees/";
+  const start = normalized.lastIndexOf(marker);
+  return start >= 0
+    ? normalized.slice(start + marker.length).split("/")[0]
+    : undefined;
 }
 
 function scheduleRepoScan(key: string, paths: string[]): void {
@@ -431,7 +638,9 @@ function scheduleRepoScan(key: string, paths: string[]): void {
     repo.debounce = undefined;
     const pendingPaths = [...repo.pendingGitPaths];
     repo.pendingGitPaths.clear();
-    const scan = scanRepo(key, pendingPaths);
+    const full = repo.fullRescan;
+    repo.fullRescan = false;
+    const scan = scanRepo(key, pendingPaths, full);
     repo.scans.add(scan);
     void scan
       .catch((err) => {
@@ -442,6 +651,17 @@ function scheduleRepoScan(key: string, paths: string[]): void {
       })
       .finally(() => repo.scans.delete(scan));
   }, GIT_DEBOUNCE_MS);
+}
+
+/**
+ * Events were lost (a queue overflow, or the gap before a resubscribe): the
+ * next scan reads every row in full, merged into the pending debounce.
+ */
+function requestFullRescan(repo: RepoWatch): void {
+  if (repoWatches.get(repo.key) !== repo) return;
+  repo.fullRescan = true;
+  repo.fullRescans += 1;
+  scheduleRepoScan(repo.key, []);
 }
 
 function relativeGitPath(mainRepoRoot: string, path: string): string {
@@ -642,8 +862,21 @@ async function refreshGitStatuses(
       ? cachedRepoBranchUpstreams(side, mainRepoRoot)
       : undefined;
   let branchUpstreams = previousBranchUpstreams;
-  const linkedGitDirExists = (name: string) =>
-    existsSync(join(mainRepoRoot, ".git", "worktrees", name));
+  // Whether an unknown linked HEAD's admin directory still exists, read on
+  // the repo's side before the synchronous targeting rule asks. A Worker
+  // failure rejects the scan.
+  const known = new Set(rows.map((row) => gitDirNames.get(row.id)));
+  const present = new Map<string, boolean>();
+  const files = checkoutFilesOn(side);
+  for (const path of relativePaths) {
+    const name = /^worktrees\/([^/]+)\/(?:logs\/)?(?:HEAD|MERGE_HEAD)$/.exec(
+      path,
+    )?.[1];
+    if (name === undefined || known.has(name) || present.has(name)) continue;
+    const adminDir = join(mainRepoRoot, ".git", "worktrees", name);
+    present.set(name, await files.pathExists(mainRepoRoot, adminDir));
+  }
+  const linkedGitDirExists = (name: string) => present.get(name) ?? true;
   let affected = new Set(
     affectedWorktreeIdsForGitPaths(
       rows,
@@ -761,7 +994,36 @@ export async function refreshGitStatusesForTests(
   ).statuses;
 }
 
-async function scanRepo(key: string, paths: string[]): Promise<void> {
+/**
+ * Every row in full: one authoritative ref map, then a forced status of each,
+ * never the remote patch.
+ */
+async function refreshAllGitStatuses(
+  side: CheckoutSide,
+  rows: WorktreeRow[],
+  mainRepoRoot: string,
+  suppliedRepoKey?: string,
+): Promise<GitStatusBatchRefresh> {
+  const repoKey =
+    suppliedRepoKey ?? (await checkoutGitOn(side).repoLockKey(mainRepoRoot));
+  const branchUpstreams = await readRepoBranchUpstreams(side, mainRepoRoot, {
+    force: true,
+    repoKey,
+  });
+  const statuses: GitStatusBatchRefresh["statuses"] = new Map();
+  for (const row of rows)
+    statuses.set(
+      row.id,
+      await computeWorktreeStatus(row, { force: true, branchUpstreams }),
+    );
+  return { statuses, fullyScanned: new Set(statuses.keys()) };
+}
+
+async function scanRepo(
+  key: string,
+  paths: string[],
+  full = false,
+): Promise<void> {
   const repo = repoWatches.get(key);
   if (!repo) return;
   const { side, mainRepoRoot } = repo;
@@ -776,15 +1038,17 @@ async function scanRepo(key: string, paths: string[]): Promise<void> {
     }
     rows.push(row);
   }
-  const refreshed = await refreshGitStatuses(
-    side,
-    rows,
-    mainRepoRoot,
-    paths,
-    repo.gitDirNames,
-    repo.repoKey,
-  );
-  const remoteOnly = isRemoteOnlyGitBatch(mainRepoRoot, paths);
+  const refreshed = full
+    ? await refreshAllGitStatuses(side, rows, mainRepoRoot, repo.repoKey)
+    : await refreshGitStatuses(
+        side,
+        rows,
+        mainRepoRoot,
+        paths,
+        repo.gitDirNames,
+        repo.repoKey,
+      );
+  const remoteOnly = !full && isRemoteOnlyGitBatch(mainRepoRoot, paths);
   for (const row of rows) {
     const status = refreshed.statuses.get(row.id);
     if (!status) continue;
@@ -908,12 +1172,22 @@ function onTreeEvents(
   // `.git` itself can still surface; filter defensively.
   const changed = events.filter((event) => !inGitDir(root, event.path));
   if (changed.length === 0) return;
-  tree.eventBatches += 1;
-  if (
+  onTreeBatch(
+    tree,
     changed.length >= TREE_BULK_EVENTS ||
-    changed.some((event) => basename(event.path) === ".gitignore")
-  )
-    tree.ignoreStale = true;
+      changed.some((event) => basename(event.path) === ".gitignore"),
+  );
+}
+
+/** The Worker's queue overflowed: the lost batches count as one bulk batch. */
+function onTreeOverflow(tree: TreeWatch): void {
+  if (!tree.path || treeWatches.get(tree.id) !== tree) return;
+  onTreeBatch(tree, true);
+}
+
+function onTreeBatch(tree: TreeWatch, bulk: boolean): void {
+  tree.eventBatches += 1;
+  if (bulk) tree.ignoreStale = true;
   // A lingering or retiring watch only keeps its crawl warm: no one would
   // receive a scan, and the next viewer takes a fresh read of its own.
   if (tree.refs === 0 || tree.retired) {
@@ -976,11 +1250,21 @@ async function settleTree(tree: TreeWatch): Promise<void> {
   const path = tree.path;
   // Set together with the path, so a watch with a path has its side.
   const side = tree.side;
-  const present = path !== undefined && existsSync(path);
-  if (!path || !side || !present || !holdsWatchSlot(tree)) {
+  // Undefined when the Worker failed to answer: never "missing".
+  let present: boolean | undefined = false;
+  let failure: unknown;
+  if (path && side)
+    try {
+      present = await checkoutFilesOn(side).pathExists(path, path);
+    } catch (err) {
+      if (checkoutFailureOf(err) !== "worker") throw err;
+      present = undefined;
+      failure = err;
+    }
+  if (!path || !side || present === false || !holdsWatchSlot(tree)) {
     if (tree.refs === 0) retireTree(tree);
     else if (path && isActive(tree))
-      noteUnwatched(tree, present ? "cap" : "missing");
+      noteUnwatched(tree, present === false ? "missing" : "cap");
     // Only its armed timer retries a failed release: a re-rank must not
     // hammer a native unsubscribe that keeps failing.
     if (tree.subscription && tree.backingOff) return;
@@ -996,6 +1280,14 @@ async function settleTree(tree: TreeWatch): Promise<void> {
     if (tree.retired) dropTree(tree);
     // The slot it held is free for a viewed tree that was denied one.
     if (released) reconcileTrees();
+    return;
+  }
+  if (present === undefined) {
+    // A failed step: it retries while viewed, as a failed subscribe does.
+    if (!tree.backingOff) {
+      retryTree(tree, failureBackoff(tree, failure));
+      tree.backingOff = tree.retry !== undefined;
+    }
     return;
   }
   tree.unwatched = undefined;
@@ -1029,20 +1321,41 @@ async function settleTree(tree: TreeWatch): Promise<void> {
     }
     if (!canSubscribe()) return;
     tree.subscribing = true;
+    let subscription: CheckoutWatchSubscription | undefined;
+    let lostEarly = false;
     try {
-      tree.subscription = await watcher.subscribe(
+      subscription = await checkoutWatchOn(side).subscribe(
+        path,
         path,
         (err, events) => {
           if (!err) onTreeEvents(tree, events);
         },
-        { ignore },
+        {
+          ignore,
+          onOverflow: () => onTreeOverflow(tree),
+          onLost: () => {
+            if (subscription) onTreeLost(tree, subscription);
+            else lostEarly = true;
+          },
+        },
       );
+      tree.subscription = subscription;
     } finally {
       tree.subscribing = false;
     }
     tree.ignore = ignore;
     tree.failures = 0;
-    if (replacing && tree.refs > 0) scheduleTreeScan(tree.id);
+    if (lostEarly) {
+      onTreeLost(tree, subscription);
+      return;
+    }
+    if (tree.resumeScan) {
+      // Events between the loss and now went nowhere: one full rescan.
+      tree.resumeScan = false;
+      tree.recoveredAt = Date.now();
+      tree.recoveries += 1;
+      if (tree.refs > 0) scheduleTreeScan(tree.id);
+    } else if (replacing && tree.refs > 0) scheduleTreeScan(tree.id);
   } catch (err) {
     tree.ignoreStale = true;
     const delay = failureBackoff(tree, err);
@@ -1092,10 +1405,40 @@ function failureBackoff(tree: TreeWatch, err?: unknown): number {
         err instanceof Error ? err.message : String(err),
       );
   }
-  return Math.min(
-    treeRetryBaseMs * 2 ** Math.max(0, tree.failures - 1),
-    TREE_RETRY_MAX_MS,
-  );
+  return retryDelay(tree.failures);
+}
+
+/**
+ * The connection that held the tree's subscription ended, and its Worker
+ * released it. The slot is free now. Resubscribe at once, or after the
+ * backoff when the last recovery was less than {@link LOSS_STABLE_MS} ago; a
+ * lingering tree resubscribes when its next viewer arrives.
+ */
+function onTreeLost(
+  tree: TreeWatch,
+  subscription: CheckoutWatchSubscription,
+): void {
+  if (tree.subscription !== subscription) return;
+  // A refresh or release retry armed for the lost subscription is moot.
+  clearRetry(tree);
+  tree.subscription = undefined;
+  tree.ignore = undefined;
+  tree.ignoreStale = true;
+  tree.lastChangesEmpty = undefined;
+  tree.resumeScan = true;
+  if (!quickLoss(tree)) {
+    tree.lossRun = 0;
+    reconcileTrees();
+    return;
+  }
+  tree.lossRun += 1;
+  tree.failures = tree.lossRun;
+  retryTree(tree, failureBackoff(tree));
+  tree.backingOff = tree.retry !== undefined;
+  // A retired tree has nothing left to wait for: its settle drops it.
+  if (tree.retired) void reconcileTree(tree);
+  for (const other of [...treeWatches.values()])
+    if (other !== tree) void reconcileTree(other);
 }
 
 /** Log once per episode why a viewed tree holds no subscription. */
@@ -1119,11 +1462,13 @@ function retryTree(tree: TreeWatch, ms: number, release = false): void {
   if (!release && (tree.refs === 0 || !isActive(tree))) return;
   clearRetry(tree);
   tree.retryRelease = release;
+  tree.retryMs = ms;
   tree.retry = setTimeout(() => runRetry(tree, release), ms);
 }
 
 function runRetry(tree: TreeWatch, release: boolean): void {
   tree.retry = undefined;
+  tree.retryMs = undefined;
   tree.backingOff = false;
   if (release ? tree.subscription : tree.refs > 0 && isActive(tree))
     void reconcileTree(tree);
@@ -1132,6 +1477,7 @@ function runRetry(tree: TreeWatch, release: boolean): void {
 function clearRetry(tree: TreeWatch): void {
   if (tree.retry) clearTimeout(tree.retry);
   tree.retry = undefined;
+  tree.retryMs = undefined;
   tree.retryRelease = false;
   tree.backingOff = false;
 }
@@ -1215,8 +1561,13 @@ export async function addWorktreeViewer(worktreeId: string): Promise<void> {
       ignoreStale: false,
       ignoreRefreshedAt: 0,
       retry: undefined,
+      retryMs: undefined,
       retryRelease: false,
       failures: 0,
+      lossRun: 0,
+      recoveredAt: undefined,
+      resumeScan: false,
+      recoveries: 0,
       unwatched: undefined,
       retired: false,
       subscribing: false,
@@ -1357,8 +1708,35 @@ export function treeActivityForTests(worktreeId: string) {
       scansScheduled: tree.scansScheduled,
       settlesPending: tree.settlesPending,
       retryArmed: tree.retry !== undefined,
+      retryMs: tree.retryMs,
+      recoveries: tree.recoveries,
     }
   );
+}
+
+/**
+ * Test hook: the git-dir watch holding a worktree — its armed retry and
+ * delay, recoveries after a loss, and full rescans requested.
+ */
+export function repoActivityForTests(worktreeId: string) {
+  for (const repo of repoWatches.values())
+    if (repo.worktreeIds.has(worktreeId))
+      return {
+        retryArmed: repo.retry !== undefined,
+        retryMs: repo.retryMs,
+        recoveries: repo.recoveries,
+        fullRescans: repo.fullRescans,
+      };
+  return undefined;
+}
+
+/** Test hook: run every repo watch's armed retry now, as its timer would. */
+export function fireRepoRetriesForTests(): void {
+  for (const repo of [...repoWatches.values()])
+    if (repo.retry) {
+      clearTimeout(repo.retry);
+      runRepoRetry(repo);
+    }
 }
 
 /** Test hook: run every registered watch's armed retry now, as its timer would. */
@@ -1377,7 +1755,10 @@ interface TreeWatchLimits {
   retryBaseMs: number;
 }
 
-/** Test hook: override the tree-tier limits; returns the previous ones. */
+/**
+ * Test hook: override the tree-tier limits, whose retry base the git-dir
+ * watch's backoff shares; returns the previous ones.
+ */
 export function setTreeWatchLimitsForTests(
   limits: Partial<TreeWatchLimits>,
 ): TreeWatchLimits {
@@ -1414,6 +1795,7 @@ export async function unregisterWorktree(worktreeId: string): Promise<void> {
       // scans launched before this point.
       repoWatches.delete(key);
       if (repo.debounce) clearTimeout(repo.debounce);
+      clearRepoRetry(repo);
       await repo.subscription?.unsubscribe().catch(() => undefined);
       await Promise.allSettled([...repo.scans]);
     }

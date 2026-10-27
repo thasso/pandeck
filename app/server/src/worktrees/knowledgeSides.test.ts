@@ -20,8 +20,15 @@ process.env.ASSISTANT_BACKGROUND_FETCH = "1";
 
 const { checkoutGitOn } = await import("../gitExec.ts");
 const { DEFAULT_WORKER_SIDE } = await import("../workers/placement.ts");
-const { answerNextInProcessWorkerCallForTests, inProcessWorkerServedForTests } =
-  await import("../workers/inProcessWorker.ts");
+const {
+  answerNextInProcessWorkerCallForTests,
+  inProcessWorkerServedForTests,
+  inProcessWorkerServedMethodForTests,
+  inProcessWorkerWatchesForTests,
+} = await import("../workers/inProcessWorker.ts");
+const { recordWatchDeliveriesForTests } =
+  await import("../workers/watchDeliveries.ts");
+const { WATCH_METHODS } = await import("../workerProtocol/watchMethods.ts");
 const { CHECKOUT_GIT_METHODS } =
   await import("../workerProtocol/checkoutMethods.ts");
 const { KnowledgeBaseStore } = await import("../knowledgeBaseStore.ts");
@@ -130,6 +137,8 @@ test("AC3: the KB row's watch, viewer, scans, fetch and a late sweep stay on the
   sh(row.path, "push", "-u", "origin", row.branch);
   await rehydrateWorktreeWatchers();
   const before = inProcessWorkerServedForTests();
+  const watches = inProcessWorkerWatchesForTests().subscriptions.length;
+  const deliveries = recordWatchDeliveriesForTests();
 
   // The status path notes interest and fetches on the row's side.
   const firstFetch = nextFetch("server");
@@ -200,6 +209,10 @@ test("AC3: the KB row's watch, viewer, scans, fetch and a late sweep stay on the
   assert.equal(repoFetchedAt(DEFAULT_WORKER_SIDE, repoKey), undefined);
 
   assert.equal(inProcessWorkerServedForTests() - before, 0);
+  // Its watches are local: no Worker subscription, no `watch.events`.
+  deliveries.stop();
+  assert.equal(deliveries.records().length, 0);
+  assert.equal(inProcessWorkerWatchesForTests().subscriptions.length, watches);
   removeWorktreeViewer(KNOWLEDGE_WORKTREE_ID);
 });
 
@@ -280,7 +293,15 @@ test("AC8: a project at the KB root runs on the Worker without the KB row causin
   assert.ok(repoFetchedAt("server", repoKey));
   assert.ok(repoFetchedAt(DEFAULT_WORKER_SIDE, repoKey));
   await addWorktreeViewer(KNOWLEDGE_WORKTREE_ID);
+  const subscribes = inProcessWorkerServedMethodForTests(
+    WATCH_METHODS.subscribe,
+  );
   await addWorktreeViewer(projectId);
+  // The project's git dir and tree are watched on the Worker.
+  assert.equal(
+    inProcessWorkerServedMethodForTests(WATCH_METHODS.subscribe) - subscribes,
+    2,
+  );
   assert.deepEqual(
     watchedRepoRoots()
       .filter((watched) => watched.root === root)

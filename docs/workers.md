@@ -214,13 +214,14 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.3` (`1.0` plus the file methods, `1.2`'s path
-methods for checkout reads, and `1.3`'s `files.readlink` and inspect `mode` for
-the workflows' reads), between the server and the in-process Worker. The code
-lives in `app/server/src/workerProtocol/` (the protocol), `worker/` (the
-Worker's side, which imports no server state) and `workers/` (the server's side
-and placement); `workerBoundary.test.ts` keeps that split. The protocol stays
-out of `app/shared/`: the web client never speaks it.
+What runs today is protocol `1.4` (`1.0` plus the file methods, `1.2`'s path
+methods for checkout reads, `1.3`'s `files.readlink` and inspect `mode` for the
+workflows' reads, and `1.4`'s watch methods for the worktree watcher), between
+the server and the in-process Worker. The code lives in
+`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
+which imports no server state) and `workers/` (the server's side and placement);
+`workerBoundary.test.ts` keeps that split. The protocol stays out of
+`app/shared/`: the web client never speaks it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -262,10 +263,12 @@ out of `app/shared/`: the web client never speaks it.
   id and the default Worker for every other row, never from a path or a setting.
   The modules that can hold that row take their side from it and are pinned
   symbol by symbol in `workerBoundary.test.ts`, so no KB-row request causes or
-  joins Worker work. The KB's document grant is server-side by kind, beside
-  session artifacts, and every served call there names its side by type. W3c
-  replaced checkout placement's path rule with this typed choice, so checkout
-  git and reads read no setting.
+  joins Worker work. That includes the watcher: the KB row's tree and git-dir
+  watches are native subscriptions on the server (`checkoutWatchOn("server")`),
+  which a Worker connection end never touches. The KB's document grant is
+  server-side by kind, beside session artifacts, and every served call there
+  names its side by type. W3c replaced checkout placement's path rule with this
+  typed choice, so checkout git and reads read no setting.
 - **Served files keep their path rule.** If KB settings cannot be read,
   served-file placement keeps lexical and observed realpath matches for the last
   successfully resolved root from any KB/settings reader and the default KB root
@@ -431,6 +434,54 @@ out of `app/shared/`: the web client never speaks it.
     over 256,000 bytes, to report the exact length, as base did.
   - W2's limit for a stuck path call applies to `files.readlink`.
 
+- **Watches.** The worktree watcher subscribes only through
+  `checkoutWatchAccess.ts`: `checkoutWatchOn(side)` makes the native
+  subscription on the row's side, so every checkout but the KB row is watched by
+  the Worker that runs its git. Its reads (`.gitignore` walks, the git dir's
+  `HEAD` files, a checkout's presence) go through `checkoutFilesOn(side)`.
+  Protocol `1.4` (`workerProtocol/watchMethods.ts`) adds three methods and
+  changes no earlier method's meaning, payload or failure shape:
+  - `watch.subscribe` and `watch.unsubscribe` go from the server to the Worker
+    and name a Worker id, refused when it is not the Worker's own. The server
+    allocates the subscription id, a positive integer never reused on its
+    connection, and registers it as pending before sending, so `watch.events`
+    that precede the answer reach the callback as a live subscription's do. A
+    native failure is an answer carrying only its message (parcel's rejections
+    carry no `code`), which the watcher classifies as a filesystem failure.
+  - The outcome of `{}`, an answered failure or `unknown_method` is definite.
+    Any other Worker failure on a connection still open leaves it uncertain: the
+    server keeps the slot and id and sends `watch.unsubscribe` until absence is
+    proven (`{}`), and if that fails too it ends the connection and waits for
+    the release. An unsubscribe joins a subscribe still in progress.
+  - `watch.events` goes from the Worker to the server and is acknowledged. The
+    Worker keeps one FIFO of batches per subscription, with parcel's batch
+    boundaries, and has at most one delivery in flight per subscription; on
+    acknowledgement the next carries the whole queue, so there is no timer.
+    Above 20,000 queued paths the queue collapses into one overflow marker,
+    which the watcher handles as a bulk batch for a tree and a full rescan for a
+    git dir.
+  - The Worker's release owner (`worker/watch.ts`) alone holds native
+    subscribes, unsubscribes and live subscriptions; handlers settle on abort.
+    On a connection end it stops deliveries, unsubscribes everything it holds,
+    orphans subscribes in progress (unsubscribing them once they resolve) and
+    retries failed unsubscribes at 5 s doubling to 60 s. Its `watchesReleased`
+    resolves once it holds nothing. Only then does the server report each live
+    subscription lost (`onLost`) and reject pending ones, so the watcher's cap
+    of eight tree subscriptions never counts a slot free while a native
+    subscription of it may live. The watcher resubscribes on the new connection
+    and rescans in full (see `docs/child-processes.md`, "Watching checkouts").
+  - Known limits. While the Worker is down no events arrive, and status and
+    changes stay at their last broadcast; scans fail and log, and a Worker
+    failure is never read as a missing checkout or an empty ignore walk. This
+    outage visibility is accepted for phase 1 only; phase 2 revisits it
+    (Task-1153). A native unsubscribe that never settles holds its tree's settle
+    chain, as before. An orphaned native subscribe or unsubscribe that never
+    settles holds its connection's `watchesReleased`, and so delays loss,
+    pending rejections and recovery for every watch on that connection (in phase
+    1, every checkout watch) until restart; a cleanup unsubscribe joining such a
+    subscribe holds that tree's slot. Git and file requests stay independent of
+    all of these.
+
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the
@@ -447,9 +498,12 @@ out of `app/shared/`: the web client never speaks it.
   other handles or unrelated requests. A FIFO substituted between stat and open
   can still block that native operation until a writer arrives, as before. Git's
   exit-receipt requirement is unchanged. Processes git itself starts (hooks,
-  ssh) are not covered, as they are not when a caller cancels. In-process, the
-  server observes the Worker's quiescence directly; phase 2's plan must replace
-  that with fencing for a Worker in another process.
+  ssh) are not covered, as they are not when a caller cancels. Watch handlers
+  settle on abort, so quiescence never waits for a native watch operation; the
+  watch release is separate (`watchesReleased`) and holds no git or file
+  request. In-process, the server observes the Worker's quiescence and watch
+  release directly; phase 2's plan must replace both with fencing for a Worker
+  in another process.
 - **Failure and restart: broker death.** A dead broker cannot report its child's
   exit. A request with the exit receipt then answers only once the broker's
   whole process group has exited: signal 0 to the group finds no member (ESRCH),
@@ -696,7 +750,7 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | landed  |
 | W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | landed  |
 | W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | planned |
-| W4     | The worktree watcher on the Worker                                                   | planned |
+| W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)     | landed  |
 | W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker   | planned |
 | W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | planned |
 | W7–W10 | The engine host: app tools, approvals and hooks, then pi and Claude sessions         | planned |
