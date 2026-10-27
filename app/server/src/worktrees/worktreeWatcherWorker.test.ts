@@ -1129,11 +1129,10 @@ for (const parkedIn of ["ignore read", "release"] as const)
   );
 
 /**
- * A viewed spawned worktree past its first (immediate) recovery, `Date`
- * frozen at the recovery, then a quick loss at R + 1 s with its 5 s backoff
- * armed.
+ * A viewed spawned worktree past its first (immediate) recovery, with `Date`
+ * frozen at the recovery.
  */
-async function quicklyLost(projectId: string, record: { id: string }) {
+async function recoveredOnce(projectId: string, record: { id: string }) {
   await addWorktreeViewer(record.id);
   await until("the view settled", () => settled(record.id));
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -1145,6 +1144,15 @@ async function quicklyLost(projectId: string, record: { id: string }) {
     `${projectId}: the immediate recovery`,
     () => tree().recoveries === 1 && settled(record.id),
   );
+  return tree;
+}
+
+/**
+ * {@link recoveredOnce}, then a quick loss at R + 1 s with its 5 s backoff
+ * armed.
+ */
+async function quicklyLost(projectId: string, record: { id: string }) {
+  const tree = await recoveredOnce(projectId, record);
   vi.setSystemTime(Date.now() + 1_000);
   await endConnection().released;
   await until(
@@ -1216,6 +1224,278 @@ test("AC14: a quick loss keeps its backoff when a re-rank takes and returns the 
   );
   assert.equal(made(lost.path), before + 1, "one subscribe");
   assert.equal(tree().scansScheduled, scans + 1, "one rescan");
+});
+
+/** Refuse the next `watch.subscribe` of `path` before its handler runs. */
+function refuseSubscribeOnce(path: string): () => boolean {
+  let refused = false;
+  const stop = intercept(WATCH_METHODS.subscribe, (payload) => {
+    if (payload.text?.path !== path) return undefined;
+    refused = true;
+    stop();
+    return Promise.reject(new Error("refused"));
+  });
+  cleanups.push(stop);
+  return () => refused;
+}
+
+/**
+ * The quick loss's backoff fired, and the resubscribe the Worker refused
+ * doubles it: no settle step between the loss and the attempt restarted the
+ * run. Then the next retry recovers, with one rescan.
+ */
+async function refusedRetryDoubles(
+  tree: () => NonNullable<ReturnType<typeof treeActivityForTests>>,
+  record: { id: string; path: string },
+  made: () => number,
+  attempt: () => unknown,
+) {
+  const before = made();
+  const scans = tree().scansScheduled;
+  const refused = refuseSubscribeOnce(record.path);
+  await attempt();
+  await until(
+    "the refused resubscribe re-armed",
+    () => refused() && tree().retryArmed && settled(record.id),
+  );
+  assert.equal(tree().retryMs, 10_000, "the failure run kept doubling");
+  assert.equal(made(), before, "the refused attempt subscribed nothing");
+  assert.equal(tree().recoveries, 1);
+  assert.equal(tree().scansScheduled, scans);
+
+  fireTreeRetriesForTests();
+  await until(
+    "the retried recovery",
+    () => tree().recoveries === 2 && settled(record.id),
+  );
+  assert.equal(made(), before + 1, "one subscribe");
+  assert.equal(tree().scansScheduled, scans + 1, "one rescan");
+}
+
+test("AC14: a release step a quick loss overtakes keeps the failure run", async () => {
+  const { id } = project("ac14-seed");
+  limits({ maxWatches: 1 });
+  const target = await worktree(id, "ac14-seed-target");
+  const waiter = await worktree(id, "ac14-seed-waiter");
+  const native = nativeWatches(target.path, waiter.path);
+  const made = () => native.made.get(target.path) ?? 0;
+  const tree = await recoveredOnce(id, target);
+  const recoveredAt = Date.now();
+
+  // The old Worker's release is held past the end.
+  vi.setSystemTime(recoveredAt + 1_000);
+  const release = holdNativeUnsubscribeForTests();
+  cleanups.push(release);
+  const reading = awaitingRelease();
+  const { ended, released } = endConnection();
+  await ended;
+  // A later view takes the target's slot before its loss is known: its
+  // release-only step awaits the old Worker's release.
+  vi.setSystemTime(recoveredAt + 2_000);
+  await addWorktreeViewer(waiter.id);
+  await until("the target's release step awaits the release", reading);
+  release();
+  await released;
+  await until(
+    "the loss's backoff armed and the release step finished",
+    () => tree().retryMs === 5_000 && settled(target.id),
+  );
+
+  // The slot returns without touching the backoff.
+  removeWorktreeViewer(waiter.id);
+  await until(
+    "the waiter forgotten",
+    () => !treeActivityForTests(waiter.id) && settled(target.id),
+  );
+  assert.equal(tree().retryMs, 5_000);
+
+  vi.setSystemTime(recoveredAt + 6_000);
+  await refusedRetryDoubles(tree, target, made, fireTreeRetriesForTests);
+});
+
+test("AC14: a fired quick-loss retry that finds no slot keeps the failure run", async () => {
+  const { id } = project("ac14-noslot");
+  limits({ maxWatches: 1 });
+  const target = await worktree(id, "ac14-noslot-target");
+  const other = await worktree(id, "ac14-noslot-other");
+  const native = nativeWatches(target.path, other.path);
+  const made = () => native.made.get(target.path) ?? 0;
+  const tree = await quicklyLost(id, target);
+
+  // A later view takes the free slot; the backoff then fires with none left.
+  await addWorktreeViewer(other.id);
+  await until("the other view settled", () => settled(other.id));
+  assert.equal(native.made.get(other.path), 1);
+  fireTreeRetriesForTests();
+  await until(
+    "the fired step found no slot",
+    () => !tree().retryArmed && settled(target.id),
+  );
+
+  // Its viewer leaves: once its release lands, the slot returns and the
+  // target attempts at once, its backoff served.
+  vi.setSystemTime(Date.now() + 5_000);
+  await refusedRetryDoubles(tree, target, made, () =>
+    removeWorktreeViewer(other.id),
+  );
+});
+
+/**
+ * Park the next presence check of `path` until released; it then answers
+ * for real, or fails as a Worker failure.
+ */
+function parkPresence(path: string, refused: boolean) {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let parked = false;
+  let finished = false;
+  const stop = intercept(FILE_METHODS.exists, (payload, signal, real) => {
+    if (pathOf(payload) !== path) return undefined;
+    parked = true;
+    stop();
+    return gate.then(() => {
+      finished = true;
+      if (refused) throw new Error("refused");
+      return real(payload, signal);
+    });
+  });
+  cleanups.push(() => {
+    release();
+    stop();
+  });
+  return { parked: () => parked, finished: () => finished, release };
+}
+
+for (const refused of [false, true])
+  test(`AC14: a quick loss during a presence check ${refused ? "the Worker refuses" : "that answers"} waits for its backoff`, async () => {
+    const name = refused ? "ac14-presence-refused" : "ac14-presence";
+    const { id } = project(name);
+    const record = await worktree(id, `${name}-wt`);
+    const native = nativeWatches(record.path);
+    const made = () => native.made.get(record.path) ?? 0;
+    const tree = await recoveredOnce(id, record);
+    const recoveredAt = Date.now();
+    const before = made();
+    const scans = tree().scansScheduled;
+
+    vi.setSystemTime(recoveredAt + 1_000);
+    const release = holdNativeUnsubscribeForTests();
+    cleanups.push(release);
+    const { ended, released } = endConnection();
+    await ended;
+    // A second viewer's step parks in its presence check on the new Worker.
+    const presence = parkPresence(record.path, refused);
+    const viewing = addWorktreeViewer(record.id);
+    cleanups.push(() => removeWorktreeViewer(record.id));
+    await until("the step parked in its presence check", presence.parked);
+    release();
+    await released;
+    await until("the loss's backoff armed", () => tree().retryMs === 5_000);
+    presence.release();
+    await viewing;
+    await until(
+      "the step finished",
+      () => presence.finished() && settled(record.id),
+    );
+    assert.equal(made(), before, "no subscribe before the retry");
+    assert.equal(tree().recoveries, 1);
+    assert.equal(tree().scansScheduled, scans, "no rescan before the retry");
+    assert.equal(tree().retryMs, 5_000, "the backoff is kept");
+
+    fireTreeRetriesForTests();
+    await until(
+      "the retried recovery",
+      () => tree().recoveries === 2 && settled(record.id),
+    );
+    assert.equal(made(), before + 1, "one subscribe");
+    assert.equal(tree().scansScheduled, scans + 1, "one rescan");
+  });
+
+test("AC14: a presence check a quick loss overtakes keeps the backoff when a re-rank takes and returns the slot", async () => {
+  const { id } = project("ac14-presence-rank");
+  limits({ maxWatches: 1 });
+  const target = await worktree(id, "ac14-presence-rank-target");
+  const waiter = await worktree(id, "ac14-presence-rank-waiter");
+  const native = nativeWatches(target.path, waiter.path);
+  const made = () => native.made.get(target.path) ?? 0;
+  const tree = await recoveredOnce(id, target);
+  const recoveredAt = Date.now();
+  const before = made();
+  const scans = tree().scansScheduled;
+
+  vi.setSystemTime(recoveredAt + 1_000);
+  const release = holdNativeUnsubscribeForTests();
+  cleanups.push(release);
+  const { ended, released } = endConnection();
+  await ended;
+  const presence = parkPresence(target.path, false);
+  const viewing = addWorktreeViewer(target.id);
+  cleanups.push(() => removeWorktreeViewer(target.id));
+  await until("the step parked in its presence check", presence.parked);
+  // A later view takes the target's slot while its step is parked.
+  vi.setSystemTime(recoveredAt + 2_000);
+  await addWorktreeViewer(waiter.id);
+  release();
+  await released;
+  await until("the loss's backoff armed", () => tree().retryMs === 5_000);
+  presence.release();
+  await viewing;
+  await until("the no-slot step finished", () => settled(target.id));
+  assert.equal(tree().retryMs, 5_000, "the no-slot step kept the backoff");
+
+  // The waiter leaves: the slot returns, and only the retry may use it.
+  removeWorktreeViewer(waiter.id);
+  await until(
+    "the waiter forgotten",
+    () =>
+      !treeActivityForTests(waiter.id) &&
+      native.live === 0 &&
+      settled(target.id),
+  );
+  assert.equal(made(), before, "no subscribe before the retry");
+  assert.equal(tree().recoveries, 1);
+  assert.equal(tree().scansScheduled, scans, "no rescan before the retry");
+  assert.equal(tree().retryMs, 5_000);
+
+  fireTreeRetriesForTests();
+  await until(
+    "the retried recovery",
+    () => tree().recoveries === 2 && settled(target.id),
+  );
+  assert.equal(made(), before + 1, "one subscribe");
+  assert.equal(tree().scansScheduled, scans + 1, "one rescan");
+  assert.equal(native.maxLive, 1, "the cap held");
+});
+
+test("a tree's answered native failure retries, and its success ends the failure run", async () => {
+  const { id } = project("native-success");
+  limits({ ignoreRefreshMs: 0 });
+  const record = await worktree(id, "native-success-wt");
+  mkdirSync(join(record.path, "dir2"));
+  writeFileSync(join(record.path, "dir2", "x.txt"), "x\n");
+  const tree = () => treeActivityForTests(record.id)!;
+  const native = capture({ holdSubscribe: true });
+  native.rejectSubscribe("Not a directory");
+  await addWorktreeViewer(record.id);
+  assert.equal(await treeWatchLiveForTests(record.id), false);
+  assert.deepEqual(
+    { armed: tree().retryArmed, ms: tree().retryMs },
+    { armed: true, ms: 5_000 },
+  );
+  fireTreeRetriesForTests();
+  await until("the retry subscribed", () => settled(record.id));
+  assert.equal(await treeWatchLiveForTests(record.id), true);
+
+  // No loss: a changed ignore set replaces the subscription, and the Worker
+  // refuses the new one. Its delay starts the run again.
+  const refused = refuseSubscribeOnce(record.path);
+  writeFileSync(join(record.path, ".gitignore"), "dir2/\n");
+  await until(
+    "the refused replacement re-armed",
+    () => refused() && tree().retryArmed && settled(record.id),
+  );
+  assert.equal(tree().retryMs, 5_000);
+  assert.equal(tree().recoveries, 0, "no loss was involved");
 });
 
 // --- AC16 -----------------------------------------------------------------

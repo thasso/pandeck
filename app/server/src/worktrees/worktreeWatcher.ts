@@ -255,21 +255,94 @@ export function gitDirIgnoreForTests(
 type GitStateListener = (worktreeId: string, newHead: string) => void;
 
 /**
- * How a watch recovers a lost subscription (`docs/child-processes.md`). Both
- * tiers keep it beside their own retry state.
+ * A watch's backoff and loss recovery (`docs/child-processes.md`), the only
+ * writer of its counters; both tiers keep their own timers. Only a confirmed
+ * subscribe ends a failure run: a release, a lost slot or a fired retry has
+ * no way to restart the doubling.
  */
-interface LossRecovery {
+class Backoff {
+  /** Consecutive failed attempts; a quick loss seeds it with the loss run. */
+  private failures = 0;
   /** Consecutive quick losses; see {@link LOSS_STABLE_MS}. */
-  lossRun: number;
+  private lossRun = 0;
   /** When a resubscribe after a loss last succeeded. */
-  recoveredAt: number | undefined;
-  /** The next successful subscribe follows a loss: it rescans in full. */
-  resumeScan: boolean;
+  private recoveredAt: number | undefined;
+  private lossPending = false;
+  private recoveryCount = 0;
+
+  /** A loss (or failed git-dir subscribe) still waits for its resubscribe. */
+  get pending(): boolean {
+    return this.lossPending;
+  }
+
   /** Successful resubscribes after a loss, for the test seams. */
-  recoveries: number;
+  get recoveries(): number {
+    return this.recoveryCount;
+  }
+
+  /** A loss now would be quick: the last recovery was less than a minute ago. */
+  get quick(): boolean {
+    return (
+      this.recoveredAt !== undefined &&
+      Date.now() - this.recoveredAt < LOSS_STABLE_MS
+    );
+  }
+
+  /** The next retry delay: 5 s doubling to 60 s. */
+  get delay(): number {
+    return Math.min(
+      treeRetryBaseMs * 2 ** Math.max(0, this.failures - 1),
+      TREE_RETRY_MAX_MS,
+    );
+  }
+
+  /** Count a failed attempt; returns the run's length, for its log line. */
+  failed(): number {
+    this.failures += 1;
+    return this.failures;
+  }
+
+  /** The watch's own subscribe succeeded: the only end of a failure run. */
+  subscribed(): void {
+    this.failures = 0;
+  }
+
+  /**
+   * After {@link subscribed}, unless the new subscription was lost already:
+   * whether it recovers a loss, which then wants one full rescan.
+   */
+  recovered(): boolean {
+    if (!this.lossPending) return false;
+    this.lossPending = false;
+    this.recoveredAt = Date.now();
+    this.recoveryCount += 1;
+    return true;
+  }
+
+  /**
+   * The held subscription was lost; whether the loss is quick, so the next
+   * attempt waits out {@link delay}. A quick loss sets the failure run to
+   * the loss run, so a failed resubscribe keeps doubling it; a loss after a
+   * stable minute restarts the loss run.
+   */
+  lost(): boolean {
+    this.lossPending = true;
+    if (!this.quick) {
+      this.lossRun = 0;
+      return false;
+    }
+    this.lossRun += 1;
+    this.failures = this.lossRun;
+    return true;
+  }
+
+  /** A failed git-dir subscribe: its eventual success rescans in full. */
+  pend(): void {
+    this.lossPending = true;
+  }
 }
 
-interface RepoWatch extends LossRecovery {
+interface RepoWatch {
   /** Its {@link repoWatches} key. */
   key: string;
   /** The side every row it holds runs its git on: part of its key. */
@@ -279,8 +352,8 @@ interface RepoWatch extends LossRecovery {
   /** The next subscribe attempt after a Worker failure or a quick loss. */
   retry: ReturnType<typeof setTimeout> | undefined;
   retryMs: number | undefined;
-  /** Consecutive failed subscribes; only the first of a run is logged. */
-  failures: number;
+  /** Its failure run and loss recovery; only the first failure is logged. */
+  backoff: Backoff;
   /** The next scan reads every row in full (overflow, recovery). */
   fullRescan: boolean;
   fullRescans: number;
@@ -308,7 +381,7 @@ interface RepoJoin {
   worktreeId: string;
 }
 
-interface TreeWatch extends LossRecovery {
+interface TreeWatch {
   id: string;
   /** Checkout path, set once the id resolved to an active row. */
   path: string | undefined;
@@ -339,8 +412,11 @@ interface TreeWatch extends LossRecovery {
   retryMs: number | undefined;
   /** {@link retry} releases a subscription, so it outlives the viewers. */
   retryRelease: boolean;
-  /** Consecutive failed subscribes/releases; only the first is logged. */
-  failures: number;
+  /**
+   * Its failed subscribes/releases and loss recovery; only the first failure
+   * of a run is logged.
+   */
+  backoff: Backoff;
   /** Why a viewed tree holds no subscription; logged once per episode. */
   unwatched: "cap" | "missing" | undefined;
   /**
@@ -445,13 +521,9 @@ async function ensureRepoWatch(row: WorktreeRow): Promise<void> {
       scans: new Set(),
       retry: undefined,
       retryMs: undefined,
-      failures: 0,
+      backoff: new Backoff(),
       fullRescan: false,
       fullRescans: 0,
-      lossRun: 0,
-      recoveredAt: undefined,
-      resumeScan: false,
-      recoveries: 0,
     };
     repoWatches.set(key, repo);
   }
@@ -545,7 +617,7 @@ async function subscribeRepo(repo: RepoWatch): Promise<void> {
       return;
     }
   } catch (err) {
-    repo.resumeScan = true;
+    repo.backoff.pend();
     armRepoRetry(repo, repoBackoff(repo, err));
     return;
   }
@@ -555,30 +627,23 @@ async function subscribeRepo(repo: RepoWatch): Promise<void> {
     return;
   }
   repo.subscription = subscription;
-  repo.failures = 0;
+  repo.backoff.subscribed();
   if (lostEarly) {
     onRepoLost(repo, subscription);
     return;
   }
-  if (repo.resumeScan) {
-    repo.resumeScan = false;
-    repo.recoveredAt = Date.now();
-    repo.recoveries += 1;
-    requestFullRescan(repo);
-  }
+  if (repo.backoff.recovered()) requestFullRescan(repo);
 }
 
 /** Count a failure (logging only the first of a run); the next retry delay. */
-function repoBackoff(repo: RepoWatch, err?: unknown): number {
-  if (err !== undefined) {
-    repo.failures += 1;
-    if (repo.failures === 1 || repo.failures % 10 === 0)
-      console.warn(
-        `[worktrees] git-dir watch of ${repo.mainRepoRoot} failed ${repo.failures}x (retrying):`,
-        err instanceof Error ? err.message : String(err),
-      );
-  }
-  return retryDelay(repo.failures);
+function repoBackoff(repo: RepoWatch, err: unknown): number {
+  const failures = repo.backoff.failed();
+  if (failures === 1 || failures % 10 === 0)
+    console.warn(
+      `[worktrees] git-dir watch of ${repo.mainRepoRoot} failed ${failures}x (retrying):`,
+      err instanceof Error ? err.message : String(err),
+    );
+  return repo.backoff.delay;
 }
 
 function armRepoRetry(repo: RepoWatch, ms: number): void {
@@ -612,31 +677,10 @@ function onRepoLost(
 ): void {
   if (repo.subscription !== subscription) return;
   repo.subscription = undefined;
-  repo.resumeScan = true;
+  const quick = repo.backoff.lost();
   if (repoWatches.get(repo.key) !== repo) return;
-  if (quickLoss(repo)) {
-    repo.lossRun += 1;
-    repo.failures = repo.lossRun;
-    armRepoRetry(repo, repoBackoff(repo));
-    return;
-  }
-  repo.lossRun = 0;
-  void subscribeRepo(repo);
-}
-
-function quickLoss(watch: LossRecovery): boolean {
-  return (
-    watch.recoveredAt !== undefined &&
-    Date.now() - watch.recoveredAt < LOSS_STABLE_MS
-  );
-}
-
-/** The retry delay after `failures` consecutive failures: 5 s doubling to 60 s. */
-function retryDelay(failures: number): number {
-  return Math.min(
-    treeRetryBaseMs * 2 ** Math.max(0, failures - 1),
-    TREE_RETRY_MAX_MS,
-  );
+  if (quick) armRepoRetry(repo, repo.backoff.delay);
+  else void subscribeRepo(repo);
 }
 
 /**
@@ -1290,7 +1334,7 @@ async function settleTree(tree: TreeWatch): Promise<void> {
   // Set together with the path, so a watch with a path has its side.
   const side = tree.side;
   // Only a loss sets it while a step runs: see the check before subscribing.
-  const resuming = tree.resumeScan;
+  const resuming = tree.backoff.pending;
   // Undefined when the Worker failed to answer: never "missing".
   let present: boolean | undefined = false;
   let failure: unknown;
@@ -1318,7 +1362,6 @@ async function settleTree(tree: TreeWatch): Promise<void> {
       tree.backingOff = true;
       return;
     }
-    tree.failures = 0;
     // A re-view during the release un-retired it; its own step subscribes.
     if (tree.retired) dropTree(tree);
     // The slot it held is free for a viewed tree that was denied one.
@@ -1338,7 +1381,7 @@ async function settleTree(tree: TreeWatch): Promise<void> {
   if (tree.backingOff) return;
   // A quick loss arms nothing for a tree nobody views: its next viewer
   // resubscribes it, never another watch's re-rank.
-  if (tree.resumeScan && tree.refs === 0 && quickLoss(tree)) return;
+  if (tree.backoff.pending && tree.refs === 0 && tree.backoff.quick) return;
   const wait = tree.ignoreRefreshedAt + treeIgnoreRefreshMs - Date.now();
   if (tree.subscription && wait > 0) {
     retryTree(tree, wait);
@@ -1368,7 +1411,7 @@ async function settleTree(tree: TreeWatch): Promise<void> {
     // The subscription was lost during this step's awaits, and the loss chose
     // the next attempt: at once, after its backoff, or at the next viewer.
     // Subscribing here would pre-empt that and bypass the flapping bound.
-    if (tree.resumeScan && !resuming) return;
+    if (tree.backoff.pending && !resuming) return;
     if (!canSubscribe()) return;
     tree.subscribing = true;
     let subscription: CheckoutWatchSubscription | undefined;
@@ -1394,16 +1437,13 @@ async function settleTree(tree: TreeWatch): Promise<void> {
       tree.subscribing = false;
     }
     tree.ignore = ignore;
-    tree.failures = 0;
+    tree.backoff.subscribed();
     if (lostEarly) {
       onTreeLost(tree, subscription);
       return;
     }
-    if (tree.resumeScan) {
+    if (tree.backoff.recovered()) {
       // Events between the loss and now went nowhere: one full rescan.
-      tree.resumeScan = false;
-      tree.recoveredAt = Date.now();
-      tree.recoveries += 1;
       if (tree.refs > 0) scheduleTreeScan(tree.id);
     } else if (replacing && tree.refs > 0) scheduleTreeScan(tree.id);
   } catch (err) {
@@ -1435,6 +1475,9 @@ async function releaseSubscription(tree: TreeWatch): Promise<boolean> {
   try {
     await subscription.unsubscribe();
   } catch (err) {
+    // Lost meanwhile: nothing is left to release, and the loss chose the
+    // next attempt.
+    if (tree.subscription !== subscription) return true;
     failureBackoff(tree, err);
     return false;
   }
@@ -1448,14 +1491,14 @@ async function releaseSubscription(tree: TreeWatch): Promise<boolean> {
 /** Count a failure (logging only the first of a run); the next retry delay. */
 function failureBackoff(tree: TreeWatch, err?: unknown): number {
   if (err !== undefined) {
-    tree.failures += 1;
-    if (tree.failures === 1 || tree.failures % 10 === 0)
+    const failures = tree.backoff.failed();
+    if (failures === 1 || failures % 10 === 0)
       console.warn(
-        `[worktrees] tree watch of ${tree.id} failed ${tree.failures}x (retrying; a subscription that never releases keeps its slot until restart):`,
+        `[worktrees] tree watch of ${tree.id} failed ${failures}x (retrying; a subscription that never releases keeps its slot until restart):`,
         err instanceof Error ? err.message : String(err),
       );
   }
-  return retryDelay(tree.failures);
+  return tree.backoff.delay;
 }
 
 /**
@@ -1475,15 +1518,11 @@ function onTreeLost(
   tree.ignore = undefined;
   tree.ignoreStale = true;
   tree.lastChangesEmpty = undefined;
-  tree.resumeScan = true;
-  if (!quickLoss(tree)) {
-    tree.lossRun = 0;
+  if (!tree.backoff.lost()) {
     reconcileTrees();
     return;
   }
-  tree.lossRun += 1;
-  tree.failures = tree.lossRun;
-  retryTree(tree, failureBackoff(tree));
+  retryTree(tree, tree.backoff.delay);
   tree.backingOff = tree.retry !== undefined;
   // A retired tree has nothing left to wait for: its settle drops it.
   if (tree.retired) void reconcileTree(tree);
@@ -1613,11 +1652,7 @@ export async function addWorktreeViewer(worktreeId: string): Promise<void> {
       retry: undefined,
       retryMs: undefined,
       retryRelease: false,
-      failures: 0,
-      lossRun: 0,
-      recoveredAt: undefined,
-      resumeScan: false,
-      recoveries: 0,
+      backoff: new Backoff(),
       unwatched: undefined,
       retired: false,
       subscribing: false,
@@ -1759,7 +1794,7 @@ export function treeActivityForTests(worktreeId: string) {
       settlesPending: tree.settlesPending,
       retryArmed: tree.retry !== undefined,
       retryMs: tree.retryMs,
-      recoveries: tree.recoveries,
+      recoveries: tree.backoff.recoveries,
     }
   );
 }
@@ -1774,7 +1809,7 @@ export function repoActivityForTests(worktreeId: string) {
       return {
         retryArmed: repo.retry !== undefined,
         retryMs: repo.retryMs,
-        recoveries: repo.recoveries,
+        recoveries: repo.backoff.recoveries,
         fullRescans: repo.fullRescans,
       };
   return undefined;

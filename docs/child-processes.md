@@ -171,11 +171,12 @@ submodules.
   whose serialized chain either keeps the still-live subscription or subscribes
   only after the release completes. So there are never two subscriptions of one
   path. A release that never succeeds keeps its old subscription, and its slot,
-  until restart. The first failure is logged, and every tenth after it. A viewed
-  tree without a watch is logged once, naming the reason: the cap, or a checkout
-  that is gone. A Worker failure is never read as a checkout that is gone: a
-  presence check the Worker could not answer takes the same failed step and
-  backoff, and keeps the tree's slot.
+  until restart. Only a successful subscribe ends a run of failures: a release,
+  a lost slot or a fired retry never restarts the doubling. The first failure is
+  logged, and every tenth after it. A viewed tree without a watch is logged
+  once, naming the reason: the cap, or a checkout that is gone. A Worker failure
+  is never read as a checkout that is gone: a presence check the Worker could
+  not answer takes the same failed step and backoff, and keeps the tree's slot.
 - **A watch lost with its Worker connection recovers.** The server learns of the
   loss only after the Worker released the native subscription, so the cap still
   counts truly. The first loss resubscribes at once on the new connection (a
