@@ -29,6 +29,7 @@ import type { ToolCallContext } from "./mcp/tool.ts";
 import { MAX_FRAME_PAYLOAD_BYTES } from "./workerProtocol/codec.ts";
 import { FILE_METHODS } from "./workerProtocol/fileMethods.ts";
 import {
+  answerNextInProcessWorkerCallForTests,
   ensureInProcessWorker,
   inProcessWorkerEpochForTests,
   inProcessWorkerFileHandlesForTests,
@@ -89,6 +90,41 @@ async function drain(stream: Readable): Promise<Buffer> {
 async function settle(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i += 1)
     await new Promise<void>((done) => setImmediate(done));
+}
+
+/**
+ * A server answering direct file requests. Its sockets can close before the
+ * Worker has closed a file, so a test awaits `settled()`, each handler's
+ * receipt, after `close()` and before checking that nothing is held.
+ */
+async function serveDirectFiles(): Promise<{
+  port: number;
+  close(): Promise<void>;
+  settled(): Promise<void>;
+}> {
+  const handled: Promise<void>[] = [];
+  const server: Server = createServer((req, res) => {
+    handled.push(
+      handleDirectFileRequest(
+        req,
+        res,
+        new URL(req.url ?? "/", "http://127.0.0.1"),
+        {},
+      ),
+    );
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  return {
+    port: typeof address === "object" && address ? address.port : 0,
+    close: async () => {
+      if (server.listening)
+        await new Promise<void>((done) => server.close(() => done()));
+    },
+    settled: async () => {
+      await Promise.all(handled);
+    },
+  };
 }
 
 describe("where a served file is read", () => {
@@ -228,23 +264,13 @@ describe("streaming pulls one chunk at a time", () => {
     const size = 64 * CHUNK;
     const bytes = binary(size);
     const path = fixture("sixty-four.bin", bytes);
-    const server: Server = createServer((req, res) => {
-      void handleDirectFileRequest(
-        req,
-        res,
-        new URL(req.url ?? "/", "http://127.0.0.1"),
-        {},
-      );
-    });
-    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-    const address = server.address();
-    const port = typeof address === "object" && address ? address.port : 0;
+    const files = await serveDirectFiles();
     const before = inProcessWorkerServedMethodForTests(FILE_METHODS.read);
     try {
       const body = await new Promise<Buffer>((done, fail) => {
         const chunks: Buffer[] = [];
         let paused = false;
-        const socket = connect(port, "127.0.0.1", () =>
+        const socket = connect(files.port, "127.0.0.1", () =>
           socket.write(
             `GET /api/files${path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
           ),
@@ -269,7 +295,56 @@ describe("streaming pulls one chunk at a time", () => {
         inProcessWorkerServedMethodForTests(FILE_METHODS.read) - before;
       assert.ok(reads <= Math.ceil(size / CHUNK) + 1, `${reads} reads`);
     } finally {
-      await new Promise<void>((done) => server.close(() => done()));
+      await files.close();
+      await files.settled();
+    }
+  });
+
+  test("a closed server's handler may still be closing the file, so teardown awaits it", async () => {
+    const bytes = binary(CHUNK);
+    const path = fixture("closing.bin", bytes);
+    let reached!: () => void;
+    const closeAsked = new Promise<void>((resolve) => (reached = resolve));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    // Holds the Worker's close past the server's: on a busy threadpool the
+    // native close can finish after every socket has closed.
+    const disarm = answerNextInProcessWorkerCallForTests(
+      FILE_METHODS.close,
+      async (payload, signal, real) => {
+        reached();
+        await held;
+        return real(payload, signal);
+      },
+    );
+    const files = await serveDirectFiles();
+    try {
+      const response = await new Promise<Buffer>((done, fail) => {
+        const chunks: Buffer[] = [];
+        const socket = connect(files.port, "127.0.0.1", () =>
+          socket.write(
+            `GET /api/files${path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
+          ),
+        );
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("close", () => done(Buffer.concat(chunks)));
+      });
+      const body = response.subarray(response.indexOf("\r\n\r\n") + 4);
+      assert.equal(sha256(body), sha256(bytes));
+      await files.close();
+      await closeAsked;
+      let settled = false;
+      void files.settled().then(() => (settled = true));
+      await settle();
+      assert.equal(settled, false, "the handler is still closing the file");
+      assert.equal(inProcessWorkerFileHandlesForTests(), 1, "handle held");
+      assert.equal(fileReadsCountsForTests().liveDescriptors, 1, "open");
+    } finally {
+      release();
+      disarm();
+      await files.close();
+      await files.settled();
     }
   });
 });

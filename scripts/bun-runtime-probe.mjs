@@ -6,7 +6,8 @@
  * the in-process fallback, served-file bytes read through the Worker's file
  * methods, served-file requests whose client leaves early, the worktree
  * surfaces' and checkout workflows' reads against Bun's own `fs`,
- * a watcher subscribed with a git-derived ignore set, the SQLite paths that
+ * a checkout watch through the Worker with a git-derived ignore set, lost
+ * with its connection and made again on the next, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
  * Initiative map laid out by elkjs in the bundled layout worker.
@@ -96,7 +97,6 @@ import {
   startPackageProxyIfEnabled,
   stopPackageProxy,
 } from "../app/server/src/packageProxy/packageProxy.ts";
-import watcher from "../app/server/src/parcelWatcher.ts";
 import { modelRuntimeForProfile } from "../app/server/src/piSdk/models.ts";
 import {
   brokerExecFile,
@@ -106,6 +106,7 @@ import {
   openServedFile,
   statServedFile,
 } from "../app/server/src/servedFileAccess.ts";
+import { checkoutWatchOn } from "../app/server/src/checkoutWatchAccess.ts";
 import { childProcessEnv } from "../app/server/src/subprocessEnv.ts";
 import { createTask, updateTask } from "../app/server/src/tasks.ts";
 import { MAX_FRAME_PAYLOAD_BYTES } from "../app/server/src/workerProtocol/codec.ts";
@@ -114,10 +115,13 @@ import { isWorkerFailure } from "../app/server/src/workers/fileClient.ts";
 import {
   answerNextInProcessWorkerCallForTests,
   ensureInProcessWorker,
+  inProcessWorkerEpochForTests,
   inProcessWorkerFileHandlesForTests,
   inProcessWorkerServedMethodForTests,
+  inProcessWorkerWatchesForTests,
   writeAsInProcessWorkerForTests,
 } from "../app/server/src/workers/inProcessWorker.ts";
+import { recordWatchDeliveriesForTests } from "../app/server/src/workers/watchDeliveries.ts";
 import { DEFAULT_WORKER_SIDE } from "../app/server/src/workers/placement.ts";
 import { treeIgnoreForTests } from "../app/server/src/worktrees/worktreeWatcher.ts";
 import {
@@ -1414,33 +1418,87 @@ async function checkWatcher() {
   );
 
   const seen = [];
-  const subscription = await watcher.subscribe(
-    root,
-    (error, events) => {
-      if (!error) seen.push(...events.map((event) => event.path));
-    },
-    { ignore },
-  );
-  // The ignored writes come first and a watched barrier last. One
-  // subscription's events arrive in the order the kernel queued them, so an
-  // ignored event that was going to arrive has arrived by the barrier's.
-  const barrier = join(root, "src", "barrier.txt");
-  try {
-    writeFileSync(join(root, "build", "out.txt"), "ignored\n");
-    writeFileSync(join(root, "nested", "cache", "c.txt"), "ignored\n");
-    writeFileSync(join(root, "src", "a.txt"), "changed\n");
-    writeFileSync(join(root, "nested", "keep", "k.txt"), "changed\n");
+  const lost = [];
+  let overflows = 0;
+  let released = false;
+  const watches = checkoutWatchOn(DEFAULT_WORKER_SIDE);
+  const subscribe = () =>
+    watches.subscribe(
+      root,
+      root,
+      (error, events) => {
+        if (!error) seen.push(...events.map((event) => event.path));
+      },
+      {
+        ignore,
+        onOverflow: () => overflows++,
+        onLost: () => lost.push(released),
+      },
+    );
+  const native = () => inProcessWorkerWatchesForTests().subscriptions.length;
+  // Ignored writes first and a watched barrier last. One subscription's events
+  // arrive in the order the kernel queued them, and the Worker delivers them in
+  // that order, so an ignored event that was going to arrive has arrived by
+  // the barrier's.
+  const writeUntilBarrier = async (barrier, watched) => {
+    writeFileSync(join(root, "build", "out.txt"), `ignored ${barrier}\n`);
+    writeFileSync(
+      join(root, "nested", "cache", "c.txt"),
+      `ignored ${barrier}\n`,
+    );
+    for (const path of watched) writeFileSync(path, `changed ${barrier}\n`);
     writeFileSync(barrier, "barrier\n");
     await until(
-      () =>
-        seen.includes(barrier) &&
-        seen.includes(join(root, "src", "a.txt")) &&
-        seen.includes(join(root, "nested", "keep", "k.txt")),
-      "watcher events for the watched files",
+      () => [...watched, barrier].every((path) => seen.includes(path)),
+      `watched events through the Worker up to ${barrier}`,
+    );
+  };
+  const deliveries = recordWatchDeliveriesForTests();
+  let subscription;
+  try {
+    subscription = await subscribe();
+    assert(native() === 1, `The Worker holds ${native()} native watches.`);
+    await writeUntilBarrier(join(root, "src", "barrier.txt"), [
+      join(root, "src", "a.txt"),
+      join(root, "nested", "keep", "k.txt"),
+    ]);
+    const delivered = deliveries.records().length;
+    assert(delivered > 0, "No watch.events reached the server.");
+
+    // The connection ends: the watch is lost only once the Worker released
+    // its native subscription, and is made again on the next connection.
+    const epoch = inProcessWorkerEpochForTests();
+    void inProcessWorkerWatchesForTests().released.then(() => {
+      released = true;
+    });
+    writeAsInProcessWorkerForTests(new Uint8Array(8));
+    await until(() => lost.length > 0, "the watch lost with its connection");
+    assert(
+      lost.length === 1 && lost[0],
+      `The watch was lost before its release: ${JSON.stringify(lost)}`,
+    );
+    await subscription.unsubscribe();
+    subscription = await subscribe();
+    const next = inProcessWorkerEpochForTests();
+    assert(
+      next !== undefined && next !== epoch,
+      `The watch was made again on epoch ${next}, not after ${epoch}.`,
+    );
+    assert(native() === 1, `The new Worker holds ${native()} native watches.`);
+    await writeUntilBarrier(join(root, "src", "barrier-2.txt"), [
+      join(root, "src", "a.txt"),
+    ]);
+    assert(
+      deliveries.records().length > delivered,
+      "No watch.events reached the server on the new connection.",
     );
   } finally {
-    await subscription.unsubscribe();
+    deliveries.stop();
+    await subscription?.unsubscribe();
   }
+  assert(native() === 0, `${native()} native watches outlived unsubscribe.`);
+  assert(lost.length === 1, `The watch was lost ${lost.length} times.`);
+  assert(overflows === 0, `A small burst overflowed ${overflows} times.`);
   const leaked = seen.filter(
     (path) =>
       path.startsWith(join(root, "build")) ||
@@ -1722,8 +1780,8 @@ async function checkInitiativeLayout() {
 
 await checkGit();
 await checkPackageProxyEnvironment();
+await checkWatcher();
 if (mode === "broker") {
-  await checkWatcher();
   checkSqlite();
   checkSyncSpawnEnvironment();
   await checkPiOAuthFlows();

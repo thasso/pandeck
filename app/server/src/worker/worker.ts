@@ -13,8 +13,10 @@ import {
   type MethodHandler,
 } from "../workerProtocol/connection.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
+import { WATCH_METHODS } from "../workerProtocol/watchMethods.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
 import { fileHandlers } from "./files.ts";
+import { watchHandlers, type WatchSnapshot } from "./watch.ts";
 
 export interface RunningWorker {
   /**
@@ -25,8 +27,16 @@ export interface RunningWorker {
    * descriptors close without registration and do not hold this promise.
    */
   readonly quiescent: Promise<void>;
+  /**
+   * Resolves once the connection has ended and the Worker holds no native
+   * watch: no subscription, no subscribe and no unsubscribe in progress.
+   * Separate from {@link quiescent}, which never waits for watch work.
+   */
+  readonly watchesReleased: Promise<void>;
   /** Test seam: how many file handles the Worker holds. */
   fileHandles(): number;
+  /** Test seam: the native watch subscriptions the Worker holds. */
+  watches(): WatchSnapshot[];
 }
 
 /**
@@ -51,10 +61,15 @@ export function startWorker(options: {
   onRequest?: (method: string) => SubstituteHandler | undefined;
 }): RunningWorker {
   const files = fileHandlers(options.workerId);
+  // Deliveries start only after a subscribe, so after the connection exists.
+  const watches = watchHandlers(options.workerId, (payload) =>
+    connection.request(WATCH_METHODS.events, payload),
+  );
   const handlers = Object.fromEntries(
     Object.entries({
       ...checkoutGitHandlers(options.workerId),
       ...files.handlers,
+      ...watches.handlers,
     }).map(([method, handler]) => [
       method,
       (payload: Payload, signal: AbortSignal) => {
@@ -68,12 +83,17 @@ export function startWorker(options: {
   const connection = new WorkerConnection(options.transport, {
     handshake: { role: "worker", workerId: options.workerId },
     handlers,
-    onEnd: () => files.end(),
+    onEnd: () => {
+      files.end();
+      watches.end();
+    },
   });
   return {
     quiescent: connection.ended
       .then(() => connection.handlersSettled())
       .then(() => files.sweep()),
+    watchesReleased: watches.released,
     fileHandles: () => files.size,
+    watches: () => watches.snapshot(),
   };
 }

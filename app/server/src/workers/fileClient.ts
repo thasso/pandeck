@@ -61,7 +61,7 @@ export function isWorkerFailure(error: unknown): boolean {
 }
 
 /** Brands `error` in place; a non-object is wrapped in an `Error` first. */
-function branded(error: unknown): unknown {
+export function brandWorkerFailure(error: unknown): unknown {
   const failure =
     typeof error === "object" && error !== null
       ? error
@@ -74,7 +74,7 @@ function connectionTo(workerId: string): WorkerConnection {
   try {
     return workerConnection(workerId);
   } catch (error) {
-    throw branded(error);
+    throw brandWorkerFailure(error);
   }
 }
 
@@ -86,7 +86,7 @@ async function requestOn(
   try {
     return await connection.request(method, payload);
   } catch (error) {
-    throw branded(error);
+    throw brandWorkerFailure(error);
   }
 }
 
@@ -95,7 +95,8 @@ function decoded<T>(answer: Payload, decode: (answer: Payload) => T): T {
   try {
     return decode(answer);
   } catch (error) {
-    if (error instanceof MalformedWorkerAnswerError) throw branded(error);
+    if (error instanceof MalformedWorkerAnswerError)
+      throw brandWorkerFailure(error);
     throw error;
   }
 }

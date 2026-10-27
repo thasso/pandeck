@@ -76,7 +76,8 @@ export function checkoutFailureOf(
   return undefined;
 }
 
-function filesystemFailure(error: Error): Error {
+/** Marks `error` in place as a filesystem failure: the call ran and failed. */
+export function markFilesystemFailure(error: Error): Error {
   filesystemFailures.add(error);
   return error;
 }
@@ -102,7 +103,7 @@ export async function readLocally<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
-    if (isNativeFailure(error)) filesystemFailure(error);
+    if (isNativeFailure(error)) markFilesystemFailure(error);
     throw error;
   }
 }
@@ -112,7 +113,7 @@ async function remote<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
-    if (error instanceof AnsweredFileFailure) filesystemFailure(error);
+    if (error instanceof AnsweredFileFailure) markFilesystemFailure(error);
     throw error;
   }
 }
@@ -291,7 +292,7 @@ async function readFileOn(
       : await remote(() =>
           openOnWorker({ workerId: side.workerId, path }, false),
         );
-  if ("error" in outcome) throw filesystemFailure(outcome.error);
+  if ("error" in outcome) throw markFilesystemFailure(outcome.error);
   const { file } = outcome;
   let bytes: Buffer | undefined;
   let readFailure: { error: unknown } | undefined;
