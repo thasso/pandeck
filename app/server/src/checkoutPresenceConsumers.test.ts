@@ -69,7 +69,8 @@ vi.mock("./sessionAccountSwitch.ts", async (importOriginal) => ({
   },
 }));
 
-const { WORKTREE_MISSING_BLOCKED_REASON } = await import("@assistant/shared");
+const { KNOWLEDGE_WORKTREE_ID, WORKTREE_MISSING_BLOCKED_REASON } =
+  await import("@assistant/shared");
 const { hub } = await import("./hub.ts");
 (
   hub as unknown as { broadcastSessions: () => Promise<void> }
@@ -1547,7 +1548,15 @@ describe("lifecycle, shared resolver and placement", () => {
     });
 
   test("placement: edges probe on the default Worker; the KB row never resolves; DATA_DIR checkouts probe on the Worker (AC14)", async () => {
-    assert.equal(await resolveWorktreeRow("kb"), undefined);
+    const kbServed = recordServedForTests([
+      FILE_METHODS.exists,
+      FILE_METHODS.realpath,
+      FILE_METHODS.inspect,
+    ]);
+    assert.equal(await resolveWorktreeRow(KNOWLEDGE_WORKTREE_ID), undefined);
+    assert.equal(await resolveUsableWorktree(KNOWLEDGE_WORKTREE_ID), undefined);
+    kbServed.stop();
+    assert.deepEqual(kbServed.served, [], "the KB row reaches no Worker");
     const repo = join(tmp, "data", `inside-${++serial}`);
     initRepo(repo);
     const mainId = mainWorktreeId(project([{ path: repo, kind: "repo" }]));
