@@ -2769,8 +2769,11 @@ export class Connection implements Viewer {
         ? captureHumanResume(target.sessionId)
         : undefined;
     try {
-      const row = (await resolveUsableWorktree(worktreeId))?.row;
-      if (!row) throw new Error("That worktree is no longer available.");
+      const usable = await resolveUsableWorktree(worktreeId);
+      if (!usable) throw new Error("That worktree is no longer available.");
+      // The path is the resolver's own check, not `row.path`: a cached main
+      // root it found absent was replaced by the checkout its scan chose.
+      const { row, path } = usable;
       if (commentIds.length === 0)
         throw new Error("Select at least one comment.");
       // Canonical id (spawned id, or `main:<canonical projectId>`): comments and
@@ -2802,10 +2805,7 @@ export class Connection implements Viewer {
         if (!this.guardDeveloperWorktree(target.agentType, row)) return;
         const engine = handoffEngine(target.harness);
         if (engine.guardsPersona && !this.guardKind(target.agentType)) return;
-        driver = await engine.create(target, {
-          id: canonicalId,
-          path: row.path,
-        });
+        driver = await engine.create(target, { id: canonicalId, path });
       }
 
       markCommentsAttached(commentIds, driver.sessionId);

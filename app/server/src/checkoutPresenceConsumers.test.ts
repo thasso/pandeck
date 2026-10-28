@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -2071,5 +2072,72 @@ describe("shared resolver outputs, complete (AC12)", () => {
     assert.equal(live.cwd, root);
     assert.equal(worktreeIdForSession(live.sessionId), mainId);
     assert.equal(await deliveredTo, live.sessionId);
+  });
+
+  test("review handoff: a cached root that vanishes during its own check hands pi the surviving checkout it checked", async () => {
+    const a = fresh("handoff-a");
+    initRepo(a);
+    const b = fresh("handoff-b");
+    sh(tmp, "clone", "-q", a, b);
+    const projectId = project([
+      { path: a, kind: "repo" },
+      { path: b, kind: "repo" },
+    ]);
+    const mainId = mainWorktreeId(projectId);
+    const rootA = realpathSync(a);
+    const rootB = realpathSync(b);
+    // Warms the main cache at A, the first localPath.
+    const comment = await addWorktreeComment({
+      worktreeId: mainId,
+      body: "Please look.",
+      author: { kind: "user" },
+      anchor: { path: "readme.md", side: "new", line: 1 },
+    });
+    assert.equal((await resolveWorktreeRow(mainId))?.path, rootA);
+    const profile = createCredentialProfile({
+      name: "Handoff pi",
+      provider: "openai-codex",
+    });
+    const create = vi.spyOn(handoffEngine("pi"), "create");
+    let delivered!: (sessionId: string) => void;
+    const deliveredTo = new Promise<string>((resolve) => {
+      delivered = resolve;
+    });
+    vi.spyOn(sessionRuntime, "deliverPrompt").mockImplementation(
+      async (sessionId: string) => delivered(sessionId),
+    );
+
+    const { conn, sent } = connection();
+    const held = holdFileForTests(rootA, "exists");
+    const pending = conn.onAttachWorktreeComments!(mainId, [comment.id], {
+      kind: "new",
+      harness: "pi",
+      agentType: "developer",
+      credentialProfileId: profile.id,
+      additionalPrompt: "Address the review.",
+    });
+    await held.reached;
+    renameSync(a, fresh("handoff-a-moved"));
+    held.release();
+    await pending;
+
+    assert.deepEqual(
+      sent.filter((message) => message.type === "error"),
+      [],
+    );
+    assert.equal(create.mock.calls.length, 1);
+    assert.deepEqual(create.mock.calls[0]?.[1], { id: mainId, path: rootB });
+    const live = (await create.mock.results[0]?.value) as {
+      sessionId: string;
+      cwd: string;
+      dispose: () => void;
+    };
+    try {
+      assert.equal(live.cwd, rootB);
+      assert.equal(worktreeIdForSession(live.sessionId), mainId);
+      assert.equal(await deliveredTo, live.sessionId);
+    } finally {
+      live.dispose();
+    }
   });
 });
