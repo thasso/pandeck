@@ -5,7 +5,7 @@
  * computed by `worktreeStatus.ts`; this module owns the durable rows and the
  * git mutations, which run under {@link withRepoLock}.
  */
-import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -25,12 +25,19 @@ import {
 import { errorText } from "../errors.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { pullRequestSummaryForWorktree } from "../pullRequestCards.ts";
+import { restoreOwnerAccess, type TreeResidue } from "../managedTreeRemoval.ts";
 import {
-  removeManagedTree,
-  restoreOwnerAccess,
-  scanTreeResidue,
-  type TreeResidue,
-} from "../managedTreeRemoval.ts";
+  checkoutFailureOf,
+  checkoutFilesOn,
+  checkoutPathExists,
+  inspectCheckoutPath,
+  realpathInCheckout,
+} from "../checkoutFileAccess.ts";
+import {
+  checkoutLifecycleOn,
+  removeManagedTreeOn,
+} from "../checkoutLifecycle.ts";
+import type { PathInspection } from "../fileReads.ts";
 import { reclaimContainerResidue } from "../containerResidue.ts";
 import { getSettings } from "../settings.ts";
 import {
@@ -77,7 +84,6 @@ import {
 } from "./worktreeResolve.ts";
 import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { forgetPresence, notePresent } from "./checkoutPresence.ts";
-import { stopCheckoutProcesses } from "./checkoutProcesses.ts";
 
 /**
  * Non-interactive git/ssh env for creation's submodule setup: fail fast instead
@@ -1004,7 +1010,7 @@ async function populatedSubmodules(root: string): Promise<string[]> {
       const path = join(dir, entry.slice(entry.indexOf("\t") + 1));
       // Git counts a gitlink only when its directory is a real checkout, and a
       // nested submodule lives inside one, so this both filters and recurses.
-      if (!existsSync(join(path, ".git"))) continue;
+      if (!(await checkoutPathExists(root, join(path, ".git")))) continue;
       found.push(path);
       pending.push(path);
     }
@@ -1026,10 +1032,22 @@ async function hasSubmoduleCheckout(worktreePath: string): Promise<boolean> {
     worktreePath,
   );
   if (gitDir.code === 0) {
-    const modules = statSync(join(gitDir.stdout.trim(), "modules"), {
-      throwIfNoEntry: false,
-    });
-    if (modules?.isDirectory()) return true;
+    const modulesPath = join(gitDir.stdout.trim(), "modules");
+    let modules: PathInspection | undefined;
+    try {
+      modules = await inspectCheckoutPath(worktreePath, modulesPath, {
+        follow: true,
+      });
+    } catch (err) {
+      // Only an answered ENOENT is absence, as `throwIfNoEntry: false` reads
+      // it; any other failure, and every Worker failure, refuses.
+      if (
+        checkoutFailureOf(err) !== "filesystem" ||
+        (err as NodeJS.ErrnoException).code !== "ENOENT"
+      )
+        throw err;
+    }
+    if (modules?.kind === "directory") return true;
   }
   // Submodules cloned outside our creation path keep their gitdir in the
   // checkout, so the index is the only remaining evidence.
@@ -1152,10 +1170,14 @@ function residueSentence(residue: TreeResidue, reason?: string): string {
  * forcing on is precisely what leaves Git and the row disagreeing.
  */
 async function assertCheckoutDeletable(row: WorktreeRow): Promise<void> {
-  const scan = scanTreeResidue(row.path);
+  const lifecycle = checkoutLifecycleOn(checkoutSideOf(row));
+  const scan = await lifecycle.scanResidue(row.path);
   if (!scan.foreign) return;
   const outcome = await reclaimFor(row)(row.path);
-  if (outcome.status === "reclaimed" && !scanTreeResidue(row.path).foreign)
+  if (
+    outcome.status === "reclaimed" &&
+    !(await lifecycle.scanResidue(row.path)).foreign
+  )
     return;
   const reason =
     outcome.status === "reclaimed"
@@ -1181,17 +1203,23 @@ async function isRegisteredWorktree(
     throw new Error(
       `git could not list the worktrees of ${mainRepoRoot}: ${res.stderr.trim() || `exit ${res.code}`}`,
     );
-  return res.stdout
+  const listed = res.stdout
     .split(/\r?\n/)
     .filter((line) => line.startsWith("worktree "))
-    .map((line) => line.slice("worktree ".length).trim())
-    .some((listed) => listed === path || sameRealPath(listed, path));
+    .map((line) => line.slice("worktree ".length).trim());
+  for (const entry of listed)
+    if (entry === path || (await sameRealPath(entry, path))) return true;
+  return false;
 }
 
-function sameRealPath(a: string, b: string): boolean {
+/** A path that cannot be resolved is not the same; a Worker failure rejects. */
+async function sameRealPath(a: string, b: string): Promise<boolean> {
   try {
-    return realpathSync(a) === realpathSync(b);
-  } catch {
+    return (
+      (await realpathInCheckout(a, a)) === (await realpathInCheckout(b, b))
+    );
+  } catch (err) {
+    if (checkoutFailureOf(err) !== "filesystem") throw err;
     return false;
   }
 }
@@ -1225,7 +1253,7 @@ async function assertGitUnregistered(row: WorktreeRow): Promise<void> {
 async function removeUnregisteredCheckout(
   row: WorktreeRow,
 ): Promise<string | undefined> {
-  const result = await removeManagedTree(row.path, {
+  const result = await removeManagedTreeOn(checkoutSideOf(row), row.path, {
     reclaim: reclaimFor(row),
   });
   if (result.removed) return undefined;
@@ -1271,13 +1299,16 @@ export async function removeWorktree(
   // command can run in it, and the branch went with it. What is left is the
   // record and possibly a checkout folder that outlived it, which nothing can
   // inspect for uncommitted work any more, so only force deletes that folder.
-  const repositoryGone = !retryBranchOnly && !existsSync(row.mainRepoRoot);
-  if (repositoryGone && !opts.force && existsSync(row.path))
+  const files = checkoutFilesOn(checkoutSideOf(row));
+  const exists = (path: string): Promise<boolean> =>
+    files.pathExists(path, path);
+  const repositoryGone = !retryBranchOnly && !(await exists(row.mainRepoRoot));
+  if (repositoryGone && !opts.force && (await exists(row.path)))
     throw new WorktreeRemovalBlockedError(
       `Repository ${row.mainRepoRoot} no longer exists, so ${row.path} cannot be checked for uncommitted work. Force-remove to delete it.`,
     );
 
-  if (!retryBranchOnly && !opts.force && existsSync(row.path)) {
+  if (!retryBranchOnly && !opts.force && (await exists(row.path))) {
     const status = await gitOptionalExit(
       ["status", "--porcelain=v1", "-uall"],
       row.path,
@@ -1290,7 +1321,7 @@ export async function removeWorktree(
   }
   // Deletability is checked for EVERY removal, forced or not, before fetching
   // or mutating Git: force cannot make another user's files deletable.
-  if (!retryBranchOnly && existsSync(row.path))
+  if (!retryBranchOnly && (await exists(row.path)))
     await assertCheckoutDeletable(row);
 
   // Fetch only if the available receipts do not already prove safety. Never
@@ -1331,7 +1362,9 @@ export async function removeWorktree(
         `[worktrees] stopping background work before removing ${row.path} failed: ${errorText(err)}`,
       );
     });
-    const stopped = await stopCheckoutProcesses(row.path);
+    const stopped = await checkoutLifecycleOn(
+      checkoutSideOf(row),
+    ).stopProcesses(row.path);
     if (stopped.terminated.length > 0)
       console.info(
         `[worktrees] stopped ${stopped.terminated.length} process(es) still running in ${row.path}${
@@ -1390,11 +1423,11 @@ export async function removeWorktree(
         if (repositoryGone) {
           // Nothing registers the checkout any more; only a surviving folder
           // (force already required above) needs deleting.
-          if (existsSync(row.path)) {
+          if (await exists(row.path)) {
             await releaseCheckout();
             residue = await removeUnregisteredCheckout(row);
           }
-        } else if (!existsSync(row.path)) {
+        } else if (!(await exists(row.path))) {
           // Folder already gone (deleted externally): Git cleanup must still
           // succeed before comment lifetime can end.
           await git(["worktree", "prune"], row.mainRepoRoot);

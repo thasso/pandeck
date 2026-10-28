@@ -39,12 +39,14 @@ const SERVER_REPO_GIT_USERS = [
  * What `worker/` may import besides itself and `workerProtocol/`.
  * `parcelWatcher.ts` loads the native watcher; it imports only
  * `runtimeAssets.ts`, which reads the environment and asset paths, not server
- * state.
+ * state. `managedTreeRemoval.ts` is the removal ladder the lifecycle methods
+ * run; it imports only `node:` modules.
  */
 const WORKER_ALLOWED = new Set([
   "errors.ts",
   "fileReads.ts",
   "gitProcess.ts",
+  "managedTreeRemoval.ts",
   "parcelWatcher.ts",
   "spawnBroker.ts",
   "subprocessEnv.ts",
@@ -91,7 +93,6 @@ const CHECKOUT_FS_INVENTORY: Record<string, string> = {
  * `node:fs` until its slice lands.
  */
 const NAMED_CHECKOUT_READERS: Record<string, string> = {
-  "worktrees/checkoutProcesses.ts": "W5",
   "worktrees/idleWorktrees.ts": "W5",
 };
 
@@ -102,8 +103,10 @@ const NAMED_CHECKOUT_READERS: Record<string, string> = {
  */
 const MIGRATED_CHECKOUT_READERS = [
   "checkoutFileAccess.ts",
+  "checkoutLifecycle.ts",
   "commitWorkflow.ts",
   "connection.ts",
+  "containerResidue.ts",
   "gitFamily.ts",
   "sessionSpawn.ts",
   "workflow/operationTriage.ts",
@@ -469,7 +472,21 @@ test("served files read only through the served-file access", () => {
   );
   assert.deepEqual(
     importersOf((target) => target === "workers/fileClient.ts"),
-    ["checkoutFileAccess.ts", "servedFileAccess.ts", "workers/watchClient.ts"],
+    [
+      "checkoutFileAccess.ts",
+      "servedFileAccess.ts",
+      "workers/lifecycleClient.ts",
+      "workers/watchClient.ts",
+    ],
+  );
+});
+
+test("the removal ladder runs only on the Worker and for agent temp trees", () => {
+  // Every other user takes only its types (`import type`). The create
+  // discard's owner-access repair stays in `worktrees.ts` until create moves.
+  assert.deepEqual(
+    importersOf((target) => target === "managedTreeRemoval.ts", "valueImports"),
+    ["agentTempTree.ts", "worker/lifecycle.ts", "worktrees/worktrees.ts"],
   );
 });
 

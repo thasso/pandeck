@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  statSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -27,7 +28,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
-import { removeManagedTree, scanTreeResidue } from "./managedTreeRemoval.ts";
+import {
+  removeAfterReclaim,
+  removeManagedTree,
+  scanTreeResidue,
+  type ManagedTreeRemovalResult,
+} from "./managedTreeRemoval.ts";
 
 /** Root bypasses the mode checks, so the failures these fixtures need never happen. */
 const permissionsEnforced = process.getuid?.() !== 0;
@@ -267,3 +273,109 @@ test("the removal still reaches residue that a first scan could not see", async 
   assert.equal(result.removed, false);
   assert.equal(result.residue?.path, store);
 });
+
+/*
+ * `removeAfterReclaim` is base's post-reclaim branch on its own (the Worker's
+ * `afterReclaim` stage). Base is driven past its reclaim by a `remove` that
+ * fails its first two calls; from the reclaim on, both sides get the same
+ * `remove` outcome and the same owners. Each tree has a 0o500 directory, which
+ * base's reclaim locks again, so the mode `remove` records proves the
+ * post-reclaim owner repair ran, not the earlier one. Compared: the result
+ * (base's reclaim metadata and its residue fallback are the composition's,
+ * checked in `checkoutLifecycle.test.ts`), and the trace from the reclaim on.
+ */
+const AFTER_RECLAIM = [
+  { name: "removed", removes: true, foreignAfter: undefined },
+  { name: "still foreign", removes: false, foreignAfter: "store" },
+  {
+    name: "not removed, nothing foreign",
+    removes: false,
+    foreignAfter: undefined,
+  },
+] as const;
+
+for (const variant of AFTER_RECLAIM)
+  test(`removeAfterReclaim is base's post-reclaim branch: ${variant.name}`, async () => {
+    const fixture = () => {
+      const root = tree();
+      mkdirSync(join(root, "store"));
+      const locked = join(root, "locked");
+      mkdirSync(locked);
+      writeFileSync(join(locked, "out.png"), "x");
+      chmodSync(locked, 0o500);
+      return { root, locked };
+    };
+    const run = (side: { root: string; locked: string }) => {
+      const trace: string[] = [];
+      let reclaimed = false;
+      const rel = (path: string) => path.slice(side.root.length) || "/";
+      return {
+        trace,
+        reclaimed: () => {
+          reclaimed = true;
+          // Locked again, as a container's chown would leave its modes.
+          chmodSync(side.locked, 0o500);
+          trace.push("reclaim");
+        },
+        remove: (path: string) => {
+          assert.equal(path, side.root);
+          trace.push(
+            `remove ${(statSync(side.locked).mode & 0o777).toString(8)}`,
+          );
+          return reclaimed && variant.removes;
+        },
+        scanOptions: {
+          selfUid: SERVER_UID,
+          uidOf: (path: string) => {
+            trace.push(`uidOf ${rel(path)}`);
+            const foreign = reclaimed ? variant.foreignAfter : "";
+            return foreign !== undefined &&
+              path === (foreign ? join(side.root, foreign) : side.root)
+              ? FOREIGN_UID
+              : SERVER_UID;
+          },
+        },
+      };
+    };
+
+    const baseTree = fixture();
+    const base = run(baseTree);
+    const baseResult: ManagedTreeRemovalResult = await removeManagedTree(
+      baseTree.root,
+      {
+        remove: base.remove,
+        scanOptions: base.scanOptions,
+        reclaim: async () => {
+          base.reclaimed();
+          return { status: "reclaimed" };
+        },
+      },
+    );
+
+    const stageTree = fixture();
+    const stage = run(stageTree);
+    stage.reclaimed();
+    const stageResult = removeAfterReclaim(stageTree.root, {
+      remove: stage.remove,
+      scanOptions: stage.scanOptions,
+    });
+
+    // Base reached its post-reclaim branch, with the tree locked again.
+    const at = base.trace.indexOf("reclaim");
+    assert.ok(at > 0, "base reached its reclaim");
+    assert.deepEqual(base.trace.slice(at), stage.trace);
+    assert.equal(stage.trace[1], "remove 700", "owner access came back first");
+
+    const name = (result: object, root: string) =>
+      JSON.parse(JSON.stringify(result).replaceAll(root, "<tree>"));
+    const { reclaimed, residue, ...baseRest } = name(baseResult, baseTree.root);
+    assert.equal(reclaimed, true);
+    const stageNamed = name(stageResult, stageTree.root);
+    assert.deepEqual(
+      { ...baseRest, ...(stageNamed.residue ? { residue } : {}) },
+      stageNamed,
+    );
+    if (!stageNamed.removed && !stageNamed.residue)
+      // Base falls back to the residue its reclaim was for.
+      assert.equal(residue.path, "<tree>");
+  });

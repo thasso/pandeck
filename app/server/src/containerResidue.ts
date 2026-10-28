@@ -46,8 +46,12 @@
  * It is a cleanup step on a removal the user already asked for, so it runs
  * without a separate confirmation.
  */
-import { realpathSync, statSync } from "node:fs";
 import { relative, isAbsolute, sep } from "node:path";
+import {
+  checkoutFailureOf,
+  inspectCheckoutPath,
+  realpathInCheckout,
+} from "./checkoutFileAccess.ts";
 import {
   containerRuntimeStatus,
   execContainerCommand,
@@ -82,9 +86,11 @@ export interface ReclaimContainerResidueOptions {
 /**
  * Chown one tree back to the server's uid/gid through the container runtime.
  *
- * Never throws: every failure is an `unavailable` outcome whose reason is meant
- * to be shown to the user next to the `sudo` fallback, because a reclaim that
- * cannot run is not an error in the removal that asked for it.
+ * Never throws for the reclaim's own failures: each is an `unavailable`
+ * outcome whose reason is meant to be shown to the user next to the `sudo`
+ * fallback, because a reclaim that cannot run is not an error in the removal
+ * that asked for it. A Worker failure reading the path's identity rejects: no
+ * answer is not an answer (`docs/workers.md`).
  */
 export async function reclaimContainerResidue(
   options: ReclaimContainerResidueOptions,
@@ -94,7 +100,7 @@ export async function reclaimContainerResidue(
   if (uid === undefined || gid === undefined)
     return unavailable("this platform has no uid to hand ownership back to");
 
-  const first = resolveTarget(options);
+  const first = await resolveTarget(options);
   if ("reason" in first) return unavailable(first.reason);
 
   let image: string;
@@ -127,7 +133,7 @@ export async function reclaimContainerResidue(
   // Resolved AGAIN, right before the mount: the runtime probe and the pull are
   // awaits, and the path could have been replaced during them. What the daemon
   // mounts is decided by this resolution and proven by the inode check below.
-  const target = resolveTarget(options);
+  const target = await resolveTarget(options);
   if ("reason" in target) return unavailable(target.reason);
 
   try {
@@ -182,7 +188,7 @@ const MOUNT_IDENTITY_MISMATCH_EXIT = 3;
  * repeat across filesystems, and a device holds many inodes.
  *
  * Every interpolated value is a number this process computed — `st_dev` and
- * `st_ino` from `statSync`, our own uid and gid — and each is asserted here to
+ * `st_ino` from the Worker's inspection, our own uid and gid — and each is asserted here to
  * be a non-negative integer, so nothing in this string can carry shell syntax.
  */
 function reclaimScript(
@@ -207,28 +213,39 @@ interface TargetIdentity {
 }
 
 /**
- * Resolve the path and re-check containment, returning the identity the
- * container verifies after the mount.
+ * `st_dev`/`st_ino` as `statSync` gives them, from an inspection's signed
+ * 64-bit decimal: the unsigned value, as a number.
  */
-function resolveTarget(
+function identityNumber(decimal: string): number {
+  return Number(BigInt.asUintN(64, BigInt(decimal)));
+}
+
+/**
+ * Resolve the path and re-check containment, returning the identity the
+ * container verifies after the mount. Both are read on the default Worker,
+ * where the checkout is; a Worker failure rejects, never reads as a path that
+ * could not be resolved.
+ */
+async function resolveTarget(
   options: ReclaimContainerResidueOptions,
-): TargetIdentity | { reason: string } {
+): Promise<TargetIdentity | { reason: string }> {
   let path: string;
   let dev: number;
   let inode: number;
   try {
-    path = realpathSync(options.path);
-    const stat = statSync(path);
-    if (!stat.isDirectory())
+    path = await realpathInCheckout(options.path, options.path);
+    const stat = await inspectCheckoutPath(path, path, { follow: true });
+    if (stat.kind !== "directory")
       return { reason: "the path to reclaim is not a directory" };
-    dev = Number(stat.dev);
-    inode = Number(stat.ino);
+    dev = identityNumber(stat.dev);
+    inode = identityNumber(stat.ino);
   } catch (err) {
+    if (checkoutFailureOf(err) === "worker") throw err;
     return {
       reason: `the path to reclaim could not be resolved: ${text(err)}`,
     };
   }
-  if (!containedInAllowedRoot(path, options.allowedRoots))
+  if (!(await containedInAllowedRoot(path, options.allowedRoots)))
     return {
       reason: "the path to reclaim is not inside a managed worktree root",
     };
@@ -240,22 +257,28 @@ function resolveTarget(
  * directory every worktree of that project lives in, which is never what a
  * single removal is cleaning up.
  */
-function containedInAllowedRoot(target: string, roots: string[]): boolean {
-  return roots.some((root) => {
+async function containedInAllowedRoot(
+  target: string,
+  roots: string[],
+): Promise<boolean> {
+  for (const root of roots) {
     let resolved: string;
     try {
-      resolved = realpathSync(root);
-    } catch {
-      return false;
+      resolved = await realpathInCheckout(root, root);
+    } catch (err) {
+      if (checkoutFailureOf(err) === "worker") throw err;
+      continue;
     }
     const rel = relative(resolved, target);
-    return (
+    if (
       rel !== "" &&
       !rel.startsWith(`..${sep}`) &&
       rel !== ".." &&
       !isAbsolute(rel)
-    );
-  });
+    )
+      return true;
+  }
+  return false;
 }
 
 function unavailable(reason: string): TreeReclaimOutcome {

@@ -214,7 +214,7 @@ function decodeFailure(payload: Payload): AnsweredFileFailure | undefined {
 }
 
 /** The answer's value, or its rebuilt failure thrown. */
-function settled(payload: Payload): Record<string, unknown> {
+export function settled(payload: Payload): Record<string, unknown> {
   const failure = decodeFailure(payload);
   if (failure) throw failure;
   const json = record(payload.json);

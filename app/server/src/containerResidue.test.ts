@@ -19,6 +19,14 @@ import {
   type ContainerExecResult,
 } from "./containerImages.ts";
 import { reclaimContainerResidue } from "./containerResidue.ts";
+import { checkoutFailureOf } from "./checkoutFileAccess.ts";
+import {
+  answeredFailure,
+  answering,
+  scriptWorkerAnswersForTests,
+} from "./test/workerAnswers.ts";
+import { FILE_METHODS } from "./workerProtocol/fileMethods.ts";
+import { isWorkerFailure } from "./workers/fileClient.ts";
 
 const uid = process.getuid?.() ?? 0;
 const gid = process.getgid?.() ?? 0;
@@ -285,5 +293,100 @@ test("a symlink out of the managed roots is refused on its resolved path", async
   });
 
   assert.equal(outcome.status, "unavailable");
+  assert.deepEqual(calls, []);
+});
+
+/** The identity reads, each failing as the Worker or answered by it. */
+const IDENTITY_READS = [
+  { read: "the path's realpath", method: FILE_METHODS.realpath, of: "target" },
+  { read: "the path's inspection", method: FILE_METHODS.inspect, of: "target" },
+  { read: "a root's realpath", method: FILE_METHODS.realpath, of: "root" },
+] as const;
+
+for (const { read, method, of } of IDENTITY_READS)
+  test(`a Worker failure at ${read} rejects, never a reason, and runs nothing`, async () => {
+    const root = scratch();
+    const worktree = join(root, "repo-feature");
+    mkdirSync(worktree);
+    exec(() => ({ code: 0, stdout: "", stderr: "" }));
+    const script = scriptWorkerAnswersForTests(method, [
+      {
+        match: (request) => request.path === (of === "root" ? root : worktree),
+        action: "fail",
+      },
+    ]);
+    try {
+      const error = await reclaimContainerResidue({
+        path: worktree,
+        allowedRoots: [root],
+      }).then(
+        () => assert.fail("it resolved"),
+        (error: unknown) => error,
+      );
+      assert.ok(isWorkerFailure(error), String(error));
+      assert.equal(checkoutFailureOf(error), "worker");
+      assert.ok(script.seen.some((request) => request.action === "fail"));
+    } finally {
+      script.disarm();
+    }
+    assert.deepEqual(calls, []);
+  });
+
+test("a failure the Worker answered for the path stays a reason, as before", async () => {
+  const root = scratch();
+  const worktree = join(root, "repo-feature");
+  mkdirSync(worktree);
+  exec(() => ({ code: 0, stdout: "", stderr: "" }));
+  const script = scriptWorkerAnswersForTests(FILE_METHODS.realpath, [
+    {
+      match: (request) => request.path === worktree,
+      action: {
+        answer: answering(
+          answeredFailure("EACCES", "EACCES: permission denied"),
+        ),
+      },
+    },
+  ]);
+  try {
+    const outcome = await reclaimContainerResidue({
+      path: worktree,
+      allowedRoots: [root],
+    });
+    assert.deepEqual(outcome, {
+      status: "unavailable",
+      reason:
+        "the path to reclaim could not be resolved: EACCES: permission denied",
+    });
+  } finally {
+    script.disarm();
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("a root the Worker answered it cannot resolve is skipped, as before", async () => {
+  const root = scratch();
+  const worktree = join(root, "repo-feature");
+  mkdirSync(worktree);
+  exec(() => ({ code: 0, stdout: "", stderr: "" }));
+  const script = scriptWorkerAnswersForTests(FILE_METHODS.realpath, [
+    {
+      match: (request) => request.path === root,
+      action: {
+        answer: answering(answeredFailure("ENOENT", "ENOENT: no such file")),
+      },
+    },
+  ]);
+  try {
+    const outcome = await reclaimContainerResidue({
+      path: worktree,
+      allowedRoots: [root],
+    });
+    assert.deepEqual(outcome, {
+      status: "unavailable",
+      reason: "the path to reclaim is not inside a managed worktree root",
+    });
+  } finally {
+    script.disarm();
+  }
   assert.deepEqual(calls, []);
 });
