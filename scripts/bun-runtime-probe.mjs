@@ -1413,6 +1413,204 @@ function parentPid(pid) {
 
 const running = (pid) => !["gone", "Z"].includes(procState(pid));
 
+/** `/proc/<pid>/stat`'s start time, which tells a reused pid from its first owner. */
+function startTime(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  } catch {
+    return undefined;
+  }
+}
+
+/** `/proc/<pid>/comm`, or undefined once gone. */
+function commOf(pid) {
+  try {
+    return readFileSync(`/proc/${pid}/comm`, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/** The processes still running in process group `group`. */
+function groupMembers(group) {
+  return readdirSync("/proc")
+    .filter((name) => /^\d+$/.test(name))
+    .map(Number)
+    .filter((pid) => {
+      try {
+        return processGroup(pid) === group && running(pid);
+      } catch {
+        return false;
+      }
+    });
+}
+
+/** The running children of `parent`, by `/proc` ppid. */
+function childrenOf(parent) {
+  return readdirSync("/proc")
+    .filter((name) => /^\d+$/.test(name))
+    .map(Number)
+    .filter((pid) => parentPid(pid) === parent && running(pid));
+}
+
+/**
+ * The O5 process tree: the probe's direct child `sh`, in `cwd`, starts each
+ * of `children` in the background and waits on them. The direct child leads
+ * a process group of its own, which its children inherit (no job control), so
+ * `stop` ends every process of the tree by group, whether or not any of them
+ * ever wrote its pid file or became ready. Detaching changes no parentage, and
+ * the Worker's stop selects by ancestry and cwd, not by group.
+ */
+function ownedProcessTree(cwd, children, args) {
+  const direct = spawn(
+    "sh",
+    [
+      "-c",
+      [...children.map((child) => `${child} &`), "wait"].join("\n"),
+      "sh",
+      ...args,
+    ],
+    { cwd, stdio: "ignore", detached: true },
+  );
+  const exited = new Promise((resolve) => {
+    direct.once("exit", resolve);
+    direct.once("error", resolve);
+  });
+  const unreaped = () => direct.exitCode === null && direct.signalCode === null;
+  return {
+    direct,
+    /** SIGKILL the whole group, then wait for the direct child and every member. */
+    async stop() {
+      const group = direct.pid;
+      if (group === undefined) return;
+      // While the direct child is unreaped its pid, and so the group id,
+      // cannot be reused; after that the group id stays allocated for as long
+      // as any member lives, and each member is matched by its group.
+      if (unreaped())
+        try {
+          process.kill(-group, "SIGKILL");
+        } catch {
+          // The group is gone already.
+        }
+      for (const pid of groupMembers(group))
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Gone since.
+        }
+      if (unreaped()) await exited;
+      await until(
+        () => groupMembers(group).length === 0,
+        "the probe's process tree to end",
+      );
+    },
+  };
+}
+
+/**
+ * Reads each pid file anew on every call, so a later child's pid is known
+ * whatever an earlier one did; `ready()` holds once every file names a
+ * process that has exec'd `sleep`.
+ */
+function pidFileReadiness(pidFiles) {
+  const pids = {};
+  const ready = () => {
+    for (const [name, file] of Object.entries(pidFiles)) {
+      let pid;
+      try {
+        pid = Number(readFileSync(file, "utf8"));
+      } catch {
+        continue;
+      }
+      if (pid > 0) pids[name] = pid;
+    }
+    return Object.keys(pidFiles).every(
+      (name) => pids[name] !== undefined && commOf(pids[name]) === "sleep\n",
+    );
+  };
+  return { pids, ready };
+}
+
+/** O5's three children: a sleeper and a TERM-ignoring one in the cwd, one in `$1`. */
+const O5_CHILDREN = [
+  `sh -c 'echo $$ > sleeper.pid; exec sleep 600'`,
+  `sh -c 'trap "" TERM; echo $$ > ignorer.pid; exec sleep 600'`,
+  `sh -c 'cd "$1"; echo $$ > outside.pid; exec sleep 600' sh "$1"`,
+];
+
+/**
+ * O5's cleanup on a readiness failure: the first child never becomes a
+ * sleeper (its exec fails after writing its pid file, or it exits before
+ * writing one) while its later siblings run. The tree is not ready, and its
+ * stop must still end every process in it. The probe watches the siblings
+ * itself and, should the stop leak one, SIGKILLs it by pid and start time
+ * before failing.
+ */
+async function checkProcessTreeCleanup(base) {
+  for (const [variant, first] of [
+    ["exec failed", `sh -c 'echo $$ > sleeper.pid; exec ./no-such-sleep 600'`],
+    ["no pid file", `sh -c 'exit 3'`],
+  ]) {
+    const fixture = join(base, `O5-cleanup-${variant.replace(" ", "-")}`);
+    const tree = lifecycleFixture(fixture, "plain");
+    const outside = join(fixture, "outside");
+    const owned = ownedProcessTree(
+      tree,
+      [first, ...O5_CHILDREN.slice(1)],
+      [outside],
+    );
+    const watched = new Map();
+    try {
+      const readiness = pidFileReadiness({
+        sleeper: join(tree, "sleeper.pid"),
+        ignorer: join(tree, "ignorer.pid"),
+        outside: join(outside, "outside.pid"),
+      });
+      // Settled: the first child is gone and exactly its two siblings run,
+      // each exec'd into `sleep`.
+      await until(() => {
+        readiness.ready();
+        const live = childrenOf(owned.direct.pid);
+        return (
+          live.length === 2 &&
+          [readiness.pids.ignorer, readiness.pids.outside].every(
+            (pid) => pid !== undefined && live.includes(pid),
+          ) &&
+          live.every((pid) => commOf(pid) === "sleep\n")
+        );
+      }, `the ${variant} tree's later sleepers`);
+      for (const pid of [readiness.pids.ignorer, readiness.pids.outside])
+        watched.set(pid, startTime(pid));
+      assert(
+        [owned.direct.pid, ...watched.keys()].every(
+          (pid) => processGroup(pid) === owned.direct.pid,
+        ),
+        `The ${variant} tree does not run in its direct child's own group.`,
+      );
+      assert(
+        !readiness.ready(),
+        `A tree whose first child ${variant} read as ready.`,
+      );
+      await owned.stop();
+      const leaked = [...watched.keys()].filter(running);
+      assert(
+        leaked.length === 0 && !running(owned.direct.pid),
+        `Stopping the ${variant} tree left ${leaked} running.`,
+      );
+    } finally {
+      for (const [pid, start] of watched)
+        if (running(pid) && startTime(pid) === start)
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // Gone since.
+          }
+      await owned.stop();
+    }
+  }
+}
+
 /** `value` with every object's keys sorted, so key order is no difference. */
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -1437,8 +1635,7 @@ async function checkWorkerLifecycle() {
   const uid = process.getuid?.();
   const base = realpathSync(mkdtempSync(join(scratch, "lifecycle-")));
   const lifecycle = checkoutLifecycleOn(DEFAULT_WORKER_SIDE);
-  const recorded = [];
-  let direct;
+  let owned;
 
   /** `run` on a fixture's tree: its answer or failure, then what remains. */
   const observe = async (root, run) => {
@@ -1545,58 +1742,33 @@ async function checkWorkerLifecycle() {
     }
     console.log("lifecycle O4 ok");
 
+    await checkProcessTreeCleanup(base);
+    console.log("lifecycle O5 cleanup ok");
+
     // O5's tree: the probe's direct child `sh` in B starts a sleeper and a
     // TERM-ignoring sleeper in B and one outside it, each exec'd so its pid
     // file names the process itself, then waits on all three.
     const fixture = join(base, "O5-b");
     const tree = lifecycleFixture(fixture, "plain");
     const outside = join(fixture, "outside");
-    direct = spawn(
-      "sh",
-      [
-        "-c",
-        [
-          `sh -c 'echo $$ > sleeper.pid; exec sleep 600' &`,
-          `sh -c 'trap "" TERM; echo $$ > ignorer.pid; exec sleep 600' &`,
-          `sh -c 'cd "$1"; echo $$ > outside.pid; exec sleep 600' sh "$1" &`,
-          "wait",
-        ].join("\n"),
-        "sh",
-        outside,
-      ],
-      { cwd: tree, stdio: "ignore" },
-    );
-    const pidFiles = {
+    owned = ownedProcessTree(tree, O5_CHILDREN, [outside]);
+    const { direct } = owned;
+    const { pids, ready } = pidFileReadiness({
       sleeper: join(tree, "sleeper.pid"),
       ignorer: join(tree, "ignorer.pid"),
       outside: join(outside, "outside.pid"),
-    };
-    const pids = {};
-    await until(() => {
-      for (const [name, file] of Object.entries(pidFiles)) {
-        let pid;
-        try {
-          pid = Number(readFileSync(file, "utf8"));
-        } catch {
-          return false;
-        }
-        if (!(pid > 0)) return false;
-        let comm;
-        try {
-          comm = readFileSync(`/proc/${pid}/comm`, "utf8");
-        } catch {
-          return false;
-        }
-        if (comm !== "sleep\n") return false;
-        if (!recorded.includes(pid)) recorded.push(pid);
-        pids[name] = pid;
-      }
-      return true;
-    }, "the process tree's sleepers");
+    });
+    await until(ready, "the process tree's sleepers");
     assert(
       parentPid(direct.pid) === process.pid &&
         Object.values(pids).every((pid) => parentPid(pid) === direct.pid),
       "The process tree is not the probe's child and grandchildren.",
+    );
+    assert(
+      [direct.pid, ...Object.values(pids)].every(
+        (pid) => processGroup(pid) === direct.pid,
+      ),
+      "The process tree does not run in its direct child's own group.",
     );
 
     // O6: a request for another Worker is refused before any effect.
@@ -1655,17 +1827,15 @@ async function checkWorkerLifecycle() {
       `Worker lifecycle (${mode}, uid ${uid}): mkdir, removal, residue scan, discard and delete match native fs and base code on twin fixtures; a stop signals exactly its checkout's grandchildren; another Worker's requests are refused.`,
     );
   } finally {
-    for (const pid of [...recorded, direct?.pid])
-      if (pid !== undefined && procState(pid) !== "gone")
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Gone since.
-        }
-    if (direct && direct.exitCode === null && direct.signalCode === null)
-      await new Promise((resolve) => direct.once("exit", resolve));
-    execFileSync("chmod", ["-R", "u+rwx", base]);
-    rmSync(base, { recursive: true, force: true });
+    try {
+      await owned?.stop();
+    } finally {
+      try {
+        execFileSync("chmod", ["-R", "u+rwx", base]);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    }
   }
 }
 
