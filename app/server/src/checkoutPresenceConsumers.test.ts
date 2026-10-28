@@ -88,10 +88,12 @@ const { reserveAccountRecovery, releaseAccountRecovery } =
 const { reserveWorktreeForRemoval } =
   await import("./session/sessionRunLease.ts");
 const { drainPromptQueue } = await import("./promptQueue.ts");
+const { buildSpawnProposal } = await import("./sessionSpawn.ts");
 const { promptQueueStore } = await import("./db/promptQueueStore.ts");
 const { projectStore } = await import("./db/projectStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const {
+  activeWorktreePaths,
   insertWorktree,
   linkSessionToWorktree,
   markWorktreeRemovedForTests,
@@ -172,8 +174,11 @@ function fresh(name: string): string {
 type LocalPath = { path: string; kind: "repo" | "workspace" };
 
 /** A registered project with `localPaths`; answers its id. */
-function project(localPaths: LocalPath[], worktreeRoot?: string): string {
-  const id = `cp-${++serial}`;
+function project(
+  localPaths: LocalPath[],
+  worktreeRoot?: string,
+  id = `cp-${++serial}`,
+): string {
   projectStore.put({
     id,
     name: id,
@@ -772,6 +777,40 @@ function relinkOnSettle(sessionId: string, targets: string[]): void {
   });
 }
 
+/**
+ * A resident Claude source on `worktreeId` whose fork records the directory
+ * it would run in, then stops.
+ */
+async function claudeFork(id: string, worktreeId: string) {
+  const source = claudeSdkStore.acquire(
+    id,
+    { agentType: "developer", credentialProfileId: claudeProfile.id },
+    await checkWorktreeCheckout(worktreeId),
+  );
+  vi.spyOn(source, "toRecordMeta").mockReturnValue({
+    ...source.toRecordMeta(),
+    providerSessionId: "provider-1",
+  });
+  vi.spyOn(sessionRuntime, "canForkLogAt").mockReturnValue(true);
+  const dirs: string[] = [];
+  claudeSdkStore.setSeam(
+    async () =>
+      ({
+        forkSession: async (_id: string, opts: { dir: string }) => {
+          dirs.push(opts.dir);
+          throw new Error("stop after the cwd");
+        },
+      }) as never,
+  );
+  const fork = () =>
+    claudeSdkStore.forkSession(id, {
+      anchor: "a",
+      keepThroughEntryId: "e",
+      forkOrigin: {} as never,
+    });
+  return { dirs, fork };
+}
+
 describe("engine construction reads its own check (AC6)", () => {
   test("Claude open: spawned path; deleted folder falls back; never unverified", async () => {
     const live = spawnedRow(true);
@@ -895,37 +934,10 @@ describe("engine construction reads its own check (AC6)", () => {
     }
   });
 
-  test("Claude fork and transcript removal read their own check", async () => {
+  test("Claude fork reads its own check", async () => {
     const live = spawnedRow(true);
-    const id = claudeSession(live.id);
-    const session_ = claudeSdkStore.acquire(
-      id,
-      { agentType: "developer", credentialProfileId: claudeProfile.id },
-      await checkWorktreeCheckout(live.id),
-    );
-    vi.spyOn(session_, "toRecordMeta").mockReturnValue({
-      ...session_.toRecordMeta(),
-      providerSessionId: "provider-1",
-    });
-    vi.spyOn(sessionRuntime, "canForkLogAt").mockReturnValue(true);
-    const dirs: string[] = [];
-    claudeSdkStore.setSeam(
-      async () =>
-        ({
-          forkSession: async (_id: string, opts: { dir: string }) => {
-            dirs.push(opts.dir);
-            throw new Error("stop after the cwd");
-          },
-        }) as never,
-    );
-    await assert.rejects(
-      claudeSdkStore.forkSession(id, {
-        anchor: "a",
-        keepThroughEntryId: "e",
-        forkOrigin: {} as never,
-      }),
-      /stop after the cwd/,
-    );
+    const { dirs, fork } = await claudeFork(claudeSession(live.id), live.id);
+    await assert.rejects(fork(), /stop after the cwd/);
     assert.deepEqual(dirs, [live.path]);
   });
 
@@ -1254,6 +1266,51 @@ const CONSUMERS: Consumer[] = [
     },
   },
   {
+    name: "Claude rename (stored, non-resident)",
+    prepare: async () => {
+      const { row, id } = liveRowSession("claude-sdk");
+      vi.spyOn(claudeSdkStore, "exists").mockReturnValue(true);
+      return {
+        path: row.path,
+        run: () =>
+          harnessRegistry.rename({ id, harness: "claude-sdk" } as never, "R"),
+        after: () => assert.equal(claudeSdkStore.get(id), undefined),
+      };
+    },
+  },
+  {
+    name: "Claude fork",
+    prepare: async () => {
+      const { row, id } = liveRowSession("claude-sdk");
+      const { dirs, fork } = await claudeFork(id, row.id);
+      return {
+        path: row.path,
+        run: fork,
+        after: () => assert.deepEqual(dirs, []),
+      };
+    },
+  },
+  {
+    name: "pi fork",
+    prepare: async () => {
+      const { row, id } = liveRowSession();
+      const header = fresh("fail-fork-header");
+      mkdirSync(header);
+      const file = piTranscript(id, header);
+      return {
+        path: row.path,
+        run: () =>
+          piStore.forkSession(
+            "developer",
+            file,
+            `${id}-user`,
+            "at",
+            "app-entry",
+          ),
+      };
+    },
+  },
+  {
     name: "pi reopen",
     prepare: async () => {
       const { row, id } = liveRowSession();
@@ -1369,6 +1426,40 @@ describe("lifecycle, shared resolver and placement", () => {
     );
   });
 
+  test("after 50 create/remove cycles and 5 project edits, entries stay within the live bound (AC11)", async () => {
+    const repo = fresh("cycles");
+    initRepo(repo);
+    const projectId = project(
+      [{ path: repo, kind: "repo" }],
+      fresh("cycle-root"),
+    );
+    for (let i = 0; i < 50; i++) {
+      const record = await createWorktree({ projectId, name: `cycle-${i}` });
+      presenceNow(DEFAULT_WORKER_SIDE, record.path);
+      await removeWorktree(record.id, { force: true, deleteBranch: true });
+    }
+    for (let i = 0; i < 5; i++) {
+      const before = fresh("edit-before");
+      initRepo(before);
+      const edited = project([{ path: before, kind: "repo" }]);
+      await checkWorktreeCheckout(mainWorktreeId(edited));
+      const after = fresh("edit-after");
+      mkdirSync(after);
+      // Edited as the registry writers do: the record, then invalidation.
+      project([{ path: after, kind: "repo" }], undefined, edited);
+      invalidateMainRepo(edited);
+      await checkWorktreeCheckout(mainWorktreeId(edited));
+    }
+    await flushPresenceForTests();
+    const bound =
+      activeWorktreePaths().size +
+      projectStore
+        .list()
+        .reduce((sum, p) => sum + (p.localPaths?.length ?? 0) + 1, 0);
+    const { entries } = presenceCountsForTests();
+    assert.ok(entries <= bound, `${entries} entries > bound ${bound}`);
+  }, 120_000);
+
   test("shared resolver: present answers the row and path, deleted answers undefined, nested main the root (AC12)", async () => {
     const live = spawnedRow(true);
     const usable = await resolveUsableWorktree(live.id);
@@ -1390,6 +1481,70 @@ describe("lifecycle, shared resolver and placement", () => {
       { type: "error", message: "That worktree is no longer available." },
     ]);
   });
+
+  test("spawn proposals and review handoffs resolve through the shared resolver (AC12)", async () => {
+    const live = spawnedRow(true);
+    const gone = await stalePresent();
+    const sender = session();
+    const propose = (worktreeId: string) =>
+      buildSpawnProposal({
+        senderSessionId: sender,
+        rows: [{ title: "T", agentType: "assistant", prompt: "p", worktreeId }],
+      } as never);
+    const proposal = await propose(live.id);
+    assert.equal(proposal.items[0]?.worktreeId, live.id);
+    await assert.rejects(propose(gone.id), {
+      message: `Worktree ${gone.id} does not exist, was removed, or its checkout is gone.`,
+    });
+
+    const handoff = async (worktreeId: string) => {
+      const { conn, sent } = connection();
+      await conn.onAttachWorktreeComments!(worktreeId, [], {
+        kind: "existing",
+        sessionId: session(worktreeId),
+      });
+      return sent.map((message) => message.message);
+    };
+    // An empty selection is refused only after the worktree resolved.
+    assert.deepEqual(await handoff(live.id), [
+      "Failed to attach comments: Select at least one comment.",
+    ]);
+    assert.deepEqual(await handoff(gone.id), [
+      "Failed to attach comments: That worktree is no longer available.",
+    ]);
+  });
+
+  for (const kind of FAILURE_KINDS)
+    test(`spawn proposal and review handoff: a ${kind} is a Worker failure, not a missing worktree`, async () => {
+      const row = spawnedRow(true);
+      const sender = session();
+      const spawned = await underFailure(kind, row.path, () =>
+        buildSpawnProposal({
+          senderSessionId: sender,
+          rows: [
+            {
+              title: "T",
+              agentType: "assistant",
+              prompt: "p",
+              worktreeId: row.id,
+            },
+          ],
+        } as never),
+      );
+      const expected = assertWorkerFailure(spawned) as Error;
+      const { conn, sent } = connection();
+      const target = session(row.id);
+      await underFailure(kind, row.path, () =>
+        conn.onAttachWorktreeComments!(row.id, [], {
+          kind: "existing",
+          sessionId: target,
+        }),
+      );
+      assert.deepEqual(
+        sent.map((message) => message.message),
+        [`Failed to attach comments: ${expected.message}`],
+      );
+    });
 
   test("placement: edges probe on the default Worker; the KB row never resolves; DATA_DIR checkouts probe on the Worker (AC14)", async () => {
     assert.equal(await resolveWorktreeRow("kb"), undefined);

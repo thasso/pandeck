@@ -39,6 +39,8 @@ const { insertWorktree, linkSessionToWorktree } =
 const { flushPresenceForTests, presenceCountsForTests, resetPresenceForTests } =
   await import("./worktrees/checkoutPresence.ts");
 const { checkWorktreeCheckout } = await import("./worktrees/sessionCwd.ts");
+const { recordServedForTests } = await import("./test/workerAnswers.ts");
+const { FILE_METHODS } = await import("./workerProtocol/fileMethods.ts");
 const { clearMainRepoCache, mainWorktreeId, resolveWorktreeRow } =
   await import("./worktrees/worktreeResolve.ts");
 
@@ -195,7 +197,10 @@ async function quiescent(): Promise<number> {
 async function assertSettled(...feeds: Message[][]): Promise<void> {
   const probes = presenceCountsForTests().probesIssued;
   const lengths = feeds.map((feed) => feed.length);
+  const served = recordServedForTests([FILE_METHODS.exists]);
   assert.equal(await quiescent(), 1);
+  served.stop();
+  assert.deepEqual(served.served, [], "no files.exists served");
   assert.equal(presenceCountsForTests().probesIssued, probes, "no loop");
   assert.deepEqual(
     feeds.map((feed) => feed.length),
