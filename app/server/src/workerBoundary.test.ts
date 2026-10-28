@@ -81,7 +81,6 @@ const GIT_SPAWNS: Record<string, number> = {
  * directly. Each names the slice that moves those reads behind the Worker.
  */
 const CHECKOUT_FS_INVENTORY: Record<string, string> = {
-  "worktrees/worktreeResolve.ts": "W3d",
   "projectProvision.ts": "W5",
   "tools/core/projectCreateTool.ts": "W5",
   "worktrees/worktrees.ts": "W5",
@@ -92,7 +91,6 @@ const CHECKOUT_FS_INVENTORY: Record<string, string> = {
  * `node:fs` until its slice lands.
  */
 const NAMED_CHECKOUT_READERS: Record<string, string> = {
-  "worktrees/sessionCwd.ts": "W3d",
   "worktrees/checkoutProcesses.ts": "W5",
   "worktrees/idleWorktrees.ts": "W5",
 };
@@ -108,10 +106,13 @@ const MIGRATED_CHECKOUT_READERS = [
   "gitFamily.ts",
   "workflow/operationTriage.ts",
   "workflow/rebaseRepair.ts",
+  "worktrees/checkoutPresence.ts",
+  "worktrees/sessionCwd.ts",
   "worktrees/worktreeComments.ts",
   "worktrees/worktreeDiff.ts",
   "worktrees/worktreeFetch.ts",
   "worktrees/worktreeMerge.ts",
+  "worktrees/worktreeResolve.ts",
   "worktrees/worktreeStatus.ts",
   "worktrees/worktreeSync.ts",
   "worktrees/worktreeWatcher.ts",

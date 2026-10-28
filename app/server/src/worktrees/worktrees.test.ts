@@ -64,6 +64,7 @@ const {
   sessionWorktreeMissing,
   acknowledgeMissingSessionWorktree,
   worktreeMissingProbe,
+  checkWorktreeCheckout,
 } = await import("./sessionCwd.ts");
 const {
   computeWorktreeStatus,
@@ -1194,6 +1195,7 @@ test("synthetic main worktree: resolveWorktreeRow, cwd binding, and no merge/rem
   // aligned with the synthetic row's (realpath'd) path.
   assert.equal(mainCheckoutPathForProject("wt-proj"), realpathSync(repoPath));
   linkSessionToWorktree("main-sess", mainId);
+  await checkWorktreeCheckout(mainId);
   assert.equal(worktreeCwdForSession("main-sess"), realpathSync(repoPath));
   assert.equal(resolveSessionCwd("main-sess"), realpathSync(repoPath));
 
@@ -1422,6 +1424,7 @@ test("mainCheckoutPathForProject aligns with resolveMainRepo for a nested localP
   });
 
   clearMainRepoCache();
+  await checkWorktreeCheckout(mainWorktreeId("nested-proj"));
   // Cold cache: git-free fallback returns the configured (sub)directory (realpath'd).
   assert.equal(mainCheckoutPathForProject("nested-proj"), realpathSync(sub));
   // Warm cache: returns the resolved git ROOT, matching the synthetic row path.
