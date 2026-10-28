@@ -278,6 +278,7 @@ export function clearMainRepoCache(): void {
   for (const key of new Set([
     ...mainRepoCache.keys(),
     ...mainRepoInFlight.keys(),
+    ...mainCandidates.keys(),
   ]))
     bumpMainRepoGeneration(key);
   mainRepoCache.clear();
@@ -313,12 +314,17 @@ async function resolveMainRepoCached(
     const freshness = mainRepoCacheFresh(cached, Date.now());
     if (typeof freshness === "boolean") {
       if (freshness) return cached.info;
-    } else if (
-      (await freshness) &&
-      mainRepoCache.get(key) === cached &&
-      mainRepoGenerationOf(key) === generation
-    )
-      return cached.info;
+    } else {
+      const holds = await freshness;
+      // An invalidation or clear while the stamp was read: `project` may be
+      // the pre-edit record, so start over from the registry as it is now
+      // rather than resolve it under the newer generation.
+      if (mainRepoGenerationOf(key) !== generation) {
+        const current = getProject(key);
+        return current ? resolveMainRepoCached(current) : undefined;
+      }
+      if (holds && mainRepoCache.get(key) === cached) return cached.info;
+    }
   }
   const running = mainRepoInFlight.get(key);
   if (running) return running;
@@ -497,15 +503,18 @@ function sameCandidate(a: MainCandidateState, b: MainCandidateState): boolean {
 }
 
 /**
- * One scan of `project`'s candidate, resolving with its own result. It writes
- * only into the entry it was issued for, when no newer scan wrote and the
- * project's generation is unchanged since it started.
+ * One scan of the candidate of the project keyed `key`, resolving with its own
+ * result. It reads the registry and the generation together when it starts,
+ * so no earlier read can pair a pre-edit record with a newer generation. It
+ * writes only into the entry it was issued for, when no newer scan wrote and
+ * the generation is unchanged since it started.
  */
 async function runMainCandidateScan(
-  project: ProjectRecord,
+  key: string,
   entry: MainCandidateEntry,
 ): Promise<MainCandidateState> {
-  const key = project.id;
+  const project = getProject(key);
+  if (!project) return { kind: "none" };
   const ticket = ++entry.issued;
   const generation = mainRepoGenerationOf(key);
   const state = await scanMainCandidate(project);
@@ -525,19 +534,19 @@ async function runMainCandidateScan(
 }
 
 /** The candidate state now; schedules one background rescan (refresh on read). */
-function mainCandidateNow(project: ProjectRecord): MainCandidateState {
-  const entry = mainCandidateEntry(project.id);
+function mainCandidateNow(key: string): MainCandidateState {
+  const entry = mainCandidateEntry(key);
   if (!entry.backgroundInFlight) {
     entry.backgroundInFlight = true;
     const scan = Promise.resolve()
-      .then(() => runMainCandidateScan(project, entry))
+      .then(() => runMainCandidateScan(key, entry))
       .then(
         () => {},
         (error: unknown) => {
-          if (entry.failing || mainCandidates.get(project.id) !== entry) return;
+          if (entry.failing || mainCandidates.get(key) !== entry) return;
           entry.failing = true;
           console.warn(
-            `[checkout-presence] main checkout scan of ${project.id} failed; keeping the last state:`,
+            `[checkout-presence] main checkout scan of ${key} failed; keeping the last state:`,
             error,
           );
         },
@@ -550,11 +559,9 @@ function mainCandidateNow(project: ProjectRecord): MainCandidateState {
   return entry.state;
 }
 
-/** A fresh scan of `project`'s candidate; rejects on any Worker failure. */
-function checkMainCandidate(
-  project: ProjectRecord,
-): Promise<MainCandidateState> {
-  return runMainCandidateScan(project, mainCandidateEntry(project.id));
+/** A fresh scan of `key`'s candidate; rejects on any Worker failure. */
+function checkMainCandidate(key: string): Promise<MainCandidateState> {
+  return runMainCandidateScan(key, mainCandidateEntry(key));
 }
 
 /* ------------------------------- main checkout ------------------------------ */
@@ -601,7 +608,7 @@ export function mainCheckoutEdgeNow(projectId: string): MainCheckoutEdge {
     dropResolvedRoot(key, cached);
   } else if (cached && noRepositoryHolds(cached, Date.now()))
     return { kind: "missing", retired: true };
-  const state = mainCandidateNow(project);
+  const state = mainCandidateNow(key);
   if (state.kind === "path") return { kind: "live", path: state.path };
   return state.kind === "none"
     ? { kind: "missing", retired: false }
@@ -618,6 +625,10 @@ export type MainCheckoutCheck =
  * presence check (absent drops it), else base's cached "no repository" within
  * its TTL with no Worker call, else a fresh candidate scan. Rejects on any
  * Worker failure; never adopts an older probe or scan.
+ *
+ * An invalidation, clear or root drop while a check ran may have moved the
+ * registry under it: the check starts over from the state as it is now, so
+ * neither its answer nor anything it writes derives from a pre-edit record.
  */
 export async function checkMainCheckout(
   projectId: string,
@@ -628,12 +639,18 @@ export async function checkMainCheckout(
   const cached = mainRepoCache.get(key);
   if (cached?.info) {
     const root = cached.info.root;
-    if (await checkMainPresence(key, root))
-      return { verdict: "live", path: root };
+    const generation = mainRepoGenerationOf(key);
+    const present = await checkMainPresence(key, root);
+    if (mainRepoGenerationOf(key) !== generation)
+      return checkMainCheckout(projectId);
+    if (present) return { verdict: "live", path: root };
     dropResolvedRoot(key, cached);
   } else if (cached && noRepositoryHolds(cached, Date.now()))
     return { verdict: "missing-no-repository" };
-  const state = await checkMainCandidate(project);
+  const generation = mainRepoGenerationOf(key);
+  const state = await checkMainCandidate(key);
+  if (mainRepoGenerationOf(key) !== generation)
+    return checkMainCheckout(projectId);
   return state.kind === "path"
     ? { verdict: "live", path: state.path }
     : { verdict: "missing-absent" };
@@ -661,7 +678,7 @@ export function mainCheckoutPathForProject(
   const cached = mainRepoCache.get(project.id);
   if (cached?.info) return cached.info.root;
   if (cached && noRepositoryHolds(cached, Date.now())) return undefined;
-  const state = mainCandidateNow(project);
+  const state = mainCandidateNow(project.id);
   return state.kind === "path" ? state.path : undefined;
 }
 

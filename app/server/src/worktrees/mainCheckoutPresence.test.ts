@@ -103,6 +103,12 @@ type LocalPath = { path: string; kind: "repo" | "workspace" };
 /** A registered project with `localPaths`; answers its id. */
 function project(localPaths: LocalPath[]): string {
   const id = `mp-${++serial}`;
+  putProject(id, localPaths);
+  return id;
+}
+
+/** Writes project `id` with `localPaths`, as a registry edit does. */
+function putProject(id: string, localPaths: LocalPath[]): void {
   projectStore.put({
     id,
     name: id,
@@ -113,7 +119,12 @@ function project(localPaths: LocalPath[]): string {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
-  return id;
+}
+
+/** Edits project `id` to `localPaths` and invalidates it, as the registry writers do. */
+function editProject(id: string, localPaths: LocalPath[]): void {
+  putProject(id, localPaths);
+  invalidateMainRepo(id);
 }
 
 function fresh(name: string): string {
@@ -301,25 +312,25 @@ describe("main checkout path (AC8, D15)", () => {
     });
   });
 
-  test("invalidateMainRepo during a held scan: the check keeps its own result, the cache records nothing", async () => {
+  test("an edit during a held scan: the check starts over on the edited record, and the old scan records nothing", async () => {
     const repo = fresh("invalidated");
+    const edited = fresh("edited");
     initRepo(repo);
+    initRepo(edited);
     const id = project([{ path: repo, kind: "repo" }]);
     const held = holdFileForTests(join(repo, ".git"), "exists");
     const pending = checkMainCheckout(id);
     await held.reached;
-    invalidateMainRepo(id);
+    editProject(id, [{ path: edited, kind: "repo" }]);
     held.release();
-    assert.deepEqual(await pending, {
-      verdict: "live",
-      path: realpathSync(repo),
-    });
-    assert.equal(mainCheckoutPathForProject(id), undefined, "still unknown");
+    const checked = await pending;
+    assert.equal(mainCheckoutPathForProject(id), realpathSync(edited));
+    assert.deepEqual(checked, { verdict: "live", path: realpathSync(edited) });
 
-    // The same for a background scan.
+    // A background scan: an invalidation during it leaves the state unknown.
     await flushPresenceForTests();
     invalidateMainRepo(id);
-    const again = holdFileForTests(join(repo, ".git"), "exists");
+    const again = holdFileForTests(join(edited, ".git"), "exists");
     mainCheckoutPathForProject(id);
     await again.reached;
     invalidateMainRepo(id);
@@ -331,6 +342,62 @@ describe("main checkout path (AC8, D15)", () => {
       "late scan dropped",
     );
   });
+
+  test("a background scan scheduled before an edit scans the edited record", async () => {
+    const repo = fresh("deferred-old");
+    const edited = fresh("deferred-new");
+    initRepo(repo);
+    initRepo(edited);
+    const id = project([{ path: repo, kind: "repo" }]);
+    // The read schedules its scan; the edit lands before the scan starts.
+    assert.equal(mainCheckoutPathForProject(id), undefined);
+    editProject(id, [{ path: edited, kind: "repo" }]);
+    mainCheckoutPathForProject(id);
+    await flushPresenceForTests();
+    assert.equal(mainCheckoutPathForProject(id), realpathSync(edited));
+  });
+
+  test.each([
+    { name: "falsely missing", workspace: false },
+    { name: "the old workspace", workspace: true },
+  ])(
+    "an edit during a resolved root's own check publishes nothing from the old record: not $name (F002)",
+    async ({ workspace }) => {
+      const repo = fresh("root-old");
+      const edited = fresh("root-new");
+      const oldWorkspace = fresh("workspace-old");
+      initRepo(repo);
+      initRepo(edited);
+      mkdirSync(oldWorkspace);
+      const id = project([
+        { path: repo, kind: "repo" },
+        ...(workspace
+          ? [{ path: oldWorkspace, kind: "workspace" as const }]
+          : []),
+      ]);
+      assert.equal(
+        (await resolveMainWorktreeRow(id))?.path,
+        realpathSync(repo),
+      );
+      const root = realpathSync(repo);
+      const held = holdFileForTests(root, "exists");
+      const pending = checkMainCheckout(id);
+      await held.reached;
+      rmSync(repo, { recursive: true });
+      editProject(id, [{ path: edited, kind: "repo" }]);
+      held.release();
+      const oldCheck = await pending;
+      assert.deepEqual(mainCheckoutEdgeNow(id), {
+        kind: "live",
+        path: realpathSync(edited),
+      });
+      // The old check answers the registry as it is now, from its own scan.
+      assert.deepEqual(oldCheck, {
+        verdict: "live",
+        path: realpathSync(edited),
+      });
+    },
+  );
 
   test.each(["EACCES", "ENOENT"])(
     "a realpath %s on a present folder keeps the path as chosen, and the final check answers true",
@@ -482,6 +549,31 @@ describe("main stamp through the Worker (AC9)", () => {
       clock.mockRestore();
     }
   });
+
+  test.each(["invalidate", "clear"] as const)(
+    "an edit and a %s during a held freshness check never publish the pre-edit root (F001)",
+    async (drop) => {
+      const { id, head } = stampedProject();
+      const edited = fresh("edited-stamped");
+      initRepo(edited);
+      ageStampFiles(edited);
+      await resolveMainWorktreeRow(id);
+      const held = holdFileForTests(head, "inspect");
+      const old = resolveMainWorktreeRow(id);
+      await held.reached;
+      putProject(id, [{ path: edited, kind: "repo" }]);
+      if (drop === "invalidate") invalidateMainRepo(id);
+      else clearMainRepoCache();
+      held.release();
+      const oldRow = await old;
+      assert.equal(mainCheckoutPathForProject(id), realpathSync(edited));
+      assert.equal(
+        (await resolveMainWorktreeRow(id))?.path,
+        realpathSync(edited),
+      );
+      assert.equal(oldRow?.path, realpathSync(edited), "started over");
+    },
+  );
 
   test("a missing packed-refs stamps '-'; ENOTDIR propagates", async () => {
     const { id, repo } = stampedProject();
