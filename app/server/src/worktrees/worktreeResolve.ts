@@ -205,9 +205,9 @@ export async function noMainRepoMessage(
  * a repo created by hand waits that long. Keyed by canonical project id.
  *
  * One in-flight resolve per project owns the resolve, its stamp and the
- * publication, and publishes only if no invalidation bumped the generation
- * since it started. A freshness check is shared by the callers that ask while
- * it runs, and its answer counts only for the entry it checked.
+ * publication, and publishes through {@link publishAsOwner} only. A freshness
+ * check is shared by the callers that ask while it runs, and its answer counts
+ * only for the entry it checked.
  */
 const MAIN_REPO_TTL_MS = 3_000;
 const MAIN_REPO_ABSENT_TTL_MS = 60_000;
@@ -248,12 +248,14 @@ async function stampStillHolds(
 }
 
 const mainRepoCache = new Map<string, MainRepoCacheEntry>();
-const mainRepoInFlight = new Map<string, Promise<MainRepoInfo | undefined>>();
+/** The running owned resolve per project; joined only while its owner holds. */
+const mainRepoInFlight = new Map<
+  string,
+  { promise: Promise<MainRepoInfo | undefined>; owner: ResolveOwner }
+>();
 // Per-key generation, bumped on invalidation/clear and on dropping a root its
-// side answered absent. A resolve or candidate scan captures the generation at
-// start and only writes its result back if it hasn't changed — so an
-// invalidation that lands mid-resolve can't be clobbered by the older resolve
-// completing afterwards.
+// side answered absent. Together with the entry an operation read, it is what
+// the operation owns: see {@link publishAsOwner}.
 const mainRepoGeneration = new Map<string, number>();
 let mainRepoColdResolves = 0;
 
@@ -263,6 +265,53 @@ function bumpMainRepoGeneration(key: string): void {
 
 function mainRepoGenerationOf(key: string): number {
   return mainRepoGeneration.get(key) ?? 0;
+}
+
+/**
+ * What an operation owns in one of the main checkout's caches: the key's entry
+ * there (or its absence) and the key's generation, read in the same turn as
+ * the project record it works on, before its first yield.
+ */
+interface MainOwner<Entry> {
+  readonly cache: ReadonlyMap<string, NonNullable<Entry>>;
+  readonly key: string;
+  readonly entry: Entry;
+  readonly generation: number;
+}
+
+/** The resolve cache's owner of `key`, as of now. */
+type ResolveOwner = MainOwner<MainRepoCacheEntry | undefined>;
+
+function resolveOwner(key: string): ResolveOwner {
+  return {
+    cache: mainRepoCache,
+    key,
+    entry: mainRepoCache.get(key),
+    generation: mainRepoGenerationOf(key),
+  };
+}
+
+/** Whether `owner` still holds: the same entry under the same generation. */
+function ownsMain<Entry>(owner: MainOwner<Entry>): boolean {
+  return (
+    owner.cache.get(owner.key) === owner.entry &&
+    mainRepoGenerationOf(owner.key) === owner.generation
+  );
+}
+
+/**
+ * The one way a main-checkout result reaches a cache: `publish` runs only
+ * while `owner` still holds, BOTH its entry and its generation, and this
+ * answers whether it ran. Detached work has no owner and never publishes;
+ * it answers its own result to its own caller alone.
+ */
+function publishAsOwner<Entry>(
+  owner: MainOwner<Entry> | undefined,
+  publish: (entry: Entry) => void,
+): boolean {
+  if (!owner || !ownsMain(owner)) return false;
+  publish(owner.entry);
+  return true;
 }
 
 /** Test hook: how many uncached {@link resolveMainRepo} calls the cache made. */
@@ -308,59 +357,56 @@ async function resolveMainRepoCached(
   project: ProjectRecord,
 ): Promise<MainRepoInfo | undefined> {
   const key = project.id;
-  // `project` and this generation are read in the same turn: what this call
-  // resolves, it may publish only under the generation of that record.
-  const generation = mainRepoGenerationOf(key);
-  const cached = mainRepoCache.get(key);
+  // `project` and what this call owns are read in the same turn.
+  const owner = resolveOwner(key);
+  const cached = owner.entry;
   if (cached) {
     const freshness = mainRepoCacheFresh(cached, Date.now());
     if (typeof freshness === "boolean") {
       if (freshness) return cached.info;
     } else {
       const holds = await freshness;
-      if (
-        mainRepoCache.get(key) !== cached ||
-        mainRepoGenerationOf(key) !== generation
-      ) {
-        // Dropped while the stamp was read: `project` may be the pre-edit
-        // record. This call resolves it for itself alone, outside the
-        // in-flight map, and its generation forbids publishing.
+      if (!ownsMain(owner)) {
+        // Dropped or replaced while the stamp was read: `project` may be the
+        // pre-edit record, and a newer resolve may have published. This call
+        // resolves it for itself alone, outside the in-flight map, detached.
         mainRepoColdResolves += 1;
-        return resolveAndPublishMainRepo(project, generation, Date.now());
+        return resolveAndPublishMainRepo(project, undefined, Date.now());
       }
       if (holds) return cached.info;
     }
   }
   const running = mainRepoInFlight.get(key);
-  if (running) return running;
+  if (running && ownsMain(running.owner)) return running.promise;
   mainRepoColdResolves += 1;
-  const promise = resolveAndPublishMainRepo(
-    project,
-    generation,
-    Date.now(),
-  ).finally(() => {
-    if (mainRepoInFlight.get(key) === promise) mainRepoInFlight.delete(key);
-  });
-  mainRepoInFlight.set(key, promise);
+  const promise = resolveAndPublishMainRepo(project, owner, Date.now()).finally(
+    () => {
+      if (mainRepoInFlight.get(key)?.promise === promise)
+        mainRepoInFlight.delete(key);
+    },
+  );
+  mainRepoInFlight.set(key, { promise, owner });
   return promise;
 }
 
+/**
+ * Resolves `project` and its stamp; publishes for `owner` if it still holds.
+ * Without one (detached) it publishes nothing.
+ */
 async function resolveAndPublishMainRepo(
   project: ProjectRecord,
-  generation: number,
+  owner: ResolveOwner | undefined,
   startedAt: number,
 ): Promise<MainRepoInfo | undefined> {
   const key = project.id;
   const info = await resolveMainRepo(project);
   const stamp = info ? await trustedMainRepoStamp(info, startedAt) : undefined;
-  // Skip the write-back if an invalidation/clear bumped the generation while we
-  // were resolving or stamping — the result may reflect pre-edit localPaths.
-  if (mainRepoGenerationOf(key) === generation) {
-    const previous = mainRepoCache.get(key)?.info?.root;
+  publishAsOwner(owner, (entry) => {
     mainRepoCache.set(key, { info, at: Date.now(), stamp });
+    const previous = entry?.info?.root;
     if (previous !== undefined && previous !== info?.root)
       forgetMainPresence(key, previous);
-  }
+  });
   return info;
 }
 
@@ -404,14 +450,17 @@ function forgetProjectPresence(key: string): void {
  * A resolved root its side answered absent: the resolve entry goes and the
  * synchronous readers fall to a fresh candidate scan, as base fell to its scan
  * once the stamp moved after a deletion. A candidate from before the resolve
- * goes too, so no stale path answers live meanwhile.
+ * goes too, so no stale path answers live meanwhile. Only `owner`'s resolved
+ * entry is dropped, while it holds; answers whether it was.
  */
-function dropResolvedRoot(key: string, entry: MainRepoCacheEntry): void {
-  if (mainRepoCache.get(key) !== entry || !entry.info) return;
-  mainRepoCache.delete(key);
-  mainCandidates.delete(key);
-  bumpMainRepoGeneration(key);
-  forgetMainPresence(key, entry.info.root);
+function dropResolvedRoot(owner: ResolveOwner): boolean {
+  if (!owner.entry?.info) return false;
+  return publishAsOwner(owner, (entry) => {
+    mainRepoCache.delete(owner.key);
+    mainCandidates.delete(owner.key);
+    bumpMainRepoGeneration(owner.key);
+    if (entry?.info) forgetMainPresence(owner.key, entry.info.root);
+  });
 }
 
 onPresenceChange((changes) => {
@@ -419,7 +468,7 @@ onPresenceChange((changes) => {
     if (change.answer !== "absent") continue;
     for (const [key, entry] of mainRepoCache)
       if (entry.info && presenceKey(MAIN_SIDE, entry.info.root) === change.key)
-        dropResolvedRoot(key, entry);
+        dropResolvedRoot(resolveOwner(key));
   }
 });
 
@@ -507,27 +556,16 @@ function sameCandidate(a: MainCandidateState, b: MainCandidateState): boolean {
     : a.kind === b.kind;
 }
 
-/**
- * What a scan may write: the entry and generation read in the same turn as
- * the project record it scans. Ownership ends when either changes.
- */
-interface CandidateOwner {
-  entry: MainCandidateEntry;
-  generation: number;
-}
+/** What a scan may write, read in the same turn as the record it scans. */
+type CandidateOwner = MainOwner<MainCandidateEntry>;
 
 function candidateOwner(key: string): CandidateOwner {
   return {
+    cache: mainCandidates,
+    key,
     entry: mainCandidateEntry(key),
     generation: mainRepoGenerationOf(key),
   };
-}
-
-function ownsCandidate(key: string, owner: CandidateOwner): boolean {
-  return (
-    mainCandidates.get(key) === owner.entry &&
-    mainRepoGenerationOf(key) === owner.generation
-  );
 }
 
 /**
@@ -542,15 +580,15 @@ async function runMainCandidateScan(
   const key = project.id;
   const ticket = owner ? ++owner.entry.issued : 0;
   const state = await scanMainCandidate(project);
-  if (owner && ownsCandidate(key, owner) && ticket > owner.entry.applied) {
-    const { entry } = owner;
+  publishAsOwner(owner, (entry) => {
+    if (ticket <= entry.applied) return;
     entry.applied = ticket;
     entry.failing = false;
     const previous = entry.state;
     entry.state = state;
     if (!sameCandidate(previous, state))
       notifyPresenceChange([{ key: mainWorktreeId(key) }]);
-  }
+  });
   return state;
 }
 
@@ -567,19 +605,19 @@ function mainCandidateNow(project: ProjectRecord): MainCandidateState {
     entry.backgroundInFlight = true;
     const scan = Promise.resolve()
       .then(() =>
-        ownsCandidate(key, owner)
-          ? runMainCandidateScan(project, owner)
-          : undefined,
+        ownsMain(owner) ? runMainCandidateScan(project, owner) : undefined,
       )
       .then(
         () => {},
         (error: unknown) => {
-          if (entry.failing || mainCandidates.get(key) !== entry) return;
-          entry.failing = true;
-          console.warn(
-            `[checkout-presence] main checkout scan of ${key} failed; keeping the last state:`,
-            error,
-          );
+          publishAsOwner(owner, (owned) => {
+            if (owned.failing) return;
+            owned.failing = true;
+            console.warn(
+              `[checkout-presence] main checkout scan of ${key} failed; keeping the last state:`,
+              error,
+            );
+          });
         },
       )
       .finally(() => {
@@ -637,12 +675,13 @@ export function mainCheckoutEdgeNow(projectId: string): MainCheckoutEdge {
   const project = getProject(projectId);
   if (!project) return { kind: "missing", retired: true };
   const key = project.id;
-  const cached = mainRepoCache.get(key);
+  const rootOwner = resolveOwner(key);
+  const cached = rootOwner.entry;
   if (cached?.info) {
     const answer = mainPresenceNow(key, cached.info.root);
     if (answer === "present") return { kind: "live", path: cached.info.root };
     if (answer === "unverified") return { kind: "unverified" };
-    dropResolvedRoot(key, cached);
+    dropResolvedRoot(rootOwner);
   } else if (cached && noRepositoryHolds(cached, Date.now()))
     return { kind: "missing", retired: true };
   const state = mainCandidateNow(project);
@@ -674,21 +713,15 @@ export async function checkMainCheckout(
   const project = getProject(projectId);
   if (!project) return { verdict: "missing-db" };
   const key = project.id;
-  const cached = mainRepoCache.get(key);
+  const rootOwner = resolveOwner(key);
+  const cached = rootOwner.entry;
   let owner: CandidateOwner | undefined;
   if (cached?.info) {
     const root = cached.info.root;
-    const generation = mainRepoGenerationOf(key);
     if (await checkMainPresence(key, root))
       return { verdict: "live", path: root };
-    if (
-      mainRepoCache.get(key) === cached &&
-      mainRepoGenerationOf(key) === generation
-    ) {
-      dropResolvedRoot(key, cached);
-      // The drop was this check's, in this turn: it owns what follows.
-      owner = candidateOwner(key);
-    }
+    // A drop that was this check's, in this turn, owns what follows.
+    if (dropResolvedRoot(rootOwner)) owner = candidateOwner(key);
   } else if (cached && noRepositoryHolds(cached, Date.now()))
     return { verdict: "missing-no-repository" };
   else owner = candidateOwner(key);

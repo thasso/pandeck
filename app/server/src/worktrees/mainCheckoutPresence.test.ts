@@ -624,6 +624,73 @@ describe("main stamp through the Worker (AC9)", () => {
     },
   );
 
+  test("a freshness check whose entry was replaced without an invalidation resolves for itself alone and never overwrites a newer HEAD (F004)", async () => {
+    const { id, repo, head } = stampedProject();
+    const initial = (await resolveMainWorktreeRow(id))?.baseCommit;
+    const base = mainRepoResolveCount();
+    const held = holdFileForTests(head, "inspect");
+    const old = resolveMainWorktreeRow(id);
+    await held.reached;
+    // The stamped TTL expires, so a new resolve replaces the entry under the
+    // same generation.
+    const later = Date.now() + 10 * 60_000 + 1_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+    try {
+      assert.equal((await resolveMainWorktreeRow(id))?.baseCommit, initial);
+      // The old call's own resolve read HEAD; hold it at its stamp.
+      const detachedStamp = holdFileForTests(head, "inspect");
+      held.release();
+      await detachedStamp.reached;
+      sh(repo, "commit", "--allow-empty", "-m", "newer");
+      const newer = sh(repo, "rev-parse", "HEAD").trim();
+      const moved = new Date(later + 2_000);
+      for (const file of ["HEAD", "refs/heads/main"])
+        utimesSync(join(repo, ".git", file), moved, moved);
+      assert.equal(
+        (await resolveMainWorktreeRow(id))?.baseCommit,
+        newer,
+        "the current entry's own re-resolve",
+      );
+      detachedStamp.release();
+      assert.equal((await old)?.baseCommit, initial, "its own");
+      assert.equal(
+        (await resolveMainWorktreeRow(id))?.baseCommit,
+        newer,
+        "nothing published over the newer entry",
+      );
+      assert.equal(mainRepoResolveCount() - base, 3, "no retry");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a resolve whose root was dropped while it ran answers its own caller, and a later call never joins it", async () => {
+    const { id, repo, head } = stampedProject();
+    const root = realpathSync(repo);
+    await resolveMainWorktreeRow(id);
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.now() + 10 * 60_000 + 1_000);
+    try {
+      // The stamped TTL expired, so an owned resolve runs; hold it at its
+      // stamp, after git read the root.
+      const held = holdFileForTests(head, "inspect");
+      const old = resolveMainWorktreeRow(id);
+      await held.reached;
+      rmSync(repo, { recursive: true });
+      assert.deepEqual(await checkMainCheckout(id), {
+        verdict: "missing-absent",
+      });
+      const next = resolveMainWorktreeRow(id);
+      held.release();
+      assert.equal((await old)?.path, root, "its own");
+      assert.equal(await next, undefined, "its own resolve, not the old one");
+      assert.equal(mainCheckoutPathForProject(id), undefined);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("a missing packed-refs stamps '-'; ENOTDIR propagates", async () => {
     const { id, repo } = stampedProject();
     const common = join(realpathSync(repo), ".git");
