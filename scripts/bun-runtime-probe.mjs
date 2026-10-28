@@ -2136,11 +2136,13 @@ async function checkProcessTreeCleanup(base) {
         // that never wrote a pid file holds its gate.
         const sleepers = variant === "leader gone" ? [0, 1, 2] : [1, 2];
         const gated = variant === "never ready" ? 1 : 0;
+        let settled;
         await until(() => {
           const acquired = owned.acquire();
           const scan = owned.witness();
           scan.holders.forEach(watch);
           const live = childrenOf(owned.direct.pid);
+          settled = scan.holders;
           return (
             acquired &&
             live.length === sleepers.length + gated &&
@@ -2150,10 +2152,9 @@ async function checkProcessTreeCleanup(base) {
           );
         }, `the ${variant} tree's sleepers`);
         sleepers.forEach((i) => watch(pidOf(i)));
+        // The settled tree's: a failed exec's child may have exited since.
         assert(
-          [...watched.keys()].every(
-            (pid) => processGroup(pid) === owned.direct.pid,
-          ),
+          settled.every((pid) => processGroup(pid) === owned.direct.pid),
           `The ${variant} tree does not run in its direct child's own group.`,
         );
         if (variant === "leader gone") {
