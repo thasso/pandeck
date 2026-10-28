@@ -135,24 +135,28 @@ export async function checkWorktreeCheckout(
   return checked;
 }
 
-async function checkOnce(
-  worktreeId: string | undefined,
-): Promise<CheckedCheckout> {
-  if (!worktreeId) return { worktreeId, verdict: "none" };
-  if (isMainWorktreeId(worktreeId)) {
-    const main = await checkMainCheckout(
-      projectIdFromMainWorktreeId(worktreeId),
+/**
+ * The check split at its first yield: the store reads (the row, the project)
+ * run now and throw synchronously; the promise is the Worker half alone.
+ */
+function checkOnce(worktreeId: string | undefined): Promise<CheckedCheckout> {
+  if (!worktreeId) return Promise.resolve({ worktreeId, verdict: "none" });
+  if (isMainWorktreeId(worktreeId))
+    return checkMainCheckout(projectIdFromMainWorktreeId(worktreeId)).then(
+      (main): CheckedCheckout =>
+        main.verdict === "live"
+          ? { worktreeId, verdict: "live", path: main.path }
+          : { worktreeId, verdict: main.verdict },
     );
-    return main.verdict === "live"
-      ? { worktreeId, verdict: "live", path: main.path }
-      : { worktreeId, verdict: main.verdict };
-  }
   const row = getWorktree(worktreeId);
   if (!row || row.status !== "active")
-    return { worktreeId, verdict: "missing-db" };
-  return (await checkPresence(checkoutSideOf(row), row.path))
-    ? { worktreeId, verdict: "live", path: row.path }
-    : { worktreeId, verdict: "missing-absent" };
+    return Promise.resolve({ worktreeId, verdict: "missing-db" });
+  return checkPresence(checkoutSideOf(row), row.path).then(
+    (present): CheckedCheckout =>
+      present
+        ? { worktreeId, verdict: "live", path: row.path }
+        : { worktreeId, verdict: "missing-absent" },
+  );
 }
 
 /**
@@ -300,17 +304,47 @@ export function sessionCheckoutRefusal(
 }
 
 /**
+ * The store half of a run's own check, read now: the persona, the edge and
+ * what it names. A store error throws HERE, synchronously, before any Worker
+ * contact; the promise is the Worker check alone and rejects only on a Worker
+ * failure. Undefined for a non-coding persona, which needs no check.
+ */
+export function startSessionCheckoutCheck(
+  sessionId: string,
+): Promise<CheckedCheckout> | undefined {
+  if (exemptPersona(sessionId)) return undefined;
+  return checkOnce(worktreeIdForSession(sessionId));
+}
+
+/**
  * Whether a run of `sessionId` refuses, decided from a Worker check this call
  * requests: {@link sessionCheckoutRefusal} on it. A non-coding persona is
  * decided before any Worker contact; no edge and a DB verdict need none.
- * Rejects on a Worker failure.
+ *
+ * Fails OPEN on a store error, as base's run checks did: a store read that
+ * throws (only the synchronous halves before and after the Worker check) is
+ * handed to `storeFailed` and does not refuse. A Worker failure is never a
+ * store error: it rejects.
  */
 export async function checkSessionCheckoutRefused(
   sessionId: string,
+  storeFailed: (error: unknown) => void,
 ): Promise<boolean> {
-  if (exemptPersona(sessionId)) return false;
-  const checked = await checkWorktreeCheckout(worktreeIdForSession(sessionId));
-  return sessionCheckoutRefusal(sessionId, checked);
+  let check: Promise<CheckedCheckout> | undefined;
+  try {
+    check = startSessionCheckoutCheck(sessionId);
+  } catch (error) {
+    storeFailed(error);
+    return false;
+  }
+  if (!check) return false;
+  const checked = await check;
+  try {
+    return sessionCheckoutRefusal(sessionId, checked);
+  } catch (error) {
+    storeFailed(error);
+    return false;
+  }
 }
 
 /**

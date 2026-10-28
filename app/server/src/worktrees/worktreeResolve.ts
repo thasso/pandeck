@@ -23,6 +23,7 @@ import {
   presenceNow,
   trackPresenceWork,
   type PresenceAnswer,
+  type PresenceChange,
 } from "./checkoutPresence.ts";
 
 /**
@@ -449,8 +450,8 @@ function forgetProjectPresence(key: string): void {
 /**
  * Whether `projectId`'s main checkout answer reads one of the changed presence
  * `keys`: its candidate key (`main:<projectId>`) or a path it read presence
- * for. A root dropped as absent is no longer one; the candidate rescan that
- * follows notifies under the candidate key.
+ * for. A root dropped as absent is no longer one: its drop, and the
+ * candidate rescan that follows, notify under the candidate key.
  */
 export function mainCheckoutReadsKey(
   projectId: string,
@@ -480,13 +481,24 @@ function dropResolvedRoot(owner: ResolveOwner): boolean {
   });
 }
 
+// A root answered absent is dropped here, before any later listener runs, and
+// the drop forgets the root's key. Its main answer turned from the root to the
+// reset candidate, a transition like any other, so it notifies `main:<id>`:
+// a reader matches by that key alone, starts the rescan by reading, and the
+// rescan notifies once more when it answers. Notified once per dropped entry.
 onPresenceChange((changes) => {
+  const dropped: PresenceChange[] = [];
   for (const change of changes) {
     if (change.answer !== "absent") continue;
     for (const [key, entry] of mainRepoCache)
-      if (entry.info && presenceKey(MAIN_SIDE, entry.info.root) === change.key)
-        dropResolvedRoot(resolveOwner(key));
+      if (
+        entry.info &&
+        presenceKey(MAIN_SIDE, entry.info.root) === change.key &&
+        dropResolvedRoot(resolveOwner(key))
+      )
+        dropped.push({ key: mainWorktreeId(key) });
   }
+  if (dropped.length > 0) notifyPresenceChange(dropped);
 });
 
 /**
@@ -723,12 +735,21 @@ export type MainCheckoutCheck =
  * what it still owns: the root it found absent is dropped, and its scan
  * recorded, only if no invalidation, clear or other drop came first;
  * otherwise its scan answers it alone.
+ *
+ * The project is read synchronously, so a store error throws from this call
+ * itself; the promise rejects only on a Worker failure.
  */
-export async function checkMainCheckout(
+export function checkMainCheckout(
   projectId: string,
 ): Promise<MainCheckoutCheck> {
   const project = getProject(projectId);
-  if (!project) return { verdict: "missing-db" };
+  if (!project) return Promise.resolve({ verdict: "missing-db" });
+  return checkProjectMainCheckout(project);
+}
+
+async function checkProjectMainCheckout(
+  project: ProjectRecord,
+): Promise<MainCheckoutCheck> {
   const key = project.id;
   const rootOwner = resolveOwner(key);
   const cached = rootOwner.entry;

@@ -3379,7 +3379,9 @@ export class Connection implements Viewer {
         // rejects into the failure below.
         if (
           !CONTEXT_ONLY_SLASH_COMMANDS.has(name) &&
-          (await checkSessionCheckoutRefused(viewing.sessionId))
+          (await checkSessionCheckoutRefused(viewing.sessionId, (err) =>
+            console.warn("Failed to check session worktree:", errorText(err)),
+          ))
         ) {
           this.sendMissingWorktree();
           return;

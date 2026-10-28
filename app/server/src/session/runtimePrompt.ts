@@ -227,13 +227,17 @@ function assertSessionWorktreePresent(sessionId: string): void {
   } catch (err) {
     // A store failure must not block every prompt: fail OPEN, the same way
     // memory selection does; the own check below still decides presence.
-    console.warn(
-      "Failed to check session worktree before prompting:",
-      err instanceof Error ? err.message : String(err),
-    );
+    warnCheckFailed(err);
     return;
   }
   if (missing) throw new Error(WORKTREE_MISSING_BLOCKED_REASON);
+}
+
+function warnCheckFailed(err: unknown): void {
+  console.warn(
+    "Failed to check session worktree before prompting:",
+    err instanceof Error ? err.message : String(err),
+  );
 }
 
 /**
@@ -243,10 +247,11 @@ function assertSessionWorktreePresent(sessionId: string): void {
  * Worker contact; a session with no edge, or a DB verdict, needs none. A
  * Worker failure rejects: never absence, never the app CWD. It starts no
  * engine and reads no cwd, so it compares no edge; the run lease taken before
- * it keeps the worktree's removal out.
+ * it keeps the worktree's removal out. A store error fails open, as the
+ * synchronous half does.
  */
 async function decideSessionCheckout(sessionId: string): Promise<void> {
-  if (await checkSessionCheckoutRefused(sessionId))
+  if (await checkSessionCheckoutRefused(sessionId, warnCheckFailed))
     throw new Error(WORKTREE_MISSING_BLOCKED_REASON);
 }
 

@@ -553,6 +553,61 @@ test("a project's MAIN checkout is a valid target, by its synthetic id", async (
   expect(recorded.pi[0]?.cwd).toBe(realpathSync(repo));
 });
 
+test("approved rows start in the shared resolver's whole target: a spawned folder, a nested main's root (AC12)", async () => {
+  activeWorktree("wt-resolved");
+  const root = join(tmp, "nested-main");
+  const sub = join(root, "pkg");
+  mkdirSync(sub, { recursive: true });
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
+  git("init", "-q", "-b", "main");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "T");
+  writeFileSync(join(sub, "readme.md"), "hi\n");
+  git("add", "-A");
+  git("commit", "-m", "init");
+  projectStore.put({
+    id: "nested-spawn-proj",
+    name: "Nested Spawn Project",
+    key: "NSP",
+    description: "",
+    status: "active",
+    localPaths: [{ path: sub, kind: "repo", match: "prefix" }],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  const { card } = await propose([
+    row({
+      title: "Spawned",
+      agentType: "developer",
+      worktreeId: "wt-resolved",
+    }),
+    row({
+      title: "Nested",
+      agentType: "developer",
+      worktreeId: "main:nested-spawn-proj",
+    }),
+  ]);
+  const [spawned, nested] = bodyOf(card).items;
+  expect(spawned).toMatchObject({
+    worktreeId: "wt-resolved",
+    worktreeName: "wt-resolved",
+    projectId: "spawn-proj",
+  });
+  expect(nested).toMatchObject({
+    worktreeId: "main:nested-spawn-proj",
+    worktreeName: "main",
+    projectId: "nested-spawn-proj",
+  });
+
+  await resolveApproval(card.id, "approved");
+  expect(recorded.pi.map((started) => started.cwd)).toEqual([
+    join(tmp, "wt-resolved"),
+    realpathSync(root),
+  ]);
+});
+
 test("a developer row carries its worktree, project and Task into the card", async () => {
   activeWorktree("wt-dev");
   const task = createTask({

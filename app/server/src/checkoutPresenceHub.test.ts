@@ -291,6 +291,55 @@ describe("a changed presence answer reaches its readers unasked (AC3)", () => {
     await assertSettled(list.sent, viewer.sent);
   });
 
+  test("a resolved main's root deleted: a detached viewer of an archived session converges with no list reading the project", async () => {
+    const repo = fresh("main-archived");
+    initRepo(repo);
+    const mainId = mainOf([repo]);
+    await resolveWorktreeRow(mainId);
+    await checkWorktreeCheckout(mainId);
+    // The project's only session is archived, and no connection asked for
+    // the archive list: no list build reads this main checkout.
+    const viewedId = session(mainId);
+    sessionStore.setArchived(viewedId, true);
+    const viewer = await connect();
+    await viewer.conn.dispatch({ type: "loadSession", id: viewedId });
+    assert.equal(shown(viewer.sent), false);
+    await quiescent();
+    rmSync(repo, { recursive: true });
+    // The ONE read: stale present, it refreshes the root's entry.
+    await viewer.conn.dispatch({ type: "loadSession", id: viewedId });
+    assert.equal(shown(viewer.sent), false, "stale until the probe");
+
+    await quiescent();
+    assert.equal(shown(viewer.sent), true);
+    await assertSettled(viewer.sent);
+  });
+
+  test("a resolved main's root deleted: a resident engine of an archived session is re-sent its state", async () => {
+    const repo = fresh("main-resident");
+    initRepo(repo);
+    const mainId = mainOf([repo]);
+    await resolveWorktreeRow(mainId);
+    const residentId = session(mainId, "claude-sdk");
+    sessionStore.setArchived(residentId, true);
+    const resident = claudeSdkStore.acquire(
+      residentId,
+      { agentType: "developer", credentialProfileId: claudeProfile.id },
+      await checkWorktreeCheckout(mainId),
+    );
+    const residentState = vi.spyOn(resident, "broadcastState");
+    await quiescent();
+    rmSync(repo, { recursive: true });
+    // The one read is the awaited check, which finds the root absent.
+    assert.deepEqual(await checkWorktreeCheckout(mainId), {
+      worktreeId: mainId,
+      verdict: "missing-absent",
+    });
+    await quiescent();
+    assert.ok(residentState.mock.calls.length > 0, "resident state re-sent");
+    await assertSettled();
+  });
+
   test("a cold main whose local paths are all absent converges from unknown to missing", async () => {
     const mainId = mainOf([fresh("never-a"), fresh("never-b")]);
     const listedId = session(mainId);

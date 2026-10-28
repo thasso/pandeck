@@ -4,10 +4,10 @@
 
 - Mutating git operations go through `withRepoLock` (`../gitExec.ts`); read-only
   scans stay lock-free. Network-bound exceptions live ONLY in `../CLAUDE.md`.
-- Paths that ACT on a checkout decide from their OWN `checkWorktreeCheckout`:
-  edge compared, consumed yield-free in that continuation
-  (`withCheckedCheckout`); views read the cache. A Worker failure rejects, never
-  reads as missing (`docs/workers.md`).
+- Acting paths decide from their OWN `checkWorktreeCheckout`; constructions
+  compare the edge, then consume yield-free (`withCheckedCheckout`). Views read
+  the cache. A Worker failure rejects, never reads as missing
+  (`docs/workers.md`).
 - The project's main checkout is derived live from project `localPaths` and
   surfaced as the synthetic `main:<projectId>` record; it is never a DB row. DB
   rows are spawned worktrees only, removed softly (`status='removed'`).

@@ -141,6 +141,10 @@ const {
 } = await import("./worktrees/worktreeResolve.ts");
 const { createWorktree, removeWorktree } =
   await import("./worktrees/worktrees.ts");
+const worktreeStore = await import("./db/worktreeStore.ts");
+const { writeClaudeSdkRecord } =
+  await import("./claudeSdk/claudeSdkRecords.ts");
+const { CLAUDE_SDK_STORE_DIR } = await import("./sessionStorage.ts");
 
 const claudeProfile = createCredentialProfile({
   name: "Presence consumers",
@@ -1572,5 +1576,451 @@ describe("lifecycle, shared resolver and placement", () => {
       presenceKey(DEFAULT_WORKER_SIDE, row.path),
     );
     assert.equal(presenceNow("server", row.path), "unverified");
+  });
+});
+
+/* ------------- V5 completion: store failures, admission, recovery ------------ */
+
+/** Every read of the worktrees table throws from now on; the rest works. */
+function worktreesTableDown(): void {
+  vi.spyOn(worktreeStore, "getWorktree").mockImplementation(() => {
+    throw new Error("worktrees table down");
+  });
+}
+
+function warnedStoreFailure(warn: { mock: { calls: unknown[][] } }): boolean {
+  return warn.mock.calls.some((call) =>
+    String(call[0]).includes("Failed to check session worktree"),
+  );
+}
+
+/**
+ * The recovery continuation of `sessionId`, run to its end on a fake runtime
+ * that records what it created and prompted.
+ */
+async function recoveryRun(
+  sessionId: string,
+  agentType: Persona = "developer",
+) {
+  const fake = fakeRuntime();
+  const { ensureRuntimeSessionWithRuntime } =
+    await import("./session/runtimePrompt.ts");
+  (
+    ensureRuntimeSessionWithRuntime as unknown as (
+      r: unknown,
+      d: unknown,
+    ) => unknown
+  )(
+    { ...fake.runtime, get: () => undefined },
+    fakeDriver(sessionId, agentType),
+  );
+  const recovery = recoveries.get(sessionId);
+  assert.ok(recovery, "recovery installed");
+  const resume = async () => {
+    recovery.admit();
+    const ticket = reserveAccountRecovery(sessionId);
+    try {
+      return await settle(recovery.resume(ticket, () => {}));
+    } finally {
+      releaseAccountRecovery(sessionId, ticket);
+    }
+  };
+  const prompted = () =>
+    fake.calls.filter((call) => call.kind === "prompt" && call.id === sessionId)
+      .length;
+  return { resume, prompted };
+}
+
+describe("a worktrees-table failure fails open as base; a Worker failure fails closed (AC5, AC7)", () => {
+  test("door, provider turn and recovery continuation admit a turn while every worktrees read throws", async () => {
+    const row = spawnedRow(true);
+    const id = session(row.id);
+    const recovery = await recoveryRun(id);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    worktreesTableDown();
+
+    const run = door(id);
+    await run.run();
+    assert.deepEqual(run.calls, [{ kind: "prompt", id }]);
+
+    const release = await providerTurn(id);
+    assert.equal(sessionRuntime.isBusy(id), true);
+    release();
+    assert.equal(sessionRuntime.isBusy(id), false);
+
+    assert.deepEqual(await recovery.resume(), { value: undefined });
+    assert.equal(recovery.prompted(), 1, "the continuation prompted");
+    assert.ok(warnedStoreFailure(warn), "the store failure was logged");
+  });
+
+  test("a host command through the connection is not refused while every worktrees read throws", async () => {
+    const row = spawnedRow(true);
+    const id = session(row.id, "developer", "claude-sdk");
+    const { conn, sent } = connection();
+    conn.viewing = claudeSdkStore.acquire(
+      id,
+      { agentType: "developer", credentialProfileId: claudeProfile.id },
+      await checkWorktreeCheckout(row.id),
+    );
+    const resolveRepoRoot = vi
+      .spyOn(gitExec, "resolveRepoRoot")
+      .mockRejectedValue(new Error("stop at git"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    worktreesTableDown();
+    await conn.onRunSlashCommand!("commit", "");
+    assert.ok(warnedStoreFailure(warn), "the store failure was logged");
+    assert.ok(
+      !sent.some((message) =>
+        message.message?.startsWith(WORKTREE_MISSING_BLOCKED_REASON),
+      ),
+      JSON.stringify(sent),
+    );
+    assert.ok(resolveRepoRoot.mock.calls.length > 0, "the command ran");
+  });
+
+  test("a queued host command: a worktrees-table failure throws out of the drain as base's check did, holding nothing", async () => {
+    const row = spawnedRow(true);
+    const id = session(row.id);
+    worktreesTableDown();
+    const drained = settle(queuedCommit(id));
+    assert.match(String(errorOf(await drained)), /worktrees table down/);
+    vi.restoreAllMocks();
+    const [left] = promptQueueStore.list(id);
+    assert.equal((left as { error?: string } | undefined)?.error, undefined);
+    if (left) promptQueueStore.remove(id, left.id);
+  });
+
+  test("a Worker failure with the stores working is no store failure: door, provider turn and recovery reject", async () => {
+    const row = spawnedRow(true);
+    const id = session(row.id);
+    const recovery = await recoveryRun(id);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const kind of FAILURE_KINDS) {
+      const run = door(id);
+      assertWorkerFailure(await underFailure(kind, row.path, () => run.run()));
+      assert.deepEqual(run.calls, []);
+      assertWorkerFailure(
+        await underFailure(kind, row.path, () => providerTurn(id)),
+      );
+      assert.equal(sessionRuntime.isBusy(id), false, `${kind}: no admission`);
+      assert.ok(removalReservable(row.id), `${kind}: no lease`);
+      assertWorkerFailure(
+        await underFailure(kind, row.path, async () => {
+          const result = await recovery.resume();
+          if ("error" in (result as object))
+            throw (result as { error: unknown }).error;
+        }),
+      );
+      assert.equal(recovery.prompted(), 0, `${kind}: no continuation turn`);
+    }
+    assert.ok(!warnedStoreFailure(warn), "never taken for a store failure");
+  });
+});
+
+describe("run start: admission ownership and recovery continuations (AC5)", () => {
+  test("provider turn: busy from success until its release; a refusal and a Worker failure leave it idle", async () => {
+    const live = spawnedRow(true);
+    const id = session(live.id);
+    const release = await providerTurn(id);
+    assert.equal(sessionRuntime.isBusy(id), true, "admitted by the turn");
+    release();
+    assert.equal(sessionRuntime.isBusy(id), false);
+
+    const gone = await stalePresent();
+    const refused = session(gone.id);
+    const error = errorOf(await settle(providerTurn(refused)));
+    assert.equal((error as Error).message, WORKTREE_MISSING_BLOCKED_REASON);
+    assert.equal(sessionRuntime.isBusy(refused), false);
+
+    const failing = spawnedRow(true);
+    const failed = session(failing.id);
+    for (const kind of FAILURE_KINDS) {
+      assertWorkerFailure(
+        await underFailure(kind, failing.path, () => providerTurn(failed)),
+      );
+      assert.equal(sessionRuntime.isBusy(failed), false, kind);
+      assert.ok(removalReservable(failing.id), kind);
+    }
+  });
+
+  test("recovery: a stale absent whose folder is back runs the continuation", async () => {
+    const restored = await staleAbsent();
+    const id = session(restored.id);
+    assert.equal(sessionWorktreeMissing(id), true, "the cache is stale");
+    const recovery = await recoveryRun(id);
+    assert.deepEqual(await recovery.resume(), { value: undefined });
+    assert.equal(recovery.prompted(), 1);
+  });
+
+  test("coordinators: a removed row and a Worker outage run the recovery continuation, with no files.exists served", async () => {
+    const removed = spawnedRow(true);
+    markWorktreeRemovedForTests(removed.id);
+    const removedId = session(removed.id, "workflow-coordinator");
+    const removedRecovery = await recoveryRun(
+      removedId,
+      "workflow-coordinator",
+    );
+    assert.deepEqual(await removedRecovery.resume(), { value: undefined });
+    assert.equal(removedRecovery.prompted(), 1);
+
+    const outage = spawnedRow(true);
+    const outageId = session(outage.id, "workflow-coordinator");
+    answerForPathForTests(FILE_METHODS.exists, outage.path, async () => {
+      throw new WorkerMethodError("wrong_worker", "Not here.");
+    });
+    const outageRecovery = await recoveryRun(outageId, "workflow-coordinator");
+    const served = recordServedForTests([FILE_METHODS.exists]);
+    assert.deepEqual(await outageRecovery.resume(), { value: undefined });
+    served.stop();
+    assert.equal(outageRecovery.prompted(), 1);
+    assert.deepEqual(served.pathsOf(FILE_METHODS.exists), []);
+  });
+});
+
+/* --------------- V6 completion: every construction, every edge -------------- */
+
+/** A stored, non-resident Claude record of `id` whose cwd is `cwd`. */
+function claudeRecord(id: string, cwd: string): void {
+  writeClaudeSdkRecord(
+    CLAUDE_SDK_STORE_DIR,
+    { id, title: id, cwd, createdAt: 1, updatedAt: 1 },
+    [],
+    undefined,
+  );
+}
+
+async function claudeRename(id: string): Promise<string | undefined> {
+  await harnessRegistry.rename(
+    { id, harness: "claude-sdk" } as never,
+    "Renamed",
+  );
+  return claudeSdkStore.get(id)?.cwd;
+}
+
+async function claudeCreate(spec: Record<string, unknown>): Promise<string> {
+  const live = await createSession({
+    harness: "claude-sdk",
+    agentType: "developer",
+    credentialProfileId: claudeProfile.id,
+    ...spec,
+  } as never);
+  return (live as unknown as { cwd: string }).cwd;
+}
+
+async function piCreate(worktreeId: string): Promise<string> {
+  const live = (await createSession({
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "default",
+    worktree: { id: worktreeId },
+  } as never)) as unknown as { cwd: string; dispose: () => void };
+  try {
+    return live.cwd;
+  } finally {
+    live.dispose();
+  }
+}
+
+async function piReopen(worktreeId: string, header: string): Promise<string> {
+  const id = session(worktreeId);
+  const live = await piStore.acquireExisting(
+    "developer",
+    piTranscript(id, header),
+    id,
+  );
+  try {
+    return live.cwd;
+  } finally {
+    live.dispose();
+  }
+}
+
+async function piFork(worktreeId: string, header: string): Promise<string> {
+  const id = session(worktreeId);
+  const child = await piStore.forkSession(
+    "developer",
+    piTranscript(id, header),
+    `${id}-user`,
+    "at",
+    "app-entry",
+  );
+  try {
+    return child.cwd;
+  } finally {
+    child.dispose();
+  }
+}
+
+async function claudeForkDir(worktreeId: string): Promise<string[]> {
+  const { dirs, fork } = await claudeFork(
+    claudeSession(worktreeId),
+    worktreeId,
+  );
+  await assert.rejects(fork(), /stop after the cwd/);
+  return dirs;
+}
+
+/** A header directory for pi transcripts, present on disk. */
+function headerDir(): string {
+  const header = fresh("header");
+  mkdirSync(header);
+  return header;
+}
+
+/**
+ * Runs `construct` against a nested-localPath main cold (caches reset), then
+ * warm (resolved): base's scan subdirectory first, the git root after.
+ */
+async function coldThenWarm(
+  construct: (mainId: string) => Promise<string | string[] | undefined>,
+  shape: (path: string) => string | string[] = (path) => path,
+): Promise<void> {
+  const { mainId, sub, root } = nestedMain();
+  assert.deepEqual(await construct(mainId), shape(sub), "cold: the scan");
+  await resolveWorktreeRow(mainId);
+  assert.deepEqual(await construct(mainId), shape(root), "warm: the root");
+}
+
+describe("engine construction: the full V6 matrix (AC6)", () => {
+  test("Claude open: a deleted folder takes the record's cwd", async () => {
+    const gone = await stalePresent();
+    const id = claudeSession(gone.id);
+    const recorded = headerDir();
+    claudeRecord(id, recorded);
+    assert.equal((await claudeOpen(id)).cwd, recorded);
+  });
+
+  test("Claude rename: nested main cold and warm; a deleted folder takes the record's cwd", async () => {
+    await coldThenWarm(async (mainId) => {
+      const id = claudeSession(mainId);
+      claudeRecord(id, headerDir());
+      return claudeRename(id);
+    });
+    const gone = await stalePresent();
+    const id = claudeSession(gone.id);
+    const recorded = headerDir();
+    claudeRecord(id, recorded);
+    assert.equal(await claudeRename(id), recorded);
+  });
+
+  test("Claude fork: nested main cold and warm; a folder deleted under a resident source takes the source's cwd", async () => {
+    await coldThenWarm(claudeForkDir, (path) => [path]);
+    const live = spawnedRow(true);
+    const { dirs, fork } = await claudeFork(claudeSession(live.id), live.id);
+    rmSync(live.path, { recursive: true });
+    await assert.rejects(fork(), /stop after the cwd/);
+    assert.deepEqual(dirs, [live.path], "base: the source's own cwd");
+  });
+
+  test("pi reopen: nested main cold and warm", async () => {
+    const header = headerDir();
+    await coldThenWarm((mainId) => piReopen(mainId, header));
+  });
+
+  test("pi fork: nested main cold and warm; a deleted folder takes the header cwd", async () => {
+    const header = headerDir();
+    await coldThenWarm((mainId) => piFork(mainId, header));
+    const gone = await stalePresent();
+    assert.equal(await piFork(gone.id, header), header);
+  });
+
+  test("createSession (Claude) with an explicit path: nested main cold and warm; a deleted folder keeps the explicit path", async () => {
+    await coldThenWarm((mainId) =>
+      claudeCreate({ worktree: { id: mainId, path: headerDir() } }),
+    );
+    const gone = await stalePresent();
+    assert.equal(
+      await claudeCreate({ worktree: { id: gone.id, path: gone.path } }),
+      gone.path,
+    );
+  });
+
+  test("createSession (Claude) with a pathless worktree: nested main cold and warm; a deleted folder takes the app CWD", async () => {
+    await coldThenWarm((mainId) => claudeCreate({ worktree: { id: mainId } }));
+    const gone = await stalePresent();
+    assert.equal(await claudeCreate({ worktree: { id: gone.id } }), tmp);
+  });
+
+  test("createSession (Claude) for a reused id with an edge: nested main cold and warm; a deleted folder takes the app CWD", async () => {
+    await coldThenWarm((mainId) => claudeCreate({ id: claudeSession(mainId) }));
+    const gone = await stalePresent();
+    assert.equal(await claudeCreate({ id: claudeSession(gone.id) }), tmp);
+  });
+
+  test("createSession (pi) with a pathless worktree: nested main cold and warm; a deleted folder takes the app CWD", async () => {
+    await coldThenWarm(piCreate);
+    const gone = await stalePresent();
+    assert.equal(await piCreate(gone.id), tmp);
+  });
+});
+
+/* ------------------ V12 completion: complete resolver outputs ---------------- */
+
+describe("shared resolver outputs, complete (AC12)", () => {
+  test("creation context and spawn proposals answer the whole target; a nested main runs at the root", async () => {
+    const { conn, sent } = connection();
+    const { mainId, root } = nestedMain();
+    const projectId = mainId.slice("main:".length);
+    assert.deepEqual(await conn.resolveWorktreeContext!(mainId), {
+      id: mainId,
+      path: root,
+      projectId,
+    });
+
+    const sender = session();
+    const proposed = async (worktreeId: string) =>
+      (
+        await buildSpawnProposal({
+          senderSessionId: sender,
+          rows: [
+            { title: "T", agentType: "developer", prompt: "p", worktreeId },
+          ],
+        } as never)
+      ).items[0];
+    const target = async (worktreeId: string) => {
+      const item = await proposed(worktreeId);
+      return {
+        worktreeId: item?.worktreeId,
+        worktreeName: item?.worktreeName,
+        projectId: item?.projectId,
+      };
+    };
+    const live = spawnedRow(true);
+    assert.deepEqual(await target(live.id), {
+      worktreeId: live.id,
+      worktreeName: live.id,
+      projectId: undefined,
+    });
+    assert.deepEqual(await target(mainId), {
+      worktreeId: mainId,
+      worktreeName: "main",
+      projectId,
+    });
+
+    rmSync(root, { recursive: true });
+    assert.equal(await resolveUsableWorktree(mainId), undefined);
+    assert.equal(await conn.resolveWorktreeContext!(mainId), undefined);
+    assert.deepEqual(sent, [
+      { type: "error", message: "That worktree is no longer available." },
+    ]);
+  });
+
+  test("review handoff: a nested main resolves past the worktree check; its deleted root is no longer available", async () => {
+    const handoff = async (worktreeId: string) => {
+      const { conn, sent } = connection();
+      await conn.onAttachWorktreeComments!(worktreeId, [], {
+        kind: "existing",
+        sessionId: session(worktreeId),
+      });
+      return sent.map((message) => message.message);
+    };
+    const { mainId, root } = nestedMain();
+    assert.deepEqual(await handoff(mainId), [
+      "Failed to attach comments: Select at least one comment.",
+    ]);
+    rmSync(root, { recursive: true });
+    assert.deepEqual(await handoff(mainId), [
+      "Failed to attach comments: That worktree is no longer available.",
+    ]);
   });
 });
