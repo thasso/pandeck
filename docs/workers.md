@@ -482,6 +482,45 @@ which imports no server state) and `workers/` (the server's side and placement);
     subscribe holds that tree's slot. Git and file requests stay independent of
     all of these.
 
+- **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
+  answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and
+  wire shapes are unchanged.
+  - Key universe. One entry per `checkoutSideKey(side)` and path: active spawned
+    rows and the main checkout's candidate paths and resolved root, each on its
+    registry side. The Knowledge Base row never resolves to a checkout here, so
+    it never reaches a Worker; a checkout inside `DATA_DIR` is an ordinary
+    checkout and is probed on its Worker.
+  - Views read the cache synchronously (`presenceNow`): the session list's
+    `worktreeMissing`, session state and `guardMissingWorktree`. A read answers
+    the last verified answer at once and queues one background probe, at most
+    eight running, coalescing onto a queued or running one. Never-verified is
+    `unverified`, which is not missing.
+  - Latency. A deleted or restored checkout shows after the probe its next read
+    queues. A changed answer notifies its key; the hub rebroadcasts the list and
+    resends state to resident engines and detached viewers that read it, with no
+    further read. Worktree watch events never answer presence.
+  - Acting paths decide from their OWN answer: the run door, provider turns,
+    recovery, host commands (`/commit`, `/push`, `/pr`, `/compact`, queued),
+    acknowledge, the shared resolver (`resolveUsableWorktree`, used by creation,
+    spawn and handoff) and every engine construction. Each awaits
+    `checkWorktreeCheckout`, compares the session's edge in the same
+    continuation and consumes with no yield (`withCheckedCheckout`); three
+    consecutive changed edges refuse with "the session's worktree changed while
+    opening; try again". The door decides DB retirement synchronously before its
+    lease and the presence check after lease and admission.
+  - Main candidate. A cold main resolves by scanning `localPaths` on the Worker;
+    a resolved root is re-checked by presence and dropped when absent, after
+    which readers see `unverified` until the rescan answers. "No repository"
+    stays cached for 60 s with no Worker request, then rescans; project edits
+    and `invalidateMainRepo` forget every key the project read.
+  - Lifecycle. Creating a worktree seeds it present; removal forgets it, and a
+    probe answering later writes nothing.
+  - Outage. A Worker failure (a coded refusal, a malformed answer, the
+    connection ending) is never an answer: views keep the last answer and log
+    once, and an acting path rejects with the branded failure. There is no
+    filesystem, lexical or app-CWD fallback, and no retry of a main generation.
+    Non-coding personas and sessions without an edge contact no Worker.
+
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the
@@ -749,7 +788,7 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)       | landed  |
 | W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | landed  |
 | W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | landed  |
-| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | planned |
+| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | landed  |
 | W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)     | landed  |
 | W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker   | planned |
 | W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | planned |
