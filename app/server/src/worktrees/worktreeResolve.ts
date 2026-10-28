@@ -308,22 +308,27 @@ async function resolveMainRepoCached(
   project: ProjectRecord,
 ): Promise<MainRepoInfo | undefined> {
   const key = project.id;
+  // `project` and this generation are read in the same turn: what this call
+  // resolves, it may publish only under the generation of that record.
+  const generation = mainRepoGenerationOf(key);
   const cached = mainRepoCache.get(key);
   if (cached) {
-    const generation = mainRepoGenerationOf(key);
     const freshness = mainRepoCacheFresh(cached, Date.now());
     if (typeof freshness === "boolean") {
       if (freshness) return cached.info;
     } else {
       const holds = await freshness;
-      // An invalidation or clear while the stamp was read: `project` may be
-      // the pre-edit record, so start over from the registry as it is now
-      // rather than resolve it under the newer generation.
-      if (mainRepoGenerationOf(key) !== generation) {
-        const current = getProject(key);
-        return current ? resolveMainRepoCached(current) : undefined;
+      if (
+        mainRepoCache.get(key) !== cached ||
+        mainRepoGenerationOf(key) !== generation
+      ) {
+        // Dropped while the stamp was read: `project` may be the pre-edit
+        // record. This call resolves it for itself alone, outside the
+        // in-flight map, and its generation forbids publishing.
+        mainRepoColdResolves += 1;
+        return resolveAndPublishMainRepo(project, generation, Date.now());
       }
-      if (holds && mainRepoCache.get(key) === cached) return cached.info;
+      if (holds) return cached.info;
     }
   }
   const running = mainRepoInFlight.get(key);
@@ -331,7 +336,7 @@ async function resolveMainRepoCached(
   mainRepoColdResolves += 1;
   const promise = resolveAndPublishMainRepo(
     project,
-    mainRepoGenerationOf(key),
+    generation,
     Date.now(),
   ).finally(() => {
     if (mainRepoInFlight.get(key) === promise) mainRepoInFlight.delete(key);
@@ -503,26 +508,42 @@ function sameCandidate(a: MainCandidateState, b: MainCandidateState): boolean {
 }
 
 /**
- * One scan of the candidate of the project keyed `key`, resolving with its own
- * result. It reads the registry and the generation together when it starts,
- * so no earlier read can pair a pre-edit record with a newer generation. It
- * writes only into the entry it was issued for, when no newer scan wrote and
- * the generation is unchanged since it started.
+ * What a scan may write: the entry and generation read in the same turn as
+ * the project record it scans. Ownership ends when either changes.
+ */
+interface CandidateOwner {
+  entry: MainCandidateEntry;
+  generation: number;
+}
+
+function candidateOwner(key: string): CandidateOwner {
+  return {
+    entry: mainCandidateEntry(key),
+    generation: mainRepoGenerationOf(key),
+  };
+}
+
+function ownsCandidate(key: string, owner: CandidateOwner): boolean {
+  return (
+    mainCandidates.get(key) === owner.entry &&
+    mainRepoGenerationOf(key) === owner.generation
+  );
+}
+
+/**
+ * One scan of `project`'s candidate, resolving with its own result. It writes
+ * only for an `owner` it still is, and only when no newer scan wrote; without
+ * one it writes nothing.
  */
 async function runMainCandidateScan(
-  key: string,
-  entry: MainCandidateEntry,
+  project: ProjectRecord,
+  owner: CandidateOwner | undefined,
 ): Promise<MainCandidateState> {
-  const project = getProject(key);
-  if (!project) return { kind: "none" };
-  const ticket = ++entry.issued;
-  const generation = mainRepoGenerationOf(key);
+  const key = project.id;
+  const ticket = owner ? ++owner.entry.issued : 0;
   const state = await scanMainCandidate(project);
-  if (
-    mainCandidates.get(key) === entry &&
-    ticket > entry.applied &&
-    mainRepoGenerationOf(key) === generation
-  ) {
+  if (owner && ownsCandidate(key, owner) && ticket > owner.entry.applied) {
+    const { entry } = owner;
     entry.applied = ticket;
     entry.failing = false;
     const previous = entry.state;
@@ -533,13 +554,23 @@ async function runMainCandidateScan(
   return state;
 }
 
-/** The candidate state now; schedules one background rescan (refresh on read). */
-function mainCandidateNow(key: string): MainCandidateState {
-  const entry = mainCandidateEntry(key);
+/**
+ * The candidate state now; schedules one background rescan (refresh on read).
+ * The rescan owns what this read saw, and does not start once that is gone:
+ * it has no caller to answer.
+ */
+function mainCandidateNow(project: ProjectRecord): MainCandidateState {
+  const key = project.id;
+  const owner = candidateOwner(key);
+  const { entry } = owner;
   if (!entry.backgroundInFlight) {
     entry.backgroundInFlight = true;
     const scan = Promise.resolve()
-      .then(() => runMainCandidateScan(key, entry))
+      .then(() =>
+        ownsCandidate(key, owner)
+          ? runMainCandidateScan(project, owner)
+          : undefined,
+      )
       .then(
         () => {},
         (error: unknown) => {
@@ -559,9 +590,15 @@ function mainCandidateNow(key: string): MainCandidateState {
   return entry.state;
 }
 
-/** A fresh scan of `key`'s candidate; rejects on any Worker failure. */
-function checkMainCandidate(key: string): Promise<MainCandidateState> {
-  return runMainCandidateScan(key, mainCandidateEntry(key));
+/**
+ * A fresh scan of `project`'s candidate, writing for `owner` if still owned;
+ * rejects on any Worker failure.
+ */
+function checkMainCandidate(
+  project: ProjectRecord,
+  owner: CandidateOwner | undefined,
+): Promise<MainCandidateState> {
+  return runMainCandidateScan(project, owner);
 }
 
 /* ------------------------------- main checkout ------------------------------ */
@@ -608,7 +645,7 @@ export function mainCheckoutEdgeNow(projectId: string): MainCheckoutEdge {
     dropResolvedRoot(key, cached);
   } else if (cached && noRepositoryHolds(cached, Date.now()))
     return { kind: "missing", retired: true };
-  const state = mainCandidateNow(key);
+  const state = mainCandidateNow(project);
   if (state.kind === "path") return { kind: "live", path: state.path };
   return state.kind === "none"
     ? { kind: "missing", retired: false }
@@ -626,9 +663,10 @@ export type MainCheckoutCheck =
  * its TTL with no Worker call, else a fresh candidate scan. Rejects on any
  * Worker failure; never adopts an older probe or scan.
  *
- * An invalidation, clear or root drop while a check ran may have moved the
- * registry under it: the check starts over from the state as it is now, so
- * neither its answer nor anything it writes derives from a pre-edit record.
+ * The check answers from its own record, read when it started. It writes only
+ * what it still owns: the root it found absent is dropped, and its scan
+ * recorded, only if no invalidation, clear or other drop came first;
+ * otherwise its scan answers it alone.
  */
 export async function checkMainCheckout(
   projectId: string,
@@ -637,20 +675,24 @@ export async function checkMainCheckout(
   if (!project) return { verdict: "missing-db" };
   const key = project.id;
   const cached = mainRepoCache.get(key);
+  let owner: CandidateOwner | undefined;
   if (cached?.info) {
     const root = cached.info.root;
     const generation = mainRepoGenerationOf(key);
-    const present = await checkMainPresence(key, root);
-    if (mainRepoGenerationOf(key) !== generation)
-      return checkMainCheckout(projectId);
-    if (present) return { verdict: "live", path: root };
-    dropResolvedRoot(key, cached);
+    if (await checkMainPresence(key, root))
+      return { verdict: "live", path: root };
+    if (
+      mainRepoCache.get(key) === cached &&
+      mainRepoGenerationOf(key) === generation
+    ) {
+      dropResolvedRoot(key, cached);
+      // The drop was this check's, in this turn: it owns what follows.
+      owner = candidateOwner(key);
+    }
   } else if (cached && noRepositoryHolds(cached, Date.now()))
     return { verdict: "missing-no-repository" };
-  const generation = mainRepoGenerationOf(key);
-  const state = await checkMainCandidate(key);
-  if (mainRepoGenerationOf(key) !== generation)
-    return checkMainCheckout(projectId);
+  else owner = candidateOwner(key);
+  const state = await checkMainCandidate(project, owner);
   return state.kind === "path"
     ? { verdict: "live", path: state.path }
     : { verdict: "missing-absent" };
@@ -678,7 +720,7 @@ export function mainCheckoutPathForProject(
   const cached = mainRepoCache.get(project.id);
   if (cached?.info) return cached.info.root;
   if (cached && noRepositoryHolds(cached, Date.now())) return undefined;
-  const state = mainCandidateNow(project.id);
+  const state = mainCandidateNow(project);
   return state.kind === "path" ? state.path : undefined;
 }
 
