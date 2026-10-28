@@ -42,6 +42,7 @@ import {
   type WorkerFileLocation,
 } from "./workerProtocol/fileMethods.ts";
 import {
+  brandWorkerFailure,
   existsOnWorker,
   inspectOnWorker,
   isWorkerFailure,
@@ -80,6 +81,18 @@ export function checkoutFailureOf(
 export function markFilesystemFailure(error: Error): Error {
   filesystemFailures.add(error);
   return error;
+}
+
+/**
+ * `to`, classified where `from` came from: branded as a Worker failure or
+ * marked as a filesystem failure like it, else returned as it is. For an
+ * error that rewraps another's message, so its callers still tell them apart.
+ */
+export function carryCheckoutFailure(from: unknown, to: Error): Error {
+  const origin = checkoutFailureOf(from);
+  if (origin === "worker") brandWorkerFailure(to);
+  else if (origin === "filesystem") markFilesystemFailure(to);
+  return to;
 }
 
 /** A native failure: a string `code` and a numeric `errno`. */

@@ -79,22 +79,17 @@ const GIT_SPAWNS: Record<string, number> = {
 };
 
 /**
- * Modules that import the checkout family AND `node:fs`: they read checkouts
- * directly. Each names the slice that moves those reads behind the Worker.
+ * Modules that import the checkout family AND `node:fs`: they would read
+ * checkouts directly. Empty since W5 moved the checkout lifecycle behind the
+ * Worker; a new entry names the slice that moves its reads there.
  */
-const CHECKOUT_FS_INVENTORY: Record<string, string> = {
-  "projectProvision.ts": "W5",
-  "tools/core/projectCreateTool.ts": "W5",
-  "worktrees/worktrees.ts": "W5",
-};
+const CHECKOUT_FS_INVENTORY: Record<string, string> = {};
 
 /**
- * Checkout readers outside the family, named by the plan: each still imports
- * `node:fs` until its slice lands.
+ * Checkout readers outside the family that still import `node:fs`, each with
+ * the slice that moves it. Empty since W5; a new entry needs a plan naming it.
  */
-const NAMED_CHECKOUT_READERS: Record<string, string> = {
-  "worktrees/idleWorktrees.ts": "W5",
-};
+const NAMED_CHECKOUT_READERS: Record<string, string> = {};
 
 /**
  * Modules that read checkouts only through the checkout-file access
@@ -108,10 +103,13 @@ const MIGRATED_CHECKOUT_READERS = [
   "connection.ts",
   "containerResidue.ts",
   "gitFamily.ts",
+  "projectProvision.ts",
   "sessionSpawn.ts",
+  "tools/core/projectCreateTool.ts",
   "workflow/operationTriage.ts",
   "workflow/rebaseRepair.ts",
   "worktrees/checkoutPresence.ts",
+  "worktrees/idleWorktrees.ts",
   "worktrees/sessionCwd.ts",
   "worktrees/worktreeComments.ts",
   "worktrees/worktreeDiff.ts",
@@ -121,6 +119,7 @@ const MIGRATED_CHECKOUT_READERS = [
   "worktrees/worktreeStatus.ts",
   "worktrees/worktreeSync.ts",
   "worktrees/worktreeWatcher.ts",
+  "worktrees/worktrees.ts",
 ];
 
 /**
@@ -482,11 +481,10 @@ test("served files read only through the served-file access", () => {
 });
 
 test("the removal ladder runs only on the Worker and for agent temp trees", () => {
-  // Every other user takes only its types (`import type`). The create
-  // discard's owner-access repair stays in `worktrees.ts` until create moves.
+  // Every other user takes only its types (`import type`).
   assert.deepEqual(
     importersOf((target) => target === "managedTreeRemoval.ts", "valueImports"),
-    ["agentTempTree.ts", "worker/lifecycle.ts", "worktrees/worktrees.ts"],
+    ["agentTempTree.ts", "worker/lifecycle.ts"],
   );
 });
 

@@ -4,13 +4,16 @@
  * project's main checkout, since main is derived from localPaths) and pull it.
  * No credential handling here — we rely on the host's git/ssh config.
  */
-import { existsSync, mkdirSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { userHomeDir } from "./userHome.ts";
 import { join, resolve, sep } from "node:path";
+import { checkoutFilesOn } from "./checkoutFileAccess.ts";
+import { checkoutLifecycleOn } from "./checkoutLifecycle.ts";
 import { git } from "./gitExec.ts";
 import { getProject, updateProject } from "./projectRegistry.ts";
 import { getSettings } from "./settings.ts";
+import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
+import { mainWorktreeId } from "./worktrees/worktreeResolve.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 
 /**
  * Non-interactive git/ssh environment for provisioning. Without this, a clone
@@ -47,9 +50,21 @@ export function projectRepoDir(projectId: string): string {
   return join(projectsRootDir(), projectId);
 }
 
+/**
+ * Where a project's managed clone lives: its main checkout's side. Every
+ * filesystem step below runs there, and a Worker failure rejects.
+ */
+function provisionSide(projectId: string): CheckoutSide {
+  return checkoutSideOf({ id: mainWorktreeId(projectId) });
+}
+
+function pathExistsOn(side: CheckoutSide, path: string): Promise<boolean> {
+  return checkoutFilesOn(side).pathExists(path, path);
+}
+
 /** Whether `dir` looks like a git checkout. */
-function isGitRepo(dir: string): boolean {
-  return existsSync(join(dir, ".git"));
+function isGitRepo(side: CheckoutSide, dir: string): Promise<boolean> {
+  return pathExistsOn(side, join(dir, ".git"));
 }
 
 /**
@@ -65,14 +80,15 @@ export async function cloneProjectRepo(
   projectId: string,
   repoUrl: string,
 ): Promise<string> {
+  const side = provisionSide(projectId);
   const dir = projectRepoDir(projectId);
-  if (isGitRepo(dir)) return dir;
-  if (existsSync(dir))
+  if (await isGitRepo(side, dir)) return dir;
+  if (await pathExistsOn(side, dir))
     throw new Error(
       `Target directory already exists and is not a git repo: ${dir}`,
     );
   const root = projectsRootDir();
-  mkdirSync(root, { recursive: true });
+  await checkoutLifecycleOn(side).mkdir(root);
   await git(
     ["clone", "--recurse-submodules", "--", repoUrl, dir],
     root,
@@ -105,7 +121,7 @@ export async function cloneAndRegisterProjectRepo(projectId: string): Promise<{
   const repoUrl = project.repoUrl?.trim();
   if (!repoUrl) throw new Error("Set a repository URL on the project first.");
   const dir = projectRepoDir(projectId);
-  const cloned = !isGitRepo(dir);
+  const cloned = !(await isGitRepo(provisionSide(projectId), dir));
   await cloneProjectRepo(projectId, repoUrl);
   const already = (project.localPaths ?? []).some((p) => p.path === dir);
   if (!already) {
@@ -136,7 +152,8 @@ export async function deleteProjectRepoFolder(
   const dir = resolve(projectRepoDir(projectId));
   const root = resolve(projectsRootDir());
   if (dir === root || !dir.startsWith(root + sep)) return false; // containment guard
-  if (!existsSync(dir)) return false;
-  await rm(dir, { recursive: true, force: true });
+  const side = provisionSide(projectId);
+  if (!(await pathExistsOn(side, dir))) return false;
+  await checkoutLifecycleOn(side).removeAll(dir);
   return true;
 }

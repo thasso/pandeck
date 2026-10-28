@@ -5,7 +5,7 @@
  * computed by `worktreeStatus.ts`; this module owns the durable rows and the
  * git mutations, which run under {@link withRepoLock}.
  */
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -25,7 +25,7 @@ import {
 import { errorText } from "../errors.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { pullRequestSummaryForWorktree } from "../pullRequestCards.ts";
-import { restoreOwnerAccess, type TreeResidue } from "../managedTreeRemoval.ts";
+import type { TreeResidue } from "../managedTreeRemoval.ts";
 import {
   checkoutFailureOf,
   checkoutFilesOn,
@@ -83,6 +83,7 @@ import {
   type MainRepoInfo,
 } from "./worktreeResolve.ts";
 import { checkoutSideOf } from "./knowledgeCheckout.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
 import { forgetPresence, notePresent } from "./checkoutPresence.ts";
 
 /**
@@ -243,21 +244,19 @@ export async function createWorktree(
 
   throwIfAborted(input.signal);
   const mainRepoKey = await repoLockKey(main.root);
+  // The project's main side: where its checkouts and their worktree root are.
+  const side = checkoutSideOf({ id: mainWorktreeId(project.id) });
   // Reuse the background fetch's gate, cadence, coalescing and honest freshness
   // stamp. It is deliberately fire-and-forget before the repository lock; the
   // fork point below remains the local base whatever the fetch later finds.
-  fetchRepoIfDue(
-    checkoutSideOf({ id: mainWorktreeId(project.id) }),
-    mainRepoKey,
-    main.root,
-  );
+  fetchRepoIfDue(side, mainRepoKey, main.root);
 
   const root = worktreeRootFor(project);
   // Node resolves a relative root against the server's cwd and git against the
   // main checkout's, so one creation would name two different folders.
   if (!isAbsolute(root))
     throw new Error(`Worktree root "${root}" must be an absolute path`);
-  mkdirSync(root, { recursive: true });
+  await checkoutLifecycleOn(side).mkdir(root);
   throwIfAborted(input.signal);
 
   // Everything that pins the fork point runs under ONE lock acquisition:
@@ -288,8 +287,8 @@ export async function createWorktree(
       mainRepoKey,
       () =>
         source.kind === "track-remote"
-          ? addTrackingCheckout(main, root, input, source, claim)
-          : addNewBranchCheckout(main, root, input, claim),
+          ? addTrackingCheckout(side, main, root, input, source, claim)
+          : addNewBranchCheckout(side, main, root, input, claim),
     );
 
     const now = Date.now();
@@ -324,7 +323,7 @@ export async function createWorktree(
     // Deliberately OUTSIDE the repo lock: a submodule clone can take minutes
     // over the network, and it writes only worktree-private state
     // (`.git/worktrees/<wt>/modules/<name>`), so it races with nothing.
-    await initSubmodules(path, input.onSubmodules, input.signal);
+    await initSubmodules(side, path, input.onSubmodules, input.signal);
     throwIfAborted(input.signal);
     insertWorktree(row);
     // Its creator's own success: present from the first read, with no probe.
@@ -344,7 +343,7 @@ export async function createWorktree(
     void broadcastWorktreeList().catch(() => undefined);
     return toRecord(row);
   } catch (err) {
-    if (untracked) await discardUntrackedWorktree(main.root, untracked);
+    if (untracked) await discardUntrackedWorktree(side, main.root, untracked);
     throw err;
   }
 }
@@ -426,6 +425,7 @@ async function commitOf(
  * with the base verified and snapshotted under the caller's lock.
  */
 async function addNewBranchCheckout(
+  side: CheckoutSide,
   main: MainRepoInfo,
   root: string,
   input: CreateWorktreeInput,
@@ -450,6 +450,7 @@ async function addNewBranchCheckout(
     input.signal,
   );
   const chosen = await findAvailableSuffix(
+    side,
     main,
     root,
     basename(main.root),
@@ -458,6 +459,7 @@ async function addNewBranchCheckout(
   );
   const target = join(root, `${basename(main.root)}-${chosen}`);
   await addCheckout(
+    side,
     main,
     target,
     chosen,
@@ -490,6 +492,7 @@ async function addNewBranchCheckout(
  * the ref is still good for.
  */
 async function addTrackingCheckout(
+  side: CheckoutSide,
   main: MainRepoInfo,
   root: string,
   input: CreateWorktreeInput,
@@ -557,12 +560,14 @@ async function addTrackingCheckout(
   // asks about the directory alone, and exhaustion falls back to a timestamp
   // rather than failing a creation over a name.
   const folder = await findAvailableFolderSuffix(
+    side,
     root,
     basename(main.root),
     input.name,
   );
   const target = join(root, `${basename(main.root)}-${folder}`);
   await addCheckout(
+    side,
     main,
     target,
     source.headBranch,
@@ -607,6 +612,7 @@ async function addTrackingCheckout(
  * otherwise claim them before the outer catch reacquires the lock.
  */
 async function addCheckout(
+  side: CheckoutSide,
   main: MainRepoInfo,
   target: string,
   branch: string,
@@ -639,7 +645,7 @@ async function addCheckout(
     throwIfAborted(signal);
     await git(["worktree", "add", target, branch], main.root, signal);
   } catch (err) {
-    await discardUntrackedWorktreeLocked(main.root, created);
+    await discardUntrackedWorktreeLocked(side, main.root, created);
     claim.release();
     throw err;
   }
@@ -659,15 +665,19 @@ async function addCheckout(
  * `gitOptional` absorbs the git side COMPLETELY — a non-zero exit and an
  * execution failure (no git binary, vanished cwd) both come back as non-zero
  * results, so either one is logged and the worktree remains usable. An aborted
- * signal is different: it is rethrown so the caller can clean up and cancel.
+ * signal is different: it is rethrown so the caller can clean up and cancel,
+ * and so is a Worker failure asking whether `.gitmodules` exists: whether the
+ * tree is complete is then unknown, and the caller discards it.
  */
 async function initSubmodules(
+  side: CheckoutSide,
   worktreePath: string,
   onStart?: () => void,
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  if (!existsSync(join(worktreePath, ".gitmodules"))) return;
+  const gitmodules = join(worktreePath, ".gitmodules");
+  if (!(await checkoutFilesOn(side).pathExists(gitmodules, gitmodules))) return;
   onStart?.();
   throwIfAborted(signal);
   const res = await gitOptional(
@@ -707,31 +717,33 @@ async function initSubmodules(
  * But "best effort" must not mean silent: a cleanup that fails leaves behind
  * precisely the orphan this exists to prevent, and the failures cascade (with
  * the checkout still registered, its branch is checked out and kept), so EVERY
- * step reports its own non-zero exit.
+ * step reports its own failure, naming the path and the branch. A Worker
+ * failure is its step's failure: it is logged and the discard goes on, but it
+ * never proves the folder absent, so the repo-global prune waits for a proof.
  */
-const ORPHAN_DIRECTORY_REMOVAL_RETRIES = 10;
-const ORPHAN_DIRECTORY_REMOVAL_RETRY_DELAY_MS = 200;
 const ORPHAN_DIRECTORY_SETTLE_ATTEMPTS = 5;
 const ORPHAN_DIRECTORY_SETTLE_DELAY_MS = 250;
 
-async function removeOrphanDirectory(path: string): Promise<boolean> {
+async function removeOrphanDirectory(
+  side: CheckoutSide,
+  path: string,
+  subject: string,
+): Promise<boolean> {
+  const lifecycle = checkoutLifecycleOn(side);
+  const files = checkoutFilesOn(side);
   for (let attempt = 0; attempt < ORPHAN_DIRECTORY_SETTLE_ATTEMPTS; attempt++) {
+    // A checkout with read-only directories in it (submodule artifacts, a
+    // tool's output) is unlinkable until owner access is back. The Worker
+    // repairs it after a failed removal, which turns the next attempt into a
+    // success instead of leaving the generated name occupied.
     try {
-      rmSync(path, {
-        recursive: true,
-        force: true,
-        maxRetries: ORPHAN_DIRECTORY_REMOVAL_RETRIES,
-        retryDelay: ORPHAN_DIRECTORY_REMOVAL_RETRY_DELAY_MS,
-      });
+      const removal = await lifecycle.discardTree(path);
+      if (removal.failed !== undefined)
+        console.error(
+          `${subject}: directory removal failed: ${removal.failed}`,
+        );
     } catch (err) {
-      console.error(
-        `[worktrees] discarding the incomplete worktree ${path}: directory removal failed: ${errorText(err)}`,
-      );
-      // A checkout with read-only directories in it (submodule artifacts, a
-      // tool's output) is unlinkable until owner access is back. Repairing
-      // costs one walk and turns the next attempt into a success instead of
-      // leaving the generated name occupied.
-      restoreOwnerAccess(path);
+      console.error(`${subject}: directory removal failed: ${errorText(err)}`);
     }
     // An aborted `git worktree add` can leave its checkout child briefly alive.
     // A successful first rm can therefore be followed by the child recreating
@@ -739,39 +751,50 @@ async function removeOrphanDirectory(path: string): Promise<boolean> {
     await new Promise<void>((resolve) =>
       setTimeout(resolve, ORPHAN_DIRECTORY_SETTLE_DELAY_MS),
     );
-    if (!existsSync(path)) return true;
+    try {
+      if (!(await files.pathExists(path, path))) return true;
+    } catch (err) {
+      console.error(`${subject}: settle check failed: ${errorText(err)}`);
+    }
   }
-  console.error(
-    `[worktrees] discarding the incomplete worktree ${path}: directory remained after bounded cleanup.`,
-  );
+  console.error(`${subject}: directory remained after bounded cleanup.`);
   return false;
 }
 
 async function discardUntrackedWorktreeLocked(
+  side: CheckoutSide,
   mainRepoRoot: string,
   created: CreatedCheckout,
 ): Promise<void> {
   const { path, branch, startOid } = created;
+  const subject = `[worktrees] discarding the incomplete worktree ${path} (branch ${branch})`;
   const report = (step: string, res: GitResult): void => {
     if (res.code === 0) return;
     console.error(
-      `[worktrees] discarding the incomplete worktree ${path}: ${step} failed: ${res.stderr.trim() || `exit ${res.code}`}`,
+      `${subject}: ${step} failed: ${res.stderr.trim() || `exit ${res.code}`}`,
     );
   };
   const kept = (why: string): void => {
     console.error(
-      `[worktrees] discarding the incomplete worktree ${path}: kept branch ${branch}: ${why}`,
+      `${subject}: kept branch ${branch}: ${why}`,
     );
   };
   // Same shape as removeWorktree: prune is repo-global, so only run it after
-  // the generated path has stayed absent through the settle window.
-  if (existsSync(path)) {
+  // the generated path has stayed absent through the settle window. When the
+  // Worker cannot say whether the folder is there, the remove is still tried.
+  let present = true;
+  try {
+    present = await checkoutFilesOn(side).pathExists(path, path);
+  } catch (err) {
+    console.error(`${subject}: existence check failed: ${errorText(err)}`);
+  }
+  if (present) {
     report(
       "worktree remove",
       await gitOptional(["worktree", "remove", "--force", path], mainRepoRoot),
     );
   }
-  if (await removeOrphanDirectory(path))
+  if (await removeOrphanDirectory(side, path, subject))
     report(
       "worktree prune",
       await gitOptional(["worktree", "prune"], mainRepoRoot),
@@ -816,22 +839,48 @@ async function discardUntrackedWorktreeLocked(
 }
 
 async function discardUntrackedWorktree(
+  side: CheckoutSide,
   mainRepoRoot: string,
   created: CreatedCheckout,
 ): Promise<void> {
   try {
     await withRepoLock(await repoLockKey(mainRepoRoot), () =>
-      discardUntrackedWorktreeLocked(mainRepoRoot, created),
+      discardUntrackedWorktreeLocked(side, mainRepoRoot, created),
     );
   } catch (err) {
     console.error(
-      `[worktrees] failed to discard the incomplete worktree ${created.path}: ${errorText(err)}`,
+      `[worktrees] failed to discard the incomplete worktree ${created.path} (branch ${created.branch}): ${errorText(err)}`,
     );
   }
 }
 
-/** Find a branch- and folder-collision-free variant of the requested suffix. */
+/**
+ * Whether a candidate folder is proven absent on `side`, for the naming
+ * searches. A Worker failure is not a proof: it is kept in `failures` and the
+ * candidate counts as taken. A raw read, so it never touches presence.
+ */
+async function folderProvenFree(
+  side: CheckoutSide,
+  path: string,
+  failures: { last?: Error },
+): Promise<boolean> {
+  try {
+    return !(await checkoutFilesOn(side).pathExists(path, path));
+  } catch (err) {
+    if (checkoutFailureOf(err) !== "worker" || !(err instanceof Error))
+      throw err;
+    failures.last = err;
+    return false;
+  }
+}
+
+/**
+ * Find a branch- and folder-collision-free variant of the requested suffix.
+ * When none was proven free and a folder probe hit a Worker failure, that
+ * failure is the answer, not "Could not find a free worktree name".
+ */
 async function findAvailableSuffix(
+  side: CheckoutSide,
   main: MainRepoInfo,
   root: string,
   folderPrefix: string,
@@ -841,6 +890,7 @@ async function findAvailableSuffix(
   const registeredPaths = new Set(
     listWorktrees({ includeRemoved: true }).map((worktree) => worktree.path),
   );
+  const failures: { last?: Error } = {};
   for (let attempt = 0; attempt < 20; attempt++) {
     const candidate = attempt === 0 ? requested : `${requested}-${attempt + 1}`;
     // Naming must never block creation: execution failures count as an
@@ -861,9 +911,11 @@ async function findAvailableSuffix(
     // only Git and the filesystem as occupancy would recreate the old path and
     // fail at insert after doing all the expensive provisioning work.
     const folderTaken =
-      existsSync(candidatePath) || registeredPaths.has(candidatePath);
+      !(await folderProvenFree(side, candidatePath, failures)) ||
+      registeredPaths.has(candidatePath);
     if (!branchTaken && !folderTaken) return candidate;
   }
+  if (failures.last !== undefined) throw failures.last;
   throw new Error(`Could not find a free worktree name for "${requested}".`);
 }
 
@@ -874,8 +926,12 @@ async function findAvailableSuffix(
  * Exhaustion falls back to a timestamp instead of throwing: naming must never
  * block creation, and unlike the branch-and-folder search above there is no
  * name here a user ever sees or types — only a directory this process picks.
+ * The unchecked random fallback is kept for a search where every probe
+ * answered "occupied"; when a probe hit a Worker failure instead, that failure
+ * is rethrown, so nothing is ever added at a name no probe checked.
  */
 async function findAvailableFolderSuffix(
+  side: CheckoutSide,
   root: string,
   folderPrefix: string,
   requested: string,
@@ -883,18 +939,24 @@ async function findAvailableFolderSuffix(
   const registeredPaths = new Set(
     listWorktrees({ includeRemoved: true }).map((worktree) => worktree.path),
   );
-  const free = (candidate: string): boolean => {
+  const failures: { last?: Error } = {};
+  const free = async (candidate: string): Promise<boolean> => {
     const path = join(root, `${folderPrefix}-${candidate}`);
     // Removed worktrees keep their row (and its unique `path`), so Git and the
     // filesystem alone are not occupancy — see {@link findAvailableSuffix}.
-    return !existsSync(path) && !registeredPaths.has(path);
+    return (
+      (await folderProvenFree(side, path, failures)) &&
+      !registeredPaths.has(path)
+    );
   };
   for (let attempt = 0; attempt < 20; attempt++) {
     const candidate = attempt === 0 ? requested : `${requested}-${attempt + 1}`;
-    if (free(candidate)) return candidate;
+    if (await free(candidate)) return candidate;
   }
   const stamped = `${requested}-${Date.now().toString(36)}`;
-  return free(stamped) ? stamped : `${requested}-${randomUUID().slice(0, 8)}`;
+  if (await free(stamped)) return stamped;
+  if (failures.last !== undefined) throw failures.last;
+  return `${requested}-${randomUUID().slice(0, 8)}`;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

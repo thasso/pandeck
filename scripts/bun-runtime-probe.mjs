@@ -15,6 +15,9 @@
  * else reused (Bun 1.3.13 did, at GC), and that `maxBuffer` bounds each
  * stream's length on overflow as Node does.
  *
+ * The checkout lifecycle methods run against native `fs` and base code on a
+ * twin fixture, and the process stop against a tree whose every pid is known.
+ *
  * Not run from a checkout. `test-bun-server-bundle.mjs` bundles it with the
  * server's own plugins and runs it with the packaged Bun, once per mode:
  * `broker`, and `in-process` under `ASSISTANT_SPAWN_BROKER=0`.
@@ -41,7 +44,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { createServer, get as httpGet } from "node:http";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
@@ -112,6 +115,18 @@ import {
   statServedFile,
 } from "../app/server/src/servedFileAccess.ts";
 import { checkoutWatchOn } from "../app/server/src/checkoutWatchAccess.ts";
+import { checkoutLifecycleOn } from "../app/server/src/checkoutLifecycle.ts";
+import { errorText } from "../app/server/src/errors.ts";
+import {
+  removeManagedTree,
+  restoreOwnerAccess,
+  scanTreeResidue,
+} from "../app/server/src/managedTreeRemoval.ts";
+import {
+  LIFECYCLE_METHODS,
+  encodeLifecycleLocation,
+  encodeRemoveTree,
+} from "../app/server/src/workerProtocol/lifecycleMethods.ts";
 import { childProcessEnv } from "../app/server/src/subprocessEnv.ts";
 import { createTask, updateTask } from "../app/server/src/tasks.ts";
 import { MAX_FRAME_PAYLOAD_BYTES } from "../app/server/src/workerProtocol/codec.ts";
@@ -1318,6 +1333,342 @@ async function checkWorkerWorkflowReads() {
   }
 }
 
+/** What is at `path`, depth first: relative path, kind, mode, text or bytes. */
+function treeSnapshot(path) {
+  const entries = [];
+  const visit = (at, relative) => {
+    let stat;
+    try {
+      stat = lstatSync(at);
+    } catch (error) {
+      entries.push(`${relative} ${error.code}`);
+      return;
+    }
+    const mode = (stat.mode & 0o7777).toString(8);
+    if (stat.isSymbolicLink()) {
+      entries.push(`${relative} link ${readlinkSync(at)}`);
+    } else if (stat.isFile()) {
+      let content;
+      try {
+        content = readFileSync(at, "utf8");
+      } catch (error) {
+        content = error.code;
+      }
+      entries.push(`${relative} file ${mode} ${content}`);
+    } else if (stat.isDirectory()) {
+      entries.push(`${relative} dir ${mode}`);
+      let names;
+      try {
+        names = readdirSync(at).sort();
+      } catch (error) {
+        entries.push(`${relative} unlistable ${error.code}`);
+        return;
+      }
+      for (const name of names)
+        visit(join(at, name), relative === "." ? name : `${relative}/${name}`);
+    } else entries.push(`${relative} other ${mode}`);
+  };
+  visit(path, ".");
+  return entries;
+}
+
+/**
+ * A lifecycle fixture under `root`: `tree/` and an `outside/` target that a
+ * link in the tree points at. `locked` adds a 0o500 and a 0o000 directory, each
+ * holding a file; `missing` has no tree at all.
+ */
+function lifecycleFixture(root, shape) {
+  const tree = join(root, "tree");
+  const outside = join(root, "outside");
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, "secret"), "OUTSIDE");
+  chmodSync(join(outside, "secret"), 0o640);
+  chmodSync(outside, 0o750);
+  if (shape === "missing") return tree;
+  mkdirSync(join(tree, "sub"), { recursive: true });
+  writeFileSync(join(tree, "file"), "file");
+  writeFileSync(join(tree, "sub", "file"), "nested");
+  symlinkSync(outside, join(tree, "outside-link"));
+  if (shape === "locked")
+    for (const [name, mode] of [
+      ["read-only", 0o500],
+      ["no-access", 0o000],
+    ]) {
+      mkdirSync(join(tree, name));
+      writeFileSync(join(tree, name, "file"), name);
+      chmodSync(join(tree, name), mode);
+    }
+  return tree;
+}
+
+/** `/proc/<pid>/stat`'s ppid, or undefined once gone. */
+function parentPid(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  } catch {
+    return undefined;
+  }
+}
+
+const running = (pid) => !["gone", "Z"].includes(procState(pid));
+
+/** `value` with every object's keys sorted, so key order is no difference. */
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonical(value[key])]),
+  );
+}
+
+/**
+ * The checkout lifecycle methods answer under Bun as native `fs` and base
+ * code do (`docs/workers.md`, "Checkout lifecycle"). Each filesystem case
+ * builds two identical fixtures, runs the reference on A and the in-process
+ * Worker's method on B, and compares the answer or failure, what remains of
+ * the tree and the outside target, each normalized for its fixture's root.
+ * The process stop runs against a tree the probe builds with a pid file per
+ * process, so the expected signal sets come from the construction alone.
+ */
+async function checkWorkerLifecycle() {
+  const uid = process.getuid?.();
+  const base = realpathSync(mkdtempSync(join(scratch, "lifecycle-")));
+  const lifecycle = checkoutLifecycleOn(DEFAULT_WORKER_SIDE);
+  const recorded = [];
+  let direct;
+
+  /** `run` on a fixture's tree: its answer or failure, then what remains. */
+  const observe = async (root, run) => {
+    let outcome;
+    try {
+      outcome = { answer: canonical(await run(join(root, "tree"))) };
+    } catch (error) {
+      outcome = {
+        failure: {
+          code: error?.code ?? null,
+          message: error?.message ?? String(error),
+          ...(checkoutFailureOf(error) === "worker" ? { worker: true } : {}),
+        },
+      };
+    }
+    const observed = JSON.stringify({
+      ...outcome,
+      tree: treeSnapshot(join(root, "tree")),
+      outside: treeSnapshot(join(root, "outside")),
+    });
+    return observed.split(root).join("<fixture>");
+  };
+  const differential = async (name, shape, method, reference, onWorker) => {
+    const a = join(base, `${name}-a`);
+    const b = join(base, `${name}-b`);
+    lifecycleFixture(a, shape);
+    lifecycleFixture(b, shape);
+    const expected = await observe(a, reference);
+    const answered = await crossing([method], name, () => observe(b, onWorker));
+    assert(
+      answered === expected,
+      `lifecycle ${name}: the Worker answered\n${answered}\nthe reference\n${expected}`,
+    );
+  };
+  const done = () => "done";
+
+  try {
+    // O1: mkdir, recursive, as `mkdirSync` makes it.
+    for (const [name, target] of [
+      ["new", "new/deeper"],
+      ["existing-dir", "sub"],
+      ["existing-file", "file"],
+      ["below-file", "file/below"],
+    ])
+      await differential(
+        `O1-${name}`,
+        "plain",
+        LIFECYCLE_METHODS.mkdir,
+        (tree) => (mkdirSync(join(tree, target), { recursive: true }), "done"),
+        (tree) => lifecycle.mkdir(join(tree, target)).then(done),
+      );
+    console.log("lifecycle O1 ok");
+
+    // O2: the removal ladder's first stage, as base `removeManagedTree`.
+    await differential(
+      "O2",
+      "locked",
+      LIFECYCLE_METHODS.removeTree,
+      (tree) => removeManagedTree(tree),
+      (tree) => lifecycle.removeTree(tree, "initial"),
+    );
+    console.log("lifecycle O2 ok");
+
+    // O3: the residue scan, as base `scanTreeResidue`.
+    await differential(
+      "O3",
+      "plain",
+      LIFECYCLE_METHODS.scanResidue,
+      (tree) => scanTreeResidue(tree),
+      (tree) => lifecycle.scanResidue(tree),
+    );
+    console.log("lifecycle O3 ok");
+
+    // O4: a failed create's discard and the managed clone's delete, as
+    // base's `rmSync` (with its retries and owner repair) and `rm`.
+    for (const shape of ["locked", "missing"]) {
+      await differential(
+        `O4-discard-${shape}`,
+        shape,
+        LIFECYCLE_METHODS.discardTree,
+        (tree) => {
+          try {
+            rmSync(tree, {
+              recursive: true,
+              force: true,
+              maxRetries: 10,
+              retryDelay: 200,
+            });
+            return {};
+          } catch (error) {
+            restoreOwnerAccess(tree);
+            return { failed: errorText(error) };
+          }
+        },
+        (tree) => lifecycle.discardTree(tree),
+      );
+      await differential(
+        `O4-remove-all-${shape}`,
+        shape,
+        LIFECYCLE_METHODS.removeAll,
+        (tree) => rm(tree, { recursive: true, force: true }).then(done),
+        (tree) => lifecycle.removeAll(tree).then(done),
+      );
+    }
+    console.log("lifecycle O4 ok");
+
+    // O5's tree: the probe's direct child `sh` in B starts a sleeper and a
+    // TERM-ignoring sleeper in B and one outside it, each exec'd so its pid
+    // file names the process itself, then waits on all three.
+    const fixture = join(base, "O5-b");
+    const tree = lifecycleFixture(fixture, "plain");
+    const outside = join(fixture, "outside");
+    direct = spawn(
+      "sh",
+      [
+        "-c",
+        [
+          `sh -c 'echo $$ > sleeper.pid; exec sleep 600' &`,
+          `sh -c 'trap "" TERM; echo $$ > ignorer.pid; exec sleep 600' &`,
+          `sh -c 'cd "$1"; echo $$ > outside.pid; exec sleep 600' sh "$1" &`,
+          "wait",
+        ].join("\n"),
+        "sh",
+        outside,
+      ],
+      { cwd: tree, stdio: "ignore" },
+    );
+    const pidFiles = {
+      sleeper: join(tree, "sleeper.pid"),
+      ignorer: join(tree, "ignorer.pid"),
+      outside: join(outside, "outside.pid"),
+    };
+    const pids = {};
+    await until(() => {
+      for (const [name, file] of Object.entries(pidFiles)) {
+        let pid;
+        try {
+          pid = Number(readFileSync(file, "utf8"));
+        } catch {
+          return false;
+        }
+        if (!(pid > 0)) return false;
+        let comm;
+        try {
+          comm = readFileSync(`/proc/${pid}/comm`, "utf8");
+        } catch {
+          return false;
+        }
+        if (comm !== "sleep\n") return false;
+        if (!recorded.includes(pid)) recorded.push(pid);
+        pids[name] = pid;
+      }
+      return true;
+    }, "the process tree's sleepers");
+    assert(
+      parentPid(direct.pid) === process.pid &&
+        Object.values(pids).every((pid) => parentPid(pid) === direct.pid),
+      "The process tree is not the probe's child and grandchildren.",
+    );
+
+    // O6: a request for another Worker is refused before any effect.
+    const before = JSON.stringify(treeSnapshot(tree));
+    const elsewhere = { workerId: "elsewhere", path: tree };
+    for (const [method, payload] of [
+      [
+        LIFECYCLE_METHODS.mkdir,
+        encodeLifecycleLocation({ ...elsewhere, path: join(tree, "refused") }),
+      ],
+      [LIFECYCLE_METHODS.scanResidue, encodeLifecycleLocation(elsewhere)],
+      [LIFECYCLE_METHODS.removeTree, encodeRemoveTree(elsewhere, "initial")],
+      [LIFECYCLE_METHODS.discardTree, encodeLifecycleLocation(elsewhere)],
+      [LIFECYCLE_METHODS.removeAll, encodeLifecycleLocation(elsewhere)],
+      [LIFECYCLE_METHODS.stopProcesses, encodeLifecycleLocation(elsewhere)],
+    ]) {
+      const refused = await rejection(
+        ensureInProcessWorker().request(method, payload),
+      );
+      assert(
+        refused?.code === "wrong_worker",
+        `A ${method} for another Worker answered ${refused}.`,
+      );
+    }
+    assert(
+      JSON.stringify(treeSnapshot(tree)) === before,
+      "A refused lifecycle request changed the checkout.",
+    );
+    assert(
+      [direct.pid, ...Object.values(pids)].every(running),
+      "A refused stop signalled a process.",
+    );
+    console.log("lifecycle O6 ok");
+
+    // O5: TERM reaches exactly the two grandchildren in B, KILL the one that
+    // ignores it; the direct child and the outside sleeper get nothing.
+    const stop = await crossing([LIFECYCLE_METHODS.stopProcesses], "O5", () =>
+      lifecycle.stopProcesses(tree),
+    );
+    const sorted = (list) => [...list].sort((x, y) => x - y).join();
+    assert(
+      sorted(stop.terminated) === sorted([pids.sleeper, pids.ignorer]) &&
+        sorted(stop.killed) === sorted([pids.ignorer]),
+      `The stop signalled ${JSON.stringify(stop)}; the tree is ${JSON.stringify({ direct: direct.pid, ...pids })}.`,
+    );
+    await until(
+      () => !running(pids.sleeper) && !running(pids.ignorer),
+      "the stopped sleepers to end",
+    );
+    assert(
+      running(direct.pid) && running(pids.outside),
+      "The stop ended the direct child or the outside sleeper.",
+    );
+    console.log("lifecycle O5 ok");
+    console.log(
+      `Worker lifecycle (${mode}, uid ${uid}): mkdir, removal, residue scan, discard and delete match native fs and base code on twin fixtures; a stop signals exactly its checkout's grandchildren; another Worker's requests are refused.`,
+    );
+  } finally {
+    for (const pid of [...recorded, direct?.pid])
+      if (pid !== undefined && procState(pid) !== "gone")
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Gone since.
+        }
+    if (direct && direct.exitCode === null && direct.signalCode === null)
+      await new Promise((resolve) => direct.once("exit", resolve));
+    execFileSync("chmod", ["-R", "u+rwx", base]);
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
 /**
  * A client that leaves a served-file request stops its reads under Bun too,
  * which reports the disconnect on the request and its socket but never closes
@@ -1532,6 +1883,7 @@ async function checkGit() {
   await checkServedFileCancellation();
   await checkWorkerCheckoutReads();
   await checkWorkerWorkflowReads();
+  await checkWorkerLifecycle();
 
   if (mode !== "broker") return;
 

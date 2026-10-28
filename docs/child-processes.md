@@ -221,9 +221,8 @@ the same trees takes 7–60 ms.
 Under the repo lock, after every refusal of the app's own (dirty tree, unmerged
 branch, foreign-owned files, review-comment scope, unpushed submodule work) and
 immediately before `git worktree remove`, removal stops what still runs in the
-checkout (`worktrees/checkoutProcesses.ts`, `worktreeRemoval.ts`). What can
-still refuse afterwards is only git's own check of a tree that changed in the
-meantime:
+checkout (`releaseCheckout` in `worktrees/worktrees.ts`). What can still refuse
+afterwards is only git's own check of a tree that changed in the meantime:
 
 1. Tracked background work of every session linked to the worktree is stopped
    through the background-work supervisor, bounded at three seconds. A live
@@ -240,16 +239,22 @@ meantime:
    it; the result remains on the background task even when its completion wake
    requires missing-worktree acknowledgement.
 2. Any remaining process whose working directory is inside the checkout gets
-   SIGTERM, then SIGKILL after two seconds — only if the server provably started
-   it: a descendant at least two levels down. The server's direct children are
-   its own harnesses and helpers (an idle Claude session's CLI runs in its
-   checkout) and are never signalled, while anything an agent started sits below
-   them. Nothing is inferred from sharing the service cgroup: a deliberately
-   detached process (`nohup`/`setsid`) whose parent already exited cannot be
-   told apart from an app helper and is left alone. A user's shell or editor in
-   the same folder is never our descendant. Each process is identified by pid
-   AND start time, re-checked before SIGTERM and again before SIGKILL, so a pid
-   recycled during the grace is never signalled.
+   SIGTERM, then SIGKILL after two seconds — only if the checkout's Worker
+   provably started it: a descendant of the Worker's own process at least two
+   levels down. This runs on the Worker (`worker/checkoutProcesses.ts`, as
+   `lifecycle.stopProcesses`, `docs/workers.md`, "Checkout lifecycle"): the
+   server names only the checkout, and nothing it sends widens the set. In phase
+   1 the Worker runs in the server's process, so the candidates are the server's
+   descendants. The Worker's direct children are its own harnesses and helpers
+   (an idle Claude session's CLI runs in its checkout) and are never signalled,
+   while anything an agent started sits below them. Nothing is inferred from
+   sharing the service cgroup: a deliberately detached process
+   (`nohup`/`setsid`) whose parent already exited cannot be told apart from an
+   app helper and is left alone. A user's shell or editor in the same folder is
+   never our descendant. The working directory is read once, when the scan finds
+   the process. Each process is identified by pid AND start time, re-checked
+   before SIGTERM and again before SIGKILL, so a pid recycled during the grace
+   is never signalled; its working directory is not re-checked.
 
 The scan is one `readlink` per process (about 10 ms for a few hundred), so a
 removal only waits when something was actually running. Without it, a dev server

@@ -17,7 +17,6 @@
  * ({@link worktreeIdleRefusal}), so a snapshot that went stale cannot settle a
  * session that started working there since.
  */
-import { existsSync } from "node:fs";
 import type {
   IdleWorktree,
   IdleWorktreeKind,
@@ -32,6 +31,8 @@ import {
   type WorktreeRow,
 } from "../db/worktreeStore.ts";
 import { errorText } from "../errors.ts";
+import { checkoutFilesOn } from "../checkoutFileAccess.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { computeWorktreeStatus } from "./worktreeStatus.ts";
 import {
   listWorktreeRecords,
@@ -50,12 +51,15 @@ const MOVING_CARD = new Set(["choosing-task", "creating", "open"]);
 
 export interface IdleWorktreeOperations {
   status(row: WorktreeRow): Promise<WorktreeGitStatus>;
-  exists(path: string): boolean;
+  exists(row: WorktreeRow): Promise<boolean>;
 }
 
 const defaultOperations: IdleWorktreeOperations = {
   status: (row) => computeWorktreeStatus(row),
-  exists: existsSync,
+  // Read directly on the row's side, not through presence: a view of what a
+  // retire would lose wants the folder as it is now.
+  exists: (row) =>
+    checkoutFilesOn(checkoutSideOf(row)).pathExists(row.path, row.path),
 };
 
 /**
@@ -202,9 +206,11 @@ export async function computeIdleWorktrees(
     STATUS_CONCURRENCY,
     async ({ record, row, lastActivityAt }): Promise<IdleWorktree> => {
       const base = { worktree: record, lastActivityAt };
-      if (!operations.exists(row.path))
-        return { ...base, kind: "missing" as IdleWorktreeKind };
+      // Inside the catch: a Worker failure asking whether the folder is there
+      // makes the row unknown, never missing.
       try {
+        if (!(await operations.exists(row)))
+          return { ...base, kind: "missing" as IdleWorktreeKind };
         return { ...base, ...idleWorktreeKind(await operations.status(row)) };
       } catch (err) {
         console.warn(
