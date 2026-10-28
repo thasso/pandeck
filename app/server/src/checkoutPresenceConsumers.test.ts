@@ -80,6 +80,7 @@ const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const { harnessRegistry } = await import("./harnesses/registry.ts");
+const { handoffEngine } = await import("./harnesses/handoffSession.ts");
 const { createSession } = await import("./harnesses/create.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { beginRuntimeProviderTurn, promptRuntimeSessionWithRuntime } =
@@ -141,6 +142,7 @@ const {
 } = await import("./worktrees/worktreeResolve.ts");
 const { createWorktree, removeWorktree } =
   await import("./worktrees/worktrees.ts");
+const { addWorktreeComment } = await import("./worktrees/worktreeComments.ts");
 const worktreeStore = await import("./db/worktreeStore.ts");
 const { writeClaudeSdkRecord } =
   await import("./claudeSdk/claudeSdkRecords.ts");
@@ -2022,5 +2024,52 @@ describe("shared resolver outputs, complete (AC12)", () => {
     assert.deepEqual(await handoff(mainId), [
       "Failed to attach comments: That worktree is no longer available.",
     ]);
+  });
+
+  test("review handoff: a nested main, by an aliased id, hands the new session the canonical id and the repo root", async () => {
+    const { mainId, sub, root } = nestedMain();
+    const projectId = mainId.slice("main:".length);
+    const alias = `main:${projectId.toUpperCase()}`;
+    assert.notEqual(alias, mainId);
+    assert.notEqual(sub, root);
+    const comment = await addWorktreeComment({
+      worktreeId: mainId,
+      body: "Please look.",
+      author: { kind: "user" },
+      anchor: { path: "readme.md", side: "new", line: 1 },
+    });
+    const engine = handoffEngine("claude-sdk");
+    const create = vi.spyOn(engine, "create");
+    // The real Worker check and creation run; only the provider turn stops.
+    let delivered!: (sessionId: string) => void;
+    const deliveredTo = new Promise<string>((resolve) => {
+      delivered = resolve;
+    });
+    vi.spyOn(sessionRuntime, "deliverPrompt").mockImplementation(
+      async (sessionId: string) => delivered(sessionId),
+    );
+
+    const { conn, sent } = connection();
+    await conn.onAttachWorktreeComments!(alias, [comment.id], {
+      kind: "new",
+      harness: "claude-sdk",
+      agentType: "developer",
+      credentialProfileId: claudeProfile.id,
+      additionalPrompt: "Address the review.",
+    });
+
+    assert.deepEqual(
+      sent.filter((message) => message.type === "error"),
+      [],
+    );
+    assert.equal(create.mock.calls.length, 1);
+    assert.deepEqual(create.mock.calls[0]?.[1], { id: mainId, path: root });
+    const live = (await create.mock.results[0]?.value) as {
+      sessionId: string;
+      cwd: string;
+    };
+    assert.equal(live.cwd, root);
+    assert.equal(worktreeIdForSession(live.sessionId), mainId);
+    assert.equal(await deliveredTo, live.sessionId);
   });
 });
