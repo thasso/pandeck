@@ -447,6 +447,23 @@ function forgetProjectPresence(key: string): void {
 }
 
 /**
+ * Whether `projectId`'s main checkout answer reads one of the changed presence
+ * `keys`: its candidate key (`main:<projectId>`) or a path it read presence
+ * for. A root dropped as absent is no longer one; the candidate rescan that
+ * follows notifies under the candidate key.
+ */
+export function mainCheckoutReadsKey(
+  projectId: string,
+  keys: ReadonlySet<string>,
+): boolean {
+  const key = getProject(projectId)?.id ?? projectId;
+  if (keys.has(mainWorktreeId(key))) return true;
+  for (const path of mainPresencePaths.get(key) ?? [])
+    if (keys.has(presenceKey(MAIN_SIDE, path))) return true;
+  return false;
+}
+
+/**
  * A resolved root its side answered absent: the resolve entry goes and the
  * synchronous readers fall to a fresh candidate scan, as base fell to its scan
  * once the stamp moved after a deletion. A candidate from before the resolve

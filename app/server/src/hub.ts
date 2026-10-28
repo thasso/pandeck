@@ -19,6 +19,12 @@ import {
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { mergedSessionList } from "./harnesses/sessionList.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
+import {
+  onPresenceChange,
+  type PresenceChange,
+} from "./worktrees/checkoutPresence.ts";
+import { worktreeReadsPresenceKey } from "./worktrees/sessionCwd.ts";
+import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import { setLibraryBroadcaster } from "./library/libraryPublish.ts";
 import { setMemoryBroadcaster } from "./memoryEvents.ts";
 import {
@@ -197,6 +203,11 @@ class SessionHub {
         }
       },
     });
+    // A checkout's side answered differently than before (D14): the list's
+    // `worktreeMissing` and the banner of every session reading that answer
+    // are rebuilt. Rebuilding reads the cache again, which probes once more;
+    // an unchanged answer notifies nothing, so this settles.
+    onPresenceChange((changes) => this.checkoutPresenceChanged(changes));
     // The libraries' only path to browsers: one topic each, one list shape.
     setLibraryBroadcaster({
       broadcast: (msg, topic) => this.broadcastTopic(topic, msg),
@@ -283,6 +294,19 @@ class SessionHub {
    */
   sessionStateChanged(sessionId: string): void {
     for (const c of this.connections) c.sessionStateChanged?.(sessionId);
+  }
+
+  private checkoutPresenceChanged(changes: readonly PresenceChange[]): void {
+    void this.broadcastSessions();
+    const keys = new Set(changes.map((change) => change.key));
+    const reads = (sessionId: string) => {
+      const worktreeId = worktreeIdForSession(sessionId);
+      return !!worktreeId && worktreeReadsPresenceKey(worktreeId, keys);
+    };
+    for (const session of harnessRegistry.resident())
+      if (reads(session.sessionId)) session.broadcastState();
+    for (const sessionId of this.viewedSessionIds())
+      if (reads(sessionId)) this.sessionStateChanged(sessionId);
   }
 
   /** The sessions some connected viewer is showing right now. */

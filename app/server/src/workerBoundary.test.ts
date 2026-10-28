@@ -103,7 +103,9 @@ const NAMED_CHECKOUT_READERS: Record<string, string> = {
 const MIGRATED_CHECKOUT_READERS = [
   "checkoutFileAccess.ts",
   "commitWorkflow.ts",
+  "connection.ts",
   "gitFamily.ts",
+  "sessionSpawn.ts",
   "workflow/operationTriage.ts",
   "workflow/rebaseRepair.ts",
   "worktrees/checkoutPresence.ts",

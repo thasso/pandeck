@@ -279,9 +279,6 @@ import {
 import {
   canonicalWorktreeId,
   invalidateMainRepo,
-  isMainWorktreeId,
-  mainCheckoutPathForProject,
-  resolveWorktreeRow,
 } from "./worktrees/worktreeResolve.ts";
 import {
   generateWorktreeSuffix,
@@ -292,6 +289,8 @@ import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import { removeWorktreeAndSettleSessions } from "./worktreeRemoval.ts";
 import {
   acknowledgeMissingSessionWorktree,
+  checkSessionCheckoutRefused,
+  resolveUsableWorktree,
   sessionWorktreeMissing,
 } from "./worktrees/sessionCwd.ts";
 import { readableWorktreeStatus } from "./worktrees/worktreeStatus.ts";
@@ -302,7 +301,6 @@ import {
 import { markCommentsAttached } from "./worktrees/worktreeComments.ts";
 import { buildReviewHandoffPrompt } from "./worktrees/reviewHandoff.ts";
 import { mergeWorktree } from "./worktrees/worktreeMerge.ts";
-import { existsSync } from "node:fs";
 import {
   approvalForId,
   approvalGrantsPayload,
@@ -2771,9 +2769,8 @@ export class Connection implements Viewer {
         ? captureHumanResume(target.sessionId)
         : undefined;
     try {
-      const row = await resolveWorktreeRow(worktreeId);
-      if (!row || row.status !== "active" || !existsSync(row.path))
-        throw new Error("That worktree is no longer available.");
+      const row = (await resolveUsableWorktree(worktreeId))?.row;
+      if (!row) throw new Error("That worktree is no longer available.");
       if (commentIds.length === 0)
         throw new Error("Select at least one comment.");
       // Canonical id (spawned id, or `main:<canonical projectId>`): comments and
@@ -3378,11 +3375,15 @@ export class Connection implements Viewer {
         // act on the session's cwd. /pr chains /commit and /push through this
         // same runner seam (Task 325), so it is covered here too, not just
         // incidentally. A context-only command is exempt — see the set.
+        // Decided from the command's own Worker check; a Worker failure
+        // rejects into the failure below.
         if (
           !CONTEXT_ONLY_SLASH_COMMANDS.has(name) &&
-          !this.guardMissingWorktree(viewing.sessionId)
-        )
+          (await checkSessionCheckoutRefused(viewing.sessionId))
+        ) {
+          this.sendMissingWorktree();
           return;
+        }
 
         const cmd = findSlashCommand(name);
         if (!cmd) throw new Error(`Unknown slash command: /${name}`);
@@ -4282,11 +4283,15 @@ export class Connection implements Viewer {
       console.warn("Failed to check session worktree:", errorText(err));
     }
     if (!missing) return true;
+    this.sendMissingWorktree();
+    return false;
+  }
+
+  private sendMissingWorktree(): void {
     this.send({
       type: "error",
       message: `${WORKTREE_MISSING_BLOCKED_REASON} Acknowledge the banner to run it there anyway.`,
     });
-    return false;
   }
 
   /**
@@ -4366,7 +4371,8 @@ export class Connection implements Viewer {
   private async onAcknowledgeMissingWorktree(id: string): Promise<void> {
     const ref = this.resolveSessionRef(id);
     if (ref && !this.guardSessionRef(ref)) return;
-    if (!acknowledgeMissingSessionWorktree(id)) return; // nothing to acknowledge
+    // From its own Worker check; a Worker failure rejects.
+    if (!(await acknowledgeMissingSessionWorktree(id))) return; // nothing to acknowledge
     if (this.viewing?.sessionId === id) this.viewing.broadcastState();
     await hub.broadcastSessions();
   }
@@ -4383,29 +4389,25 @@ export class Connection implements Viewer {
   > {
     const id = worktreeId?.trim();
     if (!id) return null;
-    // resolveWorktreeRow canonicalizes a `main:<projectId>` id AND proves the
+    // resolveUsableWorktree canonicalizes a `main:<projectId>` id AND proves the
     // project actually resolves to a git checkout (no phantom mains); it exact-
-    // matches spawned rows. row.id is therefore the canonical edge target.
-    const row = await resolveWorktreeRow(id);
-    if (!row || row.status !== "active" || !existsSync(row.path)) {
+    // matches spawned rows. row.id is therefore the canonical edge target. Its
+    // own Worker check proves the checkout is there; a failure is not absence.
+    let usable: Awaited<ReturnType<typeof resolveUsableWorktree>>;
+    try {
+      usable = await resolveUsableWorktree(id);
+    } catch (err) {
+      this.send({ type: "error", message: errorText(err) });
+      return undefined;
+    }
+    if (!usable) {
       this.send({
         type: "error",
         message: "That worktree is no longer available.",
       });
       return undefined;
     }
-    // Main runs in the sync-resolved checkout path (matches reopen cwd
-    // resolution in sessionCwd); spawned worktrees run in the worktree folder.
-    const path = isMainWorktreeId(row.id)
-      ? mainCheckoutPathForProject(row.projectId)
-      : row.path;
-    if (!path || !existsSync(path)) {
-      this.send({
-        type: "error",
-        message: "That worktree is no longer available.",
-      });
-      return undefined;
-    }
+    const { row, path } = usable;
     return { id: row.id, path, projectId: row.projectId };
   }
 

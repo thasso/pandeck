@@ -59,7 +59,10 @@ import {
   readSessionHeaderId,
   sessionIdFromFile,
 } from "./sessionOpen.ts";
-import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
+import {
+  withCheckedCheckout,
+  worktreeCwdForSession,
+} from "../worktrees/sessionCwd.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 import {
@@ -407,9 +410,12 @@ class PiSessionStore {
       // Cwd precedence on reopen: the in_worktree edge (durable source of
       // truth) wins; without one, the session's own header cwd applies
       // (sessions created in a non-CWD directory, e.g. merge agents);
-      // openExistingSession falls back to the app CWD last.
+      // openExistingSession falls back to the app CWD last. The edge's cwd
+      // comes from this reopen's own check, read where it was compared.
       const edgeCwd = candidateId
-        ? worktreeCwdForSession(candidateId)
+        ? await withCheckedCheckout(candidateId, undefined, (checked) =>
+            worktreeCwdForSession(candidateId, checked),
+          )
         : undefined;
       const sm = await openExistingSession(kind, openFile, {
         ...(candidateId !== undefined ? { expectedId: candidateId } : {}),
@@ -557,6 +563,13 @@ class PiSessionStore {
     // Freeze a legacy parent before branching, then give the child exactly that
     // list. Settings changing between parent and child must not move the fork.
     const inheritSkills = await sessionSkills(parentSessionId, kind);
+    // The parent's worktree cwd from the fork's own check, read where it was
+    // compared and before any native branch is written.
+    const edgeCwd = await withCheckedCheckout(
+      parentSessionId,
+      undefined,
+      (checked) => worktreeCwdForSession(parentSessionId, checked),
+    );
     ensureEnterpriseAccount();
 
     if (position === "before") {
@@ -585,8 +598,7 @@ class PiSessionStore {
     // Forks inherit the parent's execution context (the caller copies the
     // in_worktree edge to the forked session id for durable reopen). Without a
     // worktree link, the parent's header cwd (applied by the open above) wins.
-    const cwd =
-      worktreeCwdForSession(parentSessionId) ?? sessionManagerCwd(sm) ?? CWD;
+    const cwd = edgeCwd ?? sessionManagerCwd(sm) ?? CWD;
     // A fork continues the parent's conversation, so it inherits the parent's
     // frozen prompt conditions rather than recomputing against today's gates.
     const inherit = parsePromptConditions(

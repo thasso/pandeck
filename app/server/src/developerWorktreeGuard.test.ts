@@ -40,6 +40,7 @@ const { promptRuntimeSessionWithRuntime } =
 const { insertWorktree, linkSessionToWorktree } =
   await import("./db/worktreeStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
+const { checkWorktreeCheckout } = await import("./worktrees/sessionCwd.ts");
 const { WORKTREE_MISSING_BLOCKED_REASON } = await import("@assistant/shared");
 const gitExec = await import("./gitExec.ts");
 const claudeProfile = createCredentialProfile({
@@ -190,7 +191,7 @@ function assertWorktreeGoneRejection(sent: SentMessage[], path: string) {
   );
 }
 
-test("guardMissingWorktree refuses only a session whose worktree is GONE", () => {
+test("guardMissingWorktree refuses only a session whose worktree is GONE", async () => {
   const { conn, sent } = makeConnection();
   const guard = (
     conn as unknown as { guardMissingWorktree: (id: string) => boolean }
@@ -202,7 +203,7 @@ test("guardMissingWorktree refuses only a session whose worktree is GONE", () =>
   assert.equal(guard("live-sess"), true, "a session with its worktree passes");
   assert.equal(sent.length, 0, "passing calls send nothing");
 
-  linkWorktree("gone-sess", "gone-wt", false);
+  await checkWorktreeCheckout(linkWorktree("gone-sess", "gone-wt", false));
   assert.equal(guard("gone-sess"), false, "a dead edge is refused");
   assertWorktreeGoneRejection(sent, "guardMissingWorktree");
 });
@@ -210,12 +211,15 @@ test("guardMissingWorktree refuses only a session whose worktree is GONE", () =>
 test("a prompt to a session whose worktree is gone starts no turn", async () => {
   const { conn, sent } = makeConnection();
   const sessionId = "prompt-gone-sess";
-  linkWorktree(sessionId, "prompt-gone-wt", false);
+  const checkout = await checkWorktreeCheckout(
+    linkWorktree(sessionId, "prompt-gone-wt", false),
+  );
   // A real driver: `dispatch` only prompts PiLiveSession/ClaudeSdkSession
   // instances, and acquiring an SDK session spawns nothing on its own.
   (conn as unknown as { viewing: unknown }).viewing = claudeSdkStore.acquire(
     sessionId,
     { agentType: "developer", credentialProfileId: claudeProfile.id },
+    checkout,
   );
 
   await conn.dispatch!({ type: "prompt", text: "keep going" });
@@ -241,12 +245,18 @@ test("/commit, /push and /pr each refuse at slash dispatch before any git runs",
     for (const name of ["commit", "push", "pr"]) {
       const { conn, sent } = makeConnection();
       const sessionId = `slash-${name}-gone-sess`;
-      linkWorktree(sessionId, `slash-${name}-gone-wt`, false);
+      const checkout = await checkWorktreeCheckout(
+        linkWorktree(sessionId, `slash-${name}-gone-wt`, false),
+      );
       (conn as unknown as { viewing: unknown }).viewing =
-        claudeSdkStore.acquire(sessionId, {
-          agentType: "developer",
-          credentialProfileId: claudeProfile.id,
-        });
+        claudeSdkStore.acquire(
+          sessionId,
+          {
+            agentType: "developer",
+            credentialProfileId: claudeProfile.id,
+          },
+          checkout,
+        );
 
       await conn.onRunSlashCommand!(name, "");
       assertWorktreeGoneRejection(sent, `/${name}`);
@@ -270,14 +280,20 @@ test("/commit, /push and /pr each refuse at slash dispatch before any git runs",
  * refused, which is what makes this a scoped exemption rather than a hole.
  */
 test("/clear reaches its runner for a missing-worktree session while /compact does not", async () => {
-  const gone = (name: string) => {
+  const gone = async (name: string) => {
     const { conn, sent } = makeConnection();
     const sessionId = `slash-exempt-${name}-sess`;
-    linkWorktree(sessionId, `slash-exempt-${name}-wt`, false);
-    const session = claudeSdkStore.acquire(sessionId, {
-      agentType: "developer",
-      credentialProfileId: claudeProfile.id,
-    });
+    const checkout = await checkWorktreeCheckout(
+      linkWorktree(sessionId, `slash-exempt-${name}-wt`, false),
+    );
+    const session = claudeSdkStore.acquire(
+      sessionId,
+      {
+        agentType: "developer",
+        credentialProfileId: claudeProfile.id,
+      },
+      checkout,
+    );
     (conn as unknown as { viewing: unknown }).viewing = session;
     // Session broadcasts reach VIEWERS, not the connection's socket, so watch
     // the session directly for evidence the runner actually ran.
@@ -288,7 +304,7 @@ test("/clear reaches its runner for a missing-worktree session while /compact do
     return { conn, sent, envelopes };
   };
 
-  const compact = gone("compact");
+  const compact = await gone("compact");
   await compact.conn.onRunSlashCommand!("compact", "");
   assertWorktreeGoneRejection(compact.sent, "/compact");
   assert.deepEqual(
@@ -297,7 +313,7 @@ test("/clear reaches its runner for a missing-worktree session while /compact do
     "/compact never opened a turn: the guard refused it first",
   );
 
-  const clear = gone("clear");
+  const clear = await gone("clear");
   await clear.conn.onRunSlashCommand!("clear", "");
   assert.equal(
     clear.sent.filter((m) =>
@@ -322,8 +338,9 @@ test("acknowledging the missing worktree unblocks that session only", async () =
   const guard = (
     conn as unknown as { guardMissingWorktree: (id: string) => boolean }
   ).guardMissingWorktree.bind(conn);
-  linkWorktree("ack-sess", "ack-wt", false);
+  await checkWorktreeCheckout(linkWorktree("ack-sess", "ack-wt", false));
   const otherWorktreeId = linkWorktree("other-sess", "other-wt", false);
+  await checkWorktreeCheckout(otherWorktreeId);
 
   assert.equal(guard("ack-sess"), false, "refused before acknowledgement");
   sent.length = 0;

@@ -21,7 +21,11 @@ import { buildRealClaudeSdkSeam, type ClaudeSdkSeam } from "./sdkSeam.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
-import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
+import {
+  type CheckedCheckout,
+  withCheckedCheckout,
+  worktreeCwdForSession,
+} from "../worktrees/sessionCwd.ts";
 import {
   claudeProfileSessionStore,
   removeClaudeSessionFromAllProfiles,
@@ -166,6 +170,12 @@ class ClaudeSdkSessionStore {
        */
       scope?: SessionScope;
     } = {},
+    /**
+     * The construction's own check of the session's worktree, taken right
+     * before this call in the caller's continuation; the cwd comes from it.
+     * Without one the cache answers, and an unverified checkout throws.
+     */
+    checkout?: CheckedCheckout,
   ): ClaudeSdkSession {
     const existing = this.getForDrive(id);
     if (existing) return existing;
@@ -182,7 +192,8 @@ class ClaudeSdkSessionStore {
     const agentTypeValue = record?.agentType ?? opts.agentType;
     const additionalSystemPromptValue =
       record?.additionalSystemPrompt ?? opts.additionalSystemPrompt;
-    const cwdValue = worktreeCwdForSession(id) ?? record?.cwd ?? opts.cwd;
+    const cwdValue =
+      worktreeCwdForSession(id, checkout) ?? record?.cwd ?? opts.cwd;
     const session = new ClaudeSdkSession(id, {
       buildSessionState: this.requireStateBuilder(),
       seam: () => this.seam(),
@@ -321,9 +332,17 @@ class ClaudeSdkSessionStore {
     // The project dir keys the native transcript's location, so resolve the
     // session's EFFECTIVE cwd exactly as `acquire` does — the worktree EDGE
     // first, because a session linked or handed off after creation carries a
-    // stale cwd both in its record and on its live instance.
-    const cwd =
-      worktreeCwdForSession(sourceId) ?? source?.cwd ?? record.cwd ?? CWD;
+    // stale cwd both in its record and on its live instance. From the fork's
+    // own check of that edge, read in the continuation that compared it.
+    const cwd = await withCheckedCheckout(
+      sourceId,
+      undefined,
+      (checked) =>
+        worktreeCwdForSession(sourceId, checked) ??
+        source?.cwd ??
+        record.cwd ??
+        CWD,
+    );
     const store = claudeProfileSessionStore(credentialProfileId);
     // Validate OUR side of the cut before the provider's, because the provider's
     // is not undoable: a native fork that no session ends up referencing is an
@@ -652,8 +671,14 @@ class ClaudeSdkSessionStore {
     if (!record?.providerSessionId) return;
     try {
       const seam = await this.seam();
+      // A Worker failure or a moving edge lands in the sweep below.
+      const dir = await withCheckedCheckout(
+        id,
+        undefined,
+        (checked) => worktreeCwdForSession(id, checked) ?? record.cwd ?? CWD,
+      );
       await seam.deleteSession?.(record.providerSessionId, {
-        dir: worktreeCwdForSession(id) ?? record.cwd ?? CWD,
+        dir,
         sessionStore: claudeProfileSessionStore(record.credentialProfileId),
       });
     } catch {

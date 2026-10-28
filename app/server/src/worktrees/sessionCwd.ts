@@ -21,14 +21,17 @@ import {
   activeWorktreePaths,
   getWorktree,
   worktreeIdForSession,
+  type WorktreeRow,
 } from "../db/worktreeStore.ts";
-import { checkPresence, presenceNow } from "./checkoutPresence.ts";
+import { checkPresence, presenceKey, presenceNow } from "./checkoutPresence.ts";
 import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import {
   checkMainCheckout,
   isMainWorktreeId,
   mainCheckoutEdgeNow,
+  mainCheckoutReadsKey,
   projectIdFromMainWorktreeId,
+  resolveWorktreeRow,
 } from "./worktreeResolve.ts";
 
 /** Where a session's `in_worktree` edge points, and whether it still exists. */
@@ -88,13 +91,18 @@ function edgeVerdict(worktreeId: string): EdgeVerdict {
 }
 
 /**
- * Resolve a worktree id to its path from the cache, or undefined unless its
- * side last answered it present. A synthetic `main:<projectId>` id resolves to
- * the project's main checkout.
+ * Whether the synchronous answer for `worktreeId` reads one of the changed
+ * presence `keys` (`checkoutPresence.ts`): its row's path, or for a main id
+ * its candidate (`main:<projectId>`) and the paths the project read.
  */
-export function worktreePathIfPresent(worktreeId: string): string | undefined {
-  const verdict = edgeVerdict(worktreeId);
-  return verdict.kind === "live" ? verdict.path : undefined;
+export function worktreeReadsPresenceKey(
+  worktreeId: string,
+  keys: ReadonlySet<string>,
+): boolean {
+  if (isMainWorktreeId(worktreeId))
+    return mainCheckoutReadsKey(projectIdFromMainWorktreeId(worktreeId), keys);
+  const row = getWorktree(worktreeId);
+  return !!row && keys.has(presenceKey(checkoutSideOf(row), row.path));
 }
 
 /** The session's edge and whether the worktree it names is still there. */
@@ -161,6 +169,46 @@ export function checkoutEdgeTarget(
 /** A check's cwd: the path when live, else undefined. */
 export function checkoutCwd(checked: CheckedCheckout): string | undefined {
   return checked.verdict === "live" ? checked.path : undefined;
+}
+
+/**
+ * Checks the worktree a construction for `sessionId` reads and hands that
+ * check to `consume`, called synchronously right after the comparison in the
+ * same continuation: `consume` is the construction's yield-free section and
+ * must not await. A target that moved while it was checked is checked again;
+ * the third consecutive move refuses with {@link CheckoutEdgeChangedError}
+ * (RD-W3d-3). With `explicitTarget` (a creation that links the session to it)
+ * nothing is compared, so one check settles it. Rejects on a Worker failure.
+ */
+export async function withCheckedCheckout<T>(
+  sessionId: string,
+  explicitTarget: string | undefined,
+  consume: (checked: CheckedCheckout) => T,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    const checked = await checkWorktreeCheckout(
+      checkoutEdgeTarget(sessionId, explicitTarget),
+    );
+    // Resumed in THIS continuation: compare, then consume with no yield.
+    if (checked.worktreeId === checkoutEdgeTarget(sessionId, explicitTarget))
+      return consume(checked);
+    if (attempt === 3) throw new CheckoutEdgeChangedError();
+  }
+}
+
+/**
+ * The worktree `id` names when a session can run in it now: its row resolved
+ * and active, and its checkout live by this call's own Worker check. Undefined
+ * for a DB verdict, a verified absence or base's cached "no repository";
+ * rejects on a Worker failure. A main id answers the main checkout's path.
+ */
+export async function resolveUsableWorktree(
+  id: string,
+): Promise<{ row: WorktreeRow; path: string } | undefined> {
+  const row = await resolveWorktreeRow(id);
+  if (!row || row.status !== "active") return undefined;
+  const path = checkoutCwd(await checkWorktreeCheckout(row.id));
+  return path === undefined ? undefined : { row, path };
 }
 
 /**
@@ -252,17 +300,36 @@ export function sessionCheckoutRefusal(
 }
 
 /**
- * Record the user's "run it in the app directory anyway" for the worktree the
- * session's edge points at now. Returns the acknowledged worktree id, or
- * undefined when there was nothing to acknowledge (no edge, or it still exists).
+ * Whether a run of `sessionId` refuses, decided from a Worker check this call
+ * requests: {@link sessionCheckoutRefusal} on it. A non-coding persona is
+ * decided before any Worker contact; no edge and a DB verdict need none.
+ * Rejects on a Worker failure.
  */
-export function acknowledgeMissingSessionWorktree(
+export async function checkSessionCheckoutRefused(
   sessionId: string,
-): string | undefined {
-  const edge = sessionWorktreeEdge(sessionId);
-  if (edge.kind !== "missing") return undefined;
-  sessionStore.acknowledgeMissingWorktree(sessionId, edge.worktreeId);
-  return edge.worktreeId;
+): Promise<boolean> {
+  if (exemptPersona(sessionId)) return false;
+  const checked = await checkWorktreeCheckout(worktreeIdForSession(sessionId));
+  return sessionCheckoutRefusal(sessionId, checked);
+}
+
+/**
+ * Record the user's "run it in the app directory anyway" for the worktree the
+ * session's edge points at, decided by this call's own Worker check. Returns
+ * the acknowledged worktree id, or undefined when there was nothing to
+ * acknowledge (no edge, it still exists, or the edge moved while it was
+ * checked). Rejects on a Worker failure.
+ */
+export async function acknowledgeMissingSessionWorktree(
+  sessionId: string,
+): Promise<string | undefined> {
+  const checked = await checkWorktreeCheckout(worktreeIdForSession(sessionId));
+  const { worktreeId } = checked;
+  if (!worktreeId || !checked.verdict.startsWith("missing-")) return undefined;
+  // Resumed in this continuation: only the edge that was checked is recorded.
+  if (worktreeId !== worktreeIdForSession(sessionId)) return undefined;
+  sessionStore.acknowledgeMissingWorktree(sessionId, worktreeId);
+  return worktreeId;
 }
 
 /**

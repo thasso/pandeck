@@ -50,7 +50,7 @@ import {
   type RuntimePromptDriver,
 } from "./session/runtimePrompt.ts";
 import { findSlashCommand } from "./slashCommands.ts";
-import { sessionWorktreeMissing } from "./worktrees/sessionCwd.ts";
+import { checkSessionCheckoutRefused } from "./worktrees/sessionCwd.ts";
 
 /** A driver the queue can prompt and run host commands against. */
 export type PromptQueueDriver = RuntimePromptDriver & SyntheticToolHost;
@@ -411,12 +411,19 @@ async function runQueuedCommand(
     );
     return;
   }
-  if (
-    !CONTEXT_ONLY_SLASH_COMMANDS.has(command.name) &&
-    sessionWorktreeMissing(sessionId)
-  ) {
-    holdOnFailure(sessionId, item, WORKTREE_MISSING_BLOCKED_REASON);
-    return;
+  if (!CONTEXT_ONLY_SLASH_COMMANDS.has(command.name)) {
+    // The command's own Worker check, as the run door decides a prompt.
+    let refused: boolean;
+    try {
+      refused = await checkSessionCheckoutRefused(sessionId);
+    } catch (err) {
+      holdOnFailure(sessionId, item, errorText(err));
+      return;
+    }
+    if (refused) {
+      holdOnFailure(sessionId, item, WORKTREE_MISSING_BLOCKED_REASON);
+      return;
+    }
   }
   try {
     await runner(driver, command.rawArgs);
