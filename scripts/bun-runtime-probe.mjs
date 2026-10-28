@@ -24,6 +24,7 @@
  */
 import { execFileSync, execSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import {
   appendFileSync,
   chmodSync,
@@ -1432,19 +1433,34 @@ function commOf(pid) {
   }
 }
 
-/** The processes still running in process group `group`. */
-function groupMembers(group) {
-  return readdirSync("/proc")
-    .filter((name) => /^\d+$/.test(name))
-    .map(Number)
-    .filter((pid) => {
-      try {
-        return processGroup(pid) === group && running(pid);
-      } catch {
-        return false;
-      }
-    });
-}
+/**
+ * What `ownedProcessTree` needs of the host, so a model can stand in for it.
+ * `stat` takes state, parent, group, session and start time from a single
+ * read of `/proc/<pid>/stat`, so they all describe one process.
+ */
+const liveProcessHost = {
+  spawn,
+  kill: (pid, signal) => process.kill(pid, signal),
+  pids: () =>
+    readdirSync("/proc")
+      .filter((name) => /^\d+$/.test(name))
+      .map(Number),
+  stat: (pid) => {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      return {
+        state: fields[0],
+        parent: Number(fields[1]),
+        group: Number(fields[2]),
+        session: Number(fields[3]),
+        start: fields[19],
+      };
+    } catch {
+      return undefined;
+    }
+  },
+};
 
 /** The running children of `parent`, by `/proc` ppid. */
 function childrenOf(parent) {
@@ -1456,55 +1472,104 @@ function childrenOf(parent) {
 
 /**
  * The O5 process tree: the probe's direct child `sh`, in `cwd`, starts each
- * of `children` in the background and waits on them. The direct child leads
- * a process group of its own, which its children inherit (no job control), so
- * `stop` ends every process of the tree by group, whether or not any of them
- * ever wrote its pid file or became ready. Detaching changes no parentage, and
- * the Worker's stop selects by ancestry and cwd, not by group.
+ * of `children` in the background and then blocks reading its stdin. Detached,
+ * the direct child leads a session and process group of its own, which its
+ * children inherit (no job control). Detaching changes no parentage, and the
+ * Worker's stop selects by ancestry and cwd, not by group.
+ *
+ * `stop` closes that stdin, and the direct child, if it still runs, SIGKILLs
+ * its own group (`kill 0`), so no group number is ever signalled from here.
+ * The probe itself signals only claimed members, by pid and start time, for
+ * when the direct child died first. `claim` records the group's members only
+ * while the direct child provably still holds its number: it is seen, with the
+ * start time it had when spawned, after the members were read. Tests claim in
+ * their readiness polls, so the tree ends whether or not any child ever wrote
+ * its pid file or became ready.
  */
-function ownedProcessTree(cwd, children, args) {
-  const direct = spawn(
+function ownedProcessTree(cwd, children, args, host = liveProcessHost) {
+  const direct = host.spawn(
     "sh",
     [
       "-c",
-      [...children.map((child) => `${child} &`), "wait"].join("\n"),
+      [...children.map((child) => `${child} &`), "read _", "kill -KILL 0"].join(
+        "\n",
+      ),
       "sh",
       ...args,
     ],
-    { cwd, stdio: "ignore", detached: true },
+    { cwd, stdio: ["pipe", "ignore", "ignore"], detached: true },
   );
+  // Read in the step that spawned it, before it could have been reaped.
+  const leaderStart =
+    direct.pid === undefined ? undefined : host.stat(direct.pid)?.start;
   const exited = new Promise((resolve) => {
     direct.once("exit", resolve);
     direct.once("error", resolve);
   });
-  const unreaped = () => direct.exitCode === null && direct.signalCode === null;
+  /** The start time of `pid` while it runs. */
+  const startOf = (pid) => {
+    const stat = host.stat(pid);
+    return stat && stat.state !== "Z" ? stat.start : undefined;
+  };
+  /** Whether the direct child, live or a zombie, still holds its pid and so its group's number. */
+  const leads = () => {
+    if (
+      direct.pid === undefined ||
+      direct.exitCode !== null ||
+      direct.signalCode !== null
+    )
+      return false;
+    const stat = host.stat(direct.pid);
+    return (
+      stat?.start === leaderStart &&
+      stat.parent === process.pid &&
+      stat.session === direct.pid
+    );
+  };
+  /** Each member ever claimed, by pid: its start time. */
+  const claimed = new Map();
+  /** Record the group's running members; false, recording nothing, once its number may not be the tree's. */
+  const claim = () => {
+    const members = [];
+    for (const pid of host.pids()) {
+      const stat = host.stat(pid);
+      if (stat?.group === direct.pid && stat.state !== "Z")
+        members.push([pid, stat.start]);
+    }
+    if (!leads()) return false;
+    for (const [pid, start] of members) claimed.set(pid, start);
+    return true;
+  };
+  const end = async () => {
+    if (direct.pid === undefined) return;
+    claim();
+    direct.stdin.destroy();
+    await exited;
+    const failures = [];
+    for (const [pid, start] of claimed)
+      if (startOf(pid) === start)
+        try {
+          host.kill(pid, "SIGKILL");
+        } catch (error) {
+          if (error?.code !== "ESRCH") failures.push(error);
+        }
+    if (failures.length > 0)
+      throw new AggregateError(failures, "Stopping the process tree failed.");
+    await until(
+      () => [...claimed].every(([pid, start]) => startOf(pid) !== start),
+      "the probe's process tree to end",
+    );
+  };
+  let stopping;
   return {
     direct,
-    /** SIGKILL the whole group, then wait for the direct child and every member. */
-    async stop() {
-      const group = direct.pid;
-      if (group === undefined) return;
-      // While the direct child is unreaped its pid, and so the group id,
-      // cannot be reused; after that the group id stays allocated for as long
-      // as any member lives, and each member is matched by its group.
-      if (unreaped())
-        try {
-          process.kill(-group, "SIGKILL");
-        } catch {
-          // The group is gone already.
-        }
-      for (const pid of groupMembers(group))
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Gone since.
-        }
-      if (unreaped()) await exited;
-      await until(
-        () => groupMembers(group).length === 0,
-        "the probe's process tree to end",
-      );
-    },
+    claim,
+    leads,
+    /**
+     * End the tree as above, then wait for every claimed member; every call
+     * shares the one run.
+     */
+    stop: () => (stopping ??= end()),
   };
 }
 
@@ -1540,17 +1605,20 @@ const O5_CHILDREN = [
 ];
 
 /**
- * O5's cleanup on a readiness failure: the first child never becomes a
- * sleeper (its exec fails after writing its pid file, or it exits before
- * writing one) while its later siblings run. The tree is not ready, and its
- * stop must still end every process in it. The probe watches the siblings
- * itself and, should the stop leak one, SIGKILLs it by pid and start time
- * before failing.
+ * O5's cleanup when the tree never becomes ready, or loses its direct child
+ * first. In the first two variants the first child never becomes a sleeper
+ * (its exec fails after writing its pid file, or it exits before writing one)
+ * while its later siblings run, so the tree is not ready and its stop must
+ * still end every process in it. In the third the direct child is SIGKILLed
+ * once all three run and are claimed, and the stop must still end its
+ * orphaned children. The probe watches the sleepers itself and, should the
+ * stop leak one, SIGKILLs it by pid and start time before failing.
  */
 async function checkProcessTreeCleanup(base) {
   for (const [variant, first] of [
     ["exec failed", `sh -c 'echo $$ > sleeper.pid; exec ./no-such-sleep 600'`],
     ["no pid file", `sh -c 'exit 3'`],
+    ["leader gone", O5_CHILDREN[0]],
   ]) {
     const fixture = join(base, `O5-cleanup-${variant.replace(" ", "-")}`);
     const tree = lifecycleFixture(fixture, "plain");
@@ -1567,31 +1635,50 @@ async function checkProcessTreeCleanup(base) {
         ignorer: join(tree, "ignorer.pid"),
         outside: join(outside, "outside.pid"),
       });
-      // Settled: the first child is gone and exactly its two siblings run,
-      // each exec'd into `sleep`.
+      const sleepers =
+        variant === "leader gone"
+          ? ["sleeper", "ignorer", "outside"]
+          : ["ignorer", "outside"];
+      // Settled: exactly the expected sleepers run as the direct child's
+      // children, each exec'd into `sleep`, and are claimed.
       await until(() => {
         readiness.ready();
         const live = childrenOf(owned.direct.pid);
         return (
-          live.length === 2 &&
-          [readiness.pids.ignorer, readiness.pids.outside].every(
-            (pid) => pid !== undefined && live.includes(pid),
+          live.length === sleepers.length &&
+          sleepers.every(
+            (name) =>
+              readiness.pids[name] !== undefined &&
+              live.includes(readiness.pids[name]),
           ) &&
-          live.every((pid) => commOf(pid) === "sleep\n")
+          live.every((pid) => commOf(pid) === "sleep\n") &&
+          owned.claim()
         );
-      }, `the ${variant} tree's later sleepers`);
-      for (const pid of [readiness.pids.ignorer, readiness.pids.outside])
-        watched.set(pid, startTime(pid));
+      }, `the ${variant} tree's sleepers`);
+      for (const name of sleepers)
+        watched.set(readiness.pids[name], startTime(readiness.pids[name]));
       assert(
         [owned.direct.pid, ...watched.keys()].every(
           (pid) => processGroup(pid) === owned.direct.pid,
         ),
         `The ${variant} tree does not run in its direct child's own group.`,
       );
-      assert(
-        !readiness.ready(),
-        `A tree whose first child ${variant} read as ready.`,
-      );
+      if (variant === "leader gone") {
+        const gone = new Promise((resolve) =>
+          owned.direct.once("exit", resolve),
+        );
+        assert(owned.leads(), "The direct child no longer leads its group.");
+        process.kill(owned.direct.pid, "SIGKILL");
+        await gone;
+        assert(
+          [...watched.keys()].every(running) && !owned.claim(),
+          "The direct child's end took its children, or left its group claimable.",
+        );
+      } else
+        assert(
+          !readiness.ready(),
+          `A tree whose first child ${variant} read as ready.`,
+        );
       await owned.stop();
       const leaked = [...watched.keys()].filter(running);
       assert(
@@ -1608,6 +1695,206 @@ async function checkProcessTreeCleanup(base) {
           }
       await owned.stop();
     }
+  }
+}
+
+/**
+ * A model of what `ownedProcessTree` needs of the host: a process table, the
+ * signals the probe sends, and a direct child (pid 100, leading group and
+ * session 100) whose reaping the caller drives. Closing its stdin ends its
+ * group, as `kill 0` would, while it still runs. No real process is started
+ * or signalled.
+ */
+function modelProcessHost({ leaderKills = true, refused = [] } = {}) {
+  const member = (start, parent = 100) => ({
+    state: "S",
+    parent,
+    group: 100,
+    session: 100,
+    start,
+  });
+  const table = new Map([
+    [100, member("1", process.pid)],
+    [101, member("2")],
+    [102, member("3")],
+  ]);
+  const signals = [];
+  const groupKills = [];
+  const direct = Object.assign(new EventEmitter(), {
+    pid: 100,
+    exitCode: null,
+    signalCode: null,
+    stdin: {
+      destroy: () => {
+        if (direct.signalCode !== null || table.get(100)?.state !== "S") return;
+        if (leaderKills) {
+          groupKills.push(100);
+          for (const [pid, stat] of table)
+            if (stat.group === 100 && pid !== 100) table.delete(pid);
+        }
+        table.get(100).state = "Z";
+      },
+    },
+  });
+  const failure = (code) => Object.assign(new Error(code), { code });
+  return {
+    table,
+    signals,
+    groupKills,
+    member,
+    direct,
+    /** Reap the direct child, as Node would once it ended. */
+    reap(signalCode = "SIGKILL") {
+      table.delete(100);
+      direct.signalCode = signalCode;
+      direct.emit("exit", null, signalCode);
+    },
+    host: {
+      spawn: () => direct,
+      kill: (pid, signal) => {
+        signals.push([pid, signal]);
+        if (refused.includes(pid)) throw failure("EPERM");
+        if (table.get(pid)?.state !== "S") throw failure("ESRCH");
+        table.delete(pid);
+      },
+      pids: () => [...table.keys()],
+      stat: (pid) => table.get(pid),
+    },
+  };
+}
+
+/**
+ * The tree's stop signals only what it owns, on a model host: never a group
+ * or process that took over a number of the tree's once the direct child was
+ * reaped, whether the stop repeats one that ended the tree or comes first
+ * after the direct child died; concurrent stops share one run, and a refused
+ * signal fails the stop without one more signal from a repeat.
+ */
+async function checkProcessTreeOwnership() {
+  const sorted = (signals) => JSON.stringify([...signals].sort());
+
+  // Recycled after the first cleanup.
+  {
+    const model = modelProcessHost();
+    const owned = ownedProcessTree("/", [], [], model.host);
+    assert(owned.claim(), "A model tree's group could not be claimed.");
+    const first = owned.stop();
+    assert(
+      sorted(model.groupKills) === "[100]" && model.signals.length === 0,
+      "A model tree's stop did not end its group from the direct child.",
+    );
+    model.reap();
+    await first;
+    model.table.set(100, model.member("50", 1));
+    model.table.set(102, model.member("51"));
+    model.table.set(103, model.member("52"));
+    await owned.stop();
+    assert(
+      !owned.claim() &&
+        model.signals.length === 0 &&
+        model.groupKills.length === 1 &&
+        [100, 102, 103].every((pid) => model.table.has(pid)),
+      `A repeated stop reached the recycled group: ${sorted(model.signals)}.`,
+    );
+  }
+
+  // The direct child died, and its group's number and a child's pid were
+  // reused, before a first stop.
+  {
+    const model = modelProcessHost();
+    const owned = ownedProcessTree("/", [], [], model.host);
+    assert(owned.claim(), "A model tree's group could not be claimed.");
+    model.reap("SIGTERM");
+    model.table.get(101).parent = 1;
+    model.table.set(100, model.member("60", 1));
+    model.table.set(102, model.member("61", 1));
+    model.table.set(103, model.member("62"));
+    assert(!owned.claim(), "A recycled group number was claimable.");
+    await owned.stop();
+    assert(
+      sorted(model.signals) === sorted([[101, "SIGKILL"]]) &&
+        model.groupKills.length === 0 &&
+        [100, 102, 103].every((pid) => model.table.has(pid)),
+      `A stop after the direct child died signalled ${sorted(model.signals)}.`,
+    );
+  }
+
+  // Concurrent stops, the direct child's reaping held.
+  {
+    const model = modelProcessHost();
+    const owned = ownedProcessTree("/", [], [], model.host);
+    const stops = [owned.stop(), owned.stop()];
+    let settled = false;
+    stops[0].then(() => (settled = true));
+    await Promise.resolve();
+    assert(
+      stops[0] === stops[1] &&
+        !settled &&
+        model.groupKills.length === 1 &&
+        model.signals.length === 0,
+      "Concurrent stops did not share one run.",
+    );
+    model.reap();
+    await Promise.all(stops);
+    assert(
+      model.groupKills.length === 1 && model.signals.length === 0,
+      `Concurrent stops signalled ${sorted(model.signals)}.`,
+    );
+  }
+
+  // The direct child's own group kill failed: the claimed children still
+  // running are signalled by pid and start time.
+  {
+    const model = modelProcessHost({ leaderKills: false });
+    const owned = ownedProcessTree("/", [], [], model.host);
+    assert(owned.claim(), "A model tree's group could not be claimed.");
+    const stop = owned.stop();
+    model.reap("SIGKILL");
+    await stop;
+    assert(
+      sorted(model.signals) ===
+        sorted([
+          [101, "SIGKILL"],
+          [102, "SIGKILL"],
+        ]),
+      `A stop whose group kill failed signalled ${sorted(model.signals)}.`,
+    );
+  }
+
+  // A refused signal: the other claimed child is still signalled, the stop
+  // fails, and a repeat fails the same way with no further signal.
+  {
+    const model = modelProcessHost({ refused: [101] });
+    const owned = ownedProcessTree("/", [], [], model.host);
+    assert(owned.claim(), "A model tree's group could not be claimed.");
+    model.reap("SIGTERM");
+    const failed = await rejection(owned.stop());
+    const repeated = await rejection(owned.stop());
+    assert(
+      failed instanceof AggregateError &&
+        failed.errors.map((error) => error.code).join() === "EPERM" &&
+        repeated === failed &&
+        sorted(model.signals) ===
+          sorted([
+            [101, "SIGKILL"],
+            [102, "SIGKILL"],
+          ]),
+      `A refused signal stopped as ${failed} after ${sorted(model.signals)}.`,
+    );
+  }
+
+  // A direct child that never spawned: nothing to claim or signal.
+  {
+    const model = modelProcessHost();
+    model.direct.pid = undefined;
+    const owned = ownedProcessTree("/", [], [], model.host);
+    await owned.stop();
+    assert(
+      !owned.claim() &&
+        model.signals.length === 0 &&
+        model.groupKills.length === 0,
+      "A tree that never spawned signalled something.",
+    );
   }
 }
 
@@ -1742,6 +2029,8 @@ async function checkWorkerLifecycle() {
     }
     console.log("lifecycle O4 ok");
 
+    await checkProcessTreeOwnership();
+    console.log("lifecycle O5 ownership ok");
     await checkProcessTreeCleanup(base);
     console.log("lifecycle O5 cleanup ok");
 
@@ -1758,7 +2047,7 @@ async function checkWorkerLifecycle() {
       ignorer: join(tree, "ignorer.pid"),
       outside: join(outside, "outside.pid"),
     });
-    await until(ready, "the process tree's sleepers");
+    await until(() => ready() && owned.claim(), "the process tree's sleepers");
     assert(
       parentPid(direct.pid) === process.pid &&
         Object.values(pids).every((pid) => parentPid(pid) === direct.pid),
