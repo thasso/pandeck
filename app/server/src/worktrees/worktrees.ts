@@ -76,6 +76,7 @@ import {
   type MainRepoInfo,
 } from "./worktreeResolve.ts";
 import { checkoutSideOf } from "./knowledgeCheckout.ts";
+import { forgetPresence, notePresent } from "./checkoutPresence.ts";
 import { stopCheckoutProcesses } from "./checkoutProcesses.ts";
 
 /**
@@ -313,6 +314,8 @@ export async function createWorktree(
     await initSubmodules(path, input.onSubmodules, input.signal);
     throwIfAborted(input.signal);
     insertWorktree(row);
+    // Its creator's own success: present from the first read, with no probe.
+    notePresent(checkoutSideOf(row), row.path);
     // The row is now durable, so later edge/watcher failures must not delete a
     // registered checkout.
     claim.release();
@@ -1338,6 +1341,8 @@ export async function removeWorktree(
         const deletedReviewSetIds = listReviewSets(id).map((set) => set.id);
         const deletedComments = finalizeWorktreeRemoval(id, branchCleanupOid);
         finalized = true;
+        // A probe still running for it completes into nothing.
+        forgetPresence(checkoutSideOf(row), row.path);
         console.info(
           `[worktrees] deleted ${deletedComments} review comment(s) for removed worktree ${id}.`,
         );

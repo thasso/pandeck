@@ -482,6 +482,95 @@ which imports no server state) and `workers/` (the server's side and placement);
     subscribe holds that tree's slot. Git and file requests stay independent of
     all of these.
 
+- **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
+  answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and
+  wire shapes are unchanged.
+  - Key universe. One entry per `checkoutSideKey(side)` and path: active spawned
+    rows and the main checkout's candidate paths and resolved root, each on its
+    registry side. The Knowledge Base row never resolves to a checkout here, so
+    it never reaches a Worker; a checkout inside `DATA_DIR` is an ordinary
+    checkout and is probed on its Worker.
+  - Views read the cache synchronously (`presenceNow`): the session list's
+    `worktreeMissing`, session state, the interactive prompt pre-check
+    (`guardMissingWorktree`) and the watcher's viewer gate. A read answers the
+    last verified answer at once and queues one background probe, at most eight
+    running, coalescing onto a queued or running one. Never-verified is
+    `unverified`, which is not missing.
+  - Notification. A changed answer notifies its key; the hub rebroadcasts the
+    list and resends state to resident engines and detached viewers that read
+    it, with no further read. A resolved main root answered absent is dropped
+    and notifies `main:<projectId>`, so its readers rebuild, which starts the
+    candidate rescan; the rescan notifies again when its answer changes.
+    Worktree watch events (W4) never answer presence.
+  - Acting paths decide from their OWN answer: a Worker check requested after
+    the caller started. Two kinds:
+    - Run decisions: the run door, provider turns, the recovery continuation and
+      host commands (`/commit`, `/push`, `/pr`, `/compact`, queued). They start
+      no engine and read no cwd, so they compare no edge; the run lease taken
+      before the check keeps the worktree's removal out. The door refuses a DB
+      verdict synchronously before its lease and decides presence after lease
+      and admission.
+    - Constructions: every engine open, rename, fork and creation with an edge.
+      Each compares the checked edge in the continuation the check resumed in
+      and consumes it with no yield (`withCheckedCheckout`); three consecutive
+      changed edges refuse with "the session's worktree changed while opening;
+      try again". An explicit creation target is checked once and not compared.
+    - Acknowledge records only the edge it checked. The shared resolver
+      (`resolveUsableWorktree`, used by creation context, spawn and handoff)
+      checks the id it was given.
+  - Exemptions, with no Worker call: a session with no edge; a DB verdict
+    (removed or inactive row, unknown project); the main checkout's cached "no
+    repository" within its 60 s TTL. Run decisions also exempt non-coding
+    personas, decided before any contact. A construction with an edge checks
+    whatever the persona.
+  - Store errors. The run decisions' store reads stay synchronous, apart from
+    the awaited Worker check, and keep base's handling: the door, provider
+    turns, recovery and the connection's host commands fail open on a store
+    error and log it; a queued command's store error throws out of the drain. A
+    Worker failure is never a store error.
+  - Main candidate. A cold main scans `localPaths` on the Worker in base's
+    candidate order (existence, then realpath), then makes one final
+    `files.exists` call on the chosen path. False there is `none`
+    (`missing-absent`), a Worker failure propagates, and the call adds no
+    presence key. A realpath filesystem error on a present folder keeps the
+    chosen path. A resolved root is re-checked by presence and dropped when
+    absent, after which readers see `unverified` until the rescan answers. "No
+    repository" stays cached for 60 s with no Worker request, then rescans;
+    project edits and `invalidateMainRepo` forget every key the project read.
+  - Stable root (D15). Once a resolve is cached, the synchronous main path is
+    its git root, for a nested `localPath` too. A commit moving the stamp and
+    TTL expiry leave it unchanged; only a drop or a newer async resolve replaces
+    it.
+  - Lifecycle. Creating a worktree seeds it present; removal forgets it, and a
+    probe answering later writes nothing.
+  - Outage. A Worker failure (a coded refusal, a malformed answer, the
+    connection ending) is never an answer: views keep the last answer and log
+    once, and an acting path rejects with the branded failure. There is no
+    filesystem, lexical or app-CWD fallback, and no retry of a main generation.
+  - Latency ("own" is one Worker round trip, +RTT, requested by the caller):
+
+    | Caller                                            | Base                                      | After W3d                                                                                       |
+    | ------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
+    | Session list `worktreeMissing`, session banner    | Stat at each build                        | The first build after a change shows the old answer and probes; the fix follows +RTT +25–250 ms |
+    | Cold start, after a project edit                  | Correct in the first payload              | No missing flag until the first probes answer                                                   |
+    | Interactive prompt pre-check, watcher viewer gate | Exact                                     | Cache; the door still decides from its own check                                                |
+    | Run door, provider turn, recovery, host commands  | Exact                                     | Own, +RTT per coding run start or command                                                       |
+    | Engine construction with an edge                  | Exact                                     | Own, +RTT per non-resident open, rename, fork or creation; a cold main adds the final call      |
+    | Creation context, spawn, handoff, acknowledge     | Exact                                     | Own, +RTT                                                                                       |
+    | Newly created spawned worktree                    | Present at once                           | Present at once (seeded)                                                                        |
+    | Main path after a commit or TTL expiry, nested    | Subdirectory until the next async resolve | Root (D15)                                                                                      |
+    | Main candidate change                             | Next synchronous call                     | First read shows the old state; corrected after +RTT and the debounce                           |
+    | Main "no repository" verdict                      | Cached 60 s                               | Cached 60 s                                                                                     |
+
+  - Known limits. E-W3d-1: the cached rows above are not exact. E-W3d-2: a
+    nested `localPath` gets the git root once resolved. E-W3d-3: during a Worker
+    outage, coding runs, provider turns and host commands with an edge,
+    constructions with an edge, spawns, handoffs and acknowledgements with a
+    target, and main-row resolution refuse with the Worker error where base
+    failed open or stat locally; flags freeze at the last verified answer
+    (Task-1153). E-W3d-4: the +RTT above. E-W3d-5: a construction relinked
+    during three consecutive checks refuses with the retryable error above.
+
 - **Executors.** Both families share one implementation (`gitFamily.ts`) over a
   runner that only starts the process: one read fan-out bound of six, one repo
   lock map, one execution counter and one error class. The fan-out bound and the
@@ -749,7 +838,7 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)       | landed  |
 | W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | landed  |
 | W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | landed  |
-| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | planned |
+| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | landed  |
 | W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)     | landed  |
 | W5     | Checkout lifecycle (create, remove, provisioning, PR view checkouts) on the Worker   | planned |
 | W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | planned |

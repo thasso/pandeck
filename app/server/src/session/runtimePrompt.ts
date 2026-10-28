@@ -15,7 +15,10 @@ import type {
   ThinkingLevel,
 } from "@assistant/shared";
 import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";
-import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
+import {
+  checkSessionCheckoutRefused,
+  sessionWorktreeRetired,
+} from "../worktrees/sessionCwd.ts";
 import {
   assertTurnAllowed,
   spendHumanResume,
@@ -205,6 +208,12 @@ export function ensureRuntimeSessionWithRuntime(
  * the app's OWN repository. One check before the runtime session is ensured and
  * before anything is appended, so no path can forget it.
  *
+ * Two halves. This synchronous one refuses on a DB verdict (a removed row, an
+ * unknown project, the main checkout's cached "no repository") before the run
+ * lease is taken. {@link decideSessionCheckout} then decides presence from the
+ * run's own Worker check, after the lease and admission, so a folder deleted
+ * or restored since the last cached answer is decided exactly.
+ *
  * It THROWS: every caller here is a background or fire-and-forget driver that
  * already reports a failed send (the peer store retries then fails the message
  * permanently, the connection handlers surface `errorText`). `connection.ts`
@@ -214,17 +223,36 @@ export function ensureRuntimeSessionWithRuntime(
 function assertSessionWorktreePresent(sessionId: string): void {
   let missing = false;
   try {
-    missing = sessionWorktreeMissing(sessionId);
+    missing = sessionWorktreeRetired(sessionId);
   } catch (err) {
-    // A store/filesystem failure must not block every prompt: fail OPEN, the
-    // same way memory selection does, and let the cwd fallback stand.
-    console.warn(
-      "Failed to check session worktree before prompting:",
-      err instanceof Error ? err.message : String(err),
-    );
+    // A store failure must not block every prompt: fail OPEN, the same way
+    // memory selection does; the own check below still decides presence.
+    warnCheckFailed(err);
     return;
   }
   if (missing) throw new Error(WORKTREE_MISSING_BLOCKED_REASON);
+}
+
+function warnCheckFailed(err: unknown): void {
+  console.warn(
+    "Failed to check session worktree before prompting:",
+    err instanceof Error ? err.message : String(err),
+  );
+}
+
+/**
+ * The run's own decision on its session's checkout: a Worker check requested
+ * now, refused with {@link WORKTREE_MISSING_BLOCKED_REASON} when it finds the
+ * checkout gone and unacknowledged. A non-coding persona is decided before any
+ * Worker contact; a session with no edge, or a DB verdict, needs none. A
+ * Worker failure rejects: never absence, never the app CWD. It starts no
+ * engine and reads no cwd, so it compares no edge; the run lease taken before
+ * it keeps the worktree's removal out. A store error fails open, as the
+ * synchronous half does.
+ */
+async function decideSessionCheckout(sessionId: string): Promise<void> {
+  if (await checkSessionCheckoutRefused(sessionId, warnCheckFailed))
+    throw new Error(WORKTREE_MISSING_BLOCKED_REASON);
 }
 
 /** Current account metadata is checked at admission, never inside an admitted run. */
@@ -265,6 +293,7 @@ export async function beginRuntimeProviderTurn(
   const releaseRun = beginPromptRun(driver.sessionId);
   const releaseAdmission = sessionRuntime.admitPrompt(driver.sessionId);
   try {
+    await decideSessionCheckout(driver.sessionId);
     await sessionSkills(driver.sessionId, driver.agentType);
     assertTurnAllowed(driver.sessionId, undefined);
     assertAccountRecoveryAdmission(driver.sessionId);
@@ -342,6 +371,9 @@ async function deliverWithRuntime(
   // Until the run settles, no idle release may take this session's harness.
   const releaseAdmission = runtime.admitPrompt(driver.sessionId);
   try {
+    // Presence from this run's own Worker check, under the lease: a refusal
+    // still precedes the runtime session and every append.
+    await decideSessionCheckout(driver.sessionId);
     // The lifecycle backstop for every prompt mouth. Creation paths freeze
     // eagerly where they know a session is new; this covers reopen/resume and
     // the first post-upgrade start of a legacy coding session. It happens before

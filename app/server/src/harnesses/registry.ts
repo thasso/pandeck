@@ -18,6 +18,7 @@ import {
   CLAUDE_SDK_STORE_DIR,
 } from "../sessionStorage.ts";
 import { sessionRefFile } from "./storage.ts";
+import { withCheckedCheckout } from "../worktrees/sessionCwd.ts";
 import { CWD } from "../config.ts";
 import { readClaudeSdkRecordCwd } from "../claudeSdk/claudeSdkRecords.ts";
 import { readSessionHeaderCwd } from "../piSdk/sessionOpen.ts";
@@ -121,11 +122,17 @@ const sessions: Record<Harness, HarnessSessions> = {
     storedWithoutRow: (id) => claudeSdkStore.exists(id),
     holdsOnDisk: (id) => claudeSdkStore.exists(id),
     setHeldElsewhere: (check) => claudeSdkStore.setHeldElsewhere(check),
-    // Rehydrated on the account its record names, else the default one.
+    // Rehydrated on the account its record names, else the default one, in
+    // the cwd of its own worktree check, acquired in the continuation that
+    // compared it.
     open: async (id) =>
-      claudeSdkStore.acquire(id, {
-        credentialProfileId: DEFAULT_CLAUDE_PROFILE_ID,
-      }),
+      withCheckedCheckout(id, undefined, (checkout) =>
+        claudeSdkStore.acquire(
+          id,
+          { credentialProfileId: DEFAULT_CLAUDE_PROFILE_ID },
+          checkout,
+        ),
+      ),
     cwd: (id) => {
       const stat = statSync(join(CLAUDE_SDK_STORE_DIR, `${id}.json`), {
         throwIfNoEntry: false,
@@ -146,7 +153,12 @@ const sessions: Record<Harness, HarnessSessions> = {
     // without one is not renamed into existence.
     rename: async ({ id }, title) => {
       if (!claudeSdkStore.exists(id)) throw new Error("session not found.");
-      (claudeSdkStore.get(id) ?? claudeSdkStore.acquire(id)).setTitle(title);
+      const session =
+        claudeSdkStore.get(id) ??
+        (await withCheckedCheckout(id, undefined, (checkout) =>
+          claudeSdkStore.acquire(id, {}, checkout),
+        ));
+      session.setTitle(title);
     },
     // Tombstones the id and deletes its record and native transcript.
     remove: async ({ id }) => claudeSdkStore.remove(id),

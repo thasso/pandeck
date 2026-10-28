@@ -290,7 +290,8 @@ test("every checkout surface reads a checkout's files through the Worker", async
         ).anchor?.selectors.quote.exact,
       "alpha",
       // The add asks the repo key, remembered by now: identity reads only.
-      { ...contained, ...read, inspect: 2 },
+      // Cold main resolution moves its localPath existence check and four stamp stats onto the Worker.
+      { ...contained, ...read, exists: 1, inspect: 6 },
     ],
     [
       "a worktreeFile grant",

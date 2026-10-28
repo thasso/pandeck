@@ -28,7 +28,11 @@ import {
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
 import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
-import { worktreePathIfPresent } from "../worktrees/sessionCwd.ts";
+import {
+  checkWorktreeCheckout,
+  checkoutCwd,
+  withCheckedCheckout,
+} from "../worktrees/sessionCwd.ts";
 import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
 import { harnessRegistry } from "./registry.ts";
 
@@ -172,11 +176,6 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
   assertEnterpriseProfile(spec);
   if (spec.peerTurnCap !== undefined && !isSessionPeerTurnCap(spec.peerTurnCap))
     throw new Error("Peer turn cap must be an integer from 1 to 16.");
-  // Resolved here for both engines alike: Claude's store would read a
-  // pathless worktree from its edge, but pi's `acquireNew` never looks.
-  const cwd = spec.worktree
-    ? (spec.worktree.path ?? worktreePathIfPresent(spec.worktree.id))
-    : spec.cwd;
   if (spec.harness === "claude-sdk") {
     const id = spec.id ?? randomUUID();
     // Resolved first: from the ownership check below to the session's
@@ -188,61 +187,90 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       undefined,
       spec.agent?.skills,
     );
-    assertEnterpriseProfile(spec);
-    const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
-      onDisk: spec.id !== undefined,
-    });
-    if (holder) throw new SessionIdTakenError(id, holder);
-    // An agent only ever starts a NEW session: an existing one would keep its
-    // own runtime and account whatever this creation names (a first send is
-    // re-issued only while nothing was created). The one reuse is finishing a
-    // creation that failed after writing its agent row — and only with exactly
-    // that definition; a plain creation may not take over such an id either.
-    const frozen = sessionStore.getAgent(id);
-    const wanted = spec.agent ? JSON.stringify(spec.agent) : undefined;
-    const exists = spec.agent !== undefined && claudeSdkStore.exists(id);
-    if (exists || (frozen !== undefined && frozen !== wanted))
-      throw new SessionAgentConflictError(id, frozen, spec.agent?.name, exists);
-    linkWorktree(id, spec.worktree?.id);
-    if (spec.agent) freezeSessionAgent(id, spec.agent);
-    if (spec.promptEvidence)
-      sessionPromptConditions(id, spec.agentType, spec.promptEvidence);
-    // With the names resolved, the freeze lands right here, before the
-    // session exists; an existing freeze or a non-coding persona awaits
-    // nothing either.
-    const skillsFrozen = sessionSkills(id, spec.agentType, skills);
-    const alreadyExists = claudeSdkStore.exists(id);
-    const session = claudeSdkStore.acquire(id, {
-      agentType: spec.agentType,
-      credentialProfileId: spec.credentialProfileId,
-      ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
-      ...(spec.modelId !== undefined ? { modelId: spec.modelId } : {}),
-      ...(spec.thinkingLevel !== undefined
-        ? { thinkingLevel: spec.thinkingLevel }
-        : {}),
-      ...(cwd !== undefined ? { cwd } : {}),
-      ...(spec.additionalSystemPrompt !== undefined
-        ? { additionalSystemPrompt: spec.additionalSystemPrompt }
-        : {}),
-      ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
-    });
-    sessionStore.upsert({
+    // The worktree this creation links (or, for a reused id, its current
+    // edge) is checked last; the ownership window runs in the continuation
+    // that compared it, so the store reads exactly that check.
+    const { session, skillsFrozen } = await withCheckedCheckout(
       id,
-      harness: "claude-sdk",
-      ...(spec.peerTurnCap !== undefined && !alreadyExists
-        ? { peerTurnCap: spec.peerTurnCap }
-        : {}),
-      agentType: spec.agentType,
-      credentialProfileId: spec.credentialProfileId,
-      ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
-      ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
-    });
-    // Before the first prompt: `setTitle` also marks auto-naming done.
-    if (spec.title !== undefined) session.setTitle(spec.title);
+      spec.worktree?.id,
+      (checkout) => {
+        assertEnterpriseProfile(spec);
+        const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
+          onDisk: spec.id !== undefined,
+        });
+        if (holder) throw new SessionIdTakenError(id, holder);
+        // An agent only ever starts a NEW session: an existing one would keep
+        // its own runtime and account whatever this creation names (a first
+        // send is re-issued only while nothing was created). The one reuse is
+        // finishing a creation that failed after writing its agent row — and
+        // only with exactly that definition; a plain creation may not take
+        // over such an id either.
+        const frozen = sessionStore.getAgent(id);
+        const wanted = spec.agent ? JSON.stringify(spec.agent) : undefined;
+        const exists = spec.agent !== undefined && claudeSdkStore.exists(id);
+        if (exists || (frozen !== undefined && frozen !== wanted))
+          throw new SessionAgentConflictError(
+            id,
+            frozen,
+            spec.agent?.name,
+            exists,
+          );
+        linkWorktree(id, spec.worktree?.id);
+        if (spec.agent) freezeSessionAgent(id, spec.agent);
+        if (spec.promptEvidence)
+          sessionPromptConditions(id, spec.agentType, spec.promptEvidence);
+        // With the names resolved, the freeze lands right here, before the
+        // session exists; an existing freeze or a non-coding persona awaits
+        // nothing either.
+        const skillsFrozen = sessionSkills(id, spec.agentType, skills);
+        const alreadyExists = claudeSdkStore.exists(id);
+        const cwd = spec.worktree
+          ? (spec.worktree.path ?? checkoutCwd(checkout))
+          : spec.cwd;
+        const session = claudeSdkStore.acquire(
+          id,
+          {
+            agentType: spec.agentType,
+            credentialProfileId: spec.credentialProfileId,
+            ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
+            ...(spec.modelId !== undefined ? { modelId: spec.modelId } : {}),
+            ...(spec.thinkingLevel !== undefined
+              ? { thinkingLevel: spec.thinkingLevel }
+              : {}),
+            ...(cwd !== undefined ? { cwd } : {}),
+            ...(spec.additionalSystemPrompt !== undefined
+              ? { additionalSystemPrompt: spec.additionalSystemPrompt }
+              : {}),
+            ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
+          },
+          checkout,
+        );
+        sessionStore.upsert({
+          id,
+          harness: "claude-sdk",
+          ...(spec.peerTurnCap !== undefined && !alreadyExists
+            ? { peerTurnCap: spec.peerTurnCap }
+            : {}),
+          agentType: spec.agentType,
+          credentialProfileId: spec.credentialProfileId,
+          ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
+          ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
+        });
+        // Before the first prompt: `setTitle` also marks auto-naming done.
+        if (spec.title !== undefined) session.setTitle(spec.title);
+        return { session, skillsFrozen };
+      },
+    );
     await skillsFrozen;
     return session;
   }
 
+  // pi's `acquireNew` never reads the edge, so a pathless worktree's cwd is
+  // its own check, with nothing to compare.
+  const cwd = spec.worktree
+    ? (spec.worktree.path ??
+      checkoutCwd(await checkWorktreeCheckout(spec.worktree.id)))
+    : spec.cwd;
   const live = await piStore.acquireNew(
     spec.agentType,
     spec.model,

@@ -30,7 +30,10 @@ import {
   listTasks,
   updateTask,
 } from "./tasks.ts";
-import { sessionWorktreeMissing } from "./worktrees/sessionCwd.ts";
+import {
+  checkWorktreeCheckout,
+  sessionWorktreeMissing,
+} from "./worktrees/sessionCwd.ts";
 
 const liveDir = mkdtempSync(join(tmpdir(), "session-list-memo-"));
 afterAll(() => rmSync(liveDir, { recursive: true, force: true }));
@@ -110,6 +113,7 @@ test("the memoized list equals a fresh build across every kind of write", async 
   linkSessionToWorktree(a, gone);
   projectStore.setSessionProject(b, "list-memo-p2");
   linkSessionToObject(a, "knowledge", "notes/x", "initial-context");
+  await checkWorktreeCheckout(gone);
   rows = await listedAfter("edges relinked");
   assert.equal(rows.get(a)?.worktreeId, gone);
   assert.equal(rows.get(a)?.worktreeMissing, true);

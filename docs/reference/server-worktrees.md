@@ -231,26 +231,28 @@ a synthetic record (never a DB row).
 - `worktreeStatus.ts` owns live git status (dirty/ahead/behind/merged incl.
   squash detection via `git cherry`), TTL-cached and coalesced, plus
   `branchContainedInBase` — the ancestry-or-no-op-merge containment predicate
-  the merge/removal guards share with it. A base branch resolving to no LOCAL
-  commit is reported as `baseUnresolved` with `merged: false` (counts that could
-  not be taken are never a delivery claim): the ahead/behind rev-list fails
-  there, and its 0 must not be read as delivery when removal's containment guard
-  is about to refuse on the same ref. It is deliberately a LOCAL claim only: no
-  absent ref proves a remote lacks the branch (a narrow refspec, a never-fetched
-  or locally deleted tracking ref all look identical), and only
-  `baseBranchTarget`'s fetch answers that — so a fetching flow's own refusal,
-  never this field, is what establishes containment as unknowable. The probe
-  distinguishing a missing base from an unresolvable tip runs only on that error
-  path, so a normal scan pays nothing. Each remote-facing field has exactly one
-  config context: OWN `upstream` is always resolved inside that worktree —
-  porcelain-v2 `branch.upstream`/`branch.ab` on full reads, or a one-branch
-  `for-each-ref` on remote patches when the root map is silent — honoring
-  `includeIf`, `config.worktree`, and future Git config mechanisms.
-  `baseUpstream` comes from one TTL-memoized `git for-each-ref` map evaluated in
-  the main checkout's config context. Both projections preserve Git's resolved
-  short upstream name alongside the counters, so a client can render an ad-hoc
-  remote honestly instead of assuming `origin`. That map also supplies
-  best-effort watcher targeting.
+  the merge/removal guards share with it. Plain reads coalesce onto an in-flight
+  scan, but a FORCED read never adopts one that started before its caller's
+  change: that scan would report pre-change counts as current. A base branch
+  resolving to no LOCAL commit is reported as `baseUnresolved` with
+  `merged: false` (counts that could not be taken are never a delivery claim):
+  the ahead/behind rev-list fails there, and its 0 must not be read as delivery
+  when removal's containment guard is about to refuse on the same ref. It is
+  deliberately a LOCAL claim only: no absent ref proves a remote lacks the
+  branch (a narrow refspec, a never-fetched or locally deleted tracking ref all
+  look identical), and only `baseBranchTarget`'s fetch answers that — so a
+  fetching flow's own refusal, never this field, is what establishes containment
+  as unknowable. The probe distinguishing a missing base from an unresolvable
+  tip runs only on that error path, so a normal scan pays nothing. Each
+  remote-facing field has exactly one config context: OWN `upstream` is always
+  resolved inside that worktree — porcelain-v2 `branch.upstream`/`branch.ab` on
+  full reads, or a one-branch `for-each-ref` on remote patches when the root map
+  is silent — honoring `includeIf`, `config.worktree`, and future Git config
+  mechanisms. `baseUpstream` comes from one TTL-memoized `git for-each-ref` map
+  evaluated in the main checkout's config context. Both projections preserve
+  Git's resolved short upstream name alongside the counters, so a client can
+  render an ad-hoc remote honestly instead of assuming `origin`. That map also
+  supplies best-effort watcher targeting.
 
   **Accepted limitation — root-visible tracking overrides.** Git can make OWN
   tracking worktree-specific in two ways: (a) with

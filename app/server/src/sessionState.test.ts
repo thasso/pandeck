@@ -229,6 +229,7 @@ test("detached serialization preserves the pre-owner field order and values", as
     loadEvents: [],
   }));
   try {
+    await cwd.checkWorktreeCheckout("missing-worktree");
     // Captured on the exact base before the owner replaces ViewSession.state().
     const view = viewSessionById(id)!;
     const detached = buildSessionState(id, view.nativeFacts());

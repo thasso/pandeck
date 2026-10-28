@@ -19,7 +19,6 @@
  * card.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import {
   accountProviderForModelProvider,
   estimateSpawnCompactionWindow,
@@ -87,11 +86,7 @@ import {
   type AgentSpawnRuntime,
 } from "./agents/agentSpawn.ts";
 import type { SessionAgent } from "./agents/sessionAgent.ts";
-import {
-  isMainWorktreeId,
-  mainCheckoutPathForProject,
-  resolveWorktreeRow,
-} from "./worktrees/worktreeResolve.ts";
+import { resolveUsableWorktree } from "./worktrees/sessionCwd.ts";
 import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import { broadcastWorktreeList } from "./worktrees/worktrees.ts";
 
@@ -398,20 +393,16 @@ interface SpawnWorktree {
  * resolver: a project's MAIN checkout is a synthetic `main:<projectId>` row that
  * `worktree_status` shows and an agent will copy, so reading the table directly
  * would reject exactly the target that the "spawn in any worktree" workflow
- * needs most. Main also runs in the project's checkout path rather than the
- * row's, and both paths are proven to exist here: an absent folder means the
- * session would silently run somewhere else.
+ * needs most. `resolveUsableWorktree` runs it, then proves the checkout is
+ * there by its own Worker check: an absent folder means the session would
+ * silently run somewhere else. A Worker failure rejects.
  */
 async function resolveSpawnWorktree(
   id: string,
 ): Promise<SpawnWorktree | undefined> {
-  const row = await resolveWorktreeRow(id);
-  if (!row || row.status !== "active" || !existsSync(row.path))
-    return undefined;
-  const path = isMainWorktreeId(row.id)
-    ? mainCheckoutPathForProject(row.projectId)
-    : row.path;
-  if (!path || !existsSync(path)) return undefined;
+  const usable = await resolveUsableWorktree(id);
+  if (!usable) return undefined;
+  const { row, path } = usable;
   return { id: row.id, path, projectId: row.projectId, branch: row.branch };
 }
 
