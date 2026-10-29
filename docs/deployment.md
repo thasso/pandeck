@@ -401,8 +401,9 @@ On 30 Sep 2026 (0.49.0 plus this change), 3908 of 3931 tests passed and one file
 failed at setup. Of the 23 failures, `memoryLog.test.ts` expecting a Node
 runtime name has since been made runtime-neutral, and the two in
 `portForwarding.test.ts` were the port-forward defect, since fixed (above). The
-rest are expected, and a job must compare its failures against exactly this
-list:
+`HOME` cases in `credentialProfiles.test.ts` and `tools/core/lsTool.test.ts`
+pass since `userHome.ts`. The rest are expected, and a job must compare its
+failures against exactly this list:
 
 - `webStatic.test.ts`: the three "never reads outside the dist root for …" cases
   with encoded or doubled `..` segments. The test's `node:http` client
@@ -415,9 +416,6 @@ list:
   post-add step throws": the tests set `GIT_CONFIG_*` in `process.env` and run
   git through `execFileSync`, which starts children with the environment from
   start-up. The package's `child_process` shim fixes it; the test run lacks it.
-- `credentialProfiles.test.ts` "the protected Claude default reflects the normal
-  user login …" and `tools/core/lsTool.test.ts` "`~` and `~/sub` expand against
-  the home directory": both change `HOME`, which `os.homedir()` does not follow.
 - `skills/skillRuntimeMaterializer.test.ts` "reuses the sorted set …": the
   test's own `readdir` is unsorted.
 - `piSdk/toolBinaries.test.ts` "stops pi's tool lookup from spawning once

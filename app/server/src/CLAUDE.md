@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4096 reason="Guard credential origins, harness boundaries, storage-only views, spawn admission. 51 MB transcript: 1.7s; a 1.3 GB server fork froze connections." task=1168 date=2026-10-25 -->
+<!-- instruction-budget: bytes=4096 reason="Guard credentials, harness boundaries, storage-only views and spawn admission." task=1168 date=2026-10-25 -->
 
 # Server modules
 
@@ -58,3 +58,4 @@
   the metadata row and the app-owned log (`viewSession.ts`). Only a command that
   DRIVES it may acquire one, through `ensureViewingHarness`; never await an
   acquisition on a view path.
+- Resolve home only through `userHomeDir()` (`userHome.ts`).
