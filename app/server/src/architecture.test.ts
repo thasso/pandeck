@@ -536,11 +536,18 @@ test("server code resolves the home directory only through userHome.ts", () => {
   const offenders: string[] = [];
   for (const path of sourceFiles(SRC_ROOT)) {
     const file = relative(SRC_ROOT, path);
-    if (file === "userHome.ts") continue;
+    // The test setup reads Bun's launch home on purpose, to refuse a run that
+    // could reach the real one.
+    if (file === "userHome.ts" || file === "test/setup.ts") continue;
+    // A `//` after `:` is a URL, not a comment, and must not hide a call.
     const source = readFileSync(path, "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/\/\/.*$/gm, "");
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
     if (/\bhomedir\b/.test(source)) offenders.push(file);
   }
-  assert.deepEqual(offenders, []);
+  assert.deepEqual(
+    offenders,
+    [],
+    "resolve the home directory with userHomeDir() from userHome.ts",
+  );
 });

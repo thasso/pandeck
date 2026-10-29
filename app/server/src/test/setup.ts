@@ -1,7 +1,20 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import { afterAll, vi } from "vitest";
+
+// Bun's os.homedir() keeps the HOME the run was launched with, whatever a test
+// sets later, and SDK code the tests reach resolves home through it. A Bun run
+// launched with the user's real HOME can overwrite ~/.claude credentials, so it
+// must start with a throwaway HOME ("Running the server suite under Bun" in
+// docs/deployment.md).
+if (
+  process.versions.bun &&
+  !resolve(homedir()).startsWith(resolve(tmpdir()) + sep)
+)
+  throw new Error(
+    `Bun test runs must be launched with HOME set to a fresh temp directory, not ${homedir()}: HOME="$(mktemp -d)" bun ...`,
+  );
 
 // Every database a test opens is a throwaway in a temp directory, so durability
 // across a power cut is not under test, and waiting on fsync for every commit

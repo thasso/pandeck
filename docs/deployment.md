@@ -310,7 +310,11 @@ production code already or affect only test clients:
 - `readdir` returns directory order; Node's is sorted. Every production caller
   whose result order matters sorts it.
 - `os.homedir()` is read once at start-up and does not follow a later `HOME`
-  change. The server never changes `HOME`.
+  change. The server never changes `HOME`, but tests do, so server code resolves
+  home only through `userHomeDir()` (`userHome.ts`), which reads `HOME` on every
+  call; `architecture.test.ts` rejects any other `homedir` use. SDK code the
+  server runs (the Pi agent directory, `~` in native file tools) still calls
+  `os.homedir()` itself, so a test changing `HOME` does not move it.
 - `fetch` and `node:http`'s client honour `HTTP(S)_PROXY`/`NO_PROXY` from
   `process.env`, where Node's `fetch` ignores them. The package proxy therefore
   publishes its bundle to child processes only (`docs/package-proxy.md`).
@@ -375,10 +379,17 @@ export default mergeConfig(
 ```bash
 bun=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#bun)
 gcc=$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#stdenv.cc.cc.lib')
-env -u NODE_ENV CI=true LD_LIBRARY_PATH="$gcc/lib" \
+env -u NODE_ENV CI=true LD_LIBRARY_PATH="$gcc/lib" HOME="$(mktemp -d)" \
   "$bun/bin/bun" --bun ./node_modules/vitest/vitest.mjs run \
   --config vitest.bun.config.ts
 ```
+
+The fresh `HOME` is mandatory. Tests redirect `HOME` at runtime, which Bun's
+`os.homedir()` ignores (see above). Before `userHome.ts`, a run launched with
+the real `HOME` had `credentialProfiles.test.ts` overwrite the user's
+`~/.claude/.credentials.json`, and SDK paths can still reach real files that
+way. `src/test/setup.ts` refuses a Bun run whose launch `HOME` is not under the
+temp directory.
 
 Run the `nix build` lines from the repository root, where `--inputs-from .` pins
 the flake's own Bun. `LD_LIBRARY_PATH` lets the `@parcel/watcher` addon find
