@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3584 reason="seven independent contracts: repo locking, synthetic main, managed delivery, removal consistency under foreign ownership, review tombstones, status refresh tiers, and context resolution" task=659 date=2026-09-23 -->
+<!-- instruction-budget: bytes=3693 reason="eight independent contracts: repo locking, synthetic main, managed delivery, removal consistency under foreign ownership, review tombstones, status refresh tiers, context resolution, and failed-add discard ownership" task=1228 date=2026-10-29 -->
 
 # Worktrees
 
@@ -46,4 +46,6 @@
   targeting; manual per-worktree or `includeIf` overrides can leave OWN counters
   stale after fetch (an accepted limitation). Never memoize/gate an
   invisible-row context read from root-context state.
-- Naming never blocks creation: any failure falls back to a timestamp suffix.
+- Naming never blocks creation: any failure falls back to a timestamp suffix. A
+  failed add deletes only the branch and folder it created
+  (`docs/pull-requests.md`).

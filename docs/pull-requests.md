@@ -2117,12 +2117,21 @@ isolation, not a detail, and its argv is asserted rather than described.
 Everything that pins the checkout — reading the tracking ref, verifying the
 commit, choosing and snapshotting the base, picking a free folder,
 `git worktree add`, configuring the upstream — happens under ONE acquisition, as
-the new-branch variant already did. Creation stays atomic for the caller: a
-failure after the add discards the checkout AND its branch, so a rejected create
-leaves nothing behind and the next attempt does not silently land on a `-2`
-suffix. Naming still never blocks creation — the folder search is folder-only
-here (the branch is already decided) and exhaustion falls back to a timestamp
-rather than throwing.
+the new-branch variant already did. Creation needs an absolute worktree root; a
+relative one is refused before anything is created, because Node and git would
+resolve it against different directories. Before `git worktree add`, the attempt
+creates its own folder with an exclusive `mkdir`, refusing a folder that already
+exists, empty or not, and its own branch with a create-only `git branch`. A
+failure during or after the add discards only those two: the folder, and the
+branch through one non-dereferencing compare-and-delete at its start commit
+(`update-ref --no-deref -d`), only while no worktree has it checked out,
+together with its `branch.<name>` config. A branch whose creation or state the
+attempt cannot prove (its create failed without a clear answer, it moved, or a
+worktree has it checked out) is kept and logged with the reason, and the next
+attempt lands on a `-2` suffix. Otherwise a rejected create leaves nothing
+behind, so the next attempt keeps its name. Naming still never blocks creation —
+the folder search is folder-only here (the branch is already decided) and
+exhaustion falls back to a timestamp rather than throwing.
 
 **Update is the other half.** A worktree already standing on that head branch is
 brought to the pull request's current head instead of a second one being

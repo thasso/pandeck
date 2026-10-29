@@ -221,8 +221,10 @@ export interface CreateWorktreeInput {
  * main branch, checked out at `<root>/<mainFolder>-<name>`. On collision the
  * suffix gets `-2`, `-3`, … appended. Submodules are checked out before the row
  * is recorded, so a session opening the worktree sees a complete tree.
- * Atomic for the caller: a failure after the `git worktree add` discards the
- * checkout and its branch, so a rejected create leaves nothing behind.
+ * A failure discards the folder and branch this attempt created, so a rejected
+ * create leaves nothing behind, except a branch the discard cannot prove is
+ * still its own and unchanged: that one is kept and logged
+ * ({@link discardUntrackedWorktreeLocked}).
  * Broadcasts the updated worktree list.
  */
 export async function createWorktree(
