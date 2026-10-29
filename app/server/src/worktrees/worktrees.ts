@@ -6,7 +6,7 @@
  * git mutations, which run under {@link withRepoLock}.
  */
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   boundMergeMessage,
@@ -221,8 +221,10 @@ export interface CreateWorktreeInput {
  * main branch, checked out at `<root>/<mainFolder>-<name>`. On collision the
  * suffix gets `-2`, `-3`, … appended. Submodules are checked out before the row
  * is recorded, so a session opening the worktree sees a complete tree.
- * Atomic for the caller: a failure after the `git worktree add` discards the
- * checkout and its branch, so a rejected create leaves nothing behind.
+ * A failure discards the folder and branch this attempt created, so a rejected
+ * create leaves nothing behind, except a branch the discard cannot prove is
+ * still its own and unchanged: that one is kept and logged
+ * ({@link discardUntrackedWorktreeLocked}).
  * Broadcasts the updated worktree list.
  */
 export async function createWorktree(
@@ -245,6 +247,10 @@ export async function createWorktree(
   );
 
   const root = worktreeRootFor(project);
+  // Node resolves a relative root against the server's cwd and git against the
+  // main checkout's, so one creation would name two different folders.
+  if (!isAbsolute(root))
+    throw new Error(`Worktree root "${root}" must be an absolute path`);
   mkdirSync(root, { recursive: true });
   throwIfAborted(input.signal);
 
@@ -253,14 +259,15 @@ export async function createWorktree(
   // AND the base branch/head snapshot (a commit landing between snapshot and
   // `worktree add` would make the stored baseCommit lie, polluting "vs base"
   // diffs with already-base changes).
-  // Set immediately before the add so its catch can remove a checkout Git may
-  // have created only partially when an abort kills it. That catch cleans up
-  // while `withRepoLock` still holds the creation lock; post-lock failures use
-  // the outer catch, which acquires that same repo lock for cleanup.
-  let untracked: { branch: string; path: string } | undefined;
+  // Set as soon as the attempt has created its own folder, so the add's catch
+  // can remove what it created, including a checkout Git may have created only
+  // partially when an abort kills it. That catch cleans up while `withRepoLock`
+  // still holds the creation lock; post-lock failures use the outer catch,
+  // which acquires that same repo lock for cleanup.
+  let untracked: CreatedCheckout | undefined;
   const claim: CreationClaim = {
-    take: (branch, path) => {
-      untracked = { branch, path };
+    take: (created) => {
+      untracked = created;
     },
     release: () => {
       untracked = undefined;
@@ -331,23 +338,32 @@ export async function createWorktree(
     void broadcastWorktreeList().catch(() => undefined);
     return toRecord(row);
   } catch (err) {
-    if (untracked)
-      await discardUntrackedWorktree(
-        main.root,
-        untracked.path,
-        untracked.branch,
-      );
+    if (untracked) await discardUntrackedWorktree(main.root, untracked);
     throw err;
   }
 }
 
 /**
- * Ownership of the branch and folder a `git worktree add` is about to take,
- * held from just before the add until the row is durable. Both cleanup paths
- * read it, so the two creation variants hand it the same two names.
+ * What one creation attempt CREATED, and so what its discard may delete. The
+ * folder is always the attempt's own: a record exists only once its exclusive
+ * `mkdir` succeeded. The branch is its own only once its create-only
+ * `git branch` succeeded (`ownsBranch`), and only at `startOid`, the full oid
+ * that create started from.
+ */
+interface CreatedCheckout {
+  branch: string;
+  path: string;
+  startOid: string;
+  ownsBranch: boolean;
+}
+
+/**
+ * Ownership of what the attempt created, held from its folder's creation until
+ * the row is durable. Both cleanup paths read it, so the two creation variants
+ * hand it the same record.
  */
 interface CreationClaim {
-  take(branch: string, path: string): void;
+  take(created: CreatedCheckout): void;
   release(): void;
 }
 
@@ -435,12 +451,12 @@ async function addNewBranchCheckout(
     input.signal,
   );
   const target = join(root, `${basename(main.root)}-${chosen}`);
-  claim.take(chosen, target);
   await addCheckout(
     main,
-    ["worktree", "add", "-b", chosen, target, baseBranch],
     target,
     chosen,
+    baseBranch,
+    baseCommit,
     claim,
     input.signal,
   );
@@ -492,20 +508,18 @@ async function addTrackingCheckout(
   // The pinned commit, re-verified under the lock: a prune or a garbage
   // collection between the caller's fetch and this add can leave the oid
   // unreachable, and checking out something else would be the whole failure
-  // this pinning exists to prevent.
-  if (
-    (
-      await gitOptionalExit(
-        ["rev-parse", "--verify", "--quiet", `${source.headCommit}^{commit}`],
-        main.root,
-        input.signal,
-      )
-    ).code !== 0
-  )
+  // this pinning exists to prevent. Its full oid is what the branch starts at.
+  const head = await gitOptionalExit(
+    ["rev-parse", "--verify", "--quiet", `${source.headCommit}^{commit}`],
+    main.root,
+    input.signal,
+  );
+  if (head.code !== 0)
     throw new WorktreeCreateRefusalError(
       `The pull request's head ${source.headCommit.slice(0, 12)} is no longer in this repository; nothing was checked out.`,
       "head-unreachable",
     );
+  const startOid = head.stdout.trim();
   // Adopting an existing local branch would mean deciding what to do with
   // whatever is on it — reset it, merge it, rebase it. This path decides none
   // of those; it says so instead.
@@ -542,19 +556,20 @@ async function addTrackingCheckout(
     input.name,
   );
   const target = join(root, `${basename(main.root)}-${folder}`);
-  claim.take(source.headBranch, target);
   await addCheckout(
     main,
-    ["worktree", "add", "-b", source.headBranch, target, source.headCommit],
     target,
     source.headBranch,
+    source.headCommit,
+    startOid,
     claim,
     input.signal,
   );
   // Tracking is set AFTER the add, because the start point is the pinned commit
   // rather than the ref. A throw here leaves the claim standing, so the outer
-  // catch discards the checkout and its branch — an untracked branch would look
-  // like an ordinary worktree and could never be updated from the pull request.
+  // catch discards the checkout and its branch with that branch's config — an
+  // untracked branch would look like an ordinary worktree and could never be
+  // updated from the pull request.
   await git(
     [
       "branch",
@@ -568,23 +583,57 @@ async function addTrackingCheckout(
 }
 
 /**
- * The `git worktree add` itself, with the one cleanup both variants need: keep
- * this name's ownership under the creation lock THROUGH cleanup, because an
+ * Create the checkout's folder and branch, then `git worktree add` onto them.
+ *
+ * Naming only judged both names free, and that judgment can be wrong: a raced
+ * create, or a probe that read a failure as "free". So the attempt creates both
+ * itself, exclusively, before git sees them: a non-recursive `mkdir` that
+ * refuses any existing folder, empty or not, and a create-only `git branch`
+ * that refuses an existing branch. The add then only ever runs on what this
+ * attempt created, and its discard (and git's own junk cleanup) can only ever
+ * remove that.
+ *
+ * The branch create gets no signal: killing it mid-create would leave nobody
+ * able to say whether the ref is this attempt's. Abort is honored right after.
+ *
+ * Ownership stays claimed under the creation lock THROUGH cleanup, because an
  * aborted add can remove its own ref and path, and a queued creator would
  * otherwise claim them before the outer catch reacquires the lock.
  */
 async function addCheckout(
   main: MainRepoInfo,
-  args: string[],
   target: string,
   branch: string,
+  startPoint: string,
+  startOid: string,
   claim: CreationClaim,
   signal?: AbortSignal,
 ): Promise<void> {
+  throwIfAborted(signal);
+  // Leading directories are never the attempt's, the same as git's own.
+  mkdirSync(dirname(target), { recursive: true });
   try {
-    await git(args, main.root, signal);
+    mkdirSync(target);
   } catch (err) {
-    await discardUntrackedWorktreeLocked(main.root, target, branch);
+    if ((err as NodeJS.ErrnoException).code === "EEXIST")
+      throw new Error(`'${target}' already exists`);
+    throw err;
+  }
+  const created: CreatedCheckout = {
+    branch,
+    path: target,
+    startOid,
+    ownsBranch: false,
+  };
+  claim.take(created);
+  try {
+    await git(["branch", "--", branch, startPoint], main.root);
+    // The claim holds this same record, so the outer catch sees it too.
+    created.ownsBranch = true;
+    throwIfAborted(signal);
+    await git(["worktree", "add", target, branch], main.root, signal);
+  } catch (err) {
+    await discardUntrackedWorktreeLocked(main.root, created);
     claim.release();
     throw err;
   }
@@ -630,16 +679,28 @@ async function initSubmodules(
 }
 
 /**
- * Undo a `git worktree add` whose creation then failed, freeing the checkout,
- * the registration and the branch name for the next attempt. The branch is
- * force-deleted: it was created moments ago at the base head and no row, and
- * therefore no session, ever pointed at it.
+ * Undo a creation attempt that failed, freeing the checkout, the registration
+ * and the branch name for the next attempt. It deletes only what the attempt
+ * created ({@link CreatedCheckout}): its own folder, and its own branch.
+ *
+ * The branch goes only when it is provably the attempt's and unchanged: its
+ * creation succeeded, no worktree has it checked out (`branch -D` refuses that
+ * too; `update-ref` would not), and one atomic `update-ref --no-deref -d` still
+ * finds it at its start commit. Its `branch.<name>` config goes with it. A
+ * branch failing any of these is kept and logged with why, so a commit someone
+ * made on it is never lost; the next attempt gets a `-2` suffix instead.
+ *
+ * Two residuals remain. The checked-out guard is not atomic with a concurrent
+ * checkout: an outsider who checks the brand-new branch out between the guard
+ * and the delete is left on an unborn branch, though no commit is lost, as the
+ * delete only matches the start commit. And an outsider's symref placed at the
+ * owned name is removed by name only; `--no-deref` leaves its target untouched.
  *
  * Best effort by design — it runs on an error path, so nothing here throws; the
  * caller rethrows the ORIGINAL cause, which is the one the user needs to see.
  * But "best effort" must not mean silent: a cleanup that fails leaves behind
  * precisely the orphan this exists to prevent, and the failures cascade (with
- * the checkout still registered, git refuses to delete its branch), so EVERY
+ * the checkout still registered, its branch is checked out and kept), so EVERY
  * step reports its own non-zero exit.
  */
 const ORPHAN_DIRECTORY_REMOVAL_RETRIES = 10;
@@ -682,13 +743,18 @@ async function removeOrphanDirectory(path: string): Promise<boolean> {
 
 async function discardUntrackedWorktreeLocked(
   mainRepoRoot: string,
-  path: string,
-  branch: string,
+  created: CreatedCheckout,
 ): Promise<void> {
+  const { path, branch, startOid } = created;
   const report = (step: string, res: GitResult): void => {
     if (res.code === 0) return;
     console.error(
       `[worktrees] discarding the incomplete worktree ${path}: ${step} failed: ${res.stderr.trim() || `exit ${res.code}`}`,
+    );
+  };
+  const kept = (why: string): void => {
+    console.error(
+      `[worktrees] discarding the incomplete worktree ${path}: kept branch ${branch}: ${why}`,
     );
   };
   // Same shape as removeWorktree: prune is repo-global, so only run it after
@@ -704,24 +770,56 @@ async function discardUntrackedWorktreeLocked(
       "worktree prune",
       await gitOptional(["worktree", "prune"], mainRepoRoot),
     );
-  report(
-    "branch delete",
-    await gitOptional(["branch", "-D", branch], mainRepoRoot),
+  if (!created.ownsBranch) {
+    kept("this attempt could not prove it created it");
+    return;
+  }
+  const worktrees = await gitOptional(
+    ["worktree", "list", "--porcelain"],
+    mainRepoRoot,
   );
+  if (worktrees.code !== 0) {
+    kept(
+      `worktree list failed: ${worktrees.stderr.trim() || `exit ${worktrees.code}`}`,
+    );
+    return;
+  }
+  if (
+    worktrees.stdout
+      .split("\n")
+      .some((line) => line === `branch refs/heads/${branch}`)
+  ) {
+    kept("checked out in a worktree");
+    return;
+  }
+  const deleted = await gitOptional(
+    ["update-ref", "--no-deref", "-d", `refs/heads/${branch}`, startOid],
+    mainRepoRoot,
+  );
+  if (deleted.code !== 0) {
+    report("branch delete", deleted);
+    kept(`it no longer points at ${startOid}`);
+    return;
+  }
+  const config = await gitOptional(
+    ["config", "--remove-section", `branch.${branch}`],
+    mainRepoRoot,
+  );
+  if (!(config.code === 128 && config.stderr.includes("no such section")))
+    report("branch config", config);
 }
 
 async function discardUntrackedWorktree(
   mainRepoRoot: string,
-  path: string,
-  branch: string,
+  created: CreatedCheckout,
 ): Promise<void> {
   try {
     await withRepoLock(await repoLockKey(mainRepoRoot), () =>
-      discardUntrackedWorktreeLocked(mainRepoRoot, path, branch),
+      discardUntrackedWorktreeLocked(mainRepoRoot, created),
     );
   } catch (err) {
     console.error(
-      `[worktrees] failed to discard the incomplete worktree ${path}: ${errorText(err)}`,
+      `[worktrees] failed to discard the incomplete worktree ${created.path}: ${errorText(err)}`,
     );
   }
 }
