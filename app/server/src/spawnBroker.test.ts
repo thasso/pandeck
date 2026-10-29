@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -6,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -118,6 +120,91 @@ test("with the broker disabled, the same handler runs in-process", async () => {
   }
 });
 
+/**
+ * The script the live broker was started with, read back from its command
+ * line, run in a fresh process whose preload throws one uncaught error with
+ * `code` and `message` once the script is running. It is then asked to run
+ * one child and told the server went away.
+ */
+async function runBrokerScriptThrowing(code: string, message: string) {
+  const pid = await spawnBrokerPidForTests();
+  assert.ok(pid);
+  const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+  const script = argv[argv.indexOf("-e") + 1] ?? "";
+  assert.ok(script.includes("ignoreCollectedFileHandle"));
+  const dir = mkdtempSync(join(tmpdir(), "broker-uncaught-"));
+  const preload = join(dir, "throw.cjs");
+  writeFileSync(
+    preload,
+    `setImmediate(() => { throw Object.assign(new Error(${JSON.stringify(
+      message,
+    )}), { code: ${JSON.stringify(code)} }); });`,
+  );
+  try {
+    const child = spawn(process.execPath, ["--require", preload, "-e", script]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (data: string) => {
+      stdout += data;
+    });
+    child.stderr.setEncoding("utf8").on("data", (data: string) => {
+      stderr += data;
+    });
+    const exited = new Promise<number | null>((resolve) =>
+      child.on("exit", resolve),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    child.stdin.on("error", () => undefined);
+    child.stdin.write(
+      `${JSON.stringify({
+        id: 1,
+        file: "sh",
+        args: ["-c", "echo alive"],
+        cwd: process.cwd(),
+        env: process.env,
+        maxBuffer: 1024,
+        encoding: "utf8",
+      })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    child.stdin.end();
+    return { exitCode: await exited, stdout, stderr };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the broker only warns for a FileHandle closed during GC", async () => {
+  const message =
+    "A FileHandle object was closed during garbage collection. This used to be allowed with a deprecation warning but is now considered an error. Please close FileHandle objects explicitly. File descriptor: 7 (file:///tmp/leak.txt)";
+  const run = await runBrokerScriptThrowing("ERR_INVALID_STATE", message);
+  assert.ok(
+    run.stderr.includes(
+      `[spawn broker] Warning: a leaked FileHandle was closed during garbage collection, which Node only warns about; not exiting. ${message}`,
+    ),
+    run.stderr,
+  );
+  assert.ok(run.stdout.includes('"stdout":"alive\\n"'), run.stdout);
+  assert.equal(run.exitCode, 0);
+});
+
+test("any other uncaught error still ends the broker", async () => {
+  for (const [code, message] of [
+    ["ERR_INVALID_STATE", "Invalid state: Controller is already closed"],
+    ["EOTHER", "A FileHandle object was closed during garbage collection."],
+  ] as const) {
+    const run = await runBrokerScriptThrowing(code, message);
+    assert.equal(run.exitCode, 1, run.stderr);
+    assert.ok(
+      run.stderr.includes("Uncaught exception in the spawn broker:") &&
+        run.stderr.includes(message),
+      run.stderr,
+    );
+    assert.ok(!run.stderr.includes("Warning: a leaked FileHandle"));
+    assert.ok(!run.stdout.includes("alive"), run.stdout);
+  }
+});
+
 test("output past maxBuffer fails like execFile, and large output crosses intact", async () => {
   const overflow = await brokerExecFile({
     ...base,
@@ -138,6 +225,68 @@ test("output past maxBuffer fails like execFile, and large output crosses intact
   assert.equal(large.error, null);
   assert.equal(large.stdout.length, 8_000_004);
   assert.ok(large.stdout.endsWith("\nend"));
+});
+
+/** What Node's own `execFile` reports, in the broker's reply shape. */
+function directExecFile(
+  script: string,
+  maxBuffer: number,
+  encoding: "utf8" | "buffer",
+) {
+  return new Promise<{
+    error: { code: unknown; message: string } | null;
+    stdout: string | Buffer;
+    stderr: string;
+  }>((resolve) => {
+    execFile(
+      "sh",
+      ["-c", script],
+      { ...base, maxBuffer, encoding },
+      (err, stdout, stderr) =>
+        resolve({
+          error: err ? { code: err.code, message: err.message } : null,
+          stdout,
+          // The broker carries stderr as UTF-8 text in either encoding.
+          stderr: Buffer.from(stderr).toString("utf8"),
+        }),
+    );
+  });
+}
+
+test("an overflow past maxBuffer crosses the broker as execFile reports it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "broker-overflow-"));
+  try {
+    // One write under PIPE_BUF reaches the reader as one chunk, so Node's own
+    // cut lands at the same place on both sides. Node bounds the .length, not
+    // the bytes: 1025 code units ends the mixed text on a lone high surrogate.
+    const maxBuffer = 1025;
+    for (const [name, text, encoding, redirect] of [
+      ["2-byte stdout", "ü".repeat(1500), "utf8", ""],
+      ["mixed 4-byte stdout", "a\u{1F600}".repeat(600), "utf8", ""],
+      ["utf8 stderr", "ü".repeat(1500), "utf8", " >&2"],
+      ["buffer stderr", "ü".repeat(1500), "buffer", " >&2"],
+    ] as const) {
+      const file = join(dir, "output");
+      writeFileSync(file, text);
+      const script = `cat '${file}'${redirect}`;
+      const direct = await directExecFile(script, maxBuffer, encoding);
+      assert.equal(
+        direct.error?.code,
+        "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+        name,
+      );
+      const request = { ...base, maxBuffer, file: "sh", args: ["-c", script] };
+      assert.deepEqual(
+        encoding === "buffer"
+          ? await brokerExecFile({ ...request, encoding })
+          : await brokerExecFile({ ...request, encoding }),
+        direct,
+        name,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a broker that dies mid-request fails it only once its children are gone", async () => {

@@ -19,7 +19,6 @@ import {
   directDependencyRoot,
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
-import * as childProcessShim from "./bun-shims/node-child-process.mjs";
 import {
   collectWebNotices,
   renderWebNotices,
@@ -222,10 +221,10 @@ async function checkWebAndSocket() {
 }
 
 /**
- * An upgrade with the wrong token is closed within 5 s and never opens.
- * Returns the status line it was answered with, for the log: under Bun there
- * is none, since nothing written to a refused upgrade socket reaches the
- * client.
+ * An upgrade with the wrong token is answered 401 within 5 s and never opens.
+ * Returns the status line, for the log. Bun 1.3.13 delivered nothing written
+ * to a refused upgrade socket, so every refusal reached the client as a bare
+ * close (a 502 behind a proxy such as Caddy).
  */
 async function checkRejectedUpgrade() {
   const reply = await new Promise((resolveReply, reject) => {
@@ -265,11 +264,12 @@ async function checkRejectedUpgrade() {
       reject(error);
     });
   });
+  const status = reply.split("\r\n", 1)[0] ?? "";
   assert(
-    !reply.includes(" 101 "),
-    "The packaged server upgraded a WebSocket with the wrong token.",
+    status.startsWith("HTTP/1.1 401 "),
+    `A wrong-token WebSocket upgrade was answered ${JSON.stringify(status || "(nothing)")}, not 401.`,
   );
-  return reply.split("\r\n", 1)[0] || "(connection closed without a status)";
+  return status;
 }
 
 /**
@@ -686,46 +686,6 @@ function checkSqliteShim() {
   readOnly.close();
 }
 
-/** The child_process shim restores Node's live `process.env` default. */
-function checkChildProcessShim() {
-  process.env.PA_SHIM_ADDED = "added";
-  const script = 'printf "%s" "${PA_SHIM_ADDED:-none}"';
-  const { execFileSync, execSync, spawnSync } = childProcessShim;
-  for (const [shape, run] of [
-    ["spawnSync(file, args)", () => spawnSync("sh", ["-c", script]).stdout],
-    [
-      "spawnSync(file, options)",
-      () => spawnSync("sh", { input: script }).stdout,
-    ],
-    [
-      "execFileSync(file, null, options)",
-      () => execFileSync("sh", null, { input: script }),
-    ],
-    ["execSync(command)", () => execSync(script)],
-    [
-      "spawnSync(file, args, { env: null })",
-      () => spawnSync("sh", ["-c", script], { env: null }).stdout,
-    ],
-    [
-      "execFileSync(file, args, { env: null })",
-      () => execFileSync("sh", ["-c", script], { env: null }),
-    ],
-    ["execSync(command, { env: null })", () => execSync(script, { env: null })],
-  ]) {
-    const seen = String(run());
-    assert(seen === "added", `The child_process shim broke ${shape}: ${seen}`);
-  }
-  for (const [env, expected] of [
-    [{ PA_SHIM_ADDED: "explicit" }, "explicit"],
-    [{}, "none"],
-  ])
-    assert(
-      String(execFileSync("/bin/sh", ["-c", script], { env })) === expected,
-      `The child_process shim overrode an explicit env ${JSON.stringify(env)}.`,
-    );
-  delete process.env.PA_SHIM_ADDED;
-}
-
 async function checkCompiledPhoton() {
   const entrypoint = join(temp, "compiled-photon-probe.mjs");
   const executable = join(temp, "compiled-photon-probe");
@@ -1128,14 +1088,14 @@ async function connect() {
   };
 }
 
-/** Collect a child's stdout line by line while still showing it. */
-function collectLines(stream) {
+/** Collect a child's output line by line while still showing it. */
+function collectLines(stream, shown = process.stdout) {
   const lines = [];
   const decoder = new globalThis.TextDecoder();
   let pending = "";
   void (async () => {
     for await (const chunk of stream) {
-      process.stdout.write(chunk);
+      shown.write(chunk);
       pending += decoder.decode(chunk, { stream: true });
       const parts = pending.split("\n");
       pending = parts.pop() ?? "";
@@ -1339,6 +1299,109 @@ function checkSessionDeleted(sessionId) {
   );
 }
 
+/** Whether `pid` names a process that is neither gone nor a zombie. */
+function running(pid) {
+  try {
+    return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, "latin1"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Bun 1.4.2 raises an uncaught error for a FileHandle closed during garbage
+ * collection, where Node only warns (`collectedFileHandle.ts`). In both modes
+ * the packaged server boots with the check's leak preload, which reaches the
+ * spawn broker through `BUN_OPTIONS`. Each process that loaded it leaks and
+ * collects on SIGWINCH and must keep running and log the production warning.
+ * In-process mode has no broker; the server is the one process.
+ */
+async function checkCollectedFileHandles() {
+  const leaked = join(temp, "leaked-file-handle.txt");
+  writeFileSync(leaked, "leaked\n");
+  const preload = fileURLToPath(
+    new URL("./bun-check-collected-file-handle.mjs", import.meta.url),
+  );
+  for (const mode of ["broker", "in-process"]) {
+    const env = {
+      ...serverEnv(),
+      DATA_DIR: join(temp, `collected-file-handle-${mode}`),
+      BUN_OPTIONS: `--preload ${preload}`,
+      PA_CHECK_LEAKED_FILE: leaked,
+    };
+    if (mode === "in-process") env.ASSISTANT_SPAWN_BROKER = "0";
+    else delete env.ASSISTANT_SPAWN_BROKER;
+    const child = launch([directExecutable, serverModule], {
+      cwd: work,
+      env,
+      stdout: "inherit",
+      stderr: "pipe",
+    });
+    const output = collectLines(child.stderr, process.stderr);
+    await waitForHealth(child);
+    const armed = (role) =>
+      output
+        .map((line) =>
+          line.startsWith(`[collected-file-handle check] armed in ${role} `)
+            ? Number(line.slice(line.lastIndexOf(" ") + 1))
+            : undefined,
+        )
+        .filter((pid) => pid !== undefined);
+    assert(
+      armed("server").includes(child.pid),
+      `The packaged server did not load the leak preload (${mode}).`,
+    );
+    const targets = [["server", child.pid]];
+    if (mode === "broker") {
+      await until(
+        () => armed("spawn broker").length > 0,
+        "the spawn broker to load the leak preload",
+      );
+      const broker = armed("spawn broker")[0];
+      assert(
+        readFileSync(`/proc/${broker}/stat`, "latin1")
+          .replace(/^.*\) /s, "")
+          .split(" ")[1] === String(child.pid),
+        "The preloaded spawn broker is not the server's child.",
+      );
+      targets.push(["spawn broker", broker]);
+    }
+    for (const [role, pid] of targets) {
+      const warnings = () =>
+        output.filter((line) =>
+          line.startsWith(
+            `[${role}] Warning: a leaked FileHandle was closed during garbage collection`,
+          ),
+        ).length;
+      process.kill(pid, "SIGWINCH");
+      await until(
+        () =>
+          output.includes(
+            `[collected-file-handle check] collected in ${role} ${pid}`,
+          ) || !running(pid),
+        `the ${role} to collect its leaked FileHandles (${mode})`,
+      );
+      assert(
+        running(pid) && child.exitCode === null,
+        `A FileHandle closed during garbage collection ended the ${role} (${mode}).`,
+      );
+      await until(
+        () => warnings() > 0,
+        `the ${role}'s collected-FileHandle warning (${mode})`,
+        5_000,
+      );
+    }
+    if (mode === "in-process")
+      assert(
+        armed("spawn broker").length === 0,
+        "In-process mode started a spawn broker.",
+      );
+    const health = await globalThis.fetch(`${baseUrl}/api/health`);
+    assert(health.ok, `The packaged server stopped answering (${mode}).`);
+    await stop(child);
+  }
+}
+
 /**
  * The lifecycle boot runs the same server module through the packaged Bun,
  * with the check's grace preload and the fake Claude CLI in place of the
@@ -1380,7 +1443,6 @@ try {
   await checkMissingRuntimeRoot();
   await checkBrowserMcpCli();
   checkSqliteShim();
-  checkChildProcessShim();
   await checkCompiledPhoton();
 
   const files = packageFiles(runtimeRoot);
@@ -1430,8 +1492,8 @@ try {
     );
 
   // Bun.spawnSync starts its child with the start-up environment whatever
-  // process.env holds now, and no shim covers it. Server code cannot name it
-  // (its types are Node's); this keeps it out of every bundled dependency.
+  // process.env holds now. Server code cannot name it (its types are Node's);
+  // this keeps it out of every bundled dependency.
   for (const bundled of [
     "server.js",
     "workers/initiative-layout-worker.js",
@@ -1452,6 +1514,7 @@ try {
   await checkParseLinkMemory();
   await checkNativeAssets();
   await runRuntimeProbes();
+  await checkCollectedFileHandles();
 
   seedDataDir();
   const first = start();
@@ -1497,7 +1560,7 @@ try {
   );
 
   console.log(
-    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
+    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, collected FileHandles in server and broker, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
   );
 } finally {
   await terminateChildren();
