@@ -137,6 +137,7 @@ export const MALFORMED_ANSWERS: Record<string, Payload> = {
   [FILE_METHODS.open]: { json: { opened: { handle: 0 } } },
   [FILE_METHODS.readlink]: { json: { target: 5 } },
   [LIFECYCLE_METHODS.mkdir]: { json: "made" },
+  [LIFECYCLE_METHODS.createDir]: { json: { dir: "made" } },
   [LIFECYCLE_METHODS.scanResidue]: { json: { scan: { complete: "yes" } } },
   [LIFECYCLE_METHODS.removeTree]: { json: { removal: { removed: "no" } } },
   [LIFECYCLE_METHODS.discardTree]: { json: { discard: { failed: true } } },

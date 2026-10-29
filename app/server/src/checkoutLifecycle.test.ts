@@ -279,6 +279,8 @@ test("a Worker failure at the initial stage rejects before any reclaim", async (
 const CALLS: Record<string, (path: string) => Promise<unknown>> = {
   [LIFECYCLE_METHODS.mkdir]: (path) =>
     checkoutLifecycleOn(DEFAULT_WORKER_SIDE).mkdir(path),
+  [LIFECYCLE_METHODS.createDir]: (path) =>
+    checkoutLifecycleOn(DEFAULT_WORKER_SIDE).createDir(path),
   [LIFECYCLE_METHODS.scanResidue]: (path) =>
     checkoutLifecycleOn(DEFAULT_WORKER_SIDE).scanResidue(path),
   [LIFECYCLE_METHODS.removeTree]: (path) =>
@@ -328,12 +330,20 @@ test("an unknown Worker is a Worker failure, before any request", async () => {
 test("a failure the Worker answered is a filesystem failure, never branded", async () => {
   const file = join(dir, "a-file");
   writeFileSync(file, "x");
-  const error = await rejection(
-    checkoutLifecycleOn(DEFAULT_WORKER_SIDE).mkdir(join(file, "below")),
-  );
-  assert.equal(isWorkerFailure(error), false);
-  assert.equal(checkoutFailureOf(error), "filesystem");
-  assert.equal(typeof (error as NodeJS.ErrnoException).code, "string");
+  const lifecycle = checkoutLifecycleOn(DEFAULT_WORKER_SIDE);
+  for (const call of [lifecycle.mkdir, lifecycle.createDir]) {
+    const error = await rejection(call(join(file, "below")));
+    assert.equal(isWorkerFailure(error), false);
+    assert.equal(checkoutFailureOf(error), "filesystem");
+    assert.equal(typeof (error as NodeJS.ErrnoException).code, "string");
+  }
+});
+
+test("createDir answers created once, then exists", async () => {
+  const lifecycle = checkoutLifecycleOn(DEFAULT_WORKER_SIDE);
+  const target = join(dir, "create-once", "new");
+  assert.equal(await lifecycle.createDir(target), "created");
+  assert.equal(await lifecycle.createDir(target), "exists");
 });
 
 test("the Knowledge Base side has no lifecycle", () => {

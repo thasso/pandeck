@@ -15,6 +15,7 @@
  */
 import { mkdirSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { dirname } from "node:path";
 import { errorText } from "../errors.ts";
 import {
   removeAfterReclaim,
@@ -35,6 +36,7 @@ import {
   LIFECYCLE_METHODS,
   decodeLifecycleLocation,
   decodeRemoveTree,
+  encodeCreateDirResult,
   encodeDiscardTreeResult,
   encodeDone,
   encodeProcessStop,
@@ -72,6 +74,24 @@ export function lifecycleHandlers(workerId: string): MethodHandlers {
       try {
         mkdirSync(path, { recursive: true });
         return encodeDone();
+      } catch (error) {
+        return encodeFailure(error);
+      }
+    },
+    [LIFECYCLE_METHODS.createDir]: async (payload) => {
+      const path = here(decodeLifecycleLocation(payload));
+      try {
+        // Only the last mkdir's EEXIST is the path's: an earlier one names a
+        // leading directory, and that is a failure like any other.
+        mkdirSync(dirname(path), { recursive: true });
+        try {
+          mkdirSync(path);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST")
+            return encodeCreateDirResult("exists");
+          throw error;
+        }
+        return encodeCreateDirResult("created");
       } catch (error) {
         return encodeFailure(error);
       }

@@ -18,6 +18,7 @@ import {
 } from "../workerProtocol/fileMethods.ts";
 import {
   LIFECYCLE_METHODS,
+  decodeCreateDirResult,
   decodeDiscardTreeResult,
   decodeDone,
   decodeProcessStop,
@@ -25,6 +26,7 @@ import {
   decodeResidueScan,
   encodeLifecycleLocation,
   encodeRemoveTree,
+  type CreateDirResult,
   type DiscardTreeResult,
   type LifecycleProcessStop,
   type RemoveTreeStage,
@@ -60,6 +62,17 @@ export function mkdirOnWorker(location: WorkerFileLocation): Promise<void> {
     LIFECYCLE_METHODS.mkdir,
     encodeLifecycleLocation(location),
     decodeDone,
+  );
+}
+
+export function createDirOnWorker(
+  location: WorkerFileLocation,
+): Promise<CreateDirResult> {
+  return ask(
+    location,
+    LIFECYCLE_METHODS.createDir,
+    encodeLifecycleLocation(location),
+    decodeCreateDirResult,
   );
 }
 

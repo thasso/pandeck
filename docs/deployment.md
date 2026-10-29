@@ -240,8 +240,18 @@ link targets (dangling, non-ASCII, invalid UTF-8) against `readlinkSync`,
 failure codes and messages against the sync call's throw, and each operation
 marker against `existsSync` in a main and a linked checkout. A dry-run commit
 workflow over untracked fixtures must give the prompt the summaries a copy of
-base's synchronous reader gives. Each checkout lifecycle method must answer as native `fs` and base code do on a twin fixture (`mkdir` on new, existing and blocked paths; the removal ladder's first stage and the discard and delete on a tree with 0o500 and 0o000 directories and a link to an outside directory; the residue scan; a missing tree): the same answer or failure code and message, the same survivors with their modes and link texts, and the outside directory untouched. A stop in a checkout must SIGTERM exactly the two sleepers the probe's direct child started there and SIGKILL only the one that ignores SIGTERM, leaving the direct child and a sleeper outside the checkout running, and every lifecycle request naming another Worker must be refused with nothing changed. Over a real local socket, both served-file
-routes must send the whole file to a client that stays. A client gone before the
+base's synchronous reader gives. Each checkout lifecycle method must answer as
+native `fs` and base code do on a twin fixture (`mkdir` and the exclusive
+`createDir` on new, existing and blocked paths; the removal ladder's first stage
+and the discard and delete on a tree with 0o500 and 0o000 directories and a link
+to an outside directory; the residue scan; a missing tree): the same answer or
+failure code and message, the same survivors with their modes and link texts,
+and the outside directory untouched. A stop in a checkout must SIGTERM exactly
+the two sleepers the probe's direct child started there and SIGKILL only the one
+that ignores SIGTERM, leaving the direct child and a sleeper outside the
+checkout running, and every lifecycle request naming another Worker must be
+refused with nothing changed. Over a real local socket, both served-file routes
+must send the whole file to a client that stays. A client gone before the
 handler runs, or while its open is held, must cost at most one chunk read and
 close what was opened once. One gone mid-body must end the handler before the
 file's end, with its file closed once. Killing the broker must fail the lost

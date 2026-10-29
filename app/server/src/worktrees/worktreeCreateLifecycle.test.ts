@@ -1,7 +1,8 @@
 /**
  * Worktree creation on the Worker (W5): the root's mkdir, both naming
- * searches, the submodule gate and the discard of a failed create, each with
- * a Worker failure injected where it moved (`docs/workers.md`, W5).
+ * searches, the checkout folder's exclusive create, the submodule gate and
+ * the discard of a failed create, each with a Worker failure injected where
+ * it moved (`docs/workers.md`, W5).
  *
  * Worker failures are injected per method by a script on the in-process
  * Worker, which also records what it saw. Orderings between failures come from
@@ -40,8 +41,11 @@ const { scriptWorkerAnswersForTests } =
 const { FILE_METHODS } = await import("../workerProtocol/fileMethods.ts");
 const { CHECKOUT_GIT_METHODS } =
   await import("../workerProtocol/checkoutMethods.ts");
-const { LIFECYCLE_METHODS } =
+const { LIFECYCLE_METHODS, encodeCreateDirResult } =
   await import("../workerProtocol/lifecycleMethods.ts");
+const { inProcessWorkerQuiescentForTests, writeAsInProcessWorkerForTests } =
+  await import("../workers/inProcessWorker.ts");
+const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
 
 function sh(cwd: string, ...args: string[]): string {
   return execFileSync(
@@ -125,6 +129,33 @@ const isGit =
   (...prefix: string[]) =>
   (request: { args?: string[] }): boolean =>
     prefix.every((arg, at) => request.args?.[at] === arg);
+
+/** Any git run that would delete a branch, by name or by ref. */
+const deletesBranch = (request: { args?: string[] }): boolean =>
+  isGit("branch", "-D")(request) || isGit("update-ref")(request);
+
+/**
+ * The discard deleted `name` as its own: one non-dereferencing
+ * compare-and-delete at the start commit, then its config, never `branch -D`.
+ */
+function assertOwnedBranchDeleted(seen: Script["seen"], name: string): void {
+  assert.deepEqual(
+    seen
+      .filter(
+        (request) =>
+          deletesBranch(request) ||
+          isGit("config", "--remove-section")(request),
+      )
+      .map((request) => [request.args, request.action]),
+    [
+      [
+        ["update-ref", "--no-deref", "-d", `refs/heads/${name}`, mainHead],
+        "pass",
+      ],
+      [["config", "--remove-section", `branch.${name}`], "pass"],
+    ],
+  );
+}
 
 /** Nothing of `name`'s candidates: no row, branch, folder or registration. */
 function assertNothingFor(name: string): void {
@@ -239,7 +270,9 @@ test("(b) a candidate whose probe failed is not free: the next proven one is tak
       (request) =>
         (isGit("worktree", "remove")(request) &&
           request.args?.includes(taken)) ||
-        (isGit("branch", "-D")(request) && request.args?.includes(name)),
+        (deletesBranch(request) &&
+          (request.args?.includes(name) === true ||
+            request.args?.includes(`refs/heads/${name}`) === true)),
     ),
     false,
   );
@@ -312,13 +345,100 @@ test("(c′) every folder probe failing for a tracking checkout rejects before t
       21,
     );
     assert.equal(git.seen.some(isGit("worktree", "add")), false);
-    assert.equal(git.seen.some(isGit("branch", "-D")), false);
+    assert.equal(git.seen.some(deletesBranch), false);
     assert.equal(branchExists(head), false, `refs/heads/${head} absent`);
     assertNothingFor(head);
     assert.deepEqual(presenceCountsForTests(), before, "presence untouched");
   } finally {
     sh(repoPath, "update-ref", "-d", `refs/remotes/origin/${head}`);
   }
+});
+
+/* ---------------------- the folder's exclusive create ---------------------- */
+
+test("(g) an answered exists claims nothing: no branch, no discard", async () => {
+  const name = "create-taken";
+  const wt = candidate(name);
+  const createDir = script(LIFECYCLE_METHODS.createDir, [
+    {
+      match: (request) => request.path === wt,
+      times: 1,
+      action: { answer: async () => encodeCreateDirResult("exists") },
+    },
+  ]);
+  const discard = script(LIFECYCLE_METHODS.discardTree, []);
+  const git = recordGit();
+
+  const error = await rejection(create(name));
+  assert.match(String(error), new RegExp(`'${wt}' already exists`));
+  assert.equal(isWorkerFailure(error), false);
+  assert.deepEqual(
+    createDir.seen.map((request) => [request.path, request.action]),
+    [[wt, "answer"]],
+  );
+  assert.equal(git.seen.some(isGit("branch")), false);
+  assert.equal(git.seen.some(isGit("worktree", "add")), false);
+  assert.equal(git.seen.some(isGit("worktree", "remove")), false);
+  assert.deepEqual(discard.seen, []);
+  assertNothingFor(name);
+});
+
+test("(h) a Worker lost after creating the folder claims nothing and settles first", async () => {
+  const name = "create-lost";
+  const wt = candidate(name);
+  const lockKey = await repoLockKey(repoPath);
+  const trace: string[] = [];
+  let contender: Promise<void> | undefined;
+  script(LIFECYCLE_METHODS.createDir, [
+    {
+      match: (request) => request.path === wt,
+      times: 1,
+      action: {
+        answer: async (payload, signal, real) => {
+          const answer = await real(payload, signal);
+          trace.push("handler-settled");
+          // Queued behind the creation, which holds the repo lock now.
+          contender = withRepoLock(lockKey, async () => {
+            trace.push("lock-acquired");
+          });
+          // The connection ends before this answer can reach the server.
+          writeAsInProcessWorkerForTests(new Uint8Array(8));
+          return answer;
+        },
+      },
+    },
+  ]);
+  const discard = script(LIFECYCLE_METHODS.discardTree, []);
+  const git = recordGit();
+
+  const quiescent = inProcessWorkerQuiescentForTests();
+  const error = await rejection(
+    create(name).finally(() => trace.push("rejected")),
+  );
+  await contender;
+  await quiescent;
+
+  assert.ok(isWorkerFailure(error), String(error));
+  // The rejection and the lock's release both follow the settled handler.
+  assert.equal(trace[0], "handler-settled", trace.join());
+  assert.deepEqual(trace.slice(1).sort(), ["lock-acquired", "rejected"]);
+  assert.equal(git.seen.some(isGit("branch")), false);
+  assert.equal(git.seen.some(isGit("worktree")), false);
+  assert.deepEqual(discard.seen, []);
+  // Made, but never proven the attempt's: left in place, not discarded.
+  assert.deepEqual(readdirSync(wt), []);
+  assert.equal(branchExists(name), false);
+  assert.equal(registered(wt), false);
+  assert.deepEqual(
+    listWorktrees({ includeRemoved: true }).filter((row) => row.path === wt),
+    [],
+  );
+
+  disarmAll();
+  const next = await create(name);
+  assert.equal(next.path, candidate(name, 2));
+  await removeWorktree(next.id);
+  rmSync(wt, { recursive: true, force: true });
 });
 
 /* ------------------------- the discard (RD-W5-4) -------------------------- */
@@ -346,6 +466,7 @@ test("(d) a Worker failure at the submodule gate discards the checkout", async (
     ),
   );
   assert.equal(git.seen.filter(isGit("worktree", "prune")).length, 1);
+  assertOwnedBranchDeleted(git.seen, name);
   assert.equal(registered(wt), false);
   assertNothingFor(name);
 });
@@ -387,6 +508,7 @@ test("(e) a failed settle check is not proof; a later one is, and the name frees
     false,
   );
   assert.equal(git.seen.filter(isGit("worktree", "prune")).length, 1);
+  assertOwnedBranchDeleted(git.seen, name);
   assertNothingFor(name);
 
   disarmAll();
@@ -396,7 +518,7 @@ test("(e) a failed settle check is not proof; a later one is, and the name frees
   await removeWorktree(again.id);
 });
 
-test("(f) when the discard cannot remove the checkout it logs the orphan and still tries the branch", async () => {
+test("(f) when the discard cannot remove the checkout it logs the orphan and keeps its checked-out branch", async () => {
   const name = "orphan";
   const wt = candidate(name);
   const added = { open: false };
@@ -437,24 +559,25 @@ test("(f) when the discard cannot remove the checkout it logs the orphan and sti
   assert.ok(existsSync(wt), "its folder remains");
   assert.ok(branchExists(name), "its branch remains");
   assert.equal(seenGit.filter(isGit("worktree", "prune")).length, 0);
-  const branchDeletes = seenGit.filter(isGit("branch", "-D"));
-  assert.deepEqual(
-    branchDeletes.map((request) => [request.args, request.action]),
-    [[["branch", "-D", name], "pass"]],
-  );
+  // The orphan still has the branch checked out, so no delete is attempted.
+  assert.deepEqual(seenGit.filter(deletesBranch), []);
   const subject = `[worktrees] discarding the incomplete worktree ${wt} (branch ${name})`;
   for (const step of [
     "existence check failed:",
     "worktree remove failed:",
     "directory removal failed:",
     "settle check failed:",
-    "branch delete failed:",
     "directory remained after bounded cleanup.",
+    `kept branch ${name}: checked out in a worktree`,
   ])
     assert.ok(
       errors.some((line) => line.startsWith(`${subject}: ${step}`)),
       `${step}\n${errors.join("\n")}`,
     );
+  assert.equal(
+    errors.some((line) => line.includes("branch delete failed:")),
+    false,
+  );
 
   const next = await create(name);
   assert.equal(next.path, candidate(name, 2));

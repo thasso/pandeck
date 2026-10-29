@@ -5,8 +5,7 @@
  * computed by `worktreeStatus.ts`; this module owns the durable rows and the
  * git mutations, which run under {@link withRepoLock}.
  */
-import { mkdirSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   boundMergeMessage,
@@ -252,8 +251,8 @@ export async function createWorktree(
   fetchRepoIfDue(side, mainRepoKey, main.root);
 
   const root = worktreeRootFor(project);
-  // Node resolves a relative root against the server's cwd and git against the
-  // main checkout's, so one creation would name two different folders.
+  // The Worker resolves a relative root against its own cwd and git against
+  // the main checkout's, so one creation would name two different folders.
   if (!isAbsolute(root))
     throw new Error(`Worktree root "${root}" must be an absolute path`);
   await checkoutLifecycleOn(side).mkdir(root);
@@ -622,15 +621,12 @@ async function addCheckout(
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  // Leading directories are never the attempt's, the same as git's own.
-  mkdirSync(dirname(target), { recursive: true });
-  try {
-    mkdirSync(target);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST")
-      throw new Error(`'${target}' already exists`);
-    throw err;
-  }
+  // Leading directories are never the attempt's, the same as git's own. Only
+  // the Worker's answer that this request created the folder makes it the
+  // attempt's: a Worker failure rejects with nothing claimed, even if the
+  // folder was made before the answer was lost.
+  if ((await checkoutLifecycleOn(side).createDir(target)) === "exists")
+    throw new Error(`'${target}' already exists`);
   const created: CreatedCheckout = {
     branch,
     path: target,
@@ -775,9 +771,7 @@ async function discardUntrackedWorktreeLocked(
     );
   };
   const kept = (why: string): void => {
-    console.error(
-      `${subject}: kept branch ${branch}: ${why}`,
-    );
+    console.error(`${subject}: kept branch ${branch}: ${why}`);
   };
   // Same shape as removeWorktree: prune is repo-global, so only run it after
   // the generated path has stayed absent through the settle window. When the

@@ -2,7 +2,8 @@
  * A failed `createWorktree` discards only what that attempt created: its own
  * folder, and its own branch through a non-dereferencing compare-and-delete at
  * the start commit. Every case drives the failure through a one-shot hook on an
- * exact git argv or filesystem path, never through timing. Run:
+ * exact git argv or on the Worker's folder naming probe for an exact path,
+ * never through timing. Run:
  *   pnpm --filter @assistant/server test src/worktrees/worktreeAddOwnership.test.ts
  */
 import assert from "node:assert/strict";
@@ -37,16 +38,11 @@ interface GitResultShape {
   stderr: string;
   code: number;
 }
-interface AbsentLie {
-  path: string;
-  fired: number;
-}
-
 // One-shot hooks: each acts on the FIRST call matching it exactly and passes
 // every later call through, so `fired` proves it ran exactly once.
 const hooks = vi.hoisted(() => ({
   git: [] as GitHook[],
-  absent: [] as AbsentLie[],
+  disarms: [] as Array<() => void>,
 }));
 
 vi.mock("../gitExec.ts", async (importOriginal) => {
@@ -85,21 +81,6 @@ vi.mock("../gitExec.ts", async (importOriginal) => {
   };
 });
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
-    existsSync: (path: Parameters<typeof actual.existsSync>[0]) => {
-      const lie = hooks.absent.find(
-        (candidate) => candidate.fired === 0 && candidate.path === path,
-      );
-      if (!lie) return actual.existsSync(path);
-      lie.fired++;
-      return false;
-    },
-  };
-});
-
 // Canonical, so paths compare equal to the ones git prints.
 const tmp = realpathSync(
   mkdtempSync(join(tmpdir(), "worktree-add-ownership-")),
@@ -111,6 +92,9 @@ const { createWorktree } = await import("./worktrees.ts");
 const { GitCommandError } = await import("../gitExec.ts");
 const { listWorktrees } = await import("../db/worktreeStore.ts");
 const { projectStore } = await import("../db/projectStore.ts");
+const { answerForPathForTests } = await import("../test/workerAnswers.ts");
+const { FILE_METHODS, encodeExists } =
+  await import("../workerProtocol/fileMethods.ts");
 
 function sh(cwd: string, ...args: string[]): string {
   return execFileSync(
@@ -243,9 +227,18 @@ function onGit(
   return hook;
 }
 
+/**
+ * The Worker's next existence probe of `path` answers absent: an answer, never
+ * a Worker failure, which the naming searches would count as taken.
+ */
 function lieAbsent(path: string): { readonly fired: number } {
-  const lie: AbsentLie = { path, fired: 0 };
-  hooks.absent.push(lie);
+  const lie = { fired: 0 };
+  hooks.disarms.push(
+    answerForPathForTests(FILE_METHODS.exists, path, async () => {
+      lie.fired++;
+      return encodeExists(false);
+    }),
+  );
   return lie;
 }
 
@@ -290,7 +283,7 @@ beforeEach(() => {
 
 afterEach(() => {
   hooks.git.length = 0;
-  hooks.absent.length = 0;
+  for (const disarm of hooks.disarms.splice(0)) disarm();
   vi.restoreAllMocks();
 });
 

@@ -51,7 +51,7 @@ import { createServer, get as httpGet } from "node:http";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { runInThisContext } from "node:vm";
 import {
@@ -3079,6 +3079,31 @@ async function checkWorkerLifecycle() {
         (tree) => (mkdirSync(join(tree, target), { recursive: true }), "done"),
         (tree) => lifecycle.mkdir(join(tree, target)).then(done),
       );
+    // O1 also covers the exclusive create of a creation's folder, as base's
+    // own mkdirs: the leading directories, then the folder alone.
+    for (const [name, target] of [
+      ["new", "new/deeper"],
+      ["existing-dir", "sub"],
+      ["existing-file", "file"],
+      ["below-file", "file/below"],
+    ])
+      await differential(
+        `O1-create-${name}`,
+        "plain",
+        LIFECYCLE_METHODS.createDir,
+        (tree) => {
+          const path = join(tree, target);
+          mkdirSync(dirname(path), { recursive: true });
+          try {
+            mkdirSync(path);
+            return "created";
+          } catch (error) {
+            if (error?.code === "EEXIST") return "exists";
+            throw error;
+          }
+        },
+        (tree) => lifecycle.createDir(join(tree, target)),
+      );
     console.log("lifecycle O1 ok");
 
     // O2: the removal ladder's first stage, as base `removeManagedTree`.
@@ -3174,6 +3199,10 @@ async function checkWorkerLifecycle() {
     for (const [method, payload] of [
       [
         LIFECYCLE_METHODS.mkdir,
+        encodeLifecycleLocation({ ...elsewhere, path: join(tree, "refused") }),
+      ],
+      [
+        LIFECYCLE_METHODS.createDir,
         encodeLifecycleLocation({ ...elsewhere, path: join(tree, "refused") }),
       ],
       [LIFECYCLE_METHODS.scanResidue, encodeLifecycleLocation(elsewhere)],

@@ -12,6 +12,7 @@ import {
 } from "./fileMethods.ts";
 import {
   LIFECYCLE_METHODS,
+  decodeCreateDirResult,
   decodeDiscardTreeResult,
   decodeDone,
   decodeLifecycleLocation,
@@ -19,6 +20,7 @@ import {
   decodeRemoveTree,
   decodeRemoveTreeResult,
   decodeResidueScan,
+  encodeCreateDirResult,
   encodeDiscardTreeResult,
   encodeDone,
   encodeLifecycleLocation,
@@ -68,9 +70,10 @@ function assertMalformed(run: () => unknown): void {
   });
 }
 
-test("the protocol is 1.5 with six lifecycle methods", () => {
+test("the protocol is 1.5 with seven lifecycle methods", () => {
   assert.equal(WORKER_PROTOCOL_VERSION, "1.5");
   assert.deepEqual(Object.values(LIFECYCLE_METHODS).sort(), [
+    "lifecycle.createDir",
     "lifecycle.discardTree",
     "lifecycle.mkdir",
     "lifecycle.removeAll",
@@ -126,6 +129,12 @@ test("a path resolving to / is refused, any other is not", () => {
 test("answers round-trip", () => {
   decodeDone(wire(encodeDone()));
 
+  for (const result of ["created", "exists"] as const)
+    assert.equal(
+      decodeCreateDirResult(wire(encodeCreateDirResult(result))),
+      result,
+    );
+
   const clean = { complete: true, directoriesVisited: 3 };
   assert.deepEqual(decodeResidueScan(wire(encodeResidueScan(clean))), clean);
   const foreign = {
@@ -175,6 +184,7 @@ test("an answered failure rebuilds with its code and exact message", () => {
   );
   for (const decode of [
     decodeDone,
+    decodeCreateDirResult,
     decodeResidueScan,
     decodeRemoveTreeResult,
     decodeDiscardTreeResult,
@@ -192,6 +202,7 @@ test("an answered failure rebuilds with its code and exact message", () => {
 test("malformed answers are malformed, per method", () => {
   const decoders: Record<string, (payload: Payload) => unknown> = {
     [LIFECYCLE_METHODS.mkdir]: decodeDone,
+    [LIFECYCLE_METHODS.createDir]: decodeCreateDirResult,
     [LIFECYCLE_METHODS.scanResidue]: decodeResidueScan,
     [LIFECYCLE_METHODS.removeTree]: decodeRemoveTreeResult,
     [LIFECYCLE_METHODS.discardTree]: decodeDiscardTreeResult,
@@ -222,6 +233,8 @@ test("malformed answers are malformed, per method", () => {
       },
     }),
   );
+  for (const json of [{}, { dir: true }, { dir: "made" }, { created: true }])
+    assertMalformed(() => decodeCreateDirResult({ json }));
   assertMalformed(() =>
     decodeProcessStop({ json: { stop: { terminated: [0], killed: [] } } }),
   );

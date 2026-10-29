@@ -35,6 +35,7 @@ import type { Payload } from "../workerProtocol/codec.ts";
 import { WorkerRequestError } from "../workerProtocol/connection.ts";
 import {
   LIFECYCLE_METHODS,
+  decodeCreateDirResult,
   decodeDiscardTreeResult,
   decodeProcessStop,
   decodeRemoveTreeResult,
@@ -248,7 +249,10 @@ describe("refusals, before any effect", () => {
   test("another Worker's id is refused by every method", async () => {
     for (const method of Object.values(LIFECYCLE_METHODS)) {
       const target =
-        method === LIFECYCLE_METHODS.mkdir ? join(tree, "new") : tree;
+        method === LIFECYCLE_METHODS.mkdir ||
+        method === LIFECYCLE_METHODS.createDir
+          ? join(tree, "new")
+          : tree;
       const error = await refusal(
         ask(method, requestOf(method, target, "elsewhere")),
       );
@@ -338,6 +342,68 @@ test("mkdir answers the failure native mkdirSync throws, code and message", asyn
   });
   assert.deepEqual(answer.json, { error: { code: native.code } });
   assert.deepEqual(answer.text, { message: native.message });
+});
+
+describe("createDir creates exclusively", () => {
+  const create = async (path: string) =>
+    decodeCreateDirResult(
+      await ask(LIFECYCLE_METHODS.createDir, { location: here(path) }),
+    );
+
+  test("a new path is created with its leading directories", async () => {
+    const target = join(dir, "create", "lead", "new");
+    assert.equal(await create(target), "created");
+    assert.ok(statSync(target).isDirectory());
+    assert.deepEqual(readdirSync(target), []);
+  });
+
+  test("any entry already there answers exists and is left untouched", async () => {
+    const at = join(dir, "create-taken");
+    const directory = fixtureTree("create-taken-dir");
+    const file = join(at, "file");
+    const dangling = join(at, "dangling");
+    mkdirSync(at, { recursive: true });
+    writeFileSync(file, "mine\n");
+    symlinkSync(join(at, "nowhere"), dangling);
+    for (const path of [directory, file, dangling])
+      assert.equal(await create(path), "exists", path);
+    assert.equal(
+      readFileSync(join(directory, "sub", "kept.txt"), "utf8"),
+      "kept\n",
+    );
+    assert.equal(readFileSync(file, "utf8"), "mine\n");
+    assert.ok(lstatSync(dangling).isSymbolicLink());
+    assert.equal(existsSync(join(at, "nowhere")), false);
+  });
+
+  test("a leading path that is a file is a failure, never exists", async () => {
+    const file = join(dir, "create-lead-file");
+    writeFileSync(file, "x");
+    for (const target of [join(file, "below"), join(file, "a", "below")]) {
+      let native: NodeJS.ErrnoException | undefined;
+      try {
+        mkdirSync(join(target, ".."), { recursive: true });
+      } catch (error) {
+        native = error as NodeJS.ErrnoException;
+      }
+      assert.ok(native, target);
+      const answer = await ask(LIFECYCLE_METHODS.createDir, {
+        location: here(target),
+      });
+      assert.deepEqual(answer.json, { error: { code: native.code } }, target);
+      assert.deepEqual(answer.text, { message: native.message });
+    }
+    assert.equal(readFileSync(file, "utf8"), "x");
+  });
+
+  test("a relative path resolves against the Worker's cwd", async () => {
+    const target = join(dir, "create-relative", "a");
+    const rel = relative(process.cwd(), target);
+    assert.ok(!rel.startsWith("/"));
+    assert.equal(await create(rel), "created");
+    assert.ok(statSync(target).isDirectory());
+    assert.equal(await create(rel), "exists");
+  });
 });
 
 test("scanResidue answers the scan the Worker's own uid makes", async () => {

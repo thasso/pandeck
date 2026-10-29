@@ -25,12 +25,14 @@ import {
   type WorkerFileLocation,
 } from "./workerProtocol/fileMethods.ts";
 import type {
+  CreateDirResult,
   DiscardTreeResult,
   LifecycleProcessStop,
   RemoveTreeStage,
   RemoveTreeStageResult,
 } from "./workerProtocol/lifecycleMethods.ts";
 import {
+  createDirOnWorker,
   discardTreeOnWorker,
   mkdirOnWorker,
   removeAllOnWorker,
@@ -43,6 +45,11 @@ import { checkoutSideKey, type CheckoutSide } from "./workers/placement.ts";
 /** The lifecycle steps of the checkouts on one Worker. */
 export interface CheckoutLifecycle {
   mkdir(path: string): Promise<void>;
+  /**
+   * Creates `path` exclusively, its leading directories as `mkdir` does. Only
+   * `"created"` proves this call made it; a rejection never does.
+   */
+  createDir(path: string): Promise<CreateDirResult>;
   scanResidue(path: string): Promise<TreeResidueScan>;
   removeTree(
     path: string,
@@ -80,6 +87,7 @@ export function checkoutLifecycleOn(side: CheckoutSide): CheckoutLifecycle {
     });
     lifecycle = {
       mkdir: (path) => remote(() => mkdirOnWorker(at(path))),
+      createDir: (path) => remote(() => createDirOnWorker(at(path))),
       scanResidue: (path) => remote(() => scanResidueOnWorker(at(path))),
       removeTree: (path, stage) =>
         remote(() => removeTreeOnWorker(at(path), stage)),

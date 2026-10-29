@@ -488,13 +488,14 @@ which imports no server state) and `workers/` (the server's side and placement);
   the checkout's Worker through `checkoutLifecycleOn(side)` and
   `checkoutFilesOn(side)` (`checkoutLifecycle.ts`, `workers/lifecycleClient.ts`;
   the Worker's side is `worker/lifecycle.ts`). Protocol `1.5`
-  (`workerProtocol/lifecycleMethods.ts`) adds six server-to-Worker methods and
+  (`workerProtocol/lifecycleMethods.ts`) adds seven server-to-Worker methods and
   changes no earlier method's meaning, payload or failure shape:
   - The methods run base code with its production defaults, and no option
     crosses the wire: `lifecycle.mkdir` is a recursive `mkdirSync`;
-    `lifecycle.scanResidue` is `scanTreeResidue` with the default budget and the
-    Worker's own uid; `lifecycle.removeTree` runs `removeManagedTree` without
-    options at stage `initial` and `removeAfterReclaim` at `afterReclaim`;
+    `lifecycle.createDir` is the exclusive create below; `lifecycle.scanResidue`
+    is `scanTreeResidue` with the default budget and the Worker's own uid;
+    `lifecycle.removeTree` runs `removeManagedTree` without options at stage
+    `initial` and `removeAfterReclaim` at `afterReclaim`;
     `lifecycle.discardTree` is a failed create's `rmSync` (10 retries 200 ms
     apart, owner access restored on a throw), whose failure is an answer
     (`{failed}`), not a failed request; `lifecycle.removeAll` is a forced
@@ -510,8 +511,22 @@ which imports no server state) and `workers/` (the server's side and placement);
     cancellation: on a connection end each runs to its last deletion or signal
     and settles before the Worker is quiescent, so the caller's rejection, and
     the release of its repo lock, come after it. A stop's SIGKILL is sent, not
-    awaited. The client never retries; every method is idempotent on its target,
-    and recovery is the callers' existing row and git state.
+    awaited. The client never retries. Every method but `createDir` is
+    idempotent on its target, and recovery is the callers' existing row and git
+    state.
+  - Exclusive create. A creation's checkout folder is made by
+    `lifecycle.createDir` on the checkout's Worker: the leading directories as a
+    recursive `mkdirSync`, never the attempt's, then `mkdirSync(path)` alone. It
+    answers `{dir: "created"}` when that call made the folder, or
+    `{dir: "exists"}` when it failed with `EEXIST`, whatever kind of entry is
+    there (a directory, empty or not, a file, a dangling link). Any other
+    failure, including an `EEXIST` from a leading directory that is a file, is a
+    filesystem failure answered with its code and message. Only `created` makes
+    the folder the attempt's (`docs/pull-requests.md`): `exists` refuses the
+    create with `'<path>' already exists` before any branch is made, and a
+    Worker failure rejects with nothing claimed. No naming probe proves a folder
+    free; the create's answer does. The repo lock, the claim and git stay on the
+    server, and git calls stay git.
   - Placement. A lifecycle side is a spawned row's `checkoutSideOf(row)` or the
     project's main side, `checkoutSideOf({id: mainWorktreeId(projectId)})`, for
     creation and provisioning. `checkoutLifecycleOn("server")` throws, so the
@@ -542,37 +557,45 @@ which imports no server state) and `workers/` (the server's side and placement);
       not free. When no candidate is free and a probe failed, the search
       rethrows that failure before any claim, add or unchecked random-name
       fallback. Naming probes are raw reads and never write presence.
-    - A failed create's discard deletes exactly base's claimed path and branch.
-      It logs each step's failure with path and branch (`existence check`,
-      `worktree remove`, `directory removal`, `settle check`, `branch delete`)
-      and goes on; it prunes only on a proven absence and always attempts
-      `branch -D`.
+    - A failed create's discard deletes only the folder and branch the attempt
+      created, as Task-1228 made it (`docs/pull-requests.md`). It logs each
+      step's failure with path and branch (`existence check`, `worktree remove`,
+      `directory removal`, `settle check`, `branch delete`, `branch config`) and
+      goes on, and prunes only on a proven absence. The owned branch is
+      compare-and-deleted without dereferencing, by `update-ref --no-deref -d`
+      at its start commit and then its `branch.<name>` config, unless a worktree
+      has it checked out. A branch it keeps (not provably created, checked out,
+      or moved) is logged with `kept branch <name>:` and the reason.
   - Known limits. During a Worker failure every moved operation fails closed,
     except naming and the discard steps above (E-W5-1). A create that fails
     after the add, whose discard cannot remove the checkout either, leaves an
     orphan logged as `directory remained after bounded cleanup` with path and
-    branch; there is no sweep (E-W5-2). Under Node, removal's `<gitdir>/modules`
-    probe rejects a non-`ENOENT` failure, as packaged Bun's base did (E-W5-3).
-    Git calls and their failure mappings are unchanged, so a Worker failure of
-    git keeps W2's mapping: the naming branch probe reads it as a free branch,
-    and submodule init, the discard's git steps, the `project_create` HEAD
-    probe, `refreshRemovalBase` and the PR view checkout's reads absorb it as
-    before (E-W5-4, Task-1227).
+    branch; there is no sweep (E-W5-2). A Worker failure after `createDir` made
+    the folder leaves it empty and unclaimed, never discarded; naming then
+    counts it as taken. Under Node, removal's `<gitdir>/modules` probe rejects a
+    non-`ENOENT` failure, as packaged Bun's base did (E-W5-3). Git calls and
+    their failure mappings are unchanged, so a Worker failure of git keeps W2's
+    mapping: the naming branch probe reads it as a free branch, and submodule
+    init, the discard's git steps, the `project_create` HEAD probe,
+    `refreshRemovalBase` and the PR view checkout's reads absorb it as before
+    (E-W5-4, Task-1227).
   - Base behavior kept, not fixed. In broker mode, a lock-free git read running
     in the checkout is stopped with it (BB-W5-1). A process whose cwd was
     deleted is never a candidate (BB-W5-2). A managed-clone delete neither stops
     processes nor takes the repo lock (BB-W5-3). The discard's retries never
-    retry `EACCES` (BB-W5-4). A failed add's discard can delete a pre-existing
-    branch or folder (BB-W5-5, Task-1228). With a relative `worktrees.root`, the
-    filesystem steps resolve against the Worker's cwd while `git worktree add`
-    resolves against the main checkout (BB-W5-6, from reading the code).
+    retry `EACCES` (BB-W5-4). Two that W5 found are fixed by Task-1228 instead.
+    A failed add's discard no longer deletes a pre-existing branch or folder
+    (BB-W5-5); two residuals stay: the checked-out guard is not atomic with an
+    outsider's checkout, and a symref placed at the owned name is removed by
+    name only, its target untouched. Creation refuses a relative
+    `worktrees.root` before making any folder, so the Worker's cwd and the main
+    checkout can no longer name two different folders (BB-W5-6).
   - Phase 2 (Task-1153) fences these handlers like the others and keeps the
-    two-level rule relative to the Worker's pid. A relative projects or
-    worktrees root resolves against the Worker's cwd, so a separate Worker must
-    start in the server's cwd, or the roots must become absolute. Phase 3
-    (Task-1154) settles the reclaim's container run and its uid, and a
-    `projectsRoot` given with `~`, which the server expands against its own
-    home.
+    two-level rule relative to the Worker's pid. A relative projects root
+    resolves against the Worker's cwd, so a separate Worker must start in the
+    server's cwd, or that root must become absolute. Phase 3 (Task-1154) settles
+    the reclaim's container run and its uid, and a `projectsRoot` given with
+    `~`, which the server expands against its own home.
 
 - **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
   answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and

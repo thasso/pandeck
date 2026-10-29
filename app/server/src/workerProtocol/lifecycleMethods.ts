@@ -29,6 +29,11 @@ import {
 export const LIFECYCLE_METHODS = {
   /** `mkdirSync(path, {recursive: true})`. */
   mkdir: "lifecycle.mkdir",
+  /**
+   * The leading directories as `mkdir` does, then `mkdirSync(path)` alone:
+   * created, or something was already at the path.
+   */
+  createDir: "lifecycle.createDir",
   /** The residue scan, with the Worker's own uid and the default budget. */
   scanResidue: "lifecycle.scanResidue",
   /** One stage of the managed tree removal (`managedTreeRemoval.ts`). */
@@ -50,6 +55,13 @@ export type RemoveTreeStage = "initial" | "afterReclaim";
 /** What one stage answers: removed, or what still blocks the tree. */
 export type RemoveTreeStageResult =
   { removed: true } | { removed: false; residue?: TreeResidue };
+
+/**
+ * What an exclusive create answers: this request made the directory, or an
+ * entry of any kind was already at the path (`EEXIST`). Only `created` makes
+ * the directory the caller's.
+ */
+export type CreateDirResult = "created" | "exists";
 
 /** What a discard attempt answers: nothing, or its removal failure's text. */
 export interface DiscardTreeResult {
@@ -156,6 +168,16 @@ function residueOf(value: unknown): TreeResidue {
   )
     malformed("tree residue");
   return { path: residue.path, reason: residue.reason, uid: residue.uid };
+}
+
+export function encodeCreateDirResult(result: CreateDirResult): Payload {
+  return { json: { dir: result } };
+}
+
+export function decodeCreateDirResult(payload: Payload): CreateDirResult {
+  const dir = settled(payload).dir;
+  if (dir !== "created" && dir !== "exists") malformed("directory create");
+  return dir;
 }
 
 export function encodeResidueScan(scan: TreeResidueScan): Payload {

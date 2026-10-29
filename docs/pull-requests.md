@@ -2118,12 +2118,15 @@ Everything that pins the checkout — reading the tracking ref, verifying the
 commit, choosing and snapshotting the base, picking a free folder,
 `git worktree add`, configuring the upstream — happens under ONE acquisition, as
 the new-branch variant already did. Creation needs an absolute worktree root; a
-relative one is refused before anything is created, because Node and git would
-resolve it against different directories. Before `git worktree add`, the attempt
-creates its own folder with an exclusive `mkdir`, refusing a folder that already
-exists, empty or not, and its own branch with a create-only `git branch`. A
-failure during or after the add discards only those two: the folder, and the
-branch through one non-dereferencing compare-and-delete at its start commit
+relative one is refused before anything is created, because the checkout's
+Worker and git would resolve it against different directories. Before
+`git worktree add`, the attempt creates its own folder with an exclusive `mkdir`
+on that Worker (`lifecycle.createDir`, `docs/workers.md`), refusing a folder
+that already exists, empty or not, and its own branch with a create-only
+`git branch`. Only the Worker's answer that it created the folder makes it the
+attempt's; a Worker failure claims nothing. A failure during or after the add
+discards only those two: the folder, and the branch through one
+non-dereferencing compare-and-delete at its start commit
 (`update-ref --no-deref -d`), only while no worktree has it checked out,
 together with its `branch.<name>` config. A branch whose creation or state the
 attempt cannot prove (its create failed without a clear answer, it moved, or a
