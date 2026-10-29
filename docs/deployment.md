@@ -184,11 +184,16 @@ one-transaction delete. Every open must show the model and thinking level it was
 created with. That boot runs the same `server.js` under the packaged Bun with
 `scripts/bun-check-short-graces.mjs` preloaded, a check-only file that shortens
 the two release graces to 200 ms. The check waits for the server's
-`[sessions] released <id>: …` lines. A SIGUSR1 must leave the server running and
-write a private V8-format heap snapshot, and a second one right after must write
-nothing. The check starts every process in its own process group and ends every
-group still running before it deletes its temporary directory, on success or
-failure.
+`[sessions] released <id>: …` lines. Before the first boot, in both modes, a
+separate boot preloads `scripts/bun-check-collected-file-handle.mjs`, which
+`BUN_OPTIONS` also carries into the spawn broker. On SIGWINCH each process that
+loaded it leaks three FileHandles on a disposable file and forces collection,
+and it installs no handler of its own. The server, and in broker mode the
+broker, must keep running and log the production warning; without the guard,
+either one exits. A SIGUSR1 must leave the server running and write a private
+V8-format heap snapshot, and a second one right after must write nothing. The
+check starts every process in its own process group and ends every group still
+running before it deletes its temporary directory, on success or failure.
 
 Before booting, the check asserts the pragma on the first line of `server.js`,
 the worker and the watcher wrapper. It then runs a copy of `server.js` whose
@@ -341,6 +346,19 @@ clients:
   handler, which serves both modes, cuts an overflowing reply's streams to that
   length (UTF-16 code units for text, bytes for a Buffer). It changes no Node
   outcome, and the runtime probe asserts it.
+- Guarded in the server and the broker: when the collector reclaims a
+  `node:fs/promises` FileHandle nobody closed, Bun 1.4.2 closes its descriptor
+  and then raises an uncaught `ERR_INVALID_STATE`, "A FileHandle object was
+  closed during garbage collection. …". Node 24 closes it with a DEP0137
+  warning, and 1.3.13 said nothing. The server's `uncaughtException` handler
+  exited on it, and the broker, which had no handler, died of it. Both now ask
+  `collectedFileHandle.ts`, whose one predicate the broker's `-e` script embeds
+  as source, and log a warning and keep running for exactly that code and
+  message. Every other `ERR_INVALID_STATE` and every other exception still ends
+  the process. No production path has been shown to leak a FileHandle: 100 open,
+  read and close cycles through `fileReads.ts` under each runtime left none.
+  Whether one can is open in [Task-1233](pa://task/1233). The install check
+  leaks some in the server and the broker, in both modes (above).
 - Fixed in the adapter (found under 1.3.13): `isTransaction` was missing,
   `run().changes` counted cascaded and trigger rows (`deleteCancelledRun` checks
   for exactly 1; unchanged on 1.4.2), an undeclared named parameter bound NULL,
@@ -493,7 +511,10 @@ compare its named failures against exactly this list:
 
 That list is not the whole compatibility account. The 15 unhandled errors and
 one silent file come on top of it. They are accepted for the 1.4.2 upgrade as
-test-harness limitations, and the fixes are [Task-1233](pa://task/1233):
+test-harness limitations, and the fixes are [Task-1233](pa://task/1233). This
+run predates the FileHandle guard (Bun runtime differences, above) and was not
+repeated with it; the guard is in the server's and broker's own handlers, which
+Vitest's workers do not install:
 
 - Twelve errors are new on Bun 1.4.2:
   `ERR_INVALID_STATE: A FileHandle object was closed during garbage collection`.
@@ -506,9 +527,9 @@ test-harness limitations, and the fixes are [Task-1233](pa://task/1233):
   raised 13. Production's file reads keep the receiver. Under each runtime, 100
   open, read and close cycles through `fileReads.ts` left no open descriptor or
   live handle and raised no finalizer error. That does not prove production
-  never leaks a `FileHandle`. On 1.4.2 a leaked one would throw this same
-  uncaught exception, and whether that can crash the server is an open question
-  in Task-1233.
+  never leaks a `FileHandle`. On 1.4.2 a leaked one raises this same uncaught
+  exception, which the packaged server and broker now log as a warning; whether
+  a production path can leak one is open in Task-1233.
 - Three errors are Vitest failing to format a test failure. Its source-map
   reader takes a `sourceMappingURL` string inside tsx's register file for an
   inline map and throws a JSON parse error. The same input fails the same way

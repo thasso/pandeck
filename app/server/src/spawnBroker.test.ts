@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -117,6 +117,91 @@ test("with the broker disabled, the same handler runs in-process", async () => {
     assert.equal(Number(parent.stdout.trim()), process.pid);
   } finally {
     delete process.env.ASSISTANT_SPAWN_BROKER;
+  }
+});
+
+/**
+ * The script the live broker was started with, read back from its command
+ * line, run in a fresh process whose preload throws one uncaught error with
+ * `code` and `message` once the script is running. It is then asked to run
+ * one child and told the server went away.
+ */
+async function runBrokerScriptThrowing(code: string, message: string) {
+  const pid = await spawnBrokerPidForTests();
+  assert.ok(pid);
+  const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+  const script = argv[argv.indexOf("-e") + 1] ?? "";
+  assert.ok(script.includes("ignoreCollectedFileHandle"));
+  const dir = mkdtempSync(join(tmpdir(), "broker-uncaught-"));
+  const preload = join(dir, "throw.cjs");
+  writeFileSync(
+    preload,
+    `setImmediate(() => { throw Object.assign(new Error(${JSON.stringify(
+      message,
+    )}), { code: ${JSON.stringify(code)} }); });`,
+  );
+  try {
+    const child = spawn(process.execPath, ["--require", preload, "-e", script]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (data: string) => {
+      stdout += data;
+    });
+    child.stderr.setEncoding("utf8").on("data", (data: string) => {
+      stderr += data;
+    });
+    const exited = new Promise<number | null>((resolve) =>
+      child.on("exit", resolve),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    child.stdin.on("error", () => undefined);
+    child.stdin.write(
+      `${JSON.stringify({
+        id: 1,
+        file: "sh",
+        args: ["-c", "echo alive"],
+        cwd: process.cwd(),
+        env: process.env,
+        maxBuffer: 1024,
+        encoding: "utf8",
+      })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    child.stdin.end();
+    return { exitCode: await exited, stdout, stderr };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the broker only warns for a FileHandle closed during GC", async () => {
+  const message =
+    "A FileHandle object was closed during garbage collection. This used to be allowed with a deprecation warning but is now considered an error. Please close FileHandle objects explicitly. File descriptor: 7 (file:///tmp/leak.txt)";
+  const run = await runBrokerScriptThrowing("ERR_INVALID_STATE", message);
+  assert.ok(
+    run.stderr.includes(
+      `[spawn broker] Warning: a leaked FileHandle was closed during garbage collection, which Node only warns about; not exiting. ${message}`,
+    ),
+    run.stderr,
+  );
+  assert.ok(run.stdout.includes('"stdout":"alive\\n"'), run.stdout);
+  assert.equal(run.exitCode, 0);
+});
+
+test("any other uncaught error still ends the broker", async () => {
+  for (const [code, message] of [
+    ["ERR_INVALID_STATE", "Invalid state: Controller is already closed"],
+    ["EOTHER", "A FileHandle object was closed during garbage collection."],
+  ] as const) {
+    const run = await runBrokerScriptThrowing(code, message);
+    assert.equal(run.exitCode, 1, run.stderr);
+    assert.ok(
+      run.stderr.includes("Uncaught exception in the spawn broker:") &&
+        run.stderr.includes(message),
+      run.stderr,
+    );
+    assert.ok(!run.stderr.includes("Warning: a leaked FileHandle"));
+    assert.ok(!run.stdout.includes("alive"), run.stdout);
   }
 });
 

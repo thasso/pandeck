@@ -40,6 +40,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInThisContext } from "node:vm";
+import { COLLECTED_FILE_HANDLE_SOURCE } from "./collectedFileHandle.ts";
 
 /** How long a cancelled child with an exit receipt has before SIGKILL. */
 const EXIT_ESCALATION_MS = 2_000;
@@ -256,6 +257,15 @@ const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
 })`;
 
 const BROKER_SCRIPT = String.raw`
+// Bun 1.4.2 raises an uncaught error for a FileHandle closed during garbage
+// collection, where Node only warns: warn for exactly that one, and end the
+// broker on anything else as an unheard exception would (collectedFileHandle.ts).
+const ignoreCollectedFileHandle = ${COLLECTED_FILE_HANDLE_SOURCE};
+process.on("uncaughtException", (err) => {
+  if (ignoreCollectedFileHandle(err, "spawn broker")) return;
+  console.error("Uncaught exception in the spawn broker:", err);
+  process.exit(1);
+});
 // The server's lowered oom_score_adj is its own: the broker, and so every
 // process it starts, goes back to neutral (childOomScore.ts).
 try {

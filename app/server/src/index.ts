@@ -29,6 +29,7 @@ import { DATA_DIR, HOST, IS_PROD, PORT, PUBLIC_BASE_URL } from "./config.ts";
 import { authTokenStartupMessage, resolveAuthToken } from "./authToken.ts";
 import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
+import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
@@ -1798,7 +1799,11 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 // socket — enough to take the whole server (every session) down. Swallow only
 // that narrow write-failure case so the affected turn fails on its own while the
 // server stays up; re-crash on anything else to preserve default behavior.
+// Bun 1.4.2's error for a FileHandle closed during garbage collection, where
+// Node only warns, is the other exception that only warns here
+// (collectedFileHandle.ts).
 process.on("uncaughtException", (err) => {
+  if (ignoreCollectedFileHandle(err, "server")) return;
   const e = err as NodeJS.ErrnoException;
   if (
     (e?.code === "EPIPE" || e?.code === "ECONNRESET") &&

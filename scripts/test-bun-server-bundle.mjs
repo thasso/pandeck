@@ -1088,14 +1088,14 @@ async function connect() {
   };
 }
 
-/** Collect a child's stdout line by line while still showing it. */
-function collectLines(stream) {
+/** Collect a child's output line by line while still showing it. */
+function collectLines(stream, shown = process.stdout) {
   const lines = [];
   const decoder = new globalThis.TextDecoder();
   let pending = "";
   void (async () => {
     for await (const chunk of stream) {
-      process.stdout.write(chunk);
+      shown.write(chunk);
       pending += decoder.decode(chunk, { stream: true });
       const parts = pending.split("\n");
       pending = parts.pop() ?? "";
@@ -1299,6 +1299,109 @@ function checkSessionDeleted(sessionId) {
   );
 }
 
+/** Whether `pid` names a process that is neither gone nor a zombie. */
+function running(pid) {
+  try {
+    return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, "latin1"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Bun 1.4.2 raises an uncaught error for a FileHandle closed during garbage
+ * collection, where Node only warns (`collectedFileHandle.ts`). In both modes
+ * the packaged server boots with the check's leak preload, which reaches the
+ * spawn broker through `BUN_OPTIONS`. Each process that loaded it leaks and
+ * collects on SIGWINCH and must keep running and log the production warning.
+ * In-process mode has no broker; the server is the one process.
+ */
+async function checkCollectedFileHandles() {
+  const leaked = join(temp, "leaked-file-handle.txt");
+  writeFileSync(leaked, "leaked\n");
+  const preload = fileURLToPath(
+    new URL("./bun-check-collected-file-handle.mjs", import.meta.url),
+  );
+  for (const mode of ["broker", "in-process"]) {
+    const env = {
+      ...serverEnv(),
+      DATA_DIR: join(temp, `collected-file-handle-${mode}`),
+      BUN_OPTIONS: `--preload ${preload}`,
+      PA_CHECK_LEAKED_FILE: leaked,
+    };
+    if (mode === "in-process") env.ASSISTANT_SPAWN_BROKER = "0";
+    else delete env.ASSISTANT_SPAWN_BROKER;
+    const child = launch([directExecutable, serverModule], {
+      cwd: work,
+      env,
+      stdout: "inherit",
+      stderr: "pipe",
+    });
+    const output = collectLines(child.stderr, process.stderr);
+    await waitForHealth(child);
+    const armed = (role) =>
+      output
+        .map((line) =>
+          line.startsWith(`[collected-file-handle check] armed in ${role} `)
+            ? Number(line.slice(line.lastIndexOf(" ") + 1))
+            : undefined,
+        )
+        .filter((pid) => pid !== undefined);
+    assert(
+      armed("server").includes(child.pid),
+      `The packaged server did not load the leak preload (${mode}).`,
+    );
+    const targets = [["server", child.pid]];
+    if (mode === "broker") {
+      await until(
+        () => armed("spawn broker").length > 0,
+        "the spawn broker to load the leak preload",
+      );
+      const broker = armed("spawn broker")[0];
+      assert(
+        readFileSync(`/proc/${broker}/stat`, "latin1")
+          .replace(/^.*\) /s, "")
+          .split(" ")[1] === String(child.pid),
+        "The preloaded spawn broker is not the server's child.",
+      );
+      targets.push(["spawn broker", broker]);
+    }
+    for (const [role, pid] of targets) {
+      const warnings = () =>
+        output.filter((line) =>
+          line.startsWith(
+            `[${role}] Warning: a leaked FileHandle was closed during garbage collection`,
+          ),
+        ).length;
+      process.kill(pid, "SIGWINCH");
+      await until(
+        () =>
+          output.includes(
+            `[collected-file-handle check] collected in ${role} ${pid}`,
+          ) || !running(pid),
+        `the ${role} to collect its leaked FileHandles (${mode})`,
+      );
+      assert(
+        running(pid) && child.exitCode === null,
+        `A FileHandle closed during garbage collection ended the ${role} (${mode}).`,
+      );
+      await until(
+        () => warnings() > 0,
+        `the ${role}'s collected-FileHandle warning (${mode})`,
+        5_000,
+      );
+    }
+    if (mode === "in-process")
+      assert(
+        armed("spawn broker").length === 0,
+        "In-process mode started a spawn broker.",
+      );
+    const health = await globalThis.fetch(`${baseUrl}/api/health`);
+    assert(health.ok, `The packaged server stopped answering (${mode}).`);
+    await stop(child);
+  }
+}
+
 /**
  * The lifecycle boot runs the same server module through the packaged Bun,
  * with the check's grace preload and the fake Claude CLI in place of the
@@ -1411,6 +1514,7 @@ try {
   await checkParseLinkMemory();
   await checkNativeAssets();
   await runRuntimeProbes();
+  await checkCollectedFileHandles();
 
   seedDataDir();
   const first = start();
@@ -1456,7 +1560,7 @@ try {
   );
 
   console.log(
-    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
+    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, collected FileHandles in server and broker, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
   );
 } finally {
   await terminateChildren();
