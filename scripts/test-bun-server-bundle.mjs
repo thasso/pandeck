@@ -19,7 +19,6 @@ import {
   directDependencyRoot,
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
-import * as childProcessShim from "./bun-shims/node-child-process.mjs";
 import {
   collectWebNotices,
   renderWebNotices,
@@ -222,10 +221,10 @@ async function checkWebAndSocket() {
 }
 
 /**
- * An upgrade with the wrong token is closed within 5 s and never opens.
- * Returns the status line it was answered with, for the log: under Bun there
- * is none, since nothing written to a refused upgrade socket reaches the
- * client.
+ * An upgrade with the wrong token is answered 401 within 5 s and never opens.
+ * Returns the status line, for the log. Bun 1.3.13 delivered nothing written
+ * to a refused upgrade socket, so every refusal reached the client as a bare
+ * close (a 502 behind a proxy such as Caddy).
  */
 async function checkRejectedUpgrade() {
   const reply = await new Promise((resolveReply, reject) => {
@@ -265,11 +264,12 @@ async function checkRejectedUpgrade() {
       reject(error);
     });
   });
+  const status = reply.split("\r\n", 1)[0] ?? "";
   assert(
-    !reply.includes(" 101 "),
-    "The packaged server upgraded a WebSocket with the wrong token.",
+    status.startsWith("HTTP/1.1 401 "),
+    `A wrong-token WebSocket upgrade was answered ${JSON.stringify(status || "(nothing)")}, not 401.`,
   );
-  return reply.split("\r\n", 1)[0] || "(connection closed without a status)";
+  return status;
 }
 
 /**
@@ -684,46 +684,6 @@ function checkSqliteShim() {
     "A read-only Bun SQLite connection accepted a write.",
   );
   readOnly.close();
-}
-
-/** The child_process shim restores Node's live `process.env` default. */
-function checkChildProcessShim() {
-  process.env.PA_SHIM_ADDED = "added";
-  const script = 'printf "%s" "${PA_SHIM_ADDED:-none}"';
-  const { execFileSync, execSync, spawnSync } = childProcessShim;
-  for (const [shape, run] of [
-    ["spawnSync(file, args)", () => spawnSync("sh", ["-c", script]).stdout],
-    [
-      "spawnSync(file, options)",
-      () => spawnSync("sh", { input: script }).stdout,
-    ],
-    [
-      "execFileSync(file, null, options)",
-      () => execFileSync("sh", null, { input: script }),
-    ],
-    ["execSync(command)", () => execSync(script)],
-    [
-      "spawnSync(file, args, { env: null })",
-      () => spawnSync("sh", ["-c", script], { env: null }).stdout,
-    ],
-    [
-      "execFileSync(file, args, { env: null })",
-      () => execFileSync("sh", ["-c", script], { env: null }),
-    ],
-    ["execSync(command, { env: null })", () => execSync(script, { env: null })],
-  ]) {
-    const seen = String(run());
-    assert(seen === "added", `The child_process shim broke ${shape}: ${seen}`);
-  }
-  for (const [env, expected] of [
-    [{ PA_SHIM_ADDED: "explicit" }, "explicit"],
-    [{}, "none"],
-  ])
-    assert(
-      String(execFileSync("/bin/sh", ["-c", script], { env })) === expected,
-      `The child_process shim overrode an explicit env ${JSON.stringify(env)}.`,
-    );
-  delete process.env.PA_SHIM_ADDED;
 }
 
 async function checkCompiledPhoton() {
@@ -1380,7 +1340,6 @@ try {
   await checkMissingRuntimeRoot();
   await checkBrowserMcpCli();
   checkSqliteShim();
-  checkChildProcessShim();
   await checkCompiledPhoton();
 
   const files = packageFiles(runtimeRoot);
@@ -1430,8 +1389,8 @@ try {
     );
 
   // Bun.spawnSync starts its child with the start-up environment whatever
-  // process.env holds now, and no shim covers it. Server code cannot name it
-  // (its types are Node's); this keeps it out of every bundled dependency.
+  // process.env holds now. Server code cannot name it (its types are Node's);
+  // this keeps it out of every bundled dependency.
   for (const bundled of [
     "server.js",
     "workers/initiative-layout-worker.js",

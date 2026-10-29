@@ -35,10 +35,6 @@ export function serverBundlePlugins() {
     "utf8",
   );
   const sqliteShim = join(repoRoot, "scripts/bun-shims/node-sqlite.mjs");
-  const childProcessShim = join(
-    repoRoot,
-    "scripts/bun-shims/node-child-process.mjs",
-  );
   const photonShim = join(repoRoot, "scripts/bun-shims/photon-node.mjs");
   const jsdomAssetsShim = join(
     repoRoot,
@@ -55,19 +51,6 @@ export function serverBundlePlugins() {
         build.onResolve({ filter: /^node:sqlite$/ }, () => ({
           path: sqliteShim,
         }));
-      },
-    },
-    {
-      name: "child-process-env-compat",
-      setup(build) {
-        // The shim itself imports the real builtin.
-        build.onResolve(
-          { filter: /^(node:)?child_process$/ },
-          ({ importer }) =>
-            importer === childProcessShim
-              ? undefined
-              : { path: childProcessShim },
-        );
       },
     },
     {
@@ -224,9 +207,10 @@ export async function bundle(entrypoint, options = {}) {
     ...(format === "cjs" ? { footer: { js: BUN_CJS_FOOTER } } : {}),
     bundle: true,
     entryPoints: [entrypoint],
-    // Bun provides these as runtime builtins. Bundling npm's Node-targeted
-    // undici calls worker_threads.markAsUncloneable, which Bun 1.3.13 does not
-    // expose, while npm ws does not drive Bun's server upgrade path correctly.
+    // Bun provides these as runtime builtins. npm's Node-targeted undici calls
+    // worker_threads.markAsUncloneable, which Bun 1.3.13 lacked; Bun 1.4.2 has
+    // it, and undici stays external unchanged. npm ws does not drive Bun's
+    // server upgrade path correctly, so ws stays external for upgrades.
     external: ["bun:*", "undici", "ws"],
     format,
     minify: true,

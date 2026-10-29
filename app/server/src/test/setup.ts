@@ -25,7 +25,9 @@ vi.mock("node:sqlite", async (importOriginal) => {
   class DatabaseSync extends sqlite.DatabaseSync {
     constructor(...args: ConstructorParameters<typeof sqlite.DatabaseSync>) {
       super(...args);
-      if (this.isOpen) this.exec("PRAGMA synchronous = OFF");
+      // From the option, not `isOpen`: this file also runs under Bun, whose
+      // SQLite adapter refuses `isOpen`.
+      if (args[1]?.open !== false) this.exec("PRAGMA synchronous = OFF");
     }
   }
   return { ...sqlite, DatabaseSync };

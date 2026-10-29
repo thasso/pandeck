@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -6,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -138,6 +140,68 @@ test("output past maxBuffer fails like execFile, and large output crosses intact
   assert.equal(large.error, null);
   assert.equal(large.stdout.length, 8_000_004);
   assert.ok(large.stdout.endsWith("\nend"));
+});
+
+/** What Node's own `execFile` reports, in the broker's reply shape. */
+function directExecFile(
+  script: string,
+  maxBuffer: number,
+  encoding: "utf8" | "buffer",
+) {
+  return new Promise<{
+    error: { code: unknown; message: string } | null;
+    stdout: string | Buffer;
+    stderr: string;
+  }>((resolve) => {
+    execFile(
+      "sh",
+      ["-c", script],
+      { ...base, maxBuffer, encoding },
+      (err, stdout, stderr) =>
+        resolve({
+          error: err ? { code: err.code, message: err.message } : null,
+          stdout,
+          // The broker carries stderr as UTF-8 text in either encoding.
+          stderr: Buffer.from(stderr).toString("utf8"),
+        }),
+    );
+  });
+}
+
+test("an overflow past maxBuffer crosses the broker as execFile reports it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "broker-overflow-"));
+  try {
+    // One write under PIPE_BUF reaches the reader as one chunk, so Node's own
+    // cut lands at the same place on both sides. Node bounds the .length, not
+    // the bytes: 1025 code units ends the mixed text on a lone high surrogate.
+    const maxBuffer = 1025;
+    for (const [name, text, encoding, redirect] of [
+      ["2-byte stdout", "ü".repeat(1500), "utf8", ""],
+      ["mixed 4-byte stdout", "a\u{1F600}".repeat(600), "utf8", ""],
+      ["utf8 stderr", "ü".repeat(1500), "utf8", " >&2"],
+      ["buffer stderr", "ü".repeat(1500), "buffer", " >&2"],
+    ] as const) {
+      const file = join(dir, "output");
+      writeFileSync(file, text);
+      const script = `cat '${file}'${redirect}`;
+      const direct = await directExecFile(script, maxBuffer, encoding);
+      assert.equal(
+        direct.error?.code,
+        "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+        name,
+      );
+      const request = { ...base, maxBuffer, file: "sh", args: ["-c", script] };
+      assert.deepEqual(
+        encoding === "buffer"
+          ? await brokerExecFile({ ...request, encoding })
+          : await brokerExecFile({ ...request, encoding }),
+        direct,
+        name,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a broker that dies mid-request fails it only once its children are gone", async () => {

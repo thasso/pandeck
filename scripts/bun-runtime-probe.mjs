@@ -10,7 +10,10 @@
  * with its connection and made again on the next, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
  * children but never the server's own fetch, pi's OAuth flows, and an
- * Initiative map laid out by elkjs in the bundled layout worker.
+ * Initiative map laid out by elkjs in the bundled layout worker. First of all,
+ * that a child's managed stdio never closes a descriptor number something
+ * else reused (Bun 1.3.13 did, at GC), and that `maxBuffer` bounds each
+ * stream's length on overflow as Node does.
  *
  * Not run from a checkout. `test-bun-server-bundle.mjs` bundles it with the
  * server's own plugins and runs it with the packaged Bun, once per mode:
@@ -40,10 +43,12 @@ import {
 } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, get as httpGet } from "node:http";
+import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { runInThisContext } from "node:vm";
 import {
   checkoutFailureOf,
   checkoutPathExists,
@@ -175,6 +180,245 @@ function procState(pid) {
 function processGroup(pid) {
   const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+}
+
+/**
+ * The fd-reuse check's body: ONE source, evaluated here with this process's
+ * `require` and handed to a separate Bun through `-e`, so the shapes cannot
+ * drift. Each iteration starts a detached `sh` with managed pipes, destroys
+ * them and kills its group, then opens a FIFO four times, likely into the
+ * numbers just freed. After a GC, each fd must still name the FIFO it was
+ * opened on: Bun 1.3.13 closed a dead child's stdio numbers at GC, whatever
+ * had reused them since (Task-1231).
+ *
+ * Only numeric pids outlive an iteration. Keeping the ChildProcess or its
+ * streams reachable keeps them from being collected, which hides exactly the
+ * defect this looks for.
+ */
+const FD_REUSE_SOURCE = String.raw`(async function fdReuseCheck(require, dir, iterations, track) {
+  const { spawn, spawnSync } = require("node:child_process");
+  const fs = require("node:fs");
+  const { join } = require("node:path");
+  // O_CLOEXEC on Linux; node:fs does not export it.
+  const flags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | 0o2000000;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const groups = new Set();
+  const killGroup = (pid) => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch (_) {}
+  };
+  let reused = 0;
+  const lost = [];
+  try {
+    for (let i = 0; i < iterations; i += 1) {
+      const fds = [];
+      try {
+        const child = spawn("sh", ["-c", "read _; sleep 600"], {
+          detached: true,
+          stdio: ["pipe", "ignore", "ignore", "pipe", "pipe", "pipe"],
+        });
+        const pid = child.pid;
+        groups.add(pid);
+        track(pid);
+        for (const stream of child.stdio) if (stream && stream.on) stream.on("error", () => {});
+        const event = (name) =>
+          new Promise((resolve, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error("Timed out waiting for sh " + pid + " to " + name + ".")),
+              5000,
+            );
+            child.once(name, () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+        const exited = event("exit");
+        const closed = event("close");
+        // Awaited in turn: a timeout on one must not leave the other unhandled.
+        closed.catch(() => {});
+        await sleep(20);
+        const managed = child.stdio
+          .map((stream) =>
+            [stream && stream.fd, stream && stream._handle && stream._handle.fd,
+              stream && stream._socket && stream._socket._handle && stream._socket._handle.fd]
+              .find(Number.isInteger),
+          )
+          .filter(Number.isInteger);
+        for (const stream of child.stdio) if (stream && stream.destroy) stream.destroy();
+        killGroup(pid);
+        const fifo = join(dir, "fifo-" + i);
+        const made = spawnSync("mkfifo", ["-m", "600", fifo]);
+        if (made.status !== 0) throw new Error("mkfifo failed: " + String(made.stderr));
+        for (let n = 0; n < 4; n += 1) fds.push(fs.openSync(fifo, flags));
+        const before = fds.map((fd) => fs.fstatSync(fd));
+        if (fds.some((fd) => managed.includes(fd))) reused += 1;
+        fs.unlinkSync(fifo);
+        await exited;
+        await closed;
+        await sleep(100);
+        if (globalThis.Bun) globalThis.Bun.gc(true);
+        await sleep(100);
+        const gone = [];
+        fds.forEach((fd, at) => {
+          try {
+            const now = fs.fstatSync(fd);
+            if (now.dev !== before[at].dev || now.ino !== before[at].ino)
+              gone.push({ fd, code: "reused by another file" });
+          } catch (error) {
+            gone.push({ fd, code: (error && error.code) || String(error) });
+          }
+        });
+        if (gone.length) lost.push({ iteration: i, managed, fds, lost: gone });
+      } finally {
+        for (const fd of fds)
+          try {
+            fs.closeSync(fd);
+          } catch (_) {}
+      }
+    }
+  } finally {
+    // A late "sleep 600" may still have started inside a killed group.
+    for (const pid of groups) killGroup(pid);
+  }
+  return { iterations, reused, lost };
+})`;
+
+const FD_REUSE_ITERATIONS = 10;
+
+/** The check in this process: the server's own spawns, direct or in-process. */
+async function fdReuseInline(dir, track) {
+  const check = runInThisContext(FD_REUSE_SOURCE);
+  return check(createRequire(import.meta.url), dir, FD_REUSE_ITERATIONS, track);
+}
+
+/**
+ * The check in a separate packaged Bun launched as `spawnBroker.ts` launches
+ * the broker: detached, without `NODE_OPTIONS`. It reports each `sh` pid as it
+ * starts, so a child that never answers leaves nothing behind either.
+ */
+async function fdReuseInBrokerShapedChild(dir, track) {
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  const script =
+    `${FD_REUSE_SOURCE}(require, ${JSON.stringify(dir)}, ${FD_REUSE_ITERATIONS}, ` +
+    `(pid) => process.stdout.write(JSON.stringify({ pid }) + "\\n")).then(` +
+    `(result) => { process.stdout.write(JSON.stringify({ result }) + "\\n"); process.exit(0); }, ` +
+    `(error) => { console.error(error); process.exit(1); });`;
+  const child = spawn(process.execPath, ["-e", script], {
+    stdio: ["pipe", "pipe", "inherit"],
+    env,
+    detached: true,
+  });
+  const pid = child.pid;
+  track(pid);
+  let result;
+  let pending = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (data) => {
+    pending += data;
+    for (let at = pending.indexOf("\n"); at >= 0; at = pending.indexOf("\n")) {
+      const line = JSON.parse(pending.slice(0, at));
+      pending = pending.slice(at + 1);
+      if (line.pid) track(line.pid);
+      if (line.result) result = line.result;
+    }
+  });
+  const code = await new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(
+      () =>
+        reject(new Error("The broker-shaped fd check did not finish in 30s.")),
+      30_000,
+    );
+    child.once("close", (exitCode, signal) => {
+      globalThis.clearTimeout(timer);
+      resolve(exitCode ?? signal);
+    });
+  });
+  child.stdin.destroy();
+  assert(code === 0, `The broker-shaped fd check exited with ${code}.`);
+  assert(result, "The broker-shaped fd check printed no result.");
+  return result;
+}
+
+/**
+ * Every shape for this mode runs before any fails, so a broken runtime
+ * reports all of them. A check without one reused number proves nothing.
+ */
+async function checkManagedStdioFdReuse() {
+  const groups = new Set();
+  const track = (pid) => groups.add(pid);
+  const shapes = [["inline", fdReuseInline]];
+  if (mode === "broker") shapes.push(["child", fdReuseInBrokerShapedChild]);
+  const failures = [];
+  try {
+    for (const [shape, run] of shapes) {
+      const label = `Managed-stdio fd reuse (${mode}, ${shape})`;
+      const dir = mkdtempSync(join(scratch, `fd-reuse-${shape}-`));
+      try {
+        const { iterations, reused, lost } = await run(dir, track);
+        if (lost.length)
+          failures.push(
+            `${label}: ${lost.length} of ${iterations} iterations lost a descriptor: ${JSON.stringify(lost)}`,
+          );
+        else if (reused === 0)
+          failures.push(
+            `${label}: no iteration reused a managed fd number, so nothing was proven.`,
+          );
+        else
+          console.log(
+            `${label}: ${iterations} iterations, ${reused} reused, 0 lost.`,
+          );
+      } catch (error) {
+        failures.push(`${label}: ${error?.stack ?? error}`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    for (const pid of groups)
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // The group is gone already.
+      }
+  }
+  assert(failures.length === 0, failures.join("\n"));
+}
+
+/**
+ * On overflow, each stream comes back with exactly `maxBuffer` of its length
+ * (Node's and Bun 1.3.13's bound; Bun 1.4.2 alone overshoots it), whichever
+ * stream overflowed and in either encoding, with the other stream empty.
+ */
+async function checkMaxBufferBound() {
+  const maxBuffer = 1024 * 1024;
+  for (const [stream, encoding, script] of [
+    ["stdout", "utf8", "yes | head -c 2097152"],
+    ["stdout", "buffer", "head -c 2097152 /dev/zero"],
+    ["stderr", "utf8", "yes | head -c 2097152 >&2"],
+    ["stderr", "buffer", "head -c 2097152 /dev/zero >&2"],
+  ]) {
+    const result = await brokerExecFile({
+      file: "sh",
+      args: ["-c", script],
+      cwd: scratch,
+      env: process.env,
+      maxBuffer,
+      encoding,
+    });
+    const other = stream === "stdout" ? "stderr" : "stdout";
+    assert(
+      result.error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" &&
+        result[stream].length === maxBuffer &&
+        result[other].length === 0,
+      `The ${encoding} ${stream} overflow answered ${JSON.stringify({
+        error: result.error,
+        stdout: result.stdout.length,
+        stderr: result.stderr.length,
+      })}, not exactly ${maxBuffer} on ${stream}.`,
+    );
+  }
 }
 
 const sh = (script, signal) =>
@@ -1608,6 +1852,11 @@ function checkSqlite() {
   );
 }
 
+/**
+ * The synchronous child_process calls start their child with the CURRENT
+ * environment. This guards Bun's own default: 1.3.13 used the start-up one,
+ * which a bundled shim corrected until 1.4.2 made it unnecessary.
+ */
 function checkSyncSpawnEnvironment() {
   // The harness starts this process with both set; the server's boot scrub
   // deletes variables the same way.
@@ -1778,7 +2027,9 @@ async function checkInitiativeLayout() {
   stopInitiativeLayoutWorker();
 }
 
+await checkManagedStdioFdReuse();
 await checkGit();
+await checkMaxBufferBound();
 await checkPackageProxyEnvironment();
 await checkWatcher();
 if (mode === "broker") {
