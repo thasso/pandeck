@@ -310,7 +310,11 @@ production code already or affect only test clients:
 - `readdir` returns directory order; Node's is sorted. Every production caller
   whose result order matters sorts it.
 - `os.homedir()` is read once at start-up and does not follow a later `HOME`
-  change. The server never changes `HOME`.
+  change. The server never changes `HOME`, but tests do, so server code resolves
+  home only through `userHomeDir()` (`userHome.ts`), which reads `HOME` on every
+  call; `architecture.test.ts` rejects any other `homedir` use. SDK code the
+  server runs (the Pi agent directory, `~` in native file tools) still calls
+  `os.homedir()` itself, so a test changing `HOME` does not move it.
 - `fetch` and `node:http`'s client honour `HTTP(S)_PROXY`/`NO_PROXY` from
   `process.env`, where Node's `fetch` ignores them. The package proxy therefore
   publishes its bundle to child processes only (`docs/package-proxy.md`).
@@ -375,10 +379,17 @@ export default mergeConfig(
 ```bash
 bun=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#bun)
 gcc=$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#stdenv.cc.cc.lib')
-env -u NODE_ENV CI=true LD_LIBRARY_PATH="$gcc/lib" \
+env -u NODE_ENV CI=true LD_LIBRARY_PATH="$gcc/lib" HOME="$(mktemp -d)" \
   "$bun/bin/bun" --bun ./node_modules/vitest/vitest.mjs run \
   --config vitest.bun.config.ts
 ```
+
+The fresh `HOME` is mandatory. Tests redirect `HOME` at runtime, which Bun's
+`os.homedir()` ignores (see above). Before `userHome.ts`, a run launched with
+the real `HOME` had `credentialProfiles.test.ts` overwrite the user's
+`~/.claude/.credentials.json`, and SDK paths can still reach real files that
+way. `src/test/setup.ts` refuses a Bun run whose launch `HOME` is not under the
+temp directory.
 
 Run the `nix build` lines from the repository root, where `--inputs-from .` pins
 the flake's own Bun. `LD_LIBRARY_PATH` lets the `@parcel/watcher` addon find
@@ -390,8 +401,9 @@ On 30 Sep 2026 (0.49.0 plus this change), 3908 of 3931 tests passed and one file
 failed at setup. Of the 23 failures, `memoryLog.test.ts` expecting a Node
 runtime name has since been made runtime-neutral, and the two in
 `portForwarding.test.ts` were the port-forward defect, since fixed (above). The
-rest are expected, and a job must compare its failures against exactly this
-list:
+`HOME` cases in `credentialProfiles.test.ts` and `tools/core/lsTool.test.ts`
+pass since `userHome.ts`. The rest are expected, and a job must compare its
+failures against exactly this list:
 
 - `webStatic.test.ts`: the three "never reads outside the dist root for …" cases
   with encoded or doubled `..` segments. The test's `node:http` client
@@ -404,9 +416,6 @@ list:
   post-add step throws": the tests set `GIT_CONFIG_*` in `process.env` and run
   git through `execFileSync`, which starts children with the environment from
   start-up. The package's `child_process` shim fixes it; the test run lacks it.
-- `credentialProfiles.test.ts` "the protected Claude default reflects the normal
-  user login …" and `tools/core/lsTool.test.ts` "`~` and `~/sub` expand against
-  the home directory": both change `HOME`, which `os.homedir()` does not follow.
 - `skills/skillRuntimeMaterializer.test.ts` "reuses the sorted set …": the
   test's own `readdir` is unsorted.
 - `piSdk/toolBinaries.test.ts` "stops pi's tool lookup from spawning once

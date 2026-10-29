@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
+import { userHomeDir } from "./userHome.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "kb-settings-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -38,7 +39,7 @@ test("resolves a configured folder: absolute, home-relative, or under the data f
   const folder = (path: string) =>
     knowledgeBaseSettingsProjection({ path }).effectivePath;
   assert.equal(folder("/srv/notes/"), "/srv/notes");
-  assert.equal(folder("~/notes"), join(homedir(), "notes"));
+  assert.equal(folder("~/notes"), join(userHomeDir(), "notes"));
   assert.equal(folder("notes"), join(DATA_DIR, "notes"));
   assert.equal(folder("  "), join(DATA_DIR, "knowledge"));
 });
