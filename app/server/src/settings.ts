@@ -1,5 +1,5 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { userHomeDir } from "./userHome.ts";
 import { dirname, join } from "node:path";
 import {
   DEFAULT_ASSISTANT_WORKING_DIRECTORY,
@@ -498,7 +498,7 @@ function normalizePeerSpawnRuntimes(
 }
 
 const DEFAULT_WORKTREE_SETTINGS: WorktreeSettings = {
-  root: join(homedir(), "worktrees"),
+  root: join(userHomeDir(), "worktrees"),
   namingAgent: {
     ...DEFAULT_HELPER_MODEL,
     thinkingLevel: "off",
@@ -584,7 +584,7 @@ function normalizeSkillToggles(value: unknown): SkillToggles {
   return out;
 }
 
-const DEFAULT_PROJECTS_ROOT = join(homedir(), "projects");
+const DEFAULT_PROJECTS_ROOT = join(userHomeDir(), "projects");
 
 function normalizeProjectsRoot(value: unknown): string {
   return typeof value === "string" && value.trim()

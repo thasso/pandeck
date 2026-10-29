@@ -18,7 +18,7 @@
  * discovery round trip and be strictly worse than the shell call it replaces.
  */
 import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { userHomeDir } from "../../userHome.ts";
 import { isAbsolute, join, resolve } from "node:path";
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { CWD } from "../../config.ts";
@@ -193,9 +193,9 @@ function resolveListingPath(input: string | undefined, cwd: string): string {
   const raw = input?.trim() || ".";
   const expanded =
     raw === "~"
-      ? homedir()
+      ? userHomeDir()
       : raw.startsWith("~/")
-        ? join(homedir(), raw.slice(2))
+        ? join(userHomeDir(), raw.slice(2))
         : raw;
   return isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
 }

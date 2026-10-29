@@ -10,7 +10,7 @@
  *     `browserRawMcp` Settings toggle, exactly like any other integration.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { userHomeDir } from "../../userHome.ts";
 import { join } from "node:path";
 import { CWD, DATA_DIR } from "../../config.ts";
 import { PLAYWRIGHT_MCP_CLI_PATH } from "../../runtimeAssets.ts";
@@ -43,7 +43,7 @@ function browserExecutablePath(): string | undefined {
     process.env.PLAYWRIGHT_CHROME_EXECUTABLE_PATH?.trim();
   if (configured) return configured;
   const homeManagerChrome = join(
-    homedir(),
+    userHomeDir(),
     "Applications",
     "Home Manager Apps",
     "Google Chrome.app",

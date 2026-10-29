@@ -11,7 +11,7 @@
  * (`app/web/src/components/ServedFileCard.tsx`). The snippet in the payload is
  * the agent's own copy, for placing the file inside its reply.
  */
-import { homedir } from "node:os";
+import { userHomeDir } from "../../userHome.ts";
 import {
   basename,
   dirname,
@@ -173,9 +173,9 @@ const ARTIFACT_URL_PREFIX = "/api/session-artifacts/";
 function resolveInputPath(input: string, cwd: string): string {
   const expanded =
     input === "~"
-      ? homedir()
+      ? userHomeDir()
       : input.startsWith("~/")
-        ? join(homedir(), input.slice(2))
+        ? join(userHomeDir(), input.slice(2))
         : input;
   return isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
 }

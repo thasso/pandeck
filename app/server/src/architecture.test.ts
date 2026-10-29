@@ -526,3 +526,21 @@ test("settings are written only through the settings service", () => {
   }
   assert.deepEqual(offenders, []);
 });
+
+/**
+ * Bun's `os.homedir()` ignores a `HOME` change made after startup, so a test
+ * that redirects `HOME` would still write the user's real `~/.claude`. Server
+ * code resolves home only through `userHome.ts`, which reads `HOME` per call.
+ */
+test("server code resolves the home directory only through userHome.ts", () => {
+  const offenders: string[] = [];
+  for (const path of sourceFiles(SRC_ROOT)) {
+    const file = relative(SRC_ROOT, path);
+    if (file === "userHome.ts") continue;
+    const source = readFileSync(path, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    if (/\bhomedir\b/.test(source)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, []);
+});

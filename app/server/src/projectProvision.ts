@@ -6,7 +6,7 @@
  */
 import { existsSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { homedir } from "node:os";
+import { userHomeDir } from "./userHome.ts";
 import { join, resolve, sep } from "node:path";
 import { git } from "./gitExec.ts";
 import { getProject, updateProject } from "./projectRegistry.ts";
@@ -32,8 +32,8 @@ const PROVISION_ENV: NodeJS.ProcessEnv = {
 
 /** Expand a leading `~` to the home directory. */
 function expandHome(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p === "~") return userHomeDir();
+  if (p.startsWith("~/")) return join(userHomeDir(), p.slice(2));
   return p;
 }
 

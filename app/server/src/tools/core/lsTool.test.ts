@@ -15,10 +15,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
+import { userHomeDir } from "../../userHome.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ls-tool-"));
 
@@ -96,7 +97,7 @@ test("`~` and `~/sub` expand against the home directory", async () => {
   const realHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    assert.equal(homedir(), home, "HOME override must reach os.homedir()");
+    assert.equal(userHomeDir(), home, "HOME override must reach userHomeDir()");
     assert.deepEqual(textOf(await run({ path: "~" }, root)).split("\n"), [
       "in-home.txt",
       "sub/",

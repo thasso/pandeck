@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { userHomeDir } from "./userHome.ts";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DATA_DIR } from "./config.ts";
@@ -200,7 +200,7 @@ export function piAgentDir(profileId = "default"): string {
 /** Claude CLI state: the protected default follows the user's normal ~/.claude login; named profiles stay PA-isolated. */
 export function claudeConfigDir(profileId: string): string {
   if (profileId === DEFAULT_CLAUDE_PROFILE_ID)
-    return join(homedir(), ".claude");
+    return join(userHomeDir(), ".claude");
   const dir = join(profileRoot(profileId), "claude");
   privateDir(dir);
   return dir;

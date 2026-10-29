@@ -9,7 +9,7 @@
  * write replaces the file (a new inode).
  */
 import { realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { userHomeDir } from "./userHome.ts";
 import { isAbsolute, join, resolve } from "node:path";
 import type { KnowledgeBaseSettings } from "@assistant/shared";
 import { APP_SETTINGS_PATH, readStoredAppSettings } from "./appSettingsFile.ts";
@@ -34,7 +34,7 @@ function knowledgeBaseFolder(path: string): string {
   if (!path) return join(DATA_DIR, KB_REPO_DIR_NAME);
   const expanded =
     path === "~" || path.startsWith("~/")
-      ? join(homedir(), path.slice(1))
+      ? join(userHomeDir(), path.slice(1))
       : path;
   return isAbsolute(expanded) ? resolve(expanded) : resolve(DATA_DIR, expanded);
 }

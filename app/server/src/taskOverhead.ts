@@ -49,7 +49,7 @@
  * comparison.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { userHomeDir } from "./userHome.ts";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentType } from "@assistant/shared";
@@ -781,7 +781,7 @@ export function measureTaskOverhead(
   const afterStartMs = options.afterStartMs ?? TASK_SURFACE_AFTER_START_MS;
   const claudeProjectsDir =
     options.claudeProjectsDir === undefined
-      ? join(homedir(), ".claude", "projects")
+      ? join(userHomeDir(), ".claude", "projects")
       : options.claudeProjectsDir;
   const transcripts = claudeProjectsDir
     ? indexClaudeTranscripts(claudeProjectsDir)

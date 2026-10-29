@@ -15,7 +15,7 @@
  * Neither writes anything.
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { userHomeDir } from "./userHome.ts";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
 import { objectRefsForSession } from "./db/sessionObjectStore.ts";
@@ -39,7 +39,7 @@ import {
 
 /** Default Claude CLI transcript root; `undefined` disables the join. */
 function defaultClaudeProjectsDir(): string {
-  return join(homedir(), ".claude", "projects");
+  return join(userHomeDir(), ".claude", "projects");
 }
 
 export interface AuditSourceOptions {
