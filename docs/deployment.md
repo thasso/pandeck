@@ -455,13 +455,16 @@ gives it through an rpath instead. Without it, 178 files fail to import.
 `src/test/setup.ts` sets its SQLite pragma from the `open` option, not `isOpen`:
 the adapter refuses `isOpen`, and reading it failed 3319 tests.
 
-On 29 Oct 2026 (0.63.0 plus Bun 1.4.2), 7350 of 7385 tests passed, 5 were
-skipped, and 23 failed in 9 of 598 files. All 23 also failed under Bun 1.3.13,
-whose run stalls on `directFileServing.test.ts` timeouts and gives no totals.
-The 1.3.13 failures that 1.4.2 fixed (`webStatic`, `packageProxy` CONNECT, and
+On 29 Oct 2026 (0.63.0 plus Bun 1.4.2), Vitest reported 7350 of 7385 tests
+passed, 5 skipped, and 23 failed in 9 of 598 files, plus 15 unhandled errors.
+Those are Vitest's own totals. They are not a passing suite, and they do not
+account for everything that ran (the unhandled errors and the file with no
+outcome are below). All 23 named failures also failed under Bun 1.3.13, whose
+run stalls on `directFileServing.test.ts` timeouts and gives no totals. The
+1.3.13 failures that 1.4.2 fixed (`webStatic`, `packageProxy` CONNECT, and
 `worktrees` and `worktreeTracking` through `execFileSync`) pass, as do the
 `credentialProfiles` and `lsTool` `HOME` cases since `userHome.ts`. A job must
-compare its failures against exactly this list:
+compare its named failures against exactly this list:
 
 - `db/subagentRegistryDropMigration.test.ts`, all three cases: Bun's SQLite
   `exec` drops a trigger's `RAISE(ABORT)` from a multi-statement script and runs
@@ -487,6 +490,40 @@ compare its failures against exactly this list:
   `syncBuiltinESMExports`, which Bun ignores.
 - `db/cardStoresQueryPlan.test.ts`, both cases: the `EXPLAIN QUERY PLAN`
   difference above.
+
+That list is not the whole compatibility account. The 15 unhandled errors and
+one silent file come on top of it. They are accepted for the 1.4.2 upgrade as
+test-harness limitations, and the fixes are [Task-1233](pa://task/1233):
+
+- Twelve errors are new on Bun 1.4.2:
+  `ERR_INVALID_STATE: A FileHandle object was closed during garbage collection`.
+  They come from the same `checkoutFileAccess.test.ts` mock as the twelve
+  failures above: its unbound `close` fails and leaves the handle open. Bun
+  1.3.13 leaves the handle open too, through 20 forced collections, but raises
+  nothing. Bun 1.4.2 closes it at collection and throws. A targeted 1.3.13 run
+  of that file raised none of them, so they are not errors carried over from
+  1.3.13. Collection timing sets the count; an isolated run of that one file
+  raised 13. Production's file reads keep the receiver. Under each runtime, 100
+  open, read and close cycles through `fileReads.ts` left no open descriptor or
+  live handle and raised no finalizer error. That does not prove production
+  never leaks a `FileHandle`. On 1.4.2 a leaked one would throw this same
+  uncaught exception, and whether that can crash the server is an open question
+  in Task-1233.
+- Three errors are Vitest failing to format a test failure. Its source-map
+  reader takes a `sourceMappingURL` string inside tsx's register file for an
+  inline map and throws a JSON parse error. The same input fails the same way
+  under both Bun versions. The three blocks name no test or file, so not every
+  one can be traced to its own source. The only source traced so far is
+  `backgroundHandlingRestart.test.ts`, and a targeted run of it reproduces the
+  error. Its child process gets an explicit environment without
+  `LD_LIBRARY_PATH` and runs outside the Vitest `node:sqlite` alias. Under
+  1.3.13 the child stops early, on the missing `node:sqlite`. Under 1.4.2 it
+  gets further, fails to load `@parcel/watcher`, and the report of that failure
+  hits the parser error.
+- `backgroundHandlingRestart.test.ts` therefore has no named outcome under Bun.
+  The formatting failure hides whether it passed or failed, and it is the only
+  one of the 598 files with no test outcome in the verbose log. The 23 failures
+  do not count it.
 
 ### Diagnostics under Bun
 
