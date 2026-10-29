@@ -2127,11 +2127,17 @@ branch through one non-dereferencing compare-and-delete at its start commit
 (`update-ref --no-deref -d`), only while no worktree has it checked out,
 together with its `branch.<name>` config. A branch whose creation or state the
 attempt cannot prove (its create failed without a clear answer, it moved, or a
-worktree has it checked out) is kept and logged with the reason, and the next
-attempt lands on a `-2` suffix. Otherwise a rejected create leaves nothing
-behind, so the next attempt keeps its name. Naming still never blocks creation —
-the folder search is folder-only here (the branch is already decided) and
-exhaustion falls back to a timestamp rather than throwing.
+worktree has it checked out) is kept and logged with the reason. What the next
+attempt does with a kept branch depends on the variant. A new-branch attempt
+finds the name taken and lands on a `-2` suffix. A track-remote attempt cannot
+rename, because the head branch is fixed, so it is refused with `branch-exists`
+for as long as that local branch exists. To retry, check what the branch holds
+first (for example `git log <remote>/<branch>..<branch>`), save any commits
+still needed, and only then delete it with `git branch -D <branch>`. When no
+branch is kept, a rejected create leaves nothing behind, so the next attempt
+keeps its name. Naming still never blocks creation — the folder search is
+folder-only here (the branch is already decided) and exhaustion falls back to a
+timestamp rather than throwing.
 
 **Update is the other half.** A worktree already standing on that head branch is
 brought to the pull request's current head instead of a second one being
