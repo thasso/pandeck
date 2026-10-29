@@ -293,6 +293,34 @@ test("version setter updates every declaration and nothing else", () => {
   );
 });
 
+test("the flake's Bun pin is not read or rewritten as the app version", () => {
+  const { root } = gitFixture("0.1.0", "# Changelog\n\n## [0.1.0]\n\n- x\n");
+  // The pin's shape in the real flake: a quoted `version = "x.y.z";` line here
+  // would be a second app version and break both the reader and the setter.
+  const bunPin = [
+    '  bunVersion = "1.4.2";',
+    "  bun = pkgs.bun.overrideAttrs (old: {",
+    "    version = bunVersion;",
+    "  });",
+  ].join("\n");
+  const flakePath = join(root, "flake.nix");
+  const appFlake = readFileSync(flakePath, "utf8");
+  writeFileSync(flakePath, `${bunPin}\n${appFlake}`);
+
+  assert.equal(
+    readDeclaredVersions(root).find((entry) => entry.file === "flake.nix")
+      .version,
+    "0.1.0",
+  );
+
+  setRepositoryVersion(root, "0.2.0");
+
+  assert.equal(
+    readFileSync(flakePath, "utf8"),
+    `${bunPin}\n${appFlake.replace('version = "0.1.0";', 'version = "0.2.0";')}`,
+  );
+});
+
 test("first-parent changes group Task merges and link every PR", () => {
   const changes = collectChanges(
     [

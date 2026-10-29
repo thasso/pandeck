@@ -26,6 +26,36 @@
           # Node 24; the packaged server runs on Bun and ships no Node at all.
           pnpm = pkgs.pnpm_11.override { nodejs-slim = pkgs.nodejs-slim_22; };
 
+          # The packaged runtime is Bun 1.4.2, pinned here for this package only
+          # and leaving the rest of the locked nixpkgs as it is. Bun 1.3.13, the
+          # locked nixpkgs' version, closes file descriptor numbers at GC after a
+          # child_process subprocess with managed pipes ended, hitting whatever
+          # later reused them (Task-1231). Drop this override once the locked
+          # nixpkgs' `bun` is 1.4.2 or later. The x64 asset is the `baseline`
+          # build, the one nixpkgs itself packages. The version stays in
+          # `bunVersion`: scripts/release-utils.mjs reads any
+          # `version = "x.y.z";` line in this file as the app's own version.
+          bunVersion = "1.4.2";
+          bun =
+            if pkgs.stdenv.hostPlatform.isLinux then
+              pkgs.bun.overrideAttrs (old: {
+                version = bunVersion;
+                src =
+                  if pkgs.stdenv.hostPlatform.isx86_64 then
+                    pkgs.fetchurl {
+                      url = "https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-linux-x64-baseline.zip";
+                      hash = "sha256-xngEDxT+BEDrg503y9DOTAUaMtpygGrJfeamqra/co8=";
+                    }
+                  else
+                    pkgs.fetchurl {
+                      url = "https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-linux-aarch64.zip";
+                      hash = "sha256-VDKLvC2cjgyfiSxUTWbFeoO4QTnjSQnl7oF1jxrI/ac=";
+                    };
+                __intentionallyOverridingVersion = true;
+              })
+            else
+              pkgs.bun;
+
           # Which optional platform packages pnpm installs: the Linux systems
           # above, on glibc (nixpkgs' Linux stdenv). Named explicitly, never
           # "current", so the dependency FOD's hash does not depend on the host
@@ -159,7 +189,7 @@
             dontFixup = true;
 
             nativeBuildInputs = [
-              pkgs.bun
+              bun
               nodejs
               pnpm
               pkgs.pnpmConfigHook
@@ -204,7 +234,10 @@
               runHook postInstall
             '';
 
-            passthru.pnpmDeps = finalAttrs.pnpmDeps;
+            passthru = {
+              inherit bun;
+              pnpmDeps = finalAttrs.pnpmDeps;
+            };
 
             # Development and the test suites run on Node; this check is what
             # proves the packaged server under the packaged Bun.
