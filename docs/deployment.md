@@ -49,19 +49,22 @@ also be run under Bun by hand (Running the server suite under Bun, below).
 
 `scripts/build-bun-server-bundle.mjs` owns the target layout. Nix installs pnpm
 dependencies against `pnpm-lock.yaml`, builds the web UI, and invokes that
-builder with nixpkgs' pinned Bun. If the lockfile changes, `nix build` prints
-the new fixed-output `pnpmDeps` hash. That fetch and the offline install take
-optional platform packages only for `pnpmPlatformFlags` (Linux x64 and arm64 on
-glibc), named explicitly rather than detected from the host, so the hash is the
-same wherever it is built; a new target system extends that list and changes the
-hash. The offline install hardlinks from the unpacked store. The flake then
-applies two Nix-specific ELF fixes and wraps the runtime as
-`bin/personal-assistant-server` with `NODE_ENV=production`, the build commit,
-and a pinned git and OpenSSH PATH prefix. The first fix gives the
-`@parcel/watcher` addon an rpath to libstdc++. The second runs
-`patchelf --set-interpreter` over the copied Bun-compiled Claude CLI, which
-otherwise requests the FHS loader `/lib64/ld-linux-*.so.2`, absent on NixOS.
-Both SDK sessions and the browser-streamed official Claude profile-login
+builder with Bun 1.4.2, exposed as `.#personal-assistant.bun`. The flake
+overrides the locked nixpkgs' Bun 1.3.13 for this package alone, because 1.3.13
+closes descriptor numbers that something else reused (Bun runtime differences,
+below). The override goes once the locked nixpkgs' `bun` is 1.4.2 or later. If
+the lockfile changes, `nix build` prints the new fixed-output `pnpmDeps` hash.
+That fetch and the offline install take optional platform packages only for
+`pnpmPlatformFlags` (Linux x64 and arm64 on glibc), named explicitly rather than
+detected from the host, so the hash is the same wherever it is built; a new
+target system extends that list and changes the hash. The offline install
+hardlinks from the unpacked store. The flake then applies two Nix-specific ELF
+fixes and wraps the runtime as `bin/personal-assistant-server` with
+`NODE_ENV=production`, the build commit, and a pinned git and OpenSSH PATH
+prefix. The first fix gives the `@parcel/watcher` addon an rpath to libstdc++.
+The second runs `patchelf --set-interpreter` over the copied Bun-compiled Claude
+CLI, which otherwise requests the FHS loader `/lib64/ld-linux-*.so.2`, absent on
+NixOS. Both SDK sessions and the browser-streamed official Claude profile-login
 terminal resolve this exact binary. Only the interpreter may be rewritten:
 `--set-rpath` corrupts Bun's appended payload (segfault), and the binary links
 nothing beyond glibc. Equally, it must be exec'd directly and never through a
@@ -141,38 +144,37 @@ opens Bun with `safeIntegers` and returns integers as numbers, throwing Node's
 a read of 20,000 five-column rows. A BLOB parameter is bound as a BLOB. Any
 other Node member or option throws a named error rather than reading as
 `undefined`: a missing `isTransaction` made every nested transaction look like
-none. The builder also aliases `child_process` to
-`scripts/bun-shims/node-child-process.mjs`. Bun 1.3.13 starts a synchronous
-spawn (`spawnSync`, `execFileSync`, `execSync`) that was given no `env` with the
-environment the process started with, not the current `process.env`. Without the
-shim, the host-tool probes and every dependency's synchronous spawn would
-inherit the instance token and the integration secrets that boot deletes. The
-shim passes the live `process.env` for an omitted or `null` `env`, Node's
-documented default, and leaves any env object, `{}` included, as given.
-`Bun.spawnSync` has the same leak and no shim, so it must never be used: server
-code cannot name it (its types are Node's), and the install check fails on any
-bundled `Bun.spawnSync`. `parcelWatcher.ts` loads the copied N-API addon and a
-bundled copy of its upstream option-normalizing wrapper by absolute path. Every
-Claude SDK query option builder and the login terminal use the packaged CLI
-path. For browser work, the builder patches the MCP CLI's two package imports to
-local relative paths before copying it. The server launches that CLI with the
-packaged Bun executable, so browser sessions do not need Node, `npx`, a runtime
-npm download, or a `node_modules` tree. The Photon shim loads its copied module
-and sibling WASM from the runtime asset root. The builder also inlines JSDOM's
-default stylesheet and points its separately bundled sync-XHR worker at that
-root. JSDOM launches that worker with `process.execPath`, which is the packaged
-Bun runtime in this package; Pandeck's current JSDOM use does not issue
-synchronous XHR.
+none. Bun 1.4.2 starts a synchronous spawn (`spawnSync`, `execFileSync`,
+`execSync`) that was given no `env` with the current `process.env`, Node's
+documented default. Bun 1.3.13 used the environment the process started with,
+and a bundled `child_process` shim corrected that until 1.4.2. Otherwise the
+host-tool probes and every dependency's synchronous spawn would inherit the
+instance token and the integration secrets that boot deletes, so the runtime
+probe asserts the live default. `Bun.spawnSync` still starts with the launch
+environment, so it must never be used: server code cannot name it (its types are
+Node's), and the install check fails on any bundled `Bun.spawnSync`.
+`parcelWatcher.ts` loads the copied N-API addon and a bundled copy of its
+upstream option-normalizing wrapper by absolute path. Every Claude SDK query
+option builder and the login terminal use the packaged CLI path. For browser
+work, the builder patches the MCP CLI's two package imports to local relative
+paths before copying it. The server launches that CLI with the packaged Bun
+executable, so browser sessions do not need Node, `npx`, a runtime npm download,
+or a `node_modules` tree. The Photon shim loads its copied module and sibling
+WASM from the runtime asset root. The builder also inlines JSDOM's default
+stylesheet and points its separately bundled sync-XHR worker at that root. JSDOM
+launches that worker with `process.execPath`, which is the packaged Bun runtime
+in this package; Pandeck's current JSDOM use does not issue synchronous XHR.
 
 The package's install check boots from an unrelated temporary cwd and data
 directory, applies exactly the migration set named by the packaged lock to a
 fresh database, checks health, web and WebSocket service, verifies the native
 process executable, restarts against the same database, and asserts the explicit
-file set. A wrong-token WebSocket upgrade must be closed within 5 s without
-opening. A granted port-forward session echoes 1 MiB through a local TCP target
-in frames of at most 64 KiB, and both the target's end and the client's close
-end it. The restart is a Claude session's whole life, driven over the WebSocket
-with `scripts/fake-claude-cli.mjs` standing in for the Claude CLI through the
+file set. A wrong-token WebSocket upgrade must be answered with an
+`HTTP/1.1 401` status line within 5 s and never open. A granted port-forward
+session echoes 1 MiB through a local TCP target in frames of at most 64 KiB, and
+both the target's end and the client's close end it. The restart is a Claude
+session's whole life, driven over the WebSocket with
+`scripts/fake-claude-cli.mjs` standing in for the Claude CLI through the
 existing `ASSISTANT_CLAUDE_CLI_BIN` override, so no account or network is
 involved. The fake speaks the SDK's stream-json protocol and answers each prompt
 with `Fake reply to: <prompt>`. The session is created with a turn, opened while
@@ -196,40 +198,53 @@ the cost of parse and link alone, and it must stay under 300 MB: 130–180 MB wi
 the pragma, about 1.6 GB without. The check then bundles
 `scripts/bun-runtime-probe.mjs` with the server's plugins and defines and runs
 it with the packaged Bun, which reaches code a booted server runs only on
-demand. It runs git through `gitExec.ts`, the in-process Worker and the spawn
-broker. The broker must be the packaged Bun executable and lead its own process
-group. A cancelled request must kill its child. A bounded read cut inside a
-surrogate pair must come back with the lone high surrogate, and an aborted
-checkout git whose stand-in handles SIGTERM must settle only after the stand-in
-has written its `done` marker and exited (the Worker's exit receipt). A binary
-file outside `DATA_DIR`, holding every byte value, must come back through the
-Worker's file methods with the same SHA-256, whole and in a range across a chunk
-edge; a file request naming another Worker must be refused; and a handle whose
-connection ended must fail without affecting one opened on the next connection.
-On both served-file routes, a native open blocked by a FIFO substituted after
-lookup must not hold unrelated request rejection or the connection's descriptor
-sweep; a later FIFO writer must leave only the replacement connection's live
-handle, which still reads its own bytes. In a temporary checkout, the worktree
-surfaces' checkout reads through the Worker must answer as Bun's own `fs` does
-on the same paths (existence, bigint identity, Dirent kinds, `repoLockKey`, and
-whole and capped reads compared with `readFile` and `readFileSync`), and map a
-directory, a FIFO with a writer, a malformed answer, a refusal and an escaping
-link as `docs/workers.md` "Checkout files" states. The checkout workflows' reads
-must also answer as Bun's own sync `fs`: inspect kinds and modes against
-`lstatSync`, link targets (dangling, non-ASCII, invalid UTF-8) against
-`readlinkSync`, failure codes and messages against the sync call's throw, and
-each operation marker against `existsSync` in a main and a linked checkout. A
-dry-run commit workflow over untracked fixtures must give the prompt the
-summaries a copy of base's synchronous reader gives. Over a real local socket,
-both served-file routes must send the whole file to a client that stays. A
-client gone before the handler runs, or while its open is held, must cost at
-most one chunk read and close what was opened once. One gone mid-body must end
-the handler before the file's end, with its file closed once. Killing the broker
-must fail the lost request as an execution failure and kill the grandchild git
-started, and the broker must come back for the next call. Signal 0 to an empty
-process group must throw `ESRCH` and to a live one must not. A checkout git lost
-with its broker, with the Worker connection kept and with it ending, must reject
-only once its stand-in child is gone or a zombie. A second run under
+demand. First, in both modes, a child's managed stdio must never close a
+descriptor number something else reused since. Bun 1.3.13 closed a dead child's
+stdio numbers late, at GC, whatever had reused them
+([Task-1231](pa://task/1231)). For 10 iterations the probe starts a detached
+`sh` with managed pipes, destroys them and kills its group as a cancel or abort
+does, then opens a FIFO four times into the freed numbers. After a GC, each fd
+must still name its FIFO (`dev` and `ino`), and at least one iteration must have
+reused a managed number, or the check proved nothing. It runs inline, where the
+probe plays the server process, and in broker mode also in a separate
+packaged-Bun child launched as the broker is. Bun 1.3.13 fails every shape. The
+probe runs git through `gitExec.ts`, the in-process Worker and the spawn broker.
+The broker must be the packaged Bun executable and lead its own process group. A
+cancelled request must kill its child. A 2 MiB output against a 1 MiB
+`maxBuffer`, on stdout or stderr, as text or a Buffer, must fail with
+`ERR_CHILD_PROCESS_STDIO_MAXBUFFER` and come back with exactly 1 MiB of that
+stream and none of the other. A bounded read cut inside a surrogate pair must
+come back with the lone high surrogate, and an aborted checkout git whose
+stand-in handles SIGTERM must settle only after the stand-in has written its
+`done` marker and exited (the Worker's exit receipt). A binary file outside
+`DATA_DIR`, holding every byte value, must come back through the Worker's file
+methods with the same SHA-256, whole and in a range across a chunk edge; a file
+request naming another Worker must be refused; and a handle whose connection
+ended must fail without affecting one opened on the next connection. On both
+served-file routes, a native open blocked by a FIFO substituted after lookup
+must not hold unrelated request rejection or the connection's descriptor sweep;
+a later FIFO writer must leave only the replacement connection's live handle,
+which still reads its own bytes. In a temporary checkout, the worktree surfaces'
+checkout reads through the Worker must answer as Bun's own `fs` does on the same
+paths (existence, bigint identity, Dirent kinds, `repoLockKey`, and whole and
+capped reads compared with `readFile` and `readFileSync`), and map a directory,
+a FIFO with a writer, a malformed answer, a refusal and an escaping link as
+`docs/workers.md` "Checkout files" states. The checkout workflows' reads must
+also answer as Bun's own sync `fs`: inspect kinds and modes against `lstatSync`,
+link targets (dangling, non-ASCII, invalid UTF-8) against `readlinkSync`,
+failure codes and messages against the sync call's throw, and each operation
+marker against `existsSync` in a main and a linked checkout. A dry-run commit
+workflow over untracked fixtures must give the prompt the summaries a copy of
+base's synchronous reader gives. Over a real local socket, both served-file
+routes must send the whole file to a client that stays. A client gone before the
+handler runs, or while its open is held, must cost at most one chunk read and
+close what was opened once. One gone mid-body must end the handler before the
+file's end, with its file closed once. Killing the broker must fail the lost
+request as an execution failure and kill the grandchild git started, and the
+broker must come back for the next call. Signal 0 to an empty process group must
+throw `ESRCH` and to a live one must not. A checkout git lost with its broker,
+with the Worker connection kept and with it ending, must reject only once its
+stand-in child is gone or a zombie. A second run under
 `ASSISTANT_SPAWN_BROKER=0` checks the in-process fallback, the exit receipt and
 the surrogate included. The probe derives a tree-watch ignore set from a small
 repository's `.gitignore`, one ignored directory at the root and one nested. In
@@ -264,97 +279,132 @@ and an MCP initialize plus `tools/list`, covering the patched local imports
 without a workspace `node_modules`. When Chrome or Chromium is available, the
 check also launches it and navigates a page. The Nix sandbox has neither
 browser, so that last probe reports an explicit skip there; the same
-clean-environment probe with the pinned Bun 1.3.13 passes launch and navigation
-on a host with Chrome. The server itself keeps its deterministic bundle beside
-the executable because Bun's standalone compiler randomizes its embedded
-module-table encryption; the package wrapper invokes that module explicitly,
-while `/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary
-bundler also emits scheduler-dependent module order and identifier names, even
-when pinned to one CPU and given a lexically recreated source tree. The builder
-therefore uses pinned esbuild for the server module and its two bundled helpers;
-Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
-`node_modules`, and source derivations, then confirms pinned git and OpenSSH
-remain present. The install check also scans every runtime file for the Nix
-source path and build directory. CI builds the package and its closure check on
-every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
-derivation.
+clean-environment probe with the pinned Bun 1.4.2 passes launch and navigation
+on a host with Chrome, run outside the sandbox against the built package. The
+server itself keeps its deterministic bundle beside the executable because Bun's
+standalone compiler randomizes its embedded module-table encryption; the package
+wrapper invokes that module explicitly, while `/proc/<pid>/exe` remains the
+packaged Bun executable. Bun's ordinary bundler also emits scheduler-dependent
+module order and identifier names, even when pinned to one CPU and given a
+lexically recreated source tree. The builder therefore uses pinned esbuild for
+the server module and its two bundled helpers; Bun remains the packaged runtime.
+The flake closure check rejects Node, tsx, `node_modules`, and source
+derivations, then confirms pinned git and OpenSSH remain present. The install
+check also scans every runtime file for the Nix source path and build directory.
+CI builds the package and its closure check on every change (`docs/ci-cd.md`),
+and a deployment of that commit builds the same derivation.
 
-The package must not use `bun build --compile` or Bun's ordinary bundler: Bun
-1.3.13's standalone compiler encrypts its embedded module table with a random
-nonce, while ordinary bundles vary in module order and short identifier names.
-Keeping the pinned Bun runtime and esbuild-produced `server.js` separate avoids
-both sources of nondeterminism. CI builds `.#personal-assistant` twice on
+The package must not use `bun build --compile` or Bun's ordinary bundler. As
+observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses
+neither, the standalone compiler encrypts its embedded module table with a
+random nonce, while ordinary bundles vary in module order and short identifier
+names. Keeping the pinned Bun runtime and esbuild-produced `server.js` separate
+avoids both sources of nondeterminism. CI builds `.#personal-assistant` twice on
 separate runners and compares the NAR hashes, so a return to either path cannot
 silently regress reproducibility.
 
 ### Bun runtime differences
 
 These were found by running the whole server test suite under Bun 1.3.13 with
-the adapter aliased in (recipe below). All but the fixed ones are covered by
-production code already or affect only test clients:
+the adapter aliased in (recipe below). The package now runs Bun 1.4.2, and each
+item says whether it was re-checked there: "fixed in 1.4.2" and "unchanged on
+1.4.2" were re-measured, "found under 1.3.13" was not. All but the fixed ones
+and the open one are covered by production code already or affect only test
+clients:
 
-- Fixed in the adapter: `isTransaction` was missing, `run().changes` counted
-  cascaded and trigger rows (`deleteCancelledRun` checks for exactly 1), an
-  undeclared named parameter bound NULL, and an integer past 2^53 was rounded.
-- Fixed in the server: pi loads each provider's OAuth flow through a variable
-  `import()` of a sibling file, which the bundle does not have, so every
-  subscription model failed. `piSdk/models.ts` registers the flows statically,
-  and the runtime probe covers it (above).
+- Fixed in Bun 1.4.2, and the reason the package pins it: after a
+  `child_process` subprocess with managed pipes ended, 1.3.13 closed its stdio
+  descriptor numbers late, at GC, whatever had reused them since. Every such
+  spawn was exposed, in the server and in the broker: brokered children, the
+  login terminal, and container, background shell and speech processes. The
+  measured trigger is a child whose streams were destroyed and group killed, as
+  a cancel or abort does; one that exited on its own did not trigger it. A
+  standalone reproduction lost descriptors in 20 of 20 runs on 1.3.13 and in
+  none of 20 on 1.4.2. The runtime probe's fd check fails on 1.3.13 (above).
+- Fixed in Bun 1.4.2: synchronous spawns without `env`, or with `env: null`,
+  used the start-up environment; the package's `child_process` shim for it is
+  gone. `Bun.spawnSync` still does (unchanged on 1.4.2), and is kept out of the
+  bundle.
+- Fixed in Bun 1.4.2: `node:http`'s client was built on fetch, normalized a
+  request path and could not send CONNECT. The server side of both, raw request
+  paths and the package proxy's CONNECT tunnel, behaved as under Node.
+- Fixed in Bun 1.4.2: nothing written to a `node:http` upgrade socket reached
+  the client, so an upgrade the server refuses (wrong token, origin,
+  port-forward grant) reached it as a bare close, which a proxy such as Caddy
+  reported as a 502. The refusal now reaches the client with its 4xx or 503
+  status line, as intended; it still never opens. The install check requires
+  the 401.
+- Fixed in the server: Bun 1.4.2's `execFile` can return more than `maxBuffer`
+  on the stream that overflowed, stdout or stderr, text or Buffer, by a
+  timing-dependent amount (up to 1,176,000 bytes against 1,048,576). Node and
+  1.3.13 keep each stream's `.length` within `maxBuffer`. The spawn broker's
+  handler, which serves both modes, cuts an overflowing reply's streams to that
+  length (UTF-16 code units for text, bytes for a Buffer). It changes no Node
+  outcome, and the runtime probe asserts it.
+- Fixed in the adapter (found under 1.3.13): `isTransaction` was missing,
+  `run().changes` counted cascaded and trigger rows (`deleteCancelledRun` checks
+  for exactly 1; unchanged on 1.4.2), an undeclared named parameter bound NULL,
+  and an integer past 2^53 was rounded.
+- Fixed in the server (found under 1.3.13): pi loads each provider's OAuth flow
+  through a variable `import()` of a sibling file, which the bundle does not
+  have, so every subscription model failed. `piSdk/models.ts` registers the
+  flows statically, and the runtime probe covers it (above).
 - Fixed in the server: elkjs's worker script registers itself as a web worker
-  wherever `self` exists, and Bun defines `self`, so `new ELK()` threw.
-  `initiativeLayoutWorker.ts` removes `self` from its own thread's global before
-  it loads elkjs; the server thread keeps it. The runtime probe covers it.
-- Fixed in the child_process shim: synchronous spawns without `env`, or with
-  `env: null`, used the start-up environment. `Bun.spawnSync` does too, and is
-  kept out of the bundle.
-- `readdir` returns directory order; Node's is sorted. Every production caller
-  whose result order matters sorts it.
+  wherever `self` exists, and Bun defines `self` (unchanged on 1.4.2), so
+  `new ELK()` threw. `initiativeLayoutWorker.ts` removes `self` from its own
+  thread's global before it loads elkjs; the server thread keeps it. The runtime
+  probe covers it.
+- Open ([Task-1232](pa://task/1232)): the SQLite adapter's `exec` hands a
+  multi-statement script to Bun, which drops a trigger's `RAISE(ABORT)` from it
+  and runs the statements after it; Node throws. Migration 0097's refusal guard
+  is such a trigger, so under Bun it drops a non-empty subagent registry. Same
+  on 1.3.13 and 1.4.2.
+- `readdir` returns directory order; Node's is sorted (unchanged on 1.4.2).
+  Every production caller whose result order matters sorts it.
 - `os.homedir()` is read once at start-up and does not follow a later `HOME`
-  change. The server never changes `HOME`, but tests do, so server code resolves
-  home only through `userHomeDir()` (`userHome.ts`), which reads `HOME` on every
-  call; `architecture.test.ts` rejects any other `homedir` use. SDK code the
-  server runs (the Pi agent directory, `~` in native file tools) still calls
-  `os.homedir()` itself, so a test changing `HOME` does not move it.
+  change (unchanged on 1.4.2). The server never changes `HOME`, but tests do, so
+  server code resolves home only through `userHomeDir()` (`userHome.ts`), which
+  reads `HOME` on every call; `architecture.test.ts` rejects any other `homedir`
+  use. SDK code the server runs (the Pi agent directory, `~` in native file
+  tools) still calls `os.homedir()` itself, so a test changing `HOME` does not
+  move it.
 - `fetch` and `node:http`'s client honour `HTTP(S)_PROXY`/`NO_PROXY` from
-  `process.env`, where Node's `fetch` ignores them. The package proxy therefore
-  publishes its bundle to child processes only (`docs/package-proxy.md`).
-- `node:http`'s client is built on fetch: it normalizes a request path and
-  cannot send CONNECT. The server side of both, raw request paths and the
-  package proxy's CONNECT tunnel, behaves as under Node.
+  `process.env`, where Node's `fetch` ignores them (unchanged on 1.4.2). The
+  package proxy therefore publishes its bundle to child processes only
+  (`docs/package-proxy.md`).
 - An `EXPLAIN QUERY PLAN` of a write statement stays active after `all()` and
-  blocks the next COMMIT. Only query-plan tests prepare EXPLAIN.
-- Nothing written to a `node:http` upgrade socket reaches the client. An upgrade
-  the server refuses (wrong token, origin, port-forward grant) still never
-  opens, but the client sees the connection close instead of the 4xx or 503
-  status line.
+  blocks the next COMMIT (unchanged on 1.4.2). Only query-plan tests prepare
+  EXPLAIN.
 - Fixed in the server: the bundle keeps `ws` external, so the server uses Bun's
-  built-in `ws`, whose server socket has no `pause()`/`resume()`.
-  `attachPortForwardSocket` called both, so every port-forward connection failed
-  on the 0.49.0 Bun package. `portForwarding.ts` now uses them only where they
-  exist. Without them, frames are copied into a queue of 64 KiB chunks capped at
-  4 MiB per connection, so many tiny frames retain no more than their bytes, and
-  empty frames are dropped. A client that overruns the cap is closed with 1008.
-  `portForwarding.test.ts` runs its socket tests with Node's pause hidden, and
-  the install check forwards a real session.
-- That server honours none of the `WebSocketServer` options: `maxPayload` is
-  Bun's 16 MiB, so the forwarding frame limit is checked per message, and
-  `perMessageDeflate` is never negotiated, so session frames are uncompressed. A
-  send's callback fires once uWS takes the frame, not once it is written; only
-  past uWS's 16 MiB buffer does it wait for a drain.
-- `node:net` delivers reads of up to 512 KiB, where Node's are 64 KiB.
-  Forwarding splits them, because the shell refuses messages over 64 KiB.
-  `terminate()` drops frames uWS still buffers, so a target's end closes the
-  socket normally.
-- uWS does not check that client frames are masked. Other protocol violations
-  close the connection, as under Node.
-- An `http.Server` that has served a WebSocket never calls back from `close()`.
-  Shutdown does not wait for that callback; tests must not either.
+  built-in `ws`, whose server socket has no `pause()`/`resume()` (unchanged on
+  1.4.2). `attachPortForwardSocket` called both, so every port-forward
+  connection failed on the 0.49.0 Bun package. `portForwarding.ts` now uses them
+  only where they exist. Without them, frames are copied into a queue of 64 KiB
+  chunks capped at 4 MiB per connection, so many tiny frames retain no more than
+  their bytes, and empty frames are dropped. A client that overruns the cap is
+  closed with 1008. `portForwarding.test.ts` runs its socket tests with Node's
+  pause hidden, and the install check forwards a real session.
+- That server honours none of the `WebSocketServer` options (found under
+  1.3.13): `maxPayload` is Bun's 16 MiB, so the forwarding frame limit is
+  checked per message, and `perMessageDeflate` is never negotiated, so session
+  frames are uncompressed. A send's callback fires once uWS takes the frame, not
+  once it is written; only past uWS's 16 MiB buffer does it wait for a drain.
+- `node:net` delivers reads of up to 512 KiB, where Node's are 64 KiB (unchanged
+  on 1.4.2). Forwarding splits them, because the shell refuses messages over 64
+  KiB.
+- `terminate()` drops frames uWS still buffers, so a target's end closes the
+  socket normally (found under 1.3.13).
+- uWS does not check that client frames are masked (found under 1.3.13). Other
+  protocol violations close the connection, as under Node.
+- On 1.3.13 and 1.4.2 alike, an `http.Server` that has served a WebSocket did
+  not call back from `close()` while the client stayed open, and did once it
+  closed. Shutdown does not wait for that callback; tests must not either.
 
 ### Running the server suite under Bun
 
 There is no CI job for this yet. The run needs a per-test expected-failure
 comparison, because vitest cannot skip single tests by name from outside the
-file. The run takes about 4 minutes on a 24-core host. The recipe, from
+file. The run takes under 3 minutes on a 24-core host. The recipe, from
 `app/server`, with this `vitest.bun.config.ts` beside `vitest.config.ts`:
 
 ```ts
@@ -377,9 +427,12 @@ export default mergeConfig(
 ```
 
 ```bash
-bun=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#bun)
+bun=$(nix build --no-link --print-out-paths .#personal-assistant.bun)
 gcc=$(nix build --no-link --print-out-paths --inputs-from . 'nixpkgs#stdenv.cc.cc.lib')
-env -u NODE_ENV CI=true LD_LIBRARY_PATH="$gcc/lib" HOME="$(mktemp -d)" \
+home=$(mktemp -d)
+HOME="$home" git config --global user.name "Bun suite"
+HOME="$home" git config --global user.email bun-suite@invalid
+env -u NODE_ENV CI=true LD_LIBRARY_PATH="$gcc/lib" HOME="$home" \
   "$bun/bin/bun" --bun ./node_modules/vitest/vitest.mjs run \
   --config vitest.bun.config.ts
 ```
@@ -389,33 +442,44 @@ The fresh `HOME` is mandatory. Tests redirect `HOME` at runtime, which Bun's
 the real `HOME` had `credentialProfiles.test.ts` overwrite the user's
 `~/.claude/.credentials.json`, and SDK paths can still reach real files that
 way. `src/test/setup.ts` refuses a Bun run whose launch `HOME` is not under the
-temp directory.
+temp directory. The fresh `HOME` also needs a git identity, a throwaway one and
+never the user's: tests that commit through the server's git take the global
+identity, so without one 42 tests in 11 files fail with git's "Please tell me
+who you are", under Node as well as Bun.
 
-Run the `nix build` lines from the repository root, where `--inputs-from .` pins
-the flake's own Bun. `LD_LIBRARY_PATH` lets the `@parcel/watcher` addon find
-libstdc++, which the package gives it through an rpath instead. Without it, 178
-files fail to import. The run lacks the package's `child_process` shim: an
-`enforce: "pre"` plugin redirecting that builtin to it had no effect.
+Run the `nix build` lines from the repository root. `.#personal-assistant.bun`
+is the package's own Bun 1.4.2; `nixpkgs#bun` would give the locked nixpkgs'
+1.3.13. `--inputs-from .` pins the flake's nixpkgs for libstdc++, and
+`LD_LIBRARY_PATH` lets the `@parcel/watcher` addon find it, which the package
+gives it through an rpath instead. Without it, 178 files fail to import.
+`src/test/setup.ts` sets its SQLite pragma from the `open` option, not `isOpen`:
+the adapter refuses `isOpen`, and reading it failed 3319 tests.
 
-On 30 Sep 2026 (0.49.0 plus this change), 3908 of 3931 tests passed and one file
-failed at setup. Of the 23 failures, `memoryLog.test.ts` expecting a Node
-runtime name has since been made runtime-neutral, and the two in
-`portForwarding.test.ts` were the port-forward defect, since fixed (above). The
-`HOME` cases in `credentialProfiles.test.ts` and `tools/core/lsTool.test.ts`
-pass since `userHome.ts`. The rest are expected, and a job must compare its
-failures against exactly this list:
+On 29 Oct 2026 (0.63.0 plus Bun 1.4.2), 7350 of 7385 tests passed, 5 were
+skipped, and 23 failed in 9 of 598 files. All 23 also failed under Bun 1.3.13,
+whose run stalls on `directFileServing.test.ts` timeouts and gives no totals.
+The 1.3.13 failures that 1.4.2 fixed (`webStatic`, `packageProxy` CONNECT, and
+`worktrees` and `worktreeTracking` through `execFileSync`) pass, as do the
+`credentialProfiles` and `lsTool` `HOME` cases since `userHome.ts`. A job must
+compare its failures against exactly this list:
 
-- `webStatic.test.ts`: the three "never reads outside the dist root for …" cases
-  with encoded or doubled `..` segments. The test's `node:http` client
-  normalizes the path before sending it.
-- `packageProxy/proxyServer.test.ts`: nine cases, every one that sends CONNECT
-  or an absolute-form request through the test's `node:http` client, which Bun
-  cannot send.
-- `worktrees/worktrees.test.ts` (the whole file, at its submodule setup) and
-  `worktrees/worktreeTracking.test.ts` "discards the tracking checkout when a
-  post-add step throws": the tests set `GIT_CONFIG_*` in `process.env` and run
-  git through `execFileSync`, which starts children with the environment from
-  start-up. The package's `child_process` shim fixes it; the test run lacks it.
+- `db/subagentRegistryDropMigration.test.ts`, all three cases: Bun's SQLite
+  `exec` drops a trigger's `RAISE(ABORT)` from a multi-statement script and runs
+  the statements after it, so migration 0097 drops a non-empty registry where
+  Node refuses. This one is a production defect, not a test artefact
+  ([Task-1232](pa://task/1232)).
+- `checkoutFileAccess.test.ts`, twelve cases: the test's `node:fs/promises` mock
+  calls the saved `handle.close` without its receiver, which Bun's `FileHandle`
+  needs and Node's does not.
+- `gitExec.test.ts` "Node pin: statSync without throwing answers undefined for
+  ENOENT and ENOTDIR": it pins Node's side; Bun throws `ENOTDIR`, and production
+  follows Bun (`docs/workers.md`).
+- `directFileServing.test.ts` "minting names what is wrong, in the words the
+  route classifies": Bun's `realpath` error names `lstat`.
+- `directFileServing.test.ts` "by absolute path: an open failure after the
+  headers ends the response with no body" and `workers/inProcessWorker.test.ts`
+  "a script that ran checkout and local git, and read a served file, exits on
+  its own": also fail under 1.3.13; cause not classified.
 - `skills/skillRuntimeMaterializer.test.ts` "reuses the sorted set …": the
   test's own `readdir` is unsorted.
 - `piSdk/toolBinaries.test.ts` "stops pi's tool lookup from spawning once
@@ -447,7 +511,7 @@ log names each new file with `[memory] heap snapshot written to …`, and a
 failure with `[memory] heap snapshot failed: …`. A dev server runs on Node,
 where SIGUSR1 still opens the inspector on 127.0.0.1:9229.
 
-The `[memory]` line names its runtime: `runtime=bun-1.3.13` in production,
+The `[memory]` line names its runtime: `runtime=bun-1.4.2` in production,
 `runtime=node-24.x` on a dev server. `heapUsed` and `heapTotal` are the engine's
 own heap, JavaScriptCore's under Bun and V8's under Node, and are not comparable
 across the two. Compare `rss`, which is also the figure to watch for growth in

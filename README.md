@@ -318,7 +318,7 @@ journalctl -fu 'personal-assistant-release@*'  # a running deploy (project pipel
 ### Memory and heap snapshots
 
 At boot and every 10 minutes after, the server logs a line like
-`[memory] runtime=bun-1.3.13 rss=250MB heapUsed=… heapTotal=… external=… arrayBuffers=…`.
+`[memory] runtime=bun-1.4.2 rss=250MB heapUsed=… heapTotal=… external=… arrayBuffers=…`.
 Watch `rss`: it is what the host pays, and the only figure comparable with a dev
 server, which runs on Node. The heap figures are JavaScriptCore's under Bun and
 V8's under Node.
