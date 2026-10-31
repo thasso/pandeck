@@ -14,8 +14,9 @@ const { Connection } = await import("./connection.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-test("a liveness ping is answered with exactly one pong", async () => {
-  const validated = validateClientMessage({ type: "ping" });
+test("a liveness ping is answered with exactly one pong echoing its id", async () => {
+  assert.equal(validateClientMessage({ type: "ping" }).ok, false);
+  const validated = validateClientMessage({ type: "ping", id: "probe-1" });
   assert.ok(validated.ok);
 
   const sent: ServerMessage[] = [];
@@ -29,5 +30,5 @@ test("a liveness ping is answered with exactly one pong", async () => {
     send: (frame: string | Buffer) => sent.push(parseServerFrame(frame)),
   });
   await conn.handle(validated.msg);
-  assert.deepEqual(sent, [{ type: "pong" }]);
+  assert.deepEqual(sent, [{ type: "pong", id: "probe-1" }]);
 });

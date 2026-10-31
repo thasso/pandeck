@@ -17,9 +17,12 @@ capability logic.
 - `socket.ts` owns the reconnecting WebSocket wrapper; `serverFrames.ts`
   inflates its binary (deflated) frames and keeps every frame in arrival order.
   When the page becomes visible again or the network returns, the wrapper pings
-  an open socket and holds sends until any frame arrives, replacing the socket
-  after 1.5 s of silence; a pending reconnect runs at once. A suspended phone
-  browser can leave a dead socket reading as open for many seconds.
+  an open socket with a fresh id and holds sends until the pong echoing that id
+  arrives (an earlier frame may have waited out the suspension in the event
+  queue), replacing the socket after 1.5 s; a pending reconnect runs at once. A
+  suspended phone browser can leave a dead socket reading as open for many
+  seconds. Writes still held when a socket is replaced were never sent, so
+  `unsentRequestIds` keeps their mutations pending through the reconnect.
 - `markdownFrontmatter.ts` owns `splitMarkdownFrontmatter`: a Markdown file's
   leading frontmatter projected for a header (title, tags, label/value fields,
   or the raw block when the shared YAML subset cannot read it) and the body with

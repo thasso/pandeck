@@ -7879,11 +7879,13 @@ export type ClientMessage =
   /** Load archived session rows on demand, when the archived sidebar section is expanded. */
   | { type: "loadArchivedSessions" }
   /**
-   * Liveness probe: the server answers `pong` at once. A page coming back from
-   * the background sends it, because a socket the OS suspended can still read
-   * as open long after the connection died.
+   * Liveness probe: the server answers `pong` with the same `id` at once. A
+   * page coming back from the background sends it, because a socket the OS
+   * suspended can still read as open long after the connection died. Only the
+   * echoed id proves the connection works NOW: a frame received earlier may
+   * still be waiting in the browser's event queue.
    */
-  | { type: "ping" }
+  | { type: "ping"; id: string }
   /** Resolve compact metadata for generic pa:// object links. */
   | { type: "resolveObjectLinks"; requestId: string; uris: string[] }
   | { type: "deleteSession"; id: string; requestId?: string }
@@ -8520,8 +8522,8 @@ export type ServerMessage =
       type: "webBuild";
       webBuildId: string;
     }
-  /** The answer to a client `ping`. */
-  | { type: "pong" }
+  /** The answer to a client `ping`, echoing its id. */
+  | { type: "pong"; id: string }
   | {
       type: "ready";
       /**

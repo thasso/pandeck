@@ -1022,7 +1022,7 @@ export class Connection implements Viewer {
       case "loadArchivedSessions":
         return this.onLoadArchivedSessions();
       case "ping":
-        this.send({ type: "pong" });
+        this.send({ type: "pong", id: msg.id });
         return;
       case "resolveObjectLinks":
         return this.onResolveObjectLinks(msg.requestId, msg.uris);

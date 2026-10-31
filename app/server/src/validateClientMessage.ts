@@ -1064,7 +1064,7 @@ const REGISTRY = defineRegistry({
   ),
   releasePermanentAssistant: fields({ sessionId: STRING }),
   loadArchivedSessions: NONE,
-  ping: NONE,
+  ping: fields({ id: STRING }),
   resolveObjectLinks: fields({ requestId: STRING, uris: STRING_ARRAY }),
   deleteSession: fields({ id: STRING }, { requestId: STRING }),
   archiveSession: fields(

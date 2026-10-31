@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientMessage, ServerMessage } from "@assistant/shared";
+import { createMutationLifecycle } from "./mutationLifecycle.ts";
 import { AssistantSocket } from "./socket.ts";
 
 class FakeSocket {
@@ -60,6 +61,13 @@ function latest(): FakeSocket {
   return FakeSocket.created.at(-1)!;
 }
 
+/** The id of the probe this socket was last pinged with. */
+function pingId(ws: FakeSocket): string {
+  const ping = ws.sent.findLast((msg) => msg.type === "ping");
+  if (ping?.type !== "ping") throw new Error("no ping sent");
+  return ping.id;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("WebSocket", FakeSocket);
@@ -80,29 +88,36 @@ afterEach(() => {
 });
 
 describe("AssistantSocket liveness probe", () => {
-  it("pings on resume and releases held sends once the socket answers", () => {
+  it("pings on resume and releases held sends once its pong answers", () => {
     const ws = latest();
     resume();
-    expect(ws.sent).toEqual([{ type: "ping" }]);
+    const id = pingId(ws);
+    expect(ws.sent).toEqual([{ type: "ping", id }]);
 
     socket.send(loadSession);
-    expect(ws.sent).toEqual([{ type: "ping" }]);
+    expect(ws.sent).toEqual([{ type: "ping", id }]);
 
-    ws.receive({ type: "pong" });
-    expect(ws.sent).toEqual([{ type: "ping" }, loadSession]);
+    ws.receive({ type: "pong", id });
+    expect(ws.sent).toEqual([{ type: "ping", id }, loadSession]);
     expect(received).toEqual([]);
 
     vi.advanceTimersByTime(5000);
     expect(FakeSocket.created).toHaveLength(1);
   });
 
-  it("any frame proves the socket alive, not only the pong", () => {
+  it("is not released by a frame queued before the probe or by an older pong", () => {
     const ws = latest();
     resume();
+    const first = pingId(ws);
     socket.send(loadSession);
+    // Both may have waited in the browser's event queue through suspension.
     ws.receive({ type: "accountHealthChanged" });
-    expect(ws.sent).toEqual([{ type: "ping" }, loadSession]);
-    expect(received).toHaveLength(1);
+    ws.receive({ type: "pong", id: `${first}-earlier` });
+    expect(ws.sent).toEqual([{ type: "ping", id: first }]);
+    expect(received).toEqual([{ type: "accountHealthChanged" }]);
+
+    vi.advanceTimersByTime(1500);
+    expect(FakeSocket.created).toHaveLength(2);
   });
 
   it("replaces a socket that stays silent and sends the held messages on the new one", () => {
@@ -129,6 +144,56 @@ describe("AssistantSocket liveness probe", () => {
     expect(statuses).toEqual([true, false, true]);
   });
 
+  it("keeps a write held by a failed probe pending, and sends it once on the new socket", () => {
+    const lifecycle = createMutationLifecycle<{ topic?: string }>();
+    const terminals: string[] = [];
+    // The status wiring useAssistant installs for a lost socket.
+    let connected = true;
+    socket.onStatus((next) => {
+      if (connected && !next) lifecycle.disconnect(socket.unsentRequestIds());
+      connected = next;
+    });
+    const sentBeforeProbe = lifecycle.start({
+      context: {},
+      timeoutMs: 30_000,
+      recover: () => {},
+      disconnected: () => {},
+      terminal: (outcome) => terminals.push(`sent:${outcome.type}`),
+    });
+    socket.send({
+      type: "deleteSession",
+      id: "s0",
+      requestId: sentBeforeProbe,
+    });
+
+    resume();
+    const held = lifecycle.start({
+      context: {},
+      timeoutMs: 30_000,
+      recover: () => {},
+      disconnected: () => {},
+      terminal: (outcome) => terminals.push(`held:${outcome.type}`),
+    });
+    const write: ClientMessage = {
+      type: "deleteSession",
+      id: "s1",
+      requestId: held,
+    };
+    socket.send(write);
+    expect(socket.unsentRequestIds()).toEqual(new Set([held]));
+
+    vi.advanceTimersByTime(1500);
+    // The write the dead socket carried is unknown; the held one never left.
+    expect(terminals).toEqual(["sent:unknown"]);
+    expect(lifecycle.get(held)).toBeDefined();
+
+    const fresh = latest();
+    fresh.accept();
+    expect(fresh.sent).toEqual([write]);
+    lifecycle.settle(held);
+    expect(terminals).toEqual(["sent:unknown", "held:settled"]);
+  });
+
   it("runs a pending reconnect at once instead of waiting it out", () => {
     latest().drop();
     expect(FakeSocket.created).toHaveLength(1);
@@ -143,7 +208,7 @@ describe("AssistantSocket liveness probe", () => {
     resume();
     resume();
     window.dispatchEvent(new Event("online"));
-    expect(ws.sent).toEqual([{ type: "ping" }]);
+    expect(ws.sent.filter((msg) => msg.type === "ping")).toHaveLength(1);
   });
 
   it("stops listening once disposed", () => {
