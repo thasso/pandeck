@@ -40,7 +40,9 @@ const SERVER_REPO_GIT_USERS = [
  * `parcelWatcher.ts` loads the native watcher; it imports only
  * `runtimeAssets.ts`, which reads the environment and asset paths, not server
  * state. `managedTreeRemoval.ts` is the removal ladder the lifecycle methods
- * run; it imports only `node:` modules.
+ * run; it imports only `node:` modules. The environment the Worker's children
+ * inherit is the isolation boundary's (`workers/isolationBoundary.ts`), passed
+ * in when the Worker starts, never the server's child-env overlay.
  */
 const WORKER_ALLOWED = new Set([
   "errors.ts",
@@ -49,7 +51,6 @@ const WORKER_ALLOWED = new Set([
   "managedTreeRemoval.ts",
   "parcelWatcher.ts",
   "spawnBroker.ts",
-  "subprocessEnv.ts",
 ]);
 
 /**
@@ -400,6 +401,25 @@ test("only the in-process Worker starts the Worker side", () => {
       (module) => !module.startsWith("worker/"),
     ),
     ["workers/inProcessWorker.ts"],
+  );
+});
+
+test("the Worker's endpoint and children's environment come from the isolation boundary", () => {
+  // Only the boundary makes a stream pair; `workerProtocol/` names its type.
+  assert.deepEqual(
+    importersOf(
+      (target) => target === "workerProtocol/inProcessTransport.ts",
+      "valueImports",
+    ).filter((module) => !module.startsWith("workerProtocol/")),
+    ["workers/isolationBoundary.ts"],
+  );
+  // Neither the in-process Worker nor the Worker side reads the overlay.
+  assert.deepEqual(
+    importersOf((target) => target === "subprocessEnv.ts").filter(
+      (module) =>
+        module === "workers/inProcessWorker.ts" || module.startsWith("worker/"),
+    ),
+    [],
   );
 });
 

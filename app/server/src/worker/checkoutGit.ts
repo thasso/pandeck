@@ -25,8 +25,14 @@ import {
   type MethodHandlers,
 } from "../workerProtocol/connection.ts";
 
-/** The handlers of the Worker `workerId`. */
-export function checkoutGitHandlers(workerId: string): MethodHandlers {
+/**
+ * The handlers of the Worker `workerId`. Each git child inherits `childEnv()`,
+ * read when its request is served, with the request's overrides on top.
+ */
+export function checkoutGitHandlers(
+  workerId: string,
+  childEnv: () => NodeJS.ProcessEnv,
+): MethodHandlers {
   /** The checkout's path here; another Worker's location runs nothing. */
   const here = (location: CheckoutLocation): string => {
     if (location.workerId !== workerId)
@@ -41,7 +47,10 @@ export function checkoutGitHandlers(workerId: string): MethodHandlers {
     async (payload, signal) => {
       const { location, ...req } = decodeRun(payload, withInput);
       return encodeExecOutcome(
-        await runGit({ ...req, cwd: here(location), signal, awaitExit: true }),
+        await runGit(
+          { ...req, cwd: here(location), signal, awaitExit: true },
+          childEnv(),
+        ),
       );
     };
   return {
@@ -50,23 +59,19 @@ export function checkoutGitHandlers(workerId: string): MethodHandlers {
     [CHECKOUT_GIT_METHODS.raw]: async (payload, signal) => {
       const { location, ...req } = decodeRun(payload, false);
       return encodeRawOutcome(
-        await runGitRaw({
-          ...req,
-          cwd: here(location),
-          signal,
-          awaitExit: true,
-        }),
+        await runGitRaw(
+          { ...req, cwd: here(location), signal, awaitExit: true },
+          childEnv(),
+        ),
       );
     },
     [CHECKOUT_GIT_METHODS.bounded]: async (payload, signal) => {
       const { location, ...req } = decodeBounded(payload);
       return encodeBoundedOutcome(
-        await runGitBounded({
-          ...req,
-          cwd: here(location),
-          signal,
-          awaitExit: true,
-        }),
+        await runGitBounded(
+          { ...req, cwd: here(location), signal, awaitExit: true },
+          childEnv(),
+        ),
       );
     },
   };

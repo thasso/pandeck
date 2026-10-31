@@ -81,7 +81,9 @@ The isolation boundary is what keeps Worker processes, and so agents, out of
 Pandeck's secrets. It has two implementations: separate OS accounts on a server
 host, described here, and separately signed processes with the platform key
 store on a single-user desktop ("Bundled desktop mode" below). Nothing outside
-these implementations assumes either one.
+these implementations assumes either one. The phase-1 ports are
+`workers/isolationBoundary.ts` and `secretStore.ts`, each with a same-account
+server-host implementation.
 
 Every app-managed credential and key lives behind one **secret store** port:
 model tokens (read only by the credential gateway), integration OAuth results,
@@ -1040,28 +1042,30 @@ natural shape anyway.
 
 Phase 1 ships as slices; each keeps behavior unchanged.
 
-| Slice  | Change                                                                                             | State   |
-| ------ | -------------------------------------------------------------------------------------------------- | ------- |
-| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it               | landed  |
-| W2     | Served files (`/api/files`, `show_files`) read through the Worker                                  | landed  |
-| W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                     | landed  |
-| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                          | landed  |
-| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)                    | landed  |
-| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                      | landed  |
-| W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                   | landed  |
-| W5     | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                  | landed  |
-| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone                  | landed  |
-| W7     | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                  | landed  |
-| W8     | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175) | landed  |
-| W9–W10 | The engine host: pi and Claude sessions                                                            | planned |
-| W11    | Isolation boundary and secret store ports                                                          | planned |
+| Slice  | Change                                                                                                         | State   |
+| ------ | -------------------------------------------------------------------------------------------------------------- | ------- |
+| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it                           | landed  |
+| W2     | Served files (`/api/files`, `show_files`) read through the Worker                                              | landed  |
+| W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                                 | landed  |
+| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                                      | landed  |
+| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)                                | landed  |
+| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                                  | landed  |
+| W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                               | landed  |
+| W5     | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                              | landed  |
+| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone                              | landed  |
+| W7     | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                              | landed  |
+| W8     | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)             | landed  |
+| W9–W10 | The engine host: pi and Claude sessions                                                                        | planned |
+| W11    | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178) | landed  |
 
 `workerBoundary.test.ts` asserts that no module of the checkout family imports
 `node:fs`, that `gitExec.ts` and `checkoutFileAccess.ts` export no read or
 executor without a side, and that only the side derivations and the Worker's own
 clients name the default Worker. It also closes the value imports of the modules
 that can hold the Knowledge Base row, each external symbol pinned to its
-declaration.
+declaration. The in-process Worker gets its endpoint and its children's
+environment only from `workers/isolationBoundary.ts`, and `worker/` never reads
+the server's child-env overlay.
 
 ## Open questions
 

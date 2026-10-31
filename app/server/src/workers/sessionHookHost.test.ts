@@ -316,7 +316,11 @@ test("a Worker the session is not placed on is refused before any effect", async
     }),
   });
   // A real Worker, admitted as one no session is placed on.
-  const worker = startWorker({ workerId: "elsewhere", transport: workerEnd });
+  const worker = startWorker({
+    workerId: "elsewhere",
+    transport: workerEnd,
+    childEnv: () => process.env,
+  });
   const before = served();
   try {
     const hooks = worker.sessionHooks;
