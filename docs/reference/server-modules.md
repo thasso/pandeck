@@ -22,9 +22,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   applies the origin/token/shutdown gate once: constructing them with
   `{ server, path }` attaches independent upgrade listeners, each calling
   `handleUpgrade` unconditionally, and the one whose `path` does not match
-  aborts the handshake with 400 before the right one is reached.
-  `permessage-deflate` stays on the session socket only (the other two are short
-  control/terminal frames or incompressible PCM).
+  aborts the handshake with 400 before the right one is reached. No socket
+  negotiates `permessage-deflate` (Bun never does): `serverFrames.ts` deflates a
+  large session-socket message into a binary frame itself, and
+  `socketHeartbeat.ts` pings each session socket and terminates one that stops
+  answering.
 - `connection.ts` owns one browser WebSocket connection and translates client
   commands into server operations. EVERY command dispatches inside a
   `MutationScope`, whose two jobs are separable: recording THAT a command

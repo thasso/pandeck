@@ -19,6 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { parseServerFrame } from "./test/serverFrames.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "presence-consumers-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -385,7 +386,8 @@ function connection() {
   )({
     OPEN: 1,
     readyState: 1,
-    send: (s: string) => sent.push(JSON.parse(s) as SentMessage),
+    send: (frame: string | Buffer) =>
+      sent.push(parseServerFrame<SentMessage>(frame)),
   }) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>> & {
     viewing: unknown;
   };

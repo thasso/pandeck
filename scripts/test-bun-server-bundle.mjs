@@ -50,6 +50,7 @@ import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 
 const serverRequire = createRequire(
   new URL("../app/server/package.json", import.meta.url),
@@ -188,6 +189,7 @@ async function checkWebAndSocket() {
     const socket = new globalThis.WebSocket(
       `ws://127.0.0.1:${port}/ws?token=${token}`,
     );
+    socket.binaryType = "arraybuffer";
     let ready = false;
     let taskList = false;
     const timer = globalThis.setTimeout(() => {
@@ -198,7 +200,7 @@ async function checkWebAndSocket() {
       socket.send(JSON.stringify({ type: "subscribe", topics: ["tasks"] }));
     });
     socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
+      const message = parseServerFrame(event.data);
       if (message.type === "ready") {
         assert(
           message.serverBuild?.version === expectedVersion,
@@ -1051,16 +1053,29 @@ function seedDataDir() {
   );
 }
 
+/**
+ * One session-socket message: a large one arrives as a binary frame of its
+ * JSON's raw DEFLATE stream (`COMPRESSED_SERVER_FRAME_MIN_BYTES`).
+ */
+function parseServerFrame(data) {
+  return JSON.parse(
+    typeof data === "string"
+      ? data
+      : inflateRawSync(Buffer.from(data)).toString("utf8"),
+  );
+}
+
 /** A JSON WebSocket client that waits for messages in arrival order. */
 async function connect() {
   const socket = new globalThis.WebSocket(
     `ws://127.0.0.1:${port}/ws?token=${token}`,
   );
+  socket.binaryType = "arraybuffer";
   const messages = [];
   const waiting = new Set();
   let cursor = 0;
   socket.addEventListener("message", (event) => {
-    messages.push(JSON.parse(String(event.data)));
+    messages.push(parseServerFrame(event.data));
     for (const check of waiting) check();
   });
   await new Promise((opened, failed) => {

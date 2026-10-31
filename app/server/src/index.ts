@@ -19,7 +19,11 @@ import type {
   TimelineCacheDescriptor,
   AccountPickPreviewRequest,
 } from "@assistant/shared";
-import { isThinkingLevel, normalizeGithubIssueRefs } from "@assistant/shared";
+import {
+  COMPRESSED_SERVER_FRAME_MIN_BYTES,
+  isThinkingLevel,
+  normalizeGithubIssueRefs,
+} from "@assistant/shared";
 import type {
   PortForwardGrantRequest,
   PortForwardGrantRevokeRequest,
@@ -193,6 +197,7 @@ import { handleApnsApi } from "./apnsHttp.ts";
 import { handleWebPushApi } from "./webPushHttp.ts";
 import { errorText } from "./errors.ts";
 import { reconcileMissingPiSessionMetadata } from "./sessions.ts";
+import { startSocketHeartbeat } from "./socketHeartbeat.ts";
 import {
   installSessionActivityTracking,
   markInterruptedRunsOnBoot,
@@ -439,20 +444,6 @@ backgroundWorkSupervisor.setCompletionRecordedHandler((item) => {
     Boolean(hub.getLiveById(item.ownerSessionId)?.isRunning),
   );
 });
-
-const WEBSOCKET_COMPRESSION = {
-  // Browser clients advertise `permessage-deflate` automatically, but `ws` keeps
-  // it disabled by default on servers. Enable it only for meaningful payloads so
-  // large snapshots benefit while chat deltas and control frames stay cheap.
-  threshold: 1024,
-  serverNoContextTakeover: true,
-  clientNoContextTakeover: true,
-  concurrencyLimit: 10,
-  zlibDeflateOptions: {
-    level: 3,
-    memLevel: 7,
-  },
-} as const;
 
 /**
  * Optional extra browser origins allowed to call the API (comma-separated). The
@@ -1514,13 +1505,14 @@ const server = createServer((req, res) => {
  * unconditionally, and the one whose `path` did not match would abort the
  * handshake with 400 before the right one ever saw it.
  *
- * Speech frames are 16-bit PCM: `permessage-deflate` only reaches ~76% of
- * original on that, which is not worth the per-frame CPU, so compression stays
- * on the session socket only.
+ * None negotiates `permessage-deflate`: the production Bun runtime never does,
+ * so the session socket compresses its own large frames
+ * (`COMPRESSED_SERVER_FRAME_MIN_BYTES`), and speech frames are 16-bit PCM, which
+ * deflate only reaches ~76% of original on.
  */
 const wss = new WebSocketServer({
   noServer: true,
-  perMessageDeflate: WEBSOCKET_COMPRESSION,
+  perMessageDeflate: false,
 });
 const conversationWss = new WebSocketServer({
   noServer: true,
@@ -1655,6 +1647,7 @@ wss.on("connection", (ws, req) => {
     requestPublicBaseUrl(req),
     WEB_BUILD_ID,
   );
+  startSocketHeartbeat(ws);
   connection.init().catch((err) => {
     ws.send(
       JSON.stringify({
@@ -1898,7 +1891,7 @@ server.listen(PORT, HOST, () => {
   );
   console.log(`[assistant] server listening on http://${displayHost}:${PORT}`);
   console.log(
-    `[assistant] websocket on ws://${displayHost}:${PORT}/ws (permessage-deflate enabled for payloads >= ${WEBSOCKET_COMPRESSION.threshold} bytes)`,
+    `[assistant] websocket on ws://${displayHost}:${PORT}/ws (server frames >= ${COMPRESSED_SERVER_FRAME_MIN_BYTES} bytes are deflated)`,
   );
   if (!IS_PROD && displayHost === "localhost") {
     console.log(

@@ -14,7 +14,8 @@ capability logic.
 
 ## Module ownership
 
-- `socket.ts` owns the reconnecting WebSocket wrapper.
+- `socket.ts` owns the reconnecting WebSocket wrapper; `serverFrames.ts`
+  inflates its binary (deflated) frames and keeps every frame in arrival order.
 - `markdownFrontmatter.ts` owns `splitMarkdownFrontmatter`: a Markdown file's
   leading frontmatter projected for a header (title, tags, label/value fields,
   or the raw block when the shared YAML subset cannot read it) and the body with
