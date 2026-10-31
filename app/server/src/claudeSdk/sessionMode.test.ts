@@ -28,6 +28,8 @@ import {
 import type { ClaudeSdkRecord } from "./claudeSdkRecords.ts";
 import { claudeSdkStore } from "./claudeSdkStore.ts";
 import type { ClaudeQueryParams, ClaudeSdkSeam } from "./sdkSeam.ts";
+import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
+import { sessionHookCallsServedForTests } from "../workers/sessionHookHost.ts";
 
 installClaudeStateBuilder(claudeSdkStore);
 
@@ -118,9 +120,17 @@ async function main(): Promise<void> {
       "deny",
       `a session switched to Plan cannot call ${t}`,
     );
+    const served = sessionHookCallsServedForTests(
+      SESSION_HOOK_METHODS.canUseTool,
+    );
     const verdict = await planOptions!.canUseTool!(t, {}, {} as never);
     assert.ok(verdict, `Plan's canUseTool returns a verdict for ${t}`);
     assert.equal(verdict.behavior, "deny", `Plan's canUseTool denies ${t}`);
+    assert.equal(
+      sessionHookCallsServedForTests(SESSION_HOOK_METHODS.canUseTool),
+      served + 1,
+      "the session's binding on the server gave the verdict",
+    );
   }
   assert.notEqual(await gate("Bash"), "deny", "a Plan turn still runs Bash");
   const mcpVerdict = await planOptions!.canUseTool!(

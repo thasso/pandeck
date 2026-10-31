@@ -212,7 +212,13 @@ import {
   mapToolResults,
   resultProviderError,
 } from "./messageMapper.ts";
-import { buildClaudeSdkQueryOptions, claudeQueryModel } from "./options.ts";
+import {
+  buildClaudeSdkQueryOptions,
+  claudeQueryModel,
+  claudeSessionHookBinding,
+} from "./options.ts";
+import { sessionHooksFor } from "../workers/inProcessWorker.ts";
+import { registerSessionHooks } from "../workers/sessionHookHost.ts";
 import {
   ClaudeCompactionWindow,
   readContextUsage,
@@ -739,6 +745,13 @@ export class ClaudeSdkSession implements LiveSession {
    * call), closed on dispose.
    */
   private toolServer: SessionToolServer | undefined;
+  /**
+   * Disposes this session's hook binding on the server
+   * (`workers/sessionHookHost.ts`): its interactive queries' permission and
+   * hook decisions. Registered beside the tool server and kept as long, so a
+   * late hook from an ended query is still answered in its own epoch.
+   */
+  private unregisterSessionHooks: (() => void) | undefined;
   /** Per-tool loaded/token state from the CLI's tool search (getContextUsage). */
   private toolLoadState = new Map<
     string,
@@ -2025,6 +2038,20 @@ export class ClaudeSdkSession implements LiveSession {
         skill,
       );
     if (!this.toolServer) this.toolServer = createClaudeSessionToolServer(this);
+    this.unregisterSessionHooks ??= registerSessionHooks(
+      this.id,
+      claudeSessionHookBinding({
+        agentType: this.agentType,
+        agent: sessionAgent(this.id),
+        mode: () => this.mode,
+        admit: (epoch, input) => this.admitNativeBackgroundTool(epoch, input),
+        stop: (epoch, tasks) => this.reconcileStopTasks(epoch, tasks),
+        postCompact: (epoch, summary) => {
+          if (this.compactOperation && this.compactOperationEpochKey === epoch)
+            this.compactOperation.summary = summary;
+        },
+      }),
+    );
     const epochKey = `claude-${randomUUID()}`;
     const queue = new CloseableInputQueue();
     // A skill turn's queue starts EMPTY: the CLI must register the command
@@ -2083,7 +2110,6 @@ export class ClaudeSdkSession implements LiveSession {
           abortController,
           modelId: this.modelId,
           thinkingLevel: this.thinkingLevel,
-          mode: () => this.mode,
           ...(this.providerSessionId !== undefined
             ? { providerSessionId: this.providerSessionId }
             : {}),
@@ -2095,19 +2121,7 @@ export class ClaudeSdkSession implements LiveSession {
           promptConditions: this.promptConditions(),
           frozenSkillNames,
           agent: sessionAgent(this.id),
-          outputPolicySessionId: this.id,
-          lifecycleHooks: {
-            preToolUse: (input) =>
-              this.admitNativeBackgroundTool(epochKey, input),
-            stop: (tasks) => this.reconcileStopTasks(epochKey, tasks),
-            postCompact: (summary) => {
-              if (
-                this.compactOperation &&
-                this.compactOperationEpochKey === epochKey
-              )
-                this.compactOperation.summary = summary;
-            },
-          },
+          sessionHooks: { ...sessionHooksFor(this.id), epoch: epochKey },
           env: {
             ...(this.credentialProfileId
               ? claudeProfileEnvironment(this.credentialProfileId)
@@ -4504,6 +4518,8 @@ export class ClaudeSdkSession implements LiveSession {
     this.cancelQuietClose();
     void this.toolServer?.close();
     this.toolServer = undefined;
+    this.unregisterSessionHooks?.();
+    this.unregisterSessionHooks = undefined;
     closeToolGroupSession(this.id);
     this.unsubscribeQuestions();
     this.unsubscribeApprovals();

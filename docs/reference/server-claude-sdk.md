@@ -120,23 +120,24 @@ SDK option construction, stream/message mapping, persistence, and tests.
   structured `FileReadOutput.file` line metadata drives exact continuation
   notices, and large successful native results are reduced by the shared
   `../outputPolicy.ts` contract before entering Claude history while preserving
-  the tool's output schema. Their raw payload is retained as a session artifact.
-  Native failures instead use `PostToolUseFailure`: the SDK cannot replace that
-  output, so the CLI environment cap bounds it and the hook adds targeted
-  command/conflict context. Option construction also includes `canUseTool`
-  gating for native tools and the mounted `mcp__pa__*` namespace. `ToolSearch`
-  (the CLI's own deferred-tool search) is added to the `tools:` ALLOWLIST ARRAY
-  itself for every persona — the CLI's `isToolSearchToolAvailable` gate requires
-  that; coding personas likewise receive `Skill`, whose literal `tools:`
-  membership is required for the model to invoke the context-injecting tool.
-  (`Skill` remains available in Plan because loading skill context is
-  non-mutating.) canUseTool alone does nothing for either CLI-gated tool,
-  verified live — omitting `ToolSearch` from `tools:` silently loads every
-  `mcp__pa__*` definition upfront regardless of `alwaysLoad`, for every persona
-  and model. The host-owned persona/tool allowlist is authoritative: interactive
-  coding sessions use `bypassPermissions` so ordinary allowed Bash commands run
-  without per-command prompts (like pi), while assistant personas still receive
-  no native shell/file tools. Bypass is not guaranteed: an account whose
+  the tool's output schema. Their raw payload is retained as a session artifact,
+  which the server writes (`sessionHooks.persistOutput`). Native failures
+  instead use `PostToolUseFailure`: the SDK cannot replace that output, so the
+  CLI environment cap bounds it and the hook adds targeted command/conflict
+  context. Option construction also includes `canUseTool` gating for native
+  tools and the mounted `mcp__pa__*` namespace. `ToolSearch` (the CLI's own
+  deferred-tool search) is added to the `tools:` ALLOWLIST ARRAY itself for
+  every persona — the CLI's `isToolSearchToolAvailable` gate requires that;
+  coding personas likewise receive `Skill`, whose literal `tools:` membership is
+  required for the model to invoke the context-injecting tool. (`Skill` remains
+  available in Plan because loading skill context is non-mutating.) canUseTool
+  alone does nothing for either CLI-gated tool, verified live — omitting
+  `ToolSearch` from `tools:` silently loads every `mcp__pa__*` definition
+  upfront regardless of `alwaysLoad`, for every persona and model. The
+  host-owned persona/tool allowlist is authoritative: interactive coding
+  sessions use `bypassPermissions` so ordinary allowed Bash commands run without
+  per-command prompts (like pi), while assistant personas still receive no
+  native shell/file tools. Bypass is not guaranteed: an account whose
   org-managed settings set `permissions.disableBypassPermissionsMode` silently
   starts the CLI in `default` mode, and `canUseTool` is then the only approver.
   Without it every prompting call (each `mcp__pa__*` tool, any out-of-cwd read)
@@ -166,32 +167,34 @@ SDK option construction, stream/message mapping, persistence, and tests.
   preset — pi's two search builtins cost 1,612 chars for comparison (1,509 of it
   definition text, the rest their prompt snippets).
 - `options.ts` also owns the `SessionMode` (Build/Plan) tool policy
-  ([Task-329](pa://task/329)), a second axis independent of the persona.
-  `buildClaudeSdkQueryOptions` takes a getter for the session's LIVE mode and
-  never lets it shape `tools:`/`disallowedTools`: those are fixed when the
-  Claude process starts, and a process retained for background work must be able
-  to leave Plan without a restart that would kill that work
-  ([Task-756](pa://task/756)). Instead the `PreToolUse` hook refuses the
-  file-mutating natives (`CLAUDE_NATIVE_MUTATING_TOOLS`: `Write`, `Edit`,
-  `MultiEdit`, `NotebookEdit`) per call while the mode reads Plan, so a switch
-  in either direction reaches the running process on its next tool call. The
-  builder therefore refuses a mode without `outputPolicySessionId`, whose hooks
-  carry the gate. `canUseTool` reads the same live mode so it stays consistent
-  when bypass is downgraded and the callback decides. The mounted MCP server
-  also filters catalog tools whose `sideEffects` are `local` or `external`,
-  except `task_manage` for durable Task organization and `session_spawn` for
-  read-only profile inspection; that tool still refuses `spawn`/`propose`
-  against persisted Plan mode. `canUseTool` independently denies the remaining
-  blocked external `mcp__pa__*` names for stale or forged calls. `Read`, `Bash`,
-  `Grep`/`Glob`, `ToolSearch`, `Skill` for coding personas, read-only app tools,
-  and Task management remain, so a planning session investigates and records
-  plans at full strength. Both modes start an identical process. A frozen
-  library plugin remains mounted in Plan, matching the retained `Skill`
-  invocation surface. Deliberately NOT the SDK's own `permissionMode: "plan"`
-  (`sdk.d.ts:1736`): that halts tool execution generally, imposes the CLI's
-  `EnterPlanMode`/`ExitPlanMode` protocol and can emit `conversation_reset` on
-  exit — the opposite of "all tools allowed, no file mutation".
-  `planModeInstructions` is likewise never set and
+  ([Task-329](pa://task/329)), a second axis independent of the persona. The
+  session's LIVE mode is read per call by the session's hook binding on the
+  server (`claudeSessionHookBinding`, served through the session's Worker as
+  `sessionHooks.*`, `docs/workers.md`), and never shapes
+  `tools:`/`disallowedTools`: those are fixed when the Claude process starts,
+  and a process retained for background work must be able to leave Plan without
+  a restart that would kill that work ([Task-756](pa://task/756)). Instead the
+  `PreToolUse` hook refuses the file-mutating natives
+  (`CLAUDE_NATIVE_MUTATING_TOOLS`: `Write`, `Edit`, `MultiEdit`, `NotebookEdit`)
+  per call while the mode reads Plan, so a switch in either direction reaches
+  the running process on its next tool call. A query passes `sessionHooks`,
+  which install those hooks and route `canUseTool`; without them `canUseTool`
+  decides locally in Build. Both use `claudeToolPermission`. `canUseTool` reads
+  the same live mode so it stays consistent when bypass is downgraded and the
+  callback decides. The mounted MCP server also filters catalog tools whose
+  `sideEffects` are `local` or `external`, except `task_manage` for durable Task
+  organization and `session_spawn` for read-only profile inspection; that tool
+  still refuses `spawn`/`propose` against persisted Plan mode. `canUseTool`
+  independently denies the remaining blocked external `mcp__pa__*` names for
+  stale or forged calls. `Read`, `Bash`, `Grep`/`Glob`, `ToolSearch`, `Skill`
+  for coding personas, read-only app tools, and Task management remain, so a
+  planning session investigates and records plans at full strength. Both modes
+  start an identical process. A frozen library plugin remains mounted in Plan,
+  matching the retained `Skill` invocation surface. Deliberately NOT the SDK's
+  own `permissionMode: "plan"` (`sdk.d.ts:1736`): that halts tool execution
+  generally, imposes the CLI's `EnterPlanMode`/`ExitPlanMode` protocol and can
+  emit `conversation_reset` on exit — the opposite of "all tools allowed, no
+  file mutation". `planModeInstructions` is likewise never set and
   `allowDangerouslySkipPermissions` is untouched. `ClaudeSdkSession.setMode`
   persists immediately. A retained epoch switches in either direction through
   the live `PreToolUse` gate, without restarting or stopping its background

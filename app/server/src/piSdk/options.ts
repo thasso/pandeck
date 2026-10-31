@@ -34,6 +34,7 @@ import { getSettings } from "../settings.ts";
 import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
 import { piAgentDir } from "../credentialProfiles.ts";
 import { createPiOutputPolicyExtension } from "./outputPolicyExtension.ts";
+import { persistSessionOutput } from "../workers/inProcessWorker.ts";
 import { scanSkillLibrary, skillLibraryStore } from "../skills/skillLibrary.ts";
 import {
   materializeSkillRuntime,
@@ -221,7 +222,9 @@ async function buildPiOptions(
         extensionFactories: [
           {
             name: "bounded-output",
-            factory: createPiOutputPolicyExtension(),
+            factory: createPiOutputPolicyExtension({
+              persistOutput: persistSessionOutput,
+            }),
             hidden: true,
           },
         ],
@@ -260,7 +263,9 @@ async function buildPiOptions(
           extensionFactories: [
             {
               name: "bounded-output",
-              factory: createPiOutputPolicyExtension(),
+              factory: createPiOutputPolicyExtension({
+                persistOutput: persistSessionOutput,
+              }),
               hidden: true,
             },
           ],

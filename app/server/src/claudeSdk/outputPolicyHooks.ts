@@ -3,7 +3,6 @@ import {
   addArtifactNotice,
   boundNativeOutput,
   fullOutputPathFromUnknownToolOutput,
-  persistOutputArtifact,
   prepareReadWindow,
   readResultMetadataFromUnknownToolOutput,
   replaceUnknownToolOutputText,
@@ -11,29 +10,16 @@ import {
   type ReadWindowDecision,
 } from "../outputPolicy.ts";
 import { childProcessEnv } from "../subprocessEnv.ts";
+import type { SessionHooks } from "../workers/inProcessWorker.ts";
 
 const POLICY_TOOLS = new Set(["Read", "Bash", "Grep", "Glob"]);
 
-export interface ClaudeQueryLifecycleHooks {
-  preToolUse(input: {
-    toolName: string;
-    toolInput: Record<string, unknown>;
-    toolUseId: string;
-  }): Promise<
-    /** `context` reaches the model beside the call (the job's PA id). */
-    { allowed: true; context?: string } | { allowed: false; reason: string }
-  >;
-  stop(
-    tasks: Array<{
-      id: string;
-      type: string;
-      status: string;
-      description: string;
-      command?: string;
-    }>,
-  ): void;
-  postCompact(summary: string): void;
-}
+/**
+ * One query's session hooks: its session's calls to the server through the
+ * session's Worker (`sessionHooksFor`), and the query's epoch key, which the
+ * server's binding reads to pick that query's bookkeeping.
+ */
+export type ClaudeQuerySessionHooks = SessionHooks & { epoch: string };
 
 function recordInput(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -51,56 +37,53 @@ function isConflictCommand(command: string): boolean {
 }
 
 /**
- * Native output hooks for one Claude query. Maps are query-local by design.
- * `refuseTool` answers a refusal reason for a call the session's live policy
- * forbids (Plan's mutating natives); it runs before any admission.
+ * Native output and lifecycle hooks for one Claude query. Maps are
+ * query-local by design.
+ *
+ * What reads the session's live state or writes the server's stores asks the
+ * server: `PreToolUse`'s decision (Plan's refusal of a mutating native, then
+ * background admission), `Stop`'s task reconciliation, `PostCompact`'s
+ * summary, and the artifact of an elided result. `Stop` and `PostCompact`
+ * resolve only once the server has run them. The `Read` window, output
+ * bounding and the Bash failure guidance are the engine's own and stay here.
  */
 export function claudeOutputPolicyHooks(
-  sessionId: string,
-  lifecycle?: ClaudeQueryLifecycleHooks,
-  refuseTool?: (toolName: string) => string | undefined,
+  hooks: ClaudeQuerySessionHooks,
 ): NonNullable<ClaudeSdkOptions["hooks"]> {
   const reads = new Map<string, ReadWindowDecision>();
   return {
     PreToolUse: [
       {
         hooks: [
-          async (input, toolUseId) => {
+          async (input, toolUseId, options) => {
             if (input.hook_event_name !== "PreToolUse")
               return { continue: true };
-            const refusal = refuseTool?.(input.tool_name);
-            if (refusal)
+            const resolvedToolUseId = toolUseId ?? input.tool_use_id;
+            const admission = await hooks.preToolUse(
+              hooks.epoch,
+              {
+                toolName: input.tool_name,
+                toolInput: recordInput(input.tool_input),
+                toolUseId: resolvedToolUseId,
+              },
+              options?.signal,
+            );
+            if (!admission.allowed)
               return {
                 hookSpecificOutput: {
                   hookEventName: "PreToolUse" as const,
                   permissionDecision: "deny" as const,
-                  permissionDecisionReason: refusal,
+                  permissionDecisionReason: admission.reason,
                 },
               };
-            const resolvedToolUseId = toolUseId ?? input.tool_use_id;
-            if (lifecycle) {
-              const admission = await lifecycle.preToolUse({
-                toolName: input.tool_name,
-                toolInput: recordInput(input.tool_input),
-                toolUseId: resolvedToolUseId,
-              });
-              if (!admission.allowed)
-                return {
-                  hookSpecificOutput: {
-                    hookEventName: "PreToolUse" as const,
-                    permissionDecision: "deny" as const,
-                    permissionDecisionReason: admission.reason,
-                  },
-                };
-              if (admission.context)
-                return {
-                  continue: true,
-                  hookSpecificOutput: {
-                    hookEventName: "PreToolUse" as const,
-                    additionalContext: admission.context,
-                  },
-                };
-            }
+            if (admission.context)
+              return {
+                continue: true,
+                hookSpecificOutput: {
+                  hookEventName: "PreToolUse" as const,
+                  additionalContext: admission.context,
+                },
+              };
             if (input.tool_name !== "Read") return { continue: true };
             const decision = await prepareReadWindow(
               recordInput(input.tool_input),
@@ -118,47 +101,49 @@ export function claudeOutputPolicyHooks(
         ],
       },
     ],
-    ...(lifecycle
-      ? {
-          Stop: [
-            {
-              hooks: [
-                async (input) => {
-                  if (input.hook_event_name === "Stop")
-                    lifecycle.stop(
-                      (input.background_tasks ?? []).map((task) => ({
-                        id: task.id,
-                        type: task.type,
-                        status: task.status,
-                        description: task.description,
-                        ...(task.command ? { command: task.command } : {}),
-                      })),
-                    );
-                  return { continue: true };
-                },
-              ],
-            },
-          ],
-          PostCompact: [
-            {
-              hooks: [
-                async (input) => {
-                  if (
-                    "compact_summary" in input &&
-                    typeof input.compact_summary === "string"
-                  )
-                    lifecycle.postCompact(input.compact_summary);
-                  return { continue: true };
-                },
-              ],
-            },
-          ],
-        }
-      : {}),
+    Stop: [
+      {
+        hooks: [
+          async (input, _toolUseId, options) => {
+            if (input.hook_event_name === "Stop")
+              await hooks.stop(
+                hooks.epoch,
+                (input.background_tasks ?? []).map((task) => ({
+                  id: task.id,
+                  type: task.type,
+                  status: task.status,
+                  description: task.description,
+                  ...(task.command ? { command: task.command } : {}),
+                })),
+                options?.signal,
+              );
+            return { continue: true };
+          },
+        ],
+      },
+    ],
+    PostCompact: [
+      {
+        hooks: [
+          async (input, _toolUseId, options) => {
+            if (
+              "compact_summary" in input &&
+              typeof input.compact_summary === "string"
+            )
+              await hooks.postCompact(
+                hooks.epoch,
+                input.compact_summary,
+                options?.signal,
+              );
+            return { continue: true };
+          },
+        ],
+      },
+    ],
     PostToolUse: [
       {
         hooks: [
-          async (input) => {
+          async (input, _toolUseId, options) => {
             if (
               input.hook_event_name !== "PostToolUse" ||
               !POLICY_TOOLS.has(input.tool_name)
@@ -191,12 +176,14 @@ export function claudeOutputPolicyHooks(
               const sourcePath = fullOutputPathFromUnknownToolOutput(
                 input.tool_response,
               );
-              const artifact = await persistOutputArtifact({
-                sessionId,
-                toolName: input.tool_name,
-                raw,
-                ...(sourcePath ? { sourcePath } : {}),
-              });
+              const artifact = await hooks.persistOutput(
+                {
+                  toolName: input.tool_name,
+                  raw,
+                  ...(sourcePath ? { sourcePath } : {}),
+                },
+                options?.signal,
+              );
               bounded = addArtifactNotice(bounded, artifact);
             }
             if (bounded.text === raw) return { continue: true };

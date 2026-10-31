@@ -214,16 +214,17 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.6` (`1.0` plus the file methods, `1.2`'s path
+What runs today is protocol `1.7` (`1.0` plus the file methods, `1.2`'s path
 methods for checkout reads, `1.3`'s `files.readlink` and inspect `mode` for the
 workflows' reads, `1.4`'s watch methods for the worktree watcher, `1.5`'s
-lifecycle methods for creating, removing and provisioning checkouts, and `1.6`'s
-app-tool methods for interactive sessions' app tools), between the server and
-the in-process Worker. The code lives in `app/server/src/workerProtocol/` (the
-protocol), `worker/` (the Worker's side, which imports no server state) and
-`workers/` (the server's side and placement); `workerBoundary.test.ts` keeps
-that split. The protocol stays out of `app/shared/`: the web client never speaks
-it.
+lifecycle methods for creating, removing and provisioning checkouts, `1.6`'s
+app-tool methods for interactive sessions' app tools, and `1.7`'s session-hook
+methods for their permission and hook decisions and output artifacts), between
+the server and the in-process Worker. The code lives in
+`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
+which imports no server state) and `workers/` (the server's side and placement);
+`workerBoundary.test.ts` keeps that split. The protocol stays out of
+`app/shared/`: the web client never speaks it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -644,6 +645,49 @@ it.
     over the live engine's objects, which W9/W10 replace when engines leave the
     server.
 
+- **Session hooks (W8).** An interactive session's permission and hook callbacks
+  run with its engine; where one reads the session's live state, writes the
+  server's stores or settles the server's bookkeeping, it asks the server
+  through the session's Worker. Protocol `1.7`
+  (`workerProtocol/sessionHookMethods.ts`) adds five Worker → server methods and
+  changes no earlier method's meaning, payload or failure shape:
+  - `sessionHooks.canUseTool` answers Claude's permission verdict from the
+    session's tool allowlist and live mode, with today's texts (Plan's app-tool
+    and native refusals, "Tool X is not enabled for this session."). The engine
+    keeps its own input on an allow.
+  - `sessionHooks.preToolUse` answers Claude's `PreToolUse` decision: Plan's
+    refusal of a mutating native against the live mode first, then background
+    admission of `Bash` with `run_in_background` and of `Monitor`, with the
+    job's context on an admitted launch.
+  - `sessionHooks.stop` and `sessionHooks.postCompact` carry Claude's `Stop`
+    tasks and compact summary; each answers `{}` only once the server has run
+    the session's reconciliation or recorded the summary, and the hook waits for
+    that answer.
+  - `sessionHooks.persistOutput` serves both harnesses (Claude's `PostToolUse`,
+    pi's `tool_result`): when output is elided, the server writes the full
+    output as a session artifact and answers its path and URL. A vendor
+    full-output file, named explicitly or in the output text, is streamed from
+    the session's Worker (`files.open`), one read piece in memory at a time,
+    never read on the server; any failure writes the output text instead.
+  - The decoder refuses a session id that is not one artifact-safe path segment
+    (empty, `/`, `\`, `.` or `..`) as `invalid_params` before any lookup or
+    effect. The server (`workers/sessionHookHost.ts`) then takes the Worker id
+    from the connection's admission and refuses a session not placed on that
+    Worker (`not_placed`). The four Claude methods apply the binding the session
+    registered while live (`no_session_hooks` without one; the newest
+    registration serves, and a disposer removes only its own); a binding's error
+    reaches the hook with its message. Requests carry the query's epoch key, so
+    a late hook from an ended query is attributed to its own epoch.
+  - The engine's own policy stays with it and moves with it in W9/W10: the
+    `Read` window (a `stat` relative to the engine's cwd), output bounding and
+    the artifact notice, and the Bash failure guidance. One-shot runs, the
+    standalone `/compact` query (no tools, its own summary capture) and pi's
+    background `bash`/`monitor` shadows, whose admission runs inside their own
+    `execute`, send no session-hook request.
+  - Known limits: a hook whose connection ends mid-request rejects, as a
+    throwing hook does today; a binding closes over the live engine's objects,
+    which W9/W10 replace.
+
 - **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
   answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and
   wire shapes are unchanged.
@@ -852,9 +896,12 @@ process, and builds through it fail for the few seconds a server restart takes.
 A running turn keeps going. Native tools never need the server, and model
 requests go through the gateway, so most of a coding turn proceeds untouched.
 The Worker spools the session's events, record changes and native output durably
-until the server acknowledges them. App tool calls and approval hooks wait for
-the server for a bound of about ten minutes and then fail as an ordinary tool
-error the agent sees.
+until the server acknowledges them. App tool calls and approval hooks (the
+session-hook methods: Claude's permission and `PreToolUse` decisions, `Stop`,
+`PostCompact` and output artifacts) wait for the server for a bound of about ten
+minutes and then fail as an ordinary tool error the agent sees. No engine waits
+on a user's approval: an approval card is created by an app tool, which returns
+at once, and the user's answer reaches the server on their own connection.
 
 When the spool reaches its size cap, the Worker holds the turn before its next
 model request until the server is back, rather than drop events.
@@ -993,20 +1040,21 @@ natural shape anyway.
 
 Phase 1 ships as slices; each keeps behavior unchanged.
 
-| Slice  | Change                                                                               | State   |
-| ------ | ------------------------------------------------------------------------------------ | ------- |
-| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it | landed  |
-| W2     | Served files (`/api/files`, `show_files`) read through the Worker                    | landed  |
-| W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)       | landed  |
-| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)            | landed  |
-| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)      | landed  |
-| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | landed  |
-| W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)     | landed  |
-| W5     | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)    | landed  |
-| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | landed  |
-| W7     | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)    | landed  |
-| W8–W10 | The engine host: approvals and hooks, then pi and Claude sessions                    | planned |
-| W11    | Isolation boundary and secret store ports                                            | planned |
+| Slice  | Change                                                                                             | State   |
+| ------ | -------------------------------------------------------------------------------------------------- | ------- |
+| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it               | landed  |
+| W2     | Served files (`/api/files`, `show_files`) read through the Worker                                  | landed  |
+| W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                     | landed  |
+| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                          | landed  |
+| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)                    | landed  |
+| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                      | landed  |
+| W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                   | landed  |
+| W5     | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                  | landed  |
+| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone                  | landed  |
+| W7     | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                  | landed  |
+| W8     | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175) | landed  |
+| W9–W10 | The engine host: pi and Claude sessions                                                            | planned |
+| W11    | Isolation boundary and secret store ports                                                          | planned |
 
 `workerBoundary.test.ts` asserts that no module of the checkout family imports
 `node:fs`, that `gitExec.ts` and `checkoutFileAccess.ts` export no read or

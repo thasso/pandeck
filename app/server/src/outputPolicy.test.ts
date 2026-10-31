@@ -11,7 +11,6 @@ import {
   captureTaskOutputArtifact,
   fullOutputPathFromUnknownToolOutput,
   isQualityGateCommand,
-  persistOutputArtifact,
   prepareReadWindow,
   readResultMetadataFromUnknownToolOutput,
   replaceUnknownToolOutputText,
@@ -20,6 +19,7 @@ import {
 import { deleteToolGroupSessionData } from "./mcp/toolGroups/registry.ts";
 import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import { DATA_DIR } from "./config.ts";
+import { sessionHooksFor } from "./workers/inProcessWorker.ts";
 
 describe("bounded native output policy", () => {
   test("adds a smaller default window and log-specific guidance metadata", async () => {
@@ -174,8 +174,8 @@ describe("bounded native output policy", () => {
   test("persists elided raw output in the session artifact store", async () => {
     const sessionId = `output-policy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     try {
-      const artifact = await persistOutputArtifact({
-        sessionId,
+      // Through the session's Worker to the server, which writes it.
+      const artifact = await sessionHooksFor(sessionId).persistOutput({
         toolName: "bash",
         raw: "complete raw output\n",
       });

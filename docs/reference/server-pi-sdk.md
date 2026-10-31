@@ -85,7 +85,8 @@ and headless one-shot utility runs.
   lower provider-history ceiling. The extension adds bounded default read
   windows, concise quality-gate success summaries, diagnostic failure tails,
   targeted diff/conflict guidance, and session artifacts for every elided raw
-  result through the shared `../outputPolicy.ts` policy. `grep` and `find`
+  result through the shared `../outputPolicy.ts` policy; the server writes each
+  artifact (`sessionHooks.persistOutput`, `docs/workers.md`). `grep` and `find`
   respect `.gitignore`, unlike the `bash` searches they replace: generated trees
   (`assistant-data/`, `node_modules/`, `app/web/dist/`) are invisible to them,
   and a session that must look there still needs the shell.
