@@ -4,6 +4,10 @@ import { ErrorNote } from "../common/load.tsx";
 import { useReloadOnToken } from "../../hooks/useFetchState.ts";
 import { fetchWorktreeTree } from "../../lib/worktrees.ts";
 import {
+  loadExpandedTreeDirs,
+  saveExpandedTreeDirs,
+} from "../../lib/worktreeTreeExpansion.ts";
+import {
   WorktreeFileNavigator,
   ancestorDirectoryPaths,
   buildLoadedTreeNavigatorEntries,
@@ -38,8 +42,21 @@ export function useWorktreeFileTree({
     Record<string, WorktreeTreeEntry[]>
   >({});
   const [loadingDirs, setLoadingDirs] = useState<string[]>([]);
-  const [expandedDirs, setExpandedDirs] = useState<string[]>(() =>
-    filePath ? ancestorDirectoryPaths(filePath) : [],
+  // The folders left open last time (remembered per worktree), plus the open
+  // file's own.
+  const [expandedDirs, setExpandedDirs] = useState<string[]>(() => [
+    ...new Set([
+      ...loadExpandedTreeDirs(worktreeId),
+      ...(filePath ? ancestorDirectoryPaths(filePath) : []),
+    ]),
+  ]);
+  // The reader's own folding is what is remembered, not the unfolding to a file.
+  const setExpandedDirsRemembered = useCallback(
+    (dirs: string[]) => {
+      setExpandedDirs(dirs);
+      saveExpandedTreeDirs(worktreeId, dirs);
+    },
+    [worktreeId],
   );
   const [listDirectory, setListDirectory] = useState(() =>
     filePath ? splitWorktreePath(filePath).dir : "",
@@ -60,6 +77,8 @@ export function useWorktreeFileTree({
   // same folder onto the git queue; an answer that is one scan behind is close
   // enough, and the next push re-reads anyway.
   const inFlightDirs = useRef(new Set<string>());
+  const worktreeIdRef = useRef(worktreeId);
+  worktreeIdRef.current = worktreeId;
   // Bumped when the worktree or visibility mode changes, so an older read
   // cannot land its listing in the current tree.
   const treeGeneration = useRef(0);
@@ -112,8 +131,25 @@ export function useWorktreeFileTree({
     setLoadingDirs([]);
     setListDirectory("");
     setTreeError(null);
+    setExpandedDirs(loadExpandedTreeDirs(worktreeIdRef.current));
     loadDirectory("", true);
   }, [loadDirectory]);
+
+  // Remembered folders load level by level: each once its parent's listing
+  // shows it still exists, so one deleted since never reads as a failure.
+  useEffect(() => {
+    for (const dir of expandedDirs) {
+      if (dir === "" || entriesByDir[dir] || inFlightDirs.current.has(dir))
+        continue;
+      const parent = splitWorktreePath(dir).dir;
+      if (
+        entriesByDir[parent]?.some(
+          (entry) => entry.kind === "dir" && entry.path === dir,
+        )
+      )
+        loadDirectory(dir);
+    }
+  }, [expandedDirs, entriesByDir, loadDirectory]);
 
   // Which directories the cache holds, readable from refreshes without making
   // them re-run on every answer.
@@ -172,7 +208,7 @@ export function useWorktreeFileTree({
     loadingDirs,
     rootLoaded: entriesByDir[""] !== undefined,
     expandedDirs,
-    setExpandedDirs,
+    setExpandedDirs: setExpandedDirsRemembered,
     listDirectory,
     setListDirectory,
     includeIgnored,
