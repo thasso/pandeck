@@ -14,14 +14,21 @@
  * a shell listing spends tokens on Nerd Font glyphs and depends on whatever the
  * user's rc files define. This reads the directory directly, with no subprocess.
  *
+ * The path is the agent's, so it is read on the session's own Worker, never by
+ * the server (`docs/workers.md`, "File paths in app tools").
+ *
  * Registered EAGER for the coding personas: a deferred listing tool would cost a
  * discovery round trip and be strictly worse than the shell call it replaces.
  */
-import { readdir, stat } from "node:fs/promises";
 import { userHomeDir } from "../../userHome.ts";
 import { isAbsolute, join, resolve } from "node:path";
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { CWD } from "../../config.ts";
+import {
+  checkoutFailureOf,
+  checkoutFilesOn,
+} from "../../checkoutFileAccess.ts";
+import { sessionCheckoutSide } from "../../workers/placement.ts";
 
 type LsParams = {
   path?: string;
@@ -58,17 +65,28 @@ export const lsTool = defineAgentTool<LsParams>({
     const dirPath = resolveListingPath(params.path, ctx.session.cwd ?? CWD);
     const limit = Math.max(1, Math.trunc(params.limit ?? DEFAULT_LIMIT));
 
-    const target = await stat(dirPath).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT")
-        throw new Error(`Path not found: ${dirPath}`);
-      throw error;
-    });
-    if (!target.isDirectory()) throw new Error(`Not a directory: ${dirPath}`);
+    const files = checkoutFilesOn(sessionCheckoutSide(ctx.session.sessionId));
+
+    const target = await files
+      .inspect(dirPath, dirPath, { follow: true })
+      .catch((error: NodeJS.ErrnoException) => {
+        if (
+          checkoutFailureOf(error) === "filesystem" &&
+          error.code === "ENOENT"
+        )
+          throw new Error(`Path not found: ${dirPath}`);
+        throw error;
+      });
+    if (target.kind !== "directory")
+      throw new Error(`Not a directory: ${dirPath}`);
 
     let names: string[];
     try {
-      names = await readdir(dirPath);
+      names = (await files.readDir(dirPath, dirPath)).map(
+        (entry) => entry.name,
+      );
     } catch (error) {
+      if (checkoutFailureOf(error) !== "filesystem") throw error;
       throw new Error(
         `Cannot read directory ${dirPath}: ${(error as Error).message}`,
       );
@@ -88,12 +106,17 @@ export const lsTool = defineAgentTool<LsParams>({
         break;
       }
       throwIfAborted(ctx.signal);
-      // A directory gets the '/' suffix; an entry we cannot stat (a broken
-      // symlink, a race with a delete) is skipped rather than reported.
+      // A directory, or a link to one, gets the '/' suffix; an entry we cannot
+      // stat (a broken symlink, a race with a delete) is skipped rather than
+      // reported. A Worker that could not answer is not a skipped entry.
       let suffix = "";
       try {
-        if ((await stat(join(dirPath, name))).isDirectory()) suffix = "/";
-      } catch {
+        const entry = await files.inspect(dirPath, join(dirPath, name), {
+          follow: true,
+        });
+        if (entry.kind === "directory") suffix = "/";
+      } catch (error) {
+        if (checkoutFailureOf(error) !== "filesystem") throw error;
         continue;
       }
       entries.push(name + suffix);

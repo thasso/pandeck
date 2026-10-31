@@ -118,18 +118,20 @@ and headless one-shot utility runs.
   was actually lost. The title comes from `backgroundWork/title.ts`: the shadow
   `bash` takes an optional `description` for background jobs, and a command
   without one is titled by its first line.
-- `agentToolAdapter.ts` owns the direct in-process `AgentTool → ToolDefinition`
-  adapter (replaced the former MCP client bridge): execute runs the AgentTool
-  directly, `ctx.progress` maps to pi `onUpdate`, details/terminate map 1:1, and
-  ref-bearing schemas (proxied MCP tools) are inlined via `jsonSchemaToTypeBox`.
-  NO tool sets `constrainedSampling`, and `strict: "prefer"` is NOT a safe
-  default: pi resolves it against MODEL capability only (never schema
-  compatibility) and the codex/azure responses adapters default that capability
-  to true, so the provider gets `strict: true` with our unchanged schema and
-  rejects the entire request — any optional property (e.g.
-  `current_time.timeZone`) fails OpenAI's strict subset, which demands every
-  property in `required` plus `additionalProperties: false`. Guarded by
-  `agentToolAdapter.test.ts`.
+- `agentToolAdapter.ts` owns the in-process `AgentTool → ToolDefinition` adapter
+  (replaced the former MCP client bridge): an interactive session's app tools
+  execute on the server through the session's Worker (`appTools.call`), gated
+  there by `piAppToolBinding`, while `find_tools` and the background shell tools
+  execute in place; `ctx.progress` maps to pi `onUpdate`, details/terminate map
+  1:1, and ref-bearing schemas (proxied MCP tools) are inlined via
+  `jsonSchemaToTypeBox`. NO tool sets `constrainedSampling`, and
+  `strict: "prefer"` is NOT a safe default: pi resolves it against MODEL
+  capability only (never schema compatibility) and the codex/azure responses
+  adapters default that capability to true, so the provider gets `strict: true`
+  with our unchanged schema and rejects the entire request — any optional
+  property (e.g. `current_time.timeZone`) fails OpenAI's strict subset, which
+  demands every property in `required` plus `additionalProperties: false`.
+  Guarded by `agentToolAdapter.test.ts`.
 - `toolActivation.ts` owns per-session deferred activation. Exact/query loads
   happen additively inside `find_tools` execute so pi records native deferred
   definitions. Reopen seeds only names both present in `addedToolNames` and
@@ -142,13 +144,13 @@ and headless one-shot utility runs.
   organization and `session_spawn` for read-only profile inspection; that tool
   still refuses `spawn`/`propose` against persisted Plan mode. It keeps
   `read`/`bash`/`grep`/`find` and read-only bridge tools, and restores the same
-  active set when Build returns. The direct adapter independently rejects
-  stale/forged calls to a Plan-blocked tool. Adapter execute callbacks track
-  usage. Prompt extras remain absent, so deferred activation and pruning keep
-  the rebuilt system prompt constant. A mode flip deliberately calls
-  `setActiveToolsByName` through that same path; pi rebuilds the prompt,
-  invalidating the prompt-cache prefix once, but the new prompt no longer
-  advertises `edit`/`write` in Plan. The module also serves
+  active set when Build returns. The adapter (for an app tool, the server's
+  binding) independently rejects stale/forged calls to a Plan-blocked tool.
+  Adapter execute callbacks track usage. Prompt extras remain absent, so
+  deferred activation and pruning keep the rebuilt system prompt constant. A
+  mode flip deliberately calls `setActiveToolsByName` through that same path; pi
+  rebuilds the prompt, invalidating the prompt-cache prefix once, but the new
+  prompt no longer advertises `edit`/`write` in Plan. The module also serves
   definition-size/used/load-event diagnostics in `SessionState.toolExposure`;
   `docs/tool-discovery.md` records the measured cache rationale.
 - `toolPayloadProbe.ts` is the opt-in pi `onPayload` measurement seam. With

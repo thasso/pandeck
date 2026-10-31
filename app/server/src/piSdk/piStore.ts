@@ -27,6 +27,7 @@ import { dirname, resolve } from "node:path";
 import { CWD } from "../config.ts";
 import {
   planModeToolUnavailableMessage,
+  type AgentTool,
   type ToolSession,
 } from "../mcp/tool.ts";
 import {
@@ -34,7 +35,7 @@ import {
   PI_PLAN_RESTRICTED_BUILTIN_TOOLS,
   sessionDirFor,
 } from "./options.ts";
-import { toPiToolDefinitions } from "./agentToolAdapter.ts";
+import { piAppToolBinding, toPiToolDefinitions } from "./agentToolAdapter.ts";
 import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
 import { installToolPayloadProbe } from "./toolPayloadProbe.ts";
 import { installCompactionWindow } from "./compactionWindow.ts";
@@ -86,6 +87,8 @@ import {
 import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
+import { registerAppToolSession } from "../workers/appToolHost.ts";
+import { appToolExecutorFor } from "../workers/inProcessWorker.ts";
 
 /** Every persona a legacy per-persona transcript directory can hold. */
 const LEGACY_KINDS: readonly AgentType[] = AGENT_TYPE_IDS;
@@ -215,6 +218,8 @@ class PiSessionStore {
   private readonly opening = new Map<string, Promise<PiLiveSession>>();
   /** Per-session tool activation (change subscriptions), disposed on eviction. */
   private toolRuntimes = new Map<string, PiToolActivation>();
+  /** Each committed runtime's app-tool binding disposer, by session id. */
+  private appToolBindings = new Map<string, () => void>();
   /** Live policy read by the built-in/bridge active-set merge. */
   private sessionModes = new Map<string, SessionMode>();
   private host: HarnessHost | undefined;
@@ -751,9 +756,8 @@ class PiSessionStore {
         ),
       );
 
-    // Direct tool path: the persona's AgentTools are adapted straight into pi
-    // customTools (no MCP hop — the session MCP server serves the Claude
-    // harness only). The full universe is registered up front (pi cannot add
+    // The persona's AgentTools are adapted straight into pi customTools (no
+    // MCP hop — the session MCP server serves the Claude harness only). The full universe is registered up front (pi cannot add
     // definitions mid-session); toolActivation keeps only eager + loaded tools
     // ACTIVE so the initial context stays small, reconciles toolGroup/
     // integration-gate changes, and activates find_tools matches inside the
@@ -833,14 +837,24 @@ class PiSessionStore {
         );
       },
     });
-    const customTools = toPiToolDefinitions(activation.piToolUniverse, {
+    const toolConfig = {
       session: () => piToolSession(kind, sm, cwd),
-      unavailableReason: (tool) =>
+      unavailableReason: (tool: AgentTool) =>
         (this.sessionModes.get(activeSessionId) ?? "build") === "plan" &&
         !isPlanModeToolAllowed(tool)
           ? planModeToolUnavailableMessage(tool.name)
           : undefined,
-      onExecute: (name) => activation.markUsed(name),
+      onExecute: (name: string) => activation.markUsed(name),
+    };
+    // The persona's app tools run on the server, through the session's
+    // Worker, gated there by the binding `commit()` registers; `find_tools`
+    // and the background shell tools run and are gated here.
+    const customTools = toPiToolDefinitions(activation.piToolUniverse, {
+      ...toolConfig,
+      appTools: {
+        routes: new Set(opts.agentTools),
+        execute: appToolExecutorFor(activeSessionId),
+      },
     });
 
     let session: AgentSession;
@@ -884,6 +898,13 @@ class PiSessionStore {
     const commit = () => {
       this.closeToolRuntime(session.sessionId);
       this.toolRuntimes.set(session.sessionId, activation);
+      this.appToolBindings.set(
+        session.sessionId,
+        registerAppToolSession(
+          session.sessionId,
+          piAppToolBinding(opts.agentTools, toolConfig),
+        ),
+      );
       activation.register();
       // A staged runtime may have waited across a live Build/Plan change.
       activation.reapply();
@@ -1079,8 +1100,13 @@ class PiSessionStore {
     }
   }
 
-  /** Dispose a session's tool activation subscriptions (no-op when none). */
+  /**
+   * Dispose a session's tool activation subscriptions and its app-tool
+   * binding (no-op when none).
+   */
   private closeToolRuntime(key: string): void {
+    this.appToolBindings.get(key)?.();
+    this.appToolBindings.delete(key);
     const runtime = this.toolRuntimes.get(key);
     if (!runtime) return;
     this.toolRuntimes.delete(key);

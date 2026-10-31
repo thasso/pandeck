@@ -15,6 +15,7 @@
  *
  * The only module that imports `worker/` (`workerBoundary.test.ts`).
  */
+import type { AppToolExecutor } from "../mcp/tool.ts";
 import {
   startWorker,
   type RunningWorker,
@@ -26,6 +27,7 @@ import {
   createInProcessTransport,
   type ByteEndpoint,
 } from "../workerProtocol/inProcessTransport.ts";
+import { appToolHandlers } from "./appToolHost.ts";
 import { DEFAULT_WORKER_ID } from "./placement.ts";
 import { watchDeliveries } from "./watchDeliveries.ts";
 import { workerRegistry } from "./workerRegistry.ts";
@@ -48,9 +50,14 @@ export function ensureInProcessWorker(): WorkerConnection {
   // Accept first, as a listening socket would, then let the Worker dial.
   let quiescent: Promise<void> = Promise.resolve();
   const deliveries = watchDeliveries();
-  const connection = workerRegistry.accept(serverEnd, {
+  // Calls are served only after the handshake, so `connection` is set by then.
+  const appTools = appToolHandlers(() => {
+    const workerId = workerRegistry.admittedAs(connection);
+    return workerId === undefined ? undefined : { connection, workerId };
+  });
+  const connection: WorkerConnection = workerRegistry.accept(serverEnd, {
     quiescence: () => quiescent,
-    handlers: deliveries.handlers,
+    handlers: { ...deliveries.handlers, ...appTools },
   });
   const worker = startWorker({
     workerId: DEFAULT_WORKER_ID,
@@ -67,6 +74,24 @@ export function ensureInProcessWorker(): WorkerConnection {
   deliveries.attach(connection, worker.watchesReleased);
   current = { connection, workerEnd, worker };
   return connection;
+}
+
+/**
+ * How an interactive engine runs `sessionId`'s app tools: from the session's
+ * Worker, which asks the server (`appTools.call`). In phase 1 the in-process
+ * Worker serves every session (`docs/workers.md`).
+ */
+export function appToolExecutorFor(sessionId: string): AppToolExecutor {
+  return (tool, args, ctx) => {
+    ensureInProcessWorker();
+    return current!.worker.callAppTool(
+      { sessionId, tool, toolCallId: ctx.toolCallId, args },
+      {
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+        ...(ctx.progress !== undefined ? { onProgress: ctx.progress } : {}),
+      },
+    );
+  };
 }
 
 /** Boot: dial the in-process Worker before the first checkout needs it. */

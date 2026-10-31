@@ -14,6 +14,7 @@ import {
 } from "../workerProtocol/connection.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import { WATCH_METHODS } from "../workerProtocol/watchMethods.ts";
+import { appToolCalls, type AppToolCaller } from "./appTools.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
 import { fileHandlers } from "./files.ts";
 import { lifecycleHandlers } from "./lifecycle.ts";
@@ -35,6 +36,8 @@ export interface RunningWorker {
    * Separate from {@link quiescent}, which never waits for watch work.
    */
   readonly watchesReleased: Promise<void>;
+  /** Asks the server to run one of a session's app tools (`appTools.call`). */
+  readonly callAppTool: AppToolCaller;
   /** Test seam: how many file handles the Worker holds. */
   fileHandles(): number;
   /** Test seam: the native watch subscriptions the Worker holds. */
@@ -67,12 +70,16 @@ export function startWorker(options: {
   const watches = watchHandlers(options.workerId, (payload) =>
     connection.request(WATCH_METHODS.events, payload),
   );
+  const appTools = appToolCalls((method, payload, signal) =>
+    connection.request(method, payload, signal),
+  );
   const handlers = Object.fromEntries(
     Object.entries({
       ...checkoutGitHandlers(options.workerId),
       ...files.handlers,
       ...lifecycleHandlers(options.workerId),
       ...watches.handlers,
+      ...appTools.handlers,
     }).map(([method, handler]) => [
       method,
       (payload: Payload, signal: AbortSignal) => {
@@ -96,6 +103,7 @@ export function startWorker(options: {
       .then(() => connection.handlersSettled())
       .then(() => files.sweep()),
     watchesReleased: watches.released,
+    callAppTool: appTools.call,
     fileHandles: () => files.size,
     watches: () => watches.snapshot(),
   };

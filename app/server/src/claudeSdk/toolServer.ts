@@ -29,13 +29,17 @@ import { sessionPromptConditions } from "../promptConditions.ts";
 import { buildCommitSessionManager } from "../claudeCommitContext.ts";
 import {
   createSessionToolServer,
+  resolveSessionTool,
   type SessionToolServer,
+  type SessionToolServerConfig,
 } from "../mcp/sessionToolServer.ts";
 import {
   planModeToolUnavailableMessage,
   type ToolSession,
   type ToolSessionManager,
 } from "../mcp/tool.ts";
+import { registerAppToolSession } from "../workers/appToolHost.ts";
+import { appToolExecutorFor } from "../workers/inProcessWorker.ts";
 
 /** The narrow ClaudeSdkSession surface the tool server needs (test-friendly). */
 export interface ClaudeToolSessionSource {
@@ -86,6 +90,10 @@ function sessionTools(source: ClaudeToolSessionSource) {
  * Build the per-session tool server a `claude-sdk` session mounts as `pa`.
  * Integration-gate changes push tools/list_changed (wired inside the generic
  * server), so the Claude client can refresh its tool list mid-session.
+ *
+ * Its calls run on the server through the session's Worker: the server
+ * resolves them against this session's binding, registered until `close()`,
+ * with the same unknown and inactive checks as the listing.
  */
 export function createClaudeSessionToolServer(
   source: ClaudeToolSessionSource,
@@ -96,9 +104,10 @@ export function createClaudeSessionToolServer(
   const commitManager = buildCommitSessionManager(() =>
     source.timelineEntries(),
   );
-  return createSessionToolServer({
-    sessionId: source.id,
-    harness: "claude-sdk",
+  const toolset: Pick<
+    SessionToolServerConfig,
+    "tools" | "activeToolNames" | "inactiveToolMessage"
+  > = {
     // A spawned agent definition's denied tools are not this session's at all:
     // neither listed nor callable (`docs/agent-definitions.md` "Tools").
     tools: () => sessionTools(source),
@@ -115,11 +124,21 @@ export function createClaudeSessionToolServer(
         integrationActive,
       );
     },
-    searchHint: (tool) => catalogSearchHintFor(source.agentType, tool.name),
     inactiveToolMessage: (tool) =>
       source.sessionMode === "plan" && !isPlanModeToolAllowed(tool)
         ? planModeToolUnavailableMessage(tool.name)
         : undefined,
+  };
+  const session = () => claudeToolSession(source, commitManager);
+  const unregister = registerAppToolSession(source.id, {
+    resolve: (name) => resolveSessionTool(toolset, name),
+    session,
+  });
+  const server = createSessionToolServer({
+    sessionId: source.id,
+    harness: "claude-sdk",
+    ...toolset,
+    searchHint: (tool) => catalogSearchHintFor(source.agentType, tool.name),
     // Eager-tier catalog tools are marked anthropic/alwaysLoad so the SDK's
     // native tool search keeps them in the initial context and defers the rest.
     // The session's FROZEN start conditions decide the conditional eager groups
@@ -129,7 +148,15 @@ export function createClaudeSessionToolServer(
         source.agentType,
         sessionPromptConditions(source.id, source.agentType),
       ),
-    session: () => claudeToolSession(source, commitManager),
+    session,
     onToolExecuted: () => source.broadcastState(),
+    execute: appToolExecutorFor(source.id),
   });
+  return {
+    ...server,
+    close: async () => {
+      unregister();
+      await server.close();
+    },
+  };
 }

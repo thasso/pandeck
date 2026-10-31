@@ -1,8 +1,8 @@
 /**
  * One end of a worker protocol connection. Both ends are the same peer: either
  * may send requests and serve them. The server sends checkout (and later
- * engine) operations to the Worker; the Worker will send app tools, approvals
- * and hooks the other way.
+ * engine) operations to the Worker; the Worker sends app tools (and later
+ * approvals and hooks) the other way.
  *
  * The Worker dials and opens with `hello`; the server answers `welcome` or
  * `refused`. Requests made before the handshake completes wait for it, for at

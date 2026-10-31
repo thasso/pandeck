@@ -2,8 +2,13 @@
  * The generic per-session MCP server exposing the app's own {@link AgentTool}s
  * over MCP. The Claude SDK mounts `server` in-process (`mcpServers.pa`, type
  * "sdk"); no other client connects today. The pi harness does not use it: it
- * runs the same tools through the direct adapter in
- * `piSdk/agentToolAdapter.ts`.
+ * runs the same tools through its adapter in `piSdk/agentToolAdapter.ts`.
+ *
+ * With `execute`, a call runs through it instead of here: an interactive
+ * Claude session's calls cross to the server through its Worker, which
+ * resolves the tool with {@link resolveSessionTool} and runs it. Everything
+ * MCP-shaped — the tool-call id, progress notifications, the result mapping,
+ * `onToolExecuted` — stays in this handler either way.
  *
  * Wire contract beyond plain MCP (all under `_meta`, see ./meta.ts):
  *  - request `_meta["pa/toolCallId"]`, else the Claude CLI's
@@ -25,7 +30,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Harness } from "@assistant/shared";
 import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
-import type { AgentTool, ToolResult, ToolSession } from "./tool.ts";
+import type {
+  AgentTool,
+  AppToolExecutor,
+  ToolResult,
+  ToolSession,
+} from "./tool.ts";
 import {
   ANTHROPIC_ALWAYS_LOAD_META_KEY,
   ANTHROPIC_SEARCH_HINT_META_KEY,
@@ -64,6 +74,33 @@ export interface SessionToolServerConfig {
   session(): ToolSession;
   /** Called after every tool call, success or error (e.g. broadcastState). */
   onToolExecuted?(): void;
+  /**
+   * Runs every call instead of this server: the executor's side resolves the
+   * tool and applies the unknown and inactive checks.
+   */
+  execute?: AppToolExecutor;
+}
+
+/**
+ * The tool `name` calls in this session now. Throws for a name the session
+ * does not have, or one it has but not active, with the server's own text.
+ */
+export function resolveSessionTool(
+  config: Pick<
+    SessionToolServerConfig,
+    "tools" | "activeToolNames" | "inactiveToolMessage"
+  >,
+  name: string,
+): AgentTool {
+  const tool = config.tools().find((t) => t.name === name);
+  if (!tool) throw new Error(`Unknown tool: ${name}`);
+  const active = config.activeToolNames?.() ?? null;
+  if (active && !active.has(name))
+    throw new Error(
+      config.inactiveToolMessage?.(tool) ??
+        `Tool ${name} is not enabled for this session.`,
+    );
+  return tool;
 }
 
 export interface SessionToolServer {
@@ -146,14 +183,9 @@ export function createSessionToolServer(
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     try {
       const name = req.params.name;
-      const tool = config.tools().find((t) => t.name === name);
-      if (!tool) throw new Error(`Unknown tool: ${name}`);
-      const active = config.activeToolNames?.() ?? null;
-      if (active && !active.has(name))
-        throw new Error(
-          config.inactiveToolMessage?.(tool) ??
-            `Tool ${name} is not enabled for this session.`,
-        );
+      const tool = config.execute
+        ? undefined
+        : resolveSessionTool(config, name);
 
       const meta = req.params._meta;
       const requestedId = [
@@ -179,15 +211,15 @@ export function createSessionToolServer(
                 .catch(() => {});
             };
 
-      const result = await tool.execute(
-        (req.params.arguments ?? {}) as Record<string, unknown>,
-        {
-          toolCallId,
-          session: config.session(),
-          signal: extra.signal,
-          ...(progress !== undefined ? { progress } : {}),
-        },
-      );
+      const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+      const ctx = {
+        toolCallId,
+        signal: extra.signal,
+        ...(progress !== undefined ? { progress } : {}),
+      };
+      const result = config.execute
+        ? await config.execute(name, args, ctx)
+        : await tool!.execute(args, { ...ctx, session: config.session() });
       return toCallToolResult(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

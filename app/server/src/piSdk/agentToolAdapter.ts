@@ -1,16 +1,22 @@
 /**
- * Direct in-process adapter: the app's harness-neutral {@link AgentTool}s →
- * pi `ToolDefinition`s for `customTools`. This replaced the former MCP client
- * bridge (`mcpToolBridge.ts`): pi tools now execute the AgentTool directly —
- * `ctx.progress` maps to pi `onUpdate`, `details`/`terminate` map 1:1, and a
- * thrown error is pi's failure contract too. No MCP hop, no `_meta` smuggling,
- * no client timeout to override; the session MCP server remains for the Claude
- * harness (and future external MCP clients) only.
+ * In-process adapter: the app's harness-neutral {@link AgentTool}s → pi
+ * `ToolDefinition`s for `customTools`. This replaced the former MCP client
+ * bridge (`mcpToolBridge.ts`): no MCP hop, no `_meta` smuggling, no client
+ * timeout to override — `ctx.progress` maps to pi `onUpdate`,
+ * `details`/`terminate` map 1:1, and a thrown error is pi's failure contract
+ * too. The session MCP server remains for the Claude harness (and future
+ * external MCP clients) only.
  *
- * Executing in-process is also what makes pi's cache-friendly dynamic tool
- * loading work: when a tool (`find_tools`) additively activates more tools
- * via `setActiveToolsByName` DURING its execute window, pi's tool wrapper
- * records the added names on that tool result and natively defer-loads the
+ * An interactive session's app tools run on the server: their definitions
+ * send each call through the session's Worker (`appTools`), and the server
+ * applies the Plan gate and `onExecute` there (`workers/appToolHost.ts`).
+ * Every other tool — `find_tools` and the background shell tools — executes
+ * here, with the gate applied here.
+ *
+ * Executing `find_tools` in-process is what makes pi's cache-friendly dynamic
+ * tool loading work: when it additively activates more tools via
+ * `setActiveToolsByName` DURING its execute window, pi's tool wrapper records
+ * the added names on that tool result and natively defer-loads the
  * definitions on supported models.
  */
 import {
@@ -19,7 +25,13 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
-import type { AgentTool, ToolResult, ToolSession } from "../mcp/tool.ts";
+import type { AppToolBinding } from "../workers/appToolHost.ts";
+import type {
+  AgentTool,
+  AppToolExecutor,
+  ToolResult,
+  ToolSession,
+} from "../mcp/tool.ts";
 
 /*
  * NO constrained sampling here, deliberately. `constrainedSampling:
@@ -42,6 +54,11 @@ export interface PiAgentToolAdapterConfig {
   unavailableReason?(tool: AgentTool): string | undefined;
   /** Called immediately before a tool executes. */
   onExecute?(name: string): void;
+  /**
+   * The app tools that run away from the engine, and how. For these the
+   * executor's side applies the gate and `onExecute`, not the adapter.
+   */
+  appTools?: { routes: ReadonlySet<AgentTool>; execute: AppToolExecutor };
 }
 
 /** Adapt the persona's AgentTools into pi custom-tool definitions. */
@@ -68,6 +85,21 @@ function toPiToolDefinition(
       : {}),
     parameters: toPiParameters(tool.parameters),
     async execute(toolCallId, params, signal, onUpdate) {
+      const progress = onUpdate
+        ? (partial: ToolResult) => onUpdate(toPiResult(partial))
+        : undefined;
+      if (config.appTools?.routes.has(tool))
+        return toPiResult(
+          await config.appTools.execute(
+            tool.name,
+            (params ?? {}) as Record<string, unknown>,
+            {
+              toolCallId,
+              ...(signal !== undefined ? { signal } : {}),
+              ...(progress !== undefined ? { progress } : {}),
+            },
+          ),
+        );
       const unavailableReason = config.unavailableReason?.(tool);
       if (unavailableReason) throw new Error(unavailableReason);
       config.onExecute?.(tool.name);
@@ -77,14 +109,34 @@ function toPiToolDefinition(
           toolCallId,
           session: config.session(),
           ...(signal !== undefined ? { signal } : {}),
-          ...(onUpdate
-            ? { progress: (partial) => onUpdate(toPiResult(partial)) }
-            : {}),
+          ...(progress !== undefined ? { progress } : {}),
         },
       );
       return toPiResult(result);
     },
   });
+}
+
+/**
+ * The server's binding for the app tools a pi session routes: by name, the
+ * same Plan denial and `onExecute` the adapter applies to its local tools.
+ * pi checks no active set at call time, so neither does this.
+ */
+export function piAppToolBinding(
+  tools: readonly AgentTool[],
+  config: PiAgentToolAdapterConfig,
+): AppToolBinding {
+  return {
+    resolve: (name) => {
+      const tool = tools.find((t) => t.name === name);
+      if (!tool) throw new Error(`Unknown tool: ${name}`);
+      const unavailableReason = config.unavailableReason?.(tool);
+      if (unavailableReason) throw new Error(unavailableReason);
+      return tool;
+    },
+    session: () => config.session(),
+    ...(config.onExecute ? { onExecute: config.onExecute } : {}),
+  };
 }
 
 function toPiResult(result: ToolResult): AgentToolResult<unknown> {

@@ -2,7 +2,8 @@
  * Task 319: the ported `ls` tool's observable contract — the sort, the `/`
  * suffix, the two bounds and their notices, path resolution (relative, absolute,
  * `~`, and the app-`CWD` fallback, all of which the port added over pi), and the
- * paths that throw.
+ * paths that throw. Every listing reads on the session's Worker, the
+ * in-process one here.
  *
  *   pnpm --filter @assistant/server test src/tools/core/lsTool.test.ts
  */
@@ -32,6 +33,8 @@ mkdirSync(process.env.ASSISTANT_CWD, { recursive: true });
 writeFileSync(join(process.env.ASSISTANT_CWD, "from-app-cwd.txt"), "x");
 
 const { lsTool } = await import("./lsTool.ts");
+const { inProcessWorkerServedMethodForTests } =
+  await import("../../workers/inProcessWorker.ts");
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -160,6 +163,23 @@ test("both notices appear together when both bounds are hit", async () => {
   assert.match(
     textOf(result),
     /\n\n\[299 entries limit reached\. Use limit=598 for more\. 50KB limit reached\]$/,
+  );
+});
+
+test("a link to a directory gets '/', a link to a file does not, read on the Worker", async () => {
+  const dir = fixture("links", ["plain.txt"], ["real-dir"]);
+  symlinkSync(join(dir, "real-dir"), join(dir, "dir-link"));
+  symlinkSync(join(dir, "plain.txt"), join(dir, "file-link"));
+  const listings = inProcessWorkerServedMethodForTests("files.readdir");
+  assert.deepEqual(textOf(await run({}, dir)).split("\n"), [
+    "dir-link/",
+    "file-link",
+    "plain.txt",
+    "real-dir/",
+  ]);
+  assert.equal(
+    inProcessWorkerServedMethodForTests("files.readdir"),
+    listings + 1,
   );
 });
 

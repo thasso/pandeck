@@ -10,6 +10,9 @@
  * JSON-encoded partial results, details → `_meta` (never structuredContent),
  * terminate → `_meta`, active-set enforcement, and error mapping. It also
  * covers a proxied tool whose whole answer is text ([Task-439](pa://task/439)).
+ * The contract runs twice: executing here, and routed as an interactive
+ * Claude session runs it, through the in-process Worker to the server's
+ * binding (`workers/appToolHost.ts`).
  *
  * Part 2 is the claude-sdk integration path (successor of the old
  * claudeSdkBridge test): builds the session tool server for a fake `claude-sdk`
@@ -55,8 +58,17 @@ import { externalToolName } from "./names.ts";
 import { mcpToolNamesFor } from "./agentToolNames.ts";
 import {
   createSessionToolServer,
+  resolveSessionTool,
   type SessionToolServer,
 } from "./sessionToolServer.ts";
+import {
+  appToolCallsServedForTests,
+  registerAppToolSession,
+} from "../workers/appToolHost.ts";
+import {
+  appToolExecutorFor,
+  inProcessWorkerServedMethodForTests,
+} from "../workers/inProcessWorker.ts";
 import { defineAgentTool, type AgentTool } from "./tool.ts";
 
 interface ToolListResult {
@@ -87,169 +99,282 @@ async function connect(server: SessionToolServer): Promise<Client> {
   return client;
 }
 
-test("session tool server wire contract", async () => {
-  const seenCtx: Record<string, unknown>[] = [];
-  const tools: AgentTool[] = [
-    defineAgentTool<{ value?: string }>({
-      name: "probe",
-      label: "Probe",
-      description: "test tool",
-      searchHint: "probing diagnostics",
-      executionMode: "sequential",
-      parameters: { type: "object", properties: { value: { type: "string" } } },
-      async execute(params, ctx) {
-        seenCtx.push({
-          toolCallId: ctx.toolCallId,
-          sessionId: ctx.session.sessionId,
-          harness: ctx.session.harness,
-        });
-        ctx.progress?.({
-          content: [{ type: "text", text: "working" }],
-          details: { status: "half" },
-        });
-        ctx.progress?.({
-          content: [{ type: "text", text: "almost" }],
-          details: { status: "nearly" },
-        });
-        return {
-          content: [{ type: "text", text: `ok:${params.value ?? ""}` }],
-          details: { echoed: params.value ?? null },
-          terminate: true,
-        };
-      },
-    }),
-    defineAgentTool({
-      name: "inactive_probe",
-      label: "Inactive",
-      description: "not enabled",
-      parameters: { type: "object", properties: {} },
-      async execute() {
-        return { content: [{ type: "text", text: "should never run" }] };
-      },
-    }),
-    defineAgentTool({
-      name: "list_details",
-      label: "List details",
-      description: "returns array details",
-      parameters: { type: "object", properties: {} },
-      async execute() {
-        return { content: [{ type: "text", text: "[]" }], details: [1, 2, 3] };
-      },
-    }),
-    defineAgentTool({
-      name: "boom",
-      label: "Boom",
-      description: "always throws",
-      parameters: { type: "object", properties: {} },
-      async execute() {
-        throw new Error("kapow");
-      },
-    }),
-  ];
-  const active = new Set(["probe", "list_details", "boom"]);
-  const server = createSessionToolServer({
-    sessionId: "sess-1",
-    harness: "pi",
-    tools: () => tools,
-    activeToolNames: () => active,
-    eagerToolNames: () => new Set(["probe"]),
-    session: () => ({
+test.each(["direct", "routed"] as const)(
+  "session tool server wire contract (%s)",
+  async (mode) => {
+    const seenCtx: Record<string, unknown>[] = [];
+    const tools: AgentTool[] = [
+      defineAgentTool<{ value?: string }>({
+        name: "probe",
+        label: "Probe",
+        description: "test tool",
+        searchHint: "probing diagnostics",
+        executionMode: "sequential",
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+        },
+        async execute(params, ctx) {
+          seenCtx.push({
+            toolCallId: ctx.toolCallId,
+            sessionId: ctx.session.sessionId,
+            harness: ctx.session.harness,
+          });
+          ctx.progress?.({
+            content: [{ type: "text", text: "working" }],
+            details: { status: "half" },
+          });
+          ctx.progress?.({
+            content: [{ type: "text", text: "almost" }],
+            details: { status: "nearly" },
+          });
+          return {
+            content: [{ type: "text", text: `ok:${params.value ?? ""}` }],
+            details: { echoed: params.value ?? null },
+            terminate: true,
+          };
+        },
+      }),
+      defineAgentTool({
+        name: "inactive_probe",
+        label: "Inactive",
+        description: "not enabled",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          return { content: [{ type: "text", text: "should never run" }] };
+        },
+      }),
+      defineAgentTool({
+        name: "list_details",
+        label: "List details",
+        description: "returns array details",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          return {
+            content: [{ type: "text", text: "[]" }],
+            details: [1, 2, 3],
+          };
+        },
+      }),
+      defineAgentTool({
+        name: "boom",
+        label: "Boom",
+        description: "always throws",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          throw new Error("kapow");
+        },
+      }),
+    ];
+    const active = new Set(["probe", "list_details", "boom"]);
+    const session = () => ({
+      sessionId: "sess-1",
+      harness: "pi" as const,
+      agentType: "workshop" as const,
+    });
+    const routed = mode === "routed";
+    const unregister = routed
+      ? registerAppToolSession("sess-1", {
+          resolve: (name) =>
+            resolveSessionTool(
+              { tools: () => tools, activeToolNames: () => active },
+              name,
+            ),
+          session,
+        })
+      : () => {};
+    const server = createSessionToolServer({
       sessionId: "sess-1",
       harness: "pi",
-      agentType: "workshop",
-    }),
-  });
-  const client = await connect(server);
-  try {
-    // tools/list: only the active tools are listed, extras ride _meta.
-    const listed = (await client.listTools()) as ToolListResult;
-    assert.deepEqual(listed.tools.map((t) => t.name).sort(), [
-      "boom",
-      "list_details",
-      "probe",
-    ]);
-    const probe = listed.tools.find((t) => t.name === "probe")!;
-    assert.equal(probe.title, "Probe");
-    // pa/pi carries executionMode only: Task-282 deleted the prompt extras
-    // that used to ride here (and that the Claude CLI ignored anyway).
-    assert.deepEqual(probe._meta?.["pa/pi"], {
-      executionMode: "sequential",
+      tools: () => tools,
+      activeToolNames: () => active,
+      eagerToolNames: () => new Set(["probe"]),
+      session,
+      ...(routed ? { execute: appToolExecutorFor("sess-1") } : {}),
     });
+    const client = await connect(server);
+    const calls = appToolCallsServedForTests();
+    const partials = inProcessWorkerServedMethodForTests("appTools.progress");
+    try {
+      // tools/list: only the active tools are listed, extras ride _meta.
+      const listed = (await client.listTools()) as ToolListResult;
+      assert.deepEqual(listed.tools.map((t) => t.name).sort(), [
+        "boom",
+        "list_details",
+        "probe",
+      ]);
+      const probe = listed.tools.find((t) => t.name === "probe")!;
+      assert.equal(probe.title, "Probe");
+      // pa/pi carries executionMode only: Task-282 deleted the prompt extras
+      // that used to ride here (and that the Claude CLI ignored anyway).
+      assert.deepEqual(probe._meta?.["pa/pi"], {
+        executionMode: "sequential",
+      });
 
-    // Claude tool-search metadata: eager tools are marked alwaysLoad, search
-    // hints ride anthropic/searchHint, deferred tools carry neither by default.
-    assert.equal(probe._meta?.["anthropic/alwaysLoad"], true);
-    assert.equal(probe._meta?.["anthropic/searchHint"], "probing diagnostics");
-    const deferredListed = listed.tools.find((t) => t.name === "list_details")!;
-    assert.equal(deferredListed._meta?.["anthropic/alwaysLoad"], undefined);
-    assert.equal(deferredListed._meta?.["anthropic/searchHint"], undefined);
+      // Claude tool-search metadata: eager tools are marked alwaysLoad, search
+      // hints ride anthropic/searchHint, deferred tools carry neither by default.
+      assert.equal(probe._meta?.["anthropic/alwaysLoad"], true);
+      assert.equal(
+        probe._meta?.["anthropic/searchHint"],
+        "probing diagnostics",
+      );
+      const deferredListed = listed.tools.find(
+        (t) => t.name === "list_details",
+      )!;
+      assert.equal(deferredListed._meta?.["anthropic/alwaysLoad"], undefined);
+      assert.equal(deferredListed._meta?.["anthropic/searchHint"], undefined);
 
-    // tools/call with _meta toolCallId + progress token: partials arrive as
-    // progress notifications with the partial ToolResult JSON-encoded in message.
-    const progressMessages: string[] = [];
-    const result = (await client.callTool(
-      {
-        name: "probe",
-        arguments: { value: "hi" },
-        _meta: { "pa/toolCallId": "call-42" },
-      },
-      undefined,
-      {
-        onprogress: (p) => {
-          if (typeof p.message === "string") progressMessages.push(p.message);
+      // tools/call with _meta toolCallId + progress token: partials arrive as
+      // progress notifications with the partial ToolResult JSON-encoded in message.
+      const progressMessages: string[] = [];
+      const result = (await client.callTool(
+        {
+          name: "probe",
+          arguments: { value: "hi" },
+          _meta: { "pa/toolCallId": "call-42" },
         },
-      },
-    )) as ToolCallResult;
-    assert.equal(result.isError ?? false, false);
-    assert.equal(result.content[0]?.text, "ok:hi");
-    // Details ride _meta and never displace the text content (Task-439).
-    assert.equal(result.structuredContent, undefined);
-    assert.deepEqual(result._meta?.["pa/details"], { echoed: "hi" });
-    assert.equal(result._meta?.["pa/terminate"], true);
-    assert.equal(seenCtx[0]?.toolCallId, "call-42");
-    assert.equal(seenCtx[0]?.sessionId, "sess-1");
-    assert.equal(progressMessages.length, 2);
-    assert.deepEqual(JSON.parse(progressMessages[0]!), {
-      content: [{ type: "text", text: "working" }],
-      details: { status: "half" },
+        undefined,
+        {
+          onprogress: (p) => {
+            if (typeof p.message === "string") progressMessages.push(p.message);
+          },
+        },
+      )) as ToolCallResult;
+      assert.equal(result.isError ?? false, false);
+      assert.equal(result.content[0]?.text, "ok:hi");
+      // Details ride _meta and never displace the text content (Task-439).
+      assert.equal(result.structuredContent, undefined);
+      assert.deepEqual(result._meta?.["pa/details"], { echoed: "hi" });
+      assert.equal(result._meta?.["pa/terminate"], true);
+      assert.equal(seenCtx[0]?.toolCallId, "call-42");
+      assert.equal(seenCtx[0]?.sessionId, "sess-1");
+      assert.equal(progressMessages.length, 2);
+      assert.deepEqual(JSON.parse(progressMessages[0]!), {
+        content: [{ type: "text", text: "working" }],
+        details: { status: "half" },
+      });
+
+      // The Claude CLI names its tool_use under its own key; cards anchor on it.
+      await client.callTool({
+        name: "probe",
+        arguments: { value: "claude" },
+        _meta: { "claudecode/toolUseId": "toolu_01abc" },
+      });
+      assert.equal(seenCtx[1]?.toolCallId, "toolu_01abc");
+
+      // Non-object details ride the same key — no shape is special-cased.
+      const arr = (await client.callTool({
+        name: "list_details",
+        arguments: {},
+      })) as ToolCallResult;
+      assert.equal(arr.structuredContent, undefined);
+      assert.deepEqual(arr._meta?.["pa/details"], [1, 2, 3]);
+
+      // Inactive tools are rejected even though listed in "all" mode.
+      const denied = (await client.callTool({
+        name: "inactive_probe",
+        arguments: {},
+      })) as ToolCallResult;
+      assert.equal(denied.isError, true);
+      assert.match(denied.content[0]?.text ?? "", /not enabled/);
+
+      // Thrown errors map to isError results with the message as text.
+      const boom = (await client.callTool({
+        name: "boom",
+        arguments: {},
+      })) as ToolCallResult;
+      assert.equal(boom.isError, true);
+      assert.equal(boom.content[0]?.text, "kapow");
+
+      // A name the session does not have.
+      const unknown = (await client.callTool({
+        name: "nope",
+        arguments: {},
+      })) as ToolCallResult;
+      assert.equal(unknown.isError, true);
+      assert.equal(unknown.content[0]?.text, "Unknown tool: nope");
+
+      // Routed, the four admitted calls ran on the server and both partials
+      // crossed back; the refused ones never executed.
+      assert.equal(appToolCallsServedForTests() - calls, routed ? 4 : 0);
+      assert.equal(
+        inProcessWorkerServedMethodForTests("appTools.progress") - partials,
+        routed ? 2 : 0,
+      );
+    } finally {
+      unregister();
+      await client.close().catch(() => {});
+      await server.close().catch(() => {});
+    }
+  },
+);
+
+test.each(["direct", "routed"] as const)(
+  "a cancelled call aborts the tool's signal (%s)",
+  async (mode) => {
+    const sessionId = `sess-cancel-${mode}`;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    let aborted!: () => void;
+    const observed = new Promise<void>((resolve) => (aborted = resolve));
+    const tools: AgentTool[] = [
+      defineAgentTool({
+        name: "waits",
+        label: "Waits",
+        description: "waits for its signal",
+        parameters: { type: "object", properties: {} },
+        async execute(_params, ctx) {
+          started();
+          await new Promise<void>((resolve) =>
+            ctx.signal?.addEventListener("abort", () => resolve(), {
+              once: true,
+            }),
+          );
+          aborted();
+          throw new Error("probe aborted");
+        },
+      }),
+    ];
+    const session = () => ({
+      sessionId,
+      harness: "claude-sdk" as const,
+      agentType: "workshop" as const,
     });
-
-    // The Claude CLI names its tool_use under its own key; cards anchor on it.
-    await client.callTool({
-      name: "probe",
-      arguments: { value: "claude" },
-      _meta: { "claudecode/toolUseId": "toolu_01abc" },
+    const unregister =
+      mode === "routed"
+        ? registerAppToolSession(sessionId, {
+            resolve: (name) => resolveSessionTool({ tools: () => tools }, name),
+            session,
+          })
+        : () => {};
+    const server = createSessionToolServer({
+      sessionId,
+      harness: "claude-sdk",
+      tools: () => tools,
+      session,
+      ...(mode === "routed" ? { execute: appToolExecutorFor(sessionId) } : {}),
     });
-    assert.equal(seenCtx[1]?.toolCallId, "toolu_01abc");
-
-    // Non-object details ride the same key — no shape is special-cased.
-    const arr = (await client.callTool({
-      name: "list_details",
-      arguments: {},
-    })) as ToolCallResult;
-    assert.equal(arr.structuredContent, undefined);
-    assert.deepEqual(arr._meta?.["pa/details"], [1, 2, 3]);
-
-    // Inactive tools are rejected even though listed in "all" mode.
-    const denied = (await client.callTool({
-      name: "inactive_probe",
-      arguments: {},
-    })) as ToolCallResult;
-    assert.equal(denied.isError, true);
-    assert.match(denied.content[0]?.text ?? "", /not enabled/);
-
-    // Thrown errors map to isError results with the message as text.
-    const boom = (await client.callTool({
-      name: "boom",
-      arguments: {},
-    })) as ToolCallResult;
-    assert.equal(boom.isError, true);
-    assert.equal(boom.content[0]?.text, "kapow");
-  } finally {
-    await client.close().catch(() => {});
-    await server.close().catch(() => {});
-  }
-});
+    const client = await connect(server);
+    try {
+      const controller = new AbortController();
+      const call = client.callTool(
+        { name: "waits", arguments: {} },
+        undefined,
+        {
+          signal: controller.signal,
+        },
+      );
+      await running;
+      controller.abort();
+      await assert.rejects(call);
+      await observed;
+    } finally {
+      unregister();
+      await client.close().catch(() => {});
+      await server.close().catch(() => {});
+    }
+  },
+);
 
 test("a proxied tool's text-only answer survives the wire", async () => {
   // Task-439: browser_snapshot's whole value is the accessibility tree in the
@@ -461,6 +586,8 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
           `${tool.name} needs discriminating Claude ToolSearch metadata`,
         );
 
+    // An interactive Claude session's calls cross to the server.
+    const crossed = appToolCallsServedForTests();
     const read = (await client.callTool({
       name: "task_read",
       arguments: {},
@@ -483,6 +610,7 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
       !create.isError,
       `task_manage create should not error: ${JSON.stringify(create.content)}`,
     );
+    assert.equal(appToolCallsServedForTests(), crossed + 2);
 
     const linked = listSessionTasks("workshop", ID);
     const probe = linked.find((t) => t.title === title);
