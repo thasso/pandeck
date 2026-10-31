@@ -3,19 +3,74 @@ import { test } from "vitest";
 import { deleteToolGroupSessionData } from "../mcp/toolGroups/registry.ts";
 import { listSessionArtifacts } from "../mcp/toolGroups/packRuntime.ts";
 import { setChildProcessEnvOverlay } from "../subprocessEnv.ts";
+import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
+import {
+  sessionHooksFor,
+  type SessionHooks,
+} from "../workers/inProcessWorker.ts";
+import {
+  registerSessionHooks,
+  sessionHookCallsServedForTests,
+} from "../workers/sessionHookHost.ts";
+import { claudeSessionHookBinding } from "./options.ts";
 import {
   claudeOutputPolicyHooks,
+  type ClaudeQuerySessionHooks,
   withClaudeOutputBudgetEnvironment,
 } from "./outputPolicyHooks.ts";
+
+/** A calls object for one query, answering as an idle Build session would. */
+function calls(overrides: Partial<SessionHooks> = {}): ClaudeQuerySessionHooks {
+  return {
+    epoch: "epoch-1",
+    canUseTool: async () => ({ behavior: "allow" }),
+    preToolUse: async () => ({ allowed: true }),
+    stop: async () => undefined,
+    postCompact: async () => undefined,
+    persistOutput: async () => {
+      throw new Error("no artifact is expected");
+    },
+    ...overrides,
+  };
+}
+
+/** Routed hooks for `sessionId`, served by a Build binding with no background work. */
+function routed(sessionId: string): {
+  hooks: ClaudeQuerySessionHooks;
+  dispose: () => void;
+} {
+  const dispose = registerSessionHooks(
+    sessionId,
+    claudeSessionHookBinding({
+      agentType: "workshop",
+      agent: undefined,
+      mode: () => "build",
+      admit: async () => ({ allowed: true }),
+      stop: () => undefined,
+      postCompact: () => undefined,
+    }),
+  );
+  return {
+    hooks: { ...sessionHooksFor(sessionId), epoch: "epoch-1" },
+    dispose,
+  };
+}
+
+const servedCounts = () =>
+  Object.values(SESSION_HOOK_METHODS).map(sessionHookCallsServedForTests);
 
 test("Claude hooks bound the real FileReadOutput shape without silent pagination", async () => {
   // This fixture is the FileReadOutput text variant from the installed
   // @anthropic-ai/claude-agent-sdk sdk-tools.d.ts. updatedToolOutput must retain
   // this exact outer/file schema because the shipped CLI validates it.
   const sessionId = `claude-output-policy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const session = routed(sessionId);
   try {
-    const hooks = claudeOutputPolicyHooks(sessionId);
+    const hooks = claudeOutputPolicyHooks(session.hooks);
     const pre = hooks.PreToolUse![0]!.hooks[0]!;
+    const preServed = sessionHookCallsServedForTests(
+      SESSION_HOOK_METHODS.preToolUse,
+    );
     const preResult = await pre(
       {
         hook_event_name: "PreToolUse",
@@ -36,6 +91,12 @@ test("Claude hooks bound the real FileReadOutput shape without silent pagination
         }
       ).hookSpecificOutput?.updatedInput?.limit,
       400,
+      "the engine keeps its Read window after the server allows the call",
+    );
+    assert.equal(
+      sessionHookCallsServedForTests(SESSION_HOOK_METHODS.preToolUse),
+      preServed + 1,
+      "the PreToolUse decision crossed to the server once",
     );
 
     const response = {
@@ -83,22 +144,24 @@ test("Claude hooks bound the real FileReadOutput shape without silent pagination
       "navigation-only reads do not register duplicate window artifacts",
     );
   } finally {
+    session.dispose();
     deleteToolGroupSessionData(sessionId);
   }
 });
 
 test("Claude background denial uses the authoritative permission decision shape", async () => {
   const seen: string[] = [];
-  const hooks = claudeOutputPolicyHooks("session-1", {
-    preToolUse: async ({ toolName }) => {
-      seen.push(toolName);
-      return toolName === "Monitor"
-        ? { allowed: false, reason: "background capacity is full" }
-        : { allowed: true };
-    },
-    stop: () => undefined,
-    postCompact: () => undefined,
-  });
+  const hooks = claudeOutputPolicyHooks(
+    calls({
+      preToolUse: async (epoch, { toolName }) => {
+        assert.equal(epoch, "epoch-1", "the query's epoch travels");
+        seen.push(toolName);
+        return toolName === "Monitor"
+          ? { allowed: false, reason: "background capacity is full" }
+          : { allowed: true };
+      },
+    }),
+  );
   const pre = hooks.PreToolUse![0]!.hooks[0]!;
   const denied = await pre(
     {
@@ -149,11 +212,11 @@ test("Claude background denial uses the authoritative permission decision shape"
 });
 
 test("an admitted Claude background launch passes its context to the model", async () => {
-  const hooks = claudeOutputPolicyHooks("session-1", {
-    preToolUse: async () => ({ allowed: true, context: "PA task bgw_1" }),
-    stop: () => undefined,
-    postCompact: () => undefined,
-  });
+  const hooks = claudeOutputPolicyHooks(
+    calls({
+      preToolUse: async () => ({ allowed: true, context: "PA task bgw_1" }),
+    }),
+  );
   const result = await hooks.PreToolUse![0]!.hooks[0]!(
     {
       hook_event_name: "PreToolUse",
@@ -177,7 +240,9 @@ test("an admitted Claude background launch passes its context to the model", asy
 });
 
 test("Claude failure hook adds bounded conflict diagnostics", async () => {
-  const hooks = claudeOutputPolicyHooks("session-1");
+  const session = routed("claude-failure-guidance");
+  const before = servedCounts();
+  const hooks = claudeOutputPolicyHooks(session.hooks);
   const failure = hooks.PostToolUseFailure![0]!.hooks[0]!;
   const result = await failure(
     {
@@ -198,6 +263,12 @@ test("Claude failure hook adds bounded conflict diagnostics", async () => {
   ).hookSpecificOutput?.additionalContext;
   assert.match(context ?? "", /Failed command: git rebase main/);
   assert.match(context ?? "", /git diff --name-only --diff-filter=U/);
+  assert.deepEqual(
+    servedCounts(),
+    before,
+    "the failure guidance is the engine's own: no session-hook request",
+  );
+  session.dispose();
 });
 
 test("Claude subprocess budgets preserve supplied or inherited environment", () => {

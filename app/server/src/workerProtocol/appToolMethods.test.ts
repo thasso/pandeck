@@ -20,7 +20,6 @@ import {
   type Payload,
 } from "./codec.ts";
 import { WorkerMethodError } from "./connection.ts";
-import { WORKER_PROTOCOL_VERSION } from "./version.ts";
 
 /** `payload` through the real framing, as the peer receives it. */
 function wire(payload: Payload, frames = encodeFrames(payload)): Payload {
@@ -56,8 +55,7 @@ function assertInvalid(run: () => unknown): void {
   );
 }
 
-test("protocol 1.6 adds the two app-tool methods", () => {
-  assert.equal(WORKER_PROTOCOL_VERSION, "1.6");
+test("protocol 1.6 added the two app-tool methods", () => {
   assert.deepEqual(Object.values(APP_TOOL_METHODS).sort(), [
     "appTools.call",
     "appTools.progress",

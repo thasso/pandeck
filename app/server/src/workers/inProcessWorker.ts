@@ -27,8 +27,17 @@ import {
   createInProcessTransport,
   type ByteEndpoint,
 } from "../workerProtocol/inProcessTransport.ts";
-import { appToolHandlers } from "./appToolHost.ts";
+import type {
+  PersistOutputRequest,
+  PreToolUseRequest,
+  SessionOutputArtifact,
+  SessionStopTask,
+  SessionToolAdmission,
+  SessionToolPermission,
+} from "../workerProtocol/sessionHookMethods.ts";
+import { appToolHandlers, type AdmittedPeer } from "./appToolHost.ts";
 import { DEFAULT_WORKER_ID } from "./placement.ts";
+import { sessionHookHandlers } from "./sessionHookHost.ts";
 import { watchDeliveries } from "./watchDeliveries.ts";
 import { workerRegistry } from "./workerRegistry.ts";
 
@@ -51,13 +60,17 @@ export function ensureInProcessWorker(): WorkerConnection {
   let quiescent: Promise<void> = Promise.resolve();
   const deliveries = watchDeliveries();
   // Calls are served only after the handshake, so `connection` is set by then.
-  const appTools = appToolHandlers(() => {
+  const peer = (): AdmittedPeer | undefined => {
     const workerId = workerRegistry.admittedAs(connection);
     return workerId === undefined ? undefined : { connection, workerId };
-  });
+  };
   const connection: WorkerConnection = workerRegistry.accept(serverEnd, {
     quiescence: () => quiescent,
-    handlers: { ...deliveries.handlers, ...appTools },
+    handlers: {
+      ...deliveries.handlers,
+      ...appToolHandlers(peer),
+      ...sessionHookHandlers(peer),
+    },
   });
   const worker = startWorker({
     workerId: DEFAULT_WORKER_ID,
@@ -92,6 +105,69 @@ export function appToolExecutorFor(sessionId: string): AppToolExecutor {
       },
     );
   };
+}
+
+/**
+ * How an interactive engine asks the server for `sessionId`'s permission and
+ * hook decisions and persists its elided output: from the session's Worker
+ * (`sessionHooks.*`). In phase 1 the in-process Worker serves every session.
+ */
+export interface SessionHooks {
+  canUseTool(
+    toolName: string,
+    signal?: AbortSignal,
+  ): Promise<SessionToolPermission>;
+  preToolUse(
+    epoch: string,
+    input: Omit<PreToolUseRequest, "sessionId" | "epoch">,
+    signal?: AbortSignal,
+  ): Promise<SessionToolAdmission>;
+  stop(
+    epoch: string,
+    tasks: SessionStopTask[],
+    signal?: AbortSignal,
+  ): Promise<void>;
+  postCompact(
+    epoch: string,
+    summary: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  persistOutput(
+    input: Omit<PersistOutputRequest, "sessionId">,
+    signal?: AbortSignal,
+  ): Promise<SessionOutputArtifact>;
+}
+
+/** The current in-process Worker's session-hook calls, dialing one if needed. */
+function sessionHookCallsNow() {
+  ensureInProcessWorker();
+  return current!.worker.sessionHooks;
+}
+
+export function sessionHooksFor(sessionId: string): SessionHooks {
+  return {
+    canUseTool: (toolName, signal) =>
+      sessionHookCallsNow().canUseTool({ sessionId, toolName }, signal),
+    preToolUse: (epoch, input, signal) =>
+      sessionHookCallsNow().preToolUse({ sessionId, epoch, ...input }, signal),
+    stop: (epoch, tasks, signal) =>
+      sessionHookCallsNow().stop({ sessionId, epoch, tasks }, signal),
+    postCompact: (epoch, summary, signal) =>
+      sessionHookCallsNow().postCompact({ sessionId, epoch, summary }, signal),
+    persistOutput: (input, signal) =>
+      persistSessionOutput({ sessionId, ...input }, signal),
+  };
+}
+
+/**
+ * {@link SessionHooks}' `persistOutput` for an engine that learns its session
+ * id per call (pi's extension).
+ */
+export function persistSessionOutput(
+  request: PersistOutputRequest,
+  signal?: AbortSignal,
+): Promise<SessionOutputArtifact> {
+  return sessionHookCallsNow().persistOutput(request, signal);
 }
 
 /** Boot: dial the in-process Worker before the first checkout needs it. */

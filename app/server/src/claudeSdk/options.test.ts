@@ -13,17 +13,54 @@
  *
  * The session MODE is the second, independent axis: `plan` refuses the
  * file-mutating natives per call against the live mode, and never changes the
- * tool list the process starts with.
+ * tool list the process starts with. A query reads the mode through its
+ * session hooks, which the session's binding answers on the server.
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import type { AgentType, SessionMode } from "@assistant/shared";
 import {
   buildClaudeSdkQueryOptions,
+  claudeSessionHookBinding,
+  claudeToolPermission,
   CLAUDE_AUTO_COMPACT_WINDOW_ENV,
   CLAUDE_SDK_NATIVE_TOOLS,
 } from "./options.ts";
 import { CLAUDE_SDK_HARNESS_SETTINGS } from "./modelSettings.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
+import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
+import { sessionHooksFor } from "../workers/inProcessWorker.ts";
+import {
+  registerSessionHooks,
+  sessionHookCallsServedForTests,
+} from "../workers/sessionHookHost.ts";
+
+const disposers: Array<() => void> = [];
+
+/**
+ * A query's session hooks for `sessionId`, answered by a session binding in
+ * `mode` with no background work, as a live session's would be.
+ */
+function sessionIn(
+  sessionId: string,
+  mode: () => SessionMode,
+  agentType: AgentType = "workshop",
+) {
+  disposers.push(
+    registerSessionHooks(
+      sessionId,
+      claudeSessionHookBinding({
+        agentType,
+        agent: undefined,
+        mode,
+        admit: async () => ({ allowed: true }),
+        stop: () => undefined,
+        postCompact: () => undefined,
+      }),
+    ),
+  );
+  return { sessionHooks: { ...sessionHooksFor(sessionId), epoch: "epoch-1" } };
+}
 
 async function main(): Promise<void> {
   const base = {
@@ -154,8 +191,7 @@ async function main(): Promise<void> {
   const paPlan = buildClaudeSdkQueryOptions({
     ...base,
     agentType: "personal-assistant",
-    mode: () => "plan",
-    outputPolicySessionId: "pa-plan",
+    ...sessionIn("pa-plan", () => "plan", "personal-assistant"),
   });
   assert.deepEqual(paPlan.tools, pa.tools);
   for (const tool of ["Edit", "Write"])
@@ -273,13 +309,11 @@ async function main(): Promise<void> {
   let liveMode: "build" | "plan" = "plan";
   const plan = buildClaudeSdkQueryOptions({
     ...base,
-    outputPolicySessionId: "options-plan-test",
-    mode: () => liveMode,
+    ...sessionIn("options-plan-test", () => liveMode),
   });
   const build = buildClaudeSdkQueryOptions({
     ...base,
-    outputPolicySessionId: "options-plan-test",
-    mode: () => "build",
+    ...sessionIn("options-build-test", () => "build"),
   });
   for (const key of [
     "tools",
@@ -293,11 +327,6 @@ async function main(): Promise<void> {
       build[key],
       `plan and build start the same process (${key})`,
     );
-  assert.throws(
-    () => buildClaudeSdkQueryOptions({ ...base, mode: () => "plan" }),
-    /outputPolicySessionId/,
-    "a moded query without the hooks that enforce Plan is refused",
-  );
   const preToolUse = plan.hooks!.PreToolUse![0]!.hooks[0]!;
   const gate = (toolName: string) =>
     preToolUse(
@@ -357,8 +386,7 @@ async function main(): Promise<void> {
 
   const planWithMcp = buildClaudeSdkQueryOptions({
     ...base,
-    outputPolicySessionId: "options-plan-test",
-    mode: () => "plan",
+    ...sessionIn("options-plan-mcp", () => "plan"),
     mcpServer: {} as never,
   });
   const mcpVerdict = await planWithMcp.canUseTool!(
@@ -412,8 +440,7 @@ async function main(): Promise<void> {
   const planAssistant = buildClaudeSdkQueryOptions({
     ...base,
     agentType: "assistant",
-    outputPolicySessionId: "options-plan-test",
-    mode: () => "plan",
+    ...sessionIn("options-plan-assistant", () => "plan", "assistant"),
   });
   assert.deepEqual(
     planAssistant.tools,
@@ -429,8 +456,7 @@ async function main(): Promise<void> {
       const options = buildClaudeSdkQueryOptions({
         ...base,
         agentType,
-        outputPolicySessionId: "options-plan-test",
-        mode: () => mode,
+        ...sessionIn(`options-${agentType}-${mode}`, () => mode, agentType),
       });
       assert.ok(
         (options.tools as string[]).includes("Skill"),
@@ -447,8 +473,7 @@ async function main(): Promise<void> {
       const options = buildClaudeSdkQueryOptions({
         ...base,
         agentType,
-        outputPolicySessionId: "options-plan-test",
-        mode: () => mode,
+        ...sessionIn(`options-${agentType}-${mode}`, () => mode, agentType),
       });
       assert.ok(
         !(options.tools as string[]).includes("Skill"),
@@ -460,8 +485,7 @@ async function main(): Promise<void> {
   const planWithLibrarySkill = buildClaudeSdkQueryOptions({
     ...base,
     agentType: "workshop",
-    outputPolicySessionId: "options-plan-test",
-    mode: () => "plan",
+    ...sessionIn("options-plan-skill", () => "plan"),
     frozenSkillNames: ["alpha-skill"],
   });
   assert.ok(
@@ -496,7 +520,80 @@ async function main(): Promise<void> {
 }
 
 test("builds persona-specific Claude SDK native-tool policy", async () => {
-  await main();
+  try {
+    await main();
+  } finally {
+    for (const dispose of disposers.splice(0)) dispose();
+  }
+});
+
+test("routed verdicts equal the direct ones for every persona, in Build and Plan", async () => {
+  const base = {
+    cwd: "/tmp",
+    abortController: new AbortController(),
+    modelId: "sonnet",
+    thinkingLevel: "low" as const,
+    mcpServer: {} as never,
+  };
+  const tools = [
+    "Edit",
+    "Read",
+    "mcp__other__lookup",
+    "mcp__pa__kb_write",
+    "mcp__pa__kb_read",
+    "mcp__pa__task_manage",
+  ];
+  const input = { file_path: "/tmp/x" };
+  try {
+    for (const agentType of [
+      "workshop",
+      "developer",
+      "assistant",
+      "personal-assistant",
+      "workflow-coordinator",
+    ] as const) {
+      for (const mode of ["build", "plan"] as const) {
+        const routed = buildClaudeSdkQueryOptions({
+          ...base,
+          agentType,
+          ...sessionIn(`parity-${agentType}-${mode}`, () => mode, agentType),
+        });
+        const direct = claudeToolPermission({
+          agentType,
+          allowPaMcp: true,
+          mode: () => mode,
+        });
+        const unhooked = buildClaudeSdkQueryOptions({ ...base, agentType });
+        for (const tool of tools) {
+          const served = sessionHookCallsServedForTests(
+            SESSION_HOOK_METHODS.canUseTool,
+          );
+          const verdict = await routed.canUseTool!(tool, input, {} as never);
+          assert.equal(
+            sessionHookCallsServedForTests(SESSION_HOOK_METHODS.canUseTool),
+            served + 1,
+            "one verdict is one request",
+          );
+          const expected = direct(tool);
+          assert.deepEqual(
+            verdict,
+            expected.behavior === "allow"
+              ? { behavior: "allow", updatedInput: input }
+              : expected,
+            `${agentType} in ${mode}: ${tool}`,
+          );
+          if (mode === "build")
+            assert.deepEqual(
+              verdict,
+              await unhooked.canUseTool!(tool, input, {} as never),
+              `${agentType}: ${tool} as a query without session hooks decides`,
+            );
+        }
+      }
+    }
+  } finally {
+    for (const dispose of disposers.splice(0)) dispose();
+  }
 });
 
 test("a stored compaction window rides the start settings and drops the inherited variable", () => {

@@ -1,4 +1,4 @@
-import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import {
   closeSync,
   fstatSync,
@@ -638,13 +638,22 @@ function artifactSourcePath(
   return match?.[1]?.trim();
 }
 
-/** Persist an elided native result and register it in the session artifact drawer. */
-export async function persistOutputArtifact(input: {
-  sessionId: string;
-  toolName: string;
-  raw: string;
-  sourcePath?: string;
-}): Promise<OutputArtifact> {
+/**
+ * Persist an elided native result and register it in the session artifact
+ * drawer. `copySource` copies the vendor's full-output file, named explicitly
+ * or in `raw`, to the artifact; the server reads it on the session's Worker
+ * (`workers/sessionHookHost.ts`). `sessionId` must be one artifact-safe path
+ * segment, which the session-hook decoder enforces.
+ */
+export async function persistOutputArtifact(
+  input: {
+    sessionId: string;
+    toolName: string;
+    raw: string;
+    sourcePath?: string;
+  },
+  copySource: (source: string, destination: string) => Promise<void>,
+): Promise<OutputArtifact> {
   const safeTool = input.toolName.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase();
   const root = join(
     DATA_DIR,
@@ -659,7 +668,7 @@ export async function persistOutputArtifact(input: {
   let copied = false;
   if (source) {
     try {
-      await copyFile(source, path);
+      await copySource(source, path);
       copied = true;
     } catch {
       // Vendor temp artifacts are best effort; the hook still has its raw result.

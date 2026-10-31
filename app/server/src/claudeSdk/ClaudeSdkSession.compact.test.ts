@@ -20,6 +20,8 @@ import {
   freezeSessionAgent,
 } from "../agents/sessionAgent.ts";
 import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
+import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
+import { sessionHookCallsServedForTests } from "../workers/sessionHookHost.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./sdkSeam.ts";
 
 const PROVIDER_SESSION = "11111111-2222-3333-4444-555555555555";
@@ -257,14 +259,31 @@ async function testNoProviderHistory(): Promise<void> {
   );
 }
 
+/**
+ * `run`, a standalone compaction: its own query keeps its local `PostCompact`
+ * capture and asks the server nothing.
+ */
+function askingNoSessionHooks(run: () => Promise<void>): () => Promise<void> {
+  return async () => {
+    const served = () =>
+      Object.values(SESSION_HOOK_METHODS).map(sessionHookCallsServedForTests);
+    const before = served();
+    await run();
+    assert.deepEqual(served(), before, "no session-hook request");
+  };
+}
+
 test(
   "Claude manual compaction reports the boundary and renders one durable card",
-  testCompactedCard,
+  askingNoSessionHooks(testCompactedCard),
 );
-test("Claude compaction that the CLI declines reports skipped", testSkipped);
+test(
+  "Claude compaction that the CLI declines reports skipped",
+  askingNoSessionHooks(testSkipped),
+);
 test(
   "Claude compaction without provider history is skipped",
-  testNoProviderHistory,
+  askingNoSessionHooks(testNoProviderHistory),
 );
 
 async function testCompactionBillsItsOwnEpoch(): Promise<void> {

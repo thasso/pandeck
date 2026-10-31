@@ -40,9 +40,11 @@ import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
 import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
 import {
   claudeOutputPolicyHooks,
-  type ClaudeQueryLifecycleHooks,
+  type ClaudeQuerySessionHooks,
   withClaudeOutputBudgetEnvironment,
 } from "./outputPolicyHooks.ts";
+import type { SessionToolPermission } from "../workerProtocol/sessionHookMethods.ts";
+import type { SessionHookBinding } from "../workers/sessionHookHost.ts";
 
 /**
  * Default native tools exposed to a Claude-SDK session.
@@ -133,14 +135,6 @@ export interface BuildClaudeSdkQueryOptionsInput {
   abortController: AbortController;
   modelId: string;
   thinkingLevel: ThinkingLevel;
-  /**
-   * The session's LIVE Build/Plan mode, read per tool call. It never shapes
-   * `tools:`/`disallowedTools` — a retained process outlives a mode switch —
-   * only the `PreToolUse` gate and `canUseTool`, so a switch applies to the
-   * running process too. Requires `outputPolicySessionId`, whose hooks carry
-   * the gate. Omitted means Build.
-   */
-  mode?: () => SessionMode;
   /** Provider session id from a prior run, to resume. */
   providerSessionId?: string;
   /** Override the native tools exposed; defaults to {@link CLAUDE_SDK_NATIVE_TOOLS}. */
@@ -174,8 +168,15 @@ export interface BuildClaudeSdkQueryOptionsInput {
   promptConditions?: PromptConditions;
   /** Scrubbed, profile-specific SDK subprocess environment. */
   env?: Record<string, string>;
-  /** App session id used to retain elided native output as session artifacts. */
-  outputPolicySessionId?: string;
+  /**
+   * An interactive query's session hooks: its `canUseTool` verdict and its
+   * `PreToolUse`, `Stop` and `PostCompact` decisions come from the session's
+   * binding on the server, which reads the LIVE Build/Plan mode per call, and
+   * its elided native output is persisted there as session artifacts. The
+   * mode never shapes `tools:`/`disallowedTools`: a retained process outlives
+   * a switch. Omitted: no hooks, and `canUseTool` decides locally in Build.
+   */
+  sessionHooks?: ClaudeQuerySessionHooks;
   /**
    * Library skill names frozen at session start. The caller recreates this
    * set's generated runtime before an ordinary query; this builder only points
@@ -188,8 +189,6 @@ export interface BuildClaudeSdkQueryOptionsInput {
    * coding-session discovery defaults.
    */
   disableTools?: boolean;
-  /** Per-process retained-query governance hooks. */
-  lifecycleHooks?: ClaudeQueryLifecycleHooks;
   /**
    * The session's stored compaction window, already clamped into the model's
    * range. Set: the query starts with it as `autoCompactWindow` and without the
@@ -199,55 +198,19 @@ export interface BuildClaudeSdkQueryOptionsInput {
   compactionWindow?: number;
 }
 
-/**
- * Permission callback: allow the configured native tools and the mounted `pa` MCP
- * server's tools; deny everything else (other MCP servers, other natives).
- *
- * Bypass mode below normally approves before this runs, but bypass is not
- * guaranteed: an account whose org-managed settings carry
- * `permissions.disableBypassPermissionsMode: "disable"` silently starts the CLI
- * in `default` mode. This callback is then the only approver; without it every
- * prompting call (each `mcp__pa__*` tool, any out-of-cwd read) is denied with
- * "you haven't granted it yet" and no prompt ever reaches the user.
- */
-function buildCanUseTool(
-  allowed: ReadonlySet<string>,
-  allowPaMcp: boolean,
-  mode: () => SessionMode,
-  planRestrictedAppTools: ReadonlySet<string>,
-): NonNullable<ClaudeSdkOptions["canUseTool"]> {
-  // External-name prefix the SDK gives tools served by our in-process `pa` server.
-  const mcpPrefix = `mcp__${MCP_SERVER_NAME}__`;
-  return async (toolName, input) => {
-    const appToolName = toolName.startsWith(mcpPrefix)
-      ? toolName.slice(mcpPrefix.length)
-      : undefined;
-    const planned = mode() === "plan";
-    if (planned && appToolName && planRestrictedAppTools.has(appToolName))
-      return {
-        behavior: "deny",
-        message: planModeToolUnavailableMessage(appToolName),
-      };
-    const nativeRefusal = planModeNativeRefusal(mode(), toolName);
-    if (nativeRefusal) return { behavior: "deny", message: nativeRefusal };
-    if (allowed.has(toolName) || (allowPaMcp && appToolName !== undefined))
-      return { behavior: "allow", updatedInput: input };
-    return {
-      behavior: "deny",
-      message: `Tool ${toolName} is not enabled for this session.`,
-    };
-  };
+/** What a session's Claude tool policy derives from. */
+interface ClaudeToolPolicyInput {
+  agentType?: AgentType;
+  agent?: SessionAgent | undefined;
+  nativeTools?: readonly string[];
+  disableTools?: boolean;
 }
 
-/**
- * The CLI's own compaction-window variable. It outranks every settings layer,
- * so a query that carries a stored window must not inherit it.
- */
-export const CLAUDE_AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
-
-export function buildClaudeSdkQueryOptions(
-  input: BuildClaudeSdkQueryOptionsInput,
-): ClaudeSdkOptions {
+/** The natives a query exposes, and its whole `tools:` allowlist. */
+function claudeToolsAllowlist(input: ClaudeToolPolicyInput): {
+  native: string[];
+  tools: string[];
+} {
   const agentType = input.agentType ?? "workshop";
   const defaultNative = hasNativeTools(agentType)
     ? CLAUDE_SDK_NATIVE_TOOLS
@@ -266,21 +229,6 @@ export function buildClaudeSdkQueryOptions(
   const native = [
     ...(input.disableTools ? [] : (input.nativeTools ?? defaultNative)),
   ].filter((name) => !deniedNative.has(name));
-  const allowed = new Set(native);
-  if (input.mode && !input.outputPolicySessionId)
-    throw new Error(
-      "A Claude query with a session mode needs outputPolicySessionId: its PreToolUse hook enforces Plan.",
-    );
-  const mode = input.mode ?? (() => "build" as const);
-  const planRestrictedAppTools = new Set(
-    AGENT_TYPES[agentType]
-      .tools()
-      .filter((tool) => !isPlanModeToolAllowed(tool))
-      .map((tool) => tool.name),
-  );
-  const disallowedTools = KNOWN_CLAUDE_NATIVE_TOOLS.filter(
-    (name) => !allowed.has(name),
-  );
   // ToolSearch is the CLI's own built-in deferred-tool search (loads
   // mcp__pa__* tool definitions on demand); it is NOT covered by allowing
   // "mcp__pa__*" through canUseTool. The CLI's own isToolSearchToolAvailable
@@ -294,13 +242,138 @@ export function buildClaudeSdkQueryOptions(
   // Only coding personas load project settings/skills, so only they receive it.
   // Skill remains available in Plan because loading context is non-mutating,
   // matching Read and ToolSearch even when a skill body describes later edits.
-  const toolsAllowlist = input.disableTools
+  const tools = input.disableTools
     ? []
     : [
         ...native,
         ...(isCodingAgentType(agentType) ? ["Skill"] : []),
         ...(agentType === "workflow-coordinator" ? [] : ["ToolSearch"]),
       ];
+  return { native, tools };
+}
+
+/**
+ * The permission verdict of a session's queries: allow the configured native
+ * tools and, with `allowPaMcp`, the mounted `pa` MCP server's tools; deny
+ * everything else (other MCP servers, other natives). Plan, read from the
+ * LIVE `mode` per call, denies its restricted app tools and the mutating
+ * natives first. The session's binding on the server and a query without
+ * session hooks both decide with it.
+ */
+export function claudeToolPermission(
+  input: ClaudeToolPolicyInput & {
+    allowPaMcp: boolean;
+    mode: () => SessionMode;
+  },
+): (toolName: string) => SessionToolPermission {
+  const allowed = new Set(claudeToolsAllowlist(input).tools);
+  const planRestrictedAppTools = new Set(
+    AGENT_TYPES[input.agentType ?? "workshop"]
+      .tools()
+      .filter((tool) => !isPlanModeToolAllowed(tool))
+      .map((tool) => tool.name),
+  );
+  // External-name prefix the SDK gives tools served by our in-process `pa` server.
+  const mcpPrefix = `mcp__${MCP_SERVER_NAME}__`;
+  return (toolName) => {
+    const appToolName = toolName.startsWith(mcpPrefix)
+      ? toolName.slice(mcpPrefix.length)
+      : undefined;
+    const planned = input.mode() === "plan";
+    if (planned && appToolName && planRestrictedAppTools.has(appToolName))
+      return {
+        behavior: "deny",
+        message: planModeToolUnavailableMessage(appToolName),
+      };
+    const nativeRefusal = planModeNativeRefusal(input.mode(), toolName);
+    if (nativeRefusal) return { behavior: "deny", message: nativeRefusal };
+    if (
+      allowed.has(toolName) ||
+      (input.allowPaMcp && appToolName !== undefined)
+    )
+      return { behavior: "allow" };
+    return {
+      behavior: "deny",
+      message: `Tool ${toolName} is not enabled for this session.`,
+    };
+  };
+}
+
+/**
+ * A Claude session's hook authority, served to its engine through the
+ * session's Worker (`workers/sessionHookHost.ts`). `canUseTool` is
+ * {@link claudeToolPermission} with the session's `pa` server mounted;
+ * `PreToolUse` refuses Plan's mutating natives against the live mode before
+ * `admit` runs background admission. `stop` and `postCompact` are the
+ * session's per-query bookkeeping.
+ */
+export function claudeSessionHookBinding(input: {
+  agentType: AgentType;
+  agent: SessionAgent | undefined;
+  mode: () => SessionMode;
+  admit: SessionHookBinding["preToolUse"];
+  stop: SessionHookBinding["stop"];
+  postCompact: SessionHookBinding["postCompact"];
+}): SessionHookBinding {
+  const verdict = claudeToolPermission({
+    agentType: input.agentType,
+    agent: input.agent,
+    allowPaMcp: true,
+    mode: input.mode,
+  });
+  return {
+    canUseTool: verdict,
+    preToolUse: async (epoch, call) => {
+      const refusal = planModeNativeRefusal(input.mode(), call.toolName);
+      return refusal
+        ? { allowed: false, reason: refusal }
+        : input.admit(epoch, call);
+    },
+    stop: input.stop,
+    postCompact: input.postCompact,
+  };
+}
+
+/**
+ * Permission callback over a verdict, keeping the engine's own input on an
+ * allow.
+ *
+ * Bypass mode below normally approves before this runs, but bypass is not
+ * guaranteed: an account whose org-managed settings carry
+ * `permissions.disableBypassPermissionsMode: "disable"` silently starts the CLI
+ * in `default` mode. This callback is then the only approver; without it every
+ * prompting call (each `mcp__pa__*` tool, any out-of-cwd read) is denied with
+ * "you haven't granted it yet" and no prompt ever reaches the user.
+ */
+function buildCanUseTool(
+  verdict: (
+    toolName: string,
+    signal?: AbortSignal,
+  ) => SessionToolPermission | Promise<SessionToolPermission>,
+): NonNullable<ClaudeSdkOptions["canUseTool"]> {
+  return async (toolName, input, options) => {
+    const answer = await verdict(toolName, options?.signal);
+    return answer.behavior === "allow"
+      ? { behavior: "allow", updatedInput: input }
+      : answer;
+  };
+}
+
+/**
+ * The CLI's own compaction-window variable. It outranks every settings layer,
+ * so a query that carries a stored window must not inherit it.
+ */
+export const CLAUDE_AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+
+export function buildClaudeSdkQueryOptions(
+  input: BuildClaudeSdkQueryOptionsInput,
+): ClaudeSdkOptions {
+  const agentType = input.agentType ?? "workshop";
+  const { native, tools: toolsAllowlist } = claudeToolsAllowlist(input);
+  const allowed = new Set(native);
+  const disallowedTools = KNOWN_CLAUDE_NATIVE_TOOLS.filter(
+    (name) => !allowed.has(name),
+  );
   const cwd = isAbsolute(input.cwd) ? input.cwd : pathResolve(input.cwd);
   const env = withClaudeOutputBudgetEnvironment(input.env);
   if (input.compactionWindow !== undefined)
@@ -321,14 +394,8 @@ export function buildClaudeSdkQueryOptions(
     abortController: input.abortController,
     ...packagedClaudeSdkOptions(),
     env,
-    ...(input.outputPolicySessionId
-      ? {
-          hooks: claudeOutputPolicyHooks(
-            input.outputPolicySessionId,
-            input.lifecycleHooks,
-            (toolName) => planModeNativeRefusal(mode(), toolName),
-          ),
-        }
+    ...(input.sessionHooks
+      ? { hooks: claudeOutputPolicyHooks(input.sessionHooks) }
       : {}),
     includePartialMessages: true,
     strictMcpConfig: true,
@@ -378,10 +445,12 @@ export function buildClaudeSdkQueryOptions(
     // Deliberately omit the SDK `skills` filter: coding sessions retain the
     // CLI-default discovery of repository `.claude/skills` alongside the plugin.
     canUseTool: buildCanUseTool(
-      new Set(toolsAllowlist),
-      Boolean(input.mcpServer),
-      mode,
-      planRestrictedAppTools,
+      input.sessionHooks?.canUseTool ??
+        claudeToolPermission({
+          ...input,
+          allowPaMcp: Boolean(input.mcpServer),
+          mode: () => "build",
+        }),
     ),
     model: claudeQueryModel(input.modelId, input.agent),
     systemPrompt: claudeSdkSystemPrompt(

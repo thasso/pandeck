@@ -32,6 +32,10 @@ const { holdAutomaticTurns, resumeAutomaticTurns } =
   await import("../automaticTurnHold.ts");
 const { claudeBackgroundWorkBackend } =
   await import("./backgroundWorkBackend.ts");
+const { sessionHookCallsServedForTests } =
+  await import("../workers/sessionHookHost.ts");
+const { SESSION_HOOK_METHODS } =
+  await import("../workerProtocol/sessionHookMethods.ts");
 
 afterEach(() => {
   setHubForTests(undefined);
@@ -649,6 +653,7 @@ test("background admission lazily retains one query and binds after the level si
   assert.equal(JSON.stringify(completedItem).includes(taskOutputFile), false);
   const stopHook = query.params.options?.hooks?.Stop?.[0]?.hooks[0];
   assert.ok(stopHook);
+  const stopsServed = sessionHookCallsServedForTests(SESSION_HOOK_METHODS.stop);
   await stopHook(
     {
       hook_event_name: "Stop",
@@ -667,6 +672,11 @@ test("background admission lazily retains one query and binds after the level si
     },
     undefined,
     { signal: new AbortController().signal },
+  );
+  assert.equal(
+    sessionHookCallsServedForTests(SESSION_HOOK_METHODS.stop),
+    stopsServed + 1,
+    "the Stop reconciliation ran on the server",
   );
   assert.equal(
     backgroundWorkStore.listItems({ ownerSessionId: session.id }).length,
@@ -970,6 +980,32 @@ test("compact stays loudly refused while armed and guarded auto-compaction is re
   session.beginSyntheticTool("/compact", { command: "/compact", rawArgs: "" });
   const retry = session.compactContext();
   await until(() => query.inputs.length === 2);
+  // The retained query's own PostCompact hook reports the summary, through
+  // the session's Worker to the session's binding, in this query's epoch.
+  const compactsServed = sessionHookCallsServedForTests(
+    SESSION_HOOK_METHODS.postCompact,
+  );
+  const postCompact = query.params.options?.hooks?.PostCompact?.[0]?.hooks[0];
+  assert.ok(postCompact);
+  assert.deepEqual(
+    await postCompact(
+      {
+        hook_event_name: "PostCompact",
+        session_id: "provider-background",
+        transcript_path: "/tmp/transcript",
+        cwd: dataDir,
+        trigger: "manual",
+        compact_summary: "W8 retained summary",
+      },
+      undefined,
+      { signal: new AbortController().signal },
+    ),
+    { continue: true },
+  );
+  assert.equal(
+    sessionHookCallsServedForTests(SESSION_HOOK_METHODS.postCompact),
+    compactsServed + 1,
+  );
   query.output.emit({
     type: "system",
     subtype: "compact_boundary",
@@ -982,7 +1018,12 @@ test("compact stays loudly refused while armed and guarded auto-compaction is re
     session_id: "provider-background",
   } as unknown as ClaudeSdkMessage);
   query.output.emit(result("compact-reset-result"));
-  assert.equal((await retry).kind, "compacted");
+  const compacted = await retry;
+  assert.equal(compacted.kind, "compacted");
+  assert.equal(
+    compacted.kind === "compacted" && compacted.summary,
+    "W8 retained summary",
+  );
   session.discardSyntheticTool();
   session.dispose();
 });

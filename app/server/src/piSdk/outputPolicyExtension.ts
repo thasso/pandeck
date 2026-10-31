@@ -2,16 +2,28 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import {
   addArtifactNotice,
   boundNativeOutput,
-  persistOutputArtifact,
   prepareReadWindow,
   textFromUnknownToolOutput,
+  type OutputArtifact,
   type ReadWindowDecision,
 } from "../outputPolicy.ts";
 
 const POLICY_TOOLS = new Set(["read", "bash", "grep", "find"]);
 
-/** Inline pi extension that bounds native results before they enter history. */
-export function createPiOutputPolicyExtension(): ExtensionFactory {
+/**
+ * Inline pi extension that bounds native results before they enter history.
+ * The read window and bounding are the engine's own; an elided result's full
+ * output is persisted by the server through the session's Worker
+ * (`persistOutput`, `persistSessionOutput`).
+ */
+export function createPiOutputPolicyExtension(hooks: {
+  persistOutput(input: {
+    sessionId: string;
+    toolName: string;
+    raw: string;
+    sourcePath?: string;
+  }): Promise<OutputArtifact>;
+}): ExtensionFactory {
   return (pi) => {
     const reads = new Map<string, ReadWindowDecision>();
 
@@ -50,7 +62,7 @@ export function createPiOutputPolicyExtension(): ExtensionFactory {
       if (bounded.elided) {
         const details = event.details as
           { fullOutputPath?: unknown } | undefined;
-        const artifact = await persistOutputArtifact({
+        const artifact = await hooks.persistOutput({
           sessionId: ctx.sessionManager.getSessionId(),
           toolName: event.toolName,
           raw,

@@ -417,6 +417,18 @@ test("the Worker side reaches no server state", () => {
   }
 });
 
+test("the session-hook protocol runs no server module", () => {
+  // The Worker side imports it, and the direct rule above stops at
+  // `workerProtocol/`: a server module it ran would reach the Worker unseen.
+  const scan = scans.get("workerProtocol/sessionHookMethods.ts");
+  assert.ok(scan);
+  for (const target of scan.valueImports)
+    assert.ok(
+      target.startsWith("workerProtocol/"),
+      `workerProtocol/sessionHookMethods.ts runs ${target}`,
+    );
+});
+
 test("only the executor families and the Worker run git processes", () => {
   assert.deepEqual(
     importersOf((target) => target === "gitProcess.ts", "valueImports").filter(

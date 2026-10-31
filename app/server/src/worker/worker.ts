@@ -18,6 +18,7 @@ import { appToolCalls, type AppToolCaller } from "./appTools.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
 import { fileHandlers } from "./files.ts";
 import { lifecycleHandlers } from "./lifecycle.ts";
+import { sessionHookCalls, type SessionHookCalls } from "./sessionHooks.ts";
 import { watchHandlers, type WatchSnapshot } from "./watch.ts";
 
 export interface RunningWorker {
@@ -38,6 +39,8 @@ export interface RunningWorker {
   readonly watchesReleased: Promise<void>;
   /** Asks the server to run one of a session's app tools (`appTools.call`). */
   readonly callAppTool: AppToolCaller;
+  /** Asks the server for a session's hook decisions (`sessionHooks.*`). */
+  readonly sessionHooks: SessionHookCalls;
   /** Test seam: how many file handles the Worker holds. */
   fileHandles(): number;
   /** Test seam: the native watch subscriptions the Worker holds. */
@@ -73,6 +76,9 @@ export function startWorker(options: {
   const appTools = appToolCalls((method, payload, signal) =>
     connection.request(method, payload, signal),
   );
+  const sessionHooks = sessionHookCalls((method, payload, signal) =>
+    connection.request(method, payload, signal),
+  );
   const handlers = Object.fromEntries(
     Object.entries({
       ...checkoutGitHandlers(options.workerId),
@@ -104,6 +110,7 @@ export function startWorker(options: {
       .then(() => files.sweep()),
     watchesReleased: watches.released,
     callAppTool: appTools.call,
+    sessionHooks,
     fileHandles: () => files.size,
     watches: () => watches.snapshot(),
   };
