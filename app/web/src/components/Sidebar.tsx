@@ -932,14 +932,17 @@ function SidebarImpl({
           section === "sessions" || section === "settings"
             ? ""
             : section === "pull-requests" ||
+                section === "projects" ||
                 (section === "tasks" &&
                   (prefs.backlogView === "focus" ||
                     (prefs.backlogView === "backlog" &&
                       prefs.backlogViewMode === "project")))
               ? // Flush under its bar: a group band meets the bar's hairline
-                // the way a row meets the one above it.
+                // the way a row meets the one above it. A top padding would
+                // also hold a sticky band that far below the edge, leaving a
+                // strip for rows to scroll through above it.
                 ""
-              : section === "tasks" || section === "projects"
+              : section === "tasks"
                 ? "pt-1"
                 : "px-1 pt-2 sm:px-2"
         }`}

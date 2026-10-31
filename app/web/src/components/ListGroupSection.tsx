@@ -127,7 +127,10 @@ export function ListGroupSection({
           </span>
         ) : null}
       </h2>
-      <CollapsibleContent className="flex flex-col">
+      {/* `isolate` keeps the rows' own z-indices (a `Tree` row's `z-10`, an
+          unread dot's `z-20`) inside the content, so none paints over the
+          sticky band. */}
+      <CollapsibleContent className="isolate flex flex-col">
         {children}
       </CollapsibleContent>
     </Collapsible>
