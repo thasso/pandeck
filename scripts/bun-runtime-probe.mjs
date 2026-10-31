@@ -165,11 +165,14 @@ function assert(value, message) {
 const sleep = (ms) =>
   new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 
+/** Poll `predicate`; `what` names it, or, called at the timeout, describes what was last seen. */
 async function until(predicate, what, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (!(await predicate())) {
     if (Date.now() > deadline)
-      throw new Error(`Timed out waiting for ${what}.`);
+      throw new Error(
+        `Timed out waiting for ${typeof what === "function" ? what() : what}.`,
+      );
     await sleep(20);
   }
 }
@@ -358,6 +361,9 @@ async function fdReuseInBrokerShapedChild(dir, track) {
   return result;
 }
 
+/** Set once `checkManagedStdioFdReuse` passed; O5 needs it first (RD-1263-1). */
+let managedStdioChecked = false;
+
 /**
  * Every shape for this mode runs before any fails, so a broken runtime
  * reports all of them. A check without one reused number proves nothing.
@@ -401,6 +407,7 @@ async function checkManagedStdioFdReuse() {
       }
   }
   assert(failures.length === 0, failures.join("\n"));
+  managedStdioChecked = true;
 }
 
 /**
@@ -1434,10 +1441,16 @@ function commOf(pid) {
   }
 }
 
+/** `/proc` failures that mean the process is gone. */
+const VANISHED = new Set(["ENOENT", "ESRCH"]);
+const codeOf = (error) =>
+  typeof error?.code === "string" ? error.code : "UNCLASSIFIED";
+
 /**
  * What `ownedProcessTree` needs of the host, so a model can stand in for it.
  * `stat` takes state, parent, group, session and start time from a single
- * read of `/proc/<pid>/stat`, so they all describe one process.
+ * read of `/proc/<pid>/stat`, so they all describe one process: undefined
+ * once the process is gone, `{ error: code }` when it could not be read.
  */
 const liveProcessHost = {
   spawn,
@@ -1447,197 +1460,70 @@ const liveProcessHost = {
       .filter((name) => /^\d+$/.test(name))
       .map(Number),
   stat: (pid) => {
+    let stat;
     try {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      return {
-        state: fields[0],
-        parent: Number(fields[1]),
-        group: Number(fields[2]),
-        session: Number(fields[3]),
-        start: fields[19],
-      };
-    } catch {
-      return undefined;
+      stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    } catch (error) {
+      const code = codeOf(error);
+      return VANISHED.has(code) ? undefined : { error: code };
     }
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return {
+      state: fields[0],
+      parent: Number(fields[1]),
+      group: Number(fields[2]),
+      session: Number(fields[3]),
+      start: fields[19],
+    };
   },
-  // The witness's reads; each throws the failure with its code.
   readText: (path) => readFileSync(path, "utf8"),
-  list: (path) => readdirSync(path),
-  link: (path) => readlinkSync(path),
 };
 
-/** Per-process `/proc` failures that mean the process, task or descriptor is gone. */
-const VANISHED = new Set(["ENOENT", "ESRCH"]);
-/** Refused observations: never "empty", whoever the process belongs to. */
-const DENIED = new Set(["EACCES", "EPERM"]);
-const PF_KTHREAD = 0x00200000n;
-const codeOf = (error) =>
-  typeof error?.code === "string" ? error.code : "UNCLASSIFIED";
+/** A start time read from `/proc`: a decimal string or a safe integer, never undefined. */
+const validStart = (start) =>
+  (typeof start === "string" && /^\d+$/.test(start)) ||
+  (Number.isSafeInteger(start) && start >= 0);
 
-/** `/proc/<pid>/stat`'s state, flags, thread count and start, or undefined when it does not parse. */
-function parseStat(text) {
-  const fields = text
-    .slice(text.lastIndexOf(")") + 2)
-    .trim()
-    .split(" ");
-  const [state, flags, threads, start] = [0, 6, 17, 19].map((i) => fields[i]);
-  if (!/^[A-Za-z]$/.test(state ?? "")) return undefined;
-  if (![flags, threads, start].every((field) => /^\d+$/.test(field ?? "")))
-    return undefined;
-  return {
-    state,
-    flags: BigInt(flags),
-    threads: Number(threads),
-    start: BigInt(start),
-  };
+/**
+ * What one `host.stat` read says of the process that had `start`: `gone`
+ * when the pid is absent, a zombie (or dead) with that start, or names
+ * another start; `running` with that start otherwise; `unknown` when the
+ * read failed, does not parse, or there is no valid start to compare.
+ */
+function observation(stat, start) {
+  if (stat === undefined) return { seen: "gone", state: "absent" };
+  if (stat.error !== undefined) return { seen: "unknown", code: stat.error };
+  if (!validStart(start)) return { seen: "unknown", code: "NO_START" };
+  if (!/^[A-Za-z]$/.test(stat.state ?? "") || !validStart(stat.start))
+    return { seen: "unknown", code: "MALFORMED" };
+  if (String(stat.start) !== String(start))
+    return { seen: "gone", state: "reused" };
+  if (stat.state === "Z" || stat.state === "X")
+    return { seen: "gone", state: stat.state };
+  return { seen: "running", state: stat.state };
 }
 
 /**
- * One read-only scan for holders of the gate sockets `inodes`: "empty" only
- * when no process holds one, nothing observed is unknown, `/proc` is this
- * process's unhidden view at both ends, and no task was created meanwhile
- * (the global fork counter is unchanged), so every process alive at the end
- * was listed and read. A process can count as not holding only by being gone
- * (ENOENT/ESRCH), started before the tree's leader, a kernel thread, or read
- * without a gate socket; any other failure, a refused read included, is
- * unknown. Its pids are for diagnosis only: nothing is signalled or released
- * on them.
+ * Every signal the tree's stop and its cleanup send goes through here: to
+ * `pid` only when `retainedStart` is the valid start read when it was owned
+ * (claimed, or spawned) and a fresh read immediately before still shows it
+ * running with that start. Absent, unknown, malformed, zombie or another
+ * start sends nothing. Returns what it found, `sent` once `host.kill` was
+ * called, and that call's failure unless ESRCH (then `gone`).
  */
-function gateHolders(host, inodes, leaderStart) {
-  const want = new Set(inodes.map((inode) => `socket:[${inode}]`));
-  const scan = { kind: "unknown", holders: [], unknown: [], reason: undefined };
-  const fail = (reason) => Object.assign(scan, { kind: "unknown", reason });
-  /** The reason `/proc` is not this process's whole view, if it is not. */
-  const view = () => {
-    try {
-      if (host.link("/proc/self") !== String(process.pid))
-        return "/proc/self is not this process";
-      const mounts = host
-        .readText("/proc/self/mountinfo")
-        .split("\n")
-        .map((line) => line.split(" - "))
-        .filter(
-          ([mount, fs]) =>
-            mount?.split(" ")[4] === "/proc" && fs?.split(" ")[0] === "proc",
-        );
-      if (mounts.length === 0) return "no proc mount at /proc";
-      for (const [, fs] of mounts) {
-        const hidepid = /(?:^|,)hidepid=([^,\s]+)/.exec(fs.split(" ")[2])?.[1];
-        if (hidepid !== undefined && hidepid !== "0" && hidepid !== "off")
-          return `/proc is mounted with hidepid=${hidepid}`;
-      }
-      return undefined;
-    } catch (error) {
-      return `the /proc view could not be read (${codeOf(error)})`;
-    }
-  };
-  const forks = () => {
-    const count = /^processes (\d+)$/m.exec(host.readText("/proc/stat"))?.[1];
-    if (count === undefined)
-      throw Object.assign(new Error("unparsed"), { code: "UNPARSED" });
-    return count;
-  };
-  /** "held", "gone", "clear", "excluded", or the unknown observation. */
-  const classify = (pid) => {
-    const unknown = (path, code) => ({ pid, path, code });
-    let stat;
-    try {
-      stat = parseStat(host.readText(`/proc/${pid}/stat`));
-    } catch (error) {
-      const code = codeOf(error);
-      return VANISHED.has(code) ? "gone" : unknown(`${pid}/stat`, code);
-    }
-    if (!stat) return unknown(`${pid}/stat`, "UNPARSED");
-    if (stat.flags & PF_KTHREAD || stat.start < leaderStart) return "excluded";
-    // A task in state Z or X has dropped its descriptors; any other task's
-    // table is read, each task's own once the process has more than one.
-    let tables = [{ dir: `/proc/${pid}/fd`, state: stat.state }];
-    if (stat.threads > 1) {
-      let tids;
-      try {
-        tids = host.list(`/proc/${pid}/task`);
-      } catch (error) {
-        const code = codeOf(error);
-        return VANISHED.has(code) ? "gone" : unknown(`${pid}/task`, code);
-      }
-      tables = [];
-      for (const tid of tids) {
-        let task;
-        try {
-          task = parseStat(host.readText(`/proc/${pid}/task/${tid}/stat`));
-        } catch (error) {
-          const code = codeOf(error);
-          if (VANISHED.has(code)) continue;
-          return unknown(`${pid}/task/${tid}/stat`, code);
-        }
-        if (!task) return unknown(`${pid}/task/${tid}/stat`, "UNPARSED");
-        tables.push({ dir: `/proc/${pid}/task/${tid}/fd`, state: task.state });
-      }
-    }
-    let denied;
-    for (const { dir, state } of tables) {
-      if (state === "Z" || state === "X") continue;
-      let fds;
-      try {
-        fds = host.list(dir);
-      } catch (error) {
-        const code = codeOf(error);
-        if (VANISHED.has(code)) continue;
-        if (!DENIED.has(code)) return unknown(dir.slice(6), code);
-        denied ??= unknown(dir.slice(6), code);
-        continue;
-      }
-      for (const fd of fds) {
-        let target;
-        try {
-          target = host.link(`${dir}/${fd}`);
-        } catch (error) {
-          const code = codeOf(error);
-          if (VANISHED.has(code)) continue;
-          if (!DENIED.has(code)) return unknown(`${dir.slice(6)}/${fd}`, code);
-          denied ??= unknown(`${dir.slice(6)}/${fd}`, code);
-          continue;
-        }
-        if (want.has(target)) return "held";
-      }
-    }
-    return denied ?? "clear";
-  };
-
-  const before = view();
-  if (before) return fail(before);
-  let first, names;
+function signalIfSame(host, pid, retainedStart, signal) {
+  const { seen, state } = observation(host.stat(pid), retainedStart);
+  if (seen === "unknown") return { outcome: "unknown" };
+  if (seen === "gone")
+    return { outcome: state === "reused" ? "mismatch" : "gone" };
   try {
-    first = forks();
-    names = host.list("/proc");
+    host.kill(pid, signal);
+    return { outcome: "sent" };
   } catch (error) {
-    return fail(`/proc could not be listed (${codeOf(error)})`);
+    return error?.code === "ESRCH"
+      ? { outcome: "gone" }
+      : { outcome: "sent", error };
   }
-  if (!names.includes(String(process.pid)))
-    return fail("/proc does not list this process");
-  for (const name of names) {
-    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-    const found = classify(Number(name));
-    if (found === "held") scan.holders.push(Number(name));
-    else if (typeof found === "object") scan.unknown.push(found);
-  }
-  let last;
-  try {
-    last = forks();
-  } catch (error) {
-    return fail(`/proc/stat could not be read (${codeOf(error)})`);
-  }
-  const after = view();
-  if (after) return fail(after);
-  if (last !== first) return fail("tasks were created during the scan");
-  scan.kind =
-    scan.holders.length > 0
-      ? "held"
-      : scan.unknown.length > 0
-        ? "unknown"
-        : "empty";
-  return scan;
 }
 
 /** The running children of `parent`, by `/proc` ppid. */
@@ -1657,8 +1543,8 @@ function childrenOf(parent) {
  *
  * Nothing runs before it is owned. The direct child forks nothing until it
  * reads `start`, which is written only once it is proven to be the probe's
- * own child and the inodes of its gate sockets (fds 3 on, one per child) are
- * read. Child i gets gate i as its fd 3 and holds it, through `read go <&3 &&
+ * own child: it is seen with the start time read in the step that spawned
+ * it. Child i gets gate i as its fd 3 and holds it, through `read go <&3 &&
  * exec`, for as long as it runs; it starts its work only on `go`, which
  * `acquire` writes once child i's pid file names a member it has claimed.
  *
@@ -1670,10 +1556,19 @@ function childrenOf(parent) {
  * `stop` closes the gates, so ungated children end on EOF, and the direct
  * child's stdin, so that, if it still runs, it SIGKILLs its own group (`kill
  * 0`): no group number is ever signalled from here. The probe itself signals
- * only claimed members, by pid and start time, for when the direct child died
- * first. The tree has ended once `gateHolders` reads it empty and no claimed
- * member runs; that scan only observes. Every stdio stream must then have
- * closed, so its errors are in; any failure rejects the stop with all of them.
+ * only claimed members, each at most once, through `signalIfSame` with the
+ * start read when it was claimed, for when the direct child died first.
+ *
+ * The tree has ended once (a) its stdout, which every process of the tree
+ * inherits and holds until it exits, reads EOF, and (b) every claimed member
+ * is provably gone, observed afresh on each pass under one deadline. EOF
+ * proves the pipe released, not the process reaped, so claims are watched
+ * after it on a timer until gone. EOF sees only processes that hold the
+ * pipe: a member that closed or redirected its fd 1 ends it early while it
+ * may still run (no fixture does; a released one is claimed, so (b) still
+ * holds the stop). It is no general process-tree guarantee. Every child,
+ * with a pid or not, and every stdio stream must then have closed, so its
+ * errors are in; any failure rejects the stop with all of them.
  */
 function ownedProcessTree(
   cwd,
@@ -1682,6 +1577,10 @@ function ownedProcessTree(
   host = liveProcessHost,
   { completionMs = 5000 } = {},
 ) {
+  assert(
+    host.spawn !== liveProcessHost.spawn || managedStdioChecked,
+    "The managed-stdio fd-reuse check must pass before O5 (RD-1263-1).",
+  );
   const gates = children.map((_, i) => 3 + i);
   const direct = host.spawn(
     "sh",
@@ -1704,11 +1603,25 @@ function ownedProcessTree(
     ],
     {
       cwd,
-      stdio: ["pipe", "ignore", "ignore", ...gates.map(() => "pipe")],
+      stdio: ["pipe", "pipe", "ignore", ...gates.map(() => "pipe")],
       detached: true,
     },
   );
+  // The lifeline: only `end` is its EOF, never a `close` without one. It is
+  // read without a `data` listener, so nothing in it is kept.
+  const lifeline = { ended: false };
+  const endSeen = direct.stdout
+    ? new Promise((resolve) =>
+        direct.stdout.once("end", () => {
+          lifeline.ended = true;
+          resolve();
+        }),
+      )
+    : undefined;
+  direct.stdout?.resume();
   const errors = [];
+  direct.on("error", (error) => errors.push(error));
+  const childClosed = new Promise((resolve) => direct.once("close", resolve));
   const streams = [...(direct.stdio ?? [])].filter(Boolean);
   const unclosed = new Set(streams);
   const closed = streams.map(
@@ -1728,7 +1641,9 @@ function ownedProcessTree(
   /** The start time of `pid` while it runs. */
   const startOf = (pid) => {
     const stat = host.stat(pid);
-    return stat && stat.state !== "Z" ? stat.start : undefined;
+    return stat && stat.error === undefined && stat.state !== "Z"
+      ? stat.start
+      : undefined;
   };
   // Read in the step that spawned it, before it could have been reaped.
   const leaderStart =
@@ -1748,40 +1663,38 @@ function ownedProcessTree(
       stat.session === direct.pid
     );
   };
-  // Node and Bun make each "pipe" stdio a Unix socketpair, so the direct
-  // child's end reads as `socket:[inode]`; anything else leaves it unproven.
-  const inodes = gates.map((fd) => {
-    try {
-      return /^socket:\[(\d+)\]$/.exec(
-        host.link(`/proc/${direct.pid}/fd/${fd}`),
-      )?.[1];
-    } catch {
-      return undefined;
-    }
-  });
-  // Read after the inodes, so they are the direct child's.
   const proven =
-    leaderStart !== undefined &&
-    /^\d+$/.test(leaderStart) &&
-    inodes.every(Boolean) &&
-    leads();
+    leaderStart !== undefined && /^\d+$/.test(leaderStart) && leads();
   if (proven)
     try {
       direct.stdin.write("start\n");
     } catch (error) {
       errors.push(error);
     }
-  // Unproven, the direct child was never sent `start`, so it forked nothing
-  // and no process can hold a gate: there is no tree to scan for.
-  const witness = () =>
-    proven
-      ? gateHolders(host, inodes, BigInt(leaderStart))
-      : { kind: "empty", holders: [], unknown: [] };
   let phase = "running";
   /** Each member ever claimed, by pid: its start time. */
   const claimed = new Map();
   /** The children sent `go`. */
   const released = new Set();
+  /** Claims given their one signal attempt; never a completion state. */
+  const attempted = new Set();
+  let passes = 0;
+  /** Each claim observed afresh: the running and the unreadable, with their state or code. */
+  const observeClaims = () => {
+    const running = [];
+    const unknown = [];
+    for (const [pid, start] of claimed) {
+      const { seen, state, code } = observation(host.stat(pid), start);
+      if (seen === "running") running.push({ pid, state });
+      else if (seen === "unknown") unknown.push({ pid, code });
+    }
+    return { running, unknown };
+  };
+  /** Read-only, for tests: the lifeline and each claim's fresh observation. */
+  const witness = () => ({
+    lifeline: lifeline.ended ? "ended" : "held",
+    ...observeClaims(),
+  });
   /** Claim the group's running members and release the children they are; false, doing nothing, once its number may not be the tree's or the tree is stopping. */
   const acquire = ({ observe = () => true } = {}) => {
     if (phase !== "running" || !proven) return false;
@@ -1815,61 +1728,84 @@ function ownedProcessTree(
     return true;
   };
   const end = async () => {
+    // One deadline for every wait of the stop.
+    const deadline = globalThis.performance.now() + completionMs;
+    const left = () => Math.max(0, deadline - globalThis.performance.now());
+    /** Whether `promise` settles within `ms`, by default before the deadline. */
+    const settles = (promise, ms = left()) => {
+      let timer;
+      return Promise.race([
+        promise.then(() => true),
+        new Promise(
+          (resolve) => (timer = globalThis.setTimeout(resolve, ms, false)),
+        ),
+      ]).finally(() => globalThis.clearTimeout(timer));
+    };
     for (const stream of streams)
-      try {
-        stream.destroy();
-      } catch (error) {
-        errors.push(error);
-      }
+      if (stream !== direct.stdout)
+        try {
+          stream.destroy();
+        } catch (error) {
+          errors.push(error);
+        }
     if (direct.pid !== undefined) {
-      await exited;
-      for (const [pid, start] of claimed)
-        if (startOf(pid) === start)
-          try {
-            host.kill(pid, "SIGKILL");
-          } catch (error) {
-            if (error?.code !== "ESRCH") errors.push(error);
-          }
-      let last;
-      try {
-        await until(
-          () => {
-            last = witness();
-            return (
-              last.kind === "empty" &&
-              [...claimed].every(([pid, start]) => startOf(pid) !== start)
-            );
-          },
-          "the probe's process tree to end",
-          completionMs,
-        );
-      } catch {
+      const hasExited = await settles(exited);
+      let last = { running: [], unknown: [] };
+      let ended = false;
+      while (hasExited) {
+        passes++;
+        last = observeClaims();
+        if (
+          lifeline.ended &&
+          last.running.length === 0 &&
+          last.unknown.length === 0
+        ) {
+          ended = true;
+          break;
+        }
+        for (const { pid } of last.running) {
+          if (attempted.has(pid)) continue;
+          attempted.add(pid);
+          const { error } = signalIfSame(
+            host,
+            pid,
+            claimed.get(pid),
+            "SIGKILL",
+          );
+          if (error) errors.push(error);
+        }
+        const wait = Math.min(50, left());
+        if (wait <= 0) break;
+        // Once EOF has come, a timer alone: its settled promise must not spin.
+        if (lifeline.ended || endSeen === undefined) await sleep(wait);
+        else await settles(endSeen, wait);
+      }
+      if (!ended) {
+        const cause = {
+          lifeline: lifeline.ended ? "ended" : "held",
+          exited: hasExited,
+          running: last.running,
+          unknown: last.unknown,
+          attempted: [...attempted],
+        };
         errors.push(
           new Error(
-            `The process tree's end could not be observed: ${JSON.stringify({
-              kind: last?.kind,
-              reason: last?.reason,
-              holders: last?.holders,
-              unknown: last?.unknown,
-              claimed: [...claimed]
-                .filter(([pid, start]) => startOf(pid) === start)
-                .map(([pid]) => pid),
-            })}.`,
-            { cause: last },
+            `The process tree's end could not be observed: ${JSON.stringify(cause)}.`,
+            { cause },
           ),
         );
       }
     }
+    try {
+      direct.stdout?.destroy();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (!(await settles(childClosed)))
+      errors.push(new Error("The process tree's direct child did not close."));
     // A stream's errors all come before its `close`; `closed` flags do not
     // wait for them.
-    let timer;
-    await Promise.race([
-      Promise.all(closed),
-      new Promise(
-        (resolve) => (timer = globalThis.setTimeout(resolve, completionMs)),
-      ),
-    ]);
-    globalThis.clearTimeout(timer);
+    await settles(Promise.all(closed));
     if (unclosed.size > 0)
       errors.push(
         new Error(
@@ -1886,10 +1822,12 @@ function ownedProcessTree(
     direct,
     acquire,
     leads,
-    /** The tree's scan, read-only, for tests. */
     witness,
     /** A copy of the claimed members, for tests. */
     claimed: () => new Map(claimed),
+    /** The stop's passes so far and the claims attempted, for tests. */
+    passes: () => passes,
+    attempted: () => new Set(attempted),
     /**
      * End the tree as above; the first call stops acquiring and releasing,
      * and every call shares the one run.
@@ -1945,6 +1883,112 @@ const o5Children = (tree, outside) => [
 ];
 
 /**
+ * SIGKILL the tree's direct child, only while `leads()` sees it with the
+ * start, parent and session read when it was spawned, and wait for its exit.
+ * Between that read and the signal lies the declared check-to-kill race.
+ */
+async function loseLeader(owned, host) {
+  const gone = new Promise((resolve) => owned.direct.once("exit", resolve));
+  assert(owned.leads(), "The direct child no longer leads its group.");
+  host.kill(owned.direct.pid, "SIGKILL");
+  await gone;
+}
+
+/**
+ * The cleanup's safety net, which observes and never owns. `observe` notes a
+ * pid's start for diagnosis; `hold` queues a signal the tree sent and
+ * `deliver` sends it only through `signalIfSame` with the start the tree
+ * claimed, noting each one dropped. `settle` delivers what is held, and
+ * whatever is held from then on, awaits the tree's stop, then
+ * reads each observed process every 10 ms, up to `exitGraceMs`, until it is
+ * gone, and returns those still running (`OBSERVED_LEFT`) or unreadable
+ * (`OBSERVED_UNKNOWN`) at the bound with the stop's failure: it signals
+ * nothing.
+ */
+function cleanupNet(owned, host, { exitGraceMs = 2000 } = {}) {
+  const observed = new Map();
+  const queued = [];
+  const dropped = [];
+  let settling = false;
+  const deliver = () => {
+    for (const [pid, signal] of queued.splice(0)) {
+      const { outcome, error } = signalIfSame(
+        host,
+        pid,
+        owned.claimed().get(pid),
+        signal,
+      );
+      if (outcome !== "sent" || error)
+        dropped.push({ pid, signal, outcome, code: error?.code });
+    }
+  };
+  return {
+    observed,
+    dropped,
+    observe: (pid) => {
+      if (pid === undefined || observed.has(pid)) return;
+      const stat = host.stat(pid);
+      if (stat && stat.error === undefined && validStart(stat.start))
+        observed.set(pid, stat.start);
+    },
+    hold: (pid, signal) => {
+      queued.push([pid, signal]);
+      if (settling) deliver();
+    },
+    deliver,
+    settle: async () => {
+      // From here on, a signal held for a claim is delivered at once.
+      settling = true;
+      deliver();
+      let stopError;
+      try {
+        await owned.stop();
+      } catch (error) {
+        stopError = error;
+      }
+      const deadline = globalThis.performance.now() + exitGraceMs;
+      let left;
+      for (;;) {
+        left = [];
+        for (const [pid, start] of observed) {
+          const { seen, state, code } = observation(host.stat(pid), start);
+          if (seen === "running")
+            left.push({ kind: "OBSERVED_LEFT", pid, start, state });
+          else if (seen === "unknown")
+            left.push({ kind: "OBSERVED_UNKNOWN", pid, start, code });
+        }
+        if (left.length === 0 || globalThis.performance.now() >= deadline)
+          break;
+        await sleep(Math.min(10, deadline - globalThis.performance.now()));
+      }
+      return { left, stopError };
+    },
+  };
+}
+
+/**
+ * `body` under `net`: whatever it does, the tree's stop and the net's
+ * settle run once after it. Its own failure propagates; otherwise a failed
+ * stop or a process left running or unreadable fails it.
+ */
+async function underCleanupNet(net, what, body) {
+  let failure;
+  try {
+    await body();
+  } catch (error) {
+    failure = { error };
+  }
+  const { left, stopError } = await net.settle();
+  if (failure) {
+    if (left.length > 0)
+      console.error(`${what} also left ${JSON.stringify(left)}.`);
+    throw failure.error;
+  }
+  if (stopError) throw stopError;
+  assert(left.length === 0, `Stopping ${what} left ${JSON.stringify(left)}.`);
+}
+
+/**
  * O5's cleanup when the tree never becomes ready, or loses its direct child.
  * The first child's exec fails after `go`, it exits before writing a pid file,
  * or it never writes one and stays gated, while its later siblings run, so the
@@ -1952,10 +1996,11 @@ const o5Children = (tree, outside) => [
  * direct child is SIGKILLed once all three run and are claimed, before any
  * was claimed, or once only the first was (the others unobserved), and the
  * stop must still end its children while signalling only claimed ones. One
- * child runs an execute-only copy of `sleep`, so its descriptors cannot be
- * read: its stop must not end until it does. The probe watches every process
- * of the tree itself and, should the stop leak one, SIGKILLs it by pid and
- * start time before failing.
+ * child runs an execute-only copy of `sleep`, whose descriptors cannot be
+ * read: its stop must not end until it does. An unrelated execute-only
+ * process outside the tree neither holds nor delays a stop, and is never
+ * signalled. The probe observes every process of the tree itself and fails
+ * on one a stop left running; it signals none of them.
  */
 async function checkProcessTreeCleanup(base) {
   const firsts = {
@@ -1973,6 +2018,14 @@ async function checkProcessTreeCleanup(base) {
       pidFile: join(tree, "sleeper.pid"),
     }),
   };
+  /** An execute-only copy of `sleep` at `path`. */
+  const executeOnlySleep = (path) => {
+    const binary = process.env.PATH.split(":")
+      .map((dir) => join(dir, "sleep"))
+      .find((candidate) => existsSync(candidate));
+    copyFileSync(realpathSync(binary), path);
+    chmodSync(path, 0o111);
+  };
   for (const variant of [
     "exec failed",
     "no pid file",
@@ -1981,43 +2034,31 @@ async function checkProcessTreeCleanup(base) {
     "leader gone unclaimed",
     "leader gone partly claimed",
     "unreadable",
+    "unrelated unreadable",
   ]) {
     const fixture = join(base, `O5-cleanup-${variant.replaceAll(" ", "-")}`);
     const tree = lifecycleFixture(fixture, "plain");
     const outside = join(fixture, "outside");
     const children = o5Children(tree, outside);
     if (firsts[variant]) children[0] = firsts[variant](tree);
-    if (variant === "unreadable") {
-      const sleep = process.env.PATH.split(":")
-        .map((dir) => join(dir, "sleep"))
-        .find((path) => existsSync(path));
-      copyFileSync(realpathSync(sleep), join(tree, "sleep"));
-      chmodSync(join(tree, "sleep"), 0o111);
-    }
+    if (variant === "unreadable") executeOnlySleep(join(tree, "sleep"));
     // Records every signal the tree sends; one to a held pid waits until
-    // the test delivers it, to the same pid and start time.
+    // the test delivers it, to the claimed pid and start time.
     const sent = [];
     const held = new Set();
-    const queued = [];
+    let net;
     const host = {
       ...liveProcessHost,
       kill: (pid, signal) => {
         sent.push(pid);
-        if (held.has(pid)) queued.push([pid, signal]);
+        if (held.has(pid)) net.hold(pid, signal);
         else liveProcessHost.kill(pid, signal);
       },
     };
-    const owned = ownedProcessTree(tree, children, [outside], host);
-    const watched = new Map();
-    const watch = (pid) => {
-      const start = startTime(pid);
-      if (start !== undefined && !watched.has(pid)) watched.set(pid, start);
-    };
-    const deliver = () => {
-      for (const [pid, signal] of queued.splice(0))
-        if (running(pid) && startTime(pid) === watched.get(pid))
-          process.kill(pid, signal);
-    };
+    const owned = ownedProcessTree(tree, children, [outside], host, {
+      completionMs: variant === "unreadable" ? 20000 : 5000,
+    });
+    net = cleanupNet(owned, liveProcessHost);
     const pidOf = (i) => {
       try {
         return Number(readFileSync(children[i].pidFile, "utf8")) || undefined;
@@ -2034,27 +2075,26 @@ async function checkProcessTreeCleanup(base) {
       }
     };
     const sorted = (pids) => [...pids].sort((x, y) => x - y).join();
-    try {
-      watch(owned.direct.pid);
-      const loseLeader = async () => {
-        const gone = new Promise((resolve) =>
-          owned.direct.once("exit", resolve),
-        );
-        assert(owned.leads(), "The direct child no longer leads its group.");
-        process.kill(owned.direct.pid, "SIGKILL");
-        await gone;
-      };
+    const passesAfter = async (count, what) => {
+      const from = owned.passes();
+      await until(() => owned.passes() >= from + count, what);
+    };
+    await underCleanupNet(net, `the ${variant} tree`, async () => {
+      net.observe(owned.direct.pid);
       if (
         variant === "leader gone unclaimed" ||
         variant === "leader gone partly claimed"
       ) {
         // All three wait at their gates, none claimed or released.
-        await until(() => {
-          const scan = owned.witness();
-          scan.holders.forEach(watch);
-          return [0, 1, 2].every(pidOf) && scan.holders.length === 4;
-        }, `the ${variant} tree's gated children`);
+        await until(
+          () =>
+            [0, 1, 2].every(
+              (i) => pidOf(i) && parentPid(pidOf(i)) === owned.direct.pid,
+            ),
+          `the ${variant} tree's gated children`,
+        );
         const [first, second, third] = [0, 1, 2].map(pidOf);
+        [first, second, third].forEach(net.observe);
         if (variant === "leader gone partly claimed") {
           assert(
             owned.acquire({
@@ -2072,12 +2112,16 @@ async function checkProcessTreeCleanup(base) {
             `The unobserved children were claimed: ${[...claimed.keys()]}.`,
           );
         }
-        await loseLeader();
+        await loseLeader(owned, liveProcessHost);
         assert(
           !owned.acquire() &&
             [first, second, third].every(running) &&
             [second, third].every((pid) => commOf(pid) === "sh\n"),
           "The direct child's end took its children, released one, or left its group claimable.",
+        );
+        assert(
+          owned.witness().lifeline === "held",
+          "The tree's stdout ended while its children ran.",
         );
         await owned.stop();
         assert(
@@ -2094,77 +2138,106 @@ async function checkProcessTreeCleanup(base) {
           );
         }, "the tree's unreadable sleeper");
         const pids = [0, 1, 2].map(pidOf);
-        pids.forEach(watch);
-        // One the host's other forks do not overlap.
-        let scan;
-        await until(
-          () => (scan = owned.witness()).reason === undefined,
-          "a scan of the unreadable tree",
-        );
-        assert(
-          scan.kind !== "empty" &&
-            !scan.holders.includes(pids[0]) &&
-            scan.unknown.some(
-              ({ pid, code }) => pid === pids[0] && code === "EACCES",
-            ) &&
-            sorted(scan.holders) ===
-              sorted([owned.direct.pid, ...pids.slice(1)]),
-          `The unreadable sleeper was read as ${JSON.stringify(scan)}.`,
-        );
-        await loseLeader();
+        pids.forEach(net.observe);
+        await loseLeader(owned, liveProcessHost);
         held.add(pids[0]);
         let settled = false;
         const stop = owned.stop().finally(() => (settled = true));
-        await until(() => {
-          const left = owned.witness();
-          return (
+        await until(
+          () =>
             sorted(sent) === sorted(pids) &&
-            left.holders.length === 0 &&
-            left.unknown.map(({ pid }) => pid).join() === String(pids[0])
-          );
-        }, "the unreadable sleeper to be all that is left");
+            !pids.slice(1).some(running) &&
+            running(pids[0]),
+          "the unreadable sleeper to be all that is left",
+        );
+        await passesAfter(3, "the unreadable tree's passes");
         assert(!settled, "The stop ended while an unreadable sleeper ran.");
-        deliver();
+        net.deliver();
         await stop;
         assert(
-          sorted(sent) === sorted(pids),
-          `The unreadable tree's stop signalled ${sent}.`,
+          sorted(sent) === sorted(pids) && net.dropped.length === 0,
+          `The unreadable tree's stop signalled ${sent}, dropping ${JSON.stringify(net.dropped)}.`,
         );
       } else {
         // Settled: exactly the expected sleepers run as the direct child's
         // children, each exec'd into `sleep`, and are claimed; a gated child
         // that never wrote a pid file holds its gate.
-        const sleepers = variant === "leader gone" ? [0, 1, 2] : [1, 2];
+        const sleepers = ["leader gone", "unrelated unreadable"].includes(
+          variant,
+        )
+          ? [0, 1, 2]
+          : [1, 2];
         const gated = variant === "never ready" ? 1 : 0;
         let settled;
         await until(() => {
           const acquired = owned.acquire();
-          const scan = owned.witness();
-          scan.holders.forEach(watch);
           const live = childrenOf(owned.direct.pid);
-          settled = scan.holders;
+          live.forEach(net.observe);
+          settled = [owned.direct.pid, ...live];
           return (
             acquired &&
             live.length === sleepers.length + gated &&
             sleepers.every((i) => live.includes(pidOf(i))) &&
-            sleepers.every((i) => commOf(pidOf(i)) === "sleep\n") &&
-            scan.holders.length === 1 + sleepers.length + gated
+            sleepers.every((i) => commOf(pidOf(i)) === "sleep\n")
           );
         }, `the ${variant} tree's sleepers`);
-        sleepers.forEach((i) => watch(pidOf(i)));
+        sleepers.forEach((i) => net.observe(pidOf(i)));
         // The settled tree's: a failed exec's child may have exited since.
         assert(
           settled.every((pid) => processGroup(pid) === owned.direct.pid),
           `The ${variant} tree does not run in its direct child's own group.`,
         );
         if (variant === "leader gone") {
-          await loseLeader();
+          await loseLeader(owned, liveProcessHost);
           assert(
             sleepers.every((i) => running(pidOf(i))) && !owned.acquire(),
             "The direct child's end took its children, or left its group claimable.",
           );
+          assert(
+            owned.witness().lifeline === "held",
+            "The tree's stdout ended while its children ran.",
+          );
         }
-        await owned.stop();
+        if (variant === "unrelated unreadable") {
+          // Outside the tree and its stdout; its pid and start are for
+          // diagnosis only, and its exit is awaited from the step that
+          // spawned it.
+          const path = join(fixture, "unrelated-sleep");
+          executeOnlySleep(path);
+          const unrelated = spawn(path, ["5"], { stdio: "ignore" });
+          const exited = new Promise((resolve) => {
+            unrelated.once("exit", () => resolve(true));
+            unrelated.once("error", () => resolve(true));
+          });
+          const start = startTime(unrelated.pid);
+          try {
+            await owned.stop();
+            const stat = liveProcessHost.stat(unrelated.pid);
+            assert(
+              start !== undefined &&
+                stat?.start === start &&
+                !["Z", "X"].includes(stat.state),
+              `The unrelated process ${unrelated.pid} (start ${start}) did not outlast the tree's stop: ${JSON.stringify(stat)}.`,
+            );
+          } finally {
+            let timer;
+            const ended = await Promise.race([
+              exited,
+              new Promise(
+                (resolve) =>
+                  (timer = globalThis.setTimeout(resolve, 10000, false)),
+              ),
+            ]).finally(() => globalThis.clearTimeout(timer));
+            assert(
+              ended,
+              `The unrelated process ${unrelated.pid} (start ${start}) did not end by itself.`,
+            );
+          }
+          assert(
+            !sent.includes(unrelated.pid),
+            `The tree's stop signalled the unrelated process ${unrelated.pid}.`,
+          );
+        } else await owned.stop();
         // Without the direct child's own `kill 0`, exactly its sleepers;
         // after it, at most a claimed member that has not yet died of it.
         const claimed = owned.claimed();
@@ -2175,89 +2248,105 @@ async function checkProcessTreeCleanup(base) {
           `The ${variant} tree's stop signalled ${sent}.`,
         );
       }
-      const leaked = [...watched.keys()].filter(running);
+      const left = owned.witness();
       assert(
-        leaked.length === 0,
-        `Stopping the ${variant} tree left ${leaked} running.`,
+        left.lifeline === "ended" &&
+          left.running.length === 0 &&
+          left.unknown.length === 0,
+        `Stopping the ${variant} tree left ${JSON.stringify(left)}.`,
       );
-      // A scan the host's other forks overlap is unknown, not a holder.
-      await until(() => {
-        const left = owned.witness();
-        assert(
-          left.kind !== "held",
-          `Stopping the ${variant} tree left gate holders: ${JSON.stringify(left)}.`,
-        );
-        return left.kind === "empty";
-      }, `the ${variant} tree's gates to be unheld`);
-    } finally {
-      deliver();
-      for (const [pid, start] of watched)
-        if (running(pid) && startTime(pid) === start)
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {
-            // Gone since.
-          }
-      await owned.stop();
-    }
+    });
   }
 }
 
 /**
- * A model of what `ownedProcessTree` needs of the host: a process table with
- * each process's descriptors, the `/proc` reads its scan makes, the signals
- * the probe sends, and a direct child (pid 100, leading group and session
- * 100, start 10) whose reaping the caller drives. Its stdin and gates are
- * fake streams: `start` forks one child per gate (pids 101 on, starts 11 on),
- * each holding its gate's socket (inodes 9001 on); `go` releases a child;
- * closing its gate ends a child not released (on `eof()` when `deferEof`);
- * closing the stdin ends the group, as `kill 0` would, while the direct child
- * still runs. A signal to a `held` pid is recorded and not delivered. No real
- * process is started or signalled.
+ * A model of what `ownedProcessTree` needs of the host: a process table, the
+ * reads the tree makes, the signals the probe sends, and a direct child (pid
+ * 100 when `options` has a `pid`, leading group and session 100, start 10)
+ * whose reaping the caller drives. Its stdin and gates are fake streams:
+ * `start` forks one child per gate (pids 101 on, starts 11 on); `go`
+ * releases a child; closing its gate ends a child not released (on `eof()`
+ * when `deferEof`); closing the stdin ends the group, as `kill 0` would,
+ * while the direct child still runs. The tree's processes hold its stdout,
+ * which emits `end` and then `close` once none holds it: one created with
+ * `holdsLifeline: false` does not, a zombie holds while one of its `tasks`
+ * runs. A signal to a `held` pid is recorded and not delivered. `reuse`
+ * gives a pid to another process, before `notifyExit` reports the direct
+ * child's end, as a waiter thread that reaped first would. Without a pid,
+ * the caller emits the child's errors and its close. No real process is
+ * started or signalled.
  */
-function modelProcessHost({
-  gates = 2,
-  leaderKills = true,
-  refused = [],
-  held = [],
-  deferEof = false,
-} = {}) {
+function modelProcessHost(options = {}) {
+  const {
+    gates = 2,
+    leaderKills = true,
+    refused = [],
+    held = [],
+    deferEof = false,
+    nullGates = false,
+  } = options;
   const failure = (code) => Object.assign(new Error(code), { code });
-  const member = (start, { parent = 100, group = 100, fds = [] } = {}) => ({
+  const member = (
+    start,
+    { parent = 100, group = 100, holdsLifeline = false } = {},
+  ) => ({
     state: "S",
     parent,
     group,
     session: group,
     start,
-    flags: 0,
-    fds,
-    deny: {},
+    holdsLifeline,
   });
-  const inodes = Array.from({ length: gates }, (_, i) => 9001 + i);
-  const table = new Map([
-    [100, member("10", { parent: process.pid, fds: inodes })],
-  ]);
+  const holds = (entry) =>
+    entry.holdsLifeline &&
+    (entry.tasks ?? [entry]).some(({ state }) => !["Z", "X"].includes(state));
   const model = {
-    table,
     member,
-    inodes,
     signals: [],
     groupKills: [],
     files: new Map(),
     reads: [],
     released: new Set(),
     pendingEof: [],
-    forks: 0,
-    scans: 0,
-    self: String(process.pid),
-    listSelf: true,
-    mountinfo: "22 1 0:5 / /proc rw,nosuid - proc proc rw\n",
-    onRead: undefined,
+    statError: {},
+    onStat: undefined,
     spawnFailure: undefined,
     /** Apply the gate closes held by `deferEof`. */
     eof: () => model.pendingEof.splice(0).forEach((pid) => table.delete(pid)),
+    /** End the stdout once nothing holds it; call after changing an entry in place. */
+    check: () => {
+      if (stdout.ended || [...table.values()].some(holds)) return;
+      stdout.ended = true;
+      globalThis.queueMicrotask(() => {
+        if (stdout.destroyed) return;
+        stdout.emit("end");
+        closeStream(stdout);
+      });
+    },
   };
+  const table = new (class extends Map {
+    set(key, value) {
+      super.set(key, value);
+      model.check();
+      return this;
+    }
+    delete(key) {
+      const deleted = super.delete(key);
+      model.check();
+      return deleted;
+    }
+  })();
+  model.table = table;
   let started = false;
+  let exitEmitted = false;
+  let closeEmitted = false;
+  const closeStream = (fake) => {
+    if (fake.closed) return;
+    fake.closed = true;
+    if (fake.error) fake.emit("error", fake.error);
+    fake.emit("close");
+    maybeClose();
+  };
   const stream = (effects) => {
     const fake = Object.assign(new EventEmitter(), {
       closes: 0,
@@ -2268,87 +2357,115 @@ function modelProcessHost({
         if (fake.throwOnDestroy) throw fake.throwOnDestroy;
         if (fake.closes > 1) return;
         effects.close?.();
-        const emit = () => {
-          if (fake.error) fake.emit("error", fake.error);
-          fake.emit("close");
-        };
+        const emit = () => closeStream(fake);
         if (fake.holdClose) fake.release = emit;
+        else if (options.streamCloseDelay !== undefined)
+          globalThis.setTimeout(emit, options.streamCloseDelay);
         else globalThis.queueMicrotask(emit);
       },
     });
     return fake;
   };
+  const stdout = Object.assign(new EventEmitter(), {
+    closes: 0,
+    resumed: false,
+    ended: false,
+    destroyed: false,
+    resume: () => {
+      stdout.resumed = true;
+      return stdout;
+    },
+    destroy: () => {
+      stdout.closes++;
+      if (stdout.destroyed) return;
+      stdout.destroyed = true;
+      const emit = () => closeStream(stdout);
+      if (options.streamCloseDelay !== undefined)
+        globalThis.setTimeout(emit, options.streamCloseDelay);
+      else globalThis.queueMicrotask(emit);
+    },
+  });
   const stdin = stream({
     write: (text) => {
       if (text !== "start\n" || started || table.get(100)?.state !== "S")
         return;
       started = true;
-      inodes.forEach((inode, i) => {
-        model.forks++;
-        table.set(101 + i, member(String(11 + i), { fds: [inode] }));
-      });
+      for (let i = 0; i < gates; i++)
+        table.set(101 + i, member(String(11 + i), { holdsLifeline: true }));
     },
     close: () => {
-      if (direct.signalCode !== null || table.get(100)?.state !== "S") return;
+      const leader = table.get(100);
+      if (
+        direct.signalCode !== null ||
+        leader?.state !== "S" ||
+        leader.start !== "10"
+      )
+        return;
       if (leaderKills && started) {
         model.groupKills.push(100);
         for (const [pid, stat] of table)
           if (stat.group === 100 && pid !== 100) table.delete(pid);
       }
-      table.get(100).state = "Z";
+      leader.state = "Z";
+      model.check();
     },
   });
-  const gateStreams = inodes.map((_, i) =>
-    stream({
-      write: (text) => text === "go\n" && model.released.add(i),
-      close: () => {
-        const child = table.get(101 + i);
-        if (model.released.has(i) || child?.start !== String(11 + i)) return;
-        if (deferEof) model.pendingEof.push(101 + i);
-        else table.delete(101 + i);
-      },
-    }),
+  const gateStreams = Array.from({ length: gates }, (_, i) =>
+    nullGates
+      ? null
+      : stream({
+          write: (text) => text === "go\n" && model.released.add(i),
+          close: () => {
+            const child = table.get(101 + i);
+            if (model.released.has(i) || child?.start !== String(11 + i))
+              return;
+            if (deferEof) model.pendingEof.push(101 + i);
+            else table.delete(101 + i);
+          },
+        }),
   );
-  const direct = Object.assign(new EventEmitter(), {
-    pid: 100,
-    exitCode: null,
-    signalCode: null,
-    stdin,
-    stdio: [stdin, null, null, ...gateStreams],
-  });
-  const entry = (pid, tid) => {
-    const entryOf = table.get(Number(pid));
-    if (!entryOf) throw failure("ENOENT");
-    if (tid === undefined) return entryOf;
-    const task = (entryOf.tasks ?? [{ tid: Number(pid), ...entryOf }]).find(
-      (task) => task.tid === Number(tid),
-    );
-    if (!task) throw failure("ENOENT");
-    return { ...entryOf, tasks: undefined, ...task };
+  const direct = Object.assign(
+    new EventEmitter(),
+    "pid" in options ? { pid: options.pid } : {},
+    {
+      exitCode: null,
+      signalCode: null,
+      stdin,
+      stdout,
+      stdio: [stdin, stdout, null, ...gateStreams],
+      // A handle's signal: recorded, never authority.
+      kill: (signal) => model.signals.push(["handle", signal]),
+    },
+  );
+  const streams = () => direct.stdio.filter(Boolean);
+  /** The child's `close`, once it exited and every stream closed. */
+  function maybeClose() {
+    if (closeEmitted || !exitEmitted || !streams().every((s) => s.closed))
+      return;
+    closeEmitted = true;
+    direct.emit("close", direct.exitCode, direct.signalCode);
+  }
+  const notifyExit = (signalCode = "SIGKILL") => {
+    direct.signalCode = signalCode;
+    exitEmitted = true;
+    direct.emit("exit", null, signalCode);
+    maybeClose();
   };
-  const denied = (entryOf, read) => {
-    if (entryOf.deny[read]) throw failure(entryOf.deny[read]);
-  };
-  const fdList = (task) => {
-    if (task.state === "Z") throw failure("EACCES");
-    return task.fds.map((_, n) => String(3 + n));
-  };
-  const statText = (pid, task) =>
-    task.raw ??
-    `${pid} (m) ${task.state} ${task.parent} ${task.group} ${task.session} 0 -1 ${task.flags} 0 0 0 0 0 0 0 0 20 0 ${task.tasks?.length ?? 1} 0 ${task.start} 0`;
-  const read = (path) => {
-    model.reads.push(path);
-    model.onRead?.(path);
-  };
+  if ("pid" in options)
+    table.set(100, member("10", { parent: process.pid, holdsLifeline: true }));
   return Object.assign(model, {
     direct,
     gates: gateStreams,
     /** Reap the direct child, as Node would once it ended. */
     reap(signalCode = "SIGKILL") {
       table.delete(100);
-      direct.signalCode = signalCode;
-      direct.emit("exit", null, signalCode);
+      notifyExit(signalCode);
     },
+    /** Report the direct child's end, with no change to the table. */
+    notifyExit,
+    /** Give `pid` to another running process, outside the tree. */
+    reuse: (pid, { start }) =>
+      table.set(pid, member(String(start), { parent: 1, group: pid })),
     host: {
       spawn: () => {
         if (model.spawnFailure) throw model.spawnFailure;
@@ -2357,55 +2474,28 @@ function modelProcessHost({
       kill: (pid, signal) => {
         model.signals.push([pid, signal]);
         if (refused.includes(pid)) throw failure("EPERM");
-        if (table.get(pid)?.state !== "S") throw failure("ESRCH");
+        const entry = table.get(pid);
+        if (!entry || ["Z", "X"].includes(entry.state)) throw failure("ESRCH");
         if (!held.includes(pid)) table.delete(pid);
       },
-      pids: () => [...table.keys()],
-      stat: (pid) => table.get(pid),
+      pids: () => {
+        model.reads.push("/proc");
+        return [...table.keys()];
+      },
+      stat: (pid) => {
+        model.reads.push(`/proc/${pid}/stat`);
+        const result = model.statError[pid]
+          ? { error: model.statError[pid] }
+          : table.has(pid)
+            ? { ...table.get(pid) }
+            : undefined;
+        model.onStat?.(pid);
+        return result;
+      },
       readText: (path) => {
-        read(path);
-        if (path === "/proc/stat") return `cpu 0\nprocesses ${model.forks}\n`;
-        if (path === "/proc/self/mountinfo") return model.mountinfo;
+        model.reads.push(path);
         if (model.files.has(path)) return model.files.get(path);
-        const [, pid, tid] =
-          /^\/proc\/(\d+)(?:\/task\/(\d+))?\/stat$/.exec(path) ?? [];
-        if (!pid) throw failure("ENOENT");
-        const task = entry(pid, tid);
-        denied(table.get(Number(pid)), "stat");
-        return statText(pid, task);
-      },
-      list: (path) => {
-        read(path);
-        if (path === "/proc") {
-          model.scans++;
-          return [...table.keys(), ...(model.listSelf ? [process.pid] : [])]
-            .map(String)
-            .concat("self", "stat");
-        }
-        const [, pid, tasks, tid] =
-          /^\/proc\/(\d+)(\/task)?(?:\/(\d+))?(?:\/fd)?$/.exec(path) ?? [];
-        if (!pid) throw failure("ENOENT");
-        const entryOf = entry(pid);
-        if (tasks && tid === undefined) {
-          denied(entryOf, "task");
-          return (entryOf.tasks ?? [{ tid: Number(pid) }]).map(({ tid }) =>
-            String(tid),
-          );
-        }
-        denied(entryOf, "fd");
-        return fdList(entry(pid, tid ?? pid));
-      },
-      link: (path) => {
-        read(path);
-        if (path === "/proc/self") return model.self;
-        const [, pid, tid, fd] =
-          /^\/proc\/(\d+)(?:\/task\/(\d+))?\/fd\/(\d+)$/.exec(path) ?? [];
-        if (!pid) throw failure("ENOENT");
-        const entryOf = entry(pid);
-        denied(entryOf, "link");
-        const inode = entry(pid, tid ?? pid).fds[Number(fd) - 3];
-        if (inode === undefined) throw failure("ENOENT");
-        return `socket:[${inode}]`;
+        throw failure("ENOENT");
       },
     },
   });
@@ -2413,8 +2503,8 @@ function modelProcessHost({
 
 /** A model tree whose start was written, its children's pid files listed under /model. */
 function modelTree(options = {}, completionMs = 300) {
-  const model = modelProcessHost(options);
-  const children = model.inodes.map((_, i) => ({
+  const model = modelProcessHost({ pid: 100, ...options });
+  const children = Array.from({ length: options.gates ?? 2 }, (_, i) => ({
     script: `child ${i}`,
     pidFile: `/model/${i}.pid`,
   }));
@@ -2423,7 +2513,7 @@ function modelTree(options = {}, completionMs = 300) {
   });
   /** Write every child's pid file. */
   const ready = () =>
-    model.inodes.forEach((_, i) =>
+    children.forEach((_, i) =>
       model.files.set(`/model/${i}.pid`, String(101 + i)),
     );
   return { model, owned, ready };
@@ -2434,15 +2524,38 @@ function modelTree(options = {}, completionMs = 300) {
  * or process that took over a number of the tree's once the direct child was
  * reaped, whether the stop repeats one that ended the tree or comes first
  * after the direct child died; never a child it did not claim, or one whose
- * pid changed hands; concurrent stops share one run that acquires and
- * releases nothing more; and a failure anywhere fails the stop, after every
- * other step ran, with all errors, the same for a repeat.
+ * pid changed hands, nor one it could not read; each claim at most once;
+ * concurrent stops share one run that acquires and releases nothing more; it
+ * ends only on its stdout's EOF with every claim gone, observed afresh on a
+ * timer; and a failure anywhere, a child without a pid included, fails the
+ * stop by its deadline, after every other step ran, with all errors, the
+ * same for a repeat.
  */
 async function checkProcessTreeOwnership() {
   const sorted = (signals) => JSON.stringify([...signals].sort());
-  const scansAfter = async (model, count, what) => {
-    const from = model.scans;
-    await until(() => model.scans >= from + count, what);
+  const sentTo = (model, pid) =>
+    model.signals.filter(([target]) => target === pid).length;
+  const passesAfter = async (owned, count, what) => {
+    const from = owned.passes();
+    await until(() => owned.passes() >= from + count, what);
+  };
+  /** `promise`, or a failure once `ms` passed. */
+  const within = async (promise, ms, what) => {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise(
+          (_, reject) =>
+            (timer = globalThis.setTimeout(
+              () => reject(new Error(`Timed out waiting for ${what}.`)),
+              ms,
+            )),
+        ),
+      ]);
+    } finally {
+      globalThis.clearTimeout(timer);
+    }
   };
   const pending = (promise) => {
     const state = { settled: false };
@@ -2452,6 +2565,10 @@ async function checkProcessTreeOwnership() {
     );
     return state;
   };
+  const endOf = (failed) =>
+    failed?.errors?.find((error) =>
+      error.message?.startsWith("The process tree's end"),
+    )?.cause;
 
   // Recycled after the first cleanup.
   {
@@ -2472,6 +2589,7 @@ async function checkProcessTreeOwnership() {
     await owned.stop();
     assert(
       !owned.acquire() &&
+        model.direct.stdout.resumed &&
         model.signals.length === 0 &&
         model.groupKills.length === 1 &&
         [100, 102, 103].every((pid) => model.table.has(pid)),
@@ -2527,14 +2645,20 @@ async function checkProcessTreeOwnership() {
   }
 
   // The direct child's own group kill failed: the claimed children still
-  // running are signalled by pid and start time.
+  // running are signalled by pid and start time. The stop reads nothing but
+  // its claims' stats.
   {
     const { model, owned, ready } = modelTree({ leaderKills: false });
     ready();
     assert(owned.acquire(), "A model tree could not be acquired.");
+    const from = model.reads.length;
     const stop = owned.stop();
     model.reap("SIGKILL");
     await stop;
+    const claims = new Set(
+      [...owned.claimed().keys()].map((pid) => `/proc/${pid}/stat`),
+    );
+    const reads = model.reads.slice(from);
     assert(
       sorted(model.signals) ===
         sorted([
@@ -2543,22 +2667,45 @@ async function checkProcessTreeOwnership() {
         ]),
       `A stop whose group kill failed signalled ${sorted(model.signals)}.`,
     );
+    assert(
+      reads.length > 0 && reads.every((path) => claims.has(path)),
+      `A stop read more than its claims: ${[...new Set(reads)]}.`,
+    );
   }
 
   // A refused signal: the other claimed child is still signalled, the stop
-  // waits for the refused one in vain and fails, and a repeat fails the same
-  // way with no further signal.
+  // keeps observing the refused one, never signalling it again, and fails
+  // by its deadline; a repeat fails the same way with no further signal.
   {
-    const { model, owned, ready } = modelTree({ refused: [101] });
+    const { model, owned, ready } = modelTree({ refused: [101] }, 1000);
     ready();
     assert(owned.acquire(), "A model tree could not be acquired.");
     model.reap("SIGTERM");
-    const failed = await rejection(owned.stop());
+    const stop = owned.stop();
+    const state = pending(stop);
+    await passesAfter(owned, 1, "the refused tree's first pass");
+    const [passes, reads] = [
+      owned.passes(),
+      model.reads.filter((path) => path === "/proc/101/stat").length,
+    ];
+    await passesAfter(owned, 3, "the refused tree's passes");
+    assert(
+      !state.settled &&
+        owned.attempted().has(101) &&
+        model.reads.filter((path) => path === "/proc/101/stat").length -
+          reads >=
+          owned.passes() - passes &&
+        sentTo(model, 101) === 1,
+      "A refused claim was not observed on each pass, or signalled again.",
+    );
+    const failed = await rejection(stop);
     const repeated = await rejection(owned.stop());
+    const cause = endOf(failed);
     assert(
       failed instanceof AggregateError &&
         failed.errors[0]?.code === "EPERM" &&
-        failed.errors[1]?.cause?.holders.join() === "101" &&
+        cause?.running.map(({ pid }) => pid).join() === "101" &&
+        cause.attempted.includes(101) &&
         failed.errors.length === 2 &&
         repeated === failed &&
         sorted(model.signals) ===
@@ -2570,24 +2717,38 @@ async function checkProcessTreeOwnership() {
     );
   }
 
-  // A direct child that never spawned: its stdio is still closed, and
-  // nothing is claimed or signalled. One that failed to spawn at all throws.
+  // A direct child that never spawned, in Bun's shape: no pid, no stdout
+  // `end`, null extra stdio, `error` then `close`, its streams closing
+  // later. Its stop rejects with that error, signals nothing, and closes its
+  // stdio once. One that failed to spawn at all throws.
   {
-    const model = modelProcessHost();
-    model.direct.pid = undefined;
+    const model = modelProcessHost({ nullGates: true, streamCloseDelay: 5 });
     const owned = ownedProcessTree("/", [{}, {}], [], model.host);
-    await owned.stop();
+    const spawnError = Object.assign(new Error("spawn sh ENOENT"), {
+      code: "ENOENT",
+    });
+    globalThis.setTimeout(() => {
+      model.direct.emit("error", spawnError);
+      model.direct.emit("close", -2, null);
+    });
+    const failed = await rejection(owned.stop());
     assert(
-      !owned.acquire() &&
+      !("pid" in model.direct) &&
+        failed instanceof AggregateError &&
+        failed.errors.length === 1 &&
+        failed.errors[0] === spawnError &&
+        !owned.acquire() &&
         model.signals.length === 0 &&
         model.groupKills.length === 0 &&
         model.direct.stdio
           .filter(Boolean)
           .every(
             (stream) =>
-              stream.closes === 1 && stream.listenerCount("error") === 1,
+              stream.closes === 1 &&
+              stream.closed &&
+              stream.listenerCount("error") === 1,
           ),
-      "A tree that never spawned signalled something or kept its stdio.",
+      `A tree that never spawned stopped as ${failed?.errors?.map(String)}, signalled something or kept its stdio.`,
     );
     model.spawnFailure = Object.assign(new Error("EAGAIN"), { code: "EAGAIN" });
     let thrown;
@@ -2599,10 +2760,79 @@ async function checkProcessTreeOwnership() {
     assert(thrown === model.spawnFailure, "A failed spawn did not throw.");
   }
 
+  // D3: a child without a pid reports two errors before its held close:
+  // the stop waits for the close and rejects with both, as does a repeat.
+  {
+    const model = modelProcessHost({ nullGates: true });
+    const owned = ownedProcessTree("/", [{}], [], model.host);
+    const errors = ["ENOENT", "EBADF"].map((code) =>
+      Object.assign(new Error(code), { code }),
+    );
+    globalThis.setTimeout(() => {
+      errors.forEach((error) => model.direct.emit("error", error));
+      globalThis.setTimeout(() => model.direct.emit("close", -2, null), 20);
+    });
+    const failed = await within(
+      rejection(owned.stop()),
+      900,
+      "a pid-less stop",
+    );
+    const repeated = await rejection(owned.stop());
+    assert(
+      failed instanceof AggregateError &&
+        errors.every((error) => failed.errors.includes(error)) &&
+        failed.errors.length === 2 &&
+        repeated === failed &&
+        model.signals.length === 0,
+      `A pid-less child's stop rejected with ${failed?.errors?.map(String)}.`,
+    );
+  }
+
+  // D4: a child without a pid that never closes: the stop rejects by its
+  // deadline with the spawn error and the missing close.
+  {
+    const model = modelProcessHost({ nullGates: true });
+    const owned = ownedProcessTree("/", [{}], [], model.host, {
+      completionMs: 300,
+    });
+    const spawnError = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    globalThis.setTimeout(() => model.direct.emit("error", spawnError));
+    const failed = await within(
+      rejection(owned.stop()),
+      900,
+      "a never-closing stop",
+    );
+    assert(
+      failed instanceof AggregateError &&
+        failed.errors.includes(spawnError) &&
+        failed.errors.some((error) => /did not close/.test(error.message)),
+      `A never-closing child's stop rejected with ${failed?.errors?.map(String)}.`,
+    );
+  }
+
+  // D2: a direct child that never reports its exit: the stop rejects by its
+  // deadline, having signalled nothing.
+  {
+    const { model, owned, ready } = modelTree({}, 300);
+    ready();
+    assert(owned.acquire(), "A model tree could not be acquired.");
+    const failed = await within(
+      rejection(owned.stop()),
+      900,
+      "a stop whose child never exits",
+    );
+    assert(
+      failed instanceof AggregateError &&
+        endOf(failed)?.exited === false &&
+        model.signals.length === 0,
+      `A stop whose child never exits rejected with ${failed?.errors?.map(String)}.`,
+    );
+  }
+
   // The direct child dies before any child is claimed: nothing is released
   // or signalled, and the stop waits for the gated children's EOF.
   {
-    const { model, owned } = modelTree({ deferEof: true });
+    const { model, owned } = modelTree({ deferEof: true }, 1000);
     model.reap();
     assert(
       !owned.acquire() && model.table.has(101) && model.table.has(102),
@@ -2610,7 +2840,7 @@ async function checkProcessTreeOwnership() {
     );
     const stop = owned.stop();
     const state = pending(stop);
-    await scansAfter(model, 3, "the unclaimed tree's scans");
+    await passesAfter(owned, 3, "the unclaimed tree's passes");
     assert(
       !state.settled && model.signals.length === 0,
       "An unclaimed tree's stop ended before its gated children.",
@@ -2623,7 +2853,10 @@ async function checkProcessTreeOwnership() {
   // The direct child dies while only the first child was observed: only it
   // is claimed and signalled, and the stop waits for the others' EOF.
   {
-    const { model, owned, ready } = modelTree({ gates: 3, deferEof: true });
+    const { model, owned, ready } = modelTree(
+      { gates: 3, deferEof: true },
+      1000,
+    );
     ready();
     assert(
       owned.acquire({ observe: (pid) => pid === 101 }),
@@ -2638,7 +2871,7 @@ async function checkProcessTreeOwnership() {
     model.reap();
     const stop = owned.stop();
     const state = pending(stop);
-    await scansAfter(model, 3, "the partly claimed tree's scans");
+    await passesAfter(owned, 3, "the partly claimed tree's passes");
     assert(
       !state.settled && sorted(model.signals) === sorted([[101, "SIGKILL"]]),
       `A partly claimed tree's stop signalled ${sorted(model.signals)}.`,
@@ -2689,12 +2922,14 @@ async function checkProcessTreeOwnership() {
 
   // Stopping fails, after every step ran, when a gate's close throws, a
   // gate reports an error, or one's error comes only with its late close;
-  // the stop waits for that close, and a repeat fails the same way.
+  // the stop keeps observing while a held child runs, ends its passes soon
+  // after the child does, waits for that close, and a repeat fails the same
+  // way.
   {
-    const { model, owned, ready } = modelTree({
-      leaderKills: false,
-      held: [101],
-    });
+    const { model, owned, ready } = modelTree(
+      { leaderKills: false, held: [101] },
+      1500,
+    );
     ready();
     assert(owned.acquire(), "A model tree could not be acquired.");
     const thrown = new Error("destroy");
@@ -2707,20 +2942,21 @@ async function checkProcessTreeOwnership() {
     const stop = owned.stop();
     const state = pending(stop);
     model.reap();
-    // The stop scans while the held child runs; the first scan after it is
-    // gone reads empty, and the stop goes on to wait for the late close.
-    await scansAfter(model, 1, "the failing tree's scans");
+    await passesAfter(owned, 3, "the failing tree's passes");
+    assert(!state.settled, "A stop ended while a held child ran.");
+    const passes = owned.passes();
     model.table.delete(101);
-    await scansAfter(model, 1, "the failing tree's last scan");
+    await sleep(250);
     assert(
       !state.settled &&
+        owned.passes() <= passes + 2 &&
         model.direct.stdin.release !== undefined &&
         sorted(model.signals) ===
           sorted([
             [101, "SIGKILL"],
             [102, "SIGKILL"],
           ]),
-      "A stop ended before a late close, or skipped a signal.",
+      "A stop ended before a late close, kept passing, or skipped a signal.",
     );
     model.direct.stdin.release();
     const failed = await rejection(stop);
@@ -2731,274 +2967,347 @@ async function checkProcessTreeOwnership() {
         failed.errors.includes(thrown) &&
         codes.includes("EPIPE") &&
         codes.includes("ELATE") &&
+        endOf(failed) === undefined &&
         repeated === failed &&
         model.signals.length === 2,
       `A failing stop rejected with ${codes}.`,
     );
   }
 
-  await checkGateHolders();
-}
-
-/**
- * The tree's scan counts a process as not holding a gate only when it is
- * gone, older than the tree, a kernel thread, or read without one. A refused
- * or failed read, a changed or hidden `/proc`, or a task created meanwhile
- * keeps it from reading empty; a zombie's tasks hold nothing, and a living
- * task of one is read. Nothing it reports is signalled.
- */
-async function checkGateHolders() {
-  const scanOf = (setup) => {
-    const { model, owned } = modelTree();
-    for (const pid of [100, 101, 102]) model.table.delete(pid);
-    setup(model);
-    return owned.witness();
-  };
-  const subject = (model, change = {}) => {
-    const entryOf = Object.assign(
-      model.member("20", { group: 200, fds: [9001] }),
-      change,
+  // D1: every claimed stat fails EMFILE while a claimed child lives: it is
+  // never signalled, and the stop rejects by its deadline naming it. Once
+  // the stat recovers, it is signalled once and the stop ends.
+  for (const recovers of [false, true]) {
+    const { model, owned, ready } = modelTree(
+      { gates: 1, leaderKills: false },
+      recovers ? 2000 : 400,
     );
-    model.table.set(200, entryOf);
-    return entryOf;
-  };
-  const expect = (what, scan, kind, extra = () => true) =>
-    assert(
-      scan.kind === kind && extra(scan),
-      `${what} scanned as ${JSON.stringify(scan)}.`,
-    );
-  const unknownCode = (code) => (scan) =>
-    scan.unknown.length === 1 && scan.unknown[0].code === code;
-
-  expect(
-    "A readable holder",
-    scanOf((m) => subject(m)),
-    "held",
-  );
-  expect(
-    "No holder",
-    scanOf(() => {}),
-    "empty",
-  );
-  for (const [read, code] of [
-    ["fd", "EACCES"],
-    ["fd", "EPERM"],
-    ["link", "EACCES"],
-    ["stat", "EIO"],
-    ["fd", "EMFILE"],
-    ["task", "EIO"],
-  ])
-    expect(
-      `A holder whose ${read} read failed with ${code}`,
-      scanOf((m) => {
-        const entryOf = subject(m, { deny: { [read]: code } });
-        if (read === "task")
-          entryOf.tasks = [
-            { tid: 200, ...entryOf },
-            { tid: 201, ...entryOf },
-          ];
-      }),
-      "unknown",
-      unknownCode(code),
-    );
-  expect(
-    "An unparsed stat",
-    scanOf((m) => subject(m, { raw: "200 (m) S" })),
-    "unknown",
-    unknownCode("UNPARSED"),
-  );
-  for (const [read, code] of [
-    ["stat", "ENOENT"],
-    ["fd", "ESRCH"],
-    ["link", "ENOENT"],
-  ])
-    expect(
-      `A holder gone at its ${read} read (${code})`,
-      scanOf((m) => subject(m, { deny: { [read]: code } })),
-      "empty",
-    );
-  // Refused reads are unknown whoever the process is; only age and kernel
-  // threads exclude one, and nothing reads a process's credentials.
-  {
-    let reads;
-    expect(
-      "An unrelated unreadable process",
-      scanOf((m) => {
-        subject(m, { group: 0, session: 0, fds: [], deny: { fd: "EACCES" } });
-        reads = m.reads;
-      }),
-      "unknown",
-      unknownCode("EACCES"),
-    );
-    assert(
-      !reads.some((path) => path.endsWith("/status")),
-      "The scan read a process's credentials.",
-    );
-  }
-  expect(
-    "An unreadable process older than the tree",
-    scanOf((m) => subject(m, { start: "9", deny: { fd: "EACCES" } })),
-    "empty",
-  );
-  expect(
-    "An unreadable process as old as the tree",
-    scanOf((m) => subject(m, { start: "10", deny: { fd: "EACCES" } })),
-    "unknown",
-  );
-  expect(
-    "An unreadable kernel thread",
-    scanOf((m) => subject(m, { flags: 0x00200000, deny: { fd: "EACCES" } })),
-    "empty",
-  );
-  expect(
-    "A zombie",
-    scanOf((m) => subject(m, { state: "Z", fds: [] })),
-    "empty",
-  );
-  expect(
-    "A zombie leader with a living task holding a gate",
-    scanOf((m) => {
-      const entryOf = subject(m, { state: "Z", fds: [] });
-      entryOf.tasks = [
-        { tid: 200, state: "Z", fds: [] },
-        { tid: 201, state: "S", fds: [9001] },
-      ];
-    }),
-    "held",
-    (scan) => scan.holders.join() === "200",
-  );
-  // A task created during the scan, or a pid replaced meanwhile.
-  {
-    const { model, owned } = modelTree();
-    for (const pid of [100, 101, 102]) model.table.delete(pid);
-    subject(model, { fds: [] });
-    let churn = true;
-    model.onRead = (path) => {
-      if (churn && path === "/proc/200/stat") {
-        model.forks++;
-        churn = false;
-      }
-    };
-    expect("A scan during a fork", owned.witness(), "unknown");
-    expect("The scan after it", owned.witness(), "empty");
-    let replaced = true;
-    model.onRead = (path) => {
-      if (replaced && path === "/proc/200/stat") {
-        model.forks++;
-        model.table.set(200, model.member("30", { group: 200 }));
-        replaced = false;
-      }
-    };
-    expect("A scan whose pid was replaced", owned.witness(), "unknown");
-  }
-  // `/proc` that is not this process's whole view, at either end.
-  for (const [what, change] of [
-    ["a foreign /proc/self", (m) => (m.self = "1")],
-    ["no proc mount", (m) => (m.mountinfo = "")],
-    ...["1", "2", "4", "noaccess", "invisible", "ptraceable"].map((value) => [
-      `hidepid=${value}`,
-      (m) =>
-        (m.mountinfo = `22 1 0:5 / /proc rw - proc proc rw,hidepid=${value}\n`),
-    ]),
-    ["a listing without this process", (m) => (m.listSelf = false)],
-    [
-      "an unreadable /proc/stat",
-      (m) =>
-        (m.onRead = (path) => {
-          if (path === "/proc/stat")
-            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
-        }),
-    ],
-    [
-      "a remount during the scan",
-      (m) =>
-        (m.onRead = (path) => {
-          if (path === "/proc/200/stat")
-            m.mountinfo = "22 1 0:5 / /proc rw - proc proc rw,hidepid=2\n";
-        }),
-    ],
-  ])
-    expect(
-      `A scan with ${what}`,
-      scanOf((m) => {
-        subject(m, { fds: [] });
-        change(m);
-      }),
-      "unknown",
-    );
-
-  // An unreadable claimed child: the stop waits, signalling nothing more,
-  // until it is gone; while it stays, the stop fails naming it.
-  for (const leaves of [true, false]) {
-    const { model, owned, ready } = modelTree({
-      leaderKills: false,
-      held: [101],
-    });
     ready();
     assert(owned.acquire(), "A model tree could not be acquired.");
-    model.table.get(101).deny.fd = "EACCES";
+    for (const pid of owned.claimed().keys()) model.statError[pid] = "EMFILE";
     const stop = owned.stop();
-    const state = { settled: false };
-    stop.then(
-      () => (state.settled = true),
-      () => (state.settled = true),
-    );
+    const state = pending(stop);
     model.reap();
-    if (leaves) {
-      const from = model.scans;
-      await until(
-        () => model.scans >= from + 3,
-        "the unreadable child's scans",
-      );
+    if (recovers) {
+      await passesAfter(owned, 3, "the unreadable tree's passes");
       assert(
-        !state.settled &&
-          JSON.stringify(model.signals) ===
-            JSON.stringify([
-              [101, "SIGKILL"],
-              [102, "SIGKILL"],
-            ]),
-        "A stop ended while an unreadable child ran.",
+        !state.settled && model.signals.length === 0,
+        "An unreadable claim ended the stop or was signalled.",
       );
-      model.table.delete(101);
+      model.statError = {};
       await stop;
+      assert(
+        sorted(model.signals) === sorted([[101, "SIGKILL"]]),
+        `A recovered claim was signalled ${sorted(model.signals)}.`,
+      );
     } else {
       const failed = await rejection(stop);
-      const witness = failed?.errors?.at(-1)?.cause;
+      const unknown = endOf(failed)?.unknown ?? [];
       assert(
-        failed instanceof AggregateError &&
-          failed.errors.length === 1 &&
-          witness?.kind === "unknown" &&
-          witness.unknown[0]?.pid === 101 &&
-          witness.unknown[0]?.code === "EACCES" &&
-          model.signals.length === 2,
-        `An unreadable child's stop ended as ${failed}.`,
+        model.signals.length === 0 &&
+          unknown.some(({ pid, code }) => pid === 101 && code === "EMFILE"),
+        `An unreadable claim stopped as ${failed?.errors?.map(String)} after ${sorted(model.signals)}.`,
       );
     }
   }
 
-  // Holders and unknown processes the scan reports are never signalled:
-  // only the claimed child is.
+  // D6: the stdout ends while a claimed child still runs, as one that closed
+  // its fd 1 would. The stop goes on, on a timer, signals it once, and ends
+  // soon after it is gone; refused, it fails naming it.
+  for (const refuses of [false, true]) {
+    const { model, owned, ready } = modelTree(
+      { leaderKills: false, held: [102], refused: refuses ? [102] : [] },
+      refuses ? 600 : 3000,
+    );
+    ready();
+    assert(owned.acquire(), "A model tree could not be acquired.");
+    model.table.get(102).holdsLifeline = false;
+    model.check();
+    const from = globalThis.performance.now();
+    const stop = owned.stop();
+    const state = pending(stop);
+    model.reap();
+    await until(() => owned.witness().lifeline === "ended", "the stdout's EOF");
+    await passesAfter(owned, 3, "the passes after EOF");
+    assert(
+      !state.settled &&
+        sentTo(model, 102) === 1 &&
+        owned.passes() <= (globalThis.performance.now() - from) / 50 + 2,
+      `A stop after EOF ended, signalled again or spun: ${owned.passes()} passes.`,
+    );
+    if (refuses) {
+      const failed = await rejection(stop);
+      const cause = endOf(failed);
+      assert(
+        cause?.running.map(({ pid }) => pid).join() === "102" &&
+          cause.attempted.includes(102) &&
+          sentTo(model, 102) === 1,
+        `A refused claim after EOF stopped as ${failed?.errors?.map(String)}.`,
+      );
+    } else {
+      const passes = owned.passes();
+      model.table.delete(102);
+      await stop;
+      assert(
+        owned.passes() <= passes + 2 && sentTo(model, 102) === 1,
+        `A stop ended ${owned.passes() - passes} passes after its last claim.`,
+      );
+    }
+  }
+
+  // D7 (a): `loseLeader` signals the direct child by pid, never through its
+  // handle, while it leads; once it was reaped and its pid reused before its
+  // exit is reported, it is not signalled, by `loseLeader` or the stop, and
+  // its claim counts as gone.
+  {
+    const { model, owned } = modelTree({ gates: 0 });
+    const lost = loseLeader(owned, model.host);
+    model.notifyExit();
+    await lost;
+    await owned.stop();
+    assert(
+      sorted(model.signals) === sorted([[100, "SIGKILL"]]),
+      `\`loseLeader\` signalled ${sorted(model.signals)}.`,
+    );
+  }
+  {
+    const { model, owned } = modelTree({ gates: 0 });
+    assert(owned.acquire(), "A model tree could not be acquired.");
+    model.reuse(100, { start: 999 });
+    const lost = await rejection(loseLeader(owned, model.host));
+    const stop = owned.stop();
+    globalThis.setTimeout(() => model.notifyExit());
+    await stop;
+    assert(
+      lost !== undefined && model.signals.length === 0,
+      `A reused direct child was signalled: ${sorted(model.signals)}.`,
+    );
+  }
+
+  // D7 (b): a claim's pid is reused between its observation and the
+  // signal's own read: nothing is sent to it, and it counts as gone.
   {
     const { model, owned, ready } = modelTree({ leaderKills: false });
     ready();
+    assert(owned.acquire(), "A model tree could not be acquired.");
+    let armed = false;
+    model.onStat = (pid) => {
+      if (armed && pid === 102) {
+        armed = false;
+        model.reuse(102, { start: 999 });
+      }
+    };
+    const stop = owned.stop();
+    model.reap();
+    armed = true;
+    await stop;
     assert(
-      owned.acquire({ observe: (pid) => pid !== 102 }),
-      "A model tree could not be acquired.",
+      sentTo(model, 102) === 0 && sentTo(model, 101) === 1,
+      `A pid reused before its signal was signalled: ${sorted(model.signals)}.`,
     );
-    model.table.set(300, model.member("30", { group: 300, fds: [9002] }));
-    model.table.set(
-      301,
-      Object.assign(model.member("31", { group: 301 }), {
-        deny: { fd: "EACCES" },
-      }),
-    );
+  }
+
+  // D7 (c): a claim without a valid start is never signalled, and the stop
+  // fails naming it.
+  {
+    const { model, owned, ready } = modelTree({ leaderKills: false });
+    model.table.get(101).start = "?";
+    ready();
+    assert(owned.acquire(), "A model tree could not be acquired.");
     const stop = owned.stop();
     model.reap();
     const failed = await rejection(stop);
     assert(
-      failed instanceof AggregateError &&
-        JSON.stringify(model.signals) === JSON.stringify([[101, "SIGKILL"]]),
-      `A stop signalled what its scan reported: ${JSON.stringify(model.signals)}.`,
+      sentTo(model, 101) === 0 &&
+        endOf(failed)?.unknown.some(({ pid }) => pid === 101),
+      `A claim without a start stopped as ${failed?.errors?.map(String)} after ${sorted(model.signals)}.`,
+    );
+  }
+
+  // R9: a zombie child without a running task does not hold the stdout.
+  {
+    const { model, owned, ready } = modelTree({ gates: 1, leaderKills: false });
+    ready();
+    assert(owned.acquire(), "A model tree could not be acquired.");
+    model.table.get(101).state = "Z";
+    model.check();
+    const stop = owned.stop();
+    model.reap();
+    await stop;
+    assert(model.signals.length === 0, "A zombie child was signalled.");
+  }
+
+  // R10: a zombie whose other task still runs holds it until that task ends.
+  {
+    const { model, owned, ready } = modelTree(
+      { gates: 1, leaderKills: false },
+      2000,
+    );
+    ready();
+    assert(owned.acquire(), "A model tree could not be acquired.");
+    const child = model.table.get(101);
+    child.state = "Z";
+    child.tasks = [
+      { tid: 101, state: "Z" },
+      { tid: 105, state: "S" },
+    ];
+    model.check();
+    const stop = owned.stop();
+    const state = pending(stop);
+    model.reap();
+    await passesAfter(owned, 3, "the zombie's passes");
+    assert(
+      !state.settled && model.signals.length === 0,
+      "A zombie with a running task did not hold the stop, or was signalled.",
+    );
+    child.tasks[1].state = "Z";
+    model.check();
+    await stop;
+  }
+
+  // R11: the stdout ends while an attempted claim still reads R: the stop
+  // waits for it on its timer, with no second signal, and ends once it is
+  // gone.
+  {
+    const { model, owned, ready } = modelTree(
+      { leaderKills: false, held: [102] },
+      3000,
+    );
+    ready();
+    assert(owned.acquire(), "A model tree could not be acquired.");
+    const stop = owned.stop();
+    const state = pending(stop);
+    model.reap();
+    await until(() => owned.attempted().has(102), "the first attempt");
+    const child = model.table.get(102);
+    child.state = "R";
+    child.holdsLifeline = false;
+    model.check();
+    await until(() => owned.witness().lifeline === "ended", "the stdout's EOF");
+    await passesAfter(owned, 2, "the passes after EOF");
+    assert(
+      !state.settled && sentTo(model, 102) === 1,
+      "A stop ended while its claim ran, or signalled it again.",
+    );
+    model.table.delete(102);
+    await stop;
+    assert(sentTo(model, 102) === 1, "An attempted claim was signalled again.");
+  }
+}
+
+/**
+ * The cleanup's net owns nothing, on a fake tree and host: what it observed
+ * is never signalled, a held signal reaches only a claim whose start still
+ * matches, and its settle runs once, after any failure, read-only, waiting
+ * a bounded grace for each observed process to be gone.
+ */
+async function checkCleanupAuthority() {
+  const fake = (claims, stats) => {
+    const host = {
+      sent: [],
+      stat: (pid) => {
+        const stat = stats.get(pid);
+        return typeof stat === "function" ? stat() : stat;
+      },
+      kill: (pid, signal) => host.sent.push([pid, signal]),
+    };
+    const owned = {
+      stops: 0,
+      claimed: () => new Map(claims),
+      stop: async () => {
+        owned.stops++;
+      },
+    };
+    return { host, owned };
+  };
+  const running = (start) => ({ state: "S", start });
+
+  // A1: an observed-only process exits and its pid is reused.
+  {
+    const stats = new Map([[200, running("10")]]);
+    const { host, owned } = fake([], stats);
+    const net = cleanupNet(owned, host);
+    net.observe(200);
+    stats.set(200, running("99"));
+    const { left } = await net.settle();
+    assert(
+      left.length === 0 && host.sent.length === 0,
+      `A reused observed pid was reported or signalled: ${JSON.stringify({ left, sent: host.sent })}.`,
+    );
+  }
+
+  // A2: an outer failure still settles once, signals nothing, and propagates.
+  {
+    const { host, owned } = fake([], new Map([[200, running("10")]]));
+    const net = cleanupNet(owned, host, { exitGraceMs: 50 });
+    const outer = new Error("outer");
+    const failed = await rejection(
+      underCleanupNet(net, "a failing variant", async () => {
+        net.observe(200);
+        throw outer;
+      }),
+    );
+    assert(
+      failed === outer && owned.stops === 1 && host.sent.length === 0,
+      `An outer failure became ${failed}, after ${owned.stops} stops and ${JSON.stringify(host.sent)}.`,
+    );
+  }
+
+  // A3–A5: a held signal reaches only a claim whose start still matches,
+  // once; a changed start, a claim without a start, an unreadable stat or no
+  // claim at all drops it.
+  {
+    const stats = new Map([
+      [101, running("99")],
+      [102, { error: "EMFILE" }],
+      [103, running("13")],
+      [104, running("14")],
+    ]);
+    const { host, owned } = fake(
+      [
+        [101, "11"],
+        [102, undefined],
+        [104, "14"],
+      ],
+      stats,
+    );
+    const net = cleanupNet(owned, host);
+    for (const pid of [101, 102, 103, 104]) net.hold(pid, "SIGKILL");
+    net.deliver();
+    net.deliver();
+    assert(
+      JSON.stringify(host.sent) === JSON.stringify([[104, "SIGKILL"]]) &&
+        net.dropped.map(({ pid }) => pid).join() === "101,102,103",
+      `Held signals went to ${JSON.stringify(host.sent)}, dropping ${JSON.stringify(net.dropped)}.`,
+    );
+  }
+
+  // A6: after the stop, an observed process gone within the grace is not
+  // reported; one still running at its bound, or unreadable, is; none is
+  // signalled.
+  {
+    let polls = 0;
+    let unreadable = false;
+    const stats = new Map([
+      [201, () => (polls++ < 4 ? running("20") : undefined)],
+      [202, running("21")],
+      [203, () => (unreadable ? { error: "EMFILE" } : running("22"))],
+    ]);
+    const { host, owned } = fake([], stats);
+    const net = cleanupNet(owned, host);
+    [201, 202, 203].forEach(net.observe);
+    unreadable = true;
+    const from = globalThis.performance.now();
+    const { left } = await net.settle();
+    assert(
+      globalThis.performance.now() - from >= 2000 &&
+        JSON.stringify(left) ===
+          JSON.stringify([
+            { kind: "OBSERVED_LEFT", pid: 202, start: "21", state: "S" },
+            { kind: "OBSERVED_UNKNOWN", pid: 203, start: "22", code: "EMFILE" },
+          ]) &&
+        host.sent.length === 0,
+      `The settle reported ${JSON.stringify(left)} and signalled ${JSON.stringify(host.sent)}.`,
     );
   }
 }
@@ -3024,6 +3333,10 @@ function canonical(value) {
  * process, so the expected signal sets come from the construction alone.
  */
 async function checkWorkerLifecycle() {
+  assert(
+    managedStdioChecked,
+    "The managed-stdio fd-reuse check must pass before the Worker lifecycle (RD-1263-1).",
+  );
   const uid = process.getuid?.();
   const base = realpathSync(mkdtempSync(join(scratch, "lifecycle-")));
   const lifecycle = checkoutLifecycleOn(DEFAULT_WORKER_SIDE);
@@ -3160,6 +3473,7 @@ async function checkWorkerLifecycle() {
     console.log("lifecycle O4 ok");
 
     await checkProcessTreeOwnership();
+    await checkCleanupAuthority();
     console.log("lifecycle O5 ownership ok");
     await checkProcessTreeCleanup(base);
     console.log("lifecycle O5 cleanup ok");
@@ -3240,9 +3554,17 @@ async function checkWorkerLifecycle() {
         sorted(stop.killed) === sorted([pids.ignorer]),
       `The stop signalled ${JSON.stringify(stop)}; the tree is ${JSON.stringify({ direct: direct.pid, ...pids })}.`,
     );
+    let sleepers;
     await until(
-      () => !running(pids.sleeper) && !running(pids.ignorer),
-      "the stopped sleepers to end",
+      () => {
+        sleepers = [pids.sleeper, pids.ignorer].map((pid) => ({
+          pid,
+          state: procState(pid),
+        }));
+        return sleepers.every(({ state }) => ["gone", "Z"].includes(state));
+      },
+      () =>
+        `the stopped sleepers to end, last seen ${JSON.stringify(sleepers)}`,
     );
     assert(
       running(direct.pid) && running(pids.outside),
