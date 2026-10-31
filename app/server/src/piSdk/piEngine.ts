@@ -87,13 +87,13 @@ export interface PiEngineHandle {
    * Start a turn, or steer the running one, as the caller decided in its own
    * synchronous span. `steerOnly` is carried for an engine whose streaming
    * state the caller read late; the local engine needs no reconciliation.
-   * Consumers read only its settlement: a steer settles on pi's acceptance.
+   * Settles as pi's call does: a steer on pi's acceptance.
    */
   submit(
     text: string,
     images: PiEngineImages,
     intent: { steer: boolean; steerOnly: boolean },
-  ): Promise<unknown>;
+  ): Promise<void>;
   /** Continue a failed turn with model-only custom input. */
   continueFailedTurn(context: string): Promise<void>;
   /** Omit opaque OpenAI reasoning from context; `false` while streaming. */
@@ -301,12 +301,13 @@ export function localPiEngine(session: AgentSession): PiEngineHandle {
       };
     },
 
-    // pi's own promise, called in the caller's synchronous span: acceptance
-    // and settlement keep their timing.
-    submit: (text, images, intent) =>
-      intent.steer
+    // pi is called in the caller's synchronous span, before the first await;
+    // only its settlement crosses, not a steer's queue disposition.
+    async submit(text, images, intent) {
+      await (intent.steer
         ? session.steer(text, images)
-        : session.prompt(text, { images }),
+        : session.prompt(text, { images }));
+    },
     continueFailedTurn(context) {
       const branch = session.sessionManager.getBranch();
       const last = [...branch]

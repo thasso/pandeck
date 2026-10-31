@@ -56,22 +56,18 @@ function fakeSession(overrides: Record<string, unknown> = {}) {
     },
     steer: (text: string, images: unknown) => {
       calls.push(["steer", text, images]);
-      return steered;
+      return Promise.resolve();
     },
     prompt: (text: string, options: unknown) => {
       calls.push(["prompt", text, options]);
-      return prompted;
+      return Promise.resolve();
     },
     dispose: () => calls.push(["dispose"]),
     ...overrides,
   };
-  const steered = Promise.resolve();
-  const prompted = Promise.resolve();
   return {
     session,
     calls,
-    steered,
-    prompted,
     emit: (event: unknown) => listener?.(event),
     get subscribed() {
       return listener !== undefined;
@@ -200,26 +196,35 @@ test("listeners each see every event once, in order, after the policy ran for it
   ]);
 });
 
-test("submit makes the caller's steer-or-prompt call before it returns, and answers pi's own promise", () => {
-  const fake = fakeSession();
+test("submit makes the caller's steer-or-prompt call before it returns, and settles as pi's call does", async () => {
+  const calls: unknown[] = [];
+  const fake = fakeSession({
+    steer: (text: string, images: unknown) => {
+      calls.push(["steer", text, images]);
+      return Promise.resolve("queued");
+    },
+    prompt: (text: string, options: unknown) => {
+      calls.push(["prompt", text, options]);
+      return Promise.reject(new Error("prompt refused"));
+    },
+  });
   const engine = localPiEngine(fake.session as never);
   const images = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
-  fake.calls.length = 0;
 
   const steered = engine.submit("more", images as never, {
     steer: true,
     steerOnly: true,
   });
-  assert.deepEqual(fake.calls, [["steer", "more", images]]);
-  assert.equal(steered, fake.steered);
+  assert.deepEqual(calls, [["steer", "more", images]]);
+  assert.equal(await steered, undefined, "a steer's disposition stays in pi");
 
-  fake.calls.length = 0;
+  calls.length = 0;
   const started = engine.submit("hello", images as never, {
     steer: false,
     steerOnly: false,
   });
-  assert.deepEqual(fake.calls, [["prompt", "hello", { images }]]);
-  assert.equal(started, fake.prompted);
+  assert.deepEqual(calls, [["prompt", "hello", { images }]]);
+  await assert.rejects(started, /prompt refused/);
 });
 
 test("dispose drops the engine's subscription and disposes the session within the call", () => {
