@@ -797,7 +797,7 @@ test("prompt acceptance persists and announces a Claude session before its first
     "the list states that the naming agent is still working",
   );
   assert.equal(persisted[0]?.entries.length, 1, "the user entry is durable");
-  assert.equal(changes, 1, "the list is invalidated at prompt acceptance");
+  assert.ok(changes > 0, "the list is invalidated at prompt acceptance");
   await Promise.resolve();
 
   const item = session.listItem(0);

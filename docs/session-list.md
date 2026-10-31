@@ -138,7 +138,11 @@ included:
 - the live engines' map entries: a pi or Claude session that opens or leaves
   memory overlays the persisted row, so both stores touch it. Pi model/thinking
   commands await the engine's effect, then synchronously report the row before
-  the command resolves.
+  the command resolves. Native callbacks are write boundaries too: pi's
+  `message_end` exposes a newly appended native message count before the next
+  tool/provider step. Claude reports canonical appends (including steers
+  accepted by a command-lifecycle callback) and observed model changes without
+  waiting for a later terminal persist.
 
 Over-touching costs one row rebuild; under-touching leaves a stale row. Deferred
 reporting (`void import(…).then(…)`, a post-publish listener) is not a touch,
@@ -273,6 +277,19 @@ and events.
   It checks every changed id, including indirect dependents. Equal-public
   transitions state their reason and assert their durable effect. Engine tests
   replace provider construction/snapshots, not row construction or diffing.
+- `sessionListOwnerInventory.test.ts` classifies every concrete method of both
+  stores, both live classes and `SessionRuntime`, plus native switch callbacks.
+  New methods/cases require classification; evidence references are navigation,
+  not behavioral proof. `piSdk/sessionListLiveWriters.test.ts`,
+  `claudeSdk/sessionListLiveWriters.test.ts` and the retained-host oracle
+  fixture in `ClaudeSdkSession.backgroundWork.test.ts` execute
+  acquisition/fork/cleanup, prompt/error/continuation, delayed naming,
+  account/control commands, synthetic/native callbacks and runtime teardown
+  against full public builds. Context edits and compaction retain native
+  transcript-total counts; usage, context caps and Claude's current retry
+  overlay have explicit equal-public checks rather than artificial row changes.
+  Promise-like prompt receipts are awaited through completion, while synchronous
+  writers are sampled before yielding.
 - `sessionListCorrections.test.ts` pins public singleton membership and unread
   state, prune dependencies, touch-before-TTL-expiry (including a delayed
   timer), and touch-before-COMMIT ordering. `sessionListDeadline.test.ts` drives

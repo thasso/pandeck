@@ -1262,6 +1262,9 @@ export class ClaudeSdkSession implements LiveSession {
       createdAt: new Date().toISOString(),
     } as T & { seq: number; createdAt: string };
     this.committed.push(entry as unknown as ClientTimelineEntry);
+    // Accepted steers can append outside a turn-end persist; messageCount is
+    // already public at this canonical append boundary.
+    this.onChange();
     return entry;
   }
 
@@ -4207,7 +4210,10 @@ export class ClaudeSdkSession implements LiveSession {
     // feeding an unknown value through the configuration fallback would silently
     // turn it into Sonnet and persist an unintended model switch.
     const model = knownClaudeSdkModelAlias(assistantModel(message));
-    if (model) this.modelId = model;
+    if (model && model !== this.modelId) {
+      this.modelId = model;
+      this.onChange();
+    }
     // Each assistant step's usage reports that request's input-side tokens; the
     // last one before `result` is the current context size. Snapshot, don't sum.
     const ctx = contextSizeFromUsage(assistantUsage(message));

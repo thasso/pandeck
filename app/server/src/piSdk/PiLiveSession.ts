@@ -601,6 +601,9 @@ export class PiLiveSession implements LiveSession {
         break;
       }
       case "message_end": {
+        // The SDK persists this message synchronously after delivering the
+        // callback. Report within that span, before the next native step.
+        this.host.sessionRowsChanged([this.key]);
         this.providerTransportFailure = {
           ...this.providerTransportFailure,
           ...providerTransportDetails(event.message),
