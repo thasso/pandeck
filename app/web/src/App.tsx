@@ -4176,6 +4176,14 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     removeWorktreeId: null,
   });
 
+  const requestMergeWorktree = useCallback((id: string) => {
+    setWorktreeOverlay({
+      createForProjectId: null,
+      mergeWorktreeId: id,
+      removeWorktreeId: null,
+    });
+  }, []);
+
   const requestRemoveWorktree = useCallback((id: string) => {
     setWorktreeOverlay({
       createForProjectId: null,
@@ -7598,28 +7606,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         status={state.worktreeStatuses[route.id]}
         projects={projects}
         sessions={state.sessions}
-        sessionsFresh={state.sessionListFresh}
         comments={state.worktreeComments[route.id] ?? NO_WORKTREE_COMMENTS}
         reviewSets={
           state.worktreeReviewSets[route.id] ?? NO_WORKTREE_REVIEW_SETS
         }
         onOpenComment={(commentId) => openWorktreeComment(route.id!, commentId)}
         openers={inspectorOpeners}
-        onStartSession={startSessionInWorktree}
-        onMerge={(id) =>
-          setWorktreeOverlay({
-            createForProjectId: null,
-            mergeWorktreeId: id,
-            removeWorktreeId: null,
-          })
-        }
-        onRemove={(id) =>
-          setWorktreeOverlay({
-            createForProjectId: null,
-            mergeWorktreeId: null,
-            removeWorktreeId: id,
-          })
-        }
       />
     ) : route.name === "pullRequests" ? (
       pullRequestTarget ? (
@@ -8186,6 +8178,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             sessions={state.sessions}
                             sessionsFresh={state.sessionListFresh}
                             onRemoveWorktree={requestRemoveWorktree}
+                            onMergeWorktree={requestMergeWorktree}
+                            onStartSessionInWorktree={startSessionInWorktree}
                             project={projects.find(
                               (item) => item.id === worktree.projectId,
                             )}

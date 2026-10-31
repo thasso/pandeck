@@ -56,7 +56,6 @@ import {
   type WorktreeReviewSet,
 } from "@assistant/shared";
 import { ownedBySessionTree } from "@assistant/shared/sessionTreeWorktrees";
-import { useCommentActuation } from "./review/CommentActuation.tsx";
 import type { Task } from "../lib/backlogTree.ts";
 import { taskWorktreeIds } from "../lib/taskActivity.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -117,7 +116,6 @@ import {
   WorktreeDeliverySection,
   useWorktreeDelivery,
 } from "./worktree/WorktreeDelivery.tsx";
-import { useWorktreeRetire } from "./worktree/useWorktreeRetire.tsx";
 import { usePullRequestActions } from "./pullRequest/PullRequestActions.tsx";
 import {
   hostingProviderLabel,
@@ -2282,11 +2280,7 @@ export function WorktreeInspector({
   status,
   projects,
   sessions,
-  sessionsFresh,
   openers,
-  onStartSession,
-  onMerge,
-  onRemove,
   comments = [],
   reviewSets = [],
   onOpenComment,
@@ -2295,54 +2289,17 @@ export function WorktreeInspector({
   status?: WorktreeGitStatus | undefined;
   projects: ProjectRecord[];
   sessions: SessionListItem[];
-  /**
-   * That list answered in the CURRENT socket episode. Retire states a session
-   * COUNT in its consent text, and a count off a stale list is a promise the
-   * run contradicts (`worktree/useWorktreeRetire.tsx`).
-   */
-  sessionsFresh: boolean;
   openers: ObjectOpeners;
-  onStartSession: (worktreeId: string) => void;
-  onMerge: (worktreeId: string) => void;
-  onRemove: (worktreeId: string) => void;
   /** This worktree's review comments (server-synced, loaded by the page). */
   comments?: WorktreeComment[];
   reviewSets?: WorktreeReviewSet[];
   /** Cross-pane: land on a comment's thread in the diff the main pane shows. */
   onOpenComment?: (commentId: string) => void;
 }) {
-  const commentActuation = useCommentActuation();
   const delivery = useWorktreeDelivery({
     worktree,
     ...(status !== undefined ? { status } : {}),
   });
-  // Retire lives WITH the worktree it ends, beside Remove. Its `merged` fact is
-  // read from this panel's own hosting answer rather than from the app-wide
-  // projection: absent stays unknown there, and an unknown must not be allowed
-  // to read as "delivered".
-  const retire = useWorktreeRetire({
-    worktree,
-    ...(delivery.status !== undefined ? { status: delivery.status } : {}),
-    sessions,
-    sessionsFresh,
-    merged: delivery.hosting?.pr?.state === "merged",
-  });
-  const actions: InspectorAction[] = worktree
-    ? worktreeInspectorActions(worktree, {
-        onStartSession,
-        onMerge,
-        onRemove,
-        onRetire: retire.open,
-        retireBusy: retire.busy,
-        ...(commentActuation?.onSubmitReview !== undefined
-          ? { onSubmitReview: commentActuation?.onSubmitReview }
-          : {}),
-        ...(commentActuation?.pendingCount !== undefined
-          ? { pendingReviewCount: commentActuation?.pendingCount }
-          : {}),
-        deliveryActions: delivery.actions,
-      })
-    : [];
   const liveBranch = status?.branch ?? worktree?.branch;
   return (
     <Inspector
@@ -2356,7 +2313,10 @@ export function WorktreeInspector({
             )
           : []
       }
-      actions={actions}
+      // The worktree page's header menu holds every action, on every layout:
+      // this panel keeps the facts and the links.
+      actions={[]}
+      ownsHeaderActions={false}
       // The worktree page's header draws Add comment beside its menu.
       commentActuationInHeader
       sectionStorageScope={`worktree:${worktree?.id ?? "loading"}`}
@@ -2419,7 +2379,6 @@ export function WorktreeInspector({
             onOpenComment={onOpenComment}
           />
           {delivery.dialogs}
-          {retire.dialog}
         </div>
       ) : null}
     </Inspector>

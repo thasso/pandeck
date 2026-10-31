@@ -28,6 +28,7 @@ import {
   Check,
   ChevronLeft,
   Download,
+  Ellipsis,
   ExternalLink,
   Eye,
   File,
@@ -71,7 +72,9 @@ import {
 } from "../DocumentNavigationShell.tsx";
 import { Button } from "../ui/button.tsx";
 import {
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "../ui/dropdown-menu.tsx";
@@ -80,13 +83,13 @@ import { useCommentActuation } from "../review/CommentActuation.tsx";
 import type { InspectorAction } from "../shell/Inspector.tsx";
 import { useWorktreeDelivery } from "./WorktreeDelivery.tsx";
 import { useWorktreeRetire } from "./useWorktreeRetire.tsx";
+import { worktreeInspectorActions } from "../objectInspectors.tsx";
+import { useIgnoredFilesShown } from "../../lib/worktreeIgnoredFiles.ts";
 import { Field, FieldLabel } from "../ui/field.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Separator } from "../ui/separator.tsx";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
-import { Toggle } from "../ui/toggle.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
 import { DiffModeToolbar } from "../diff/DiffModeToolbar.tsx";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
@@ -109,6 +112,13 @@ import { pendingWorktreeReviewIds } from "./worktreeReview.tsx";
 import { WorktreeScopePicker } from "./WorktreeScopePicker.tsx";
 import { useViewedFiles } from "./useViewedFiles.ts";
 import { EdgeSheet } from "../common/EdgeSheet.tsx";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemMedia,
+  ItemTitle,
+} from "../ui/item.tsx";
 import { IconButton } from "../common/IconButton.tsx";
 import { OverflowMenu } from "../common/OverflowMenu.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "../common/load.tsx";
@@ -237,6 +247,9 @@ export interface WorktreeDetailPageProps {
   sessionsFresh?: boolean;
   /** Opens the app's Remove dialog for this worktree. */
   onRemoveWorktree?: ((id: string) => void) | undefined;
+  /** Opens the app's Merge back dialog for this worktree. */
+  onMergeWorktree?: ((id: string) => void) | undefined;
+  onStartSessionInWorktree?: ((id: string) => void) | undefined;
   /** The worktree's Project, named in the Overview's facts. */
   project?: ProjectRecord | undefined;
 }
@@ -1158,7 +1171,6 @@ function FilesView({
     filePath,
     refreshToken,
   });
-  const { includeIgnored, setIncludeIgnored } = tree;
 
   // The file's own path is the fetch key, so opening another file shows ITS
   // placeholder instead of the previous file's source under the new path (R3);
@@ -1267,9 +1279,6 @@ function FilesView({
   // What the pane on screen is refetching, if anything (R2): the source, or the
   // "Changes vs base" diff that replaces it. One marker either way — only one of
   // the two is being looked at.
-  const ignoredVisibilityLabel = includeIgnored
-    ? "Hide ignored and hidden files"
-    : "Show ignored and hidden files";
   const shownRefresh =
     pivot === "history"
       ? null // the history list marks its own refresh
@@ -1320,21 +1329,6 @@ function FilesView({
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
           {navigationControls}
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Toggle
-                    size="sm"
-                    aria-label={ignoredVisibilityLabel}
-                    pressed={includeIgnored}
-                    onPressedChange={setIncludeIgnored}
-                  />
-                }
-              >
-                <Eye />
-              </TooltipTrigger>
-              <TooltipContent>{ignoredVisibilityLabel}</TooltipContent>
-            </Tooltip>
             {!narrow ? pivotControls : null}
             {NAVIGATOR_VIEW_SWITCH_ENABLED && !sidebarNavigation ? (
               <NavigatorViewToggle
@@ -1601,13 +1595,35 @@ const VIEW_TABS: Array<{ id: WorktreeView; label: string }> = [
   { id: "changes", label: "Review" },
   { id: "files", label: "Files" },
 ];
+function SheetGroupLabel({ children }: { children: ReactNode }) {
+  return (
+    // The rows' own inset, so a label lines up with the icons under it.
+    <div className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
 /**
  * A phone's worktree header, the shape the other object pages draw: Add comment
  * (and Submit review while comments wait) beside one menu of the worktree's
  * delivery actions.
  */
-function WorktreeHeaderActions({ actions }: { actions: InspectorAction[] }) {
+function WorktreeHeaderActions({
+  actions,
+  showComment,
+  ignoredFiles,
+}: {
+  actions: InspectorAction[];
+  showComment: boolean;
+  /** The file trees' "show ignored and hidden files", shared per worktree. */
+  ignoredFiles?:
+    { shown: boolean; onChange: (shown: boolean) => void } | undefined;
+}) {
   const actuation = useCommentActuation();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetTop, setSheetTop] = useState(0);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const pendingCount = Math.max(0, actuation?.pendingCount ?? 0);
   const canComment = actuation?.canComment === true;
   const commentLabel = canComment
@@ -1615,7 +1631,7 @@ function WorktreeHeaderActions({ actions }: { actions: InspectorAction[] }) {
     : "Select text to comment";
   return (
     <div className="flex shrink-0 items-center gap-1">
-      {actuation?.onComment ? (
+      {showComment && actuation?.onComment ? (
         <span title={commentLabel}>
           <Button
             variant="ghost"
@@ -1631,7 +1647,7 @@ function WorktreeHeaderActions({ actions }: { actions: InspectorAction[] }) {
           </Button>
         </span>
       ) : null}
-      {actuation?.onSubmitReview && pendingCount > 0 ? (
+      {showComment && actuation?.onSubmitReview && pendingCount > 0 ? (
         <IconButton
           label={`${actuation.submitLabel ?? "Submit review"} (${pendingCount} pending)`}
           size="icon"
@@ -1644,7 +1660,94 @@ function WorktreeHeaderActions({ actions }: { actions: InspectorAction[] }) {
           <Badge className="absolute -right-1 -top-1">{pendingCount}</Badge>
         </IconButton>
       ) : null}
-      {actions.length > 0 ? (
+      {(actions.length > 0 || ignoredFiles) && showComment ? (
+        // A phone's menu is the chat header's: a sheet dropping from under
+        // the header, its rows a thumb's height.
+        <>
+          <IconButton
+            ref={triggerRef}
+            label="Worktree actions"
+            aria-haspopup="dialog"
+            onClick={() => {
+              const anchor =
+                triggerRef.current?.closest("header") ?? triggerRef.current;
+              setSheetTop(anchor?.getBoundingClientRect().bottom ?? 0);
+              setSheetOpen(true);
+            }}
+          >
+            <Ellipsis />
+          </IconButton>
+          <EdgeSheet
+            open={sheetOpen}
+            side="top"
+            offsetTop={sheetTop}
+            title="Worktree actions"
+            onClose={() => setSheetOpen(false)}
+          >
+            <div role="menu">
+              {actions.length > 0 ? (
+                <>
+                  <SheetGroupLabel>Actions</SheetGroupLabel>
+                  {actions.map((action) => (
+                    <Item
+                      key={action.key}
+                      size="sm"
+                      render={
+                        <button
+                          type="button"
+                          disabled={action.busy || action.disabled}
+                        />
+                      }
+                      className="disabled:pointer-events-none disabled:opacity-50"
+                      role="menuitem"
+                      title={action.disabledReason}
+                      onClick={() => {
+                        setSheetOpen(false);
+                        action.onRun();
+                      }}
+                    >
+                      {action.icon ? (
+                        <ItemMedia variant="icon">{action.icon}</ItemMedia>
+                      ) : null}
+                      <ItemContent>
+                        <ItemTitle>
+                          <span className="truncate">{action.label}</span>
+                        </ItemTitle>
+                      </ItemContent>
+                      {action.hint ? (
+                        <ItemActions>{action.hint}</ItemActions>
+                      ) : null}
+                    </Item>
+                  ))}
+                </>
+              ) : null}
+              {ignoredFiles ? (
+                <>
+                  {actions.length > 0 ? <Separator /> : null}
+                  <SheetGroupLabel>Files</SheetGroupLabel>
+                  <Item
+                    size="sm"
+                    render={<button type="button" />}
+                    role="menuitemcheckbox"
+                    aria-checked={ignoredFiles.shown}
+                    onClick={() => ignoredFiles.onChange(!ignoredFiles.shown)}
+                  >
+                    <ItemMedia variant="icon">
+                      <Eye />
+                    </ItemMedia>
+                    <ItemContent>
+                      <ItemTitle>Show ignored files</ItemTitle>
+                    </ItemContent>
+                    <ItemActions>
+                      {ignoredFiles.shown ? <Check size={14} /> : null}
+                    </ItemActions>
+                  </Item>
+                </>
+              ) : null}
+            </div>
+          </EdgeSheet>
+        </>
+      ) : actions.length > 0 || ignoredFiles ? (
         <OverflowMenu
           label="Worktree actions"
           size="icon"
@@ -1661,6 +1764,19 @@ function WorktreeHeaderActions({ actions }: { actions: InspectorAction[] }) {
               {action.label}
             </DropdownMenuItem>
           ))}
+          {ignoredFiles ? (
+            <>
+              {actions.length > 0 ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuCheckboxItem
+                checked={ignoredFiles.shown}
+                closeOnClick={false}
+                onCheckedChange={(checked) => ignoredFiles.onChange(checked)}
+              >
+                <Eye />
+                Show ignored files
+              </DropdownMenuCheckboxItem>
+            </>
+          ) : null}
         </OverflowMenu>
       ) : null}
     </div>
@@ -1704,6 +1820,8 @@ export default function WorktreeDetailPage({
   sessions,
   sessionsFresh = false,
   onRemoveWorktree,
+  onMergeWorktree,
+  onStartSessionInWorktree,
   project,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
@@ -1728,6 +1846,35 @@ export default function WorktreeDetailPage({
     sessionsFresh,
     merged: delivery.hosting?.pr?.state === "merged",
   });
+  // The worktree's ONE action list, the header menu's on every layout: the
+  // object panel keeps the facts and the links.
+  const menuActions = useMemo(
+    () =>
+      browseAsDocuments ||
+      !onStartSessionInWorktree ||
+      !onMergeWorktree ||
+      !onRemoveWorktree
+        ? []
+        : worktreeInspectorActions(worktree, {
+            onStartSession: onStartSessionInWorktree,
+            onMerge: onMergeWorktree,
+            onRemove: onRemoveWorktree,
+            onRetire: retire.open,
+            retireBusy: retire.busy,
+            deliveryActions: delivery.actions,
+          }),
+    [
+      browseAsDocuments,
+      worktree,
+      onStartSessionInWorktree,
+      onMergeWorktree,
+      onRemoveWorktree,
+      retire.open,
+      retire.busy,
+      delivery.actions,
+    ],
+  );
+  const [ignoredShown, setIgnoredShown] = useIgnoredFilesShown(worktree.id);
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
   // Same default rule ChangesView applies, so the view-options segment and the
   // comment-following below both know what the pane is actually doing.
@@ -2139,9 +2286,16 @@ export default function WorktreeDetailPage({
                     {filePath ? (
                       <DocumentNavigationActions className="hidden desktop:flex" />
                     ) : null}
-                    {narrow ? (
-                      <WorktreeHeaderActions actions={delivery.actions} />
-                    ) : null}
+                    <WorktreeHeaderActions
+                      actions={menuActions}
+                      // A wide header draws Add comment itself.
+                      showComment={narrow}
+                      ignoredFiles={
+                        browseAsDocuments
+                          ? undefined
+                          : { shown: ignoredShown, onChange: setIgnoredShown }
+                      }
+                    />
                   </>
                 )
               }

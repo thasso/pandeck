@@ -3,6 +3,7 @@ import type { WorktreeTreeEntry } from "@assistant/shared";
 import { ErrorNote } from "../common/load.tsx";
 import { useReloadOnToken } from "../../hooks/useFetchState.ts";
 import { fetchWorktreeTree } from "../../lib/worktrees.ts";
+import { useIgnoredFilesShown } from "../../lib/worktreeIgnoredFiles.ts";
 import {
   loadExpandedTreeDirs,
   saveExpandedTreeDirs,
@@ -61,7 +62,8 @@ export function useWorktreeFileTree({
   const [listDirectory, setListDirectory] = useState(() =>
     filePath ? splitWorktreePath(filePath).dir : "",
   );
-  const [includeIgnored, setIncludeIgnored] = useState(false);
+  // Shared by every tree of this worktree (`lib/worktreeIgnoredFiles.ts`).
+  const [includeIgnored, setIncludeIgnored] = useIgnoredFilesShown(worktreeId);
   const includeIgnoredRef = useRef(includeIgnored);
   includeIgnoredRef.current = includeIgnored;
   // The tree keeps its own error, against the DIRECTORY that failed: a folder
