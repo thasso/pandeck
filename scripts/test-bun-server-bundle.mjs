@@ -26,6 +26,11 @@ import {
   WEB_NOTICES_FILE,
 } from "../app/web/thirdPartyNotices.ts";
 import { DatabaseSync } from "./bun-shims/node-sqlite.mjs";
+import {
+  EXEC_PARITY_CASES,
+  EXEC_REFUSAL_CASES,
+  execCaseProblem,
+} from "../app/server/src/db/sqliteExecCases.ts";
 import { createRequire } from "node:module";
 import {
   chmodSync,
@@ -608,6 +613,15 @@ function checkSqliteShim() {
     "Bun SQLite adapter read a BLOB parameter as named parameters.",
   );
   database.exec("-- a comments-only script is a no-op, as in Node");
+  // exec stops at the first failing statement, as Node does; Bun's own exec
+  // ran on past a non-final one, so migration 0097's guard dropped its tables.
+  for (const execCase of [...EXEC_PARITY_CASES, ...EXEC_REFUSAL_CASES]) {
+    const problem = execCaseProblem(
+      () => new DatabaseSync(":memory:"),
+      execCase,
+    );
+    assert(!problem, `Bun SQLite adapter exec() case failed: ${problem}`);
+  }
 
   database.exec(`
     CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT);
@@ -937,8 +951,9 @@ async function checkParseLinkMemory() {
 
 /**
  * Server code a booted server reaches only on demand (git through the spawn
- * broker, the watcher, the SQLite transaction paths), bundled with the
- * server's own plugins and run by the packaged Bun: see bun-runtime-probe.mjs.
+ * broker, the watcher, the SQLite transaction paths, a migration guard through
+ * the real runner), bundled with the server's own plugins and run by the
+ * packaged Bun: see bun-runtime-probe.mjs.
  */
 async function runRuntimeProbes() {
   assert(which("git"), "The runtime probe needs git on PATH.");
@@ -950,6 +965,9 @@ async function runRuntimeProbes() {
       { define: SERVER_BUNDLE_DEFINE, plugins: serverBundlePlugins() },
     ),
   );
+  // Every mode runs before any exit is judged, so a failure names each mode
+  // it happens in.
+  const failures = [];
   for (const mode of ["broker", "in-process"]) {
     const probeData = join(temp, `probe-${mode}`);
     const home = join(probeData, "home");
@@ -998,8 +1016,10 @@ async function runRuntimeProbes() {
       stderr: "inherit",
     });
     const code = await child.exited;
-    assert(code === 0, `Bun runtime probe (${mode}) exited with ${code}.`);
+    if (code !== 0)
+      failures.push(`Bun runtime probe (${mode}) exited with ${code}.`);
   }
+  assert(failures.length === 0, failures.join(" "));
 }
 
 const claudeProfile = "bun-check";
