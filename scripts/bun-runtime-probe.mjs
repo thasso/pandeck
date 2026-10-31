@@ -2018,10 +2018,10 @@ async function checkProcessTreeCleanup(base) {
       pidFile: join(tree, "sleeper.pid"),
     }),
   };
-  /** An execute-only copy of `sleep` at `path`. */
-  const executeOnlySleep = (path) => {
+  /** An execute-only copy of `command`, found on PATH, at `path`. */
+  const executeOnly = (command, path) => {
     const binary = process.env.PATH.split(":")
-      .map((dir) => join(dir, "sleep"))
+      .map((dir) => join(dir, command))
       .find((candidate) => existsSync(candidate));
     copyFileSync(realpathSync(binary), path);
     chmodSync(path, 0o111);
@@ -2041,7 +2041,7 @@ async function checkProcessTreeCleanup(base) {
     const outside = join(fixture, "outside");
     const children = o5Children(tree, outside);
     if (firsts[variant]) children[0] = firsts[variant](tree);
-    if (variant === "unreadable") executeOnlySleep(join(tree, "sleep"));
+    if (variant === "unreadable") executeOnly("sleep", join(tree, "sleep"));
     // Records every signal the tree sends; one to a held pid waits until
     // the test delivers it, to the claimed pid and start time.
     const sent = [];
@@ -2199,38 +2199,47 @@ async function checkProcessTreeCleanup(base) {
           );
         }
         if (variant === "unrelated unreadable") {
-          // Outside the tree and its stdout; its pid and start are for
-          // diagnosis only, and its exit is awaited from the step that
-          // spawned it.
-          const path = join(fixture, "unrelated-sleep");
-          executeOnlySleep(path);
-          const unrelated = spawn(path, ["5"], { stdio: "ignore" });
-          const exited = new Promise((resolve) => {
-            unrelated.once("exit", () => resolve(true));
-            unrelated.once("error", () => resolve(true));
+          // Outside the tree, its group and its stdout: an execute-only
+          // shell blocked reading a pipe only the probe holds, so it cannot
+          // end by time, only by itself at EOF once the probe closes that
+          // pipe. Its pid and start are for diagnosis only, and its exit is
+          // awaited from the step that spawned it.
+          const path = join(fixture, "unrelated", "sh");
+          mkdirSync(dirname(path));
+          executeOnly("sh", path);
+          const unrelated = spawn(path, ["-c", "read _"], {
+            stdio: ["pipe", "ignore", "ignore"],
+          });
+          const exit = new Promise((resolve) => {
+            unrelated.once("exit", (code, signal) => resolve({ code, signal }));
+            unrelated.once("error", (error) =>
+              resolve({ error: codeOf(error) }),
+            );
           });
           const start = startTime(unrelated.pid);
           try {
             await owned.stop();
+            const signalled = [...sent];
             const stat = liveProcessHost.stat(unrelated.pid);
             assert(
               start !== undefined &&
                 stat?.start === start &&
                 !["Z", "X"].includes(stat.state),
-              `The unrelated process ${unrelated.pid} (start ${start}) did not outlast the tree's stop: ${JSON.stringify(stat)}.`,
+              `The unrelated process ${unrelated.pid} (start ${start}) did not outlast the tree's stop, which signalled ${JSON.stringify(signalled)}: ${JSON.stringify(stat)}.`,
             );
           } finally {
+            unrelated.stdin?.destroy();
             let timer;
             const ended = await Promise.race([
-              exited,
+              exit,
               new Promise(
                 (resolve) =>
-                  (timer = globalThis.setTimeout(resolve, 10000, false)),
+                  (timer = globalThis.setTimeout(resolve, 10000, undefined)),
               ),
             ]).finally(() => globalThis.clearTimeout(timer));
             assert(
-              ended,
-              `The unrelated process ${unrelated.pid} (start ${start}) did not end by itself.`,
+              ended !== undefined && ended.error === undefined,
+              `The unrelated process ${unrelated.pid} (start ${start}) did not end by itself: ${JSON.stringify(ended)}.`,
             );
           }
           assert(
