@@ -1,5 +1,23 @@
 import { useCallback, useMemo, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FileCode2, Folder } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  File,
+  FileArchive,
+  FileAudio,
+  FileCode2,
+  FileCog,
+  FileImage,
+  FileJson,
+  FileKey,
+  FileLock,
+  FileSpreadsheet,
+  FileTerminal,
+  FileText,
+  FileVideo,
+  Folder,
+  type LucideIcon,
+} from "lucide-react";
 import type {
   WorktreeChangeFile,
   WorktreeChangeStatus,
@@ -478,6 +496,88 @@ function ChangeStats({
   );
 }
 
+const ICON_BY_EXTENSION: Record<string, LucideIcon> = {};
+const iconGroups: Array<[LucideIcon, string[]]> = [
+  [
+    FileCode2,
+    [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "mjs",
+      "cjs",
+      "py",
+      "rs",
+      "go",
+      "java",
+      "kt",
+      "swift",
+      "c",
+      "h",
+      "cc",
+      "cpp",
+      "hpp",
+      "cs",
+      "rb",
+      "php",
+      "lua",
+      "nix",
+      "css",
+      "scss",
+      "html",
+      "htm",
+      "vue",
+      "svelte",
+      "sql",
+      "graphql",
+    ],
+  ],
+  [FileJson, ["json", "jsonc", "json5"]],
+  [FileText, ["md", "mdx", "markdown", "txt", "rst", "adoc", "pdf"]],
+  [
+    FileImage,
+    ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "avif", "bmp"],
+  ],
+  [FileTerminal, ["sh", "bash", "zsh", "fish", "ps1", "bat", "cmd"]],
+  [FileCog, ["yaml", "yml", "toml", "ini", "conf", "cfg", "xml", "plist"]],
+  [FileSpreadsheet, ["csv", "tsv", "xlsx", "xls", "ods"]],
+  [FileArchive, ["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar"]],
+  [FileVideo, ["mp4", "mov", "webm", "mkv", "avi"]],
+  [FileAudio, ["mp3", "wav", "ogg", "flac", "m4a", "aac"]],
+  [FileKey, ["pem", "key", "crt", "cer", "pub"]],
+];
+for (const [icon, extensions] of iconGroups)
+  for (const extension of extensions) ICON_BY_EXTENSION[extension] = icon;
+
+/** Whole names that say more than their extension (or have none). */
+const ICON_BY_NAME: Record<string, LucideIcon> = {
+  dockerfile: FileCog,
+  makefile: FileTerminal,
+  ".gitignore": FileCog,
+  ".gitattributes": FileCog,
+  ".editorconfig": FileCog,
+  ".npmrc": FileCog,
+  ".env": FileKey,
+  license: FileText,
+};
+
+/** A file's glyph by its name: its type at a glance, in the same muted grey. */
+function fileIconFor(path: string): LucideIcon {
+  const name = (path.split("/").pop() ?? path).toLowerCase();
+  const byName = ICON_BY_NAME[name];
+  if (byName) return byName;
+  if (name.startsWith(".env")) return FileKey;
+  if (
+    name.endsWith(".lock") ||
+    name.endsWith("-lock.json") ||
+    name.endsWith("-lock.yaml")
+  )
+    return FileLock;
+  const dot = name.lastIndexOf(".");
+  return (dot > 0 ? ICON_BY_EXTENSION[name.slice(dot + 1)] : undefined) ?? File;
+}
+
 /**
  * One entry's row content, shared by the tree and the list: icon and status
  * glyph, then the name (`children`), then loading, drill-down and stats.
@@ -496,7 +596,7 @@ function EntryParts({
   children: ReactNode;
 }) {
   const isDir = data.kind === "dir";
-  const Icon = isDir ? Folder : FileCode2;
+  const Icon = isDir ? Folder : fileIconFor(data.path);
   return (
     <>
       <Icon size={13} className="shrink-0 text-muted-foreground" />
