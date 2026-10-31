@@ -79,6 +79,7 @@ import { Badge } from "../ui/badge.tsx";
 import { useCommentActuation } from "../review/CommentActuation.tsx";
 import type { InspectorAction } from "../shell/Inspector.tsx";
 import { useWorktreeDelivery } from "./WorktreeDelivery.tsx";
+import { useWorktreeRetire } from "./useWorktreeRetire.tsx";
 import { Field, FieldLabel } from "../ui/field.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Separator } from "../ui/separator.tsx";
@@ -232,6 +233,10 @@ export interface WorktreeDetailPageProps {
   sidebarNavigation?: boolean;
   /** For the Overview's sessions working here. */
   sessions?: readonly SessionListItem[] | undefined;
+  /** `sessions` answered in this socket episode: Retire may count them. */
+  sessionsFresh?: boolean;
+  /** Opens the app's Remove dialog for this worktree. */
+  onRemoveWorktree?: ((id: string) => void) | undefined;
   /** The worktree's Project, named in the Overview's facts. */
   project?: ProjectRecord | undefined;
 }
@@ -1662,6 +1667,8 @@ function WorktreeHeaderActions({ actions }: { actions: InspectorAction[] }) {
   );
 }
 
+const NO_SESSIONS: readonly SessionListItem[] = [];
+
 const OVERVIEW_TAB: { id: WorktreeView; label: string } = {
   id: "overview",
   label: "Overview",
@@ -1695,6 +1702,8 @@ export default function WorktreeDetailPage({
   documentComments,
   sidebarNavigation = false,
   sessions,
+  sessionsFresh = false,
+  onRemoveWorktree,
   project,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
@@ -1711,6 +1720,13 @@ export default function WorktreeDetailPage({
   const delivery = useWorktreeDelivery({
     worktree: browseAsDocuments ? undefined : worktree,
     ...(status !== undefined ? { status } : {}),
+  });
+  const retire = useWorktreeRetire({
+    worktree: browseAsDocuments || worktree.isMain ? undefined : worktree,
+    ...(delivery.status !== undefined ? { status: delivery.status } : {}),
+    sessions: (sessions ?? NO_SESSIONS) as SessionListItem[],
+    sessionsFresh,
+    merged: delivery.hosting?.pr?.state === "merged",
   });
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
   // Same default rule ChangesView applies, so the view-options segment and the
@@ -2137,6 +2153,8 @@ export default function WorktreeDetailPage({
               status={status}
               project={project}
               delivery={delivery}
+              retire={retire}
+              onRemove={onRemoveWorktree}
               sessions={sessions}
               navigate={navigate}
               toolbar={
@@ -2184,6 +2202,7 @@ export default function WorktreeDetailPage({
             />
           )}
           {delivery.dialogs}
+          {retire.dialog}
         </div>
       </DiffCommentBarProvider>
     </DiffWorkerProvider>

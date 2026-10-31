@@ -8,6 +8,10 @@ import {
   FileDiff,
   FolderKanban,
   GitCommitHorizontal,
+  GitMerge,
+  GitPullRequestClosed,
+  Trash2,
+  TriangleAlert,
   GitPullRequest,
   House,
   Upload,
@@ -19,6 +23,9 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { Item } from "../ui/item.tsx";
+import { Button } from "../ui/button.tsx";
+import { AppCard } from "../common/AppCard.tsx";
+import type { WorktreeRetire } from "./useWorktreeRetire.tsx";
 import { IconButton } from "../common/IconButton.tsx";
 import { SessionRowContent } from "../SessionRow.tsx";
 import { sessionPath } from "../../lib/sessionRoutes.ts";
@@ -39,6 +46,8 @@ export function WorktreeOverview({
   worktree,
   status,
   delivery,
+  retire,
+  onRemove,
   project,
   sessions,
   navigate,
@@ -47,6 +56,10 @@ export function WorktreeOverview({
   worktree: WorktreeRecord;
   status: WorktreeGitStatus | undefined;
   delivery: WorktreeDelivery;
+  /** Ends the worktree once its work is delivered: the notice's answer. */
+  retire: WorktreeRetire;
+  /** Opens the Remove dialog: the answer to work that was not delivered. */
+  onRemove?: ((id: string) => void) | undefined;
   project?: ProjectRecord | undefined;
   sessions?: readonly SessionListItem[] | undefined;
   navigate: (path: string) => void;
@@ -65,6 +78,15 @@ export function WorktreeOverview({
     [sessions, worktree.id],
   );
   const branch = live?.branch ?? worktree.branch;
+  // Delivered: the branch is in its base, or its pull request was merged. The
+  // worktree has done its job, and Retire is the way it ends.
+  const prMerged = delivery.hosting?.pr?.state === "merged";
+  const integrated = Boolean(live?.merged && live.ahead > 0);
+  const delivered = !worktree.isMain && (prMerged || integrated);
+  // Closed unmerged: abandoned, unless it is reopened. Removing the worktree
+  // (and, as its dialog offers, the branch) is the way it ends.
+  const prClosed =
+    !worktree.isMain && !delivered && delivery.hosting?.pr?.state === "closed";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {toolbar}
@@ -74,6 +96,68 @@ export function WorktreeOverview({
             <h1 className="text-lg font-semibold wrap-anywhere text-foreground">
               {branch}
             </h1>
+            {delivered ? (
+              // A state that asks for a decision, as the Task page's notices:
+              // what happened, and the answer in the footer.
+              <AppCard
+                role="status"
+                tone="success"
+                icon={<GitMerge />}
+                label={
+                  prMerged
+                    ? "Pull request merged"
+                    : `Merged into ${worktree.baseBranch}`
+                }
+                actions={
+                  <Button size="xs" busy={retire.busy} onClick={retire.open}>
+                    <Trash2 />
+                    Retire worktree…
+                  </Button>
+                }
+              >
+                <p>
+                  Its work is in {worktree.baseBranch}. Retiring verifies that,
+                  settles the sessions working here, and removes the checkout
+                  and its branch.
+                </p>
+              </AppCard>
+            ) : null}
+            {prClosed ? (
+              <AppCard
+                role="status"
+                tone="neutral"
+                icon={<GitPullRequestClosed />}
+                label="Pull request closed"
+                {...(onRemove
+                  ? {
+                      actions: (
+                        <Button size="xs" onClick={() => onRemove(worktree.id)}>
+                          <Trash2 />
+                          Remove worktree…
+                        </Button>
+                      ),
+                    }
+                  : {})}
+              >
+                <p>
+                  Closed without being merged. If the work is not coming back,
+                  remove the worktree.
+                </p>
+              </AppCard>
+            ) : null}
+            {!worktree.isMain && live?.baseUnresolved ? (
+              <AppCard
+                role="status"
+                tone="warning"
+                icon={<TriangleAlert />}
+                label={`${worktree.baseBranch} not found`}
+              >
+                <p>
+                  The base branch is not in this repository, so how far the
+                  branch is ahead or behind it is unknown — not zero.
+                </p>
+              </AppCard>
+            ) : null}
             <WorktreeFacts
               worktree={worktree}
               status={live}
@@ -174,7 +258,7 @@ function WorktreeFacts({
           <House size={14} aria-hidden />
           Main checkout
         </span>
-      ) : status ? (
+      ) : status && !status.baseUnresolved ? (
         <span
           className="inline-flex items-center gap-1.5 font-mono text-xs"
           title={`Against ${worktree.baseBranch}: ${status.ahead} ahead, ${status.behind} behind`}

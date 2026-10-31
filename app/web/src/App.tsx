@@ -8184,6 +8184,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             // and change sets.
                             sidebarNavigation
                             sessions={state.sessions}
+                            sessionsFresh={state.sessionListFresh}
+                            onRemoveWorktree={requestRemoveWorktree}
                             project={projects.find(
                               (item) => item.id === worktree.projectId,
                             )}
