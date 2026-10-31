@@ -4,10 +4,18 @@
  * relation surfaces also share line deltas, the Integrated badge, linked-session
  * paging and expansion memory. The hosts still own their density and hierarchy.
  */
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Ban,
   ChevronRight,
+  CloudOff,
   GitBranch,
   House,
   MessageSquarePlus,
@@ -97,39 +105,38 @@ function WorktreeRowSummary({
     <SessionDeliveryMark session={{ pullRequest }} variant="reference" />
   ) : null;
   const integrated = Boolean(status?.merged && status.ahead > 0);
-  const showContext = Boolean(pullRequest || status?.dirty || integrated);
+  // Two lines, never three: the PR and Integrated marks close the branch's
+  // line, and the uncommitted delta opens the git line.
+  const marks =
+    pullRequest || integrated ? (
+      <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+        {prMark ? (
+          hosting?.pr?.url ? (
+            <a
+              href={hosting.pr.url}
+              target="_blank"
+              rel="noreferrer"
+              draggable={false}
+              aria-label={`Open PR #${hosting.pr.number}`}
+              className="inline-flex shrink-0 hover:underline"
+              onClick={(event) =>
+                followRowLink(event, event.currentTarget.href)
+              }
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              {prMark}
+            </a>
+          ) : (
+            <span className="inline-flex shrink-0">{prMark}</span>
+          )
+        ) : null}
+        {integrated ? <IntegratedBadge /> : null}
+      </span>
+    ) : null;
   return (
     <ListRowContent
       density={density}
       actionSpan="all"
-      context={
-        showContext ? (
-          <>
-            {prMark ? (
-              hosting?.pr?.url ? (
-                <a
-                  href={hosting.pr.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  draggable={false}
-                  aria-label={`Open PR #${hosting.pr.number}`}
-                  className="inline-flex shrink-0 hover:underline"
-                  onClick={(event) =>
-                    followRowLink(event, event.currentTarget.href)
-                  }
-                  onKeyDown={(event) => event.stopPropagation()}
-                >
-                  {prMark}
-                </a>
-              ) : (
-                <span className="inline-flex shrink-0">{prMark}</span>
-              )
-            ) : null}
-            {integrated ? <IntegratedBadge /> : null}
-            <WorktreeLineDelta status={status} />
-          </>
-        ) : undefined
-      }
       identity={
         <>
           <span
@@ -142,6 +149,7 @@ function WorktreeRowSummary({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {branch}
           </span>
+          {marks}
         </>
       }
       details={
@@ -194,6 +202,7 @@ function WorktreeRowSummary({
               Sessions <span>{sessionCount}</span>
             </Badge>
           ) : null}
+          <WorktreeLineDelta status={status} />
           <span className="flex min-w-0 flex-1 basis-0">
             {hasAxes(axes) ? (
               <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
@@ -268,19 +277,27 @@ function hasAxes(axes: WorktreeAxes): boolean {
 
 /**
  * The second line when no axis has anything to say: before git has answered,
- * that it is being checked; after, that there is nothing to do — level with the
- * base for a branch, current with its remote for the main checkout.
+ * that it is being checked; after, the axis it is level on drawn like any
+ * other but with grey zeros — the base for a branch, the remote for the main
+ * checkout.
  */
 function calmLine(
   worktree: WorktreeRecord,
   status: WorktreeGitStatus | undefined,
-): string {
+): ReactNode {
   if (!status) return "checking…";
-  if (worktree.isMain)
-    return status.upstream?.name
-      ? `up to date with ${status.upstream.name}`
-      : "up to date";
-  return `level with ${worktree.baseBranch || "base"}`;
+  const label = worktree.isMain
+    ? (status.upstream?.name ?? "upstream")
+    : worktree.baseBranch || "base";
+  return (
+    <span
+      title={
+        worktree.isMain ? `Up to date with ${label}` : `Level with ${label}`
+      }
+    >
+      {label} ↑0↓0
+    </span>
+  );
 }
 
 function AxesSummary({
@@ -346,7 +363,12 @@ function AxesSummary({
               className="mr-2 last:mr-0"
               title="This branch has never been pushed"
             >
-              unpublished
+              <CloudOff
+                size={12}
+                className="inline-block align-[-2px]"
+                aria-hidden
+              />
+              <span className="sr-only">unpublished</span>
             </span>
           )}
         </>
@@ -371,7 +393,7 @@ function Axis({
 }) {
   return (
     <span data-worktree-axis={id} className="mr-2 last:mr-0" title={title}>
-      {label}{" "}
+      {label} {ahead === 0 && behind === 0 ? "↑0↓0" : null}
       {ahead > 0 ? <span className="text-success">↑{ahead}</span> : null}
       {behind > 0 ? <span className="text-warning">↓{behind}</span> : null}
     </span>
@@ -379,6 +401,7 @@ function Axis({
 }
 
 function axisDivergence(ahead: number, behind: number, label: string): string {
+  if (ahead === 0 && behind === 0) return `level with ${label}`;
   return [
     ahead > 0 ? `${ahead} ahead of ${label}` : undefined,
     behind > 0 ? `${behind} behind ${label}` : undefined,

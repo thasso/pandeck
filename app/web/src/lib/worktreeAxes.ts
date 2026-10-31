@@ -87,7 +87,9 @@ export function worktreeAxes(
 
   // A main checkout IS the base branch, so that axis is meaningless there and
   // rendering `main ↑0 ↓0` on it would be noise pretending to be information.
-  if (!worktree.isMain && (status.ahead > 0 || status.behind > 0)) {
+  // A branch always shows where it stands against its base, level included,
+  // so every branch row reads the same way.
+  if (!worktree.isMain) {
     axes.base = {
       label: worktree.baseBranch || "base",
       ahead: status.ahead,
