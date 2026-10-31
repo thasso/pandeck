@@ -226,6 +226,25 @@ export async function removeManagedTree(
 }
 
 /**
+ * The ladder's step after a reclaim handed the tree back, on its own: owner
+ * access, one more removal, then a scan for what still blocks it. The Worker
+ * runs it between the server's reclaim and the result, which the server
+ * composes as {@link removeManagedTree} does (`checkoutLifecycle.ts`).
+ */
+export function removeAfterReclaim(
+  path: string,
+  options: Pick<ManagedTreeRemovalOptions, "remove" | "scanOptions"> = {},
+): { removed: true } | { removed: false; residue?: TreeResidue } {
+  const remove = options.remove ?? tryRemove;
+  restoreOwnerAccess(path);
+  if (remove(path)) return { removed: true };
+  const after = scanTreeResidue(path, options.scanOptions);
+  return after.foreign
+    ? { removed: false, residue: after.foreign }
+    : { removed: false };
+}
+
+/**
  * Who owns one directory. `undefined` for anything that is not a directory, or
  * that vanished: the removal itself reports what blocks it, and a scan that
  * guessed here would refuse on a race.

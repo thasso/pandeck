@@ -16,13 +16,15 @@ import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import { WATCH_METHODS } from "../workerProtocol/watchMethods.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
 import { fileHandlers } from "./files.ts";
+import { lifecycleHandlers } from "./lifecycle.ts";
 import { watchHandlers, type WatchSnapshot } from "./watch.ts";
 
 export interface RunningWorker {
   /**
    * Resolves once the connection has ended and every request the Worker was
    * serving has settled: with the exit receipt, once every git child it
-   * started has exited, and once every file handle it held is closed. Native
+   * started has exited, once every lifecycle handler has made its last
+   * deletion or signal, and once every file handle it held is closed. Native
    * opens still awaiting a descriptor are orphaned on end; their eventual
    * descriptors close without registration and do not hold this promise.
    */
@@ -69,6 +71,7 @@ export function startWorker(options: {
     Object.entries({
       ...checkoutGitHandlers(options.workerId),
       ...files.handlers,
+      ...lifecycleHandlers(options.workerId),
       ...watches.handlers,
     }).map(([method, handler]) => [
       method,

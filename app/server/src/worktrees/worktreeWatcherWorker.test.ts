@@ -1549,6 +1549,8 @@ for (const after of ["malformed", "failed"] as const)
       "the cleanup unsubscribe",
       () => served(WATCH_METHODS.unsubscribe) === unsubscribes + 1,
     );
+    // `served` counts the unsubscribe as it is dispatched, not as it runs.
+    await until("the native subscription went live", () => native.maxLive > 0);
     assert.equal(native.maxLive, 1, "the native subscription went live");
     await viewWaiter();
     await until("the waiter's settle", () => settled(waiter.id));
@@ -1665,6 +1667,10 @@ for (const definite of [
     else capture({ holdSubscribe: true }).rejectSubscribe("Not a directory");
     const unsubscribes = served(WATCH_METHODS.unsubscribe);
     await addWorktreeViewer(target.id);
+    assert.equal(served(WATCH_METHODS.unsubscribe), unsubscribes);
+    await until("the target's backoff", () =>
+      Boolean(treeActivityForTests(target.id)?.retryArmed),
+    );
     assert.equal(served(WATCH_METHODS.unsubscribe), unsubscribes);
     assert.equal(treeActivityForTests(target.id)!.retryArmed, true);
   });

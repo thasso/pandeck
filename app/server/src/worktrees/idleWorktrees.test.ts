@@ -159,7 +159,7 @@ test("a worktree is idle only when nobody up its ownership chain is live", async
     orphan: status({ dirty: true, filesChanged: 4 }),
   };
   const idle = await computeIdleWorktrees({
-    exists: (path) => !path.endsWith("vanished"),
+    exists: async (row) => !row.path.endsWith("vanished"),
     status: async (worktree) => {
       const answer = statuses[worktree.id];
       if (!answer) throw new Error("git failed");
@@ -180,7 +180,7 @@ test("a worktree is idle only when nobody up its ownership chain is live", async
   // failing for it reads as unknown.
   sessionStore.setSettled("coord", true);
   const after = await computeIdleWorktrees({
-    exists: () => true,
+    exists: async () => true,
     status: async () => {
       throw new Error("git failed");
     },
@@ -212,7 +212,7 @@ test("an open Workflow Run's worktree is not idle, and retire re-asks the rule",
   const listed = async () =>
     (
       await computeIdleWorktrees({
-        exists: () => true,
+        exists: async () => true,
         status: async () => status(),
       })
     ).map((item) => item.worktree.id);

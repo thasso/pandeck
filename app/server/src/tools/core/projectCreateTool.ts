@@ -22,10 +22,17 @@ import {
   cloneAndRegisterProjectRepo,
   projectRepoDir,
 } from "../../projectProvision.ts";
-import { existsSync } from "node:fs";
+import {
+  carryCheckoutFailure,
+  checkoutFilesOn,
+} from "../../checkoutFileAccess.ts";
 import { gitOptional } from "../../gitExec.ts";
 import { broadcastWorktreeList } from "../../worktrees/worktrees.ts";
-import { invalidateMainRepo } from "../../worktrees/worktreeResolve.ts";
+import { checkoutSideOf } from "../../worktrees/knowledgeCheckout.ts";
+import {
+  invalidateMainRepo,
+  mainWorktreeId,
+} from "../../worktrees/worktreeResolve.ts";
 import { parseRemoteUrl, type RemoteRepoRef } from "../../gitHosting.ts";
 import {
   githubRequest,
@@ -200,7 +207,7 @@ export const projectCreateTool = defineAgentTool<CreateParams>({
 
     const clone = repository !== undefined && params.clone !== false;
     const cloneDir = clone ? projectRepoDir(project.id) : undefined;
-    if (cloneDir && existsSync(cloneDir))
+    if (cloneDir && (await cloneDirExists(project.id, cloneDir)))
       throw new Error(
         `${cloneDir} already exists. Move it away, or pass clone=false and register it with project_registry_write addLocalPath after approval.`,
       );
@@ -587,6 +594,16 @@ function forgejoHost(config: ForgejoApiConfig): HostApi {
 
 /* ------------------------------- execution ------------------------------ */
 
+/**
+ * Whether the clone folder exists, on the side the project's main checkout
+ * will be on; a Worker failure rejects rather than reading as free.
+ */
+function cloneDirExists(projectId: string, dir: string): Promise<boolean> {
+  return checkoutFilesOn(
+    checkoutSideOf({ id: mainWorktreeId(projectId) }),
+  ).pathExists(dir, dir);
+}
+
 registerApprovalExecutor("projectCreate", {
   async execute(card: ApprovalCard) {
     if (card.body.kind !== "projectCreate")
@@ -601,7 +618,7 @@ registerApprovalExecutor("projectCreate", {
         throw new Error(
           `The projects folder changed since this was proposed: the clone would now go to ${target}, not ${b.cloneDir}. Nothing was created; propose it again.`,
         );
-      if (existsSync(b.cloneDir))
+      if (await cloneDirExists(b.project.id, b.cloneDir))
         throw new Error(
           `${b.cloneDir} appeared since this was proposed. Nothing was created; move it away, or propose again with clone=false.`,
         );
@@ -642,10 +659,15 @@ registerApprovalExecutor("projectCreate", {
         return await run();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          done.length
-            ? `${label} failed after it ${done.join(" and ")}: ${message}`
-            : `${label} failed: ${message}`,
+        // The rewrapped error keeps the cause's origin: a Worker failure stays
+        // one, so a caller still tells it from the step's own refusal.
+        throw carryCheckoutFailure(
+          error,
+          new Error(
+            done.length
+              ? `${label} failed after it ${done.join(" and ")}: ${message}`
+              : `${label} failed: ${message}`,
+          ),
         );
       }
     };
@@ -656,10 +678,10 @@ registerApprovalExecutor("projectCreate", {
     done.push(`registered project ${b.project.id}`);
     if (b.cloneDir && repoUrl) {
       const cloneDir = b.cloneDir;
-      const clone = await step("Cloning the repository", () => {
+      const clone = await step("Cloning the repository", async () => {
         // Checked again right before cloning: the clone helper reuses any
         // checkout it finds there, which would register an unrelated repository.
-        if (existsSync(cloneDir))
+        if (await cloneDirExists(b.project.id, cloneDir))
           throw new Error(`${cloneDir} appeared while approval ran.`);
         return cloneAndRegisterProjectRepo(b.project.id);
       });
