@@ -30,7 +30,6 @@ import {
   encodeResidueScan,
   refuseFilesystemRoot,
 } from "./lifecycleMethods.ts";
-import { WORKER_PROTOCOL_VERSION } from "./version.ts";
 
 /** `payload` through the real framing, as the peer receives it. */
 function wire(payload: Payload): Payload {
@@ -70,8 +69,7 @@ function assertMalformed(run: () => unknown): void {
   });
 }
 
-test("the protocol is 1.5 with seven lifecycle methods", () => {
-  assert.equal(WORKER_PROTOCOL_VERSION, "1.5");
+test("protocol 1.5 added seven lifecycle methods", () => {
   assert.deepEqual(Object.values(LIFECYCLE_METHODS).sort(), [
     "lifecycle.createDir",
     "lifecycle.discardTree",

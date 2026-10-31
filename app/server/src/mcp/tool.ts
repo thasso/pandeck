@@ -2,9 +2,10 @@
  * The app's own, harness-neutral tool interface. Every domain tool (see
  * `src/tools/`) is an {@link AgentTool}; the per-session MCP server exposes them
  * over MCP. Nothing in this folder may import the pi or Claude SDKs — the pi
- * harness runs these tools through its direct adapter
- * (`piSdk/agentToolAdapter.ts`), the Claude harness by mounting the server
- * in-process (`claudeSdk/`).
+ * harness adapts these tools into its own definitions
+ * (`piSdk/agentToolAdapter.ts`), the Claude harness mounts the server
+ * in-process (`claudeSdk/`). In an interactive session of either, a call runs
+ * on the server through the session's Worker ({@link AppToolExecutor}).
  */
 import type { AgentType, Harness } from "@assistant/shared";
 
@@ -64,6 +65,18 @@ export interface ToolCallContext {
    */
   progress?: (partial: ToolResult) => void;
 }
+
+/**
+ * Runs one of a session's app tools away from its engine: an interactive
+ * engine's calls cross to the server through the session's Worker
+ * (`workers/appToolHost.ts`), which resolves the tool and applies the
+ * session's authority.
+ */
+export type AppToolExecutor = (
+  name: string,
+  args: Record<string, unknown>,
+  ctx: Omit<ToolCallContext, "session">,
+) => Promise<ToolResult>;
 
 /** Whether a tool can change durable local state or a system outside the app. */
 export type ToolSideEffects = "none" | "local" | "external";

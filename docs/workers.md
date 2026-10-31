@@ -214,15 +214,16 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.5` (`1.0` plus the file methods, `1.2`'s path
+What runs today is protocol `1.6` (`1.0` plus the file methods, `1.2`'s path
 methods for checkout reads, `1.3`'s `files.readlink` and inspect `mode` for the
-workflows' reads, `1.4`'s watch methods for the worktree watcher, and `1.5`'s
-lifecycle methods for creating, removing and provisioning checkouts), between
-the server and the in-process Worker. The code lives in
-`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
-which imports no server state) and `workers/` (the server's side and placement);
-`workerBoundary.test.ts` keeps that split. The protocol stays out of
-`app/shared/`: the web client never speaks it.
+workflows' reads, `1.4`'s watch methods for the worktree watcher, `1.5`'s
+lifecycle methods for creating, removing and provisioning checkouts, and `1.6`'s
+app-tool methods for interactive sessions' app tools), between the server and
+the in-process Worker. The code lives in `app/server/src/workerProtocol/` (the
+protocol), `worker/` (the Worker's side, which imports no server state) and
+`workers/` (the server's side and placement); `workerBoundary.test.ts` keeps
+that split. The protocol stays out of `app/shared/`: the web client never speaks
+it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -300,8 +301,11 @@ which imports no server state) and `workers/` (the server's side and placement);
     the rest of R1 stays with review.
   - Registry `localPaths` warnings still read the server's `node:fs`
     (Task-1153).
-  - The `ls` app tool still reads session paths on the server's `node:fs`
-    (Task-1174).
+  - The `ls` app tool lists through its session's Worker but expands `~` with
+    the server's home (`userHomeDir()`); the in-process Worker shares that
+    account, so phase 3 must expand it on the Worker. In a session whose cwd is
+    the Knowledge Base, `ls` lists through the default Worker too, as `/commit`
+    does.
   - A session whose cwd is the Knowledge Base runs `/commit`, `/push` and `/pr`
     git on the default Worker, as before W6.
   - `sessionCheckoutSide` ignores its session until phase 4.
@@ -607,6 +611,38 @@ which imports no server state) and `workers/` (the server's side and placement);
     server's cwd, or that root must become absolute. Phase 3 (Task-1154) settles
     the reclaim's container run and its uid, and a `projectsRoot` given with
     `~`, which the server expands against its own home.
+
+- **App tools (W7).** An interactive pi or Claude session's app tools (the
+  catalog's `pa` tools) run on the server through the session's Worker. Protocol
+  `1.6` (`workerProtocol/appToolMethods.ts`) adds two methods and changes no
+  earlier method's meaning, payload or failure shape:
+  - `appTools.call` goes from the Worker to the server and names the session,
+    the tool, the engine's tool-call id and the arguments, with a call id the
+    Worker mints. The server (`workers/appToolHost.ts`) takes the Worker id from
+    the connection's admission, never the payload, and refuses a session not
+    placed on that Worker (`not_placed`) before any lookup. It then resolves the
+    binding the session's harness registered while its engine is live
+    (`no_tool_session` without one), which applies that harness's own gate with
+    its own text: Claude's unknown and inactive checks, pi's Plan denial (pi
+    checks no active set at call time). The answer is the tool's result as JSON;
+    a tool's failure is the call's failure, its message as text.
+  - `appTools.progress` goes from the server to the Worker with one partial,
+    sent only when the engine asked for progress (pi's `onUpdate`, a Claude
+    `progressToken`). The Worker hands it to the waiting call synchronously, so
+    every partial reaches the engine, in order, before the call's answer.
+  - Aborting the engine's signal (pi's, or an MCP `notifications/cancelled`) is
+    the protocol's `cancel`, which aborts the tool's `ctx.signal`; the tool's
+    own outcome still settles the call.
+  - Only catalog app tools cross. pi's `find_tools`, which changes the engine's
+    active set inside its execute window, and pi's background `bash` and
+    `monitor`, which are native tools, execute in the engine with the gate
+    applied there. One-shot runs and task intake execute their tools directly on
+    the server.
+  - Known limits: a result's `details` reach the engine in their JSON form,
+    which is what the transcript already stores; a call whose signal is aborted
+    before it is sent is withdrawn without running the tool; a binding closes
+    over the live engine's objects, which W9/W10 replace when engines leave the
+    server.
 
 - **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
   answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and
@@ -968,7 +1004,8 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)     | landed  |
 | W5     | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)    | landed  |
 | W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | landed  |
-| W7–W10 | The engine host: app tools, approvals and hooks, then pi and Claude sessions         | planned |
+| W7     | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)    | landed  |
+| W8–W10 | The engine host: approvals and hooks, then pi and Claude sessions                    | planned |
 | W11    | Isolation boundary and secret store ports                                            | planned |
 
 `workerBoundary.test.ts` asserts that no module of the checkout family imports

@@ -65,6 +65,13 @@ export class WorkerRegistry {
     return this.connections.get(workerId)?.connection;
   }
 
+  /** The Worker id `connection` was admitted as, while it is open. */
+  admittedAs(connection: WorkerConnection): string | undefined {
+    for (const [workerId, entry] of this.connections)
+      if (entry.connection === connection) return workerId;
+    return undefined;
+  }
+
   /** The epoch of `workerId`'s open connection. */
   epoch(workerId: string): number | undefined {
     return this.connections.get(workerId)?.epoch;

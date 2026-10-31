@@ -93,6 +93,7 @@ const MIGRATED_CHECKOUT_READERS = [
   "projectProvision.ts",
   "pullRequestHosting.ts",
   "sessionSpawn.ts",
+  "tools/core/lsTool.ts",
   "tools/core/projectCreateTool.ts",
   "workflow/operationTriage.ts",
   "workflow/rebaseRepair.ts",

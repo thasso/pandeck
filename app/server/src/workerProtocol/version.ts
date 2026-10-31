@@ -4,7 +4,7 @@
  * renaming, removing or changing what a method means bumps the major. Two
  * versions work together exactly when their majors are equal.
  */
-export const WORKER_PROTOCOL_VERSION = "1.5";
+export const WORKER_PROTOCOL_VERSION = "1.6";
 
 const VERSION = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 
