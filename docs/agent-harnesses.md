@@ -191,16 +191,22 @@ Four layers, each depending only on the ones below it:
      state instead hands raw loading/usage and wire sizes to
      `buildSessionState`, which applies catalog, agent, integration and mode
      gates. Registrations remain available to detached views during this
-     migration. `harnesses/piSession.ts` is a type-only pass-through: a commit
-     dry run names the pi session types it is recorded on.
+     migration.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
-   the only place their SDK package is imported. Each session class composes a
-   shared session kit (`sessionKit/`) instead of carrying a copy:
-   `SessionResidency` owns the viewer set and the idle clock, and the engine
-   says only when it is idle and how its store releases it. `hostCommandTurn.ts`
-   emits a synthetic host-command turn (open, progress, discard, tool output or
-   card) to viewers and the runtime adapter alike, while the engine keeps the
-   turn's ids, running state and teardown. A host command ends its turn with one
+   the only place their SDK package is imported. Server code, `PiLiveSession`
+   included, reaches a live pi engine only through `PiEngineHandle`
+   (`piSdk/piEngine.ts`): reads are synchronous, commands return promises the
+   consumer awaits before reading what they changed, and no member returns an
+   SDK object. The engine's loop policy (retry suppression, the compaction
+   window's check on each run start and model change) runs behind the handle,
+   before any listener sees the event. A commit dry run is recorded on the
+   handle's tool session manager. Each session class composes a shared session
+   kit (`sessionKit/`) instead of carrying a copy: `SessionResidency` owns the
+   viewer set and the idle clock, and the engine says only when it is idle and
+   how its store releases it. `hostCommandTurn.ts` emits a synthetic
+   host-command turn (open, progress, discard, tool output or card) to viewers
+   and the runtime adapter alike, while the engine keeps the turn's ids, running
+   state and teardown. A host command ends its turn with one
    `finishSyntheticCard`, whichever card it renders. The live display-block
    helpers live in `session/runtime/liveBlocks.ts`. Both engines supply native
    facts to the app's state owner. Their state broadcasts use the injected

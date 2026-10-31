@@ -67,7 +67,7 @@ export interface PiDriver {
   skillDispatch?(name: string): SkillDispatch;
   abort(): void | Promise<void>;
   setModel(model: unknown): void | Promise<void>;
-  setThinkingLevel(level: string): void;
+  setThinkingLevel(level: string): void | Promise<void>;
   /** Best-effort metadata for driver-completion fallback when no native completion event arrives. */
   completionMetadata?(): { model?: string; usage?: AgentUsage };
   readonly sessionFile: string | undefined;
@@ -286,8 +286,8 @@ class PiAdapter implements PromptableAdapter {
     return this.driver.setModel(resolved);
   }
 
-  setReasoning(level: string): void {
-    this.driver.setThinkingLevel(level);
+  setReasoning(level: string): void | Promise<void> {
+    return this.driver.setThinkingLevel(level);
   }
 
   listModels(): Promise<SessionConfigModel[]> {

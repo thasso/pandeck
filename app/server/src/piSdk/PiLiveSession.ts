@@ -6,10 +6,8 @@
  * import hub.ts.
  */
 import type {
-  AgentSession,
   AgentSessionEvent,
   CompactionResult,
-  SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type {
   AgentType,
@@ -40,14 +38,8 @@ import { CWD } from "../config.ts";
 import { resetMemorySessionContext } from "../memory/memoryRuntime.ts";
 import { memoryScheduler } from "../memory/memoryScheduler.ts";
 import { buildModelPromptWithAttachments } from "../promptAttachments.ts";
+import { findModel, toModelOption, type PiModel } from "./models.ts";
 import {
-  findModel,
-  modelRegistry,
-  toModelOption,
-  type PiModel,
-} from "./models.ts";
-import {
-  analyzeProviderError,
   providerErrorDisplayText,
   runFailureFacts,
   shouldSuppressProviderRetry,
@@ -75,7 +67,13 @@ import type {
   LiveSession,
   Viewer,
 } from "../harness.ts";
-import { compactionWindowFor } from "./compactionWindow.ts";
+import {
+  piProviderErrorInfo,
+  terminalAssistantError,
+  type PiEngineHandle,
+  type PiEngineModel,
+  type PiTranscriptView,
+} from "./piEngine.ts";
 import { SessionResidency } from "../sessionKit/residency.ts";
 import {
   discardHostCommandTurn,
@@ -174,7 +172,7 @@ function extractTextContent(content: unknown): string {
     .join("\n");
 }
 
-function forkTitleContext(sm: SessionManager): string {
+function forkTitleContext(sm: Pick<PiTranscriptView, "getBranch">): string {
   const entries = sm.getBranch() as Array<{
     type?: string;
     message?: { role?: string; content?: unknown };
@@ -194,41 +192,6 @@ function forkTitleContext(sm: SessionManager): string {
   return context.length > 6000 ? `…${context.slice(-6000)}` : context;
 }
 
-function terminalAssistantError(message: unknown): string | undefined {
-  const m = message as
-    | { role?: unknown; stopReason?: unknown; errorMessage?: unknown }
-    | null
-    | undefined;
-  if (!m || m.role !== "assistant") return undefined;
-  const errorMessage =
-    typeof m.errorMessage === "string" ? m.errorMessage : undefined;
-  if (m.stopReason === "error") return errorMessage || "Unknown provider error";
-  return undefined;
-}
-
-function assistantErrorMetadata(message: unknown): {
-  api?: string;
-  provider?: string;
-  model?: string;
-  responseId?: string;
-} {
-  const m = message as
-    | {
-        api?: unknown;
-        provider?: unknown;
-        model?: unknown;
-        responseId?: unknown;
-      }
-    | null
-    | undefined;
-  return {
-    ...(typeof m?.api === "string" ? { api: m.api } : {}),
-    ...(typeof m?.provider === "string" ? { provider: m.provider } : {}),
-    ...(typeof m?.model === "string" ? { model: m.model } : {}),
-    ...(typeof m?.responseId === "string" ? { responseId: m.responseId } : {}),
-  };
-}
-
 /* -------------------------------- helpers -------------------------------- */
 
 function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
@@ -246,12 +209,12 @@ function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
  * One long-lived agent run, decoupled from any socket. Multiple {@link Viewer}s
  * (browser tabs) can attach; events are broadcast to all of them, and an
  * atomic {@link snapshot} lets a (re)connecting viewer catch up with no data
- * loss. The underlying {@link AgentSession} keeps running across detach so a run
- * survives a tab close or reconnect.
+ * loss. The underlying engine keeps running across detach so a run survives a
+ * tab close or reconnect.
  */
 /** A replacement engine prepared without changing the live wrapper or its tools. */
 export interface PiAccountSession {
-  session: AgentSession;
+  engine: PiEngineHandle;
   commit(): void;
   dispose(): void;
 }
@@ -288,8 +251,6 @@ export class PiLiveSession implements LiveSession {
     phase?: string;
     requestBytes?: number;
   } = {};
-  private retrySettingsBeforeSuppression:
-    ReturnType<AgentSession["settingsManager"]["getRetrySettings"]> | undefined;
   /**
    * Cumulative session totals sampled at `agent_start`, so the completed turn's
    * durable usage is THIS run's delta (pi only exposes session-cumulative stats).
@@ -309,8 +270,9 @@ export class PiLiveSession implements LiveSession {
   private running = false;
   private driveCompletion: Promise<unknown> | undefined;
 
-  get session(): AgentSession {
-    return this.agentSession;
+  /** The only way this wrapper reaches its pi engine (`piEngine.ts`). */
+  get engine(): PiEngineHandle {
+    return this.currentEngine;
   }
 
   get credentialProfileId(): string | undefined {
@@ -326,7 +288,7 @@ export class PiLiveSession implements LiveSession {
 
   constructor(
     readonly kind: AgentType,
-    private agentSession: AgentSession,
+    private currentEngine: PiEngineHandle,
     private readonly host: HarnessHost,
     private readonly onEvict: (key: string) => void,
     private initialNotices: Array<{
@@ -343,26 +305,26 @@ export class PiLiveSession implements LiveSession {
       profileId: string,
     ) => Promise<PiAccountSession>,
   ) {
-    const session = agentSession;
-    this.key = session.sessionId;
+    const engine = currentEngine;
+    this.key = engine.sessionId;
     // Registered by its store (`track`) as soon as it is built.
     this.residency.hold(() => {
       this.dispose();
       this.onEvict(this.key);
       return true;
     });
-    this.unsubscribe = session.subscribe((event) => this.onAgentEvent(event));
+    this.unsubscribe = engine.subscribe((event) => this.onAgentEvent(event));
     this.unsubscribeQuestions = subscribeAgentQuestionChanges((sessionId) => {
-      if (sessionId !== this.session.sessionId) return;
+      if (sessionId !== this.engine.sessionId) return;
       this.broadcastState();
     });
     this.unsubscribeApprovals = subscribePendingApprovalChanges((sessionId) => {
-      if (sessionId !== this.session.sessionId) return;
+      if (sessionId !== this.engine.sessionId) return;
       this.broadcastState();
     });
     this.unsubscribeTaskChoices = subscribeChoosingTaskCardChanges(
       (sessionId) => {
-        if (sessionId !== this.session.sessionId) return;
+        if (sessionId !== this.engine.sessionId) return;
         this.broadcastState();
       },
     );
@@ -371,8 +333,8 @@ export class PiLiveSession implements LiveSession {
     // wrapper, so leaving this.title undefined would let the next prompt become
     // the live title and then get persisted back into the session index.
     this.title = restorePiLiveTitle(
-      this.session.sessionName,
-      sessionStore.get(this.session.sessionId)?.title,
+      this.engine.sessionName,
+      sessionStore.get(this.engine.sessionId)?.title,
     );
     // Registry sync: record a clean per-session metadata entry. Covers every pi
     // create path (acquireNew / acquireExisting / fork all run through track →
@@ -381,12 +343,12 @@ export class PiLiveSession implements LiveSession {
   }
 
   get sessionId(): string {
-    return this.session.sessionId;
+    return this.engine.sessionId;
   }
 
   /** Our session id (= the pi session id; pi sessions are not re-id'd). */
   get id(): string {
-    return this.session.sessionId;
+    return this.engine.sessionId;
   }
 
   /** Which engine runs this session — pi, for every {@link PiLiveSession}. */
@@ -407,23 +369,23 @@ export class PiLiveSession implements LiveSession {
    */
   private syncRegistry(): void {
     try {
-      const stats = this.session.getSessionStats();
+      const stats = this.engine.stats();
       if (stats.totalMessages === 0) return;
-      const model = this.session.model as unknown as PiModel | undefined;
-      const thinkingLevelValue = this.session.thinkingLevel as
+      const model = this.engine.model as unknown as PiModel | undefined;
+      const thinkingLevelValue = this.engine.thinkingLevel as
         string | undefined;
       sessionStore.upsert({
-        id: this.session.sessionId,
+        id: this.engine.sessionId,
         harness: "pi",
         agentType: this.kind,
         ...(model?.provider !== undefined ? { provider: model?.provider } : {}),
-        providerSessionId: this.session.sessionId,
+        providerSessionId: this.engine.sessionId,
         ...(model?.id !== undefined ? { model: model?.id } : {}),
         ...(thinkingLevelValue !== undefined
           ? { thinkingLevel: thinkingLevelValue }
           : {}),
         mode: this.mode,
-        title: this.title ?? this.session.sessionName ?? "New session",
+        title: this.title ?? this.engine.sessionName ?? "New session",
         createdAt: Date.now(),
         // Only real in-memory activity (prompts, turns, renames) may advance
         // updatedAt. Opening/restoring a session (constructor sync) passes
@@ -438,12 +400,12 @@ export class PiLiveSession implements LiveSession {
   }
 
   get sessionFile(): string | undefined {
-    return this.session.sessionFile;
+    return this.engine.sessionFile;
   }
 
   /** The live title, else the name pi itself gave the session. */
   get sessionTitle(): string | undefined {
-    return this.title ?? this.session.sessionName;
+    return this.title ?? this.engine.sessionName;
   }
 
   get isRunning(): boolean {
@@ -550,28 +512,7 @@ export class PiLiveSession implements LiveSession {
     error: string,
     message?: unknown,
   ): ProviderErrorInfo {
-    const model = this.session.model as unknown as PiModel | undefined;
-    const metadata = assistantErrorMetadata(message);
-    let authMode: ProviderErrorInfo["authMode"] = "unknown";
-    try {
-      if (model)
-        authMode = modelRegistry.isUsingOAuth(model as any)
-          ? "subscription"
-          : "api_key";
-    } catch {
-      authMode = "unknown";
-    }
-    const providerValue = metadata.provider ?? model?.provider;
-    const modelValue = metadata.model ?? model?.id;
-    return analyzeProviderError(error, {
-      ...(providerValue !== undefined ? { provider: providerValue } : {}),
-      ...(modelValue !== undefined ? { model: modelValue } : {}),
-      ...(metadata.api !== undefined ? { api: metadata.api } : {}),
-      ...(metadata.responseId !== undefined
-        ? { responseId: metadata.responseId }
-        : {}),
-      authMode,
-    });
+    return piProviderErrorInfo(this.engine.model, error, message);
   }
 
   private broadcastContextInfo(force = false): void {
@@ -580,7 +521,7 @@ export class PiLiveSession implements LiveSession {
     this.lastContextBroadcastAt = now;
     this.broadcast({
       type: "contextInfo",
-      sessionId: this.session.sessionId,
+      sessionId: this.engine.sessionId,
       info: this.contextInfo(),
     });
   }
@@ -588,7 +529,7 @@ export class PiLiveSession implements LiveSession {
   /* --------------------------------- events -------------------------------- */
 
   private onAgentEvent(event: AgentSessionEvent): void {
-    const sessionId = this.session.sessionId;
+    const sessionId = this.engine.sessionId;
     switch (event.type) {
       case "agent_start": {
         this.residency.cancel();
@@ -614,13 +555,6 @@ export class PiLiveSession implements LiveSession {
         }
         this.awaitingRetryContinuation = false;
         this.retryAttemptError = undefined;
-        compactionWindowFor(this.session)?.verify();
-        if (this.retrySettingsBeforeSuppression) {
-          this.session.settingsManager.applyOverrides({
-            retry: this.retrySettingsBeforeSuppression,
-          });
-          this.retrySettingsBeforeSuppression = undefined;
-        }
         this.currentAssistantError = undefined;
         this.currentAssistantErrorInfo = undefined;
         this.currentAssistantAborted = false;
@@ -703,14 +637,6 @@ export class PiLiveSession implements LiveSession {
           this.currentAssistantError = providerErrorDisplayText(
             this.currentAssistantErrorInfo,
           );
-          if (shouldSuppressProviderRetry(this.currentAssistantErrorInfo)) {
-            if (!this.retrySettingsBeforeSuppression)
-              this.retrySettingsBeforeSuppression =
-                this.session.settingsManager.getRetrySettings();
-            this.session.settingsManager.applyOverrides({
-              retry: { ...this.retrySettingsBeforeSuppression, maxRetries: 0 },
-            });
-          }
           console.error(this.currentAssistantError);
         }
         break;
@@ -719,8 +645,8 @@ export class PiLiveSession implements LiveSession {
         const retryError = this.providerErrorInfo(event.errorMessage);
         if (this.awaitingRetryContinuation && !this.retryAttemptError)
           this.retryAttemptError = providerErrorDisplayText(retryError);
+        // The engine has already aborted the retry (`piEngine.ts`).
         if (shouldSuppressProviderRetry(retryError)) {
-          this.session.abortRetry();
           this.providerNotice(
             "warning",
             `${providerErrorDisplayText(retryError)} Retries were skipped because this error is not expected to recover automatically.`,
@@ -781,7 +707,7 @@ export class PiLiveSession implements LiveSession {
         // coalesce a pending-observation flush here before context is reset. The
         // manual `/compact` path already awaits its own pre-flush; flushSession is
         // single-flight, so a redundant trigger is harmless.
-        void memoryScheduler.flushBeforeReset(this.session.sessionId);
+        void memoryScheduler.flushBeforeReset(this.engine.sessionId);
         break;
       }
       case "compaction_end": {
@@ -794,7 +720,7 @@ export class PiLiveSession implements LiveSession {
         // next turn re-injects (Task 96). Idempotent, so a double reset from the
         // explicit /compact path is harmless.
         if (!event.aborted && event.result) {
-          resetMemorySessionContext(this.session.sessionId);
+          resetMemorySessionContext(this.engine.sessionId);
         }
         break;
       }
@@ -872,11 +798,8 @@ export class PiLiveSession implements LiveSession {
         break;
       }
       case "agent_end": {
-        // The maxRetries=0 suppression override should already make willRetry
-        // false; retain the settings guard defensively for SDK event snapshots.
-        const retryContinues =
-          event.willRetry && !this.retrySettingsBeforeSuppression;
-        if (!retryContinues) break;
+        // Under retry suppression the engine reports `willRetry: false`.
+        if (!event.willRetry) break;
         const id = this.currentAssistantId;
         this.awaitingRetryContinuation = true;
         this.retryAttemptError = this.currentAssistantError;
@@ -889,7 +812,7 @@ export class PiLiveSession implements LiveSession {
         this.syncRegistry();
         if (id) {
           this.broadcast({ type: "assistantEnd", sessionId, id });
-          const model = (this.session.model as unknown as PiModel | undefined)
+          const model = (this.engine.model as unknown as PiModel | undefined)
             ?.id;
           const usage = this.turnUsage();
           // Preserve the old one-entry-per-attempt transcript shape, but do not
@@ -944,7 +867,7 @@ export class PiLiveSession implements LiveSession {
             ...(errorInfo !== undefined ? { errorInfo } : {}),
             ...(aborted ? { aborted: true } : {}),
           });
-          const model = (this.session.model as unknown as PiModel | undefined)
+          const model = (this.engine.model as unknown as PiModel | undefined)
             ?.id;
           const usage = this.turnUsage();
           this.adapterEvents.messageCompleted(id, {
@@ -1005,7 +928,7 @@ export class PiLiveSession implements LiveSession {
   /** Where this session's host-command turns are shown (`sessionKit/hostCommandTurn.ts`). */
   private get hostCommandTarget(): HostCommandTurnTarget {
     return {
-      sessionId: this.session.sessionId,
+      sessionId: this.engine.sessionId,
       broadcast: (message) => this.broadcast(message),
       adapterEvents: this.adapterEvents,
     };
@@ -1023,7 +946,7 @@ export class PiLiveSession implements LiveSession {
     assertAccountRecoveryAdmission(this.sessionId);
     if (this.running)
       throw new SessionBusyError(
-        this.session.sessionId,
+        this.engine.sessionId,
         "Cannot run a slash command while the agent is streaming.",
       );
     if (this.host.isReloadQueued()) throw new Error(RELOAD_QUEUED_MESSAGE);
@@ -1108,9 +1031,9 @@ export class PiLiveSession implements LiveSession {
     this.host.checkPendingReload();
   }
 
-  /** Minimal session context the commit workflow needs (its real sessionManager). */
+  /** Minimal session context the commit workflow needs (the engine's transcript). */
   commitWorkflowContext(): { sessionManager: unknown; cwd?: string } {
-    return { sessionManager: this.session.sessionManager, cwd: this.cwd };
+    return { sessionManager: this.engine.toolSessionManager(), cwd: this.cwd };
   }
 
   /**
@@ -1130,7 +1053,7 @@ export class PiLiveSession implements LiveSession {
     });
     try {
       const result = await acceptCommitDryRun({
-        session: this.session,
+        sessionManager: this.engine.toolSessionManager(),
         entryId,
         cwd: this.cwd,
         side: sessionCheckoutSide(this.sessionId),
@@ -1161,19 +1084,17 @@ export class PiLiveSession implements LiveSession {
       abort: () => this.abort(),
       skillDispatch: (name) =>
         piSkillDispatch(
-          this.session.resourceLoader,
-          activeSkillsForSession(this.session.sessionId, this.kind) ?? [],
+          { getSkills: () => ({ skills: this.engine.skills() }) },
+          activeSkillsForSession(this.engine.sessionId, this.kind) ?? [],
           name,
         ),
-      setModel: (model) =>
-        this.setModel(model as Parameters<AgentSession["setModel"]>[0]),
+      setModel: (model) => this.setModel(model as PiEngineModel),
       setThinkingLevel: (level) =>
         this.setThinkingLevel(level as ThinkingLevel),
-      modelProvider: () => this.session.model?.provider,
-      modelId: () => this.session.model?.id,
+      modelProvider: () => this.engine.model?.provider,
+      modelId: () => this.engine.model?.id,
       completionMetadata: () => {
-        const model = (this.session.model as unknown as PiModel | undefined)
-          ?.id;
+        const model = (this.engine.model as unknown as PiModel | undefined)?.id;
         const usage = this.turnUsage();
         return { ...(model ? { model } : {}), ...(usage ? { usage } : {}) };
       },
@@ -1196,7 +1117,7 @@ export class PiLiveSession implements LiveSession {
       if (
         this.disposed ||
         this.running ||
-        this.session.isStreaming ||
+        this.engine.isStreaming ||
         this.profileId !== previous
       )
         throw new Error("The pi session changed during its account switch.");
@@ -1204,30 +1125,30 @@ export class PiLiveSession implements LiveSession {
     };
     await this.driveCompletion?.catch(() => {});
     check();
-    const manager = this.session.sessionManager;
-    const leaf = manager.getLeafId();
+    const transcript = this.engine.transcript;
+    const leaf = transcript.getLeafId();
     const replacement = await this.reopenForAccount(profileId);
     let committed = false;
     try {
       check();
-      if (replacement.session.sessionId !== this.id)
+      if (replacement.engine.sessionId !== this.id)
         throw new Error("The reopened pi session has a different id.");
       if (
-        manager.getLeafId() !== leaf ||
-        replacement.session.sessionManager.getLeafId() !== leaf
+        transcript.getLeafId() !== leaf ||
+        replacement.engine.transcript.getLeafId() !== leaf
       )
         throw new Error("The pi transcript changed during its account switch.");
       sessionStore.switchCredentialProfile(this.id, previous, profileId);
       committed = true;
-      const old = this.session;
+      const old = this.engine;
       this.unsubscribe();
-      this.agentSession = replacement.session;
+      this.currentEngine = replacement.engine;
       this.profileId = profileId;
-      this.unsubscribe = this.session.subscribe((event) =>
+      this.unsubscribe = this.engine.subscribe((event) =>
         this.onAgentEvent(event),
       );
       replacement.commit();
-      old.dispose();
+      void old.dispose();
       this.broadcastState();
       void this.host.broadcastSessions();
     } catch (error) {
@@ -1255,7 +1176,7 @@ export class PiLiveSession implements LiveSession {
     // with nothing in between. A caller that asked to steer and only steer gets
     // "ignored" rather than a turn it never asked to start — the runtime's own
     // `runState` check ran earlier and may already be stale by now.
-    if (options.steerOnly && !this.session.isStreaming) return "ignored";
+    if (options.steerOnly && !this.engine.isStreaming) return "ignored";
 
     // Idempotent on clientRequestId: a duplicate submit (double-click, reconnect
     // resend) is a no-op so it can't open a second turn or echo a second bubble.
@@ -1264,7 +1185,7 @@ export class PiLiveSession implements LiveSession {
       this.handledRequestIds.add(options.clientRequestId);
     }
 
-    if (this.host.isReloadQueued() && !this.session.isStreaming) {
+    if (this.host.isReloadQueued() && !this.engine.isStreaming) {
       this.notice("warning", RELOAD_QUEUED_MESSAGE);
       return "ignored";
     }
@@ -1274,17 +1195,17 @@ export class PiLiveSession implements LiveSession {
     // `/skill:` token and context pi is sent.
     const titleText = options.titleText ?? promptText;
     const { promptWithFiles, images } = buildModelPromptWithAttachments(
-      this.session.sessionId,
+      this.engine.sessionId,
       promptText,
       attachments,
     );
 
     const storedTitle =
-      this.title ?? sessionStore.get(this.session.sessionId)?.title;
+      this.title ?? sessionStore.get(this.engine.sessionId)?.title;
     const shouldAutoName = shouldAutoNamePiSession({
-      sessionManager: this.session.sessionManager,
-      ...(this.session.sessionName !== undefined
-        ? { nativeSessionName: this.session.sessionName }
+      sessionManager: this.engine.transcript,
+      ...(this.engine.sessionName !== undefined
+        ? { nativeSessionName: this.engine.sessionName }
         : {}),
       ...(storedTitle !== undefined ? { storedTitle } : {}),
     });
@@ -1292,15 +1213,15 @@ export class PiLiveSession implements LiveSession {
       ? getSettings().sessionNaming
       : undefined;
     const shouldAutoNameFork =
-      !this.session.isStreaming &&
-      isForkAutoRenamePending(this.session.sessionManager);
+      !this.engine.isStreaming &&
+      isForkAutoRenamePending(this.engine.transcript);
     const forkNamingContext = shouldAutoNameFork
-      ? forkTitleContext(this.session.sessionManager)
+      ? forkTitleContext(this.engine.transcript)
       : undefined;
     const forkOriginalName = shouldAutoNameFork
-      ? this.session.sessionName
+      ? this.engine.sessionName
       : undefined;
-    this.title ??= restorePiLiveTitle(this.session.sessionName, storedTitle);
+    this.title ??= restorePiLiveTitle(this.engine.sessionName, storedTitle);
     if (shouldAutoName) {
       this.title ??= namingSettings?.enabled
         ? UNLABELED_SESSION_TITLE
@@ -1309,7 +1230,7 @@ export class PiLiveSession implements LiveSession {
     }
     const now = Date.now();
     prepareToolsForUserTurn(
-      this.session.sessionId,
+      this.engine.sessionId,
       this.updatedAt > 0 ? now - this.updatedAt : 0,
     );
     this.updatedAt = now;
@@ -1332,7 +1253,7 @@ export class PiLiveSession implements LiveSession {
       if (options.hidden) return;
       this.broadcast({
         type: "userMessage",
-        sessionId: this.session.sessionId,
+        sessionId: this.engine.sessionId,
         message,
         ...(options.clientRequestId !== undefined
           ? { clientRequestId: options.clientRequestId }
@@ -1348,15 +1269,16 @@ export class PiLiveSession implements LiveSession {
     // words belong on screen the moment they are sent, failure or not.
     if (!options.steerOnly) emitUserMessage();
     this.broadcastContextInfo(true);
-    const wasRunning = this.running || this.session.isStreaming;
+    const wasRunning = this.running || this.engine.isStreaming;
     if (!wasRunning) {
       this.residency.cancel();
       this.running = true;
       this.host.noteRunStarted();
     }
-    const run = this.session.isStreaming
-      ? this.session.steer(promptWithFiles, images)
-      : this.session.prompt(promptWithFiles, { images });
+    const run = this.engine.submit(promptWithFiles, images, {
+      steer: this.engine.isStreaming,
+      steerOnly: Boolean(options.steerOnly),
+    });
     if (!wasRunning) this.driveCompletion = run;
     if (options.steerOnly) {
       // A refused `steerOnly` is expected control flow, not a provider failure:
@@ -1385,59 +1307,22 @@ export class PiLiveSession implements LiveSession {
   async dropEncryptedReasoning(admit: () => void): Promise<boolean> {
     await this.driveCompletion?.catch(() => undefined);
     admit();
-    if (this.running || this.session.isStreaming || this.disposed) return false;
-    let changed = false;
-    const manager = this.session.sessionManager;
-    for (const { sourceEntry, messages } of manager.buildSessionProjection()
-      .entries) {
-      const message = messages[0];
-      if (
-        sourceEntry.type !== "message" ||
-        message?.role !== "assistant" ||
-        !/^openai(?:-|$)/.test(message.provider)
-      )
-        continue;
-      const content = message.content.filter(
-        (block) => block.type !== "thinking" || !block.thinkingSignature,
-      );
-      if (content.length === message.content.length) continue;
-      manager.appendContextEdit(
-        sourceEntry.id,
-        content.length ? { content } : null,
-      );
-      changed = true;
-    }
-    return changed;
+    // The engine refuses while it streams.
+    if (this.running || this.disposed) return false;
+    return this.engine.dropEncryptedReasoning();
   }
 
   /** SDK-owned continuation: model-only custom input, never another user message. */
   private continueFailedTurn(context: string): PiPromptResponse {
-    if (this.disposed || this.running || this.session.isStreaming)
+    if (this.disposed || this.running || this.engine.isStreaming)
       throw new Error("Cannot continue a running or released pi session.");
-    const branch = this.session.sessionManager.getBranch();
-    const last = [...branch]
-      .reverse()
-      .find((entry) => entry.type === "message");
-    // Like pi's own recovery, retain the failed response in the native file but
-    // omit it from model context; Agent.continue requires a user/tool-result tail.
-    if (
-      last?.type === "message" &&
-      last.message.role === "assistant" &&
-      last.message.stopReason === "error"
-    )
-      this.session.sessionManager.appendContextEdit(last.id, null);
-    this.session.state.messages =
-      this.session.sessionManager.buildSessionContext().messages;
+    // The engine edits the transcript in this synchronous span, so a failed
+    // write throws here, before the run is marked. pi emits the turn's first
+    // event only after an await, so the run is still marked before it.
+    const run = this.engine.continueFailedTurn(context);
     this.residency.cancel();
     this.running = true;
     this.host.noteRunStarted();
-    // Agent.continue alone bypasses AgentSession's settle/retry/compaction and
-    // queue lifecycle. Its public custom-message turn preserves that lifecycle
-    // without persisting another user role or making this instruction visible.
-    const run = this.session.sendCustomMessage(
-      { customType: "account-continuation", content: context, display: false },
-      { triggerTurn: true },
-    );
     this.driveCompletion = run;
     void run.catch((error: unknown) => this.finishPromptError(error, false));
     return { outcome: "started", completed: run };
@@ -1456,7 +1341,7 @@ export class PiLiveSession implements LiveSession {
     }
 
     this.running = false;
-    const sessionId = this.session.sessionId;
+    const sessionId = this.engine.sessionId;
     const retryEndedBetweenAttempts =
       !this.currentAssistantId && this.awaitingRetryContinuation;
     const id = retryEndedBetweenAttempts
@@ -1512,8 +1397,10 @@ export class PiLiveSession implements LiveSession {
     }
     try {
       // Do not overwrite a user/manual rename that happened while generation ran.
-      if (this.session.sessionName) return;
-      this.rename(generatedTitle ?? fallbackSessionTitle(prompt, attachments));
+      if (this.engine.sessionName) return;
+      await this.rename(
+        generatedTitle ?? fallbackSessionTitle(prompt, attachments),
+      );
       await this.host.broadcastSessions();
     } finally {
       // A manual rename may have spent this already; every other exit must stop
@@ -1543,8 +1430,8 @@ export class PiLiveSession implements LiveSession {
         },
       );
       // Do not overwrite a user/manual rename that happened while generation ran.
-      if (!title || this.session.sessionName !== originalName) return;
-      this.rename(title);
+      if (!title || this.engine.sessionName !== originalName) return;
+      await this.rename(title);
       await this.host.broadcastSessions();
     } catch (err) {
       console.warn("Failed to auto-name forked session:", errorText(err));
@@ -1556,7 +1443,7 @@ export class PiLiveSession implements LiveSession {
       this.currentAssistantAborted = true;
       this.explicitAbortRequested = true;
     }
-    await this.session.abort();
+    await this.engine.abort();
   }
 
   /**
@@ -1569,7 +1456,7 @@ export class PiLiveSession implements LiveSession {
     customInstructions?: string,
   ): Promise<HostCompactionOutcome> {
     const result: CompactionResult =
-      await this.session.compact(customInstructions);
+      await this.engine.compact(customInstructions);
     return {
       kind: "compacted",
       summary: result.summary,
@@ -1590,32 +1477,31 @@ export class PiLiveSession implements LiveSession {
    * they survive; our own transcript is a separate log and keeps every message.
    */
   async clearContext(): Promise<HostClearOutcome> {
-    if (this.session.messages.length === 0)
+    const result = await this.engine.clearContext();
+    if (result.kind === "skipped")
       return {
         kind: "skipped",
         reason: "Nothing to clear — this session has no context yet.",
       };
-    const tokensBefore = this.session.getSessionStats().contextUsage?.tokens;
-    this.session.sessionManager.resetLeaf();
-    this.session.state.messages = [];
     this.broadcastContextInfo(true);
     return {
       kind: "cleared",
-      ...(tokensBefore != null ? { tokensBefore } : {}),
+      ...(result.tokensBefore != null
+        ? { tokensBefore: result.tokensBefore }
+        : {}),
     };
   }
 
-  async setModel(
-    model: Parameters<AgentSession["setModel"]>[0],
-  ): Promise<void> {
-    await this.session.setModel(model);
-    compactionWindowFor(this.session)?.onModelChanged();
+  async setModel(model: PiEngineModel): Promise<void> {
+    // The engine rewrites the compaction window for the new model.
+    await this.engine.setModel(model);
     this.broadcastState();
     this.broadcastContextInfo(true);
   }
 
-  setThinkingLevel(level: ThinkingLevel): void {
-    this.session.setThinkingLevel(level);
+  /** Broadcasts only once the engine has applied it; a rejection reaches the caller. */
+  async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+    await this.engine.setThinkingLevel(level);
     this.broadcastState();
     this.broadcastContextInfo(true);
   }
@@ -1623,41 +1509,43 @@ export class PiLiveSession implements LiveSession {
   /* ---------------------------- compaction window --------------------------- */
 
   compactionWindowStatus(): CompactionWindowHarnessStatus {
-    return (
-      compactionWindowFor(this.session)?.status() ?? {
-        live: { applied: "pending", pendingReason: "next-turn" },
-      }
-    );
+    return this.engine.compactionWindowStatus();
   }
 
   async applyCompactionWindow(
     tokens: number | null,
   ): Promise<CompactionWindowApplyResult> {
-    const controller = compactionWindowFor(this.session);
-    return controller
-      ? controller.apply(tokens)
-      : { pendingReason: "next-turn" };
+    return this.engine.applyCompactionWindow(tokens);
   }
 
   async lowerCompactionWindow(
     tokens: number,
     persist: (tokens: number) => void,
   ): Promise<CompactionWindowLowerResult> {
-    const controller = compactionWindowFor(this.session);
-    return controller
-      ? controller.lower(tokens, persist)
-      : { ok: false, message: "This pi session cannot change its window." };
+    // The engine checks and applies; persisting is this consumer's, and a
+    // failed save puts the previous window back, never the stored row.
+    const result = await this.engine.lowerCompactionWindow(tokens);
+    if (!result.ok) return result;
+    try {
+      persist(tokens);
+    } catch (error) {
+      return this.engine.restoreCompactionWindow(
+        result.previous,
+        `Saving the compaction window failed: ${errorText(error)}`,
+      );
+    }
+    return result;
   }
 
   modelSelection(): {
     model?: { provider: string; id: string };
     thinkingLevel?: ThinkingLevel;
   } {
-    const model = this.session.model;
+    const model = this.engine.model;
     return {
       ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
-      ...(this.session.thinkingLevel
-        ? { thinkingLevel: this.session.thinkingLevel as ThinkingLevel }
+      ...(this.engine.thinkingLevel
+        ? { thinkingLevel: this.engine.thinkingLevel as ThinkingLevel }
         : {}),
     };
   }
@@ -1680,11 +1568,11 @@ export class PiLiveSession implements LiveSession {
     this.broadcastState();
   }
 
-  rename(title: string): void {
+  async rename(title: string): Promise<void> {
     // `setSessionName` may emit synchronously; spend the working state first so
     // no broadcast ever shows a final title with the pending treatment.
     this.titleGenerationPending = false;
-    this.session.setSessionName(title);
+    await this.engine.setSessionName(title);
     this.title = deriveTitle(title, "");
     this.updatedAt = Date.now();
     this.syncRegistry();
@@ -1700,17 +1588,17 @@ export class PiLiveSession implements LiveSession {
    * when the SDK commits them.
    */
   snapshot(): DisplayMessage[] {
-    const branch = this.session.sessionManager.getBranch() as Parameters<
+    const branch = this.engine.transcript.getBranch() as Parameters<
       typeof serializeSessionBranch
     >[0];
-    const ctx = { kind: this.kind, sessionId: this.session.sessionId };
+    const ctx = { kind: this.kind, sessionId: this.engine.sessionId };
     if (!this.liveTurn)
       return withPullRequestCardBlocks(
         withApprovalBlocks(
           hideMarkedMessages(serializeSessionBranch(branch, ctx)),
-          this.session.sessionId,
+          this.engine.sessionId,
         ),
-        this.session.sessionId,
+        this.engine.sessionId,
       );
     let cut = branch.length;
     for (let i = branch.length - 1; i >= 0; i--) {
@@ -1729,9 +1617,9 @@ export class PiLiveSession implements LiveSession {
           ),
           this.liveTurn,
         ],
-        this.session.sessionId,
+        this.engine.sessionId,
       ),
-      this.session.sessionId,
+      this.engine.sessionId,
     );
   }
 
@@ -1750,7 +1638,7 @@ export class PiLiveSession implements LiveSession {
     const succeeded = new Set<string>();
     // Each user message opens the turn the calls after it belong to.
     let turn = 0;
-    for (const entry of this.session.sessionManager.getBranch()) {
+    for (const entry of this.engine.transcript.getBranch()) {
       const record = entry as { type?: unknown; message?: unknown };
       if (record.type !== "message") continue;
       const message = record.message as
@@ -1804,15 +1692,15 @@ export class PiLiveSession implements LiveSession {
   }
 
   nativeFacts(): SessionNativeFacts {
-    const model = this.session.model as unknown as PiModel | undefined;
+    const model = this.engine.model as unknown as PiModel | undefined;
     return {
       harness: this.harness,
       agentType: this.agentType,
       kind: this.kind,
       sessionFile: this.sessionFile,
-      forkOrigin: readForkOrigin(this.kind, this.session.sessionManager),
+      forkOrigin: readForkOrigin(this.kind, this.engine.transcript),
       model: model ? (toModelOption(model) as ModelOption) : undefined,
-      thinkingLevel: this.session.thinkingLevel as ThinkingLevel,
+      thinkingLevel: this.engine.thinkingLevel as ThinkingLevel,
       mode: this.mode,
       live: {
         canSteer: this.canSteer,
@@ -1825,7 +1713,7 @@ export class PiLiveSession implements LiveSession {
 
   /** Cumulative billed totals across the whole session, from pi's native stats. */
   private cumulativeTotals(): CumulativeUsageTotals {
-    const stats = this.session.getSessionStats();
+    const stats = this.engine.stats();
     return {
       input: stats.tokens.input,
       output: stats.tokens.output,
@@ -1842,7 +1730,7 @@ export class PiLiveSession implements LiveSession {
    * driver-completion fallback may ask again before the next run re-samples it.
    */
   private turnUsage(): AgentUsage | undefined {
-    const stats = this.session.getSessionStats();
+    const stats = this.engine.stats();
     const after: CumulativeUsageTotals = {
       input: stats.tokens.input,
       output: stats.tokens.output,
@@ -1861,7 +1749,7 @@ export class PiLiveSession implements LiveSession {
   }
 
   contextInfo(): ContextInfo {
-    const stats = this.session.getSessionStats();
+    const stats = this.engine.stats();
     const text =
       this.liveTurn?.blocks
         .filter(
@@ -1890,7 +1778,7 @@ export class PiLiveSession implements LiveSession {
 
     const projectValue = this.safeProjectContextInfo();
     return {
-      sessionId: this.session.sessionId,
+      sessionId: this.engine.sessionId,
       updatedAt: Date.now(),
       messageCounts: {
         user: stats.userMessages,
@@ -1911,7 +1799,7 @@ export class PiLiveSession implements LiveSession {
 
   private safeProjectContextInfo(): ContextInfo["project"] {
     try {
-      return sessionProjectContextInfo(this.session.sessionId);
+      return sessionProjectContextInfo(this.engine.sessionId);
     } catch (err) {
       console.warn("Failed to read session Project context:", errorText(err));
       return undefined;
@@ -1919,34 +1807,29 @@ export class PiLiveSession implements LiveSession {
   }
 
   listInfo(): LiveListInfo {
-    const model = this.session.model as unknown as PiModel | undefined;
-    const forkOriginValue = readForkOrigin(
-      this.kind,
-      this.session.sessionManager,
-    );
+    const model = this.engine.model as unknown as PiModel | undefined;
+    const forkOriginValue = readForkOrigin(this.kind, this.engine.transcript);
     return {
       kind: this.kind,
       harness: this.harness,
       agentType: this.agentType,
-      sessionId: this.session.sessionId,
-      file: this.session.sessionFile,
+      sessionId: this.engine.sessionId,
+      file: this.engine.sessionFile,
       title: this.title,
       ...(this.titleGenerationPending ? { titleGenerationPending: true } : {}),
-      messageCount: this.session.getSessionStats().totalMessages,
+      messageCount: this.engine.stats().totalMessages,
       isStreaming: this.running,
       awaitingInput:
-        hasPendingAgentQuestion(this.session.sessionId) ||
-        hasPendingApproval(this.session.sessionId) ||
-        hasChoosingTaskCard(this.session.sessionId),
+        hasPendingAgentQuestion(this.engine.sessionId) ||
+        hasPendingApproval(this.engine.sessionId) ||
+        hasChoosingTaskCard(this.engine.sessionId),
       updatedAt: this.updatedAt,
       model: model
         ? { provider: model.provider, id: model.id, name: model.name }
         : undefined,
-      thinkingLevel: this.session.thinkingLevel as ThinkingLevel | undefined,
+      thinkingLevel: this.engine.thinkingLevel as ThinkingLevel | undefined,
       ...(forkOriginValue !== undefined ? { forkOrigin: forkOriginValue } : {}),
-      forkAutoRenamePending: isForkAutoRenamePending(
-        this.session.sessionManager,
-      ),
+      forkAutoRenamePending: isForkAutoRenamePending(this.engine.transcript),
     };
   }
 
@@ -1960,7 +1843,7 @@ export class PiLiveSession implements LiveSession {
     this.unsubscribeApprovals();
     this.unsubscribeTaskChoices();
     this.adapterEvents.clear();
-    closeToolGroupSession(this.session.sessionId);
-    this.session.dispose();
+    closeToolGroupSession(this.engine.sessionId);
+    void this.engine.dispose();
   }
 }

@@ -1160,6 +1160,7 @@ test("an ordinary Pi steer the real producer refuses after its run closed cleanl
   // a scripted native AgentSession: it settles the running turn while the
   // steer is pending, then refuses the steer. The provider took zero copies.
   const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
+  const { localPiEngine } = await import("./piSdk/piEngine.ts");
   serial += 1;
   const id = `handling-pi-${serial}`;
   sessionStore.upsert({
@@ -1215,7 +1216,7 @@ test("an ordinary Pi steer the real producer refuses after its run closed cleanl
   };
   const live = new PiLiveSession(
     "assistant",
-    native as never,
+    localPiEngine(native as never),
     host as never,
     () => {},
   );

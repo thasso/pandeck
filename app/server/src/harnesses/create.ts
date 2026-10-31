@@ -305,7 +305,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
   await sessionSkills(live.sessionId, spec.agentType);
   linkWorktree(live.sessionId, spec.worktree?.id);
   // A stored title keeps the first prompt from auto-naming it.
-  if (spec.title !== undefined) live.rename(spec.title);
+  if (spec.title !== undefined) await live.rename(spec.title);
   return live;
 }
 

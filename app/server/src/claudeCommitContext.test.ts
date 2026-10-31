@@ -138,10 +138,10 @@ test("builds commit workflow branch from normalized Claude timeline", () => {
   assert.equal(branch[3]?.data?.status, "committed");
 });
 
-test("checkpoints a tool commit within the same turn, then adopts its durable result", () => {
+test("checkpoints a tool commit within the same turn, then adopts its durable result", async () => {
   const timeline = [...entries];
   const manager = buildCommitSessionManager(() => timeline);
-  manager.appendCustomEntry("workshop.commit", {
+  await manager.appendCustomEntry("workshop.commit", {
     status: "committed",
     commitHash: "same-turn-commit",
   });

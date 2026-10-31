@@ -16,6 +16,7 @@ process.env.DATA_DIR = join(tmp, "data");
 
 const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
+const { localPiEngine } = await import("./piSdk/piEngine.ts");
 const { isLiveSession } = await import("./harness.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -72,7 +73,7 @@ function fakeAgentSession(selection: {
 function piSession(selection: Parameters<typeof fakeAgentSession>[0]) {
   return new PiLiveSession(
     "assistant" as never,
-    fakeAgentSession(selection) as never,
+    localPiEngine(fakeAgentSession(selection) as never),
     {} as never,
     () => {},
   );

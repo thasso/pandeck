@@ -10,6 +10,7 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { localPiEngine } = await import("./piEngine.ts");
 const { createPiToolActivation } = await import("./toolActivation.ts");
 const { agentToolsFor, eagerToolNamesFor } =
   await import("../tools/catalog.ts");
@@ -112,7 +113,7 @@ test("pi hands the owner native identity, live limits, tool loading and the comm
   );
   const live = new PiLiveSession(
     "developer",
-    native as never,
+    localPiEngine(native as never),
     {
       broadcastSessions: async () => {},
       noteRunStarted() {},

@@ -126,6 +126,15 @@ const ENGINE_COMPUTED_IMPORT_EXCEPTIONS: Record<string, number> = {
   "piSdk/piPromptMeasure.ts": 1,
 };
 
+/**
+ * pi's session types. Only `piSdk/` may name them, and not `PiLiveSession`,
+ * which reaches its engine through `PiEngineHandle` (`piSdk/piEngine.ts`).
+ */
+const PI_SESSION_TYPES = new Set(["AgentSession", "SessionManager"]);
+
+/** The handle's test seam; no module but its own may name it. */
+const PI_ENGINE_TEST_SEAM = "nativePiSessionForTests";
+
 const EQUALITY_OPERATORS = new Set(["==", "===", "!=", "!=="]);
 
 /** An ESTree node as oxc-parser produces it; only `type` is relied on. */
@@ -192,6 +201,8 @@ function scanModule(
   stateProjectionImports: string[];
   harnessComparisons: number;
   computedImports: number;
+  piSessionTypeNames: string[];
+  engineTestSeamReferences: number;
 } {
   const parsed = parseSync(file, source, { lang: "ts", sourceType: "module" });
   assert.deepEqual(
@@ -204,6 +215,14 @@ function scanModule(
   let harnessComparisons = 0;
   // A path the scan cannot read could name an engine module unseen.
   let computedImports = 0;
+  // Named from any path, a re-export shim included.
+  const piSessionTypeNames: string[] = [];
+  let engineTestSeamReferences = 0;
+  const notePiSessionType = (binding: unknown) => {
+    const name = isNode(binding) ? (binding.name ?? binding.value) : undefined;
+    if (typeof name === "string" && PI_SESSION_TYPES.has(name))
+      piSessionTypeNames.push(name);
+  };
 
   const addSpecifier = (value: unknown, declaration?: AstNode) => {
     const specifier = constantString(value);
@@ -320,6 +339,24 @@ function scanModule(
   };
 
   const visit = (node: AstNode): void => {
+    if (node.type === "Identifier" && node.name === PI_ENGINE_TEST_SEAM)
+      engineTestSeamReferences++;
+    // An import or re-export names the source's export: `imported`, or a
+    // re-export's `local`. Qualified names catch `import("…").X` and `ns.X`.
+    if (
+      (node.type === "ImportDeclaration" ||
+        node.type === "ExportNamedDeclaration") &&
+      node.source &&
+      Array.isArray(node.specifiers)
+    )
+      for (const specifier of node.specifiers as AstNode[])
+        if (specifier.type === "ImportSpecifier")
+          notePiSessionType(specifier.imported);
+        else if (specifier.type === "ExportSpecifier")
+          notePiSessionType(specifier.local);
+    if (node.type === "TSImportType" && isNode(node.qualifier))
+      notePiSessionType(node.qualifier);
+    if (node.type === "TSQualifiedName") notePiSessionType(node.right);
     switch (node.type) {
       case "ImportDeclaration":
       case "ExportNamedDeclaration":
@@ -371,6 +408,8 @@ function scanModule(
     stateProjectionImports: [...stateProjectionImports].sort(),
     harnessComparisons,
     computedImports,
+    piSessionTypeNames: piSessionTypeNames.sort(),
+    engineTestSeamReferences,
   };
 }
 
@@ -462,6 +501,77 @@ test("app code compares harness ids only where pinned", () => {
     HARNESS_LITERAL_EXCEPTIONS,
     "Harness-id comparisons changed. Branch on a capability instead of adding one; lower or delete the entry in HARNESS_LITERAL_EXCEPTIONS when removing one (docs/agent-harnesses.md).",
   );
+});
+
+test("only piSdk names pi's session types, and PiLiveSession holds only the engine handle", () => {
+  const actual: Record<string, string[]> = {};
+  for (const file of sourceFiles(SRC_ROOT)) {
+    const rel = relative(SRC_ROOT, file);
+    // Test support is not app code; the engine folder owns the types.
+    if (/^test\//.test(rel)) continue;
+    if (/^piSdk\//.test(rel) && rel !== "piSdk/PiLiveSession.ts") continue;
+    const { piSessionTypeNames } = scanModule(file, readFileSync(file, "utf8"));
+    if (piSessionTypeNames.length) actual[rel] = piSessionTypeNames;
+  }
+  assert.deepEqual(
+    actual,
+    {},
+    "A live pi engine is reached only through PiEngineHandle (piSdk/piEngine.ts); outside piSdk/, and in PiLiveSession, name neither AgentSession nor SessionManager (docs/agent-harnesses.md).",
+  );
+});
+
+test("only the engine handle's own module names its test seam", () => {
+  const actual: string[] = [];
+  for (const file of sourceFiles(SRC_ROOT)) {
+    const { engineTestSeamReferences } = scanModule(
+      file,
+      readFileSync(file, "utf8"),
+    );
+    if (engineTestSeamReferences) actual.push(relative(SRC_ROOT, file));
+  }
+  assert.deepEqual(
+    actual,
+    ["piSdk/piEngine.ts"],
+    `${PI_ENGINE_TEST_SEAM} is for tests only; production code reads the engine through PiEngineHandle.`,
+  );
+});
+
+test("the session-type scan sees a re-export shim and every naming form", () => {
+  const file = join(SRC_ROOT, "probe.ts");
+  // The shape of the deleted `harnesses/piSession.ts` and its one consumer.
+  const shim =
+    'export type { AgentSession, SessionManager } from "../piSdk/index.ts";';
+  assert.deepEqual(scanModule(file, shim).piSessionTypeNames, [
+    "AgentSession",
+    "SessionManager",
+  ]);
+  const throughShim =
+    'import type { AgentSession } from "./harnesses/piSession.ts";';
+  assert.deepEqual(scanModule(file, throughShim).piSessionTypeNames, [
+    "AgentSession",
+  ]);
+  const forms = [
+    'import { SessionManager as Manager } from "./elsewhere.ts";',
+    'export { AgentSession as Session } from "./elsewhere.ts";',
+    'type A = import("./piSdk/index.ts").AgentSession;',
+    'type B = import("./piSdk/index.ts").pi.SessionManager;',
+    'import type * as pi from "./piSdk/index.ts";',
+    "type C = pi.AgentSession;",
+  ].join("\n");
+  assert.deepEqual(scanModule(file, forms).piSessionTypeNames, [
+    "AgentSession",
+    "AgentSession",
+    "AgentSession",
+    "SessionManager",
+    "SessionManager",
+  ]);
+  const ignored = [
+    '// import type { AgentSession } from "./piSdk/index.ts";',
+    'const label = "SessionManager";',
+    'import type { AgentSessionEvent } from "./piSdk/index.ts";',
+    "type D = { AgentSession: string };",
+  ].join("\n");
+  assert.deepEqual(scanModule(file, ignored).piSessionTypeNames, []);
 });
 
 test("only the measurement modules may reach an engine, and each still does", () => {

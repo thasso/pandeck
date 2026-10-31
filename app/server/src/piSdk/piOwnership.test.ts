@@ -21,6 +21,7 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { localPiEngine } = await import("./piEngine.ts");
 const { PiSessionDeletedError, piStore } = await import("./piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { closeDb } = await import("../db/index.ts");
@@ -69,7 +70,7 @@ test("a registered session nobody views idles out like one a viewer left", () =>
   };
   const live = new PiLiveSession(
     "coding" as never,
-    fakeAgentSession("pi-unviewed") as never,
+    localPiEngine(fakeAgentSession("pi-unviewed") as never),
     host() as never,
     onEvict,
   );
@@ -83,7 +84,7 @@ test("a registered session nobody views idles out like one a viewer left", () =>
   // A viewer arriving in time cancels the clock; leaving re-arms it.
   const watched = new PiLiveSession(
     "coding" as never,
-    fakeAgentSession("pi-watched") as never,
+    localPiEngine(fakeAgentSession("pi-watched") as never),
     host() as never,
     onEvict,
   );
@@ -166,7 +167,7 @@ test("concurrent reopens of one session share a single open and registration", a
       kind,
       key: session.sessionId,
       sessionId: session.sessionId,
-      session,
+      engine: session,
       // Reusing a resident session restarts its idle clock.
       armIdleIfUnviewed: () => {},
     };

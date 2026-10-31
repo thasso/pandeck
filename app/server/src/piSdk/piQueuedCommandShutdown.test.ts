@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { PiLiveSession } from "./PiLiveSession.ts";
+import { localPiEngine } from "./piEngine.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { promptQueueStore } from "../db/promptQueueStore.ts";
 import { setDeliveryWake } from "../deliveryWake.ts";
@@ -13,7 +14,7 @@ test("shutdown during acquisition does not persist a reload refusal on a queued 
   let cold = true;
   const driver = new PiLiveSession(
     "assistant",
-    {
+    localPiEngine({
       sessionId: id,
       sessionName: "Already named",
       isStreaming: false,
@@ -25,7 +26,7 @@ test("shutdown during acquisition does not persist a reload refusal on a queued 
         cost: 0,
         contextSize: 0,
       }),
-    } as never,
+    } as never),
     {
       broadcastSessions: async () => {},
       noteRunStarted: () => {},

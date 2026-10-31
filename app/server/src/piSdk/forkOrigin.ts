@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentType, Harness, SessionForkOrigin } from "@assistant/shared";
+import type { PiTranscriptView } from "./piEngine.ts";
 import { readSessionHeaderId } from "./sessionOpen.ts";
 
 function piForkOrigin(
@@ -21,7 +21,7 @@ type ForkEntryLike = {
 
 export function readForkOrigin(
   kind: AgentType,
-  sm: SessionManager,
+  sm: Pick<PiTranscriptView, "getEntries" | "getHeader">,
 ): SessionForkOrigin | undefined {
   // Every entry, not the current BRANCH: where a session came from is a fact
   // about the session, and `/clear` resets the leaf, which would otherwise
@@ -98,7 +98,9 @@ function isForkOriginAgentType(value: unknown): value is AgentType {
 }
 
 /** True until the fork receives its first new user prompt after the origin marker. */
-export function isForkAutoRenamePending(sm: SessionManager): boolean {
+export function isForkAutoRenamePending(
+  sm: Pick<PiTranscriptView, "getBranch">,
+): boolean {
   const entries = sm.getBranch() as ForkEntryLike[];
   let originIndex = -1;
   for (let i = entries.length - 1; i >= 0; i--) {

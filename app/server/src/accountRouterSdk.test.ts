@@ -22,6 +22,7 @@ const { createSession } = await import("./harnesses/create.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { buildSessionState } = await import("./sessionState.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
+const { nativePiSessionForTests } = await import("./piSdk/piEngine.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { SessionRuntime } = await import("./session/runtime/runtime.ts");
@@ -298,12 +299,14 @@ test("real pi-store creation persists enterprise before its first immutable clai
     );
     const native = piStore.get(piSession.sessionId);
     assert.ok(native);
-    const anchor = native.session.sessionManager.appendMessage({
+    const anchor = nativePiSessionForTests(
+      native.engine,
+    ).sessionManager.appendMessage({
       role: "user",
       content: "Enterprise fork fixture",
       timestamp: Date.now(),
     });
-    const file = native.session.sessionFile;
+    const file = nativePiSessionForTests(native.engine).sessionFile;
     assert.ok(file);
     patchCredentialProfile(pi.id, { enterprise: false });
     await assert.rejects(

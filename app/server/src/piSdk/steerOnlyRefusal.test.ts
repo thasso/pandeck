@@ -21,6 +21,7 @@ const tmp = mkdtempSync(join(tmpdir(), "steer-refusal-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { localPiEngine } = await import("./piEngine.ts");
 const { closeDb } = await import("../db/index.ts");
 
 afterAll(() => {
@@ -68,10 +69,12 @@ function harness(sessionId: string, steer: () => Promise<void>) {
   let steerCalls = 0;
   const live = new PiLiveSession(
     "coding" as never,
-    fakeAgentSession(sessionId, () => {
-      steerCalls += 1;
-      return steer();
-    }) as never,
+    localPiEngine(
+      fakeAgentSession(sessionId, () => {
+        steerCalls += 1;
+        return steer();
+      }) as never,
+    ),
     host() as never,
     () => {},
   );
@@ -192,7 +195,7 @@ test("a peer prompt waits for agent_settled across a pi retry", async () => {
   };
   const live = new PiLiveSession(
     "coding" as never,
-    native as never,
+    localPiEngine(native as never),
     host() as never,
     () => {},
   );

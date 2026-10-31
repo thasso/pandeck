@@ -41,7 +41,7 @@ export function buildCommitSessionManager(
       });
       return [...branch, ...pendingCommitted];
     },
-    appendCustomEntry: (type, data) => {
+    appendCustomEntry: async (type, data) => {
       if (type !== COMMIT_CUSTOM_TYPE) return undefined;
       const checkpoint = committedCheckpoint(
         `pending-tool-commit-${nextPendingId++}`,

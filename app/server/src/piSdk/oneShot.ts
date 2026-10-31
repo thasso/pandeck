@@ -166,7 +166,12 @@ export async function runPiOneShot(
           harness: "pi",
           agentType: "assistant",
           cwd: CWD,
-          sessionManager,
+          sessionManager: {
+            getSessionId: () => sessionManager.getSessionId(),
+            getBranch: () => sessionManager.getBranch(),
+            appendCustomEntry: async (type, data) =>
+              sessionManager.appendCustomEntry(type, data),
+          },
         }),
       })
     : undefined;

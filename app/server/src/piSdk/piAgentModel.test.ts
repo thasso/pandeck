@@ -44,6 +44,7 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const { freezeSessionAgent, sessionAgent } =
   await import("../agents/sessionAgent.ts");
 const { piStore } = await import("./piStore.ts");
+const { nativePiSessionForTests } = await import("./piEngine.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 const { findModelForProfile } = await import("./models.ts");
 
@@ -115,8 +116,12 @@ test("a fork before the first prompt starts on the agent's model, not pi's defau
     "app-entry-1",
   );
   try {
-    assert.equal(child.session.messages.length, 0, "an empty prefix");
-    assert.equal(child.session.model?.id, "chosen");
+    assert.equal(
+      nativePiSessionForTests(child.engine).messages.length,
+      0,
+      "an empty prefix",
+    );
+    assert.equal(nativePiSessionForTests(child.engine).model?.id, "chosen");
     assert.equal(sessionAgent(child.sessionId)?.model, "chosen");
   } finally {
     child.dispose();
@@ -163,8 +168,10 @@ test("denied tools stay gone even when repository settings turn pi's own on", as
     });
     try {
       return {
-        all: live.session.getAllTools().map((tool) => tool.name),
-        active: live.session.getActiveToolNames(),
+        all: nativePiSessionForTests(live.engine)
+          .getAllTools()
+          .map((tool) => tool.name),
+        active: nativePiSessionForTests(live.engine).getActiveToolNames(),
       };
     } finally {
       live.dispose();

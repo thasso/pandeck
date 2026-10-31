@@ -203,7 +203,7 @@ export async function runClaudeSdkOneShot(
   const sessionManager = {
     getSessionId: () => sessionId,
     getBranch: () => [] as unknown[],
-    appendCustomEntry: () => undefined,
+    appendCustomEntry: async () => undefined,
   };
   const toolServer = input.tools?.length
     ? createSessionToolServer({

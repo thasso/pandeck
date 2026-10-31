@@ -123,6 +123,7 @@ const journal = await import("./delegationFailureJournal.ts");
 const { DATA_DIR } = await import("./config.ts");
 const { measureCpuMs, measureCpuMsAsync } = await import("./test/cpuBudget.ts");
 const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
+const { localPiEngine } = await import("./piSdk/piEngine.ts");
 const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./tools/sessions/sessionControlTool.ts");
 
@@ -431,7 +432,7 @@ function realPiChild(parentId: string): {
   };
   const live = new PiLiveSession(
     "assistant",
-    session as never,
+    localPiEngine(session as never),
     host as never,
     () => {},
   );
@@ -1728,10 +1729,11 @@ if (mode === "crash") {
   if (!["recorded", "before", "pi-fanout", "claude-fanout", "standdown", "done-lost"].includes(scenario)) refuseDatabase();
   if (scenario === "pi-fanout" || scenario === "pi-fanout-refused") {
     const { PiLiveSession } = await import(src + "piSdk/PiLiveSession.ts");
+    const { localPiEngine } = await import(src + "piSdk/piEngine.ts");
     let listener;
     const session = { sessionId: "Child", sessionName: "Already named", isStreaming: false, sessionManager: { getBranch: () => [], getEntries: () => [] }, subscribe: (l) => { listener = l; return () => {}; }, getSessionStats: () => ({ totalMessages: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), settingsManager: { getRetrySettings: () => ({ enabled: true, maxRetries: 3 }), applyOverrides() {} }, abortRetry() {}, dispose() {} };
     const host = { broadcastSessions: async () => {}, noteRunStarted() {}, checkPendingReload() {}, isReloadQueued: () => false, buildSessionState: () => ({}) };
-    const live = new PiLiveSession("assistant", session, host, () => {});
+    const live = new PiLiveSession("assistant", localPiEngine(session), host, () => {});
     sessionRuntime.createSession("Child", live.createRuntimeAdapter());
     live.addViewer({ send: (e) => { if (e.type === "assistantEnd" && e.error) process.exit(73); } });
     listener({ type: "agent_start" });

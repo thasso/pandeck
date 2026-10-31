@@ -165,12 +165,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   session on disk, from paths alone), `availability.ts` (whether an existing
   session may be opened now), `sessionList.ts` (the merged session list across
   both stores), `handoffSession.ts` (each engine's checks for a review handoff's
-  new session), `piSession.ts` (pi's session types), `usage.ts` (per-account
-  usage, OpenAI reset-credit redeem), `registry.ts` (`harnessRegistry`: id
-  routing, resident sessions, store wiring, rename and the engine half of a
-  delete), `firstSend.ts` (each engine's admission and preparation for a
-  session's first send), `create.ts` (`createSession`: each engine's creation
-  sequence) and `fork.ts` (`prepareFork`: each engine's fork cut and refusals).
+  new session), `usage.ts` (per-account usage, OpenAI reset-credit redeem),
+  `registry.ts` (`harnessRegistry`: id routing, resident sessions, store wiring,
+  rename and the engine half of a delete), `firstSend.ts` (each engine's
+  admission and preparation for a session's first send), `create.ts`
+  (`createSession`: each engine's creation sequence) and `fork.ts`
+  (`prepareFork`: each engine's fork cut and refusals).
   `harnessBoundary.test.ts` pins what still bypasses it.
 - `sessionKit/` holds what both engine session classes compose instead of
   copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock

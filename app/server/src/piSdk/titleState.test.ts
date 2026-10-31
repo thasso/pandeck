@@ -15,6 +15,7 @@ const tmp = mkdtempSync(join(tmpdir(), "pi-title-state-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { localPiEngine } = await import("./piEngine.ts");
 const { closeDb } = await import("../db/index.ts");
 const { getSettings, updateSettings } = await import("../settings.ts");
 const { fallbackSessionTitle } = await import("../sessionNaming.ts");
@@ -104,7 +105,7 @@ describe("pi skill command naming", () => {
     const seen: ServerMessage[] = [];
     const live = new PiLiveSession(
       "coding" as never,
-      {
+      localPiEngine({
         sessionId: "pi-skill-title",
         sessionName: undefined,
         isStreaming: false,
@@ -119,7 +120,7 @@ describe("pi skill command naming", () => {
           sent.push(text);
           return Promise.resolve();
         },
-      } as never,
+      } as never),
       {
         broadcastSessions: () => Promise.resolve(),
         noteRunStarted: () => {},

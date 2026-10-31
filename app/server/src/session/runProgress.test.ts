@@ -38,6 +38,7 @@ const { SessionLogStore } = await import("./log/store.ts");
 const { setSessionIdleHook } = await import("./runtime/liveSession.ts");
 const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { PiLiveSession } = await import("../piSdk/PiLiveSession.ts");
+const { localPiEngine } = await import("../piSdk/piEngine.ts");
 const { closeDb } = await import("../db/index.ts");
 type AdapterEvent = import("./adapters/contract.ts").AdapterEvent;
 type AgentRunResult = import("./adapters/contract.ts").AgentRunResult;
@@ -1089,7 +1090,7 @@ function piHarness(sessionId: string) {
   };
   const live = new PiLiveSession(
     "coding" as never,
-    session as never,
+    localPiEngine(session as never),
     host as never,
     () => {},
   );

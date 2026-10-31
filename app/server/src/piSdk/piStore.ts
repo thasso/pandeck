@@ -78,7 +78,8 @@ import {
   type PromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
-import { PiLiveSession, type PiAccountSession } from "./PiLiveSession.ts";
+import { PiLiveSession } from "./PiLiveSession.ts";
+import { localPiEngine } from "./piEngine.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
@@ -178,7 +179,7 @@ function piToolSession(
     sessionManager: {
       getSessionId: () => sm.getSessionId(),
       getBranch: () => sm.getBranch(),
-      appendCustomEntry: (type, data) => sm.appendCustomEntry(type, data),
+      appendCustomEntry: async (type, data) => sm.appendCustomEntry(type, data),
     },
   };
 }
@@ -393,10 +394,9 @@ class PiSessionStore {
     for (const ls of this.live.values()) {
       if (
         ls.kind === kind &&
-        (ls.session.sessionFile === file ||
-          ls.session.sessionFile === canonical)
+        (ls.engine.sessionFile === file || ls.engine.sessionFile === canonical)
       ) {
-        if (candidateId !== undefined && ls.session.sessionId !== candidateId)
+        if (candidateId !== undefined && ls.engine.sessionId !== candidateId)
           continue;
         ls.armIdleIfUnviewed();
         return ls;
@@ -512,7 +512,7 @@ class PiSessionStore {
     // pi live sessions are keyed by id, not by our id directly,
     // so scan for a resident one whose pi sessionId matches.
     for (const ls of this.live.values()) {
-      if (ls.session.sessionId === id) return ls;
+      if (ls.engine.sessionId === id) return ls;
     }
     return undefined;
   }
@@ -536,7 +536,7 @@ class PiSessionStore {
     originEntryId: string,
   ): Promise<PiLiveSession> {
     for (const ls of this.live.values()) {
-      if (ls.kind === kind && ls.session.sessionFile === file && ls.isRunning) {
+      if (ls.kind === kind && ls.engine.sessionFile === file && ls.isRunning) {
         throw new Error("Cannot fork a session while it is streaming.");
       }
     }
@@ -670,11 +670,12 @@ class PiSessionStore {
     promptStart?: PiPromptStart,
     requestedMode?: SessionMode,
     staged = false,
-  ): Promise<
-    PiAccountSession & {
-      notices: Array<{ severity: NoticeSeverity; message: string }>;
-    }
-  > {
+  ): Promise<{
+    session: AgentSession;
+    commit(): void;
+    dispose(): void;
+    notices: Array<{ severity: NoticeSeverity; message: string }>;
+  }> {
     // Session-START prompt conditions (Task 287). pi rebuilds the system prompt
     // on every active-tool change and on every reopen, so this reads the frozen
     // record whenever the session already has one — creation is the only call
@@ -966,9 +967,10 @@ class PiSessionStore {
       ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
     });
     // The injected host inverts the session→hub calls so piSdk never imports hub.ts.
+    // The engine subscribes as it is made, right where the wrapper always did.
     const ls = new PiLiveSession(
       kind,
-      session,
+      localPiEngine(session),
       this.requireHost(),
       (key) => this.onLiveSessionEvicted(key, ls),
       initialNotices,
@@ -996,7 +998,7 @@ class PiSessionStore {
           expectedId: ls.id,
           cwd: ls.cwd,
         });
-        return this.create(
+        const replacement = await this.create(
           kind,
           sm,
           model,
@@ -1007,6 +1009,11 @@ class PiSessionStore {
           ls.sessionMode,
           true,
         );
+        return {
+          engine: localPiEngine(replacement.session),
+          commit: replacement.commit,
+          dispose: replacement.dispose,
+        };
       },
     );
     this.live.set(ls.key, ls);
@@ -1127,10 +1134,10 @@ class PiSessionStore {
     const key = id;
     const live = this.live.get(key);
     if (live) {
-      if (live.session.sessionFile && live.session.sessionFile !== file) {
+      if (live.engine.sessionFile && live.engine.sessionFile !== file) {
         throw new Error("Session file does not match the live session.");
       }
-      live.rename(title);
+      await live.rename(title);
       return;
     }
 
@@ -1162,7 +1169,7 @@ class PiSessionStore {
       | undefined;
     const live = this.live.get(sessionId);
     if (live) {
-      entries = live.session.sessionManager.getEntries() as typeof entries;
+      entries = live.engine.transcript.getEntries() as typeof entries;
     } else {
       try {
         const file = canonicalPiSessionPath(sessionId);
