@@ -5,6 +5,7 @@
  * from it; `heldDirectPeers.ts` re-checks a waiting child against it.
  */
 import { getDb } from "./index.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 
 export interface DirectPeerChild {
   childSessionId: string;
@@ -81,6 +82,7 @@ export const directPeerChildStore = {
         child.credentialProfileId,
         child.createdAt,
       );
+    touchSessionRows([child.childSessionId]);
   },
 
   get(childSessionId: string): DirectPeerChild | undefined {

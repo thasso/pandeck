@@ -15,6 +15,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { getDb, inDbTransaction } from "./index.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 
 /** Known node types. Kept small and explicit; extend as new entities appear. */
 export type NodeType =
@@ -177,6 +178,17 @@ function assertRelation(relation: string): asserts relation is Relation {
 }
 
 /** Insert or update one edge (idempotent on its identity key). */
+/**
+ * Every edge with a `session` end can move that session's list row (project,
+ * worktree, context refs, Task progress), so each write touches its session
+ * ends, old and new, at the write (`sessionListChanges.ts`).
+ */
+function touchSessionEnds(...nodes: NodeRef[]): void {
+  touchSessionRows(
+    nodes.filter((node) => node.type === "session").map((node) => node.id),
+  );
+}
+
 export function addLink(
   from: NodeRef,
   relation: Relation,
@@ -205,6 +217,7 @@ export function addLink(
       Date.now(),
     );
   noteWrite(from.type);
+  touchSessionEnds(from, to);
 }
 
 /** Remove one specific edge. */
@@ -219,6 +232,7 @@ export function removeLink(
     )
     .run(from.type, from.id, relation, to.type, to.id);
   noteWrite(from.type);
+  touchSessionEnds(from, to);
 }
 
 /** Outgoing edges from a node, optionally filtered by relation, ordered by position then age. */
@@ -295,6 +309,14 @@ export function setOutgoing(
   assertRelation(relation);
   try {
     inDbTransaction(() => {
+      // The replaced targets' ends, read before they go.
+      touchSessionEnds(
+        from,
+        ...outgoing(from, relation).map((link) => ({
+          type: link.toType,
+          id: link.toId,
+        })),
+      );
       getDb()
         .prepare(
           "DELETE FROM links WHERE from_type = ? AND from_id = ? AND relation = ?",
@@ -334,6 +356,18 @@ export function removeAllFor(node: NodeRef): void {
   try {
     inDbTransaction(() => {
       const db = getDb();
+      // Every session at the other end of an edge about to go, read first.
+      touchSessionEnds(
+        node,
+        ...(
+          db
+            .prepare(
+              `SELECT to_id AS id FROM links WHERE from_type = ? AND from_id = ? AND to_type = 'session'
+               UNION SELECT from_id AS id FROM links WHERE to_type = ? AND to_id = ? AND from_type = 'session'`,
+            )
+            .all(node.type, node.id, node.type, node.id) as { id: string }[]
+        ).map((row) => ({ type: "session" as const, id: row.id })),
+      );
       db.prepare("DELETE FROM links WHERE from_type = ? AND from_id = ?").run(
         node.type,
         node.id,

@@ -3,7 +3,7 @@ import { isSessionPeerTurnCap } from "@assistant/shared";
 const hubLoad = vi.hoisted(() => vi.fn());
 vi.mock("./hub.ts", () => {
   hubLoad();
-  return { hub: { broadcastSessions: vi.fn() } };
+  return { hub: {} };
 });
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { closeDb } = await import("./db/index.ts");

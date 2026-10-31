@@ -14,6 +14,7 @@
  */
 import type { BackgroundHandlingRef } from "@assistant/shared";
 import { getDb, inDbTransaction, withDbTransaction } from "./index.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 
 type BackgroundHandlingPhase = "owed" | "reserved" | "handling" | "interrupted";
 
@@ -90,6 +91,7 @@ export const backgroundDeliveryOutboxStore = {
   save(row: BackgroundDeliveryOutboxRow): void {
     inDbTransaction(() => {
       const db = getDb();
+      touchSessionRows([row.sessionId]);
       const existing = db
         .prepare(
           "SELECT revision, phase FROM background_delivery_outbox WHERE session_id=? AND item_id=? ORDER BY revision LIMIT 1",
@@ -130,6 +132,7 @@ export const backgroundDeliveryOutboxStore = {
         "UPDATE background_delivery_outbox SET retained=1 WHERE session_id=?",
       )
       .run(sessionId);
+    touchSessionRows([sessionId]);
   },
 
   /**
@@ -143,6 +146,7 @@ export const backgroundDeliveryOutboxStore = {
         "DELETE FROM background_delivery_outbox WHERE session_id=? AND item_id=? AND revision=? AND phase='owed'",
       )
       .run(sessionId, itemId, revision);
+    touchSessionRows([sessionId]);
   },
 
   /**
@@ -170,6 +174,7 @@ export const backgroundDeliveryOutboxStore = {
     try {
       withDbTransaction(() => {
         const db = getDb();
+        touchSessionRows([sessionId]);
         const claim = db.prepare(
           "UPDATE background_delivery_outbox SET prior_attempt_id=CASE WHEN phase='interrupted' THEN attempt_id END, prior_run_id=CASE WHEN phase='interrupted' THEN run_id END, prior_entry_id=CASE WHEN phase='interrupted' THEN entry_id END, phase='reserved', attempt_id=?, run_id=NULL, entry_id=NULL, phase_at_ms=? WHERE session_id=? AND item_id=? AND revision=? AND phase=?",
         );
@@ -237,6 +242,7 @@ export const backgroundDeliveryOutboxStore = {
     runId: string,
     entryId: string,
   ): number {
+    touchSessionRows([sessionId]);
     return Number(
       getDb()
         .prepare(
@@ -256,6 +262,7 @@ export const backgroundDeliveryOutboxStore = {
    * attempt: a newer one's claim is untouched.
    */
   release(sessionId: string, attemptId: string): number {
+    touchSessionRows([sessionId]);
     return Number(
       getDb()
         .prepare(
@@ -296,6 +303,7 @@ export const backgroundDeliveryOutboxStore = {
             "UPDATE background_delivery_outbox SET phase='interrupted', interruption=?, entry_id=COALESCE(entry_id, prior_entry_id), prior_attempt_id=NULL, prior_run_id=NULL, prior_entry_id=NULL, phase_at_ms=? WHERE session_id=? AND run_id=? AND phase='handling'",
           )
           .run(interruption, Date.now(), sessionId, runId);
+      touchSessionRows([sessionId]);
       return rows;
     });
   },
@@ -311,6 +319,7 @@ export const backgroundDeliveryOutboxStore = {
     interruption: BackgroundHandlingInterruption | undefined,
   ): number {
     const db = getDb();
+    touchSessionRows([sessionId]);
     return Number(
       interruption === undefined
         ? db
@@ -345,6 +354,7 @@ export const backgroundDeliveryOutboxStore = {
           "UPDATE background_delivery_outbox SET phase='interrupted', interruption='restart', entry_id=COALESCE(entry_id, prior_entry_id), prior_attempt_id=NULL, prior_run_id=NULL, prior_entry_id=NULL, phase_at_ms=? WHERE phase IN ('reserved','handling')",
         )
         .run(Date.now());
+      touchSessionRows(sessions);
       return sessions;
     });
   },
@@ -443,6 +453,7 @@ export const backgroundDeliveryOutboxStore = {
         dismissed += Number(
           drop.run(sessionId, ref.itemId, ref.revision, ref.attemptId).changes,
         );
+      touchSessionRows([sessionId]);
       return dismissed;
     });
   },
@@ -482,6 +493,7 @@ export const backgroundDeliveryOutboxStore = {
     getDb()
       .prepare("DELETE FROM background_delivery_outbox WHERE session_id=?")
       .run(sessionId);
+    touchSessionRows([sessionId]);
   },
 };
 

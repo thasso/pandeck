@@ -124,6 +124,10 @@ import {
 import { backgroundWorkSupervisor } from "./backgroundWork/supervisor.ts";
 import { registerServerTaskBackend } from "./serverTasks.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
+import {
+  touchAllSessionRows,
+  touchSessionRows,
+} from "./db/sessionListChanges.ts";
 import { setArtifactRetentionGuard } from "./mcp/toolGroups/packRuntime.ts";
 import {
   BackgroundCompletionDelivery,
@@ -381,7 +385,7 @@ setArtifactRetentionGuard((sessionId) =>
 setBackgroundHandlingHost({
   changed: (sessionId) => {
     backgroundUpdateQueueChanged(sessionId);
-    void hub.broadcastSessions();
+    touchSessionRows([sessionId]);
   },
 });
 
@@ -1944,7 +1948,7 @@ server.listen(PORT, HOST, () => {
   installReplyReminders();
   onSettingsChanged(({ sections }) => {
     if (sections.includes("sessionPeerPromptReminderLimit"))
-      void hub.broadcastSessions();
+      touchAllSessionRows("reminder-limit");
   });
   // Publishes proxy/CA env vars to `childProcessEnv()` (never process.env), so
   // every later-spawned agent, host command and build tool gets them while the

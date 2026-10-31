@@ -37,7 +37,6 @@ vi.mock("./hub.ts", async (importOriginal) => {
     hub: {
       ...actual.hub,
       listSessions: () => Promise.resolve([]),
-      broadcastSessions: () => Promise.resolve(),
     },
   };
 });

@@ -15,6 +15,7 @@ import { afterAll, test, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "session-activity-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -156,15 +157,12 @@ test("a run start is timed, and a failed run is recorded as the session's last e
 });
 
 test("a provider retry is on the row while it holds, and moves the list only when it changes", async () => {
-  const { hub } = await import("./hub.ts");
-  const broadcasts = vi
-    .spyOn(hub, "broadcastSessions")
-    .mockImplementation(() => Promise.resolve());
+  const touches = recordSessionRowTouches();
   try {
     const { id, adapter } = await liveSession();
     adapter.emit({ type: "messageStarted", streamId: "m1", run: 1 });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    broadcasts.mockClear();
+    touches.clear();
     assert.equal(sessionProviderRetry(id), undefined);
 
     adapter.emit({
@@ -191,7 +189,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
       "the streak keeps its start",
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(broadcasts.mock.calls.length, 2, "one per attempt");
+    assert.equal(touches.countFor(id), 2, "one per attempt");
 
     // Tool transitions move progress constantly; they never move the list.
     adapter.emit({
@@ -225,9 +223,9 @@ test("a provider retry is on the row while it holds, and moves the list only whe
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(
-      broadcasts.mock.calls.length,
+      touches.countFor(id),
       3,
-      "only the retry ending asked for a refresh",
+      "only the retry ending touched the row",
     );
 
     adapter.emit({ type: "providerRetry", attempt: 1, run: 1 });
@@ -256,7 +254,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
       "the run's end clears it",
     );
   } finally {
-    broadcasts.mockRestore();
+    touches.stop();
   }
 });
 

@@ -9,6 +9,7 @@ import { dirname } from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
 
 vi.mock("./harnesses/oneShot.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./harnesses/oneShot.ts")>()),
@@ -148,16 +149,16 @@ test("guidance, current title and origin Task reach the agent; the reference pre
   const renamed: string[] = [];
   let pendingSeen = false;
 
+  const touches = recordSessionRowTouches((ids) => {
+    if (ids.has(sessionId)) pendingSeen ||= isRetitlingSession(sessionId);
+  });
   const title = await retitleSession({
     sessionId,
     guidance: "  stress the naming agent  ",
     rename: async (next) => {
       renamed.push(next);
     },
-    changed: async () => {
-      pendingSeen ||= isRetitlingSession(sessionId);
-    },
-  });
+  }).finally(() => touches.stop());
 
   assert.equal(title, "Task-42: Add Composer Rename Command");
   assert.deepEqual(renamed, ["Task-42: Add Composer Rename Command"]);
@@ -174,7 +175,7 @@ test("guidance, current title and origin Task reach the agent; the reference pre
   assert.equal(request.record?.parentSessionId, sessionId);
 });
 
-test("retitling captures enterprise scope before its first changed callback await", async () => {
+test("retitling captures enterprise scope before it announces the pending state", async () => {
   sessionId = `enterprise-retitle-${counter++}`;
   sessionStore.upsert({
     id: sessionId,
@@ -189,21 +190,23 @@ test("retitling captures enterprise scope before its first changed callback awai
     usage: {},
   });
   let spy: { mockRestore(): void } | undefined;
+  // The pending state's touch is the first thing a viewer can react to.
+  const touches = recordSessionRowTouches(() => {
+    spy ??= vi
+      .spyOn(sessionStore, "get")
+      .mockReturnValue({ ...original, requiresEnterprise: false });
+  });
   try {
     await retitleSession({
       sessionId,
       rename: async () => {},
-      changed: async () => {
-        spy ??= vi
-          .spyOn(sessionStore, "get")
-          .mockReturnValue({ ...original, requiresEnterprise: false });
-      },
     });
     assert.equal(
       vi.mocked(runOneShot).mock.calls[0]?.[0].requiresEnterprise,
       true,
     );
   } finally {
+    touches.stop();
     spy?.mockRestore();
   }
 });
@@ -223,7 +226,6 @@ test("a manual rename during generation wins", async () => {
     rename: async (next) => {
       renamed.push(next);
     },
-    changed: async () => {},
   });
   await vi.waitFor(() => assert.ok(finish));
   assert.equal(cancelSessionRetitle(sessionId), true);
@@ -247,7 +249,6 @@ test("no usable model is an error the user sees, and the old title stays", async
       rename: async (next) => {
         renamed.push(next);
       },
-      changed: async () => {},
     }),
     /No model is available/,
   );
@@ -311,7 +312,6 @@ test("a superseded run reports nothing, even when it fails", async () => {
   const run = retitleSession({
     sessionId,
     rename: async () => {},
-    changed: async () => {},
   });
   await vi.waitFor(() => assert.ok(fail));
   cancelSessionRetitle(sessionId);
@@ -335,7 +335,6 @@ test("a run that broke off mid-answer keeps the old title", async () => {
       rename: async (next) => {
         renamed.push(next);
       },
-      changed: async () => {},
     }),
     /aborted/,
   );
@@ -347,7 +346,6 @@ test("a session whose log names nothing is refused without a run", async () => {
     retitleSession({
       sessionId,
       rename: async () => {},
-      changed: async () => {},
     }),
     /no conversation/,
   );

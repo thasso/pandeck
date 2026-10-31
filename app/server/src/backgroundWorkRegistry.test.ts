@@ -20,6 +20,7 @@ import {
 } from "./backgroundWorkRegistry.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { getDb } from "./db/index.ts";
+import { setSessionListSink } from "./db/sessionListChanges.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { listSessions } from "./sessions.ts";
 
@@ -359,26 +360,25 @@ test("a Background frame is never larger than a subscribe answer", () => {
   assert.equal(backgroundWorkTopic.batchMax, BACKGROUND_WORK_SNAPSHOT_MAX);
 });
 
-test("the session list refreshes after a Background flush, not at commit", async () => {
+test("a Background commit touches its owner's session row at commit", async () => {
   const { hub } = await import("./hub.ts");
   const owner = makeOwner();
   const item = reserve(owner, { label: "npm run dev" });
   await hub.flushPendingBroadcastsForTests();
 
-  const broadcastSessions = hub.broadcastSessions.bind(hub);
-  let requests = 0;
-  hub.broadcastSessions = () => {
-    requests += 1;
-    return broadcastSessions();
-  };
+  const touched: string[][] = [];
+  const previous = setSessionListSink({
+    touch: (ids, force) => {
+      touched.push([...ids]);
+      previous?.touch(ids, force);
+    },
+    touchAll: (reason) => previous?.touchAll(reason),
+  });
   try {
     backgroundWorkStore.markRunning({ itemId: item.id });
-    assert.equal(requests, 0, "nothing listens at commit");
-    await hub.flushPendingBroadcastsForTests();
-    assert.equal(requests, 1);
+    assert.deepEqual(touched, [[owner]], "touched before the commit returns");
 
-    // A host-only commit reports no item ids, and still reaches the listener:
-    // its empty report is what schedules the flush.
+    // A host-only commit reports no item ids, and still names the host's owner.
     const hostOwner = makeOwner();
     const hostId = `bgh_registry_${hostOwner}`;
     const now = Date.now();
@@ -390,12 +390,11 @@ test("the session list refreshes after a Background flush, not at commit", async
         ) VALUES (?, ?, 'claude-query', ?, 'boot-registry', 'reserved', 'live', 0, 1, ?, ?, 0)`,
       )
       .run(hostId, hostOwner, `epoch-host-only-${hostOwner}`, now, now);
-    requests = 0;
+    touched.length = 0;
     backgroundWorkStore.requestHostStopAll({ hostId, reason: "empty host" });
-    assert.equal(requests, 0, "nothing listens at commit");
+    assert.deepEqual(touched, [[hostOwner]]);
     await hub.flushPendingBroadcastsForTests();
-    assert.equal(requests, 1);
   } finally {
-    hub.broadcastSessions = broadcastSessions;
+    setSessionListSink(previous);
   }
 });

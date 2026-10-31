@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
+import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "session-delete-harness-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -31,7 +32,7 @@ const toolGroups = await import("./mcp/toolGroups/registry.ts");
 const { projectStore } = await import("./db/projectStore.ts");
 const statusAgent = await import("./sessionStatus/statusAgent.ts");
 const { sessionStatusCardPath } = await import("./sessionStorage.ts");
-const { hub } = await import("./hub.ts");
+await import("./hub.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -103,13 +104,15 @@ test("a cleanup step that fails leaves the rest of the delete to run", async () 
     throw new Error("EACCES: permission denied");
   });
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const broadcast = vi.spyOn(hub, "broadcastSessions");
+  const touches = recordSessionRowTouches();
 
-  await connection().onDeleteSession(id);
+  await connection()
+    .onDeleteSession(id)
+    .finally(() => touches.stop());
 
   assert.deepEqual(remove.mock.calls, [[id]]);
   assert.deepEqual(forget.mock.calls, [[id]]);
-  assert.ok(broadcast.mock.calls.length > 0, "the list still learns of it");
+  assert.ok(touches.countFor(id) > 0, "the list still learns of it");
   assert.equal(warn.mock.calls.length, 1);
   assert.match(String(warn.mock.calls[0]?.[1]), /EACCES/);
 });

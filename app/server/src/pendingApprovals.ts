@@ -57,6 +57,7 @@ import type {
 } from "@assistant/shared";
 import { AGENT_DEFAULT_EFFORT } from "./agents/agentLibrary.ts";
 import { inDbTransaction } from "./db/index.ts";
+import { touchSessionRows } from "./db/sessionListChanges.ts";
 import { approvalStore, type StoredApproval } from "./db/approvalStore.ts";
 import { sessionStore, type SpawnGrantEdge } from "./db/sessionStore.ts";
 
@@ -252,6 +253,8 @@ export function subscribePendingApprovalChanges(
 }
 
 function emitChange(sessionId: string): void {
+  // The row's `awaitingInput`/`attention` read the pending set just written.
+  touchSessionRows([sessionId]);
   for (const listener of listeners) listener(sessionId);
 }
 
@@ -1149,7 +1152,6 @@ async function broadcast(
   try {
     const { hub } = await import("./hub.ts");
     hub.broadcastApprovalUpdate(sessionId, approval);
-    void hub.broadcastSessions();
   } catch {
     // best-effort; the card still resolves from the store on the next snapshot.
   }

@@ -15,6 +15,11 @@ import { randomUUID } from "node:crypto";
 import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import { sessionStore } from "./sessionStore.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
+import {
+  CLOSED_PEER_PROMPT_STATUSES,
+  noteDeadline,
+} from "./peerDeadlineClock.ts";
 import type { PeerPromptHopRefusal } from "@assistant/shared";
 
 export type PeerPromptStatus =
@@ -271,6 +276,76 @@ function getRow(id: string): Row | undefined {
     Row | undefined;
 }
 
+/* --------------------------- session-list rows --------------------------- */
+
+/**
+ * Touch the session-list rows a write to request `row` may change, at the
+ * write (`sessionListChanges.ts`): its sender and recipient (owed replies,
+ * reminders, queued work); for a `held` row before or after the write, every
+ * child its coordinator still holds, whose slot positions shift; and the
+ * participants of the requests this row answered, whose lost-reply case
+ * reads its status (`OUTSTANDING_REPLIES_SQL`, `peer_prompts_replied_by_idx`),
+ * and the senders still owed a reply by this row's sender, below.
+ */
+function touchRequestRows(
+  db: ReturnType<typeof getDb>,
+  row: Pick<Row, "id" | "sender_session_id" | "recipient_session_id">,
+  held: boolean,
+): void {
+  const ids = [row.sender_session_id, row.recipient_session_id];
+  for (const answered of db
+    .prepare(
+      "SELECT sender_session_id, recipient_session_id FROM peer_prompts WHERE replied_by_message_id = ?",
+    )
+    .all(row.id) as {
+    sender_session_id: string;
+    recipient_session_id: string;
+  }[])
+    ids.push(answered.sender_session_id, answered.recipient_session_id);
+  // A handoff: this sender's own request being accepted or interrupted can
+  // settle what it owes the sessions waiting on it (the second NOT EXISTS of
+  // `OUTSTANDING_REPLIES_SQL`; `peer_prompts_recipient_fifo_idx`).
+  for (const waiting of db
+    .prepare(
+      "SELECT DISTINCT sender_session_id FROM peer_prompts WHERE recipient_session_id = ? AND status IN ('awaiting_response', 'replied')",
+    )
+    .all(row.sender_session_id) as { sender_session_id: string }[])
+    ids.push(waiting.sender_session_id);
+  if (held) ids.push(...heldChildIds(db, row.sender_session_id));
+  touchSessionRows(ids);
+}
+
+/** The children a coordinator still holds (`peer_prompts_held_sender_idx`). */
+function heldChildIds(
+  db: ReturnType<typeof getDb>,
+  senderSessionId: string,
+): string[] {
+  return (
+    db
+      .prepare(
+        "SELECT recipient_session_id FROM peer_prompts WHERE sender_session_id = ? AND status = 'held'",
+      )
+      .all(senderSessionId) as { recipient_session_id: string }[]
+  ).map((r) => r.recipient_session_id);
+}
+
+/**
+ * The status graph's one guard (T1297-P7): nothing leaves a closed status, so
+ * the deadline timer's scheduled set covers every request that can still
+ * become owed (`peerDeadlineClock.ts`). Checked in {@link transitionInTxn},
+ * which every transition, `transition()` and the in-transaction callers
+ * alike, goes through.
+ */
+function assertReopensNothing(from: readonly PeerPromptStatus[]): void {
+  const closed = from.filter((status) =>
+    CLOSED_PEER_PROMPT_STATUSES.includes(status),
+  );
+  if (closed.length > 0)
+    throw new Error(
+      `A peer request cannot leave a closed status (${closed.join(", ")}); classify it in peerDeadlineClock.ts first.`,
+    );
+}
+
 /* ------------------------------- chains ---------------------------------- */
 
 function createChain(
@@ -374,12 +449,16 @@ function closeChainsForSession(sessionId: string, now = Date.now()): string[] {
   );
   const closed: string[] = [];
   const clearRefusals = db.prepare(
-    "DELETE FROM peer_prompt_hop_refusals WHERE chain_id = ?",
+    "DELETE FROM peer_prompt_hop_refusals WHERE chain_id = ? RETURNING sender_session_id",
   );
+  const refused: string[] = [];
   for (const id of ids) {
     if (stmt.run(now, id).changes > 0) closed.push(id);
-    clearRefusals.run(id);
+    for (const row of clearRefusals.all(id) as { sender_session_id: string }[])
+      refused.push(row.sender_session_id);
   }
+  // A refusal shows on its sender's row only while its chain is open.
+  touchSessionRows(refused);
   return closed;
 }
 
@@ -390,7 +469,7 @@ function recordHopRefusal(
   maxHops: number,
   now = Date.now(),
 ): boolean {
-  return (
+  const recorded =
     getDb()
       .prepare(
         `
@@ -400,8 +479,9 @@ function recordHopRefusal(
      WHERE chain_id = ? AND closed = 0
   `,
       )
-      .run(senderSessionId, maxHops, now, chainId).changes > 0
-  );
+      .run(senderSessionId, maxHops, now, chainId).changes > 0;
+  if (recorded) touchSessionRows([senderSessionId]);
+  return recorded;
 }
 
 /** One bounded condition per sender for the list; all resolve with their chain. */
@@ -602,6 +682,16 @@ function enqueueRouted(
       input.expiresAt ?? null,
       JSON.stringify([{ to: status, at: now }]),
     );
+    touchRequestRows(
+      db,
+      {
+        id,
+        sender_session_id: input.senderSessionId,
+        recipient_session_id: input.recipientSessionId,
+      },
+      status === "held",
+    );
+    noteDeadline(input.expiresAt);
     const closed = (input.markRepliedIds ?? []).filter(
       (requestId) =>
         !transitionInTxn(
@@ -663,6 +753,16 @@ function enqueue(input: EnqueueInput, now = Date.now()): PeerPromptRecord {
       input.expiresAt ?? null,
       JSON.stringify([{ to: "queued", at: now }]),
     );
+    touchRequestRows(
+      db,
+      {
+        id,
+        sender_session_id: input.senderSessionId,
+        recipient_session_id: input.recipientSessionId,
+      },
+      false,
+    );
+    noteDeadline(input.expiresAt);
     db.exec("COMMIT");
     return map(getRow(id)!);
   } catch (err) {
@@ -708,6 +808,7 @@ function transitionInTxn(
   patch: TransitionPatch,
   now: number,
 ): boolean {
+  assertReopensNothing(from);
   const current = getRow(id);
   if (!current || !from.includes(current.status)) return false;
   if (
@@ -788,7 +889,10 @@ function transitionInTxn(
       ...(from as never[]),
       ...(patch.expectAttempts !== undefined ? [patch.expectAttempts] : []),
     );
-  return result.changes > 0;
+  if (result.changes === 0) return false;
+  touchRequestRows(db, current, current.status === "held" || to === "held");
+  if (patch.expiresAt !== undefined) noteDeadline(patch.expiresAt);
+  return true;
 }
 
 /** Compare-and-set status transition; returns the updated record or undefined. */
@@ -1743,10 +1847,15 @@ function dueReminderRequests(
 function markReminded(ids: readonly string[]): void {
   if (ids.length === 0) return;
   inDbTransaction(() => {
-    const stmt = getDb().prepare(
+    const db = getDb();
+    const stmt = db.prepare(
       "UPDATE peer_prompts SET reminder_count = reminder_count + 1 WHERE id = ?",
     );
-    for (const id of ids) stmt.run(id);
+    for (const id of ids) {
+      stmt.run(id);
+      const row = getRow(id);
+      if (row) touchRequestRows(db, row, false);
+    }
   });
 }
 
@@ -2411,14 +2520,35 @@ function expireUnresolved(
 /** Prune terminal rows last updated before the cutoff. */
 function pruneTerminal(cutoffMs: number): number {
   const placeholders = TERMINAL_STATUSES.map(() => "?").join(", ");
-  return Number(
-    getDb()
-      .prepare(
-        `DELETE FROM peer_prompts
-         WHERE status IN (${placeholders}) AND updated_at_ms < ?`,
-      )
-      .run(...(TERMINAL_STATUSES as never[]), cutoffMs).changes,
-  );
+  const where = `status IN (${placeholders}) AND updated_at_ms < ?`;
+  const params = [...TERMINAL_STATUSES, cutoffMs] as never[];
+  return inDbTransaction(() => {
+    const db = getDb();
+    // Read before the delete: a pruned row can be the lost reply that kept a
+    // request owed, or the later message that answered one, so the
+    // participants of both stop reading it.
+    const ids = (
+      db
+        .prepare(
+          `SELECT sender_session_id, recipient_session_id FROM peer_prompts WHERE ${where}
+           UNION
+           SELECT o.sender_session_id, o.recipient_session_id
+             FROM peer_prompts a
+             CROSS JOIN peer_prompts o ON o.replied_by_message_id = a.id
+            WHERE a.${where.replace("updated_at_ms", "a.updated_at_ms")}`,
+        )
+        .all(...params, ...params) as {
+        sender_session_id: string;
+        recipient_session_id: string;
+      }[]
+    ).flatMap((row) => [row.sender_session_id, row.recipient_session_id]);
+    const pruned = Number(
+      db.prepare(`DELETE FROM peer_prompts WHERE ${where}`).run(...params)
+        .changes,
+    );
+    touchSessionRows(ids);
+    return pruned;
+  });
 }
 
 export const peerPromptStore = {

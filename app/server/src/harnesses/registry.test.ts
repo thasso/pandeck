@@ -471,8 +471,8 @@ test("both stores reach the hub through one host", () => {
     .spyOn(claudeSdkStore, "setStateBuilder")
     .mockImplementation(() => {});
   const host = {
-    broadcastSessions: async () => {
-      calls.push("broadcastSessions");
+    sessionRowsChanged: (ids: Iterable<string>) => {
+      calls.push(`sessionRowsChanged:${[...ids].join(",")}`);
     },
     noteRunStarted: () => {},
     checkPendingReload: () => {
@@ -487,8 +487,8 @@ test("both stores reach the hub through one host", () => {
   harnessRegistry.setHost(host);
 
   assert.equal(setPiHost.mock.calls[0]?.[0], host);
-  // A Claude session changing re-lists and re-checks a queued reload.
-  setOnChange.mock.calls[0]?.[0]();
+  // A Claude session changing touches its row and re-checks a queued reload.
+  setOnChange.mock.calls[0]?.[0]("c1");
   const facts = {
     harness: "pi",
     kind: "developer",
@@ -497,7 +497,7 @@ test("both stores reach the hub through one host", () => {
   } as const;
   setProvider.mock.calls[0]?.[0]("s1", facts);
   assert.deepEqual(calls, [
-    "broadcastSessions",
+    "sessionRowsChanged:c1",
     "checkPendingReload",
     "buildSessionState:s1",
   ]);

@@ -15,7 +15,7 @@ const tmp = mkdtempSync(join(tmpdir(), "pi-fork-profile-test-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
-const { hub } = await import("../hub.ts");
+await import("../hub.ts");
 const { createCredentialProfile, patchCredentialProfile } =
   await import("../credentialProfiles.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
@@ -112,7 +112,6 @@ test("a pi fork persists its inherited profile and enterprise requirement", asyn
   const internals = piStore as unknown as StoreInternals;
   const originalCreate = internals.create;
   const originalTrack = internals.track;
-  const originalBroadcastSessions = hub.broadcastSessions;
   let childFile: string | undefined;
   let reopenedProfileId: string | undefined;
   const trackedProfiles: Array<string | undefined> = [];
@@ -152,9 +151,6 @@ test("a pi fork persists its inherited profile and enterprise requirement", asyn
         : {}),
     };
   };
-  (
-    hub as unknown as { broadcastSessions: () => Promise<void> }
-  ).broadcastSessions = async () => {};
 
   try {
     const forked = await piStore.forkSession(
@@ -219,9 +215,6 @@ test("a pi fork persists its inherited profile and enterprise requirement", asyn
   } finally {
     internals.create = originalCreate;
     internals.track = originalTrack;
-    (
-      hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
-    ).broadcastSessions = originalBroadcastSessions;
   }
 });
 

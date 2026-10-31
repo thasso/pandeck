@@ -133,7 +133,7 @@ export async function sweepSettledSessionArchive(
     console.info(
       `[sessions] archived ${archived.length} settled session${archived.length === 1 ? "" : "s"} older than ${SESSION_AUTO_ARCHIVE_AFTER_MS / 86_400_000} days`,
     );
-    await hub.broadcastSessions();
+    await hub.sessionRowsSent();
     return archived;
   } finally {
     sweepRunning = false;

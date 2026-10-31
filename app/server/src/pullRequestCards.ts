@@ -720,7 +720,6 @@ async function broadcast(
   try {
     const { hub } = await import("./hub.ts");
     hub.broadcastPullRequestCardUpdate(card);
-    if (rowChanged) void hub.broadcastSessions();
   } catch {
     // best-effort; the card still resolves from the store on the next snapshot.
   }

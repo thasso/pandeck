@@ -216,7 +216,6 @@ async function abandonPermanentAssistant(): Promise<void> {
   // Only the singleton this rotation set out to abandon.
   if (permanentAssistantStore.sessionId() === previous) {
     permanentAssistantStore.clearSessionId();
-    void hub.broadcastSessions();
   }
 }
 
@@ -365,7 +364,6 @@ async function acquireOrCreatePermanentAssistant(
     }
   }
   permanentAssistantStore.setSessionId(driver.id);
-  void hub.broadcastSessions();
   return driver;
 }
 

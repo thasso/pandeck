@@ -10,13 +10,13 @@ import type { AccountModelOption, PeerSpawnRuntime } from "@assistant/shared";
 import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
 import { setDeliveryWake } from "./deliveryWake.ts";
+import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
 
 const { fakeDrivers, fakeHub } = vi.hoisted(() => {
   const fakeDrivers = new Map<string, unknown>();
   const fakeHub = {
     getLiveById: (id: string) => fakeDrivers.get(id),
     acquireById: async (id: string) => fakeDrivers.get(id),
-    broadcastSessions: () => {},
     broadcastPeerPromptCardUpdate: () => {},
     broadcastPeerPromptQueue: () => {},
   };
@@ -917,16 +917,16 @@ test("cleanup needs no free slot: a pass with the cap full cancels what was remo
 
 /* -------------------------- the session list sees it -------------------------- */
 
-/** How many session-list rebuilds `action` asked for, once its effects settled. */
+/** How many session-row touches `action` reported, once its effects settled. */
 async function listBroadcastsDuring(action: () => unknown): Promise<number> {
   await settle();
-  const spy = vi.spyOn(fakeHub, "broadcastSessions");
+  const touches = recordSessionRowTouches();
   try {
     await action();
     await settle();
-    return spy.mock.calls.length;
+    return touches.touches.length;
   } finally {
-    spy.mockRestore();
+    touches.stop();
   }
 }
 
@@ -1023,7 +1023,7 @@ test("Send now on a waiting child updates the list before its delivery is append
     return realSkills(...args);
   });
   await settle();
-  const lists = vi.spyOn(fakeHub, "broadcastSessions");
+  const lists = recordSessionRowTouches();
   const sending = sendQueuedPeerPromptNow(
     a.child,
     peerPromptQueueField(a.child).queuedPeerPrompts![0]!.id,
@@ -1031,7 +1031,10 @@ test("Send now on a waiting child updates the list before its delivery is append
   try {
     await vi.waitFor(() => expect(statusOf(a.rowId)).toBe("dispatching"));
     await settle();
-    expect(lists).toHaveBeenCalled();
+    // The sent child and the sibling whose position moved, before the append.
+    expect([...lists.ids()]).toEqual(
+      expect.arrayContaining([a.child, b.child]),
+    );
     const { listSessions } = await import("./sessions.ts");
     const rows = await listSessions([], () => Date.now(), {
       onlyIds: new Set([a.child, b.child]),
@@ -1041,6 +1044,7 @@ test("Send now on a waiting child updates the list before its delivery is append
     expect(row(a.child)?.waitingForSlot).toBeUndefined();
     expect(row(b.child)?.waitingForSlot).toEqual({ position: 1 });
   } finally {
+    lists.stop();
     release();
     await sending;
   }

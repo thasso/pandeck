@@ -35,6 +35,7 @@ import {
 import type { AgentUsage } from "@assistant/shared/session";
 import { randomUUID } from "node:crypto";
 import { getDb } from "./index.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 
 /**
  * Receives the ids of sessions whose LIVENESS may have changed: archived or
@@ -53,6 +54,7 @@ function subscribeLiveness(listener: SessionLivenessListener): () => void {
 
 function noteLiveness(ids: readonly string[]): void {
   if (!ids.length) return;
+  touchSessionRows([...ids, ...lifecycleCounterparts(ids)]);
   for (const listener of livenessListeners) {
     try {
       listener(ids);
@@ -60,6 +62,37 @@ function noteLiveness(ids: readonly string[]): void {
       // A listener cannot make an already durable session write fail.
     }
   }
+}
+
+/**
+ * The other sessions whose list row reads this one's lifecycle: counterparts of
+ * its peer requests not yet closed, in both directions (a reminder names only a
+ * live user sender, `REMINDABLE_WHERE`), and its spawn parent and children
+ * (`spawnedBySessionId`). Indexed: `peer_prompts_sender_idx`,
+ * `peer_prompts_recipient_fifo_idx` and the `session_links` keys.
+ */
+function lifecycleCounterparts(ids: readonly string[]): string[] {
+  const db = getDb();
+  const open = `status NOT IN ('settled', 'failed', 'interrupted', 'cancelled', 'expired')`;
+  const toRecipients = db.prepare(
+    `SELECT DISTINCT recipient_session_id AS id FROM peer_prompts WHERE sender_session_id = ? AND ${open}`,
+  );
+  const toSenders = db.prepare(
+    `SELECT DISTINCT sender_session_id AS id FROM peer_prompts WHERE recipient_session_id = ? AND ${open}`,
+  );
+  const links = db.prepare(
+    `SELECT parent_session_id AS id FROM session_links WHERE child_session_id = ?
+     UNION SELECT child_session_id AS id FROM session_links WHERE parent_session_id = ?`,
+  );
+  const out: string[] = [];
+  for (const id of new Set(ids))
+    for (const row of [
+      ...(toRecipients.all(id) as { id: string }[]),
+      ...(toSenders.all(id) as { id: string }[]),
+      ...(links.all(id, id) as { id: string }[]),
+    ])
+      out.push(row.id);
+  return out;
 }
 
 /** Failure text is a sidebar label, not a log: keep it short enough to render. */
@@ -459,6 +492,7 @@ function upsert(input: SessionUpsert): boolean {
         input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
       );
     if (!prev) noteLiveness([input.id]);
+    else touchSessionRows([input.id]);
     return true;
   } catch (err) {
     console.warn(
@@ -480,6 +514,7 @@ function setPeerTurnCap(id: string, cap: number | null): void {
     .run(cap, id);
   if (result.changes !== 1)
     throw new Error("Session does not exist or was deleted.");
+  touchSessionRows([id]);
 }
 
 /** Live failover only: refuse a stale binding or a session deleted during the move. */
@@ -497,6 +532,7 @@ function switchCredentialProfile(
     throw new Error(
       "The session's account changed or the session was deleted during the switch.",
     );
+  touchSessionRows([id]);
 }
 
 /**
@@ -557,6 +593,7 @@ function markRead(id: string, ts: number): boolean {
         "UPDATE session_index SET read_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL AND read_at_ms < ?",
       )
       .run(ts, id, ts);
+    if (result.changes > 0) touchSessionRows([id]);
     return result.changes > 0;
   } catch {
     return false;
@@ -684,6 +721,7 @@ function touch(id: string, ts = Date.now()): void {
         "UPDATE session_index SET updated_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL AND updated_at_ms < ?",
       )
       .run(ts, id, ts);
+    touchSessionRows([id]);
   } catch {
     // best-effort mirror
   }
@@ -809,6 +847,7 @@ function acknowledgeMissingWorktree(
           "ON CONFLICT(session_id) DO UPDATE SET worktree_id = excluded.worktree_id, acknowledged_at_ms = excluded.acknowledged_at_ms",
       )
       .run(id, worktreeId, ts);
+    touchSessionRows([id]);
   } catch (err) {
     console.warn(
       "sessionStore.acknowledgeMissingWorktree failed:",
@@ -950,6 +989,7 @@ function recordRunFailure(id: string, message: string, ts = Date.now()): void {
         "UPDATE session_index SET last_error_at_ms = ?, last_error_text = ? WHERE id = ? AND deleted_at_ms IS NULL",
       )
       .run(ts, text || "The agent run failed.", id);
+    touchSessionRows([id]);
   } catch {
     // best-effort mirror
   }
@@ -972,6 +1012,7 @@ function recordInterruptedRun(
         "UPDATE session_index SET interrupted_run_at_ms = ?, interrupted_run_json = ? WHERE id = ? AND deleted_at_ms IS NULL",
       )
       .run(ts, JSON.stringify(detail), id);
+    touchSessionRows([id]);
   } catch {
     // best-effort mirror
   }
@@ -990,6 +1031,7 @@ function clearInterruptedRun(id: string): void {
         "UPDATE session_index SET interrupted_run_at_ms = NULL, interrupted_run_json = NULL WHERE id = ? AND deleted_at_ms IS NULL",
       )
       .run(id);
+    touchSessionRows([id]);
   } catch {
     // best-effort mirror
   }
@@ -1002,6 +1044,7 @@ function clearRunFailure(id: string): void {
         "UPDATE session_index SET last_error_at_ms = NULL, last_error_text = NULL WHERE id = ? AND deleted_at_ms IS NULL",
       )
       .run(id);
+    touchSessionRows([id]);
   } catch {
     // best-effort mirror
   }
@@ -1115,6 +1158,7 @@ function updateStats(
         `UPDATE session_index SET ${sets.join(", ")} WHERE id = ? AND deleted_at_ms IS NULL`,
       )
       .run(...(params as never[]));
+    touchSessionRows([id]);
   } catch {
     // best-effort mirror
   }
@@ -1633,6 +1677,7 @@ function linkSpawned(
         ...(options.inheritGrants === false ? { inheritGrants: false } : {}),
       }),
     );
+  touchSessionRows([childSessionId, parentSessionId]);
 }
 
 /**
@@ -1684,6 +1729,7 @@ function setSpawnedOwnership(
       row.parent_session_id,
       childSessionId,
     );
+  touchSessionRows([childSessionId, row.parent_session_id]);
   return true;
 }
 

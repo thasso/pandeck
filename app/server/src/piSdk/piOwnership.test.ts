@@ -54,7 +54,7 @@ function fakeAgentSession(sessionId: string) {
 
 function host() {
   return {
-    broadcastSessions: () => Promise.resolve(),
+    sessionRowsChanged: () => {},
     noteRunStarted: () => {},
     checkPendingReload: () => {},
     isReloadQueued: () => false,

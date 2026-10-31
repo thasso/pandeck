@@ -27,6 +27,7 @@ import { sessionStore } from "./db/sessionStore.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
+import { deadlineWatermark } from "./db/peerDeadlineClock.ts";
 import { directPeerChildStore } from "./db/directPeerChildStore.ts";
 import { waitingForSlotByChild } from "./heldDirectPeers.ts";
 import { getSettings } from "./settings.ts";
@@ -329,7 +330,7 @@ function attentionFields(
 /** Who still owes each session a reply; empty (and logged) when unreadable. */
 function awaitingRepliesBySender(): Map<string, string[]> {
   try {
-    return peerPromptStore.outstandingRepliesBySender();
+    return peerPromptStore.outstandingRepliesBySender(deadlineWatermark());
   } catch (err) {
     console.warn("Failed to read awaited peer replies for session list:", err);
     return new Map();
@@ -341,6 +342,7 @@ function unansweredRequestsByRecipient(): Map<string, string[]> {
   try {
     return peerPromptStore.remindersExhaustedByRecipient(
       getSettings().sessionPeerPromptReminderLimit,
+      deadlineWatermark(),
     );
   } catch (err) {
     console.warn(
@@ -441,6 +443,9 @@ export async function listSessions(
   // connection. A new per-row lookup belongs in this batched prologue. The
   // maps derived from session edges are memoized on those edges
   // (`memoizedOnLinks`), so between edge writes they cost nothing.
+  // The row builder reads no clock but `deadlineWatermark()`: every input
+  // here changes only through a write that touches its rows
+  // (`db/sessionListChanges.ts`), and a new input must too.
   const projectBySession = projectStore.sessionProjectIndex();
   const worktreeBySession = worktreeIdBySession();
   // Memoized per DISTINCT worktree id, and only for the ids rows actually

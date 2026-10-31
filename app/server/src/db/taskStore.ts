@@ -564,6 +564,23 @@ function sessionTaskStatuses(): Array<{
 }
 
 /**
+ * The sessions these Tasks are context of: the rows whose `taskProgress`
+ * counts them (`sessionTaskStatuses`). Served by the links primary key.
+ */
+function contextSessionIds(taskIds: readonly number[]): string[] {
+  const sessions = new Set<string>();
+  const stmt = getDb().prepare(
+    `SELECT to_id FROM links
+      WHERE from_type = 'task' AND from_id = ? AND relation = 'context'
+        AND to_type = 'session'`,
+  );
+  for (const id of new Set(taskIds))
+    for (const row of stmt.all(String(id)) as { to_id: string }[])
+      sessions.add(row.to_id);
+  return [...sessions];
+}
+
+/**
  * Replace the task's ticket — the one Jira key or canonical GitHub
  * `owner/repo#123` ref it is about — or remove it with null. It is a single
  * `jira` or `github` edge; writing one clears the other relation.
@@ -924,6 +941,7 @@ export const taskStore = {
   linkSession,
   sessionsFor,
   sessionTaskStatuses,
+  contextSessionIds,
   setTicket,
   addUrl,
   urlsFor,

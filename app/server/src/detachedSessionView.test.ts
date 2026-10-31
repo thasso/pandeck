@@ -103,7 +103,6 @@ describe("viewing a stored session", () => {
     const connection = new Connection(fakeSocket(sent));
     const { acquired } = storedSession("stored-b");
     const attached = vi.spyOn(attach, "attachRuntimeView");
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
 
     void connection.handle({
       type: "loadSession",
@@ -177,7 +176,6 @@ describe("viewing a stored session", () => {
       harness: "pi",
       agentType: "assistant",
     });
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
     // F is already live, so navigating to it attaches a REAL driver — the one a
     // stale command would reach for after its own session finished opening.
     const liveF = new ClaudeSdkSession("stored-f", {
@@ -247,7 +245,6 @@ describe("viewing a stored session", () => {
       harness: "pi",
       agentType: "assistant",
     });
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
     const liveG = new ClaudeSdkSession("live-g", {
       seam: async () => fakeSeam(),
       agentType: "assistant",
@@ -302,7 +299,6 @@ describe("viewing a stored session", () => {
       harness: "pi",
       agentType: "assistant",
     });
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
     const liveJ = new ClaudeSdkSession("live-j", {
       seam: async () => fakeSeam(),
       agentType: "assistant",

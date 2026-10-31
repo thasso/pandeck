@@ -74,6 +74,7 @@ import {
   type PeerPromptRecoveryDecision,
   type PeerPromptStatus,
 } from "./db/peerPromptStore.ts";
+import { advancePeerDeadlines } from "./db/peerDeadlineClock.ts";
 import { getSettings } from "./settings.ts";
 import { sessionFirstTurnContext } from "./sessionContext.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
@@ -161,8 +162,6 @@ export function setPeerPromptAutoDeliverForTests(enabled: boolean): void {
 export interface PeerPromptHub {
   getLiveById(id: string): RuntimePromptDriver | undefined;
   acquireById(id: string): Promise<RuntimePromptDriver | undefined>;
-  /** Rebuild the session list; optional so a test hub need not stub it. */
-  broadcastSessions?(): Promise<void> | void;
   broadcastPeerPromptCardUpdate(
     sessionId: string,
     update: {
@@ -288,9 +287,6 @@ export async function sendPeerPrompt(
           detail,
         ).catch(() => {});
       }
-      void getHub()
-        .then((hub) => hub.broadcastSessions?.())
-        .catch(() => {});
       throw new Error(
         `This agent-to-agent chain (${err.chainId}) reached its ${err.maxHops}-hop limit without a human in the loop. This send was not queued. Wait for a human prompt to a chain participant or involve the user before sending again.`,
       );
@@ -1386,10 +1382,6 @@ async function deliverReplyReminder(
             `[peer] could not count reminders for ${sessionId} (${failureLabel(err)})`,
           );
         }
-        if (due.some((r) => r.reminderCount + 1 >= limit))
-          void getHub()
-            .then((hub) => hub.broadcastSessions?.())
-            .catch(() => {});
       });
       await receipt;
       return undefined;
@@ -2791,15 +2783,13 @@ export function runPeerPromptRetention(now = Date.now()): {
   expired: number;
   pruned: number;
 } {
+  // A request past its deadline already owes nothing in the session list once
+  // the watermark passes it (`db/peerDeadlineClock.ts`); advance it first, so
+  // the transitions below change no row.
+  advancePeerDeadlines(now);
   const expired = peerPromptStore.expireUnresolved(now, now);
   for (const m of expired) void broadcastCardUpdateFor(m);
-  // An expired request owes nothing any more: the session list must hear it.
   if (expired.length > 0) void broadcastParticipants(expired);
-  // A request whose reply was lost stops being owed at its own deadline with
-  // no transition to announce it, so each sweep rebuilds the list (debounced).
-  void getHub()
-    .then((hub) => hub.broadcastSessions?.())
-    .catch(() => undefined);
   const pruned = peerPromptStore.pruneTerminal(now - PRUNE_TTL_MS);
   pruneDelegationNotices(now - PRUNE_TTL_MS);
   return { expired: expired.length, pruned };
@@ -2816,10 +2806,6 @@ async function broadcastParticipants(batch: PeerPromptRecord[]): Promise<void> {
       ids.add(m.recipientSessionId);
     }
     for (const id of ids) hub.getLiveById(id)?.broadcastState();
-    // The session LIST reads peer prompts too (`queuedWork`, the replies a
-    // session still awaits), and a transition outside any turn — a cancel, a
-    // retry that gave up — moves no other row; debounced, so a burst is one.
-    void hub.broadcastSessions?.();
   } catch {
     // Best-effort UI refresh only.
   }
@@ -2856,11 +2842,7 @@ function newId(prefix: string): string {
  */
 export function closeChainsForHumanPrompt(sessionId: string): void {
   try {
-    const closed = peerPromptStore.closeChainsForSession(sessionId);
-    if (closed.length)
-      void getHub()
-        .then((hub) => hub.broadcastSessions?.())
-        .catch(() => {});
+    peerPromptStore.closeChainsForSession(sessionId);
   } catch {
     // Best-effort; a failed close only leaves a chain open, not corrupted.
   }

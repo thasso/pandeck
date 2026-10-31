@@ -656,7 +656,7 @@ class PiSessionStore {
       credentialProfileId,
       mode,
     });
-    await this.requireHost().broadcastSessions();
+    this.requireHost().sessionRowsChanged([live.sessionId]);
     return live;
   }
 
@@ -1017,6 +1017,8 @@ class PiSessionStore {
       },
     );
     this.live.set(ls.key, ls);
+    // A live row overlays the persisted one (`listInfo`).
+    this.requireHost().sessionRowsChanged([ls.key]);
     // Ownership from the first moment: an acquisition that is never viewed
     // (superseded navigation, closed socket) and never prompted idles out.
     ls.armIdleIfUnviewed();
@@ -1036,6 +1038,7 @@ class PiSessionStore {
   private onLiveSessionEvicted(key: string, ls: PiLiveSession): void {
     if (this.live.get(key) !== ls) return;
     this.live.delete(key);
+    this.requireHost().sessionRowsChanged([key]);
     this.closeToolRuntime(key);
     this.sessionModes.delete(key);
     void sessionRuntime.releaseHarness(key);
@@ -1085,6 +1088,7 @@ class PiSessionStore {
     const ls = this.live.get(key);
     if (!ls) return;
     this.live.delete(key);
+    this.requireHost().sessionRowsChanged([key]);
     // A turn still running ends here, as a deliberate end, while the runtime
     // can still tell it: disposing the pi session stops its events first.
     sessionRuntime.closeForTeardown(key);

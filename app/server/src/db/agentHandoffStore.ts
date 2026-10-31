@@ -6,6 +6,7 @@
  * `agentHandoffs.ts` owns delivery.
  */
 import { getDb } from "./index.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 
 /** The provenance of the turn a handoff becomes; mirrors `PromptOrigin`. */
 export type AgentHandoffOrigin =
@@ -119,6 +120,7 @@ export const agentHandoffStore = {
         now,
         now,
       ).lastInsertRowid as number;
+    touchSessionRows([input.sessionId]);
     return {
       id,
       sessionId: input.sessionId,
@@ -144,10 +146,11 @@ export const agentHandoffStore = {
 
   /** Drop one handoff; `false` means it was already gone. */
   remove(id: number): boolean {
-    return (
-      (getDb().prepare("DELETE FROM agent_handoffs WHERE id=?").run(id)
-        .changes as number) > 0
-    );
+    const row = getDb()
+      .prepare("DELETE FROM agent_handoffs WHERE id=? RETURNING session_id")
+      .get(id) as { session_id: string } | undefined;
+    touchSessionRows([row?.session_id]);
+    return row !== undefined;
   },
 
   /** Record a failed delivery attempt and return the row's new attempt count. */
@@ -185,10 +188,12 @@ export const agentHandoffStore = {
         .prepare("SELECT * FROM agent_handoffs WHERE created_at_ms < ?")
         .all(cutoff) as unknown as Row[]
     ).map(map);
-    if (expired.length > 0)
+    if (expired.length > 0) {
       getDb()
         .prepare("DELETE FROM agent_handoffs WHERE created_at_ms < ?")
         .run(cutoff);
+      touchSessionRows(expired.map((handoff) => handoff.sessionId));
+    }
     return expired;
   },
 

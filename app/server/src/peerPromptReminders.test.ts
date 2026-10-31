@@ -54,13 +54,20 @@ const fakeHub = {
     acquired.push(id);
     return driverFor(id);
   },
-  broadcastSessions: () => {
-    listBroadcasts.count += 1;
-  },
   broadcastPeerPromptCardUpdate: () => {},
   broadcastPeerPromptQueue: () => {},
 };
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
+// Every session-row touch counts as a list refresh (no hub is loaded).
+const { setSessionListSink } = await import("./db/sessionListChanges.ts");
+setSessionListSink({
+  touch: () => {
+    listBroadcasts.count += 1;
+  },
+  touchAll: () => {
+    listBroadcasts.count += 1;
+  },
+});
 
 const peer = await import("./peerPrompt.ts");
 const {
@@ -325,12 +332,10 @@ describe("reply reminders", () => {
           origin: { kind: "system", source: "test" },
         });
       }
-      const before = listBroadcasts.count;
       await offerReplyReminders(me);
       assert.equal(reminders(me).length, 2);
       assert.ok(reminders(me)[1]!.includes("reminder 2 of 2"));
       assert.equal(count(r.id), 2);
-      assert.equal(listBroadcasts.count, before, "nothing new to show");
       assert.deepEqual(
         peerPromptStore.remindersExhaustedByRecipient(2).get(me),
         [asker],

@@ -3,13 +3,13 @@
 What one rebuild of the session list costs, and the rules that keep it bounded
 by what is shown rather than by what the database has accumulated.
 
-The hub rebuilds the list (`hub.mergedSessions` → `sessions.ts`'s
-`listSessions`) after every session change: up to ~4 times a second while agents
-stream, about 30 times in four minutes with two or three agents running. Every
-rebuild runs on the thread that serves every connection, so its cost is latency
-for everyone. The flush then sends only what changed: single-row
-`sessionUpdated`s when the row set is unchanged, the full `sessions` list
-otherwise (`sessionListDelta` in `hub.ts`).
+The hub rebuilds the rows a write reported (`hub.mergedSessions` →
+`sessions.ts`'s `listSessions` with `onlyIds`; see "Touched rows" below): up to
+~4 times a second while agents stream, about 30 times in four minutes with two
+or three agents running. Every rebuild runs on the thread that serves every
+connection, so its cost is latency for everyone. The flush then sends only what
+changed: single-row `sessionUpdated`s when the row set is unchanged, the full
+`sessions` list otherwise (`planSessionListSends` in `hub.ts`).
 
 ## What it cost
 
@@ -68,8 +68,10 @@ connection has the archive view open.
 - **What changes without a write is read per build.** Whether a worktree folder
   still exists can change with no write this process sees, so the
   missing-worktree probe is never memoized across builds. It reads the active
-  worktree rows once per build instead of once per id, and calls `existsSync`
-  once per distinct id.
+  worktree rows once per build instead of once per id, and reads each distinct
+  id's presence answer once. A changed presence answer
+  (`worktrees/checkoutPresence.ts`) and every write to the main-checkout caches
+  (`worktrees/worktreeResolve.ts`) touch the sessions reading it.
 - **Count from the columns a count needs.** Per-session Task progress is still
   cached on `taskIndexVersion`, but that version moves on every Task write. The
   rebuild after one used to assemble every Task summary just to count statuses.
@@ -86,8 +88,9 @@ reply reminder (`peerPromptStore.remindersExhaustedByRecipient`, projected as
 `unansweredRequestsFrom`, requesters newest first): one grouped read over the
 `awaiting_response` rows whose `reminder_count` reached
 `sessionPeerPromptReminderLimit`, from a user session neither archived nor
-deleted, served by `peer_prompts_expiry_idx`. A change of the limit rebuilds the
-list; nothing clears the field but a reply, a settle or the request's expiry.
+deleted, served by `peer_prompts_expiry_idx`. A change of the limit rebuilds
+every row; nothing clears the field but a reply, a settle or the request's
+deadline passing the watermark (below).
 
 Each rebuild also reads who still owes each session a reply
 (`peerPromptStore.outstandingRepliesBySender`, projected as
@@ -115,6 +118,81 @@ sibling something on their shared chain is cleared by that sibling's own report
 — the same rows as a real forward. Measured on a copy of the production database
 (7,539 peer prompts, 16 senders owed): 0.24 ms median.
 
+## Touched rows
+
+A write that can change a `SessionListItem` reports WHICH rows, through the one
+seam `db/sessionListChanges.ts`: `touchSessionRows(ids)` at the write site,
+synchronously, inside its transaction when one is open, before the writing
+function returns. It names every session whose row the write may change, fan-out
+included:
+
+- a peer request's sender and recipient, the coordinator's other held children
+  (their `waitingForSlot` positions), and the senders waiting on this row's
+  sender through a handoff (`awaitingRepliesFrom`'s second probe);
+- both ends of a `links.ts` edge, and every session linked to a Task whose
+  status, title or existence changed (`taskStore.contextSessionIds`);
+- every session in a worktree whose row was inserted, updated or removed, and
+  the owners of background hosts that changed;
+- the live engines' map entries: a pi or Claude session that opens or leaves
+  memory overlays the persisted row, so both stores touch it.
+
+Over-touching costs one row rebuild; under-touching leaves a stale row. Deferred
+reporting (`void import(…).then(…)`, a post-publish listener) is not a touch,
+because another flush could see the change first. `touchAllSessionRows` is only
+for inputs every row reads with no bounded id set: the reminder-limit setting, a
+cleared pull-request card table, a closed database.
+
+The hub's sink coalesces touches (25 ms debounce, 250 ms under churn) and
+rebuilds only the touched rows (`onlyIds`), or every row on a global touch or
+before the first publish. It compares each against what it last published per
+archived variant (`publishedSessionRows`). A variant gets the full `sessions`
+list when its row set changed, the archived count moved, or more than
+`SESSION_DELTA_MAX_ROWS` rows changed; otherwise one `sessionUpdated` per
+changed row. A forced touch (`hub.broadcastSessionUpdated`, used before a
+refusal's error) sends the row even when it is equal. The singleton Personal
+Assistant's row never travels as a row, only as `permanentAssistantUnread`. A
+caller whose reply or later broadcast must follow the list (`mutationSettled`, a
+Workflow Run list after its roles) awaits `hub.sessionRowsSent()`.
+
+Two backstops catch a writer that forgot to touch:
+
+- **Audit (tests).** Under Vitest every flush first builds every row and throws
+  `unreported session row change: <id> <fields>` for a row that differs from the
+  published one without a touch, before anything is published, so a full-list
+  fallback cannot hide it. `hub.setSessionListAuditForTests(false)` pauses it
+  for a test that counts store reads.
+- **Sweep (production).** Every 60 s (`startSessionListSweep`) the hub advances
+  the deadline watermark, compares a full build with what it published, logs
+  each unreported row once with its changed fields, and touches it, which
+  repairs it. Nothing relies on it.
+
+Known gap: a main checkout cached as "no repository" turns live again when that
+cache entry's TTL lapses (`worktreeResolve.ts`'s `noRepositoryHolds`), a clock
+read with no write; the sweep repairs that row within 60 s.
+
+### Deadline watermark
+
+A peer request stops being owed when its reply deadline passes, with no write to
+say so. The row builder therefore reads no clock but `deadlineWatermark()` W
+(`db/peerDeadlineClock.ts`): a request reads as expired exactly when
+`expires_at_ms <= W`. W moves only inside `advancePeerDeadlines(now)`, which
+first touches the sender and recipient of every request whose deadline lies in
+(W, now], then sets W; it never moves backwards.
+
+A timer runs it at the next deadline after W over a deliberate superset of
+statuses: every status from which a `response_requested` request is, or can
+still become, owed (`held` through `replied`). No transition leaves
+`settled`/`failed`/`interrupted`/`cancelled`/`expired` (`transitionInTxn`
+refuses to), so a deadline stays scheduled from the write that stores it until
+its request closes for good. Every write of `expires_at_ms` calls
+`noteDeadline`, which arms earlier when needed. The delay is clamped to
+`setTimeout`'s 2^31−1 ms (the 30-day reply TTL exceeds it; an early fire only
+re-arms) and `unref`'d; a failed advance keeps W and retries after 60 s.
+Retention (`runPeerPromptRetention`) advances W before it expires and prunes
+rows, so those transitions change no row. Both queries seek
+`peer_prompts_expiry_idx`, one seek per status for the next deadline
+(`peerPromptStore.test.ts` pins the plans).
+
 ## Children waiting for a slot
 
 A directly spawned child over its coordinator's concurrency cap is created with
@@ -128,8 +206,9 @@ hold tickets, read from their one owner in `peerSpawnRuntimes.ts`. The
 `session_spawn` result reports a position by the same rule, so the two never
 disagree. The row carries `waitingForSlot: { position }`; nothing else stores
 it. Every held transition (insertion, a start by the pass or by Send now, a
-refusal, a withdraw or stop, an archive or delete) requests a rebuild, and Send
-now requests it when it claims the row, before the delivery is appended.
+refusal, a withdraw or stop, an archive or delete) touches the coordinator's
+held children, and Send now touches them when it claims the row, before the
+delivery is appended.
 
 **Zero-message rows.** A row with no message is a runtime's metadata claim, not
 a conversation, and stays unlisted, with two exceptions: a draft, and a child
@@ -144,8 +223,8 @@ are not revived, and the live-only rows are unchanged.
 
 A running row carries `providerRetry` while its provider reports it is retrying
 a failed request (`docs/live-progress.md`). It is read from an in-memory map in
-`sessionActivity.ts`, so the build pays nothing for it. That map asks for a
-rebuild only when a retry starts, reaches another attempt or ends. The rest of a
+`sessionActivity.ts`, so the build pays nothing for it. That map touches its
+session only when a retry starts, reaches another attempt or ends. The rest of a
 run's live progress moves on every tool transition and deliberately never
 rebuilds the list: it reaches the viewed session through its runtime snapshot
 and events.
@@ -158,12 +237,6 @@ and events.
   maps are memoized, a cold scan happens only after a session edge write. On
   production that is ~60 a day, most of them at session creation, which rebuilds
   the full list anyway.
-- **No touched-rows rebuild.** A trigger that knows its session ids could
-  rebuild only those rows. At ~5 ms per default rebuild, the saving does not pay
-  for a second path whose correctness depends on every trigger naming every row
-  it changed: unread state, attention, pull-request cards and Task progress all
-  move rows the trigger did not name. The full rebuild plus `sessionListDelta`'s
-  exact comparison stays the one source of truth.
 
 ## Verifying
 
@@ -178,6 +251,11 @@ and events.
   transaction and a reopened database all miss.
 - `app/server/src/sessionDelta.test.ts` shows that `broadcastSessionUpdated`
   reads only the named row and sends exactly what a full build lists.
+- `app/server/src/sessionListReporters.test.ts` classifies every export of the
+  stores the list reads, checks each fan-out against a full build, and covers
+  the audit, the sweep and wire parity. `sessionListDeadline.test.ts` drives the
+  watermark on fake time; `sessionListForcedRefresh.test.ts` shows a refused
+  command's row arriving before its error.
 - `pnpm --filter @assistant/server measure:session-list --data-dir <absolute data dir>`
   copies the database and the file-backed stores into a temporary directory,
   measures that copy, and deletes it.

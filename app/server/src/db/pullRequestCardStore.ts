@@ -6,6 +6,7 @@
  */
 import type { PullRequestCard } from "@assistant/shared";
 import { getDb } from "./index.ts";
+import { touchAllSessionRows, touchSessionRows } from "./sessionListChanges.ts";
 
 /** A stored card and its server-only context, exactly as it was written. */
 export interface StoredPullRequestCard {
@@ -167,11 +168,15 @@ export const pullRequestCardStore = {
         JSON.stringify(stored.card),
         JSON.stringify(stored.context),
       );
+    // The session's `pullRequest` and task-choice attention read its cards.
+    if (Number(result.changes) > 0) touchSessionRows([sessionId]);
     return Number(result.changes) > 0;
   },
 
   /** Replace one stored card (and its context) in place, keeping its position. */
   update(stored: StoredPullRequestCard): void {
+    // Old and new session: a card can move.
+    touchSessionRows([this.get(stored.card.id)?.card.sessionId]);
     getDb()
       .prepare(PULL_REQUEST_CARD_SQL.update)
       .run(
@@ -180,6 +185,7 @@ export const pullRequestCardStore = {
         JSON.stringify(stored.context),
         stored.card.id,
       );
+    touchSessionRows([stored.card.sessionId]);
   },
 
   forSession(sessionId: string): StoredPullRequestCard[] {
@@ -285,5 +291,6 @@ export const pullRequestCardStore = {
   /** Test seam: drop every card. */
   clear(): void {
     getDb().exec("DELETE FROM pull_request_cards");
+    touchAllSessionRows("pull-request cards cleared");
   },
 };

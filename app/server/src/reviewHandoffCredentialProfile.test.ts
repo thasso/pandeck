@@ -18,7 +18,7 @@ const { Connection } = await import("./connection.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { projectStore } = await import("./db/projectStore.ts");
-const { hub } = await import("./hub.ts");
+await import("./hub.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
 const { addWorktreeComment } = await import("./worktrees/worktreeComments.ts");
@@ -82,15 +82,11 @@ test("pi review handoff persists the selected profile and cold reopen recovers i
   const sessionId = "review-profile-session";
 
   const originalAcquireNew = piStore.acquireNew;
-  const originalBroadcastSessions = hub.broadcastSessions;
   (
     piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{ sessionId: string }>;
     }
   ).acquireNew = async () => ({ sessionId });
-  (
-    hub as unknown as { broadcastSessions: () => Promise<void> }
-  ).broadcastSessions = async () => {};
   const sent: unknown[] = [];
   const fakeWs = {
     OPEN: 1,
@@ -182,9 +178,6 @@ test("pi review handoff persists the selected profile and cold reopen recovers i
         acquireNew: typeof originalAcquireNew;
       }
     ).acquireNew = originalAcquireNew;
-    (
-      hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
-    ).broadcastSessions = originalBroadcastSessions;
   }
 });
 

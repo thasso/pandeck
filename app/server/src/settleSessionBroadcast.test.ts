@@ -94,7 +94,7 @@ test("settling in one tab reaches every other subscribed tab", async () => {
     // without either of them doing anything.
     otherTab.length = 0;
     sessionStore.recordSessionOutcome(id, "failed");
-    await hub.broadcastSessions();
+    await hub.flushPendingBroadcastsForTests();
     await settled();
 
     const woken = rowFor(otherTab, id);

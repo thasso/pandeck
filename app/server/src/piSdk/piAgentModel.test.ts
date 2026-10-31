@@ -39,7 +39,7 @@ writeFileSync(
   }),
 );
 
-const { hub } = await import("../hub.ts");
+await import("../hub.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { freezeSessionAgent, sessionAgent } =
   await import("../agents/sessionAgent.ts");
@@ -47,10 +47,6 @@ const { piStore } = await import("./piStore.ts");
 const { nativePiSessionForTests } = await import("./piEngine.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 const { findModelForProfile } = await import("./models.ts");
-
-(
-  hub as unknown as { broadcastSessions: () => Promise<void> }
-).broadcastSessions = async () => {};
 
 const agent = {
   name: "test-reviewer",

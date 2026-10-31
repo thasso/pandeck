@@ -28,7 +28,7 @@ test("shutdown during acquisition does not persist a reload refusal on a queued 
       }),
     } as never),
     {
-      broadcastSessions: async () => {},
+      sessionRowsChanged: () => {},
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => shutdown,

@@ -50,7 +50,7 @@ export async function archiveRunSessions(
   cancelHeldForArchivedSessions(sessionIds);
   if (sessionIds.length === 0) return;
   const { hub } = await import("../hub.ts");
-  await hub.broadcastSessions();
+  await hub.sessionRowsSent();
 }
 
 const defaultOperations: RunCleanupOperations = {

@@ -11,7 +11,15 @@ import { join } from "node:path";
 import { checkoutFailureOf, checkoutFilesOn } from "../checkoutFileAccess.ts";
 import { checkoutGitOn } from "../gitExec.ts";
 import { getProject, type ProjectRecord } from "../projectRegistry.ts";
-import { getWorktree, type WorktreeRow } from "../db/worktreeStore.ts";
+import {
+  touchAllSessionRows,
+  touchSessionRows,
+} from "../db/sessionListChanges.ts";
+import {
+  getWorktree,
+  sessionIdsForWorktree,
+  type WorktreeRow,
+} from "../db/worktreeStore.ts";
 import type { PathInspection } from "../fileReads.ts";
 import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
 import {
@@ -264,6 +272,15 @@ function bumpMainRepoGeneration(key: string): void {
   mainRepoGeneration.set(key, (mainRepoGeneration.get(key) ?? 0) + 1);
 }
 
+/**
+ * A session on `key`'s main checkout reads these caches for its list row's
+ * `worktreeMissing` (`mainCheckoutEdgeNow`), so a write here touches it.
+ * Candidate transitions also notify `main:<id>`, whose listener touches too.
+ */
+function touchMainCheckoutSessions(key: string): void {
+  touchSessionRows(sessionIdsForWorktree(mainWorktreeId(key)));
+}
+
 function mainRepoGenerationOf(key: string): number {
   return mainRepoGeneration.get(key) ?? 0;
 }
@@ -335,6 +352,7 @@ export function clearMainRepoCache(): void {
   mainRepoInFlight.clear();
   mainCandidates.clear();
   for (const key of [...mainPresencePaths.keys()]) forgetProjectPresence(key);
+  touchAllSessionRows("main checkout cache cleared");
 }
 
 /**
@@ -351,6 +369,7 @@ export function invalidateMainRepo(projectId: string): void {
     mainCandidates.delete(key);
     forgetProjectPresence(key);
     bumpMainRepoGeneration(key); // invalidate any in-flight resolve's write-back
+    touchMainCheckoutSessions(key);
   }
 }
 
@@ -404,6 +423,7 @@ async function resolveAndPublishMainRepo(
   const stamp = info ? await trustedMainRepoStamp(info, startedAt) : undefined;
   publishAsOwner(owner, (entry) => {
     mainRepoCache.set(key, { info, at: Date.now(), stamp });
+    touchMainCheckoutSessions(key);
     const previous = entry?.info?.root;
     if (previous !== undefined && previous !== info?.root)
       forgetMainPresence(key, previous);
@@ -477,6 +497,7 @@ function dropResolvedRoot(owner: ResolveOwner): boolean {
     mainRepoCache.delete(owner.key);
     mainCandidates.delete(owner.key);
     bumpMainRepoGeneration(owner.key);
+    touchMainCheckoutSessions(owner.key);
     if (entry?.info) forgetMainPresence(owner.key, entry.info.root);
   });
 }

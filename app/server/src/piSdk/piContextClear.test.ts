@@ -68,7 +68,7 @@ function harness(sessionId: string, messages: unknown[]) {
     "coding" as never,
     localPiEngine(fakeAgentSession(sessionId, state) as never),
     {
-      broadcastSessions: () => Promise.resolve(),
+      sessionRowsChanged: () => {},
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => false,

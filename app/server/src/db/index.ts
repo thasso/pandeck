@@ -8,6 +8,7 @@ import {
   assertMayApplyMigrations,
   recordMigrationOwner,
 } from "./migrationOwner.ts";
+import { touchAllSessionRows } from "./sessionListChanges.ts";
 
 const DB_PATH = join(DATA_DIR, "app.sqlite3");
 const MIGRATIONS_DIR = PACKAGED_MIGRATIONS_DIR;
@@ -50,6 +51,8 @@ export function closeDb(): void {
   }
   db = undefined;
   migrated = false;
+  // Whatever opens next may hold different rows.
+  touchAllSessionRows("database closed");
 }
 
 /**

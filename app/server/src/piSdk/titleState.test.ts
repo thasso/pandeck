@@ -122,7 +122,7 @@ describe("pi skill command naming", () => {
         },
       } as never),
       {
-        broadcastSessions: () => Promise.resolve(),
+        sessionRowsChanged: () => {},
         noteRunStarted: () => {},
         checkPendingReload: () => {},
         isReloadQueued: () => false,

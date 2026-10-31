@@ -73,9 +73,9 @@ manual archive.
 The first sweep after this rule ships meets the whole legacy settled population
 at once. It is ONE list read, ONE store transaction (chunked
 `UPDATE … RETURNING` statements under a single `BEGIN IMMEDIATE`, advancing each
-row's read mark through its latest update as a manual archive does) and ONE
-`hub.broadcastSessions()` for everything that changed — never a commit and a
-broadcast per row.
+row's read mark through its latest update as a manual archive does), whose store
+write touches every row it archived — one flush for everything that changed,
+never a commit and a broadcast per row.
 
 ## List generation
 

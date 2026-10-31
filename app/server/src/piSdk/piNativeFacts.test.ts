@@ -115,7 +115,7 @@ test("pi hands the owner native identity, live limits, tool loading and the comm
     "developer",
     localPiEngine(native as never),
     {
-      broadcastSessions: async () => {},
+      sessionRowsChanged() {},
       noteRunStarted() {},
       checkPendingReload() {},
       isReloadQueued: () => false,

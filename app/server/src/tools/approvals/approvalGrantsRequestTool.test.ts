@@ -16,7 +16,7 @@ import type {
   ApprovalResolutionEdits,
 } from "@assistant/shared";
 
-vi.mock("../../hub.ts", () => ({ hub: { broadcastSessions: vi.fn() } }));
+vi.mock("../../hub.ts", () => ({ hub: {} }));
 vi.mock("../../peerSpawnRuntimes.ts", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../peerSpawnRuntimes.ts")>();

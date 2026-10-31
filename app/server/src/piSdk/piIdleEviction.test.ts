@@ -55,7 +55,7 @@ function idleSession() {
       },
     } as never),
     {
-      broadcastSessions: () => Promise.resolve(),
+      sessionRowsChanged: () => {},
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => false,
