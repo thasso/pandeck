@@ -41,6 +41,7 @@ import {
   type WorktreeSyncExpectation,
 } from "./worktrees/worktreeSync.ts";
 import { WorktreeCreateRefusalError } from "./worktrees/worktrees.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
 /* --------------------------------- fixtures -------------------------------- */
 
@@ -135,8 +136,8 @@ function operations(input: {
 }): PullRequestViewCheckoutOperations {
   return {
     worktreeRows: async () => input.rows,
-    resolveProvider: async (path) => input.providers[path] ?? null,
-    fetchHead: async (repoPath, remote, headBranch) => {
+    resolveProvider: async (_side, path) => input.providers[path] ?? null,
+    fetchHead: async (_side, repoPath, remote, headBranch) => {
       input.recorded?.fetches.push({ repoPath, remote, headBranch });
       return input.fetch ?? { status: "fetched", oid: HEAD_SHA };
     },
@@ -700,7 +701,13 @@ test("is refused while another mutation holds this pull request", async () => {
   const recorded = recorder();
 
   await withPullRequestMutation(
-    { repoPath: main, providerKind: "forgejo", number: 7, repoUrl: undefined },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: main,
+      providerKind: "forgejo",
+      number: 7,
+      repoUrl: undefined,
+    },
     "a merge & clean up",
     async () => {
       await assert.rejects(
@@ -727,7 +734,13 @@ test("is not blocked by a mutation on another pull request", async () => {
   const main = repo();
 
   await withPullRequestMutation(
-    { repoPath: main, providerKind: "forgejo", number: 8, repoUrl: undefined },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: main,
+      providerKind: "forgejo",
+      number: 8,
+      repoUrl: undefined,
+    },
     "a merge & clean up",
     async () => {
       const result = await checkoutPullRequestFromView(
@@ -826,6 +839,7 @@ test("the real head fetch leaves FETCH_HEAD untouched", async () => {
   const head = sh(remote, "rev-parse", "HEAD").trim();
 
   const fetched = await pullRequestCheckoutOperationsForTests().fetchHead(
+    DEFAULT_WORKER_SIDE,
     clone,
     "origin",
     "feature-7",

@@ -27,7 +27,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
-import { git } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { resolveEntryDetail } from "./entryDetail.ts";
 import {
   EntryFileTooLargeError,
@@ -51,6 +51,9 @@ import {
 import type { LibraryKind } from "./libraryKind.ts";
 import { scanLibrary } from "./libraryScanner.ts";
 import { LibraryStore } from "./libraryStore.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
+
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 interface WidgetManifest {
   name: string;

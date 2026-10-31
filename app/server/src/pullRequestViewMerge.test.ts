@@ -47,6 +47,7 @@ import {
   recordPendingMerge,
   resetPendingMergesForTests,
 } from "./pendingMerges.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
 /* --------------------------------- fixtures -------------------------------- */
 
@@ -200,7 +201,7 @@ function operations(input: {
 }): PullRequestViewMergeOperations {
   return {
     worktreeRows: async () => input.rows,
-    resolveProvider: async (path) => input.providers[path] ?? null,
+    resolveProvider: async (_side, path) => input.providers[path] ?? null,
     forgetInventoryReads: (projectId, identityKey) => {
       input.forgotten?.push({ projectId, identityKey });
     },
@@ -601,7 +602,13 @@ async function holdPullRequest(
     registered = resolve;
   });
   const done = withPullRequestMutation(
-    { repoPath: path, providerKind: "forgejo", number: 7, repoUrl: undefined },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: path,
+      providerKind: "forgejo",
+      number: 7,
+      repoUrl: undefined,
+    },
     what,
     async () => {
       registered();

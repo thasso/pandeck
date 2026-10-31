@@ -12,9 +12,11 @@ import type {
   WorktreeSyncOperation,
   WorktreeSyncResponse,
 } from "@assistant/shared";
-import { checkoutPathExists } from "../checkoutFileAccess.ts";
-import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
+import { checkoutFilesOn } from "../checkoutFileAccess.ts";
+import { checkoutGitOn, withRepoLock } from "../gitExec.ts";
 import { getWorktree, type WorktreeRow } from "../db/worktreeStore.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { invalidateWorktreeStatus } from "./worktreeStatus.ts";
 import { isMainWorktreeId, mainWorktreeId } from "./worktreeResolve.ts";
 import { baseBranchRemote, remoteNames } from "./worktreeRemote.ts";
@@ -93,8 +95,10 @@ const MAX_CONFLICTED_FILE_CHARS = 300;
 
 /** Best-effort evidence captured before an aborted rebase clears the index. */
 async function conflictedFiles(
+  side: CheckoutSide,
   cwd: string,
 ): Promise<{ files: string[]; truncated: boolean }> {
+  const { gitOptional } = checkoutGitOn(side);
   const result = await gitOptional(
     ["diff", "--name-only", "--diff-filter=U", "-z"],
     cwd,
@@ -115,11 +119,17 @@ async function conflictedFiles(
   };
 }
 
-async function oid(cwd: string, ref = "HEAD"): Promise<string> {
+async function oid(
+  side: CheckoutSide,
+  cwd: string,
+  ref = "HEAD",
+): Promise<string> {
+  const { git } = checkoutGitOn(side);
   return (await git(["rev-parse", "--verify", ref], cwd)).stdout.trim();
 }
 
-async function branch(cwd: string): Promise<string> {
+async function branch(side: CheckoutSide, cwd: string): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const result = await gitOptional(
     ["symbolic-ref", "--quiet", "--short", "HEAD"],
     cwd,
@@ -127,7 +137,12 @@ async function branch(cwd: string): Promise<string> {
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
-async function requireClean(cwd: string, label: string): Promise<void> {
+async function requireClean(
+  side: CheckoutSide,
+  cwd: string,
+  label: string,
+): Promise<void> {
+  const { git } = checkoutGitOn(side);
   const result = await git(
     ["status", "--porcelain=v1", "--untracked-files=all"],
     cwd,
@@ -139,11 +154,12 @@ async function requireClean(cwd: string, label: string): Promise<void> {
 }
 
 async function requireBranch(
+  side: CheckoutSide,
   cwd: string,
   expected: string,
   label: string,
 ): Promise<void> {
-  const actual = await branch(cwd);
+  const actual = await branch(side, cwd);
   if (actual !== expected) {
     throw new Error(
       `${label} is on "${actual || "a detached HEAD"}", not "${expected}".`,
@@ -151,26 +167,35 @@ async function requireBranch(
   }
 }
 
-async function rebaseInProgress(cwd: string): Promise<boolean> {
+async function rebaseInProgress(
+  side: CheckoutSide,
+  cwd: string,
+): Promise<boolean> {
+  const { gitOptional } = checkoutGitOn(side);
   const result = await gitOptional(["rev-parse", "--absolute-git-dir"], cwd);
   if (result.code !== 0) return false;
   const dir = result.stdout.trim();
   return (
-    (await checkoutPathExists(cwd, join(dir, "rebase-merge"))) ||
-    (await checkoutPathExists(cwd, join(dir, "rebase-apply")))
+    (await checkoutFilesOn(side).pathExists(cwd, join(dir, "rebase-merge"))) ||
+    (await checkoutFilesOn(side).pathExists(cwd, join(dir, "rebase-apply")))
   );
 }
 
 async function restoreAfterRebaseFailure(
+  side: CheckoutSide,
   cwd: string,
   originalHead: string,
 ): Promise<void> {
-  if (await rebaseInProgress(cwd))
+  const { git, gitOptional } = checkoutGitOn(side);
+  if (await rebaseInProgress(side, cwd))
     await gitOptional(["rebase", "--abort"], cwd);
-  const current = await oid(cwd).catch(() => "");
+  const current = await oid(side, cwd).catch(() => "");
   if (current !== originalHead)
     await git(["reset", "--hard", originalHead], cwd);
-  if ((await oid(cwd)) !== originalHead || (await rebaseInProgress(cwd))) {
+  if (
+    (await oid(side, cwd)) !== originalHead ||
+    (await rebaseInProgress(side, cwd))
+  ) {
     throw new Error(
       "The rebase failed and Git could not restore the worktree automatically. Inspect it before continuing.",
     );
@@ -201,23 +226,25 @@ async function pullRebase(
   row: WorktreeRow,
   expected?: WorktreeSyncExpectation,
 ): Promise<WorktreeSyncResponse> {
+  const side = checkoutSideOf(row);
+  const { git, gitOptional } = checkoutGitOn(side);
   if (!expected) {
     // Unchanged for callers that pin nothing.
-    await requireClean(row.path, "The worktree");
-    await requireBranch(row.path, row.branch, "The worktree");
+    await requireClean(side, row.path, "The worktree");
+    await requireBranch(side, row.path, row.branch, "The worktree");
   } else {
     // A caller that pinned oids decided OUTSIDE this lock, so what it decided
     // on is re-established here first — starting with which branch is checked
     // out at all. A detached checkout tracks nothing, however convincing the
     // commit under it looks, so this cannot be folded into the oid checks.
-    const current = await branch(row.path);
+    const current = await branch(side, row.path);
     if (current !== row.branch)
       throw new WorktreeSyncPreconditionError(
         `That worktree is on ${current ? `"${current}"` : "a detached HEAD"}, not "${row.branch}" as this update was checked against. Nothing was changed.`,
         "pull-rebase",
       );
   }
-  const before = await oid(row.path);
+  const before = await oid(side, row.path);
   if (expected && before !== expected.head)
     throw new WorktreeSyncPreconditionError(
       `"${row.branch}" is at ${before.slice(0, 12)}, not the ${expected.head.slice(0, 12)} this update was checked against. Nothing was changed.`,
@@ -258,7 +285,7 @@ async function pullRebase(
   // is being changed, so uncommitted work is in the way of nothing.
   if (expected && expected.head === expected.upstream)
     return response(row, "pull-rebase", before, before);
-  if (expected) await requireClean(row.path, "The worktree");
+  if (expected) await requireClean(side, row.path, "The worktree");
 
   await git(
     ["fetch", "--no-tags", "--", remote, mergeRef],
@@ -266,7 +293,7 @@ async function pullRebase(
     undefined,
     REMOTE_ENV,
   );
-  const target = await oid(row.path, "FETCH_HEAD");
+  const target = await oid(side, row.path, "FETCH_HEAD");
   // Still before any mutation of the checkout: the fetch above wrote refs, not
   // the working tree, so a caller whose upstream moved is refused with the
   // branch exactly as it was.
@@ -280,11 +307,11 @@ async function pullRebase(
     row.path,
   );
   if (result.code !== 0) {
-    const conflicted = await rebaseInProgress(row.path);
+    const conflicted = await rebaseInProgress(side, row.path);
     const evidence = conflicted
-      ? await conflictedFiles(row.path)
+      ? await conflictedFiles(side, row.path)
       : { files: [], truncated: false };
-    await restoreAfterRebaseFailure(row.path, before);
+    await restoreAfterRebaseFailure(side, row.path, before);
     if (conflicted)
       throw new WorktreeSyncConflictError(
         `Pull with rebase hit a conflict. The rebase was aborted and "${row.branch}" was restored.`,
@@ -308,7 +335,7 @@ async function pullRebase(
     REMOTE_ENV,
   );
   invalidate(row);
-  return response(row, "pull-rebase", before, await oid(row.path));
+  return response(row, "pull-rebase", before, await oid(side, row.path));
 }
 
 /**
@@ -325,11 +352,13 @@ async function rebaseOnMain(
   row: WorktreeRow,
   baseRemote?: string,
 ): Promise<WorktreeSyncResponse> {
+  const side = checkoutSideOf(row);
+  const { gitOptional } = checkoutGitOn(side);
   if (isMainWorktreeId(row.id))
     throw new Error("The main checkout cannot be rebased onto itself.");
-  await requireClean(row.path, "The worktree");
-  await requireBranch(row.path, row.branch, "The worktree");
-  const before = await oid(row.path);
+  await requireClean(side, row.path, "The worktree");
+  await requireBranch(side, row.path, row.branch, "The worktree");
+  const before = await oid(side, row.path);
   const target = await baseBranchTarget(
     row,
     baseRemote ? { remote: baseRemote } : {},
@@ -339,11 +368,11 @@ async function rebaseOnMain(
     row.path,
   );
   if (result.code !== 0) {
-    const conflicted = await rebaseInProgress(row.path);
+    const conflicted = await rebaseInProgress(side, row.path);
     const evidence = conflicted
-      ? await conflictedFiles(row.path)
+      ? await conflictedFiles(side, row.path)
       : { files: [], truncated: false };
-    await restoreAfterRebaseFailure(row.path, before);
+    await restoreAfterRebaseFailure(side, row.path, before);
     if (conflicted)
       throw new WorktreeSyncConflictError(
         `Rebase onto ${row.baseBranch} hit a conflict. The rebase was aborted and "${row.branch}" was restored.`,
@@ -357,7 +386,7 @@ async function rebaseOnMain(
     );
   }
   invalidate(row);
-  return response(row, "rebase-main", before, await oid(row.path));
+  return response(row, "rebase-main", before, await oid(side, row.path));
 }
 
 /** The oid to rebase onto: the selected remote's base, else the local ref. */
@@ -365,6 +394,8 @@ export async function baseBranchTarget(
   row: WorktreeRow,
   options: { remote?: string } = {},
 ): Promise<string> {
+  const side = checkoutSideOf(row);
+  const { git, gitOptional } = checkoutGitOn(side);
   const remote = options.remote ?? (await baseBranchRemote(row));
   if (remote) {
     const namedRemote = (await remoteNames(row)).includes(remote);
@@ -385,7 +416,7 @@ export async function baseBranchTarget(
       undefined,
       REMOTE_ENV,
     );
-    return oid(row.path, "FETCH_HEAD");
+    return oid(side, row.path, "FETCH_HEAD");
   }
   const local = await gitOptional(
     ["rev-parse", "--verify", `refs/heads/${row.baseBranch}`],
@@ -401,23 +432,30 @@ export async function baseBranchTarget(
 async function fastForwardMain(
   row: WorktreeRow,
 ): Promise<WorktreeSyncResponse> {
+  const side = checkoutSideOf(row);
+  const { git, gitOptional } = checkoutGitOn(side);
   if (isMainWorktreeId(row.id))
     throw new Error("The main checkout cannot be merged into itself.");
-  await requireClean(row.path, "The worktree");
-  await requireClean(row.mainRepoRoot, "The main checkout");
-  await requireBranch(row.path, row.branch, "The worktree");
-  await requireBranch(row.mainRepoRoot, row.baseBranch, "The main checkout");
-  const before = await oid(row.mainRepoRoot);
-  const source = await oid(row.path);
+  await requireClean(side, row.path, "The worktree");
+  await requireClean(side, row.mainRepoRoot, "The main checkout");
+  await requireBranch(side, row.path, row.branch, "The worktree");
+  await requireBranch(
+    side,
+    row.mainRepoRoot,
+    row.baseBranch,
+    "The main checkout",
+  );
+  const before = await oid(side, row.mainRepoRoot);
+  const source = await oid(side, row.path);
   const result = await gitOptional(
     ["merge", "--ff-only", source],
     row.mainRepoRoot,
   );
   if (result.code !== 0) {
-    const current = await oid(row.mainRepoRoot).catch(() => "");
+    const current = await oid(side, row.mainRepoRoot).catch(() => "");
     if (current !== before)
       await git(["reset", "--hard", before], row.mainRepoRoot);
-    if ((await oid(row.mainRepoRoot)) !== before) {
+    if ((await oid(side, row.mainRepoRoot)) !== before) {
       throw new Error(
         "The fast-forward merge failed and Git could not restore the main checkout automatically. Inspect it before continuing.",
       );
@@ -431,7 +469,7 @@ async function fastForwardMain(
     row,
     "fast-forward-main",
     before,
-    await oid(row.mainRepoRoot),
+    await oid(side, row.mainRepoRoot),
   );
 }
 
@@ -444,6 +482,7 @@ export async function syncWorktree(
     expected?: WorktreeSyncExpectation;
   } = {},
 ): Promise<WorktreeSyncResponse> {
+  const { repoLockKey } = checkoutGitOn(checkoutSideOf(row));
   return withRepoLock(await repoLockKey(row.mainRepoRoot), async () => {
     let current = row;
     if (!isMainWorktreeId(row.id)) {

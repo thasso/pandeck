@@ -40,7 +40,7 @@ import type {
 } from "@assistant/shared";
 import { randomUUID } from "node:crypto";
 import type { WorktreeRow } from "./db/worktreeStore.ts";
-import { repoLockKey } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
 import { errorText } from "./errors.ts";
 import {
   hostingProviderForRepo,
@@ -57,7 +57,7 @@ import {
   patchPullRequestCardObservation,
   pullRequestCardRecord,
 } from "./pullRequestCards.ts";
-import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
+import { pullRequestCardCheckout } from "./pullRequestHosting.ts";
 import { scheduleImmediatePoll } from "./pullRequestPollSchedule.ts";
 import { forgetPendingMerge, recordPendingMerge } from "./pendingMerges.ts";
 import { pullRequestIdentity, pullRequestKey } from "./pullRequestIdentity.ts";
@@ -72,6 +72,8 @@ import {
   invalidateProjectPullRequests,
   invalidateWorktreeHosting,
 } from "./worktrees/worktreeHosting.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
+import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
 import { isMainWorktreeId } from "./worktrees/worktreeResolve.ts";
 import {
   observePullRequestCardForWorkflows,
@@ -86,6 +88,8 @@ export interface MergePullRequestInput {
   provider: GitHostingProvider;
   /** Any checkout of the repository; used for repo identity, never for display. */
   repoPath: string;
+  /** The side `repoPath` is on. */
+  side: CheckoutSide;
   number: number;
   headBranch: string;
   baseBranch: string;
@@ -169,6 +173,8 @@ export interface MergePullRequestProjection {
 export interface PullRequestIdentity {
   /** Any checkout of the repository. */
   repoPath: string;
+  /** The side `repoPath` is on. */
+  side: CheckoutSide;
   providerKind: GitHostingProviderKind;
   number: number;
   /**
@@ -197,7 +203,7 @@ async function mutationKeys(identity: PullRequestIdentity): Promise<string[]> {
     identity.repoUrl &&
     pullRequestKey(identity.providerKind, identity.repoUrl, identity.number);
   return [
-    `${await repoLockKey(identity.repoPath)}#${identity.providerKind}#${identity.number}`,
+    `${await checkoutGitOn(identity.side).repoLockKey(identity.repoPath)}#${identity.providerKind}#${identity.number}`,
     ...(hosted ? [`hosted#${hosted}`] : []),
   ];
 }
@@ -292,7 +298,7 @@ export async function reservePullRequestObservationGenerations(
       card.provider === identity.providerKind,
   );
   if (candidates.length === 0) return;
-  const key = await repoLockKey(identity.repoPath);
+  const key = await checkoutGitOn(identity.side).repoLockKey(identity.repoPath);
   for (const card of candidates)
     if ((await cardRepoKey(card)) === key)
       beginPullRequestCardObservation(card.id);
@@ -307,12 +313,12 @@ export async function reservePullRequestObservationGenerations(
 async function cardRepoKey(card: PullRequestCard): Promise<string | undefined> {
   const record = pullRequestCardRecord(card.id);
   if (!record) return undefined;
-  return repoLockKey(
-    pullRequestCardRepoRoot({
-      repoRoot: record.context.repoRoot,
-      ...(card.worktreeId ? { worktreeId: card.worktreeId } : {}),
-    }),
-  );
+  const checkout = await pullRequestCardCheckout({
+    repoRoot: record.context.repoRoot,
+    ...(card.worktreeId ? { worktreeId: card.worktreeId } : {}),
+    sessionId: card.sessionId,
+  });
+  return checkoutGitOn(checkout.side).repoLockKey(checkout.repoRoot);
 }
 
 type ReservedPullRequestObservation = {
@@ -337,6 +343,7 @@ export async function mergePullRequestAndProject(
   return withPullRequestMutation(
     {
       repoPath: input.repoPath,
+      side: input.side,
       providerKind: input.provider.kind,
       number: input.number,
       repoUrl: input.provider.repoWebUrl,
@@ -580,6 +587,7 @@ async function mergeAndProject(
       baseRefreshMessage = await operations.refreshBaseCheckout({
         worktreeId: input.worktreeId,
         repoPath: input.repoPath,
+        side: input.side,
         baseBranch: input.baseBranch,
       });
     } catch (err) {
@@ -808,7 +816,7 @@ async function pollDependentCards(input: MergePullRequestInput): Promise<void> {
       card.baseBranch === input.headBranch,
   );
   if (candidates.length === 0) return;
-  const key = await repoLockKey(input.repoPath);
+  const key = await checkoutGitOn(input.side).repoLockKey(input.repoPath);
   for (const card of candidates)
     if ((await cardRepoKey(card)) === key) scheduleImmediatePoll(card.id);
 }
@@ -1160,7 +1168,7 @@ export async function openCardsForPullRequest(
       card.provider === identity.providerKind,
   );
   if (candidates.length === 0) return [];
-  const key = await repoLockKey(identity.repoPath);
+  const key = await checkoutGitOn(identity.side).repoLockKey(identity.repoPath);
   const matched: PullRequestCard[] = [];
   for (const card of candidates)
     if ((await cardRepoKey(card)) === key) matched.push(card);
@@ -1172,6 +1180,7 @@ async function cardsForMergedPullRequest(
 ): Promise<PullRequestCard[]> {
   return openCardsForPullRequest({
     repoPath: input.repoPath,
+    side: input.side,
     providerKind: input.provider.kind,
     number: input.number,
   });
@@ -1250,7 +1259,8 @@ export async function mergeWorktreePullRequest(
 ): Promise<WorktreeMergePrResponse> {
   if (isMainWorktreeId(row.id))
     throw new Error("The main checkout has no pull request to merge.");
-  const provider = await hostingProviderForRepo(row.path);
+  const side = checkoutSideOf(row);
+  const provider = await hostingProviderForRepo(side, row.path);
   if (!provider)
     throw new Error(
       "No git hosting provider is configured for this repository.",
@@ -1263,6 +1273,7 @@ export async function mergeWorktreePullRequest(
   const { result } = await mergePullRequestAndProject({
     provider,
     repoPath: row.path,
+    side,
     number: pr.number,
     headBranch: row.branch,
     baseBranch: row.baseBranch,

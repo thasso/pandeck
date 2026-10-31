@@ -42,7 +42,7 @@ import {
   type PendingPullRequestMerge,
   type PullRequestCardContext,
 } from "./pullRequestCards.ts";
-import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
+import { pullRequestCardCheckout } from "./pullRequestHosting.ts";
 import {
   nextPullRequestPollAt,
   scheduleImmediatePoll,
@@ -66,6 +66,7 @@ import {
   updatePendingMerge,
 } from "./pendingMerges.ts";
 import { pullRequestKey } from "./pullRequestIdentity.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 import {
   deliverAppNotification,
   pullRequestCiConclusionNotification,
@@ -77,6 +78,7 @@ import {
  * provider / notification sink instead of touching the network. */
 
 type ProviderResolver = (
+  side: CheckoutSide,
   repoPath: string,
   remote?: string,
 ) => Promise<GitHostingProvider | null>;
@@ -239,11 +241,12 @@ async function pollCard(cardId: string): Promise<void> {
   // Through the main checkout when this card's own worktree has been removed:
   // the pull request outlives its checkout, and a card that can no longer be
   // observed freezes in `open` forever (`pullRequestHosting.ts`).
-  const repoRoot = pullRequestCardRepoRoot({
+  const { side, repoRoot } = await pullRequestCardCheckout({
     repoRoot: context.repoRoot,
     ...(card.worktreeId ? { worktreeId: card.worktreeId } : {}),
+    sessionId: card.sessionId,
   });
-  const provider = await resolveProvider(repoRoot, context.remote);
+  const provider = await resolveProvider(side, repoRoot, context.remote);
   if (!provider) {
     // No provider (settings changed, repo moved) — retry slowly rather than spin.
     nextPollAt.set(cardId, Date.now() + SLOW_POLL_MS);
@@ -252,6 +255,7 @@ async function pollCard(cardId: string): Promise<void> {
   if (
     await pullRequestMutationInProgress({
       repoPath: repoRoot,
+      side,
       providerKind: provider.kind,
       number,
       repoUrl: provider.repoWebUrl,

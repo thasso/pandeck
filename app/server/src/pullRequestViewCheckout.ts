@@ -40,7 +40,7 @@ import type {
 } from "@assistant/shared";
 import type { WorktreeRow } from "./db/worktreeStore.ts";
 import { errorText } from "./errors.ts";
-import { git, gitOptional, gitOptionalExit } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
 import {
   hostingProviderForRepo,
   type GitHostingProvider,
@@ -48,6 +48,8 @@ import {
 import { pullRequestIdentityThrough } from "./pullRequestIdentity.ts";
 import { invalidatePullRequestInventorySnapshot } from "./pullRequestInventorySync.ts";
 import { withPullRequestMutation } from "./pullRequestMerge.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
+import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
 import { PullRequestViewMergeError } from "./pullRequestViewMerge.ts";
 import { taskIdsForWorktree } from "./db/worktreeStore.ts";
 import { taskSummaryFor } from "./tasks.ts";
@@ -121,7 +123,10 @@ export interface CreatedCheckout {
 /** The side-effecting seams, injectable as in the neighbouring modules. */
 export interface PullRequestViewCheckoutOperations {
   worktreeRows(): Promise<WorktreeRow[]>;
-  resolveProvider(path: string): Promise<GitHostingProvider | null>;
+  resolveProvider(
+    side: CheckoutSide,
+    path: string,
+  ): Promise<GitHostingProvider | null>;
   /**
    * Fetch `<remote>/<headBranch>` into its remote-tracking ref. Network-bound
    * and therefore OUTSIDE the repository lock, and it writes ONLY
@@ -133,6 +138,7 @@ export interface PullRequestViewCheckoutOperations {
    * pull request's head as its target. See {@link pullRequestHeadFetchArgs}.
    */
   fetchHead(
+    side: CheckoutSide,
     repoPath: string,
     remote: string,
     headBranch: string,
@@ -196,8 +202,10 @@ export function pullRequestHeadFetchArgs(
 
 const defaultOperations: PullRequestViewCheckoutOperations = {
   worktreeRows: listWorktreeRows,
-  resolveProvider: (path) => hostingProviderForRepo(path, PULL_REQUEST_REMOTE),
-  async fetchHead(repoPath, remote, headBranch) {
+  resolveProvider: (side, path) =>
+    hostingProviderForRepo(side, path, PULL_REQUEST_REMOTE),
+  async fetchHead(side, repoPath, remote, headBranch) {
+    const { gitOptional, gitOptionalExit } = checkoutGitOn(side);
     const result = await gitOptional(
       pullRequestHeadFetchArgs(remote, headBranch),
       repoPath,
@@ -225,6 +233,9 @@ const defaultOperations: PullRequestViewCheckoutOperations = {
     return { status: "fetched", oid: oid.stdout.trim() };
   },
   async inspect(row, headCommit) {
+    const { git, gitOptional, gitOptionalExit } = checkoutGitOn(
+      checkoutSideOf(row),
+    );
     const config = async (key: string): Promise<string> => {
       const result = await gitOptional(["config", "--get", key], row.path);
       return result.code === 0 ? result.stdout.trim() : "";
@@ -277,7 +288,10 @@ const defaultOperations: PullRequestViewCheckoutOperations = {
       // agree — but reporting the pin instead of the checkout would be a claim
       // about git rather than an observation of it.
       head: (
-        await git(["rev-parse", "--verify", "HEAD"], record.path)
+        await checkoutGitOn(checkoutSideOf(record)).git(
+          ["rev-parse", "--verify", "HEAD"],
+          record.path,
+        )
       ).stdout.trim(),
     };
   },
@@ -315,7 +329,7 @@ export async function checkoutPullRequestFromView(
   // creating one from the main repository anyway would check out a branch of a
   // repository this pull request is not in.
   const provider = await operations
-    .resolveProvider(main.path)
+    .resolveProvider(checkoutSideOf(main), main.path)
     .catch(() => null);
   const identity = provider && pullRequestIdentityThrough(provider, request);
   if (!provider || !identity)
@@ -326,6 +340,7 @@ export async function checkoutPullRequestFromView(
 
   const response = await withPullRequestMutation(
     {
+      side: checkoutSideOf(main),
       repoPath: main.path,
       providerKind: request.provider,
       number: request.number,
@@ -371,6 +386,7 @@ async function checkout(
     return answer(refusal("ambiguous-checkout", local.ambiguity));
 
   const fetched = await operations.fetchHead(
+    checkoutSideOf(main),
     main.path,
     PULL_REQUEST_REMOTE,
     detail.headBranch,
@@ -618,7 +634,7 @@ async function resolveWorktree(
   const matched: WorktreeRow[] = [];
   for (const row of onBranch) {
     const provider = await operations
-      .resolveProvider(row.path)
+      .resolveProvider(checkoutSideOf(row), row.path)
       .catch(() => null);
     if (provider && pullRequestIdentityThrough(provider, request))
       matched.push(row);

@@ -15,6 +15,7 @@ import { test } from "vitest";
 const tmp = mkdtempSync(join(tmpdir(), "push-workflow-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
+const { DEFAULT_WORKER_SIDE } = await import("./workers/placement.ts");
 const {
   buildPushArgs,
   parsePushArgs,
@@ -65,7 +66,7 @@ test("parsePushArgs reads flags and positional remote/branch", () => {
 test("first push sets upstream, then reports up-to-date", async () => {
   const { work, bare } = makeRepoPair("uprepo");
 
-  const first = await runPushWorkflow({ cwd: work });
+  const first = await runPushWorkflow({ side: DEFAULT_WORKER_SIDE, cwd: work });
   assert.equal(
     first.status,
     "pushed",
@@ -77,7 +78,10 @@ test("first push sets upstream, then reports up-to-date", async () => {
   // The commit really landed on the bare remote.
   assert.match(sh(bare, "log", "--oneline"), /init/);
 
-  const second = await runPushWorkflow({ cwd: work });
+  const second = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
+    cwd: work,
+  });
   assert.equal(second.status, "up-to-date");
   assert.equal(second.setUpstream, false, "upstream already tracked");
 
@@ -107,6 +111,7 @@ test("records the branch a push published, not its source argument", async () =>
   ];
   for (const [branch, published] of cases) {
     const result = await runPushWorkflow({
+      side: DEFAULT_WORKER_SIDE,
       cwd: work,
       remote: "origin",
       ...(branch !== undefined ? { branch } : {}),
@@ -118,6 +123,7 @@ test("records the branch a push published, not its source argument", async () =>
   // A configured push mapping may send a source-only refspec elsewhere.
   sh(work, "config", "remote.origin.push", "refs/heads/feature:refs/heads/out");
   const mapped = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     remote: "origin",
     branch: "feature",
@@ -128,7 +134,11 @@ test("records the branch a push published, not its source argument", async () =>
 
 test("first push with an explicit remote still sets upstream", async () => {
   const { work } = makeRepoPair("explicitremote");
-  const first = await runPushWorkflow({ cwd: work, remote: "origin" });
+  const first = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
+    cwd: work,
+    remote: "origin",
+  });
   assert.equal(first.status, "pushed", first.error ?? first.output);
   assert.equal(
     first.setUpstream,
@@ -143,19 +153,23 @@ test("first push with an explicit remote still sets upstream", async () => {
 
 test("force maps to --force-with-lease and rewrites the remote branch", async () => {
   const { work, bare } = makeRepoPair("forcerepo");
-  await runPushWorkflow({ cwd: work });
+  await runPushWorkflow({ side: DEFAULT_WORKER_SIDE, cwd: work });
   // Rewrite history so a plain push would be rejected (non-fast-forward).
   writeFileSync(join(work, "readme.md"), "changed\n");
   sh(work, "commit", "-am", "amended", "--amend");
 
-  const plain = await runPushWorkflow({ cwd: work });
+  const plain = await runPushWorkflow({ side: DEFAULT_WORKER_SIDE, cwd: work });
   assert.equal(
     plain.status,
     "failed",
     "non-fast-forward push must be rejected without force",
   );
 
-  const forced = await runPushWorkflow({ cwd: work, force: true });
+  const forced = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
+    cwd: work,
+    force: true,
+  });
   assert.equal(
     forced.status,
     "pushed",
@@ -173,7 +187,10 @@ test("fails clearly when the repository has no remote", async () => {
   sh(solo, "add", "-A");
   sh(solo, "commit", "-m", "init");
 
-  const result = await runPushWorkflow({ cwd: solo });
+  const result = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
+    cwd: solo,
+  });
   assert.equal(result.status, "failed");
   assert.match(result.error ?? "", /no git remote/i);
 });
@@ -183,7 +200,10 @@ test("fails clearly on detached HEAD with no explicit branch", async () => {
   const head = sh(work, "rev-parse", "HEAD").trim();
   sh(work, "checkout", head); // detach
 
-  const result = await runPushWorkflow({ cwd: work });
+  const result = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
+    cwd: work,
+  });
   assert.equal(result.status, "failed");
   assert.match(result.error ?? "", /detached/i);
 });
@@ -216,6 +236,7 @@ test("managed first push of an upstream-less worktree branch sets tracking expli
   const head = sh(feature, "rev-parse", "HEAD").trim();
 
   const first = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: feature,
     remote: "origin",
     expectedBranch: "feature",
@@ -233,17 +254,26 @@ test("managed first push of an upstream-less worktree branch sets tracking expli
     sh(feature, "config", "--get", "branch.feature.merge").trim(),
     "refs/heads/feature",
   );
-  assert.deepEqual((await resolvePushTarget(feature, "feature")).upstream, {
-    remote: "origin",
-    branch: "feature",
-  });
+  assert.deepEqual(
+    (await resolvePushTarget(DEFAULT_WORKER_SIDE, feature, "feature")).upstream,
+    {
+      remote: "origin",
+      branch: "feature",
+    },
+  );
   assert.equal(sh(bare, "rev-parse", "refs/heads/feature").trim(), head);
 
-  const observed = await readRemoteBranchOid(feature, "origin", "feature");
+  const observed = await readRemoteBranchOid(
+    DEFAULT_WORKER_SIDE,
+    feature,
+    "origin",
+    "feature",
+  );
   writeFileSync(join(feature, "readme.md"), "rewritten feature\n");
   sh(feature, "commit", "-am", "rewrite feature", "--amend");
   const rewritten = sh(feature, "rev-parse", "HEAD").trim();
   const forced = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: feature,
     remote: "origin",
     expectedBranch: "feature",
@@ -258,6 +288,7 @@ test("managed first push of an upstream-less worktree branch sets tracking expli
 test("explicit lease mode refuses calls without every managed precondition", async () => {
   const { work } = makeRepoPair("lease-preconditions");
   const result = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     explicitLease: { expectedRemoteOid: "a".repeat(40) },
   });
@@ -267,14 +298,20 @@ test("explicit lease mode refuses calls without every managed precondition", asy
 
 test("explicit oid lease rewrites only the authoritatively observed remote head", async () => {
   const { work, bare } = makeRepoPair("explicit-lease");
-  await runPushWorkflow({ cwd: work });
-  const expectedRemoteOid = await readRemoteBranchOid(work, "origin", "main");
+  await runPushWorkflow({ side: DEFAULT_WORKER_SIDE, cwd: work });
+  const expectedRemoteOid = await readRemoteBranchOid(
+    DEFAULT_WORKER_SIDE,
+    work,
+    "origin",
+    "main",
+  );
   assert.equal(expectedRemoteOid, sh(work, "rev-parse", "@{u}").trim());
 
   writeFileSync(join(work, "readme.md"), "rewritten\n");
   sh(work, "commit", "-am", "rewritten", "--amend");
   const expectedHead = sh(work, "rev-parse", "HEAD").trim();
   const result = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     remote: "origin",
     expectedBranch: "main",
@@ -289,8 +326,13 @@ test("explicit oid lease rewrites only the authoritatively observed remote head"
 
 test("an explicit lease atomically refuses a remote advance after observation", async () => {
   const { work, bare } = makeRepoPair("stale-explicit-lease");
-  await runPushWorkflow({ cwd: work });
-  const observed = await readRemoteBranchOid(work, "origin", "main");
+  await runPushWorkflow({ side: DEFAULT_WORKER_SIDE, cwd: work });
+  const observed = await readRemoteBranchOid(
+    DEFAULT_WORKER_SIDE,
+    work,
+    "origin",
+    "main",
+  );
 
   const peer = join(tmp, "stale-explicit-lease-peer");
   execFileSync("git", ["clone", bare, peer], { encoding: "utf8" });
@@ -304,6 +346,7 @@ test("an explicit lease atomically refuses a remote advance after observation", 
   sh(work, "commit", "-am", "local rewrite", "--amend");
   const localHead = sh(work, "rev-parse", "HEAD").trim();
   const result = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     remote: "origin",
     expectedBranch: "main",
@@ -326,6 +369,7 @@ test("managed preconditions refuse branch, head, and dirty drift but allow ignor
   const head = sh(work, "rev-parse", "HEAD").trim();
 
   const branchDrift = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     expectedBranch: "feature",
     expectedHead: head,
@@ -335,6 +379,7 @@ test("managed preconditions refuse branch, head, and dirty drift but allow ignor
   assert.match(branchDrift.error ?? "", /branch changed/);
 
   const headDrift = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     expectedBranch: "main",
     expectedHead: "f".repeat(40),
@@ -347,6 +392,7 @@ test("managed preconditions refuse branch, head, and dirty drift but allow ignor
     writeFileSync(join(work, "readme.md"), staged ? "staged\n" : "modified\n");
     if (staged) sh(work, "add", "readme.md");
     const dirty = await runPushWorkflow({
+      side: DEFAULT_WORKER_SIDE,
       cwd: work,
       expectedBranch: "main",
       expectedHead: head,
@@ -359,6 +405,7 @@ test("managed preconditions refuse branch, head, and dirty drift but allow ignor
 
   writeFileSync(join(work, "untracked.txt"), "dirty\n");
   const untracked = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     expectedBranch: "main",
     expectedHead: head,
@@ -369,6 +416,7 @@ test("managed preconditions refuse branch, head, and dirty drift but allow ignor
   sh(work, "clean", "-f", "untracked.txt");
 
   const allowed = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: work,
     expectedBranch: "main",
     expectedHead: head,
@@ -387,6 +435,7 @@ test("non-interactive authentication failures return promptly with progress", as
   sh(solo, "remote", "add", "origin", "ssh://git@127.0.0.1:1/unreachable.git");
   const progress: string[] = [];
   const result = await runPushWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     cwd: solo,
     onProgress: (message) => progress.push(message),
   });
@@ -399,12 +448,12 @@ test("non-interactive authentication failures return promptly with progress", as
 test("remote resolution uses tracked, origin, or sole remote and refuses ambiguity", async () => {
   const { work } = makeRepoPair("remote-resolution");
   sh(work, "remote", "rename", "origin", "sole");
-  let target = await resolvePushTarget(work, "main");
+  let target = await resolvePushTarget(DEFAULT_WORKER_SIDE, work, "main");
   assert.equal(target.remote, "sole");
   assert.equal(target.upstream, undefined);
 
-  await runPushWorkflow({ cwd: work });
-  target = await resolvePushTarget(work, "main");
+  await runPushWorkflow({ side: DEFAULT_WORKER_SIDE, cwd: work });
+  target = await resolvePushTarget(DEFAULT_WORKER_SIDE, work, "main");
   assert.deepEqual(target.upstream, { remote: "sole", branch: "main" });
 
   sh(
@@ -415,9 +464,12 @@ test("remote resolution uses tracked, origin, or sole remote and refuses ambigui
     sh(work, "remote", "get-url", "sole").trim(),
   );
   sh(work, "branch", "--unset-upstream");
-  await assert.rejects(resolvePushTarget(work, "main"), /Multiple remotes/);
+  await assert.rejects(
+    resolvePushTarget(DEFAULT_WORKER_SIDE, work, "main"),
+    /Multiple remotes/,
+  );
 
   sh(work, "remote", "rename", "sole", "origin");
-  target = await resolvePushTarget(work, "main");
+  target = await resolvePushTarget(DEFAULT_WORKER_SIDE, work, "main");
   assert.equal(target.remote, "origin");
 });

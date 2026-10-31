@@ -4,11 +4,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
-import { git } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
 import {
   KnowledgeBaseError,
   KnowledgeBaseStore,
 } from "./knowledgeBaseStore.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
+
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 /**
  * The KB folder is the user's: a tool write touches only its own paths,

@@ -5,11 +5,11 @@
  * that Worker, which starts the process; a caller sees exactly what a local
  * run returns.
  *
- * {@link checkoutGitOn} runs on a given side, the server included for the
- * Knowledge Base row: the modules that can hold that row take their side from
- * it (`checkoutSideOf`). The string executors exported below are the default
- * Worker's, with no path rule: every checkout reached by a bare cwd runs
- * there. W6 removes them once every caller passes its own side.
+ * {@link checkoutGitOn} is the only way in: every caller names the side of
+ * the checkout it holds — its row's or project's (`checkoutSideOf`), its
+ * session's (`sessionCheckoutSide`), its pull-request card's
+ * (`pullRequestCardCheckout`) — the server included for the Knowledge Base
+ * row. No path chooses a side.
  *
  * The executors, their failure shapes, the read fan-out bound, the execution
  * counter and {@link withRepoLock} belong to the executor family
@@ -24,11 +24,7 @@ import { checkoutFilesOn } from "./checkoutFileAccess.ts";
 import { createGitFamily } from "./gitFamily.ts";
 import { localGitRunner, type GitRunner } from "./gitProcess.ts";
 import { workerGitRunner } from "./workers/checkoutClient.ts";
-import {
-  DEFAULT_WORKER_SIDE,
-  checkoutSideKey,
-  type CheckoutSide,
-} from "./workers/placement.ts";
+import { checkoutSideKey, type CheckoutSide } from "./workers/placement.ts";
 
 export {
   GitCommandError,
@@ -81,17 +77,3 @@ export function checkoutGitOn(side: CheckoutSide): CheckoutGit {
   }
   return family;
 }
-
-/** The default Worker's executors, for callers that pass a bare cwd. */
-export const {
-  git,
-  gitBoundedStdout,
-  gitWithInputOptional,
-  gitRawStdout,
-  gitOptional,
-  gitReadOnlyOptional,
-  gitOptionalExit,
-  gitReadOnlyOptionalExit,
-  resolveRepoRoot,
-  repoLockKey,
-} = checkoutGitOn(DEFAULT_WORKER_SIDE);

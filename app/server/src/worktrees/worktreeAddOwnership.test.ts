@@ -47,15 +47,16 @@ const hooks = vi.hoisted(() => ({
 
 vi.mock("../gitExec.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gitExec.ts")>();
+  type CheckoutGit = ReturnType<typeof actual.checkoutGitOn>;
   const wrap =
-    (fn: GitFn) =>
+    (family: CheckoutGit, fn: GitFn) =>
     async (
       args: string[],
       cwd: string,
       signal?: AbortSignal,
       env?: NodeJS.ProcessEnv,
     ) => {
-      const real = () => actual[fn](args, cwd, signal, env);
+      const real = () => family[fn](args, cwd, signal, env);
       const hook = hooks.git.find(
         (candidate) =>
           candidate.fired === 0 &&
@@ -73,11 +74,23 @@ vi.mock("../gitExec.ts", async (importOriginal) => {
         return err.result;
       }
     };
+  const wrapped = new Map<string, CheckoutGit>();
   return {
     ...actual,
-    git: wrap("git"),
-    gitOptional: wrap("gitOptional"),
-    gitOptionalExit: wrap("gitOptionalExit"),
+    checkoutGitOn: (side: Parameters<typeof actual.checkoutGitOn>[0]) => {
+      const family = actual.checkoutGitOn(side);
+      let hooked = wrapped.get(family.sideKey);
+      if (!hooked) {
+        hooked = {
+          ...family,
+          git: wrap(family, "git"),
+          gitOptional: wrap(family, "gitOptional"),
+          gitOptionalExit: wrap(family, "gitOptionalExit"),
+        };
+        wrapped.set(family.sideKey, hooked);
+      }
+      return hooked;
+    },
   };
 });
 

@@ -18,8 +18,15 @@ vi.mock("../gitExec.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gitExec.ts")>();
   return {
     ...actual,
-    resolveRepoRoot: async () => "/repo",
-    gitOptional: async () => ({ code: 0, stdout: "a".repeat(40), stderr: "" }),
+    checkoutGitOn: (side: Parameters<typeof actual.checkoutGitOn>[0]) => ({
+      ...actual.checkoutGitOn(side),
+      resolveRepoRoot: async () => "/repo",
+      gitOptional: async () => ({
+        code: 0,
+        stdout: "a".repeat(40),
+        stderr: "",
+      }),
+    }),
   };
 });
 
@@ -39,6 +46,7 @@ import {
   worktreeHostingStatus,
   worktreeHostingStatusesWithFailures,
 } from "./worktreeHosting.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
 
 const row: WorktreeRow = {
   id: "wt-fork-hosting",
@@ -143,9 +151,11 @@ test("spawned worktree hosting follows the branch's derived push remote", async 
   const status = await worktreeHostingStatus(row);
 
   assert.deepEqual(hoisted.resolvePushTarget.mock.calls, [
-    ["/repo", row.branch],
+    [DEFAULT_WORKER_SIDE, "/repo", row.branch],
   ]);
-  assert.deepEqual(hoisted.provider.mock.calls, [[row.path, "fork"]]);
+  assert.deepEqual(hoisted.provider.mock.calls, [
+    [DEFAULT_WORKER_SIDE, row.path, "fork"],
+  ]);
   assert.equal(status.pr?.number, 12);
   assert.equal(status.repoWebUrl, "https://github.com/acme/fork");
 });

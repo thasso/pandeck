@@ -15,6 +15,7 @@ import {
   createWorktreeUpdatePullRequestBodyTool,
   type WorktreePullRequestBodyOperations,
 } from "./worktreePullRequestBody.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -139,6 +140,7 @@ function operations(
     },
     localState: async () => ({ branch: row.branch, head: HEAD, clean: true }),
     target: async () => ({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: "/repo",
       remote: "origin",
       upstream: { remote: "origin", branch: row.branch },

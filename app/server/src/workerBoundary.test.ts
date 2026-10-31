@@ -7,11 +7,11 @@
  * runner crosses the Worker protocol; the server's own repositories use the
  * local family (`serverRepoGit.ts`), and only the modules named below may.
  *
- * The checkout filesystem inventory pins every module that still reads a
- * checkout on the server's own filesystem, with the slice that moves the read
- * behind the Worker. Every list is exact: a new entry fails, and so does an
- * entry the code no longer needs, so the lists only shrink. W6 is done when
- * both inventories are empty.
+ * No checkout is read on the server's own filesystem: a module of the checkout
+ * family imports no `node:fs`, and the checkout readers read only through the
+ * checkout-file access. Checkout git and reads take a typed side, and the
+ * default Worker is named only where a side is derived. Every list is exact: a
+ * new entry fails, and so does an entry the code no longer needs.
  *
  * Scope: every non-test `.ts` module under `app/server/src`. Imports are read
  * from a parsed syntax tree (oxc), so comments and strings never count. A
@@ -79,19 +79,6 @@ const GIT_SPAWNS: Record<string, number> = {
 };
 
 /**
- * Modules that import the checkout family AND `node:fs`: they would read
- * checkouts directly. Empty since W5 moved the checkout lifecycle behind the
- * Worker; a new entry names the slice that moves its reads there.
- */
-const CHECKOUT_FS_INVENTORY: Record<string, string> = {};
-
-/**
- * Checkout readers outside the family that still import `node:fs`, each with
- * the slice that moves it. Empty since W5; a new entry needs a plan naming it.
- */
-const NAMED_CHECKOUT_READERS: Record<string, string> = {};
-
-/**
  * Modules that read checkouts only through the checkout-file access
  * (`checkoutFileAccess.ts`, itself included): none imports `node:fs`.
  * `gitFamily.ts` reads through what its family is given.
@@ -104,6 +91,7 @@ const MIGRATED_CHECKOUT_READERS = [
   "containerResidue.ts",
   "gitFamily.ts",
   "projectProvision.ts",
+  "pullRequestHosting.ts",
   "sessionSpawn.ts",
   "tools/core/projectCreateTool.ts",
   "workflow/operationTriage.ts",
@@ -537,22 +525,13 @@ test("server-written files a Worker's git reads are pinned to phase 3", () => {
   }
 });
 
-test("every module reading checkouts on the server is pinned to its slice", () => {
-  const checkoutFamilyUsers = importersOf((target) => target === "gitExec.ts");
+test("no module of the checkout family reads the server's filesystem", () => {
   assert.deepEqual(
-    checkoutFamilyUsers.filter((module) =>
+    importersOf((target) => target === "gitExec.ts").filter((module) =>
       [...scans.get(module)!.imports].some(isFs),
     ),
-    Object.keys(CHECKOUT_FS_INVENTORY).sort(),
+    [],
   );
-  for (const module of Object.keys(NAMED_CHECKOUT_READERS)) {
-    const scan = scans.get(module);
-    assert.ok(scan, `${module} is gone: delete its pin`);
-    assert.ok(
-      [...scan.imports].some(isFs),
-      `${module} no longer reads the filesystem: delete its pin`,
-    );
-  }
 });
 
 test("ordinary createRequire aliases count in both directions, bound and direct", () => {
@@ -657,31 +636,10 @@ const SIDE_BOUND_MODULES = [
 ];
 
 /**
- * What a side-bound module may never import: the default Worker's string API
- * (by symbol) and every executor or primitive below the families (`"*"`).
+ * What a side-bound module may never import: the default Worker's side (by
+ * symbol) and every executor or primitive below the families (`"*"`).
  */
 const SIDE_BOUND_FORBIDDEN: Record<string, readonly string[] | "*"> = {
-  "gitExec.ts": [
-    "git",
-    "gitBoundedStdout",
-    "gitWithInputOptional",
-    "gitRawStdout",
-    "gitOptional",
-    "gitReadOnlyOptional",
-    "gitOptionalExit",
-    "gitReadOnlyOptionalExit",
-    "resolveRepoRoot",
-    "repoLockKey",
-  ],
-  "checkoutFileAccess.ts": [
-    "checkoutPathExists",
-    "inspectCheckoutPath",
-    "readCheckoutLink",
-    "readCheckoutDir",
-    "realpathInCheckout",
-    "containedRealPath",
-    "readCheckoutFile",
-  ],
   "workers/placement.ts": ["DEFAULT_WORKER_ID", "DEFAULT_WORKER_SIDE"],
   "gitProcess.ts": "*",
   "fileReads.ts": "*",
@@ -1103,6 +1061,109 @@ test("only the gate and three side-bound modules produce the KB row", () => {
   assert.deepEqual(kbRowProducers(moduleSources), KB_ROW_PRODUCERS);
 });
 
+/* ------------------------- typed checkout sides (W6) ------------------------- */
+
+/**
+ * The modules that may name the default Worker: the side derivations
+ * (`checkoutSideOf`, the main checkout's side) and the Worker's own clients.
+ * Every other module takes its side from a row, a session or a card.
+ */
+const DEFAULT_WORKER_NAMERS = [
+  "workers/checkoutClient.ts",
+  "workers/inProcessWorker.ts",
+  "worktrees/knowledgeCheckout.ts",
+  "worktrees/worktreeResolve.ts",
+];
+
+/**
+ * What the checkout-file access exports: no read that takes only a root, so
+ * every checkout read names its side (`checkoutFilesOn`).
+ */
+const CHECKOUT_FILE_ACCESS_EXPORTS = [
+  "CheckoutPathVerdict",
+  "carryCheckoutFailure",
+  "checkLexicalPath",
+  "checkoutFailureOf",
+  "checkoutFilesOn",
+  "markFilesystemFailure",
+  "readLocally",
+  "throwInCheckoutReadForTests",
+];
+
+/** Modules binding the default Worker's id or side, or all of `placement.ts`. */
+function defaultWorkerNamers(sources: Map<string, string>): string[] {
+  return [...sources]
+    .filter(([file, source]) =>
+      symbolImports(file, source).some(
+        (ref) =>
+          ref.module === "workers/placement.ts" &&
+          ["DEFAULT_WORKER_ID", "DEFAULT_WORKER_SIDE", "*"].includes(
+            ref.symbol,
+          ),
+      ),
+    )
+    .map(([file]) => file)
+    .sort();
+}
+
+/** The names a module exports as values; `*` for an `export *`. */
+function valueExports(file: string, source: string): string[] {
+  const names: string[] = [];
+  for (const node of parseModule(file, source).body as AstNode[]) {
+    if (node.type === "ExportAllDeclaration" && node.exportKind !== "type")
+      names.push("*");
+    if (node.type === "ExportDefaultDeclaration") names.push("default");
+    if (node.type !== "ExportNamedDeclaration" || node.exportKind === "type")
+      continue;
+    const declaration = node.declaration as AstNode | null;
+    if (declaration?.type === "VariableDeclaration")
+      for (const declarator of declaration.declarations as AstNode[])
+        names.push(nameOf(declarator.id));
+    else if (
+      declaration?.type === "FunctionDeclaration" ||
+      declaration?.type === "ClassDeclaration"
+    )
+      names.push(nameOf(declaration.id));
+    for (const specifier of node.specifiers as AstNode[])
+      if (specifier.exportKind !== "type")
+        names.push(nameOf(specifier.exported));
+  }
+  return names.sort();
+}
+
+test("the default Worker is named only where a side is derived", () => {
+  assert.deepEqual(defaultWorkerNamers(moduleSources), DEFAULT_WORKER_NAMERS);
+  // A synthetic extra importer, in each form that binds the side.
+  for (const source of [
+    'import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";',
+    'import { DEFAULT_WORKER_ID } from "./workers/placement.ts";',
+    'import * as placement from "./workers/placement.ts";',
+    'export { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";',
+    'const placement = await import("./workers/placement.ts");',
+  ])
+    assert.deepEqual(
+      defaultWorkerNamers(
+        new Map([...moduleSources, ["commitWorkflow.ts", source]]),
+      ),
+      [...DEFAULT_WORKER_NAMERS, "commitWorkflow.ts"].sort(),
+      source,
+    );
+});
+
+test("checkout git and reads are reached only by a side", () => {
+  assert.deepEqual(valueExports("gitExec.ts", sourceOf("gitExec.ts")!), [
+    "GitCommandError",
+    "checkoutGitOn",
+    "clearRepoLockKeysForTests",
+    "countGitExecutionsForTests",
+    "withRepoLock",
+  ]);
+  assert.deepEqual(
+    valueExports("checkoutFileAccess.ts", sourceOf("checkoutFileAccess.ts")!),
+    CHECKOUT_FILE_ACCESS_EXPORTS,
+  );
+});
+
 test("the side-bound ratchet flags each way around it (S1–S10)", () => {
   const status = "worktrees/worktreeStatus.ts";
   const flags = (file: string, source: string, why: RegExp): void => {
@@ -1117,8 +1178,12 @@ test("the side-bound ratchet flags each way around it (S1–S10)", () => {
       (candidate) => candidate.symbol === symbol,
     )!;
 
-  // S1: the default Worker's string API, imported directly.
-  flags(status, 'import { git } from "../gitExec.ts";', /forbidden/);
+  // S1: a primitive below the families, imported directly.
+  flags(
+    status,
+    'import { workerGitRunner } from "../workers/checkoutClient.ts";',
+    /forbidden/,
+  );
   // S2: a two-hop wrapper the lists do not know.
   flags(
     status,
@@ -1152,8 +1217,12 @@ test("the side-bound ratchet flags each way around it (S1–S10)", () => {
     'import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";',
     /forbidden/,
   );
-  // S6: the string API, value-re-exported.
-  flags(status, 'export { gitOptional } from "../gitExec.ts";', /forbidden/);
+  // S6: the default Worker's side, value-re-exported.
+  flags(
+    status,
+    'export { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";',
+    /forbidden/,
+  );
   // S7: declaration forms and unsupported import forms.
   assert.match(
     externalEntryViolation(
@@ -1202,8 +1271,8 @@ test("the side-bound ratchet flags each way around it (S1–S10)", () => {
   );
   flags(
     status,
-    'import * as git from "../gitExec.ts";',
-    /not on the closed surface/,
+    'import * as client from "../workers/checkoutClient.ts";',
+    /forbidden/,
   );
   flags(status, 'export * from "./worktreeDiff.ts";', /not on the closed/);
   assert.match(
@@ -1218,7 +1287,7 @@ test("the side-bound ratchet flags each way around it (S1–S10)", () => {
     'const m = await import("../settings.ts");',
     /unsupported form/,
   );
-  flags(status, 'require("../gitExec.ts");', /unsupported form/);
+  flags(status, 'require("../workers/checkoutClient.ts");', /unsupported form/);
   flags(
     status,
     'import settings from "../settings.ts";',
@@ -1269,7 +1338,7 @@ test("an import that binds nothing still runs its module (S11)", () => {
       'export {} from "./newHelper.ts";',
       'export { type Wrap } from "./newHelper.ts";',
       'import "../settings.ts";',
-      'import "../gitExec.ts";',
+      'import "../workers/checkoutClient.ts";',
       'import "../gitProcess.ts";',
     ].filter((source) => !closed(source)),
     [],

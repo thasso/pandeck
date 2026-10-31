@@ -2,13 +2,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { GitTagApprovalBody } from "@assistant/shared";
-import {
-  git,
-  gitOptional,
-  repoLockKey,
-  resolveRepoRoot,
-  withRepoLock,
-} from "../../gitExec.ts";
+import { checkoutGitOn, withRepoLock } from "../../gitExec.ts";
 import { readRemoteBranchOid, resolvePushTarget } from "../../pushWorkflow.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import {
@@ -16,6 +10,10 @@ import {
   createApproval,
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
+import {
+  sessionCheckoutSide,
+  type CheckoutSide,
+} from "../../workers/placement.ts";
 
 const PUSH_ENV: NodeJS.ProcessEnv = {
   GIT_TERMINAL_PROMPT: "0",
@@ -26,6 +24,7 @@ const OID = /^[a-f0-9]{40,64}$/i;
 
 type TagInput = { repoPath: string; tag: string; expectedHead: string };
 type TagTarget = {
+  side: CheckoutSide;
   repoRoot: string;
   remote: string;
   branch: string;
@@ -34,11 +33,13 @@ type TagTarget = {
 };
 
 async function tagOid(
+  side: CheckoutSide,
   repoRoot: string,
   remote: string | undefined,
   tag: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
+  const { gitOptional } = checkoutGitOn(side);
   if (!remote) {
     const result = await gitOptional(
       ["rev-parse", "--verify", `refs/tags/${tag}`],
@@ -73,14 +74,22 @@ function displayPushUrl(pushUrl: string): string {
 }
 
 async function inspectTarget(
+  side: CheckoutSide,
   repoPath: string,
   signal?: AbortSignal,
 ): Promise<TagTarget> {
+  const { git, resolveRepoRoot } = checkoutGitOn(side);
   const repoRoot = await resolveRepoRoot(repoPath, signal);
   const branch = (
     await git(["symbolic-ref", "--quiet", "--short", "HEAD"], repoRoot, signal)
   ).stdout.trim();
-  const target = await resolvePushTarget(repoRoot, branch, undefined, signal);
+  const target = await resolvePushTarget(
+    side,
+    repoRoot,
+    branch,
+    undefined,
+    signal,
+  );
   if (
     target.upstream?.remote !== target.remote ||
     target.upstream.branch !== branch
@@ -103,6 +112,7 @@ async function inspectTarget(
     );
   const pushUrl = pushUrls[0];
   return {
+    side,
     repoRoot,
     remote: target.remote,
     branch,
@@ -113,6 +123,7 @@ async function inspectTarget(
 }
 
 async function validateInput(
+  side: CheckoutSide,
   input: TagInput,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -126,7 +137,7 @@ async function validateInput(
     tag.length > 128 ||
     tag.startsWith("-") ||
     (
-      await gitOptional(
+      await checkoutGitOn(side).gitOptional(
         ["check-ref-format", `refs/tags/${tag}`],
         repoPath,
         signal,
@@ -142,6 +153,7 @@ async function assertPublishedBranch(
   signal?: AbortSignal,
 ) {
   const remoteHead = await readRemoteBranchOid(
+    target.side,
     target.repoRoot,
     target.pushUrl,
     target.branch,
@@ -158,6 +170,7 @@ async function assertLocalState(
   head: string,
   signal?: AbortSignal,
 ) {
+  const { git } = checkoutGitOn(target.side);
   const [currentHead, currentBranch, status] = await Promise.all([
     git(["rev-parse", "HEAD^{commit}"], target.repoRoot, signal),
     git(
@@ -185,6 +198,8 @@ async function assertLocalState(
 /** Execute only after the exact target was approved. Exported for isolated Git regression tests. */
 export async function publishApprovedTag(
   input: TagInput & {
+    /** The side of the session that proposed the tag. */
+    side: CheckoutSide;
     approvedTarget?: Pick<
       TagTarget,
       "remote" | "branch" | "pushUrlFingerprint"
@@ -192,8 +207,8 @@ export async function publishApprovedTag(
   },
   signal?: AbortSignal,
 ) {
-  await validateInput(input, signal);
-  const target = await inspectTarget(input.repoPath, signal);
+  await validateInput(input.side, input, signal);
+  const target = await inspectTarget(input.side, input.repoPath, signal);
   const approved = input.approvedTarget;
   if (
     approved &&
@@ -206,6 +221,7 @@ export async function publishApprovedTag(
     );
   const head = input.expectedHead.toLowerCase();
   const existingRemote = await tagOid(
+    target.side,
     target.repoRoot,
     target.pushUrl,
     input.tag,
@@ -225,10 +241,12 @@ export async function publishApprovedTag(
       repoRoot: target.repoRoot,
     };
   await assertPublishedBranch(target, head, signal);
+  const { git, repoLockKey } = checkoutGitOn(target.side);
   const lockKey = await repoLockKey(target.repoRoot);
   await withRepoLock(lockKey, async () => {
     await assertLocalState(target, head, signal);
     const existingLocal = await tagOid(
+      target.side,
       target.repoRoot,
       undefined,
       input.tag,
@@ -262,6 +280,7 @@ export async function publishApprovedTag(
     PUSH_ENV,
   );
   const published = await tagOid(
+    target.side,
     target.repoRoot,
     target.pushUrl,
     input.tag,
@@ -312,12 +331,14 @@ export const gitPublishTagTool = defineAgentTool<TagInput>({
     },
   },
   async execute(input, ctx) {
-    await validateInput(input, ctx.signal);
-    const target = await inspectTarget(input.repoPath, ctx.signal);
+    const side = sessionCheckoutSide(ctx.session.sessionId);
+    await validateInput(side, input, ctx.signal);
+    const target = await inspectTarget(side, input.repoPath, ctx.signal);
     const head = input.expectedHead.toLowerCase();
     await assertPublishedBranch(target, head, ctx.signal);
     await assertLocalState(target, head, ctx.signal);
     const existingRemote = await tagOid(
+      target.side,
       target.repoRoot,
       target.pushUrl,
       input.tag,
@@ -328,6 +349,7 @@ export const gitPublishTagTool = defineAgentTool<TagInput>({
         `The remote tag ${input.tag} already exists. This tool never replaces it.`,
       );
     const existingLocal = await tagOid(
+      target.side,
       target.repoRoot,
       undefined,
       input.tag,
@@ -380,6 +402,7 @@ registerApprovalExecutor("gitTag", {
       throw new Error("Mismatched approval body for gitTag.");
     const b = card.body;
     const result = await publishApprovedTag({
+      side: sessionCheckoutSide(card.sessionId),
       repoPath: b.repoPath,
       tag: b.tag,
       expectedHead: b.targetSha,

@@ -32,7 +32,7 @@ import type {
   WorktreeCreatePrResponse,
   WorktreeHostingStatusResponse,
 } from "@assistant/shared";
-import { gitOptional, resolveRepoRoot } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import {
   ciBesideReviewGates,
@@ -42,6 +42,7 @@ import {
   type GitHostingProvider,
 } from "../gitHosting.ts";
 import { resolvePushTarget } from "../pushWorkflow.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { isMainWorktreeId } from "./worktreeResolve.ts";
 
 const CACHE_MS = 15_000;
@@ -60,15 +61,17 @@ export function invalidateWorktreeHosting(worktreeId: string): void {
 }
 
 async function hostingProviderForWorktree(row: WorktreeRow) {
-  if (isMainWorktreeId(row.id)) return hostingProviderForRepo(row.path);
+  const side = checkoutSideOf(row);
+  if (isMainWorktreeId(row.id)) return hostingProviderForRepo(side, row.path);
   // A spawned branch's upstream is its publication repository. This must match
   // checked managed PR creation; falling back to origin preserves the ordinary
   // pre-publication status path when no unambiguous target exists yet.
-  const remote = await resolveRepoRoot(row.path)
-    .then((repoRoot) => resolvePushTarget(repoRoot, row.branch))
+  const remote = await checkoutGitOn(side)
+    .resolveRepoRoot(row.path)
+    .then((repoRoot) => resolvePushTarget(side, repoRoot, row.branch))
     .then((target) => target.remote)
     .catch(() => undefined);
-  return hostingProviderForRepo(row.path, remote);
+  return hostingProviderForRepo(side, row.path, remote);
 }
 
 interface ResolvedRow {
@@ -81,7 +84,7 @@ interface ResolvedRow {
 async function resolveRow(row: WorktreeRow): Promise<ResolvedRow> {
   const provider = await hostingProviderForWorktree(row);
   if (!provider) return { row, provider, head: "" };
-  const headRes = await gitOptional(
+  const headRes = await checkoutGitOn(checkoutSideOf(row)).gitOptional(
     ["rev-parse", "--verify", "HEAD"],
     row.path,
   );
@@ -314,7 +317,10 @@ export async function projectPullRequestsWithFailures(
         let payload: ProjectPullRequests | null = null;
         let failed = false;
         try {
-          const provider = await hostingProviderForRepo(row.path);
+          const provider = await hostingProviderForRepo(
+            checkoutSideOf(row),
+            row.path,
+          );
           const pulls = provider ? await provider.listOpenPullRequests() : null;
           if (provider && pulls) {
             payload = {
@@ -410,7 +416,7 @@ export async function createWorktreePullRequest(
     );
   const title = input.title?.trim();
   if (!title) throw new Error("Pull request title cannot be empty.");
-  const provider = await hostingProviderForRepo(row.path);
+  const provider = await hostingProviderForRepo(checkoutSideOf(row), row.path);
   if (!provider)
     throw new Error(
       "No git hosting provider is configured for this repository.",

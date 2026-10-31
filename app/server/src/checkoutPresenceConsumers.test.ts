@@ -104,7 +104,7 @@ const {
 } = await import("./db/worktreeStore.ts");
 const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
 const { failFileForTests, holdFileForTests } = await import("./fileReads.ts");
-const gitExec = await import("./gitExec.ts");
+const { checkoutGitOn } = await import("./gitExec.ts");
 const {
   MALFORMED_ANSWERS,
   answerForPathForTests,
@@ -117,6 +117,8 @@ const { isWorkerFailure } = await import("./workers/fileClient.ts");
 const { writeAsInProcessWorkerForTests } =
   await import("./workers/inProcessWorker.ts");
 const { DEFAULT_WORKER_SIDE } = await import("./workers/placement.ts");
+/** The executors a session's paths and default-Worker rows run on. */
+const gitExec = checkoutGitOn(DEFAULT_WORKER_SIDE);
 const {
   flushPresenceForTests,
   presenceCountsForTests,

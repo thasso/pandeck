@@ -26,6 +26,7 @@ import {
 } from "./pullRequestMerge.ts";
 import { createTask, deleteTask, readTask } from "./tasks.ts";
 import { resetWorkflowStoreForTests } from "./db/workflowStore.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -127,6 +128,7 @@ test("every live card for the pull request moves to closed with the reason", asy
   let closedWith: string | undefined;
 
   const projection = await closePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider({}, (options) => {
       closedWith = options.expectedHeadSha;
     }),
@@ -181,6 +183,7 @@ test("a close never suggests the linked Task done", async () => {
       },
     });
     await closePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider(),
       repoPath: path,
       number: 42,
@@ -203,6 +206,7 @@ test("a comment and branch deletion reach the provider and the card message", as
   const created = card(path);
   let sent: Parameters<GitHostingProvider["closePullRequest"]>[1] | undefined;
   const projection = await closePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider({
       closePullRequest: async (number, options) => {
         sent = options;
@@ -241,6 +245,7 @@ test("a kept remote branch names why beside the close", async () => {
   const path = repo();
   card(path);
   const projection = await closePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider({
       closePullRequest: async (number, options) => ({
         number,
@@ -269,6 +274,7 @@ test("a same-numbered pull request in another repository is left alone", async (
   const theirs = repo();
   const created = card(mine);
   const projection = await closePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider(),
     repoPath: theirs,
     number: 42,
@@ -286,6 +292,7 @@ test("a moved head refuses before the provider is asked to close", async () => {
   let closes = 0;
   await assert.rejects(
     closePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider({}, () => {
         closes += 1;
       }),
@@ -305,6 +312,7 @@ test("a pull request that is no longer open refuses the close", async () => {
   const path = repo();
   await assert.rejects(
     closePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider({
         pullRequestDetail: async () => ({
           number: 42,
@@ -333,11 +341,18 @@ test("a pull request that is no longer open refuses the close", async () => {
 test("a close is refused while another mutation owns the pull request", async () => {
   const path = repo();
   await withPullRequestMutation(
-    { repoPath: path, providerKind: "github", number: 42, repoUrl: undefined },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: path,
+      providerKind: "github",
+      number: 42,
+      repoUrl: undefined,
+    },
     "a merge",
     async () => {
       await assert.rejects(
         closePullRequestAndProject({
+          side: DEFAULT_WORKER_SIDE,
           provider: fakeProvider(),
           repoPath: path,
           number: 42,
@@ -358,6 +373,7 @@ test("an unconfirmed close is projected as an honest partial", async () => {
   const path = repo();
   const created = card(path);
   const projection = await closePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider({
       closePullRequest: async (number, options) => ({
         number,

@@ -27,6 +27,7 @@ import {
 } from "./test/workerAnswers.ts";
 import { FILE_METHODS } from "./workerProtocol/fileMethods.ts";
 import { isWorkerFailure } from "./workers/fileClient.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
 const uid = process.getuid?.() ?? 0;
 const gid = process.getgid?.() ?? 0;
@@ -75,6 +76,7 @@ test("chowns the one mounted directory back to the server's own uid", async () =
   exec(() => ({ code: 0, stdout: "", stderr: "" }));
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: worktree,
     allowedRoots: [root],
     image: "alpine:3.22",
@@ -106,6 +108,7 @@ test("refuses a path outside every managed root, without running anything", asyn
   exec(() => ({ code: 0, stdout: "", stderr: "" }));
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: worktree,
     allowedRoots: [root],
   });
@@ -123,6 +126,7 @@ test("refuses the managed root itself: that is every worktree, not one", async (
   exec(() => ({ code: 0, stdout: "", stderr: "" }));
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: root,
     allowedRoots: [root],
   });
@@ -136,6 +140,7 @@ test("refuses a path that has already gone", async () => {
   exec(() => ({ code: 0, stdout: "", stderr: "" }));
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: join(root, "never-existed"),
     allowedRoots: [root],
   });
@@ -150,6 +155,7 @@ test("an aborted runtime probe is a reason, not an exception", async () => {
   mkdirSync(worktree);
   exec(() => ({ code: 0, stdout: "", stderr: "" }));
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: worktree,
     allowedRoots: [root],
     signal: AbortSignal.abort(new Error("reclaim was cancelled")),
@@ -180,6 +186,7 @@ for (const stage of ["version", "pull"])
       };
     });
     const outcome = await reclaimContainerResidue({
+      side: DEFAULT_WORKER_SIDE,
       path: worktree,
       allowedRoots: [root],
       signal: controller.signal,
@@ -204,6 +211,7 @@ test("an unusable runtime is a reason, not an exception", async () => {
   });
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: worktree,
     allowedRoots: [root],
   });
@@ -227,6 +235,7 @@ test("a failing chown comes back with docker's own first line", async () => {
   }));
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: worktree,
     allowedRoots: [root],
   });
@@ -244,7 +253,11 @@ test("carries the expected device AND inode, checked before the chown", async ()
   mkdirSync(worktree);
   exec(() => ({ code: 0, stdout: "", stderr: "" }));
 
-  await reclaimContainerResidue({ path: worktree, allowedRoots: [root] });
+  await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
+    path: worktree,
+    allowedRoots: [root],
+  });
 
   const run = calls.find((args) => args[0] === "run")!;
   const script = run.at(-1)!;
@@ -269,6 +282,7 @@ test("a swapped mount is refused by the container, and says so", async () => {
   exec(() => ({ code: 3, stdout: "", stderr: "" }));
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: worktree,
     allowedRoots: [root],
   });
@@ -288,6 +302,7 @@ test("a symlink out of the managed roots is refused on its resolved path", async
   exec(() => ({ code: 0, stdout: "", stderr: "" }));
 
   const outcome = await reclaimContainerResidue({
+    side: DEFAULT_WORKER_SIDE,
     path: link,
     allowedRoots: [root],
   });
@@ -317,6 +332,7 @@ for (const { read, method, of } of IDENTITY_READS)
     ]);
     try {
       const error = await reclaimContainerResidue({
+        side: DEFAULT_WORKER_SIDE,
         path: worktree,
         allowedRoots: [root],
       }).then(
@@ -349,6 +365,7 @@ test("a failure the Worker answered for the path stays a reason, as before", asy
   ]);
   try {
     const outcome = await reclaimContainerResidue({
+      side: DEFAULT_WORKER_SIDE,
       path: worktree,
       allowedRoots: [root],
     });
@@ -378,6 +395,7 @@ test("a root the Worker answered it cannot resolve is skipped, as before", async
   ]);
   try {
     const outcome = await reclaimContainerResidue({
+      side: DEFAULT_WORKER_SIDE,
       path: worktree,
       allowedRoots: [root],
     });

@@ -24,13 +24,6 @@ import {
   checkLexicalPath,
   checkoutFailureOf,
   checkoutFilesOn,
-  checkoutPathExists,
-  containedRealPath,
-  inspectCheckoutPath,
-  readCheckoutDir,
-  readCheckoutFile,
-  readCheckoutLink,
-  realpathInCheckout,
   throwInCheckoutReadForTests,
 } from "./checkoutFileAccess.ts";
 import {
@@ -55,6 +48,16 @@ import {
   inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
 } from "./workers/inProcessWorker.ts";
+
+const {
+  pathExists: checkoutPathExists,
+  containedRealPath,
+  inspect: inspectCheckoutPath,
+  readDir: readCheckoutDir,
+  readFile: readCheckoutFile,
+  readLink: readCheckoutLink,
+  realpath: realpathInCheckout,
+} = checkoutFilesOn(DEFAULT_WORKER_SIDE);
 
 /**
  * The checkout-file access on both sides: the default Worker's reads, which

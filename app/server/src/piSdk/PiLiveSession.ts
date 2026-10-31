@@ -141,6 +141,7 @@ import { errorText } from "../errors.ts";
 import { SessionBusyError } from "../session/runtime/errors.ts";
 import { assertAccountRecoveryAdmission } from "../session/runtime/accountRecoveryAdmission.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
+import { sessionCheckoutSide } from "../workers/placement.ts";
 
 const RELOAD_QUEUED_MESSAGE =
   "A server restart is queued to apply code changes. Please wait for the reconnect before starting another run.";
@@ -1132,6 +1133,7 @@ export class PiLiveSession implements LiveSession {
         session: this.session,
         entryId,
         cwd: this.cwd,
+        side: sessionCheckoutSide(this.sessionId),
         onProgress: (message) => this.updateSyntheticTool(message),
       });
       this.finishSyntheticCard({

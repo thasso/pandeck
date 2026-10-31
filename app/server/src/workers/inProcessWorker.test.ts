@@ -19,17 +19,8 @@ import { afterAll, afterEach, beforeAll, describe, test } from "vitest";
 import {
   GitCommandError,
   clearRepoLockKeysForTests,
-  git,
-  gitBoundedStdout,
-  gitOptional,
-  gitOptionalExit,
-  gitRawStdout,
-  gitReadOnlyOptional,
-  gitReadOnlyOptionalExit,
-  gitWithInputOptional,
-  repoLockKey,
-  resolveRepoRoot,
   withRepoLock,
+  checkoutGitOn,
 } from "../gitExec.ts";
 import { readLocally } from "../checkoutFileAccess.ts";
 import { inspectPath, realpathFile } from "../fileReads.ts";
@@ -62,6 +53,20 @@ import {
   inProcessWorkerServedMethodForTests,
   writeAsInProcessWorkerForTests,
 } from "./inProcessWorker.ts";
+import { DEFAULT_WORKER_SIDE } from "./placement.ts";
+
+const {
+  git,
+  gitBoundedStdout,
+  gitOptional,
+  gitOptionalExit,
+  gitRawStdout,
+  gitReadOnlyOptional,
+  gitReadOnlyOptionalExit,
+  gitWithInputOptional,
+  repoLockKey,
+  resolveRepoRoot,
+} = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 /** The same executors as the server runs them for its own repositories. */
 const local = createGitFamily(localGitRunner, {
@@ -711,10 +716,11 @@ test("a script that ran checkout and local git, and read a served file, exits on
   const repo = await makeRepo("natural-exit");
   const head = join(repo, ".git", "HEAD");
   const script = `
-    import { git } from ${JSON.stringify(pathToFileURL(join(src, "gitExec.ts")).href)};
+    import { checkoutGitOn } from ${JSON.stringify(pathToFileURL(join(src, "gitExec.ts")).href)};
+    import { DEFAULT_WORKER_SIDE } from ${JSON.stringify(pathToFileURL(join(src, "workers", "placement.ts")).href)};
     import { gitOptional } from ${JSON.stringify(pathToFileURL(join(src, "serverRepoGit.ts")).href)};
     import { openServedFile, statServedFile } from ${JSON.stringify(pathToFileURL(join(src, "servedFileAccess.ts")).href)};
-    const checkout = await git(["rev-parse", "HEAD"], ${JSON.stringify(repo)});
+    const checkout = await checkoutGitOn(DEFAULT_WORKER_SIDE).git(["rev-parse", "HEAD"], ${JSON.stringify(repo)});
     const local = await gitOptional(["rev-parse", "HEAD"], ${JSON.stringify(repo)});
     if (checkout.stdout !== local.stdout) throw new Error("different answers");
     const { size } = await statServedFile(${JSON.stringify(head)});

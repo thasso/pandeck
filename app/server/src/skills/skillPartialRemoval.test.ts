@@ -42,7 +42,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const { git } = await import("../gitExec.ts");
+const { DEFAULT_WORKER_SIDE } = await import("../workers/placement.ts");
+const { checkoutGitOn } = await import("../gitExec.ts");
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 const { createSkill } = await import("./createSkill.ts");
 const { deleteEntry, manageEntryFiles } =
   await import("../library/libraryAuthoring.ts");

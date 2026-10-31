@@ -13,25 +13,12 @@ import {
   type WorktreeMergePhase,
   type WorktreeRecord,
 } from "@assistant/shared";
-import {
-  git,
-  gitOptional,
-  gitOptionalExit,
-  repoLockKey,
-  withRepoLock,
-  type GitResult,
-} from "../gitExec.ts";
+import { checkoutGitOn, withRepoLock, type GitResult } from "../gitExec.ts";
 import { errorText } from "../errors.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { pullRequestSummaryForWorktree } from "../pullRequestCards.ts";
 import type { TreeResidue } from "../managedTreeRemoval.ts";
-import {
-  checkoutFailureOf,
-  checkoutFilesOn,
-  checkoutPathExists,
-  inspectCheckoutPath,
-  realpathInCheckout,
-} from "../checkoutFileAccess.ts";
+import { checkoutFailureOf, checkoutFilesOn } from "../checkoutFileAccess.ts";
 import {
   checkoutLifecycleOn,
   removeManagedTreeOn,
@@ -242,9 +229,9 @@ export async function createWorktree(
   if (!main) throw new Error(await noMainRepoMessage(project));
 
   throwIfAborted(input.signal);
-  const mainRepoKey = await repoLockKey(main.root);
   // The project's main side: where its checkouts and their worktree root are.
   const side = checkoutSideOf({ id: mainWorktreeId(project.id) });
+  const mainRepoKey = await checkoutGitOn(side).repoLockKey(main.root);
   // Reuse the background fetch's gate, cadence, coalescing and honest freshness
   // stamp. It is deliberately fire-and-forget before the repository lock; the
   // fork point below remains the local base whatever the fetch later finds.
@@ -381,9 +368,11 @@ interface PreparedCheckout {
 
 /** The main checkout's current branch, or "" when it is detached. */
 async function currentMainBranch(
+  side: CheckoutSide,
   main: MainRepoInfo,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { git } = checkoutGitOn(side);
   const res = await git(
     ["rev-parse", "--abbrev-ref", "HEAD"],
     main.root,
@@ -394,10 +383,12 @@ async function currentMainBranch(
 }
 
 async function localBranchExists(
+  side: CheckoutSide,
   main: MainRepoInfo,
   branch: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  const { gitOptionalExit } = checkoutGitOn(side);
   return (
     (
       await gitOptionalExit(
@@ -410,10 +401,12 @@ async function localBranchExists(
 }
 
 async function commitOf(
+  side: CheckoutSide,
   main: MainRepoInfo,
   ref: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { git } = checkoutGitOn(side);
   return (
     await git(["rev-parse", "--verify", `${ref}^{commit}`], main.root, signal)
   ).stdout.trim();
@@ -431,7 +424,7 @@ async function addNewBranchCheckout(
   claim: CreationClaim,
 ): Promise<PreparedCheckout> {
   throwIfAborted(input.signal);
-  const currentBranch = await currentMainBranch(main, input.signal);
+  const currentBranch = await currentMainBranch(side, main, input.signal);
   // A detached main checkout matters only for the default: an explicit
   // local base still has an unambiguous merge-back target and fork point.
   if (!input.baseBranch && !currentBranch)
@@ -439,11 +432,12 @@ async function addNewBranchCheckout(
       "The main checkout is on a detached HEAD; check out a branch first or name a local base branch.",
     );
   const baseBranch = input.baseBranch ?? currentBranch;
-  if (!(await localBranchExists(main, baseBranch, input.signal)))
+  if (!(await localBranchExists(side, main, baseBranch, input.signal)))
     throw new Error(
       `Base branch "${baseBranch}" must be a local branch (refs/heads/<name>); remote-tracking refs, tags and commit SHAs cannot be merge-back targets.`,
     );
   const baseCommit = await commitOf(
+    side,
     main,
     `refs/heads/${baseBranch}`,
     input.signal,
@@ -498,6 +492,7 @@ async function addTrackingCheckout(
   source: Extract<CreateWorktreeSource, { kind: "track-remote" }>,
   claim: CreationClaim,
 ): Promise<PreparedCheckout> {
+  const { git, gitOptionalExit } = checkoutGitOn(side);
   throwIfAborted(input.signal);
   const remoteRef = `refs/remotes/${source.remote}/${source.headBranch}`;
   if (
@@ -531,7 +526,7 @@ async function addTrackingCheckout(
   // Adopting an existing local branch would mean deciding what to do with
   // whatever is on it — reset it, merge it, rebase it. This path decides none
   // of those; it says so instead.
-  if (await localBranchExists(main, source.headBranch, input.signal))
+  if (await localBranchExists(side, main, source.headBranch, input.signal))
     throw new WorktreeCreateRefusalError(
       `A local branch "${source.headBranch}" already exists here and no managed worktree stands on it. Remove or check it out yourself; this never moves a branch it did not create.`,
       "branch-exists",
@@ -539,9 +534,9 @@ async function addTrackingCheckout(
 
   const preferred = source.preferredBaseBranch?.trim();
   const baseBranch =
-    preferred && (await localBranchExists(main, preferred, input.signal))
+    preferred && (await localBranchExists(side, main, preferred, input.signal))
       ? preferred
-      : await currentMainBranch(main, input.signal);
+      : await currentMainBranch(side, main, input.signal);
   if (!baseBranch)
     throw new WorktreeCreateRefusalError(
       preferred
@@ -550,6 +545,7 @@ async function addTrackingCheckout(
       "base-unresolvable",
     );
   const baseCommit = await commitOf(
+    side,
     main,
     `refs/heads/${baseBranch}`,
     input.signal,
@@ -620,6 +616,7 @@ async function addCheckout(
   claim: CreationClaim,
   signal?: AbortSignal,
 ): Promise<void> {
+  const { git } = checkoutGitOn(side);
   throwIfAborted(signal);
   // Leading directories are never the attempt's, the same as git's own. Only
   // the Worker's answer that this request created the folder makes it the
@@ -671,6 +668,7 @@ async function initSubmodules(
   onStart?: () => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const { gitOptional } = checkoutGitOn(side);
   throwIfAborted(signal);
   const gitmodules = join(worktreePath, ".gitmodules");
   if (!(await checkoutFilesOn(side).pathExists(gitmodules, gitmodules))) return;
@@ -762,6 +760,7 @@ async function discardUntrackedWorktreeLocked(
   mainRepoRoot: string,
   created: CreatedCheckout,
 ): Promise<void> {
+  const { gitOptional } = checkoutGitOn(side);
   const { path, branch, startOid } = created;
   const subject = `[worktrees] discarding the incomplete worktree ${path} (branch ${branch})`;
   const report = (step: string, res: GitResult): void => {
@@ -837,6 +836,7 @@ async function discardUntrackedWorktree(
   mainRepoRoot: string,
   created: CreatedCheckout,
 ): Promise<void> {
+  const { repoLockKey } = checkoutGitOn(side);
   try {
     await withRepoLock(await repoLockKey(mainRepoRoot), () =>
       discardUntrackedWorktreeLocked(side, mainRepoRoot, created),
@@ -881,6 +881,7 @@ async function findAvailableSuffix(
   requested: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const registeredPaths = new Set(
     listWorktrees({ includeRemoved: true }).map((worktree) => worktree.path),
   );
@@ -1050,7 +1051,11 @@ export class WorktreeBranchCleanupError extends Error {
  * answering "no submodules" there derives no force, which hands the decision
  * back to Git's own refusal.
  */
-async function populatedSubmodules(root: string): Promise<string[]> {
+async function populatedSubmodules(
+  side: CheckoutSide,
+  root: string,
+): Promise<string[]> {
+  const { gitOptionalExit } = checkoutGitOn(side);
   const found: string[] = [];
   const pending = [root];
   while (pending.length) {
@@ -1066,7 +1071,8 @@ async function populatedSubmodules(root: string): Promise<string[]> {
       const path = join(dir, entry.slice(entry.indexOf("\t") + 1));
       // Git counts a gitlink only when its directory is a real checkout, and a
       // nested submodule lives inside one, so this both filters and recurses.
-      if (!(await checkoutPathExists(root, join(path, ".git")))) continue;
+      if (!(await checkoutFilesOn(side).pathExists(root, join(path, ".git"))))
+        continue;
       found.push(path);
       pending.push(path);
     }
@@ -1082,7 +1088,11 @@ async function populatedSubmodules(root: string): Promise<string[]> {
  * conditions mirror Git's own `validate_no_submodules`: the worktree's private
  * `modules` gitdir, or a populated gitlink in its index.
  */
-async function hasSubmoduleCheckout(worktreePath: string): Promise<boolean> {
+async function hasSubmoduleCheckout(
+  side: CheckoutSide,
+  worktreePath: string,
+): Promise<boolean> {
+  const { gitOptionalExit } = checkoutGitOn(side);
   const gitDir = await gitOptionalExit(
     ["rev-parse", "--absolute-git-dir"],
     worktreePath,
@@ -1091,7 +1101,7 @@ async function hasSubmoduleCheckout(worktreePath: string): Promise<boolean> {
     const modulesPath = join(gitDir.stdout.trim(), "modules");
     let modules: PathInspection | undefined;
     try {
-      modules = await inspectCheckoutPath(worktreePath, modulesPath, {
+      modules = await checkoutFilesOn(side).inspect(worktreePath, modulesPath, {
         follow: true,
       });
     } catch (err) {
@@ -1107,7 +1117,7 @@ async function hasSubmoduleCheckout(worktreePath: string): Promise<boolean> {
   }
   // Submodules cloned outside our creation path keep their gitdir in the
   // checkout, so the index is the only remaining evidence.
-  return (await populatedSubmodules(worktreePath)).length > 0;
+  return (await populatedSubmodules(side, worktreePath)).length > 0;
 }
 
 function unverifiableMessage(root: string, submodule: string): string {
@@ -1137,9 +1147,11 @@ function unverifiableMessage(root: string, submodule: string): string {
  * orphan tags, and never protected before this change either.
  */
 async function submoduleWorkAtRisk(
+  side: CheckoutSide,
   worktreePath: string,
 ): Promise<string | null> {
-  for (const path of await populatedSubmodules(worktreePath)) {
+  const { gitOptionalExit } = checkoutGitOn(side);
+  for (const path of await populatedSubmodules(side, worktreePath)) {
     const localOnly = await gitOptionalExit(
       ["rev-list", "--count", "-1", "--all", "--not", "--remotes", "--tags"],
       path,
@@ -1164,8 +1176,12 @@ async function submoduleWorkAtRisk(
  * Every probe fails CLOSED. A guard that cannot answer must not hand back the
  * force that disables it; refusing still leaves force-remove as the way out.
  */
-async function deriveSubmoduleForce(worktreePath: string): Promise<boolean> {
-  if (!(await hasSubmoduleCheckout(worktreePath))) return false;
+async function deriveSubmoduleForce(
+  side: CheckoutSide,
+  worktreePath: string,
+): Promise<boolean> {
+  const { gitOptionalExit } = checkoutGitOn(side);
+  if (!(await hasSubmoduleCheckout(side, worktreePath))) return false;
   const status = await gitOptionalExit(
     ["status", "--porcelain=v1", "-uall"],
     worktreePath,
@@ -1178,7 +1194,7 @@ async function deriveSubmoduleForce(worktreePath: string): Promise<boolean> {
     throw new WorktreeRemovalBlockedError(
       "Worktree has uncommitted changes. Commit them or force-remove to discard.",
     );
-  const risky = await submoduleWorkAtRisk(worktreePath);
+  const risky = await submoduleWorkAtRisk(side, worktreePath);
   if (risky)
     throw new WorktreeRemovalBlockedError(
       `Submodule ${risky} has commits or stashed changes that no remote or tag has. Removing this worktree deletes them, so push them or force-remove to lose them.`,
@@ -1207,7 +1223,11 @@ function reclaimFor(
   path: string,
 ) => Promise<Awaited<ReturnType<typeof reclaimContainerResidue>>> {
   return (path) =>
-    reclaimContainerResidue({ path, allowedRoots: worktreeRootsFor(row) });
+    reclaimContainerResidue({
+      path,
+      allowedRoots: worktreeRootsFor(row),
+      side: checkoutSideOf(row),
+    });
 }
 
 function residueSentence(residue: TreeResidue, reason?: string): string {
@@ -1248,9 +1268,11 @@ async function assertCheckoutDeletable(row: WorktreeRow): Promise<void> {
 
 /** Whether Git still registers `path` as a worktree of this repository. */
 async function isRegisteredWorktree(
+  side: CheckoutSide,
   mainRepoRoot: string,
   path: string,
 ): Promise<boolean> {
+  const { gitOptionalExit } = checkoutGitOn(side);
   const res = await gitOptionalExit(
     ["worktree", "list", "--porcelain"],
     mainRepoRoot,
@@ -1264,15 +1286,20 @@ async function isRegisteredWorktree(
     .filter((line) => line.startsWith("worktree "))
     .map((line) => line.slice("worktree ".length).trim());
   for (const entry of listed)
-    if (entry === path || (await sameRealPath(entry, path))) return true;
+    if (entry === path || (await sameRealPath(side, entry, path))) return true;
   return false;
 }
 
 /** A path that cannot be resolved is not the same; a Worker failure rejects. */
-async function sameRealPath(a: string, b: string): Promise<boolean> {
+async function sameRealPath(
+  side: CheckoutSide,
+  a: string,
+  b: string,
+): Promise<boolean> {
   try {
     return (
-      (await realpathInCheckout(a, a)) === (await realpathInCheckout(b, b))
+      (await checkoutFilesOn(side).realpath(a, a)) ===
+      (await checkoutFilesOn(side).realpath(b, b))
     );
   } catch (err) {
     if (checkoutFailureOf(err) !== "filesystem") throw err;
@@ -1296,7 +1323,14 @@ async function sameRealPath(a: string, b: string): Promise<boolean> {
  * cannot re-register a worktree, so it needs no second probe.
  */
 async function assertGitUnregistered(row: WorktreeRow): Promise<void> {
-  if (!(await isRegisteredWorktree(row.mainRepoRoot, row.path))) return;
+  if (
+    !(await isRegisteredWorktree(
+      checkoutSideOf(row),
+      row.mainRepoRoot,
+      row.path,
+    ))
+  )
+    return;
   throw new WorktreeRemovalBlockedError(
     `Git still registers ${row.path} as a worktree after pruning it, which usually means it is locked. Run git worktree unlock ${row.path} in ${row.mainRepoRoot} (or git worktree remove --force it) and try again. Nothing was removed.`,
   );
@@ -1334,6 +1368,8 @@ export async function removeWorktree(
     throw new Error("The main checkout cannot be removed.");
   const row = getWorktree(id);
   if (!row) throw new Error("Unknown worktree.");
+  const side = checkoutSideOf(row);
+  const { git, gitOptionalExit, repoLockKey } = checkoutGitOn(side);
   const retryBranchOnly = row.status === "removed";
   if (retryBranchOnly && (!opts.deleteBranch || !row.branchCleanupOid))
     throw new Error("Unknown worktree.");
@@ -1355,7 +1391,7 @@ export async function removeWorktree(
   // command can run in it, and the branch went with it. What is left is the
   // record and possibly a checkout folder that outlived it, which nothing can
   // inspect for uncommitted work any more, so only force deletes that folder.
-  const files = checkoutFilesOn(checkoutSideOf(row));
+  const files = checkoutFilesOn(side);
   const exists = (path: string): Promise<boolean> =>
     files.pathExists(path, path);
   const repositoryGone = !retryBranchOnly && !(await exists(row.mainRepoRoot));
@@ -1488,8 +1524,11 @@ export async function removeWorktree(
           // succeed before comment lifetime can end.
           await git(["worktree", "prune"], row.mainRepoRoot);
           await assertGitUnregistered(row);
-        } else if (await isRegisteredWorktree(row.mainRepoRoot, row.path)) {
-          const force = opts.force || (await deriveSubmoduleForce(row.path));
+        } else if (
+          await isRegisteredWorktree(side, row.mainRepoRoot, row.path)
+        ) {
+          const force =
+            opts.force || (await deriveSubmoduleForce(side, row.path));
           await releaseCheckout();
           const args = [
             "worktree",
@@ -1505,7 +1544,7 @@ export async function removeWorktree(
             // failed. Which half happened decides everything, so ask rather
             // than assume — still registered means nothing durable happened and
             // the caller's guarantee ("nothing was removed") still holds.
-            if (await isRegisteredWorktree(row.mainRepoRoot, row.path))
+            if (await isRegisteredWorktree(side, row.mainRepoRoot, row.path))
               throw err;
             console.warn(
               `[worktrees] git unregistered ${row.path} but could not delete it: ${errorText(err)}`,
@@ -1587,6 +1626,7 @@ export async function removeWorktree(
 type LocalBranchProbe = { kind: "absent" } | { kind: "present"; oid: string };
 
 async function probeLocalBranch(row: WorktreeRow): Promise<LocalBranchProbe> {
+  const { git, gitOptionalExit } = checkoutGitOn(checkoutSideOf(row));
   const ref = `refs/heads/${row.branch}`;
   // `--verify --quiet` rather than `--exists`: exit 1 means "no such ref" and
   // anything else means the probe itself failed, which is the distinction this
@@ -1617,6 +1657,7 @@ async function deletePendingWorktreeBranch(
   containmentBase = row.baseBranch,
   remoteHeads: readonly string[] = [],
 ): Promise<void> {
+  const { git } = checkoutGitOn(checkoutSideOf(row));
   let branch: LocalBranchProbe;
   try {
     branch = await probeLocalBranch(row);

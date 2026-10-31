@@ -47,11 +47,7 @@
  * without a separate confirmation.
  */
 import { relative, isAbsolute, sep } from "node:path";
-import {
-  checkoutFailureOf,
-  inspectCheckoutPath,
-  realpathInCheckout,
-} from "./checkoutFileAccess.ts";
+import { checkoutFailureOf, checkoutFilesOn } from "./checkoutFileAccess.ts";
 import {
   containerRuntimeStatus,
   execContainerCommand,
@@ -60,6 +56,7 @@ import {
   redactRegistrySecrets,
 } from "./containerImages.ts";
 import type { TreeReclaimOutcome } from "./managedTreeRemoval.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 
 /**
  * Small, ubiquitous, and needs nothing but `chown`. Overridable because a host
@@ -79,6 +76,8 @@ export interface ReclaimContainerResidueOptions {
   path: string;
   /** Directories the path must live under, exclusive of the roots themselves. */
   allowedRoots: string[];
+  /** The side of the checkout the path and the roots belong to. */
+  side: CheckoutSide;
   image?: string;
   signal?: AbortSignal;
 }
@@ -222,7 +221,7 @@ function identityNumber(decimal: string): number {
 
 /**
  * Resolve the path and re-check containment, returning the identity the
- * container verifies after the mount. Both are read on the default Worker,
+ * container verifies after the mount. Both are read on the checkout's side,
  * where the checkout is; a Worker failure rejects, never reads as a path that
  * could not be resolved.
  */
@@ -233,8 +232,9 @@ async function resolveTarget(
   let dev: number;
   let inode: number;
   try {
-    path = await realpathInCheckout(options.path, options.path);
-    const stat = await inspectCheckoutPath(path, path, { follow: true });
+    const files = checkoutFilesOn(options.side);
+    path = await files.realpath(options.path, options.path);
+    const stat = await files.inspect(path, path, { follow: true });
     if (stat.kind !== "directory")
       return { reason: "the path to reclaim is not a directory" };
     dev = identityNumber(stat.dev);
@@ -245,7 +245,7 @@ async function resolveTarget(
       reason: `the path to reclaim could not be resolved: ${text(err)}`,
     };
   }
-  if (!(await containedInAllowedRoot(path, options.allowedRoots)))
+  if (!(await containedInAllowedRoot(options.side, path, options.allowedRoots)))
     return {
       reason: "the path to reclaim is not inside a managed worktree root",
     };
@@ -258,13 +258,14 @@ async function resolveTarget(
  * single removal is cleaning up.
  */
 async function containedInAllowedRoot(
+  side: CheckoutSide,
   target: string,
   roots: string[],
 ): Promise<boolean> {
   for (const root of roots) {
     let resolved: string;
     try {
-      resolved = await realpathInCheckout(root, root);
+      resolved = await checkoutFilesOn(side).realpath(root, root);
     } catch (err) {
       if (checkoutFailureOf(err) === "worker") throw err;
       continue;

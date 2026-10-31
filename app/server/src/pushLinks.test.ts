@@ -16,6 +16,7 @@ import type { PushWorkflowResult } from "./pushWorkflow.ts";
 
 process.env.ASSISTANT_CWD = mkdtempSync(join(tmpdir(), "push-links-test-"));
 
+const { DEFAULT_WORKER_SIDE } = await import("./workers/placement.ts");
 const { branchWebUrl, resolvePushLinks } = await import("./pushLinks.ts");
 
 const pushed: PushWorkflowResult = {
@@ -68,8 +69,8 @@ describe("branchWebUrl", () => {
 describe("resolvePushLinks", () => {
   test("links the branch and its pull request", async () => {
     const asked: string[] = [];
-    const links = await resolvePushLinks(pushed, {
-      provider: async (repoRoot, remote) => {
+    const links = await resolvePushLinks(DEFAULT_WORKER_SIDE, pushed, {
+      provider: async (_side, repoRoot, remote) => {
         asked.push(`${repoRoot} ${remote}`);
         return provider(async () => openPull);
       },
@@ -83,7 +84,7 @@ describe("resolvePushLinks", () => {
   });
 
   test("a failed or slow pull-request read keeps the branch link", async () => {
-    const failing = await resolvePushLinks(pushed, {
+    const failing = await resolvePushLinks(DEFAULT_WORKER_SIDE, pushed, {
       provider: async () =>
         provider(async () => {
           throw new Error("rate limited");
@@ -93,7 +94,7 @@ describe("resolvePushLinks", () => {
       provider: "github",
       branchUrl: "https://github.com/acme/repo/tree/feature/retry",
     });
-    const slow = await resolvePushLinks(pushed, {
+    const slow = await resolvePushLinks(DEFAULT_WORKER_SIDE, pushed, {
       provider: async () => provider(() => new Promise(() => {})),
       timeoutMs: 5,
     });
@@ -102,11 +103,13 @@ describe("resolvePushLinks", () => {
 
   test("no provider, a failed push, or no proven branch yields no links", async () => {
     assert.equal(
-      await resolvePushLinks(pushed, { provider: async () => null }),
+      await resolvePushLinks(DEFAULT_WORKER_SIDE, pushed, {
+        provider: async () => null,
+      }),
       undefined,
     );
     assert.equal(
-      await resolvePushLinks(pushed, {
+      await resolvePushLinks(DEFAULT_WORKER_SIDE, pushed, {
         provider: async () => {
           throw new Error("git failed");
         },
@@ -118,6 +121,7 @@ describe("resolvePushLinks", () => {
     };
     assert.equal(
       await resolvePushLinks(
+        DEFAULT_WORKER_SIDE,
         { ...pushed, status: "failed" },
         { provider: unreachable },
       ),
@@ -125,7 +129,9 @@ describe("resolvePushLinks", () => {
     );
     const { publishedBranch: _unproven, ...unpublished } = pushed;
     assert.equal(
-      await resolvePushLinks(unpublished, { provider: unreachable }),
+      await resolvePushLinks(DEFAULT_WORKER_SIDE, unpublished, {
+        provider: unreachable,
+      }),
       undefined,
     );
   });

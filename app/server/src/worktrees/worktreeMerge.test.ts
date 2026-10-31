@@ -27,7 +27,9 @@ const { addWorktreeComment } = await import("./worktreeComments.ts");
 const { mergeWorktree, mergePhase, reconcileWorktreeMergesOnBoot } =
   await import("./worktreeMerge.ts");
 const { setWorktreeBroadcaster } = await import("./worktreeEvents.ts");
-const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
+const { DEFAULT_WORKER_SIDE } = await import("../workers/placement.ts");
+const { withRepoLock, checkoutGitOn } = await import("../gitExec.ts");
+const { repoLockKey } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 const { getComment, getWorktree, updateWorktree } =
   await import("../db/worktreeStore.ts");
 const { projectStore } = await import("../db/projectStore.ts");
@@ -343,7 +345,8 @@ const {
 const { FILE_METHODS } = await import("../workerProtocol/fileMethods.ts");
 const { WorkerMethodError } = await import("../workerProtocol/connection.ts");
 const { isWorkerFailure } = await import("../workers/fileClient.ts");
-const { checkoutPathExists } = await import("../checkoutFileAccess.ts");
+const { checkoutFilesOn } = await import("../checkoutFileAccess.ts");
+const { pathExists: checkoutPathExists } = checkoutFilesOn(DEFAULT_WORKER_SIDE);
 const { holdFileForTests } = await import("../fileReads.ts");
 const { writeAsInProcessWorkerForTests } =
   await import("../workers/inProcessWorker.ts");

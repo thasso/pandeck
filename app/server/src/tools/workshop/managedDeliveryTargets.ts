@@ -8,7 +8,7 @@
  * "the remote head" or "the provider repository" is a second chance to target
  * something the caller never asked for.
  */
-import { git, gitOptional, resolveRepoRoot } from "../../gitExec.ts";
+import { checkoutGitOn } from "../../gitExec.ts";
 import {
   hostingProviderForRepo,
   parseRemoteUrl,
@@ -21,6 +21,7 @@ import {
   resolvePushTarget,
   type ResolvedPushTarget,
 } from "../../pushWorkflow.ts";
+import { checkoutSideOf } from "../../worktrees/knowledgeCheckout.ts";
 
 /** The managed checkout as git reports it right now. */
 export interface ManagedWorktreeLocalState {
@@ -33,6 +34,7 @@ export async function readManagedLocalState(
   row: WorktreeRow,
   signal?: AbortSignal,
 ): Promise<ManagedWorktreeLocalState> {
+  const { git, gitOptional } = checkoutGitOn(checkoutSideOf(row));
   const [branch, head, status] = await Promise.all([
     gitOptional(
       ["symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -57,8 +59,9 @@ export async function resolveManagedPushTarget(
   row: WorktreeRow,
   signal?: AbortSignal,
 ): Promise<ResolvedPushTarget> {
-  const repoRoot = await resolveRepoRoot(row.path, signal);
-  return resolvePushTarget(repoRoot, row.branch, undefined, signal);
+  const side = checkoutSideOf(row);
+  const repoRoot = await checkoutGitOn(side).resolveRepoRoot(row.path, signal);
+  return resolvePushTarget(side, repoRoot, row.branch, undefined, signal);
 }
 
 export function readManagedRemoteHead(
@@ -66,7 +69,13 @@ export function readManagedRemoteHead(
   branch: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  return readRemoteBranchOid(target.repoRoot, target.remote, branch, signal);
+  return readRemoteBranchOid(
+    target.side,
+    target.repoRoot,
+    target.remote,
+    branch,
+    signal,
+  );
 }
 
 /** The hosted repository behind a managed worktree's publication target. */
@@ -81,7 +90,7 @@ export async function resolveManagedHosting(
   signal?: AbortSignal,
   providerSignal?: AbortSignal,
 ): Promise<ManagedHostingTarget | undefined> {
-  const remoteUrl = await gitOptional(
+  const remoteUrl = await checkoutGitOn(target.side).gitOptional(
     ["remote", "get-url", "--push", target.remote],
     target.repoRoot,
     signal,
@@ -93,6 +102,7 @@ export async function resolveManagedHosting(
       `The derived push remote "${target.remote}" does not name a supported repository URL.`,
     );
   const provider = await hostingProviderForRepo(
+    target.side,
     target.repoRoot,
     target.remote,
     providerSignal,

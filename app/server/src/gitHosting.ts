@@ -30,7 +30,8 @@ import {
   type WorktreePullRequestInfo,
   type WorktreePullRequestReview,
 } from "@assistant/shared";
-import { gitOptional } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 import {
   getGithubConfigIfAvailable,
   getGithubToolConfig,
@@ -1784,16 +1785,18 @@ export function hostingProviderFor(
 }
 
 /**
- * Resolve the provider for one named remote of the repo containing `repoPath`.
+ * Resolve the provider for one named remote of the repo containing `repoPath`,
+ * a checkout on `side`.
  * The push URL is authoritative: a remote may fetch from one repository while
  * publishing to another, and PR creation must follow the latter.
  */
 export async function hostingProviderForRepo(
+  side: CheckoutSide,
   repoPath: string,
   remote = "origin",
   signal?: AbortSignal,
 ): Promise<GitHostingProvider | null> {
-  const remoteRes = await gitOptional(
+  const remoteRes = await checkoutGitOn(side).gitOptional(
     ["remote", "get-url", "--push", remote],
     repoPath,
     signal,

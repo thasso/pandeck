@@ -61,7 +61,11 @@ import {
   type PullRequestCardLinks,
 } from "./pullRequestCards.ts";
 import { pullRequestIdentity } from "./pullRequestIdentity.ts";
-import { isMainWorktreeId } from "./worktrees/worktreeResolve.ts";
+import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
+import {
+  isMainWorktreeId,
+  mainWorktreeId,
+} from "./worktrees/worktreeResolve.ts";
 import {
   projectPullRequestsWithFailures,
   worktreeHostingStatusesWithFailures,
@@ -605,7 +609,10 @@ async function resolveProvider(
   project: ProjectCandidates,
 ): Promise<GitHostingProvider | null> {
   if (!project.mainPath) return null;
-  return hostingProviderForRepo(project.mainPath).catch(() => null);
+  return hostingProviderForRepo(
+    checkoutSideOf({ id: mainWorktreeId(project.projectId) }),
+    project.mainPath,
+  ).catch(() => null);
 }
 
 async function inventoryItem(

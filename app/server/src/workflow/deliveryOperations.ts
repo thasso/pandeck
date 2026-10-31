@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { sessionStore } from "../db/sessionStore.ts";
 import { getWorktree, type WorktreeRow } from "../db/worktreeStore.ts";
 import { errorText } from "../errors.ts";
-import { git, gitOptional } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import {
   hostingProviderForRepo,
   type GitHostingProvider,
@@ -35,6 +35,8 @@ import {
   type PushWorkflowOptions,
   type PushWorkflowResult,
 } from "../pushWorkflow.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "../worktrees/knowledgeCheckout.ts";
 import {
   CI_OBSERVATION_OPERATION_ID,
   DELIVERY_GATE_OPERATION_ID,
@@ -60,15 +62,16 @@ import {
 
 interface DeliveryInspectionDependencies {
   worktree(worktreeId: string): WorktreeRow | undefined;
-  branch(cwd: string): Promise<string>;
-  status(cwd: string): Promise<string>;
-  head(cwd: string): Promise<string>;
+  branch(side: CheckoutSide, cwd: string): Promise<string>;
+  status(side: CheckoutSide, cwd: string): Promise<string>;
+  head(side: CheckoutSide, cwd: string): Promise<string>;
 }
 
 export interface PublishPullRequestDependencies extends DeliveryInspectionDependencies {
   push(options: PushWorkflowOptions): Promise<PushWorkflowResult>;
   /** The derived push remote and one branch's exact current remote oid. */
   remoteBranch(
+    side: CheckoutSide,
     cwd: string,
     branch: string,
   ): Promise<{ remote: string; oid: string | undefined }>;
@@ -79,7 +82,7 @@ export interface PublishPullRequestDependencies extends DeliveryInspectionDepend
   beginCard(
     input: BeginPullRequestCardInput,
   ): Promise<BeginPullRequestCardResult>;
-  provider(cwd: string): Promise<GitHostingProvider | null>;
+  provider(side: CheckoutSide, cwd: string): Promise<GitHostingProvider | null>;
   updateCard(
     cardId: string,
     patch: Patch<PullRequestCard>,
@@ -93,6 +96,7 @@ export interface CiObservationDependencies extends DeliveryInspectionDependencie
   push(options: PushWorkflowOptions): Promise<PushWorkflowResult>;
   /** The derived push remote and one branch's exact current remote oid. */
   remoteBranch(
+    side: CheckoutSide,
     cwd: string,
     branch: string,
   ): Promise<{ remote: string; oid: string | undefined }>;
@@ -103,7 +107,7 @@ export interface CiObservationDependencies extends DeliveryInspectionDependencie
   beginCard(
     input: BeginPullRequestCardInput,
   ): Promise<BeginPullRequestCardResult>;
-  provider(cwd: string): Promise<GitHostingProvider | null>;
+  provider(side: CheckoutSide, cwd: string): Promise<GitHostingProvider | null>;
   session(context: WorkflowStepContext): ReturnType<typeof publicationSession>;
   now(): number;
   sleep(ms: number): Promise<void>;
@@ -111,31 +115,43 @@ export interface CiObservationDependencies extends DeliveryInspectionDependencie
 
 const INSPECTION_DEPENDENCIES: DeliveryInspectionDependencies = {
   worktree: getWorktree,
-  async branch(cwd) {
-    const result = await gitOptional(
+  async branch(side, cwd) {
+    const result = await checkoutGitOn(side).gitOptional(
       ["symbolic-ref", "--quiet", "--short", "HEAD"],
       cwd,
     );
     return result.code === 0 ? result.stdout.trim() : "";
   },
-  async status(cwd) {
+  async status(side, cwd) {
     return (
-      await git(["status", "--porcelain=v1", "--untracked-files=all"], cwd)
+      await checkoutGitOn(side).git(
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        cwd,
+      )
     ).stdout;
   },
-  async head(cwd) {
+  async head(side, cwd) {
     return (
-      await git(["rev-parse", "--verify", "HEAD^{commit}"], cwd)
+      await checkoutGitOn(side).git(
+        ["rev-parse", "--verify", "HEAD^{commit}"],
+        cwd,
+      )
     ).stdout.trim();
   },
 };
 
 async function remoteBranchTip(
+  side: CheckoutSide,
   cwd: string,
   branch: string,
 ): Promise<{ remote: string; oid: string | undefined }> {
-  const target = await resolvePushTarget(cwd, branch);
-  const oid = await readRemoteBranchOid(target.repoRoot, target.remote, branch);
+  const target = await resolvePushTarget(side, cwd, branch);
+  const oid = await readRemoteBranchOid(
+    side,
+    target.repoRoot,
+    target.remote,
+    branch,
+  );
   return { remote: target.remote, oid };
 }
 
@@ -279,9 +295,9 @@ async function observeCi(
 
   try {
     const [branch, status, observedHead] = await Promise.all([
-      dependencies.branch(worktree.path),
-      dependencies.status(worktree.path),
-      dependencies.head(worktree.path),
+      dependencies.branch(checkoutSideOf(worktree), worktree.path),
+      dependencies.status(checkoutSideOf(worktree), worktree.path),
+      dependencies.head(checkoutSideOf(worktree), worktree.path),
     ]);
     if (branch !== context.run.branch)
       return blocked(
@@ -296,7 +312,10 @@ async function observeCi(
         `CI observation blocked: local run head ${observedHead} does not equal commit/sync head ${headCommit}`,
       );
 
-    const provider = await dependencies.provider(worktree.path);
+    const provider = await dependencies.provider(
+      checkoutSideOf(worktree),
+      worktree.path,
+    );
     if (!provider)
       return ciOutcome({
         outcome: "none",
@@ -307,6 +326,7 @@ async function observeCi(
       });
     const push = await dependencies.push({
       cwd: worktree.path,
+      side: checkoutSideOf(worktree),
       branch: context.run.branch,
       force: false,
     });
@@ -408,6 +428,7 @@ async function recoverRunBranchPush(
   let remoteOid: string | undefined;
   try {
     ({ remote, oid: remoteOid } = await dependencies.remoteBranch(
+      checkoutSideOf(worktree),
       worktree.path,
       branch,
     ));
@@ -427,6 +448,7 @@ async function recoverRunBranchPush(
   // caller just verified.
   const lease = await dependencies.push({
     cwd: worktree.path,
+    side: checkoutSideOf(worktree),
     remote,
     expectedBranch: branch,
     expectedHead: headCommit,
@@ -462,6 +484,7 @@ async function ensureDraftCard(
     const session = dependencies.session(context);
     const result = await dependencies.beginCard({
       repoRoot: worktree.path,
+      side: checkoutSideOf(worktree),
       sessionKind: session.agentType,
       sessionId: session.id,
       args: {
@@ -563,6 +586,7 @@ async function publishPullRequest(
   try {
     const push = await dependencies.push({
       cwd: worktree.path,
+      side: checkoutSideOf(worktree),
       force: false,
     });
     if (push.status === "failed") {
@@ -590,6 +614,7 @@ async function publishPullRequest(
       const session = publicationSession(context);
       const result = await dependencies.beginCard({
         repoRoot: worktree.path,
+        side: checkoutSideOf(worktree),
         sessionKind: session.agentType,
         sessionId: session.id,
         args: {
@@ -612,7 +637,10 @@ async function publishPullRequest(
     if (!card || !card.provider || card.number === undefined || !card.url)
       return failed("pull request service did not produce a usable live card");
 
-    const provider = await dependencies.provider(worktree.path);
+    const provider = await dependencies.provider(
+      checkoutSideOf(worktree),
+      worktree.path,
+    );
     if (!provider)
       return failed(
         "no git hosting provider is configured for the run repository",
@@ -703,14 +731,17 @@ async function inspectDelivery(
 ): Promise<DeliveryInspection> {
   const validated = validateDeliveryContext(context, operationId, dependencies);
   const { worktree, reviewedHeadCommit } = await validated;
-  const branch = await dependencies.branch(worktree.path);
+  const branch = await dependencies.branch(
+    checkoutSideOf(worktree),
+    worktree.path,
+  );
   if (branch !== context.run.branch)
     throw new Error(
       `run checkout is on ${branch ? `"${branch}"` : "a detached HEAD"}, not "${context.run.branch}"`,
     );
   const [status, observedHeadCommit] = await Promise.all([
-    dependencies.status(worktree.path),
-    dependencies.head(worktree.path),
+    dependencies.status(checkoutSideOf(worktree), worktree.path),
+    dependencies.head(checkoutSideOf(worktree), worktree.path),
   ]);
   const reasons: string[] = [];
   const worktreeDirty = Boolean(status.trim());

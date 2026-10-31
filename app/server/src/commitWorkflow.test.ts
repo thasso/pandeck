@@ -19,6 +19,7 @@ import {
 import type { CommitAgentResult } from "./commitAgent.ts";
 import type { AgentSession } from "./piSdk/index.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
 // Passthrough git seam with one hook: run something after the workflow's
 // unlocked inspection and right before it takes the repository lock.
@@ -30,9 +31,15 @@ vi.mock("./gitExec.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./gitExec.ts")>();
   return {
     ...actual,
-    resolveRepoRoot: async (cwd: string) => {
-      lockHooks.beforeInspect?.();
-      return actual.resolveRepoRoot(cwd);
+    checkoutGitOn: (side: Parameters<typeof actual.checkoutGitOn>[0]) => {
+      const family = actual.checkoutGitOn(side);
+      return {
+        ...family,
+        resolveRepoRoot: async (cwd: string) => {
+          lockHooks.beforeInspect?.();
+          return family.resolveRepoRoot(cwd);
+        },
+      };
     },
     withRepoLock: async <T>(key: string, fn: () => Promise<T>) => {
       lockHooks.beforeLock?.();
@@ -123,6 +130,7 @@ test("commit helper captures transcript source requirement before git awaits", a
       },
     ] as never;
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "slash",
     cwd,
     dryRun: true,
@@ -142,6 +150,7 @@ test("checked workflow commits with a generated message and reports no changes a
     return generated;
   });
   const committed = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -170,6 +179,7 @@ test("checked workflow commits with a generated message and reports no changes a
     throw new Error("clean trees do not invoke the agent");
   });
   const clean = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -194,6 +204,7 @@ test("a caller message is committed as given while the commit agent still review
   });
   const progress: string[] = [];
   const blocked = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     callerMessage: message,
@@ -216,6 +227,7 @@ test("a caller message is committed as given while the commit agent still review
     return generated;
   });
   const committed = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     callerMessage: message,
@@ -239,6 +251,7 @@ test("caller and approved messages survive git cleanup verbatim", async () => {
   setCommitMessageGeneratorForTests(async () => generated);
   writeFileSync(join(cwd, "file.txt"), "caller\n");
   const committed = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     callerMessage: message,
@@ -248,12 +261,14 @@ test("caller and approved messages survive git cleanup verbatim", async () => {
 
   writeFileSync(join(cwd, "file.txt"), "approved\n");
   const proposal = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     dryRun: true,
     callerMessage: message,
   });
   const approved = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     force: true,
@@ -284,7 +299,11 @@ test("a commit a commit-msg hook refuses leaves no message file behind", async (
   const saved = process.env.TMPDIR;
   process.env.TMPDIR = tmp;
   try {
-    const result = await runCommitWorkflow({ source: "tool", cwd });
+    const result = await runCommitWorkflow({
+      side: DEFAULT_WORKER_SIDE,
+      source: "tool",
+      cwd,
+    });
     assert.equal(result.status, "failed");
   } finally {
     if (saved === undefined) delete process.env.TMPDIR;
@@ -333,6 +352,7 @@ test("tool callers contribute session prompts, touched paths, context and a chec
     return generated;
   });
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     sessionManager,
@@ -376,6 +396,7 @@ test("credentials in session prompts and caller context are redacted, not blocke
     return generated;
   });
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     sessionManager,
@@ -396,7 +417,11 @@ test("a temporary AWS access key in the diff still blocks", async () => {
     `key = ${"ASIA" + "ABCDEFGHIJKLMNOP"}\n`,
   );
   setCommitMessageGeneratorForTests(async () => generated);
-  const result = await runCommitWorkflow({ source: "tool", cwd });
+  const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
+    source: "tool",
+    cwd,
+  });
   assert.equal(result.status, "blocked");
   assert.ok(result.blockers.some((item) => item.kind === "secret"));
 });
@@ -411,6 +436,7 @@ test("same-sized content drift after generation blocks before staging", async ()
     return generated;
   });
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -433,6 +459,7 @@ test("fingerprints untracked files beyond the commit-agent summary cap", async (
     return generated;
   });
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -447,6 +474,7 @@ test("commits dangling untracked symlinks without following their referents", as
   symlinkSync("missing-target", join(cwd, "dangling.txt"));
   setCommitMessageGeneratorForTests(async () => generated);
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "slash",
     cwd,
   });
@@ -466,6 +494,7 @@ test("registered branch drift is revalidated inside the repository lock", async 
     return generated;
   });
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -480,6 +509,7 @@ test("agent calls cannot force secret blockers while slash force remains availab
   const toolRepo = repo();
   writeFileSync(join(toolRepo, ".env"), "SAFE_TEST_VALUE=yes\n");
   const blocked = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd: toolRepo,
     force: false,
@@ -491,6 +521,7 @@ test("agent calls cannot force secret blockers while slash force remains availab
   const humanRepo = repo();
   writeFileSync(join(humanRepo, ".env"), "SAFE_TEST_VALUE=yes\n");
   const forced = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "slash",
     cwd: humanRepo,
     force: true,
@@ -504,6 +535,7 @@ test("a Workflow Run's forced commit still refuses a secret the check finds", as
   const cwd = repo();
   writeFileSync(join(cwd, ".env"), "SAFE_TEST_VALUE=yes\n");
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     force: true,
@@ -526,6 +558,7 @@ test("a Workflow Run's forced commit overrides the check's other problems", asyn
   const cwd = repo();
   writeFileSync(join(cwd, "file.txt"), "changed\n");
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     force: true,
@@ -544,6 +577,7 @@ test("approved overrides bind changes and message while retaining a fresh secret
     blockers: [{ kind: "unsafe", reason: "Potential issue" }],
   }));
   const proposal = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     dryRun: true,
@@ -556,6 +590,7 @@ test("approved overrides bind changes and message while retaining a fresh secret
   const head = git(cwd, "rev-parse", "HEAD");
   writeFileSync(join(cwd, "file.txt"), "another\n");
   const stale = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     force: true,
@@ -573,6 +608,7 @@ test("approved overrides bind changes and message while retaining a fresh secret
     blockers: [{ kind: "secret", reason: "Fresh secret finding" }],
   }));
   const secret = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     force: true,
@@ -588,6 +624,7 @@ test("approved overrides bind changes and message while retaining a fresh secret
     blockers: [{ kind: "unsafe", reason: "Potential issue" }],
   }));
   const committed = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     force: true,
@@ -615,12 +652,14 @@ test("approved overrides reject changes during fresh review and Git operations u
       blockers: [{ kind: "unsafe", reason: "Potential issue" }],
     }));
     const proposal = await runCommitWorkflow({
+      side: DEFAULT_WORKER_SIDE,
       source: "tool",
       cwd,
       dryRun: true,
     });
     lockHooks.beforeLock = () => mutate(cwd);
     const result = await runCommitWorkflow({
+      side: DEFAULT_WORKER_SIDE,
       source: "tool",
       cwd,
       force: true,
@@ -647,6 +686,7 @@ test("staged-only approved override leaves other edits out of the commit", async
     blockers: [{ kind: "unsafe", reason: "Potential issue" }],
   }));
   const proposal = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     dryRun: true,
@@ -655,6 +695,7 @@ test("staged-only approved override leaves other edits out of the commit", async
   writeFileSync(join(cwd, "file.txt"), "unstaged\n");
   writeFileSync(join(cwd, ".env"), "SAFE_TEST_VALUE=yes\n");
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     stagedOnly: true,
@@ -686,6 +727,7 @@ test("staged-only scope commits the index as-is and leaves the rest of the tree 
     return generated;
   });
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -725,6 +767,7 @@ test("staged-only scope blocks on an empty index and still fingerprints index dr
     throw new Error("an empty index does not invoke the agent");
   });
   const empty = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -743,6 +786,7 @@ test("staged-only scope blocks on an empty index and still fingerprints index dr
     return generated;
   });
   const settled = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -759,6 +803,7 @@ test("staged-only scope blocks on an empty index and still fingerprints index dr
     return generated;
   });
   const drifted = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -785,6 +830,7 @@ test("staged renames and quoted paths project one file each with exact paths", a
     return generated;
   });
   const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     expectedBranch: "feature",
@@ -823,6 +869,7 @@ test("accepting a staged-only dry run rechecks the index under the lock", async 
     return generated;
   });
   const dry = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "slash",
     cwd,
     dryRun: true,
@@ -838,6 +885,7 @@ test("accepting a staged-only dry run rechecks the index under the lock", async 
     git(cwd, "add", "file.txt");
   };
   const moved = await acceptCommitDryRun({
+    side: DEFAULT_WORKER_SIDE,
     session,
     entryId: dry.customEntryId!,
     cwd,
@@ -852,6 +900,7 @@ test("accepting a staged-only dry run rechecks the index under the lock", async 
   git(cwd, "add", "file.txt");
   writeFileSync(join(cwd, "file.txt"), "tree only\n");
   const accepted = await acceptCommitDryRun({
+    side: DEFAULT_WORKER_SIDE,
     session,
     entryId: dry.customEntryId!,
     cwd,

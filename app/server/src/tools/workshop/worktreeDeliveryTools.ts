@@ -19,7 +19,7 @@ import {
   type ToolCallContext,
 } from "../../mcp/tool.ts";
 import { isAgentType } from "@assistant/shared";
-import { gitOptional } from "../../gitExec.ts";
+import { checkoutGitOn } from "../../gitExec.ts";
 import { sourceRequiresEnterprise } from "../../sessionEnterprise.ts";
 import {
   approvalCardReference,
@@ -45,6 +45,8 @@ import { resolvePushLinks } from "../../pushLinks.ts";
 import { reserveWorktreeForMutation } from "../../session/sessionRunLease.ts";
 import { invalidateWorktreeStatus } from "../../worktrees/worktreeStatus.ts";
 import { isMainWorktreeId } from "../../worktrees/worktreeResolve.ts";
+import { checkoutSideOf } from "../../worktrees/knowledgeCheckout.ts";
+import type { CheckoutSide } from "../../workers/placement.ts";
 import type { GitHostingProvider } from "../../gitHosting.ts";
 import {
   assertManagedProviderRepository,
@@ -117,7 +119,7 @@ const defaultOperations: WorktreeCommitOperations = {
   // Deliberately NOT the full local-state read: a worktree whose branch has no
   // commit yet still has a branch to check, and committing is what gives it one.
   async checkedOutBranch(row, signal) {
-    const result = await gitOptional(
+    const result = await checkoutGitOn(checkoutSideOf(row)).gitOptional(
       ["symbolic-ref", "--quiet", "--short", "HEAD"],
       row.path,
       signal,
@@ -148,7 +150,10 @@ export interface WorktreePushOperations {
   ): Promise<string | undefined>;
   runPush(options: PushWorkflowOptions): Promise<PushWorkflowResult>;
   /** Best-effort hosted branch/pull-request links for the card. */
-  links(result: PushWorkflowResult): Promise<PushHostedLinks | undefined>;
+  links(
+    side: CheckoutSide,
+    result: PushWorkflowResult,
+  ): Promise<PushHostedLinks | undefined>;
   invalidate(worktreeId: string): void;
 }
 
@@ -527,6 +532,7 @@ async function executeWorktreeCommit(
       force: false,
       ...(params.force === true ? { dryRun: true } : {}),
       cwd: row.path,
+      side: checkoutSideOf(row),
       expectedBranch: row.branch,
       ...(ctx.session.sessionManager !== undefined
         ? { sessionManager: ctx.session.sessionManager }
@@ -666,6 +672,7 @@ export const managedCommitOverrideApprovalExecutor: ApprovalExecutor = {
       const result = await operations.runCommit({
         source: "tool",
         cwd: row.path,
+        side: checkoutSideOf(row),
         expectedBranch: body.branch,
         force: true,
         forceRefusesSecrets: true,
@@ -791,6 +798,7 @@ async function executeWorktreePush(
 
     const result = await operations.runPush({
       cwd: row.path,
+      side: checkoutSideOf(row),
       force: false,
       remote: target.remote,
       expectedBranch: row.branch,
@@ -813,7 +821,7 @@ async function executeWorktreePush(
           : "";
       throw new Error(`${detail}${guidance}`);
     }
-    const hosted = await operations.links(result);
+    const hosted = await operations.links(checkoutSideOf(row), result);
     const display: PushDisplay = {
       ...toPushDisplay(result),
       localHead: local.head,
@@ -1049,6 +1057,7 @@ async function executeWorktreePullRequest(
       recovered ??
       (await operations.begin({
         repoRoot: row.path,
+        side: checkoutSideOf(row),
         sessionKind: ctx.session.agentType,
         sessionId: ctx.session.sessionId,
         requiresEnterprise,

@@ -50,6 +50,7 @@ import {
   createRun,
   resetWorkflowStoreForTests,
 } from "./db/workflowStore.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
 function repo(): string {
   const path = mkdtempSync(join(tmpdir(), "pr-merge-projection-"));
@@ -113,6 +114,7 @@ afterEach(() => {
 test("inventory failure after a provider-confirmed merge stays a successful projection", async () => {
   const result = await mergePullRequestAndProject(
     {
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider(),
       repoPath: repo(),
       number: 91,
@@ -161,6 +163,7 @@ test("a merge issued from another checkout of the repo still closes the card", a
   const staleObservation = beginPullRequestCardObservation(card.id);
 
   const projection = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider(),
     // A DIFFERENT path string for the same repository, as the worktree page's
     // row would supply.
@@ -218,6 +221,7 @@ test("a degraded merge clears a stale head receipt instead of proving an old for
     throw new Error("unavailable");
   };
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -268,6 +272,7 @@ test("a same-numbered pull request in another repository is left alone", async (
   );
 
   const projection = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider(),
     repoPath: theirs,
     number: 42,
@@ -309,6 +314,7 @@ test("the projection suggests the linked Task done, whichever surface merged", a
     );
 
     await mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider(),
       repoPath: path,
       number: 42,
@@ -381,6 +387,7 @@ test("a refused merge is re-fetched and classified as a moved-base conflict", as
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -437,6 +444,7 @@ test("a caller's accepted head is always forwarded to the provider", async () =>
   };
 
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -543,6 +551,7 @@ test("a preflight conflict is not claimed until a second read reproduces it", as
   );
 
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -571,6 +580,7 @@ test("a preflight answer that is still unknown goes to the provider", async () =
   );
 
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -596,6 +606,7 @@ test("a preflight conflict that reproduces refuses the merge and says so", async
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -628,6 +639,7 @@ test("a preflight retry that fails or finds nothing confirms no conflict", async
     );
 
     await mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -665,6 +677,7 @@ test("a preflight retry about another head does not confirm the first", async ()
   );
 
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -723,6 +736,7 @@ test("classifier bookkeeping failures cannot mask the provider refusal", async (
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -755,6 +769,7 @@ test("a non-conflict merge refusal keeps the provider's raw message", async () =
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -779,6 +794,7 @@ test("a provider merge failure never attempts the local base refresh", async () 
   await assert.rejects(
     mergePullRequestAndProject(
       {
+        side: DEFAULT_WORKER_SIDE,
         provider,
         repoPath: path,
         number: 42,
@@ -803,6 +819,7 @@ test("the local base refresh outcome is appended to the merge sentence", async (
   const path = repo();
   const projection = await mergePullRequestAndProject(
     {
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider(),
       repoPath: path,
       number: 42,
@@ -826,6 +843,7 @@ test("a throwing local base refresh cannot fail an accepted merge", async () => 
   const path = repo();
   const projection = await mergePullRequestAndProject(
     {
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider(),
       repoPath: path,
       number: 42,
@@ -871,6 +889,7 @@ test("the projection invalidates the hosting cache for every worktree it knows",
   assert.equal(cached, first, "the second read came from the cache");
 
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: fakeProvider(),
     repoPath: path,
     number: 42,
@@ -905,10 +924,17 @@ test("a merge is refused while the same pull request is being updated", async ()
 
   let refused: unknown;
   await withPullRequestMutation(
-    { repoPath: path, providerKind: "github", number: 42, repoUrl: undefined },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: path,
+      providerKind: "github",
+      number: 42,
+      repoUrl: undefined,
+    },
     "an update with main",
     async () => {
       refused = await mergePullRequestAndProject({
+        side: DEFAULT_WORKER_SIDE,
         provider,
         repoPath: path,
         number: 42,
@@ -933,7 +959,13 @@ test("a hosted-only mutation collides with a managed one on the same pull reques
   const mine = repo();
   const url = "https://github.com/acme/repo";
   await withPullRequestMutation(
-    { repoPath: mine, providerKind: "github", number: 42, repoUrl: url },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: mine,
+      providerKind: "github",
+      number: 42,
+      repoUrl: url,
+    },
     "a merge",
     async () => {
       await assert.rejects(
@@ -971,7 +1003,13 @@ test("a hosted-only mutation collides with a managed one on the same pull reques
     async () => {
       await assert.rejects(
         withPullRequestMutation(
-          { repoPath: mine, providerKind: "github", number: 42, repoUrl: url },
+          {
+            side: DEFAULT_WORKER_SIDE,
+            repoPath: mine,
+            providerKind: "github",
+            number: 42,
+            repoUrl: url,
+          },
           "a merge",
           async () => undefined,
         ),
@@ -985,12 +1023,19 @@ test("the hold is per pull request, and released again afterwards", async () => 
   const mine = repo();
   const theirs = repo();
   await withPullRequestMutation(
-    { repoPath: mine, providerKind: "github", number: 42, repoUrl: undefined },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: mine,
+      providerKind: "github",
+      number: 42,
+      repoUrl: undefined,
+    },
     "a merge",
     async () => {
       // Same number, other repository: untouched.
       await withPullRequestMutation(
         {
+          side: DEFAULT_WORKER_SIDE,
           repoPath: theirs,
           providerKind: "github",
           number: 42,
@@ -1002,6 +1047,7 @@ test("the hold is per pull request, and released again afterwards", async () => 
       await assert.rejects(
         withPullRequestMutation(
           {
+            side: DEFAULT_WORKER_SIDE,
             repoPath: mine,
             providerKind: "github",
             number: 42,
@@ -1017,7 +1063,13 @@ test("the hold is per pull request, and released again afterwards", async () => 
 
   // Released: the same identity can be taken again.
   await withPullRequestMutation(
-    { repoPath: mine, providerKind: "github", number: 42, repoUrl: undefined },
+    {
+      side: DEFAULT_WORKER_SIDE,
+      repoPath: mine,
+      providerKind: "github",
+      number: 42,
+      repoUrl: undefined,
+    },
     "a merge",
     async () => undefined,
   );
@@ -1056,6 +1108,7 @@ test("a pull request retargeted onto another base is not merged", async () => {
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: retargetingProvider({ baseBranch: "main" }, () => {
         merged += 1;
       }),
@@ -1076,6 +1129,7 @@ test("a head branch that no longer matches the decision is not merged", async ()
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: retargetingProvider({ headBranch: "someone-elses" }, () => {
         merged += 1;
       }),
@@ -1096,6 +1150,7 @@ test("a pull request turned back into a draft is not merged", async () => {
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: retargetingProvider({ draft: true }, () => {
         merged += 1;
       }),
@@ -1119,6 +1174,7 @@ test("a card click is refused by a contradicting answer and tolerates none", asy
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: retargetingProvider({ baseBranch: "main" }, () => {
         merged += 1;
       }),
@@ -1133,6 +1189,7 @@ test("a card click is refused by a contradicting answer and tolerates none", asy
   assert.equal(merged, 0);
 
   const projection = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     // `fakeProvider` answers no detail at all — an older surface, or a provider
     // that could not be asked. The click still merges.
     provider: fakeProvider(() => {
@@ -1161,6 +1218,7 @@ test("an unreadable pull request refuses a merge that accepted a head", async ()
   };
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -1193,6 +1251,7 @@ test("a method the repository does not allow is refused for every surface", asyn
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: capabilityProvider(
         async () => ({ defaultBranch: "main", mergeMethods: ["merge"] }),
         () => {
@@ -1215,6 +1274,7 @@ test("unknown merge capabilities refuse the merge rather than guessing", async (
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: capabilityProvider(
         async () => {
           throw new Error("repository settings unavailable");
@@ -1250,6 +1310,7 @@ test("the guard re-reads capabilities instead of trusting the cache", async () =
   });
 
   const first = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -1262,6 +1323,7 @@ test("the guard re-reads capabilities instead of trusting the cache", async () =
   allowSquash = false;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -1319,6 +1381,7 @@ test("duplicate cards for one Task report a single suggestion", async () => {
     const second = linkedCard(path, task, "session-2");
 
     const projection = await mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider(),
       repoPath: path,
       number: 42,
@@ -1363,6 +1426,7 @@ test("a suggestion that already stood is not claimed as newly written", async ()
     assert.equal(readTask(task.id)?.statusSuggestion?.to, "done");
 
     const projection = await mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: fakeProvider(),
       repoPath: path,
       number: 42,
@@ -1432,6 +1496,7 @@ test("a retarget during the capability read still refuses the merge", async () =
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -1455,6 +1520,7 @@ test("a default branch that moved onto this base refuses a direct merge", async 
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: capabilityProvider(
         async () => ({ defaultBranch: "release-2", mergeMethods: ["squash"] }),
         () => {
@@ -1498,6 +1564,7 @@ test("an approved merge whose base stopped being the default refuses", async () 
   );
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -1523,6 +1590,7 @@ test("an approved merge refuses when the offered method set changed", async () =
   let merged = 0;
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: capabilityProvider(
         async () => ({
           defaultBranch: "main",
@@ -1553,6 +1621,7 @@ test("an approved merge refuses when the offered method set changed", async () =
 test("a human merge is unaffected by where the default branch sits", async () => {
   const path = repo();
   const projection = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider: capabilityProvider(async () => ({
       defaultBranch: "main",
       mergeMethods: ["squash"],
@@ -1609,6 +1678,7 @@ test("a verified merge hands the provider the branch it proved", async () => {
   });
 
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -1639,6 +1709,7 @@ test("a human merge is conditioned on the head it just validated", async () => {
   });
 
   const projection = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -1660,6 +1731,7 @@ test("a merge that could not verify the branch names none", async () => {
   const { provider, options } = optionCapturingProvider(null);
 
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 42,
@@ -1743,6 +1815,7 @@ test("a head that moved under the merge is not called a base conflict", async ()
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider: headMovedUnderMergeProvider({ validated, published }),
       repoPath: path,
       number: 42,
@@ -1793,6 +1866,7 @@ test("a conflict about the refused head is still confirmed", async () => {
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -1836,6 +1910,7 @@ test("a refusal with no known conditioned head claims no conflict", async () => 
 
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: path,
       number: 42,
@@ -1942,6 +2017,7 @@ for (const [name, extra] of ENTRY_POINTS)
         : mergePullRequestAndProject;
       await assert.rejects(
         merge({
+          side: DEFAULT_WORKER_SIDE,
           provider,
           repoPath: repo(),
           number: 7,
@@ -1970,6 +2046,7 @@ test("an approved default-branch merge refuses a stack that changed under it", a
   });
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: repo(),
       number: 7,
@@ -2004,6 +2081,7 @@ test("merged members below do not count; the open one above them does", async ()
   });
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: repo(),
       number: 7,
@@ -2030,6 +2108,7 @@ test("a member below that was closed without merging refuses the merge", async (
   });
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: repo(),
       number: 7,
@@ -2064,6 +2143,7 @@ test("a stacked pull request whose base is not the stack's base is refused", asy
   });
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: repo(),
       number: 7,
@@ -2098,6 +2178,7 @@ for (const [name, second] of [
     });
     await assert.rejects(
       mergePullRequestAndProject({
+        side: DEFAULT_WORKER_SIDE,
         provider,
         repoPath: repo(),
         number: 7,
@@ -2133,6 +2214,7 @@ test("the bottom of a stack merges like any pull request", async () => {
     },
   });
   const projection = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: repo(),
     number: 7,
@@ -2180,6 +2262,7 @@ for (const [name, options, pattern] of [
     const { provider, calls } = stackedProvider(options);
     await assert.rejects(
       mergePullRequestAndProject({
+        side: DEFAULT_WORKER_SIDE,
         provider,
         repoPath: repo(),
         number: 7,
@@ -2209,6 +2292,7 @@ test("a stacked provider whose last identity read fails merges nothing", async (
   };
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: repo(),
       number: 7,
@@ -2237,6 +2321,7 @@ test("a stacked provider whose conflict-confirming retry fails merges nothing", 
   };
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: repo(),
       number: 7,
@@ -2272,6 +2357,7 @@ for (const [name, nullRead, mergeable] of [
     };
     await assert.rejects(
       mergePullRequestAndProject({
+        side: DEFAULT_WORKER_SIDE,
         provider,
         repoPath: repo(),
         number: 7,
@@ -2300,6 +2386,7 @@ test("the seam hands the provider the stack it bound", async () => {
     return merging(number, options);
   };
   await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: repo(),
     number: 7,
@@ -2320,6 +2407,7 @@ test("a card click whose stack cannot be read at all is refused", async () => {
   };
   await assert.rejects(
     mergePullRequestAndProject({
+      side: DEFAULT_WORKER_SIDE,
       provider,
       repoPath: repo(),
       number: 7,
@@ -2384,6 +2472,7 @@ test("a pending merge leaves the card open, says so, and polls it at once", asyn
     });
     const projection = await mergePullRequestAndProject(
       {
+        side: DEFAULT_WORKER_SIDE,
         provider,
         repoPath: path,
         number: 7,
@@ -2457,6 +2546,7 @@ test("a confirmed merge polls the cards stacked on the merged branch", async () 
     }),
   });
   const projection = await mergePullRequestAndProject({
+    side: DEFAULT_WORKER_SIDE,
     provider,
     repoPath: path,
     number: 7,

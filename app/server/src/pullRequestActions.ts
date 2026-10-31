@@ -39,7 +39,7 @@ import {
   worktreeIdForSession,
 } from "./db/worktreeStore.ts";
 import { registerAgentHandoffOutcome } from "./agentHandoffs.ts";
-import { gitOptional } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
 import {
   hostingProviderForRepo,
   type GitHostingProvider,
@@ -50,7 +50,10 @@ import {
   pullRequestCardRecord,
   pullRequestCardsWithBusyAction,
 } from "./pullRequestCards.ts";
-import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
+import {
+  pullRequestCardCheckout,
+  pullRequestCardSide,
+} from "./pullRequestHosting.ts";
 import {
   mergePullRequestAndProject,
   reservePullRequestObservationGenerations,
@@ -71,6 +74,7 @@ import {
   resolveWorktreeRow,
 } from "./worktrees/worktreeResolve.ts";
 import { branchContainedInBase } from "./worktrees/worktreeStatus.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
 import {
   baseBranchTarget,
@@ -111,6 +115,7 @@ export interface PullRequestActionResult {
  */
 export interface PullRequestActionOperations {
   resolveProvider(
+    side: CheckoutSide,
     repoRoot: string,
     remote?: string,
   ): Promise<GitHostingProvider | null>;
@@ -126,13 +131,13 @@ export interface PullRequestActionOperations {
     worktreeId: string,
     options: RemoveWorktreeOptions,
   ): Promise<void>;
-  pushBranch(cwd: string): Promise<{ status: string; error?: string }>;
+  pushBranch(row: WorktreeRow): Promise<{ status: string; error?: string }>;
   /**
    * The commit the checkout's branch stands at, or `undefined` when it cannot
    * be read. Used only as the conflict handoff's baseline: the head the agent
    * inherits, against which the watcher recognises the republished rebase.
    */
-  headCommit(cwd: string): Promise<string | undefined>;
+  headCommit(row: WorktreeRow): Promise<string | undefined>;
   /**
    * Why a session may NOT leave the inbox yet, in the shared wording, or
    * `undefined` when it may. Cleanup ends by settling the card's session and
@@ -191,9 +196,13 @@ const defaultOperations: PullRequestActionOperations = {
   // the loss this action exists to prevent.
   removeWorktree: (worktreeId, options) =>
     removeWorktree(worktreeId, { ...options, deleteBranch: true }),
-  pushBranch: (cwd) => runPushWorkflow({ cwd, force: true }),
-  async headCommit(cwd) {
-    const res = await gitOptional(["rev-parse", "HEAD"], cwd);
+  pushBranch: (row) =>
+    runPushWorkflow({ cwd: row.path, side: checkoutSideOf(row), force: true }),
+  async headCommit(row) {
+    const res = await checkoutGitOn(checkoutSideOf(row)).gitOptional(
+      ["rev-parse", "HEAD"],
+      row.path,
+    );
     return res.code === 0 ? res.stdout.trim() || undefined : undefined;
   },
   // The shared predicate, so this button, the worktree page's Remove and
@@ -304,6 +313,12 @@ async function runPullRequestCardActionAs(
     )
       await reservePullRequestObservationGenerations({
         repoPath: record.context.repoRoot,
+        side: pullRequestCardSide({
+          ...(record.card.worktreeId
+            ? { worktreeId: record.card.worktreeId }
+            : {}),
+          sessionId: record.card.sessionId,
+        }),
         providerKind: record.card.provider,
         number: record.card.number,
       });
@@ -429,11 +444,16 @@ async function mergeCard(
   // pull request is the provider's, and a retired checkout must not be what
   // stops the one action that can still answer a Workflow Run's merge gate
   // (`pullRequestHosting.ts`).
-  const cardRepoRoot = pullRequestCardRepoRoot({
+  const cardCheckout = await pullRequestCardCheckout({
     repoRoot,
     ...(card.worktreeId ? { worktreeId: card.worktreeId } : {}),
+    sessionId: card.sessionId,
   });
-  const provider = await operations.resolveProvider(cardRepoRoot, remote);
+  const provider = await operations.resolveProvider(
+    cardCheckout.side,
+    cardCheckout.repoRoot,
+    remote,
+  );
   if (!provider)
     throw new Error(
       "No git hosting provider is configured for this repository.",
@@ -446,7 +466,8 @@ async function mergeCard(
   // for the action's own bookkeeping.
   const { message, cardIds, result } = await mergePullRequestAndProject({
     provider,
-    repoPath: cardRepoRoot,
+    repoPath: cardCheckout.repoRoot,
+    side: cardCheckout.side,
     number: card.number,
     headBranch: card.headBranch,
     baseBranch: card.baseBranch,
@@ -502,6 +523,7 @@ async function updateWithMain(
     return withPullRequestMutation(
       {
         repoPath: row.path,
+        side: checkoutSideOf(row),
         providerKind: card.provider,
         number: card.number,
         repoUrl: card.url,
@@ -555,8 +577,7 @@ async function updateWithMainLocked(
       // provider SHAs), and the local read covers the card that has not been
       // polled yet.
       const observed = pullRequestCardRecord(card.id)?.context.observedHeadSha;
-      const handoffHeadSha =
-        observed ?? (await operations.headCommit(row.path));
+      const handoffHeadSha = observed ?? (await operations.headCommit(row));
       return {
         patch: {
           actionMessage: `Rebasing ${card.headBranch} onto ${card.baseBranch} hit a conflict.`,
@@ -578,12 +599,13 @@ async function updateWithMainLocked(
   if (card.number !== undefined && card.provider)
     await reservePullRequestObservationGenerations({
       repoPath: row.path,
+      side: checkoutSideOf(row),
       providerKind: card.provider,
       number: card.number,
     });
   // A rebase always rewrites history, so this is a lease-guarded force push,
   // the same one `/push --force` performs.
-  const push = await operations.pushBranch(row.path);
+  const push = await operations.pushBranch(row);
   if (push.status === "failed")
     throw new Error(
       `Rebased onto ${card.baseBranch}, but publishing the branch failed: ${push.error ?? "the push was rejected."} Push it yourself with /push --force.`,

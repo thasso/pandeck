@@ -555,7 +555,7 @@ test("a card whose worktree was removed is polled through the main checkout", as
   });
   const card = openCard({ worktreeId: "wt-retired" });
   const asked: string[] = [];
-  setPullRequestWatcherProviderResolverForTests(async (repoPath) => {
+  setPullRequestWatcherProviderResolverForTests(async (_side, repoPath) => {
     asked.push(repoPath);
     // The deleted checkout answers nothing, exactly as `git remote get-url` does.
     return repoPath === "/tmp/main-repo"

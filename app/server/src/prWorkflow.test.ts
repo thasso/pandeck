@@ -33,6 +33,7 @@ import type { CommitWorkflowResult } from "./commitWorkflow.ts";
 import type { PushWorkflowResult } from "./pushWorkflow.ts";
 import { createTask } from "./tasks.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
 const hoisted = vi.hoisted(() => ({
   hostingProviderForRepo:
@@ -152,6 +153,7 @@ test("--force only force-pushes; --force-commit is the safety override", async (
   let pushForce: boolean | undefined;
   await runPrWorkflow(
     {
+      side: DEFAULT_WORKER_SIDE,
       ...baseOptions,
       args: { ...baseOptions.args, force: true },
       presenter: presenter([]),
@@ -189,7 +191,7 @@ test("PR diff context prefers the remote-tracking base ref", async () => {
     });
 
     assert.equal(
-      await resolveDiffBaseRef(repo, "main"),
+      await resolveDiffBaseRef(DEFAULT_WORKER_SIDE, repo, "main"),
       "refs/remotes/origin/main",
     );
   } finally {
@@ -208,7 +210,7 @@ test("Task candidates preserve session relevance before worktree-only links", ()
 test("skips clean commit and up-to-date push phases", async () => {
   const events: string[] = [];
   const result = await runPrWorkflow(
-    { ...baseOptions, presenter: presenter(events) },
+    { side: DEFAULT_WORKER_SIDE, ...baseOptions, presenter: presenter(events) },
     operations(),
   );
   assert.equal(result.status, "created");
@@ -221,6 +223,7 @@ test("the pull-request phase waits for the push card to finish", async () => {
   const base = presenter(events);
   const running = runPrWorkflow(
     {
+      side: DEFAULT_WORKER_SIDE,
       ...baseOptions,
       presenter: {
         ...base,
@@ -251,7 +254,7 @@ test("the pull-request phase waits for the push card to finish", async () => {
 test("a commit race that finds no changes discards its transient card", async () => {
   const events: string[] = [];
   await runPrWorkflow(
-    { ...baseOptions, presenter: presenter(events) },
+    { side: DEFAULT_WORKER_SIDE, ...baseOptions, presenter: presenter(events) },
     operations({
       hasChanges: async () => true,
       runCommit: async () =>
@@ -273,7 +276,7 @@ test("a blocked commit stops before push and pull request", async () => {
   let pushCalls = 0;
   let prCalls = 0;
   const result = await runPrWorkflow(
-    { ...baseOptions, presenter: presenter(events) },
+    { side: DEFAULT_WORKER_SIDE, ...baseOptions, presenter: presenter(events) },
     operations({
       hasChanges: async () => true,
       runCommit: async () => commit("blocked"),
@@ -296,7 +299,7 @@ test("a blocked commit stops before push and pull request", async () => {
 test("up-to-date push output remains silent even when the preflight requested a push", async () => {
   const events: string[] = [];
   await runPrWorkflow(
-    { ...baseOptions, presenter: presenter(events) },
+    { side: DEFAULT_WORKER_SIDE, ...baseOptions, presenter: presenter(events) },
     operations({
       needsPush: async () => true,
       runPush: async () => push("up-to-date"),
@@ -456,6 +459,7 @@ test.each([
         return new Response("[]");
       }) as typeof fetch;
       const result = await beginPullRequestCard({
+        side: DEFAULT_WORKER_SIDE,
         repoRoot: repo,
         sessionKind: "developer",
         sessionId: `real-port-${service}-${draft}`,
@@ -519,6 +523,7 @@ test("the PR agent title remains the default with a linked Jira Task", async () 
     );
 
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "jira-title-default",
@@ -550,6 +555,7 @@ test("the PR command freezes source requirement across commit/push git awaits", 
   try {
     const result = await runPrWorkflow(
       {
+        side: DEFAULT_WORKER_SIDE,
         cwd: repo,
         sessionManager: {},
         sessionKind: "developer",
@@ -607,6 +613,7 @@ test("PR drafting preserves source requirement across provider/git awaits and a 
       });
     });
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "enterprise-pr",
@@ -669,6 +676,7 @@ test("an explicit title overrides only the title while the PR agent supplies bod
     );
 
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "explicit-title",
@@ -735,6 +743,7 @@ test.each([
       const body =
         "## Summary\n\nCaller body.\n\n## Notes for Percy\n\n- Agreed.";
       const result = await beginPullRequestCard({
+        side: DEFAULT_WORKER_SIDE,
         repoRoot: repo,
         sessionKind: "developer",
         sessionId: `explicit-body-${agentCalls}`,
@@ -763,6 +772,7 @@ test.each([
 test("a credential in an explicit PR body refuses before any provider work", async () => {
   await assert.rejects(
     beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: "/nonexistent",
       sessionKind: "developer",
       sessionId: "explicit-body-secret",
@@ -805,6 +815,7 @@ test("a PR landing after card reservation is adopted into that same card", async
     );
 
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "session-recovery",
@@ -859,6 +870,7 @@ test("adopting an existing PR with already-concluded CI does not notify on the f
     );
 
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "session-1",
@@ -902,6 +914,7 @@ test("reuse still creates a usable card when the detail lookup fails", async () 
     );
 
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "session-2",
@@ -959,6 +972,7 @@ test("checked managed adoption requires exact existing PR head, base, and accept
       });
       await assert.rejects(
         beginPullRequestCard({
+          side: DEFAULT_WORKER_SIDE,
           repoRoot: repo,
           sessionKind: "developer",
           sessionId: "managed-caller",
@@ -997,6 +1011,7 @@ test("checked managed adoption requires exact existing PR head, base, and accept
       }),
     });
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "managed-caller",
@@ -1063,6 +1078,7 @@ test("a managed PR that lands with a moved remote head stays visible with a stal
     });
 
     const result = await beginPullRequestCard({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: repo,
       sessionKind: "developer",
       sessionId: "managed-stale",

@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { WorkflowResultStatus } from "@assistant/shared";
-import { checkoutPathExists } from "../checkoutFileAccess.ts";
+import { checkoutFilesOn } from "../checkoutFileAccess.ts";
 import {
   appendEvent,
   listEvents,
@@ -27,7 +27,9 @@ import {
   type WorkflowStepRow,
 } from "../db/workflowStore.ts";
 import { getWorktree } from "../db/worktreeStore.ts";
-import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
+import { checkoutGitOn, withRepoLock } from "../gitExec.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "../worktrees/knowledgeCheckout.ts";
 import {
   operationTriagePayloadOf,
   type OperationTriageSafetyEvidence,
@@ -55,34 +57,46 @@ const IN_PROGRESS_MARKERS = [
   ["BISECT_LOG", "a bisect"],
 ] as const;
 
-async function gitDir(cwd: string): Promise<string> {
-  return (await git(["rev-parse", "--absolute-git-dir"], cwd)).stdout.trim();
-}
-
-async function inProgressOperation(cwd: string): Promise<string | undefined> {
-  const dir = await gitDir(cwd);
-  for (const [marker, label] of IN_PROGRESS_MARKERS)
-    if (await checkoutPathExists(cwd, join(dir, marker))) return label;
-  return undefined;
-}
-
-async function head(cwd: string): Promise<string> {
+async function gitDir(side: CheckoutSide, cwd: string): Promise<string> {
   return (
-    await git(["rev-parse", "--verify", "HEAD^{commit}"], cwd)
+    await checkoutGitOn(side).git(["rev-parse", "--absolute-git-dir"], cwd)
   ).stdout.trim();
 }
 
-async function branch(cwd: string): Promise<string> {
-  const result = await gitOptional(
+async function inProgressOperation(
+  side: CheckoutSide,
+  cwd: string,
+): Promise<string | undefined> {
+  const dir = await gitDir(side, cwd);
+  for (const [marker, label] of IN_PROGRESS_MARKERS)
+    if (await checkoutFilesOn(side).pathExists(cwd, join(dir, marker)))
+      return label;
+  return undefined;
+}
+
+async function head(side: CheckoutSide, cwd: string): Promise<string> {
+  return (
+    await checkoutGitOn(side).git(
+      ["rev-parse", "--verify", "HEAD^{commit}"],
+      cwd,
+    )
+  ).stdout.trim();
+}
+
+async function branch(side: CheckoutSide, cwd: string): Promise<string> {
+  const result = await checkoutGitOn(side).gitOptional(
     ["symbolic-ref", "--quiet", "--short", "HEAD"],
     cwd,
   );
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
-async function status(cwd: string): Promise<string> {
+async function status(side: CheckoutSide, cwd: string): Promise<string> {
   return (
-    await git(["status", "--porcelain=v1", "--untracked-files=all"], cwd)
+    await checkoutGitOn(side).git(
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      cwd,
+    )
   ).stdout.trim();
 }
 
@@ -156,22 +170,23 @@ export async function recordOperationTriageSnapshot(
 ): Promise<void> {
   if (!operationTriagePayloadOf(step)) return;
   const row = triageWorktree(run, step);
+  const side = checkoutSideOf(row);
   const snapshot = await withRepoLock(
-    await repoLockKey(row.mainRepoRoot),
+    await checkoutGitOn(side).repoLockKey(row.mainRepoRoot),
     async (): Promise<OperationTriageSnapshot> => {
-      const pending = await inProgressOperation(row.path);
+      const pending = await inProgressOperation(side, row.path);
       if (pending)
         throw new Error(
           `a workflow triage cannot start while ${pending} is in progress`,
         );
-      const current = await branch(row.path);
+      const current = await branch(side, row.path);
       if (current !== run.branch)
         throw new Error(
           `a workflow triage cannot start off the run branch "${run.branch}"`,
         );
-      const text = await status(row.path);
+      const text = await status(side, row.path);
       return {
-        head: await head(row.path),
+        head: await head(side, row.path),
         branch: current,
         clean: text === "",
         statusDigest: digest(text),
@@ -218,8 +233,15 @@ export async function finalizeOperationTriage(
   const row = triageWorktree(run, step);
   const runBranch = run.branch!;
 
+  const side = checkoutSideOf(row);
+  const { git, gitOptional, repoLockKey } = checkoutGitOn(side);
   return withRepoLock(await repoLockKey(row.mainRepoRoot), async () => {
-    const violations = await triageViolations(row.path, runBranch, snapshot);
+    const violations = await triageViolations(
+      side,
+      row.path,
+      runBranch,
+      snapshot,
+    );
     if (resultStatus === "completed") {
       if (violations.length === 0) return undefined;
       throw new Error(
@@ -231,7 +253,7 @@ export async function finalizeOperationTriage(
 
     // Each abort is attempted once and only where Git says that state exists;
     // the ones that do not apply exit non-zero and are ignored.
-    if (await inProgressOperation(row.path))
+    if (await inProgressOperation(side, row.path))
       for (const command of [
         ["rebase", "--abort"],
         ["merge", "--abort"],
@@ -240,14 +262,19 @@ export async function finalizeOperationTriage(
         ["bisect", "reset"],
       ])
         await gitOptional(command, row.path);
-    if ((await branch(row.path)) !== runBranch) {
+    if ((await branch(side, row.path)) !== runBranch) {
       // Never force a checkout: the current branch may contain unrelated work
       // the snapshot cannot authorize us to discard. If checkout cannot prove
       // the run branch is active, preserve all evidence and do not reset/clean.
       try {
         await git(["checkout", runBranch], row.path);
       } catch {
-        const remaining = await triageViolations(row.path, runBranch, snapshot);
+        const remaining = await triageViolations(
+          side,
+          row.path,
+          runBranch,
+          snapshot,
+        );
         return {
           verified: true,
           restored: false,
@@ -259,8 +286,13 @@ export async function finalizeOperationTriage(
         };
       }
     }
-    if ((await branch(row.path)) !== runBranch) {
-      const remaining = await triageViolations(row.path, runBranch, snapshot);
+    if ((await branch(side, row.path)) !== runBranch) {
+      const remaining = await triageViolations(
+        side,
+        row.path,
+        runBranch,
+        snapshot,
+      );
       return {
         verified: true,
         restored: false,
@@ -271,7 +303,7 @@ export async function finalizeOperationTriage(
         ],
       };
     }
-    if ((await head(row.path).catch(() => "")) !== snapshot.head)
+    if ((await head(side, row.path).catch(() => "")) !== snapshot.head)
       await git(
         ["reset", snapshot.clean ? "--hard" : "--soft", snapshot.head],
         row.path,
@@ -282,11 +314,17 @@ export async function finalizeOperationTriage(
       // survive a failed/blocked triage as an unreviewed workspace change.
       await git(["clean", "-fd"], row.path);
 
-    const remaining = await triageViolations(row.path, runBranch, snapshot, {
-      // A dirty snapshot is restored to its branch and head only; the working
-      // tree is deliberately left alone, so it is not a restoration failure.
-      ignoreTree: !snapshot.clean,
-    });
+    const remaining = await triageViolations(
+      side,
+      row.path,
+      runBranch,
+      snapshot,
+      {
+        // A dirty snapshot is restored to its branch and head only; the working
+        // tree is deliberately left alone, so it is not a restoration failure.
+        ignoreTree: !snapshot.clean,
+      },
+    );
     return {
       verified: true,
       restored: remaining.length === 0,
@@ -298,15 +336,16 @@ export async function finalizeOperationTriage(
 
 /** Everything the current checkout differs in from what the triage was handed. */
 async function triageViolations(
+  side: CheckoutSide,
   cwd: string,
   runBranch: string,
   snapshot: OperationTriageSnapshot,
   options: { ignoreTree?: boolean } = {},
 ): Promise<string[]> {
-  const pending = await inProgressOperation(cwd);
-  const current = await branch(cwd);
-  const currentHead = await head(cwd).catch(() => "");
-  const text = await status(cwd);
+  const pending = await inProgressOperation(side, cwd);
+  const current = await branch(side, cwd);
+  const currentHead = await head(side, cwd).catch(() => "");
+  const text = await status(side, cwd);
   return [
     pending ? `${pending} is in progress` : "",
     current !== runBranch

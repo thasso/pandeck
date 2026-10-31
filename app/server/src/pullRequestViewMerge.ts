@@ -74,6 +74,8 @@ import {
 } from "./pullRequestMerge.ts";
 import { retireWorktree } from "./worktreeRemoval.ts";
 import { invalidateProjectPullRequests } from "./worktrees/worktreeHosting.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
+import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
 import { isMainWorktreeId } from "./worktrees/worktreeResolve.ts";
 import {
   listWorktreeRows,
@@ -99,7 +101,10 @@ export class PullRequestViewMergeError extends Error {
 /** The side-effecting seams, injectable as in the neighbouring modules. */
 export interface PullRequestViewMergeOperations {
   worktreeRows(): Promise<WorktreeRow[]>;
-  resolveProvider(path: string): Promise<GitHostingProvider | null>;
+  resolveProvider(
+    side: CheckoutSide,
+    path: string,
+  ): Promise<GitHostingProvider | null>;
   /** The shared merge projection, called with the mutation lock ALREADY held. */
   merge(input: MergePullRequestInput): Promise<MergePullRequestProjection>;
   retire(
@@ -115,7 +120,7 @@ export interface PullRequestViewMergeOperations {
 
 const defaultOperations: PullRequestViewMergeOperations = {
   worktreeRows: listWorktreeRows,
-  resolveProvider: (path) => hostingProviderForRepo(path),
+  resolveProvider: (side, path) => hostingProviderForRepo(side, path),
   merge: mergePullRequestAndProjectLocked,
   retire: retireWorktree,
   forgetInventoryReads: (projectId, identityKey) => {
@@ -134,6 +139,8 @@ interface ResolvedRepository {
   provider: GitHostingProvider;
   /** Any checkout of it; used for repo identity and the base refresh. */
   repoPath: string;
+  /** The side `repoPath` is on. */
+  side: CheckoutSide;
   /** `<provider>#<owner>/<repo>#<number>` — the inventory's own cache key. */
   identityKey: string;
 }
@@ -189,6 +196,7 @@ export async function mergePullRequestFromView(
   return withPullRequestMutation(
     {
       repoPath: repository.repoPath,
+      side: repository.side,
       providerKind: request.provider,
       number: request.number,
       repoUrl: repository.provider.repoWebUrl,
@@ -222,6 +230,7 @@ export async function checkPullRequestFromView(
   return withPullRequestMutation(
     {
       repoPath: repository.repoPath,
+      side: repository.side,
       providerKind: request.provider,
       number: request.number,
       repoUrl: repository.provider.repoWebUrl,
@@ -406,6 +415,7 @@ async function mergeAndCleanUp(
     const projection = await operations.merge({
       provider: repository.provider,
       repoPath: repository.repoPath,
+      side: repository.side,
       number: request.number,
       headBranch: detail.headBranch,
       baseBranch: detail.baseBranch,
@@ -569,12 +579,13 @@ async function resolveRepository(
     ...rows.filter((row) => !isMainWorktreeId(row.id)),
   ];
   for (const row of candidates) {
+    const side = checkoutSideOf(row);
     const provider = await operations
-      .resolveProvider(row.path)
+      .resolveProvider(side, row.path)
       .catch(() => null);
     const identity = provider && identityOf(provider, request);
     if (provider && identity)
-      return { provider, repoPath: row.path, identityKey: identity.key };
+      return { provider, repoPath: row.path, side, identityKey: identity.key };
   }
   throw new PullRequestViewMergeError(
     `No checkout of project ${request.projectId} publishes to ${request.repositoryKey} on ${request.provider}, so pull request #${request.number} could not be resolved.`,
@@ -615,7 +626,7 @@ async function resolveWorktree(
   const matched: WorktreeRow[] = [];
   for (const row of onBranch) {
     const provider = await operations
-      .resolveProvider(row.path)
+      .resolveProvider(checkoutSideOf(row), row.path)
       .catch(() => null);
     if (provider && identityOf(provider, request)) matched.push(row);
   }

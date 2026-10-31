@@ -19,7 +19,7 @@ import { agentKind } from "../../agents/agentLibrary.ts";
 import { setAgentRuntimeSourcesForTests } from "../../agents/agentRuntime.ts";
 import { setAgentSpawnSourcesForTests } from "../../agents/agentSpawn.ts";
 import { setLibraryBroadcaster } from "../../library/libraryPublish.ts";
-import { git } from "../../gitExec.ts";
+import { checkoutGitOn } from "../../gitExec.ts";
 import { LibraryStore } from "../../library/libraryStore.ts";
 import type { AgentTool, ToolCallContext } from "../../mcp/tool.ts";
 import {
@@ -30,6 +30,9 @@ import {
   agentLibraryTools,
   setAgentToolLibraryForTests,
 } from "./agentLibraryTools.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
+
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 let root: string;
 let store: LibraryStore;

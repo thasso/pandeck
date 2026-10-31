@@ -15,7 +15,7 @@ import {
   readStoredAppSettings,
 } from "../appSettingsFile.ts";
 import { DATA_DIR } from "../config.ts";
-import * as checkout from "../gitExec.ts";
+import { checkoutGitOn, GitCommandError } from "../gitExec.ts";
 import { readLocally } from "../checkoutFileAccess.ts";
 import { inspectPath, realpathFile } from "../fileReads.ts";
 import { createGitFamily } from "../gitFamily.ts";
@@ -24,6 +24,10 @@ import { knowledgeBaseRoot } from "../knowledgeBaseSettings.ts";
 import * as serverLocal from "../serverRepoGit.ts";
 import { getSettings } from "../settings.ts";
 import { inProcessWorkerServedForTests } from "./inProcessWorker.ts";
+import { DEFAULT_WORKER_SIDE } from "./placement.ts";
+
+/** Checkout git on the default Worker. */
+const checkout = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 /** The family as the server runs it for its own repositories. */
 const local = createGitFamily(localGitRunner, {
@@ -116,7 +120,7 @@ for (const mode of ["broker", "in-process"]) {
               () => checkout.gitBoundedStdout(failed, repo, 3),
             ]) {
               await assert.rejects(run, (error: unknown) => {
-                assert.ok(error instanceof checkout.GitCommandError);
+                assert.ok(error instanceof GitCommandError);
                 assert.equal(
                   error.failureKind,
                   "exit",
@@ -143,8 +147,8 @@ for (const mode of ["broker", "in-process"]) {
             custom,
             "repair recovers without invalidating the cache manually",
           );
-          // Checkout placement is typed: a bare cwd at the KB root is a
-          // checkout, on the Worker (RD-W3-1).
+          // Checkout placement is typed: the KB root, on the default
+          // Worker's side, is a checkout run there (RD-W3-1).
           const beforeKbRoot = inProcessWorkerServedForTests();
           assert.equal(
             (await checkout.gitOptional(["--version"], custom)).code,

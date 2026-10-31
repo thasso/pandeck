@@ -45,7 +45,8 @@ const { LIFECYCLE_METHODS, encodeCreateDirResult } =
   await import("../workerProtocol/lifecycleMethods.ts");
 const { inProcessWorkerQuiescentForTests, writeAsInProcessWorkerForTests } =
   await import("../workers/inProcessWorker.ts");
-const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
+const { withRepoLock, checkoutGitOn } = await import("../gitExec.ts");
+const { repoLockKey } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 function sh(cwd: string, ...args: string[]): string {
   return execFileSync(

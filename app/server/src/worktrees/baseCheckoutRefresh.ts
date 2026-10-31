@@ -1,12 +1,8 @@
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import { listWorktrees } from "../db/worktreeStore.ts";
-import {
-  git,
-  gitOptionalExit,
-  repoLockKey,
-  withRepoLock,
-  type GitResult,
-} from "../gitExec.ts";
+import { checkoutGitOn, withRepoLock, type GitResult } from "../gitExec.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import {
   resolveMainWorktreeRow,
   resolveWorktreeRow,
@@ -31,29 +27,44 @@ const LOCAL_BRANCH_FETCH_ENV: NodeJS.ProcessEnv = {
 export interface BaseCheckoutRefreshInput {
   worktreeId: string;
   repoPath: string;
+  /** The side `repoPath` is on. */
+  side: CheckoutSide;
   baseBranch: string;
 }
 
-/** Side-effecting seams for the targeted post-merge refresh. */
+/**
+ * Side-effecting seams for the targeted post-merge refresh. Each checkout
+ * operation runs on the side its caller names for `path`.
+ */
 export interface BaseCheckoutRefreshOperations {
   resolveWorktree(worktreeId: string): Promise<WorktreeRow | undefined>;
   resolveMainWorktree(projectId: string): Promise<WorktreeRow | undefined>;
   listSpawnedWorktrees(projectId: string): WorktreeRow[];
-  repoKey(path: string): Promise<string>;
-  currentBranch(path: string): Promise<string>;
-  isDirty(path: string): Promise<boolean>;
-  head(path: string): Promise<string>;
+  repoKey(side: CheckoutSide, path: string): Promise<string>;
+  currentBranch(side: CheckoutSide, path: string): Promise<string>;
+  isDirty(side: CheckoutSide, path: string): Promise<boolean>;
+  head(side: CheckoutSide, path: string): Promise<string>;
   baseRemote(row: WorktreeRow): Promise<string | undefined>;
   fetchBaseTarget(row: WorktreeRow, remote?: string): Promise<string>;
   isAncestor(
+    side: CheckoutSide,
     path: string,
     ancestor: string,
     descendant: string,
   ): Promise<boolean>;
-  localBranchOid(path: string, branch: string): Promise<string | undefined>;
-  fastForwardCheckout(path: string, target: string): Promise<void>;
-  updateSubmodules(path: string): Promise<void>;
+  localBranchOid(
+    side: CheckoutSide,
+    path: string,
+    branch: string,
+  ): Promise<string | undefined>;
+  fastForwardCheckout(
+    side: CheckoutSide,
+    path: string,
+    target: string,
+  ): Promise<void>;
+  updateSubmodules(side: CheckoutSide, path: string): Promise<void>;
   fastForwardLocalBranch(
+    side: CheckoutSide,
     path: string,
     remote: string,
     branch: string,
@@ -62,8 +73,11 @@ export interface BaseCheckoutRefreshOperations {
   invalidateStatus(worktreeId: string): void;
 }
 
-async function currentBranch(path: string): Promise<string> {
-  const result = await gitOptionalExit(
+async function currentBranch(
+  side: CheckoutSide,
+  path: string,
+): Promise<string> {
+  const result = await checkoutGitOn(side).gitOptionalExit(
     ["symbolic-ref", "--quiet", "--short", "HEAD"],
     path,
   );
@@ -74,51 +88,53 @@ const defaultOperations: BaseCheckoutRefreshOperations = {
   resolveWorktree: resolveWorktreeRow,
   resolveMainWorktree: resolveMainWorktreeRow,
   listSpawnedWorktrees: (projectId) => listWorktrees({ projectId }),
-  repoKey: repoLockKey,
+  repoKey: (side, path) => checkoutGitOn(side).repoLockKey(path),
   currentBranch,
-  async isDirty(path) {
-    const result = await git(
+  async isDirty(side, path) {
+    const result = await checkoutGitOn(side).git(
       ["status", "--porcelain=v1", "--untracked-files=all"],
       path,
     );
     return Boolean(result.stdout.trim());
   },
-  async head(path) {
-    return (await git(["rev-parse", "--verify", "HEAD"], path)).stdout.trim();
+  async head(side, path) {
+    return (
+      await checkoutGitOn(side).git(["rev-parse", "--verify", "HEAD"], path)
+    ).stdout.trim();
   },
   baseRemote: baseBranchRemote,
   fetchBaseTarget: (row, remote) =>
     baseBranchTarget(row, remote ? { remote } : {}),
-  async isAncestor(path, ancestor, descendant) {
+  async isAncestor(side, path, ancestor, descendant) {
     return (
       (
-        await gitOptionalExit(
+        await checkoutGitOn(side).gitOptionalExit(
           ["merge-base", "--is-ancestor", ancestor, descendant],
           path,
         )
       ).code === 0
     );
   },
-  async localBranchOid(path, branch) {
-    const result = await gitOptionalExit(
+  async localBranchOid(side, path, branch) {
+    const result = await checkoutGitOn(side).gitOptionalExit(
       ["rev-parse", "--verify", `refs/heads/${branch}`],
       path,
     );
     return result.code === 0 ? result.stdout.trim() : undefined;
   },
-  async fastForwardCheckout(path, target) {
-    await git(["merge", "--ff-only", target], path);
+  async fastForwardCheckout(side, path, target) {
+    await checkoutGitOn(side).git(["merge", "--ff-only", target], path);
   },
-  async updateSubmodules(path) {
-    await git(
+  async updateSubmodules(side, path) {
+    await checkoutGitOn(side).git(
       ["submodule", "update", "--init", "--recursive"],
       path,
       undefined,
       REMOTE_ENV,
     );
   },
-  fastForwardLocalBranch: (path, remote, branch) =>
-    gitOptionalExit(
+  fastForwardLocalBranch: (side, path, remote, branch) =>
+    checkoutGitOn(side).gitOptionalExit(
       [
         "fetch",
         "--no-tags",
@@ -159,7 +175,7 @@ export async function refreshBaseCheckoutAfterMerge(
   const source = await operations.resolveWorktree(input.worktreeId);
   if (!source || source.status !== "active") return undefined;
 
-  const mergeRepoKey = await operations.repoKey(input.repoPath);
+  const mergeRepoKey = await operations.repoKey(input.side, input.repoPath);
   const main = await operations.resolveMainWorktree(source.projectId);
   const candidates = [
     ...(main ? [main] : []),
@@ -168,8 +184,12 @@ export async function refreshBaseCheckoutAfterMerge(
   let baseCheckout: WorktreeRow | undefined;
   for (const candidate of candidates) {
     if (
-      (await operations.repoKey(candidate.path)) === mergeRepoKey &&
-      (await operations.currentBranch(candidate.path)) === input.baseBranch
+      (await operations.repoKey(checkoutSideOf(candidate), candidate.path)) ===
+        mergeRepoKey &&
+      (await operations.currentBranch(
+        checkoutSideOf(candidate),
+        candidate.path,
+      )) === input.baseBranch
     ) {
       baseCheckout = candidate;
       break;
@@ -186,34 +206,45 @@ export async function refreshBaseCheckoutAfterMerge(
 
   const outcome = await operations.withRepoLock(mergeRepoKey, async () => {
     if (baseCheckout) {
-      if (await operations.isDirty(baseCheckout.path))
+      const side = checkoutSideOf(baseCheckout);
+      if (await operations.isDirty(side, baseCheckout.path))
         return `${input.baseBranch} was not updated: it has uncommitted changes.`;
-      const branch = await operations.currentBranch(baseCheckout.path);
+      const branch = await operations.currentBranch(side, baseCheckout.path);
       if (!branch)
         return `${input.baseBranch} was not updated: its managed checkout is detached.`;
       if (branch !== input.baseBranch)
         return `${input.baseBranch} was not updated: its managed checkout moved to ${branch}.`;
-      const head = await operations.head(baseCheckout.path);
+      const head = await operations.head(side, baseCheckout.path);
       if (head === target) return `${input.baseBranch} was already up to date.`;
-      if (!(await operations.isAncestor(baseCheckout.path, head, target)))
+      if (!(await operations.isAncestor(side, baseCheckout.path, head, target)))
         return `${input.baseBranch} was not updated: it has local commits that are not in ${remote ? `${remote}/` : ""}${input.baseBranch}.`;
-      await operations.fastForwardCheckout(baseCheckout.path, target);
-      await operations.updateSubmodules(baseCheckout.path);
+      await operations.fastForwardCheckout(side, baseCheckout.path, target);
+      await operations.updateSubmodules(side, baseCheckout.path);
       return `Updated ${input.baseBranch} to ${shortOid(target)}.`;
     }
 
+    const mainSide = checkoutSideOf(source);
     const local = await operations.localBranchOid(
+      mainSide,
       source.mainRepoRoot,
       input.baseBranch,
     );
     if (!local)
       return `${input.baseBranch} was not updated: it does not exist locally.`;
     if (local === target) return `${input.baseBranch} was already up to date.`;
-    if (!(await operations.isAncestor(source.mainRepoRoot, local, target)))
+    if (
+      !(await operations.isAncestor(
+        mainSide,
+        source.mainRepoRoot,
+        local,
+        target,
+      ))
+    )
       return `${input.baseBranch} was not updated: it has local commits that are not in ${remote ? `${remote}/` : ""}${input.baseBranch}.`;
     if (!remote)
       return `${input.baseBranch} was not updated: it has no configured remote.`;
     const result = await operations.fastForwardLocalBranch(
+      mainSide,
       source.mainRepoRoot,
       remote,
       input.baseBranch,

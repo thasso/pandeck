@@ -13,9 +13,10 @@
  */
 import { relative } from "node:path";
 import type { PushDisplay } from "@assistant/shared";
-import { gitOptional, resolveRepoRoot } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
 import { CWD } from "./config.ts";
 import { errorText } from "./errors.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 
 /**
  * Non-interactive git/ssh environment: `/push` runs without a tty, so a remote
@@ -32,6 +33,8 @@ const PUSH_ENV: NodeJS.ProcessEnv = {
 export interface PushWorkflowOptions {
   /** Working directory whose enclosing git repo should be pushed. Defaults to app CWD. */
   cwd?: string;
+  /** The side that checkout's git runs on. */
+  side: CheckoutSide;
   /** `--force` → bare `--force-with-lease`, retained for human/guarded callers. */
   force?: boolean;
   /** Strong agent mode: atomically require this exact current remote oid. */
@@ -50,6 +53,8 @@ export interface PushWorkflowOptions {
 }
 
 export interface ResolvedPushTarget {
+  /** The side `repoRoot` was resolved on, which every later read keeps. */
+  side: CheckoutSide;
   repoRoot: string;
   remote: string;
   upstream?: { remote: string; branch: string };
@@ -97,9 +102,11 @@ export function parsePushArgs(rawArgs: string): ParsedPushArgs {
 }
 
 async function currentBranch(
+  side: CheckoutSide,
   repoRoot: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const res = await gitOptional(
     ["rev-parse", "--abbrev-ref", "HEAD"],
     repoRoot,
@@ -110,10 +117,12 @@ async function currentBranch(
 
 /** The upstream ref (e.g. `origin/main`) for a named local branch. */
 async function upstreamRef(
+  side: CheckoutSide,
   repoRoot: string,
   branch: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
+  const { gitOptional } = checkoutGitOn(side);
   const res = await gitOptional(
     [
       "rev-parse",
@@ -129,9 +138,11 @@ async function upstreamRef(
 }
 
 async function listRemotes(
+  side: CheckoutSide,
   repoRoot: string,
   signal?: AbortSignal,
 ): Promise<string[]> {
+  const { gitOptional } = checkoutGitOn(side);
   const res = await gitOptional(["remote"], repoRoot, signal);
   return res.stdout
     .split("\n")
@@ -141,13 +152,14 @@ async function listRemotes(
 
 /** Resolve remote/upstream using the one policy shared by every push surface. */
 export async function resolvePushTarget(
+  side: CheckoutSide,
   repoRoot: string,
   branch: string,
   explicitRemote?: string,
   signal?: AbortSignal,
 ): Promise<ResolvedPushTarget> {
-  const remotes = await listRemotes(repoRoot, signal);
-  const tracked = await upstreamRef(repoRoot, branch, signal);
+  const remotes = await listRemotes(side, repoRoot, signal);
+  const tracked = await upstreamRef(side, repoRoot, branch, signal);
   // Longest match handles legal remote names containing `/`.
   const trackedRemote = tracked
     ? remotes
@@ -174,6 +186,7 @@ export async function resolvePushTarget(
       );
   }
   return {
+    side,
     repoRoot,
     remote,
     ...(upstream ? { upstream } : {}),
@@ -182,11 +195,13 @@ export async function resolvePushTarget(
 
 /** Authoritatively read one exact remote branch without updating local refs. */
 export async function readRemoteBranchOid(
+  side: CheckoutSide,
   repoRoot: string,
   remote: string,
   branch: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
+  const { gitOptional } = checkoutGitOn(side);
   const ref = `refs/heads/${branch}`;
   const result = await gitOptional(
     ["ls-remote", "--refs", remote, ref],
@@ -243,11 +258,13 @@ export function buildPushArgs(options: {
  * resolves to a local branch and no `remote.<name>.push` mapping can move it.
  */
 async function publishedBranchOf(
+  side: CheckoutSide,
   repoRoot: string,
   remote: string,
   refspec: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
+  const { gitOptional } = checkoutGitOn(side);
   const spec = refspec.replace(/^\+/, "");
   const colon = spec.indexOf(":");
   let destination: string;
@@ -277,17 +294,21 @@ async function publishedBranchOf(
 }
 
 async function localHead(
+  side: CheckoutSide,
   repoRoot: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const result = await gitOptional(["rev-parse", "HEAD"], repoRoot, signal);
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
 async function isClean(
+  side: CheckoutSide,
   repoRoot: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  const { gitOptional } = checkoutGitOn(side);
   const result = await gitOptional(
     ["status", "--porcelain=v1", "--untracked-files=all"],
     repoRoot,
@@ -317,6 +338,8 @@ export async function runPushWorkflow(
 
   try {
     options.onProgress?.("Resolving repository…");
+    const { side } = options;
+    const { gitOptional, resolveRepoRoot } = checkoutGitOn(side);
     const repoRoot = await resolveRepoRoot(options.cwd ?? CWD, options.signal);
 
     if (options.force && options.explicitLease)
@@ -347,7 +370,7 @@ export async function runPushWorkflow(
         });
     }
 
-    const actualBranch = await currentBranch(repoRoot, options.signal);
+    const actualBranch = await currentBranch(side, repoRoot, options.signal);
     const branch = options.branch ?? actualBranch;
     if (actualBranch === "HEAD" && !options.branch) {
       return base({
@@ -367,7 +390,7 @@ export async function runPushWorkflow(
         error: `The checked-out branch changed from ${options.expectedBranch} to ${actualBranch === "HEAD" ? "a detached HEAD" : actualBranch}.`,
       });
 
-    const beforeHead = await localHead(repoRoot, options.signal);
+    const beforeHead = await localHead(side, repoRoot, options.signal);
     if (
       options.expectedHead !== undefined &&
       beforeHead !== options.expectedHead
@@ -378,7 +401,10 @@ export async function runPushWorkflow(
         branch,
         error: `The local branch head changed from ${options.expectedHead} to ${beforeHead || "an unreadable HEAD"}.`,
       });
-    if (options.requireClean && !(await isClean(repoRoot, options.signal)))
+    if (
+      options.requireClean &&
+      !(await isClean(side, repoRoot, options.signal))
+    )
       return base({
         status: "failed",
         repoRoot,
@@ -388,6 +414,7 @@ export async function runPushWorkflow(
       });
 
     const target = await resolvePushTarget(
+      side,
       repoRoot,
       branch,
       options.remote,
@@ -433,6 +460,7 @@ export async function runPushWorkflow(
     }
     const upToDate = /everything up-to-date/i.test(output);
     const publishedBranch = await publishedBranchOf(
+      side,
       repoRoot,
       remote,
       args[args.length - 1]!,
@@ -469,10 +497,10 @@ export async function runPushWorkflow(
       options.expectedHead !== undefined
     ) {
       const [afterBranch, afterHead, clean] = await Promise.all([
-        currentBranch(repoRoot, options.signal),
-        localHead(repoRoot, options.signal),
+        currentBranch(side, repoRoot, options.signal),
+        localHead(side, repoRoot, options.signal),
         options.requireClean
-          ? isClean(repoRoot, options.signal)
+          ? isClean(side, repoRoot, options.signal)
           : Promise.resolve(true),
       ]);
       if (

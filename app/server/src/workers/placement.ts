@@ -3,11 +3,12 @@
  * checkout is placed on the default Worker, the in-process one; its id is
  * derived, not stored, until phase 4 (`docs/workers.md`).
  *
- * A checkout's place is typed only, a {@link CheckoutSide}: the modules that
- * can hold the Knowledge Base row take it from the row (`checkoutSideOf`) and
- * run on `checkoutGitOn`/`checkoutFilesOn` for it, and everything reached by a
- * bare cwd runs on {@link DEFAULT_WORKER_SIDE}. No path and no setting chooses
- * a checkout's side: a project inside the KB root or `DATA_DIR` is a checkout.
+ * A checkout's place is typed only, a {@link CheckoutSide}: every caller runs on
+ * `checkoutGitOn`/`checkoutFilesOn` for the side of what it holds — a row or a
+ * project's main checkout (`checkoutSideOf`), a path its session supplied
+ * ({@link sessionCheckoutSide}), a pull-request card (`pullRequestCardCheckout`).
+ * No path and no setting chooses a checkout's side: a project inside the KB
+ * root or `DATA_DIR` is a checkout.
  *
  * {@link placeServedPath} places a served file by its path: inside `DATA_DIR`
  * or the Knowledge Base it stays on the server.
@@ -31,6 +32,15 @@ export type CheckoutSide = "server" | { readonly workerId: string };
 export const DEFAULT_WORKER_SIDE: CheckoutSide = {
   workerId: DEFAULT_WORKER_ID,
 };
+
+/**
+ * The side of a checkout path a session supplies: a slash command's cwd, the
+ * app's `CWD` default, a tool's path input. A session's paths live on its
+ * session's Worker; until phase 4 that is the default Worker for every session.
+ */
+export function sessionCheckoutSide(_sessionId: string): CheckoutSide {
+  return DEFAULT_WORKER_SIDE;
+}
 
 /** One string per side, for maps keyed by it. */
 export function checkoutSideKey(side: CheckoutSide): string {

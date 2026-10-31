@@ -37,8 +37,15 @@ vi.mock("./gitExec.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./gitExec.ts")>();
   return {
     ...actual,
-    resolveRepoRoot: async () => "/repo",
-    gitOptional: async () => ({ code: 0, stdout: "h".repeat(40), stderr: "" }),
+    checkoutGitOn: (side: Parameters<typeof actual.checkoutGitOn>[0]) => ({
+      ...actual.checkoutGitOn(side),
+      resolveRepoRoot: async () => "/repo",
+      gitOptional: async () => ({
+        code: 0,
+        stdout: "h".repeat(40),
+        stderr: "",
+      }),
+    }),
   };
 });
 
@@ -67,7 +74,7 @@ const {
 /** `hostingProviderForRepo` answers per checkout PATH, as production does. */
 function serveProviders(byPath: Record<string, GitHostingProvider>): void {
   hoisted.provider.mockImplementation(
-    async (path: string) => byPath[path] ?? null,
+    async (_side: unknown, path: string) => byPath[path] ?? null,
   );
 }
 
