@@ -562,6 +562,24 @@ const ICON_BY_NAME: Record<string, LucideIcon> = {
   license: FileText,
 };
 
+/**
+ * The types worth noticing take a colour from the theme's terminal palette
+ * (`--ansi-*`, tuned per light and dark); prose, archives and plain files stay
+ * grey so the list does not turn to confetti.
+ */
+const ICON_COLOR = new Map<LucideIcon, string>([
+  [FileCode2, "var(--ansi-blue)"],
+  [FileJson, "var(--ansi-yellow)"],
+  [FileCog, "var(--ansi-yellow)"],
+  [FileTerminal, "var(--ansi-green)"],
+  [FileImage, "var(--ansi-magenta)"],
+  [FileVideo, "var(--ansi-magenta)"],
+  [FileAudio, "var(--ansi-magenta)"],
+  [FileSpreadsheet, "var(--ansi-cyan)"],
+  [FileKey, "var(--ansi-red)"],
+  [FileLock, "var(--ansi-red)"],
+]);
+
 /** A file's glyph by its name: its type at a glance, in the same muted grey. */
 function fileIconFor(path: string): LucideIcon {
   const name = (path.split("/").pop() ?? path).toLowerCase();
@@ -597,9 +615,15 @@ function EntryParts({
 }) {
   const isDir = data.kind === "dir";
   const Icon = isDir ? Folder : fileIconFor(data.path);
+  // A change list colours its status letter: the glyph stays grey beside it.
+  const color = showChangeStats ? undefined : ICON_COLOR.get(Icon);
   return (
     <>
-      <Icon size={13} className="shrink-0 text-muted-foreground" />
+      <Icon
+        size={13}
+        className="shrink-0 text-muted-foreground"
+        style={color ? { color } : undefined}
+      />
       {showChangeStats && !isDir ? (
         <span
           className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}
