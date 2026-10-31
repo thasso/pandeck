@@ -17,6 +17,13 @@ type Listener = (msg: ServerMessage) => void;
 type StatusListener = (connected: boolean) => void;
 
 /**
+ * How long a page coming back waits for any frame on its open socket before it
+ * treats the socket as dead and replaces it. A frame normally arrives within one
+ * round trip; a too-short wait only costs an unneeded reconnect.
+ */
+const LIVENESS_PROBE_TIMEOUT_MS = 1500;
+
+/**
  * Thin auto-reconnecting WebSocket wrapper around the server protocol.
  */
 export class AssistantSocket {
@@ -26,11 +33,15 @@ export class AssistantSocket {
   private queue: ClientMessage[] = [];
   private reconnectTimer: number | undefined;
   private closed = false;
+  /** Set while a liveness probe waits for proof the open socket still works. */
+  private probeTimer: number | undefined;
+  private removeLifecycleListeners: (() => void) | undefined;
 
   constructor(private readonly url: string | (() => string)) {}
 
   connect(): void {
     this.closed = false;
+    this.listenForResume();
     // Already have a live (or pending) socket — don't open a second one. A
     // duplicate socket would stay registered as its own viewer server-side, so
     // every broadcast would be delivered twice and dispatched twice (duplicate
@@ -50,6 +61,7 @@ export class AssistantSocket {
    * shared listener set or trigger its own reconnect after being replaced.
    */
   private teardownActiveSocket(): void {
+    this.endProbe();
     const ws = this.ws;
     if (!ws) return;
     this.ws = undefined;
@@ -94,6 +106,8 @@ export class AssistantSocket {
     );
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
+      // Any frame proves the connection alive, before it is even decoded.
+      if (this.probeTimer !== undefined) this.socketProvedAlive();
       frames.push(event.data as string | ArrayBuffer);
     };
 
@@ -121,6 +135,8 @@ export class AssistantSocket {
     } catch {
       return;
     }
+    // Transport-only: the frame already proved the socket alive on arrival.
+    if (msg.type === "pong") return;
     if (measuring) {
       const parsedAt = performance.now();
       recordServerMessage(msg.type, utf8Length(raw), parsedAt - parseStart);
@@ -142,8 +158,77 @@ export class AssistantSocket {
     }, 1000);
   }
 
+  /**
+   * Make sure the socket works NOW: the page came back from the background or
+   * the network returned. A suspended phone browser can leave its socket
+   * reading as open long after the connection died, and the close only arrives
+   * once the OS gives up, so everything sent meanwhile is lost. An open socket
+   * is pinged and replaced unless a frame arrives within
+   * {@link LIVENESS_PROBE_TIMEOUT_MS}; a pending reconnect runs at once.
+   */
+  private checkLiveness(): void {
+    if (this.closed) return;
+    const ws = this.ws;
+    if (!ws) {
+      if (this.reconnectTimer === undefined) return;
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+      this.open();
+      return;
+    }
+    // A socket still connecting settles by itself; one probe at a time.
+    if (ws.readyState !== WebSocket.OPEN || this.probeTimer !== undefined)
+      return;
+    ws.send(JSON.stringify({ type: "ping" } satisfies ClientMessage));
+    this.probeTimer = window.setTimeout(() => {
+      this.probeTimer = undefined;
+      if (this.ws !== ws) return;
+      // Detached first, so the dead socket's late close cannot schedule a
+      // second reconnect; the queued sends go out on the new socket.
+      this.teardownActiveSocket();
+      this.emitStatus(false);
+      this.open();
+    }, LIVENESS_PROBE_TIMEOUT_MS);
+  }
+
+  private socketProvedAlive(): void {
+    this.endProbe();
+    const pending = this.queue;
+    this.queue = [];
+    for (const msg of pending) this.send(msg);
+  }
+
+  private endProbe(): void {
+    if (this.probeTimer === undefined) return;
+    window.clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+  }
+
+  private listenForResume(): void {
+    if (this.removeLifecycleListeners || typeof document === "undefined")
+      return;
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") this.checkLiveness();
+    };
+    const onResume = () => this.checkLiveness();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onResume);
+    window.addEventListener("online", onResume);
+    this.removeLifecycleListeners = () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onResume);
+      window.removeEventListener("online", onResume);
+    };
+  }
+
   send(msg: ClientMessage): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    // While a probe is out the socket may be dead: hold sends until it answers
+    // or is replaced, so nothing is written into a connection nobody reads.
+    if (
+      this.ws &&
+      this.ws.readyState === WebSocket.OPEN &&
+      this.probeTimer === undefined
+    ) {
       this.ws.send(JSON.stringify(msg));
     } else {
       this.queue.push(msg);
@@ -166,6 +251,8 @@ export class AssistantSocket {
 
   dispose(): void {
     this.closed = true;
+    this.removeLifecycleListeners?.();
+    this.removeLifecycleListeners = undefined;
     if (this.reconnectTimer) {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;

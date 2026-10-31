@@ -7878,6 +7878,12 @@ export type ClientMessage =
   | { type: "releasePermanentAssistant"; sessionId: string }
   /** Load archived session rows on demand, when the archived sidebar section is expanded. */
   | { type: "loadArchivedSessions" }
+  /**
+   * Liveness probe: the server answers `pong` at once. A page coming back from
+   * the background sends it, because a socket the OS suspended can still read
+   * as open long after the connection died.
+   */
+  | { type: "ping" }
   /** Resolve compact metadata for generic pa:// object links. */
   | { type: "resolveObjectLinks"; requestId: string; uris: string[] }
   | { type: "deleteSession"; id: string; requestId?: string }
@@ -8514,6 +8520,8 @@ export type ServerMessage =
       type: "webBuild";
       webBuildId: string;
     }
+  /** The answer to a client `ping`. */
+  | { type: "pong" }
   | {
       type: "ready";
       /**
