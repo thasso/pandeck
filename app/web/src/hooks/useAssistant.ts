@@ -7723,9 +7723,13 @@ export function useAssistant({
         transportHasConnectedRef.current = true;
       } else {
         replicaTransport.dropRequests();
-        // Failed connection attempts also emit false. Their queued, unsent
-        // writes keep their claims and deadlines until a real socket is lost.
-        if (lostConnection) mutationLifecycleRef.current.disconnect();
+        // Failed connection attempts also emit false. Writes still queued —
+        // theirs, or held by a liveness probe that replaced a dead socket —
+        // were never sent, so they keep their claims and deadlines and go out
+        // on the next socket; only the writes a lost socket carried are
+        // unknown.
+        if (lostConnection)
+          mutationLifecycleRef.current.disconnect(socket.unsentRequestIds());
         commentResyncRef.current.clear();
         commentRequestsRef.current.clear();
         for (const id of taskDetailRequestsRef.current.keys())

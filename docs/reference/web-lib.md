@@ -16,6 +16,13 @@ capability logic.
 
 - `socket.ts` owns the reconnecting WebSocket wrapper; `serverFrames.ts`
   inflates its binary (deflated) frames and keeps every frame in arrival order.
+  When the page becomes visible again or the network returns, the wrapper pings
+  an open socket with a fresh id and holds sends until the pong echoing that id
+  arrives (an earlier frame may have waited out the suspension in the event
+  queue), replacing the socket after 1.5 s; a pending reconnect runs at once. A
+  suspended phone browser can leave a dead socket reading as open for many
+  seconds. Writes still held when a socket is replaced were never sent, so
+  `unsentRequestIds` keeps their mutations pending through the reconnect.
 - `markdownFrontmatter.ts` owns `splitMarkdownFrontmatter`: a Markdown file's
   leading frontmatter projected for a header (title, tags, label/value fields,
   or the raw block when the shared YAML subset cannot read it) and the body with
@@ -145,9 +152,10 @@ capability logic.
   session row's own projection, so a collapsed ledge costs nothing.
 - `perfStats.ts` owns the dev performance counters behind
   `components/PerfHud.tsx`: a rolling one-second window of inbound server
-  messages (type + UTF-8 WIRE BYTES + `JSON.parse` time, recorded in `socket.ts`
-  because that is the only place the raw frame exists; the byte count walks the
-  frame, so it runs only while the HUD is on), of React commits per instrumented
+  messages (type + UTF-8 bytes of the JSON + `JSON.parse` time, recorded in
+  `socket.ts` because that is the only place the raw text exists; a deflated
+  frame counts its inflated JSON, not its wire size; the byte count walks the
+  text, so it runs only while the HUD is on), of React commits per instrumented
   component (`usePerfRenderCount`, called during render — discarded work still
   cost what this measures; `recordRender` also takes a duration, which
   `App.tsx`'s `Profiler` around the transcript supplies), and the latest session

@@ -127,9 +127,11 @@ export function createMutationLifecycle<
         ),
       );
     },
-    disconnect() {
+    /** The socket was lost: its sent writes' outcomes are unknown; `unsent` ones were never sent and stay pending. */
+    disconnect(unsent: ReadonlySet<string> = new Set()) {
       for (const [requestId, entry] of [...pending])
-        if (entry.disconnected) finish(requestId, { type: "unknown" });
+        if (entry.disconnected && !unsent.has(requestId))
+          finish(requestId, { type: "unknown" });
     },
     reconnect() {
       const queued = recoveries;
