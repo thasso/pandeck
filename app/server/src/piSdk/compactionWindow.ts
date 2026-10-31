@@ -182,26 +182,33 @@ export class PiCompactionWindow {
           );
     }
     const previous = this.desired;
-    const restore = (reason: string): CompactionWindowLowerResult => {
-      this.desired = previous;
-      this.write();
-      return refused(
-        this.applied === "unknown"
-          ? `${reason} Restoring the previous window also failed, so the live window is unknown.`
-          : reason,
-      );
-    };
     this.desired = tokens;
     const result = this.write();
-    if (result.applyError !== undefined) return restore(result.applyError);
+    if (result.applyError !== undefined)
+      return this.restore(previous, result.applyError);
     try {
       persist(tokens);
     } catch (error) {
-      return restore(
+      return this.restore(
+        previous,
         `Saving the compaction window failed: ${errorText(error)}`,
       );
     }
     return { ok: true, previous, applied: tokens };
+  }
+
+  /** Put back the window a lower replaced, refusing with `reason`. */
+  restore(
+    previous: number | null,
+    reason: string,
+  ): CompactionWindowLowerResult {
+    this.desired = previous;
+    this.write();
+    return refused(
+      this.applied === "unknown"
+        ? `${reason} Restoring the previous window also failed, so the live window is unknown.`
+        : reason,
+    );
   }
 
   /** A real rebuild dropped every override: re-read and re-apply. */

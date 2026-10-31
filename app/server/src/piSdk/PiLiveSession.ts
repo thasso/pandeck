@@ -40,14 +40,8 @@ import { CWD } from "../config.ts";
 import { resetMemorySessionContext } from "../memory/memoryRuntime.ts";
 import { memoryScheduler } from "../memory/memoryScheduler.ts";
 import { buildModelPromptWithAttachments } from "../promptAttachments.ts";
+import { findModel, toModelOption, type PiModel } from "./models.ts";
 import {
-  findModel,
-  modelRegistry,
-  toModelOption,
-  type PiModel,
-} from "./models.ts";
-import {
-  analyzeProviderError,
   providerErrorDisplayText,
   runFailureFacts,
   shouldSuppressProviderRetry,
@@ -76,6 +70,7 @@ import type {
   Viewer,
 } from "../harness.ts";
 import { compactionWindowFor } from "./compactionWindow.ts";
+import { piProviderErrorInfo, terminalAssistantError } from "./piEngine.ts";
 import { SessionResidency } from "../sessionKit/residency.ts";
 import {
   discardHostCommandTurn,
@@ -192,41 +187,6 @@ function forkTitleContext(sm: SessionManager): string {
   }
   const context = lines.slice(-8).join("\n\n");
   return context.length > 6000 ? `…${context.slice(-6000)}` : context;
-}
-
-function terminalAssistantError(message: unknown): string | undefined {
-  const m = message as
-    | { role?: unknown; stopReason?: unknown; errorMessage?: unknown }
-    | null
-    | undefined;
-  if (!m || m.role !== "assistant") return undefined;
-  const errorMessage =
-    typeof m.errorMessage === "string" ? m.errorMessage : undefined;
-  if (m.stopReason === "error") return errorMessage || "Unknown provider error";
-  return undefined;
-}
-
-function assistantErrorMetadata(message: unknown): {
-  api?: string;
-  provider?: string;
-  model?: string;
-  responseId?: string;
-} {
-  const m = message as
-    | {
-        api?: unknown;
-        provider?: unknown;
-        model?: unknown;
-        responseId?: unknown;
-      }
-    | null
-    | undefined;
-  return {
-    ...(typeof m?.api === "string" ? { api: m.api } : {}),
-    ...(typeof m?.provider === "string" ? { provider: m.provider } : {}),
-    ...(typeof m?.model === "string" ? { model: m.model } : {}),
-    ...(typeof m?.responseId === "string" ? { responseId: m.responseId } : {}),
-  };
 }
 
 /* -------------------------------- helpers -------------------------------- */
@@ -550,28 +510,7 @@ export class PiLiveSession implements LiveSession {
     error: string,
     message?: unknown,
   ): ProviderErrorInfo {
-    const model = this.session.model as unknown as PiModel | undefined;
-    const metadata = assistantErrorMetadata(message);
-    let authMode: ProviderErrorInfo["authMode"] = "unknown";
-    try {
-      if (model)
-        authMode = modelRegistry.isUsingOAuth(model as any)
-          ? "subscription"
-          : "api_key";
-    } catch {
-      authMode = "unknown";
-    }
-    const providerValue = metadata.provider ?? model?.provider;
-    const modelValue = metadata.model ?? model?.id;
-    return analyzeProviderError(error, {
-      ...(providerValue !== undefined ? { provider: providerValue } : {}),
-      ...(modelValue !== undefined ? { model: modelValue } : {}),
-      ...(metadata.api !== undefined ? { api: metadata.api } : {}),
-      ...(metadata.responseId !== undefined
-        ? { responseId: metadata.responseId }
-        : {}),
-      authMode,
-    });
+    return piProviderErrorInfo(this.session.model, error, message);
   }
 
   private broadcastContextInfo(force = false): void {
