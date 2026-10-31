@@ -4161,6 +4161,14 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     removeWorktreeId: null,
   });
 
+  const requestRemoveWorktree = useCallback((id: string) => {
+    setWorktreeOverlay({
+      createForProjectId: null,
+      mergeWorktreeId: null,
+      removeWorktreeId: id,
+    });
+  }, []);
+
   const createWorktreeForProject = useCallback((projectId: string) => {
     setWorktreeOverlay({
       createForProjectId: projectId,
@@ -7233,6 +7241,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onLoadWorktrees={actions.listWorktrees}
         onOpenWorktree={openWorktree}
         onStartSessionInWorktree={startSessionInWorktree}
+        onRemoveWorktree={requestRemoveWorktree}
         activeSection={activeSettingsSection}
         onOpenSection={openSettingsSection}
         state={backlogState}

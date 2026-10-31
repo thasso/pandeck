@@ -1,11 +1,26 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowDownToLine,
+  GitCommitHorizontal,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import type {
   WorktreeChangesResponse,
   WorktreeDiffScope,
   WorktreeGitStatus,
   WorktreeRecord,
+  WorktreeSyncOperation,
 } from "@assistant/shared";
-import { fetchWorktreeChanges } from "../lib/worktrees.ts";
+import {
+  autoCommitWorktree,
+  fetchWorktreeChanges,
+  pushWorktree,
+  syncWorktree,
+} from "../lib/worktrees.ts";
+import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
+import type { ListRowAction } from "./common/ListRowActions.tsx";
 import { ErrorNote, Skeleton } from "./common/load.tsx";
 import {
   WorktreeFileNavigator,
@@ -160,4 +175,112 @@ export function WorktreeFilesList({
       ariaLabel="Worktree files"
     />
   );
+}
+
+const errorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const failed = (message: string) =>
+  showToast(message, { tone: "error", durationMs: TOAST_DWELL_MS });
+
+/**
+ * A worktree row's git actions, each offered only when its state calls for it:
+ * Commit with changes, Push with commits to push or a branch never pushed, a
+ * pull from origin or the base when behind it, and Remove for a non-main
+ * worktree. Outcomes travel as toasts — a sidebar row has no place to show
+ * them. A commit the review blocks is left for the worktree page.
+ */
+export function useWorktreeRowActions(
+  worktree: WorktreeRecord,
+  status: WorktreeGitStatus | undefined,
+  onRemove: ((id: string) => void) | undefined,
+): ListRowAction[] {
+  const [busy, setBusy] = useState(false);
+  return useMemo(() => {
+    const run = (act: () => Promise<void>) => () => {
+      setBusy(true);
+      void act()
+        .catch((error: unknown) => failed(errorText(error)))
+        .finally(() => setBusy(false));
+    };
+    const sync = (operation: WorktreeSyncOperation, label: string) =>
+      run(async () => {
+        const result = await syncWorktree(worktree.id, operation);
+        showToast(
+          result.status === "up-to-date"
+            ? `${label}: already up to date.`
+            : `${label} completed.`,
+          { tone: result.status === "updated" ? "success" : "default" },
+        );
+      });
+    const actions: ListRowAction[] = [];
+    if (status?.dirty)
+      actions.push({
+        id: "commit",
+        label: "Commit",
+        accessibleLabel: `Commit the changes in ${worktree.branch}`,
+        icon: <GitCommitHorizontal />,
+        disabled: busy,
+        onSelect: run(async () => {
+          const { result } = await autoCommitWorktree(worktree.id);
+          if (result.status === "committed")
+            showToast(`Committed ${result.commitHash ?? "changes"}.`, {
+              tone: "success",
+            });
+          else
+            failed(
+              result.error ??
+                (result.blockers.length
+                  ? `Commit blocked: ${result.blockers.map((blocker) => blocker.reason).join("; ")}. Open the worktree to review.`
+                  : "Nothing was committed."),
+            );
+        }),
+      });
+    if (status?.head && (!status.upstream || status.upstream.ahead > 0))
+      actions.push({
+        id: "push",
+        label: "Push",
+        accessibleLabel: `Push ${worktree.branch}`,
+        icon: <Upload />,
+        disabled: busy,
+        onSelect: run(async () => {
+          const result = await pushWorktree(worktree.id);
+          if (result.status === "failed")
+            failed(result.error || "Push failed.");
+          else if (result.status === "up-to-date")
+            showToast("Everything up to date.");
+          else
+            showToast(
+              `Pushed ${result.branch ?? worktree.branch} → ${result.remote ?? "origin"}.`,
+              { tone: "success" },
+            );
+        }),
+      });
+    if (status?.upstream && status.upstream.behind > 0)
+      actions.push({
+        id: "pull-origin",
+        label: "Pull from origin",
+        icon: <ArrowDownToLine />,
+        disabled: busy,
+        onSelect: sync("pull-rebase", "Pull from origin"),
+      });
+    if (!worktree.isMain && status && status.behind > 0)
+      actions.push({
+        id: "pull-base",
+        label: `Pull from ${worktree.baseBranch}`,
+        icon: <RefreshCw />,
+        disabled: busy,
+        onSelect: sync("rebase-main", `Pull from ${worktree.baseBranch}`),
+      });
+    if (!worktree.isMain && onRemove)
+      actions.push({
+        id: "remove",
+        label: "Remove worktree…",
+        icon: <Trash2 />,
+        variant: "destructive",
+        disabled: busy,
+        onSelect: () => onRemove(worktree.id),
+      });
+    return actions;
+  }, [worktree, status, onRemove, busy]);
 }

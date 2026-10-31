@@ -272,6 +272,7 @@ interface Props {
   onOpenWorktree: (id: string) => void;
   /** Hover "+" on worktree rows: start a session executing in that worktree. */
   onStartSessionInWorktree: (id: string) => void;
+  onRemoveWorktree?: ((id: string) => void) | undefined;
   /** Settings section currently active, for highlighting in the settings list. */
   activeSection?: SettingsSection | null;
   /** Called when a settings section is selected from the sidebar. */
@@ -535,6 +536,7 @@ function SidebarImpl({
   onLoadWorktrees,
   onOpenWorktree,
   onStartSessionInWorktree,
+  onRemoveWorktree,
   activeSection,
   onOpenSection,
   state,
@@ -1016,6 +1018,7 @@ function SidebarImpl({
                 onOpenWorktree={onOpenWorktree}
                 onStartSession={onStartSessionForProject}
                 onStartSessionInWorktree={onStartSessionInWorktree}
+                onRemoveWorktree={onRemoveWorktree}
                 onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
                 onNavigate={onNavigate}
                 flush

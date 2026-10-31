@@ -21,14 +21,18 @@ export function ListRowActions({
   actions,
   label = "More actions",
   alwaysVisible = false,
+  menuOnly = false,
 }: {
   actions: ListRowAction[];
   label?: string;
   alwaysVisible?: boolean;
+  /** Every action in the menu behind one vertical ⋮, none direct. */
+  menuOnly?: boolean;
 }) {
   if (actions.length === 0) return null;
-  const direct =
-    actions.length <= 2
+  const direct = menuOnly
+    ? []
+    : actions.length <= 2
       ? actions
       : actions.filter((action) => action.primary).slice(0, 2);
   const overflow = actions.filter((action) => !direct.includes(action));
@@ -59,6 +63,7 @@ export function ListRowActions({
         <OverflowMenu
           label={label}
           size="icon-list-overflow"
+          vertical={menuOnly}
           contentClassName="w-64 touch-ui:[&_[role=menuitem]]:min-h-11"
         >
           {overflow.map((action) => (

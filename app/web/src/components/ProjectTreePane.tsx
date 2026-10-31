@@ -1,5 +1,13 @@
 import { applyPatch } from "@assistant/shared";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import {
   ChevronRight,
   FileDiff,
@@ -48,6 +56,7 @@ import {
   WorktreeChangeList,
   WorktreeFilesList,
   useWorktreeChangeSets,
+  useWorktreeRowActions,
   type ChangeSetKind,
   type WorktreeSectionKind,
 } from "./WorktreeSections.tsx";
@@ -93,6 +102,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onStartSessionInWorktree,
   onVisibleWorktreeIdsChange,
   onNavigate,
+  onRemoveWorktree,
   flush = false,
   density = "tight",
   rootProjectId,
@@ -120,6 +130,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onVisibleWorktreeIdsChange?: (ids: string[]) => void;
   /** Opens a worktree file or changed file picked in a worktree's sections. */
   onNavigate?: ((path: string) => void) | undefined;
+  /** Opens the Remove dialog for a worktree, from its row's menu. */
+  onRemoveWorktree?: ((id: string) => void) | undefined;
   /**
    * Edge-to-edge, hairline-divided rows (the sidebar), as the Tasks tree: the
    * notes and placeholders around the tree keep their own inset.
@@ -471,7 +483,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
               );
             case "worktree":
               return (
-                <WorktreeRow
+                <ProjectWorktreeRow
                   worktree={data.worktree}
                   status={data.status}
                   now={now}
@@ -485,6 +497,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                   onOpen={onOpenWorktree}
                   iconColor={projectIconColor(data.worktree.projectId)}
                   onStartSession={onStartSessionInWorktree}
+                  onRemove={onRemoveWorktree}
                 />
               );
             case "section":
@@ -623,6 +636,21 @@ const SECTION_ICON: Record<WorktreeSectionKind, typeof FileDiff> = {
   files: FolderTree,
 };
 
+/** A worktree row with its git actions in the menu (`useWorktreeRowActions`). */
+function ProjectWorktreeRow({
+  onRemove,
+  ...props
+}: ComponentProps<typeof WorktreeRow> & {
+  onRemove: ((id: string) => void) | undefined;
+}) {
+  const menuActions = useWorktreeRowActions(
+    props.worktree,
+    props.status,
+    onRemove,
+  );
+  return <WorktreeRow {...props} menuActions={menuActions} />;
+}
+
 /** A worktree section's heading row: a standard one-line row; a tap folds it. */
 const WorktreeSectionHeader = memo(function WorktreeSectionHeader({
   data,
@@ -732,12 +760,14 @@ const ProjectRowContent = memo(function ProjectRowContent({
       actions={
         onStartSession || onOpen ? (
           <ListRowActions
+            menuOnly
             actions={[
               ...(onOpen
                 ? [
                     {
                       id: "open",
-                      label: `Open project: ${project.key} ${project.name}`,
+                      label: "Open project",
+                      accessibleLabel: `Open project: ${project.key} ${project.name}`,
                       icon: <SquareArrowOutUpRight />,
                       onSelect: () => onOpen(project.id),
                     },
@@ -747,7 +777,8 @@ const ProjectRowContent = memo(function ProjectRowContent({
                 ? [
                     {
                       id: "start-session",
-                      label: `Start session in project: ${project.key} ${project.name}`,
+                      label: "Start session",
+                      accessibleLabel: `Start session in project: ${project.key} ${project.name}`,
                       icon: <MessageSquarePlus />,
                       onSelect: () => onStartSession(project.id),
                     },

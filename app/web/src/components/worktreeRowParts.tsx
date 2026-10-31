@@ -36,7 +36,10 @@ import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Item } from "./ui/item.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
-import { ListRowActions } from "./common/ListRowActions.tsx";
+import {
+  ListRowActions,
+  type ListRowAction,
+} from "./common/ListRowActions.tsx";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import { Tree, type TreeNode } from "./common/Tree.tsx";
 import { taskPath } from "../hooks/useSessionRouting.ts";
@@ -74,6 +77,7 @@ function WorktreeRowSummary({
   expanded = false,
   onToggleSessions,
   iconColor,
+  menuActions,
   onOpen,
   onStartSession,
   tasks,
@@ -215,15 +219,17 @@ function WorktreeRowSummary({
         </>
       }
       actions={
-        onStartSession || onOpen ? (
+        onStartSession || onOpen || menuActions?.length ? (
           <ListRowActions
             alwaysVisible={selected}
+            menuOnly
             actions={[
               ...(onOpen
                 ? [
                     {
                       id: "open",
-                      label: `Open worktree: ${branch}`,
+                      label: "Open worktree",
+                      accessibleLabel: `Open worktree: ${branch}`,
                       icon: <SquareArrowOutUpRight />,
                       onSelect: () => onOpen(worktree.id),
                     },
@@ -233,12 +239,14 @@ function WorktreeRowSummary({
                 ? [
                     {
                       id: "start-session",
-                      label: `Start session in worktree: ${branch}`,
+                      label: "Start session",
+                      accessibleLabel: `Start session in worktree: ${branch}`,
                       icon: <MessageSquarePlus />,
                       onSelect: () => onStartSession(worktree.id),
                     },
                   ]
                 : []),
+              ...(menuActions ?? []),
             ]}
           />
         ) : undefined
@@ -495,6 +503,8 @@ interface WorktreeRowProps {
   onToggleSessions?: (id: string) => void;
   /** The icon in this colour (its project's), not the muted grey. */
   iconColor?: string | undefined;
+  /** More actions after Open and Start session, in the row's menu. */
+  menuActions?: ListRowAction[] | undefined;
   /** Opens the worktree page, where tapping the row only expands it. */
   onOpen?: ((id: string) => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
@@ -541,6 +551,7 @@ export const WorktreeRow = memo(
     previous.onToggleSessions === next.onToggleSessions &&
     previous.onOpen === next.onOpen &&
     previous.iconColor === next.iconColor &&
+    previous.menuActions === next.menuActions &&
     previous.onStartSession === next.onStartSession &&
     previous.tasks === next.tasks &&
     previous.tasksExpanded === next.tasksExpanded &&
