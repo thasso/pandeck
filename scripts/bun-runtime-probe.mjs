@@ -2202,8 +2202,10 @@ async function checkProcessTreeCleanup(base) {
           // Outside the tree, its group and its stdout: an execute-only
           // shell blocked reading a pipe only the probe holds, so it cannot
           // end by time, only by itself at EOF once the probe closes that
-          // pipe. Its pid and start are for diagnosis only, and its exit is
-          // awaited from the step that spawned it.
+          // pipe: `read` then fails with status 1 (bash, dash and busybox
+          // ash alike), the shell's own exit status. Its pid and start are
+          // for diagnosis only, and its exit is awaited from the step that
+          // spawned it.
           const path = join(fixture, "unrelated", "sh");
           mkdirSync(dirname(path));
           executeOnly("sh", path);
@@ -2238,7 +2240,7 @@ async function checkProcessTreeCleanup(base) {
               ),
             ]).finally(() => globalThis.clearTimeout(timer));
             assert(
-              ended !== undefined && ended.error === undefined,
+              ended?.code === 1 && !ended.signal,
               `The unrelated process ${unrelated.pid} (start ${start}) did not end by itself: ${JSON.stringify(ended)}.`,
             );
           }
