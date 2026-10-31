@@ -59,12 +59,23 @@ export interface GitRunner {
   bounded(req: GitBoundedRequest): Promise<BrokerBoundedOutcome>;
 }
 
-function childEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
-  return env ? { ...childProcessEnv(), ...env } : childProcessEnv();
+/** `base` with the request's overrides over it. */
+function childEnv(
+  base: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
+  return env ? { ...base, ...env } : base;
 }
 
-/** Run git, collecting stdout as text (`execFile`'s utf8 mode). */
-export function runGit(req: GitRunRequest): Promise<BrokerExecOutcome<string>> {
+/**
+ * Run git, collecting stdout as text (`execFile`'s utf8 mode). The child
+ * inherits `baseEnv`, its caller's: the server's own, or its Worker's
+ * (`workers/isolationBoundary.ts`).
+ */
+export function runGit(
+  req: GitRunRequest,
+  baseEnv: NodeJS.ProcessEnv,
+): Promise<BrokerExecOutcome<string>> {
   return brokerExecFile({
     file: "git",
     args: req.args,
@@ -72,7 +83,7 @@ export function runGit(req: GitRunRequest): Promise<BrokerExecOutcome<string>> {
     ...(req.signal ? { signal: req.signal } : {}),
     maxBuffer: req.maxBuffer,
     encoding: "utf8",
-    env: childEnv(req.env),
+    env: childEnv(baseEnv, req.env),
     ...(req.input !== undefined ? { input: req.input } : {}),
     ...(req.awaitExit ? { awaitExit: true } : {}),
   });
@@ -81,6 +92,7 @@ export function runGit(req: GitRunRequest): Promise<BrokerExecOutcome<string>> {
 /** Run git, collecting stdout as raw bytes. */
 export function runGitRaw(
   req: GitRawRequest,
+  baseEnv: NodeJS.ProcessEnv,
 ): Promise<BrokerExecOutcome<Buffer>> {
   return brokerExecFile({
     file: "git",
@@ -89,7 +101,7 @@ export function runGitRaw(
     ...(req.signal ? { signal: req.signal } : {}),
     maxBuffer: req.maxBuffer,
     encoding: "buffer",
-    env: childEnv(req.env),
+    env: childEnv(baseEnv, req.env),
     ...(req.awaitExit ? { awaitExit: true } : {}),
   });
 }
@@ -97,6 +109,7 @@ export function runGitRaw(
 /** Run git, keeping a bounded prefix of its stdout. */
 export function runGitBounded(
   req: GitBoundedRequest,
+  baseEnv: NodeJS.ProcessEnv,
 ): Promise<BrokerBoundedOutcome> {
   return brokerBoundedStdout({
     file: "git",
@@ -105,14 +118,17 @@ export function runGitBounded(
     maxChars: req.maxChars,
     maxStderr: req.maxStderr,
     ...(req.signal ? { signal: req.signal } : {}),
-    env: childEnv(req.env),
+    env: childEnv(baseEnv, req.env),
     ...(req.awaitExit ? { awaitExit: true } : {}),
   });
 }
 
-/** git started on this server, with the broker's ordinary timing. */
+/**
+ * git started on this server, with the broker's ordinary timing; its children
+ * inherit the server's own environment.
+ */
 export const localGitRunner: GitRunner = {
-  run: runGit,
-  raw: runGitRaw,
-  bounded: runGitBounded,
+  run: (req) => runGit(req, childProcessEnv()),
+  raw: (req) => runGitRaw(req, childProcessEnv()),
+  bounded: (req) => runGitBounded(req, childProcessEnv()),
 };

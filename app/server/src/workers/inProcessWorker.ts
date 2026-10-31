@@ -23,10 +23,7 @@ import {
 } from "../worker/worker.ts";
 import type { WatchSnapshot } from "../worker/watch.ts";
 import type { WorkerConnection } from "../workerProtocol/connection.ts";
-import {
-  createInProcessTransport,
-  type ByteEndpoint,
-} from "../workerProtocol/inProcessTransport.ts";
+import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import type {
   PersistOutputRequest,
   PreToolUseRequest,
@@ -36,6 +33,7 @@ import type {
   SessionToolPermission,
 } from "../workerProtocol/sessionHookMethods.ts";
 import { appToolHandlers, type AdmittedPeer } from "./appToolHost.ts";
+import { isolationBoundary } from "./isolationBoundary.ts";
 import { DEFAULT_WORKER_ID } from "./placement.ts";
 import { sessionHookHandlers } from "./sessionHookHost.ts";
 import { watchDeliveries } from "./watchDeliveries.ts";
@@ -55,7 +53,7 @@ const substitutes = new Map<string, SubstituteHandler>();
 /** The server's connection to the in-process Worker, dialing one if needed. */
 export function ensureInProcessWorker(): WorkerConnection {
   if (current && !current.connection.isEnded) return current.connection;
-  const [serverEnd, workerEnd] = createInProcessTransport();
+  const [serverEnd, workerEnd] = isolationBoundary.workerEndpoint();
   // Accept first, as a listening socket would, then let the Worker dial.
   let quiescent: Promise<void> = Promise.resolve();
   const deliveries = watchDeliveries();
@@ -75,6 +73,7 @@ export function ensureInProcessWorker(): WorkerConnection {
   const worker = startWorker({
     workerId: DEFAULT_WORKER_ID,
     transport: workerEnd,
+    childEnv: () => isolationBoundary.workerChildEnv(),
     onRequest: (method) => {
       served += 1;
       servedByMethod.set(method, (servedByMethod.get(method) ?? 0) + 1);

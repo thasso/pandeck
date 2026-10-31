@@ -10,12 +10,19 @@ import { readLocally } from "../checkoutFileAccess.ts";
 import { inspectPath, realpathFile } from "../fileReads.ts";
 import { createGitFamily } from "../gitFamily.ts";
 import { localGitRunner } from "../gitProcess.ts";
-import { WRONG_WORKER, encodeRun } from "../workerProtocol/checkoutMethods.ts";
+import { setChildProcessEnvOverlay } from "../subprocessEnv.ts";
+import {
+  CHECKOUT_GIT_METHODS,
+  WRONG_WORKER,
+  decodeExecOutcome,
+  encodeRun,
+} from "../workerProtocol/checkoutMethods.ts";
 import { WorkerRequestError } from "../workerProtocol/connection.ts";
 import {
   ensureInProcessWorker,
   inProcessWorkerServedForTests,
 } from "../workers/inProcessWorker.ts";
+import { checkoutGitHandlers } from "./checkoutGit.ts";
 import { getWorktreeFileRaw } from "../worktrees/worktreeDiff.ts";
 import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
 
@@ -201,4 +208,53 @@ test("a bounded read cut inside a surrogate pair keeps the exact code units", as
   );
   assert.equal(three.truncated, true);
   assert.deepEqual(three, await local.gitBoundedStdout(args, repo, 3));
+});
+
+/** Git's own config-by-environment, read back through `git config --get`. */
+const probeConfig = (value: string): Record<string, string> => ({
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "w11.probe",
+  GIT_CONFIG_VALUE_0: value,
+});
+
+test("each git child inherits the Worker's child env, read when it is served", async () => {
+  let base = { ...process.env, ...probeConfig("from-boundary") };
+  const handler = checkoutGitHandlers("local", () => base)[
+    CHECKOUT_GIT_METHODS.run
+  ]!;
+  const probe = async (env?: NodeJS.ProcessEnv) => {
+    const { payload } = encodeRun({
+      location: { workerId: "local", path: repo },
+      args: ["config", "--get", "w11.probe"],
+      mode: "readOnly",
+      maxBuffer: MiB,
+      ...(env ? { env } : {}),
+    });
+    const outcome = decodeExecOutcome(
+      await handler(payload, new AbortController().signal),
+    );
+    assert.equal(outcome.error, null, outcome.stderr);
+    return outcome.stdout.trim();
+  };
+  assert.equal(await probe(), "from-boundary");
+  base = { ...process.env, ...probeConfig("changed") };
+  assert.equal(await probe(), "changed", "read per child, not at start");
+  assert.equal(
+    await probe({ GIT_CONFIG_VALUE_0: "from-request" }),
+    "from-request",
+    "the request's overrides win",
+  );
+});
+
+test("the in-process Worker's git children get the overlay published after it started", async () => {
+  ensureInProcessWorker();
+  setChildProcessEnvOverlay(probeConfig("from-overlay"));
+  try {
+    assert.equal(
+      (await git(["config", "--get", "w11.probe"], repo)).stdout.trim(),
+      "from-overlay",
+    );
+  } finally {
+    setChildProcessEnvOverlay(null);
+  }
 });

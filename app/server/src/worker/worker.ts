@@ -63,6 +63,11 @@ export function startWorker(options: {
   /** The Worker's end of a stream the server accepts. */
   transport: ByteEndpoint;
   /**
+   * The environment each child the Worker starts inherits, read per child
+   * (the isolation boundary's, `workers/isolationBoundary.ts`).
+   */
+  childEnv: () => NodeJS.ProcessEnv;
+  /**
    * Test seam: sees each request the Worker decoded and serves, and may
    * answer a substitute that serves that one request instead.
    */
@@ -81,7 +86,7 @@ export function startWorker(options: {
   );
   const handlers = Object.fromEntries(
     Object.entries({
-      ...checkoutGitHandlers(options.workerId),
+      ...checkoutGitHandlers(options.workerId, options.childEnv),
       ...files.handlers,
       ...lifecycleHandlers(options.workerId),
       ...watches.handlers,

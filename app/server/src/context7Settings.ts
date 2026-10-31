@@ -4,7 +4,8 @@
  * Settings → Context7 and stored privately under `DATA_DIR/settings/context7.json`
  * (mode 0600); it is never echoed back to the browser (the public projection
  * exposes only `apiKeyConfigured`). This is the sole source of the key — there
- * is no static/env fallback.
+ * is no static/env fallback. Its senders read it through the secret store
+ * (`secretStore.ts`), which holds the one origin it may go to.
  */
 import { applyPatch } from "@assistant/shared";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ import type {
 import { DATA_DIR } from "./config.ts";
 import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
+import { secretStore } from "./secretStore.ts";
 
 const CONTEXT7_SETTINGS_DIR = join(DATA_DIR, "settings");
 const CONTEXT7_CONFIG_PATH = join(CONTEXT7_SETTINGS_DIR, "context7.json");
@@ -78,22 +80,26 @@ export function updateContext7Settings(
 }
 
 /**
- * The real key for tool code, guarded by the enable+configured gate. Throws a
- * user-actionable error (surfaced to the agent) when Context7 is unusable.
+ * The real key for tool code to send to `destination`, guarded by the
+ * enable+configured gate. Throws a user-actionable error (surfaced to the
+ * agent) when Context7 is unusable.
  */
-export function getContext7ToolConfig(): { apiKey: string } {
+export async function getContext7ToolConfig(
+  destination: URL,
+): Promise<{ apiKey: string }> {
   const config = normalizeConfig(readFile());
   if (!config.enabled) {
     throw new Error(
       "Context7 docs search is disabled. Enable it in Settings → Context7.",
     );
   }
-  if (!config.apiKey) {
+  const apiKey = await secretStore.read("context7.apiKey", destination);
+  if (!apiKey) {
     throw new Error(
       "Context7 is not configured: add a Context7 API key in Settings → Context7.",
     );
   }
-  return { apiKey: config.apiKey };
+  return { apiKey };
 }
 
 /** Validate the saved key with a minimal live library search. */
@@ -109,15 +115,16 @@ export async function testContext7Settings(
       message: "Context7 docs search is disabled.",
     };
   }
-  if (!config.apiKey) {
-    return { ok: false, checkedAt, message: "A Context7 API key is required." };
-  }
   const url = new URL(`${CONTEXT7_API_BASE}/libs/search`);
   url.searchParams.set("libraryName", "react");
+  const apiKey = await secretStore.read("context7.apiKey", url);
+  if (!apiKey) {
+    return { ok: false, checkedAt, message: "A Context7 API key is required." };
+  }
   const res = await fetch(url, {
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     signal: deadlineSignal(15_000, signal),
   });
