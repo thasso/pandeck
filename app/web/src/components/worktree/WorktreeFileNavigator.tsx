@@ -8,6 +8,7 @@ import type {
 import { Tree, type TreeNode, type TreeNodeState } from "../common/Tree.tsx";
 import { Skeleton, Spinner } from "../common/load.tsx";
 import { Item, ItemContent, ItemDescription, ItemTitle } from "../ui/item.tsx";
+import { formatFileSize } from "../../lib/servedFiles.ts";
 
 /**
  * @component WorktreeFileNavigator
@@ -515,8 +516,11 @@ function EntryParts({
       (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
         <ChangeStats data={data} isDir={isDir} />
       ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {data.size.toLocaleString()}
+        <span
+          className="shrink-0 font-mono text-xs text-muted-foreground"
+          title={`${data.size.toLocaleString()} bytes`}
+        >
+          {formatFileSize(data.size)}
         </span>
       ) : null}
     </>
