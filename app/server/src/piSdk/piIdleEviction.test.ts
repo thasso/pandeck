@@ -17,6 +17,7 @@ const tmp = mkdtempSync(join(tmpdir(), "pi-idle-eviction-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { localPiEngine } = await import("./piEngine.ts");
 const { HARNESS_IDLE_EVICT_MS } = await import("../harness.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { ensureRuntimeSessionWithRuntime } =
@@ -37,7 +38,7 @@ function idleSession() {
   const evicted: string[] = [];
   const live = new PiLiveSession(
     "coding" as never,
-    {
+    localPiEngine({
       sessionId,
       sessionName: "Already named",
       isStreaming: false,
@@ -52,7 +53,7 @@ function idleSession() {
       dispose: () => {
         disposed += 1;
       },
-    } as never,
+    } as never),
     {
       broadcastSessions: () => Promise.resolve(),
       noteRunStarted: () => {},

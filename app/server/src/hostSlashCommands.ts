@@ -6,6 +6,7 @@ import type {
 import type { HostCommandResult } from "./sessionKit/hostCommandTurn.ts";
 import { parseCommitArgs, parsePrArgs } from "./slashCommands.ts";
 import {
+  type CommitWorkflowOptions,
   type CommitWorkflowResult,
   runCommitWorkflow,
   toCommitDisplay,
@@ -109,7 +110,7 @@ export interface SyntheticToolHost {
   /**
    * The minimal session context host slash commands need. `sessionManager` is
    * used by the commit workflow (getBranch + appendCustomEntry); pi returns its
-   * real `AgentSession.sessionManager` (so the commit persists into pi's jsonl),
+   * engine's tool session manager (so the commit persists into pi's jsonl),
    * Claude sessions return a snapshot-backed duck (no pi persistence). `cwd` is
    * the session's git working directory, used by both `/commit` and `/push`.
    */
@@ -163,8 +164,9 @@ export async function runCommitForHost(
     const { sessionManager, cwd } = host.commitWorkflowContext();
     const result: CommitWorkflowResult = await runCommitWorkflow({
       source: "slash",
-      // The workflow only touches `session.sessionManager`.
-      session: { sessionManager } as never,
+      sessionManager: sessionManager as NonNullable<
+        CommitWorkflowOptions["sessionManager"]
+      >,
       sessionKind: host.kind,
       sessionId: host.sessionId,
       ...(cwd !== undefined ? { cwd } : {}),

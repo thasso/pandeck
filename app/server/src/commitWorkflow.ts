@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, join, relative } from "node:path";
-import type { AgentSession, SessionManager } from "./harnesses/piSession.ts";
 import type { ToolSessionManager } from "./mcp/tool.ts";
 import type {
   AgentType,
@@ -75,9 +74,10 @@ export interface CommitWorkflowOptions {
   forceRefusesSecrets?: boolean;
   additionalContext?: string;
   commandText?: string;
-  /** Session context is optional for worktree-page auto-commit; slash commands provide it. */
-  session?: AgentSession;
-  /** Harness-neutral session manager supplied by an AgentTool caller. */
+  /**
+   * The session's transcript, from a slash command or an AgentTool caller;
+   * worktree-page auto-commit has none.
+   */
   sessionManager?: Pick<ToolSessionManager, "getBranch" | "appendCustomEntry">;
   sessionKind?: AgentType;
   sessionId?: string;
@@ -1281,13 +1281,22 @@ async function stagedDiff(
   };
 }
 
-function appendCustomResult(
+/** The transcript surface accepting a dry run needs. */
+type CommitAcceptSessionManager = Pick<
+  ToolSessionManager,
+  "getBranch" | "appendCustomEntry"
+> & { getEntry(id: string): unknown };
+
+async function appendCustomResult(
   sm: Pick<ToolSessionManager, "appendCustomEntry"> | undefined,
   result: CommitWorkflowResult,
-): string | undefined {
+): Promise<string | undefined> {
   if (!sm) return undefined;
   try {
-    const id = sm.appendCustomEntry(CUSTOM_TYPE, { version: 1, ...result });
+    const id = await sm.appendCustomEntry(CUSTOM_TYPE, {
+      version: 1,
+      ...result,
+    });
     if (id !== undefined) result.customEntryId = id;
     return id;
   } catch {
@@ -1298,8 +1307,7 @@ function appendCustomResult(
 export async function runCommitWorkflow(
   options: CommitWorkflowOptions,
 ): Promise<CommitWorkflowResult> {
-  const sourceSessionId =
-    options.sessionId ?? options.session?.sessionManager.getSessionId?.();
+  const sourceSessionId = options.sessionId;
   const helperSource: HelperSourceContext = {
     ...(sourceSessionId ? { sourceSessionId } : {}),
     requiresEnterprise: sourceRequiresEnterprise(
@@ -1311,8 +1319,7 @@ export async function runCommitWorkflow(
   const forced = Boolean(options.force);
   const stagedOnly = Boolean(options.stagedOnly);
   const createdAt = Date.now();
-  const sessionManager =
-    options.sessionManager ?? options.session?.sessionManager;
+  const sessionManager = options.sessionManager;
   let prompts: Array<{ id: string; text: string }> = [];
   let checkpointEntryId: string | undefined;
   let sessionTouchedPaths: string[] = [];
@@ -1404,7 +1411,7 @@ export async function runCommitWorkflow(
           },
         ],
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
     const hasChanges = diffContext.status.trim().length > 0;
@@ -1422,7 +1429,7 @@ export async function runCommitWorkflow(
           },
         ],
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
 
@@ -1492,7 +1499,7 @@ export async function runCommitWorkflow(
         blockers,
         warnings,
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
 
@@ -1506,7 +1513,7 @@ export async function runCommitWorkflow(
         blockers,
         warnings,
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
 
@@ -1617,7 +1624,7 @@ export async function runCommitWorkflow(
               warnings,
             },
       );
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
     const headAfter = await currentHead(side, repoRoot, options.signal);
@@ -1635,17 +1642,17 @@ export async function runCommitWorkflow(
       warnings,
       addressedTasks,
     });
-    appendCustomResult(sessionManager, result);
+    await appendCustomResult(sessionManager, result);
     return result;
   } catch (err) {
     const result = baseResult({ status: "failed", error: errorText(err) });
-    appendCustomResult(sessionManager, result);
+    await appendCustomResult(sessionManager, result);
     return result;
   }
 }
 
 function commitDataFromEntry(
-  sm: SessionManager,
+  sm: Pick<CommitAcceptSessionManager, "getEntry">,
   entryId: string,
 ): (CommitWorkflowResult & { version?: number }) | undefined {
   const entry = sm.getEntry(entryId) as
@@ -1657,7 +1664,8 @@ function commitDataFromEntry(
 }
 
 export async function acceptCommitDryRun(options: {
-  session: AgentSession;
+  /** Finds the dry run's entry by id across all entries, not only the branch. */
+  sessionManager: CommitAcceptSessionManager;
   entryId: string;
   /** Working directory whose enclosing git repo the dry run targeted. Defaults to the app CWD. */
   cwd?: string;
@@ -1666,7 +1674,7 @@ export async function acceptCommitDryRun(options: {
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
 }): Promise<CommitWorkflowResult> {
-  const sessionManager = options.session.sessionManager;
+  const sessionManager = options.sessionManager;
   const source = "slash" as const;
   const forced = false;
   const dryRun = false;
@@ -1705,7 +1713,7 @@ export async function acceptCommitDryRun(options: {
         error:
           "Dry-run entry is missing, is not accepted, or has no commit message.",
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
 
@@ -1741,7 +1749,7 @@ export async function acceptCommitDryRun(options: {
         error:
           "The working tree changed since the dry run. Run /commit --dry again before accepting.",
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
 
@@ -1754,7 +1762,7 @@ export async function acceptCommitDryRun(options: {
         changeFingerprint: fingerprint,
         error: "No changes remain to commit.",
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
 
@@ -1794,7 +1802,7 @@ export async function acceptCommitDryRun(options: {
         error:
           "The change set moved while the commit was being prepared. Run /commit --dry again before accepting.",
       });
-      appendCustomResult(sessionManager, result);
+      await appendCustomResult(sessionManager, result);
       return result;
     }
     const headAfter = await currentHead(side, repoRoot, options.signal);
@@ -1816,11 +1824,11 @@ export async function acceptCommitDryRun(options: {
       warnings: previous.warnings,
       addressedTasks,
     });
-    appendCustomResult(sessionManager, result);
+    await appendCustomResult(sessionManager, result);
     return result;
   } catch (err) {
     const result = baseResult({ status: "failed", error: errorText(err) });
-    appendCustomResult(sessionManager, result);
+    await appendCustomResult(sessionManager, result);
     return result;
   }
 }

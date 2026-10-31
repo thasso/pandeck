@@ -25,6 +25,7 @@ vi.mock("../commitWorkflow.ts", async (importOriginal) => ({
 }));
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { localPiEngine } = await import("./piEngine.ts");
 const { closeDb } = await import("../db/index.ts");
 
 afterAll(() => {
@@ -41,7 +42,7 @@ function viewedSession(opts: { reloadQueued?: boolean } = {}) {
   const events: AdapterEvent[] = [];
   const live = new PiLiveSession(
     "developer" as never,
-    {
+    localPiEngine({
       sessionId: `pi-accept-${counter++}`,
       sessionName: "Already named",
       isStreaming: false,
@@ -57,7 +58,7 @@ function viewedSession(opts: { reloadQueued?: boolean } = {}) {
         contextSize: 0,
       }),
       dispose: () => {},
-    } as never,
+    } as never),
     {
       broadcastSessions: () => Promise.resolve(),
       noteRunStarted: () => {},

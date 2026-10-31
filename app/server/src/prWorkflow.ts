@@ -866,7 +866,9 @@ export async function runPrWorkflow(
     });
     const commit = await operations.runCommit({
       source: "slash",
-      session: { sessionManager: options.sessionManager } as never,
+      sessionManager: options.sessionManager as NonNullable<
+        CommitWorkflowOptions["sessionManager"]
+      >,
       sessionKind: options.sessionKind,
       sessionId: options.sessionId,
       requiresEnterprise,

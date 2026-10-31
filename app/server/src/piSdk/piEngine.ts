@@ -29,6 +29,7 @@ import type {
   CompactionWindowHarnessStatus,
   CompactionWindowLowerResult,
 } from "../harness.ts";
+import type { ToolSessionManager } from "../mcp/tool.ts";
 import { compactionWindowFor } from "./compactionWindow.ts";
 import { modelRegistry, type PiModel } from "./models.ts";
 
@@ -38,7 +39,7 @@ type PiEngineThinkingLevel = AgentSession["thinkingLevel"];
 type PiEngineImages = NonNullable<Parameters<AgentSession["steer"]>[1]>;
 
 /** The engine's transcript, read-only; entries are pi's plain JSON data. */
-interface PiTranscriptView {
+export interface PiTranscriptView {
   getSessionId(): string;
   getHeader(): ReturnType<SessionManager["getHeader"]>;
   getEntries(): ReturnType<SessionManager["getEntries"]>;
@@ -52,12 +53,8 @@ interface PiTranscriptView {
  * What the commit workflow and host commands use on the pi side. Its append
  * is a command, so it answers a promise.
  */
-interface PiCommitSessionManager {
-  getSessionId(): string;
-  getBranch(): unknown[];
-  getEntry(id: string): unknown;
-  appendCustomEntry(type: string, data: unknown): Promise<string | undefined>;
-}
+type PiCommitSessionManager = ToolSessionManager &
+  Pick<PiTranscriptView, "getEntry">;
 
 type PiClearContextResult =
   { kind: "skipped" } | { kind: "cleared"; tokensBefore?: number };

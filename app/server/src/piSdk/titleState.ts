@@ -1,6 +1,6 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { UNLABELED_SESSION_TITLE } from "@assistant/shared";
 import { deriveTitle } from "../sessions.ts";
+import type { PiTranscriptView } from "./piEngine.ts";
 
 type BranchEntryLike = {
   type?: string;
@@ -11,7 +11,7 @@ const GENERIC_TITLES = new Set(["New chat", "New session"]);
 
 /** True when the durable native branch already contains a human prompt. */
 export function piSessionHasUserPrompt(
-  sm: Pick<SessionManager, "getBranch">,
+  sm: Pick<PiTranscriptView, "getBranch">,
 ): boolean {
   let branch: BranchEntryLike[];
   try {
@@ -36,7 +36,7 @@ export function restorePiLiveTitle(
 
 /** Only unnamed sessions with no durable user prompt may derive their title from the next prompt. */
 export function shouldAutoNamePiSession(input: {
-  sessionManager: Pick<SessionManager, "getBranch">;
+  sessionManager: Pick<PiTranscriptView, "getBranch">;
   nativeSessionName?: string;
   storedTitle?: string;
 }): boolean {

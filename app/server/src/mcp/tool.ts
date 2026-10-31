@@ -34,8 +34,8 @@ export interface ToolResult {
 export interface ToolSessionManager {
   getSessionId(): string;
   getBranch(): unknown[];
-  /** Returns the appended entry's id when the backing store provides one. */
-  appendCustomEntry(type: string, data: unknown): string | undefined;
+  /** Resolves to the appended entry's id when the backing store provides one. */
+  appendCustomEntry(type: string, data: unknown): Promise<string | undefined>;
 }
 
 /**

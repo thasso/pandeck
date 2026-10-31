@@ -2,7 +2,8 @@
  * The local pi engine handle: the loop policy it runs inside pi's event loop
  * (retry suppression, the `agent_end` guard, the compaction-window check), the
  * fan-out after it, the synchronous submit decision, the compaction-window
- * lower/restore split and disposal.
+ * lower/restore split and disposal — and the live session over it awaiting
+ * what it changed before announcing it.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -11,7 +12,12 @@ import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { installCompactionWindow } from "./compactionWindow.ts";
-import { localPiEngine, nativePiSessionForTests } from "./piEngine.ts";
+import { PiLiveSession } from "./PiLiveSession.ts";
+import {
+  localPiEngine,
+  nativePiSessionForTests,
+  type PiEngineHandle,
+} from "./piEngine.ts";
 
 /** A content-policy refusal pi must not retry (see `providerErrors.test.ts`). */
 const SUPPRESSIBLE_ERROR = `Codex error: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request.`;
@@ -359,4 +365,102 @@ test("without a controller the compaction window answers today's fallbacks", asy
     ok: false,
     message: "This pi session cannot change its window.",
   });
+});
+
+/* ------------------------- the live session awaits ------------------------ */
+
+/** What a live session reads of a session beyond the engine's own needs. */
+const LIVE_READS = {
+  sessionName: "Already named",
+  sessionManager: {
+    getBranch: () => [],
+    getEntries: () => [],
+    getHeader: () => undefined,
+  },
+  getSessionStats: () => ({
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: 0,
+    contextSize: 0,
+  }),
+};
+
+function liveOver(engine: PiEngineHandle) {
+  const host = {
+    broadcastSessions: () => Promise.resolve(),
+    noteRunStarted: () => {},
+    checkPendingReload: () => {},
+    isReloadQueued: () => false,
+    buildSessionState: () => ({}) as never,
+  };
+  const live = new PiLiveSession(
+    "coding" as never,
+    engine,
+    host as never,
+    () => {},
+  );
+  const sent: string[] = [];
+  live.addViewer({
+    send: (message: { type: string }) => sent.push(message.type),
+  });
+  return { live, sent };
+}
+
+test("a thinking-level change is announced only once the engine applied it, and a refusal reaches the caller", async () => {
+  const base = localPiEngine(fakeSession(LIVE_READS).session as never);
+  const applied: string[] = [];
+  let settle!: { resolve: () => void; reject: (error: Error) => void };
+  const engine: PiEngineHandle = Object.create(base, {
+    setThinkingLevel: {
+      value: (level: string) => {
+        applied.push(level);
+        return new Promise<void>((resolve, reject) => {
+          settle = { resolve, reject };
+        });
+      },
+    },
+  });
+  const { live, sent } = liveOver(engine);
+  const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+  const raised = live.setThinkingLevel("high");
+  await settled();
+  assert.deepEqual(applied, ["high"]);
+  assert.deepEqual(sent, [], "nothing is announced while the engine holds it");
+  settle.resolve();
+  await raised;
+  assert.deepEqual(sent, ["state", "contextInfo"]);
+
+  sent.length = 0;
+  const refused = live.setThinkingLevel("low");
+  await settled();
+  settle.reject(new Error("engine refused"));
+  await assert.rejects(refused, /engine refused/);
+  assert.deepEqual(sent, [], "a refused change is never announced");
+  live.dispose();
+});
+
+test("a lowered compaction window whose save fails is put back to the previous one", async () => {
+  const { fake } = windowedSession();
+  Object.assign(fake.session, LIVE_READS);
+  const controller = installCompactionWindow(fake.session as never, 150_000);
+  const { live } = liveOver(localPiEngine(fake.session as never));
+
+  const result = await live.lowerCompactionWindow(120_000, () => {
+    throw new Error("disk full");
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    message: "Saving the compaction window failed: disk full",
+  });
+  assert.equal(controller.status().live.appliedTokens, 150_000);
+  assert.equal(live.compactionWindowStatus().live.appliedTokens, 150_000);
+
+  const saved: number[] = [];
+  assert.deepEqual(
+    await live.lowerCompactionWindow(120_000, (tokens) => saved.push(tokens)),
+    { ok: true, previous: 150_000, applied: 120_000 },
+  );
+  assert.deepEqual(saved, [120_000], "a successful lower persists once");
+  assert.equal(controller.status().live.appliedTokens, 120_000);
+  live.dispose();
 });

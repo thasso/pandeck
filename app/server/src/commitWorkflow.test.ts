@@ -17,7 +17,6 @@ import {
   setCommitMessageGeneratorForTests,
 } from "./commitWorkflow.ts";
 import type { CommitAgentResult } from "./commitAgent.ts";
-import type { AgentSession } from "./piSdk/index.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
 
@@ -76,20 +75,20 @@ const generated: CommitAgentResult = {
 };
 
 /** A minimal slash-command session: an empty transcript plus a custom-entry store. */
-function fakeSession(): AgentSession {
+function fakeSession(): Parameters<
+  typeof acceptCommitDryRun
+>[0]["sessionManager"] {
   const entries = new Map<string, unknown>();
   let next = 0;
   return {
-    sessionManager: {
-      getBranch: () => [],
-      appendCustomEntry: (customType: string, data: unknown) => {
-        const id = `entry-${(next += 1)}`;
-        entries.set(id, { type: "custom", customType, data });
-        return id;
-      },
-      getEntry: (id: string) => entries.get(id),
+    getBranch: () => [],
+    appendCustomEntry: async (customType: string, data: unknown) => {
+      const id = `entry-${(next += 1)}`;
+      entries.set(id, { type: "custom", customType, data });
+      return id;
     },
-  } as unknown as AgentSession;
+    getEntry: (id: string) => entries.get(id),
+  };
 }
 
 afterEach(() => {
@@ -117,8 +116,8 @@ test("commit helper captures transcript source requirement before git awaits", a
     });
     return generated;
   });
-  const session = fakeSession();
-  session.sessionManager.getBranch = () =>
+  const sessionManager = fakeSession();
+  sessionManager.getBranch = () =>
     [
       {
         id: "user-1",
@@ -134,7 +133,7 @@ test("commit helper captures transcript source requirement before git awaits", a
     source: "slash",
     cwd,
     dryRun: true,
-    session,
+    sessionManager,
     sessionId: "enterprise-commit",
     requiresEnterprise: false,
   });
@@ -340,7 +339,7 @@ test("tool callers contribute session prompts, touched paths, context and a chec
         },
       },
     ],
-    appendCustomEntry: (type: string, data: unknown) => {
+    appendCustomEntry: async (type: string, data: unknown) => {
       appended.push({ type, data });
       return "checkpoint-1";
     },
@@ -388,7 +387,7 @@ test("credentials in session prompts and caller context are redacted, not blocke
         },
       },
     ],
-    appendCustomEntry: () => "checkpoint-1",
+    appendCustomEntry: async () => "checkpoint-1",
   };
   let prompt = "";
   setCommitMessageGeneratorForTests(async (text) => {
@@ -861,7 +860,7 @@ test("staged renames and quoted paths project one file each with exact paths", a
 
 test("accepting a staged-only dry run rechecks the index under the lock", async () => {
   const cwd = repo();
-  const session = fakeSession();
+  const sessionManager = fakeSession();
   writeFileSync(join(cwd, "file.txt"), "first\n");
   git(cwd, "add", "file.txt");
   setCommitMessageGeneratorForTests(async (prompt) => {
@@ -874,7 +873,7 @@ test("accepting a staged-only dry run rechecks the index under the lock", async 
     cwd,
     dryRun: true,
     stagedOnly: true,
-    session,
+    sessionManager,
   });
   assert.equal(dry.status, "dry-run");
   assert.equal(dry.stagedOnly, true);
@@ -886,7 +885,7 @@ test("accepting a staged-only dry run rechecks the index under the lock", async 
   };
   const moved = await acceptCommitDryRun({
     side: DEFAULT_WORKER_SIDE,
-    session,
+    sessionManager,
     entryId: dry.customEntryId!,
     cwd,
   });
@@ -901,7 +900,7 @@ test("accepting a staged-only dry run rechecks the index under the lock", async 
   writeFileSync(join(cwd, "file.txt"), "tree only\n");
   const accepted = await acceptCommitDryRun({
     side: DEFAULT_WORKER_SIDE,
-    session,
+    sessionManager,
     entryId: dry.customEntryId!,
     cwd,
   });

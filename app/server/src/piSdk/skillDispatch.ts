@@ -9,13 +9,14 @@
  * file passes.
  */
 import { isAbsolute, normalize, resolve } from "node:path";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { SKILLS_RUNTIME_DIR } from "../config.ts";
 import type { SkillDispatch } from "../session/adapters/contract.ts";
 import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
 
 /** The loader surface the check reads: the skills pi would expand. */
-type SkillLoader = Pick<AgentSession["resourceLoader"], "getSkills">;
+interface SkillLoader {
+  getSkills(): { skills: readonly { name: string; filePath: string }[] };
+}
 
 /**
  * The native command for `name`, or why it cannot be sent. Synchronous and

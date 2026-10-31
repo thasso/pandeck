@@ -985,4 +985,58 @@ test("adapter → runtime projection", async () => {
   await runtime.dispose();
 });
 
+/* --------------------------- reasoning await rule ------------------------ */
+test("the runtime records and announces a reasoning change only once the driver settled it", async () => {
+  const events = new NativeAdapterEventSource();
+  const levels: string[] = [];
+  let settle!: { resolve: () => void; reject: (error: Error) => void };
+  const driver: PiDriver = {
+    subscribeAdapterEvents: (listener) => events.subscribe(listener),
+    prompt: () => "ignored",
+    abort: () => {},
+    setModel: () => {},
+    setThinkingLevel: (level) => {
+      levels.push(level);
+      return new Promise<void>((resolve, reject) => {
+        settle = { resolve, reject };
+      });
+    },
+    sessionFile: undefined,
+  };
+  const runtime = new SessionRuntime(new SessionLogStore(true));
+  runtime.createSession("p-reasoning", createPiAdapter("p-reasoning", driver));
+  const announced: Array<string | undefined> = [];
+  const { unsubscribe } = runtime.openSessionStream("p-reasoning", (event) => {
+    if (event.type === "sessionConfigChanged")
+      announced.push(event.config.reasoning);
+  });
+  const session = runtime.get("p-reasoning")!;
+  const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+  const applied = session.setReasoning("low");
+  await settled();
+  assert.deepEqual(levels, ["low"]);
+  assert.deepEqual(
+    announced,
+    [],
+    "nothing is announced while the driver holds it",
+  );
+  settle.resolve();
+  await applied;
+  assert.deepEqual(
+    announced,
+    ["low"],
+    "exactly one change, with the new level",
+  );
+
+  const refused = session.setReasoning("high");
+  await settled();
+  settle.reject(new Error("engine refused"));
+  await assert.rejects(refused, /engine refused/);
+  assert.deepEqual(announced, ["low"], "a refused change is never announced");
+  assert.equal((await session.getConfig()).reasoning, "low");
+  unsubscribe();
+  await runtime.dispose();
+});
+
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

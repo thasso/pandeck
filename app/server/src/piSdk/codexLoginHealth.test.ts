@@ -10,6 +10,7 @@ import type {
   ServerMessage,
 } from "@assistant/shared";
 import { PiLiveSession } from "./PiLiveSession.ts";
+import { localPiEngine } from "./piEngine.ts";
 import { fetchOpenAiUsage } from "./openaiUsageQuery.ts";
 import { runPiOneShot, selectPiModelWithFallback } from "./oneShot.ts";
 import { runOneShot, OneShotError } from "../harnesses/oneShot.ts";
@@ -144,7 +145,7 @@ function piSession(result: AssistantMessage | Error) {
   let listener!: (event: AgentSessionEvent) => void;
   const live = new PiLiveSession(
     "coding" as never,
-    {
+    localPiEngine({
       sessionId: id,
       sessionName: "Already named",
       model,
@@ -172,7 +173,7 @@ function piSession(result: AssistantMessage | Error) {
       },
       abort: async () => {},
       dispose: () => {},
-    } as never,
+    } as never),
     {
       broadcastSessions: async () => {},
       noteRunStarted: () => {},

@@ -20,6 +20,7 @@ const tmp = mkdtempSync(join(tmpdir(), "pi-clear-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { localPiEngine } = await import("./piEngine.ts");
 const { runClearForHost } = await import("../hostSlashCommands.ts");
 const { closeDb } = await import("../db/index.ts");
 
@@ -65,7 +66,7 @@ function harness(sessionId: string, messages: unknown[]) {
   const state: FakeState = { messages, leafReset: 0 };
   const live = new PiLiveSession(
     "coding" as never,
-    fakeAgentSession(sessionId, state) as never,
+    localPiEngine(fakeAgentSession(sessionId, state) as never),
     {
       broadcastSessions: () => Promise.resolve(),
       noteRunStarted: () => {},

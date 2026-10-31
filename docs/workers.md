@@ -1042,21 +1042,32 @@ natural shape anyway.
 
 Phase 1 ships as slices; each keeps behavior unchanged.
 
-| Slice  | Change                                                                                                         | State   |
-| ------ | -------------------------------------------------------------------------------------------------------------- | ------- |
-| W1     | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it                           | landed  |
-| W2     | Served files (`/api/files`, `show_files`) read through the Worker                                              | landed  |
-| W3a    | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                                 | landed  |
-| W3b    | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                                      | landed  |
-| W3c    | The KB row's typed server-local side for its git and checkout reads (Task-1183)                                | landed  |
-| W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                                  | landed  |
-| W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                               | landed  |
-| W5     | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                              | landed  |
-| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone                              | landed  |
-| W7     | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                              | landed  |
-| W8     | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)             | landed  |
-| W9–W10 | The engine host: pi and Claude sessions                                                                        | planned |
-| W11    | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178) | landed  |
+| Slice | Change                                                                                                                    | State   |
+| ----- | ------------------------------------------------------------------------------------------------------------------------- | ------- |
+| W1    | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it                                      | landed  |
+| W2    | Served files (`/api/files`, `show_files`) read through the Worker                                                         | landed  |
+| W3a   | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                                            | landed  |
+| W3b   | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                                                 | landed  |
+| W3c   | The KB row's typed server-local side for its git and checkout reads (Task-1183)                                           | landed  |
+| W3d   | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                                             | landed  |
+| W4    | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                                          | landed  |
+| W5    | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                                         | landed  |
+| W6    | Callers pass their own side; the string-cwd executors and both pin lists are gone                                         | landed  |
+| W7    | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                                         | landed  |
+| W8    | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)                        | landed  |
+| W9a   | The pi engine handle: every live consumer reaches pi through `PiEngineHandle`, with its loop policy behind it (Task-1176) | landed  |
+| W9b   | The engine host protocol: the Worker's engine table, the handle's mirror, pi construction behind the Worker (Task-1304)   | planned |
+| W9c   | The pi engine's own server reach: admission, the background-work backend bridge, tool activation (Task-1305)              | planned |
+| W10   | The engine host for Claude sessions (Task-1177)                                                                           | planned |
+
+W9a keeps the handle's failed-turn continuation synchronous up to pi's own
+promise, so a transcript write that throws still reaches `PiAdapter.prompt`'s
+catch. W9b's protocol makes that continuation asynchronous, so it has to keep
+the route from account recovery through `PiAdapter.prompt`'s drive and
+`PiLiveSession.continueFailedTurn` to the engine's `appendContextEdit` write
+reporting its error the same way. | W11 | Isolation boundary and secret store
+ports: Worker endpoint and child env; the Context7 key's reads (Task-1178) |
+landed |
 
 `workerBoundary.test.ts` asserts that no module of the checkout family imports
 `node:fs`, that `gitExec.ts` and `checkoutFileAccess.ts` export no read or

@@ -95,7 +95,7 @@ function context(progress?: ToolCallContext["progress"]): ToolCallContext {
       sessionManager: {
         getSessionId: () => "caller-on-another-worktree",
         getBranch: () => [],
-        appendCustomEntry: () => "commit-entry",
+        appendCustomEntry: async () => "commit-entry",
       },
     },
     ...(progress ? { progress } : {}),

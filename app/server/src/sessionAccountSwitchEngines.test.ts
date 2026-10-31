@@ -33,6 +33,7 @@ profiles.setCredentialProfileEnabled(profiles.DEFAULT_CLAUDE_PROFILE_ID, false);
 profiles.setCredentialProfileEnabled(profiles.DEFAULT_OPENAI_PROFILE_ID, false);
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
+const { nativePiSessionForTests } = await import("./piSdk/piEngine.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piModelForAccount } = await import("./harnesses/models.ts");
 const { createSession } = await import("./harnesses/create.ts");
@@ -226,9 +227,9 @@ test.each([
       id = live.id;
       const file = live.sessionFile!;
       const pi = live as import("./piSdk/PiLiveSession.ts").PiLiveSession;
-      const old = pi.session;
+      const old = nativePiSessionForTests(pi.engine);
       if (mode === "rename-during-reopen") {
-        renameDuringReopen = () => pi.rename("Named while reopening");
+        renameDuringReopen = () => void pi.rename("Named while reopening");
       }
       let backgroundPid: number | undefined;
       if (mode === "background") {
@@ -423,7 +424,9 @@ test.each([
           );
         const { runClearForHost, runCompactForHost } =
           await import("./hostSlashCommands.ts");
-        const leaf = pi.session.sessionManager.getLeafId();
+        const leaf = nativePiSessionForTests(
+          pi.engine,
+        ).sessionManager.getLeafId();
         await assert.rejects(pi.acceptCommitDryRun("not-an-entry"), {
           name: "AccountSwitchInProgressError",
         });
@@ -433,7 +436,10 @@ test.each([
         await assert.rejects(runCompactForHost(pi, ""), {
           name: "AccountSwitchInProgressError",
         });
-        assert.equal(pi.session.sessionManager.getLeafId(), leaf);
+        assert.equal(
+          nativePiSessionForTests(pi.engine).sessionManager.getLeafId(),
+          leaf,
+        );
         if (mode === "admission") {
           const queue = await import("./promptQueue.ts");
           const { promptQueueStore } = await import("./db/promptQueueStore.ts");
@@ -546,7 +552,7 @@ test.each([
           1,
           "stale replacement never runs a continuation",
         );
-        assert.equal(pi.session, old);
+        assert.equal(nativePiSessionForTests(pi.engine), old);
         assert.equal(live.credentialProfileId, a);
         assert.equal(sessionStore.get(id)?.credentialProfileId, a);
         assert.notEqual(
@@ -579,9 +585,9 @@ test.each([
       assert.equal(live.credentialProfileId, b);
       assert.equal(sessionStore.get(id)?.credentialProfileId, b);
       assert.equal(live.sessionFile, file);
-      assert.equal(pi.session.sessionId, old.sessionId);
+      assert.equal(nativePiSessionForTests(pi.engine).sessionId, old.sessionId);
       assert.notEqual(
-        pi.session,
+        nativePiSessionForTests(pi.engine),
         old,
         "engine and its account registry reopened, wrapper retained",
       );
@@ -678,8 +684,8 @@ test.each([
         1 + extraTurns,
       );
       assert.ok(health.readAccountBench(a, "gpt-5.5"));
-      const nativeUser = pi.session.sessionManager
-        .getBranch()
+      const nativeUser = nativePiSessionForTests(pi.engine)
+        .sessionManager.getBranch()
         .find(
           (entry) =>
             entry.type === "message" &&
@@ -730,9 +736,9 @@ test.each([
         );
         continuationForks.push(recoveredFork.id);
         assert.ok(
-          JSON.stringify(recoveredFork.session.messages).includes(
-            "Recovered answer",
-          ),
+          JSON.stringify(
+            nativePiSessionForTests(recoveredFork.engine).messages,
+          ).includes("Recovered answer"),
         );
         const copied = runtime.forkLog(id, recoveredFork.id, recovered.id);
         assert.ok(JSON.stringify(copied).includes("Recovered answer"));
@@ -772,14 +778,14 @@ test.each([
         );
         continuationForks.push(beforeFork.id);
         assert.ok(
-          JSON.stringify(beforeFork.session.messages).includes(
-            "Recovered answer",
-          ),
+          JSON.stringify(
+            nativePiSessionForTests(beforeFork.engine).messages,
+          ).includes("Recovered answer"),
         );
         assert.ok(
-          !JSON.stringify(beforeFork.session.messages).includes(
-            "Next user question",
-          ),
+          !JSON.stringify(
+            nativePiSessionForTests(beforeFork.engine).messages,
+          ).includes("Next user question"),
         );
         const beforeLog = runtime.forkLog(
           id,
@@ -853,7 +859,7 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
       dispose: () => void;
     }>;
   };
-  const old = pi.session;
+  const old = nativePiSessionForTests(pi.engine);
   // A native transcript must have a persisted conversation to reopen its id.
   old.sessionManager.appendMessage({
     role: "user",
@@ -911,7 +917,7 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
     refuse = true;
     release!();
     await rejected;
-    assert.equal(pi.session, old);
+    assert.equal(nativePiSessionForTests(pi.engine), old);
     assert.equal(pi.credentialProfileId, a);
     assert.deepEqual(
       toolExposureForSession(live.id),
@@ -932,17 +938,24 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
     await pi.switchAccount(b, () => {});
     const current = internals.toolRuntimes.get(live.id)!;
     assert.notEqual(current, previous);
-    assert.notEqual(pi.session, old);
+    assert.notEqual(nativePiSessionForTests(pi.engine), old);
     assert.deepEqual(toolExposureForSession(live.id), current.exposure());
     assert.deepEqual(sessionToolExposure(live.id), current.exposure());
     current.initialize(["kb_read"]);
-    assert.equal(pi.session.getActiveToolNames().includes("kb_read"), true);
+    assert.equal(
+      nativePiSessionForTests(pi.engine)
+        .getActiveToolNames()
+        .includes("kb_read"),
+      true,
+    );
     assert.deepEqual(
       prepareToolsForUserTurn(live.id, UNUSED_TOOL_PRUNE_IDLE_MS),
       ["kb_read"],
     );
     assert.equal(
-      pi.session.getActiveToolNames().includes("kb_read"),
+      nativePiSessionForTests(pi.engine)
+        .getActiveToolNames()
+        .includes("kb_read"),
       false,
       "committed prune reaches replacement",
     );
