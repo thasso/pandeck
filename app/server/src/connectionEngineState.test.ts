@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerMessage } from "@assistant/shared";
+import { parseServerFrame } from "./test/serverFrames.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "conn-engine-state-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -30,7 +31,7 @@ function makeConnection() {
   const fakeWs = {
     OPEN: 1,
     readyState: 1,
-    send: (s: string) => sent.push(JSON.parse(s) as ServerMessage),
+    send: (frame: string | Buffer) => sent.push(parseServerFrame(frame)),
   };
   const conn = new (
     Connection as unknown as new (ws: unknown) => Record<string, unknown>

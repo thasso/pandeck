@@ -84,6 +84,7 @@ import { testForgejoSettings } from "./forgejoSettings.ts";
 import { testGithubSettings } from "./githubSettings.ts";
 import { testGoogleSettings } from "./googleSettings.ts";
 import { getSettings } from "./settings.ts";
+import { encodeServerFrame } from "./serverFrames.ts";
 import {
   announceSettingsWritten,
   saveSettings,
@@ -5740,7 +5741,7 @@ export class Connection implements Viewer {
     // session no list may show has nothing left to say.
     if (!wireMessage) return;
     if (this.ws.readyState === this.ws.OPEN)
-      this.ws.send(JSON.stringify(wireMessage));
+      this.ws.send(encodeServerFrame(JSON.stringify(wireMessage)));
   }
 
   /** Socket closed: detach only. The hub keeps the run alive and may evict it later. */

@@ -433,9 +433,13 @@ clients:
   pause hidden, and the install check forwards a real session.
 - That server honours none of the `WebSocketServer` options (found under
   1.3.13): `maxPayload` is Bun's 16 MiB, so the forwarding frame limit is
-  checked per message, and `perMessageDeflate` is never negotiated, so session
-  frames are uncompressed. A send's callback fires once uWS takes the frame, not
-  once it is written; only past uWS's 16 MiB buffer does it wait for a drain.
+  checked per message, and `perMessageDeflate` is never negotiated. The session
+  socket therefore deflates its own large frames (`serverFrames.ts`,
+  `COMPRESSED_SERVER_FRAME_MIN_BYTES`), identically under Node and Bun, and no
+  socket enables the extension. Protocol pings and pongs work, so
+  `socketHeartbeat.ts` closes a session socket that misses one. A send's
+  callback fires once uWS takes the frame, not once it is written; only past
+  uWS's 16 MiB buffer does it wait for a drain.
 - `node:net` delivers reads of up to 512 KiB, where Node's are 64 KiB (unchanged
   on 1.4.2). Forwarding splits them, because the shell refuses messages over 64
   KiB.

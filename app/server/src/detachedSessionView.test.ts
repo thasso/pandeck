@@ -20,6 +20,7 @@ import type {
   ClaudeSdkMessage,
   ClaudeSdkSeam,
 } from "./claudeSdk/sdkSeam.ts";
+import { parseServerFrame } from "./test/serverFrames.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "detached-session-view-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -50,7 +51,7 @@ function fakeSocket(sent: ServerMessage[]) {
   return {
     OPEN: 1,
     readyState: 1,
-    send: (raw: string) => sent.push(JSON.parse(raw) as ServerMessage),
+    send: (frame: string | Buffer) => sent.push(parseServerFrame(frame)),
   } as unknown as ConstructorParameters<typeof Connection>[0];
 }
 

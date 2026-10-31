@@ -8476,6 +8476,17 @@ export type ClientMessage =
 
 /* ----------------------------- server -> client ---------------------------- */
 
+/**
+ * Wire framing of a {@link ServerMessage} on the session socket. A message whose
+ * JSON is under this many UTF-8 bytes travels as a text frame of that JSON; one
+ * at or over it travels as a BINARY frame holding the JSON's raw DEFLATE
+ * stream (RFC 1951, the `deflate-raw` of `DecompressionStream`). The app
+ * compresses instead of `permessage-deflate` because the production Bun
+ * runtime never negotiates the extension (`docs/deployment.md`). Client
+ * frames stay uncompressed text.
+ */
+export const COMPRESSED_SERVER_FRAME_MIN_BYTES = 8 * 1024;
+
 export type ServerMessage =
   /** A session's prompt queue changed; `queue` is its complete new state. */
   | { type: "promptQueue"; sessionId: string; queue: PromptQueueState }

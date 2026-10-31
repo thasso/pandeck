@@ -4,6 +4,7 @@ import type {
   TimelineCacheDescriptor,
 } from "@assistant/shared";
 import { devServerHost, withToken } from "./serverOrigin.ts";
+import { ServerFrameReader } from "./serverFrames.ts";
 import { sessionIdFromPathname } from "./sessionRoutes.ts";
 import {
   perfStatsEnabled,
@@ -79,31 +80,21 @@ export class AssistantSocket {
       for (const msg of pending) this.send(msg);
     };
 
+    ws.binaryType = "arraybuffer";
+    const frames = new ServerFrameReader(
+      (raw) => {
+        if (this.ws === ws) this.dispatch(raw);
+      },
+      (error) => {
+        if (this.ws !== ws) return;
+        // Every later frame builds on the one lost: reconnect and resync.
+        console.warn("[socket] unreadable server frame; reconnecting", error);
+        ws.close();
+      },
+    );
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
-      const raw = event.data as string;
-      // The dev HUD needs the frame SIZE and the parse cost, which only exist
-      // here (everything downstream sees the parsed object). Measured only
-      // while the HUD is on: the UTF-8 count walks the whole frame.
-      const measuring = perfStatsEnabled();
-      const parseStart = measuring ? performance.now() : 0;
-      let msg: ServerMessage;
-      try {
-        msg = JSON.parse(raw) as ServerMessage;
-      } catch {
-        return;
-      }
-      if (measuring) {
-        const parsedAt = performance.now();
-        recordServerMessage(msg.type, utf8Length(raw), parsedAt - parseStart);
-        if (msg.type === "snapshot")
-          recordSessionLoadMark(
-            "snapshotParsed",
-            msg.snapshot.sessionId,
-            parsedAt,
-          );
-      }
-      for (const l of this.listeners) l(msg);
+      frames.push(event.data as string | ArrayBuffer);
     };
 
     ws.onclose = () => {
@@ -116,6 +107,31 @@ export class AssistantSocket {
     };
 
     ws.onerror = () => ws.close();
+  }
+
+  private dispatch(raw: string): void {
+    // The dev HUD needs the message SIZE and the parse cost, which only exist
+    // here (everything downstream sees the parsed object). Measured only
+    // while the HUD is on: the UTF-8 count walks the whole frame.
+    const measuring = perfStatsEnabled();
+    const parseStart = measuring ? performance.now() : 0;
+    let msg: ServerMessage;
+    try {
+      msg = JSON.parse(raw) as ServerMessage;
+    } catch {
+      return;
+    }
+    if (measuring) {
+      const parsedAt = performance.now();
+      recordServerMessage(msg.type, utf8Length(raw), parsedAt - parseStart);
+      if (msg.type === "snapshot")
+        recordSessionLoadMark(
+          "snapshotParsed",
+          msg.snapshot.sessionId,
+          parsedAt,
+        );
+    }
+    for (const l of this.listeners) l(msg);
   }
 
   private scheduleReconnect(): void {
