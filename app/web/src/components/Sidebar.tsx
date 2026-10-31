@@ -39,7 +39,10 @@ import {
 } from "../lib/attentionFilters.ts";
 import { ListGroupSection } from "./ListGroupSection.tsx";
 import { BacklogList } from "./BacklogList.tsx";
-import { ProjectTreePane } from "./ProjectTreePane.tsx";
+import {
+  ProjectTreePane,
+  type SelectedWorktreeFile,
+} from "./ProjectTreePane.tsx";
 import { InitiativeBrowserGroup } from "./initiative/InitiativeBrowserGroup.tsx";
 import {
   WorktreeFileTree,
@@ -252,6 +255,7 @@ interface Props {
   onOpenPullRequest: (target: PullRequestTarget) => void;
   /** Worktree id currently open in the detail route, for highlighting. */
   selectedWorktreeId?: string | null;
+  selectedWorktreeFile?: SelectedWorktreeFile | undefined;
   /** The Knowledge Base is turned on; off, its section is not offered. */
   knowledgeEnabled?: boolean;
   /** The Knowledge Base view the route is on, for highlighting. */
@@ -526,6 +530,7 @@ function SidebarImpl({
   selectedPullRequest,
   onOpenPullRequest,
   selectedWorktreeId,
+  selectedWorktreeFile,
   knowledgeEnabled = true,
   knowledgeView,
   knowledgeUncommitted = 0,
@@ -1012,6 +1017,7 @@ function SidebarImpl({
                 worktrees={worktrees}
                 worktreeStatuses={projectStatusCache.current.value}
                 selectedWorktreeId={selectedWorktreeId}
+                selectedFile={selectedWorktreeFile}
                 onReorder={onReorderProjects}
                 onOpenProject={onOpenProject}
                 onOpenSession={onSelect}

@@ -67,7 +67,7 @@ import {
 export { SETTINGS_SECTION_IDS };
 export type SettingsSection = SettingsSectionId;
 
-export type WorktreeView = "changes" | "files";
+export type WorktreeView = "overview" | "changes" | "files";
 
 export const PERMANENT_ASSISTANT_PATH = "/assistant";
 
@@ -318,7 +318,7 @@ export function parseRoute(pathAndSearch: string): Route {
   // the sidebar section that used to list them is Pull Requests now. The
   // DETAIL route below (changes/files) is untouched.
   const worktreeDetail = pathname.match(
-    /^\/worktrees\/([^/]+)(?:\/(changes|files))?\/?$/,
+    /^\/worktrees\/([^/]+)(?:\/(overview|changes|files))?\/?$/,
   );
   if (worktreeDetail?.[1]) {
     const params = new URLSearchParams(
@@ -457,7 +457,7 @@ function routeKey(route: Route): string {
       : `pullRequests:${route.projectId}:${route.provider}:${route.repositoryKey}:${route.number}`;
   if (route.name === "worktrees")
     return route.id
-      ? `worktrees:${route.id}:${route.view ?? "changes"}`
+      ? `worktrees:${route.id}:${route.view ?? "overview"}`
       : "worktrees";
   if (route.name === "knowledge") return `knowledge:${route.view ?? "files"}`;
   if (route.name === "usage") return "usage";

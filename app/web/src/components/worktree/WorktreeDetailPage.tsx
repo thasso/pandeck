@@ -35,8 +35,11 @@ import {
   FolderTree,
   GitBranch,
   GitCompareArrows,
+  GitCommitHorizontal,
   History,
   List,
+  MessageSquareQuote,
+  SendHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   SlidersHorizontal,
@@ -54,7 +57,12 @@ import type {
   WorktreeFileResponse,
   WorktreeGitStatus,
   WorktreeRecord,
+  SessionListItem,
+  ProjectRecord,
 } from "@assistant/shared";
+import { WorktreeOverview } from "./WorktreeOverview.tsx";
+import { CommitListPanel } from "./WorktreeScopePicker.tsx";
+import { ListGroupSection } from "../ListGroupSection.tsx";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
 import {
   DocumentNavigationActions,
@@ -63,9 +71,14 @@ import {
 } from "../DocumentNavigationShell.tsx";
 import { Button } from "../ui/button.tsx";
 import {
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "../ui/dropdown-menu.tsx";
+import { Badge } from "../ui/badge.tsx";
+import { useCommentActuation } from "../review/CommentActuation.tsx";
+import type { InspectorAction } from "../shell/Inspector.tsx";
+import { useWorktreeDelivery } from "./WorktreeDelivery.tsx";
 import { Field, FieldLabel } from "../ui/field.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Separator } from "../ui/separator.tsx";
@@ -212,6 +225,15 @@ export interface WorktreeDetailPageProps {
    * selected in. Keep the function's identity stable.
    */
   documentComments?: ((path: string) => CommentDocument) | undefined;
+  /**
+   * The sidebar's Projects tree browses this worktree's files and change sets,
+   * so the page draws no rail of its own and Review is one scroll.
+   */
+  sidebarNavigation?: boolean;
+  /** For the Overview's sessions working here. */
+  sessions?: readonly SessionListItem[] | undefined;
+  /** The worktree's Project, named in the Overview's facts. */
+  project?: ProjectRecord | undefined;
 }
 
 function scopeFromRoute(from?: string, to?: string): WorktreeDiffScope {
@@ -486,7 +508,9 @@ function ChangesView({
   navigationControls,
   viewOptionsControl,
   commentsConfigFor,
+  sidebarNavigation = false,
 }: {
+  sidebarNavigation?: boolean;
   worktree: WorktreeRecord;
   narrow: boolean;
   filePath?: string | undefined;
@@ -507,8 +531,11 @@ function ChangesView({
   ) => LineCommentsConfig | undefined;
 }) {
   const scope = useMemo(() => scopeFromRoute(from, to), [from, to]);
-  const reviewMode: ReviewMode =
-    prefs.worktreeReviewMode ?? (narrow ? "changeset" : "by-file");
+  // With the sidebar listing the changed files, Review is the one scroll they
+  // jump into.
+  const reviewMode: ReviewMode = sidebarNavigation
+    ? "changeset"
+    : (prefs.worktreeReviewMode ?? (narrow ? "changeset" : "by-file"));
   const [expandedChangeDirs, setExpandedChangeDirs] = useState<string[]>([]);
 
   // The worktree AND the scope are the fetch key, which is what makes trusting
@@ -617,6 +644,21 @@ function ChangesView({
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
   const [jumpSheetOpen, setJumpSheetOpen] = useState(false);
+  // A file picked in the sidebar arrives as the route's path: scroll the
+  // changeset to it, retrying while its lazily mounted section appears.
+  const changesLoaded = changes !== undefined;
+  useEffect(() => {
+    if (reviewMode !== "changeset" || !filePath || !changesLoaded) return;
+    let frame = 0;
+    let tries = 0;
+    const attempt = () => {
+      const section = sectionsRef.current.get(filePath);
+      if (section) section.scrollIntoView({ block: "start" });
+      else if (tries++ < 30) frame = requestAnimationFrame(attempt);
+    };
+    frame = requestAnimationFrame(attempt);
+    return () => cancelAnimationFrame(frame);
+  }, [reviewMode, filePath, changesLoaded]);
   // The changeset stacks every file in one scroller, so a narrow layout needs a
   // way to jump. WHERE that list opens is a phone question, not a width one: a
   // viewport-wide sheet over the whole app is wrong from a side panel, which is
@@ -738,13 +780,13 @@ function ChangesView({
             </Popover>
           )
         ) : null}
-        {NAVIGATOR_VIEW_SWITCH_ENABLED ? (
+        {NAVIGATOR_VIEW_SWITCH_ENABLED && !sidebarNavigation ? (
           <NavigatorViewToggle
             mode={navigatorMode}
             onChange={setNavigatorMode}
           />
         ) : null}
-        {!narrow ? (
+        {!narrow && !sidebarNavigation ? (
           <NavigatorVisibilityToggle
             collapsed={prefs.worktreeChangesRailCollapsed}
             onChange={(collapsed) =>
@@ -760,6 +802,32 @@ function ChangesView({
   if (reviewMode === "changeset") {
     const changesetContent = (
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+        {sidebarNavigation ? (
+          // The branch's history above its changes: pick a commit (or a
+          // range) to review just that. Folded until asked for.
+          <ListGroupSection
+            id={`worktree-commits:${worktree.id}`}
+            title="Commits"
+            icon={<GitCommitHorizontal size={14} className="shrink-0" />}
+            defaultOpen={false}
+            sticky={false}
+          >
+            <CommitListPanel
+              page
+              worktree={worktree}
+              refreshToken={refreshToken}
+              onPick={(pickedFrom, pickedTo) =>
+                navigate(
+                  worktreePath(worktree.id, "changes", {
+                    from: pickedFrom,
+                    to: pickedTo,
+                  }),
+                )
+              }
+              onClose={() => undefined}
+            />
+          </ListGroupSection>
+        ) : null}
         <WorktreeChangesetList
           worktreeId={worktree.id}
           scope={scope}
@@ -777,7 +845,7 @@ function ChangesView({
       <div className="flex min-h-0 flex-1 flex-col">
         {toolbar}
         {changesRefreshNote}
-        {narrow ? (
+        {narrow || sidebarNavigation ? (
           changesetContent
         ) : (
           <WorktreeRailLayout
@@ -1056,7 +1124,9 @@ function FilesView({
   browseAsDocuments,
   documentComments,
   commentsConfigFor,
+  sidebarNavigation = false,
 }: {
+  sidebarNavigation?: boolean;
   worktree: WorktreeRecord;
   narrow: boolean;
   filePath?: string | undefined;
@@ -1261,13 +1331,13 @@ function FilesView({
               <TooltipContent>{ignoredVisibilityLabel}</TooltipContent>
             </Tooltip>
             {!narrow ? pivotControls : null}
-            {NAVIGATOR_VIEW_SWITCH_ENABLED ? (
+            {NAVIGATOR_VIEW_SWITCH_ENABLED && !sidebarNavigation ? (
               <NavigatorViewToggle
                 mode={navigatorMode}
                 onChange={setNavigatorMode}
               />
             ) : null}
-            {!narrow ? (
+            {!narrow && !sidebarNavigation ? (
               <NavigatorVisibilityToggle
                 collapsed={prefs.worktreeChangesRailCollapsed}
                 onChange={(collapsed) =>
@@ -1308,7 +1378,7 @@ function FilesView({
         narrowListHeader={false}
         // The document header already names the file and holds its pivots.
         narrowDetailBar={!browseAsDocuments}
-        railHidden={browseAsDocuments}
+        railHidden={browseAsDocuments || sidebarNavigation}
         detailActive={Boolean(filePath)}
         {...(!filePath
           ? { onBack: () => navigate(worktreePath(worktree.id, "files")) }
@@ -1494,6 +1564,20 @@ function FilesView({
               />
             ) : null}
           </>
+        ) : sidebarNavigation && !narrow ? (
+          // No file yet: the worktree's top folder, to start from.
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <WorktreeFileTree
+              tree={tree}
+              onSelectFile={(entry) =>
+                navigate(
+                  worktreePath(worktree.id, "files", { path: entry.path }),
+                )
+              }
+              ariaLabel="Worktree files"
+              viewMode="list"
+            />
+          </div>
         ) : (
           <div className="p-6 text-sm text-muted-foreground">
             {browseAsDocuments && !narrow
@@ -1512,6 +1596,76 @@ const VIEW_TABS: Array<{ id: WorktreeView; label: string }> = [
   { id: "changes", label: "Review" },
   { id: "files", label: "Files" },
 ];
+/**
+ * A phone's worktree header, the shape the other object pages draw: Add comment
+ * (and Submit review while comments wait) beside one menu of the worktree's
+ * delivery actions.
+ */
+function WorktreeHeaderActions({ actions }: { actions: InspectorAction[] }) {
+  const actuation = useCommentActuation();
+  const pendingCount = Math.max(0, actuation?.pendingCount ?? 0);
+  const canComment = actuation?.canComment === true;
+  const commentLabel = canComment
+    ? (actuation?.commentLabel ?? "Add comment")
+    : "Select text to comment";
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {actuation?.onComment ? (
+        <span title={commentLabel}>
+          <Button
+            variant="ghost"
+            size="icon"
+            data-comment-actuation
+            // Keeps the text selection the comment is about.
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={actuation.onComment}
+            disabled={!canComment}
+            aria-label={commentLabel}
+          >
+            <MessageSquareQuote />
+          </Button>
+        </span>
+      ) : null}
+      {actuation?.onSubmitReview && pendingCount > 0 ? (
+        <IconButton
+          label={`${actuation.submitLabel ?? "Submit review"} (${pendingCount} pending)`}
+          size="icon"
+          data-comment-actuation
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={actuation.onSubmitReview}
+          className="relative"
+        >
+          <SendHorizontal />
+          <Badge className="absolute -right-1 -top-1">{pendingCount}</Badge>
+        </IconButton>
+      ) : null}
+      {actions.length > 0 ? (
+        <OverflowMenu
+          label="Worktree actions"
+          size="icon"
+          contentClassName="min-w-56"
+        >
+          {actions.map((action) => (
+            <DropdownMenuItem
+              key={action.key}
+              disabled={action.disabled || action.busy}
+              title={action.disabled ? action.disabledReason : action.hint}
+              onClick={action.onRun}
+            >
+              {action.icon}
+              {action.label}
+            </DropdownMenuItem>
+          ))}
+        </OverflowMenu>
+      ) : null}
+    </div>
+  );
+}
+
+const OVERVIEW_TAB: { id: WorktreeView; label: string } = {
+  id: "overview",
+  label: "Overview",
+};
 
 export default function WorktreeDetailPage({
   worktree,
@@ -1539,6 +1693,9 @@ export default function WorktreeDetailPage({
   markdownPreviewFirst = false,
   browseAsDocuments = false,
   documentComments,
+  sidebarNavigation = false,
+  sessions,
+  project,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
     WorktreeGitStatus | undefined
@@ -1549,11 +1706,18 @@ export default function WorktreeDetailPage({
       ? pushedStatus
       : fetchedStatus;
   const [pathCopied, setPathCopied] = useState(false);
+  // One delivery for the page: the Overview shows its facts, a phone's header
+  // menu its actions. Not for a document folder (the Knowledge Base).
+  const delivery = useWorktreeDelivery({
+    worktree: browseAsDocuments ? undefined : worktree,
+    ...(status !== undefined ? { status } : {}),
+  });
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
   // Same default rule ChangesView applies, so the view-options segment and the
   // comment-following below both know what the pane is actually doing.
-  const reviewLayout =
-    prefs.worktreeReviewMode ?? (narrow ? "changeset" : "by-file");
+  const reviewLayout = sidebarNavigation
+    ? "changeset"
+    : (prefs.worktreeReviewMode ?? (narrow ? "changeset" : "by-file"));
 
   // Split diffs are unusable in a column this narrow: it always renders
   // unified, and the remembered split pref applies in a wide pane only (its
@@ -1709,11 +1873,13 @@ export default function WorktreeDetailPage({
       }
     >
       <TabsList variant="line">
-        {VIEW_TABS.map((tab) => (
-          <TabsTrigger key={tab.id} value={tab.id}>
-            {tab.label}
-          </TabsTrigger>
-        ))}
+        {(browseAsDocuments ? VIEW_TABS : [OVERVIEW_TAB, ...VIEW_TABS]).map(
+          (tab) => (
+            <TabsTrigger key={tab.id} value={tab.id}>
+              {tab.label}
+            </TabsTrigger>
+          ),
+        )}
       </TabsList>
     </Tabs>
   );
@@ -1734,7 +1900,7 @@ export default function WorktreeDetailPage({
         {/* By-file vs changeset is a RENDERING choice like unified vs split, so
             it belongs in here rather than as a second segmented control in the
             toolbar competing with the tabs and the scope. */}
-        {view === "changes" && !filePath ? (
+        {view === "changes" && !filePath && !sidebarNavigation ? (
           <Field>
             <FieldLabel>Review layout</FieldLabel>
             <ToggleGroup
@@ -1942,18 +2108,46 @@ export default function WorktreeDetailPage({
                   : undefined
               }
               iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
-              title={title ?? worktree.branch}
+              // One row of identity, as the Task page's id: the branch, muted
+              // and mono. The Overview's body carries it as the title.
+              title={
+                <span className="truncate font-mono text-sm text-muted-foreground">
+                  {title ?? worktree.branch}
+                </span>
+              }
               actions={
                 embedded ? (
                   headerActions
-                ) : filePath ? (
-                  <DocumentNavigationActions className="hidden desktop:flex" />
-                ) : undefined
+                ) : (
+                  <>
+                    {filePath ? (
+                      <DocumentNavigationActions className="hidden desktop:flex" />
+                    ) : null}
+                    {narrow ? (
+                      <WorktreeHeaderActions actions={delivery.actions} />
+                    ) : null}
+                  </>
+                )
               }
             />
           )}
-          {view === "files" ? (
+          {view === "overview" ? (
+            <WorktreeOverview
+              worktree={worktree}
+              status={status}
+              project={project}
+              delivery={delivery}
+              sessions={sessions}
+              navigate={navigate}
+              toolbar={
+                <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+                  {navigationControls}
+                </div>
+              }
+            />
+          ) : view === "files" ? (
             <FilesView
+              sidebarNavigation={sidebarNavigation}
               worktree={worktree}
               narrow={narrow}
               filePath={filePath}
@@ -1973,6 +2167,7 @@ export default function WorktreeDetailPage({
             />
           ) : (
             <ChangesView
+              sidebarNavigation={sidebarNavigation}
               worktree={worktree}
               narrow={narrow}
               filePath={filePath}
@@ -1988,6 +2183,7 @@ export default function WorktreeDetailPage({
               commentsConfigFor={commentsConfigFor}
             />
           )}
+          {delivery.dialogs}
         </div>
       </DiffCommentBarProvider>
     </DiffWorkerProvider>

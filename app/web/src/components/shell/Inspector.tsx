@@ -444,6 +444,8 @@ interface Props {
    * chat session header): the panel then must not overwrite or clear them.
    */
   ownsHeaderActions?: boolean;
+  /** The page's own header draws Add comment on every layout: not listed here. */
+  commentActuationInHeader?: boolean;
 }
 
 /**
@@ -468,6 +470,7 @@ export function Inspector({
   sectionStorageScope,
   children,
   ownsHeaderActions = true,
+  commentActuationInHeader = false,
 }: Props) {
   const groups = relations.filter(
     (group) => group.items.length > 0 || group.alwaysShown,
@@ -491,7 +494,7 @@ export function Inspector({
     routePrimary !== null &&
     !primarySlotShowsReview(commentActuation?.pendingCount);
   const commentActions: InspectorAction[] = [
-    ...(commentActuation?.onComment
+    ...(commentActuation?.onComment && !commentActuationInHeader
       ? [
           {
             key: "comment-actuation:add",

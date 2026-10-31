@@ -49,7 +49,7 @@ import {
   persistExpandedWorktreeIds,
 } from "./worktreeRowParts.tsx";
 import { persistentStore } from "../lib/persistentStore.ts";
-import { worktreePath } from "../hooks/useSessionRouting.ts";
+import { worktreePath, type WorktreeView } from "../hooks/useSessionRouting.ts";
 import {
   DiffStat,
   RowContentHost,
@@ -67,6 +67,13 @@ const WORKTREE_NODE_PREFIX = "worktree:";
 const SESSION_NODE_PREFIX = "session:";
 const MORE_NODE_PREFIX = "more-sessions:";
 const SECTION_NODE_PREFIX = "wt-section:";
+
+/** The worktree file the page has open, as its route names it. */
+export type SelectedWorktreeFile = {
+  view: WorktreeView;
+  path: string;
+  from?: string;
+};
 const CONTENT_NODE_PREFIX = "wt-content:";
 
 /**
@@ -103,6 +110,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onVisibleWorktreeIdsChange,
   onNavigate,
   onRemoveWorktree,
+  selectedFile,
   flush = false,
   density = "tight",
   rootProjectId,
@@ -130,6 +138,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onVisibleWorktreeIdsChange?: (ids: string[]) => void;
   /** Opens a worktree file or changed file picked in a worktree's sections. */
   onNavigate?: ((path: string) => void) | undefined;
+  /** Highlighted in its section, which unfolds to it (with `selectedWorktreeId`). */
+  selectedFile?: SelectedWorktreeFile | undefined;
   /** Opens the Remove dialog for a worktree, from its row's menu. */
   onRemoveWorktree?: ((id: string) => void) | undefined;
   /**
@@ -174,6 +184,48 @@ export const ProjectTreePane = memo(function ProjectTreePane({
       return next;
     });
   }, []);
+  // Which section holds the page's open file: Files, or the change set its
+  // Review scope is (uncommitted, or the branch against its base).
+  const selectedSection = useMemo(() => {
+    if (!selectedWorktreeId || !selectedFile) return undefined;
+    const worktree = worktrees?.find((item) => item.id === selectedWorktreeId);
+    if (!worktree) return undefined;
+    const kind: WorktreeSectionKind | undefined =
+      selectedFile.view === "files"
+        ? "files"
+        : selectedFile.view !== "changes"
+          ? undefined
+          : !selectedFile.from
+            ? "uncommitted"
+            : selectedFile.from === worktree.baseCommit
+              ? "changes"
+              : undefined;
+    return kind ? { worktree, kind, path: selectedFile.path } : undefined;
+  }, [selectedWorktreeId, selectedFile, worktrees]);
+  // Unfold to it once per file opened; folding it again is the reader's call.
+  const selectedWorktreeForUnfold = selectedSection?.worktree;
+  const selectedKind = selectedSection?.kind;
+  const selectedPathForUnfold = selectedSection?.path;
+  useEffect(() => {
+    if (!selectedWorktreeForUnfold || !selectedKind) return;
+    const { id, projectId } = selectedWorktreeForUnfold;
+    setExpandedWorktreeIds((current) => {
+      if (current.has(id)) return current;
+      const next = new Set(current).add(id);
+      persistExpandedWorktreeIds(next);
+      return next;
+    });
+    setCollapsedProjects((current) => {
+      if (!current.has(projectId)) return current;
+      const next = new Set(current);
+      next.delete(projectId);
+      persistCollapsedIds(next);
+      return next;
+    });
+    setExpandedSections((current) =>
+      new Set(current).add(sectionNodeId(id, selectedKind)),
+    );
+  }, [selectedWorktreeForUnfold, selectedKind, selectedPathForUnfold]);
   // The change lists the open worktrees need: the branch's against its base
   // for every open worktree (its header shows the totals, and an empty one
   // hides), uncommitted only once that section is open.
@@ -273,6 +325,11 @@ export const ProjectTreePane = memo(function ProjectTreePane({
       expandedSections,
     ],
   );
+
+  const selectedPathIn = (worktreeId: string, kind: WorktreeSectionKind) =>
+    selectedSection?.worktree.id === worktreeId && selectedSection.kind === kind
+      ? selectedSection.path
+      : undefined;
 
   const projectIconColor = (projectId: string) => {
     const project = projectById.get(projectId);
@@ -515,6 +572,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                   {section === "files" ? (
                     <WorktreeFilesList
                       worktreeId={worktree.id}
+                      selectedPath={selectedPathIn(worktree.id, "files")}
                       refreshToken={
                         worktreeStatuses?.[worktree.id]?.updatedAt ?? 0
                       }
@@ -527,6 +585,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                   ) : (
                     <WorktreeChangeList
                       entry={changeSets[`${worktree.id}:${section}`]}
+                      selectedPath={selectedPathIn(worktree.id, section)}
                       onSelectFile={(path) =>
                         onNavigate?.(
                           worktreePath(worktree.id, "changes", {

@@ -128,9 +128,11 @@ export function RowContentHost({ children }: { children: ReactNode }) {
 
 export function WorktreeChangeList({
   entry,
+  selectedPath,
   onSelectFile,
 }: {
   entry: ChangeSetEntry | undefined;
+  selectedPath?: string | undefined;
   onSelectFile: (path: string) => void;
 }) {
   const files = entry && "response" in entry ? entry.response.files : null;
@@ -147,6 +149,7 @@ export function WorktreeChangeList({
   return (
     <WorktreeFileNavigator
       entries={entries}
+      selectedPath={selectedPath}
       expandedDirectoryPaths={expandedDirs}
       onExpandedDirectoryPathsChange={setExpandedDirs}
       onSelectFile={(file) => onSelectFile(file.path)}
@@ -160,17 +163,24 @@ export function WorktreeChangeList({
 
 export function WorktreeFilesList({
   worktreeId,
+  selectedPath,
   refreshToken,
   onSelectFile,
 }: {
   worktreeId: string;
+  selectedPath?: string | undefined;
   refreshToken: number;
   onSelectFile: (path: string) => void;
 }) {
-  const tree = useWorktreeFileTree({ worktreeId, refreshToken });
+  const tree = useWorktreeFileTree({
+    worktreeId,
+    filePath: selectedPath,
+    refreshToken,
+  });
   return (
     <WorktreeFileTree
       tree={tree}
+      selectedPath={selectedPath}
       onSelectFile={(file) => onSelectFile(file.path)}
       ariaLabel="Worktree files"
     />

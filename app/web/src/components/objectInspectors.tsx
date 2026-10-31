@@ -2357,6 +2357,8 @@ export function WorktreeInspector({
           : []
       }
       actions={actions}
+      // The worktree page's header draws Add comment beside its menu.
+      commentActuationInHeader
       sectionStorageScope={`worktree:${worktree?.id ?? "loading"}`}
     >
       {worktree ? (

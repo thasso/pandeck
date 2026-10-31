@@ -2889,6 +2889,21 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     route.name === "projects" ? (route.id ?? null) : null;
   const selectedWorktreeId =
     route.name === "worktrees" ? (route.id ?? null) : null;
+  // The open worktree file, for the sidebar to highlight and unfold to.
+  const worktreeRouteView = route.name === "worktrees" ? route.view : undefined;
+  const worktreeRoutePath = route.name === "worktrees" ? route.path : undefined;
+  const worktreeRouteFrom = route.name === "worktrees" ? route.from : undefined;
+  const selectedWorktreeFile = useMemo(
+    () =>
+      worktreeRoutePath && worktreeRouteView && worktreeRouteView !== "overview"
+        ? {
+            view: worktreeRouteView,
+            path: worktreeRoutePath,
+            ...(worktreeRouteFrom ? { from: worktreeRouteFrom } : {}),
+          }
+        : undefined,
+    [worktreeRouteView, worktreeRoutePath, worktreeRouteFrom],
+  );
   const selectedDeleteState = selectedProjectId
     ? state.projectMutations[`${selectedProjectId}:delete`]
     : undefined;
@@ -7225,6 +7240,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         selectedPullRequest={pullRequestTarget}
         onOpenPullRequest={openPullRequest}
         selectedWorktreeId={selectedWorktreeId}
+        selectedWorktreeFile={selectedWorktreeFile}
         knowledgeView={
           route.name === "knowledge" ? (route.view ?? "files") : null
         }
@@ -8163,7 +8179,14 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             worktree={worktree}
                             status={state.worktreeStatuses[worktree.id]}
                             narrow={mobileLayout}
-                            view={route.view ?? "changes"}
+                            view={route.view ?? "overview"}
+                            // The sidebar's Projects tree browses its files
+                            // and change sets.
+                            sidebarNavigation
+                            sessions={state.sessions}
+                            project={projects.find(
+                              (item) => item.id === worktree.projectId,
+                            )}
                             filePath={route.path}
                             from={route.from}
                             to={route.to}
