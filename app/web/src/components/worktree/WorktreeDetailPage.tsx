@@ -62,6 +62,7 @@ import type {
   ProjectRecord,
 } from "@assistant/shared";
 import { WorktreeOverview } from "./WorktreeOverview.tsx";
+import { WORKTREE_VIEWS } from "./worktreeViews.tsx";
 import { CommitListPanel } from "./WorktreeScopePicker.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
@@ -742,8 +743,12 @@ function ChangesView({
     // (the scope). How it is rendered lives in the view-options popover, which is
     // why this row survives a 390px viewport with words instead of six glyphs.
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1.5">
-      {navigationControls}
-      <Separator orientation="vertical" className="mx-1 h-4" />
+      {navigationControls ? (
+        <>
+          {navigationControls}
+          <Separator orientation="vertical" className="mx-1 h-4" />
+        </>
+      ) : null}
       <WorktreeScopePicker
         worktree={worktree}
         narrow={narrow}
@@ -1325,7 +1330,7 @@ function FilesView({
             </div>
           </div>
         ) : null
-      ) : (
+      ) : sidebarNavigation && !filePath ? null : (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
           {navigationControls}
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -2032,7 +2037,9 @@ export default function WorktreeDetailPage({
     [comments, commentActions, focusComment, focusRequest, lineComments],
   );
 
-  const navigationControls = (
+  // The full page switches views from its header (wide) or the dock row (a
+  // phone): no tab row. The session panel's Worktree tab keeps its tabs.
+  const navigationControls = sidebarNavigation ? null : (
     <Tabs
       value={view}
       onValueChange={(next: WorktreeView) =>
@@ -2301,6 +2308,43 @@ export default function WorktreeDetailPage({
                     {filePath ? (
                       <DocumentNavigationActions className="hidden desktop:flex" />
                     ) : null}
+                    {sidebarNavigation && !narrow ? (
+                      // The views, as the dock row draws them on a phone.
+                      <ToggleGroup
+                        variant="outline"
+                        size="sm"
+                        spacing={0}
+                        aria-label="Worktree view"
+                        value={[view]}
+                        onValueChange={(next) => {
+                          const picked = next[0] as WorktreeView | undefined;
+                          if (!picked) return;
+                          navigate(
+                            worktreePath(
+                              worktree.id,
+                              picked,
+                              picked === "changes"
+                                ? {
+                                    ...(from !== undefined ? { from } : {}),
+                                    ...(to !== undefined ? { to } : {}),
+                                  }
+                                : {},
+                            ),
+                          );
+                        }}
+                      >
+                        {WORKTREE_VIEWS.map((item) => (
+                          <ToggleGroupItem
+                            key={item.id}
+                            value={item.id}
+                            aria-label={item.label}
+                            title={item.label}
+                          >
+                            {item.icon(14)}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                    ) : null}
                     <WorktreeHeaderActions
                       actions={menuActions}
                       // A wide header draws Add comment itself.
@@ -2327,9 +2371,11 @@ export default function WorktreeDetailPage({
               sessions={sessions}
               navigate={navigate}
               toolbar={
-                <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
-                  {navigationControls}
-                </div>
+                navigationControls ? (
+                  <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+                    {navigationControls}
+                  </div>
+                ) : null
               }
             />
           ) : view === "files" ? (

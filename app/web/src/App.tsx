@@ -325,7 +325,12 @@ import {
   DocumentNavigationMarker,
   useDocumentNavigationRegistration,
 } from "./components/DocumentNavigationShell.tsx";
-import { DockAction, type DockPeek } from "./components/shell/ObjectDock.tsx";
+import {
+  DockAction,
+  DockSegmentGroup,
+  type DockPeek,
+} from "./components/shell/ObjectDock.tsx";
+import { WORKTREE_VIEWS } from "./components/worktree/worktreeViews.tsx";
 import { DocumentZoomSection } from "./components/DocumentZoom.tsx";
 import { documentDockPeek } from "./components/DocumentDockRow.tsx";
 import {
@@ -6631,10 +6636,68 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           ) : null}
         </>
       ) : null;
+    // A worktree page switches its views from here — no tab row on a phone —
+    // and leaves Add comment to its header, beside the actions menu.
+    const worktreeRouteId = route.name === "worktrees" ? route.id : undefined;
+    // The views lead, beside Back: where you are, before what you can do.
+    const worktreeViews = worktreeRouteId ? (
+      <DockSegmentGroup
+        label="Worktree view"
+        items={WORKTREE_VIEWS.map((view) => ({
+          id: view.id,
+          icon: view.icon(18),
+          label: view.label,
+          pressed: (route.view ?? "overview") === view.id,
+          onRun: () =>
+            navigate(
+              worktreePath(
+                worktreeRouteId,
+                view.id,
+                view.id === "changes" && route.name === "worktrees"
+                  ? {
+                      ...(route.from ? { from: route.from } : {}),
+                      ...(route.to ? { to: route.to } : {}),
+                    }
+                  : {},
+              ),
+            ),
+        }))}
+      />
+    ) : null;
+    const rowActions = worktreeRouteId ? (
+      submitInSlot ? (
+        <DockAction
+          icon={<SendHorizontal size={18} />}
+          label={commentActuation?.submitLabel ?? "Submit review"}
+          onRun={submitInSlot}
+          badge={pendingCommentCount}
+          commentActuation
+        />
+      ) : primaryAction ? (
+        <DockAction
+          icon={primaryAction.icon}
+          label={primaryAction.label}
+          onRun={primaryAction.onRun}
+        />
+      ) : null
+    ) : (
+      objectDockActions
+    );
     if (documentRoute && documentNavigation) {
       // `DocumentDockRow` owns the order — Back, Forward, Close, then the
       // source's and the object's actions, and no zoom controls at all.
-      return documentDockPeek(documentNavigation, objectDockActions);
+      const peek = documentDockPeek(documentNavigation, rowActions);
+      return worktreeViews
+        ? {
+            ...peek,
+            back: (
+              <>
+                {peek.back}
+                {worktreeViews}
+              </>
+            ),
+          }
+        : peek;
     }
     // A session screen's row IS the resting composer, bookended two controls a side
     // around the field (`SessionDockActions` owns that arrangement). It always
@@ -6722,7 +6785,17 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         ),
       };
     }
-    return { back, actions: objectDockActions ?? undefined };
+    return {
+      back: worktreeViews ? (
+        <>
+          {back}
+          {worktreeViews}
+        </>
+      ) : (
+        back
+      ),
+      actions: rowActions ?? undefined,
+    };
   }, [
     dockCarriesBack,
     documentRoute,
@@ -6754,6 +6827,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     receiveTranscript,
     routePrimaryAction,
     initiativeTaskPrimaryAction,
+    navigate,
   ]);
 
   // Navigating from inside the object panel changes the main pane — which on a
