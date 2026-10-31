@@ -1,6 +1,15 @@
 import { applyPatch } from "@assistant/shared";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, FolderKanban, MessageSquarePlus } from "lucide-react";
+import {
+  ChevronRight,
+  FileDiff,
+  FolderKanban,
+  FolderTree,
+  GitCompareArrows,
+  MessageSquarePlus,
+  MessagesSquare,
+  SquareArrowOutUpRight,
+} from "lucide-react";
 import type {
   ProjectRecord,
   SessionListItem,
@@ -32,12 +41,24 @@ import {
   persistExpandedWorktreeIds,
 } from "./worktreeRowParts.tsx";
 import { persistentStore } from "../lib/persistentStore.ts";
+import { worktreePath } from "../hooks/useSessionRouting.ts";
+import {
+  DiffStat,
+  RowContentHost,
+  WorktreeChangeList,
+  WorktreeFilesList,
+  useWorktreeChangeSets,
+  type ChangeSetKind,
+  type WorktreeSectionKind,
+} from "./WorktreeSections.tsx";
 
 const INDENT_WIDTH = 12;
 const COLLAPSE_STORAGE_KEY = "assistant.sidebarProjects.collapsed.v1";
 const WORKTREE_NODE_PREFIX = "worktree:";
 const SESSION_NODE_PREFIX = "session:";
 const MORE_NODE_PREFIX = "more-sessions:";
+const SECTION_NODE_PREFIX = "wt-section:";
+const CONTENT_NODE_PREFIX = "wt-content:";
 
 /**
  * @component ProjectTreePane
@@ -71,6 +92,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onStartSession,
   onStartSessionInWorktree,
   onVisibleWorktreeIdsChange,
+  onNavigate,
   flush = false,
   density = "tight",
   rootProjectId,
@@ -96,6 +118,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onStartSession?: (id: string) => void;
   onStartSessionInWorktree?: ((id: string) => void) | undefined;
   onVisibleWorktreeIdsChange?: (ids: string[]) => void;
+  /** Opens a worktree file or changed file picked in a worktree's sections. */
+  onNavigate?: ((path: string) => void) | undefined;
   /**
    * Edge-to-edge, hairline-divided rows (the sidebar), as the Tasks tree: the
    * notes and placeholders around the tree keep their own inset.
@@ -126,6 +150,35 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   const [sessionLimits, setSessionLimits] = useState<Record<string, number>>(
     {},
   );
+  // Section node ids that are open; every section starts collapsed.
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const onToggleSection = useCallback((id: string) => {
+    setExpandedSections((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  // The change lists the open worktrees need: the branch's against its base
+  // for every open worktree (its header shows the totals, and an empty one
+  // hides), uncommitted only once that section is open.
+  const wantedChangeSets = useMemo(() => {
+    const wanted: { worktree: WorktreeRecord; kind: ChangeSetKind }[] = [];
+    for (const worktree of worktrees ?? []) {
+      if (!expandedWorktreeIds.has(worktree.id)) continue;
+      if (!worktree.isMain) wanted.push({ worktree, kind: "changes" });
+      if (expandedSections.has(sectionNodeId(worktree.id, "uncommitted")))
+        wanted.push({ worktree, kind: "uncommitted" });
+    }
+    return wanted;
+  }, [worktrees, expandedWorktreeIds, expandedSections]);
+  const changeSets = useWorktreeChangeSets(
+    wantedChangeSets,
+    worktreeStatuses ?? NO_STATUSES,
+  );
   // One coarse wall clock covers every worktree row. Their memo comparator
   // folds each tick to the stale/fresh bit, so unchanged rows stay untouched.
   const now = useCoarseNow(60_000, Boolean(worktrees?.length));
@@ -153,6 +206,10 @@ export const ProjectTreePane = memo(function ProjectTreePane({
       worktreesByProject,
       statuses: worktreeStatuses ?? {},
       sessionLimits,
+      changeTotals: (worktreeId) => {
+        const entry = changeSets[`${worktreeId}:changes`];
+        return entry && "response" in entry ? entry.response.totals : undefined;
+      },
     });
   }, [
     ordered,
@@ -161,6 +218,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     worktreesByProject,
     worktreeStatuses,
     sessionLimits,
+    changeSets,
   ]);
 
   // One project's contents (not its subprojects), or the whole registry.
@@ -182,20 +240,32 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     () => collectExpandableWorktreeIds(nodes),
     [nodes],
   );
+  const expandableSections = useMemo(
+    () => collectExpandableSectionIds(nodes),
+    [nodes],
+  );
   const expandedIds = useMemo(
     () => [
       ...expandableProjects.filter((id) => !collapsedProjects.has(id)),
       ...expandableWorktrees.filter((id) =>
         expandedWorktreeIds.has(worktreeIdFromNodeId(id)),
       ),
+      ...expandableSections.filter((id) => expandedSections.has(id)),
     ],
     [
       expandableProjects,
       collapsedProjects,
       expandableWorktrees,
       expandedWorktreeIds,
+      expandableSections,
+      expandedSections,
     ],
   );
+
+  const projectIconColor = (projectId: string) => {
+    const project = projectById.get(projectId);
+    return project ? projectColor(project).dot : undefined;
+  };
 
   const visibleWorktreeIds = useMemo(
     () => collectVisibleWorktreeIds(shownNodes, new Set(expandedIds)),
@@ -263,6 +333,14 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     }
     setExpandedWorktreeIds(nextWorktrees);
     persistExpandedWorktreeIds(nextWorktrees);
+    // Sections not in the tree right now (a folded worktree) keep their state.
+    setExpandedSections((current) => {
+      const next = new Set(
+        [...current].filter((id) => !expandableSections.includes(id)),
+      );
+      for (const id of expandableSections) if (expanded.has(id)) next.add(id);
+      return next;
+    });
   };
 
   const handleMove = (items: ProjectBrowserNode[]) => {
@@ -338,8 +416,14 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         indentWidth={INDENT_WIDTH}
         compact
         paddedContent={false}
-        getRowDisclosure={() => false}
+        // Projects and worktrees lead with the tree's chevron, like a band.
+        getRowDisclosure={(node) =>
+          node.data.kind === "project" ||
+          node.data.kind === "worktree" ||
+          node.data.kind === "section"
+        }
         getRowClassName={() => "group/item"}
+        getRowPlain={(node) => node.data.kind === "sectionContent"}
         flush={flush}
         showGuides={false}
         aria-label={rootProjectId ? "Worktrees and sessions" : "Projects"}
@@ -349,11 +433,14 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         onSelectionChange={(ids) => {
           if (ids.length !== 1) return;
           const id = ids[0]!;
-          if (id.startsWith(WORKTREE_NODE_PREFIX))
-            onOpenWorktree?.(worktreeIdFromNodeId(id));
+          if (id.startsWith(SECTION_NODE_PREFIX)) onToggleSection(id);
+          else if (id.startsWith(CONTENT_NODE_PREFIX)) return;
+          // A tap on a project or worktree folds it; its Open action opens it.
+          else if (id.startsWith(WORKTREE_NODE_PREFIX))
+            onToggleWorktree(worktreeIdFromNodeId(id));
           else if (id.startsWith(SESSION_NODE_PREFIX))
             onOpenSession?.(sessionIdFromNodeId(id));
-          else if (!id.startsWith(MORE_NODE_PREFIX)) onOpenProject?.(id);
+          else if (!id.startsWith(MORE_NODE_PREFIX)) onToggleProject(id);
         }}
         // Projects are reordered in the registry tree, never under one.
         {...(rootProjectId
@@ -376,8 +463,9 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                   selected={state.selected}
                   density={density}
                   expanded={state.expanded}
-                  hasContents={state.hasChildren}
+                  hasContents={false}
                   onToggle={onToggleProject}
+                  onOpen={onOpenProject}
                   onStartSession={onStartSession}
                 />
               );
@@ -394,10 +482,53 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                     relationIndex.sessionsByWorktree.get(data.worktree.id)
                       ?.length ?? 0
                   }
-                  onToggleSessions={onToggleWorktree}
+                  onOpen={onOpenWorktree}
+                  iconColor={projectIconColor(data.worktree.projectId)}
                   onStartSession={onStartSessionInWorktree}
                 />
               );
+            case "section":
+              return (
+                <WorktreeSectionHeader
+                  data={data}
+                  density={density}
+                  iconColor={projectIconColor(data.worktree.projectId)}
+                />
+              );
+            case "sectionContent": {
+              const { worktree, section } = data;
+              return (
+                <RowContentHost>
+                  {section === "files" ? (
+                    <WorktreeFilesList
+                      worktreeId={worktree.id}
+                      refreshToken={
+                        worktreeStatuses?.[worktree.id]?.updatedAt ?? 0
+                      }
+                      onSelectFile={(path) =>
+                        onNavigate?.(
+                          worktreePath(worktree.id, "files", { path }),
+                        )
+                      }
+                    />
+                  ) : (
+                    <WorktreeChangeList
+                      entry={changeSets[`${worktree.id}:${section}`]}
+                      onSelectFile={(path) =>
+                        onNavigate?.(
+                          worktreePath(worktree.id, "changes", {
+                            path,
+                            ...(section === "changes"
+                              ? { from: worktree.baseCommit }
+                              : {}),
+                          }),
+                        )
+                      }
+                    />
+                  )}
+                </RowContentHost>
+              );
+            }
             case "session":
               return (
                 <SessionRowContent
@@ -462,7 +593,77 @@ type ProjectBrowserNodeData =
   | { kind: "project"; project: ProjectRecord }
   | { kind: "worktree"; worktree: WorktreeRecord; status?: WorktreeGitStatus }
   | { kind: "session"; session: SessionListItem }
-  | { kind: "moreSessions"; scopeKey: string; remaining: number };
+  | { kind: "moreSessions"; scopeKey: string; remaining: number }
+  | {
+      kind: "section";
+      worktree: WorktreeRecord;
+      section: WorktreeSectionKind;
+      count?: number;
+      stat?: { additions: number; deletions: number };
+    }
+  | {
+      kind: "sectionContent";
+      worktree: WorktreeRecord;
+      section: Exclude<WorktreeSectionKind, "sessions">;
+    };
+
+const NO_STATUSES: Record<string, WorktreeGitStatus> = {};
+
+const SECTION_LABEL: Record<WorktreeSectionKind, string> = {
+  sessions: "Sessions",
+  uncommitted: "Uncommitted",
+  changes: "Changes",
+  files: "Files",
+};
+
+const SECTION_ICON: Record<WorktreeSectionKind, typeof FileDiff> = {
+  sessions: MessagesSquare,
+  uncommitted: FileDiff,
+  changes: GitCompareArrows,
+  files: FolderTree,
+};
+
+/** A worktree section's heading row: a standard one-line row; a tap folds it. */
+const WorktreeSectionHeader = memo(function WorktreeSectionHeader({
+  data,
+  density,
+  iconColor,
+}: {
+  data: Extract<ProjectBrowserNodeData, { kind: "section" }>;
+  density: RowDensity;
+  iconColor: string | undefined;
+}) {
+  const Icon = SECTION_ICON[data.section];
+  const label =
+    data.section === "changes"
+      ? `Changes vs ${data.worktree.baseBranch}`
+      : SECTION_LABEL[data.section];
+  return (
+    <ListRowContent
+      density={density}
+      leading={
+        <Icon
+          className="shrink-0 text-muted-foreground"
+          style={iconColor ? { color: iconColor } : undefined}
+          aria-hidden
+        />
+      }
+      title={label}
+      trailing={
+        data.count !== undefined ? (
+          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {data.count}
+          </span>
+        ) : data.stat ? (
+          <DiffStat
+            additions={data.stat.additions}
+            deletions={data.stat.deletions}
+          />
+        ) : undefined
+      }
+    />
+  );
+});
 
 type ProjectBrowserNode = TreeNode<ProjectBrowserNodeData>;
 
@@ -473,6 +674,7 @@ const ProjectRowContent = memo(function ProjectRowContent({
   expanded,
   hasContents,
   onToggle,
+  onOpen,
   onStartSession,
 }: {
   project: ProjectRecord;
@@ -481,6 +683,7 @@ const ProjectRowContent = memo(function ProjectRowContent({
   expanded: boolean;
   hasContents: boolean;
   onToggle: (id: string) => void;
+  onOpen?: ((id: string) => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
 }) {
   const color = projectColor(project);
@@ -524,18 +727,32 @@ const ProjectRowContent = memo(function ProjectRowContent({
             />
             Contents
           </Badge>
-        ) : null
+        ) : undefined
       }
       actions={
-        onStartSession ? (
+        onStartSession || onOpen ? (
           <ListRowActions
             actions={[
-              {
-                id: "start-session",
-                label: `Start session in project: ${project.key} ${project.name}`,
-                icon: <MessageSquarePlus />,
-                onSelect: () => onStartSession(project.id),
-              },
+              ...(onOpen
+                ? [
+                    {
+                      id: "open",
+                      label: `Open project: ${project.key} ${project.name}`,
+                      icon: <SquareArrowOutUpRight />,
+                      onSelect: () => onOpen(project.id),
+                    },
+                  ]
+                : []),
+              ...(onStartSession
+                ? [
+                    {
+                      id: "start-session",
+                      label: `Start session in project: ${project.key} ${project.name}`,
+                      icon: <MessageSquarePlus />,
+                      onSelect: () => onStartSession(project.id),
+                    },
+                  ]
+                : []),
             ]}
             label="More project actions"
             alwaysVisible={selected}
@@ -574,6 +791,9 @@ function withRelatedChildren(
     worktreesByProject: Map<string, WorktreeRecord[]>;
     statuses: Record<string, WorktreeGitStatus>;
     sessionLimits: Record<string, number>;
+    changeTotals: (
+      worktreeId: string,
+    ) => { files: number; additions: number; deletions: number } | undefined;
   },
 ): ProjectBrowserNode[] {
   return nodes.map((node) => {
@@ -597,7 +817,7 @@ function withRelatedChildren(
         0,
         linkedSessions.length - visibleSessions.length,
       );
-      const childrenValue = [
+      const sessionNodes = [
         ...visibleSessions.map((session) => ({
           id: sessionNodeId(session.id),
           data: { kind: "session", session } satisfies ProjectBrowserNodeData,
@@ -614,6 +834,60 @@ function withRelatedChildren(
               },
             ]
           : []),
+      ];
+      const status = context.statuses[worktree.id];
+      const totals = worktree.isMain
+        ? undefined
+        : context.changeTotals(worktree.id);
+      const section = (
+        kind: WorktreeSectionKind,
+        children: ProjectBrowserNode[],
+        extra: {
+          count?: number;
+          stat?: { additions: number; deletions: number };
+        } = {},
+      ): ProjectBrowserNode => ({
+        id: sectionNodeId(worktree.id, kind),
+        data: { kind: "section", worktree, section: kind, ...extra },
+        children,
+      });
+      const content = (
+        kind: Exclude<WorktreeSectionKind, "sessions">,
+      ): ProjectBrowserNode[] => [
+        {
+          id: `${CONTENT_NODE_PREFIX}${worktree.id}:${kind}`,
+          data: { kind: "sectionContent", worktree, section: kind },
+        },
+      ];
+      const childrenValue: ProjectBrowserNode[] = [
+        ...(linkedSessions.length > 0
+          ? [
+              section("sessions", sessionNodes, {
+                count: linkedSessions.length,
+              }),
+            ]
+          : []),
+        ...(status?.dirty
+          ? [
+              section("uncommitted", content("uncommitted"), {
+                stat: {
+                  additions: status.additions,
+                  deletions: status.deletions,
+                },
+              }),
+            ]
+          : []),
+        ...(totals && totals.files > 0
+          ? [
+              section("changes", content("changes"), {
+                stat: {
+                  additions: totals.additions,
+                  deletions: totals.deletions,
+                },
+              }),
+            ]
+          : []),
+        section("files", content("files")),
       ];
       related.push({
         id: worktreeNodeId(worktree.id),
@@ -768,6 +1042,20 @@ function projectPlacementsFromNodes(
     );
   }
   return out;
+}
+
+function sectionNodeId(worktreeId: string, kind: WorktreeSectionKind): string {
+  return `${SECTION_NODE_PREFIX}${worktreeId}:${kind}`;
+}
+
+function collectExpandableSectionIds(nodes: ProjectBrowserNode[]): string[] {
+  const ids: string[] = [];
+  const visit = (node: ProjectBrowserNode) => {
+    if (node.data.kind === "section") ids.push(node.id);
+    for (const child of node.children ?? []) visit(child);
+  };
+  for (const node of nodes) visit(node);
+  return ids;
 }
 
 function worktreeNodeId(id: string): string {

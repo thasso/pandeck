@@ -11,6 +11,7 @@ import {
   GitBranch,
   House,
   MessageSquarePlus,
+  SquareArrowOutUpRight,
 } from "lucide-react";
 import type {
   SessionPullRequestSummary,
@@ -64,6 +65,8 @@ function WorktreeRowSummary({
   sessionCount = 0,
   expanded = false,
   onToggleSessions,
+  iconColor,
+  onOpen,
   onStartSession,
   tasks,
   tasksExpanded = false,
@@ -131,6 +134,7 @@ function WorktreeRowSummary({
         <>
           <span
             className={`flex size-4 shrink-0 items-center justify-center ${selected ? "text-foreground" : "text-muted-foreground"}`}
+            style={iconColor ? { color: iconColor } : undefined}
             aria-hidden
           >
             {worktree.isMain ? <House size={16} /> : <GitBranch size={16} />}
@@ -202,16 +206,30 @@ function WorktreeRowSummary({
         </>
       }
       actions={
-        onStartSession ? (
+        onStartSession || onOpen ? (
           <ListRowActions
             alwaysVisible={selected}
             actions={[
-              {
-                id: "start-session",
-                label: `Start session in worktree: ${branch}`,
-                icon: <MessageSquarePlus />,
-                onSelect: () => onStartSession(worktree.id),
-              },
+              ...(onOpen
+                ? [
+                    {
+                      id: "open",
+                      label: `Open worktree: ${branch}`,
+                      icon: <SquareArrowOutUpRight />,
+                      onSelect: () => onOpen(worktree.id),
+                    },
+                  ]
+                : []),
+              ...(onStartSession
+                ? [
+                    {
+                      id: "start-session",
+                      label: `Start session in worktree: ${branch}`,
+                      icon: <MessageSquarePlus />,
+                      onSelect: () => onStartSession(worktree.id),
+                    },
+                  ]
+                : []),
             ]}
           />
         ) : undefined
@@ -452,6 +470,10 @@ interface WorktreeRowProps {
   sessionCount?: number;
   expanded?: boolean;
   onToggleSessions?: (id: string) => void;
+  /** The icon in this colour (its project's), not the muted grey. */
+  iconColor?: string | undefined;
+  /** Opens the worktree page, where tapping the row only expands it. */
+  onOpen?: ((id: string) => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
   /** In-progress, unarchived Tasks, scoped by the host. */
   tasks?: readonly WorktreeContextTask[] | undefined;
@@ -494,6 +516,8 @@ export const WorktreeRow = memo(
     previous.sessionCount === next.sessionCount &&
     previous.expanded === next.expanded &&
     previous.onToggleSessions === next.onToggleSessions &&
+    previous.onOpen === next.onOpen &&
+    previous.iconColor === next.iconColor &&
     previous.onStartSession === next.onStartSession &&
     previous.tasks === next.tasks &&
     previous.tasksExpanded === next.tasksExpanded &&

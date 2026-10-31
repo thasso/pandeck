@@ -1017,6 +1017,7 @@ function SidebarImpl({
                 onStartSession={onStartSessionForProject}
                 onStartSessionInWorktree={onStartSessionInWorktree}
                 onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+                onNavigate={onNavigate}
                 flush
               />
             </ListGroupSection>

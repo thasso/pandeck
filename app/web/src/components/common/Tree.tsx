@@ -213,6 +213,8 @@ export interface TreeProps<T> {
    * says the rows belong to it, so an indent would only spend width.
    */
   getRowBand?: ((node: TreeNode<T>) => boolean) | undefined;
+  /** Rows that host content of their own: no hover or selection tint. */
+  getRowPlain?: ((node: TreeNode<T>) => boolean) | undefined;
   /** Extra classes on the tree container. */
   className?: string | undefined;
   /** Accessible label for the tree. */
@@ -291,6 +293,7 @@ export function Tree<T>({
   getRowDisclosure,
   getRowClassName,
   getRowBand,
+  getRowPlain,
   className,
   "aria-label": ariaLabel,
 }: TreeProps<T>) {
@@ -614,6 +617,7 @@ export function Tree<T>({
         getRowBand?.(toNode(node)) && "sticky top-0 z-20",
       ),
       band: getRowBand?.(toNode(node)) ?? false,
+      plain: getRowPlain?.(toNode(node)) ?? false,
       onToggle: () => setExpandedFor(node.id, !isExpanded),
       onSelect: (e: ReactMouseEvent<HTMLLIElement>) =>
         selectNode(node, e.shiftKey || e.metaKey || e.ctrlKey),
@@ -705,6 +709,8 @@ interface RowProps<T> {
   rowClassName?: string | undefined;
   /** Drawn as a group band (`getRowBand`). */
   band?: boolean;
+  /** No hover or selection tint (`getRowPlain`). */
+  plain?: boolean;
   onToggle: () => void;
   onSelect: (e: ReactMouseEvent<HTMLLIElement>) => void;
   onKeyDown: (e: ReactKeyboardEvent<HTMLLIElement>) => void;
@@ -728,6 +734,7 @@ function RowBody<T>({
   content,
   onToggle,
   band = false,
+  plain = false,
   badge,
   elevated,
 }: Pick<
@@ -746,6 +753,7 @@ function RowBody<T>({
   | "content"
   | "onToggle"
   | "band"
+  | "plain"
 > & { badge?: number | undefined; elevated?: boolean }) {
   const stretch = rowAlign === "stretch";
   // Content-owned padding must not be applied again by the tree frame.
@@ -768,15 +776,17 @@ function RowBody<T>({
         // selection tint (no text recolor, so the hierarchy stays legible).
         elevated
           ? "border border-border bg-card shadow-lg"
-          : band
-            ? selected
-              ? "bg-accent bg-none text-accent-foreground"
-              : "hover:bg-accent hover:bg-none hover:text-accent-foreground"
-            : selected
-              ? flush
-                ? "bg-muted"
-                : "bg-accent/60"
-              : "hover:bg-muted",
+          : plain
+            ? ""
+            : band
+              ? selected
+                ? "bg-accent bg-none text-accent-foreground"
+                : "hover:bg-accent hover:bg-none hover:text-accent-foreground"
+              : selected
+                ? flush
+                  ? "bg-muted"
+                  : "bg-accent/60"
+                : "hover:bg-muted",
       )}
       style={{ paddingLeft: inset + depth * indentWidth }}
     >
