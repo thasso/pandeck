@@ -194,10 +194,9 @@ const failed = (message: string) =>
   showToast(message, { tone: "error", durationMs: TOAST_DWELL_MS });
 
 /**
- * A worktree row's git actions, each offered only when its state calls for it:
- * Commit with changes, Push with commits to push or a branch never pushed, a
- * pull from origin or the base when behind it, and Remove for a non-main
- * worktree. Outcomes travel as toasts — a sidebar row has no place to show
+ * A worktree row's git actions — Commit, Push, a pull from origin or the
+ * base, Remove — always listed, each disabled when its state does not call
+ * for it. Outcomes travel as toasts — a sidebar row has no place to show
  * them. A commit the review blocks is left for the worktree page.
  */
 export function useWorktreeRowActions(
@@ -223,14 +222,20 @@ export function useWorktreeRowActions(
           { tone: result.status === "updated" ? "success" : "default" },
         );
       });
-    const actions: ListRowAction[] = [];
-    if (status?.dirty)
-      actions.push({
+    // Every act always listed, so each row's menu reads the same; one the
+    // state does not allow is disabled.
+    const pushable = Boolean(
+      status?.head && (!status.upstream || status.upstream.ahead > 0),
+    );
+    const actions: ListRowAction[] = [
+      {
         id: "commit",
         label: "Commit",
-        accessibleLabel: `Commit the changes in ${worktree.branch}`,
+        accessibleLabel: status?.dirty
+          ? `Commit the changes in ${worktree.branch}`
+          : "Nothing to commit",
         icon: <GitCommitHorizontal />,
-        disabled: busy,
+        disabled: busy || !status?.dirty,
         onSelect: run(async () => {
           const { result } = await autoCommitWorktree(worktree.id);
           if (result.status === "committed")
@@ -245,14 +250,15 @@ export function useWorktreeRowActions(
                   : "Nothing was committed."),
             );
         }),
-      });
-    if (status?.head && (!status.upstream || status.upstream.ahead > 0))
-      actions.push({
+      },
+      {
         id: "push",
         label: "Push",
-        accessibleLabel: `Push ${worktree.branch}`,
+        accessibleLabel: pushable
+          ? `Push ${worktree.branch}`
+          : "Nothing to push",
         icon: <Upload />,
-        disabled: busy,
+        disabled: busy || !pushable,
         onSelect: run(async () => {
           const result = await pushWorktree(worktree.id);
           if (result.status === "failed")
@@ -265,30 +271,44 @@ export function useWorktreeRowActions(
               { tone: "success" },
             );
         }),
-      });
-    if (status?.upstream && status.upstream.behind > 0)
-      actions.push({
+      },
+      {
         id: "pull-origin",
         label: "Pull from origin",
+        accessibleLabel: !status?.upstream
+          ? "Push the branch first"
+          : status.upstream.behind > 0
+            ? "Pull from origin"
+            : "Nothing to pull",
         icon: <ArrowDownToLine />,
-        disabled: busy,
+        disabled: busy || !(status?.upstream && status.upstream.behind > 0),
         onSelect: sync("pull-rebase", "Pull from origin"),
-      });
-    if (!worktree.isMain && status && status.behind > 0)
-      actions.push({
+      },
+      {
         id: "pull-base",
-        label: `Pull from ${worktree.baseBranch}`,
+        label: worktree.isMain
+          ? "Pull from base"
+          : `Pull from ${worktree.baseBranch}`,
+        accessibleLabel: worktree.isMain
+          ? "Not for the main checkout"
+          : status && status.behind > 0
+            ? `Pull from ${worktree.baseBranch}`
+            : `Level with ${worktree.baseBranch}`,
         icon: <RefreshCw />,
-        disabled: busy,
+        disabled: busy || worktree.isMain || !(status && status.behind > 0),
         onSelect: sync("rebase-main", `Pull from ${worktree.baseBranch}`),
-      });
-    if (!worktree.isMain && onRemove)
+      },
+    ];
+    if (onRemove)
       actions.push({
         id: "remove",
         label: "Remove worktree…",
+        ...(worktree.isMain
+          ? { accessibleLabel: "Not for the main checkout" }
+          : {}),
         icon: <Trash2 />,
         variant: "destructive",
-        disabled: busy,
+        disabled: busy || worktree.isMain,
         onSelect: () => onRemove(worktree.id),
       });
     return actions;

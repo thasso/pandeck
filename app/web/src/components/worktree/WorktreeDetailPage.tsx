@@ -1698,7 +1698,8 @@ function WorktreeHeaderActions({
                           disabled={action.busy || action.disabled}
                         />
                       }
-                      className="disabled:pointer-events-none disabled:opacity-50"
+                      // One line: the reason gives way (truncates), never wraps.
+                      className="flex-nowrap disabled:pointer-events-none disabled:opacity-50"
                       role="menuitem"
                       title={action.disabledReason}
                       onClick={() => {
@@ -1709,13 +1710,22 @@ function WorktreeHeaderActions({
                       {action.icon ? (
                         <ItemMedia variant="icon">{action.icon}</ItemMedia>
                       ) : null}
-                      <ItemContent>
+                      {/* The act keeps its full label; the reason gives way. */}
+                      <ItemContent className="shrink-0">
                         <ItemTitle>
                           <span className="truncate">{action.label}</span>
                         </ItemTitle>
                       </ItemContent>
-                      {action.hint ? (
-                        <ItemActions>{action.hint}</ItemActions>
+                      {/* A disabled row says why: a phone shows no tooltip. */}
+                      {(action.disabled && action.disabledReason) ||
+                      action.hint ? (
+                        <ItemActions className="min-w-0 shrink text-xs text-muted-foreground">
+                          <span className="truncate">
+                            {action.disabled && action.disabledReason
+                              ? action.disabledReason
+                              : action.hint}
+                          </span>
+                        </ItemActions>
                       ) : null}
                     </Item>
                   ))}
@@ -1762,6 +1772,11 @@ function WorktreeHeaderActions({
             >
               {action.icon}
               {action.label}
+              {action.disabled && action.disabledReason ? (
+                <span className="ml-auto pl-3 text-xs text-muted-foreground">
+                  {action.disabledReason}
+                </span>
+              ) : null}
             </DropdownMenuItem>
           ))}
           {ignoredFiles ? (

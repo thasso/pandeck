@@ -2157,35 +2157,42 @@ export function worktreeInspectorActions(
       onRun: () => handlers.onStartSession(worktree.id),
     },
     ...(handlers.deliveryActions ?? []),
-    ...(worktree.isMain
-      ? []
-      : [
-          {
-            key: "merge",
-            icon: <GitMerge size={14} />,
-            label: "Merge back…",
-            onRun: () => handlers.onMerge(worktree.id),
-          },
-          {
-            key: "remove",
-            icon: <Trash2 size={14} />,
-            label: "Remove worktree…",
-            onRun: () => handlers.onRemove(worktree.id),
-          },
-          {
-            // Retire is the END of a branch's life, and a different act from
-            // Remove: it refreshes the merge target, VERIFIES this branch is
-            // delivered into it, settles the sessions working here and only
-            // then deletes the checkout and the branch. Remove does none of
-            // that verification — it never fetches — so the two are not one
-            // action with a flag, and neither replaces the other.
-            key: "retire",
-            icon: <ArchiveX size={14} />,
-            label: "Retire worktree…",
-            busy: handlers.retireBusy ?? false,
-            onRun: () => handlers.onRetire(),
-          },
-        ]),
+    // Always listed; on the main checkout, which IS the base, disabled.
+    ...[
+      {
+        key: "merge",
+        icon: <GitMerge size={14} />,
+        label: "Merge back…",
+        onRun: () => handlers.onMerge(worktree.id),
+      },
+      {
+        key: "remove",
+        icon: <Trash2 size={14} />,
+        label: "Remove worktree…",
+        onRun: () => handlers.onRemove(worktree.id),
+      },
+      {
+        // Retire is the END of a branch's life, and a different act from
+        // Remove: it refreshes the merge target, VERIFIES this branch is
+        // delivered into it, settles the sessions working here and only then
+        // deletes the checkout and the branch. Remove does none of that
+        // verification — it never fetches — so the two are not one action
+        // with a flag, and neither replaces the other.
+        key: "retire",
+        icon: <ArchiveX size={14} />,
+        label: "Retire worktree…",
+        busy: handlers.retireBusy ?? false,
+        onRun: () => handlers.onRetire(),
+      },
+    ].map((action) =>
+      worktree.isMain
+        ? {
+            ...action,
+            disabled: true,
+            disabledReason: "Not for the main checkout",
+          }
+        : action,
+    ),
     // Only while there is something unsent: the batch is DERIVED from the
     // comments no session has been handed, so with nothing pending this action
     // would send nothing at all.
