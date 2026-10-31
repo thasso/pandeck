@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import type { ServerMessage, EntryFileTreeEntry } from "@assistant/shared";
-import { git, gitOptional } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { createSkill } from "./createSkill.ts";
 import {
   deleteEntry,
@@ -40,6 +40,9 @@ import {
   LibraryStore,
 } from "../library/libraryStore.ts";
 import { setLibraryBroadcaster } from "../library/libraryPublish.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
+
+const { git, gitOptional } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 let root: string;
 let outsideRoot: string;

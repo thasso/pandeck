@@ -1,41 +1,56 @@
 import { join } from "node:path";
 import type { WorkflowResultStatus } from "@assistant/shared";
-import { checkoutPathExists } from "../checkoutFileAccess.ts";
+import { checkoutFilesOn } from "../checkoutFileAccess.ts";
 import { getWorktree } from "../db/worktreeStore.ts";
 import type { WorkflowRunRow, WorkflowStepRow } from "../db/workflowStore.ts";
-import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
+import { checkoutGitOn, withRepoLock } from "../gitExec.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "../worktrees/knowledgeCheckout.ts";
 import {
   repairRebasePayloadOf,
   type RebaseRepairSafetyEvidence,
 } from "./codeDeliveryRecipe.ts";
 
-async function rebaseInProgress(cwd: string): Promise<boolean> {
-  const result = await gitOptional(["rev-parse", "--absolute-git-dir"], cwd);
+async function rebaseInProgress(
+  side: CheckoutSide,
+  cwd: string,
+): Promise<boolean> {
+  const { pathExists } = checkoutFilesOn(side);
+  const result = await checkoutGitOn(side).gitOptional(
+    ["rev-parse", "--absolute-git-dir"],
+    cwd,
+  );
   if (result.code !== 0) return false;
   const dir = result.stdout.trim();
   return (
-    (await checkoutPathExists(cwd, join(dir, "rebase-merge"))) ||
-    (await checkoutPathExists(cwd, join(dir, "rebase-apply")))
+    (await pathExists(cwd, join(dir, "rebase-merge"))) ||
+    (await pathExists(cwd, join(dir, "rebase-apply")))
   );
 }
 
-async function head(cwd: string): Promise<string> {
+async function head(side: CheckoutSide, cwd: string): Promise<string> {
   return (
-    await git(["rev-parse", "--verify", "HEAD^{commit}"], cwd)
+    await checkoutGitOn(side).git(
+      ["rev-parse", "--verify", "HEAD^{commit}"],
+      cwd,
+    )
   ).stdout.trim();
 }
 
-async function branch(cwd: string): Promise<string> {
-  const result = await gitOptional(
+async function branch(side: CheckoutSide, cwd: string): Promise<string> {
+  const result = await checkoutGitOn(side).gitOptional(
     ["symbolic-ref", "--quiet", "--short", "HEAD"],
     cwd,
   );
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
-async function status(cwd: string): Promise<string> {
+async function status(side: CheckoutSide, cwd: string): Promise<string> {
   return (
-    await git(["status", "--porcelain=v1", "--untracked-files=all"], cwd)
+    await checkoutGitOn(side).git(
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      cwd,
+    )
   ).stdout.trim();
 }
 
@@ -67,21 +82,23 @@ export async function finalizeRebaseRepair(
       `workflow repair step ${step.id} no longer matches its worktree`,
     );
 
+  const side = checkoutSideOf(row);
+  const { git, gitOptional, repoLockKey } = checkoutGitOn(side);
   return withRepoLock(await repoLockKey(row.mainRepoRoot), async () => {
     if (resultStatus === "completed") {
-      if (await rebaseInProgress(row.path))
+      if (await rebaseInProgress(side, row.path))
         throw new Error(
           "rebase repair cannot complete while a rebase is still in progress",
         );
-      if ((await branch(row.path)) !== runBranch)
+      if ((await branch(side, row.path)) !== runBranch)
         throw new Error(
           `rebase repair cannot complete off the run branch "${runBranch}"`,
         );
-      if (await status(row.path))
+      if (await status(side, row.path))
         throw new Error(
           "rebase repair cannot complete with uncommitted or untracked changes",
         );
-      await head(row.path);
+      await head(side, row.path);
       const based = await gitOptional(
         ["merge-base", "--is-ancestor", repair.baseBranch, "HEAD"],
         row.path,
@@ -93,9 +110,9 @@ export async function finalizeRebaseRepair(
       return undefined;
     }
 
-    if (await rebaseInProgress(row.path))
+    if (await rebaseInProgress(side, row.path))
       await gitOptional(["rebase", "--abort"], row.path);
-    if ((await branch(row.path)) !== runBranch)
+    if ((await branch(side, row.path)) !== runBranch)
       await git(["checkout", "-f", runBranch], row.path);
     await git(["reset", "--hard", repair.originalHead], row.path);
     // The repair started from a verified clean tree, so any untracked path now
@@ -103,14 +120,16 @@ export async function finalizeRebaseRepair(
     // failed/blocked recovery as an unreviewed workspace change.
     await git(["clean", "-fd"], row.path);
     const problems = [
-      (await rebaseInProgress(row.path)) ? "a rebase is still in progress" : "",
-      (await branch(row.path)) !== runBranch
+      (await rebaseInProgress(side, row.path))
+        ? "a rebase is still in progress"
+        : "",
+      (await branch(side, row.path)) !== runBranch
         ? `the checkout is not on ${runBranch}`
         : "",
-      (await head(row.path).catch(() => "")) !== repair.originalHead
+      (await head(side, row.path).catch(() => "")) !== repair.originalHead
         ? `HEAD was not restored to ${repair.originalHead}`
         : "",
-      (await status(row.path)) ? "the worktree is not clean" : "",
+      (await status(side, row.path)) ? "the worktree is not clean" : "",
     ].filter(Boolean);
     if (problems.length > 0)
       throw new Error(

@@ -1,9 +1,10 @@
-import { gitOptional } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import {
   listWorktrees,
   type WorktreeCommentRow,
   type WorktreeRow,
 } from "../db/worktreeStore.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 
 type CommentOwner = Pick<
   WorktreeCommentRow,
@@ -50,7 +51,7 @@ export async function captureMainCommentOwner(
       };
 
     if (!anchorCommit) return undefined;
-    const refs = await gitOptional(
+    const refs = await checkoutGitOn(checkoutSideOf(mainRow)).gitOptional(
       [
         "for-each-ref",
         "--format=%(refname:short)",

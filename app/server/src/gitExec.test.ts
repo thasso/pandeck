@@ -17,14 +17,7 @@ import { checkoutFailureOf } from "./checkoutFileAccess.ts";
 import {
   GitCommandError,
   countGitExecutionsForTests,
-  git,
-  gitBoundedStdout,
-  gitOptional,
-  gitOptionalExit,
-  gitRawStdout,
-  gitReadOnlyOptional,
-  gitWithInputOptional,
-  repoLockKey,
+  checkoutGitOn,
 } from "./gitExec.ts";
 import {
   git as serverRepoGit,
@@ -36,6 +29,18 @@ import {
   inProcessWorkerServedForTests,
   inProcessWorkerServedMethodForTests,
 } from "./workers/inProcessWorker.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
+
+const {
+  git,
+  gitBoundedStdout,
+  gitOptional,
+  gitOptionalExit,
+  gitRawStdout,
+  gitReadOnlyOptional,
+  gitWithInputOptional,
+  repoLockKey,
+} = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 const missingCwd = join(tmpdir(), `git-exec-missing-${randomUUID()}`);
 

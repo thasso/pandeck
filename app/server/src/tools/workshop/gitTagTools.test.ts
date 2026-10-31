@@ -11,6 +11,7 @@ import {
   setApprovalBroadcastForTests,
 } from "../../pendingApprovals.ts";
 import { gitPublishTagTool, publishApprovedTag } from "./gitTagTools.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
 
 const directories: string[] = [];
 const originalGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
@@ -57,6 +58,7 @@ describe("git_publish_tag", () => {
   test("refuses relative checkout paths", async () => {
     await assert.rejects(
       publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
         repoPath: "repo",
         tag: "v1",
         expectedHead: "a".repeat(40),
@@ -84,6 +86,7 @@ describe("git_publish_tag", () => {
     assert.equal(
       (
         await publishApprovedTag({
+          side: DEFAULT_WORKER_SIDE,
           repoPath: checkout,
           tag: "v0.1.0",
           expectedHead: head,
@@ -129,6 +132,7 @@ describe("git_publish_tag", () => {
     const newer = command(checkout, "rev-parse", "HEAD");
     await assert.rejects(
       publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
         repoPath: checkout,
         tag: "v1",
         expectedHead: newer,
@@ -136,13 +140,23 @@ describe("git_publish_tag", () => {
       /remote branch/,
     );
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /checkout moved/,
     );
     command(checkout, "reset", "--hard", head);
     writeFileSync(join(checkout, "new-file"), "untracked");
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /clean/,
     );
     assert.equal(command(bare, "tag", "--list"), "");
@@ -154,7 +168,12 @@ describe("git_publish_tag", () => {
     command(checkout, "init", "--bare", other);
     command(checkout, "remote", "set-url", "--push", "origin", other);
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /remote branch/,
     );
     assert.equal(command(other, "tag", "--list"), "");
@@ -164,7 +183,12 @@ describe("git_publish_tag", () => {
     const { checkout, bare, head } = fixture();
     command(checkout, "branch", "--unset-upstream");
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /track a same-named/,
     );
     command(checkout, "branch", "--set-upstream-to=origin/main");
@@ -179,12 +203,22 @@ describe("git_publish_tag", () => {
       "ssh://example.invalid/other",
     );
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /exactly one push URL/,
     );
     command(checkout, "checkout", "--detach", head);
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /symbolic-ref/,
     );
   });
@@ -196,16 +230,27 @@ describe("git_publish_tag", () => {
     command(checkout, "tag", "v1", other);
     command(checkout, "reset", "--hard", head);
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /local tag/,
     );
     command(checkout, "push", "origin", "refs/tags/v1:refs/tags/v1");
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /remote tag/,
     );
     await assert.rejects(
       publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
         repoPath: checkout,
         tag: "--all",
         expectedHead: head,
@@ -218,7 +263,12 @@ describe("git_publish_tag", () => {
     const { checkout, head } = fixture();
     command(checkout, "tag", "-a", "v1", "-m", "Annotated", head);
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /local tag/,
     );
   });
@@ -229,6 +279,7 @@ describe("git_publish_tag", () => {
     command(checkout, "config", "push.followTags", "true");
     command(checkout, "tag", "-a", "--no-sign", "extra", "-m", "Extra", head);
     const result = await publishApprovedTag({
+      side: DEFAULT_WORKER_SIDE,
       repoPath: checkout,
       tag: "v1",
       expectedHead: head,
@@ -240,6 +291,7 @@ describe("git_publish_tag", () => {
     assert.equal(
       (
         await publishApprovedTag({
+          side: DEFAULT_WORKER_SIDE,
           repoPath: checkout,
           tag: "v1",
           expectedHead: head,
@@ -255,7 +307,12 @@ describe("git_publish_tag", () => {
     const hook = join(bare, "hooks", "pre-receive");
     writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     await assert.rejects(
-      publishApprovedTag({ repoPath: checkout, tag: "v1", expectedHead: head }),
+      publishApprovedTag({
+        side: DEFAULT_WORKER_SIDE,
+        repoPath: checkout,
+        tag: "v1",
+        expectedHead: head,
+      }),
       /failed/,
     );
     assert.equal(command(checkout, "rev-parse", "refs/tags/v1"), head);
@@ -263,6 +320,7 @@ describe("git_publish_tag", () => {
     assert.equal(
       (
         await publishApprovedTag({
+          side: DEFAULT_WORKER_SIDE,
           repoPath: checkout,
           tag: "v1",
           expectedHead: head,

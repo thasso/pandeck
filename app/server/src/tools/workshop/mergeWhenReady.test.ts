@@ -13,6 +13,7 @@ import {
   type WorktreeFinishPullRequestOperations,
 } from "./worktreeFinishPullRequest.ts";
 import { createMergeWhenReadyRunner } from "./mergeWhenReady.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
 
 const head = "c".repeat(40);
 function deferred<T>() {
@@ -105,6 +106,7 @@ function fixture() {
     reserve: vi.fn(() => release),
     localState: vi.fn(async () => ({ branch: row.branch, head, clean: true })),
     target: vi.fn(async () => ({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: "/repo",
       remote: "origin",
       upstream: { remote: "origin", branch: row.branch },

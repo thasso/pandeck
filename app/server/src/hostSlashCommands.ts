@@ -16,6 +16,7 @@ import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { runPrWorkflow, type PrWorkflowPhase } from "./prWorkflow.ts";
 import { assertSessionEnterpriseAccount } from "./session/runtimePrompt.ts";
+import { sessionCheckoutSide } from "./workers/placement.ts";
 
 /**
  * What a harness reports back from a manual compaction. `skipped` is a normal,
@@ -167,6 +168,7 @@ export async function runCommitForHost(
       sessionKind: host.kind,
       sessionId: host.sessionId,
       ...(cwd !== undefined ? { cwd } : {}),
+      side: sessionCheckoutSide(host.sessionId),
       dryRun: args.dryRun,
       force: args.force,
       additionalContext: args.additionalContext,
@@ -205,8 +207,10 @@ export async function runPushForHost(
   });
   try {
     const { cwd } = host.commitWorkflowContext();
+    const side = sessionCheckoutSide(host.sessionId);
     const result = await runPushWorkflow({
       ...(cwd !== undefined ? { cwd } : {}),
+      side,
       force: args.force,
       ...(args.remote !== undefined ? { remote: args.remote } : {}),
       ...(args.branch !== undefined ? { branch: args.branch } : {}),
@@ -214,7 +218,7 @@ export async function runPushForHost(
     });
     host.finishSyntheticCard({
       kind: "push",
-      push: await toLinkedPushDisplay(result),
+      push: await toLinkedPushDisplay(side, result),
     });
   } catch (err) {
     host.finishSyntheticTool(
@@ -241,9 +245,11 @@ export async function runPrForHost(
 
   try {
     const { sessionManager, cwd } = host.commitWorkflowContext();
+    const side = sessionCheckoutSide(host.sessionId);
     await runPrWorkflow({
       sessionManager,
       ...(cwd !== undefined ? { cwd } : {}),
+      side,
       sessionKind: host.kind,
       sessionId: host.sessionId,
       args,
@@ -273,7 +279,7 @@ export async function runPrForHost(
         async finishPush(result) {
           host.finishSyntheticCard({
             kind: "push",
-            push: await toLinkedPushDisplay(result),
+            push: await toLinkedPushDisplay(side, result),
           });
           activeToolId = undefined;
         },

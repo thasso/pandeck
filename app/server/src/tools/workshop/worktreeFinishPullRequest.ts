@@ -101,6 +101,8 @@ import {
   type ManagedWorktreeLocalState,
 } from "./managedDeliveryTargets.ts";
 
+import type { CheckoutSide } from "../../workers/placement.ts";
+import { checkoutSideOf } from "../../worktrees/knowledgeCheckout.ts";
 import {
   ManagedFinishRefusedError,
   WorktreeBusyError,
@@ -159,6 +161,7 @@ export interface WorktreeFinishPullRequestOperations {
   ): Promise<PullRequestReadiness>;
   cards(input: {
     repoPath: string;
+    side: CheckoutSide;
     provider: GitHostingProvider;
     number: number;
   }): Promise<PullRequestCard[]>;
@@ -193,9 +196,10 @@ export const defaultFinishPullRequestOperations: WorktreeFinishPullRequestOperat
     hosting: resolveManagedHosting,
     capabilities: repositoryCapabilitiesFor,
     readiness: readPullRequestReadiness,
-    cards: ({ repoPath, provider, number }) =>
+    cards: ({ repoPath, side, provider, number }) =>
       openCardsForPullRequest({
         repoPath,
+        side,
         providerKind: provider.kind,
         number,
       }),
@@ -394,6 +398,7 @@ export function createWorktreeReadyPullRequestTool(
           return withPullRequestMutation(
             {
               repoPath: target.row.path,
+              side: checkoutSideOf(target.row),
               providerKind: target.hosted.provider.kind,
               number: target.number,
               repoUrl: target.hosted.provider.repoWebUrl,
@@ -519,6 +524,7 @@ export function createWorktreeRetargetPullRequestTool(
           return withPullRequestMutation(
             {
               repoPath: target.row.path,
+              side: checkoutSideOf(target.row),
               providerKind: target.hosted.provider.kind,
               number: target.number,
               repoUrl: target.hosted.provider.repoWebUrl,
@@ -879,6 +885,7 @@ async function resolveManagedTarget(
 
   const cards = await operations.cards({
     repoPath: row.path,
+    side: checkoutSideOf(row),
     provider: hosted.provider,
     number: pr.number,
   });
@@ -1221,6 +1228,7 @@ async function runClose(
   const projection = await operations.close({
     provider: target.hosted.provider,
     repoPath: target.row.path,
+    side: checkoutSideOf(target.row),
     number: target.number,
     headBranch: target.headBranch,
     baseBranch: target.baseBranch,
@@ -1374,6 +1382,7 @@ async function runMerge(
   const projection = await operations.merge({
     provider: target.hosted.provider,
     repoPath: target.row.path,
+    side: checkoutSideOf(target.row),
     number: target.number,
     headBranch: target.headBranch,
     baseBranch: target.baseBranch,
@@ -1626,6 +1635,7 @@ export const managedPullRequestMergeApprovalExecutor: ApprovalExecutor = {
       const projection = await operations.merge({
         provider: target.hosted.provider,
         repoPath: row.path,
+        side: checkoutSideOf(row),
         number: body.number,
         headBranch: body.headBranch,
         baseBranch: body.baseBranch,

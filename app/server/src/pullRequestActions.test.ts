@@ -354,11 +354,11 @@ test("a card whose worktree was removed still merges, through the main checkout"
   const rec = recorder();
   const configured = rec.operations.resolveProvider;
   const asked: string[] = [];
-  rec.operations.resolveProvider = async (repoRoot, remote) => {
+  rec.operations.resolveProvider = async (side, repoRoot, remote) => {
     asked.push(repoRoot);
     // The deleted checkout answers nothing, exactly as `git remote get-url` does.
     return repoRoot === "/tmp/pr-actions-main"
-      ? configured(repoRoot, remote)
+      ? configured(side, repoRoot, remote)
       : null;
   };
 

@@ -235,7 +235,7 @@ function fake(patch: Patch<FakeControl> = {}): {
       control.events.push(`base-oid:${refresh ? "refresh" : "local"}`);
       return refresh ? control.baseHead : control.remoteBase;
     },
-    branch: async (cwd) => {
+    branch: async (_side, cwd) => {
       if (cwd === WORKTREE.path) {
         const phase = runBranchRead++ === 0 ? "validation" : "final";
         control.events.push(`${phase}:run-branch`);
@@ -248,7 +248,7 @@ function fake(patch: Patch<FakeControl> = {}): {
       control.events.push("validation:main-branch");
       return control.mainBranch;
     },
-    repositoryIdentity: async (cwd) => {
+    repositoryIdentity: async (_side, cwd) => {
       control.events.push(`validation:repository:${cwd}`);
       return cwd === WORKTREE.path
         ? control.runRepository
@@ -258,11 +258,11 @@ function fake(patch: Patch<FakeControl> = {}): {
       control.events.push("final:status");
       return control.finalStatus;
     },
-    commitOid: async (cwd) => {
+    commitOid: async (_side, cwd) => {
       control.events.push(`range:oid:${cwd}`);
       return cwd === WORKTREE.path ? control.commitOid : control.baseHead;
     },
-    mergeBase: async (_cwd, left, right) => {
+    mergeBase: async (_side, _cwd, left, right) => {
       control.events.push(`range:merge-base:${left}:${right}`);
       return control.mergeBase;
     },
@@ -907,7 +907,7 @@ test("a moved base checkpoint rebases the run and records the rewritten range", 
   let runHeadReads = 0;
   const movedDependencies = {
     ...dependencies,
-    commitOid: async (cwd: string, ref: string) => {
+    commitOid: async (_side: unknown, cwd: string, ref: string) => {
       control.events.push(`range:oid:${cwd}:${ref}`);
       if (cwd === WORKTREE.path && ref === "HEAD")
         return runHeadReads++ === 0 ? HEAD : REWRITTEN_HEAD;

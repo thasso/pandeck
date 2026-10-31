@@ -45,7 +45,7 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 // starved CI runner has stretched the file past the 30 s default while every
 // assertion is about bytes and counts, never about time.
 vi.setConfig({ testTimeout: 120_000 });
-import { git } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { createSkill } from "./createSkill.ts";
 import {
   deleteEntry,
@@ -56,6 +56,9 @@ import {
 import { LibraryStore } from "../library/libraryStore.ts";
 import { setLibraryBroadcaster } from "../library/libraryPublish.ts";
 import { skillKind } from "./skillLibrary.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
+
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 /** How many directory entries the source seam has handed out since the reset. */
 let entriesRead = 0;

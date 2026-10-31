@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import type { AgentTool, ToolCallContext } from "../../mcp/tool.ts";
-import { git } from "../../gitExec.ts";
+import { checkoutGitOn } from "../../gitExec.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
 import { LibraryStore } from "../../library/libraryStore.ts";
 import { setLibraryBroadcaster } from "../../library/libraryPublish.ts";
@@ -14,6 +14,9 @@ import {
   setSkillToolLibraryForTests,
 } from "./skillLibraryTools.ts";
 import { skillKind } from "../../skills/skillLibrary.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
+
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 let root: string;
 let store: LibraryStore;

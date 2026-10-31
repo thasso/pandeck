@@ -17,11 +17,17 @@ import {
   APP_SETTINGS_PATH,
   readStoredAppSettings,
 } from "../appSettingsFile.ts";
-import { git } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { knowledgeBaseSettingsProjection } from "../knowledgeBaseSettings.ts";
 import { inProcessWorkerServedForTests } from "./inProcessWorker.ts";
 import { DATA_DIR } from "../config.ts";
-import { DEFAULT_WORKER_ID, placeServedPath } from "./placement.ts";
+import {
+  DEFAULT_WORKER_ID,
+  DEFAULT_WORKER_SIDE,
+  placeServedPath,
+} from "./placement.ts";
+
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 const scratch = mkdtempSync(join(tmpdir(), "placement-fallback-"));
 const defaultRoot = knowledgeBaseSettingsProjection(undefined).effectivePath;
@@ -108,7 +114,7 @@ for (const mode of ["broker", "in-process"]) {
       // `${defaultRoot}-old` lies in DATA_DIR, local by that rule alone.
       for (const path of [other, `${alias}-old`])
         assert.deepEqual(placeServedPath(path), onWorker(path));
-      // Checkout git reads no KB setting: a bare cwd in the KB is a checkout.
+      // Checkout git reads no KB setting: a path in the KB is a checkout.
       const before = inProcessWorkerServedForTests();
       for (const cwd of [alias, real, defaultReal, other])
         assert.match((await git(["--version"], cwd)).stdout, /^git version/);
@@ -285,12 +291,15 @@ test("checkout git and reads read no KB setting, from a cold start with settings
       await import("./inProcessWorker.ts");
 
     let before = served();
-    const top = await checkoutGit.gitOptional(
-      ["rev-parse", "--show-toplevel"],
-      custom,
-    );
+    const top = await checkoutGit
+      .checkoutGitOn(DEFAULT_WORKER_SIDE)
+      .gitOptional(["rev-parse", "--show-toplevel"], custom);
     assert.equal(top.code, 0, top.stderr);
-    assert.equal(served() - before, 1, "string git runs on the Worker");
+    assert.equal(
+      served() - before,
+      1,
+      "the default Worker's git runs on the Worker",
+    );
     const project = checkoutSideOf({ id: "main:notes" });
     assert.deepEqual(project, { workerId: DEFAULT_WORKER_ID });
     before = served();
@@ -302,11 +311,9 @@ test("checkout git and reads read no KB setting, from a cold start with settings
     assert.equal(served() - before, 1, "a project's side is the Worker");
     before = served();
     const page = join(custom, "page.md");
-    assert.equal(await files.checkoutPathExists(custom, page), true);
-    assert.equal(
-      (await files.readCheckoutFile(custom, page)).toString(),
-      "page\n",
-    );
+    const worker = files.checkoutFilesOn(DEFAULT_WORKER_SIDE);
+    assert.equal(await worker.pathExists(custom, page), true);
+    assert.equal((await worker.readFile(custom, page)).toString(), "page\n");
     assert.ok(served() - before >= 2, "checkout reads run on the Worker");
 
     // The KB itself fails as in base: its row cannot be resolved.

@@ -3,7 +3,7 @@ import type { WorktreeRow } from "../db/worktreeStore.ts";
 import { listWorktrees } from "../db/worktreeStore.ts";
 import { pullRequestCardStore } from "../db/pullRequestCardStore.ts";
 import type { PullRequestCardContext } from "../pullRequestCards.ts";
-import { gitOptionalExit } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { branchContainedInBase } from "./worktreeStatus.ts";
 
@@ -13,6 +13,7 @@ export async function worktreeBranchDelivered(
   containmentBase = row.baseBranch,
   remoteHeads: readonly string[] = [],
 ): Promise<boolean> {
+  const { gitOptionalExit } = checkoutGitOn(checkoutSideOf(row));
   // Keep semantic containment BASE-specific. Equal patches on an arbitrary
   // sibling or backup branch are not evidence of delivery into this base.
   if (

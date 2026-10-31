@@ -5,13 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, test } from "vitest";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
-import {
-  GitCommandError,
-  git,
-  gitBoundedStdout,
-  gitRawStdout,
-  gitWithInputOptional,
-} from "../gitExec.ts";
+import { GitCommandError, checkoutGitOn } from "../gitExec.ts";
 import { readLocally } from "../checkoutFileAccess.ts";
 import { inspectPath, realpathFile } from "../fileReads.ts";
 import { createGitFamily } from "../gitFamily.ts";
@@ -23,6 +17,10 @@ import {
   inProcessWorkerServedForTests,
 } from "../workers/inProcessWorker.ts";
 import { getWorktreeFileRaw } from "../worktrees/worktreeDiff.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
+
+const { git, gitBoundedStdout, gitRawStdout, gitWithInputOptional } =
+  checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 /** The same executors as the server runs them for its own repositories. */
 const local = createGitFamily(localGitRunner, {

@@ -32,18 +32,9 @@ import type {
   PositionSelector,
   SelectorBundle,
 } from "@assistant/shared/comments";
-import {
-  checkoutFailureOf,
-  containedRealPath,
-  readCheckoutFile,
-} from "../checkoutFileAccess.ts";
+import { checkoutFailureOf, checkoutFilesOn } from "../checkoutFileAccess.ts";
 import { resolveAnchor } from "../comments/resolveAnchor.ts";
-import {
-  gitOptional,
-  gitWithInputOptional,
-  repoLockKey,
-  withRepoLock,
-} from "../gitExec.ts";
+import { checkoutGitOn, withRepoLock } from "../gitExec.ts";
 import {
   deleteComment as deleteCommentRow,
   deleteExpiredResolvedOrphanedMainComments,
@@ -70,6 +61,7 @@ import {
   mainWorktreeId,
   resolveWorktreeRow,
 } from "./worktreeResolve.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { captureMainCommentOwner } from "./worktreeCommentOwnership.ts";
 import {
   reportCommentChanges,
@@ -132,14 +124,15 @@ async function readWorkingSource(
   row: WorktreeRow,
   path: string,
 ): Promise<WorkingSource | undefined> {
+  const files = checkoutFilesOn(checkoutSideOf(row));
   let content: Buffer;
   try {
     // containedRealPath: lexical containment + symlink resolution, so a repo
     // symlink cannot anchor comments to (and snapshot lines from) files
     // outside the worktree.
-    content = await readCheckoutFile(
+    content = await files.readFile(
       row.path,
-      await containedRealPath(row.path, path),
+      await files.containedRealPath(row.path, path),
     );
   } catch (error) {
     const origin = checkoutFailureOf(error);
@@ -166,6 +159,9 @@ async function hashSource(
   source: WorkingSource,
   write: boolean,
 ): Promise<string | undefined> {
+  const { gitWithInputOptional, repoLockKey } = checkoutGitOn(
+    checkoutSideOf(row),
+  );
   const run = () =>
     gitWithInputOptional(
       ["hash-object", ...(write ? ["-w"] : []), "--stdin"],
@@ -182,6 +178,7 @@ async function showLines(
   row: WorktreeRow,
   source: string,
 ): Promise<string[] | undefined> {
+  const { gitOptional } = checkoutGitOn(checkoutSideOf(row));
   const res = await gitOptional(["show", source], row.path);
   if (res.code !== 0 || res.stdout.includes("\0")) return undefined;
   return res.stdout.split("\n");
@@ -504,6 +501,7 @@ async function buildAnchor(
   row: WorktreeRow,
   anchor: NewWorktreeCommentAnchor,
 ): Promise<Partial<WorktreeCommentRow>> {
+  const { gitOptional } = checkoutGitOn(checkoutSideOf(row));
   // Ref anchors: the commented surface showed content at an older commit (e.g.
   // reviewing one of several commits an agent made). Snapshot the anchor at
   // exactly that commit; the ordinary re-anchor pass maps it forward from
@@ -826,7 +824,7 @@ export async function listWorktreeComments(
   // server restart), re-anchor before serving.
   const row = await resolveWorktreeRow(worktreeId);
   if (row && row.status === "active") {
-    const headRes = await gitOptional(
+    const headRes = await checkoutGitOn(checkoutSideOf(row)).gitOptional(
       ["rev-parse", "--verify", "HEAD"],
       row.path,
     );
@@ -1087,7 +1085,7 @@ async function reanchorWorktreeCommentPass(
   const row = await resolveWorktreeRow(worktreeId);
   if (!row || row.status !== "active")
     return { changed: false, changedRootIds: [], evaluatedRootIds: [] };
-  const headRes = await gitOptional(
+  const headRes = await checkoutGitOn(checkoutSideOf(row)).gitOptional(
     ["rev-parse", "--verify", "HEAD"],
     row.path,
   );
@@ -1111,6 +1109,7 @@ async function reanchorRoots(
   worktreeId: string,
   row: WorktreeRow,
 ): Promise<ReanchorPassResult> {
+  const { gitOptional } = checkoutGitOn(checkoutSideOf(row));
   const roots = listComments(worktreeId).filter(
     (comment) => comment.parentId === null && comment.anchorPath !== null,
   );

@@ -26,6 +26,7 @@ import type {
 } from "@assistant/shared";
 import { randomUUID } from "node:crypto";
 import type { GitHostingProvider } from "./gitHosting.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 import {
   beginPullRequestCardObservation,
   patchPullRequestCard,
@@ -47,6 +48,8 @@ export interface ClosePullRequestInput {
   provider: GitHostingProvider;
   /** Any checkout of the repository; used for repo identity, never for display. */
   repoPath: string;
+  /** The side `repoPath` is on. */
+  side: CheckoutSide;
   number: number;
   headBranch: string;
   baseBranch: string;
@@ -95,6 +98,7 @@ export async function closePullRequestAndProject(
   return withPullRequestMutation(
     {
       repoPath: input.repoPath,
+      side: input.side,
       providerKind: input.provider.kind,
       number: input.number,
       repoUrl: input.provider.repoWebUrl,
@@ -134,6 +138,7 @@ async function closeAndProject(
 
   const cards = await openCardsForPullRequest({
     repoPath: input.repoPath,
+    side: input.side,
     providerKind: input.provider.kind,
     number: input.number,
   });

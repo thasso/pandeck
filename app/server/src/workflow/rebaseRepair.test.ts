@@ -314,7 +314,9 @@ const { isWorkerFailure } = await import("../workers/fileClient.ts");
 const { holdFileForTests } = await import("../fileReads.ts");
 const { writeAsInProcessWorkerForTests } =
   await import("../workers/inProcessWorker.ts");
-const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
+const { DEFAULT_WORKER_SIDE } = await import("../workers/placement.ts");
+const { withRepoLock, checkoutGitOn } = await import("../gitExec.ts");
+const { repoLockKey } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 const INVALID_FRAME = new Uint8Array(8);
 const GIT_METHODS = Object.values(CHECKOUT_GIT_METHODS);

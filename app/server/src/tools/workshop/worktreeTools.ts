@@ -12,7 +12,7 @@ import { getSettings } from "../../settings.ts";
 import { readTask } from "../../tasks.ts";
 import { reserveWorktreeForMutation } from "../../session/sessionRunLease.ts";
 import { openPullRequestCards } from "../../pullRequestCards.ts";
-import { gitOptional, gitOptionalExit } from "../../gitExec.ts";
+import { checkoutGitOn } from "../../gitExec.ts";
 import { removeWorktreeAndSettleSessions } from "../../worktreeRemoval.ts";
 import {
   createWorktree,
@@ -24,6 +24,7 @@ import {
   isMainWorktreeId,
   resolveWorktreeRow,
 } from "../../worktrees/worktreeResolve.ts";
+import { checkoutSideOf } from "../../worktrees/knowledgeCheckout.ts";
 import { changeWorktreeBase } from "../../worktrees/worktreeBase.ts";
 import { computeWorktreeStatus } from "../../worktrees/worktreeStatus.ts";
 import {
@@ -48,10 +49,11 @@ function callingProjectId(session: ToolSession): Promise<string> {
 }
 
 async function localBranchExists(row: {
+  id: string;
   branch: string;
   mainRepoRoot: string;
 }): Promise<boolean> {
-  const result = await gitOptionalExit(
+  const result = await checkoutGitOn(checkoutSideOf(row)).gitOptionalExit(
     ["show-ref", "--verify", "--quiet", `refs/heads/${row.branch}`],
     row.mainRepoRoot,
   );
@@ -64,7 +66,7 @@ async function unmergedCommitLoss(
 ): Promise<number | "unknown"> {
   try {
     if (!(await hasUnmergedCommits(row))) return 0;
-    const result = await gitOptional(
+    const result = await checkoutGitOn(checkoutSideOf(row)).gitOptional(
       ["rev-list", "--count", `${row.baseBranch}..${row.branch}`],
       row.mainRepoRoot,
     );

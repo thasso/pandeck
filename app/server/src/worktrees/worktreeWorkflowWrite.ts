@@ -1,8 +1,8 @@
 /**
  * User-initiated worktree writes that run a whole app workflow on the
  * checkout path (worktreeHttp.ts): agent-generated auto-commit and push. Both
- * run git through the string executors, so this module never receives the
- * Knowledge Base row: the HTTP gate refuses both verbs for it.
+ * run on the row's side (`checkoutSideOf`); the HTTP gate refuses both verbs
+ * for the Knowledge Base row.
  *
  * Push reuses the app-side push workflow the `/push` slash command uses
  * (non-interactive ssh env, upstream resolution/setup, force-with-lease) and
@@ -19,6 +19,7 @@ import type {
 import { runCommitWorkflow, toCommitDisplay } from "../commitWorkflow.ts";
 import { runPushWorkflow } from "../pushWorkflow.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { invalidateWorktreeStatus } from "./worktreeStatus.ts";
 
 export async function autoCommitWorktree(
@@ -30,6 +31,7 @@ export async function autoCommitWorktree(
   const result = await runCommitWorkflow({
     source: "tool",
     cwd: row.path,
+    side: checkoutSideOf(row),
     force: Boolean(input.force),
   });
   invalidateWorktreeStatus(row.id);
@@ -42,6 +44,7 @@ export async function pushWorktree(
 ): Promise<WorktreePushResponse> {
   const result = await runPushWorkflow({
     cwd: row.path,
+    side: checkoutSideOf(row),
     force: Boolean(input.force),
   });
   invalidateWorktreeStatus(row.id);

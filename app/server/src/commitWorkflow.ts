@@ -9,23 +9,12 @@ import type {
   CommitTotals,
   TaskSummary,
 } from "@assistant/shared";
-import {
-  checkoutFailureOf,
-  checkoutPathExists,
-  inspectCheckoutPath,
-  readCheckoutFile,
-  readCheckoutLink,
-} from "./checkoutFileAccess.ts";
+import { checkoutFailureOf, checkoutFilesOn } from "./checkoutFileAccess.ts";
 import { commitWithMessageFile } from "./commitMessageFile.ts";
 import { CWD } from "./config.ts";
-import {
-  git,
-  gitOptional,
-  repoLockKey,
-  resolveRepoRoot,
-  withRepoLock,
-} from "./gitExec.ts";
+import { checkoutGitOn, withRepoLock } from "./gitExec.ts";
 import { getSettings } from "./settings.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 import {
   type CommitAgentBlocker,
   type CommitAgentResult,
@@ -96,6 +85,8 @@ export interface CommitWorkflowOptions {
   requiresEnterprise?: boolean;
   /** Working directory whose enclosing git repo should be committed. Defaults to the app CWD. */
   cwd?: string;
+  /** The side that checkout's git and reads run on. */
+  side: CheckoutSide;
   /** When set, this branch identity is revalidated inside the repository lock. */
   expectedBranch?: string;
   /**
@@ -197,9 +188,11 @@ function truncate(
 }
 
 async function currentHead(
+  side: CheckoutSide,
   repoRoot: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const res = await gitOptional(
     ["rev-parse", "--verify", "HEAD"],
     repoRoot,
@@ -299,9 +292,11 @@ function parseNumstatEntries(text: string): NumstatEntry[] {
 }
 
 async function untrackedFiles(
+  side: CheckoutSide,
   repoRoot: string,
   signal?: AbortSignal,
 ): Promise<string[]> {
+  const { git } = checkoutGitOn(side);
   const res = await git(
     ["ls-files", "--others", "--exclude-standard", "-z"],
     repoRoot,
@@ -312,19 +307,21 @@ async function untrackedFiles(
 
 /** Hash every untracked file, including those beyond the agent-summary cap. */
 async function fingerprintUntrackedFiles(
+  side: CheckoutSide,
   repoRoot: string,
   files: string[],
   signal?: AbortSignal,
 ): Promise<string> {
-  return (await untrackedFingerprint(repoRoot, files, signal)).digest;
+  return (await untrackedFingerprint(side, repoRoot, files, signal)).digest;
 }
 
 /** Test seam: each untracked path's fingerprint value, and the digest. */
 export function untrackedFingerprintForTests(
+  side: CheckoutSide,
   repoRoot: string,
   files: string[],
 ): Promise<{ values: Map<string, string>; digest: string }> {
-  return untrackedFingerprint(repoRoot, files);
+  return untrackedFingerprint(side, repoRoot, files);
 }
 
 /**
@@ -333,16 +330,19 @@ export function untrackedFingerprintForTests(
  * error rejects.
  */
 async function untrackedFingerprint(
+  side: CheckoutSide,
   repoRoot: string,
   files: string[],
   signal?: AbortSignal,
 ): Promise<{ values: Map<string, string>; digest: string }> {
+  const { gitOptional } = checkoutGitOn(side);
+  const checkoutFiles = checkoutFilesOn(side);
   const values = new Map<string, string>();
   const regularFiles: Array<{ path: string; executable: boolean }> = [];
   for (const path of files) {
     const absolute = join(repoRoot, path);
     try {
-      const stat = await inspectCheckoutPath(repoRoot, absolute, {
+      const stat = await checkoutFiles.inspect(repoRoot, absolute, {
         follow: false,
         mode: true,
       });
@@ -352,7 +352,7 @@ async function untrackedFingerprint(
         // worktree fingerprint for an ordinary link.
         values.set(
           path,
-          `symlink:${await readCheckoutLink(repoRoot, absolute)}`,
+          `symlink:${await checkoutFiles.readLink(repoRoot, absolute)}`,
         );
       } else if (stat.kind === "file") {
         regularFiles.push({
@@ -436,28 +436,30 @@ function isProbablyText(buffer: Buffer): boolean {
  * error rejects.
  */
 async function readUntrackedSummaries(
+  side: CheckoutSide,
   repoRoot: string,
   files: string[],
 ): Promise<UntrackedSummary[]> {
+  const checkoutFiles = checkoutFilesOn(side);
   const summaries: UntrackedSummary[] = [];
   let remaining = MAX_UNTRACKED_TOTAL_CHARS;
   for (const path of files.slice(0, 80)) {
     const absolute = join(repoRoot, path);
     try {
-      const inspection = await inspectCheckoutPath(repoRoot, absolute, {
+      const inspection = await checkoutFiles.inspect(repoRoot, absolute, {
         follow: false,
       });
       if (inspection.kind === "symlink") {
         summaries.push({
           path,
           included: true,
-          content: await readCheckoutLink(repoRoot, absolute),
+          content: await checkoutFiles.readLink(repoRoot, absolute),
         });
         continue;
       }
       // Whole, as production's readFile reads it: the reason below carries
       // the full length.
-      const buffer = await readCheckoutFile(repoRoot, absolute);
+      const buffer = await checkoutFiles.readFile(repoRoot, absolute);
       if (buffer.length === 0) {
         summaries.push({ path, included: true, content: "" });
         continue;
@@ -642,11 +644,14 @@ function suspiciousPath(path: string): string | undefined {
 
 /** The first marker found answers; read on the side of `repoRoot`. */
 async function gitOperationInProgress(
+  side: CheckoutSide,
   repoRoot: string,
   gitDir: string,
 ): Promise<boolean> {
+  const checkoutFiles = checkoutFilesOn(side);
   for (const path of ["MERGE_HEAD", "rebase-merge", "rebase-apply"])
-    if (await checkoutPathExists(repoRoot, join(gitDir, path))) return true;
+    if (await checkoutFiles.pathExists(repoRoot, join(gitDir, path)))
+      return true;
   return false;
 }
 
@@ -1017,13 +1022,15 @@ function fingerprintContent(
 
 /** Minimal locked revalidation: no prompt excerpts, stats parsing or scans. */
 async function gatherChangeFingerprint(
+  side: CheckoutSide,
   repoRoot: string,
   stagedOnly: boolean,
   signal?: AbortSignal,
 ): Promise<string> {
+  const { git, gitOptional } = checkoutGitOn(side);
   const [headBefore, status, diffStat, trackedDiff, untracked] =
     await Promise.all([
-      currentHead(repoRoot, signal),
+      currentHead(side, repoRoot, signal),
       git(["status", "--porcelain=v1", "-uall", "-z"], repoRoot, signal),
       gitOptional(reviewDiffArgs(stagedOnly, "--stat"), repoRoot, signal),
       gitOptional(
@@ -1036,9 +1043,10 @@ async function gatherChangeFingerprint(
         repoRoot,
         signal,
       ),
-      stagedOnly ? Promise.resolve([]) : untrackedFiles(repoRoot, signal),
+      stagedOnly ? Promise.resolve([]) : untrackedFiles(side, repoRoot, signal),
     ]);
   const untrackedFingerprint = await fingerprintUntrackedFiles(
+    side,
     repoRoot,
     untracked,
     signal,
@@ -1171,10 +1179,12 @@ function composeAgentPrompt(args: {
 }
 
 async function gatherDiffContext(
+  side: CheckoutSide,
   repoRoot: string,
   stagedOnly: boolean,
   signal?: AbortSignal,
 ) {
+  const { git, gitOptional } = checkoutGitOn(side);
   const [
     fullStatusRes,
     gitDirRes,
@@ -1200,7 +1210,7 @@ async function gatherDiffContext(
     ),
     // Staged scope never reads untracked files: a path enters the commit only
     // once the caller adds it, and then `diff --cached` already carries it.
-    stagedOnly ? Promise.resolve([]) : untrackedFiles(repoRoot, signal),
+    stagedOnly ? Promise.resolve([]) : untrackedFiles(side, repoRoot, signal),
   ]);
   const { status: statusEntries, unstagedPaths } = reviewedStatus(
     parseStatusEntries(fullStatusRes.stdout),
@@ -1212,11 +1222,16 @@ async function gatherDiffContext(
     ? gitDirRaw
     : join(repoRoot, gitDirRaw);
   const untrackedFingerprint = await fingerprintUntrackedFiles(
+    side,
     repoRoot,
     untracked,
     signal,
   );
-  const untrackedSummaries = await readUntrackedSummaries(repoRoot, untracked);
+  const untrackedSummaries = await readUntrackedSummaries(
+    side,
+    repoRoot,
+    untracked,
+  );
   const untrackedText = renderUntrackedSummaries(untrackedSummaries);
   const fullDiff = [diffRes.stdout, untrackedText].filter(Boolean).join("\n\n");
   const fullDiffHash = fingerprintContent(
@@ -1228,7 +1243,7 @@ async function gatherDiffContext(
     diff: fullDiff,
     untracked,
     untrackedSummaries,
-    operationInProgress: await gitOperationInProgress(repoRoot, gitDir),
+    operationInProgress: await gitOperationInProgress(side, repoRoot, gitDir),
   });
   const truncated = truncate(diffRes.stdout, MAX_AGENT_DIFF_CHARS);
   return {
@@ -1249,9 +1264,11 @@ async function gatherDiffContext(
 }
 
 async function stagedDiff(
+  side: CheckoutSide,
   repoRoot: string,
   signal?: AbortSignal,
 ): Promise<{ status: string; diffStat: string; diff: string }> {
+  const { git } = checkoutGitOn(side);
   const [status, diffStat, diff] = await Promise.all([
     git(["status", "--porcelain=v1", "-uall"], repoRoot, signal),
     git(["diff", "--cached", "--stat"], repoRoot, signal),
@@ -1341,6 +1358,9 @@ export async function runCommitWorkflow(
 
   try {
     options.onProgress?.("Inspecting git changes…");
+    const { side } = options;
+    const { git, gitOptional, repoLockKey, resolveRepoRoot } =
+      checkoutGitOn(side);
     const repoRoot = await resolveRepoRoot(options.cwd ?? CWD, options.signal);
     const sessionContext = sessionManager
       ? collectSessionContextSinceLastCommit(sessionManager, repoRoot)
@@ -1349,8 +1369,9 @@ export async function runCommitWorkflow(
     checkpointEntryId = sessionContext.checkpointEntryId;
     sessionTouchedPaths = sessionContext.touchedPaths;
     includedUserEntryIds = prompts.map((p) => p.id);
-    const headBefore = await currentHead(repoRoot, options.signal);
+    const headBefore = await currentHead(side, repoRoot, options.signal);
     const diffContext = await gatherDiffContext(
+      side,
       repoRoot,
       stagedOnly,
       options.signal,
@@ -1517,6 +1538,7 @@ export async function runCommitWorkflow(
         // it again while holding the same repository lock that protects staging
         // so a PA git mutation cannot move the target between review and add.
         const lockedFingerprint = await gatherChangeFingerprint(
+          side,
           repoRoot,
           stagedOnly,
           options.signal,
@@ -1537,7 +1559,9 @@ export async function runCommitWorkflow(
             repoRoot,
             options.signal,
           );
-          if (await gitOperationInProgress(repoRoot, gitDir.stdout.trim())) {
+          if (
+            await gitOperationInProgress(side, repoRoot, gitDir.stdout.trim())
+          ) {
             return {
               blocked: {
                 kind: "unsafe" as const,
@@ -1550,7 +1574,7 @@ export async function runCommitWorkflow(
           options.onProgress?.("Staging all changes…");
           await git(["add", "-A"], repoRoot, options.signal);
         }
-        const staged = await stagedDiff(repoRoot, options.signal);
+        const staged = await stagedDiff(side, repoRoot, options.signal);
         if (!staged.diff.trim() && !staged.diffStat.trim())
           return "empty" as const;
 
@@ -1596,7 +1620,7 @@ export async function runCommitWorkflow(
       appendCustomResult(sessionManager, result);
       return result;
     }
-    const headAfter = await currentHead(repoRoot, options.signal);
+    const headAfter = await currentHead(side, repoRoot, options.signal);
     const commitHash = headAfter.slice(0, 12);
     addressedTasks = markCommittedTasks(addressedTasks, commitHash);
     const result = baseResult({
@@ -1637,6 +1661,8 @@ export async function acceptCommitDryRun(options: {
   entryId: string;
   /** Working directory whose enclosing git repo the dry run targeted. Defaults to the app CWD. */
   cwd?: string;
+  /** The side that checkout's git and reads run on. */
+  side: CheckoutSide;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
 }): Promise<CommitWorkflowResult> {
@@ -1686,9 +1712,12 @@ export async function acceptCommitDryRun(options: {
     options.onProgress?.("Rechecking git changes…");
     // Recheck the SAME repo the dry run scanned (a worktree session's cwd),
     // never the app CWD — otherwise the fingerprint compares the wrong checkout.
+    const { side } = options;
+    const { git, repoLockKey, resolveRepoRoot } = checkoutGitOn(side);
     const repoRoot = await resolveRepoRoot(options.cwd ?? CWD, options.signal);
-    const headBefore = await currentHead(repoRoot, options.signal);
+    const headBefore = await currentHead(side, repoRoot, options.signal);
     const diffContext = await gatherDiffContext(
+      side,
       repoRoot,
       stagedOnly,
       options.signal,
@@ -1738,6 +1767,7 @@ export async function acceptCommitDryRun(options: {
         // The unlocked recheck above can be outrun by a PA git mutation;
         // compare once more under the lock that protects staging.
         const lockedFingerprint = await gatherChangeFingerprint(
+          side,
           repoRoot,
           stagedOnly,
           options.signal,
@@ -1767,7 +1797,7 @@ export async function acceptCommitDryRun(options: {
       appendCustomResult(sessionManager, result);
       return result;
     }
-    const headAfter = await currentHead(repoRoot, options.signal);
+    const headAfter = await currentHead(side, repoRoot, options.signal);
     const commitHash = headAfter.slice(0, 12);
     const addressedTasks = markCommittedTasks(
       previous.addressedTasks ?? [],

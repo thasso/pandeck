@@ -19,6 +19,7 @@ import {
   type GitHostingProvider,
 } from "./gitHosting.ts";
 import { toPushDisplay, type PushWorkflowResult } from "./pushWorkflow.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 
 /** The pull-request read must not hold the push card back noticeably. */
 const PULL_REQUEST_LOOKUP_TIMEOUT_MS = 5_000;
@@ -58,9 +59,11 @@ async function pullRequestFor(
 }
 
 export async function resolvePushLinks(
+  side: CheckoutSide,
   result: PushWorkflowResult,
   options: {
     provider?: (
+      side: CheckoutSide,
       repoRoot: string,
       remote: string,
     ) => Promise<GitHostingProvider | null>;
@@ -72,6 +75,7 @@ export async function resolvePushLinks(
   if (result.status === "failed" || !repoRoot || !remote || !branch) return;
   try {
     const provider = await (options.provider ?? hostingProviderForRepo)(
+      side,
       repoRoot,
       remote,
     );
@@ -91,10 +95,14 @@ export async function resolvePushLinks(
   }
 }
 
-/** {@link toPushDisplay} plus the hosted links, for every push card surface. */
+/**
+ * {@link toPushDisplay} plus the hosted links, for every push card surface;
+ * `side` is the side the push ran on.
+ */
 export async function toLinkedPushDisplay(
+  side: CheckoutSide,
   result: PushWorkflowResult,
 ): Promise<PushDisplay> {
-  const hosted = await resolvePushLinks(result);
+  const hosted = await resolvePushLinks(side, result);
   return { ...toPushDisplay(result), ...(hosted ? { hosted } : {}) };
 }

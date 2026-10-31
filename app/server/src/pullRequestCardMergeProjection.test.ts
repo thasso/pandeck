@@ -45,6 +45,7 @@ vi.mock("./pullRequestCards.ts", async (importOriginal) => {
   };
 });
 
+const { DEFAULT_WORKER_SIDE } = await import("./workers/placement.ts");
 const {
   createPullRequestCard,
   pullRequestCardById,
@@ -134,6 +135,7 @@ test("the projection reports only the cards it actually wrote", async () => {
 
   const projection = await mergePullRequestAndProject(
     {
+      side: DEFAULT_WORKER_SIDE,
       provider: provider(),
       repoPath: REPO,
       number: 42,

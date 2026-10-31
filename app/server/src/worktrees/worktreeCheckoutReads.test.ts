@@ -41,7 +41,7 @@ import {
 import {
   clearRepoLockKeysForTests,
   countGitExecutionsForTests,
-  repoLockKey,
+  checkoutGitOn,
 } from "../gitExec.ts";
 import { updateSettings } from "../settings.ts";
 import {
@@ -77,6 +77,9 @@ import {
   computeWorktreeStatus,
   refreshWorktreeWorkingTree,
 } from "./worktreeStatus.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
+
+const { repoLockKey } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 /**
  * The worktree surfaces' checkout reads (`docs/workers.md`, "Checkout

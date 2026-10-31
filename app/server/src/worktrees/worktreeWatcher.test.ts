@@ -51,8 +51,9 @@ const {
   worktreeStatusComputeCountsForTests,
 } = await import("./worktreeStatus.ts");
 const { projectStore } = await import("../db/projectStore.ts");
-const { clearRepoLockKeysForTests, countGitExecutionsForTests, repoLockKey } =
+const { clearRepoLockKeysForTests, countGitExecutionsForTests, checkoutGitOn } =
   await import("../gitExec.ts");
+const { repoLockKey } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 function sh(cwd: string, ...args: string[]): string {
   return execFileSync(

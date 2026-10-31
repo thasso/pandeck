@@ -8,7 +8,7 @@ import { userHomeDir } from "./userHome.ts";
 import { join, resolve, sep } from "node:path";
 import { checkoutFilesOn } from "./checkoutFileAccess.ts";
 import { checkoutLifecycleOn } from "./checkoutLifecycle.ts";
-import { git } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
 import { getProject, updateProject } from "./projectRegistry.ts";
 import { getSettings } from "./settings.ts";
 import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
@@ -89,7 +89,7 @@ export async function cloneProjectRepo(
     );
   const root = projectsRootDir();
   await checkoutLifecycleOn(side).mkdir(root);
-  await git(
+  await checkoutGitOn(side).git(
     ["clone", "--recurse-submodules", "--", repoUrl, dir],
     root,
     undefined,

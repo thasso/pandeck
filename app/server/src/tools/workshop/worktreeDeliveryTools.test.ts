@@ -38,6 +38,7 @@ import {
   pullRequestCardById,
   resetPullRequestCardsStoreForTests,
 } from "../../pullRequestCards.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
 
 const row: WorktreeRow = {
   id: "wt-target",
@@ -834,6 +835,7 @@ function pushOperations(
   };
 } {
   const target: ResolvedPushTarget = {
+    side: DEFAULT_WORKER_SIDE,
     repoRoot: "/repo",
     remote: "origin",
   };
@@ -928,6 +930,7 @@ describe("worktree_push", () => {
 
   test("forced publication leases the authoritative remote oid exactly", async () => {
     const target: ResolvedPushTarget = {
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: "/repo",
       remote: "upstream",
       upstream: { remote: "upstream", branch: row.branch },
@@ -968,7 +971,7 @@ describe("worktree_push", () => {
     };
     let linked: PushWorkflowResult | undefined;
     const ops = pushOperations({
-      links: async (result) => {
+      links: async (_side, result) => {
         linked = result;
         return hosted;
       },
@@ -1081,9 +1084,13 @@ describe("worktree_push", () => {
 
   test("force-with-lease requires a matching existing upstream and remote branch", async () => {
     for (const [target, message] of [
-      [{ repoRoot: "/repo", remote: "origin" }, /existing upstream/],
+      [
+        { side: DEFAULT_WORKER_SIDE, repoRoot: "/repo", remote: "origin" },
+        /existing upstream/,
+      ],
       [
         {
+          side: DEFAULT_WORKER_SIDE,
           repoRoot: "/repo",
           remote: "origin",
           upstream: { remote: "other", branch: row.branch },
@@ -1092,6 +1099,7 @@ describe("worktree_push", () => {
       ],
       [
         {
+          side: DEFAULT_WORKER_SIDE,
           repoRoot: "/repo",
           remote: "origin",
           upstream: { remote: "origin", branch: "other" },
@@ -1113,6 +1121,7 @@ describe("worktree_push", () => {
 
     const missing = pushOperations({
       target: async () => ({
+        side: DEFAULT_WORKER_SIDE,
         repoRoot: "/repo",
         remote: "origin",
         upstream: { remote: "origin", branch: row.branch },
@@ -1131,6 +1140,7 @@ describe("worktree_push", () => {
   test("lease failure is a hard refusal with investigation guidance", async () => {
     const ops = pushOperations({
       target: async () => ({
+        side: DEFAULT_WORKER_SIDE,
         repoRoot: "/repo",
         remote: "origin",
         upstream: { remote: "origin", branch: row.branch },
@@ -1209,6 +1219,7 @@ function pullRequestOperations(
       clean: true,
     }),
     target: async () => ({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: "/repo",
       remote: "origin",
       upstream: { remote: "origin", branch: row.branch },
@@ -1693,9 +1704,13 @@ describe("worktree_create_pull_request", () => {
 
   test("requires a same-named upstream and exact authoritative remote HEAD", async () => {
     for (const [target, message] of [
-      [{ repoRoot: "/repo", remote: "origin" }, /no upstream.*worktree_push/],
+      [
+        { side: DEFAULT_WORKER_SIDE, repoRoot: "/repo", remote: "origin" },
+        /no upstream.*worktree_push/,
+      ],
       [
         {
+          side: DEFAULT_WORKER_SIDE,
           repoRoot: "/repo",
           remote: "origin",
           upstream: { remote: "fork", branch: row.branch },
@@ -1704,6 +1719,7 @@ describe("worktree_create_pull_request", () => {
       ],
       [
         {
+          side: DEFAULT_WORKER_SIDE,
           repoRoot: "/repo",
           remote: "origin",
           upstream: { remote: "origin", branch: "other" },

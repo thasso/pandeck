@@ -1,12 +1,19 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { resolveManagedHosting } from "./managedDeliveryTargets.ts";
 import type { ResolvedPushTarget } from "../../pushWorkflow.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
 
 const remote = vi.hoisted(() => ({ url: "" }));
-vi.mock("../../gitExec.ts", async (original) => ({
-  ...(await original<typeof import("../../gitExec.ts")>()),
-  gitOptional: async () => ({ code: 0, stdout: remote.url, stderr: "" }),
-}));
+vi.mock("../../gitExec.ts", async (original) => {
+  const actual = await original<typeof import("../../gitExec.ts")>();
+  return {
+    ...actual,
+    checkoutGitOn: (side: Parameters<typeof actual.checkoutGitOn>[0]) => ({
+      ...actual.checkoutGitOn(side),
+      gitOptional: async () => ({ code: 0, stdout: remote.url, stderr: "" }),
+    }),
+  };
+});
 vi.mock("../../githubSettings.ts", () => ({
   getGithubConfigIfAvailable: () => ({
     token: "test",
@@ -49,7 +56,11 @@ test.each(["github.com", "forgejo.example"])(
     );
     const controller = new AbortController();
     const hosted = await resolveManagedHosting(
-      { repoRoot: "/repo", remote: "origin" } as ResolvedPushTarget,
+      {
+        side: DEFAULT_WORKER_SIDE,
+        repoRoot: "/repo",
+        remote: "origin",
+      } as ResolvedPushTarget,
       controller.signal,
     );
     const result = hosted!.provider
@@ -111,7 +122,11 @@ test.each(["github.com", "forgejo.example"])(
     );
     const controller = new AbortController();
     const hosted = await resolveManagedHosting(
-      { repoRoot: "/repo", remote: "origin" } as ResolvedPushTarget,
+      {
+        side: DEFAULT_WORKER_SIDE,
+        repoRoot: "/repo",
+        remote: "origin",
+      } as ResolvedPushTarget,
       controller.signal,
       controller.signal,
     );

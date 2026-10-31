@@ -17,11 +17,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, test, vi } from "vitest";
 import {
-  checkoutPathExists,
-  inspectCheckoutPath,
-  readCheckoutFile,
-  readCheckoutLink,
   throwInCheckoutReadForTests,
+  checkoutFilesOn,
 } from "./checkoutFileAccess.ts";
 import type { CommitAgentResult } from "./commitAgent.ts";
 import {
@@ -48,6 +45,14 @@ import {
   inProcessWorkerServedForTests,
   writeAsInProcessWorkerForTests,
 } from "./workers/inProcessWorker.ts";
+import { DEFAULT_WORKER_SIDE } from "./workers/placement.ts";
+
+const {
+  pathExists: checkoutPathExists,
+  inspect: inspectCheckoutPath,
+  readFile: readCheckoutFile,
+  readLink: readCheckoutLink,
+} = checkoutFilesOn(DEFAULT_WORKER_SIDE);
 
 /**
  * The commit workflow's checkout reads (`docs/workers.md`, "Checkout files"):
@@ -158,7 +163,12 @@ async function dryRun(
     prompt = text;
     return generated;
   });
-  const result = await runCommitWorkflow({ source: "tool", cwd, dryRun: true });
+  const result = await runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
+    source: "tool",
+    cwd,
+    dryRun: true,
+  });
   return { result, prompt };
 }
 
@@ -171,6 +181,7 @@ async function approved(
   assert.equal(proposal.status, "dry-run");
   gitHooks.beforeLock = beforeLock;
   return runCommitWorkflow({
+    side: DEFAULT_WORKER_SIDE,
     source: "tool",
     cwd,
     force: true,
@@ -478,7 +489,11 @@ describe("AC2 untracked summaries and fingerprint as base", () => {
     assert.ok(prompt?.includes(expected), "the prompt's untracked section");
 
     const base = baseFingerprint(cwd, files);
-    const fingerprint = await untrackedFingerprintForTests(cwd, files);
+    const fingerprint = await untrackedFingerprintForTests(
+      DEFAULT_WORKER_SIDE,
+      cwd,
+      files,
+    );
     assert.deepEqual(fingerprint.values, base.values);
     assert.equal(fingerprint.digest, base.digest);
     assert.match(base.values.get("mode-0755.sh")!, /^file:x:/);
@@ -502,7 +517,8 @@ describe("AC2 untracked summaries and fingerprint as base", () => {
     assert.ok(prompt?.includes(expected));
     const base = baseFingerprint(cwd, files);
     assert.equal(
-      (await untrackedFingerprintForTests(cwd, files)).digest,
+      (await untrackedFingerprintForTests(DEFAULT_WORKER_SIDE, cwd, files))
+        .digest,
       base.digest,
     );
   });
@@ -769,6 +785,7 @@ describe("AC6 only an established filesystem failure maps", () => {
 
       const disarm = answerForPathForTests(method, path, failure);
       const fingerprint = await untrackedFingerprintForTests(
+        DEFAULT_WORKER_SIDE,
         cwd,
         untracked(cwd),
       ).finally(disarm);

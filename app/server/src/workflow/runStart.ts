@@ -52,14 +52,17 @@ import {
   type WorkflowRunRow,
 } from "../db/workflowStore.ts";
 import { errorText } from "../errors.ts";
-import { gitOptional } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { modelsForAccount } from "../harnesses/models.ts";
 import { getProject, type ProjectRecord } from "../projectRegistry.ts";
 import { getSettings } from "../settings.ts";
 import { readTask } from "../tasks.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "../worktrees/knowledgeCheckout.ts";
 import { createWorktree } from "../worktrees/worktrees.ts";
 import {
   noMainRepoMessage,
+  mainWorktreeId,
   resolveMainRepo,
 } from "../worktrees/worktreeResolve.ts";
 import {
@@ -158,7 +161,11 @@ export async function startCodeDeliveryRun(
     );
   const main = await resolveMainRepo(project);
   if (!main) throw new Error(await noMainRepoMessage(project));
-  const baseBranch = await validateBaseBranch(input.baseBranch, main.root);
+  const baseBranch = await validateBaseBranch(
+    input.baseBranch,
+    checkoutSideOf({ id: mainWorktreeId(project.id) }),
+    main.root,
+  );
 
   if (input.config.coordinator.promptOverride?.trim())
     throw new Error(
@@ -266,8 +273,10 @@ export async function startCodeDeliveryRun(
 /** Validate an explicitly selected base before the durable run exists. */
 async function validateBaseBranch(
   rawBaseBranch: string | undefined,
+  mainSide: CheckoutSide,
   mainRoot: string,
 ): Promise<string | undefined> {
+  const { gitOptional } = checkoutGitOn(mainSide);
   if (rawBaseBranch === undefined) return undefined;
   const baseBranch = rawBaseBranch.trim();
   if (!baseBranch) throw new Error("The workflow base branch cannot be empty.");

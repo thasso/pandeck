@@ -29,6 +29,7 @@ import {
   setManagedMergeApprovalOperationsForTests,
   type WorktreeFinishPullRequestOperations,
 } from "./worktreeFinishPullRequest.ts";
+import { DEFAULT_WORKER_SIDE } from "../../workers/placement.ts";
 
 const HEAD = "c".repeat(40);
 
@@ -186,6 +187,7 @@ function operations(
       clean: true,
     }),
     target: async () => ({
+      side: DEFAULT_WORKER_SIDE,
       repoRoot: "/repo",
       remote: "origin",
       upstream: { remote: "origin", branch: row.branch },
@@ -1594,6 +1596,7 @@ describe("merge into a non-default base", () => {
     );
     const foreign = operations({
       target: async () => ({
+        side: DEFAULT_WORKER_SIDE,
         repoRoot: "/repo",
         remote: "origin",
         upstream: { remote: "fork", branch: row.branch },

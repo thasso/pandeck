@@ -10,7 +10,9 @@ import {
 } from "../commitWorkflow.ts";
 import { getWorktree, type WorktreeRow } from "../db/worktreeStore.ts";
 import { errorText } from "../errors.ts";
-import { git, gitOptional, repoLockKey } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
+import { checkoutSideOf } from "../worktrees/knowledgeCheckout.ts";
 import { invalidateWorktreeStatus } from "../worktrees/worktreeStatus.ts";
 import {
   baseBranchTarget,
@@ -53,13 +55,28 @@ export interface CommitSyncOperationDependencies {
     options?: { baseRemote?: string },
   ): Promise<unknown>;
   baseOid(row: WorktreeRow, options: { refresh: boolean }): Promise<string>;
-  branch(cwd: string): Promise<string>;
-  repositoryIdentity(cwd: string): Promise<string>;
-  status(cwd: string): Promise<string>;
-  commitOid(cwd: string, ref: string): Promise<string>;
-  mergeBase(cwd: string, left: string, right: string): Promise<string>;
-  numstat(cwd: string, base: string, head: string): Promise<string>;
-  commitSubjects(cwd: string, base: string, head: string): Promise<string>;
+  branch(side: CheckoutSide, cwd: string): Promise<string>;
+  repositoryIdentity(side: CheckoutSide, cwd: string): Promise<string>;
+  status(side: CheckoutSide, cwd: string): Promise<string>;
+  commitOid(side: CheckoutSide, cwd: string, ref: string): Promise<string>;
+  mergeBase(
+    side: CheckoutSide,
+    cwd: string,
+    left: string,
+    right: string,
+  ): Promise<string>;
+  numstat(
+    side: CheckoutSide,
+    cwd: string,
+    base: string,
+    head: string,
+  ): Promise<string>;
+  commitSubjects(
+    side: CheckoutSide,
+    cwd: string,
+    base: string,
+    head: string,
+  ): Promise<string>;
   invalidateStatus(worktreeId: string): void;
 }
 
@@ -71,7 +88,7 @@ const REAL_DEPENDENCIES: CommitSyncOperationDependencies = {
   async baseOid(row, { refresh }) {
     if (refresh) return baseBranchTarget(row, { remote: "origin" });
     return (
-      await git(
+      await checkoutGitOn(checkoutSideOf(row)).git(
         [
           "rev-parse",
           "--verify",
@@ -81,33 +98,49 @@ const REAL_DEPENDENCIES: CommitSyncOperationDependencies = {
       )
     ).stdout.trim();
   },
-  async branch(cwd) {
-    const result = await gitOptional(
+  async branch(side, cwd) {
+    const result = await checkoutGitOn(side).gitOptional(
       ["symbolic-ref", "--quiet", "--short", "HEAD"],
       cwd,
     );
     return result.code === 0 ? result.stdout.trim() : "";
   },
-  repositoryIdentity: repoLockKey,
-  async status(cwd) {
+  repositoryIdentity: (side, cwd) => checkoutGitOn(side).repoLockKey(cwd),
+  async status(side, cwd) {
     return (
-      await git(["status", "--porcelain=v1", "--untracked-files=all"], cwd)
+      await checkoutGitOn(side).git(
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        cwd,
+      )
     ).stdout;
   },
-  async commitOid(cwd, ref) {
+  async commitOid(side, cwd, ref) {
     return (
-      await git(["rev-parse", "--verify", `${ref}^{commit}`], cwd)
+      await checkoutGitOn(side).git(
+        ["rev-parse", "--verify", `${ref}^{commit}`],
+        cwd,
+      )
     ).stdout.trim();
   },
-  async mergeBase(cwd, left, right) {
-    return (await git(["merge-base", left, right], cwd)).stdout.trim();
-  },
-  async numstat(cwd, base, head) {
-    return (await git(["diff", "--numstat", `${base}..${head}`], cwd)).stdout;
-  },
-  async commitSubjects(cwd, base, head) {
+  async mergeBase(side, cwd, left, right) {
     return (
-      await git(["log", "--reverse", "--format=%s", `${base}..${head}`], cwd)
+      await checkoutGitOn(side).git(["merge-base", left, right], cwd)
+    ).stdout.trim();
+  },
+  async numstat(side, cwd, base, head) {
+    return (
+      await checkoutGitOn(side).git(
+        ["diff", "--numstat", `${base}..${head}`],
+        cwd,
+      )
+    ).stdout;
+  },
+  async commitSubjects(side, cwd, base, head) {
+    return (
+      await checkoutGitOn(side).git(
+        ["log", "--reverse", "--format=%s", `${base}..${head}`],
+        cwd,
+      )
     ).stdout;
   },
   invalidateStatus: invalidateWorktreeStatus,
@@ -197,7 +230,7 @@ async function executeOperation(
   try {
     previousHead = await fullCommitOid(
       dependencies,
-      worktree.path,
+      worktree,
       "HEAD",
       "run HEAD before operation",
     );
@@ -205,7 +238,10 @@ async function executeOperation(
       checkpoint?.baseCommit ??
       (await resolvedBaseOid(validated, dependencies, false));
     if (mode === "base-sync") {
-      const beforeStatus = await dependencies.status(worktree.path);
+      const beforeStatus = await dependencies.status(
+        checkoutSideOf(worktree),
+        worktree.path,
+      );
       if (beforeStatus.trim())
         return blocked(
           "base synchronization blocked: run checkout has uncommitted changes",
@@ -221,6 +257,7 @@ async function executeOperation(
       commitResult = await dependencies.commit({
         source: "tool",
         cwd: worktree.path,
+        side: checkoutSideOf(worktree),
         // Only the user's "Commit anyway" at a refused commit writes this: it
         // is the one way past the commit check, and a human's call.
         force: record(context.step.payload).force === true,
@@ -267,7 +304,7 @@ async function executeOperation(
       try {
         previousHead = await fullCommitOid(
           dependencies,
-          worktree.path,
+          worktree,
           "HEAD",
           "committed run HEAD",
         );
@@ -299,8 +336,14 @@ async function executeOperation(
   let finalBranch: string;
   let finalStatus: string;
   try {
-    finalBranch = await dependencies.branch(worktree.path);
-    finalStatus = await dependencies.status(worktree.path);
+    finalBranch = await dependencies.branch(
+      checkoutSideOf(worktree),
+      worktree.path,
+    );
+    finalStatus = await dependencies.status(
+      checkoutSideOf(worktree),
+      worktree.path,
+    );
   } catch (err) {
     return failed(`final inspection failed: ${errorText(err)}`);
   }
@@ -316,7 +359,7 @@ async function executeOperation(
   try {
     const headCommit = await fullCommitOid(
       dependencies,
-      worktree.path,
+      worktree,
       "HEAD",
       "run HEAD",
     );
@@ -333,12 +376,17 @@ async function executeOperation(
     // checkpoint—not a mutable branch name—is still the range ancestor.
     await fullCommitOid(
       dependencies,
-      worktree.path,
+      worktree,
       baseCommit,
       "review checkpoint base",
     );
     const ancestor = requireFullOid(
-      await dependencies.mergeBase(worktree.path, headCommit, baseCommit),
+      await dependencies.mergeBase(
+        checkoutSideOf(worktree),
+        worktree.path,
+        headCommit,
+        baseCommit,
+      ),
       "review merge base",
     );
     if (ancestor !== baseCommit)
@@ -347,7 +395,7 @@ async function executeOperation(
       );
     const changes = await rangeChanges(
       dependencies,
-      worktree.path,
+      worktree,
       baseCommit,
       headCommit,
     );
@@ -390,7 +438,7 @@ async function resolvedBaseOid(
   if (useMainCheckoutBase)
     return fullCommitOid(
       dependencies,
-      mainWorktree.path,
+      mainWorktree,
       "HEAD",
       `${refresh ? "refreshed" : "current"} ${worktree.baseBranch}`,
     );
@@ -437,16 +485,17 @@ async function rebaseRun(
 
 async function rangeChanges(
   dependencies: CommitSyncOperationDependencies,
-  cwd: string,
+  checkout: WorktreeRow,
   baseCommit: string,
   headCommit: string,
 ): Promise<CommitRangeChanges | undefined> {
+  const side = checkoutSideOf(checkout);
   let numstat: string;
   let log: string;
   try {
     [numstat, log] = await Promise.all([
-      dependencies.numstat(cwd, baseCommit, headCommit),
-      dependencies.commitSubjects(cwd, baseCommit, headCommit),
+      dependencies.numstat(side, checkout.path, baseCommit, headCommit),
+      dependencies.commitSubjects(side, checkout.path, baseCommit, headCommit),
     ]);
   } catch {
     return undefined;
@@ -530,7 +579,10 @@ async function validateContext(
     throw new Error(
       `run worktree ${run.worktreeId} records branch "${worktree.branch}", not "${run.branch}"`,
     );
-  const actualRunBranch = await dependencies.branch(worktree.path);
+  const actualRunBranch = await dependencies.branch(
+    checkoutSideOf(worktree),
+    worktree.path,
+  );
   if (actualRunBranch !== run.branch)
     throw new Error(
       `run checkout is on ${branchLabel(actualRunBranch)}, not "${run.branch}"`,
@@ -558,14 +610,20 @@ async function validateContext(
     );
   if (useMainCheckoutBase) {
     const [runRepository, mainRepository] = await Promise.all([
-      dependencies.repositoryIdentity(worktree.path),
-      dependencies.repositoryIdentity(mainWorktree.path),
+      dependencies.repositoryIdentity(checkoutSideOf(worktree), worktree.path),
+      dependencies.repositoryIdentity(
+        checkoutSideOf(mainWorktree),
+        mainWorktree.path,
+      ),
     ]);
     if (!runRepository || !mainRepository || runRepository !== mainRepository)
       throw new Error(
         `Project ${run.projectId}'s main checkout points at a different repository than the run worktree`,
       );
-    const actualMainBranch = await dependencies.branch(mainWorktree.path);
+    const actualMainBranch = await dependencies.branch(
+      checkoutSideOf(mainWorktree),
+      mainWorktree.path,
+    );
     if (actualMainBranch !== worktree.baseBranch)
       throw new Error(
         `main checkout is on ${branchLabel(actualMainBranch)}, not the run's base branch "${worktree.baseBranch}"`,
@@ -661,11 +719,14 @@ function requireFullOid(value: string, label: string): string {
 
 async function fullCommitOid(
   dependencies: CommitSyncOperationDependencies,
-  cwd: string,
+  checkout: WorktreeRow,
   ref: string,
   label: string,
 ): Promise<string> {
-  return requireFullOid(await dependencies.commitOid(cwd, ref), label);
+  return requireFullOid(
+    await dependencies.commitOid(checkoutSideOf(checkout), checkout.path, ref),
+    label,
+  );
 }
 
 /**

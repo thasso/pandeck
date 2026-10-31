@@ -11,6 +11,7 @@ import {
   refreshBaseCheckoutAfterMerge,
   type BaseCheckoutRefreshOperations,
 } from "./baseCheckoutRefresh.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
 
 const target = "a1b2c3d4e5f6789012345678901234567890abcd";
 const oldHead = "0123456789012345678901234567890123456789";
@@ -96,7 +97,8 @@ function operations(overrides: Partial<BaseCheckoutRefreshOperations> = {}): {
     resolveMainWorktree: async () => main,
     listSpawnedWorktrees: () => [source],
     repoKey: async () => "repo-key",
-    currentBranch: async (path) => (path === main.path ? "main" : "feature"),
+    currentBranch: async (_side, path) =>
+      path === main.path ? "main" : "feature",
     isDirty: async () => false,
     head: async () => oldHead,
     baseRemote: async () => "origin",
@@ -112,7 +114,7 @@ function operations(overrides: Partial<BaseCheckoutRefreshOperations> = {}): {
     updateSubmodules: async () => {
       recorder.calls.push("submodules");
     },
-    fastForwardLocalBranch: async (_path, remote, branch) => {
+    fastForwardLocalBranch: async (_side, _path, remote, branch) => {
       recorder.calls.push(
         `fetch-refspec:${remote}:${branch}:refs/heads/${branch}`,
       );
@@ -128,6 +130,7 @@ function operations(overrides: Partial<BaseCheckoutRefreshOperations> = {}): {
 }
 
 const input = {
+  side: DEFAULT_WORKER_SIDE,
   worktreeId: "feature",
   repoPath: "/repo/feature",
   baseBranch: "main",
@@ -162,7 +165,7 @@ test("does not merge an already-current managed base checkout", async () => {
 
 test("fast-forwards an existing base ref that no managed checkout holds", async () => {
   const fixture = operations({
-    currentBranch: async (path) =>
+    currentBranch: async (_side, path) =>
       path === "/repo/main" ? "topic" : "feature",
   });
 
@@ -180,7 +183,7 @@ test("fast-forwards an existing base ref that no managed checkout holds", async 
 
 test("does not fetch an already-current unmanaged base ref", async () => {
   const fixture = operations({
-    currentBranch: async (path) =>
+    currentBranch: async (_side, path) =>
       path === "/repo/main" ? "topic" : "feature",
     localBranchOid: async () => target,
   });
@@ -195,7 +198,7 @@ test("does not fetch an already-current unmanaged base ref", async () => {
 
 test("an unclassified local branch fetch refusal stays an honest generic outcome", async () => {
   const fixture = operations({
-    currentBranch: async (path) =>
+    currentBranch: async (_side, path) =>
       path === "/repo/main" ? "topic" : "feature",
     fastForwardLocalBranch: async () => ({
       stdout: "",
@@ -232,7 +235,7 @@ test("does not write a managed base checkout with local commits", async () => {
 
 test("fetches the target but does not create an absent local base branch", async () => {
   const fixture = operations({
-    currentBranch: async (path) =>
+    currentBranch: async (_side, path) =>
       path === "/repo/main" ? "topic" : "feature",
     localBranchOid: async () => undefined,
   });
@@ -247,7 +250,7 @@ test("fetches the target but does not create an absent local base branch", async
 test("does not write when the managed base checkout detaches after discovery", async () => {
   let mainReads = 0;
   const fixture = operations({
-    currentBranch: async (path) => {
+    currentBranch: async (_side, path) => {
       if (path !== "/repo/main") return "feature";
       mainReads += 1;
       return mainReads === 1 ? "main" : "";
@@ -294,6 +297,7 @@ test("the production local-ref fetch treats a leading plus as literal and refuse
 
   const result =
     await baseCheckoutRefreshOperationsForTests().fastForwardLocalBranch(
+      DEFAULT_WORKER_SIDE,
       repo.main,
       "origin",
       "+foo",
@@ -323,6 +327,7 @@ test("the production local-ref fetch classifies Git's real checked-out refusal",
   let refusal: GitResult | undefined;
   const outcome = await refreshBaseCheckoutAfterMerge(
     {
+      side: DEFAULT_WORKER_SIDE,
       worktreeId: source.id,
       repoPath: source.path,
       baseBranch: "main",

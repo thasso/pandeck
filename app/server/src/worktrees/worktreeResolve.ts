@@ -9,7 +9,7 @@
  */
 import { join } from "node:path";
 import { checkoutFailureOf, checkoutFilesOn } from "../checkoutFileAccess.ts";
-import { gitOptional } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { getProject, type ProjectRecord } from "../projectRegistry.ts";
 import { getWorktree, type WorktreeRow } from "../db/worktreeStore.ts";
 import type { PathInspection } from "../fileReads.ts";
@@ -71,7 +71,7 @@ export async function resolveMainRepo(
   );
   for (const localPath of paths) {
     if (!localPath.path || !(await existsOnMainSide(localPath.path))) continue;
-    const res = await gitOptional(
+    const res = await checkoutGitOn(MAIN_SIDE).gitOptional(
       [
         "rev-parse",
         "--path-format=absolute",
@@ -178,12 +178,12 @@ export async function noMainRepoMessage(
 ): Promise<string> {
   for (const localPath of project.localPaths ?? []) {
     if (!localPath.path || !(await existsOnMainSide(localPath.path))) continue;
-    const inside = await gitOptional(
+    const inside = await checkoutGitOn(MAIN_SIDE).gitOptional(
       ["rev-parse", "--is-inside-work-tree"],
       localPath.path,
     );
     if (inside.code !== 0) continue;
-    const head = await gitOptional(
+    const head = await checkoutGitOn(MAIN_SIDE).gitOptional(
       ["rev-parse", "--verify", "HEAD"],
       localPath.path,
     );

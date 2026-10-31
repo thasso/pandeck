@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, test } from "vitest";
-import { git } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import type {
   EntryDiagnostic,
   EntryDiagnosticCode,
@@ -13,6 +13,9 @@ import type {
 } from "@assistant/shared";
 import { scanSkillLibrary } from "./skillLibrary.ts";
 import type { LibraryScan } from "../library/libraryScanner.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
+
+const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 let root: string;
 

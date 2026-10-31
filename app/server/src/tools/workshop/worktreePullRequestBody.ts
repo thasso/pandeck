@@ -21,6 +21,7 @@ import {
   normalizeCallerPullRequestBody,
 } from "../../callerAuthoredText.ts";
 import { draftPullRequest } from "../../prWorkflow.ts";
+import { checkoutSideOf } from "../../worktrees/knowledgeCheckout.ts";
 import { patchPullRequestCard } from "../../pullRequestCards.ts";
 import { withPullRequestMutation } from "../../pullRequestMerge.ts";
 import { sourceRequiresEnterprise } from "../../sessionEnterprise.ts";
@@ -135,6 +136,7 @@ async function executeUpdateBody(
       return withPullRequestMutation(
         {
           repoPath: target.row.path,
+          side: checkoutSideOf(target.row),
           providerKind: target.hosted.provider.kind,
           number: target.number,
           repoUrl: target.hosted.provider.repoWebUrl,
@@ -172,6 +174,7 @@ async function regenerate(
   )?.linkedTask?.id;
   const agent = await operations.draft({
     repoRoot: target.row.path,
+    side: checkoutSideOf(target.row),
     headBranch: target.row.branch,
     baseBranch: target.baseBranch,
     taskId,

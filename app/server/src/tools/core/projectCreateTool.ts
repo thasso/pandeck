@@ -26,7 +26,7 @@ import {
   carryCheckoutFailure,
   checkoutFilesOn,
 } from "../../checkoutFileAccess.ts";
-import { gitOptional } from "../../gitExec.ts";
+import { checkoutGitOn } from "../../gitExec.ts";
 import { broadcastWorktreeList } from "../../worktrees/worktrees.ts";
 import { checkoutSideOf } from "../../worktrees/knowledgeCheckout.ts";
 import {
@@ -688,10 +688,9 @@ registerApprovalExecutor("projectCreate", {
       invalidateMainRepo(b.project.id);
       void broadcastWorktreeList();
       done.push(`cloned into ${clone.dir}`);
-      const head = await gitOptional(
-        ["rev-parse", "--verify", "HEAD"],
-        clone.dir,
-      );
+      const head = await checkoutGitOn(
+        checkoutSideOf({ id: mainWorktreeId(b.project.id) }),
+      ).gitOptional(["rev-parse", "--verify", "HEAD"], clone.dir);
       if (head.code !== 0)
         done.push(
           "but the repository has no commits yet, so no worktree can branch from it until one is pushed",

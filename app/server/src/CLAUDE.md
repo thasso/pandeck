@@ -40,9 +40,9 @@
   connections. Only warm speech models may spawn directly, once per warm-up, for
   PID lifetime control and SIGKILL escalation unavailable in the broker.
 - Git mutations to a WORKING TREE, INDEX, or LOCAL ref use
-  `withRepoLock(await repoLockKey(cwd), …)` from `gitExec.ts`, never a checkout
-  key or nested lock. Only network-bound work is lock-free: fetch/push, creation
-  submodules, and the remote-ref fetches in `worktreeFetch.ts`,
+  `withRepoLock(await checkoutGitOn(side).repoLockKey(cwd), …)`, never a
+  checkout key or nested lock. Only network-bound work is lock-free: fetch/push,
+  creation submodules, and the remote-ref fetches in `worktreeFetch.ts`,
   `baseCheckoutRefresh.ts` and `pullRequestViewCheckout.ts`; a fetch writing a
   local branch is locked. New exceptions belong HERE with their isolation
   argument; children may not loosen this.

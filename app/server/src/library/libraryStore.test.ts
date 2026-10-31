@@ -12,9 +12,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
-import { git, gitOptional } from "../gitExec.ts";
+import { checkoutGitOn } from "../gitExec.ts";
 import { skillKind } from "../skills/skillLibrary.ts";
 import { LibraryStore } from "./libraryStore.ts";
+import { DEFAULT_WORKER_SIDE } from "../workers/placement.ts";
+
+const { git, gitOptional } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 
 let tempRoot: string;
 let libraryRoot: string;

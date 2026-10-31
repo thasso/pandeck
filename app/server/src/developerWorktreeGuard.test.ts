@@ -42,7 +42,10 @@ const { insertWorktree, linkSessionToWorktree } =
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { checkWorktreeCheckout } = await import("./worktrees/sessionCwd.ts");
 const { WORKTREE_MISSING_BLOCKED_REASON } = await import("@assistant/shared");
-const gitExec = await import("./gitExec.ts");
+const { checkoutGitOn } = await import("./gitExec.ts");
+const { DEFAULT_WORKER_SIDE } = await import("./workers/placement.ts");
+/** The executors a session's slash workflows run on. */
+const gitExec = checkoutGitOn(DEFAULT_WORKER_SIDE);
 const claudeProfile = createCredentialProfile({
   name: "Developer guard",
   provider: "claude",

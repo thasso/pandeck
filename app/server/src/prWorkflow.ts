@@ -3,7 +3,8 @@ import type {
   PullRequestCard,
   TaskSummary,
 } from "@assistant/shared";
-import { gitOptional, resolveRepoRoot } from "./gitExec.ts";
+import { checkoutGitOn } from "./gitExec.ts";
+import type { CheckoutSide } from "./workers/placement.ts";
 import { CWD } from "./config.ts";
 import {
   hostingProviderForRepo,
@@ -29,6 +30,7 @@ import { invalidatePullRequestInventorySnapshot } from "./pullRequestInventorySy
 import { invalidateProjectPullRequests } from "./worktrees/worktreeHosting.ts";
 import { normalizeExplicitPullRequestTitle } from "./pullRequestTitle.ts";
 import { normalizeCallerPullRequestBody } from "./callerAuthoredText.ts";
+import { pullRequestCardSide } from "./pullRequestHosting.ts";
 import { getSettings } from "./settings.ts";
 import type { ParsedPrArgs } from "./slashCommands.ts";
 import { listSessionTasks, readTask, taskSummaryOf } from "./tasks.ts";
@@ -71,6 +73,8 @@ export interface PrWorkflowPresenter {
 
 export interface PrWorkflowOptions {
   cwd?: string;
+  /** The side that checkout's git runs on. */
+  side: CheckoutSide;
   sessionManager: unknown;
   sessionKind: AgentType;
   sessionId: string;
@@ -93,6 +97,8 @@ interface TrustedPullRequestTarget {
 
 export interface BeginPullRequestCardInput {
   repoRoot: string;
+  /** The side of `repoRoot`, or of the trusted target's worktree. */
+  side: CheckoutSide;
   sessionKind: AgentType;
   sessionId: string;
   /** Trusted originating-session requirement captured before caller-side awaits. */
@@ -120,9 +126,9 @@ export interface BeginPullRequestCardResult {
 }
 
 export interface PrWorkflowOperations {
-  hasChanges(repoRoot: string): Promise<boolean>;
+  hasChanges(side: CheckoutSide, repoRoot: string): Promise<boolean>;
   runCommit(options: CommitWorkflowOptions): Promise<CommitWorkflowResult>;
-  needsPush(repoRoot: string): Promise<boolean>;
+  needsPush(side: CheckoutSide, repoRoot: string): Promise<boolean>;
   runPush(options: PushWorkflowOptions): Promise<PushWorkflowResult>;
   beginPullRequestCard(
     input: BeginPullRequestCardInput,
@@ -140,18 +146,24 @@ function bounded(text: string, max: number): string {
 }
 
 async function requireGitOutput(
+  side: CheckoutSide,
   args: string[],
   cwd: string,
   what: string,
 ): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const result = await gitOptional(args, cwd);
   if (result.code !== 0)
     throw new Error(result.stderr.trim() || `Could not read ${what}.`);
   return result.stdout.trim();
 }
 
-async function currentBranch(repoRoot: string): Promise<string> {
+async function currentBranch(
+  side: CheckoutSide,
+  repoRoot: string,
+): Promise<string> {
   const branch = await requireGitOutput(
+    side,
     ["rev-parse", "--abbrev-ref", "HEAD"],
     repoRoot,
     "the current branch",
@@ -162,9 +174,11 @@ async function currentBranch(repoRoot: string): Promise<string> {
 }
 
 async function defaultBaseBranch(
+  side: CheckoutSide,
   repoRoot: string,
   sessionId: string,
 ): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const worktreeId = worktreeIdForSession(sessionId);
   const row = worktreeId ? getWorktree(worktreeId) : undefined;
   if (row?.status === "active" && row.baseBranch.trim()) return row.baseBranch;
@@ -182,9 +196,11 @@ async function defaultBaseBranch(
 }
 
 export async function resolveDiffBaseRef(
+  side: CheckoutSide,
   repoRoot: string,
   baseBranch: string,
 ): Promise<string> {
+  const { gitOptional } = checkoutGitOn(side);
   const candidates = [
     `refs/remotes/origin/${baseBranch}`,
     `refs/heads/${baseBranch}`,
@@ -334,6 +350,7 @@ function managedPostCreateWarnings(
 /** The draft agent's title, body and warnings for the branch's `base...head`. */
 export async function draftPullRequest(input: {
   repoRoot: string;
+  side: CheckoutSide;
   headBranch: string;
   baseBranch: string;
   /** The one linked Task whose title and description inform the draft. */
@@ -343,23 +360,28 @@ export async function draftPullRequest(input: {
   onProgress?: (message: string) => void;
 }): Promise<PrAgentResult> {
   input.onProgress?.("Preparing pull request context…");
+  const { side } = input;
   const diffBaseRef = await resolveDiffBaseRef(
+    side,
     input.repoRoot,
     input.baseBranch,
   );
   const range = `${diffBaseRef}...${input.headBranch}`;
   const [log, diffstat, patch] = await Promise.all([
     requireGitOutput(
+      side,
       ["log", "--format=- %s", range],
       input.repoRoot,
       "the branch commit log",
     ),
     requireGitOutput(
+      side,
       ["diff", "--stat", range],
       input.repoRoot,
       "the branch diffstat",
     ),
     requireGitOutput(
+      side,
       ["diff", "--find-renames", range],
       input.repoRoot,
       "the branch patch",
@@ -422,6 +444,10 @@ export async function finalizePullRequestCard(
   const record = pullRequestCardRecord(cardId);
   if (!record) throw new Error("Pull request card not found.");
   const context = record.context;
+  const side = pullRequestCardSide({
+    ...(record.card.worktreeId ? { worktreeId: record.card.worktreeId } : {}),
+    sessionId: context.sessionId,
+  });
   const helperSource = {
     sourceSessionId: context.sessionId,
     requiresEnterprise: sourceRequiresEnterprise(
@@ -437,7 +463,7 @@ export async function finalizePullRequestCard(
   try {
     const provider =
       options.provider ??
-      (await hostingProviderForRepo(context.repoRoot, context.remote));
+      (await hostingProviderForRepo(side, context.repoRoot, context.remote));
     if (!provider)
       throw new Error(
         "No git hosting provider is configured for this repository.",
@@ -500,6 +526,7 @@ export async function finalizePullRequestCard(
         ? undefined
         : await draftPullRequest({
             repoRoot: context.repoRoot,
+            side,
             headBranch: context.headBranch,
             baseBranch: context.baseBranch,
             taskId: chosenTaskId,
@@ -620,21 +647,22 @@ export async function beginPullRequestCard(
       : normalizeCallerPullRequestBody(input.body);
   const trusted = input.trustedTarget;
   const repoRoot = trusted?.worktree.path ?? input.repoRoot;
+  const { side } = input;
   const provider =
     trusted?.provider ??
-    (await hostingProviderForRepo(repoRoot, trusted?.remote));
+    (await hostingProviderForRepo(side, repoRoot, trusted?.remote));
   if (!provider)
     throw new Error(
       "No git hosting provider is configured for this repository.",
     );
 
   const headBranch =
-    trusted?.worktree.branch ?? (await currentBranch(repoRoot));
+    trusted?.worktree.branch ?? (await currentBranch(side, repoRoot));
   const baseBranch = trusted
     ? trusted.worktree.baseBranch
     : (
         input.args.base?.trim() ||
-        (await defaultBaseBranch(repoRoot, input.sessionId))
+        (await defaultBaseBranch(side, repoRoot, input.sessionId))
       ).replace(/^origin\//, "");
 
   // Recorded on every card the command mints: local stage-3 actions act on the
@@ -784,7 +812,8 @@ export async function beginPullRequestCard(
 }
 
 const defaultOperations: PrWorkflowOperations = {
-  async hasChanges(repoRoot) {
+  async hasChanges(side, repoRoot) {
+    const { gitOptional } = checkoutGitOn(side);
     const result = await gitOptional(
       ["status", "--porcelain=v1", "-uall"],
       repoRoot,
@@ -794,7 +823,8 @@ const defaultOperations: PrWorkflowOperations = {
     return Boolean(result.stdout.trim());
   },
   runCommit: runCommitWorkflow,
-  async needsPush(repoRoot) {
+  async needsPush(side, repoRoot) {
+    const { gitOptional } = checkoutGitOn(side);
     const upstream = await gitOptional(
       ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
       repoRoot,
@@ -823,9 +853,12 @@ export async function runPrWorkflow(
     [options.sessionId],
     options.requiresEnterprise,
   );
-  const repoRoot = await resolveRepoRoot(options.cwd ?? CWD);
+  const { side } = options;
+  const repoRoot = await checkoutGitOn(side).resolveRepoRoot(
+    options.cwd ?? CWD,
+  );
 
-  if (await operations.hasChanges(repoRoot)) {
+  if (await operations.hasChanges(side, repoRoot)) {
     options.presenter.begin("commit", {
       command: options.commandText,
       force: options.args.forceCommit,
@@ -838,6 +871,7 @@ export async function runPrWorkflow(
       sessionId: options.sessionId,
       requiresEnterprise,
       cwd: repoRoot,
+      side,
       force: options.args.forceCommit,
       additionalContext: options.args.additionalContext,
       commandText: options.commandText,
@@ -853,13 +887,14 @@ export async function runPrWorkflow(
     }
   }
 
-  if (await operations.needsPush(repoRoot)) {
+  if (await operations.needsPush(side, repoRoot)) {
     options.presenter.begin("push", {
       command: options.commandText,
       force: options.args.force,
     });
     const push = await operations.runPush({
       cwd: repoRoot,
+      side,
       force: options.args.force,
       onProgress: (message) => options.presenter.progress(message),
     });
@@ -875,6 +910,7 @@ export async function runPrWorkflow(
   });
   const result = await operations.beginPullRequestCard({
     repoRoot,
+    side,
     sessionKind: options.sessionKind,
     sessionId: options.sessionId,
     requiresEnterprise,

@@ -35,11 +35,12 @@ const {
 } = await import("./worktrees.ts");
 const { getWorktree } = await import("../db/worktreeStore.ts");
 const { projectStore } = await import("../db/projectStore.ts");
-const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
+const { withRepoLock, checkoutGitOn } = await import("../gitExec.ts");
 const { presenceNow } = await import("./checkoutPresence.ts");
 const { setContainerExecForTests } = await import("../containerImages.ts");
 const { isWorkerFailure } = await import("../workers/fileClient.ts");
 const { DEFAULT_WORKER_SIDE } = await import("../workers/placement.ts");
+const { repoLockKey } = checkoutGitOn(DEFAULT_WORKER_SIDE);
 const { inProcessWorkerQuiescentForTests, writeAsInProcessWorkerForTests } =
   await import("../workers/inProcessWorker.ts");
 const { answeredFailure, answering, scriptWorkerAnswersForTests } =

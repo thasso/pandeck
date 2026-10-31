@@ -252,10 +252,11 @@ which imports no server state) and `workers/` (the server's side and placement);
   another Worker id. The Worker id is derived until phase 4 (D2): every checkout
   is placed on the default Worker, `local`. A checkout's side is typed
   (`CheckoutSide`, `workers/placement.ts`), and `checkoutGitOn(side)` and
-  `checkoutFilesOn(side)` run on it. Until W6, the `(args, cwd)` executors in
-  `gitExec.ts` and the root-taking reads of `checkoutFileAccess.ts` remain as
-  the default Worker's adapter, with no path rule: every checkout reached by a
-  bare cwd runs there.
+  `checkoutFilesOn(side)` run on it. They are the only way in: every caller
+  names the side of what it holds — its row's or its project's main checkout's
+  (`checkoutSideOf`), its session's for a path the session supplied
+  (`sessionCheckoutSide`), or its pull-request card's
+  (`pullRequestCardCheckout`). No path chooses a side.
 - **What stays on the server.** The Knowledge Base, the skills and agent
   libraries, and the app's own tree run git through the server-local executor
   family, `serverRepoGit.ts`. The Knowledge Base _row_, browsed or committed as
@@ -295,8 +296,18 @@ which imports no server state) and `workers/` (the server's side and placement);
     allows but cannot reach a Worker (R2); path data carried out through
     externally registered callbacks or broadcast payloads (R3); and a future
     KB-kind served source that sets no side and relies on the served path rule
-    (R4). W6 removes the string executors and so closes only R1's string-API
-    reach.
+    (R4). W6 removed the string executors, which closed R1's string-API reach;
+    the rest of R1 stays with review.
+  - Registry `localPaths` warnings still read the server's `node:fs`
+    (Task-1153).
+  - The `ls` app tool still reads session paths on the server's `node:fs`
+    (Task-1174).
+  - A session whose cwd is the Knowledge Base runs `/commit`, `/push` and `/pr`
+    git on the default Worker, as before W6.
+  - `sessionCheckoutSide` ignores its session until phase 4.
+  - A card's presence read runs on its recorded side; a Worker failure there
+    rejects the provider resolution, mutation key or card match that needed it,
+    rather than choosing a root (RD-W3-2).
 - **Served files.** `/api/files`, document grants and `show_files` read through
   `servedFileAccess.ts`, which calls the file methods `files.stat`,
   `files.realpath`, `files.open`, `files.read` and `files.close`
@@ -956,14 +967,16 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W3d    | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)        | landed  |
 | W4     | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)     | landed  |
 | W5     | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)    | landed  |
-| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | planned |
+| W6     | Callers pass their own side; the string-cwd executors and both pin lists are gone    | landed  |
 | W7–W10 | The engine host: app tools, approvals and hooks, then pi and Claude sessions         | planned |
 | W11    | Isolation boundary and secret store ports                                            | planned |
 
-`workerBoundary.test.ts` pinned every module that still read a checkout on the
-server's filesystem to the slice that moves it; since W5 those lists are empty,
-and W6 removes them. It also closes the value imports of the modules that can
-hold the Knowledge Base row, each external symbol pinned to its declaration.
+`workerBoundary.test.ts` asserts that no module of the checkout family imports
+`node:fs`, that `gitExec.ts` and `checkoutFileAccess.ts` export no read or
+executor without a side, and that only the side derivations and the Worker's own
+clients name the default Worker. It also closes the value imports of the modules
+that can hold the Knowledge Base row, each external symbol pinned to its
+declaration.
 
 ## Open questions
 

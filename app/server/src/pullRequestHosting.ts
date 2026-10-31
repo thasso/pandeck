@@ -16,15 +16,42 @@
  * shares one git directory, it carries the same remotes — including the named
  * push remote a managed delivery recorded — and the same lock identity. Nothing
  * changes for a card whose worktree is still there.
+ *
+ * The answer names the side with the root, and the presence read runs on that
+ * side's Worker, not the server's filesystem (`docs/workers.md`).
  */
-import { existsSync } from "node:fs";
+import { checkoutFilesOn } from "./checkoutFileAccess.ts";
 import { getWorktree } from "./db/worktreeStore.ts";
+import { sessionCheckoutSide, type CheckoutSide } from "./workers/placement.ts";
+import { checkoutSideOf } from "./worktrees/knowledgeCheckout.ts";
+import { mainWorktreeId } from "./worktrees/worktreeResolve.ts";
 
 export interface PullRequestCardRepoTarget {
   /** The checkout recorded on the card's context when it was created. */
   repoRoot: string;
   /** The worktree it was published from, when it was published from one. */
   worktreeId?: string;
+  /** The session the card belongs to; a card without a worktree is its path. */
+  sessionId: string;
+}
+
+/** A card's checkout: the root and the side its git and reads run on. */
+export interface PullRequestCardCheckout {
+  side: CheckoutSide;
+  repoRoot: string;
+}
+
+/**
+ * The side of the checkout recorded on a card: its worktree's, else its
+ * session's, since a card without a worktree was published from its session's
+ * path.
+ */
+export function pullRequestCardSide(
+  target: Pick<PullRequestCardRepoTarget, "worktreeId" | "sessionId">,
+): CheckoutSide {
+  return target.worktreeId
+    ? checkoutSideOf({ id: target.worktreeId })
+    : sessionCheckoutSide(target.sessionId);
 }
 
 /**
@@ -32,13 +59,25 @@ export interface PullRequestCardRepoTarget {
  * resolution, for the per-pull-request mutation identity, and for matching a
  * card to a pull request — they must agree, or a merge would reach a provider
  * through one repository and project onto cards keyed to another.
+ *
+ * With {@link pullRequestCardSide}, the one place a card's side is derived:
+ * the recorded side, and the main checkout's once it falls back to that. The
+ * presence read runs on the recorded side; a Worker failure rejects rather
+ * than choosing a root.
  */
-export function pullRequestCardRepoRoot(
+export async function pullRequestCardCheckout(
   target: PullRequestCardRepoTarget,
-): string {
-  if (existsSync(target.repoRoot)) return target.repoRoot;
-  const main = target.worktreeId
-    ? getWorktree(target.worktreeId)?.mainRepoRoot
-    : undefined;
-  return main ?? target.repoRoot;
+): Promise<PullRequestCardCheckout> {
+  const recorded = pullRequestCardSide(target);
+  if (
+    await checkoutFilesOn(recorded).pathExists(target.repoRoot, target.repoRoot)
+  )
+    return { side: recorded, repoRoot: target.repoRoot };
+  const row = target.worktreeId ? getWorktree(target.worktreeId) : undefined;
+  if (row)
+    return {
+      side: checkoutSideOf({ id: mainWorktreeId(row.projectId) }),
+      repoRoot: row.mainRepoRoot,
+    };
+  return { side: recorded, repoRoot: target.repoRoot };
 }

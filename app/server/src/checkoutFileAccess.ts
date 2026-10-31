@@ -4,11 +4,10 @@
  * the side where that checkout's git runs (`docs/workers.md`, "Checkout
  * files").
  *
- * {@link checkoutFilesOn} reads on a given side: the modules that can hold
- * the Knowledge Base row pass the row's typed side (`checkoutSideOf`). The
- * root-taking functions below are the default Worker's, like the string git
- * executors: no path chooses a side, and the server never resolves a path it
- * reads to choose where to read it. The server side reads through
+ * {@link checkoutFilesOn} is the only way in: every caller names the side of
+ * the checkout it holds, as for its git (`gitExec.ts`), the server included
+ * for the Knowledge Base row. No path chooses a side, and the server never
+ * resolves a path it reads to choose where to read it. The server side reads through
  * `fileReads.ts`; a Worker side goes to its Worker through the file methods
  * (`workers/fileClient.ts`). When the Worker fails, the read fails: there is
  * no local fallback.
@@ -51,11 +50,7 @@ import {
   readlinkOnWorker,
   realpathOnWorker,
 } from "./workers/fileClient.ts";
-import {
-  DEFAULT_WORKER_SIDE,
-  checkoutSideKey,
-  type CheckoutSide,
-} from "./workers/placement.ts";
+import { checkoutSideKey, type CheckoutSide } from "./workers/placement.ts";
 
 /** The server's own verdict on a checkout path: it lies outside the root. */
 export class CheckoutPathVerdict extends Error {
@@ -175,42 +170,6 @@ function realpathOn(side: CheckoutSide, path: string): Promise<string> {
   return onSide(side, path, realpathFile, realpathOnWorker);
 }
 
-/** Whether `path` exists, as `existsSync` answers it. */
-export function checkoutPathExists(
-  root: string,
-  path: string,
-): Promise<boolean> {
-  return onDefaultWorker().pathExists(root, path);
-}
-
-/** With `mode`, the answer carries the mode bits; a Worker must send them. */
-export function inspectCheckoutPath(
-  root: string,
-  path: string,
-  options: { follow: boolean; mode?: boolean },
-): Promise<PathInspection> {
-  return onDefaultWorker().inspect(root, path, options);
-}
-
-/** A symlink's target text, as `readlink` decodes it. */
-export function readCheckoutLink(root: string, path: string): Promise<string> {
-  return onDefaultWorker().readLink(root, path);
-}
-
-export function readCheckoutDir(
-  root: string,
-  dir: string,
-): Promise<DirectoryEntry[]> {
-  return onDefaultWorker().readDir(root, dir);
-}
-
-export function realpathInCheckout(
-  root: string,
-  path: string,
-): Promise<string> {
-  return onDefaultWorker().realpath(root, path);
-}
-
 /**
  * `relPath` joined to `root`, lexically only; a verdict when it is empty,
  * absolute, or escapes the root.
@@ -224,22 +183,7 @@ export function checkLexicalPath(root: string, relPath: string): string {
   return abs;
 }
 
-/**
- * Resolve a repo-relative path for READING file content.
- * {@link checkLexicalPath} is lexical only; file reads follow symlinks, so a
- * repo containing `secret -> /etc/passwd` would otherwise leak content outside
- * the worktree. The resolved real path must stay inside the (real) worktree
- * root. Each realpath falls back only on a filesystem failure: a missing file
- * answers its lexical path (the read then fails naturally), an unresolvable
- * root itself.
- */
-export function containedRealPath(
-  root: string,
-  relPath: string,
-): Promise<string> {
-  return onDefaultWorker().containedRealPath(root, relPath);
-}
-
+/** {@link CheckoutFiles.containedRealPath} on `side`. */
 async function containedRealPathOn(
   side: CheckoutSide,
   root: string,
@@ -273,24 +217,7 @@ interface ReadableFile {
   close(): Promise<void>;
 }
 
-/**
- * The bytes of `path` in the checkout at `root`, as production's `readFile`
- * reads them: no descriptor stat and no size limit, reading until a read
- * comes back short. With `limit`, one read of at most `limit` bytes; pass a
- * cap + 1 to tell a file over the cap from one at it.
- *
- * The file is always closed. When the read and the close both fail, the
- * error thrown is the first of: a Worker failure, an unclassified error, the
- * read's filesystem failure, the close's.
- */
-export function readCheckoutFile(
-  root: string,
-  path: string,
-  limit?: number,
-): Promise<Buffer> {
-  return onDefaultWorker().readFile(root, path, limit);
-}
-
+/** {@link CheckoutFiles.readFile} on `side`. */
 async function readFileOn(
   side: CheckoutSide,
   path: string,
@@ -358,32 +285,46 @@ function asBuffer(bytes: Uint8Array): Buffer {
 }
 
 /**
- * The reads of the checkouts on one side, each taking `(root, path, …)` as the
- * root-taking functions above do; the side, not the root, says where they run.
+ * The reads of the checkouts on one side, each taking `(root, path, …)`; the
+ * side, not the root, says where they run.
  */
 export interface CheckoutFiles {
+  /** Whether `path` exists, as `existsSync` answers it. */
   pathExists(root: string, path: string): Promise<boolean>;
+  /** With `mode`, the answer carries the mode bits; a Worker must send them. */
   inspect(
     root: string,
     path: string,
     options: { follow: boolean; mode?: boolean },
   ): Promise<PathInspection>;
+  /** A symlink's target text, as `readlink` decodes it. */
   readLink(root: string, path: string): Promise<string>;
   readDir(root: string, dir: string): Promise<DirectoryEntry[]>;
   realpath(root: string, path: string): Promise<string>;
+  /**
+   * Resolve a repo-relative path for READING file content.
+   * {@link checkLexicalPath} is lexical only; file reads follow symlinks, so a
+   * repo containing `secret -> /etc/passwd` would otherwise leak content
+   * outside the worktree. The resolved real path must stay inside the (real)
+   * worktree root. Each realpath falls back only on a filesystem failure: a
+   * missing file answers its lexical path (the read then fails naturally), an
+   * unresolvable root itself.
+   */
   containedRealPath(root: string, relPath: string): Promise<string>;
+  /**
+   * The bytes of `path` in the checkout at `root`, as production's `readFile`
+   * reads them: no descriptor stat and no size limit, reading until a read
+   * comes back short. With `limit`, one read of at most `limit` bytes; pass a
+   * cap + 1 to tell a file over the cap from one at it.
+   *
+   * The file is always closed. When the read and the close both fail, the
+   * error thrown is the first of: a Worker failure, an unclassified error, the
+   * read's filesystem failure, the close's.
+   */
   readFile(root: string, path: string, limit?: number): Promise<Buffer>;
 }
 
 const filesBySide = new Map<string, CheckoutFiles>();
-
-/**
- * The default Worker's reads, behind the root-taking functions: a checkout
- * reached by a bare root is never the Knowledge Base row.
- */
-function onDefaultWorker(): CheckoutFiles {
-  return checkoutFilesOn(DEFAULT_WORKER_SIDE);
-}
 
 /** The checkout reads on `side`, one instance per side. */
 export function checkoutFilesOn(side: CheckoutSide): CheckoutFiles {
@@ -413,9 +354,8 @@ export function checkoutFilesOn(side: CheckoutSide): CheckoutFiles {
 let readThrow: { error: unknown; at: "read" | "close" } | undefined;
 
 /**
- * Test seam: the next whole-file checkout read ({@link readCheckoutFile} or
- * a side's `readFile`) throws `error` from its own
- * logic — at `read`, once the read primitive answered, before the bytes are
+ * Test seam: the next whole-file checkout read (a side's `readFile`) throws
+ * `error` from its own logic — at `read`, once the read primitive answered, before the bytes are
  * returned; at `close`, as the close step's error once the primitive close
  * settled. One-shot, taken by that call even when it never reaches the point.
  */

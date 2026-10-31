@@ -78,9 +78,11 @@ for (const mode of ["broker", "in-process"]) {
             "keep its realpath snapshot after the alias disappears",
           );
           assert.equal(warning.mock.calls.length, 1);
-          // Checkout git is typed: it reads no KB setting, so a bare cwd in
-          // the KB runs on the Worker and the outage adds no warning.
-          const { git } = await import("../gitExec.ts");
+          // Checkout git is typed: it reads no KB setting, so the default
+          // Worker's git in the KB runs there and the outage adds no warning.
+          const { DEFAULT_WORKER_SIDE } = await import("./placement.ts");
+          const { checkoutGitOn } = await import("../gitExec.ts");
+          const { git } = checkoutGitOn(DEFAULT_WORKER_SIDE);
           const { inProcessWorkerServedForTests: served } =
             await import("./inProcessWorker.ts");
           let before = served();

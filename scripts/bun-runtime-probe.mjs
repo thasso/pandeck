@@ -60,11 +60,7 @@ import { DatabaseSync } from "node:sqlite";
 import { runInThisContext } from "node:vm";
 import {
   checkoutFailureOf,
-  checkoutPathExists,
-  inspectCheckoutPath,
-  readCheckoutDir,
-  readCheckoutFile,
-  readCheckoutLink,
+  checkoutFilesOn,
 } from "../app/server/src/checkoutFileAccess.ts";
 import {
   runCommitWorkflow,
@@ -97,11 +93,8 @@ import {
 } from "../app/server/src/fileReads.ts";
 import {
   GitCommandError,
+  checkoutGitOn,
   clearRepoLockKeysForTests,
-  git,
-  gitBoundedStdout,
-  gitWithInputOptional,
-  repoLockKey,
 } from "../app/server/src/gitExec.ts";
 import { readInitiativeMap } from "../app/server/src/initiativeLayout.ts";
 import { stopInitiativeLayoutWorker } from "../app/server/src/initiativeLayoutRunner.ts";
@@ -157,6 +150,17 @@ import {
   getWorktreeFileRaw,
 } from "../app/server/src/worktrees/worktreeDiff.ts";
 import { checkWorkerFileOpenEnd } from "./worker-file-open-end-probe.ts";
+
+// Every checkout this probe makes is a project checkout, on the default Worker.
+const { git, gitBoundedStdout, gitWithInputOptional, repoLockKey } =
+  checkoutGitOn(DEFAULT_WORKER_SIDE);
+const {
+  pathExists: checkoutPathExists,
+  inspect: inspectCheckoutPath,
+  readDir: readCheckoutDir,
+  readFile: readCheckoutFile,
+  readLink: readCheckoutLink,
+} = checkoutFilesOn(DEFAULT_WORKER_SIDE);
 
 const mode = process.argv[2];
 if (mode !== "broker" && mode !== "in-process")
@@ -1316,7 +1320,13 @@ async function checkWorkerWorkflowReads() {
           "files.exists",
         ],
         "a commit dry run",
-        () => runCommitWorkflow({ source: "tool", cwd: root, dryRun: true }),
+        () =>
+          runCommitWorkflow({
+            source: "tool",
+            cwd: root,
+            side: DEFAULT_WORKER_SIDE,
+            dryRun: true,
+          }),
       );
     } finally {
       setCommitMessageGeneratorForTests(null);

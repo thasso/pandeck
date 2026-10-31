@@ -24,8 +24,9 @@ import {
   type WorktreeMergePhase,
   type WorktreeMergeStrategy,
 } from "@assistant/shared";
-import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
-import { checkoutPathExists } from "../checkoutFileAccess.ts";
+import { checkoutGitOn, withRepoLock } from "../gitExec.ts";
+import { checkoutFilesOn } from "../checkoutFileAccess.ts";
+import type { CheckoutSide } from "../workers/placement.ts";
 import { getSettings } from "../settings.ts";
 import {
   formatCommitMessage,
@@ -112,7 +113,8 @@ export function mergePhase(worktreeId: string): WorktreeMergePhase {
   return (row && readMergeState(row)?.phase) || "idle";
 }
 
-async function isClean(path: string): Promise<boolean> {
+async function isClean(side: CheckoutSide, path: string): Promise<boolean> {
+  const { gitOptional } = checkoutGitOn(side);
   const status = await gitOptional(
     ["status", "--porcelain=v1", "--untracked-files=all"],
     path,
@@ -120,7 +122,11 @@ async function isClean(path: string): Promise<boolean> {
   return status.code === 0 && !status.stdout.trim();
 }
 
-async function unmergedPaths(path: string): Promise<string[]> {
+async function unmergedPaths(
+  side: CheckoutSide,
+  path: string,
+): Promise<string[]> {
+  const { gitOptional } = checkoutGitOn(side);
   const status = await gitOptional(["status", "--porcelain=v1"], path);
   if (status.code !== 0) return [];
   return status.stdout
@@ -131,11 +137,21 @@ async function unmergedPaths(path: string): Promise<string[]> {
 }
 
 /** Misses a gitfile `.git`, where MERGE_HEAD lives elsewhere (Task-1185). */
-function mergeInProgress(repoRoot: string): Promise<boolean> {
-  return checkoutPathExists(repoRoot, join(repoRoot, ".git", "MERGE_HEAD"));
+function mergeInProgress(
+  side: CheckoutSide,
+  repoRoot: string,
+): Promise<boolean> {
+  return checkoutFilesOn(side).pathExists(
+    repoRoot,
+    join(repoRoot, ".git", "MERGE_HEAD"),
+  );
 }
 
-async function rebaseInProgress(worktreePath: string): Promise<boolean> {
+async function rebaseInProgress(
+  side: CheckoutSide,
+  worktreePath: string,
+): Promise<boolean> {
+  const { gitOptional } = checkoutGitOn(side);
   const gitDir = await gitOptional(
     ["rev-parse", "--absolute-git-dir"],
     worktreePath,
@@ -143,8 +159,14 @@ async function rebaseInProgress(worktreePath: string): Promise<boolean> {
   if (gitDir.code !== 0) return false;
   const dir = gitDir.stdout.trim();
   return (
-    (await checkoutPathExists(worktreePath, join(dir, "rebase-merge"))) ||
-    (await checkoutPathExists(worktreePath, join(dir, "rebase-apply")))
+    (await checkoutFilesOn(side).pathExists(
+      worktreePath,
+      join(dir, "rebase-merge"),
+    )) ||
+    (await checkoutFilesOn(side).pathExists(
+      worktreePath,
+      join(dir, "rebase-apply"),
+    ))
   );
 }
 
@@ -175,9 +197,14 @@ async function mergeWorktreeClaimed(
   if (
     !initial ||
     initial.status !== "active" ||
-    !(await checkoutPathExists(initial.path, initial.path))
+    !(await checkoutFilesOn(checkoutSideOf(initial)).pathExists(
+      initial.path,
+      initial.path,
+    ))
   )
     throw new Error("Unknown worktree.");
+  const side = checkoutSideOf(initial);
+  const { gitOptional, repoLockKey } = checkoutGitOn(side);
   const strategy =
     strategyInput ?? getSettings().worktrees.defaultMergeStrategy;
   let row = initial;
@@ -202,7 +229,10 @@ async function mergeWorktreeClaimed(
           currentRow.path !== initial.path ||
           currentRow.branch !== initial.branch ||
           currentRow.mainRepoRoot !== initial.mainRepoRoot ||
-          !(await checkoutPathExists(currentRow.path, currentRow.path))
+          !(await checkoutFilesOn(side).pathExists(
+            currentRow.path,
+            currentRow.path,
+          ))
         )
           throw new Error("Unknown worktree.");
         row = currentRow;
@@ -214,11 +244,11 @@ async function mergeWorktreeClaimed(
           current === "agent_resolving"
         )
           throw new Error("A merge is already in progress for this worktree.");
-        if (!(await isClean(row.path)))
+        if (!(await isClean(side, row.path)))
           throw new Error(
             "The worktree has uncommitted changes. Commit them first.",
           );
-        if (!(await isClean(row.mainRepoRoot)))
+        if (!(await isClean(side, row.mainRepoRoot)))
           throw new Error(
             "The main checkout has uncommitted changes. Commit or stash them first.",
           );
@@ -274,11 +304,13 @@ async function runStrategy(
   row: WorktreeRow,
   strategy: WorktreeMergeStrategy,
 ): Promise<ConflictInfo | undefined> {
+  const side = checkoutSideOf(row);
+  const { git, gitOptional } = checkoutGitOn(side);
   if (strategy === "rebase") {
     const rebase = await gitOptional(["rebase", row.baseBranch], row.path);
     if (rebase.code !== 0) {
-      const paths = await unmergedPaths(row.path);
-      if (paths.length || (await rebaseInProgress(row.path))) {
+      const paths = await unmergedPaths(side, row.path);
+      if (paths.length || (await rebaseInProgress(side, row.path))) {
         return {
           paths,
           message: `Rebase of ${row.branch} onto ${row.baseBranch} hit conflicts.`,
@@ -296,8 +328,8 @@ async function runStrategy(
       row.mainRepoRoot,
     );
     if (merge.code !== 0) {
-      const paths = await unmergedPaths(row.mainRepoRoot);
-      if (paths.length || (await mergeInProgress(row.mainRepoRoot))) {
+      const paths = await unmergedPaths(side, row.mainRepoRoot);
+      if (paths.length || (await mergeInProgress(side, row.mainRepoRoot))) {
         return {
           paths,
           message: `Merging ${row.branch} into ${row.baseBranch} hit conflicts.`,
@@ -314,7 +346,7 @@ async function runStrategy(
     row.mainRepoRoot,
   );
   if (squash.code !== 0) {
-    const paths = await unmergedPaths(row.mainRepoRoot);
+    const paths = await unmergedPaths(side, row.mainRepoRoot);
     if (paths.length) {
       return {
         paths,
@@ -329,6 +361,8 @@ async function runStrategy(
 
 /** Commit message for the squashed result: commit agent with a static fallback. */
 async function squashCommitMessage(row: WorktreeRow): Promise<string> {
+  const side = checkoutSideOf(row);
+  const { gitOptional } = checkoutGitOn(side);
   const fallback = `Merge worktree ${row.branch} (squash)`;
   try {
     const diff = await gitOptional(
@@ -384,6 +418,8 @@ async function spawnMergeAgent(
   row: WorktreeRow,
   initialState: MergeState,
 ): Promise<void> {
+  const side = checkoutSideOf(row);
+  const { gitOptional } = checkoutGitOn(side);
   const mainHeadRes = await gitOptional(
     ["rev-parse", "--verify", "HEAD"],
     row.mainRepoRoot,
@@ -477,6 +513,8 @@ async function mergeAgentPrompt(
   state: MergeState,
   conflictCwd: string,
 ): Promise<string> {
+  const side = checkoutSideOf(row);
+  const { gitOptional } = checkoutGitOn(side);
   const status = await gitOptional(["status"], conflictCwd);
   const finishCommand =
     state.strategy === "rebase"
@@ -546,6 +584,8 @@ async function verifyMergeResolution(
 ): Promise<void> {
   const row = getWorktree(worktreeId);
   if (!row) return;
+  const side = checkoutSideOf(row);
+  const { git, repoLockKey } = checkoutGitOn(side);
   const state = readMergeState(row);
   if (!state || state.phase !== "agent_resolving") return;
 
@@ -564,8 +604,8 @@ async function verifyMergeResolution(
 
   if (state.strategy === "rebase") {
     if (
-      (await rebaseInProgress(row.path)) ||
-      (await unmergedPaths(row.path)).length > 0
+      (await rebaseInProgress(side, row.path)) ||
+      (await unmergedPaths(side, row.path)).length > 0
     )
       return;
     // The rebase is no longer running; fast-forward the base branch under the
@@ -590,8 +630,8 @@ async function verifyMergeResolution(
     }
   } else {
     if (
-      (await mergeInProgress(row.mainRepoRoot)) ||
-      (await unmergedPaths(row.mainRepoRoot)).length > 0
+      (await mergeInProgress(side, row.mainRepoRoot)) ||
+      (await unmergedPaths(side, row.mainRepoRoot)).length > 0
     )
       return;
     if (!(await mergeConflictResolved(row, state))) {
@@ -612,6 +652,8 @@ async function verifyMergeResolution(
 
 /** Whether the main checkout still has the recorded base branch checked out. */
 async function mainCheckoutOnBase(row: WorktreeRow): Promise<boolean> {
+  const side = checkoutSideOf(row);
+  const { gitOptional } = checkoutGitOn(side);
   const res = await gitOptional(
     ["rev-parse", "--abbrev-ref", "HEAD"],
     row.mainRepoRoot,
@@ -636,6 +678,8 @@ async function mergeConflictResolved(
   row: WorktreeRow,
   state: MergeState,
 ): Promise<boolean> {
+  const side = checkoutSideOf(row);
+  const { gitOptional } = checkoutGitOn(side);
   if (state.strategy === "merge" || !state.mainHeadAtConflict) {
     return branchContainedInBase(
       checkoutSideOf(row),
@@ -677,12 +721,13 @@ export async function reconcileWorktreeMergesOnBoot(): Promise<void> {
       state.phase === "idle"
     )
       continue;
+    const side = checkoutSideOf(row);
     const stillConflicted =
       state.strategy === "rebase"
-        ? (await rebaseInProgress(row.path)) ||
-          (await unmergedPaths(row.path)).length > 0
-        : (await mergeInProgress(row.mainRepoRoot)) ||
-          (await unmergedPaths(row.mainRepoRoot)).length > 0;
+        ? (await rebaseInProgress(side, row.path)) ||
+          (await unmergedPaths(side, row.path)).length > 0
+        : (await mergeInProgress(side, row.mainRepoRoot)) ||
+          (await unmergedPaths(side, row.mainRepoRoot)).length > 0;
     if (stillConflicted) {
       setMergeState(row.id, {
         ...state,

@@ -1,6 +1,7 @@
 /** Change the recorded merge-back target of an active spawned worktree. */
-import { gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
+import { checkoutGitOn, withRepoLock } from "../gitExec.ts";
 import { getWorktree, updateWorktreeBase } from "../db/worktreeStore.ts";
+import { checkoutSideOf } from "./knowledgeCheckout.ts";
 import { invalidateWorktreeHosting } from "./worktreeHosting.ts";
 import { mergePhase } from "./worktreeMerge.ts";
 import { invalidateWorktreeStatus } from "./worktreeStatus.ts";
@@ -35,6 +36,7 @@ export async function changeWorktreeBase(
   if (baseBranch === initial.branch)
     throw new Error("A worktree branch cannot be its own merge-back target.");
 
+  const { gitOptional, repoLockKey } = checkoutGitOn(checkoutSideOf(initial));
   const repoKey = await repoLockKey(initial.mainRepoRoot);
   const result = await withRepoLock(repoKey, async () => {
     const row = getWorktree(worktreeId);
