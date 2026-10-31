@@ -652,12 +652,6 @@ function markStateChanged(
     hostIds,
   ))
     owners.add(row.owner_session_id);
-  for (const row of selectByIds<{ owner_session_id: string }>(
-    db,
-    "SELECT DISTINCT owner_session_id FROM background_hosts WHERE id IN",
-    hostIds,
-  ))
-    owners.add(row.owner_session_id);
   // The owners' `backgroundActivity` reads these rows (an owner never moves).
   touchSessionRows(owners);
   return {

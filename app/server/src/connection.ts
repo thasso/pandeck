@@ -98,6 +98,7 @@ import { testTempoSettings } from "./tempoSettings.ts";
 import { testConfluenceSettings } from "./confluenceSettings.ts";
 import { testJiraSettings } from "./jiraSettings.ts";
 import { hub } from "./hub.ts";
+import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import { sendAccountLoginAlertsTo } from "./accountHealth.ts";
 import {
   isLiveSession,
@@ -330,7 +331,6 @@ import {
   isPermanentAssistantSession,
   permanentAssistantSessionId,
   permanentAssistantViewableId,
-  sessionListHiddenProbe,
   subscribePermanentAssistant,
 } from "./permanentAssistant.ts";
 import { AsyncLocalStorage } from "node:async_hooks";

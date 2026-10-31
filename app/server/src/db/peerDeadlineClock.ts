@@ -1,5 +1,5 @@
 /**
- * The session list's one clock input (`docs/session-list.md`, "Deadline
+ * The session list's peer-request clock input (`docs/session-list.md`, "Deadline
  * watermark"). A peer request stops being owed when its reply deadline
  * passes, with no write to say so. The row builder therefore never asks the
  * wall clock: it reads {@link deadlineWatermark} W, and W moves only inside

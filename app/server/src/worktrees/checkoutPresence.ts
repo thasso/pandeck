@@ -225,6 +225,9 @@ export function forgetPresence(side: CheckoutSide, path: string): void {
   if (!entry) return;
   entries.delete(key);
   queue.delete(entry);
+  // Forgetting a verified absence makes it unverified immediately, so list
+  // readers lose worktreeMissing just as they do on a successful probe.
+  if (entry.answer?.state === "absent") notifyPresenceChange([{ key }]);
 }
 
 /**

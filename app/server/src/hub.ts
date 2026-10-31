@@ -64,6 +64,7 @@ import {
 } from "./db/peerDeadlineClock.ts";
 import { permanentAssistantStore } from "./db/permanentAssistantStore.ts";
 import { permanentAssistantUnread } from "./permanentAssistantUnread.ts";
+import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import {
   attachStateTopics,
   flushStateTopicsForTests,
@@ -116,6 +117,16 @@ const SESSION_LIST_AUDIT = process.env.VITEST === "true";
 
 type SessionRow = Awaited<ReturnType<typeof listSessions>>[number];
 
+function publicSessionRows(rows: readonly SessionRow[]): SessionRow[] {
+  const hidden = sessionListHiddenProbe();
+  return rows.filter((row) => !hidden(row));
+}
+
+function publicSessionRowJson(row: SessionRow): string {
+  const { file: _file, ...publicRow } = row;
+  return JSON.stringify(publicRow);
+}
+
 /** A row as last published: its serialization and which variant holds it. */
 interface PublishedSessionRow {
   json: string;
@@ -166,7 +177,7 @@ function planSessionListSends(
       archivedFull = true;
       if (!archived) plainFull = true;
     } else if (before.archived !== archived) plainFull = true;
-    const changed = before?.json !== JSON.stringify(row);
+    const changed = before?.json !== publicSessionRowJson(row);
     if (changed) {
       archivedChanged += 1;
       if (!archived) plainChanged += 1;
@@ -193,7 +204,10 @@ function changedSessionRowFields(
   if (before === undefined) return ["(added)"];
   if (after === undefined) return ["(removed)"];
   const old = JSON.parse(before) as Record<string, unknown>;
-  const next = after as unknown as Record<string, unknown>;
+  const next = JSON.parse(publicSessionRowJson(after)) as Record<
+    string,
+    unknown
+  >;
   return [...new Set([...Object.keys(old), ...Object.keys(next)])].filter(
     (key) => JSON.stringify(old[key]) !== JSON.stringify(next[key]),
   );
@@ -605,11 +619,18 @@ class SessionHub {
       this.lastBroadcastArchivedCount !== archivedCount;
     this.lastBroadcastArchivedCount = archivedCount;
 
-    let rows = await this.mergedSessions(
+    const assistantId = permanentAssistantStore.sessionId();
+    const builtRows = await this.mergedSessions(
       everyRow
         ? { includeArchived: true }
         : { includeArchived: true, onlyIds: touched },
     );
+    if (!assistantId) this.publishPermanentAssistantUnread(false);
+    else if (everyRow || touched.has(assistantId))
+      this.publishPermanentAssistantUnread(
+        Boolean(builtRows.find((row) => row.id === assistantId)?.unread),
+      );
+    let rows = publicSessionRows(builtRows);
     let builtEveryRow = everyRow;
     const compared = (): string[] =>
       everyRow
@@ -626,7 +647,9 @@ class SessionHub {
     if ((fullPlain || fullArchived) && !builtEveryRow) {
       // One full build serves both variants; the comparison is redone on it
       // so a delta sent beside a full list describes the same content.
-      rows = await this.mergedSessions({ includeArchived: true });
+      rows = publicSessionRows(
+        await this.mergedSessions({ includeArchived: true }),
+      );
       builtEveryRow = true;
       plan = planSessionListSends(rows, compared(), previous, forced);
     }
@@ -636,19 +659,12 @@ class SessionHub {
       const row = plan.byId.get(id);
       if (row)
         published.set(id, {
-          json: JSON.stringify(row),
+          json: publicSessionRowJson(row),
           archived: Boolean(row.archived),
         });
       else published.delete(id);
     }
     this.publishedSessionRows = published;
-
-    const assistantId = permanentAssistantStore.sessionId();
-    if (assistantId && compared().includes(assistantId))
-      this.publishPermanentAssistantUnread(
-        Boolean(plan.byId.get(assistantId)?.unread),
-      );
-    else if (!previous) this.publishPermanentAssistantUnread(false);
 
     const plainRows = builtEveryRow
       ? rows.filter((row) => !row.archived)
@@ -693,13 +709,13 @@ class SessionHub {
   ): { id: string; fields: string[] }[] {
     const published = this.publishedSessionRows;
     if (!published || this.touchAllSessionRowsPending) return [];
-    const fresh = new Map(rows.map((row) => [row.id, row]));
+    const fresh = new Map(publicSessionRows(rows).map((row) => [row.id, row]));
     const changes: { id: string; fields: string[] }[] = [];
     for (const id of new Set([...fresh.keys(), ...published.keys()])) {
       if (this.touchedSessionRows.has(id)) continue;
       const row = fresh.get(id);
       const before = published.get(id)?.json;
-      const after = row && JSON.stringify(row);
+      const after = row && publicSessionRowJson(row);
       if (before !== after)
         changes.push({ id, fields: changedSessionRowFields(before, row) });
     }

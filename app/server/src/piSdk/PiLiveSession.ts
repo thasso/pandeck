@@ -1497,6 +1497,7 @@ export class PiLiveSession implements LiveSession {
     await this.engine.setModel(model);
     this.broadcastState();
     this.broadcastContextInfo(true);
+    this.host.sessionRowsChanged([this.key]);
   }
 
   /** Broadcasts only once the engine has applied it; a rejection reaches the caller. */
@@ -1504,6 +1505,7 @@ export class PiLiveSession implements LiveSession {
     await this.engine.setThinkingLevel(level);
     this.broadcastState();
     this.broadcastContextInfo(true);
+    this.host.sessionRowsChanged([this.key]);
   }
 
   /* ---------------------------- compaction window --------------------------- */

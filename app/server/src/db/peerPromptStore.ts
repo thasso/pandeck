@@ -2527,26 +2527,21 @@ function pruneTerminal(cutoffMs: number): number {
     // Read before the delete: a pruned row can be the lost reply that kept a
     // request owed, or the later message that answered one, so the
     // participants of both stop reading it.
-    const ids = (
-      db
-        .prepare(
-          `SELECT sender_session_id, recipient_session_id FROM peer_prompts WHERE ${where}
-           UNION
-           SELECT o.sender_session_id, o.recipient_session_id
-             FROM peer_prompts a
-             CROSS JOIN peer_prompts o ON o.replied_by_message_id = a.id
-            WHERE a.${where.replace("updated_at_ms", "a.updated_at_ms")}`,
-        )
-        .all(...params, ...params) as {
-        sender_session_id: string;
-        recipient_session_id: string;
-      }[]
-    ).flatMap((row) => [row.sender_session_id, row.recipient_session_id]);
+    const rows = db
+      .prepare(
+        `SELECT id, sender_session_id, recipient_session_id FROM peer_prompts WHERE ${where}`,
+      )
+      .all(...params) as Pick<
+      Row,
+      "id" | "sender_session_id" | "recipient_session_id"
+    >[];
+    // Reuse the transition fan-out BEFORE deletion: both lost replies and
+    // requesters waiting on a pruned handoff's sender depend on these rows.
+    for (const row of rows) touchRequestRows(db, row, false);
     const pruned = Number(
       db.prepare(`DELETE FROM peer_prompts WHERE ${where}`).run(...params)
         .changes,
     );
-    touchSessionRows(ids);
     return pruned;
   });
 }

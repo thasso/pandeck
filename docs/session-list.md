@@ -70,13 +70,14 @@ connection has the archive view open.
   missing-worktree probe is never memoized across builds. It reads the active
   worktree rows once per build instead of once per id, and reads each distinct
   id's presence answer once. A changed presence answer
-  (`worktrees/checkoutPresence.ts`) and every write to the main-checkout caches
-  (`worktrees/worktreeResolve.ts`) touch the sessions reading it.
+  (`worktrees/checkoutPresence.ts`), including forgetting a verified absence,
+  and every write to the main-checkout caches (`worktrees/worktreeResolve.ts`)
+  touch the sessions reading it.
 - **Count from the columns a count needs.** Per-session Task progress is still
-  cached on `taskIndexVersion`, but that version moves on every Task write. The
-  rebuild after one used to assemble every Task summary just to count statuses.
-  It now reads one join over the same Tasks and edges
-  (`taskStore.sessionTaskStatuses`).
+  cached on `taskIndexVersion` and the Task-edge epoch, so direct context-edge
+  removal also invalidates it. The rebuild after a Task write used to assemble
+  every Task summary just to count statuses. It now reads one join over the same
+  Tasks and edges (`taskStore.sessionTaskStatuses`).
 - **`onlyIds` bounds the reads, not only the result.** A one-row refresh passes
   the id down to `sessionStore.list({ ids })`. Every row is computed from its
   own inputs, so the one row equals the same row in a full build.
@@ -128,13 +129,16 @@ included:
 
 - a peer request's sender and recipient, the coordinator's other held children
   (their `waitingForSlot` positions), and the senders waiting on this row's
-  sender through a handoff (`awaitingRepliesFrom`'s second probe);
+  sender through a handoff (`awaitingRepliesFrom`'s second probe). Terminal
+  pruning reads these dependents before deletion, just like transitions;
 - both ends of a `links.ts` edge, and every session linked to a Task whose
   status, title or existence changed (`taskStore.contextSessionIds`);
 - every session in a worktree whose row was inserted, updated or removed, and
   the owners of background hosts that changed;
 - the live engines' map entries: a pi or Claude session that opens or leaves
-  memory overlays the persisted row, so both stores touch it.
+  memory overlays the persisted row, so both stores touch it. Pi model/thinking
+  commands await the engine's effect, then synchronously report the row before
+  the command resolves.
 
 Over-touching costs one row rebuild; under-touching leaves a stale row. Deferred
 reporting (`void import(…).then(…)`, a post-publish listener) is not a touch,
@@ -145,14 +149,19 @@ cleared pull-request card table, a closed database.
 The hub's sink coalesces touches (25 ms debounce, 250 ms under churn) and
 rebuilds only the touched rows (`onlyIds`), or every row on a global touch or
 before the first publish. It compares each against what it last published per
-archived variant (`publishedSessionRows`). A variant gets the full `sessions`
-list when its row set changed, the archived count moved, or more than
-`SESSION_DELTA_MAX_ROWS` rows changed; otherwise one `sessionUpdated` per
-changed row. A forced touch (`hub.broadcastSessionUpdated`, used before a
-refusal's error) sends the row even when it is equal. The singleton Personal
-Assistant's row never travels as a row, only as `permanentAssistantUnread`. A
-caller whose reply or later broadcast must follow the list (`mutationSettled`, a
-Workflow Run list after its roles) awaits `hub.sessionRowsSent()`.
+archived variant (`publishedSessionRows`), with hidden rows absent and `file`
+stripped. The shared predicate (`permanentAssistantVisibility.ts`) is separate
+from the singleton runtime, keeping the hub dependency acyclic. Binding an
+ordinary legacy row as the singleton removes its public membership; clearing
+that binding reveals it again. A variant gets the full `sessions` list when its
+row set changed, the archived count moved, or more than `SESSION_DELTA_MAX_ROWS`
+rows changed; otherwise one `sessionUpdated` per changed row. A forced touch
+(`hub.broadcastSessionUpdated`, used before a refusal's error) sends the row
+even when it is equal. The singleton Personal Assistant's row never travels as a
+row, only as `permanentAssistantUnread`. Removing its binding publishes false,
+including to later connections, only if that scalar changed. A caller whose
+reply or later broadcast must follow the list (`mutationSettled`, a Workflow Run
+list after its roles) awaits `hub.sessionRowsSent()`.
 
 Two backstops catch a writer that forgot to touch:
 
@@ -166,14 +175,19 @@ Two backstops catch a writer that forgot to touch:
   each unreported row once with its changed fields, and touches it, which
   repairs it. Nothing relies on it.
 
-Known gap: a main checkout cached as "no repository" turns live again when that
-cache entry's TTL lapses (`worktreeResolve.ts`'s `noRepositoryHolds`), a clock
-read with no write; the sweep repairs that row within 60 s.
+A main checkout's cached "no repository" verdict keeps its existing 60 s TTL.
+`worktreeResolve.ts` reports the expiry synchronously before marking the cached
+absence expired. An unref'd timer performs that transition for idle sessions;
+every TTL-reading path also performs it if the timer has not run. Thus a read
+past the TTL sees the same candidate verdict as before, but cannot expose it
+before the touch. Invalidating, replacing or clearing an entry cancels its
+timer. The 3 s and 10 min resolve-freshness TTLs only trigger asynchronous
+validation; they do not change the synchronous row verdict.
 
 ### Deadline watermark
 
 A peer request stops being owed when its reply deadline passes, with no write to
-say so. The row builder therefore reads no clock but `deadlineWatermark()` W
+say so. Peer fields therefore read `deadlineWatermark()` W
 (`db/peerDeadlineClock.ts`): a request reads as expired exactly when
 `expires_at_ms <= W`. W moves only inside `advancePeerDeadlines(now)`, which
 first touches the sender and recipient of every request whose deadline lies in
@@ -251,10 +265,18 @@ and events.
   transaction and a reopened database all miss.
 - `app/server/src/sessionDelta.test.ts` shows that `broadcastSessionUpdated`
   reads only the named row and sends exactly what a full build lists.
-- `app/server/src/sessionListReporters.test.ts` classifies every export of the
-  stores the list reads, checks each fan-out against a full build, and covers
-  the audit, the sweep and wire parity. `sessionListDeadline.test.ts` drives the
-  watermark on fake time; `sessionListForcedRefresh.test.ts` shows a refused
+- `app/server/src/sessionListReporters.test.ts` guards export classifications
+  (including in-memory exported classes/owners), fan-out, audit, sweep and wire
+  parity. Its source-name checks are secondary guards, not behavioral proof.
+- `sessionListBehavior.test.ts` independently rebuilds both public variants
+  before/after real writes and collects touches before synchronous APIs return.
+  It checks every changed id, including indirect dependents. Equal-public
+  transitions state their reason and assert their durable effect. Engine tests
+  replace provider construction/snapshots, not row construction or diffing.
+- `sessionListCorrections.test.ts` pins public singleton membership and unread
+  state, prune dependencies, touch-before-TTL-expiry (including a delayed
+  timer), and touch-before-COMMIT ordering. `sessionListDeadline.test.ts` drives
+  the watermark on fake time; `sessionListForcedRefresh.test.ts` shows a refused
   command's row arriving before its error.
 - `pnpm --filter @assistant/server measure:session-list --data-dir <absolute data dir>`
   copies the database and the file-backed stores into a temporary directory,

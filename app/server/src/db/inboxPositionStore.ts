@@ -38,8 +38,8 @@ export function setInboxPositions(placement: InboxPlacement): boolean {
     for (const { id, position } of placement.runs)
       if (run.run(position, id).changes === 0)
         throw new Error("run row not updated");
-    db.exec("COMMIT");
     touchSessionRows(placement.sessions.map((placed) => placed.id));
+    db.exec("COMMIT");
     return true;
   } catch {
     try {

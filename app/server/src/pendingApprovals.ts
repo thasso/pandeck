@@ -253,8 +253,7 @@ export function subscribePendingApprovalChanges(
 }
 
 function emitChange(sessionId: string): void {
-  // The row's `awaitingInput`/`attention` read the pending set just written.
-  touchSessionRows([sessionId]);
+  // Row touches belong to createApproval/patchCard's writing transactions.
   for (const listener of listeners) listener(sessionId);
 }
 
@@ -398,6 +397,7 @@ export function createApproval(input: CreateApprovalInput): ApprovalCard {
       retired.push(old);
     }
     approvalStore.insert({ card, context: input.context ?? {} });
+    touchSessionRows([input.sessionId]);
     return retired;
   });
   for (const old of superseded) void broadcast(input.sessionId, old);
@@ -433,6 +433,7 @@ function patchCard(
     if (JSON.stringify(card) === JSON.stringify(stored.card)) return rec;
     const updated = { card, context: rec.context };
     approvalStore.update(updated);
+    touchSessionRows([card.sessionId]);
     return updated;
   });
 }

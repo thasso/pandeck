@@ -678,8 +678,8 @@ function archiveSettledBatch(
         ) as Array<{ id: string }>;
       for (const row of rows) archived.push(row.id);
     }
-    db.exec("COMMIT");
     noteLiveness(archived);
+    db.exec("COMMIT");
     return archived;
   } catch (err) {
     try {
@@ -938,8 +938,8 @@ function settleWithPeers(
       if (peer.run(ts, peerId).changes === 0)
         throw new Error("peer row not updated");
     for (const settledId of [id, ...peerIds]) markReadThrough(settledId);
-    db.exec("COMMIT");
     noteLiveness([id, ...peerIds]);
+    db.exec("COMMIT");
     return true;
   } catch {
     try {

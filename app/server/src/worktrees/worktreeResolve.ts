@@ -227,19 +227,53 @@ interface MainRepoCacheEntry {
   stamp: string | undefined;
   /** The running stamp comparison, joined by callers that ask meanwhile. */
   freshness?: Promise<boolean> | undefined;
+  absentExpired?: boolean;
+  absentExpiring?: boolean;
+  absentTimer?: ReturnType<typeof setTimeout>;
 }
 
-/** Base's cached "no repository" verdict, within its TTL. */
-function noRepositoryHolds(entry: MainRepoCacheEntry, now: number): boolean {
-  return !entry.info && now - entry.at < MAIN_REPO_ABSENT_TTL_MS;
+/** Report the TTL boundary BEFORE any reader can observe the new verdict. */
+function expireMainAbsence(key: string, entry: MainRepoCacheEntry): void {
+  if (entry.info || entry.absentExpired || entry.absentExpiring) return;
+  entry.absentExpiring = true;
+  try {
+    if (mainRepoCache.get(key) === entry) touchMainCheckoutSessions(key);
+    entry.absentExpired = true;
+    clearTimeout(entry.absentTimer);
+  } finally {
+    entry.absentExpiring = false;
+  }
+}
+
+function armMainAbsence(key: string, entry: MainRepoCacheEntry): void {
+  entry.absentTimer = setTimeout(
+    () => {
+      if (mainRepoCache.get(key) !== entry) return;
+      if (noRepositoryHolds(key, entry, Date.now())) armMainAbsence(key, entry);
+    },
+    Math.max(1, entry.at + MAIN_REPO_ABSENT_TTL_MS - Date.now()),
+  );
+  entry.absentTimer.unref?.();
+}
+
+/** Read-through expiry preserves the 60 s boundary even if its timer is late. */
+function noRepositoryHolds(
+  key: string,
+  entry: MainRepoCacheEntry,
+  now: number,
+): boolean {
+  if (!entry.info && now - entry.at >= MAIN_REPO_ABSENT_TTL_MS)
+    expireMainAbsence(key, entry);
+  return !entry.info && !entry.absentExpired;
 }
 
 /** Whether `entry` still holds; a Worker stamp only where the TTL cannot tell. */
 function mainRepoCacheFresh(
+  key: string,
   entry: MainRepoCacheEntry,
   now: number,
 ): boolean | Promise<boolean> {
-  if (!entry.info) return noRepositoryHolds(entry, now);
+  if (!entry.info) return noRepositoryHolds(key, entry, now);
   if (entry.stamp === undefined) return now - entry.at < MAIN_REPO_TTL_MS;
   if (now - entry.at >= MAIN_REPO_STAMPED_TTL_MS) return false;
   return (entry.freshness ??= stampStillHolds(entry, entry.info));
@@ -348,6 +382,7 @@ export function clearMainRepoCache(): void {
     ...mainCandidates.keys(),
   ]))
     bumpMainRepoGeneration(key);
+  for (const entry of mainRepoCache.values()) clearTimeout(entry.absentTimer);
   mainRepoCache.clear();
   mainRepoInFlight.clear();
   mainCandidates.clear();
@@ -364,6 +399,7 @@ export function clearMainRepoCache(): void {
 export function invalidateMainRepo(projectId: string): void {
   const canonicalId = getProject(projectId)?.id ?? projectId;
   for (const key of new Set([canonicalId, projectId])) {
+    clearTimeout(mainRepoCache.get(key)?.absentTimer);
     mainRepoCache.delete(key);
     mainRepoInFlight.delete(key);
     mainCandidates.delete(key);
@@ -381,7 +417,7 @@ async function resolveMainRepoCached(
   const owner = resolveOwner(key);
   const cached = owner.entry;
   if (cached) {
-    const freshness = mainRepoCacheFresh(cached, Date.now());
+    const freshness = mainRepoCacheFresh(key, cached, Date.now());
     if (typeof freshness === "boolean") {
       if (freshness) return cached.info;
     } else {
@@ -422,8 +458,11 @@ async function resolveAndPublishMainRepo(
   const info = await resolveMainRepo(project);
   const stamp = info ? await trustedMainRepoStamp(info, startedAt) : undefined;
   publishAsOwner(owner, (entry) => {
-    mainRepoCache.set(key, { info, at: Date.now(), stamp });
+    clearTimeout(entry?.absentTimer);
+    const next: MainRepoCacheEntry = { info, at: Date.now(), stamp };
+    mainRepoCache.set(key, next);
     touchMainCheckoutSessions(key);
+    if (!info) armMainAbsence(key, next);
     const previous = entry?.info?.root;
     if (previous !== undefined && previous !== info?.root)
       forgetMainPresence(key, previous);
@@ -732,7 +771,7 @@ export function mainCheckoutEdgeNow(projectId: string): MainCheckoutEdge {
     if (answer === "present") return { kind: "live", path: cached.info.root };
     if (answer === "unverified") return { kind: "unverified" };
     dropResolvedRoot(rootOwner);
-  } else if (cached && noRepositoryHolds(cached, Date.now()))
+  } else if (cached && noRepositoryHolds(key, cached, Date.now()))
     return { kind: "missing", retired: true };
   const state = mainCandidateNow(project);
   if (state.kind === "path") return { kind: "live", path: state.path };
@@ -781,7 +820,7 @@ async function checkProjectMainCheckout(
       return { verdict: "live", path: root };
     // A drop that was this check's, in this turn, owns what follows.
     if (dropResolvedRoot(rootOwner)) owner = candidateOwner(key);
-  } else if (cached && noRepositoryHolds(cached, Date.now()))
+  } else if (cached && noRepositoryHolds(key, cached, Date.now()))
     return { verdict: "missing-no-repository" };
   else owner = candidateOwner(key);
   const state = await checkMainCandidate(project, owner);
@@ -811,7 +850,8 @@ export function mainCheckoutPathForProject(
   if (!project) return undefined;
   const cached = mainRepoCache.get(project.id);
   if (cached?.info) return cached.info.root;
-  if (cached && noRepositoryHolds(cached, Date.now())) return undefined;
+  if (cached && noRepositoryHolds(project.id, cached, Date.now()))
+    return undefined;
   const state = mainCandidateNow(project);
   return state.kind === "path" ? state.path : undefined;
 }

@@ -27,8 +27,18 @@ import * as sessionObjectStore from "./db/sessionObjectStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import * as worktreeStore from "./db/worktreeStore.ts";
 import { getSettings, updateSettings } from "./settings.ts";
-import { sessionListHiddenProbe } from "./permanentAssistant.ts";
+import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import * as sessionRetitlePending from "./sessionRetitlePending.ts";
+import * as pendingApprovals from "./pendingApprovals.ts";
+import * as pullRequestCards from "./pullRequestCards.ts";
+import * as peerSpawnRuntimes from "./peerSpawnRuntimes.ts";
+import * as checkoutPresence from "./worktrees/checkoutPresence.ts";
+import * as questionTool from "./tools/core/questionTool.ts";
+import * as piStoreModule from "./piSdk/piStore.ts";
+import * as piLiveModule from "./piSdk/PiLiveSession.ts";
+import * as claudeStoreModule from "./claudeSdk/claudeSdkStore.ts";
+import * as claudeLiveModule from "./claudeSdk/ClaudeSdkSession.ts";
+import * as runtimeModule from "./session/runtimeInstance.ts";
 import {
   createTask,
   deleteTask,
@@ -480,6 +490,155 @@ const CLASSIFIED: Record<
       cancelSessionRetitle: "projected-write",
     },
   },
+  piStoreModule: {
+    exports: piStoreModule,
+    funnel: ["sessionRowsChanged"],
+    kinds: { PiSessionDeletedError: "read", piStore: "projected-write" },
+  },
+  piLiveModule: {
+    exports: piLiveModule,
+    funnel: ["sessionRowsChanged", "syncRegistry"],
+    kinds: { PiLiveSession: "projected-write" },
+  },
+  claudeStoreModule: {
+    exports: claudeStoreModule,
+    funnel: ["onChange", "touchSessionRows"],
+    kinds: { claudeSdkStore: "projected-write" },
+  },
+  claudeLiveModule: {
+    exports: claudeLiveModule,
+    funnel: ["onChange", "onPersist"],
+    kinds: { ClaudeSdkSession: "projected-write" },
+  },
+  runtimeModule: {
+    exports: runtimeModule,
+    funnel: ["emitSessionEvent"],
+    kinds: { sessionRuntime: "projected-write" },
+  },
+  pendingApprovals: {
+    exports: pendingApprovals,
+    funnel: ["touchSessionRows", "resolveApprovalExclusive", "autoApprove"],
+    kinds: {
+      registerApprovalExecutor: "non-projected-write",
+      reconcileLegacyAgentDefinitionCard: "read",
+      reconcileLegacyPartialApprovalCard: "read",
+      approvalForId: "read",
+      subscribePendingApprovalChanges: "read",
+      hasPendingApproval: "read",
+      pendingApprovalSessionIds: "read",
+      approvalsForSession: "read",
+      withApprovalBlocks: "read",
+      approvalCardReference: "read",
+      proposalSnapshot: "read",
+      createApproval: "projected-write",
+      resolveApproval: "projected-write",
+      approvalGrantsForSession: "read",
+      approvalGrantsPayload: "read",
+      // Grants affect future auto-approval admission, not existing list rows.
+      grantRequestedOperations: "non-projected-write",
+      effectiveGrantScope: "read",
+      grantApprovalForSession: "non-projected-write",
+      setApprovalGrantScope: "non-projected-write",
+      revokeApprovalGrant: "non-projected-write",
+      runAutoApprovals: "projected-write",
+      // Schedules the same autoApprove path, without itself changing a card.
+      recoverAutoApprovalsOnBoot: "non-projected-write",
+      setAutoApprovalDrainForTests: "non-projected-write",
+      setApprovalBroadcastForTests: "non-projected-write",
+    },
+  },
+  pullRequestCards: {
+    exports: pullRequestCards,
+    funnel: ["insert", "persist", "clear"],
+    kinds: {
+      pullRequestCardRecord: "read",
+      pullRequestCardById: "read",
+      cardsForSession: "read",
+      pullRequestCardsForWorktree: "read",
+      pullRequestActivityRecords: "read",
+      pullRequestCardsWithBusyAction: "read",
+      pullRequestCardLinksByPullRequest: "read",
+      openPullRequestCards: "read",
+      pullRequestSummariesBySession: "read",
+      choosingTaskSessionIds: "read",
+      hasChoosingTaskCard: "read",
+      pullRequestSummaryForWorktree: "read",
+      subscribeChoosingTaskCardChanges: "read",
+      withPullRequestCardBlocks: "read",
+      createPullRequestCard: "projected-write",
+      patchPullRequestCard: "projected-write",
+      patchPullRequestCardObservation: "projected-write",
+      resetPullRequestCardsStoreForTests: "projected-write",
+      // Provider observation tokens live only in server-side context.
+      beginPullRequestCardObservation: "non-projected-write",
+      setPullRequestCardBroadcastForTests: "non-projected-write",
+    },
+  },
+  peerSpawnRuntimes: {
+    exports: peerSpawnRuntimes,
+    funnel: ["setPeerTurnCap", "record"],
+    kinds: {
+      directPeerTurnCapOf: "read",
+      setSessionPeerTurnCap: "projected-write",
+      setPeerTurnCapChangedHook: "non-projected-write",
+      modelsForProfile: "read",
+      accountModelOptions: "read",
+      peerRuntimeRoster: "read",
+      PeerRuntimeRefusedError: "read",
+      resolveApprovedPeerRuntime: "read",
+      directPeerCostClass: "read",
+      withDirectAdmission: "non-projected-write",
+      recordDirectPeerChild: "projected-write",
+      resetDirectPeerChildrenForTests: "non-projected-write",
+      directSlotCounter: "read",
+      oldestInFlightHold: "read",
+      inFlightHoldsBefore: "read",
+      // Allocated tickets are younger than every existing row. The returned
+      // settleHold method is a writer, exercised against a younger held child.
+      admitDirectPeerTurns: "non-projected-write",
+      directSpawnReportingSuffix: "read",
+      withReportingRoute: "read",
+    },
+  },
+  checkoutPresence: {
+    exports: checkoutPresence,
+    funnel: ["apply", "notifyPresenceChange", "listener"],
+    kinds: {
+      presenceKey: "read",
+      notifyPresenceChange: "projected-write",
+      onPresenceChange: "read",
+      // Queues a probe; its callback writes through apply, not on this read.
+      presenceNow: "read",
+      checkPresence: "projected-write",
+      notePresent: "projected-write",
+      forgetPresence: "projected-write",
+      trackPresenceWork: "non-projected-write",
+      presenceCountsForTests: "read",
+      presenceQueuedForTests: "read",
+      resetPresenceForTests: "non-projected-write",
+      flushPresenceForTests: "read",
+    },
+  },
+  questionTool: {
+    exports: {
+      ...questionTool,
+      askQuestionsTool: questionTool.askQuestionsTool.execute,
+    },
+    funnel: ["registerPendingQuestion", "emitQuestionChange"],
+    kinds: {
+      getAnsweredAgentQuestions: "read",
+      QUESTION_ANSWERS_MARKER: "read",
+      subscribeAgentQuestionChanges: "read",
+      getPendingAgentQuestions: "read",
+      hasPendingAgentQuestion: "read",
+      questionRequestIdFromToolResult: "read",
+      // Transcript tool-call association is not a list field.
+      relinkAgentQuestionToolCallId: "non-projected-write",
+      submitAgentQuestionResponse: "projected-write",
+      clearPendingQuestion: "projected-write",
+      askQuestionsTool: "projected-write",
+    },
+  },
 };
 
 describe("every export is classified, and every projected write reaches the seam", () => {
@@ -492,7 +651,8 @@ describe("every export is classified, and every projected write reaches the seam
       );
       for (const [name, kind] of Object.entries(kinds)) {
         if (kind !== "projected-write") continue;
-        const fn = exports[name];
+        const value = exports[name];
+        const fn = typeof value === "function" ? value : value?.constructor;
         assert.equal(typeof fn, "function", `${module}.${name}`);
         assert.match(
           String(fn),
@@ -595,6 +755,7 @@ describe("fan-out", () => {
       conversationId: `rep-back-${++serial}`,
       chainId: handed.chainId,
       fallbackChainId: `rep-back-fb-${serial}`,
+      markRepliedIds: [],
       senderSessionId: c,
       recipientSessionId: a,
       prompt: "answer",
@@ -608,7 +769,7 @@ describe("fan-out", () => {
     await assertReported(
       "B's handoff accepted",
       () => peerPromptStore.markAdmitted(handed.id),
-      [],
+      [a],
     );
   });
 
@@ -980,6 +1141,6 @@ test("an inbox placement reports the sessions it places", async () => {
         ],
         runs: [],
       }),
-    [],
+    [p1, p2],
   );
 });
