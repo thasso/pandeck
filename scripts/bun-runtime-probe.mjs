@@ -18,6 +18,10 @@
  * The checkout lifecycle methods run against native `fs` and base code on a
  * twin fixture, and the process stop against a tree whose every pid is known.
  *
+ * Before anything opens the database, each mode has the real migration runner
+ * apply the packaged 0097 to a registry that still holds a row: its in-script
+ * guard must refuse and roll the file back, as under Node.
+ *
  * Not run from a checkout. `test-bun-server-bundle.mjs` bundles it with the
  * server's own plugins and runs it with the packaged Bun, once per mode:
  * `broker`, and `in-process` under `ASSISTANT_SPAWN_BROKER=0`.
@@ -69,6 +73,7 @@ import {
 import { DATA_DIR } from "../app/server/src/config.ts";
 import { backgroundWorkStore } from "../app/server/src/db/backgroundWorkStore.ts";
 import {
+  closeDb,
   getDb,
   inDbTransaction,
   withDbTransaction,
@@ -108,6 +113,7 @@ import {
   stopPackageProxy,
 } from "../app/server/src/packageProxy/packageProxy.ts";
 import { modelRuntimeForProfile } from "../app/server/src/piSdk/models.ts";
+import { PACKAGED_MIGRATIONS_DIR } from "../app/server/src/runtimeAssets.ts";
 import {
   brokerExecFile,
   spawnBrokerPidForTests,
@@ -4032,6 +4038,134 @@ async function checkWatcher() {
   assert(leaked.length === 0, `Ignored paths reported events: ${leaked}`);
 }
 
+/**
+ * Migration 0097 refuses to drop a subagent registry that holds a row: its
+ * TEMP trigger aborts a non-final INSERT. Bun's own `exec` went on past that
+ * abort and dropped the tables (Task-1232), so this runs the packaged
+ * migrations through the real runner and the bundled `node:sqlite` adapter,
+ * as `subagentRegistryDropMigration.test.ts` does under Node.
+ */
+function checkMigrationGuard() {
+  const path = join(DATA_DIR, "app.sqlite3");
+  for (const suffix of ["", "-wal", "-shm"])
+    assert(
+      !existsSync(`${path}${suffix}`),
+      `The migration guard check found ${path}${suffix} before seeding it.`,
+    );
+  const files = readdirSync(PACKAGED_MIGRATIONS_DIR)
+    .filter((name) => /^\d+_.+\.sql$/.test(name))
+    .sort();
+  const index = files.indexOf("0097_drop_subagent_registry.sql");
+  assert(index > 0, "The package ships no 0097_drop_subagent_registry.sql.");
+
+  // Through 0096, recorded under the shipped checksums, as the runner would.
+  const raw = new DatabaseSync(path);
+  try {
+    raw.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        applied_at_ms INTEGER NOT NULL
+      )
+    `);
+    const record = raw.prepare(
+      "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) VALUES (?, ?, ?, 1)",
+    );
+    for (const name of files.slice(0, index)) {
+      const sql = readFileSync(join(PACKAGED_MIGRATIONS_DIR, name), "utf8");
+      const foreignKeysOff = sql.includes(
+        "-- assistant:migration:foreign_keys_off",
+      );
+      if (foreignKeysOff) raw.exec("PRAGMA foreign_keys = OFF");
+      raw.exec("BEGIN IMMEDIATE");
+      raw.exec(sql);
+      record.run(
+        Number(name.split("_", 1)[0]),
+        name,
+        createHash("sha256").update(sql).digest("hex"),
+      );
+      raw.exec("COMMIT");
+      if (foreignKeysOff) {
+        raw.exec("PRAGMA legacy_alter_table = OFF");
+        raw.exec("PRAGMA foreign_keys = ON");
+      }
+    }
+    raw.exec(`
+      INSERT INTO session_index (id, scope, purpose, harness, agent_type, title, created_at_ms, updated_at_ms)
+      VALUES ('guard-parent', 'user', 'chat', 'pi', 'developer', 'Parent', 1, 1),
+             ('guard-child', 'user', 'chat', 'pi', 'developer', 'Child', 1, 1);
+      INSERT INTO subagent_threads (id, parent_session_id, session_id, is_member, deleted_at_ms)
+      VALUES ('guard-thread', 'guard-parent', 'guard-child', 0, 5);
+      INSERT INTO sequences (entity_type, next_id) VALUES ('subagent_revision', 9)
+        ON CONFLICT(entity_type) DO UPDATE SET next_id = 9;
+    `);
+  } finally {
+    raw.close();
+  }
+  const read = (fn) => {
+    const db = new DatabaseSync(path);
+    try {
+      return fn(db);
+    } finally {
+      db.close();
+    }
+  };
+
+  let refused;
+  try {
+    getDb();
+  } catch (error) {
+    refused = error;
+  } finally {
+    closeDb();
+  }
+  assert(
+    String(refused).includes("Migration 0097_drop_subagent_registry refused"),
+    `Migration 0097 did not refuse a non-empty registry: ${refused ?? "it applied"}.`,
+  );
+  const kept = read((db) => ({
+    applied: db
+      .prepare("SELECT 1 FROM schema_migrations WHERE version = 97")
+      .get(),
+    threads: db
+      .prepare("SELECT id FROM subagent_threads")
+      .all()
+      .map((row) => row.id),
+    runs: db.prepare("SELECT count(*) AS n FROM subagent_runs").get().n,
+    revision: db
+      .prepare(
+        "SELECT next_id FROM sequences WHERE entity_type = 'subagent_revision'",
+      )
+      .get()?.next_id,
+  }));
+  assert(
+    kept.applied === undefined &&
+      kept.threads.join() === "guard-thread" &&
+      kept.runs === 0 &&
+      kept.revision === 9,
+    `The refused migration 0097 changed the database: ${JSON.stringify(kept)}.`,
+  );
+
+  // Once the row is gone, the next open applies it.
+  read((db) =>
+    db.exec(`
+      DELETE FROM subagent_threads;
+      DELETE FROM session_index WHERE id IN ('guard-parent', 'guard-child');
+    `),
+  );
+  const db = getDb();
+  assert(
+    db.prepare("SELECT 1 FROM schema_migrations WHERE version = 97").get() &&
+      db
+        .prepare(
+          "SELECT count(*) AS n FROM sqlite_master WHERE name IN ('subagent_runs', 'subagent_threads')",
+        )
+        .get().n === 0,
+    "Migration 0097 did not apply to an emptied registry.",
+  );
+}
+
 function checkSqlite() {
   const db = getDb();
   // Nesting must see the caller's transaction (#370, #376).
@@ -4308,6 +4442,7 @@ async function checkInitiativeLayout() {
   stopInitiativeLayoutWorker();
 }
 
+checkMigrationGuard();
 await checkManagedStdioFdReuse();
 await checkGit();
 await checkMaxBufferBound();

@@ -8,6 +8,11 @@ import { Database } from "bun:sqlite";
  *
  * Anything else Node offers is refused loudly rather than read as `undefined`:
  * a missing `isTransaction` once made every nested transaction look like none.
+ *
+ * `exec` keeps Node's contract: statements run in order and the first one
+ * that fails throws, with none after it run and the caller's transaction left
+ * to the caller. It differs from Node in two loud refusals: a script holding
+ * U+000B or U+FEFF anywhere, and a statement with parameters.
  */
 const DATABASE_OPTIONS = new Set(["readOnly", "enableForeignKeyConstraints"]);
 const DATABASE_MEMBERS = new Set(["prepare", "exec", "close", "isTransaction"]);
@@ -100,6 +105,118 @@ function* numberRows(rows) {
   for (const row of rows) yield toNumbers(row);
 }
 
+/*
+ * The statements of an `exec` script, split as SQLite 3.53.2 splits them:
+ * `sqlite3_complete`'s state machine (complete.c) finds where a statement
+ * ends, triggers' inner `;` included, and between statements the whitespace,
+ * comments and empty statements `sqlite3_exec` (legacy.c) skips are dropped.
+ *
+ * complete.c and the tokenizer (tokenize.c) disagree on exactly two
+ * characters, U+FEFF and U+000B, and `exec` refuses both before splitting.
+ * Without them, whitespace is [ \t\n\f\r] everywhere, so one drop rule serves
+ * every position. A `/*` with nothing after it is not a comment: the tokenizer
+ * reads `/` and `*`, a syntax error. A piece is never trimmed, so SQLite
+ * compiles each byte of it; `exec` refuses any piece SQLite reads differently.
+ */
+const SEMI = 0;
+const WS = 1;
+const OTHER = 2;
+const EXPLAIN = 3;
+const CREATE = 4;
+const TEMP = 5;
+const TRIGGER = 6;
+const END = 7;
+const START = 1;
+const KEYWORDS = new Map([
+  ["explain", EXPLAIN],
+  ["create", CREATE],
+  ["temp", TEMP],
+  ["temporary", TEMP],
+  ["trigger", TRIGGER],
+  ["end", END],
+]);
+/** complete.c's `trans[state][token]`. */
+const TRANSITIONS = [
+  /* INVALID */ [1, 0, 2, 3, 4, 2, 2, 2],
+  /* START   */ [1, 1, 2, 3, 4, 2, 2, 2],
+  /* NORMAL  */ [1, 2, 2, 2, 2, 2, 2, 2],
+  /* EXPLAIN */ [1, 3, 3, 2, 4, 2, 2, 2],
+  /* CREATE  */ [1, 4, 2, 2, 2, 4, 5, 2],
+  /* TRIGGER */ [6, 5, 5, 5, 5, 5, 5, 5],
+  /* SEMI    */ [6, 6, 5, 5, 5, 5, 5, 7],
+  /* END     */ [1, 7, 5, 5, 5, 5, 5, 5],
+];
+const QUOTE_CLOSE = { "'": "'", '"': '"', "`": "`", "[": "]" };
+
+function isSpace(char) {
+  return (
+    char === " " ||
+    char === "\t" ||
+    char === "\n" ||
+    char === "\f" ||
+    char === "\r"
+  );
+}
+
+function isWordUnit(char) {
+  return /[A-Za-z0-9_$]/.test(char) || char.charCodeAt(0) >= 0x80;
+}
+
+/** The kind of the token at `start` and the index just past it. */
+function scriptToken(sql, start) {
+  const char = sql[start];
+  if (isSpace(char)) {
+    let end = start + 1;
+    while (end < sql.length && isSpace(sql[end])) end += 1;
+    return [WS, end];
+  }
+  if (char === "-" && sql[start + 1] === "-") {
+    const newline = sql.indexOf("\n", start + 2);
+    return [WS, newline === -1 ? sql.length : newline];
+  }
+  if (char === "/" && sql[start + 1] === "*" && start + 2 < sql.length) {
+    const close = sql.indexOf("*/", start + 2);
+    return [WS, close === -1 ? sql.length : close + 2];
+  }
+  if (char === ";") return [SEMI, start + 1];
+  const quote = QUOTE_CLOSE[char];
+  if (quote) {
+    const close = sql.indexOf(quote, start + 1);
+    return [OTHER, close === -1 ? sql.length : close + 1];
+  }
+  if (isWordUnit(char)) {
+    let end = start + 1;
+    while (end < sql.length && isWordUnit(sql[end])) end += 1;
+    const word = sql.slice(start, end);
+    return [
+      (/^[A-Za-z]+$/.test(word) && KEYWORDS.get(word.toLowerCase())) || OTHER,
+      end,
+    ];
+  }
+  return [OTHER, start + 1];
+}
+
+function* scriptStatements(sql) {
+  let start = 0;
+  while (start < sql.length) {
+    const [kind, next] = scriptToken(sql, start);
+    if (kind === WS || kind === SEMI) {
+      start = next;
+      continue;
+    }
+    let state = START;
+    let end = start;
+    do {
+      const [token, after] = scriptToken(sql, end);
+      state = TRANSITIONS[state][token];
+      end = after;
+      if (token === SEMI && state === START) break;
+    } while (end < sql.length);
+    yield sql.slice(start, end);
+    start = end;
+  }
+}
+
 export class DatabaseSync {
   #database;
   #counts;
@@ -175,10 +292,37 @@ export class DatabaseSync {
     });
   }
 
+  /**
+   * bun:sqlite's own `exec` goes on past a non-final statement's step error,
+   * a trigger's `RAISE(ABORT)` included, and rejects the empty statements and
+   * comment-only remainders Node skips. So each statement is run on its own,
+   * and only once SQLite has compiled exactly that text as one statement.
+   */
   exec(sql) {
-    // Node accepts a comments-only script as a no-op. Bun reports SQLITE_MISUSE.
-    if (!sql.replace(/^\s*--.*$/gm, "").trim()) return;
-    this.#database.exec(sql);
+    if (sql.includes("\u000B") || sql.includes("﻿"))
+      throw new TypeError(
+        "node:sqlite exec() of a script containing U+000B or U+FEFF is not supported by the Bun SQLite adapter.",
+      );
+    for (const piece of scriptStatements(sql)) {
+      const statement = this.#database.prepare(piece);
+      let parameters;
+      let text;
+      try {
+        parameters = statement.paramsCount;
+        text = statement.toString();
+      } finally {
+        statement.finalize();
+      }
+      if (parameters !== 0)
+        throw new TypeError(
+          "node:sqlite exec() of a statement with parameters is not supported by the Bun SQLite adapter.",
+        );
+      if (text !== piece)
+        throw new Error(
+          `The Bun SQLite adapter's exec() split a script where SQLite read a different statement boundary, at ${JSON.stringify(piece.slice(0, 80))}.`,
+        );
+      this.#database.exec(piece);
+    }
   }
 
   close() {

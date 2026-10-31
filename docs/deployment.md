@@ -125,19 +125,32 @@ The adapter covers only the `DatabaseSync` surface this server uses: the
 constructor (`readOnly`, `enableForeignKeyConstraints`), `prepare`, `exec`,
 `close` and `isTransaction`, and statements' `get`, `all`, `run` and `iterate`
 with positional or `$`/`:`/`@`-prefixed named parameters (the grammar is below).
-It keeps Node's semantics where Bun's differ: the foreign-key default, a
-comments-only `exec()` as a no-op, an absent row as `undefined`, `isTransaction`
-inside BEGIN and SAVEPOINT, and `run()`'s `changes` as the statement's own rows.
-Bun would also count rows that foreign-key actions and triggers changed, so a
-one-row delete with cascades reported more than 1. The adapter reads Node's
-figures from `changes()` and `last_insert_rowid()` instead. Named parameters
-follow Node's rules: a name the statement does not declare (`$x` for `:x`)
-throws `Unknown named parameter`, where Bun would bind NULL, and one left out
-binds NULL. A bare name (`x`) is rejected rather than silently misbound, since
-Node would match it to any prefix and Bun to none. Only names of the form
-`[:$@][A-Za-z_][A-Za-z0-9_]*` are supported. A statement bound with an object
-whose SQL declares any other name that SQLite accepts (`$foo::bar`, `$foo(bar)`,
-`:a$b`, any name holding a non-ASCII character, combining marks included) throws
+It keeps Node's semantics where Bun's differ: the foreign-key default, `exec()`
+of a script, an absent row as `undefined`, `isTransaction` inside BEGIN and
+SAVEPOINT, and `run()`'s `changes` as the statement's own rows. Bun's own `exec`
+goes on past a statement that fails at step time unless it is the script's last,
+so a migration guard's `RAISE(ABORT)` was lost; it also rejects the empty
+statements and comment-only remainders Node skips. The adapter's `exec()`
+therefore splits the script where SQLite's `sqlite3_complete` would, triggers'
+inner `;` included, and runs one statement at a time: it throws at the first
+that fails and runs none after it, leaving the caller's transaction to the
+caller. Each statement runs only after SQLite has compiled exactly that text as
+one statement, so a split SQLite reads differently throws instead of running.
+Two inputs Node may accept are refused before anything runs, each with a named
+`TypeError`: a script holding U+000B or U+FEFF anywhere, comments and string
+literals included, because SQLite's statement splitter and tokenizer read those
+two characters differently; and a statement with parameters, which Node binds as
+NULL and no server caller writes. Bun would also count rows that foreign-key
+actions and triggers changed, so a one-row delete with cascades reported more
+than 1. The adapter reads Node's figures from `changes()` and
+`last_insert_rowid()` instead. Named parameters follow Node's rules: a name the
+statement does not declare (`$x` for `:x`) throws `Unknown named parameter`,
+where Bun would bind NULL, and one left out binds NULL. A bare name (`x`) is
+rejected rather than silently misbound, since Node would match it to any prefix
+and Bun to none. Only names of the form `[:$@][A-Za-z_][A-Za-z0-9_]*` are
+supported. A statement bound with an object whose SQL declares any other name
+that SQLite accepts (`$foo::bar`, `$foo(bar)`, `:a$b`, any name holding a
+non-ASCII character, combining marks included) throws
 `Unsupported named parameter syntax`. The server binds positionally. The adapter
 opens Bun with `safeIntegers` and returns integers as numbers, throwing Node's
 `RangeError` for one outside ±2^53 that Bun would round. That costs about 30% on
@@ -268,26 +281,29 @@ which must make exactly one packaged native watch and deliver the watched edits
 as `watch.events`, none under the ignored directories. Ending the Worker
 connection must report the watch lost only after the Worker released it; a
 subscription made at once on the next connection must deliver a later edit, and
-unsubscribing must leave no native watch. In broker mode it also runs the SQLite
-paths the shim must carry: `inDbTransaction` nested in a transaction, the links
-memo invalidated by another connection's commit (`PRAGMA data_version`) and
-never kept from a rolled-back transaction, and the session delete rolling its
-tombstone back when the session write fails. A synchronous spawn must see a
-variable deleted from `process.env` as gone. The probe starts the real package
-proxy, which must leave `process.env` untouched. The proxy answers plain HTTP
-with 501 for every host, so the probe's own `fetch` and `node:http` requests to
-an `.invalid` host must fail to resolve, while a packaged-Bun child given
-`childProcessEnv()` must get the proxy's 501 for the same URL, and git through
-the broker must see the bundle's `HTTPS_PROXY`. The check removes any proxy
-variables it inherited from the probe's environment. pi loads each provider's
-OAuth flow through a variable `import()` of a sibling file the bundle does not
-have, so `piSdk/models.ts` registers the statically imported flows
-(`@earendil-works/pi-ai/bun-oauth`); the probe derives `openai-codex` auth from
-a ChatGPT credential the check seeds in its data directory, which fails the way
-production did — every subscription model — if that registration is lost. The
-check itself exercises each adapter behavior above directly. It also compiles
-and runs a Photon probe so the WASM path is covered inside a compiled Bun
-executable. The probe lays out a small Initiative map through the packaged
+unsubscribing must leave no native watch. Before anything else, both modes seed
+a database through migration 0096 with a subagent registry row and open it with
+`getDb()`: the real runner must have 0097's guard refuse, record nothing and
+keep the row, then apply 0097 once the row is gone. In broker mode it also runs
+the SQLite paths the shim must carry: `inDbTransaction` nested in a transaction,
+the links memo invalidated by another connection's commit
+(`PRAGMA data_version`) and never kept from a rolled-back transaction, and the
+session delete rolling its tombstone back when the session write fails. A
+synchronous spawn must see a variable deleted from `process.env` as gone. The
+probe starts the real package proxy, which must leave `process.env` untouched.
+The proxy answers plain HTTP with 501 for every host, so the probe's own `fetch`
+and `node:http` requests to an `.invalid` host must fail to resolve, while a
+packaged-Bun child given `childProcessEnv()` must get the proxy's 501 for the
+same URL, and git through the broker must see the bundle's `HTTPS_PROXY`. The
+check removes any proxy variables it inherited from the probe's environment. pi
+loads each provider's OAuth flow through a variable `import()` of a sibling file
+the bundle does not have, so `piSdk/models.ts` registers the statically imported
+flows (`@earendil-works/pi-ai/bun-oauth`); the probe derives `openai-codex` auth
+from a ChatGPT credential the check seeds in its data directory, which fails the
+way production did — every subscription model — if that registration is lost.
+The check itself exercises each adapter behavior above directly. It also
+compiles and runs a Photon probe so the WASM path is covered inside a compiled
+Bun executable. The probe lays out a small Initiative map through the packaged
 layout worker, which covers elkjs under Bun (below). From an unrelated cwd and a
 clean environment, it also runs the packaged browser MCP CLI's version command
 and an MCP initialize plus `tools/list`, covering the patched local imports
@@ -382,11 +398,14 @@ clients:
   `new ELK()` threw. `initiativeLayoutWorker.ts` removes `self` from its own
   thread's global before it loads elkjs; the server thread keeps it. The runtime
   probe covers it.
-- Open ([Task-1232](pa://task/1232)): the SQLite adapter's `exec` hands a
-  multi-statement script to Bun, which drops a trigger's `RAISE(ABORT)` from it
-  and runs the statements after it; Node throws. Migration 0097's refusal guard
-  is such a trigger, so under Bun it drops a non-empty subagent registry. Same
-  on 1.3.13 and 1.4.2.
+- Fixed in the adapter ([Task-1232](pa://task/1232)): Bun's `exec` swallows the
+  step error of any non-final statement in a script (a trigger's `RAISE(ABORT)`,
+  CHECK, UNIQUE, NOT NULL, a foreign key) and runs the statements after it; Node
+  throws. Migration 0097's refusal guard is such a trigger, so under Bun it
+  dropped a non-empty subagent registry. Same on 1.3.13 and 1.4.2. The adapter's
+  `exec()` now runs one SQLite-confirmed statement at a time (above).
+  `checkSqliteShim` and `sqliteExecScripts.test.ts` hold its cases against
+  Node's, and the runtime probe runs the 0097 guard in both modes.
 - `readdir` returns directory order; Node's is sorted (unchanged on 1.4.2).
   Every production caller whose result order matters sorts it.
 - `os.homedir()` is read once at start-up and does not follow a later `HOME`
@@ -491,14 +510,14 @@ outcome are below). All 23 named failures also failed under Bun 1.3.13, whose
 run stalls on `directFileServing.test.ts` timeouts and gives no totals. The
 1.3.13 failures that 1.4.2 fixed (`webStatic`, `packageProxy` CONNECT, and
 `worktrees` and `worktreeTracking` through `execFileSync`) pass, as do the
-`credentialProfiles` and `lsTool` `HOME` cases since `userHome.ts`. A job must
-compare its named failures against exactly this list:
+`credentialProfiles` and `lsTool` `HOME` cases since `userHome.ts`. On 31 Oct
+2026, with the adapter's `exec` fix ([Task-1232](pa://task/1232)), a targeted
+run of `db/subagentRegistryDropMigration.test.ts` and
+`db/sqliteExecScripts.test.ts` passed all 84 tests; the full suite was not
+repeated, so the totals above still count those three 0097 failures, which are
+no longer on the list. A job must compare its named failures against exactly
+this list:
 
-- `db/subagentRegistryDropMigration.test.ts`, all three cases: Bun's SQLite
-  `exec` drops a trigger's `RAISE(ABORT)` from a multi-statement script and runs
-  the statements after it, so migration 0097 drops a non-empty registry where
-  Node refuses. This one is a production defect, not a test artefact
-  ([Task-1232](pa://task/1232)).
 - `checkoutFileAccess.test.ts`, twelve cases: the test's `node:fs/promises` mock
   calls the saved `handle.close` without its receiver, which Bun's `FileHandle`
   needs and Node's does not.

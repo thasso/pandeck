@@ -40,6 +40,18 @@ Two consequences follow, and every rule below is one of them:
 `foreign_key_check` inside the transaction and refuses a migration that leaves
 violations.
 
+A migration that refuses to run, such as `0097_drop_subagent_registry.sql`
+guarding a drop, must make a statement in it fail: a trigger's
+`RAISE(ABORT, …)`, a CHECK or a constraint. That error reaches the runner, which
+rolls the whole file back and records nothing. Under the Bun package the
+`node:sqlite` adapter runs the file one SQLite-confirmed statement at a time,
+because `bun:sqlite`'s own `exec` skips a non-final statement's error
+([deployment](deployment.md#bun-runtime-differences)). A migration file
+therefore carries no bound parameters, no U+000B (vertical tab) and no BOM
+(U+FEFF), even in a comment or string: under Bun such a file fails at boot,
+before any of it runs. Give a guarded migration a `getDb()` regression test like
+`subagentRegistryDropMigration.test.ts`.
+
 The lock generator and CI reject duplicate numeric versions before hashing.
 Different labels or zero padding do not make two files with version 99 distinct.
 
