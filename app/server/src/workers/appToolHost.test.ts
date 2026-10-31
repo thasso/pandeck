@@ -317,7 +317,11 @@ test("a Worker the session is not placed on is refused before any lookup", async
     }),
   });
   // A real Worker, admitted as one no session is placed on.
-  const worker = startWorker({ workerId: "elsewhere", transport: workerEnd });
+  const worker = startWorker({
+    workerId: "elsewhere",
+    transport: workerEnd,
+    childEnv: () => process.env,
+  });
   try {
     const before = appToolCallsServedForTests();
     await assert.rejects(

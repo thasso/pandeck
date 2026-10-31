@@ -3,7 +3,7 @@
  * MCP server. Mirrors Context7's own two-step flow: resolve a library name to a
  * Context7 library id, then fetch focused, up-to-date docs for that id.
  *
- * Both read the API key + enable flag through `getContext7ToolConfig()` in
+ * Both read the API key + enable flag through `getContext7ToolConfig(url)` in
  * `../context7Settings.ts` (runtime user setting, no static/env fallback), which
  * throws a user-actionable error when disabled or unconfigured.
  */
@@ -37,11 +37,11 @@ async function context7Get(
   params: Record<string, string>,
   signal?: AbortSignal,
 ): Promise<Response> {
-  const { apiKey } = getContext7ToolConfig();
   const url = new URL(`${CONTEXT7_API_BASE}${path}`);
   for (const [key, value] of Object.entries(params)) {
     if (value) url.searchParams.set(key, value);
   }
+  const { apiKey } = await getContext7ToolConfig(url);
   const res = await fetch(url, {
     headers: {
       Accept: "application/json",
