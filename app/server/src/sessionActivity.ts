@@ -541,11 +541,18 @@ function untouchedSinceRunEnded(
 export async function sessionSettleBlockedReason(
   sessionId: string,
 ): Promise<string | undefined> {
+  return (await sessionSettleBlocker(sessionId))?.reason;
+}
+
+/** The same gate with the identity and facts needed for a cleanup refusal. */
+export async function sessionSettleBlocker(
+  sessionId: string,
+): Promise<SessionSettleBlocker | undefined> {
   const { hub } = await import("./hub.ts");
   const row = hub
     .listSessions({ includeArchived: true, onlyIds: new Set([sessionId]) })
     .find((item) => item.id === sessionId);
-  return row ? settleBlockedReason(row) : undefined;
+  return row ? settleBlockerOf(row) : undefined;
 }
 
 /**
@@ -563,7 +570,7 @@ export interface BackgroundItemExemption {
   ownerSessionId: string;
 }
 
-interface WorktreeSettleBlocker {
+export interface SessionSettleBlocker {
   sessionId: string;
   title?: string;
   reason: string;
@@ -574,7 +581,15 @@ export async function worktreeSettleBlockedReason(
   worktreeId: string,
   exempt?: BackgroundItemExemption,
 ): Promise<string | undefined> {
-  const blockers = await worktreeSettleBlockers(worktreeId, exempt);
+  return formatSessionSettleBlockers(
+    await worktreeSettleBlockers(worktreeId, exempt),
+  );
+}
+
+/** One refusal format for worktree Remove, Retire and the /pr cleanup. */
+export function formatSessionSettleBlockers(
+  blockers: readonly SessionSettleBlocker[],
+): string | undefined {
   if (blockers.length === 0) return undefined;
   return blockers
     .map(({ sessionId, title, reason, unhandled }) => {
@@ -591,9 +606,9 @@ export async function worktreeSettleBlockedReason(
 async function worktreeSettleBlockers(
   worktreeId: string,
   exempt?: BackgroundItemExemption,
-): Promise<WorktreeSettleBlocker[]> {
+): Promise<SessionSettleBlocker[]> {
   const live = liveSessionIdsForWorktree(worktreeId);
-  const blockers: WorktreeSettleBlocker[] = [];
+  const blockers: SessionSettleBlocker[] = [];
   if (live.length === 0) return blockers;
   const { hub } = await import("./hub.ts");
   const rows = hub.listSessions({
@@ -626,7 +641,7 @@ async function worktreeSettleBlockers(
     // in its quiet grace is safe to close there, unlike ordinary Settle which
     // does not close hosts. Every real job and all other blockers still apply.
     const blocked = row
-      ? settleBlockedReason({
+      ? settleBlockerOf({
           ...row,
           ...(row.backgroundActivity?.activeCount === 0
             ? {
@@ -638,13 +653,20 @@ async function worktreeSettleBlockers(
             : {}),
         })
       : undefined;
-    if (blocked)
-      blockers.push({
-        sessionId,
-        title: row?.title,
-        reason: blocked,
-        unhandled: (row?.unhandledBackgroundUpdates ?? 0) > 0,
-      });
+    if (blocked) blockers.push(blocked);
   }
   return blockers;
+}
+
+function settleBlockerOf(
+  row: SessionListItem,
+): SessionSettleBlocker | undefined {
+  const reason = settleBlockedReason(row);
+  if (!reason) return undefined;
+  return {
+    sessionId: row.id,
+    ...(row.title !== undefined ? { title: row.title } : {}),
+    reason,
+    unhandled: (row.unhandledBackgroundUpdates ?? 0) > 0,
+  };
 }
