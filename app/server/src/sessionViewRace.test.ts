@@ -267,35 +267,22 @@ describe("session view requests", () => {
     expect(snapshots(sent)).toEqual([]);
   });
 
-  test("a pre-ready loadSession supersedes a slower deep-link open", async () => {
+  test("a deep link is viewed and ready sent before a pre-ready load can interleave", async () => {
     const sent: ServerMessage[] = [];
     const connection = new Connection(fakeSocket(sent), { sessionId: A });
     const acquire = controlledAcquisitions();
-    // `init` reads the session list before it can view the deep-linked A; the
-    // client (whose sidebar painted from its shell cache) asks for B in that
-    // window. Not awaited: `init` also drains peer prompts for the viewed
-    // session.
-    let releaseList!: () => void;
-    vi.spyOn(hub, "listSessions").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseList = () => resolve([]);
-        }),
-    );
+    // `init` no longer reads the session list (the `sessions` topic subscribe
+    // answers it), so nothing yields between the deep link's view and
+    // `ready`: a load the client sends next simply moves the view on. Not
+    // awaited: `init` also drains peer prompts for the viewed session.
     void connection.init();
-    await settle();
-    expect(snapshots(sent)).toEqual([]);
-    void connection.handle({ type: "loadSession", id: B } as ClientMessage);
-    await settle();
-    // B attaches; then the deep link resumes and must not override it.
-    expect(snapshots(sent)).toEqual([B]);
-    releaseList();
-    await settle();
-    expect(snapshots(sent)).toEqual([B]);
     const ready = sent.find(
       (m): m is Extract<ServerMessage, { type: "ready" }> => m.type === "ready",
     );
-    expect(ready?.state?.sessionId).toBe(B);
+    expect(ready?.state?.sessionId).toBe(A);
+    void connection.handle({ type: "loadSession", id: B } as ClientMessage);
+    await settle();
+    expect(snapshots(sent)).toEqual([A, B]);
     expect(acquire.session(A).viewers.size).toBe(0);
     // Commands route to B.
     sent.length = 0;
@@ -313,33 +300,20 @@ describe("session view requests", () => {
     expect(sent.filter((m) => m.type === "timelineRange")).toHaveLength(1);
   });
 
-  test("the assistant's snapshot and route message leave together, even with a load in flight", async () => {
+  test("the assistant's snapshot and route message leave together, with no gap a load could use", async () => {
     const sent: ServerMessage[] = [];
     const connection = new Connection(fakeSocket(sent));
-    const acquire = controlledAcquisitions();
-    const listSessions = vi.spyOn(hub, "listSessions");
-    let releaseList!: () => void;
-    listSessions.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseList = () => resolve([]);
-        }),
-    );
+    controlledAcquisitions();
+    // Publishing pending rows replaced the list read the handler used to
+    // await between the acquisition and the view; nothing yields there now.
     void connection.handle({ type: "openPermanentAssistant" } as ClientMessage);
-    // Resolving the assistant's id may acquire on its own; complete whatever
-    // it asks for until the handler is parked on the list read.
-    await acquire.completeAll();
-    expect(snapshots(sent)).toEqual([]);
-    // The list read is in flight; a load for B comes in and attaches NOW.
     void connection.handle({ type: "loadSession", id: B } as ClientMessage);
     await settle();
-    expect(snapshots(sent)).toEqual([B]);
-    // The assistant's list read finishes: superseded, so neither its snapshot
-    // nor a route message that would dress B's timeline in its state is sent.
-    releaseList();
-    await settle();
-    expect(snapshots(sent)).toEqual([B]);
-    expect(sent.some((m) => m.type === "permanentAssistantOpened")).toBe(false);
+    const opened = sent.findIndex((m) => m.type === "permanentAssistantOpened");
+    const snapshot = sent.findIndex((m) => m.type === "snapshot");
+    if (opened >= 0)
+      expect(snapshots(sent.slice(snapshot, opened + 1))).toHaveLength(1);
+    expect(snapshots(sent).at(-1)).toBe(B);
   });
 
   test("a draft created while a newer load is in flight is not viewed and sends no route message", async () => {
@@ -375,7 +349,7 @@ describe("session view requests", () => {
     expect(draft.viewers.size).toBe(0);
   });
 
-  test("deleting the viewed session does not supersede a newer load", async () => {
+  test("a load after deleting the viewed session attaches normally", async () => {
     const sent: ServerMessage[] = [];
     const connection = new Connection(fakeSocket(sent));
     controlledAcquisitions();
@@ -385,24 +359,14 @@ describe("session view requests", () => {
     void connection.handle({ type: "loadSession", id: A } as ClientMessage);
     await settle();
     expect(snapshots(sent)).toEqual([A]);
-    // The delete checks blockers through a list read that is held open; a
-    // load for B arrives and attaches inside that window.
-    let releaseList!: () => void;
-    vi.spyOn(hub, "listSessions").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseList = () => resolve([]);
-        }),
-    );
+    // The delete's blocker check reads the list synchronously, so no load can
+    // arrive between the check and the views clearing: the reader is told A
+    // went, and the load that follows attaches B.
     void connection.handle({ type: "deleteSession", id: A } as ClientMessage);
     await settle();
+    expect(sent.some((m) => m.type === "sessionViewCleared")).toBe(true);
     void connection.handle({ type: "loadSession", id: B } as ClientMessage);
     await settle();
-    releaseList();
-    await settle();
-    // A is gone, but the reader had already left it: there is no view to clear
-    // and nothing to tell them. B — the newer intent — stays on show.
-    expect(sent.some((m) => m.type === "sessionViewCleared")).toBe(false);
     expect(snapshots(sent)).toEqual([A, B]);
   });
 
@@ -422,7 +386,7 @@ describe("session view requests", () => {
     // already on B's route — nothing re-requests B).
     void connection.handle({ type: "loadSession", id: B } as ClientMessage);
     await settle();
-    vi.spyOn(hub, "listSessions").mockResolvedValue([]);
+    vi.spyOn(hub, "listSessions").mockReturnValue([]);
     void connection.handle({
       type: "deleteSession",
       id: DELETED,
@@ -474,10 +438,10 @@ describe("session view requests", () => {
     void connection.handle({ type: "loadSession", id: BUSY } as ClientMessage);
     await settle();
     expect(snapshots(sent)).toEqual([BUSY]);
-    vi.spyOn(hub, "listSessions").mockResolvedValue([
+    vi.spyOn(hub, "listSessions").mockReturnValue([
       { id: BUSY, backgroundActivity: { activeCount: 1, retainedHost: false } },
     ] as never);
-    vi.spyOn(hub, "broadcastSessionUpdated").mockResolvedValue(undefined);
+    vi.spyOn(hub, "republishSessionRow").mockReturnValue(undefined);
     await connection.handle({
       type: "deleteSession",
       id: BUSY,
@@ -514,7 +478,7 @@ describe("session view requests", () => {
     } as ClientMessage);
     await settle();
     expect(snapshots(sent)).toEqual([RELOADED]);
-    vi.spyOn(hub, "listSessions").mockResolvedValue([]);
+    vi.spyOn(hub, "listSessions").mockReturnValue([]);
     void connection.handle({
       type: "deleteSession",
       id: RELOADED,
@@ -588,7 +552,7 @@ describe("session view requests", () => {
     // Another session is deleted from the list while B is on show: every
     // connection is told (a client whose route named it must leave), and B is
     // untouched.
-    vi.spyOn(hub, "listSessions").mockResolvedValue([]);
+    vi.spyOn(hub, "listSessions").mockReturnValue([]);
     await connection.handle({
       type: "deleteSession",
       id: GONE,
@@ -618,30 +582,15 @@ describe("session view requests", () => {
       agentType: "assistant",
     });
     try {
-      // Two browsers show the session; a third is still opening it when the
-      // delete arrives, and attaches while the delete checks blockers.
-      for (const c of [deleter, viewer])
+      // Three browsers show the session when the delete arrives.
+      for (const c of [deleter, viewer, late])
         void c.handle({ type: "loadSession", id: SHARED } as ClientMessage);
       await settle();
-      expect(acquire.session(SHARED).viewers.size).toBe(2);
-      let releaseList!: () => void;
-      vi.spyOn(hub, "listSessions").mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            releaseList = () => resolve([]);
-          }),
-      );
-      const deleting = deleter.handle({
+      expect(acquire.session(SHARED).viewers.size).toBe(3);
+      await deleter.handle({
         type: "deleteSession",
         id: SHARED,
       } as ClientMessage);
-      await settle();
-      // A third browser opens it while the delete is checking blockers.
-      void late.handle({ type: "loadSession", id: SHARED } as ClientMessage);
-      await settle();
-      expect(acquire.session(SHARED).viewers.size).toBe(3);
-      releaseList();
-      await deleting;
       // Every viewer left in the same run as the tombstone and eviction, and
       // each client was told so — the deleter as well as the others.
       expect(acquire.session(SHARED).viewers.size).toBe(0);
@@ -691,7 +640,7 @@ describe("session view requests", () => {
       await settle();
       // The deleter (viewing nothing) removes the session the other browser
       // is reading.
-      vi.spyOn(hub, "listSessions").mockResolvedValue([]);
+      vi.spyOn(hub, "listSessions").mockReturnValue([]);
       await deleter.handle({
         type: "deleteSession",
         id: PENDING,
@@ -754,27 +703,23 @@ describe("session view requests", () => {
     const DEEP = "session-deep-linked";
     const connection = new Connection(fakeSocket(sent), { sessionId: DEEP });
     controlledAcquisitions();
-    let releaseCount!: () => void;
-    vi.spyOn(hub, "archivedSessionCount").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseCount = () => resolve(0);
-        }),
-    );
+    // `ready` reads nothing that yields since the list left it, so the view
+    // it describes is the one attached in the same run.
     void connection.init();
     await settle();
-    expect(snapshots(sent)).toEqual([DEEP]);
-    // `ready` is now parked on a read; a load for B attaches meanwhile.
     void connection.handle({ type: "loadSession", id: B } as ClientMessage);
     await settle();
     expect(snapshots(sent)).toEqual([DEEP, B]);
-    releaseCount();
-    await settle();
     const ready = sent.find(
       (m): m is Extract<ServerMessage, { type: "ready" }> => m.type === "ready",
     );
     // State and context are ONE capture, of the session the client holds.
-    expect(ready?.state?.sessionId).toBe(B);
-    expect(ready?.contextInfo?.sessionId).toBe(B);
+    expect(ready?.state?.sessionId).toBe(DEEP);
+    expect(ready?.contextInfo?.sessionId).toBe(DEEP);
+    expect(sent.indexOf(ready!)).toBeLessThan(
+      sent.findIndex(
+        (m) => m.type === "snapshot" && m.snapshot.sessionId === B,
+      ),
+    );
   });
 });

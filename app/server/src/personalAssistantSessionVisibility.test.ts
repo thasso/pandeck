@@ -76,35 +76,25 @@ test("every sessions-carrying message drops the singleton and the internal file 
   const ordinary = row("ordinary-chat", "assistant");
   const { send, sent } = connectionWithSink();
 
-  // Every shape that carries a session list. `permanentAssistantOpened` is the
-  // one that regressed: opening the Assistant answered with the unfiltered
-  // list, and the client merged the singleton straight into its sidebar.
-  // `ready` is the boot path, where the row would be the first thing painted.
+  // Every shape that carries a session list: the `sessions` topic snapshot
+  // (the boot path, where the row would be the first thing painted) and the
+  // archived read. Topic events are built public by `sessionsTopic.ts`
+  // (`sessionListForcedRefresh.test.ts`: the singleton travels only as a
+  // delete).
   const lists: ServerMessage[] = [
     {
-      type: "ready",
+      type: "sessionList",
+      seq: 0,
       sessions: [singleton, ordinary],
+      revisions: [],
       archivedSessionCount: 0,
-      archivedSessionsLoaded: false,
-    } as unknown as ServerMessage,
-    {
-      type: "sessions",
-      sessions: [singleton, ordinary],
-      archivedSessionCount: 0,
-      archivedSessionsLoaded: false,
     },
     {
-      type: "permanentAssistantOpened",
-      state: { sessionId: singleton.id },
+      type: "archivedSessions",
+      requestId: "archived-1",
       sessions: [singleton, ordinary],
-      contextInfo: { sessionId: singleton.id },
-    } as unknown as ServerMessage,
-    {
-      type: "forkedSession",
-      state: { sessionId: ordinary.id },
-      sessions: [singleton, ordinary],
-      contextInfo: { sessionId: ordinary.id },
-    } as unknown as ServerMessage,
+      archivedSessionCount: 0,
+    },
   ];
   for (const message of lists) send(message);
 
@@ -124,19 +114,6 @@ test("every sessions-carrying message drops the singleton and the internal file 
   }
 });
 
-test("a one-row update about the singleton is dropped, an ordinary one is not", () => {
-  const { send, sent } = connectionWithSink();
-
-  send({ type: "sessionUpdated", session: row("pa-2", "personal-assistant") });
-  assert.deepEqual(sent, [], "nothing at all goes out for a hidden row");
-
-  send({ type: "sessionUpdated", session: row("ordinary-2", "assistant") });
-  assert.equal(sent.length, 1);
-  const updated = sent[0] as unknown as { session: WireSessionRow };
-  assert.equal(updated.session.id, "ordinary-2");
-  assert.equal(updated.session.file, undefined, "no internal file handle");
-});
-
 test("the currently bound singleton stays hidden even under a legacy persona", () => {
   // A binding made before the dedicated persona existed points at an ordinary
   // `assistant` session. While it IS the singleton it must not be listed; the
@@ -146,10 +123,11 @@ test("the currently bound singleton stays hidden even under a legacy persona", (
   try {
     const { send, sent } = connectionWithSink();
     send({
-      type: "sessions",
+      type: "sessionList",
+      seq: 0,
       sessions: [legacy, row("ordinary-3", "assistant")],
+      revisions: [],
       archivedSessionCount: 0,
-      archivedSessionsLoaded: false,
     });
     assert.deepEqual(
       sessionsOf(sent[0]!).map((session) => session.id),
@@ -161,10 +139,11 @@ test("the currently bound singleton stays hidden even under a legacy persona", (
 
   const { send, sent } = connectionWithSink();
   send({
-    type: "sessions",
+    type: "sessionList",
+    seq: 0,
     sessions: [legacy],
+    revisions: [],
     archivedSessionCount: 0,
-    archivedSessionsLoaded: false,
   });
   assert.deepEqual(
     sessionsOf(sent[0]!).map((session) => session.id),

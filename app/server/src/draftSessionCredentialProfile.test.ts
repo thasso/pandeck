@@ -223,7 +223,7 @@ for (const path of ["draft", "newSession"] as const) {
       const acquire = vi
         .spyOn(piStore, "acquireNew")
         .mockResolvedValue(fakeLive as never);
-      const list = vi.spyOn(hub, "listSessions").mockResolvedValue([]);
+      const list = vi.spyOn(hub, "listSessions").mockReturnValue([]);
       const sent: SentMessage[] = [];
       const ws = {
         OPEN: 1,

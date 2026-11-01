@@ -6,6 +6,8 @@ import type {
   TaskSummary,
 } from "@assistant/shared";
 import { closeDb, getDb } from "./db/index.ts";
+import { currentId } from "./db/sequences.ts";
+import { sessionsWrites } from "./db/sessionListChanges.ts";
 import { pullRequestCardStore } from "./db/pullRequestCardStore.ts";
 import {
   beginPullRequestCardObservation,
@@ -711,8 +713,11 @@ test("a worktree states its newest moving card, from any session, and rebuilds t
 });
 
 test("a patch that changes nothing writes nothing, and still reaches the card's viewers", () => {
+  // A one-session list stamp is one revision UPSERT and one sequence bump
+  // (`db/sessionListChanges.ts`); only the card's own writes count here.
   const changes = () =>
-    (getDb().prepare("SELECT total_changes() AS n").get() as { n: number }).n;
+    (getDb().prepare("SELECT total_changes() AS n").get() as { n: number }).n -
+    2 * currentId(sessionsWrites.sequence);
   const broadcasts: Array<[string, boolean, boolean]> = [];
   setPullRequestCardBroadcastForTests((card, row, delivery) =>
     broadcasts.push([card.status, row, delivery]),

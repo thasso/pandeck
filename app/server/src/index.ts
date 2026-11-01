@@ -117,6 +117,7 @@ import {
   stopSlackAssistantChat,
 } from "./slackAssistantChat.ts";
 import { hub } from "./hub.ts";
+import { captureSessionListBaseline } from "./sessionsTopic.ts";
 import {
   backgroundUpdateQueueChanged,
   installBackgroundUpdateQueue,
@@ -2168,6 +2169,16 @@ server.listen(PORT, HOST, () => {
   // rows would never recover in a running server. Run once at boot too.
   bootStep("peer-prompt retry sweep", () => sweepPeerPromptRetries());
   bootStep("dispatch-lease sweep", () => sweepExpiredLeases());
+  bootStep("session list boot touch", () => {
+    // After reconciliation and recovery: a restart resets every live field,
+    // so every live row gets a revision newer than anything a client cached.
+    // The production audit baseline is captured in the same synchronous step
+    // and so already postdates the touch (`docs/session-list.md`, "Audit").
+    touchAllSessionRows("boot");
+    captureSessionListBaseline();
+    hub.seedArchivedSessionCount();
+  });
+
   setInterval(() => {
     try {
       sweepPeerPromptRetries();

@@ -2,8 +2,8 @@
  * V9: a peer request crossing its reply deadline (`docs/session-list.md`,
  * "Deadline watermark"). Fake time, the production sweep off, retention run
  * only where a step says so. Every step asserts the sink's touched ids and the
- * rows a viewer was sent separately: a touched participant whose public row is
- * unchanged sends nothing.
+ * rows a viewer was sent separately: every touched id is published, and an
+ * untouched one is not.
  *   pnpm --filter @assistant/server test src/sessionListDeadline.test.ts
  */
 import assert from "node:assert/strict";
@@ -32,7 +32,10 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 let serial = 0;
 let sent: ServerMessage[] = [];
-const viewer = { send: (message: ServerMessage) => sent.push(message) };
+const viewer = {
+  send: (message: ServerMessage) => sent.push(message),
+  wantsTopic: (topic: string) => topic === "sessions",
+};
 let touches: SessionRowTouchRecorder | undefined;
 let reminderLimit: number;
 
@@ -151,8 +154,9 @@ async function baseline(): Promise<SessionRowTouchRecorder> {
 function sentRows(): Set<string> {
   const ids = new Set<string>();
   for (const message of sent) {
-    if (message.type === "sessionUpdated") ids.add(message.session.id);
-    if (message.type === "sessions") ids.add("<full list>");
+    if (message.type === "stateEvents" && message.topic === "sessions")
+      for (const event of message.events) ids.add(event.id);
+    if (message.type === "sessionList") ids.add("<full list>");
   }
   return ids;
 }
@@ -224,18 +228,21 @@ describe("an owed request crossing its deadline", () => {
       afterFire.has(a) && afterFire.has(c),
       "A's and C's rows went out",
     );
-    assert.equal(afterFire.has(b), false, "B's row is value-equal");
+    // B was touched, so it is published again although its row is equal.
+    assert.ok(afterFire.has(b));
     assert.equal(afterFire.has(d), false);
 
-    // 4: retention expires the awaiting row; no row changes.
+    // 4: retention expires the awaiting row; no row content changes.
     recorder.clear();
     sent = [];
     runPeerPromptRetention(Date.now());
     assert.equal(peerPromptStore.getById(toC.id)?.status, "expired");
     assert.ok(recorder.ids().has(a) && recorder.ids().has(c));
     await hub.flushPendingBroadcastsForTests();
-    assert.deepEqual([...sentRows()], []);
+    // Touched ids are published again, value-equal; nothing else is.
+    assert.deepEqual([...sentRows()].sort(), [...recorder.ids()].sort());
     recorder.clear();
+    sent = [];
     runPeerPromptRetention(Date.now());
     await hub.flushPendingBroadcastsForTests();
     assert.deepEqual(recorder.touches, []);

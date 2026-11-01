@@ -117,19 +117,22 @@ test("release cancels a retained panel's pending reopen even before it attaches"
     readyState: 1,
     send: () => {},
   } as unknown as ConstructorParameters<typeof Connection>[0]);
-  let resolve!: (rows: []) => void;
-  vi.spyOn(hub, "listSessions").mockReturnValue(
-    new Promise<[]>((done) => {
-      resolve = done;
-    }),
-  );
+  let resolve!: () => void;
+  const gate = new Promise<void>((done) => {
+    resolve = done;
+  });
+  const acquire = hub.acquireById.bind(hub);
+  vi.spyOn(hub, "acquireById").mockImplementationOnce(async (...args) => {
+    await gate;
+    return acquire(...args);
+  });
   try {
     const reopening = connection.handle({ type: "openPermanentAssistant" });
     await connection.handle({
       type: "releasePermanentAssistant",
       sessionId: id,
     });
-    resolve([]);
+    resolve();
     await reopening;
     expect(connection.viewingSessionId()).toBeUndefined();
   } finally {
@@ -157,16 +160,16 @@ test("opening PA uses read dwell and publishes only its scalar unread state", as
       await hub.sendPermanentAssistantUnreadTo(
         sink as unknown as InstanceType<typeof Connection>,
       );
-      await hub.broadcastSessionUpdated(id);
+      hub.republishSessionRow(id);
       expect(sent.at(-1)).toEqual({
         type: "permanentAssistantUnread",
         unread: false,
       });
       const sentCount = sent.length;
-      await hub.broadcastSessionUpdated(id);
+      hub.republishSessionRow(id);
       expect(sent.length).toBe(sentCount);
       update(id, Date.now() + 100);
-      await hub.broadcastSessionUpdated(id);
+      hub.republishSessionRow(id);
       expect(sent.at(-1)).toEqual({
         type: "permanentAssistantUnread",
         unread: true,

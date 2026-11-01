@@ -395,7 +395,7 @@ async function drainPermanentAssistantQueue(): Promise<void> {
                       completedAt,
                     )
                   )
-                    void hub.broadcastSessionUpdated(driver.id);
+                    hub.republishSessionRow(driver.id);
                 },
               }
             : {}),

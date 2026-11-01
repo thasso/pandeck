@@ -6,8 +6,10 @@
 import type { BroadcastTopic, ServerMessage } from "@assistant/shared";
 import { backgroundWorkTopic } from "./backgroundWorkRegistry.ts";
 import { setStateChangeSink } from "./db/changeSet.ts";
+import { dbIsOpen, getDb } from "./db/index.ts";
 import { initiativeStateTopic } from "./initiatives.ts";
 import { projectStateTopic } from "./projectRegistry.ts";
+import { sessionsStateTopic } from "./sessionsTopic.ts";
 import { createStateTopic, type StateTopic } from "./stateTopicKernel.ts";
 import { taskStateTopic } from "./tasks.ts";
 
@@ -23,6 +25,7 @@ const topics = new Map<
   BroadcastTopic,
   StateTopic<BroadcastTopic, unknown, ServerMessage>
 >([
+  ["sessions", sessionsStateTopic],
   ["background", background],
   ["projects", projects],
   ["tasks", tasks],
@@ -44,6 +47,7 @@ export function stateTopicFor(
 export function attachStateTopics(
   broadcast: (topic: BroadcastTopic, message: ServerMessage) => void,
 ): void {
+  sessionsStateTopic.attach(broadcast);
   background.attach(broadcast);
   projects.attach(broadcast);
   tasks.attach(broadcast);
@@ -54,4 +58,19 @@ export function attachStateTopics(
 /** Test seam: run every kernel's SCHEDULED flush now, and nothing more. */
 export function flushStateTopicsForTests(): void {
   for (const kernel of topics.values()) kernel.flushNow();
+}
+
+/**
+ * Publish the session-list rows touched so far, now: a caller whose reply,
+ * error or other broadcast must FOLLOW the rows calls it after its writes.
+ * Synchronous; a read or send failure stays inside the kernel (logged, ids
+ * retained), so only a test-mode invariant throws. Never inside a transaction,
+ * which would publish uncommitted rows.
+ */
+export function publishSessionRowsNow(): void {
+  if (dbIsOpen() && getDb().isTransaction)
+    throw new Error(
+      "publishSessionRowsNow inside a transaction would publish uncommitted rows",
+    );
+  sessionsStateTopic.flushNow();
 }

@@ -9,7 +9,7 @@ export async function permanentAssistantReadBoundary(): Promise<{
 }> {
   const id = permanentAssistantStore.sessionId();
   if (!id) return { updatedAt: 0, unread: false };
-  const [session] = await mergedSessionList({
+  const [session] = mergedSessionList({
     includeArchived: true,
     onlyIds: new Set([id]),
   });

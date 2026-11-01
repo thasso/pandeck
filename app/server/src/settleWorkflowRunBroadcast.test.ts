@@ -27,6 +27,7 @@ const { hub } = await import("./hub.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const workflowStore = await import("./db/workflowStore.ts");
 const { peerPromptStore } = await import("./db/peerPromptStore.ts");
+const { sessionRowIn } = await import("./test/sessionListClient.ts");
 const { CODE_DELIVERY_RECIPE_ID, CODE_DELIVERY_RECIPE_VERSION } =
   await import("./workflow/codeDeliveryRecipe.ts");
 
@@ -46,7 +47,7 @@ function fakeSocket(sent: ServerMessage[]) {
   } as unknown as ConstructorParameters<typeof Connection>[0];
 }
 
-/** The session broadcast is debounced (`hub.flushSessionsBroadcast`). */
+/** Topic publications are debounced (`stateTopicKernel.ts`). */
 const settled = () => hub.flushPendingBroadcastsForTests();
 
 let counter = 0;
@@ -109,15 +110,8 @@ function settledFrom(
   messages: ServerMessage[],
   id: string,
 ): boolean | undefined {
-  for (const message of [...messages].reverse()) {
-    if (message.type === "sessionUpdated" && message.session.id === id)
-      return message.session.settledAt !== undefined;
-    if (message.type === "sessions") {
-      const row = message.sessions.find((session) => session.id === id);
-      if (row) return row.settledAt !== undefined;
-    }
-  }
-  return undefined;
+  const row = sessionRowIn(messages, id);
+  return row ? row.settledAt !== undefined : undefined;
 }
 
 test("settling a completed run settles its roles and reaches every subscribed tab", async () => {
@@ -136,7 +130,8 @@ test("settling a completed run settles its roles and reaches every subscribed ta
   const otherTab: ServerMessage[] = [];
   const listener = {
     send: (message: ServerMessage) => otherTab.push(message),
-    wantsTopic: (topic: BroadcastTopic) => topic === "workflow",
+    wantsTopic: (topic: BroadcastTopic) =>
+      topic === "workflow" || topic === "sessions",
   };
   hub.register(listener);
 
@@ -192,7 +187,7 @@ test("settling a completed run settles its roles and reaches every subscribed ta
     // show each of them as a card of its own.
     const sessionsAt = otherTab.findIndex(
       (message) =>
-        message.type === "sessions" || message.type === "sessionUpdated",
+        message.type === "stateEvents" && message.topic === "sessions",
     );
     const runsAt = otherTab.findIndex(
       (message) => message.type === "workflowRunList",

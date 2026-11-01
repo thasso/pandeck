@@ -6723,12 +6723,16 @@ export interface PromptAttachment {
  * domain receives a revision digest, while cold and non-migrated domains receive
  * a snapshot, so reconnect and first visit converge through the same request.
  *
- * Not a topic, deliberately:
- * - the session list, which every surface's sidebar shows;
- * - per-worktree status/changes and per-object comment traces, which are
- *   addressed by the object the connection has open, not by topic.
+ * Not a topic, deliberately: per-worktree status/changes and per-object
+ * comment traces, which are addressed by the object the connection has open,
+ * not by topic.
  */
 export type BroadcastTopic =
+  /**
+   * The live session list (`SessionListItem`, archived rows excluded). Every
+   * surface's sidebar shows it, so every connection subscribes at open.
+   */
+  | "sessions"
   | "tasks"
   | "projects"
   /** Live Initiative summaries; the graph is a keyed `getInitiative` read. */
@@ -6744,6 +6748,7 @@ export type BroadcastTopic =
   | "agents";
 
 export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
+  "sessions",
   "tasks",
   "projects",
   "initiatives",
@@ -7876,8 +7881,12 @@ export type ClientMessage =
   | { type: "openPermanentAssistant"; timelineCache?: TimelineCacheDescriptor }
   /** Release a PA view when its route is no longer visible. */
   | { type: "releasePermanentAssistant"; sessionId: string }
-  /** Load archived session rows on demand, when the archived sidebar section is expanded. */
-  | { type: "loadArchivedSessions" }
+  /**
+   * Read the archived session rows, when the archived sidebar section is shown
+   * and on each freshness signal; answered by `archivedSessions` or `error`
+   * carrying the same `requestId`.
+   */
+  | { type: "loadArchivedSessions"; requestId: string }
   /**
    * Liveness probe: the server answers `pong` with the same `id` at once. A
    * page coming back from the background sends it, because a socket the OS
@@ -8039,7 +8048,6 @@ export type ClientMessage =
       draftText: string;
       notice?: string;
     }
-  | { type: "listSessions" }
   /** Bounded memory list/search for the management UI. */
   | { type: "memoryList"; requestId: string; filter?: MemoryListFilter }
   /** One memory card plus its supersession lineage. */
@@ -8515,6 +8523,7 @@ export type ServerMessage =
   | StateEventsMessage<"projects", ProjectSummary>
   | StateEventsMessage<"initiatives", InitiativeSummary>
   | StateEventsMessage<"background", BackgroundWorkItemSummary>
+  | StateEventsMessage<"sessions", SessionListItem>
   | CommentsSnapshotMessage
   | CommentEventsMessage
   | {
@@ -8537,11 +8546,6 @@ export type ServerMessage =
       models: ModelOption[];
       /** Agents available to this client (Workshop only appears in dev mode). */
       agents: AgentInfo[];
-      sessions: SessionListItem[];
-      /** Number of archived sessions omitted from the initial/default sessions list. */
-      archivedSessionCount?: number;
-      /** True when `sessions` includes archived rows. */
-      archivedSessionsLoaded?: boolean;
       /** Runtime settings needed by the app shell; Settings page requests the full object on demand. */
       settings: Partial<AppSettings>;
       /**
@@ -8655,7 +8659,6 @@ export type ServerMessage =
   | {
       type: "permanentAssistantOpened";
       state: SessionState;
-      sessions: SessionListItem[];
       contextInfo: ContextInfo;
     }
   /**
@@ -8718,14 +8721,31 @@ export type ServerMessage =
       status: ForgejoConnectionStatus;
       settings: AppSettings;
     }
+  /**
+   * The `sessions` topic's subscribe answer: the live projection (archived
+   * rows excluded) with its revision sidecar, and the archived count. Row
+   * changes never travel this way; they are `stateEvents` batches
+   * (`docs/state-sync.md`).
+   */
   | {
-      type: "sessions";
+      type: "sessionList";
+      seq: number;
       sessions: SessionListItem[];
-      archivedSessionCount?: number;
-      archivedSessionsLoaded?: boolean;
+      revisions: StateDigestEntry[];
+      archivedSessionCount: number;
     }
-  /** One session's metadata changed (for example unread/read state); avoids resending the whole list. */
-  | { type: "sessionUpdated"; session: SessionListItem }
+  /** The archived count moved; broadcast on the `sessions` topic. */
+  | { type: "archivedSessionCount"; count: number }
+  /**
+   * The answer to `loadArchivedSessions`: the archived rows only, correlated
+   * by the command's `requestId`. A failed read answers `error` with it.
+   */
+  | {
+      type: "archivedSessions";
+      requestId: string;
+      sessions: SessionListItem[];
+      archivedSessionCount: number;
+    }
   | {
       type: "objectLinksResolved";
       requestId: string;
@@ -8877,14 +8897,12 @@ export type ServerMessage =
   | {
       type: "forkedSession";
       state: SessionState;
-      sessions: SessionListItem[];
       contextInfo: ContextInfo;
       selectedText?: string;
     }
   | {
       type: "draftSession";
       state: SessionState;
-      sessions: SessionListItem[];
       contextInfo: ContextInfo;
       draftText: string;
       notice?: string;

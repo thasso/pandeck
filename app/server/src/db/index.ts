@@ -8,7 +8,6 @@ import {
   assertMayApplyMigrations,
   recordMigrationOwner,
 } from "./migrationOwner.ts";
-import { touchAllSessionRows } from "./sessionListChanges.ts";
 
 const DB_PATH = join(DATA_DIR, "app.sqlite3");
 const MIGRATIONS_DIR = PACKAGED_MIGRATIONS_DIR;
@@ -51,8 +50,21 @@ export function closeDb(): void {
   }
   db = undefined;
   migrated = false;
-  // Whatever opens next may hold different rows.
-  touchAllSessionRows("database closed");
+  // Whatever opens next may hold different rows. A listener must not reopen
+  // the database: nothing is served from a closed one.
+  for (const listener of closeListeners) listener();
+}
+
+const closeListeners: Array<() => void> = [];
+
+/** Run `listener` after every {@link closeDb}, once the handle is gone. */
+export function onDbClosed(listener: () => void): void {
+  closeListeners.push(listener);
+}
+
+/** A handle is open and migrated: a read now neither opens nor migrates. */
+export function dbIsOpen(): boolean {
+  return db !== undefined && migrated;
 }
 
 /**

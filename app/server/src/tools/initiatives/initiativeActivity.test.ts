@@ -156,14 +156,12 @@ test("opt-in keeps defaults identical, excludes references and hydrates outside 
     peer = session();
   let overlay: Partial<SessionListItem> = {};
   const batches: string[][] = [];
-  setInitiativeActivitySessionReaderForTests(async (ids) => {
+  setInitiativeActivitySessionReaderForTests((ids) => {
     batches.push(ids);
-    return (
-      await listSessions([], () => 0, {
-        includeArchived: true,
-        onlyIds: new Set(ids),
-      })
-    ).map((row) =>
+    return listSessions([], () => 0, {
+      includeArchived: true,
+      onlyIds: new Set(ids),
+    }).map((row) =>
       row.id === asker
         ? { ...row, awaitingRepliesFrom: [peer] }
         : row.id === peer
@@ -229,14 +227,12 @@ test("settled active sessions hydrate their owed peers and frozen agents", async
   });
   let overlay: Partial<SessionListItem> = {};
   const batches: string[][] = [];
-  setInitiativeActivitySessionReaderForTests(async (ids) => {
+  setInitiativeActivitySessionReaderForTests((ids) => {
     batches.push(ids);
-    return (
-      await listSessions([], () => 0, {
-        includeArchived: true,
-        onlyIds: new Set(ids),
-      })
-    ).map((row) =>
+    return listSessions([], () => 0, {
+      includeArchived: true,
+      onlyIds: new Set(ids),
+    }).map((row) =>
       row.id === settled
         ? { ...row, settledAt: 1, awaitingRepliesFrom: [peer], ...overlay }
         : row,
@@ -327,7 +323,7 @@ test("activity caps and record drop order preserve bounded paging across 200 mem
   for (const t of ids) session(t);
   for (let i = 0; i < 7; i++) session(ids[0]);
   const rows = await listSessions([], () => 0, { includeArchived: true });
-  setInitiativeActivitySessionReaderForTests(async (ids) => {
+  setInitiativeActivitySessionReaderForTests((ids) => {
     const requested = new Set(ids);
     return rows.filter((row) => requested.has(row.id));
   });

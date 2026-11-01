@@ -1,7 +1,7 @@
 /**
  * Records every session-row touch (`db/sessionListChanges.ts`) while still
- * forwarding it to the sink it replaced, so a test can assert WHICH rows a
- * write reported without disabling the hub behind it.
+ * forwarding it to the observer it replaced, so a test can assert WHICH rows a
+ * write reported; the touch itself still stamps and reports to the topic.
  */
 import { setSessionListSink } from "../db/sessionListChanges.ts";
 
@@ -24,10 +24,10 @@ export function recordSessionRowTouches(
   const touches: string[][] = [];
   const touchAlls: string[] = [];
   const previous = setSessionListSink({
-    touch: (ids, force) => {
+    touch: (ids) => {
       touches.push([...ids].sort());
       onTouch?.(ids);
-      previous?.touch(ids, force);
+      previous?.touch(ids);
     },
     touchAll: (reason) => {
       touchAlls.push(reason);

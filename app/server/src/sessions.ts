@@ -429,11 +429,11 @@ function backgroundHandlingFields(
   };
 }
 
-export async function listSessions(
+export function listSessions(
   allLive: LiveListInfo[],
   readAt: (key: string) => number,
   opts: SessionListOptions = {},
-): Promise<InternalSessionListItem[]> {
+): InternalSessionListItem[] {
   let live = allLive;
   const liveByKey = new Map(live.map((l) => [l.sessionId, l]));
   const seen = new Set<string>();
@@ -731,7 +731,7 @@ export async function listSessions(
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export async function archivedSessionCount(): Promise<number> {
+export function archivedSessionCount(): number {
   // A COUNT, not a full row scan mapped through the store's projection: this is
   // asked on every connect and on every archived-list refresh.
   return sessionStore.countArchived();

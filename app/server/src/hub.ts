@@ -1,10 +1,6 @@
 import type { BroadcastTopic, ServerMessage } from "@assistant/shared";
 import { isCodingAgentType } from "@assistant/shared";
-import {
-  archivedSessionCount,
-  listSessions,
-  type SessionListOptions,
-} from "./sessions.ts";
+import { archivedSessionCount, type SessionListOptions } from "./sessions.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { subscribeHarnessOpened } from "./session/runtimePrompt.ts";
@@ -55,19 +51,17 @@ import {
 } from "./comments/commentChanges.ts";
 import { errorText } from "./errors.ts";
 import {
-  setSessionListSink,
+  sessionListRevisions,
   touchSessionRows,
 } from "./db/sessionListChanges.ts";
-import {
-  advancePeerDeadlines,
-  startPeerDeadlineClock,
-} from "./db/peerDeadlineClock.ts";
+import { startPeerDeadlineClock } from "./db/peerDeadlineClock.ts";
+import { startSessionListSweep } from "./sessionsTopic.ts";
 import { permanentAssistantStore } from "./db/permanentAssistantStore.ts";
 import { permanentAssistantUnread } from "./permanentAssistantUnread.ts";
-import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import {
   attachStateTopics,
   flushStateTopicsForTests,
+  publishSessionRowsNow,
   stateTopicFor,
 } from "./stateTopics.ts";
 
@@ -83,134 +77,11 @@ const RELOAD_GRACE_MS = 1500;
  */
 const RELOAD_IDLE_SETTLE_MS = 1200;
 
-const SESSION_BROADCAST_DEBOUNCE_MS = 25;
-/**
- * Minimum gap between consecutive list rebuilds while invalidations keep
- * arriving (e.g. a streaming run). The first broadcast is fast (25ms debounce);
- * sustained churn coalesces to at most ~4 rebuilds/second.
- */
-const SESSION_BROADCAST_SUSTAINED_MS = 250;
-/**
- * Above this many changed rows, resend the whole list instead of row updates:
- * the delta stops saving anything, and the full list is the shape that also
- * carries the archived count.
- */
-const SESSION_DELTA_MAX_ROWS = 5;
-
 export interface LifecycleDrainParticipant {
   /** Synchronous gate, called as soon as reload or shutdown starts. */
   closeAdmissions(): void;
   /** Called once after prompted turns finish and before the clean-exit marker. */
   drain(): Promise<void>;
-}
-
-/**
- * Backstop interval of the production sweep (`sweepSessionRows`). Tests run
- * without it, so no assertion can pass because it repaired a row.
- */
-const SESSION_LIST_SWEEP_MS = 60_000;
-/**
- * Under test, every flush first compares a full build with what was published
- * and throws on a row nothing touched (`docs/session-list.md`, "Audit").
- */
-const SESSION_LIST_AUDIT = process.env.VITEST === "true";
-
-type SessionRow = Awaited<ReturnType<typeof listSessions>>[number];
-
-function publicSessionRows(rows: readonly SessionRow[]): SessionRow[] {
-  const hidden = sessionListHiddenProbe();
-  return rows.filter((row) => !hidden(row));
-}
-
-function publicSessionRowJson(row: SessionRow): string {
-  const { file: _file, ...publicRow } = row;
-  return JSON.stringify(publicRow);
-}
-
-/** A row as last published: its serialization and which variant holds it. */
-interface PublishedSessionRow {
-  json: string;
-  archived: boolean;
-}
-
-/**
- * What one flush sends, per variant: the archived-loaded variant holds every
- * row, the default one the unarchived rows. A variant whose row SET changed
- * (a row added, removed, or archived/restored for the default variant) or
- * with more than {@link SESSION_DELTA_MAX_ROWS} changed rows needs the whole
- * list: a single-row upsert cannot express a removal. Forced rows are sent
- * even when equal and do not count against the cap. Comparing serialized rows
- * is exact and cheap next to building them.
- */
-function planSessionListSends(
-  rows: readonly SessionRow[],
-  compared: readonly string[],
-  previous: ReadonlyMap<string, PublishedSessionRow> | undefined,
-  forced: ReadonlySet<string>,
-): {
-  byId: Map<string, SessionRow>;
-  plainFull: boolean;
-  archivedFull: boolean;
-  plainSend: SessionRow[];
-  archivedSend: SessionRow[];
-} {
-  const byId = new Map(rows.map((row) => [row.id, row]));
-  const ids = new Set(compared);
-  let plainFull = false;
-  let archivedFull = false;
-  let plainChanged = 0;
-  let archivedChanged = 0;
-  const plainSend: SessionRow[] = [];
-  const archivedSend: SessionRow[] = [];
-  for (const id of ids) {
-    const before = previous?.get(id);
-    if (byId.has(id) || !before) continue;
-    archivedFull = true;
-    if (!before.archived) plainFull = true;
-  }
-  // In list order, so a delta reads like the list it patches.
-  for (const row of rows) {
-    if (!ids.has(row.id)) continue;
-    const before = previous?.get(row.id);
-    const archived = Boolean(row.archived);
-    if (!before) {
-      archivedFull = true;
-      if (!archived) plainFull = true;
-    } else if (before.archived !== archived) plainFull = true;
-    const changed = before?.json !== publicSessionRowJson(row);
-    if (changed) {
-      archivedChanged += 1;
-      if (!archived) plainChanged += 1;
-    }
-    if (changed || forced.has(row.id)) {
-      archivedSend.push(row);
-      if (!archived) plainSend.push(row);
-    }
-  }
-  return {
-    byId,
-    plainFull: plainFull || plainChanged > SESSION_DELTA_MAX_ROWS,
-    archivedFull: archivedFull || archivedChanged > SESSION_DELTA_MAX_ROWS,
-    plainSend,
-    archivedSend,
-  };
-}
-
-/** The top-level fields that differ between a published row and a fresh one. */
-function changedSessionRowFields(
-  before: string | undefined,
-  after: SessionRow | undefined,
-): string[] {
-  if (before === undefined) return ["(added)"];
-  if (after === undefined) return ["(removed)"];
-  const old = JSON.parse(before) as Record<string, unknown>;
-  const next = JSON.parse(publicSessionRowJson(after)) as Record<
-    string,
-    unknown
-  >;
-  return [...new Set([...Object.keys(old), ...Object.keys(next)])].filter(
-    (key) => JSON.stringify(old[key]) !== JSON.stringify(next[key]),
-  );
 }
 
 /**
@@ -266,45 +137,18 @@ class SessionHub {
   private lifecycleDrainFinished = false;
   /** Timer for the small idle-settle delay before the actual process exit. */
   private reloadSettleTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Coalesces bursts of session-row touches into one rebuild + broadcast. */
-  private sessionsBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  private sessionsBroadcastPromise: Promise<void> | undefined;
-  private resolveSessionsBroadcast: (() => void) | undefined;
-  private rejectSessionsBroadcast: ((reason: unknown) => void) | undefined;
-  private sessionsBroadcastInFlight = false;
-  private sessionsBroadcastRequestedDuringFlush = false;
-  /** A caller awaits the flush (`flushSessionRowsNow`): no sustained wait. */
-  private sessionsFlushNow = false;
-  /** Rows touched since the last flush took them; see `db/sessionListChanges.ts`. */
-  private touchedSessionRows = new Set<string>();
-  /** The touched rows to send even when equal (an authoritative refresh). */
-  private forcedSessionRows = new Set<string>();
-  private touchAllSessionRowsPending = false;
-  /**
-   * Every row as last published, archived ones included, by id: what each
-   * touched row is compared with. Undefined before the first flush, which
-   * therefore rebuilds and sends every row.
-   */
-  private publishedSessionRows: Map<string, PublishedSessionRow> | undefined;
-  /** The every-flush audit (tests only); a cost measurement pauses it. */
-  private sessionListAudit = SESSION_LIST_AUDIT;
-  /** Archived count last sent; it only travels on a full list (see `publishTouchedSessionRows`). */
-  private lastBroadcastArchivedCount: number | undefined;
+  /** Archived count last broadcast; advances only after a send that did not throw. */
+  private lastArchivedSessionCount: number | undefined;
+  /** `<singleton id>@<revision>` at the last successful unread publication. */
+  private permanentAssistantUnreadMarker: string | undefined;
   private lastPermanentAssistantUnread: boolean | undefined;
   /** Sessions task-linked at the previous Task flush; see `refreshTaskLinkedSessions`. */
   private taskLinkedSessions = new Set<string>();
 
   constructor() {
     // The host object inverts the session→hub calls so no engine imports hub.ts.
-    setSessionListSink({
-      touch: (ids, force) => this.touchSessionRowIds(ids, force),
-      touchAll: () => {
-        this.touchAllSessionRowsPending = true;
-        void this.scheduleSessionsFlush();
-      },
-    });
     startPeerDeadlineClock();
-    if (!SESSION_LIST_AUDIT) this.startSessionListSweep();
+    startSessionListSweep();
     harnessRegistry.setHost({
       sessionRowsChanged: (ids) => touchSessionRows(ids),
       noteRunStarted: () => this.noteRunStarted(),
@@ -320,6 +164,13 @@ class SessionHub {
         if (isCodingAgentType(session.agentType)) session.broadcastState();
     });
     attachStateTopics((topic, msg) => this.broadcastTopic(topic, msg));
+    // After the topic's own audit rebaseline, in this order.
+    stateTopicFor("sessions")!.onPublished(() =>
+      this.publishArchivedSessionCount(),
+    );
+    stateTopicFor("sessions")!.onPublished(() =>
+      this.publishPermanentAssistantUnreadIfMoved(),
+    );
     // A published Task change may have moved a session's task back-links.
     stateTopicFor("tasks")!.onPublished(() => this.refreshTaskLinkedSessions());
     // Background work moves only its owners' `backgroundActivity`, which its
@@ -471,13 +322,6 @@ class SessionHub {
     return consumePostReloadContinuation();
   }
 
-  /** The merged session list across both engines (`harnesses/sessionList.ts`). */
-  private async mergedSessions(
-    opts: SessionListOptions = {},
-  ): Promise<Awaited<ReturnType<typeof listSessions>>> {
-    return mergedSessionList(opts);
-  }
-
   /** Connect and live delivery share one cache; a late read cannot regress it. */
   async sendPermanentAssistantUnreadTo(viewer: Viewer): Promise<void> {
     if (this.lastPermanentAssistantUnread === undefined) {
@@ -499,325 +343,67 @@ class SessionHub {
   }
 
   /**
-   * Re-send one session-list row even when it equals what was published: an
-   * authoritative refresh replacing a client's optimistic guess (a refused
-   * delete, a blocked settle). Resolves once the row is sent, so the caller's
-   * error follows it.
+   * Re-publish one session-list row now, even when it equals what clients
+   * hold: an authoritative refresh replacing a client's optimistic guess (a
+   * refused delete, a blocked settle). The fresh revision supersedes the
+   * guess; the row is on the wire when this returns, so the caller's error
+   * follows it.
    */
-  async broadcastSessionUpdated(sessionId: string): Promise<void> {
-    touchSessionRows([sessionId], { force: true });
-    await this.flushSessionRowsNow();
+  republishSessionRow(sessionId: string): void {
+    touchSessionRows([sessionId]);
+    publishSessionRowsNow();
   }
 
   /**
-   * Resolves once the rows touched so far are sent — the pending flush, its
-   * debounce included. Not a report: a caller whose reply or other broadcast
-   * must FOLLOW the list (a command's `mutationSettled`, a run list after its
-   * roles) awaits it after its writes.
+   * Publish the session-list rows touched so far, now (`stateTopics.ts`); for
+   * modules that reach the hub lazily. Synchronous, outside transactions.
    */
-  sessionRowsSent(): Promise<void> {
-    return this.sessionsBroadcastPromise ?? Promise.resolve();
+  publishSessionRowsNow(): void {
+    publishSessionRowsNow();
   }
 
-  /** The sink behind `touchSessionRows` (`db/sessionListChanges.ts`). */
-  private touchSessionRowIds(ids: ReadonlySet<string>, force: boolean): void {
-    for (const id of ids) {
-      this.touchedSessionRows.add(id);
-      if (force) this.forcedSessionRows.add(id);
-    }
-    void this.scheduleSessionsFlush();
+  /** The `sessions` listener: the archived count, when it moved. */
+  /**
+   * Boot: the archived count clients' `sessionList` snapshots carry, so the
+   * first publication only signals a count that moved after it.
+   */
+  seedArchivedSessionCount(): void {
+    this.lastArchivedSessionCount = archivedSessionCount();
   }
 
-  /** Coalesce touches into one flush: 25 ms debounce, 250 ms under churn. */
-  private scheduleSessionsFlush(): Promise<void> {
-    if (!this.sessionsBroadcastPromise) {
-      this.sessionsBroadcastPromise = new Promise((resolve, reject) => {
-        this.resolveSessionsBroadcast = resolve;
-        this.rejectSessionsBroadcast = reject;
-      });
-      // Most touches are fire-and-forget. Awaiting consumers still receive the
-      // rejection, without an unobserved promise when no command is waiting.
-      void this.sessionsBroadcastPromise.catch(() => {});
-    }
+  private publishArchivedSessionCount(): void {
 
-    if (this.sessionsBroadcastInFlight) {
-      this.sessionsBroadcastRequestedDuringFlush = true;
-      return this.sessionsBroadcastPromise;
-    }
-
-    if (this.sessionsBroadcastTimer) clearTimeout(this.sessionsBroadcastTimer);
-    this.sessionsBroadcastTimer = setTimeout(() => {
-      this.sessionsBroadcastTimer = undefined;
-      void this.flushSessionsBroadcast();
-    }, SESSION_BROADCAST_DEBOUNCE_MS);
-
-    return this.sessionsBroadcastPromise;
-  }
-
-  /** Flush pending touches now, skipping the debounce and the sustained wait. */
-  private async flushSessionRowsNow(): Promise<void> {
-    this.sessionsFlushNow = true;
-    const pending = this.sessionsBroadcastPromise;
-    if (this.sessionsBroadcastInFlight) {
-      this.sessionsBroadcastRequestedDuringFlush = true;
-      await pending;
-      return;
-    }
-    if (this.sessionsBroadcastTimer) {
-      clearTimeout(this.sessionsBroadcastTimer);
-      this.sessionsBroadcastTimer = undefined;
-    }
-    await this.flushSessionsBroadcast();
-    await pending;
-  }
-
-  private async flushSessionsBroadcast(): Promise<void> {
-    if (this.sessionsBroadcastInFlight) {
-      this.sessionsBroadcastRequestedDuringFlush = true;
-      return;
-    }
-    this.sessionsBroadcastInFlight = true;
-    let unreported: Error | undefined;
-    let failed = false;
-    let failure: unknown;
-    try {
-      do {
-        this.sessionsBroadcastRequestedDuringFlush = false;
-        // The audit compares BEFORE anything is published, so neither the
-        // delta nor a full-list fallback can refresh the baseline over an
-        // unreported change.
-        if (this.sessionListAudit && this.publishedSessionRows) {
-          const unreportedRows = this.unreportedSessionRowChanges(
-            await this.mergedSessions({ includeArchived: true }),
-          );
-          if (unreportedRows.length > 0) {
-            unreported = new Error(
-              `unreported session row change: ${unreportedRows
-                .map(({ id, fields }) => `${id} ${fields.join(",")}`)
-                .join("; ")}`,
-            );
-            break;
-          }
-        }
-        await this.publishTouchedSessionRows();
-        // Don't rebuild back-to-back while touches keep streaming in — wait a
-        // beat so a burst coalesces into one more rebuild, not many.
-        if (
-          this.sessionsBroadcastRequestedDuringFlush &&
-          !this.sessionsFlushNow
-        )
-          await new Promise((r) =>
-            setTimeout(r, SESSION_BROADCAST_SUSTAINED_MS),
-          );
-      } while (this.sessionsBroadcastRequestedDuringFlush);
-    } catch (err) {
-      failed = true;
-      failure = err;
-      console.warn("Failed to broadcast sessions:", errorText(err));
-    } finally {
-      this.sessionsBroadcastInFlight = false;
-      this.sessionsFlushNow = false;
-      const resolve = this.resolveSessionsBroadcast;
-      const reject = this.rejectSessionsBroadcast;
-      this.sessionsBroadcastPromise = undefined;
-      this.resolveSessionsBroadcast = undefined;
-      this.rejectSessionsBroadcast = undefined;
-      if (unreported || failed) reject?.(unreported ?? failure);
-      else resolve?.();
-    }
-    if (unreported) throw unreported;
+    const count = archivedSessionCount();
+    if (count === this.lastArchivedSessionCount) return;
+    this.broadcastTopic("sessions", { type: "archivedSessionCount", count });
+    this.lastArchivedSessionCount = count;
   }
 
   /**
-   * Rebuild only the touched rows, compare them with what was published, and
-   * send today's messages: changed rows as `sessionUpdated` (forced ones even
-   * when equal), or the whole list for a variant whose row SET changed, whose
-   * archived count moved, or with more than {@link SESSION_DELTA_MAX_ROWS}
-   * changed rows. A global touch, or no baseline yet, rebuilds every row.
+   * The `sessions` listener: the singleton's unread scalar, recomputed when
+   * its stamped revision (or the binding) moved since the last successful
+   * run. Its row never travels; this scalar is how clients see it.
    */
-  private async publishTouchedSessionRows(): Promise<void> {
-    const touched = this.touchedSessionRows;
-    const forced = this.forcedSessionRows;
-    const globalTouch = this.touchAllSessionRowsPending;
-    const everyRow = globalTouch || !this.publishedSessionRows;
-    this.touchedSessionRows = new Set();
-    this.forcedSessionRows = new Set();
-    this.touchAllSessionRowsPending = false;
-    if (!everyRow && touched.size === 0) return;
-
-    try {
-      const previous = this.publishedSessionRows;
-      const archivedCount = await archivedSessionCount();
-      // The archived COUNT only rides on a full list, and it can move while
-      // both row sets stay the same — restoring a session keeps the archived
-      // client's rows, deleting an archived one keeps the active client's — so
-      // a changed count forces the list for every variant.
-      const archivedCountMoved =
-        this.lastBroadcastArchivedCount !== archivedCount;
-
-      const assistantId = permanentAssistantStore.sessionId();
-      const builtRows = await this.mergedSessions(
-        everyRow
-          ? { includeArchived: true }
-          : { includeArchived: true, onlyIds: touched },
-      );
-      const assistantUnread = !assistantId
-        ? false
-        : everyRow || touched.has(assistantId)
-          ? Boolean(builtRows.find((row) => row.id === assistantId)?.unread)
-          : undefined;
-      let rows = publicSessionRows(builtRows);
-      let builtEveryRow = everyRow;
-      const compared = (): string[] =>
-        everyRow
-          ? [
-              ...new Set([
-                ...rows.map((row) => row.id),
-                ...(previous?.keys() ?? []),
-              ]),
-            ]
-          : [...touched];
-      let plan = planSessionListSends(rows, compared(), previous, forced);
-      const fullPlain = !previous || archivedCountMoved || plan.plainFull;
-      const fullArchived = !previous || archivedCountMoved || plan.archivedFull;
-      if ((fullPlain || fullArchived) && !builtEveryRow) {
-        // One full build serves both variants; the comparison is redone on it
-        // so a delta sent beside a full list describes the same content.
-        rows = publicSessionRows(
-          await this.mergedSessions({ includeArchived: true }),
-        );
-        builtEveryRow = true;
-        plan = planSessionListSends(rows, compared(), previous, forced);
-      }
-
-      const published = new Map(previous ?? []);
-      for (const id of compared()) {
-        const row = plan.byId.get(id);
-        if (row)
-          published.set(id, {
-            json: publicSessionRowJson(row),
-            archived: Boolean(row.archived),
-          });
-        else published.delete(id);
-      }
-
-      const plainRows = builtEveryRow
-        ? rows.filter((row) => !row.archived)
-        : undefined;
-      // The singleton's row reaches clients only as the scalar above; the
-      // connection would drop its `sessionUpdated` anyway (`publicServerMessage`).
-      const rowUpdates = (sends: SessionRow[]) =>
-        sends.filter((session) => session.id !== assistantId);
-      for (const c of this.connections) {
-        if (c.wantsArchivedSessions?.()) {
-          if (fullArchived)
-            c.send({
-              type: "sessions",
-              sessions: rows,
-              archivedSessionCount: archivedCount,
-              archivedSessionsLoaded: true,
-            });
-          else
-            for (const session of rowUpdates(plan.archivedSend))
-              c.send({ type: "sessionUpdated", session });
-        } else if (fullPlain) {
-          c.send({
-            type: "sessions",
-            sessions: plainRows!,
-            archivedSessionCount: archivedCount,
-            archivedSessionsLoaded: false,
-          });
-        } else {
-          for (const session of rowUpdates(plan.plainSend))
-            c.send({ type: "sessionUpdated", session });
-        }
-      }
-      if (assistantUnread !== undefined)
-        this.publishPermanentAssistantUnread(assistantUnread);
-      this.publishedSessionRows = published;
-      this.lastBroadcastArchivedCount = archivedCount;
-    } catch (error) {
-      // Merge, never replace: writes may have reported more work during a
-      // build/send. A later ordinary report retries; failure does not spin.
-      for (const id of touched) this.touchedSessionRows.add(id);
-      for (const id of forced) this.forcedSessionRows.add(id);
-      this.touchAllSessionRowsPending ||= globalTouch;
-      throw error;
-    }
+  private publishPermanentAssistantUnreadIfMoved(): void {
+    const id = permanentAssistantStore.sessionId();
+    const marker = id
+      ? `${id}@${sessionListRevisions([id]).get(id) ?? 0}`
+      : "";
+    if (marker === this.permanentAssistantUnreadMarker) return;
+    const [row] = id
+      ? mergedSessionList({ includeArchived: true, onlyIds: new Set([id]) })
+      : [];
+    this.publishPermanentAssistantUnread(Boolean(row?.unread));
+    this.permanentAssistantUnreadMarker = marker;
   }
 
-  /**
-   * Rows that differ from what was published although nothing touched them
-   * since: what the test-mode audit throws on and the production sweep
-   * repairs. A pending global touch rebuilds everything anyway.
-   */
-  private unreportedSessionRowChanges(
-    rows: Awaited<ReturnType<typeof listSessions>>,
-  ): { id: string; fields: string[] }[] {
-    const published = this.publishedSessionRows;
-    if (!published || this.touchAllSessionRowsPending) return [];
-    const fresh = new Map(publicSessionRows(rows).map((row) => [row.id, row]));
-    const changes: { id: string; fields: string[] }[] = [];
-    for (const id of new Set([...fresh.keys(), ...published.keys()])) {
-      if (this.touchedSessionRows.has(id)) continue;
-      const row = fresh.get(id);
-      const before = published.get(id)?.json;
-      const after = row && publicSessionRowJson(row);
-      if (before !== after)
-        changes.push({ id, fields: changedSessionRowFields(before, row) });
-    }
-    return changes;
-  }
-
-  /**
-   * The production backstop (every {@link SESSION_LIST_SWEEP_MS}): advance the
-   * deadline watermark, then compare a full build with what was published and
-   * log and repair any row no write reported. It is not a reporter: nothing
-   * relies on it, and tests run without it.
-   */
-  async sweepSessionRows(): Promise<void> {
-    advancePeerDeadlines();
-    if (!this.publishedSessionRows) return;
-    const rows = await this.mergedSessions({ includeArchived: true });
-    const changes = this.unreportedSessionRowChanges(rows);
-    for (const { id, fields } of changes)
-      console.warn(
-        `[sessions] unreported row change: ${id} (${fields.join(", ")})`,
-      );
-    touchSessionRows(changes.map((change) => change.id));
-  }
-
-  /** Starts the sweep (production boot); returns its stop. */
-  startSessionListSweep(): () => void {
-    const timer = setInterval(() => {
-      void this.sweepSessionRows().catch((err: unknown) =>
-        console.warn("[sessions] row sweep failed:", errorText(err)),
-      );
-    }, SESSION_LIST_SWEEP_MS);
-    timer.unref?.();
-    return () => clearInterval(timer);
-  }
-
-  /**
-   * Test seam for fixtures that seed rows behind the stores' backs: the next
-   * flush rebuilds every row and sends the full list, as after boot.
-   */
-  resetSessionListBaselineForTests(): void {
-    this.publishedSessionRows = undefined;
-  }
-
-  /** Test seam: pause the every-flush audit while a test counts store reads. */
-  setSessionListAuditForTests(on: boolean): void {
-    this.sessionListAudit = on && SESSION_LIST_AUDIT;
-  }
-
-  async listSessions(
+  listSessions(
     opts: SessionListOptions = {},
-  ): Promise<Awaited<ReturnType<typeof listSessions>>> {
-    return this.mergedSessions(opts);
+  ): ReturnType<typeof mergedSessionList> {
+    return mergedSessionList(opts);
   }
 
-  async archivedSessionCount(): Promise<number> {
+  archivedSessionCount(): number {
     return archivedSessionCount();
   }
 
@@ -863,17 +449,9 @@ class SessionHub {
    * session-list flush has sent.
    */
   async flushPendingBroadcastsForTests(): Promise<void> {
-    // Before the session list: a post-publish listener may request it.
     flushStateTopicsForTests();
-    if (this.sessionsBroadcastTimer) {
-      clearTimeout(this.sessionsBroadcastTimer);
-      this.sessionsBroadcastTimer = undefined;
-      const pending = this.sessionsBroadcastPromise;
-      await this.flushSessionsBroadcast();
-      await pending;
-    } else if (this.sessionsBroadcastPromise) {
-      await this.sessionsBroadcastPromise;
-    }
+    // A post-publish listener (Task back-links) may have touched session rows.
+    publishSessionRowsNow();
   }
 
   /** The `tasks` kernel's post-publish listener: runs after every Task flush. */

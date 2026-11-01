@@ -11,12 +11,14 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, describe, test, vi } from "vitest";
-import type { ServerMessage, SessionListItem } from "@assistant/shared";
 import { hub } from "./hub.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import { directPeerChildStore } from "./db/directPeerChildStore.ts";
-import { getDb } from "./db/index.ts";
+import { setStateChangeSink, withChangeSet } from "./db/changeSet.ts";
+import { getDb, withDbTransaction } from "./db/index.ts";
+import { sessionListRevisions } from "./db/sessionListChanges.ts";
+
 import * as inboxPositionStore from "./db/inboxPositionStore.ts";
 import * as links from "./db/links.ts";
 import * as peerDeadlineClock from "./db/peerDeadlineClock.ts";
@@ -46,6 +48,14 @@ import {
   updateTask,
 } from "./tasks.ts";
 import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
+import { sessionListClient } from "./test/sessionListClient.ts";
+import {
+  captureSessionListBaseline,
+  resetSessionListAuditBaselineForTests,
+  setSessionListAuditForTests,
+  startSessionListSweep,
+} from "./sessionsTopic.ts";
+import { takeStateTopicInvariantsForTests } from "./stateTopicKernel.ts";
 
 let serial = 0;
 
@@ -74,9 +84,9 @@ function seed(label: string): string {
  * V1 oracle: every row as a client may see it — the archived ones included,
  * `file` stripped, hidden rows removed — at the current `deadlineWatermark()`.
  */
-async function fullPublicProjection(): Promise<Map<string, string>> {
+function fullPublicProjection(): Map<string, string> {
   const hidden = sessionListHiddenProbe();
-  const rows = await hub.listSessions({ includeArchived: true });
+  const rows = hub.listSessions({ includeArchived: true });
   return new Map(
     rows
       .filter((row) => !hidden(row))
@@ -91,13 +101,16 @@ async function fullPublicProjection(): Promise<Map<string, string>> {
 
 /**
  * Runs `write` with a recording sink and answers which rows the full build
- * says changed, and which the write touched BEFORE it returned.
+ * says changed, which the write touched BEFORE it returned, and which ids'
+ * `session_list_revisions` row moved (V1: a touch also stamps).
  */
 async function reported(write: () => unknown): Promise<{
   changed: Set<string>;
   touched: Set<string>;
+  stamped: Set<string>;
 }> {
-  const before = await fullPublicProjection();
+  const before = fullPublicProjection();
+  const revisionsBefore = allRevisions();
   const touches = recordSessionRowTouches();
   let touched: Set<string>;
   try {
@@ -108,11 +121,22 @@ async function reported(write: () => unknown): Promise<{
   } finally {
     touches.stop();
   }
-  const after = await fullPublicProjection();
+  const after = fullPublicProjection();
   const changed = new Set<string>();
   for (const id of new Set([...before.keys(), ...after.keys()]))
     if (before.get(id) !== after.get(id)) changed.add(id);
-  return { changed, touched };
+  const stamped = new Set<string>();
+  for (const [id, revision] of allRevisions())
+    if (revision !== revisionsBefore.get(id)) stamped.add(id);
+  return { changed, touched, stamped };
+}
+
+/** Every stamped `{id → revision}`. */
+function allRevisions(): Map<string, number> {
+  const rows = getDb()
+    .prepare("SELECT session_id, revision FROM session_list_revisions")
+    .all() as { session_id: string; revision: number }[];
+  return new Map(rows.map((row) => [row.session_id, row.revision]));
 }
 
 /** The write changed at least `expected` and touched every row it changed. */
@@ -121,12 +145,15 @@ async function assertReported(
   write: () => unknown,
   expected: readonly string[],
 ): Promise<Set<string>> {
-  const { changed, touched } = await reported(write);
+  const { changed, touched, stamped } = await reported(write);
   for (const id of expected)
     assert.ok(changed.has(id), `${label}: the fixture changes ${id}'s row`);
-  for (const id of changed)
+  for (const id of changed) {
     assert.ok(touched.has(id), `${label}: ${id} changed but was not touched`);
+    assert.ok(stamped.has(id), `${label}: ${id} was touched but not stamped`);
+  }
   return touched;
+
 }
 
 /* ----------------------------- V2: classification ----------------------------- */
@@ -946,14 +973,12 @@ describe("the deadline timer's scheduled set", () => {
 /* ------------------------------- V3: the audit ------------------------------- */
 
 describe("the test-mode audit", () => {
-  test("a write with no touch fails the next flush, before a full list could hide it", async () => {
-    const viewer = { send: (_message: ServerMessage) => undefined };
-    hub.register(viewer);
+  test("a write with no touch fails the next flush and is recorded", async () => {
+    const client = sessionListClient();
     try {
       const [quiet, loud] = [seed("audit-quiet"), seed("audit-loud")];
       await hub.flushPendingBroadcastsForTests();
-      // Behind the store's back: archives the row, which moves membership,
-      // so the flush would otherwise fall back to a full list.
+      // Behind the store's back: archives the row, which no stamp covers.
       getDb()
         .prepare("UPDATE session_index SET archived_at_ms = ? WHERE id = ?")
         .run(Date.now(), quiet);
@@ -964,9 +989,10 @@ describe("the test-mode audit", () => {
           `unreported session row change: ${quiet} [a-z,A-Z]*archived`,
         ),
       );
+      assert.equal(takeStateTopicInvariantsForTests().length, 1);
     } finally {
-      hub.unregister(viewer);
-      hub.resetSessionListBaselineForTests();
+      client.close();
+      resetSessionListAuditBaselineForTests();
     }
   });
 });
@@ -975,34 +1001,28 @@ describe("the test-mode audit", () => {
 
 describe("the production sweep", () => {
   test("logs an unreported change once, with its fields, and the viewer gets the row", async () => {
-    const sent: ServerMessage[] = [];
-    const viewer = { send: (message: ServerMessage) => sent.push(message) };
-    hub.register(viewer);
+    const client = sessionListClient();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    hub.setSessionListAuditForTests(false);
+    setSessionListAuditForTests(false);
     let stop: (() => void) | undefined;
     try {
       const id = seed("sweep");
       await hub.flushPendingBroadcastsForTests();
+      captureSessionListBaseline();
       getDb()
         .prepare("UPDATE session_index SET title = ? WHERE id = ?")
         .run("Renamed behind its back", id);
-      sent.length = 0;
+      client.clear();
       vi.useFakeTimers();
-      stop = hub.startSessionListSweep();
+      stop = startSessionListSweep();
       await vi.advanceTimersByTimeAsync(60_000 + 100);
       const logged = warn.mock.calls.filter((call) =>
         String(call[0]).includes(`unreported row change: ${id}`),
       );
       assert.equal(logged.length, 1);
       assert.match(String(logged[0]![0]), /title/);
-      const row = sent.find(
-        (
-          message,
-        ): message is Extract<ServerMessage, { type: "sessionUpdated" }> =>
-          message.type === "sessionUpdated" && message.session.id === id,
-      );
-      assert.equal(row?.session.title, "Renamed behind its back");
+      assert.ok(client.upserted().includes(id));
+      assert.equal(client.row(id)?.title, "Renamed behind its back");
       await vi.advanceTimersByTimeAsync(60_000 + 100);
       assert.equal(
         warn.mock.calls.filter((call) =>
@@ -1014,15 +1034,15 @@ describe("the production sweep", () => {
     } finally {
       stop?.();
       vi.useRealTimers();
-      hub.setSessionListAuditForTests(true);
-      hub.unregister(viewer);
+      setSessionListAuditForTests(true);
+      resetSessionListAuditBaselineForTests();
+      client.close();
     }
   });
 
   test("advances a crossed deadline the stopped timer missed", async () => {
-    const sent: ServerMessage[] = [];
-    const viewer = { send: (message: ServerMessage) => sent.push(message) };
-    hub.register(viewer);
+    const client = sessionListClient();
+    setSessionListAuditForTests(false);
     let stop: (() => void) | undefined;
     try {
       const [a, b] = [seed("sweep-a"), seed("sweep-b")];
@@ -1040,80 +1060,73 @@ describe("the production sweep", () => {
       owed(a, b, Date.now() + 1_000);
       await vi.advanceTimersByTimeAsync(100);
       await hub.flushPendingBroadcastsForTests();
-      const owedBefore = (await fullPublicProjection()).get(a);
+      captureSessionListBaseline();
+      const owedBefore = fullPublicProjection().get(a);
       assert.match(owedBefore!, /awaitingRepliesFrom/);
-      sent.length = 0;
-      stop = hub.startSessionListSweep();
+      client.clear();
+      stop = startSessionListSweep();
       await vi.advanceTimersByTimeAsync(60_000 + 100);
-      const row = sent.find(
-        (
-          message,
-        ): message is Extract<ServerMessage, { type: "sessionUpdated" }> =>
-          message.type === "sessionUpdated" && message.session.id === a,
-      );
-      assert.ok(row, "the requester's row went out");
+      assert.ok(client.upserted().includes(a), "the requester's row went out");
       assert.equal(
-        (row.session as SessionListItem).awaitingRepliesFrom,
+        client.row(a)?.awaitingRepliesFrom,
         undefined,
         "owing nothing once its deadline passed",
       );
     } finally {
       stop?.();
       vi.useRealTimers();
+      setSessionListAuditForTests(true);
+      resetSessionListAuditBaselineForTests();
       peerDeadlineClock.resetPeerDeadlineClockForTests(Date.now());
       peerDeadlineClock.startPeerDeadlineClock();
-      hub.unregister(viewer);
+      client.close();
     }
   });
 });
 
-/* ------------------------------ V5: wire parity ------------------------------ */
+/* ------------------------------ V5: wire shape ------------------------------ */
 
-describe("wire parity", () => {
-  function listener() {
-    const messages: ServerMessage[] = [];
-    const viewer = { send: (message: ServerMessage) => messages.push(message) };
-    hub.register(viewer);
-    return { messages, stop: () => hub.unregister(viewer) };
-  }
-
-  test("more changed rows than a delta carries send the whole list", async () => {
+describe("wire shape", () => {
+  test("a bulk change publishes one batch of row upserts, never a list", async () => {
     const ids = Array.from({ length: 7 }, (_, i) => seed(`bulk-${i}`));
     await hub.flushPendingBroadcastsForTests();
-    const { messages, stop } = listener();
+    const client = sessionListClient();
     try {
+      client.clear();
       for (const id of ids) sessionStore.markRead(id, Date.now() + 5_000);
       await hub.flushPendingBroadcastsForTests();
+      assert.equal(client.events().length, 1);
+      assert.deepEqual(new Set(client.upserted()), new Set(ids));
       assert.equal(
-        messages.filter((message) => message.type === "sessions").length,
-        1,
-      );
-      assert.equal(
-        messages.filter((message) => message.type === "sessionUpdated").length,
+        client.sent.filter((message) => message.type === "sessionList").length,
         0,
       );
     } finally {
-      stop();
+      client.close();
     }
   });
 
-  test("a touched row equal to what was published sends nothing", async () => {
+  test("a touched row equal to what was published goes out at a new revision", async () => {
     const id = seed("equal");
-    await hub.flushPendingBroadcastsForTests();
-    const { messages, stop } = listener();
+    const client = sessionListClient();
     try {
+      await hub.flushPendingBroadcastsForTests();
+      const before = client.row(id);
+      client.clear();
       sessionStore.setPeerTurnCap(id, null);
       await hub.flushPendingBroadcastsForTests();
-      assert.deepEqual(messages, []);
+      const [event] = client.events().flatMap((batch) => batch.events);
+      assert.equal(event?.id, id);
+      assert.deepEqual(client.row(id), before);
     } finally {
-      stop();
+      client.close();
     }
   });
 
   test("a flush with one touched row builds only that row", async () => {
     const id = seed("cost");
     await hub.flushPendingBroadcastsForTests();
-    hub.setSessionListAuditForTests(false);
+    setSessionListAuditForTests(false);
     sessionStore.markRead(id, Date.now() + 9_000);
     const reads = vi.spyOn(sessionStore, "list");
     try {
@@ -1122,7 +1135,8 @@ describe("wire parity", () => {
       for (const [opts] of reads.mock.calls)
         assert.deepEqual(opts?.ids, [id], "every store read is the one row");
     } finally {
-      hub.setSessionListAuditForTests(true);
+      setSessionListAuditForTests(true);
+      resetSessionListAuditBaselineForTests();
     }
   });
 });
@@ -1143,4 +1157,57 @@ test("an inbox placement reports the sessions it places", async () => {
       }),
     [p1, p2],
   );
+});
+
+/* ------------------------------- V1: the stamp ------------------------------- */
+
+describe("a touch stamps through the change set", () => {
+  /** Records every committed hand-off, forwarding to the hub's sink. */
+  function handOffs() {
+    const seen: [string, string[]][] = [];
+    const previous = setStateChangeSink((topic, ids) => {
+      seen.push([topic, [...ids]]);
+      previous?.(topic, ids);
+    });
+    return {
+      sessions: () =>
+        seen.filter(([topic]) => topic === "sessions").map(([, ids]) => ids),
+      stop: () => setStateChangeSink(previous),
+    };
+  }
+  const revisionOf = (id: string) => sessionListRevisions([id]).get(id) ?? 0;
+
+  test("a rolled-back change set stamps nothing and reports nothing", () => {
+    const id = seed("rollback");
+    const before = revisionOf(id);
+    const sink = handOffs();
+    try {
+      assert.throws(() =>
+        withChangeSet(() => {
+          sessionStore.markRead(id, Date.now() + 7_000);
+          throw new Error("roll back");
+        }),
+      );
+    } finally {
+      sink.stop();
+    }
+    assert.equal(revisionOf(id), before);
+    assert.deepEqual(sink.sessions(), []);
+  });
+
+  test("inside a plain transaction the stamp is visible and the report immediate", () => {
+    const id = seed("plain-txn");
+    const before = revisionOf(id);
+    const sink = handOffs();
+    try {
+      withDbTransaction(() => {
+        sessionStore.markRead(id, Date.now() + 7_000);
+        assert.ok(revisionOf(id) > before, "stamped in the transaction");
+        assert.deepEqual(sink.sessions(), [[id]], "reported before commit");
+      });
+    } finally {
+      sink.stop();
+    }
+    assert.ok(revisionOf(id) > before);
+  });
 });

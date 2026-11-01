@@ -91,7 +91,15 @@ const context = {
   draft: false,
 };
 
+/**
+ * A card write touches its session's list row: the change set's revision bump
+ * and stamp are primary-key writes (`db/changeSet.ts`).
+ */
+const STAMP =
+  /^\s*(INSERT INTO sequences \(entity_type, next_id\)|SELECT next_id FROM sequences WHERE entity_type = \?$|INSERT INTO session_list_revisions \(session_id, revision\)\s+VALUES \(\?, \?\)\s+ON CONFLICT)/;
+
 const TARGETED = new Set<string>([
+
   ...Object.values(PULL_REQUEST_CARD_SQL),
   ...Object.values(APPROVAL_SQL),
   // Showing a session lists the grants it inherits: one indexed spawn-edge
@@ -160,9 +168,10 @@ test("a watcher poll, a card update, a session show and a list build issue only 
     cards.choosingTaskSessionIds();
     approvals.pendingApprovalSessionIds();
   });
-  const stray = seen.filter((sql) => !TARGETED.has(sql));
+  const stray = seen.filter((sql) => !TARGETED.has(sql) && !STAMP.test(sql));
   assert.deepEqual(stray, [], "every statement is a targeted one");
   assert.ok(seen.length > 0);
+
 });
 
 const CARD_TABLES = /\b(pull_request_cards|approvals|approval_grants)\b/;

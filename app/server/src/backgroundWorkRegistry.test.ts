@@ -368,9 +368,9 @@ test("a Background commit touches its owner's session row at commit", async () =
 
   const touched: string[][] = [];
   const previous = setSessionListSink({
-    touch: (ids, force) => {
+    touch: (ids) => {
       touched.push([...ids]);
-      previous?.touch(ids, force);
+      previous?.touch(ids);
     },
     touchAll: (reason) => previous?.touchAll(reason),
   });

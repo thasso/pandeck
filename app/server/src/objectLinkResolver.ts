@@ -34,7 +34,7 @@ export async function resolvePaObjectLinks(
   const sessions = unique.some(
     (uri) => parsePaObjectLink(uri)?.objectType === "session",
   )
-    ? await hub.listSessions({ includeArchived: true })
+    ? hub.listSessions({ includeArchived: true })
     : [];
   // Off, the Knowledge Base answers nothing: its links read as unknown.
   const knowledge =
@@ -47,7 +47,7 @@ export async function resolvePaObjectLinks(
 
 async function resolveOne(
   uri: string,
-  sessions: Awaited<ReturnType<typeof hub.listSessions>>,
+  sessions: ReturnType<typeof hub.listSessions>,
   knowledge: KbFileInfo[] | null,
 ): Promise<PaObjectLinkResolution> {
   const parsed = parsePaObjectLink(uri);

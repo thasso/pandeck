@@ -500,7 +500,91 @@ test("Task mutations carry no full-collection payload", () => {
 });
 
 /**
+ * Sessions is a migrated domain too (`docs/session-list.md`): a row change
+ * travels only as `sessions` state events. Exactly two server messages carry
+ * a top-level `sessions` array — the subscribe answer and the archived read's
+ * reply — and each is built in one place. `pnpm run typecheck` holds every
+ * other send to the protocol, so the protocol is what this guards.
+ */
+test("session rows travel as events; only the snapshot and the archived reply carry a list", () => {
+  const protocol = readFileSync(
+    join(SRC_ROOT, "..", "..", "shared", "protocol.ts"),
+    "utf8",
+  );
+  const start = protocol.indexOf("export type ServerMessage =");
+  const union = protocol.slice(start, protocol.indexOf("\nexport ", start + 1));
+  const members = union.split(/(?=\btype: ")/).slice(1);
+  assert.deepEqual(
+    members
+      .filter((member) => /^\s*sessions\??:/m.test(member))
+      .map((member) => /^type: "([^"]+)"/.exec(member)?.[1])
+      .sort(),
+    ["archivedSessions", "sessionList"],
+    "a new message with a `sessions` list would ride rows outside the topic",
+  );
+  const builders = sourceFiles(SRC_ROOT).flatMap((path) =>
+    [
+      ...readFileSync(path, "utf8").matchAll(
+        /\btype:\s*"(sessionList|archivedSessions)",/g,
+      ),
+    ].map((match) => `${relative(SRC_ROOT, path)}:${match[1]}`),
+  );
+  assert.deepEqual(builders.sort(), [
+    "connection.ts:archivedSessions",
+    "sessionsTopic.ts:sessionList",
+  ]);
+});
+
+/** Every non-test `.ts`/`.tsx` under `dir`, test helper folders excluded. */
+function productionSources(dir: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(dir)) {
+    if (["node_modules", "dist", "test"].includes(name)) continue;
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) out.push(...productionSources(path));
+    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name))
+      out.push(path);
+  }
+  return out;
+}
+
+test("the retired session-list messages are gone from shared, server and web", () => {
+  const app = join(SRC_ROOT, "..", "..");
+  const offenders = ["shared", "server/src", "web/src"].flatMap((root) =>
+    productionSources(join(app, root))
+      .filter((path) =>
+        /\bsessionUpdated\b|["']listSessions["']/.test(
+          readFileSync(path, "utf8"),
+        ),
+      )
+      .map((path) => relative(app, path)),
+  );
+  assert.deepEqual(offenders, []);
+});
+
+/**
+ * The invariant is the audit's alone (`docs/state-sync.md`, "Failure
+ * boundary"): an ordinary failure constructing one would escape every command
+ * boundary, and `instanceof` misses one from a re-imported module, so code
+ * recognises it by brand (`isStateTopicInvariant`).
+ */
+test("only the test-mode audit raises the state-topic invariant", () => {
+  const constructs: string[] = [];
+  const instanceChecks: string[] = [];
+  for (const path of sourceFiles(SRC_ROOT)) {
+    const source = readFileSync(path, "utf8");
+    const name = relative(SRC_ROOT, path);
+    if (/\bnew StateTopicInvariantError\b/.test(source)) constructs.push(name);
+    if (/instanceof\s+StateTopicInvariantError\b/.test(source))
+      instanceChecks.push(name);
+  }
+  assert.deepEqual(constructs, ["sessionsTopic.ts"]);
+  assert.deepEqual(instanceChecks, []);
+});
+
+/**
  * Settings writes go through `settingsService.saveSettings`
+
  * ([Task-729](pa://task/729)), which runs each section's side effects and
  * pushes the result to every client. A direct call to a section writer skips
  * both: the change lands on disk while open Settings pages and live sessions

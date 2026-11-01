@@ -25,7 +25,7 @@ import {
   type MemberActivity,
 } from "./initiativeActivity.ts";
 
-type SessionReader = (ids: string[]) => Promise<SessionListItem[]>;
+type SessionReader = (ids: string[]) => SessionListItem[];
 let testReader: SessionReader | undefined;
 /** Keep adapter tests on real stores while supplying live runtime overlays. */
 export function setInitiativeActivitySessionReaderForTests(

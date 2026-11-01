@@ -21,7 +21,12 @@ import {
   resolveMainWorktreeRow,
 } from "./worktrees/worktreeResolve.ts";
 import { sessionWorktreeMissing } from "./worktrees/sessionCwd.ts";
-import { Connection } from "./connection.ts";
+import {
+  resetSessionListAuditBaselineForTests,
+  sweepSessionRows,
+} from "./sessionsTopic.ts";
+import { takeStateTopicInvariantsForTests } from "./stateTopicKernel.ts";
+import { sessionListClient } from "./test/sessionListClient.ts";
 import {
   createApproval,
   resolveApproval,
@@ -70,7 +75,7 @@ function accept(r: ReturnType<typeof send>, now = Date.now()) {
 afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  hub.resetSessionListBaselineForTests();
+  resetSessionListAuditBaselineForTests();
   await hub.flushPendingBroadcastsForTests();
 });
 
@@ -85,17 +90,15 @@ test("pruning a delivered handoff reports the NULL-deadline requester whose owed
   accept(forward, t + 100);
   const reply = send(c, a, false, t + 9000, forward.chainId);
   accept(reply, t + 9000);
-  const row = async () =>
-    (await hub.listSessions({ includeArchived: true })).find(
-      (x) => x.id === a,
-    )!;
-  assert.equal((await row()).awaitingRepliesFrom, undefined);
+  const row = () =>
+    hub.listSessions({ includeArchived: true }).find((x) => x.id === a)!;
+  assert.equal(row().awaitingRepliesFrom, undefined);
   await hub.flushPendingBroadcastsForTests();
   const recorder = recordSessionRowTouches();
   try {
     peer.pruneTerminal(t + 1000);
     const touched = recorder.ids();
-    assert.deepEqual((await row()).awaitingRepliesFrom, [b]);
+    assert.deepEqual(row().awaitingRepliesFrom, [b]);
     assert.ok(touched.has(a), "requester changed but was not touched");
     assert.ok(touched.has(b) && touched.has(c));
   } finally {
@@ -126,56 +129,24 @@ test("terminal prune dependency reads seek the recipient and lost-reply indexes"
   );
 });
 
-test("binding and clearing a published legacy singleton updates PUBLIC membership in both variants", async () => {
+test("binding and clearing a published legacy singleton updates PUBLIC membership", async () => {
   const id = seed();
   const previous = pa.sessionId();
-  const messages: ServerMessage[][] = [[], []];
-  const viewers = messages.map((sent, index) => {
-    const socket = {
-      OPEN: 1,
-      readyState: 1,
-      send: (raw: string) => sent.push(JSON.parse(raw)),
-    } as unknown as ConstructorParameters<typeof Connection>[0];
-    const connection = new Connection(socket);
-    if (index === 1) connection.wantsArchivedSessions = () => true;
-    hub.register(connection);
-    return connection;
-  });
+  const client = sessionListClient();
   try {
     await hub.flushPendingBroadcastsForTests();
-    for (const sent of messages) {
-      assert.ok(
-        sent.some(
-          (m) => m.type === "sessions" && m.sessions.some((s) => s.id === id),
-        ),
-      );
-      sent.length = 0;
-    }
+    assert.ok(client.row(id));
     pa.setSessionId(id);
     await hub.flushPendingBroadcastsForTests();
-    for (const sent of messages) {
-      assert.ok(
-        sent.some(
-          (m) => m.type === "sessions" && !m.sessions.some((s) => s.id === id),
-        ),
-      );
-      assert.ok(
-        !sent.some((m) => m.type === "sessionUpdated" && m.session.id === id),
-      );
-      sent.length = 0;
-    }
+    assert.equal(client.row(id), undefined);
+    assert.ok(client.deleted().includes(id));
     pa.clearSessionId();
     await hub.flushPendingBroadcastsForTests();
-    for (const sent of messages)
-      assert.ok(
-        sent.some(
-          (m) => m.type === "sessions" && m.sessions.some((s) => s.id === id),
-        ),
-      );
+    assert.ok(client.row(id));
   } finally {
     if (previous) pa.setSessionId(previous);
     else pa.clearSessionId();
-    for (const viewer of viewers) hub.unregister(viewer);
+    client.close();
   }
 });
 
@@ -266,9 +237,7 @@ for (const mode of ["late read", "timer"] as const)
 test("public membership, not unchanged internal JSON, drives the audit and sweep", async () => {
   const [id, loud] = [seed(), seed()];
   const previous = pa.sessionId();
-  const messages: ServerMessage[] = [];
-  const viewer = { send: (m: ServerMessage) => messages.push(m) };
-  hub.register(viewer);
+  const client = sessionListClient();
   const bindSilently = () =>
     getDb()
       .prepare(
@@ -284,101 +253,82 @@ test("public membership, not unchanged internal JSON, drives the audit and sweep
       hub.flushPendingBroadcastsForTests(),
       new RegExp(`unreported session row change: ${id} .*removed`),
     );
+    assert.equal(takeStateTopicInvariantsForTests().length, 1);
     // Restore and establish the same visible baseline, then exercise repair.
     if (previous) pa.setSessionId(previous);
     else pa.clearSessionId();
-    hub.resetSessionListBaselineForTests();
+    resetSessionListAuditBaselineForTests();
     await hub.flushPendingBroadcastsForTests();
-    messages.length = 0;
+    client.clear();
     bindSilently();
-    await hub.sweepSessionRows();
+    sweepSessionRows();
     await hub.flushPendingBroadcastsForTests();
     assert.ok(
       warn.mock.calls.some((call) =>
         String(call[0]).includes(`unreported row change: ${id}`),
       ),
     );
-    assert.ok(
-      messages.some(
-        (m) => m.type === "sessions" && !m.sessions.some((s) => s.id === id),
-      ),
-    );
+    assert.ok(client.deleted().includes(id));
+    assert.equal(client.row(id), undefined);
   } finally {
     if (previous) pa.setSessionId(previous);
     else pa.clearSessionId();
-    hub.unregister(viewer);
-    hub.resetSessionListBaselineForTests();
+    client.close();
+    resetSessionListAuditBaselineForTests();
   }
 });
 
-test("file-only internal changes are absent from delta decisions, audit and sweep", async () => {
+test("file-only internal changes are absent from published items, audit and sweep", async () => {
   const id = seed();
-  const messages: ServerMessage[] = [];
-  const viewer = { send: (m: ServerMessage) => messages.push(m) };
-  hub.register(viewer);
+  const client = sessionListClient();
   try {
     await hub.flushPendingBroadcastsForTests();
-    messages.length = 0;
+    client.clear();
     const original = mergedList.mergedSessionList;
-    vi.spyOn(mergedList, "mergedSessionList").mockImplementation(async (opts) =>
-      (await original(opts)).map((row) =>
+    vi.spyOn(mergedList, "mergedSessionList").mockImplementation((opts) =>
+      original(opts).map((row) =>
         row.id === id ? { ...row, file: "different-internal-file" } : row,
       ),
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await hub.sweepSessionRows();
+    sweepSessionRows();
+    await hub.flushPendingBroadcastsForTests();
+    assert.deepEqual(client.events(), [], "the sweep repaired nothing");
     touchSessionRows([id]);
     await hub.flushPendingBroadcastsForTests();
-    assert.deepEqual(messages, []);
+    assert.deepEqual(client.upserted(), [id]);
+    assert.ok(!("file" in client.row(id)!));
     assert.ok(
       !warn.mock.calls.some((call) =>
         String(call[0]).includes("unreported row change"),
       ),
     );
   } finally {
-    hub.unregister(viewer);
+    client.close();
   }
 });
 
-test("an archived-count change with unchanged public row sets sends full lists to both variants", async () => {
+test("archiving a hidden row signals the archived count with no visible row change", async () => {
   const id = seed();
   const previous = pa.sessionId();
   pa.setSessionId(id);
-  const messages: ServerMessage[][] = [[], []];
-  const viewers = messages.map((sent, index) => ({
-    send: (m: ServerMessage) => sent.push(m),
-    wantsArchivedSessions: () => index === 1,
-  }));
-  for (const viewer of viewers) hub.register(viewer);
+  const client = sessionListClient();
   try {
-    hub.resetSessionListBaselineForTests();
     await hub.flushPendingBroadcastsForTests();
-    const baseline = messages.map((sent) =>
-      sent.find((m) => m.type === "sessions")!,
-    );
-    for (const sent of messages) sent.length = 0;
+    const before = client.archivedCount()!;
+    const visible = [...client.rows().keys()];
+    client.clear();
     sessionStore.setArchived(id, true);
     await hub.flushPendingBroadcastsForTests();
-    for (const [index, sent] of messages.entries()) {
-      const lists = sent.filter((m) => m.type === "sessions");
-      assert.equal(lists.length, 1);
-      const before = baseline[index]!;
-      assert.equal(before.type, "sessions");
-      if (before.type !== "sessions") throw new Error("missing baseline");
-      assert.deepEqual(
-        lists[0]!.sessions.map((s) => s.id),
-        before.sessions.map((s) => s.id),
-      );
-      assert.equal(
-        lists[0]!.archivedSessionCount,
-        before.archivedSessionCount! + 1,
-      );
-      assert.equal(lists[0]!.archivedSessionsLoaded, index === 1);
-    }
+    assert.deepEqual(
+      client.sent.filter((m) => m.type === "archivedSessionCount"),
+      [{ type: "archivedSessionCount", count: before + 1 }],
+    );
+    assert.deepEqual([...client.rows().keys()], visible);
   } finally {
     if (previous) pa.setSessionId(previous);
     else pa.clearSessionId();
-    for (const viewer of viewers) hub.unregister(viewer);
+    client.close();
   }
 });
 

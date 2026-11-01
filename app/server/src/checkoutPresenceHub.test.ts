@@ -2,7 +2,7 @@
  * A presence answer that changes reaches every reader of it with no further
  * read (W3d AC3): the session list on a real connection, a viewer showing a
  * session DETACHED, and a resident engine's state. Quiescence is the presence
- * pump drained and the hub's own pending broadcast awaited, bounded: no sleep.
+ * pump drained and the `sessions` topic flushed, bounded: no sleep.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import type { ServerMessage } from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "presence-hub-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -29,6 +30,7 @@ writeFileSync(
 
 const { hub } = await import("./hub.ts");
 const { Connection } = await import("./connection.ts");
+const { sessionRowIn } = await import("./test/sessionListClient.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { harnessRegistry } = await import("./harnesses/registry.ts");
@@ -122,8 +124,6 @@ function session(worktreeId: string, harness: "pi" | "claude-sdk" = "pi") {
 
 type Message = {
   type: string;
-  sessions?: Array<{ id: string; worktreeMissing?: boolean }>;
-  session?: { id: string; worktreeMissing?: boolean };
   state?: { worktreeMissing?: boolean };
 };
 
@@ -144,25 +144,15 @@ async function connect() {
     dispose?: () => void;
   };
   await conn.init();
+  await conn.dispatch({ type: "subscribe", topics: ["sessions"] });
   open.push(conn);
   return { conn, sent };
 }
 
 /** The flag the latest list traffic shows for `sessionId`. */
 function listed(sent: Message[], sessionId: string): boolean | undefined {
-  for (let i = sent.length - 1; i >= 0; i--) {
-    const message = sent[i]!;
-    const row =
-      message.type === "sessionUpdated"
-        ? message.session?.id === sessionId
-          ? message.session
-          : undefined
-        : message.type === "sessions"
-          ? message.sessions?.find((s) => s.id === sessionId)
-          : undefined;
-    if (row) return !!row.worktreeMissing;
-  }
-  return undefined;
+  const row = sessionRowIn(sent as unknown as ServerMessage[], sessionId);
+  return row ? !!row.worktreeMissing : undefined;
 }
 
 /** The flag in the latest state a viewer was sent (snapshot or state frame). */
@@ -175,20 +165,19 @@ function shown(sent: Message[]): boolean | undefined {
   return state ? !!state.state?.worktreeMissing : undefined;
 }
 
-const pending = hub as unknown as {
-  sessionsBroadcastPromise: Promise<void> | undefined;
-};
-
 /**
- * Drains probes and the broadcasts they cause until neither is pending;
+ * Drains probes and the publications they cause until neither is pending;
  * answers the rounds it took. Unbounded traffic fails it.
  */
 async function quiescent(): Promise<number> {
   for (let round = 1; round <= 10; round++) {
     await flushPresenceForTests();
-    const broadcast = pending.sessionsBroadcastPromise;
-    if (!broadcast) return round;
-    await broadcast;
+    const probes = presenceCountsForTests().probesIssued;
+    // A row build may refresh a stale entry, which probes again.
+    hub.publishSessionRowsNow();
+    await flushPresenceForTests();
+    hub.publishSessionRowsNow();
+    if (presenceCountsForTests().probesIssued === probes) return round;
   }
   return assert.fail("presence and list traffic did not settle");
 }
@@ -243,7 +232,7 @@ describe("a changed presence answer reaches its readers unasked (AC3)", () => {
     await quiescent();
     rmSync(row.path, { recursive: true });
     // The ONE read: answered from the stale cache, it refreshes the entry.
-    await list.conn.dispatch({ type: "listSessions" });
+    hub.listSessions();
     assert.equal(listed(list.sent, listedId), false, "stale until the probe");
 
     await quiescent();
@@ -256,7 +245,7 @@ describe("a changed presence answer reaches its readers unasked (AC3)", () => {
     await quiescent();
     mkdirSync(row.path);
     residentState.mockClear();
-    await list.conn.dispatch({ type: "listSessions" });
+    hub.listSessions();
     await quiescent();
     assert.equal(listed(list.sent, listedId), false);
     assert.equal(shown(viewer.sent), false);
@@ -284,7 +273,7 @@ describe("a changed presence answer reaches its readers unasked (AC3)", () => {
     // No probe may be in flight across the change: a read coalesces onto one.
     await quiescent();
     rmSync(repo, { recursive: true });
-    await list.conn.dispatch({ type: "listSessions" });
+    hub.listSessions();
     await quiescent();
     assert.equal(listed(list.sent, listedId), true);
     assert.equal(shown(viewer.sent), true);
@@ -347,7 +336,7 @@ describe("a changed presence answer reaches its readers unasked (AC3)", () => {
     const list = await connect();
     const viewer = await connect();
     await viewer.conn.dispatch({ type: "loadSession", id: viewedId });
-    await list.conn.dispatch({ type: "listSessions" });
+    hub.listSessions();
     assert.equal(listed(list.sent, listedId), false, "unknown is not missing");
     assert.equal(shown(viewer.sent), false);
 

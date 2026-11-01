@@ -13,6 +13,10 @@ import type {
 } from "@assistant/shared";
 import { Connection } from "./connection.ts";
 import { hub } from "./hub.ts";
+import {
+  sessionRowIn,
+  sessionTopicViewer,
+} from "./test/sessionListClient.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
 import { setAgentHandoffDeliveryStoppedForTests } from "./agentHandoffs.ts";
@@ -36,15 +40,7 @@ function rowFor(
   messages: ServerMessage[],
   id: string,
 ): SessionListItem | undefined {
-  for (const message of [...messages].reverse()) {
-    if (message.type === "sessionUpdated" && message.session.id === id)
-      return message.session;
-    if (message.type === "sessions") {
-      const row = message.sessions.find((session) => session.id === id);
-      if (row) return row;
-    }
-  }
-  return undefined;
+  return sessionRowIn(messages, id) ?? undefined;
 }
 
 test("taking over and handing back move ownership and reach every tab", async () => {
@@ -65,7 +61,7 @@ test("taking over and handing back move ownership and reach every tab", async ()
   const clicked: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(clicked));
   const otherTab: ServerMessage[] = [];
-  const viewer = { send: (message: ServerMessage) => otherTab.push(message) };
+  const viewer = sessionTopicViewer(otherTab);
   hub.register(viewer);
   const send = (id: string, ownership: "taken-over" | "coordinator") =>
     connection.handle({

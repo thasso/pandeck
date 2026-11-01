@@ -116,7 +116,7 @@ export async function sweepSettledSessionArchive(
     // Imported here, not at module scope: `hub.ts` owns the session list this
     // module reads and is itself wired from `index.ts` beside this scheduler.
     const { hub } = await import("./hub.ts");
-    const rows = await hub.listSessions();
+    const rows = hub.listSessions();
     const candidates = selectSettledArchiveCandidates(rows, {
       now,
       viewed: hub.viewedSessionIds(),
@@ -133,7 +133,7 @@ export async function sweepSettledSessionArchive(
     console.info(
       `[sessions] archived ${archived.length} settled session${archived.length === 1 ? "" : "s"} older than ${SESSION_AUTO_ARCHIVE_AFTER_MS / 86_400_000} days`,
     );
-    await hub.sessionRowsSent();
+    hub.publishSessionRowsNow();
     return archived;
   } finally {
     sweepRunning = false;

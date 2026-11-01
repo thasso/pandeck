@@ -139,7 +139,7 @@ test("a session whose latest outcome is unacknowledged is not settled, however o
   sessionStore.recordSessionOutcome(acknowledged, "failed");
   sessionStore.setSettled(acknowledged, true, OLD, 1);
 
-  const rows = await hub.listSessions();
+  const rows = hub.listSessions();
   assert.equal(rows.find((r) => r.id === woken)?.settledAt, undefined);
   assert.equal(rows.find((r) => r.id === acknowledged)?.settledAt, OLD);
 
@@ -220,13 +220,13 @@ test("the sweep archives old settled sessions in one batch with one row report, 
     // view, counted, and restorable.
     const first = eligible[0]!;
     assert.ok(sessionStore.get(first), "a direct link still resolves the id");
-    const defaults = await hub.listSessions();
+    const defaults = hub.listSessions();
     assert.ok(!defaults.some((r) => r.id === first));
-    const archive = await hub.listSessions({ includeArchived: true });
+    const archive = hub.listSessions({ includeArchived: true });
     assert.equal(archive.find((r) => r.id === first)?.archived, true);
     assert.ok((await hub.archivedSessionCount()) >= eligible.length);
     sessionStore.setArchived(first, false);
-    assert.ok((await hub.listSessions()).some((r) => r.id === first));
+    assert.ok(hub.listSessions().some((r) => r.id === first));
     // A bare store restore keeps the old settlement, so the next sweep takes
     // it again; the user's Restore action unsettles as well (below).
     hub.unregister(viewer);
@@ -302,7 +302,7 @@ test("the user's Restore brings a session back into the working set, so retentio
   assert.equal(sessionStore.get(id)?.archivedAt, undefined);
   assert.equal(sessionStore.isSettled(id), false, "restored = unsettled");
   assert.deepEqual(await sweepSettledSessionArchive(NOW), []);
-  assert.ok((await hub.listSessions()).some((r) => r.id === id));
+  assert.ok(hub.listSessions().some((r) => r.id === id));
 });
 
 test("a Connection reports the session it is showing", () => {
@@ -330,30 +330,29 @@ test("the sweep runs one at a time, and the schedule survives a failed run", asy
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const list = vi.spyOn(hub, "listSessions");
 
-  // Overlap: a second invocation while the first is still reading answers
+  // Overlap: a second invocation while the first is still starting answers
   // empty without a second read.
-  let release!: (rows: Awaited<ReturnType<typeof hub.listSessions>>) => void;
-  list.mockImplementationOnce(
-    () => new Promise((resolve) => (release = resolve)),
-  );
+  list.mockReturnValueOnce([]);
   const first = sweepSettledSessionArchive(NOW);
   assert.deepEqual(await sweepSettledSessionArchive(NOW), []);
-  await vi.waitFor(() => assert.equal(list.mock.calls.length, 1));
-  release([]);
   assert.deepEqual(await first, []);
   assert.equal(list.mock.calls.length, 1);
 
   // Boot: a failing sweep is logged, and startup is unaffected.
-  list.mockRejectedValueOnce(new Error("injected boot failure"));
+  list.mockImplementationOnce(() => {
+    throw new Error("injected boot failure");
+  });
   assert.doesNotThrow(() => startSessionAutoArchiveSweep());
   await vi.advanceTimersByTimeAsync(0);
   assert.match(String(warn.mock.calls[0]?.[0]), /boot auto-archive/);
 
   // Hourly: the next tick retries, and a failure there is logged the same way.
-  list.mockRejectedValueOnce(new Error("injected hourly failure"));
+  list.mockImplementationOnce(() => {
+    throw new Error("injected hourly failure");
+  });
   await vi.advanceTimersByTimeAsync(SESSION_AUTO_ARCHIVE_SWEEP_INTERVAL_MS);
   assert.match(String(warn.mock.calls[1]?.[0]), /hourly auto-archive/);
-  list.mockResolvedValueOnce([]);
+  list.mockReturnValueOnce([]);
   await vi.advanceTimersByTimeAsync(SESSION_AUTO_ARCHIVE_SWEEP_INTERVAL_MS);
   assert.equal(list.mock.calls.length, 4, "each hour reads again");
   assert.equal(warn.mock.calls.length, 2);
@@ -416,7 +415,7 @@ test("a child waiting for a slot is queued work, so retention does not take it",
   // A listable child: it already had a user turn before it waited.
   const child = seed("waiting", { settledAt: OLD });
   const opener = heldOpenerTo(child);
-  const listed = (await hub.listSessions()).find((r) => r.id === child);
+  const listed = hub.listSessions().find((r) => r.id === child);
   assert.equal(listed?.queuedWork, true);
   assert.ok(!(await sweepSettledSessionArchive(NOW)).includes(child));
   assert.equal(peerPromptStore.getById(opener.id)?.status, "held");
@@ -426,7 +425,7 @@ test("a waiting child the sweep does archive has its opening prompt cancelled", 
   const child = seed("archived-waiting", { settledAt: OLD });
   const opener = heldOpenerTo(child);
   // Reach the writer deliberately: the listed row is an eligible candidate.
-  vi.spyOn(hub, "listSessions").mockResolvedValue([
+  vi.spyOn(hub, "listSessions").mockReturnValue([
     { ...row(child), file: "" },
   ]);
   const archived = await sweepSettledSessionArchive(NOW);
