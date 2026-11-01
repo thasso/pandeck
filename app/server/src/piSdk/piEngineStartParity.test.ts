@@ -25,6 +25,8 @@ import { afterAll, test } from "vitest";
 import type { PromptConditions } from "../promptConditions.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-engine-start-parity-"));
+const originalHome = process.env.HOME;
+process.env.HOME = tmp;
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 mkdirSync(join(tmp, "data", "settings"), { recursive: true });
@@ -94,7 +96,11 @@ const { buildSystemPrompt } = (await import(
   )
 )) as { buildSystemPrompt(input: Record<string, unknown>): string };
 
-afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+afterAll(() => {
+  rmSync(tmp, { recursive: true, force: true });
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+});
 
 function writeSkill(name: string): void {
   const directory = join(SKILLS_LIBRARY_DIR, name);

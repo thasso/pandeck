@@ -178,7 +178,7 @@ test("subscribe, digest, items and the keyed graph read round-trip", async () =>
 test("the validator refuses an unknown state-items topic", () => {
   const verdict = validateClientMessage({
     type: "getStateItems",
-    topic: "sessions",
+    topic: "unknown",
     ids: [],
     requestId: "x",
   });

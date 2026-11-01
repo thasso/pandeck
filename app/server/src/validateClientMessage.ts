@@ -659,8 +659,13 @@ const validateTopics: Validator = (msg) => {
   if (msg.digests === undefined) return null;
   if (!Array.isArray(msg.digests)) return "digests must be an array";
   for (const topic of msg.digests) {
-    if (topic !== "tasks" && topic !== "projects" && topic !== "initiatives")
-      return "digests currently supports only tasks, projects and initiatives";
+    if (
+      topic !== "tasks" &&
+      topic !== "projects" &&
+      topic !== "initiatives" &&
+      topic !== "sessions"
+    )
+      return "digests currently supports only tasks, projects, initiatives and sessions";
     if (!msg.topics.includes(topic))
       return "digests must be a subset of topics";
   }
