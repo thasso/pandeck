@@ -23,7 +23,7 @@ export interface DiffModeToolbarProps {
 type BooleanDiffPref =
   "diffWordLevel" | "diffIgnoreWhitespace" | "diffWrap" | "diffExpandContext";
 
-const SWITCHES: Array<{ pref: BooleanDiffPref; label: string }> = [
+export const DIFF_VIEW_SWITCHES: Array<{ pref: BooleanDiffPref; label: string }> = [
   { pref: "diffWordLevel", label: "Words" },
   { pref: "diffIgnoreWhitespace", label: "Ignore whitespace" },
   { pref: "diffWrap", label: "Wrap" },
@@ -64,7 +64,7 @@ export function DiffModeToolbar({
         aria-label="Diff display options"
         className="flex flex-col gap-2.5"
       >
-        {SWITCHES.map(({ pref, label }) => (
+        {DIFF_VIEW_SWITCHES.map(({ pref, label }) => (
           <Field key={pref} orientation="horizontal">
             <FieldLabel htmlFor={`${id}-${pref}`}>{label}</FieldLabel>
             <Switch

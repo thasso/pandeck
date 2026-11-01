@@ -26,6 +26,13 @@ import {
 import {
   BookOpen,
   Check,
+  Columns2,
+  Files,
+  Rows2,
+  Space,
+  UnfoldVertical,
+  WholeWord,
+  WrapText,
   ChevronLeft,
   Download,
   Ellipsis,
@@ -89,7 +96,10 @@ import { Separator } from "../ui/separator.tsx";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
-import { DiffModeToolbar } from "../diff/DiffModeToolbar.tsx";
+import {
+  DIFF_VIEW_SWITCHES,
+  DiffModeToolbar,
+} from "../diff/DiffModeToolbar.tsx";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
 import { DiffWorkerProvider } from "../diff/DiffWorkerProvider.tsx";
 import { FileSurface } from "../diff/FileSurface.tsx";
@@ -535,8 +545,13 @@ function ChangesView({
   viewOptionsControl,
   commentsConfigFor,
   sidebarNavigation = false,
+  jumpOpen,
+  onJumpOpenChange,
 }: {
   sidebarNavigation?: boolean;
+  /** Jump to file, opened from the page header (the phone's sheet). */
+  jumpOpen: boolean;
+  onJumpOpenChange: (open: boolean) => void;
   worktree: WorktreeRecord;
   narrow: boolean;
   filePath?: string | undefined;
@@ -669,7 +684,8 @@ function ChangesView({
       .get(path)
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
-  const [jumpSheetOpen, setJumpSheetOpen] = useState(false);
+  const jumpSheetOpen = jumpOpen;
+  const setJumpSheetOpen = onJumpOpenChange;
   // A file picked in the sidebar arrives as the route's path: scroll the
   // changeset to it, retrying while its lazily mounted section appears.
   const changesLoaded = changes !== undefined;
@@ -780,7 +796,10 @@ function ChangesView({
         {fileDiffFetch.state.status === "refreshing" ? (
           <RefreshIndicator label="Refreshing this diff" />
         ) : null}
-        {narrow && reviewMode === "changeset" && changeFiles.length > 0 ? (
+        {narrow &&
+        !sidebarNavigation &&
+        reviewMode === "changeset" &&
+        changeFiles.length > 0 ? (
           phone ? (
             <IconButton
               label="Jump to file"
@@ -877,7 +896,7 @@ function ChangesView({
             {changesetContent}
           </WorktreeRailLayout>
         )}
-        {phone ? (
+        {phone || (sidebarNavigation && narrow) ? (
           <EdgeSheet
             open={jumpSheetOpen}
             title="Jump to file"
@@ -1597,13 +1616,72 @@ function SheetGroupLabel({ children }: { children: ReactNode }) {
  * (and Submit review while comments wait) beside one menu of the worktree's
  * delivery actions.
  */
+const DIFF_SWITCH_ICONS: Record<
+  (typeof DIFF_VIEW_SWITCHES)[number]["pref"],
+  ReactNode
+> = {
+  diffWordLevel: <WholeWord />,
+  diffIgnoreWhitespace: <Space />,
+  diffWrap: <WrapText />,
+  diffExpandContext: <UnfoldVertical />,
+};
+
+const DIFF_STYLES = [
+  { value: "unified", label: "Unified", icon: <Rows2 /> },
+  { value: "split", label: "Split", icon: <Columns2 /> },
+] as const;
+
+/** One checkable row of the phone's menu sheet. */
+function SheetCheckRow({
+  icon,
+  label,
+  checked,
+  role = "menuitemcheckbox",
+  onSelect,
+}: {
+  icon: ReactNode;
+  label: string;
+  checked: boolean;
+  role?: "menuitemcheckbox" | "menuitemradio";
+  onSelect: () => void;
+}) {
+  return (
+    <Item
+      size="sm"
+      render={<button type="button" />}
+      role={role}
+      aria-checked={checked}
+      onClick={onSelect}
+    >
+      <ItemMedia variant="icon">{icon}</ItemMedia>
+      <ItemContent>
+        <ItemTitle>{label}</ItemTitle>
+      </ItemContent>
+      <ItemActions>{checked ? <Check size={14} /> : null}</ItemActions>
+    </Item>
+  );
+}
+
 function WorktreeHeaderActions({
   actions,
   showComment,
+  onJumpToFile,
+  diffView,
   ignoredFiles,
 }: {
   actions: InspectorAction[];
   showComment: boolean;
+  /** Opens the Jump to file sheet: Review's changed files on a phone. */
+  onJumpToFile?: (() => void) | undefined;
+  /** The diff display options, where a diff can be on screen. */
+  diffView?:
+    | {
+        prefs: Prefs;
+        onUpdate: (patch: Partial<Prefs>) => void;
+        /** Unified/split: a narrow screen always renders unified. */
+        showStyle: boolean;
+      }
+    | undefined;
   /** The file trees' "show ignored and hidden files", shared per worktree. */
   ignoredFiles?:
     { shown: boolean; onChange: (shown: boolean) => void } | undefined;
@@ -1619,6 +1697,11 @@ function WorktreeHeaderActions({
     : "Select text to comment";
   return (
     <div className="flex shrink-0 items-center gap-1">
+      {onJumpToFile ? (
+        <IconButton label="Jump to file" size="icon" onClick={onJumpToFile}>
+          <Files />
+        </IconButton>
+      ) : null}
       {showComment && actuation?.onComment ? (
         <span title={commentLabel}>
           <Button
@@ -1648,7 +1731,7 @@ function WorktreeHeaderActions({
           <Badge className="absolute -right-1 -top-1">{pendingCount}</Badge>
         </IconButton>
       ) : null}
-      {(actions.length > 0 || ignoredFiles) && showComment ? (
+      {(actions.length > 0 || ignoredFiles || diffView) && showComment ? (
         // A phone's menu is the chat header's: a sheet dropping from under
         // the header, its rows a thumb's height.
         <>
@@ -1719,9 +1802,40 @@ function WorktreeHeaderActions({
                   ))}
                 </>
               ) : null}
-              {ignoredFiles ? (
+              {diffView ? (
                 <>
                   {actions.length > 0 ? <Separator /> : null}
+                  <SheetGroupLabel>Diff view</SheetGroupLabel>
+                  {diffView.showStyle
+                    ? DIFF_STYLES.map((style) => (
+                        <SheetCheckRow
+                          key={style.value}
+                          role="menuitemradio"
+                          icon={style.icon}
+                          label={style.label}
+                          checked={diffView.prefs.diffStyle === style.value}
+                          onSelect={() =>
+                            diffView.onUpdate({ diffStyle: style.value })
+                          }
+                        />
+                      ))
+                    : null}
+                  {DIFF_VIEW_SWITCHES.map(({ pref, label }) => (
+                    <SheetCheckRow
+                      key={pref}
+                      icon={DIFF_SWITCH_ICONS[pref]}
+                      label={label}
+                      checked={diffView.prefs[pref]}
+                      onSelect={() =>
+                        diffView.onUpdate({ [pref]: !diffView.prefs[pref] })
+                      }
+                    />
+                  ))}
+                </>
+              ) : null}
+              {ignoredFiles ? (
+                <>
+                  {actions.length > 0 || diffView ? <Separator /> : null}
                   <SheetGroupLabel>Files</SheetGroupLabel>
                   <Item
                     size="sm"
@@ -1745,7 +1859,7 @@ function WorktreeHeaderActions({
             </div>
           </EdgeSheet>
         </>
-      ) : actions.length > 0 || ignoredFiles ? (
+      ) : actions.length > 0 || ignoredFiles || diffView ? (
         <OverflowMenu
           label="Worktree actions"
           size="icon"
@@ -1767,9 +1881,46 @@ function WorktreeHeaderActions({
               ) : null}
             </DropdownMenuItem>
           ))}
-          {ignoredFiles ? (
+          {diffView ? (
             <>
               {actions.length > 0 ? <DropdownMenuSeparator /> : null}
+              {diffView.showStyle ? (
+                <DropdownMenuRadioGroup
+                  value={diffView.prefs.diffStyle}
+                  onValueChange={(next) =>
+                    diffView.onUpdate({ diffStyle: next as Prefs["diffStyle"] })
+                  }
+                >
+                  {DIFF_STYLES.map((style) => (
+                    <DropdownMenuRadioItem
+                      key={style.value}
+                      value={style.value}
+                      closeOnClick={false}
+                    >
+                      {style.icon}
+                      {style.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              ) : null}
+              {DIFF_VIEW_SWITCHES.map(({ pref, label }) => (
+                <DropdownMenuCheckboxItem
+                  key={pref}
+                  checked={diffView.prefs[pref]}
+                  closeOnClick={false}
+                  onCheckedChange={(checked) =>
+                    diffView.onUpdate({ [pref]: checked })
+                  }
+                >
+                  {DIFF_SWITCH_ICONS[pref]}
+                  {label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </>
+          ) : null}
+          {ignoredFiles ? (
+            <>
+              {actions.length > 0 || diffView ? <DropdownMenuSeparator /> : null}
               <DropdownMenuCheckboxItem
                 checked={ignoredFiles.shown}
                 closeOnClick={false}
@@ -1878,6 +2029,7 @@ export default function WorktreeDetailPage({
     ],
   );
   const [ignoredShown, setIgnoredShown] = useIgnoredFilesShown(worktree.id);
+  const [jumpOpen, setJumpOpen] = useState(false);
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
   // Same default rule ChangesView applies, so the view-options segment and the
   // comment-following below both know what the pane is actually doing.
@@ -2294,6 +2446,23 @@ export default function WorktreeDetailPage({
                     actions={menuActions}
                     // A wide header draws Add comment itself.
                     showComment={narrow}
+                    // The sidebar lists the files on a wide screen; a phone
+                    // jumps through the header.
+                    onJumpToFile={
+                      sidebarNavigation && narrow && view === "changes"
+                        ? () => setJumpOpen(true)
+                        : undefined
+                    }
+                    diffView={
+                      sidebarNavigation &&
+                      (view === "changes" || (view === "files" && filePath))
+                        ? {
+                            prefs: effectivePrefs,
+                            onUpdate: onUpdatePrefs,
+                            showStyle: !narrow,
+                          }
+                        : undefined
+                    }
                     ignoredFiles={
                       browseAsDocuments
                         ? undefined
@@ -2387,7 +2556,7 @@ export default function WorktreeDetailPage({
               refreshToken={refreshToken}
               anchor={anchor}
               navigationControls={navigationControls}
-              viewOptionsControl={viewOptionsControl}
+              viewOptionsControl={sidebarNavigation ? null : viewOptionsControl}
               pivot={filePivot}
               onPivotChange={setFilePivot}
               markdownPreviewFirst={markdownPreviewFirst}
@@ -2409,8 +2578,10 @@ export default function WorktreeDetailPage({
               onUpdatePrefs={onUpdatePrefs}
               refreshToken={refreshToken}
               navigationControls={navigationControls}
-              viewOptionsControl={viewOptionsControl}
+              viewOptionsControl={sidebarNavigation ? null : viewOptionsControl}
               commentsConfigFor={commentsConfigFor}
+              jumpOpen={jumpOpen}
+              onJumpOpenChange={setJumpOpen}
             />
           )}
           {delivery.dialogs}
