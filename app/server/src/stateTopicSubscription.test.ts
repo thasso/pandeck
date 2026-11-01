@@ -1,26 +1,34 @@
 /**
- * Kernel topics over the socket: `Connection` only routes. A `projects` or
- * `tasks` subscribe and `getStateItems` answer through the topic's kernel, and
- * a Task, Project or Initiative subscribe that cannot read its collection
- * answers that collection's `error`, so the pane owning it renders the failure
- * in place.
+ * Kernel topics over the socket: `Connection` only routes. A `projects`,
+ * `tasks` or `sessions` subscribe and `getStateItems` answer through the
+ * topic's kernel (a `sessions` digest followed by the archived count), and a
+ * Task, Project, Initiative or session subscribe that cannot read its
+ * collection answers that collection's `error`, so the pane owning it renders
+ * the failure in place.
  *   pnpm --filter @assistant/server exec vitest run src/stateTopicSubscription.test.ts
  */
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import type { BroadcastTopic, ServerMessage } from "@assistant/shared";
 import { Connection } from "./connection.ts";
+import { permanentAssistantStore as pa } from "./db/permanentAssistantStore.ts";
+import { sessionListRevisions } from "./db/sessionListChanges.ts";
+import { sessionStore } from "./db/sessionStore.ts";
+import * as sessionList from "./harnesses/sessionList.ts";
+import { hub } from "./hub.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import { projectStore } from "./db/projectStore.ts";
 import { taskStore } from "./db/taskStore.ts";
 import { deleteProject, upsertProject } from "./projectRegistry.ts";
 import { stateTopicFor } from "./stateTopics.ts";
 import { archiveTask, createTask, deleteTask } from "./tasks.ts";
+import { sessionListClient } from "./test/sessionListClient.ts";
+import { validateClientMessage } from "./validateClientMessage.ts";
 
 interface ConnectionHandlers {
   onSubscribe(topics: BroadcastTopic[], digests?: BroadcastTopic[]): void;
   onGetStateItems(
-    topic: "tasks" | "projects" | "initiatives",
+    topic: "tasks" | "projects" | "initiatives" | "sessions",
     ids: string[],
     requestId: string,
   ): void;
@@ -201,5 +209,139 @@ test("a tasks subscribe that cannot read answers the Task error, snapshot or dig
         target: { type: "task" },
       },
     ]);
+  }
+});
+
+/** A stored live session row, reported through its writer. */
+function seedSession(label: string): string {
+  const id = `routes-session-${label}-${suffix}`;
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    title: id,
+    messageCount: 2,
+  });
+  return id;
+}
+
+test("a sessions digest subscribe answers the digest, then the archived count", async () => {
+  const live = seedSession("digest-live");
+  await hub.flushPendingBroadcastsForTests();
+  const { connection, sent } = makeConnection();
+  connection.onSubscribe(["sessions"], ["sessions"]);
+  assert.deepEqual(
+    sent.map((message) => message.type),
+    ["stateDigest", "archivedSessionCount"],
+  );
+  const [digest, count] = sent;
+  assert.ok(digest?.type === "stateDigest" && digest.topic === "sessions");
+  assert.equal(digest.seq, stateTopicFor("sessions")!.seq());
+  assert.deepEqual(
+    digest.entries.find((entry) => entry.id === live),
+    { id: live, revision: sessionListRevisions([live]).get(live) },
+  );
+  assert.deepEqual(count, {
+    type: "archivedSessionCount",
+    count: hub.archivedSessionCount(),
+  });
+
+  const plain = makeConnection();
+  plain.connection.onSubscribe(["sessions"]);
+  assert.deepEqual(
+    plain.sent.map((message) => message.type),
+    ["sessionList"],
+  );
+});
+
+test("a sessions subscribe that cannot read answers the session error, snapshot or digest", () => {
+  for (const digest of [false, true]) {
+    const sent = failingSubscribe("sessions", digest, () =>
+      vi.spyOn(sessionList, "mergedSessionList").mockImplementation(() => {
+        throw new Error("sessions unreadable");
+      }),
+    );
+    assert.deepEqual(sent, [
+      {
+        type: "error",
+        message: "Failed to list sessions: sessions unreadable",
+        target: { type: "session" },
+      },
+    ]);
+  }
+});
+
+test("sessions getStateItems upserts members and deletes the rest, consuming no seq", async () => {
+  for (const [topic, ok] of [
+    ["sessions", true],
+    ["worktrees", false],
+  ] as const)
+    assert.equal(
+      validateClientMessage({
+        type: "getStateItems",
+        topic,
+        ids: ["a"],
+        requestId: "r",
+      }).ok,
+      ok,
+    );
+  const live = seedSession("items-live");
+  const archived = seedSession("items-archived");
+  sessionStore.setArchived(archived, true);
+  const tombstoned = seedSession("items-tombstoned");
+  sessionStore.markDeleted(tombstoned);
+  const singleton = seedSession("items-singleton");
+  const previous = pa.sessionId();
+  pa.setSessionId(singleton);
+  const client = sessionListClient();
+  try {
+    await hub.flushPendingBroadcastsForTests();
+    client.clear();
+    // A pending touch stays the kernel's to publish.
+    sessionStore.markRead(live, Date.now() + 1_000);
+    const seq = stateTopicFor("sessions")!.seq();
+    const { connection, sent } = makeConnection();
+    connection.onGetStateItems(
+      "sessions",
+      [live, archived, tombstoned, singleton],
+      "session-items",
+    );
+    const answer = sent.find((message) => message.type === "stateItems");
+    assert.ok(answer?.type === "stateItems" && answer.topic === "sessions");
+    assert.equal(answer.requestId, "session-items");
+    const revisions = sessionListRevisions([
+      live,
+      archived,
+      tombstoned,
+      singleton,
+    ]);
+    assert.deepEqual(
+      answer.events.map((event) => [event.id, event.kind, event.revision]),
+      [
+        [live, "upsert", revisions.get(live)],
+        [archived, "delete", revisions.get(archived)],
+        [tombstoned, "delete", revisions.get(tombstoned)],
+        [singleton, "delete", revisions.get(singleton)],
+      ],
+    );
+    const [upsert] = answer.events;
+    assert.ok(upsert?.kind === "upsert" && !("file" in upsert.item));
+    assert.equal(stateTopicFor("sessions")!.seq(), seq);
+    await hub.flushPendingBroadcastsForTests();
+    assert.ok(client.upserted().includes(live));
+
+    connection.onGetStateItems(
+      "sessions",
+      Array.from({ length: 2_001 }, (_, i) => `routes-many-${i}`),
+      "too-many",
+    );
+    const refused = sent.at(-1);
+    assert.ok(refused?.type === "error");
+    assert.equal(refused.requestId, "too-many");
+    assert.match(refused.message, /Failed to fetch Session state items/);
+  } finally {
+    if (previous) pa.setSessionId(previous);
+    else pa.clearSessionId();
+    client.close();
   }
 });

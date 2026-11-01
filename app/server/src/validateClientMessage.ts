@@ -671,9 +671,10 @@ const validateGetStateItems: Validator = (msg) => {
   if (
     msg.topic !== "tasks" &&
     msg.topic !== "projects" &&
-    msg.topic !== "initiatives"
+    msg.topic !== "initiatives" &&
+    msg.topic !== "sessions"
   )
-    return "topic must be tasks, projects or initiatives";
+    return "topic must be tasks, projects, initiatives or sessions";
   if (!Array.isArray(msg.ids) || !msg.ids.every(isString))
     return "ids must be an array of strings";
   if (!isString(msg.requestId)) return "requestId must be a string";

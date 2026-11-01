@@ -6,7 +6,12 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
-import type { ClientMessage } from "@assistant/shared";
+import { deflateRawSync } from "node:zlib";
+import {
+  sessionListItemAtRest,
+  type ClientMessage,
+  type SessionListItem,
+} from "@assistant/shared";
 import { hub } from "./hub.ts";
 import { getDb } from "./db/index.ts";
 import { withChangeSet } from "./db/changeSet.ts";
@@ -18,6 +23,10 @@ import {
 } from "./db/sessionListChanges.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import * as list from "./harnesses/sessionList.ts";
+import {
+  createApproval,
+  setApprovalBroadcastForTests,
+} from "./pendingApprovals.ts";
 import { piStore } from "./piSdk/piStore.ts";
 import { recordDirectPeerChild } from "./peerSpawnRuntimes.ts";
 import {
@@ -281,6 +290,246 @@ describe("events", () => {
     );
     assert.equal(snapshot.archivedSessionCount, hub.archivedSessionCount());
     client.close();
+  });
+});
+
+/* ----------------------------- digest (PR3) ------------------------------ */
+
+/** The subscribe answers, narrowed: the snapshot and the digest. */
+function snapshotAnswer() {
+  const answer = sessionsStateTopic.subscribeAnswer(false);
+  assert.ok(answer.type === "sessionList");
+  return answer;
+}
+function digestAnswer() {
+  const answer = sessionsStateTopic.subscribeAnswer(true);
+  assert.ok(answer.type === "stateDigest" && answer.topic === "sessions");
+  return answer;
+}
+
+/** A live-only pi registry row beside the real ones, until restored. */
+function spyLiveOnly(
+  rows: {
+    id: string;
+    isStreaming?: boolean;
+    awaitingInput?: boolean;
+    messageCount?: number;
+  }[],
+): void {
+  const listInfo = piStore.listInfo.bind(piStore);
+  const updatedAt = Date.now();
+  vi.spyOn(piStore, "listInfo").mockImplementation(() => [
+    ...listInfo(),
+    ...rows.map((row) => ({
+      kind: "assistant" as const,
+      sessionId: row.id,
+      file: `/tmp/${row.id}.jsonl`,
+      title: `Live ${row.id}`,
+      messageCount: row.messageCount ?? 2,
+      isStreaming: row.isStreaming ?? false,
+      awaitingInput: row.awaitingInput ?? false,
+      updatedAt,
+    })),
+  ]);
+}
+
+describe("digest", () => {
+  test("names exactly the snapshot's members, at their stored revisions (literal oracle)", async () => {
+    // Members, by the projection's rules: an ordinary stored row; a draft
+    // with no messages; a recorded direct-peer child with none; a live-only
+    // pi row with no index row. (The live Claude member is pinned in
+    // `claudeSdk/sessionListLiveWriters.test.ts`, which owns that harness.)
+    const ordinary = seed("m-ordinary");
+    const draft = `topic-m-draft-${++serial}`;
+    sessionStore.upsert({
+      id: draft,
+      harness: "pi",
+      agentType: "assistant",
+      title: draft,
+      purpose: "draft",
+      messageCount: 0,
+    });
+    const parent = seed("m-parent");
+    const child = seed("m-child", 0);
+    recordDirectPeerChild({
+      childSessionId: child,
+      spawnerSessionId: parent,
+      costClass: "counted",
+      source: { kind: "profile", profileId: "test-profile" },
+      provider: "test",
+      modelId: "test",
+      thinkingLevel: "off",
+      credentialProfileId: "test-profile",
+      createdAt: Date.now(),
+    });
+    const liveOnly = `topic-m-live-only-${++serial}`;
+    // Non-members: archived, tombstoned, the hidden persona row, a
+    // non-`user`-scope row and an ordinary zero-message row.
+    const archived = seed("x-archived");
+    sessionStore.setArchived(archived, true);
+    const tombstoned = seed("x-tombstoned");
+    sessionStore.markDeleted(tombstoned);
+    const persona = seed("x-persona");
+    sessionStore.upsert({
+      id: persona,
+      harness: "pi",
+      agentType: "personal-assistant",
+    });
+    const internal = `topic-x-internal-${++serial}`;
+    sessionStore.upsert({
+      id: internal,
+      scope: "internal",
+      harness: "pi",
+      agentType: "assistant",
+      title: internal,
+      messageCount: 2,
+    });
+    const empty = seed("x-empty", 0);
+    spyLiveOnly([{ id: liveOnly }]);
+    touchSessionRows([liveOnly]);
+    await flush();
+    clean();
+
+    const fixture = new Set([
+      ordinary,
+      draft,
+      parent,
+      child,
+      liveOnly,
+      archived,
+      tombstoned,
+      persona,
+      internal,
+      empty,
+    ]);
+    const expected = [ordinary, draft, parent, child, liveOnly].sort();
+    const ofFixture = (ids: string[]) =>
+      ids.filter((id) => fixture.has(id)).sort();
+
+    const snapshot = snapshotAnswer();
+    const digest = digestAnswer();
+    clean();
+    assert.deepEqual(
+      ofFixture(snapshot.sessions.map((row) => row.id)),
+      expected,
+    );
+    assert.deepEqual(
+      ofFixture(snapshot.revisions.map((entry) => entry.id)),
+      expected,
+    );
+    assert.deepEqual(
+      ofFixture(digest.entries.map((entry) => entry.id)),
+      expected,
+    );
+    // The whole digest is the whole snapshot, in its order and revisions.
+    assert.deepEqual(digest.entries, snapshot.revisions);
+    for (const entry of digest.entries.filter((e) => fixture.has(e.id))) {
+      assert.equal(entry.revision, revision(entry.id));
+      assert.ok(entry.revision >= 1, `${entry.id} has a stamped revision`);
+      assert.deepEqual(Object.keys(entry).sort(), ["id", "revision"]);
+    }
+    vi.restoreAllMocks();
+    touchSessionRows([liveOnly]);
+    await flush();
+  });
+
+  test("a digest is a fraction of the snapshot's bytes (AC8)", async () => {
+    const ids = Array.from({ length: 200 }, (_, i) => seed(`bytes-${i}`));
+    await flush();
+    clean();
+    const snapshot = snapshotAnswer();
+    const digest = digestAnswer();
+    clean();
+    assert.ok(ids.every((id) => digest.entries.some((e) => e.id === id)));
+    const digestJson = JSON.stringify(digest);
+    const snapshotJson = JSON.stringify(snapshot);
+    const perEntry =
+      (digestJson.length - JSON.stringify({ ...digest, entries: [] }).length) /
+      digest.entries.length;
+    assert.ok(perEntry <= 80, `${perEntry} B per digest entry`);
+    // No row content travels: only ids and revisions.
+    assert.ok(!digestJson.includes('"title"'));
+    assert.ok(digestJson.length * 3 < snapshotJson.length);
+    console.info(
+      `[digest bytes] ${digest.entries.length} rows: digest ${digestJson.length} B raw / ${deflateRawSync(digestJson).length} B deflated; snapshot ${snapshotJson.length} B raw / ${deflateRawSync(snapshotJson).length} B deflated`,
+    );
+  });
+
+  test("after the boot touch every live row's digest revision moves (AC9)", async () => {
+    const ids = [seed("boot-a"), seed("boot-b")];
+    await flush();
+    const before = new Map(
+      digestAnswer().entries.map((entry) => [entry.id, entry.revision]),
+    );
+    touchAllSessionRows("boot");
+    await flush();
+    clean();
+    const after = digestAnswer();
+    clean();
+    assert.ok(ids.every((id) => after.entries.some((e) => e.id === id)));
+    for (const entry of after.entries)
+      if (before.has(entry.id))
+        assert.ok(entry.revision > before.get(entry.id)!, entry.id);
+  });
+});
+
+/* ------------------------- resting shape (T1303-P1) ------------------------ */
+
+describe("at-rest projection", () => {
+  const atRest = (row: SessionListItem | undefined) => {
+    assert.ok(row);
+    return sessionListItemAtRest(row);
+  };
+
+  test("a resting stored and live-only pi row is already at rest", async () => {
+    const stored = seed("rest-stored");
+    const liveOnly = `topic-rest-live-only-${++serial}`;
+    spyLiveOnly([{ id: liveOnly }]);
+    touchSessionRows([liveOnly]);
+    await flush();
+    clean();
+    const rows = new Map(snapshotAnswer().sessions.map((row) => [row.id, row]));
+    clean();
+    for (const id of [stored, liveOnly]) {
+      const row = rows.get(id);
+      assert.equal(row?.isStreaming, false, id);
+      assert.equal(row?.awaitingInput, false, id);
+      assert.deepEqual(atRest(row), row, id);
+    }
+    vi.restoreAllMocks();
+    touchSessionRows([liveOnly]);
+    await flush();
+  });
+
+  test("a streaming row and a row awaiting an approval are not", async () => {
+    const streaming = `topic-rest-streaming-${++serial}`;
+    const waiting = seed("rest-approval");
+    spyLiveOnly([{ id: streaming, isStreaming: true }]);
+    setApprovalBroadcastForTests(() => {});
+    try {
+      createApproval({
+        sessionId: waiting,
+        kind: "commit",
+        title: "Merge",
+        body: { kind: "commit", message: "wip", files: ["a.ts"] },
+      });
+      touchSessionRows([streaming]);
+      await flush();
+      clean();
+      const rows = new Map(
+        snapshotAnswer().sessions.map((row) => [row.id, row]),
+      );
+      clean();
+      assert.equal(rows.get(streaming)?.isStreaming, true);
+      assert.notDeepEqual(atRest(rows.get(streaming)), rows.get(streaming));
+      assert.equal(rows.get(waiting)?.attention, "approval");
+      assert.notDeepEqual(atRest(rows.get(waiting)), rows.get(waiting));
+    } finally {
+      setApprovalBroadcastForTests(null);
+      vi.restoreAllMocks();
+      touchSessionRows([streaming]);
+      await flush();
+    }
   });
 });
 
@@ -643,7 +892,7 @@ describe("the test-mode audit", () => {
     client.close();
   });
 
-  test.each(["snapshot", "items"] as const)(
+  test.each(["snapshot", "digest", "items"] as const)(
     "a %s read after an unreported change records and throws",
     async (path) => {
       const id = seed(path);
@@ -651,9 +900,9 @@ describe("the test-mode audit", () => {
       rawTitle(id, "unreported");
       assert.throws(
         () =>
-          path === "snapshot"
-            ? sessionsStateTopic.subscribeAnswer(false)
-            : sessionsStateTopic.items([id]),
+          path === "items"
+            ? sessionsStateTopic.items([id])
+            : sessionsStateTopic.subscribeAnswer(path === "digest"),
         (err: unknown) => isStateTopicInvariant(err),
       );
       violation(id, "title");

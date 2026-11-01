@@ -10,6 +10,7 @@ import {
   MAX_OPEN_COMMENT_TARGETS,
   isPersonalAssistantAgentType,
   projectSummaryOf,
+  sessionListItemAtRest,
   taskSummaryOf,
   workflowRunRoleSessionIds,
 } from "@assistant/shared";
@@ -901,6 +902,12 @@ interface AppShellCache {
   models: ModelOption[];
   agents: AgentInfo[];
   sessions: SessionListItem[];
+  /**
+   * Sidecar for the live `sessions` rows that were at rest when saved; a row
+   * cached without one is re-read by the first digest's catch-up, and a cache
+   * without the field takes one snapshot.
+   */
+  sessionRevisions?: Record<string, number>;
   archivedSessionCount?: number;
   archivedSessionsLoaded?: boolean;
   settings: AppSettings;
@@ -1199,35 +1206,58 @@ function worktreeStatusRecord(
 function normalizeCachedSessions(
   sessions: SessionListItem[],
 ): SessionListItem[] {
-  // Every field the server derives from LIVE state is dropped here and left to
-  // the websocket to re-assert: a restored sidebar must not claim an agent is
-  // still running, keep counting an elapsed label up from a run that ended
-  // while the tab was shut, or show "Needs your approval"/queued work that was
-  // resolved meanwhile (which would also disable Settle on it). Durable state —
+  // Every field the server derives from LIVE state is reset to the value the
+  // server sends for a session with nothing live, and left to the websocket to
+  // re-assert: a restored sidebar must not claim an agent is still running,
+  // keep counting an elapsed label up from a run that ended while the tab was
+  // shut, show "Needs your approval"/queued work that was resolved meanwhile
+  // (which would also disable Settle on it), a waiting child's stale place, or
+  // a reply owed by or to a peer that answered since. Durable state —
   // `lastError`, `settledAt`, `archived` — is kept, because it is still true.
+  // A row already at rest is thereby unchanged, so it can keep its revision
+  // (`sessionRevisionsForCache`).
   // The singleton Personal Assistant is dropped too: the server never sends it
   // as a session row, so a cached one is a stale row written by an older build,
   // and it would paint in the sidebar until the first list arrives.
   return sessions
     .filter((session) => !isPersonalAssistantAgentType(session.agentType))
-    .map((session) => {
-      const {
-        runStartedAt: _runStartedAt,
-        providerRetry: _providerRetry,
-        awaitingInput: _awaitingInput,
-        attention: _attention,
-        queuedWork: _queuedWork,
-        // A waiting child may have started, or its place moved, meanwhile.
-        waitingForSlot: _waitingForSlot,
-        // Who still owes a reply is live too: kept alone, it would read a
-        // tree whose peers were working as stalled until the first list.
-        awaitingRepliesFrom: _awaitingRepliesFrom,
-        // And who still waits on it: a reply sent since would clear it.
-        unansweredRequestsFrom: _unansweredRequestsFrom,
-        ...rest
-      } = session;
-      return { ...rest, isStreaming: false };
-    });
+    .map(sessionListItemAtRest);
+}
+
+/**
+ * The cached live rows' revisions: only for a row that was at rest, which the
+ * cache therefore holds exactly as the server sent it at that revision. A row
+ * that was live is cached at rest without one, so the first digest re-reads
+ * it; archived rows never carry one.
+ */
+function sessionRevisionsForCache(state: UIState): Record<string, number> {
+  const held = state.stateEventRevisions.sessions ?? {};
+  const revisions: Record<string, number> = {};
+  for (const row of state.liveSessions) {
+    const revision = held[row.id];
+    if (
+      revision !== undefined &&
+      wireValueEqual(sessionListItemAtRest(row), row)
+    )
+      revisions[row.id] = revision;
+  }
+  return revisions;
+}
+
+/** The parsed sidecar, kept only for ids that are cached live rows. */
+function cachedSessionRevisions(
+  value: unknown,
+  sessions: readonly SessionListItem[],
+): Record<string, number> | undefined {
+  const parsed = taskRevisionRecord(value);
+  if (!parsed) return undefined;
+  const live = new Set(
+    sessions.filter((row) => !row.archived).map((row) => row.id),
+  );
+  const revisions: Record<string, number> = {};
+  for (const [id, revision] of Object.entries(parsed))
+    if (live.has(id)) revisions[id] = revision;
+  return revisions;
 }
 
 const byUpdatedAt = (a: SessionListItem, b: SessionListItem) =>
@@ -1355,12 +1385,22 @@ function parseAppShellCache(parsed: unknown): AppShellCache | null {
   const worktreeStatusesValue = worktreeStatusRecord(parsed.worktreeStatuses);
   const projectRevisionsValue =
     taskRevisionRecord(parsed.projectRevisions) ?? undefined;
+  const sessions = normalizeCachedSessions(
+    parsed.sessions as SessionListItem[],
+  );
+  const sessionRevisionsValue = cachedSessionRevisions(
+    parsed.sessionRevisions,
+    sessions,
+  );
   return {
     version: 1,
     savedAt,
     models: parsed.models as ModelOption[],
     agents: parsed.agents as AgentInfo[],
-    sessions: normalizeCachedSessions(parsed.sessions as SessionListItem[]),
+    sessions,
+    ...(sessionRevisionsValue !== undefined
+      ? { sessionRevisions: sessionRevisionsValue }
+      : {}),
     archivedSessionCount:
       typeof parsed.archivedSessionCount === "number"
         ? parsed.archivedSessionCount
@@ -1423,7 +1463,8 @@ export function createInitialState(): UIState {
     shellCachedAt: cache.savedAt,
     models: cache.models,
     agents: cache.agents,
-    // No revisions: the first snapshot replaces the live rows.
+    // Revisions only for rows cached at rest: the first digest re-reads the
+    // rest, and a cache without the sidecar takes a snapshot.
     ...sessionSlices(
       sortedByUpdatedAt(cache.sessions.filter((session) => !session.archived)),
       cache.sessions.filter((session) => session.archived),
@@ -1439,6 +1480,7 @@ export function createInitialState(): UIState {
     stateEventRevisions: {
       ...(cache.taskRevisions ? { tasks: cache.taskRevisions } : {}),
       ...(cache.projectRevisions ? { projects: cache.projectRevisions } : {}),
+      ...(cache.sessionRevisions ? { sessions: cache.sessionRevisions } : {}),
     },
     worktrees: cache.worktrees ?? null,
     cachedWorktreeStatuses: cache.worktreeStatuses ?? NO_WORKTREE_STATUSES,
@@ -1571,6 +1613,7 @@ function saveAppShellCache(state: UIState): void {
       models: state.models,
       agents: state.agents,
       sessions: normalizeCachedSessions(state.sessions),
+      sessionRevisions: sessionRevisionsForCache(state),
       archivedSessionCount: state.archivedSessionCount,
       archivedSessionsLoaded: state.archivedSessionsLoaded,
       settings: state.settings,
@@ -1856,10 +1899,7 @@ type Action =
   | {
       kind: "replicaItems";
       purpose: RequestPurpose;
-      msg: Extract<
-        ServerMessage,
-        { type: "stateItems"; topic: "tasks" | "projects" | "initiatives" }
-      >;
+      msg: Extract<ServerMessage, { type: "stateItems" }>;
     }
   /** A recovery that could not complete: its rows lose their held revision. */
   | {
@@ -3726,7 +3766,9 @@ function reconcileSessions(
  * re-sorts when an upsert moved one, keeping identity when nothing moved. An
  * archived-slice id is restored by a live upsert and re-read on a `delete`;
  * a `delete` for an id held nowhere (the hidden singleton, a zero-message
- * child) does nothing. No digest: PR3 adds one.
+ * child) does nothing. A digest prunes the rows it omits, keeps the rest by
+ * identity, and catch-up re-reads the changed ones and every row held without
+ * a revision (one that was live when the shell cache saved it).
  */
 const sessionReplica: TopicDescriptor<
   UIState,
@@ -3797,6 +3839,26 @@ const sessionReplica: TopicDescriptor<
             state.archivedSessions.filter((row) => !restored.has(row.id)),
           );
     return reread ? queueArchivedRead(next) : next;
+  },
+  digest: {
+    // Unlike the other topics, a row held without a revision does not refuse
+    // the digest: `digestChanges` fetches it. One revisioned row is enough;
+    // none (cold start, an old cache, a refused sidecar, an empty list, or a
+    // cache whose every row was live) takes a snapshot.
+    baseline: (state) => {
+      const revisions = state.stateEventRevisions.sessions;
+      return (
+        revisions !== undefined &&
+        state.liveSessions.some((row) => row.id in revisions)
+      );
+    },
+    adoptDigest: (state, _message, changedIds) => ({
+      ...state,
+      sessionListFresh: changedIds.length === 0,
+      // As after a snapshot: an open shelf re-reads once the list is fresh.
+      archivedSessionsLoaded: false,
+    }),
+    adoptItems: (state) => ({ ...state, sessionListFresh: true }),
   },
 };
 
@@ -4885,6 +4947,12 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ? applied
         : withChat(applied, { pullRequestCards });
     }
+    if (msg.topic === "sessions")
+      return applyTopicMessage(sessionReplica, state, {
+        kind: "items",
+        purpose,
+        events: msg.events,
+      });
     return msg.topic === "projects"
       ? applyTopicMessage(projectReplica, state, {
           kind: "items",
@@ -5994,7 +6062,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ? applyTopicMessage(taskReplica, state, msg)
         : msg.topic === "projects"
           ? applyTopicMessage(projectReplica, state, msg)
-          : applyTopicMessage(initiativeReplica, state, msg);
+          : msg.topic === "sessions"
+            ? applyTopicMessage(sessionReplica, state, msg)
+            : applyTopicMessage(initiativeReplica, state, msg);
     case "stateItems":
       // Every answer arrives as `replicaItems`, tagged by its purpose.
       return state;
@@ -7940,7 +8010,7 @@ export function useAssistant({
       socketConnected = connected;
       flushFrameMessagesNow();
       // Subscriptions live on the connection, so a RECONNECT re-declares them
-      // and receives a fresh snapshot. The first connection does not: setTopics
+      // and receives a fresh snapshot or digest. The first connection does not: setTopics
       // has already queued its declaration (or sends it after a very fast open),
       // and re-declaring here would put the same request on the wire twice.
       if (connected) {
@@ -7957,17 +8027,20 @@ export function useAssistant({
               mutationLifecycleRef.current.recoveryTopics().has("tasks")
             )
               replicaTransport.snapshotRequested("tasks");
-            // Sessions never asks for a digest: its subscribe is always
-            // answered by a snapshot, which a recovery's resync joins.
-            if (topics.includes("sessions"))
-              replicaTransport.snapshotRequested("sessions");
-            socket.send(
-              replicaTransport.subscribeRequest(
-                topics,
-                stateRef.current,
-                mutationLifecycleRef.current.pendingTopics(),
-              ),
+            const subscribe = replicaTransport.subscribeRequest(
+              topics,
+              stateRef.current,
+              mutationLifecycleRef.current.pendingTopics(),
             );
+            // A sessions subscribe without a digest (a pending session
+            // mutation, a due snapshot, no baseline) is answered by a
+            // snapshot, which a recovery's resync then joins.
+            if (
+              topics.includes("sessions") &&
+              !subscribe.digests?.includes("sessions")
+            )
+              replicaTransport.snapshotRequested("sessions");
+            socket.send(subscribe);
           }
           mutationLifecycleRef.current.reconnect();
           // The re-declared skills subscription re-scans on the server, and the
@@ -9196,6 +9269,10 @@ export function useAssistant({
           disconnected: () => {
             if (mutation.topic === "tasks")
               replicaTransport.invalidate("tasks", mutation.objectIds);
+            // Its recovery re-reads the live rows: the reconnect subscribe
+            // takes that snapshot instead of a digest, and the resync joins it.
+            if (mutation.topic === "worktrees")
+              replicaTransport.invalidate("sessions", []);
           },
           done: (settled, observation) => {
             if (observation) {

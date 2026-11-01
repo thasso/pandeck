@@ -83,6 +83,7 @@ export * from "./memoryValidation.ts";
 export * from "./workflow.ts";
 export * from "./initiatives.ts";
 export * from "./library.ts";
+export * from "./sessionListAtRest.ts";
 export * from "./skills.ts";
 export * from "./comments.ts";
 export * from "./thinkingLevels.ts";
@@ -8171,7 +8172,7 @@ export type ClientMessage =
   /** Batch-fetch rows whose revisions differed in a state digest. */
   | {
       type: "getStateItems";
-      topic: "tasks" | "projects" | "initiatives";
+      topic: "tasks" | "projects" | "initiatives" | "sessions";
       ids: string[];
       requestId: string;
     }
@@ -8793,6 +8794,12 @@ export type ServerMessage =
   | StateItemsMessage<"projects", ProjectSummary>
   | StateDigestMessage<"initiatives">
   | StateItemsMessage<"initiatives", InitiativeSummary>
+  /**
+   * The `sessions` digest: the live projection's ids with their revisions,
+   * followed on the same connection by one `archivedSessionCount`.
+   */
+  | StateDigestMessage<"sessions">
+  | StateItemsMessage<"sessions", SessionListItem>
   /**
    * Cold/resync snapshot of the live Initiatives. Mutations never travel this
    * way; the sidecar `revisions` seeds the client's next resubscribe.

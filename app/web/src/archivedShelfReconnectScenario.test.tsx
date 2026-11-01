@@ -303,3 +303,71 @@ it("REPRO C1b/c: error or timeout on the first read leaves the shelf loading wit
   expect(archivedReads(socket)).toHaveLength(2);
   expect(loadingShown()).toBe(true);
 });
+
+it("a reconnect answered by a digest re-reads a loaded shelf once, after catch-up (W3)", async () => {
+  const socket = await connect();
+  openShelf();
+  const [first] = archivedReads(socket);
+  await act(async () =>
+    socket.receive({
+      type: "archivedSessions",
+      requestId: first!,
+      sessions: [archivedRow("x")],
+      archivedSessionCount: 1,
+    }),
+  );
+  // The count moved: a re-read is in flight when the socket drops.
+  await act(async () =>
+    socket.receive({ type: "archivedSessionCount", count: 2 }),
+  );
+  expect(archivedReads(socket)).toHaveLength(2);
+  await act(async () => socket.close());
+  await act(async () => vi.advanceTimersByTimeAsync(1_000));
+  const next = ScenarioSocket.instances.at(-1)!;
+  await act(async () => {
+    next.open();
+    next.receive(readyMessage());
+  });
+  const subscribe = next.sent.find(
+    (m) => m.type === "subscribe" && m.topics.includes("sessions"),
+  );
+  expect(subscribe?.type === "subscribe" && subscribe.digests).toEqual([
+    "sessions",
+  ]);
+  // The digest names a moved row, then the server's count follows it.
+  await act(async () =>
+    next.receive({
+      type: "stateDigest",
+      topic: "sessions",
+      seq: 0,
+      entries: [{ id: "a", revision: 2 }],
+    }),
+  );
+  await act(async () =>
+    next.receive({ type: "archivedSessionCount", count: 3 }),
+  );
+  expect(latestState.sessionListFresh).toBe(false);
+  expect(archivedReads(next)).toHaveLength(0);
+  const fetch = next.sent.find((m) => m.type === "getStateItems");
+  if (fetch?.type !== "getStateItems") throw new Error("no catch-up");
+  await act(async () =>
+    next.receive({
+      type: "stateItems",
+      topic: "sessions",
+      requestId: fetch.requestId,
+      events: [{ kind: "upsert", id: "a", revision: 2, item: listed("a", 1) }],
+    }),
+  );
+  expect(latestState.sessionListFresh).toBe(true);
+  expect(archivedReads(next)).toHaveLength(1);
+  await act(async () =>
+    next.receive({
+      type: "archivedSessions",
+      requestId: archivedReads(next)[0]!,
+      sessions: [archivedRow("x"), archivedRow("y"), archivedRow("z")],
+      archivedSessionCount: 3,
+    }),
+  );
+  expect(latestState.archivedSessionsLoaded).toBe(true);
+  expect(archivedReads(next)).toHaveLength(1);
+});

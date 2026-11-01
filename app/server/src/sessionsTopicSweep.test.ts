@@ -70,6 +70,13 @@ function rawMember(): string {
 let warn: { mock: { calls: unknown[][] }; mockClear(): void };
 
 /** The ids the repair logged since the last call. */
+/** The topic's snapshot answer, narrowed from the digest-capable union. */
+function sessionListSnapshot() {
+  const answer = sessionsStateTopic.subscribeAnswer(false);
+  assert.ok(answer.type === "sessionList");
+  return answer;
+}
+
 function logged(): string[] {
   const ids = warn.mock.calls
     .map((call) => /unreported row change: (\S+)/.exec(String(call[0]))?.[1])
@@ -346,14 +353,14 @@ describe("the production sweep", () => {
       peerPromptStore.markCompleted(request.id);
       await flush();
       captureSessionListBaseline();
-      const before = sessionsStateTopic.subscribeAnswer(false);
+      const before = sessionListSnapshot();
       const row = before.sessions.find((row) => row.id === sender)!;
       assert.ok(row.awaitingRepliesFrom?.includes(recipient));
       const revision = before.revisions.find(
         (entry) => entry.id === sender,
       )!.revision;
       vi.setSystemTime(deadline + 1);
-      const crossed = sessionsStateTopic.subscribeAnswer(false);
+      const crossed = sessionListSnapshot();
       assert.deepEqual(
         crossed.sessions.find((row) => row.id === sender),
         row,
@@ -363,7 +370,7 @@ describe("the production sweep", () => {
         revision,
       );
       await sweep();
-      const after = sessionsStateTopic.subscribeAnswer(false);
+      const after = sessionListSnapshot();
       assert.ok(
         !after.sessions
           .find((row) => row.id === sender)

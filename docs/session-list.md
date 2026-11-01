@@ -140,7 +140,16 @@ which a listener recomputes when the singleton's revision moved.
 
 The subscribe answer, `sessionList`, carries the live rows (archived rows
 excluded), their revision sidecar and the archived count. Connect pays for that
-one build; `ready` carries no session fields.
+one build; `ready` carries no session fields. A subscribe asking the `sessions`
+digest is answered instead by `stateDigest` with the same rows' `{id, revision}`
+pairs, followed by one `archivedSessionCount`; the client fetches new and moved
+rows with `getStateItems` (`docs/state-sync.md`, "Resync"). The digest still
+costs the server one full build; it saves the transfer and the client's
+replacement of unchanged rows. The shell cache keeps rows at rest
+(`sessionListItemAtRest`), with a revision only for rows that were already at
+rest, so a reconnect or warm start re-reads exactly the moved rows and the ones
+that were live. A server restart touches every row, so the first digest after it
+re-reads them all.
 
 ### Republishing a row
 
@@ -179,8 +188,8 @@ an answer or error carrying another `requestId` is ignored. Collection errors
 are consumed here or by the snapshot transport, without changing the viewed
 chat's runtime, streams or error. If a disconnect drops an in-flight or queued
 read, the client preserves one pending read and sends it only after the
-reconnect's `sessions` snapshot. That snapshot marks the slice stale, so an open
-shelf gets exactly one fresh read.
+reconnect's `sessions` snapshot, or its digest once every moved row is fetched.
+Either marks the slice stale, so an open shelf gets exactly one fresh read.
 
 ### Audit
 

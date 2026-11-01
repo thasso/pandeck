@@ -17,10 +17,10 @@
 - Worktree comments and approval/peer-prompt cards are authoritative per-object
   broadcasts, keyed by id and rebuilt in place, never transcript-appended or
   mutated on the durable timeline.
-- `normalizeCachedSessions` must keep dropping every live-derived field and the
-  `personal-assistant` singleton row on shell-cache hydration, and an optimistic
-  `settleSession` must not move `updatedAt` and must send its row's OBSERVED
-  attention revision (0 when absent).
+- Shell-cache hydration (`normalizeCachedSessions`) resets live-derived fields
+  (`sessionListItemAtRest`) and drops the `personal-assistant` singleton; only a
+  row saved at rest keeps its revision. An optimistic `settleSession` keeps
+  `updatedAt` and sends its row's OBSERVED attention revision (0 when absent).
 - Pending session routes wait for the addressed snapshot, even offline. A
   session absent from the cached list never justifies reverting to the old chat.
 - Transcript display changes call `useTranscriptScroll`'s `holdViewChange` in
