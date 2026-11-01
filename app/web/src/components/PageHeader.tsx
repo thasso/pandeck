@@ -97,6 +97,11 @@ interface PageHeaderProps {
    * control (the phone's dock row ends the same way).
    */
   close?: ReactNode;
+  /**
+   * The page's `…` menu, drawn after the object's comment and primary
+   * controls so it is the header's rightmost control (only Close follows).
+   */
+  menu?: ReactNode;
   /** Chat supplies its own combined `…` menu; other pages use the shared one. */
   objectOverflow?: boolean;
   safeAreaTop?: boolean;
@@ -116,6 +121,7 @@ export function PageHeader({
   subtitle,
   actions,
   close,
+  menu,
   objectOverflow = true,
   safeAreaTop = false,
   transparent = false,
@@ -173,6 +179,7 @@ export function PageHeader({
       </div>
       {actions}
       <PageHeaderObjectActions showOverflow={objectOverflow} />
+      {menu}
       {close}
     </header>
   );

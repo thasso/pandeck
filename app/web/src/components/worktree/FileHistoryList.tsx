@@ -28,7 +28,6 @@ export function CommitItem({
   children,
   selected = false,
   dimmed = false,
-  highlighted = false,
   onClick,
 }: {
   subject: string;
@@ -37,8 +36,6 @@ export function CommitItem({
   children: ReactNode;
   selected?: boolean;
   dimmed?: boolean | undefined;
-  /** Picked out from the rest: a branch's own commit among its base's. */
-  highlighted?: boolean | undefined;
   onClick: (event: MouseEvent) => void;
 }) {
   return (
@@ -49,14 +46,11 @@ export function CommitItem({
       onClick={onClick}
       className={`flex-nowrap text-left ${dimmed ? "opacity-50" : ""}`}
     >
-      <ItemMedia
-        variant="icon"
-        className={highlighted ? "text-primary" : undefined}
-      >
+      <ItemMedia variant="icon">
         <GitCommitHorizontal />
       </ItemMedia>
       <ItemContent className="min-w-0">
-        <ItemTitle className={`w-full ${highlighted ? "font-semibold" : ""}`}>
+        <ItemTitle className="w-full">
           <span className="truncate">{subject}</span>
         </ItemTitle>
         <ItemDescription className="truncate">{children}</ItemDescription>

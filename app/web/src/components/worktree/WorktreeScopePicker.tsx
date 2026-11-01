@@ -17,7 +17,7 @@
  * @intent Range semantics match the old History view: from = the older commit
  *   (exclusive), to = the newer one.
  */
-import { cloneElement, useCallback, useRef, useState } from "react";
+import { cloneElement, useCallback, useState } from "react";
 import { Check, ChevronDown, FileDiff, GitCompareArrows } from "lucide-react";
 import type { WorktreeCommitLogEntry, WorktreeRecord } from "@assistant/shared";
 import { fetchWorktreeLog } from "../../lib/worktrees.ts";
@@ -201,60 +201,35 @@ function ScopePanel({
   );
 }
 
-/** Commits a page asks for at a time, up to the server's cap. */
-const COMMIT_PAGE = 50;
-const COMMIT_LIMIT_MAX = 200;
-
-export function CommitListPanel({
+function CommitListPanel({
   worktree,
   refreshToken,
   onPick,
   onClose,
-  page = false,
 }: {
   worktree: WorktreeRecord;
   refreshToken: number;
   onPick: (from: string, to: string) => void;
   onClose: () => void;
-  /**
-   * On a page, not in a popover: the list grows with the page instead of
-   * scrolling in a box, picks out the branch's own commits from its base's
-   * history, and pages in more on request.
-   */
-  page?: boolean;
 }) {
   const [rangeMode, setRangeMode] = useState(false);
   const [rangeStart, setRangeStart] = useState<string | null>(null);
-  const [limit, setLimit] = useState(page ? COMMIT_PAGE : 100);
 
   // The worktree is the key; a new commit (watcher push) refreshes the same log
   // and keeps the commits you were reading on screen (R2). A failure used to be
   // answered with an empty array, which read as "no commits" — a branch with a
   // history looking freshly created.
   const loadLog = useCallback(
-    async () => (await fetchWorktreeLog(worktree.id, limit)).entries,
-    [worktree.id, limit],
+    async () => (await fetchWorktreeLog(worktree.id, 100)).entries,
+    [worktree.id],
   );
-  const logKey = `${worktree.id}:${limit}`;
   const { state, reload } = useFetchState<WorktreeCommitLogEntry[]>(
-    logKey,
+    worktree.id,
     loadLog,
   );
-  useReloadOnToken(logKey, refreshToken, reload);
-  // Show more is a new key, which drops the answer: keep the commits already
-  // read on screen until the longer list lands.
-  const lastEntries = useRef<WorktreeCommitLogEntry[] | undefined>(undefined);
-  const answered = dataOf(state);
-  if (answered) lastEntries.current = answered;
-  const loadingMore = answered === undefined && isInitialLoad(state);
-  const allEntries = answered ?? (page ? lastEntries.current : undefined);
+  useReloadOnToken(worktree.id, refreshToken, reload);
+  const entries = dataOf(state);
   const error = errorOf(state);
-  const entries = allEntries;
-  // More may exist only when the answer filled its limit.
-  const canShowMore =
-    page &&
-    allEntries !== undefined &&
-    (loadingMore || (allEntries.length >= limit && limit < COMMIT_LIMIT_MAX));
 
   const pickRange = (a: WorktreeCommitLogEntry, b: WorktreeCommitLogEntry) => {
     if (!entries) return;
@@ -283,7 +258,7 @@ export function CommitListPanel({
   };
 
   return (
-    <div className={`flex flex-col ${page ? "" : "max-h-96"}`}>
+    <div className="flex max-h-96 flex-col">
       <div className="flex items-center justify-between gap-2 px-2 py-1.5">
         <p className="text-sm text-muted-foreground">
           {rangeStart
@@ -302,7 +277,7 @@ export function CommitListPanel({
           Range
         </Toggle>
       </div>
-      <div className={page ? "" : "min-h-0 flex-1 overflow-y-auto"}>
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {entries === undefined ? (
           isInitialLoad(state) ? (
             <PaneLoading label="Loading commits…" />
@@ -331,28 +306,13 @@ export function CommitListPanel({
                 subject={entry.subject}
                 shortOid={entry.shortOid}
                 selected={rangeStart === entry.oid}
-                dimmed={!page && entry.onBase}
-                highlighted={page && !entry.onBase}
+                dimmed={entry.onBase}
                 onClick={(event) => pick(entry, event.shiftKey)}
               >
                 {entry.author} ·{" "}
                 {new Date(entry.authoredAt).toLocaleDateString()}
               </CommitItem>
             ))}
-            {canShowMore ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                busy={loadingMore}
-                onClick={() =>
-                  setLimit((current) =>
-                    Math.min(current + COMMIT_PAGE, COMMIT_LIMIT_MAX),
-                  )
-                }
-              >
-                Show more
-              </Button>
-            ) : null}
           </div>
         )}
       </div>

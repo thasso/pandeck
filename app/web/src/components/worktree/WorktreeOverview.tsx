@@ -90,7 +90,7 @@ export function WorktreeOverview({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {toolbar}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div data-dock-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-5 py-6">
           <div className="mb-6 flex flex-col gap-1.5">
             <h1 className="text-lg font-semibold wrap-anywhere text-foreground">

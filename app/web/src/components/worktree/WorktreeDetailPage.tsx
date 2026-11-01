@@ -36,7 +36,6 @@ import {
   FolderTree,
   GitBranch,
   GitCompareArrows,
-  GitCommitHorizontal,
   History,
   List,
   MessageSquareQuote,
@@ -63,8 +62,6 @@ import type {
 } from "@assistant/shared";
 import { WorktreeOverview } from "./WorktreeOverview.tsx";
 import { WORKTREE_VIEWS } from "./worktreeViews.tsx";
-import { CommitListPanel } from "./WorktreeScopePicker.tsx";
-import { ListGroupSection } from "../ListGroupSection.tsx";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
 import {
   DocumentNavigationActions,
@@ -441,7 +438,12 @@ function WorktreeRailLayout({
       return (
         <div className="flex min-h-0 flex-1 flex-col bg-background/40">
           {narrowListHeader ? railHeading : null}
-          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">{rail}</div>
+          <div
+            data-dock-scroll
+            className="min-h-0 flex-1 overflow-y-auto p-1.5"
+          >
+            {rail}
+          </div>
         </div>
       );
     }
@@ -481,7 +483,12 @@ function WorktreeRailLayout({
           style={{ width: railWidth }}
         >
           {railHeading}
-          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">{rail}</div>
+          <div
+            data-dock-scroll
+            className="min-h-0 flex-1 overflow-y-auto p-1.5"
+          >
+            {rail}
+          </div>
           <ResizableSeparator
             edge="right"
             label="worktree navigator"
@@ -824,33 +831,7 @@ function ChangesView({
 
   if (reviewMode === "changeset") {
     const changesetContent = (
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto">
-        {sidebarNavigation ? (
-          // The branch's history above its changes: pick a commit (or a
-          // range) to review just that. Folded until asked for.
-          <ListGroupSection
-            id={`worktree-commits:${worktree.id}`}
-            title="Commits"
-            icon={<GitCommitHorizontal size={14} className="shrink-0" />}
-            defaultOpen={false}
-            sticky={false}
-          >
-            <CommitListPanel
-              page
-              worktree={worktree}
-              refreshToken={refreshToken}
-              onPick={(pickedFrom, pickedTo) =>
-                navigate(
-                  worktreePath(worktree.id, "changes", {
-                    from: pickedFrom,
-                    to: pickedTo,
-                  }),
-                )
-              }
-              onClose={() => undefined}
-            />
-          </ListGroupSection>
-        ) : null}
+      <div data-dock-scroll className="min-h-0 min-w-0 flex-1 overflow-auto">
         <WorktreeChangesetList
           worktreeId={worktree.id}
           scope={scope}
@@ -974,6 +955,7 @@ function ChangesView({
                 })
               : undefined
           }
+          data-dock-scroll
           className="min-h-0 min-w-0 flex-1 overflow-auto"
         >
           {fileDiff ? (
@@ -1430,6 +1412,7 @@ function FilesView({
                     })
                   : undefined
               }
+              data-dock-scroll
               className="min-h-0 flex-1 overflow-auto"
             >
               {pivot === "preview" && previewKind ? (
@@ -1570,7 +1553,7 @@ function FilesView({
           </>
         ) : sidebarNavigation && !narrow ? (
           // No file yet: the worktree's top folder, to start from.
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <div data-dock-scroll className="min-h-0 flex-1 overflow-y-auto p-2">
             <WorktreeFileTree
               tree={tree}
               onSelectFile={(entry) =>
@@ -2195,7 +2178,16 @@ export default function WorktreeDetailPage({
           if (pendingReviewIds.length > 0) onSubmitReview(pendingReviewIds);
         }}
       >
-        <div className="flex h-full min-h-0 flex-col">
+        <div
+          className={
+            // The worktree screen runs UNDER the phone's resting dock, as the
+            // list screens run under the nav card: the page takes back the
+            // space the shell reserved, and each scroller pads its end by it.
+            sidebarNavigation && !embedded
+              ? "flex h-[calc(100%+var(--app-bottom-chrome-inset,0px))] min-h-0 shrink-0 flex-col [&_[data-dock-scroll]]:pb-[var(--app-bottom-chrome-inset,0px)]"
+              : "flex h-full min-h-0 flex-col"
+          }
+        >
           {/* ONE identity row, the shape every other object page uses: the branch, and
             a glyph that copies the worktree PATH — the thing you actually paste (into
             a terminal), and which used to sit in a subtitle that truncated to
@@ -2295,6 +2287,21 @@ export default function WorktreeDetailPage({
               iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
               // One row of identity, as the Task page's id: the branch, muted
               // and mono. The Overview's body carries it as the title.
+              // Rightmost: after the header's own comment and Start session.
+              menu={
+                embedded ? undefined : (
+                  <WorktreeHeaderActions
+                    actions={menuActions}
+                    // A wide header draws Add comment itself.
+                    showComment={narrow}
+                    ignoredFiles={
+                      browseAsDocuments
+                        ? undefined
+                        : { shown: ignoredShown, onChange: setIgnoredShown }
+                    }
+                  />
+                )
+              }
               title={
                 <span className="truncate font-mono text-sm text-muted-foreground">
                   {title ?? worktree.branch}
@@ -2345,16 +2352,6 @@ export default function WorktreeDetailPage({
                         ))}
                       </ToggleGroup>
                     ) : null}
-                    <WorktreeHeaderActions
-                      actions={menuActions}
-                      // A wide header draws Add comment itself.
-                      showComment={narrow}
-                      ignoredFiles={
-                        browseAsDocuments
-                          ? undefined
-                          : { shown: ignoredShown, onChange: setIgnoredShown }
-                      }
-                    />
                   </>
                 )
               }
