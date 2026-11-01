@@ -14,6 +14,7 @@ import { sessionStore } from "./db/sessionStore.ts";
 import * as workflowStore from "./db/workflowStore.ts";
 import { hub } from "./hub.ts";
 import { listSessions, type LiveListInfo } from "./sessions.ts";
+import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
 import {
   SESSION_AUTO_ARCHIVE_AFTER_MS,
   SESSION_AUTO_ARCHIVE_SWEEP_INTERVAL_MS,
@@ -176,7 +177,7 @@ test("a viewed session and a Workflow Run's role session are skipped", () => {
 
 /* --------------------------------- sweep ---------------------------------- */
 
-test("the sweep archives old settled sessions in one batch with one broadcast, skipping what is viewed", async () => {
+test("the sweep archives old settled sessions in one batch with one row report, skipping what is viewed", async () => {
   const viewed = seed("viewed", { settledAt: OLD });
   const eligible = Array.from({ length: 12 }, (_, i) =>
     seed(`eligible-${i}`, { settledAt: OLD }),
@@ -189,9 +190,7 @@ test("the sweep archives old settled sessions in one batch with one broadcast, s
   });
   const empty = seed("empty", { settledAt: OLD, messageCount: 0 });
   const batch = vi.spyOn(sessionStore, "archiveSettledBatch");
-  const broadcast = vi
-    .spyOn(hub, "broadcastSessions")
-    .mockResolvedValue(undefined);
+  const touches = recordSessionRowTouches();
   const viewer = {
     send: (_message: ServerMessage) => undefined,
     viewingSessionId: () => viewed,
@@ -207,7 +206,8 @@ test("the sweep archives old settled sessions in one batch with one broadcast, s
       "every old settled listable row, the draft included, and nothing viewed, fresh or empty",
     );
     assert.equal(batch.mock.calls.length, 1, "one store transaction");
-    assert.equal(broadcast.mock.calls.length, 1, "one list broadcast");
+    assert.equal(touches.touches.length, 1, "one row report for the batch");
+    assert.deepEqual(new Set(touches.touches[0]), new Set(archived));
     assert.equal(sessionStore.get(viewed)?.archivedAt, undefined);
     assert.equal(sessionStore.get(fresh)?.archivedAt, undefined);
     assert.equal(
@@ -230,20 +230,19 @@ test("the sweep archives old settled sessions in one batch with one broadcast, s
     // A bare store restore keeps the old settlement, so the next sweep takes
     // it again; the user's Restore action unsettles as well (below).
     hub.unregister(viewer);
+    touches.clear();
     assert.deepEqual(
       new Set(await sweepSettledSessionArchive(NOW)),
       new Set([viewed, first]),
       "the view closing made the viewed session eligible",
     );
-    assert.equal(broadcast.mock.calls.length, 2);
-    // A sweep with nothing to do writes and broadcasts nothing.
+    assert.equal(touches.touches.length, 1);
+    // A sweep with nothing to do writes and touches nothing.
+    touches.clear();
     assert.deepEqual(await sweepSettledSessionArchive(NOW), []);
-    assert.equal(
-      broadcast.mock.calls.length,
-      2,
-      "no broadcast without a change",
-    );
+    assert.deepEqual(touches.touches, [], "no touch without a change");
   } finally {
+    touches.stop();
     hub.unregister(viewer);
   }
 });
@@ -275,7 +274,6 @@ test("a role session of a working-set Workflow Run stays, even while idle", asyn
     result: { status: "completed", summary: "implemented" },
     actor: { kind: "system" },
   });
-  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
 
   try {
     const archived = await sweepSettledSessionArchive(NOW);
@@ -292,7 +290,6 @@ test("a role session of a working-set Workflow Run stays, even while idle", asyn
 
 test("the user's Restore brings a session back into the working set, so retention does not take it again", async () => {
   const id = seed("restored", { settledAt: OLD });
-  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
   assert.deepEqual(await sweepSettledSessionArchive(NOW), [id]);
   const connection = new Connection({
     OPEN: 1,
@@ -419,7 +416,6 @@ test("a child waiting for a slot is queued work, so retention does not take it",
   // A listable child: it already had a user turn before it waited.
   const child = seed("waiting", { settledAt: OLD });
   const opener = heldOpenerTo(child);
-  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
   const listed = (await hub.listSessions()).find((r) => r.id === child);
   assert.equal(listed?.queuedWork, true);
   assert.ok(!(await sweepSettledSessionArchive(NOW)).includes(child));
@@ -429,7 +425,6 @@ test("a child waiting for a slot is queued work, so retention does not take it",
 test("a waiting child the sweep does archive has its opening prompt cancelled", async () => {
   const child = seed("archived-waiting", { settledAt: OLD });
   const opener = heldOpenerTo(child);
-  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
   // Reach the writer deliberately: the listed row is an eligible candidate.
   vi.spyOn(hub, "listSessions").mockResolvedValue([
     { ...row(child), file: "" },

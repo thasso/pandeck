@@ -36,8 +36,11 @@ export const HARNESS_IDLE_EVICT_MS = 5 * 60_000;
  * `hub.ts`; the hub hands it over once (`harnesses/registry.ts`).
  */
 export interface HarnessHost {
-  /** Recompute the merged session list and push it to every connected tab. */
-  broadcastSessions(): Promise<void>;
+  /**
+   * These sessions' live list fields (title, streaming, model, …) changed;
+   * the hub rebuilds their rows (`db/sessionListChanges.ts`).
+   */
+  sessionRowsChanged(ids: Iterable<string>): void;
   /** A run just started; cancel any idle-settle countdown for a queued reload. */
   noteRunStarted(): void;
   /** Re-check after a run ends whether a deferred dev reload can now proceed. */

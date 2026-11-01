@@ -254,7 +254,6 @@ function makeRig(
       }
       prompts.push({ sessionId: live.sessionId, text });
     },
-    broadcastSessions() {},
     // The rig's sessions are never mid-turn, so no assignment ever queues.
     isSessionBusy: () => false,
     wakeDelivery: () => false,

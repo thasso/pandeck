@@ -300,7 +300,6 @@ beforeEach(() => {
           held: input.hold,
         });
     },
-    broadcastSessions: () => recorded.events.push("broadcast"),
   });
   sessionStore.upsert({
     id: SENDER,
@@ -822,7 +821,6 @@ test("approving creates each session and delivers its opening prompt", async () 
   expect(recorded.events).toEqual([
     `deliver:${SENDER}:coordinator`,
     `deliver:${SENDER}:coordinator`,
-    "broadcast",
   ]);
   // The opening prompt comes FROM the proposer, which is what gives the new
   // session a peer to answer — and, with no shared history, a fresh chain.
@@ -959,10 +957,7 @@ test("a session that failed delivery is still reported, never orphaned", async (
       .spawnedParentsByChildIds([item!.resultSessionId!])
       .get(item!.resultSessionId!),
   ).toMatchObject({ parentSessionId: SENDER, ownership: "coordinator" });
-  expect(recorded.events).toEqual([
-    `deliver:${SENDER}:coordinator`,
-    "broadcast",
-  ]);
+  expect(recorded.events).toEqual([`deliver:${SENDER}:coordinator`]);
 });
 
 test("a Task deleted after the proposal stops the row BEFORE a session exists", async () => {
@@ -1520,7 +1515,6 @@ test("a direct batch creates both harnesses and reports ids, runtime and family"
   expect(recorded.events).toEqual([
     `deliver:${SENDER}:coordinator`,
     `deliver:${SENDER}:coordinator`,
-    "broadcast",
   ]);
 });
 
@@ -1538,10 +1532,7 @@ test("a direct child keeps its spawn edge when opening-prompt delivery fails", a
   expect(
     sessionStore.spawnedParentsByChildIds([childId!]).get(childId!),
   ).toMatchObject({ parentSessionId: SENDER, ownership: "coordinator" });
-  expect(recorded.events).toEqual([
-    `deliver:${SENDER}:coordinator`,
-    "broadcast",
-  ]);
+  expect(recorded.events).toEqual([`deliver:${SENDER}:coordinator`]);
 });
 
 test("the child is told to report back to its coordinator, exactly once", async () => {

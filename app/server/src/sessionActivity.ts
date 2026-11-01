@@ -43,6 +43,7 @@ import {
   subscribeSessionRunStarted,
 } from "./session/runtime/liveSession.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { touchSessionRows } from "./db/sessionListChanges.ts";
 import { errorText } from "./errors.ts";
 import type { InterruptedTurnEvidence } from "./interruptedTurnEvidence.ts";
 import { sessionRunOutcomeDisposition } from "./sessionOutcomePolicy.ts";
@@ -112,6 +113,24 @@ function noteRetry(sessionId: string, progress: RunProgress | null): boolean {
 }
 
 /**
+ * Clear only the unread state this intermediate automatic turn created.
+ * Anything already unread when the turn began remains unread unless the user
+ * read through that older boundary while the turn was running.
+ */
+function suppressIntermediateUnread(
+  sessionId: string,
+  baseline: { updatedAt: number; readAt: number } | undefined,
+): void {
+  if (!baseline) return;
+  const current = sessionStore.get(sessionId);
+  if (!current) return;
+  const priorUnreadStillOutstanding =
+    baseline.updatedAt > baseline.readAt && current.readAt < baseline.updatedAt;
+  if (priorUnreadStillOutstanding) return;
+  sessionStore.markRead(sessionId, current.updatedAt);
+}
+
+/**
  * A finished PROVIDER RUN becomes one attention revision when its result is the
  * user's own.
  *
@@ -136,34 +155,6 @@ function noteRetry(sessionId: string, progress: RunProgress | null): boolean {
  * expected report, while a direct human turn or a failure remains its own
  * outcome.
  */
-function broadcastSessionList(): void {
-  void (async () => {
-    // Imported here, not at module scope: `hub.ts` reaches back into this
-    // module through `sessions.ts`.
-    const { hub } = await import("./hub.ts");
-    await hub.broadcastSessions();
-  })().catch(() => undefined);
-}
-
-/**
- * Clear only the unread state this intermediate automatic turn created.
- * Anything already unread when the turn began remains unread unless the user
- * read through that older boundary while the turn was running.
- */
-function suppressIntermediateUnread(
-  sessionId: string,
-  baseline: { updatedAt: number; readAt: number } | undefined,
-): void {
-  if (!baseline) return;
-  const current = sessionStore.get(sessionId);
-  if (!current) return;
-  const priorUnreadStillOutstanding =
-    baseline.updatedAt > baseline.readAt && current.readAt < baseline.updatedAt;
-  if (priorUnreadStillOutstanding) return;
-  if (sessionStore.markRead(sessionId, current.updatedAt))
-    broadcastSessionList();
-}
-
 function recordRunOutcome(
   sessionId: string,
   stopReason: AgentStopReason,
@@ -184,23 +175,15 @@ function recordRunOutcome(
     return;
   }
   if (disposition === "coordinator-owned") {
-    if (
-      stopReason === "error" &&
-      sessionStore.isSettled(sessionId) &&
-      sessionStore.setSettled(sessionId, false)
-    )
-      broadcastSessionList();
+    if (stopReason === "error" && sessionStore.isSettled(sessionId))
+      sessionStore.setSettled(sessionId, false);
     return;
   }
   if (disposition !== "raise") return;
   const kind: SessionOutcomeKind =
     stopReason === "error" ? "failed" : "completed";
-  if (sessionStore.recordSessionOutcome(sessionId, kind) === undefined) return;
-  // The row's own `runStateChanged` already asks for a session-list broadcast,
-  // but this must not DEPEND on that ordering: a new revision is a change to
-  // the row every subscribed tab has to converge on, so it asks for its own.
-  // `broadcastSessions` is debounced and idempotent, so the two coalesce.
-  broadcastSessionList();
+  // The store touches the row (`db/sessionListChanges.ts`).
+  sessionStore.recordSessionOutcome(sessionId, kind);
 }
 
 let installed = false;
@@ -245,7 +228,7 @@ export function installSessionActivityTracking(): () => void {
         return;
       }
       case "runProgress":
-        if (noteRetry(sessionId, event.progress)) broadcastSessionList();
+        if (noteRetry(sessionId, event.progress)) touchSessionRows([sessionId]);
         return;
       case "runStatus": {
         // The failure MESSAGE the card shows. `aborted` is a user decision, not
@@ -306,7 +289,7 @@ export async function settleSessionsForRemovedWorktree(
   // through `sessions.ts`.
   const { hub } = await import("./hub.ts");
   for (const sessionId of linked) hub.getLiveById(sessionId)?.broadcastState();
-  if (linked.length) await hub.broadcastSessions();
+  if (linked.length) await hub.sessionRowsSent();
 }
 
 /**
@@ -360,7 +343,7 @@ export async function settleWorkflowRunRoleSessions(
   // through `sessions.ts`.
   const { hub } = await import("./hub.ts");
   for (const sessionId of settled) hub.getLiveById(sessionId)?.broadcastState();
-  await hub.broadcastSessions();
+  await hub.sessionRowsSent();
 }
 
 /**
@@ -416,7 +399,7 @@ export async function settleSessionWithPeers(
   if (!sessionStore.settleWithPeers(sessionId, throughRevision, peers))
     return { written: false };
   for (const id of [sessionId, ...peers]) hub.getLiveById(id)?.broadcastState();
-  await hub.broadcastSessions();
+  await hub.sessionRowsSent();
   return { written: true };
 }
 
@@ -511,7 +494,7 @@ async function settleIdleSessions(sessionIds: string[]): Promise<void> {
   // through `sessions.ts`.
   const { hub } = await import("./hub.ts");
   for (const sessionId of settled) hub.getLiveById(sessionId)?.broadcastState();
-  await hub.broadcastSessions();
+  await hub.sessionRowsSent();
 }
 
 /**

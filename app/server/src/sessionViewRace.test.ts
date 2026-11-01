@@ -454,7 +454,6 @@ describe("session view requests", () => {
     expect(snapshots(sent)).toEqual([ARCHIVED]);
     void connection.handle({ type: "loadSession", id: B } as ClientMessage);
     await settle();
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
     await connection.handle({
       type: "archiveSession",
       id: ARCHIVED,
@@ -552,7 +551,6 @@ describe("session view requests", () => {
     expect(snapshots(sent)).toEqual([RELOADED]);
     // The reader archives the session they are looking at (the client moves to
     // the new-session route).
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
     await connection.handle({
       type: "archiveSession",
       id: RELOADED,
@@ -722,7 +720,6 @@ describe("session view requests", () => {
     void connection.handle({ type: "loadSession", id: COLD } as ClientMessage);
     await settle();
     expect(snapshots(sent)).toEqual([COLD]);
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
     await connection.handle({
       type: "archiveSession",
       id: COLD,

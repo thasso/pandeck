@@ -900,24 +900,14 @@ export interface SessionSpawnDeps {
     /** Store the opening prompt `held` at this queue position. */
     hold?: { queueSeq: number };
   }): Promise<void>;
-  broadcastSessions(): void;
-}
-
-/**
- * `hub` is reached through a dynamic import, never a static one: it constructs
- * the session hub at module load, and this module is pulled in transitively by
- * the tool catalog — a static edge closes an initialization cycle that fails as
- * a TDZ error in whichever module the importer happens to be initializing.
- */
-async function harnessHub() {
-  return (await import("./hub.ts")).hub;
 }
 
 const REAL_DEPS: SessionSpawnDeps = {
   newSessionId: randomUUID,
   findPiModel: piModelForAccount,
-  // Dynamic for the same reason as `harnessHub`: creation reaches the Claude
-  // store, whose tool catalog pulls this module in.
+  // Dynamic, never static: creation reaches the Claude store, whose tool
+  // catalog pulls this module in, and a static edge closes an initialization
+  // cycle that fails as a TDZ error in whichever module is initializing.
   create: async (spec) =>
     (await import("./harnesses/create.ts")).createSession(spec),
   deliver: async (input) => {
@@ -929,9 +919,6 @@ const REAL_DEPS: SessionSpawnDeps = {
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.hold ? { hold: input.hold } : {}),
     });
-  },
-  broadcastSessions: () => {
-    void harnessHub().then((instance) => instance.broadcastSessions());
   },
 };
 
@@ -1315,7 +1302,6 @@ registerApprovalExecutor("sessionSpawn", {
         item.error = errorText(err);
       }
     }
-    deps.broadcastSessions();
     const created = items.filter((item) => item.resultSessionId);
     const skipped = items.filter((item) => item.skipped).length;
     const stillborn = items.filter(
@@ -1551,7 +1537,6 @@ export async function spawnApprovedPeers(input: {
     const position = waitingPositionOf(input.senderSessionId, result.sessionId);
     if (position !== undefined) result.waitingForSlot = { position };
   }
-  deps.broadcastSessions();
   return results;
 
   async function spawnDirectRow(

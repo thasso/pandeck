@@ -155,7 +155,6 @@ function deps(): WorkflowAgentExecutorDeps {
       });
       if (rejectPrompt) throw rejectPrompt;
     },
-    broadcastSessions() {},
     isSessionBusy: (sessionId) => busySessions.has(sessionId),
     wakeDelivery: () => false,
     deliveryStopped: () => deliveryStopped,

@@ -1,8 +1,5 @@
-import type { AgentType, DisplayMessage } from "@assistant/shared";
-import {
-  CLAUDE_SDK_PROVIDER,
-  isPersonalAssistantAgentType,
-} from "@assistant/shared";
+import type { DisplayMessage } from "@assistant/shared";
+import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
 import {
   permanentAssistantStore,
   type PermanentAssistantQueueItem,
@@ -68,36 +65,6 @@ export function subscribePermanentAssistant(
 
 export function isPermanentAssistantSession(sessionId: string): boolean {
   return permanentAssistantStore.sessionId() === sessionId;
-}
-
-/** The identity a session-list row needs to be recognized as the singleton. */
-export interface SessionRowIdentity {
-  id: string;
-  agentType?: AgentType;
-}
-
-/**
- * One store read, then a per-row predicate for the rows no ordinary session
- * list may show. Built once per projection because a list is rebuilt up to ~4
- * times a second — never one binding lookup per row.
- *
- * The singleton is matched by PERSONA, not only by the currently bound id: two
- * other states are real and both used to surface as an ordinary "Personal
- * Assistant" row. A list rebuild can flush in the window between minting the
- * session and binding it, and `rotatePermanentAssistantSession` leaves the
- * predecessor behind after a profile change. The persona exists only behind the
- * dedicated entry point, so neither belongs in a list — and a rotated
- * predecessor pays for that by keeping its history reachable only by id (see
- * `rotatePermanentAssistantSession`).
- *
- * The bound id is still checked so a legacy binding to an `assistant`-typed
- * session stays hidden for as long as it IS the singleton; that row becomes
- * ordinary listed history the moment the binding is abandoned.
- */
-export function sessionListHiddenProbe(): (row: SessionRowIdentity) => boolean {
-  const boundId = permanentAssistantStore.sessionId();
-  return (row) =>
-    isPersonalAssistantAgentType(row.agentType) || row.id === boundId;
 }
 
 export function hasPermanentAssistantMessage(dedupeKey: string): boolean {
@@ -216,7 +183,6 @@ async function abandonPermanentAssistant(): Promise<void> {
   // Only the singleton this rotation set out to abandon.
   if (permanentAssistantStore.sessionId() === previous) {
     permanentAssistantStore.clearSessionId();
-    void hub.broadcastSessions();
   }
 }
 
@@ -365,7 +331,6 @@ async function acquireOrCreatePermanentAssistant(
     }
   }
   permanentAssistantStore.setSessionId(driver.id);
-  void hub.broadcastSessions();
   return driver;
 }
 

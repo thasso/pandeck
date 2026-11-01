@@ -41,7 +41,6 @@ test("message-level draft sessions inherit and persist the source pi profile", a
 
   const originalAcquireNew = piStore.acquireNew;
   const originalListSessions = hub.listSessions;
-  const originalBroadcastSessions = hub.broadcastSessions;
   let acquiredOptions: unknown;
   const fakeLive = {
     key: childId,
@@ -64,9 +63,6 @@ test("message-level draft sessions inherit and persist the source pi profile", a
   };
   (hub as unknown as { listSessions: () => Promise<unknown[]> }).listSessions =
     async () => [];
-  (
-    hub as unknown as { broadcastSessions: () => Promise<void> }
-  ).broadcastSessions = async () => {};
 
   const sent: SentMessage[] = [];
   const fakeWs = {
@@ -107,9 +103,6 @@ test("message-level draft sessions inherit and persist the source pi profile", a
     (
       hub as unknown as { listSessions: typeof originalListSessions }
     ).listSessions = originalListSessions;
-    (
-      hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
-    ).broadcastSessions = originalBroadcastSessions;
   }
 });
 
@@ -231,7 +224,6 @@ for (const path of ["draft", "newSession"] as const) {
         .spyOn(piStore, "acquireNew")
         .mockResolvedValue(fakeLive as never);
       const list = vi.spyOn(hub, "listSessions").mockResolvedValue([]);
-      const broadcast = vi.spyOn(hub, "broadcastSessions").mockResolvedValue();
       const sent: SentMessage[] = [];
       const ws = {
         OPEN: 1,
@@ -279,7 +271,6 @@ for (const path of ["draft", "newSession"] as const) {
         picker.mockRestore();
         acquire.mockRestore();
         list.mockRestore();
-        broadcast.mockRestore();
       }
     });
   }

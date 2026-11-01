@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test, vi } from "vitest";
+import { test } from "vitest";
 import { peerPromptStore } from "../db/peerPromptStore.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import type { WorkflowRunRow } from "../db/workflowStore.ts";
@@ -8,8 +8,6 @@ import {
   archiveRunSessions,
   deleteCancelledWorkflowRun,
 } from "./runCleanup.ts";
-
-vi.mock("../hub.ts", () => ({ hub: { broadcastSessions: async () => {} } }));
 
 function run(overrides: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
   return {

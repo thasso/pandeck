@@ -385,8 +385,9 @@ const LIVE_READS = {
 };
 
 function liveOver(engine: PiEngineHandle) {
+  const rowChanges: string[][] = [];
   const host = {
-    broadcastSessions: () => Promise.resolve(),
+    sessionRowsChanged: (ids: readonly string[]) => rowChanges.push([...ids]),
     noteRunStarted: () => {},
     checkPendingReload: () => {},
     isReloadQueued: () => false,
@@ -402,42 +403,64 @@ function liveOver(engine: PiEngineHandle) {
   live.addViewer({
     send: (message: { type: string }) => sent.push(message.type),
   });
-  return { live, sent };
+  return { live, sent, rowChanges };
 }
 
-test("a thinking-level change is announced only once the engine applied it, and a refusal reaches the caller", async () => {
-  const base = localPiEngine(fakeSession(LIVE_READS).session as never);
-  const applied: string[] = [];
-  let settle!: { resolve: () => void; reject: (error: Error) => void };
-  const engine: PiEngineHandle = Object.create(base, {
-    setThinkingLevel: {
-      value: (level: string) => {
-        applied.push(level);
-        return new Promise<void>((resolve, reject) => {
-          settle = { resolve, reject };
-        });
+test.each(["model", "thinking"] as const)(
+  "a %s change is announced only once the engine applied it, and a refusal reaches the caller",
+  async (kind) => {
+    const base = localPiEngine(fakeSession(LIVE_READS).session as never);
+    const applied: unknown[] = [];
+    let settle!: { resolve: () => void; reject: (error: Error) => void };
+    const engine: PiEngineHandle = Object.create(base, {
+      [kind === "model" ? "setModel" : "setThinkingLevel"]: {
+        value: (value: unknown) => {
+          applied.push(value);
+          return new Promise<void>((resolve, reject) => {
+            settle = { resolve, reject };
+          });
+        },
       },
-    },
-  });
-  const { live, sent } = liveOver(engine);
-  const settled = () => new Promise((resolve) => setImmediate(resolve));
+    });
+    const { live, sent, rowChanges } = liveOver(engine);
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    const invoke = (refuse: boolean) =>
+      kind === "model"
+        ? live.setModel({ ...MODEL, id: refuse ? "refused" : "new" } as never)
+        : live.setThinkingLevel(refuse ? "low" : "high");
+    const raised = invoke(false);
+    await settled();
+    assert.equal(applied.length, 1);
+    assert.deepEqual(
+      rowChanges,
+      [],
+      "no row touch before the engine applies it",
+    );
+    assert.deepEqual(
+      sent,
+      [],
+      "nothing is announced while the engine holds it",
+    );
+    settle.resolve();
+    await raised;
+    assert.deepEqual(sent, ["state", "contextInfo"]);
+    assert.deepEqual(rowChanges, [[live.key]]);
 
-  const raised = live.setThinkingLevel("high");
-  await settled();
-  assert.deepEqual(applied, ["high"]);
-  assert.deepEqual(sent, [], "nothing is announced while the engine holds it");
-  settle.resolve();
-  await raised;
-  assert.deepEqual(sent, ["state", "contextInfo"]);
-
-  sent.length = 0;
-  const refused = live.setThinkingLevel("low");
-  await settled();
-  settle.reject(new Error("engine refused"));
-  await assert.rejects(refused, /engine refused/);
-  assert.deepEqual(sent, [], "a refused change is never announced");
-  live.dispose();
-});
+    sent.length = 0;
+    rowChanges.length = 0;
+    const refused = invoke(true);
+    await settled();
+    settle.reject(new Error("engine refused"));
+    await assert.rejects(refused, /engine refused/);
+    assert.deepEqual(sent, [], "a refused change is never announced");
+    assert.deepEqual(
+      rowChanges,
+      [],
+      "a refused command cannot report a changed row",
+    );
+    live.dispose();
+  },
+);
 
 test("a lowered compaction window whose save fails is put back to the previous one", async () => {
   const { fake } = windowedSession();

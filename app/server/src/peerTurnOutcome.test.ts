@@ -58,7 +58,6 @@ const { fakeDrivers, cardUpdates, fakeHub } = vi.hoisted(() => {
   const fakeHub = {
     getLiveById: (id: string) => fakeDrivers.get(id),
     acquireById: async (id: string) => fakeDrivers.get(id),
-    broadcastSessions: () => {},
     broadcastPeerPromptCardUpdate: (
       sessionId: string,
       update: {

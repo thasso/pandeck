@@ -225,6 +225,9 @@ export function forgetPresence(side: CheckoutSide, path: string): void {
   if (!entry) return;
   entries.delete(key);
   queue.delete(entry);
+  // Forgetting a verified absence makes it unverified immediately, so list
+  // readers lose worktreeMissing just as they do on a successful probe.
+  if (entry.answer?.state === "absent") notifyPresenceChange([{ key }]);
 }
 
 /**
@@ -268,8 +271,12 @@ export function presenceQueuedForTests(
 
 /** Test seam: forget every entry and zero the counts; listeners stay. */
 export function resetPresenceForTests(): void {
+  const changes = [...entries.values()]
+    .filter((entry) => entry.answer?.state === "absent")
+    .map(({ key }) => ({ key }));
   entries.clear();
   queue.clear();
+  if (changes.length > 0) notifyPresenceChange(changes);
   probesIssued = 0;
   coalesced = 0;
   droppedLate = 0;

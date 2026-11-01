@@ -18,7 +18,6 @@ const { drivers, fakeHub } = vi.hoisted(() => {
     fakeHub: {
       getLiveById: (id: string) => drivers.get(id),
       acquireById: async (id: string) => drivers.get(id),
-      broadcastSessions: () => {},
       broadcastPeerPromptCardUpdate: () => {},
       broadcastPeerPromptQueue: () => {},
     },

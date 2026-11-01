@@ -2176,6 +2176,329 @@ test("a retained epoch's running totals are rebased across turns, not summed", a
   session.dispose();
 });
 
+test("retained Claude controls, retry and follow-up callbacks report independent full public rows", async () => {
+  const { assertSessionRowsReported: oracle } =
+    await import("../test/sessionListPublicOracle.ts");
+  const { claudeSdkStore } = await import("./claudeSdkStore.ts");
+  const { createSession } = await import("../harnesses/create.ts");
+  const { ensureRuntimeSessionWithRuntime } =
+    await import("../session/runtimePrompt.ts");
+  const { installSessionActivityTracking } =
+    await import("../sessionActivity.ts");
+  const { getSettings } = await import("../settings.ts");
+  updateSettings({
+    sessionNaming: { ...getSettings().sessionNaming, enabled: false },
+  });
+  const stopTracking = installSessionActivityTracking();
+  const profiles = await import("../credentialProfiles.ts");
+  const profile = profiles.createCredentialProfile({
+    name: "Retained oracle account",
+    provider: "claude",
+  }).id;
+  const queries: FakeRetainedQuery[] = [];
+  claudeSdkStore.setSeam(async () => ({
+    query(params) {
+      const query = new FakeRetainedQuery(params);
+      queries.push(query);
+      return query;
+    },
+  }));
+  const session = (await createSession({
+    harness: "claude-sdk",
+    agentType: "assistant",
+    modelId: "sonnet",
+    credentialProfileId: profile,
+  })) as import("./ClaudeSdkSession.ts").ClaudeSdkSession;
+  ensureRuntimeSessionWithRuntime(sessionRuntime, session);
+  try {
+    const adapter = session.createRuntimeAdapter();
+    const turn = adapter.prompt("retained first turn");
+    await until(() => queries[0]?.inputs.length === 1);
+    const query = queries[0]!;
+    await preToolHook(query)(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "provider-background",
+        transcript_path: "/tmp/transcript",
+        cwd: dataDir,
+        tool_name: "Bash",
+        tool_input: { command: "held-oracle-job", run_in_background: true },
+        tool_use_id: "oracle-bg-tool",
+      },
+      "oracle-bg-tool",
+      { signal: new AbortController().signal },
+    );
+    query.output.emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "oracle-bg-task",
+      tool_use_id: "oracle-bg-tool",
+      description: "held oracle job",
+      task_type: "shell",
+      uuid: "oracle-bg-start",
+      session_id: "provider-background",
+    } as unknown as ClaudeSdkMessage);
+    await until(
+      () =>
+        backgroundWorkStore.listItems({ ownerSessionId: session.id })[0]
+          ?.state === "running",
+    );
+    await oracle(
+      "Claude api_retry callback",
+      () =>
+        new Promise<void>((resolve) => {
+          const unsubscribe = sessionRuntime.subscribeEvents((id, event) => {
+            if (id === session.id && event.type === "runProgress") {
+              unsubscribe();
+              resolve();
+            }
+          });
+          query.output.emit({
+            type: "system",
+            subtype: "api_retry",
+            attempt: 1,
+            max_retries: 3,
+            retry_delay_ms: 1000,
+            error_status: 429,
+            uuid: "oracle-retry",
+            session_id: "provider-background",
+          } as unknown as ClaudeSdkMessage);
+        }),
+      {
+        equal:
+          "Claude's current live list overlay does not expose provider retry progress; the runtime progress does change",
+      },
+    );
+    assert.equal(sessionRuntime.runProgress(session.id)?.retry?.attempt, 1);
+    const steer = adapter.prompt("follow-up the first reply will miss", {
+      steer: true,
+      clientRequestId: "oracle-follow-up",
+    });
+    await until(() => query.inputs.length === 2);
+    const uuid = query.inputs[1]!.uuid!;
+    const folded = adapter.prompt("accepted by native command lifecycle", {
+      steer: true,
+      clientRequestId: "oracle-native-fold",
+    });
+    await until(() => query.inputs.length === 3);
+    const foldedUuid = query.inputs[2]!.uuid!;
+    await oracle(
+      "Claude.acceptSteer command-lifecycle callback",
+      async () => {
+        query.output.emit({
+          type: "command_lifecycle",
+          state: "started",
+          command_uuid: foldedUuid,
+        } as unknown as ClaudeSdkMessage);
+        assert.equal((await folded).steerDelivery, "steer");
+      },
+      { changed: [session.id] },
+    );
+    for (const event of [
+      { type: "message_start", message: { id: "oracle-assistant" } },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "first answer" },
+      },
+      { type: "content_block_stop", index: 0 },
+    ])
+      query.output.emit({
+        type: "stream_event",
+        session_id: "provider-background",
+        uuid: "oracle-stream",
+        event,
+      } as unknown as ClaudeSdkMessage);
+    query.output.emit({
+      type: "assistant",
+      session_id: "provider-background",
+      uuid: "oracle-assistant",
+      message: {
+        id: "oracle-assistant",
+        model: "claude-sonnet-5",
+        role: "assistant",
+        content: [{ type: "text", text: "first answer" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    } as unknown as ClaudeSdkMessage);
+    await oracle(
+      "Claude continueWithFollowUps callback",
+      async () => {
+        query.output.emit({
+          ...result("oracle-first-result"),
+          user_message_uuids: [query.inputs[0]!.uuid!],
+        } as unknown as ClaudeSdkMessage);
+        assert.equal((await steer).steerDelivery, "followUp");
+      },
+      { changed: [session.id] },
+    );
+    assert.equal(session.isRunning, true);
+    assert.ok(session.listItem(0).messageCount >= 3);
+    await oracle(
+      "Claude native assistant-model callback",
+      () =>
+        (
+          session as unknown as {
+            handleAssistantMessage(message: ClaudeSdkMessage): void;
+          }
+        ).handleAssistantMessage({
+          type: "assistant",
+          session_id: "provider-background",
+          uuid: "oracle-observed-model",
+          message: {
+            id: "oracle-observed-model",
+            model: "claude-haiku-4-5",
+            role: "assistant",
+            content: [],
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        } as unknown as ClaudeSdkMessage),
+      { changed: [session.id] },
+    );
+    assert.equal(session.modelSelection().model?.id, "haiku");
+    await oracle(
+      "Claude follow-up terminal callback",
+      async () => {
+        query.output.emit({
+          ...result("oracle-follow-result"),
+          user_message_uuids: [uuid],
+        } as unknown as ClaudeSdkMessage);
+        await turn;
+      },
+      { changed: [session.id] },
+    );
+    assert.equal(session.isRunning, false);
+    assert.equal(query.closeCalls, 0);
+    let releaseModel!: () => void;
+    query.setModel = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseModel = resolve;
+        }),
+    );
+    await oracle(
+      "Claude.setModel retained control",
+      async () => {
+        const changing = session.setModel("claude-opus-4-6");
+        assert.equal(session.modelSelection().model?.id, "haiku");
+        releaseModel();
+        await changing;
+      },
+      { changed: [session.id] },
+    );
+    assert.equal(session.modelSelection().model?.id, "opus");
+    assert.equal(sessionStore.get(session.id)?.model, "opus");
+    assert.equal(vi.mocked(query.setModel).mock.calls.length, 1);
+    let releaseThinking!: () => void;
+    query.setMaxThinkingTokens = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseThinking = resolve;
+        }),
+    );
+    await oracle(
+      "Claude.setThinkingLevel retained control",
+      async () => {
+        const changing = session.setThinkingLevel("high");
+        assert.notEqual(session.toRecord().thinkingLevel, "high");
+        releaseThinking();
+        await changing;
+      },
+      { changed: [session.id] },
+    );
+    assert.equal(session.toRecord().thinkingLevel, "high");
+    assert.equal(vi.mocked(query.setMaxThinkingTokens).mock.calls.length, 1);
+    const controls: ClaudeQuery = query;
+    controls.getContextUsage = async () => ({
+      isAutoCompactEnabled: true,
+      autoCompactThreshold: 180000,
+      mcpTools: [],
+    });
+    const lowered = await oracle(
+      "Claude.lowerCompactionWindow",
+      () =>
+        session.lowerCompactionWindow(120000, (value) =>
+          sessionStore.setCompactionWindow(session.id, value),
+        ),
+      {
+        equal:
+          "the running provider threshold bounds a persisted cap, not a list field",
+      },
+    );
+    assert.equal(lowered.ok, true);
+    assert.equal(sessionStore.get(session.id)?.compactionWindow, 120000);
+    await oracle(
+      "Claude.openProviderTurn callback",
+      async () => {
+        query.output.emit({
+          type: "stream_event",
+          session_id: "provider-background",
+          uuid: "oracle-late-start",
+          event: {
+            type: "message_start",
+            message: { id: "oracle-late-message" },
+          },
+        } as unknown as ClaudeSdkMessage);
+        await until(() => session.isRunning);
+      },
+      { changed: [session.id] },
+    );
+    await oracle(
+      "Claude provider-initiated terminal callback",
+      async () => {
+        query.output.emit(result("oracle-late-result"));
+        await until(() => !session.isRunning);
+      },
+      { changed: [session.id] },
+    );
+    await oracle(
+      "Claude.openProviderTurn before Stop",
+      async () => {
+        query.output.emit({
+          type: "stream_event",
+          session_id: "provider-background",
+          uuid: "oracle-stop-start",
+          event: {
+            type: "message_start",
+            message: { id: "oracle-stop-message" },
+          },
+        } as unknown as ClaudeSdkMessage);
+        await until(() => session.isRunning);
+      },
+      { changed: [session.id] },
+    );
+    await oracle("Claude.abort retained turn", () => session.abort(), {
+      changed: [session.id],
+    });
+    assert.equal(session.isRunning, false);
+    await until(() => query.interruptCalls > 0);
+    query.setModel = async () => {
+      throw new Error("control rejected");
+    };
+    await oracle(
+      "Claude retained control rejection",
+      () =>
+        assert.rejects(() => session.setModel("sonnet"), /control rejected/),
+      {
+        equal:
+          "a rejected native control leaves the selected public model unchanged",
+      },
+    );
+    assert.equal(session.modelSelection().model?.id, "opus");
+  } finally {
+    claudeSdkStore.remove(session.id);
+    await sessionRuntime.disposeSession(session.id);
+    stopTracking();
+    profiles.setCredentialProfileEnabled(profile, false);
+  }
+});
+
 /** Every active item the owner has: what a supervisor Stop-all would reserve. */
 function activeItemIds(ownerSessionId: string): string[] {
   return backgroundWorkStore

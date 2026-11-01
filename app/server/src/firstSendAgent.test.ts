@@ -49,6 +49,7 @@ const { setAgentSpawnSourcesForTests } = await import("./agents/agentSpawn.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const accountRouter = await import("./accountRouter.ts");
 const { setLibraryBroadcaster } = await import("./library/libraryPublish.ts");
+const { publishAgentLibrary } = await import("./agents/agentLibraryList.ts");
 const published: Array<{ type: string; library?: string }> = [];
 setLibraryBroadcaster({
   broadcast: (message) => published.push(message as never),
@@ -567,7 +568,9 @@ test("a picked model the account does not offer is refused", async () => {
 });
 
 /** A hand edit that lands after the send was prepared, before creation. */
-function editAfterPrepare(patch: Parameters<typeof writeResearcher>[0]) {
+async function editAfterPrepare(patch: Parameters<typeof writeResearcher>[0]) {
+  // An earlier refusal's republish would otherwise take the first call.
+  await publishAgentLibrary();
   let calls = 0;
   setAgentSpawnSourcesForTests({
     offers: async () => {
@@ -579,7 +582,7 @@ function editAfterPrepare(patch: Parameters<typeof writeResearcher>[0]) {
 
 test("a hand edit made while the session is set up is what it freezes", async () => {
   const { conn } = makeConnection();
-  editAfterPrepare({ body: "Research twice." });
+  await editAfterPrepare({ body: "Research twice." });
   try {
     await conn.handleFirstSend({
       harness: "claude-sdk",
@@ -600,8 +603,8 @@ test("a hand edit made while the session is set up is what it freezes", async ()
 
 test("a runtime that changes while the session is set up is refused, not run", async () => {
   const { conn, sent } = makeConnection();
+  await editAfterPrepare({ effort: "low" });
   published.length = 0;
-  editAfterPrepare({ effort: "low" });
   try {
     await conn.handleFirstSend({
       harness: "claude-sdk",
@@ -633,7 +636,7 @@ test("a runtime that changes while the session is set up is refused, not run", a
 
 test("a persona that changes while the session is set up is refused, not run", async () => {
   const { conn, sent } = makeConnection();
-  editAfterPrepare({ persona: "developer" });
+  await editAfterPrepare({ persona: "developer" });
   try {
     await conn.handleFirstSend({
       harness: "claude-sdk",

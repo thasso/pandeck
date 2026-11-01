@@ -4,6 +4,7 @@
  * place both kinds, and a renumbering places many — all in one transaction.
  */
 import { getDb } from "./index.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 
 export interface InboxPlacement {
   sessions: ReadonlyArray<{ id: string; position: number }>;
@@ -37,6 +38,7 @@ export function setInboxPositions(placement: InboxPlacement): boolean {
     for (const { id, position } of placement.runs)
       if (run.run(position, id).changes === 0)
         throw new Error("run row not updated");
+    touchSessionRows(placement.sessions.map((placed) => placed.id));
     db.exec("COMMIT");
     return true;
   } catch {

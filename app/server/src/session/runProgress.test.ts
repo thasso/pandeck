@@ -1082,7 +1082,7 @@ function piHarness(sessionId: string) {
     prompt: () => Promise.resolve(),
   };
   const host = {
-    broadcastSessions: () => Promise.resolve(),
+    sessionRowsChanged: () => {},
     noteRunStarted: () => {},
     checkPendingReload: () => {},
     isReloadQueued: () => false,

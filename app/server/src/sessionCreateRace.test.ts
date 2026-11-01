@@ -149,7 +149,6 @@ function harness(sent: ServerMessage[]) {
     created.push(id);
     return sessionFor(id) as never;
   });
-  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
   const connection = new Connection(fakeSocket(sent));
   return {
     connection,

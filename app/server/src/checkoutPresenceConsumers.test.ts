@@ -73,10 +73,7 @@ vi.mock("./sessionAccountSwitch.ts", async (importOriginal) => ({
 
 const { KNOWLEDGE_WORKTREE_ID, WORKTREE_MISSING_BLOCKED_REASON } =
   await import("@assistant/shared");
-const { hub } = await import("./hub.ts");
-(
-  hub as unknown as { broadcastSessions: () => Promise<void> }
-).broadcastSessions = async () => {};
+await import("./hub.ts");
 const { Connection } = await import("./connection.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");

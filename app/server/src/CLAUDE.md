@@ -2,10 +2,9 @@
 
 # Server modules
 
-- Validate client messages and untrusted ids before effects. Keep API,
-  WebSocket, and MCP behind token/origin checks; credentials stay under
-  `DATA_DIR` or in the environment, never committed config. A stored credential
-  is dropped when its URL moves to another origin (`urlOrigin.ts`).
+- Validate client messages/untrusted ids before effects. API, WebSocket and MCP
+  require token/origin checks. Credentials stay in `DATA_DIR` or env, never
+  committed config; drop them on URL origin changes (`urlOrigin.ts`).
 - Token-bearing content never executes on the API origin: raw HTML downloads,
   and agent HTML runs only under a typed source/directory grant
   (`directFileGrants.ts`) whose opaque id is its ONLY credential. Never token a
@@ -14,11 +13,10 @@
 - `@earendil-works/*` (not `pi-mcp`) is imported only under `piSdk/`,
   `@anthropic-ai/claude-agent-sdk` only under `claudeSdk/`, and neither under
   `mcp/` or `tools/`. Prompts use `runtimePrompt.ts`, never raw engines
-  (`architecture.test.ts`). App code reaches those folders only through
-  `harnesses/`, branching on capabilities, not harness ids. Only
-  `harnessBoundary.test.ts`'s measurement modules are exempt
-  (`docs/agent-harnesses.md`). Drivers supply `nativeFacts()`; app-owned
-  `sessionState.ts` builds state. Live engines require its builder at
+  (`architecture.test.ts`). App code reaches them through `harnesses/`, by
+  capability, not harness id. Only `harnessBoundary.test.ts` measurement modules
+  are exempt (`docs/agent-harnesses.md`). Drivers supply `nativeFacts()`;
+  app-owned `sessionState.ts` builds state. Live engines require its builder at
   construction. Engine projection imports stay at zero in
   `harnessBoundary.test.ts`. Existing-session decisions use `agentHandoffs.ts`.
   Automatic drains wake `deliveryScheduler.ts`.
@@ -51,11 +49,12 @@
 - Pull-request provider calls use only `gitHosting.ts`.
 - LIST broadcasts are addressed by topic (`hub.broadcastTopic`), each domain
   seam exposing exactly one `broadcast` — never a `broadcastAll`. Per-object
-  streams reach only connections holding that object. Subscribing is also the
-  authoritative read, and those items are SUMMARIES (`taskSummaryOf` is the one
-  narrowing).
-- SHOWING a session opens no harness: `loadSession` answers synchronously from
-  the metadata row and the app-owned log (`viewSession.ts`). Only a command that
-  DRIVES it may acquire one, through `ensureViewingHarness`; never await an
-  acquisition on a view path.
+  streams reach only holders. Subscribe is the authoritative SUMMARY read
+  (`taskSummaryOf` narrows).
+- Views open no harness: `loadSession` answers synchronously from metadata and
+  app-owned logs (`viewSession.ts`). Only driving commands may acquire through
+  `ensureViewingHarness`; views never await acquisition.
+- Session-row writers synchronously report ids and fan-out through
+  `db/sessionListChanges.ts` inside any writing transaction. Clock boundaries
+  touch before changing projection inputs (`docs/session-list.md`).
 - Resolve home only through `userHomeDir()` (`userHome.ts`).

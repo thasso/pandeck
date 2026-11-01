@@ -1,4 +1,5 @@
 import { getDb } from "./index.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 
 export type PermanentAssistantQueueStatus =
   "queued" | "working" | "completed" | "failed";
@@ -57,6 +58,8 @@ export const permanentAssistantStore = {
   },
   setSessionId(sessionId: string): void {
     const now = Date.now();
+    // Which row is the hidden singleton moves: the old one shows again.
+    touchSessionRows([this.sessionId(), sessionId]);
     getDb()
       .prepare(
         "INSERT INTO permanent_assistant_state(singleton_id,session_id,created_at_ms,updated_at_ms) VALUES(1,?,?,?) ON CONFLICT(singleton_id) DO UPDATE SET session_id=excluded.session_id,updated_at_ms=excluded.updated_at_ms",
@@ -64,6 +67,7 @@ export const permanentAssistantStore = {
       .run(sessionId, now, now);
   },
   clearSessionId(): void {
+    touchSessionRows([this.sessionId()]);
     getDb()
       .prepare(
         "UPDATE permanent_assistant_state SET session_id=NULL, updated_at_ms=? WHERE singleton_id=1",

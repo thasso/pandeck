@@ -175,7 +175,7 @@ function piSession(result: AssistantMessage | Error) {
       dispose: () => {},
     } as never),
     {
-      broadcastSessions: async () => {},
+      sessionRowsChanged: () => {},
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => false,

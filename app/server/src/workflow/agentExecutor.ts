@@ -118,7 +118,6 @@ export interface WorkflowAgentExecutorDeps {
       attachments: PromptAttachment[];
     },
   ): Promise<void>;
-  broadcastSessions(): void;
   /** Whether this session is mid-turn, asked of the runtime, not of a driver. */
   isSessionBusy(sessionId: string): boolean;
   /** Offer the session to the scheduler. False in isolated executor tests. */
@@ -136,7 +135,6 @@ const REAL_DEPS: WorkflowAgentExecutorDeps = {
   // which may still be initializing this module.
   create: (spec) => createSession(spec),
   prompt: promptRuntimeSession,
-  broadcastSessions: () => void hub.broadcastSessions(),
   isSessionBusy: (sessionId) => sessionRuntime.isRunning(sessionId),
   wakeDelivery: wakeSessionDelivery,
   deliveryStopped: () => hub.isReloadQueued(),
@@ -448,7 +446,6 @@ async function dispatchWorkflowAgentStep(
       ...(driver.sessionFile ? { sessionFile: driver.sessionFile } : {}),
     });
     attachments = started.attachments;
-    deps.broadcastSessions();
   }
 
   // Before the turn begins: a triage is judged against the Git state it was

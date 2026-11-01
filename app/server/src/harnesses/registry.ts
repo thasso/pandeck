@@ -224,8 +224,8 @@ export const harnessRegistry = {
       );
     // A Claude session created, updated or removed changes the list, and may
     // unblock a queued dev reload (its turn just finished).
-    claudeSdkStore.setOnChange(() => {
-      void host.broadcastSessions();
+    claudeSdkStore.setOnChange((sessionId) => {
+      host.sessionRowsChanged([sessionId]);
       host.checkPendingReload();
     });
     claudeSdkStore.setStateBuilder((sessionId, facts) =>

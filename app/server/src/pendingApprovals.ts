@@ -57,6 +57,7 @@ import type {
 } from "@assistant/shared";
 import { AGENT_DEFAULT_EFFORT } from "./agents/agentLibrary.ts";
 import { inDbTransaction } from "./db/index.ts";
+import { touchSessionRows } from "./db/sessionListChanges.ts";
 import { approvalStore, type StoredApproval } from "./db/approvalStore.ts";
 import { sessionStore, type SpawnGrantEdge } from "./db/sessionStore.ts";
 
@@ -252,6 +253,7 @@ export function subscribePendingApprovalChanges(
 }
 
 function emitChange(sessionId: string): void {
+  // Row touches belong to createApproval/patchCard's writing transactions.
   for (const listener of listeners) listener(sessionId);
 }
 
@@ -395,6 +397,7 @@ export function createApproval(input: CreateApprovalInput): ApprovalCard {
       retired.push(old);
     }
     approvalStore.insert({ card, context: input.context ?? {} });
+    touchSessionRows([input.sessionId]);
     return retired;
   });
   for (const old of superseded) void broadcast(input.sessionId, old);
@@ -430,6 +433,7 @@ function patchCard(
     if (JSON.stringify(card) === JSON.stringify(stored.card)) return rec;
     const updated = { card, context: rec.context };
     approvalStore.update(updated);
+    touchSessionRows([card.sessionId]);
     return updated;
   });
 }
@@ -1149,7 +1153,6 @@ async function broadcast(
   try {
     const { hub } = await import("./hub.ts");
     hub.broadcastApprovalUpdate(sessionId, approval);
-    void hub.broadcastSessions();
   } catch {
     // best-effort; the card still resolves from the store on the next snapshot.
   }

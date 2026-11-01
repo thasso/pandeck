@@ -562,7 +562,7 @@ export class PiLiveSession implements LiveSession {
         this.providerTransportFailure = {};
         this.broadcastContextInfo(true);
         // Surface the running indicator in every tab's sidebar.
-        void this.host.broadcastSessions();
+        this.host.sessionRowsChanged([this.key]);
         break;
       }
       case "message_update": {
@@ -601,6 +601,9 @@ export class PiLiveSession implements LiveSession {
         break;
       }
       case "message_end": {
+        // The SDK persists this message synchronously after delivering the
+        // callback. Report within that span, before the next native step.
+        this.host.sessionRowsChanged([this.key]);
         this.providerTransportFailure = {
           ...this.providerTransportFailure,
           ...providerTransportDetails(event.message),
@@ -793,7 +796,7 @@ export class PiLiveSession implements LiveSession {
         this.broadcastContextInfo(true);
         if (event.toolName === "task_manage") {
           this.broadcastState();
-          void this.host.broadcastSessions();
+          this.host.sessionRowsChanged([this.key]);
         }
         break;
       }
@@ -827,7 +830,7 @@ export class PiLiveSession implements LiveSession {
         this.broadcastContextInfo(true);
         if (this.viewers.size > 0)
           sessionStore.markRead(this.key, this.updatedAt);
-        void this.host.broadcastSessions();
+        this.host.sessionRowsChanged([this.key]);
         break;
       }
       case "agent_settled": {
@@ -903,7 +906,7 @@ export class PiLiveSession implements LiveSession {
           sessionStore.markRead(this.key, this.updatedAt);
         }
         this.residency.arm();
-        void this.host.broadcastSessions();
+        this.host.sessionRowsChanged([this.key]);
         // A deferred reload waits for the last run to finish — check now.
         this.host.checkPendingReload();
         break;
@@ -915,7 +918,7 @@ export class PiLiveSession implements LiveSession {
         }
         this.updatedAt = Date.now();
         this.syncRegistry();
-        void this.host.broadcastSessions();
+        this.host.sessionRowsChanged([this.key]);
         break;
       }
       default:
@@ -972,7 +975,7 @@ export class PiLiveSession implements LiveSession {
     openHostCommandTurn(this.hostCommandTarget, this.liveTurn);
     this.broadcastState();
     this.broadcastContextInfo(true);
-    void this.host.broadcastSessions();
+    this.host.sessionRowsChanged([this.key]);
     return { assistantId, toolId };
   }
 
@@ -1027,7 +1030,7 @@ export class PiLiveSession implements LiveSession {
     this.broadcastContextInfo(true);
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
     this.residency.arm();
-    void this.host.broadcastSessions();
+    this.host.sessionRowsChanged([this.key]);
     this.host.checkPendingReload();
   }
 
@@ -1150,7 +1153,7 @@ export class PiLiveSession implements LiveSession {
       replacement.commit();
       void old.dispose();
       this.broadcastState();
-      void this.host.broadcastSessions();
+      this.host.sessionRowsChanged([this.key]);
     } catch (error) {
       if (!committed) replacement.dispose();
       throw error;
@@ -1290,7 +1293,7 @@ export class PiLiveSession implements LiveSession {
     } else run.catch((err: unknown) => this.finishPromptError(err, wasRunning));
     // The chat should appear in every tab the moment its first prompt is sent.
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
-    void this.host.broadcastSessions();
+    this.host.sessionRowsChanged([this.key]);
     if (shouldAutoName && namingSettings?.enabled)
       void this.autoNameFromFirstPrompt(titleText, attachments, namingSettings);
     if (shouldAutoNameFork)
@@ -1377,7 +1380,7 @@ export class PiLiveSession implements LiveSession {
     this.broadcastContextInfo(true);
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
     this.residency.arm();
-    void this.host.broadcastSessions();
+    this.host.sessionRowsChanged([this.key]);
     this.host.checkPendingReload();
   }
 
@@ -1401,13 +1404,15 @@ export class PiLiveSession implements LiveSession {
       await this.rename(
         generatedTitle ?? fallbackSessionTitle(prompt, attachments),
       );
-      await this.host.broadcastSessions();
+      this.host.sessionRowsChanged([this.key]);
+    } catch (err) {
+      console.warn("Failed to apply automatic session title:", errorText(err));
     } finally {
       // A manual rename may have spent this already; every other exit must stop
       // looking like naming work is still happening.
       if (this.titleGenerationPending) {
         this.titleGenerationPending = false;
-        await this.host.broadcastSessions();
+        this.host.sessionRowsChanged([this.key]);
       }
     }
   }
@@ -1432,7 +1437,7 @@ export class PiLiveSession implements LiveSession {
       // Do not overwrite a user/manual rename that happened while generation ran.
       if (!title || this.engine.sessionName !== originalName) return;
       await this.rename(title);
-      await this.host.broadcastSessions();
+      this.host.sessionRowsChanged([this.key]);
     } catch (err) {
       console.warn("Failed to auto-name forked session:", errorText(err));
     }
@@ -1497,6 +1502,7 @@ export class PiLiveSession implements LiveSession {
     await this.engine.setModel(model);
     this.broadcastState();
     this.broadcastContextInfo(true);
+    this.host.sessionRowsChanged([this.key]);
   }
 
   /** Broadcasts only once the engine has applied it; a rejection reaches the caller. */
@@ -1504,6 +1510,7 @@ export class PiLiveSession implements LiveSession {
     await this.engine.setThinkingLevel(level);
     this.broadcastState();
     this.broadcastContextInfo(true);
+    this.host.sessionRowsChanged([this.key]);
   }
 
   /* ---------------------------- compaction window --------------------------- */
@@ -1571,7 +1578,10 @@ export class PiLiveSession implements LiveSession {
   async rename(title: string): Promise<void> {
     // `setSessionName` may emit synchronously; spend the working state first so
     // no broadcast ever shows a final title with the pending treatment.
-    this.titleGenerationPending = false;
+    if (this.titleGenerationPending) {
+      this.titleGenerationPending = false;
+      this.host.sessionRowsChanged([this.key]);
+    }
     await this.engine.setSessionName(title);
     this.title = deriveTitle(title, "");
     this.updatedAt = Date.now();

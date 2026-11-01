@@ -41,6 +41,7 @@ import {
   taskSummaryOf,
 } from "@assistant/shared";
 import { touchStateTopic, withChangeSet } from "./db/changeSet.ts";
+import { touchSessionRows } from "./db/sessionListChanges.ts";
 import { getDb } from "./db/index.ts";
 import {
   taskStore,
@@ -189,6 +190,8 @@ function touchTasks(
     ),
   ];
   stamp(numeric.map(String));
+  // A linked session's `taskProgress` counts these Tasks.
+  touchSessionRows(taskStore.contextSessionIds(numeric));
   version += 1;
   if (holders) initiativeStore.touchHolders(numeric, formerHolders);
 }

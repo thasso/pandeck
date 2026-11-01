@@ -62,10 +62,10 @@ class ClaudeSdkSessionStore {
   private logs = new Map<string, ClaudeSdkLogCursor>();
   /** Lazily-built real seam, shared by every live session. */
   private seamPromise: Promise<ClaudeSdkSeam> | undefined;
-  private onChange: () => void = () => {};
+  private onChange: (sessionId: string) => void = () => {};
   private buildSessionState: HarnessHost["buildSessionState"] | undefined;
 
-  setOnChange(cb: () => void): void {
+  setOnChange(cb: (sessionId: string) => void): void {
     this.onChange = cb;
   }
 
@@ -236,7 +236,7 @@ class ClaudeSdkSessionStore {
         DEFAULT_CLAUDE_PROFILE_ID,
       ...(record?.usage !== undefined ? { usage: record?.usage } : {}),
     });
-    session.onChange = () => this.onChange();
+    session.onChange = () => this.onChange(id);
     session.onPersist = () => this.persist(session);
     session.holdBy(() => this.evictIdle(session));
     if (loaded) this.logs.set(id, loaded.cursor);
@@ -258,7 +258,7 @@ class ClaudeSdkSessionStore {
     // Ownership from the first moment: an acquisition nobody views and nothing
     // drives (a rename, a superseded load) idles out like any other.
     session.armIdleIfUnviewed();
-    this.onChange();
+    this.onChange(id);
     return session;
   }
 
@@ -414,7 +414,7 @@ class ClaudeSdkSessionStore {
         cwd,
         ...(credentialProfileId !== undefined ? { credentialProfileId } : {}),
       });
-      session.onChange = () => this.onChange();
+      session.onChange = () => this.onChange(id);
       session.onPersist = () => this.persist(session);
       session.holdBy(() => this.evictIdle(session));
       // A fork INHERITS its parent's scope, and claims it before the live map
@@ -430,7 +430,7 @@ class ClaudeSdkSessionStore {
       this.sessions.set(id, session);
       this.persist(session);
       session.armIdleIfUnviewed();
-      this.onChange();
+      this.onChange(id);
       return session;
     } catch (err) {
       // Nothing references the child now, so unwind BOTH sides of the failed
@@ -439,6 +439,7 @@ class ClaudeSdkSessionStore {
       // is gone. The original failure is what the user should see.
       this.sessions.delete(id);
       this.logs.delete(id);
+      this.onChange(id);
       await sessionRuntime.disposeSession(id);
       sessionStore.deleteSkills(id);
       try {
@@ -507,6 +508,8 @@ class ClaudeSdkSessionStore {
     if (!this.persist(session)) return false;
     this.sessions.delete(session.id);
     this.logs.delete(session.id);
+    // A live row overlays the persisted one (`mergedSessionList`).
+    this.onChange(session.id);
     session.dispose();
     void sessionRuntime.releaseHarness(session.id);
     return true;
@@ -627,13 +630,14 @@ class ClaudeSdkSessionStore {
     void sessionRuntime.disposeSession(id);
     this.sessions.delete(id);
     this.logs.delete(id);
+    this.onChange(id);
     try {
       removeClaudeSdkRecord(STORE_DIR, id);
     } catch {
       // ignore
     }
     void this.removeNativeTranscript(id, record);
-    this.onChange();
+    this.onChange(id);
   }
 
   /**

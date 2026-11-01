@@ -10,6 +10,7 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 const { hub } = await import("./hub.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
+const { touchAllSessionRows } = await import("./db/sessionListChanges.ts");
 const { permanentAssistantStore } =
   await import("./db/permanentAssistantStore.ts");
 const unreadModule = await import("./permanentAssistantUnread.ts");
@@ -50,9 +51,8 @@ test("unchanged row updates and full flushes do not resend the singleton boolean
   await hub.sendPermanentAssistantUnreadTo(viewer);
   await hub.broadcastSessionUpdated(id);
   vi.useFakeTimers();
-  const flush = hub.broadcastSessions();
+  touchAllSessionRows("test");
   await vi.advanceTimersByTimeAsync(1_000);
-  await flush;
   expect(
     sent.filter((message) => message.type === "permanentAssistantUnread"),
   ).toEqual([{ type: "permanentAssistantUnread", unread: true }]);

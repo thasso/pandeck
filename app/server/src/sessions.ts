@@ -23,10 +23,12 @@ import {
 import { taskIndexVersion } from "./tasks.ts";
 import { projectStore } from "./db/projectStore.ts";
 import { taskStore } from "./db/taskStore.ts";
+import { memoizedOnLinks } from "./db/links.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
+import { deadlineWatermark } from "./db/peerDeadlineClock.ts";
 import { directPeerChildStore } from "./db/directPeerChildStore.ts";
 import { waitingForSlotByChild } from "./heldDirectPeers.ts";
 import { getSettings } from "./settings.ts";
@@ -329,7 +331,7 @@ function attentionFields(
 /** Who still owes each session a reply; empty (and logged) when unreadable. */
 function awaitingRepliesBySender(): Map<string, string[]> {
   try {
-    return peerPromptStore.outstandingRepliesBySender();
+    return peerPromptStore.outstandingRepliesBySender(deadlineWatermark());
   } catch (err) {
     console.warn("Failed to read awaited peer replies for session list:", err);
     return new Map();
@@ -341,6 +343,7 @@ function unansweredRequestsByRecipient(): Map<string, string[]> {
   try {
     return peerPromptStore.remindersExhaustedByRecipient(
       getSettings().sessionPeerPromptReminderLimit,
+      deadlineWatermark(),
     );
   } catch (err) {
     console.warn(
@@ -441,6 +444,9 @@ export async function listSessions(
   // connection. A new per-row lookup belongs in this batched prologue. The
   // maps derived from session edges are memoized on those edges
   // (`memoizedOnLinks`), so between edge writes they cost nothing.
+  // Every input changes through a synchronous row touch. Peer fields read
+  // deadlineWatermark(); main-checkout TTL reads run a touch-before-expiry
+  // transition. New clock inputs must report before exposing their boundary.
   const projectBySession = projectStore.sessionProjectIndex();
   const worktreeBySession = worktreeIdBySession();
   // Memoized per DISTINCT worktree id, and only for the ids rows actually
@@ -733,15 +739,22 @@ export async function archivedSessionCount(): Promise<number> {
 
 interface TaskSessionIndex {
   version: number;
+  linksEpoch: object;
   progress: Map<string, SessionTaskProgress>;
 }
 
 let taskSessionIndexCache: TaskSessionIndex | undefined;
+// Direct edge writers, including removeAllFor(task), need not publish a Task.
+const taskContextEpoch = memoizedOnLinks("task", () => ({}));
 
 function getTaskSessionIndex(): TaskSessionIndex {
   try {
     const version = taskIndexVersion();
-    if (taskSessionIndexCache?.version === version)
+    const linksEpoch = taskContextEpoch();
+    if (
+      taskSessionIndexCache?.version === version &&
+      taskSessionIndexCache.linksEpoch === linksEpoch
+    )
       return taskSessionIndexCache;
 
     // The same Tasks `listTasks()` lists, on the same `context` edges, but only
@@ -755,10 +768,10 @@ function getTaskSessionIndex(): TaskSessionIndex {
       }
       counts[status] += 1;
     }
-    taskSessionIndexCache = { version, progress };
+    taskSessionIndexCache = { version, linksEpoch, progress };
     return taskSessionIndexCache;
   } catch (err) {
     console.warn("Failed to read task progress for session list:", err);
-    return { version: 0, progress: new Map() };
+    return { version: 0, linksEpoch: {}, progress: new Map() };
   }
 }

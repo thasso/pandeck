@@ -75,7 +75,6 @@ const { fakeDrivers, deadIds, acquired, duringAcquire, fakeHub } = vi.hoisted(
         if (deadIds.has(id)) throw new Error("no on-disk state to resume from");
         return fakeDrivers.get(id);
       },
-      broadcastSessions: () => {},
       broadcastPeerPromptCardUpdate: () => {},
       broadcastPeerPromptQueue: () => {},
     };
@@ -424,7 +423,7 @@ function realPiChild(parentId: string): {
     dispose() {},
   };
   const host = {
-    broadcastSessions: async () => {},
+    sessionRowsChanged: () => {},
     noteRunStarted() {},
     checkPendingReload() {},
     isReloadQueued: () => false,
@@ -1732,7 +1731,7 @@ if (mode === "crash") {
     const { localPiEngine } = await import(src + "piSdk/piEngine.ts");
     let listener;
     const session = { sessionId: "Child", sessionName: "Already named", isStreaming: false, sessionManager: { getBranch: () => [], getEntries: () => [] }, subscribe: (l) => { listener = l; return () => {}; }, getSessionStats: () => ({ totalMessages: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), settingsManager: { getRetrySettings: () => ({ enabled: true, maxRetries: 3 }), applyOverrides() {} }, abortRetry() {}, dispose() {} };
-    const host = { broadcastSessions: async () => {}, noteRunStarted() {}, checkPendingReload() {}, isReloadQueued: () => false, buildSessionState: () => ({}) };
+    const host = { sessionRowsChanged: () => {}, noteRunStarted() {}, checkPendingReload() {}, isReloadQueued: () => false, buildSessionState: () => ({}) };
     const live = new PiLiveSession("assistant", localPiEngine(session), host, () => {});
     sessionRuntime.createSession("Child", live.createRuntimeAdapter());
     live.addViewer({ send: (e) => { if (e.type === "assistantEnd" && e.error) process.exit(73); } });

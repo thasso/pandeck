@@ -436,7 +436,6 @@ async function spawnMergeAgent(
   const settings = getSettings().worktrees.mergeAgent;
 
   try {
-    const { hub } = await import("../hub.ts");
     const { createSession } = await import("../harnesses/create.ts");
     const { promptRuntimeSession } =
       await import("../session/runtimePrompt.ts");
@@ -496,7 +495,6 @@ async function spawnMergeAgent(
         message: `Merge agent prompt failed: ${err instanceof Error ? err.message : String(err)}`,
       });
     });
-    void hub.broadcastSessions();
   } catch (err) {
     // No agent — stay in conflicts; the user resolves manually (or retries).
     setMergeState(row.id, {

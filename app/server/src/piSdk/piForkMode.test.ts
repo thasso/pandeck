@@ -21,7 +21,7 @@ const tmp = mkdtempSync(join(tmpdir(), "pi-fork-mode-test-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
-const { hub } = await import("../hub.ts");
+await import("../hub.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { piStore } = await import("./piStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
@@ -105,7 +105,6 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
   const internals = piStore as unknown as StoreInternals;
   const originalCreate = internals.create;
   const originalTrack = internals.track;
-  const originalBroadcastSessions = hub.broadcastSessions;
   let requestedMode: unknown;
   let inheritedSkills: unknown;
   let inheritedAgent: unknown;
@@ -133,9 +132,6 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
       ? { sessionFile: session.sessionFile }
       : {}),
   });
-  (
-    hub as unknown as { broadcastSessions: () => Promise<void> }
-  ).broadcastSessions = async () => {};
 
   try {
     const forked = await piStore.forkSession(
@@ -177,9 +173,6 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
   } finally {
     internals.create = originalCreate;
     internals.track = originalTrack;
-    (
-      hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
-    ).broadcastSessions = originalBroadcastSessions;
     rmSync(tmp, { recursive: true, force: true });
   }
 });

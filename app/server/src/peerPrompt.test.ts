@@ -108,9 +108,6 @@ const {
       if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
       return fakeDrivers.get(id);
     },
-    broadcastSessions: () => {
-      listBroadcasts.count += 1;
-    },
     broadcastPeerPromptCardUpdate: (
       sessionId: string,
       update: { messageKey: string; state: string; failureReason?: string },
@@ -135,6 +132,16 @@ const {
 });
 
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
+// Every session-row touch counts as a list refresh (no hub is loaded).
+const { setSessionListSink } = await import("./db/sessionListChanges.ts");
+setSessionListSink({
+  touch: () => {
+    listBroadcasts.count += 1;
+  },
+  touchAll: () => {
+    listBroadcasts.count += 1;
+  },
+});
 vi.mock("./webPush.ts", () => ({
   notifySessionBlocked: vi.fn(async () => {}),
 }));

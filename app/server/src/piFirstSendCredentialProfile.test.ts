@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterAll, beforeEach, test, vi } from "vitest";
+import { afterAll, test, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,14 +15,13 @@ vi.mock("./session/runtimePrompt.ts", () => ({
 }));
 
 const { Connection } = await import("./connection.ts");
-const { hub } = await import("./hub.ts");
+await import("./hub.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const { createCredentialProfile, setCredentialProfileEnabled } =
   await import("./credentialProfiles.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 
 const originalAcquireNew = piStore.acquireNew;
-const originalBroadcastSessions = hub.broadcastSessions;
 
 function makeConnection() {
   const sent: unknown[] = [];
@@ -45,12 +44,6 @@ function makeConnection() {
     sent,
   };
 }
-
-beforeEach(() => {
-  (
-    hub as unknown as { broadcastSessions: () => Promise<void> }
-  ).broadcastSessions = async () => {};
-});
 
 test("pi first send validates and persists the selected OpenAI profile", async () => {
   const profile = createCredentialProfile({
@@ -219,8 +212,5 @@ test("pi first send rejects a profile from the wrong provider before acquisition
 afterAll(() => {
   (piStore as unknown as { acquireNew: typeof originalAcquireNew }).acquireNew =
     originalAcquireNew;
-  (
-    hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
-  ).broadcastSessions = originalBroadcastSessions;
   rmSync(tmp, { recursive: true, force: true });
 });

@@ -17,6 +17,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { getDb, withDbTransaction } from "./index.ts";
 import { sessionStore } from "./sessionStore.ts";
+import { touchSessionRows } from "./sessionListChanges.ts";
 import {
   addLink,
   incoming,
@@ -121,6 +122,12 @@ export function insertWorktree(row: WorktreeRow): void {
       row.updatedAt,
       row.removedAt,
     );
+  touchWorktreeSessions(row.id);
+}
+
+/** A session's `worktreeMissing` reads its worktree row's status and path. */
+function touchWorktreeSessions(worktreeId: string): void {
+  touchSessionRows(sessionIdsForWorktree(worktreeId));
 }
 
 export function updateWorktree(
@@ -142,6 +149,7 @@ export function updateWorktree(
       Date.now(),
       id,
     );
+  touchWorktreeSessions(id);
 }
 
 /** Replace the active row's merge-back target and whole-branch diff pivot. */
@@ -915,6 +923,7 @@ export function finalizeWorktreeRemoval(
         "UPDATE worktrees SET status = 'removed', branch_cleanup_oid = ?, removed_at_ms = ?, updated_at_ms = ? WHERE id = ?",
       )
       .run(branchCleanupOid, now, now, worktreeId);
+    touchWorktreeSessions(worktreeId);
     return count;
   });
 }

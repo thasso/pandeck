@@ -39,6 +39,7 @@ import {
 import { pickAccount } from "./accountRouter.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
+import { touchSessionRows } from "./db/sessionListChanges.ts";
 import {
   directPeerChildStore,
   type DirectPeerChild,
@@ -430,7 +431,11 @@ export function recordDirectPeerChild(child: DirectPeerChild): void {
 export function resetDirectPeerChildrenForTests(): void {
   directPeerChildStore.clearForTests();
   reservedTurns.clear();
+  const heldChildren = [...inFlightHolds.keys()].flatMap((coordinator) =>
+    peerPromptStore.heldFrom(coordinator).map((row) => row.recipientSessionId),
+  );
   inFlightHolds.clear();
+  touchSessionRows(heldChildren);
   admissionLocks.clear();
 }
 
@@ -603,6 +608,12 @@ export async function admitDirectPeerTurns(
         const current = inFlightHolds.get(coordinatorSessionId);
         if (!current?.delete(holdSeq)) return;
         if (current.size === 0) inFlightHolds.delete(coordinatorSessionId);
+        // Every younger held child's `waitingForSlot.position` counts it.
+        touchSessionRows(
+          peerPromptStore
+            .heldFrom(coordinatorSessionId)
+            .map((held) => held.recipientSessionId),
+        );
       },
     };
   });

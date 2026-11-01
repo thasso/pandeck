@@ -12,6 +12,7 @@ import type {
   AnsweredAgentQuestion,
 } from "@assistant/shared";
 import { DATA_DIR } from "../../config.ts";
+import { touchSessionRows } from "../../db/sessionListChanges.ts";
 
 const MAX_QUESTIONS = 12;
 const MAX_CHOICES = 20;
@@ -398,6 +399,8 @@ export function questionRequestIdFromToolResult(
 }
 
 function emitQuestionChange(sessionId: string): void {
+  // The row's `awaitingInput` / `attention` read `hasPendingAgentQuestion`.
+  touchSessionRows([sessionId]);
   for (const listener of listeners) listener(sessionId);
 }
 

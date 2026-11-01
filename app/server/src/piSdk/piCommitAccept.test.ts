@@ -60,7 +60,7 @@ function viewedSession(opts: { reloadQueued?: boolean } = {}) {
       dispose: () => {},
     } as never),
     {
-      broadcastSessions: () => Promise.resolve(),
+      sessionRowsChanged: () => {},
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => opts.reloadQueued ?? false,

@@ -118,8 +118,8 @@ function originTaskNaming(sessionId: string) {
 
 /**
  * Generate and apply a new title. `rename` persists it through the engine that
- * holds the session; `changed` re-broadcasts the list whenever the pending
- * state or the title moved. Resolves to the applied title, or undefined when a
+ * holds the session; the pending state touches the row itself
+ * (`sessionRetitlePending.ts`), and so does the rename's write. Resolves to the applied title, or undefined when a
  * manual rename or a newer `/rename` overtook this run — which then reports
  * nothing, failures included. Otherwise a failure throws after the pending
  * state is cleared, leaving the old title in place.
@@ -128,12 +128,10 @@ export async function retitleSession(input: {
   sessionId: string;
   guidance?: string;
   rename: (title: string) => Promise<void>;
-  changed: () => Promise<void>;
 }): Promise<string | undefined> {
   const { sessionId } = input;
   const requiresEnterprise = sourceRequiresEnterprise([sessionId]);
   const token = beginSessionRetitle(sessionId);
-  await input.changed();
   try {
     let title: string;
     try {
@@ -169,6 +167,5 @@ export async function retitleSession(input: {
     return title;
   } finally {
     endSessionRetitle(sessionId, token);
-    await input.changed();
   }
 }

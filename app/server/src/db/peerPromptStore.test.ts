@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 import { getDb } from "./index.ts";
 import {
+  DEADLINE_SCHEDULED_STATUSES,
+  DUE_DEADLINE_PARTICIPANTS_SQL,
+  NEXT_DEADLINE_SQL,
+} from "./peerDeadlineClock.ts";
+import {
   HELD_QUEUE_SQL,
   OUTSTANDING_REPLIES_SQL,
   peerPromptStore as store,
@@ -1347,5 +1352,40 @@ describe("the held queue the session list ranks", () => {
       /USING (COVERING )?INDEX peer_prompts_held_sender_idx/,
     );
     assert.doesNotMatch(details, /TEMP B-TREE/);
+  });
+});
+
+describe("the deadline clock's queries", () => {
+  const plan = (sql: string, ...params: number[]) =>
+    (
+      getDb()
+        .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+        .all(...params) as { detail: string }[]
+    )
+      .map((step) => step.detail)
+      .join("\n");
+
+  it("finds the next deadline with one expiry-index seek per scheduled status", () => {
+    const details = plan(
+      NEXT_DEADLINE_SQL,
+      ...DEADLINE_SCHEDULED_STATUSES.map(() => Date.now()),
+    );
+    assert.equal(
+      details.match(
+        /SEARCH peer_prompts USING (COVERING )?INDEX peer_prompts_expiry_idx \(status=\? AND expires_at_ms>\?\)/g,
+      )?.length,
+      DEADLINE_SCHEDULED_STATUSES.length,
+      details,
+    );
+    assert.doesNotMatch(details, /SCAN peer_prompts/);
+  });
+
+  it("reads the due participants from the expiry index's deadline range", () => {
+    const details = plan(DUE_DEADLINE_PARTICIPANTS_SQL, Date.now(), Date.now());
+    assert.match(
+      details,
+      /SEARCH peer_prompts USING INDEX peer_prompts_expiry_idx \(status=\? AND expires_at_ms>\? AND expires_at_ms<\?\)/,
+    );
+    assert.doesNotMatch(details, /SCAN peer_prompts/);
   });
 });

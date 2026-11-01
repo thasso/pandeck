@@ -87,7 +87,6 @@ async function carriedFrom(
         seam: async () => idleSeam,
       }) as never,
   );
-  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
   const connection = new Connection(fakeSocket([]));
   if (viewed) {
     void connection.handle({

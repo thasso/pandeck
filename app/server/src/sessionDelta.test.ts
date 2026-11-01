@@ -23,7 +23,7 @@ test("a volatile session change broadcasts as a row update, a structural one as 
       scope: "user",
       messageCount: 2,
     });
-    await hub.broadcastSessions();
+    await hub.flushPendingBroadcastsForTests();
     // The row is new, so the id set changed: the whole list goes out.
     assert.ok(
       messages.some((message) => message.type === "sessions"),
@@ -38,7 +38,7 @@ test("a volatile session change broadcasts as a row update, a structural one as 
       title: "Renamed while running",
       scope: "user",
     });
-    await hub.broadcastSessions();
+    await hub.flushPendingBroadcastsForTests();
 
     const updates = messages.filter(
       (
@@ -70,7 +70,7 @@ test("a volatile session change broadcasts as a row update, a structural one as 
       messageCount: 2,
     });
     sessionStore.setArchived(archived, true);
-    await hub.broadcastSessions();
+    await hub.flushPendingBroadcastsForTests();
     const counted = messages.filter(
       (message): message is Extract<ServerMessage, { type: "sessions" }> =>
         message.type === "sessions",
@@ -123,6 +123,11 @@ test("broadcastSessionUpdated projects only the named row", async () => {
   };
   hub.register(plainViewer);
   hub.register(archiveViewer);
+  // The seeding writes publish first; the audit's full build is not the cost.
+  await hub.flushPendingBroadcastsForTests();
+  plain.length = 0;
+  withArchive.length = 0;
+  hub.setSessionListAuditForTests(false);
   const reads = vi.spyOn(sessionStore, "list");
   try {
     await hub.broadcastSessionUpdated(active);
@@ -149,6 +154,7 @@ test("broadcastSessionUpdated projects only the named row", async () => {
       "the archive viewer gets both, exactly as a full build lists them",
     );
   } finally {
+    hub.setSessionListAuditForTests(true);
     reads.mockRestore();
     hub.unregister(plainViewer);
     hub.unregister(archiveViewer);

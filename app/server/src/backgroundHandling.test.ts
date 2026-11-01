@@ -1208,7 +1208,7 @@ test("an ordinary Pi steer the real producer refuses after its run closed cleanl
     dispose: () => {},
   };
   const host = {
-    broadcastSessions: async () => {},
+    sessionRowsChanged: () => {},
     noteRunStarted: () => {},
     checkPendingReload: () => {},
     isReloadQueued: () => false,

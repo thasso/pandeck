@@ -98,6 +98,7 @@ import { testTempoSettings } from "./tempoSettings.ts";
 import { testConfluenceSettings } from "./confluenceSettings.ts";
 import { testJiraSettings } from "./jiraSettings.ts";
 import { hub } from "./hub.ts";
+import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import { sendAccountLoginAlertsTo } from "./accountHealth.ts";
 import {
   isLiveSession,
@@ -330,7 +331,6 @@ import {
   isPermanentAssistantSession,
   permanentAssistantSessionId,
   permanentAssistantViewableId,
-  sessionListHiddenProbe,
   subscribePermanentAssistant,
 } from "./permanentAssistant.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -881,7 +881,6 @@ export class Connection implements Viewer {
         attachments.push(...staged.attachments);
         if (stagedContext.kind === "task" && staged.taskId) {
           this.viewing?.broadcastState();
-          void hub.broadcastSessions();
         }
         if (stagedContext.kind === "project")
           this.send({
@@ -1232,7 +1231,7 @@ export class Connection implements Viewer {
       case "setSessionPeerTurnCap":
         try {
           setSessionPeerTurnCap(msg.sessionId, msg.cap);
-          await hub.broadcastSessions();
+          await hub.sessionRowsSent();
         } catch (err) {
           this.send({
             type: "error",
@@ -1666,7 +1665,6 @@ export class Connection implements Viewer {
     attachments.push(...started.attachments);
     if (firstSendContext.kind === "task" && started.taskId) {
       this.viewing?.broadcastState();
-      void hub.broadcastSessions();
     }
     if (firstSendContext.kind === "project") {
       live.broadcastState();
@@ -1695,7 +1693,7 @@ export class Connection implements Viewer {
       }),
     );
     // Now that the session has a turn, refresh the sidebar so it appears.
-    await hub.broadcastSessions();
+    await hub.sessionRowsSent();
   }
 
   /**
@@ -2375,7 +2373,7 @@ export class Connection implements Viewer {
     if (!setInboxPositions(placement))
       return refuse("a session or run no longer exists");
     if (placement.runs.length > 0) broadcastWorkflowRuns();
-    if (placement.sessions.length > 0) await hub.broadcastSessions();
+    if (placement.sessions.length > 0) await hub.sessionRowsSent();
   }
 
   /**
@@ -2859,7 +2857,7 @@ export class Connection implements Viewer {
           target: { type: "session", id: driver.sessionId },
         }),
       );
-      await hub.broadcastSessions();
+      await hub.sessionRowsSent();
     } catch (err) {
       this.send({
         type: "error",
@@ -4247,7 +4245,7 @@ export class Connection implements Viewer {
         sessionId: live.sessionId,
         info: live.contextInfo(),
       });
-    await hub.broadcastSessions();
+    await hub.sessionRowsSent();
   }
 
   /**
@@ -4366,7 +4364,7 @@ export class Connection implements Viewer {
         });
       }
     }
-    await hub.broadcastSessions();
+    await hub.sessionRowsSent();
   }
 
   /**
@@ -4380,7 +4378,7 @@ export class Connection implements Viewer {
     // From its own Worker check; a Worker failure rejects.
     if (!(await acknowledgeMissingSessionWorktree(id))) return; // nothing to acknowledge
     if (this.viewing?.sessionId === id) this.viewing.broadcastState();
-    await hub.broadcastSessions();
+    await hub.sessionRowsSent();
   }
 
   /**
@@ -4720,8 +4718,8 @@ export class Connection implements Viewer {
           notice?.trim() ||
           "Draft session created — review model/thinking and edit the prompt before sending.",
       });
-      if (sessionStore.markRead(live.key, Date.now()))
-        await hub.broadcastSessions();
+      sessionStore.markRead(live.key, Date.now());
+      await hub.sessionRowsSent();
     } catch (err) {
       this.send({
         type: "error",
@@ -4838,7 +4836,7 @@ export class Connection implements Viewer {
       }
     }
     await removal;
-    await hub.broadcastSessions();
+    await hub.sessionRowsSent();
   }
 
   private async onArchiveSession(id: string, archived: boolean): Promise<void> {
@@ -4860,7 +4858,7 @@ export class Connection implements Viewer {
     // first real send creates its durable session. Another connection viewing
     // the session keeps it: an archived session can be viewed on purpose.
     if (archived) this.clearSessionView(id, "archived");
-    await hub.broadcastSessions();
+    await hub.sessionRowsSent();
   }
 
   /**
@@ -4950,7 +4948,7 @@ export class Connection implements Viewer {
         });
         return;
       }
-      await hub.broadcastSessions();
+      await hub.sessionRowsSent();
       return;
     }
     const answer = await settleSessionWithPeers(id, throughRevision);
@@ -5000,7 +4998,7 @@ export class Connection implements Viewer {
       outcomeRevision,
     });
     if (answer === "dismissed") {
-      await hub.broadcastSessions();
+      await hub.sessionRowsSent();
       return;
     }
     // Re-send the authoritative row either way, so the clicking tab shows
@@ -5097,8 +5095,8 @@ export class Connection implements Viewer {
         contextInfo: live.contextInfo(),
         ...(selectedText ? { selectedText } : {}),
       });
-      if (sessionStore.markRead(live.key, Date.now()))
-        await hub.broadcastSessions();
+      sessionStore.markRead(live.key, Date.now());
+      await hub.sessionRowsSent();
     } catch (err) {
       this.send({
         type: "error",
@@ -5120,15 +5118,16 @@ export class Connection implements Viewer {
     }
     if (!this.guardSessionRef(ref)) return;
     // The user's own title beats a `/rename` still generating one.
-    const retitleCancelled = cancelSessionRetitle(id);
+    cancelSessionRetitle(id);
     try {
       await harnessRegistry.rename(
         { harness: ref.harness, id, agentType: ref.kind, file: ref.file },
         title,
       );
-      await hub.broadcastSessions();
+      await hub.sessionRowsSent();
     } catch (err) {
-      if (retitleCancelled) await hub.broadcastSessions();
+      // A cancelled `/rename` dropped its pending state: that row goes first.
+      await hub.sessionRowsSent();
       this.send({
         type: "error",
         message: `Failed to rename session: ${errorText(err)}`,
@@ -5175,9 +5174,11 @@ export class Connection implements Viewer {
             { harness: ref.harness, id, agentType: ref.kind, file: ref.file },
             title,
           ),
-        changed: () => hub.broadcastSessions(),
       });
+      await hub.sessionRowsSent();
     } catch (err) {
+      // The cleared pending state reaches the list before the error.
+      await hub.sessionRowsSent();
       this.send({
         type: "error",
         message: `Failed to rename session: ${errorText(err)}`,
