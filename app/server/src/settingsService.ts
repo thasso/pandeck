@@ -287,12 +287,14 @@ async function settingsWritten(
   if (wrote("openAiCompatible"))
     await effect("syncing model providers", () => syncModelProviders());
   // OpenAI-compatible models reach sessions through the model list, not tools.
-  // The Knowledge Base is an app section, but it gates tool groups too.
+  // The Knowledge Base and browser tools are app sections, but they gate tool
+  // groups too (`currentIntegrationToolGates`).
   if (
     sections.some(
       (key) =>
         (isIntegrationKey(key) && key !== "openAiCompatible") ||
-        key === "knowledgeBase",
+        key === "knowledgeBase" ||
+        key === "browserTools",
     )
   )
     await effect("updating session tools", notifyIntegrationToolsChanged);

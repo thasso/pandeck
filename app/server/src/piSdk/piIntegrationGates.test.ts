@@ -51,6 +51,8 @@ const { updateGithubSettings } = await import("../githubSettings.ts");
 const { notifyIntegrationToolsChanged } =
   await import("../integrationToolChanges.ts");
 const { sessionToolExposure } = await import("../tools/sessionToolExposure.ts");
+const { saveSettings } = await import("../settingsService.ts");
+const { getSettings } = await import("../settings.ts");
 const {
   nativePiSessionForTests,
   piToolActivationForTests,
@@ -81,27 +83,27 @@ afterEach(async () => {
 });
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-/** Whether the engine's own gates let `find_tools` load {@link GATED}. */
-function usable(engine: PiEngineHandle): boolean {
+/** Whether the engine's own gates let `find_tools` load `name`. */
+function usable(engine: PiEngineHandle, name = GATED): boolean {
   return (
     piToolActivationForTests(engine)
       .exposure()
-      .tools.find((tool) => tool.name === GATED)?.usable ?? false
+      .tools.find((tool) => tool.name === name)?.usable ?? false
   );
 }
 
-/** Whether pi exposes {@link GATED} to the model right now. */
-function active(engine: PiEngineHandle): boolean {
-  return nativePiSessionForTests(engine).getActiveToolNames().includes(GATED);
+/** Whether pi exposes `name` to the model right now. */
+function active(engine: PiEngineHandle, name = GATED): boolean {
+  return nativePiSessionForTests(engine).getActiveToolNames().includes(name);
 }
 
-/** Ask the engine's own `find_tools` to load {@link GATED} by name. */
-async function load(engine: PiEngineHandle): Promise<void> {
+/** Ask the engine's own `find_tools` to load `name`. */
+async function load(engine: PiEngineHandle, name = GATED): Promise<void> {
   await nativePiSessionForTests(engine)
     .getToolDefinition("find_tools")!
     .execute(
       `call-${Math.random()}`,
-      { names: [GATED] },
+      { names: [name] },
       undefined,
       undefined,
       {} as never,
@@ -363,4 +365,53 @@ test("the inspector and the native loading facts equal the engine's activation a
 
   await live.setMode("plan");
   agree("Plan flip");
+});
+
+test("a normal Settings save of the raw browser MCP switch reaches a live developer session, on and off", async () => {
+  const RAW = "browser_mcp_call";
+  const setRawMcp = (rawMcpEnabled: boolean) =>
+    saveSettings({
+      browserTools: { ...getSettings().browserTools, rawMcpEnabled },
+    });
+  await setRawMcp(false);
+  const live = await piStore.acquireNew("developer", await chosen(), "off", {
+    cwd: tmp,
+  });
+  lives.push(live);
+  const { engine } = live;
+  const activation = piToolActivationForTests(engine);
+  const inspected = () =>
+    sessionToolExposure(live.sessionId)!.tools.find(
+      (tool) => tool.name === RAW,
+    );
+  try {
+    assert.equal(usable(engine, RAW), false);
+
+    await setRawMcp(true);
+    await vi.waitFor(() => assert.equal(usable(engine, RAW), true));
+    await load(engine, RAW);
+    assert.equal(active(engine, RAW), true, "find_tools loads it");
+    // The load ran inside pi, outside any command; the mirror learns it here.
+    await syncPiEngineMirrorForTests(engine);
+    assert.deepEqual(
+      sessionToolExposure(live.sessionId),
+      activation.exposure(),
+    );
+    assert.deepEqual([inspected()?.usable, inspected()?.loaded], [true, true]);
+
+    await setRawMcp(false);
+    await vi.waitFor(() => assert.equal(usable(engine, RAW), false));
+    assert.equal(active(engine, RAW), false, "the gate hides the loaded tool");
+    await syncPiEngineMirrorForTests(engine);
+    assert.deepEqual(
+      sessionToolExposure(live.sessionId),
+      activation.exposure(),
+    );
+    assert.deepEqual(
+      [inspected()?.usable, inspected()?.loaded],
+      [false, false],
+    );
+  } finally {
+    await setRawMcp(false);
+  }
 });
