@@ -179,7 +179,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "setMode dispose",
+        "setMode applyMode dispose",
         "Mode, subscription/native resource disposal and disposed flag are not list fields; store membership/removal owns visibility.",
         old + "PiLiveSession.setMode",
         pi + "PiStore.onLiveSessionEvicted/idle residency",
