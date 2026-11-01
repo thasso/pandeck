@@ -1,10 +1,10 @@
 /**
  * An in-process Claude session driven by the Claude Agent SDK.
  *
- * This session owns the conversation: it drives `seam.query(...)`, consumes the
- * SDK message stream, and emits this repo's websocket envelopes directly. Raw
- * prompting is private; app code drives it through the normalized runtime
- * adapter/facade.
+ * This session owns the conversation: it opens each query on its Worker
+ * (`openHostedClaudeQuery`), consumes the SDK message stream, and emits this
+ * repo's websocket envelopes directly. Raw prompting is private; app code
+ * drives it through the normalized runtime adapter/facade.
  *
  * STREAMING STRATEGY (avoids double-counting):
  *   - TEXT and THINKING blocks of the live turn are built ONLY from `stream_event`
@@ -65,8 +65,18 @@ import type {
   ClientTimelineEntry,
   HostCommandCard,
 } from "@assistant/shared/runtime";
-import { createClaudeSessionToolServer } from "./toolServer.ts";
-import type { SessionToolServer } from "../mcp/sessionToolServer.ts";
+import {
+  createClaudeSessionToolServer,
+  type ClaudeSessionToolServer,
+} from "./toolServer.ts";
+import {
+  createClaudeHostedEngineFactory,
+  registerClaudeHostedSession,
+} from "./claudeEngineHosted.ts";
+import {
+  openHostedClaudeQuery,
+  type RemoteClaudeQuery,
+} from "./remoteClaudeQuery.ts";
 import {
   closeToolGroupSession,
   hasToolGroupSession,
@@ -100,9 +110,8 @@ import {
   generateSessionTitle,
 } from "../sessionNaming.ts";
 import { getSettings } from "../settings.ts";
-import { childProcessEnv } from "../subprocessEnv.ts";
 import { CWD } from "../config.ts";
-import { claudeProfileEnvironment } from "../credentialProfiles.ts";
+import { claudeProfileRuntime } from "../credentialProfiles.ts";
 import {
   hasPendingAgentQuestion,
   questionRequestIdFromToolResult,
@@ -213,11 +222,11 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import {
-  buildClaudeSdkQueryOptions,
   claudeQueryModel,
+  claudeQueryOpenSpec,
   claudeSessionHookBinding,
 } from "./options.ts";
-import { sessionHooksFor } from "../workers/inProcessWorker.ts";
+import { registerInProcessEngineFactory } from "../workers/inProcessWorker.ts";
 import { registerSessionHooks } from "../workers/sessionHookHost.ts";
 import {
   ClaudeCompactionWindow,
@@ -595,7 +604,7 @@ export class ClaudeSdkSession implements LiveSession {
   };
   /**
    * What `cumulative` held when the current `query()` epoch started, which
-   * `beginUsageEpoch` snapshots before `seam.query` at every call site. The
+   * `beginUsageEpoch` snapshots before every query open. The
    * epoch's running totals are billed on top of it.
    */
   private epochUsageBase: CumulativeUsageTotals | undefined;
@@ -744,7 +753,7 @@ export class ClaudeSdkSession implements LiveSession {
    * kept for the session's life (its handlers resolve tools/context fresh per
    * call), closed on dispose.
    */
-  private toolServer: SessionToolServer | undefined;
+  private toolServer: ClaudeSessionToolServer | undefined;
   /**
    * Disposes this session's hook binding on the server
    * (`workers/sessionHookHost.ts`): its interactive queries' permission and
@@ -752,6 +761,11 @@ export class ClaudeSdkSession implements LiveSession {
    * late hook from an ended query is still answered in its own epoch.
    */
   private unregisterSessionHooks: (() => void) | undefined;
+  /**
+   * Releases what this session lends the Worker hosting its queries
+   * (`claudeEngineHosted.ts`): its SDK seam and tool server.
+   */
+  private readonly unregisterHostedSession: () => void;
   /** Per-tool loaded/token state from the CLI's tool search (getContextUsage). */
   private toolLoadState = new Map<
     string,
@@ -811,6 +825,10 @@ export class ClaudeSdkSession implements LiveSession {
     this.kind = this.agentType;
     this.key = id;
     this.seamFactory = deps.seam;
+    this.unregisterHostedSession = registerClaudeHostedSession(id, {
+      seam: deps.seam,
+      toolServer: () => this.toolServer,
+    });
     this.prepareSkillRuntime =
       deps.prepareSkillRuntime ?? prepareClaudeSkillRuntime;
     this.processCloseTimeoutMs = deps.processCloseTimeoutMs ?? 5_000;
@@ -2028,7 +2046,9 @@ export class ClaudeSdkSession implements LiveSession {
       return;
     }
 
-    const seam = await this.seamFactory();
+    // The Worker opens the query on this seam; one that cannot load fails the
+    // prompt here, before any epoch work.
+    await this.seamFactory();
     if (!ownsTurn()) return;
     const carried = await this.savedProviderTotals();
     if (!ownsTurn()) return;
@@ -2061,6 +2081,64 @@ export class ClaudeSdkSession implements LiveSession {
     // before it is sent, and the pair is pushed once it has.
     if (!skill) queue.push(message);
     const abortController = new AbortController();
+    const taskOutputTemp = createClaudeTaskOutputTemp();
+    const start = this.compactionWindowStart();
+    // The query opens on the session's Worker before this attempt writes any
+    // epoch state, so the guards below abandon only what it opened itself.
+    let query: RemoteClaudeQuery;
+    try {
+      query = await openHostedClaudeQuery({
+        prompt: queue,
+        spec: claudeQueryOpenSpec({
+          sessionId: this.id,
+          cwd: this.cwd,
+          modelId: this.modelId,
+          thinkingLevel: this.thinkingLevel,
+          ...(this.providerSessionId !== undefined
+            ? { providerSessionId: this.providerSessionId }
+            : {}),
+          mountToolServer: true,
+          agentType: this.agentType,
+          ...(this.additionalSystemPrompt !== undefined
+            ? { additionalSystemPrompt: this.additionalSystemPrompt }
+            : {}),
+          promptConditions: this.promptConditions(),
+          frozenSkillNames,
+          agent: sessionAgent(this.id),
+          sessionHooksEpoch: epochKey,
+          env: {
+            ...(this.credentialProfileId
+              ? { profile: claudeProfileRuntime(this.credentialProfileId) }
+              : {}),
+            set: {
+              TMPDIR: taskOutputTemp.tmpDir,
+              CLAUDE_CODE_TMPDIR: taskOutputTemp.tmpDir,
+            },
+          },
+          ...start,
+        }),
+        signal: abortController.signal,
+      });
+    } catch (error) {
+      removeAgentTempTree(taskOutputTemp.tmpDir);
+      throw error;
+    }
+    if (!ownsTurn()) {
+      void query.discard();
+      removeAgentTempTree(taskOutputTemp.tmpDir);
+      return;
+    }
+    // A query opened meanwhile takes the prompt the way it would have above.
+    if (this.activeQuery) {
+      void query.discard();
+      removeAgentTempTree(taskOutputTemp.tmpDir);
+      return this.sendPromptToProcess(
+        message,
+        frozenSkillNames,
+        ownsTurn,
+        skill,
+      );
+    }
     this.abortController = abortController;
     if (this.epochTaskOutputTemp) {
       removeAgentTempTree(this.epochTaskOutputTemp.tmpDir);
@@ -2071,7 +2149,6 @@ export class ClaudeSdkSession implements LiveSession {
     this.activeTurnEpochKey = epochKey;
     this.beginUsageEpoch(carried);
     this.processClosing = false;
-    const taskOutputTemp = createClaudeTaskOutputTemp();
     this.epochTaskOutputTemp = taskOutputTemp;
     this.unregisterBackgroundHost = claudeBackgroundWorkBackend.registerHost({
       ownerSessionId: this.id,
@@ -2103,50 +2180,6 @@ export class ClaudeSdkSession implements LiveSession {
           );
       },
     });
-    let query: ClaudeQuery;
-    const start = this.compactionWindowStart();
-    try {
-      query = seam.query({
-        prompt: queue,
-        options: buildClaudeSdkQueryOptions({
-          cwd: this.cwd,
-          abortController,
-          modelId: this.modelId,
-          thinkingLevel: this.thinkingLevel,
-          ...(this.providerSessionId !== undefined
-            ? { providerSessionId: this.providerSessionId }
-            : {}),
-          mcpServer: this.toolServer.server,
-          agentType: this.agentType,
-          ...(this.additionalSystemPrompt !== undefined
-            ? { additionalSystemPrompt: this.additionalSystemPrompt }
-            : {}),
-          promptConditions: this.promptConditions(),
-          frozenSkillNames,
-          agent: sessionAgent(this.id),
-          sessionHooks: { ...sessionHooksFor(this.id), epoch: epochKey },
-          env: {
-            ...(this.credentialProfileId
-              ? claudeProfileEnvironment(this.credentialProfileId)
-              : childProcessEnv()),
-            TMPDIR: taskOutputTemp.tmpDir,
-            CLAUDE_CODE_TMPDIR: taskOutputTemp.tmpDir,
-          },
-          ...start,
-        }),
-      });
-    } catch (error) {
-      this.unregisterBackgroundHost?.();
-      this.unregisterBackgroundHost = undefined;
-      removeAgentTempTree(taskOutputTemp.tmpDir);
-      this.epochTaskOutputTemp = undefined;
-      this.abortController = undefined;
-      this.inputQueue = undefined;
-      this.queryEpochKey = undefined;
-      this.processClosing = false;
-      this.processCloseReason = undefined;
-      throw error;
-    }
     this.activeQuery = query;
     this.compactionWindow.queryStarted(epochKey, start.compactionWindow);
     this.queryLoop = this.consumeQuery(query, epochKey);
@@ -3467,57 +3500,46 @@ export class ClaudeSdkSession implements LiveSession {
     this.abortController = abortController;
     this.abortingTurn = false;
     try {
-      const seam = await this.seamFactory();
+      await this.seamFactory();
       // A standalone compaction is its own query epoch, so its usage rebases onto
       // the session rather than onto whatever the previous epoch had reported.
       this.beginUsageEpoch(await this.savedProviderTotals());
-      const query = seam.query({
+      const query = await openHostedClaudeQuery({
         prompt: promptIterable(
           `/compact${customInstructions ? ` ${customInstructions}` : ""}`,
         ),
-        options: {
-          ...buildClaudeSdkQueryOptions({
-            cwd: this.cwd,
-            abortController,
-            modelId: this.modelId,
-            thinkingLevel: this.thinkingLevel,
-            providerSessionId: this.providerSessionId,
-            // Compaction is a CLI-local summarization pass, not an agent turn.
-            // Carry the frozen list through option construction for continuity,
-            // but explicitly suppress every native/system tool and library
-            // plugin; there is nothing to invoke and no runtime to recreate.
-            nativeTools: [],
-            disableTools: true,
-            agentType: this.agentType,
-            promptConditions: this.promptConditions(),
-            frozenSkillNames: this.frozenSkillNames(),
-            // The same prompt the session's turns carry, or the cached prefix
-            // would move.
-            agent: sessionAgent(this.id),
-            ...(this.additionalSystemPrompt
-              ? { additionalSystemPrompt: this.additionalSystemPrompt }
-              : {}),
-            ...(this.credentialProfileId
-              ? { env: claudeProfileEnvironment(this.credentialProfileId) }
-              : {}),
-            ...this.compactionWindowStart(),
-          }),
-          hooks: {
-            PostCompact: [
-              {
-                hooks: [
-                  async (input) => {
-                    if (
-                      "compact_summary" in input &&
-                      typeof input.compact_summary === "string"
-                    )
-                      summary = input.compact_summary;
-                    return { continue: true };
-                  },
-                ],
-              },
-            ],
-          },
+        spec: claudeQueryOpenSpec({
+          sessionId: this.id,
+          cwd: this.cwd,
+          modelId: this.modelId,
+          thinkingLevel: this.thinkingLevel,
+          providerSessionId: this.providerSessionId,
+          mountToolServer: false,
+          // Compaction is a CLI-local summarization pass, not an agent turn.
+          // Carry the frozen list through option construction for continuity,
+          // but explicitly suppress every native/system tool and library
+          // plugin; there is nothing to invoke and no runtime to recreate.
+          nativeTools: [],
+          disableTools: true,
+          agentType: this.agentType,
+          promptConditions: this.promptConditions(),
+          frozenSkillNames: this.frozenSkillNames(),
+          // The same prompt the session's turns carry, or the cached prefix
+          // would move.
+          agent: sessionAgent(this.id),
+          ...(this.additionalSystemPrompt
+            ? { additionalSystemPrompt: this.additionalSystemPrompt }
+            : {}),
+          // Its summary only reaches us through the `PostCompact` hook.
+          captureCompactSummary: true,
+          env: this.credentialProfileId
+            ? { profile: claudeProfileRuntime(this.credentialProfileId) }
+            : {},
+          ...this.compactionWindowStart(),
+        }),
+        signal: abortController.signal,
+        onCompactSummary: (captured) => {
+          summary = captured;
         },
       });
       this.activeQuery = query;
@@ -3734,8 +3756,8 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   /**
-   * Open a usage epoch for a `query()` that is about to start. Every `seam.query`
-   * call site must do this, ordinary turn and standalone compaction alike: the
+   * Open a usage epoch for a `query()` that is about to start. Every query open
+   * must do this, ordinary turn and standalone compaction alike: the
    * epoch base is what the session had billed BEFORE this process reported
    * anything, and a missing one silently attributes the epoch's work to nobody.
    */
@@ -4526,6 +4548,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.toolServer = undefined;
     this.unregisterSessionHooks?.();
     this.unregisterSessionHooks = undefined;
+    this.unregisterHostedSession();
     closeToolGroupSession(this.id);
     this.unsubscribeQuestions();
     this.unsubscribeApprovals();
@@ -4853,3 +4876,7 @@ function streamActivityKind(
       return "lifecycle";
   }
 }
+
+// The composition root's injection, beside the only opener of live queries:
+// the in-process Worker hosts every one, on the SDK seam its session lends.
+registerInProcessEngineFactory("claude-sdk", createClaudeHostedEngineFactory());

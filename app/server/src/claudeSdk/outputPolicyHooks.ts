@@ -10,6 +10,7 @@ import {
   type ReadWindowDecision,
 } from "../outputPolicy.ts";
 import { childProcessEnv } from "../subprocessEnv.ts";
+import { claudeChildEnvironment } from "../claudeChildEnvironment.ts";
 import type { SessionHooks } from "../workers/inProcessWorker.ts";
 
 const POLICY_TOOLS = new Set(["Read", "Bash", "Grep", "Glob"]);
@@ -235,20 +236,12 @@ export function claudeOutputPolicyHooks(
   };
 }
 
-function inheritedEnvironment(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(childProcessEnv()).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined,
-    ),
-  );
-}
-
 /** Tight vendor caps are a first line of defence; hooks add context-aware policy. */
 export function withClaudeOutputBudgetEnvironment(
   env: Record<string, string> | undefined,
 ): Record<string, string> {
   return {
-    ...(env ?? inheritedEnvironment()),
+    ...(env ?? claudeChildEnvironment(childProcessEnv(), undefined)),
     BASH_MAX_OUTPUT_LENGTH: "12000",
     CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS: "3000",
     MAX_MCP_OUTPUT_TOKENS: "5000",

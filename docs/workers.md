@@ -222,9 +222,9 @@ workflows' reads, `1.4`'s watch methods for the worktree watcher, `1.5`'s
 lifecycle methods for creating, removing and provisioning checkouts, `1.6`'s
 app-tool methods for interactive sessions' app tools, `1.7`'s session-hook
 methods for their permission and hook decisions and output artifacts, and
-`1.8`'s engine methods for interactive pi sessions' engines, and `1.9`'s
-background-work and skill methods for those engines' background work and frozen
-skills), between the server and the in-process Worker. The code lives in
+`1.8`'s engine methods for interactive pi and Claude sessions' engines, and
+`1.9`'s background-work and skill methods for pi engines' background work and
+frozen skills), between the server and the in-process Worker. The code lives in
 `app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
 which imports no server state) and `workers/` (the server's side and placement);
 `workerBoundary.test.ts` keeps that split. The protocol stays out of
@@ -646,8 +646,8 @@ which imports no server state) and `workers/` (the server's side and placement);
   - Known limits: a result's `details` reach the engine in their JSON form,
     which is what the transcript already stores; a call whose signal is aborted
     before it is sent is withdrawn without running the tool; a binding closes
-    over the live engine's objects, which W9/W10 replace when engines leave the
-    server.
+    over the live session's objects, which phase 2 replaces when engines leave
+    the server process.
 
 - **Session hooks (W8).** An interactive session's permission and hook callbacks
   run with its engine; where one reads the session's live state, writes the
@@ -682,15 +682,15 @@ which imports no server state) and `workers/` (the server's side and placement);
     registration serves, and a disposer removes only its own); a binding's error
     reaches the hook with its message. Requests carry the query's epoch key, so
     a late hook from an ended query is attributed to its own epoch.
-  - The engine's own policy stays with it and moves with it in W9/W10: the
+  - The engine's own policy stays with it and moved with it in W9/W10: the
     `Read` window (a `stat` relative to the engine's cwd), output bounding and
     the artifact notice, and the Bash failure guidance. One-shot runs, the
     standalone `/compact` query (no tools, its own summary capture) and pi's
     background `bash`/`monitor` shadows, whose admission runs inside their own
     `execute`, send no session-hook request.
   - Known limits: a hook whose connection ends mid-request rejects, as a
-    throwing hook does today; a binding closes over the live engine's objects,
-    which W9/W10 replace.
+    throwing hook does today; a binding closes over the live session's objects,
+    which phase 2 replaces.
 
 - **pi engine construction (W9b-1).** The Worker's pi engine factory calls the
   opener (W9b-2, below). `openPiEngine(spec, ctx)` (`piSdk/piEngineHost.ts`) is
@@ -805,9 +805,11 @@ which imports no server state) and `workers/` (the server's side and placement);
     items, each with a positive, increasing `seq` and a harness-defined `kind`.
     One delivery per engine is in flight; the next follows the server's `{}`,
     sent once the items are applied. A delivery for an engine the connection did
-    not open answers `engine_gone`. An engine's app-tool call waits until every
-    item it emitted before the call is acknowledged, so the server's mirror
-    holds what the engine wrote before the tool runs.
+    not open answers `engine_gone`. An engine's app-tool call, and each of
+    Claude's four session-hook calls the engine host offers
+    (`sessionHooks.canUseTool`, `preToolUse`, `stop`, `postCompact`), waits
+    until every item the engine emitted before the call is acknowledged, so the
+    server's mirror holds what the engine wrote before the tool or hook runs.
   - `engine.dispose { engineId, discard? }` removes the engine, deleting its
     file with `discard`; an engine still opening is disposed when its factory
     returns.
@@ -892,6 +894,46 @@ which imports no server state) and `workers/` (the server's side and placement);
     beyond the connection's end; a report lost with the connection leaves the
     row to its deadline; output crosses twice (written on the Worker, copied to
     the server).
+
+- **Claude engine host (W10).** A live Claude session's queries run on its
+  Worker as `claude-sdk` engines over the same `1.8` methods, with no new method
+  or payload shape. One engine is one query epoch: an interactive turn's query
+  or a standalone `/compact`. The session stays the server-side driver of its
+  turns, records and native transcript (D1); one-shot runs and the usage probe
+  keep their server-side queries.
+  - `openHostedClaudeQuery` (`claudeSdk/remoteClaudeQuery.ts`) is the only
+    opener of a live query. Its spec is `claudeQueryOpenSpec`'s JSON: the
+    options, the tool policy, and the child environment as a profile's
+    non-secret config directory and the variables the server sets, never a
+    credential. The factory (`claudeSdk/claudeEngineHosted.ts`) binds what is
+    not JSON: the abort controller, the environment over the Worker's
+    `childEnv()`, the permission and hook callbacks over `sessionHooks.*`, and
+    the session's `pa` tool server.
+  - In phase 1 the factory resolves the session's SDK seam and tool server from
+    an in-process binding the session registers by id; an open for a session
+    with none fails, and never reaches the real SDK. The tool server stays
+    server-built; each engine binds it to its own `appTools.call` when it
+    starts, and the ending engine releases it.
+  - The server awaits the open before it writes any epoch state; a Stop or a
+    racing turn that lands meanwhile discards the engine and its temp tree.
+  - Commands: `start`, `input` and `inputEnd` (the prompt), `close`, `abort`,
+    and each optional query control the open's info names (`interrupt`,
+    `setModel`, `getContextUsage`, …); the handle has exactly those controls.
+    Items: `message` per SDK message, then `end` or `failed`, and
+    `compactSummary` for `/compact`'s captured summary.
+  - The engine pulls nothing before `start`, which the handle sends when the
+    session first iterates it, so no item precedes the open's answer. Applying
+    an item queues it for the session's iterator and never waits for the
+    consumer, so the hook and tool ordering above holds from the first item.
+  - `close` closes the SDK query at most once and keeps the stream: the session
+    sees the query end on its own terminal item, and the engine is disposed once
+    every command sent before has its answer. A dispose before the terminal item
+    is forced: the prompt ends, then the query closes and aborts.
+  - Known limits: the controls are fixed at open; JSON drops `undefined`
+    arguments and keys; a command after the engine ended rejects with the
+    engine-gone text; a connection end fails the stream with "The Worker
+    connection ended."; the seam and the tool server cross in-process, by
+    session id, until phase 2 packages them.
 
 - **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
   answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and
@@ -1245,26 +1287,26 @@ natural shape anyway.
 
 Phase 1 ships as slices; each keeps behavior unchanged.
 
-| Slice | Change                                                                                                                       | State   |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------- | ------- |
-| W1    | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it                                         | landed  |
-| W2    | Served files (`/api/files`, `show_files`) read through the Worker                                                            | landed  |
-| W3a   | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                                               | landed  |
-| W3b   | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                                                    | landed  |
-| W3c   | The KB row's typed server-local side for its git and checkout reads (Task-1183)                                              | landed  |
-| W3d   | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                                                | landed  |
-| W4    | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                                             | landed  |
-| W5    | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                                            | landed  |
-| W6    | Callers pass their own side; the string-cwd executors and both pin lists are gone                                            | landed  |
-| W7    | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                                            | landed  |
-| W8    | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)                           | landed  |
-| W9a   | The pi engine handle: every live consumer reaches pi through `PiEngineHandle`, with its loop policy behind it (Task-1176)    | landed  |
-| W9b-1 | pi engine construction behind one opener over a JSON open spec, its child env injected (Task-1304)                           | landed  |
-| W9b-2 | The engine host protocol: the Worker's engine table, the handle's mirror, the opener behind the Worker (Task-1308)           | landed  |
-| W9c-1 | pi engine start resolved on the server: spec records, model port, integration gates as a command, mirrored tools (Task-1305) | landed  |
-| W9c-2 | Protocol 1.9; the pi engine's remaining server reach: skill materialization and the background-work bridge (Task-1313)       | landed  |
-| W10   | The engine host for Claude sessions (Task-1177)                                                                              | planned |
-| W11   | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178)               | landed  |
+| Slice | Change                                                                                                                       | State  |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------- | ------ |
+| W1    | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it                                         | landed |
+| W2    | Served files (`/api/files`, `show_files`) read through the Worker                                                            | landed |
+| W3a   | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                                               | landed |
+| W3b   | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                                                    | landed |
+| W3c   | The KB row's typed server-local side for its git and checkout reads (Task-1183)                                              | landed |
+| W3d   | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                                                | landed |
+| W4    | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                                             | landed |
+| W5    | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                                            | landed |
+| W6    | Callers pass their own side; the string-cwd executors and both pin lists are gone                                            | landed |
+| W7    | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                                            | landed |
+| W8    | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)                           | landed |
+| W9a   | The pi engine handle: every live consumer reaches pi through `PiEngineHandle`, with its loop policy behind it (Task-1176)    | landed |
+| W9b-1 | pi engine construction behind one opener over a JSON open spec, its child env injected (Task-1304)                           | landed |
+| W9b-2 | The engine host protocol: the Worker's engine table, the handle's mirror, the opener behind the Worker (Task-1308)           | landed |
+| W9c-1 | pi engine start resolved on the server: spec records, model port, integration gates as a command, mirrored tools (Task-1305) | landed |
+| W9c-2 | Protocol 1.9; the pi engine's remaining server reach: skill materialization and the background-work bridge (Task-1313)       | landed |
+| W10   | The engine host for Claude sessions (Task-1177)                                                                              | landed |
+| W11   | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178)               | landed |
 
 A failed-turn continuation reports asynchronously, across the protocol: a
 transcript write that fails in the engine's `appendContextEdit` rejects the

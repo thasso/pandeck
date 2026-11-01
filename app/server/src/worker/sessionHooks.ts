@@ -9,6 +9,7 @@
  * the server's bookkeeping, never beside it.
  */
 import type { Payload } from "../workerProtocol/codec.ts";
+import type { EngineSessionHookCalls } from "../workerProtocol/engineMethods.ts";
 import {
   SESSION_HOOK_METHODS,
   decodeAcknowledgement,
@@ -16,27 +17,11 @@ import {
   decodePersistOutputAnswer,
   decodePreToolUseAnswer,
   encodeSessionHookRequest,
-  type CanUseToolRequest,
   type PersistOutputRequest,
-  type PostCompactRequest,
-  type PreToolUseRequest,
   type SessionOutputArtifact,
-  type SessionToolAdmission,
-  type SessionToolPermission,
-  type StopRequest,
 } from "../workerProtocol/sessionHookMethods.ts";
 
-export interface SessionHookCalls {
-  canUseTool(
-    request: CanUseToolRequest,
-    signal?: AbortSignal,
-  ): Promise<SessionToolPermission>;
-  preToolUse(
-    request: PreToolUseRequest,
-    signal?: AbortSignal,
-  ): Promise<SessionToolAdmission>;
-  stop(request: StopRequest, signal?: AbortSignal): Promise<void>;
-  postCompact(request: PostCompactRequest, signal?: AbortSignal): Promise<void>;
+export interface SessionHookCalls extends EngineSessionHookCalls {
   persistOutput(
     request: PersistOutputRequest,
     signal?: AbortSignal,

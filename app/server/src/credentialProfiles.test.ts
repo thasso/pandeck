@@ -22,6 +22,7 @@ process.env.DATA_DIR = join(tmp, "data");
 const {
   claudeConfigDir,
   claudeProfileEnvironment,
+  claudeProfileRuntime,
   createCredentialProfile,
   deleteCredentialProfile,
   defaultOpenAiProfileId,
@@ -305,6 +306,30 @@ test("scrubs ambient Claude credentials and manages non-default profile lifecycl
     /default.*deleted/i,
   );
   assert.doesNotThrow(() => readFileSync(join(root, "profiles.json"), "utf8"));
+});
+
+test("a Claude profile's runtime half is only its config directory, validated on the server", () => {
+  ensureDefaultPiProfile();
+  const claude = createCredentialProfile({
+    name: "Claude runtime",
+    provider: "claude",
+  });
+  const openai = createCredentialProfile({
+    name: "OpenAI runtime",
+    provider: "openai-codex",
+  });
+  assert.deepEqual(claudeProfileRuntime("claude-default"), {});
+  assert.deepEqual(claudeProfileRuntime(claude.id), {
+    configDir: claudeConfigDir(claude.id),
+  });
+  for (const id of [openai.id, "missing-profile"]) {
+    assert.throws(() => claudeProfileRuntime(id), {
+      message: "That credential profile cannot run Claude.",
+    });
+    assert.throws(() => claudeProfileEnvironment(id), {
+      message: "That credential profile cannot run Claude.",
+    });
+  }
 });
 
 test("metadata PATCH applies every field together and refuses invalid patches before effects", () => {

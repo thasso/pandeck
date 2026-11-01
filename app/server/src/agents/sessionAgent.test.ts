@@ -34,6 +34,7 @@ const { CLAUDE_SDK_MODELS } = await import("../claudeSdk/modelSettings.ts");
 const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { createClaudeSessionToolServer } =
   await import("../claudeSdk/toolServer.ts");
+const { appToolExecutorFor } = await import("../workers/inProcessWorker.ts");
 
 const reviewer = {
   name: "test-reviewer",
@@ -223,6 +224,8 @@ test("Claude: a denied app tool is neither listed nor callable", async () => {
     timelineEntries: () => [],
     broadcastState() {},
   });
+  // No engine mounts it here: bind the session's Worker path, as one would.
+  server.bindExecutor(appToolExecutorFor("claude-tools"));
   const client = new Client({ name: "agent-test", version: "0.0.0" });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await Promise.all([

@@ -156,6 +156,43 @@ test("an app-tool call reaches the server only after the engine's items are appl
   assert.equal(applied, 2, "both items were applied before the call went out");
 });
 
+test("a session-hook call reaches the server only after the engine's items are applied", async () => {
+  const calls = {
+    canUseTool: () =>
+      host!.sessionHooks.canUseTool({ sessionId: "nobody", toolName: "Read" }),
+    preToolUse: () =>
+      host!.sessionHooks.preToolUse({
+        sessionId: "nobody",
+        epoch: "e",
+        toolName: "Read",
+        toolInput: {},
+        toolUseId: "t",
+      }),
+    stop: () =>
+      host!.sessionHooks.stop({ sessionId: "nobody", epoch: "e", tasks: [] }),
+    postCompact: () =>
+      host!.sessionHooks.postCompact({
+        sessionId: "nobody",
+        epoch: "e",
+        summary: "s",
+      }),
+  };
+  for (const [name, call] of Object.entries(calls)) {
+    const opened = await openScripted();
+    const release = opened.hold();
+    emit!({ kind: "event", n: 1 });
+    emit!({ kind: "event", n: 2 });
+    let applied: number | undefined;
+    const record = () => (applied = opened.applied.length);
+    const settled = call().then(record, record);
+    await settle();
+    assert.equal(applied, undefined, `${name} waits for the items`);
+    release();
+    await settled;
+    assert.equal(applied, 2, `${name}: both items were applied first`);
+  }
+});
+
 test("a delivery for an engine this connection never opened is a typed error", async () => {
   const opened = await openScripted();
   const deliver = engineDeliveries(ensureInProcessWorker)[

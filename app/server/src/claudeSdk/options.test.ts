@@ -19,13 +19,20 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AgentType, SessionMode } from "@assistant/shared";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   buildClaudeSdkQueryOptions,
+  claudeQueryEnvironment,
+  claudeQueryOpenSpec,
+  claudeQueryOptions,
   claudeSessionHookBinding,
   claudeToolPermission,
   CLAUDE_AUTO_COMPACT_WINDOW_ENV,
   CLAUDE_SDK_NATIVE_TOOLS,
 } from "./options.ts";
+import type { ClaudeSdkOptions } from "./sdkSeam.ts";
+import { childProcessEnv } from "../subprocessEnv.ts";
+import { withClaudeOutputBudgetEnvironment } from "./outputPolicyHooks.ts";
 import { CLAUDE_SDK_HARNESS_SETTINGS } from "./modelSettings.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
 import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
@@ -656,4 +663,231 @@ test("a stored compaction window rides the start settings and drops the inherite
       delete process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
     else process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV] = previous;
   }
+});
+
+/** A frozen agent definition, as a spawned session carries it. */
+const reviewerAgent = {
+  name: "test-reviewer",
+  blob: "0".repeat(40),
+  persona: "developer" as const,
+  provider: "claude-sdk",
+  model: "opus",
+  pinnedModel: "claude-opus-5-5",
+  effort: "high" as const,
+  runtimeSource: "definition" as const,
+  denyTools: ["bash"],
+  skills: [],
+  body: "Review the exact head.",
+};
+
+/** The JSON-comparable part of a query's options: its callbacks' presence. */
+function comparable(options: ClaudeSdkOptions) {
+  const { abortController, canUseTool, hooks, mcpServers, ...rest } = options;
+  return {
+    ...rest,
+    abortController,
+    canUseTool: typeof canUseTool,
+    hooks: hooks && Object.keys(hooks),
+    mcpServers,
+  };
+}
+
+const SENTINEL_KEY = "options-test-sentinel-api-key";
+
+test("a query's open spec is JSON, and composing it on its host gives today's options", async () => {
+  const {
+    createCredentialProfile,
+    claudeProfileEnvironment,
+    claudeProfileRuntime,
+    ensureDefaultPiProfile,
+  } = await import("../credentialProfiles.ts");
+  // The registry lives under the suite's temporary DATA_DIR.
+  ensureDefaultPiProfile();
+  const named = createCredentialProfile({
+    name: "Claude spec",
+    provider: "claude",
+  });
+  const tmp = { TMPDIR: "/tmp/epoch", CLAUDE_CODE_TMPDIR: "/tmp/epoch" };
+  const previous = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = SENTINEL_KEY;
+  const mcpServer = { name: "pa-fixture" } as unknown as Server;
+  try {
+    const cases = [
+      {
+        label:
+          "a coding turn under a named profile, resumed, windowed, with skills",
+        input: {
+          cwd: "/tmp/work",
+          modelId: "opus",
+          thinkingLevel: "high" as const,
+          providerSessionId: "prov-1",
+          agentType: "developer" as const,
+          additionalSystemPrompt: "Suffix.",
+          agent: reviewerAgent,
+          frozenSkillNames: ["alpha", "beta"],
+          compactionWindow: 150_000,
+        },
+        profile: named.id,
+        set: tmp,
+        hooked: true,
+        mounted: true,
+      },
+      {
+        label: "an assistant turn without a profile",
+        input: {
+          cwd: "/tmp/work",
+          modelId: "sonnet",
+          thinkingLevel: "off" as const,
+          agentType: "assistant" as const,
+        },
+        set: tmp,
+        hooked: true,
+        mounted: true,
+      },
+      {
+        label: "a standalone compaction under the default profile",
+        input: {
+          cwd: "relative/work",
+          modelId: "sonnet",
+          thinkingLevel: "low" as const,
+          providerSessionId: "prov-2",
+          nativeTools: [],
+          disableTools: true,
+          agentType: "workshop" as const,
+          frozenSkillNames: ["alpha"],
+          compactionWindow: 200_000,
+        },
+        profile: "claude-default",
+        captureCompactSummary: true,
+      },
+      {
+        label: "an unhooked assistant query without a profile or tool server",
+        input: {
+          cwd: "/tmp/work",
+          modelId: "opus",
+          thinkingLevel: "medium" as const,
+          agentType: "personal-assistant" as const,
+        },
+      },
+    ];
+    for (const item of cases) {
+      const profile =
+        item.profile !== undefined
+          ? claudeProfileRuntime(item.profile)
+          : undefined;
+      const spec = claudeQueryOpenSpec({
+        ...item.input,
+        sessionId: "spec-session",
+        mountToolServer: item.mounted === true,
+        ...(item.hooked ? { sessionHooksEpoch: "epoch-1" } : {}),
+        ...(item.captureCompactSummary ? { captureCompactSummary: true } : {}),
+        env: {
+          ...(profile ? { profile } : {}),
+          ...(item.set ? { set: item.set } : {}),
+        },
+      });
+      assert.deepStrictEqual(
+        JSON.parse(JSON.stringify(spec)),
+        spec,
+        `${item.label}: the spec survives JSON`,
+      );
+      assert.doesNotMatch(
+        JSON.stringify(spec),
+        new RegExp(SENTINEL_KEY),
+        `${item.label}: no server environment rides the spec`,
+      );
+      assert.equal(spec.sessionId, "spec-session");
+      assert.equal(spec.sessionHooksEpoch, item.hooked ? "epoch-1" : undefined);
+      assert.equal(spec.captureCompactSummary, item.captureCompactSummary);
+
+      // Today's server-built env: the profile's, or the server's own, then
+      // the epoch's temp pair.
+      const serverEnv =
+        item.profile !== undefined
+          ? { ...claudeProfileEnvironment(item.profile), ...item.set }
+          : item.set
+            ? { ...childProcessEnv(), ...item.set }
+            : undefined;
+      const env = claudeQueryEnvironment(spec.env, childProcessEnv());
+      const sessionHooks = item.hooked
+        ? {
+            canUseTool: async () => ({ behavior: "allow" as const }),
+            preToolUse: async () => ({ allowed: true as const }),
+            stop: async () => {},
+            postCompact: async () => {},
+            persistOutput: async () => ({ path: "", url: "" }),
+            epoch: "epoch-1",
+          }
+        : undefined;
+      const abortController = new AbortController();
+      const hosted = claudeQueryOptions(spec, {
+        abortController,
+        env,
+        ...(sessionHooks ? { sessionHooks } : {}),
+        ...(item.mounted ? { mcpServer } : {}),
+      });
+      const today = buildClaudeSdkQueryOptions({
+        ...item.input,
+        abortController,
+        ...(serverEnv ? { env: serverEnv } : {}),
+        ...(sessionHooks ? { sessionHooks } : {}),
+        ...(item.mounted ? { mcpServer } : {}),
+      });
+      assert.deepStrictEqual(comparable(hosted), comparable(today), item.label);
+      if (item.profile !== undefined)
+        assert.equal(hosted.env?.ANTHROPIC_API_KEY, undefined, item.label);
+      else
+        assert.equal(hosted.env?.ANTHROPIC_API_KEY, SENTINEL_KEY, item.label);
+      if (!item.hooked)
+        for (const tool of ["Read", "Bash", "mcp__pa__task_read", "Agent"])
+          assert.deepEqual(
+            await hosted.canUseTool!(tool, {}, {} as never),
+            await today.canUseTool!(tool, {}, {} as never),
+            `${item.label}: ${tool}`,
+          );
+    }
+  } finally {
+    if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previous;
+  }
+});
+
+test("a query's environment applies the profile, then its variables, the output budget and the window rule", () => {
+  const base = {
+    PATH: "/bin",
+    ANTHROPIC_API_KEY: SENTINEL_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+    AWS_PROFILE: "aws",
+    [CLAUDE_AUTO_COMPACT_WINDOW_ENV]: "150000",
+    UNSET: undefined,
+  };
+  const set = { TMPDIR: "/tmp/epoch", CLAUDE_CODE_TMPDIR: "/tmp/epoch" };
+  const { UNSET: _unset, ...defined } = base;
+  assert.deepStrictEqual(
+    claudeQueryEnvironment({ set }, base),
+    withClaudeOutputBudgetEnvironment({ ...defined, ...set }),
+    "no profile: the base as is",
+  );
+  assert.deepStrictEqual(
+    claudeQueryEnvironment({ profile: {} }, base),
+    withClaudeOutputBudgetEnvironment({ PATH: "/bin" }),
+    "the default profile scrubs credentials and keeps ~/.claude",
+  );
+  assert.deepStrictEqual(
+    claudeQueryEnvironment(
+      { profile: { configDir: "/data/profile/claude" }, set },
+      base,
+    ),
+    withClaudeOutputBudgetEnvironment({
+      PATH: "/bin",
+      CLAUDE_CONFIG_DIR: "/data/profile/claude",
+      ...set,
+    }),
+  );
+  const windowed = claudeQueryEnvironment(
+    { dropAutoCompactWindow: true },
+    base,
+  );
+  assert.equal(Object.hasOwn(windowed, CLAUDE_AUTO_COMPACT_WINDOW_ENV), false);
+  assert.equal(base[CLAUDE_AUTO_COMPACT_WINDOW_ENV], "150000");
 });

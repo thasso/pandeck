@@ -32,8 +32,14 @@ import { INVALID_PARAMS } from "./checkoutMethods.ts";
 import type { Payload } from "./codec.ts";
 import { WorkerMethodError } from "./connection.ts";
 import type {
+  CanUseToolRequest,
   PersistOutputRequest,
+  PostCompactRequest,
+  PreToolUseRequest,
   SessionOutputArtifact,
+  SessionToolAdmission,
+  SessionToolPermission,
+  StopRequest,
 } from "./sessionHookMethods.ts";
 
 export const ENGINE_METHODS = {
@@ -120,6 +126,20 @@ export interface HostedEngine {
   dispose(discard?: EngineDiscard): Promise<void>;
 }
 
+/** Claude's permission and hook calls to the server (`sessionHooks.*`). */
+export interface EngineSessionHookCalls {
+  canUseTool(
+    request: CanUseToolRequest,
+    signal?: AbortSignal,
+  ): Promise<SessionToolPermission>;
+  preToolUse(
+    request: PreToolUseRequest,
+    signal?: AbortSignal,
+  ): Promise<SessionToolAdmission>;
+  stop(request: StopRequest, signal?: AbortSignal): Promise<void>;
+  postCompact(request: PostCompactRequest, signal?: AbortSignal): Promise<void>;
+}
+
 /** What the table gives each engine it opens. */
 export interface HostedEngineHost {
   readonly engineId: number;
@@ -136,6 +156,12 @@ export interface HostedEngineHost {
       onProgress?: (partial: AppToolResult) => void;
     },
   ): Promise<AppToolResult>;
+  /**
+   * Ask the server for the session's permission verdict and hook decisions
+   * (`sessionHooks.*`), each, like {@link callAppTool}, once the server has
+   * applied every item the engine emitted before the call.
+   */
+  readonly sessionHooks: EngineSessionHookCalls;
   /**
    * Persist an elided native result's full output on the server: the
    * Worker's own `sessionHooks.persistOutput` call, for either harness.

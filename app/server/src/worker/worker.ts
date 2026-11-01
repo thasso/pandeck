@@ -119,6 +119,7 @@ export function startWorker(options: {
     factories: options.engines,
     childEnv: options.childEnv,
     callAppTool: appTools.call,
+    sessionHooks,
     persistOutput: sessionHooks.persistOutput,
     backgroundWork: backgroundWork.admitter,
     materializeSkills,

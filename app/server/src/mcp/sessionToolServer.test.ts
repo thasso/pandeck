@@ -493,6 +493,8 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
 
   const createdTaskIds: string[] = [];
   const server = createClaudeSessionToolServer(session);
+  // No engine mounts it here: bind the session's Worker path, as one would.
+  server.bindExecutor(appToolExecutorFor(ID));
   const client = await connect(server);
   try {
     const listed = (await client.listTools()) as ToolListResult;

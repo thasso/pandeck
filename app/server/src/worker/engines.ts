@@ -12,9 +12,10 @@
  *   engine's commands start in arrival order; a long one never holds back a
  *   later one.
  * - Each engine's items go out as `engine.events`, one delivery in flight;
- *   the next follows the server's acknowledgement. An engine's app-tool call
- *   waits until every item it emitted before the call is acknowledged, so the
- *   server's mirror holds what the engine wrote before the tool runs.
+ *   the next follows the server's acknowledgement. An engine's app-tool and
+ *   session-hook calls wait until every item it emitted before the call is
+ *   acknowledged, so the server's mirror holds what the engine wrote before
+ *   the tool or hook runs.
  * - On connection end every engine is disposed and its queue dropped.
  */
 import { errorText } from "../errors.ts";
@@ -38,6 +39,7 @@ import {
   type EngineItem,
   type HostedEngine,
   type HostedEngineFactory,
+  type EngineSessionHookCalls,
   type HostedEngineHost,
 } from "../workerProtocol/engineMethods.ts";
 import type { AppToolCaller } from "./appTools.ts";
@@ -71,6 +73,7 @@ export function engineHandlers(options: {
   factories: EngineFactories | undefined;
   childEnv: () => NodeJS.ProcessEnv;
   callAppTool: AppToolCaller;
+  sessionHooks: EngineSessionHookCalls;
   persistOutput: HostedEngineHost["persistOutput"];
   backgroundWork: HostedEngineHost["backgroundWork"];
   materializeSkills: HostedEngineHost["materializeSkills"];
@@ -117,13 +120,36 @@ export function engineHandlers(options: {
     return disposal;
   };
 
+  /** Resolves once every item the engine emitted so far is acknowledged. */
+  const delivered = async (entry: Entry): Promise<void> => {
+    if (entry.inFlight || entry.queue.length > 0)
+      await new Promise<void>((resume) => entry.drained.push(resume));
+  };
+
   const hostFor = (engineId: number, entry: Entry): HostedEngineHost => ({
     engineId,
     childEnv: options.childEnv,
     callAppTool: async (request, callOptions) => {
-      if (entry.inFlight || entry.queue.length > 0)
-        await new Promise<void>((resume) => entry.drained.push(resume));
+      await delivered(entry);
       return options.callAppTool(request, callOptions);
+    },
+    sessionHooks: {
+      canUseTool: async (request, signal) => {
+        await delivered(entry);
+        return options.sessionHooks.canUseTool(request, signal);
+      },
+      preToolUse: async (request, signal) => {
+        await delivered(entry);
+        return options.sessionHooks.preToolUse(request, signal);
+      },
+      stop: async (request, signal) => {
+        await delivered(entry);
+        return options.sessionHooks.stop(request, signal);
+      },
+      postCompact: async (request, signal) => {
+        await delivered(entry);
+        return options.sessionHooks.postCompact(request, signal);
+      },
     },
     persistOutput: options.persistOutput,
     backgroundWork: options.backgroundWork,
