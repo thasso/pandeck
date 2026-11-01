@@ -377,7 +377,11 @@ test.each([
 /** One hosted query opened directly, on a session binding of its own. */
 async function openDirect(
   query: (params: ClaudeQueryParams) => ClaudeQuery,
-  options: { hooksEpoch?: string; toolServer?: ClaudeSessionToolServer } = {},
+  options: {
+    hooksEpoch?: string;
+    toolServer?: ClaudeSessionToolServer;
+    abort?: AbortController;
+  } = {},
 ) {
   serial += 1;
   const sessionId = `claude-hosted-direct-${serial}`;
@@ -385,7 +389,7 @@ async function openDirect(
     seam: async () => ({ query }),
     toolServer: () => options.toolServer,
   });
-  const abort = new AbortController();
+  const abort = options.abort ?? new AbortController();
   const handle = await openHostedClaudeQuery({
     prompt: (async function* () {})(),
     spec: claudeQueryOpenSpec({
@@ -641,6 +645,56 @@ test("a standalone /compact opens one engine and reports the summary its hook ca
   await until(() => inProcessWorkerEnginesForTests() === 0);
 });
 
+test("a Stop while a standalone /compact loads the SDK aborts the hosted query it then opens", async () => {
+  const held = gate();
+  let loads = 0;
+  const queries: FakeQuery[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      const query = new FakeQuery(params);
+      queries.push(query);
+      return query;
+    },
+  };
+  serial += 1;
+  const session = new ClaudeSdkSession(`claude-hosted-compact-${serial}`, {
+    // The session's own load, which the test holds, then the Worker's.
+    seam: async () => {
+      loads += 1;
+      if (loads === 1) await held.wait;
+      return seam;
+    },
+    providerSessionId: "provider-hosted",
+    title: "Hosted compact",
+    agentType: "workshop",
+  });
+  const before = opens();
+  try {
+    session.beginSyntheticTool("/compact", {
+      command: "/compact",
+      rawArgs: "",
+    });
+    const compacting = session.compactContext().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await until(() => loads === 1);
+    session.abort();
+    held.open();
+    await until(() => queries.length === 1);
+    await until(() => queries[0]!.abortObserved);
+    const error = await compacting;
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "Compaction was stopped.");
+    assert.equal(opens() - before, 1);
+    await until(() => inProcessWorkerEnginesForTests() === 0);
+  } finally {
+    queries[0]?.output.close();
+    session.dispose();
+  }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+});
+
 test.each([
   [
     "a throwing query",
@@ -748,6 +802,30 @@ test("aborting the session's controller aborts the hosted query's", async () => 
     await until(() => observed!.abortObserved);
     await drained;
   } finally {
+    release();
+  }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+});
+
+test("a signal aborted before the open answered aborts the hosted query", async () => {
+  let observed: FakeQuery | undefined;
+  const abort = new AbortController();
+  abort.abort();
+  const { handle, release } = await openDirect(
+    (params) => {
+      observed = new FakeQuery(params);
+      return observed;
+    },
+    { abort },
+  );
+  try {
+    const drained = (async () => {
+      for await (const _ of handle);
+    })();
+    await until(() => observed?.abortObserved === true);
+    await drained;
+  } finally {
+    observed?.output.close();
     release();
   }
   await until(() => inProcessWorkerEnginesForTests() === 0);

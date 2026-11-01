@@ -256,7 +256,7 @@ export async function openHostedClaudeQuery(input: {
   signal: AbortSignal;
   onCompactSummary?: (summary: string) => void;
 }): Promise<RemoteClaudeQuery> {
-  const { value } = await openEngineChannel(
+  const { value: remote } = await openEngineChannel(
     ensureInProcessWorker(),
     "claude-sdk",
     input.spec,
@@ -267,13 +267,15 @@ export async function openHostedClaudeQuery(input: {
         input.prompt,
         input.onCompactSummary,
       );
-      if (input.signal.aborted) remote.abort();
-      else
-        input.signal.addEventListener("abort", () => remote.abort(), {
-          once: true,
-        });
-      return { sink: remote.sink, value: remote.query };
+      return { sink: remote.sink, value: remote };
     },
   );
-  return value;
+  // Only a live channel takes commands, and it is live once the open
+  // resolves: an abort that came before is sent now, a later one as it comes.
+  if (input.signal.aborted) remote.abort();
+  else
+    input.signal.addEventListener("abort", () => remote.abort(), {
+      once: true,
+    });
+  return remote.query;
 }
