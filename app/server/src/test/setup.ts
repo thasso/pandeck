@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { afterAll, vi } from "vitest";
+import { afterAll, afterEach, vi } from "vitest";
+import { failOnStateTopicInvariantsForTests } from "../stateTopicKernel.ts";
 
 // Bun's os.homedir() keeps the HOME the run was launched with, whatever a test
 // sets later, and SDK code the tests reach resolves home through it. A Bun run
@@ -60,6 +61,11 @@ writeFileSync(
   }),
 );
 process.env.ASSISTANT_CONFIG = fixtureConfig;
+
+// A missed reporter fails the test that caused it, whatever catch converted
+// the throw on its way out: the violation was recorded where it was found, in
+// a ledger every kernel instance of this worker shares (`stateTopicKernel.ts`).
+afterEach(() => failOnStateTopicInvariantsForTests());
 
 afterAll(() => {
   rmSync(testCwd, { recursive: true, force: true });

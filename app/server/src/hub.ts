@@ -213,6 +213,29 @@ function changedSessionRowFields(
   );
 }
 
+/**
+ * Send one message to each viewer. A viewer whose `send` throws neither stops
+ * delivery to the rest nor goes unnoticed: once every viewer was tried, the
+ * failures throw together.
+ */
+function sendToEach(viewers: Iterable<Viewer>, message: ServerMessage): void {
+  const failures: unknown[] = [];
+  for (const viewer of viewers) {
+    try {
+      viewer.send(message);
+    } catch (err) {
+      failures.push(err);
+    }
+  }
+  if (failures.length > 0)
+    throw new AggregateError(
+      failures,
+      `${message.type}: ${failures.length} connection(s) failed: ${failures
+        .map(errorText)
+        .join("; ")}`,
+    );
+}
+
 /** Object-addressed comment delivery shared by the live hub and isolation tests. */
 export function broadcastCommentEventToViewers(
   viewers: Iterable<Viewer>,
@@ -468,10 +491,10 @@ class SessionHub {
     });
   }
 
+  /** The marker advances only when every connection took the message. */
   private publishPermanentAssistantUnread(unread: boolean): void {
     if (unread === this.lastPermanentAssistantUnread) return;
-    for (const viewer of this.connections)
-      viewer.send({ type: "permanentAssistantUnread", unread });
+    sendToEach(this.connections, { type: "permanentAssistantUnread", unread });
     this.lastPermanentAssistantUnread = unread;
   }
 
@@ -1001,9 +1024,10 @@ class SessionHub {
    * which is correct, since subscribing is what delivers the snapshot.
    */
   private broadcastTopic(topic: BroadcastTopic, message: ServerMessage): void {
-    for (const c of this.connections) {
-      if (c.wantsTopic?.(topic)) c.send(message);
-    }
+    sendToEach(
+      [...this.connections].filter((c) => c.wantsTopic?.(topic)),
+      message,
+    );
   }
 
   /**
