@@ -705,10 +705,9 @@ test.each([
   [
     "a failing iterator",
     (): ClaudeQuery => ({
-      // eslint-disable-next-line require-yield
-      async *[Symbol.asyncIterator]() {
-        throw new Error("the stream broke");
-      },
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(new Error("the stream broke")),
+      }),
     }),
   ],
 ] as const)(
