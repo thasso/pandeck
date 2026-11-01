@@ -2336,7 +2336,7 @@ export default function WorktreeDetailPage({
             // list screens run under the nav card: the page takes back the
             // space the shell reserved, and each scroller pads its end by it.
             sidebarNavigation && !embedded
-              ? "flex h-[calc(100%+var(--app-bottom-chrome-inset,0px))] min-h-0 shrink-0 flex-col [&_[data-dock-scroll]]:pb-[var(--app-bottom-chrome-inset,0px)]"
+              ? "flex h-[calc(100%+var(--app-bottom-chrome-inset,0px))] min-h-0 shrink-0 flex-col [&_[data-dock-scroll]]:pb-[var(--app-bottom-chrome-inset,0px)] [&_[data-dock-scroll]]:overscroll-none"
               : "flex h-full min-h-0 flex-col"
           }
         >
