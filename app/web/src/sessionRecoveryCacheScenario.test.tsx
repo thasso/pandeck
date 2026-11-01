@@ -17,6 +17,7 @@ import {
   type UIState,
 } from "./hooks/useAssistant.ts";
 import { readAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
+import { sessionSettleCascade } from "./lib/sessionInbox.ts";
 
 /**
  * A failed optimistic mutation that touched session rows forgets those rows'
@@ -457,3 +458,301 @@ it("a cleanup lost to a disconnect forgets its sessions' revisions before the ca
 function family(name: string): Family {
   return families[name]!;
 }
+
+// A workflow role can spawn a child. A stale paused+acknowledged run leaves
+// that child under the role in the browser, while working-set re-entry on the
+// server excludes the role from the spawn forest without stamping the child.
+const cascadeRows = [
+  row("R", 3, { agentType: "developer" }),
+  row("Q", 2, { spawnedBySessionId: "R", spawnOwnership: "coordinator" }),
+  row("untouched", 1),
+];
+const cascadeCard: WorkflowRunCard = {
+  ...runCard,
+  coordinatorSessionId: "C",
+  implementerSessionId: "R",
+};
+const pausedRun: WorkflowRunSummary = {
+  ...run,
+  lifecycle: "paused",
+  attention: { revision: 1, settledRevision: 1, kind: "paused", at: 1 },
+};
+function runList(
+  currentRun: WorkflowRunSummary,
+  card = cascadeCard,
+): ServerMessage {
+  return {
+    type: "workflowRunList",
+    runs: [currentRun],
+    cards: { [currentRun.id]: card },
+    updatedAt: 2,
+  };
+}
+async function bootCascade() {
+  const socket = await boot();
+  await act(async () => {
+    socket.receive({
+      type: "sessionList",
+      seq: 0,
+      sessions: cascadeRows,
+      revisions: atRevision(cascadeRows),
+      archivedSessionCount: 0,
+    });
+    socket.receive(runList(pausedRun));
+  });
+  return socket;
+}
+
+/** Exercise the actual cache writer, storage, hydration and equal-revision read. */
+async function warmCascade(
+  socket: ScenarioSocket,
+  authoritativeRows: SessionListItem[],
+  expectedRevisions: Record<string, number>,
+  expectedFetch: string[],
+) {
+  // Mutation completion alone does not schedule a save. An ordinary later
+  // collection change does, and pagehide flushes the writer before teardown.
+  await act(async () =>
+    socket.receive({ type: "archivedSessionCount", count: 3 }),
+  );
+  await saveAndReload();
+  const record = readAppShellCacheRecord()!;
+  const cachedQ = (record.sessions as SessionListItem[]).find(
+    ({ id }) => id === "Q",
+  );
+  const warm = await boot();
+  expect(sessionSubscribes(warm)[0]?.digests).toEqual(["sessions"]);
+  const hydratedQ = shown("Q");
+  expect(hydratedQ).toEqual(cachedQ);
+  await act(async () =>
+    warm.receive({
+      type: "stateDigest",
+      topic: "sessions",
+      seq: 0,
+      entries: authoritativeRows.map(({ id }) => ({
+        id,
+        revision: expectedRevisions[id] ?? 5,
+      })),
+    }),
+  );
+  expect(itemFetches(warm).map(({ ids }) => ids)).toEqual(
+    expectedFetch.length ? [expectedFetch] : [],
+  );
+  expect(record.sessionRevisions).toEqual(expectedRevisions);
+  expect(latestState.sessionListFresh).toBe(expectedFetch.length === 0);
+  if (expectedFetch.length) {
+    expect(hydratedQ?.settledAt).toBeDefined();
+    await act(async () =>
+      warm.receive({
+        type: "stateItems",
+        topic: "sessions",
+        requestId: itemFetches(warm)[0]!.requestId,
+        events: authoritativeRows
+          .filter(({ id }) => expectedFetch.includes(id))
+          .map((item) => ({ kind: "upsert", id: item.id, revision: 5, item })),
+      }),
+    );
+  } else expect(shown("Q")).toBe(hydratedQ);
+  expect(latestState.sessionListFresh).toBe(true);
+  expect(shown("Q")).toEqual(authoritativeRows.find(({ id }) => id === "Q"));
+  expect(sessionUnsubscribes(warm)).toHaveLength(0);
+}
+
+for (const reentry of ["active", "paused gate"] as const)
+  it(`a successful settle with ${reentry} re-entry never caches an unechoed peer at its old revision`, async () => {
+    const socket = await bootCascade();
+    const serverRun =
+      reentry === "active"
+        ? { ...pausedRun, lifecycle: "active" as const }
+        : pausedRun;
+    const serverCard = {
+      ...cascadeCard,
+      mergeDecisionReady: reentry === "paused gate",
+    };
+    // These are the shared cascade inputs used by the browser and server.
+    expect(
+      sessionSettleCascade("R", cascadeRows, [pausedRun], {
+        [run.id]: cascadeCard,
+      }).peerIds,
+    ).toEqual(["Q"]);
+    expect(
+      sessionSettleCascade("R", cascadeRows, [serverRun], {
+        [run.id]: serverCard,
+      }).peerIds,
+    ).toEqual([]);
+    await act(async () => latestActions.settleSession("R"));
+    const requestId = lastSent(socket, "settleSession");
+    expect(shown("Q")?.settledAt).toBeDefined();
+    const settledR = { ...cascadeRows[0]!, settledAt: 10 };
+    // The production order: session rows flush before mutationSettled; the
+    // corrected workflow view may arrive afterwards. Neither confirms Q.
+    await act(async () =>
+      socket.receive({
+        type: "stateEvents",
+        topic: "sessions",
+        seq: 1,
+        events: [{ kind: "upsert", id: "R", revision: 6, item: settledR }],
+      }),
+    );
+    await act(async () =>
+      socket.receive({ type: "mutationSettled", requestId }),
+    );
+    await act(async () => socket.receive(runList(serverRun, serverCard)));
+    expect(shown("Q")?.settledAt).toBeDefined();
+    await warmCascade(
+      socket,
+      [settledR, ...cascadeRows.slice(1)],
+      { R: 6, untouched: 5 },
+      ["Q"],
+    );
+  });
+
+for (const order of ["echo before settle", "echo after settle"] as const)
+  it(`a stamped peer corrects a successful settle, ${order}`, async () => {
+    const socket = await bootCascade();
+    await act(async () => latestActions.settleSession("R"));
+    const requestId = lastSent(socket, "settleSession");
+    const settledR = { ...cascadeRows[0]!, settledAt: 10 };
+    const echo: ServerMessage = {
+      type: "stateEvents",
+      topic: "sessions",
+      seq: 1,
+      events: [
+        { kind: "upsert", id: "R", revision: 6, item: settledR },
+        { kind: "upsert", id: "Q", revision: 6, item: cascadeRows[1]! },
+      ],
+    };
+    if (order === "echo after settle")
+      await act(async () =>
+        socket.receive({ type: "mutationSettled", requestId }),
+      );
+    await act(async () => socket.receive(echo));
+    if (order === "echo before settle")
+      await act(async () =>
+        socket.receive({ type: "mutationSettled", requestId }),
+      );
+    expect(shown("Q")?.settledAt).toBeUndefined();
+    await warmCascade(
+      socket,
+      [settledR, ...cascadeRows.slice(1)],
+      { R: 6, Q: 6, untouched: 5 },
+      [],
+    );
+  });
+
+it("a successful cascade's equal echo restores revisions without replacing optimistic rows", async () => {
+  const socket = await bootCascade();
+  const untouched = shown("untouched");
+  await act(async () => latestActions.settleSession("R"));
+  const requestId = lastSent(socket, "settleSession");
+  const optimisticR = shown("R")!;
+  const optimisticQ = shown("Q")!;
+  await act(async () =>
+    socket.receive({
+      type: "stateEvents",
+      topic: "sessions",
+      seq: 1,
+      events: [
+        { kind: "upsert", id: "R", revision: 6, item: optimisticR },
+        { kind: "upsert", id: "Q", revision: 6, item: optimisticQ },
+      ],
+    }),
+  );
+  await act(async () => socket.receive({ type: "mutationSettled", requestId }));
+  expect(shown("R")).toBe(optimisticR);
+  expect(shown("Q")).toBe(optimisticQ);
+  expect(shown("untouched")).toBe(untouched);
+  await warmCascade(
+    socket,
+    [optimisticR, optimisticQ, cascadeRows[2]!],
+    { R: 6, Q: 6, untouched: 5 },
+    [],
+  );
+});
+
+it("an unechoed peer is re-read by the in-memory reconnect digest too", async () => {
+  const socket = await bootCascade();
+  const untouched = shown("untouched");
+  await act(async () => latestActions.settleSession("R"));
+  const requestId = lastSent(socket, "settleSession");
+  await act(async () =>
+    socket.receive({
+      type: "stateEvents",
+      topic: "sessions",
+      seq: 1,
+      events: [
+        {
+          kind: "upsert",
+          id: "R",
+          revision: 6,
+          item: { ...cascadeRows[0]!, settledAt: 10 },
+        },
+      ],
+    }),
+  );
+  await act(async () => socket.receive({ type: "mutationSettled", requestId }));
+  await act(async () => socket.close());
+  await act(async () => vi.advanceTimersByTimeAsync(1_000));
+  const next = ScenarioSocket.instances.at(-1)!;
+  await act(async () => {
+    next.open();
+    next.receive(readyMessage());
+  });
+  expect(sessionSubscribes(next)[0]?.digests).toEqual(["sessions"]);
+  await act(async () =>
+    next.receive({
+      type: "stateDigest",
+      topic: "sessions",
+      seq: 0,
+      entries: [
+        { id: "R", revision: 6 },
+        { id: "Q", revision: 5 },
+        { id: "untouched", revision: 5 },
+      ],
+    }),
+  );
+  expect(itemFetches(next).map(({ ids }) => ids)).toEqual([["Q"]]);
+  expect(latestState.sessionListFresh).toBe(false);
+  await act(async () =>
+    next.receive({
+      type: "stateItems",
+      topic: "sessions",
+      requestId: itemFetches(next)[0]!.requestId,
+      events: [{ kind: "upsert", id: "Q", revision: 5, item: cascadeRows[1]! }],
+    }),
+  );
+  expect(shown("Q")?.settledAt).toBeUndefined();
+  expect(shown("untouched")).toBe(untouched);
+  expect(latestState.sessionListFresh).toBe(true);
+});
+
+it("a successful Workflow Run settle cannot trust a role omitted by the current server card", async () => {
+  const socket = await bootCascade();
+  // The browser still names Q as a reviewer; the current server card no longer
+  // does. Role membership is workflow data, not a change to Q's session row.
+  const staleCard = {
+    ...cascadeCard,
+    reviewerSessions: [{ pass: 1, sessionId: "Q" }],
+  };
+  await act(async () => socket.receive(runList(run, staleCard)));
+  await act(async () => latestActions.settleWorkflowRun(run.id, 2));
+  const requestId = lastSent(socket, "settleWorkflowRun");
+  expect(shown("Q")?.settledAt).toBeDefined();
+  const settledR = { ...cascadeRows[0]!, settledAt: 10 };
+  await act(async () =>
+    socket.receive({
+      type: "stateEvents",
+      topic: "sessions",
+      seq: 1,
+      events: [{ kind: "upsert", id: "R", revision: 6, item: settledR }],
+    }),
+  );
+  await act(async () => socket.receive(runList(run)));
+  await act(async () => socket.receive({ type: "mutationSettled", requestId }));
+  await warmCascade(
+    socket,
+    [settledR, ...cascadeRows.slice(1)],
+    { R: 6, untouched: 5 },
+    ["Q"],
+  );
+});

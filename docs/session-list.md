@@ -147,8 +147,11 @@ rows with `getStateItems` (`docs/state-sync.md`, "Resync"). The digest still
 costs the server one full build; it saves the transfer and the client's
 replacement of unchanged rows. The shell cache keeps rows at rest
 (`sessionListItemAtRest`), with a revision only for rows that were already at
-rest, so a reconnect or warm start re-reads exactly the moved rows and the ones
-that were live. A server restart touches every row, so the first digest after it
+rest. Optimistic session and Workflow Run settles also discard the predicted
+rows' revisions until session authority confirms them, because a stale workflow
+view may predict peers or roles the server does not settle. A reconnect or warm
+start re-reads moved rows, rows that were live, and unconfirmed settle
+predictions. A server restart touches every row, so the first digest after it
 re-reads them all.
 
 ### Republishing a row

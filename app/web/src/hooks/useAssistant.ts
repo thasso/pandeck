@@ -5216,6 +5216,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     };
   }
   if (action.kind === "optimisticSessionSettle") {
+    // Cascade membership is a prediction from the browser's workflow view.
+    // A successful server settle can omit a predicted peer without stamping
+    // it. Forget the baseline with the guess, not at mutationSettled: rows
+    // echoed before that reply must keep their authoritative revisions.
+    const unconfirmed = applyTopicMessage(sessionReplica, state, {
+      kind: "baselineLost",
+      ids: [action.sessionId, ...action.peerSessionIds],
+    });
     // A peer already down keeps its settled time, as the server's cascade
     // does, so it does not jump to the top of the shelf until the list lands.
     const alreadySettled = new Set(
@@ -5224,7 +5232,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         .map((session) => session.id),
     );
     return {
-      ...updateSessionRows(state, (rows) => {
+      ...updateSessionRows(unconfirmed, (rows) => {
         let next = applyOptimisticSessionSettle(
           rows,
           action.sessionId,
@@ -5274,7 +5282,13 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     };
   }
   if (action.kind === "optimisticWorkflowRunSettle") {
-    const settled = updateSessionRows(state, (rows) => {
+    // Role ids also come from a possibly stale workflow card. Only a session
+    // event or snapshot can confirm a shelved role, not the run's success.
+    const unconfirmed = applyTopicMessage(sessionReplica, state, {
+      kind: "baselineLost",
+      ids: action.sessionIds,
+    });
+    const settled = updateSessionRows(unconfirmed, (rows) => {
       let next = rows;
       for (const sessionId of action.sessionIds)
         next = applyOptimisticSessionSettle(next, sessionId, true, action.now);

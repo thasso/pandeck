@@ -217,7 +217,8 @@ markers advance only after a send returns without throwing.
   start can paint immediately and digest-diff rather than replacing the list. A
   cache missing an object's revision is not digest-capable and falls back to a
   full snapshot. Sessions are the exception: a row cached without a revision
-  (one that was live when saved) is re-read by the digest's catch-up instead.
+  (one that was live when saved, or an unconfirmed settle prediction) is re-read
+  by the digest's catch-up instead.
 - Worktree git statuses are cached too, but as a SILHOUETTE, not as state: they
   hydrate into their own `cachedWorktreeStatuses` slice so a cold Projects view
   paints rows at their real height instead of growing each one as its watch
@@ -586,26 +587,33 @@ per-surface sub-tasks — no page invents its own delta format.
   every touched row's revision, so a cache save before the snapshot lands keeps
   no guess at a revision, then resubscribes or joins the awaited snapshot. A
   command whose reply must follow its rows flushes them first
-  (`publishSessionRowsNow`, outside transactions). Revisions live in a separate
-  table because live engine ids need not have a `session_index` row. The peer
-  deadline watermark is the builder's only clock input. One `summaries` batch
-  builds all touched ids. The archived-inclusive audit rebaselines each id at
-  delivered publication; tests check every flush/read, while production logs and
-  repairs missed reporters on a 60 s sweep. A pending global refresh excuses
-  only rows archived in both builds until its delivered publication.
-  Global-stamp provenance preserves the preceding explicit revision for
-  membership checks, so a global stamp cannot report archive/unarchive,
-  appearance or disappearance. That check precedes installing delivered rows.
-  Explicit reporters still cover transitions within the window, including across
-  repeated globals and retries. Collection read errors are consumed by the
-  replica/archive scheduler, never the running chat; stale archive errors have
-  no effect. Archived reads are single-flight with one queued, released only by
-  their own answer/error, disconnect or 30 s timeout. The descriptor has a
-  digest: a digest subscribe is answered by `stateDigest<"sessions">` over
-  exactly the snapshot's rows and revisions (one full build), then one
-  `archivedSessionCount`; `getStateItems` reads live rows by id, and an
-  archived, tombstoned, hidden or unknown id is a `delete` at its stored
-  revision. The shell cache stores rows at rest (`sessionListItemAtRest`:
+  (`publishSessionRowsNow`, outside transactions). An optimistic session settle
+  or Workflow Run settle forgets the predicted session rows' revisions in the
+  same reducer step. Workflow membership may be stale, so even success need not
+  stamp every predicted peer or role. Only authoritative session events or reads
+  restore their revisions; mutation success and a corrected workflow list do
+  not. An unconfirmed guess may remain displayed until an authoritative read,
+  but the next reconnect or warm digest must fetch it even at the old revision.
+  Equal authoritative echoes keep row identity and restore the sidecar normally.
+  Revisions live in a separate table because live engine ids need not have a
+  `session_index` row. The peer deadline watermark is the builder's only clock
+  input. One `summaries` batch builds all touched ids. The archived-inclusive
+  audit rebaselines each id at delivered publication; tests check every
+  flush/read, while production logs and repairs missed reporters on a 60 s
+  sweep. A pending global refresh excuses only rows archived in both builds
+  until its delivered publication. Global-stamp provenance preserves the
+  preceding explicit revision for membership checks, so a global stamp cannot
+  report archive/unarchive, appearance or disappearance. That check precedes
+  installing delivered rows. Explicit reporters still cover transitions within
+  the window, including across repeated globals and retries. Collection read
+  errors are consumed by the replica/archive scheduler, never the running chat;
+  stale archive errors have no effect. Archived reads are single-flight with one
+  queued, released only by their own answer/error, disconnect or 30 s timeout.
+  The descriptor has a digest: a digest subscribe is answered by
+  `stateDigest<"sessions">` over exactly the snapshot's rows and revisions (one
+  full build), then one `archivedSessionCount`; `getStateItems` reads live rows
+  by id, and an archived, tombstoned, hidden or unknown id is a `delete` at its
+  stored revision. The shell cache stores rows at rest (`sessionListItemAtRest`:
   live-derived fields reset to the server's resting values) and a
   `sessionRevisions` sidecar holding only rows that were already at rest when
   saved; a row hydrated without a revision is re-read by the digest's catch-up.
