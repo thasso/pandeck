@@ -336,7 +336,7 @@ const CLASSIFIED: Record<
       childrenOf: "read",
       spawnerOf: "read",
       childIdsAmong: "read",
-      clearForTests: "non-projected-write",
+      clearForTests: "projected-write",
     },
   },
   sessionObjectStore: {
@@ -367,7 +367,7 @@ const CLASSIFIED: Record<
   },
   peerDeadlineClock: {
     exports: peerDeadlineClock,
-    funnel: ["touchSessionRows"],
+    funnel: ["touchSessionRows", "touchAllSessionRows"],
     kinds: {
       DEADLINE_SCHEDULED_STATUSES: "read",
       CLOSED_PEER_PROMPT_STATUSES: "read",
@@ -379,7 +379,7 @@ const CLASSIFIED: Record<
       startPeerDeadlineClock: "non-projected-write",
       noteDeadline: "non-projected-write",
       armedPeerDeadlineForTests: "read",
-      resetPeerDeadlineClockForTests: "non-projected-write",
+      resetPeerDeadlineClockForTests: "projected-write",
     },
   },
   inboxPositionStore: {
@@ -576,7 +576,7 @@ const CLASSIFIED: Record<
   },
   peerSpawnRuntimes: {
     exports: peerSpawnRuntimes,
-    funnel: ["setPeerTurnCap", "record"],
+    funnel: ["setPeerTurnCap", "record", "clearForTests", "touchSessionRows"],
     kinds: {
       directPeerTurnCapOf: "read",
       setSessionPeerTurnCap: "projected-write",
@@ -589,7 +589,7 @@ const CLASSIFIED: Record<
       directPeerCostClass: "read",
       withDirectAdmission: "non-projected-write",
       recordDirectPeerChild: "projected-write",
-      resetDirectPeerChildrenForTests: "non-projected-write",
+      resetDirectPeerChildrenForTests: "projected-write",
       directSlotCounter: "read",
       oldestInFlightHold: "read",
       inFlightHoldsBefore: "read",
@@ -615,7 +615,7 @@ const CLASSIFIED: Record<
       trackPresenceWork: "non-projected-write",
       presenceCountsForTests: "read",
       presenceQueuedForTests: "read",
-      resetPresenceForTests: "non-projected-write",
+      resetPresenceForTests: "projected-write",
       flushPresenceForTests: "read",
     },
   },

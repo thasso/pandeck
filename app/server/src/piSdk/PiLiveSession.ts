@@ -1405,6 +1405,8 @@ export class PiLiveSession implements LiveSession {
         generatedTitle ?? fallbackSessionTitle(prompt, attachments),
       );
       this.host.sessionRowsChanged([this.key]);
+    } catch (err) {
+      console.warn("Failed to apply automatic session title:", errorText(err));
     } finally {
       // A manual rename may have spent this already; every other exit must stop
       // looking like naming work is still happening.
@@ -1576,7 +1578,10 @@ export class PiLiveSession implements LiveSession {
   async rename(title: string): Promise<void> {
     // `setSessionName` may emit synchronously; spend the working state first so
     // no broadcast ever shows a final title with the pending treatment.
-    this.titleGenerationPending = false;
+    if (this.titleGenerationPending) {
+      this.titleGenerationPending = false;
+      this.host.sessionRowsChanged([this.key]);
+    }
     await this.engine.setSessionName(title);
     this.title = deriveTitle(title, "");
     this.updatedAt = Date.now();

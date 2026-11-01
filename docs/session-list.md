@@ -142,7 +142,14 @@ included:
   `message_end` exposes a newly appended native message count before the next
   tool/provider step. Claude reports canonical appends (including steers
   accepted by a command-lifecycle callback) and observed model changes without
-  waiting for a later terminal persist.
+  waiting for a later terminal persist. Clearing Pi's live naming indicator is
+  itself a write, even if native title persistence then rejects before its
+  callback. Automatic naming logs that rejection and stops the indicator.
+
+Test-owned clears follow the same contract: removing direct-child membership
+reports the removed children, dropping hold tickets reports the held siblings,
+and resetting presence reports keys whose verified absence was forgotten. They
+do not disable the audit or reset the published baseline.
 
 Over-touching costs one row rebuild; under-touching leaves a stale row. Deferred
 reporting (`void import(…).then(…)`, a post-publish listener) is not a touch,
@@ -166,6 +173,14 @@ row, only as `permanentAssistantUnread`. Removing its binding publishes false,
 including to later connections, only if that scalar changed. A caller whose
 reply or later broadcast must follow the list (`mutationSettled`, a Workflow Run
 list after its roles) awaits `hub.sessionRowsSent()`.
+
+A failed build or send retains its captured touched ids, forced ids and global
+refresh intent alongside any reports received during that attempt. Published
+rows, archived count and singleton-unread cache advance only after successful
+publication. An awaiting caller rejects on failure rather than acknowledging a
+row that was not sent. There is no automatic retry loop: the next ordinary
+report retries the retained work, and the audit still recognizes it as reported.
+A partially completed send may be repeated on that retry.
 
 Two backstops catch a writer that forgot to touch:
 

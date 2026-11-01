@@ -247,6 +247,7 @@ class SessionHub {
   private sessionsBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
   private sessionsBroadcastPromise: Promise<void> | undefined;
   private resolveSessionsBroadcast: (() => void) | undefined;
+  private rejectSessionsBroadcast: ((reason: unknown) => void) | undefined;
   private sessionsBroadcastInFlight = false;
   private sessionsBroadcastRequestedDuringFlush = false;
   /** A caller awaits the flush (`flushSessionRowsNow`): no sustained wait. */
@@ -469,9 +470,9 @@ class SessionHub {
 
   private publishPermanentAssistantUnread(unread: boolean): void {
     if (unread === this.lastPermanentAssistantUnread) return;
-    this.lastPermanentAssistantUnread = unread;
     for (const viewer of this.connections)
       viewer.send({ type: "permanentAssistantUnread", unread });
+    this.lastPermanentAssistantUnread = unread;
   }
 
   /**
@@ -507,9 +508,13 @@ class SessionHub {
   /** Coalesce touches into one flush: 25 ms debounce, 250 ms under churn. */
   private scheduleSessionsFlush(): Promise<void> {
     if (!this.sessionsBroadcastPromise) {
-      this.sessionsBroadcastPromise = new Promise((resolve) => {
+      this.sessionsBroadcastPromise = new Promise((resolve, reject) => {
         this.resolveSessionsBroadcast = resolve;
+        this.rejectSessionsBroadcast = reject;
       });
+      // Most touches are fire-and-forget. Awaiting consumers still receive the
+      // rejection, without an unobserved promise when no command is waiting.
+      void this.sessionsBroadcastPromise.catch(() => {});
     }
 
     if (this.sessionsBroadcastInFlight) {
@@ -540,6 +545,7 @@ class SessionHub {
       this.sessionsBroadcastTimer = undefined;
     }
     await this.flushSessionsBroadcast();
+    await pending;
   }
 
   private async flushSessionsBroadcast(): Promise<void> {
@@ -549,6 +555,8 @@ class SessionHub {
     }
     this.sessionsBroadcastInFlight = true;
     let unreported: Error | undefined;
+    let failed = false;
+    let failure: unknown;
     try {
       do {
         this.sessionsBroadcastRequestedDuringFlush = false;
@@ -580,14 +588,19 @@ class SessionHub {
           );
       } while (this.sessionsBroadcastRequestedDuringFlush);
     } catch (err) {
+      failed = true;
+      failure = err;
       console.warn("Failed to broadcast sessions:", errorText(err));
     } finally {
       this.sessionsBroadcastInFlight = false;
       this.sessionsFlushNow = false;
       const resolve = this.resolveSessionsBroadcast;
+      const reject = this.rejectSessionsBroadcast;
       this.sessionsBroadcastPromise = undefined;
       this.resolveSessionsBroadcast = undefined;
-      resolve?.();
+      this.rejectSessionsBroadcast = undefined;
+      if (unreported || failed) reject?.(unreported ?? failure);
+      else resolve?.();
     }
     if (unreported) throw unreported;
   }
@@ -602,100 +615,111 @@ class SessionHub {
   private async publishTouchedSessionRows(): Promise<void> {
     const touched = this.touchedSessionRows;
     const forced = this.forcedSessionRows;
-    const everyRow =
-      this.touchAllSessionRowsPending || !this.publishedSessionRows;
+    const globalTouch = this.touchAllSessionRowsPending;
+    const everyRow = globalTouch || !this.publishedSessionRows;
     this.touchedSessionRows = new Set();
     this.forcedSessionRows = new Set();
     this.touchAllSessionRowsPending = false;
     if (!everyRow && touched.size === 0) return;
 
-    const previous = this.publishedSessionRows;
-    const archivedCount = await archivedSessionCount();
-    // The archived COUNT only rides on a full list, and it can move while
-    // both row sets stay the same — restoring a session keeps the archived
-    // client's rows, deleting an archived one keeps the active client's — so
-    // a changed count forces the list for every variant.
-    const archivedCountMoved =
-      this.lastBroadcastArchivedCount !== archivedCount;
-    this.lastBroadcastArchivedCount = archivedCount;
+    try {
+      const previous = this.publishedSessionRows;
+      const archivedCount = await archivedSessionCount();
+      // The archived COUNT only rides on a full list, and it can move while
+      // both row sets stay the same — restoring a session keeps the archived
+      // client's rows, deleting an archived one keeps the active client's — so
+      // a changed count forces the list for every variant.
+      const archivedCountMoved =
+        this.lastBroadcastArchivedCount !== archivedCount;
 
-    const assistantId = permanentAssistantStore.sessionId();
-    const builtRows = await this.mergedSessions(
-      everyRow
-        ? { includeArchived: true }
-        : { includeArchived: true, onlyIds: touched },
-    );
-    if (!assistantId) this.publishPermanentAssistantUnread(false);
-    else if (everyRow || touched.has(assistantId))
-      this.publishPermanentAssistantUnread(
-        Boolean(builtRows.find((row) => row.id === assistantId)?.unread),
+      const assistantId = permanentAssistantStore.sessionId();
+      const builtRows = await this.mergedSessions(
+        everyRow
+          ? { includeArchived: true }
+          : { includeArchived: true, onlyIds: touched },
       );
-    let rows = publicSessionRows(builtRows);
-    let builtEveryRow = everyRow;
-    const compared = (): string[] =>
-      everyRow
-        ? [
-            ...new Set([
-              ...rows.map((row) => row.id),
-              ...(previous?.keys() ?? []),
-            ]),
-          ]
-        : [...touched];
-    let plan = planSessionListSends(rows, compared(), previous, forced);
-    const fullPlain = !previous || archivedCountMoved || plan.plainFull;
-    const fullArchived = !previous || archivedCountMoved || plan.archivedFull;
-    if ((fullPlain || fullArchived) && !builtEveryRow) {
-      // One full build serves both variants; the comparison is redone on it
-      // so a delta sent beside a full list describes the same content.
-      rows = publicSessionRows(
-        await this.mergedSessions({ includeArchived: true }),
-      );
-      builtEveryRow = true;
-      plan = planSessionListSends(rows, compared(), previous, forced);
-    }
+      const assistantUnread = !assistantId
+        ? false
+        : everyRow || touched.has(assistantId)
+          ? Boolean(builtRows.find((row) => row.id === assistantId)?.unread)
+          : undefined;
+      let rows = publicSessionRows(builtRows);
+      let builtEveryRow = everyRow;
+      const compared = (): string[] =>
+        everyRow
+          ? [
+              ...new Set([
+                ...rows.map((row) => row.id),
+                ...(previous?.keys() ?? []),
+              ]),
+            ]
+          : [...touched];
+      let plan = planSessionListSends(rows, compared(), previous, forced);
+      const fullPlain = !previous || archivedCountMoved || plan.plainFull;
+      const fullArchived = !previous || archivedCountMoved || plan.archivedFull;
+      if ((fullPlain || fullArchived) && !builtEveryRow) {
+        // One full build serves both variants; the comparison is redone on it
+        // so a delta sent beside a full list describes the same content.
+        rows = publicSessionRows(
+          await this.mergedSessions({ includeArchived: true }),
+        );
+        builtEveryRow = true;
+        plan = planSessionListSends(rows, compared(), previous, forced);
+      }
 
-    const published = new Map(previous ?? []);
-    for (const id of compared()) {
-      const row = plan.byId.get(id);
-      if (row)
-        published.set(id, {
-          json: publicSessionRowJson(row),
-          archived: Boolean(row.archived),
-        });
-      else published.delete(id);
-    }
-    this.publishedSessionRows = published;
+      const published = new Map(previous ?? []);
+      for (const id of compared()) {
+        const row = plan.byId.get(id);
+        if (row)
+          published.set(id, {
+            json: publicSessionRowJson(row),
+            archived: Boolean(row.archived),
+          });
+        else published.delete(id);
+      }
 
-    const plainRows = builtEveryRow
-      ? rows.filter((row) => !row.archived)
-      : undefined;
-    // The singleton's row reaches clients only as the scalar above; the
-    // connection would drop its `sessionUpdated` anyway (`publicServerMessage`).
-    const rowUpdates = (sends: SessionRow[]) =>
-      sends.filter((session) => session.id !== assistantId);
-    for (const c of this.connections) {
-      if (c.wantsArchivedSessions?.()) {
-        if (fullArchived)
+      const plainRows = builtEveryRow
+        ? rows.filter((row) => !row.archived)
+        : undefined;
+      // The singleton's row reaches clients only as the scalar above; the
+      // connection would drop its `sessionUpdated` anyway (`publicServerMessage`).
+      const rowUpdates = (sends: SessionRow[]) =>
+        sends.filter((session) => session.id !== assistantId);
+      for (const c of this.connections) {
+        if (c.wantsArchivedSessions?.()) {
+          if (fullArchived)
+            c.send({
+              type: "sessions",
+              sessions: rows,
+              archivedSessionCount: archivedCount,
+              archivedSessionsLoaded: true,
+            });
+          else
+            for (const session of rowUpdates(plan.archivedSend))
+              c.send({ type: "sessionUpdated", session });
+        } else if (fullPlain) {
           c.send({
             type: "sessions",
-            sessions: rows,
+            sessions: plainRows!,
             archivedSessionCount: archivedCount,
-            archivedSessionsLoaded: true,
+            archivedSessionsLoaded: false,
           });
-        else
-          for (const session of rowUpdates(plan.archivedSend))
+        } else {
+          for (const session of rowUpdates(plan.plainSend))
             c.send({ type: "sessionUpdated", session });
-      } else if (fullPlain) {
-        c.send({
-          type: "sessions",
-          sessions: plainRows!,
-          archivedSessionCount: archivedCount,
-          archivedSessionsLoaded: false,
-        });
-      } else {
-        for (const session of rowUpdates(plan.plainSend))
-          c.send({ type: "sessionUpdated", session });
+        }
       }
+      if (assistantUnread !== undefined)
+        this.publishPermanentAssistantUnread(assistantUnread);
+      this.publishedSessionRows = published;
+      this.lastBroadcastArchivedCount = archivedCount;
+    } catch (error) {
+      // Merge, never replace: writes may have reported more work during a
+      // build/send. A later ordinary report retries; failure does not spin.
+      for (const id of touched) this.touchedSessionRows.add(id);
+      for (const id of forced) this.forcedSessionRows.add(id);
+      this.touchAllSessionRowsPending ||= globalTouch;
+      throw error;
     }
   }
 
@@ -821,7 +845,9 @@ class SessionHub {
     if (this.sessionsBroadcastTimer) {
       clearTimeout(this.sessionsBroadcastTimer);
       this.sessionsBroadcastTimer = undefined;
+      const pending = this.sessionsBroadcastPromise;
       await this.flushSessionsBroadcast();
+      await pending;
     } else if (this.sessionsBroadcastPromise) {
       await this.sessionsBroadcastPromise;
     }

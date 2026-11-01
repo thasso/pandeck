@@ -431,7 +431,11 @@ export function recordDirectPeerChild(child: DirectPeerChild): void {
 export function resetDirectPeerChildrenForTests(): void {
   directPeerChildStore.clearForTests();
   reservedTurns.clear();
+  const heldChildren = [...inFlightHolds.keys()].flatMap((coordinator) =>
+    peerPromptStore.heldFrom(coordinator).map((row) => row.recipientSessionId),
+  );
   inFlightHolds.clear();
+  touchSessionRows(heldChildren);
   admissionLocks.clear();
 }
 

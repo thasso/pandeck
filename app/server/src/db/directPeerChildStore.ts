@@ -133,6 +133,9 @@ export const directPeerChildStore = {
 
   /** Test seam: forget every recorded child. */
   clearForTests(): void {
-    getDb().prepare("DELETE FROM direct_peer_children").run();
+    const children = getDb()
+      .prepare("DELETE FROM direct_peer_children RETURNING child_session_id")
+      .all() as { child_session_id: string }[];
+    touchSessionRows(children.map((child) => child.child_session_id));
   },
 };

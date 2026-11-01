@@ -373,6 +373,138 @@ test("Pi automatic and fork title completions report pending/title transitions",
   assert.equal(child.listInfo().forkAutoRenamePending, false);
 });
 
+test("Pi rejected manual rename reports the cleared naming flag before any native callback", async () => {
+  interceptPi();
+  updateSettings({
+    sessionNaming: { ...getSettings().sessionNaming, enabled: true },
+  });
+  const live = await freshPi();
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "pending naming failure fixture");
+  await hub.flushPendingBroadcastsForTests();
+  const before = await publicSessionRows();
+  assert.equal(before.get(`default:${live.id}`)?.titleGenerationPending, true);
+  const native = opens.at(-1)!;
+  const rename = vi.spyOn(native, "setSessionName").mockImplementation(() => {
+    // Native append/persistence may throw before session_info_changed. Do not
+    // fabricate a callback to cover the app's earlier pending-flag mutation.
+    throw Object.assign(new Error("rename persistence denied"), {
+      code: "EACCES",
+    });
+  });
+  await oracle(
+    "Pi rejected manual rename",
+    async () => {
+      await assert.rejects(
+        () => live.rename("Rejected title"),
+        /persistence denied/,
+      );
+    },
+    { changed: [live.id] },
+  );
+  assert.equal(rename.mock.calls.length, 1);
+  const after = await publicSessionRows();
+  assert.equal(
+    after.get(`default:${live.id}`)?.titleGenerationPending,
+    undefined,
+  );
+  assert.equal(
+    after.get(`default:${live.id}`)?.title,
+    before.get(`default:${live.id}`)?.title,
+  );
+  // No later same-session event can repair the missing report.
+  const other = await freshPi();
+  sessionStore.touch(other.id);
+  await hub.flushPendingBroadcastsForTests();
+});
+
+test("Pi automatic title persistence rejection reports pending cleanup without a native callback", async () => {
+  interceptPi();
+  updateSettings({
+    sessionNaming: { ...getSettings().sessionNaming, enabled: true },
+  });
+  const live = await freshPi();
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "automatic naming persistence failure");
+  await hub.flushPendingBroadcastsForTests();
+  assert.equal(
+    (await publicSessionRows()).get(`default:${live.id}`)
+      ?.titleGenerationPending,
+    true,
+  );
+  const rename = vi
+    .spyOn(opens.at(-1)!, "setSessionName")
+    .mockImplementation(() => {
+      throw new Error("automatic title persistence denied");
+    });
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await oracle(
+    "Pi failed automatic title cleanup",
+    async () => {
+      naming.pending.shift()!("Rejected automatic title");
+      await turn();
+    },
+    { changed: [live.id] },
+  );
+  assert.equal(rename.mock.calls.length, 1);
+  assert.ok(
+    warning.mock.calls.some((args) =>
+      String(args).includes("persistence denied"),
+    ),
+  );
+  assert.ok(!live.listInfo().titleGenerationPending);
+  sessionStore.touch((await freshPi()).id);
+  await hub.flushPendingBroadcastsForTests();
+});
+
+test("Pi fork title persistence rejection leaves the public row unchanged", async () => {
+  interceptPi();
+  const live = await freshPi();
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "fork naming failure parent");
+  const anchor = opens
+    .at(-1)!
+    .sessionManager.getEntries()
+    .findLast(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    )!;
+  const child = await piStore.forkSession(
+    "assistant",
+    live.sessionFile!,
+    anchor.id,
+    "at",
+    "origin",
+  );
+  ensureRuntimeSessionWithRuntime(sessionRuntime, child);
+  await sessionRuntime.prompt(child.id, "fork naming failure child");
+  await hub.flushPendingBroadcastsForTests();
+  const rename = vi
+    .spyOn(opens.at(-1)!, "setSessionName")
+    .mockImplementation(() => {
+      throw new Error("fork title persistence denied");
+    });
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await oracle(
+    "Pi failed fork title",
+    async () => {
+      naming.pending.shift()!("Rejected fork title");
+      await turn();
+    },
+    {
+      equal:
+        "fork naming has no pending indicator after first-prompt acceptance; no native callback changes its title",
+    },
+  );
+  assert.equal(rename.mock.calls.length, 1);
+  assert.ok(
+    warning.mock.calls.some((args) =>
+      String(args).includes("persistence denied"),
+    ),
+  );
+  sessionStore.touch(live.id);
+  await hub.flushPendingBroadcastsForTests();
+});
+
 test("Pi context-only clearing uses real transcript-total stats, not fabricated message counts", async () => {
   interceptPi();
   const live = await freshPi();

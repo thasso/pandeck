@@ -271,8 +271,12 @@ export function presenceQueuedForTests(
 
 /** Test seam: forget every entry and zero the counts; listeners stay. */
 export function resetPresenceForTests(): void {
+  const changes = [...entries.values()]
+    .filter((entry) => entry.answer?.state === "absent")
+    .map(({ key }) => ({ key }));
   entries.clear();
   queue.clear();
+  if (changes.length > 0) notifyPresenceChange(changes);
   probesIssued = 0;
   coalesced = 0;
   droppedLate = 0;
