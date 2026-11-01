@@ -16,6 +16,10 @@ import { DATA_DIR } from "./config.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { childProcessEnv } from "./subprocessEnv.ts";
 import {
+  claudeChildEnvironment,
+  type ClaudeProfileRuntime,
+} from "./claudeSdk/childEnvironment.ts";
+import {
   readAccountHealth,
   reportAccountLoginCompleted,
   withAccountHealthProfiles,
@@ -206,29 +210,28 @@ export function claudeConfigDir(profileId: string): string {
   return dir;
 }
 
+/**
+ * The non-secret half of a profile that runs Claude: only its config
+ * directory, which a query's host applies over its own base environment
+ * (`claudeChildEnvironment`). The CLI reads its credentials from there.
+ */
+export function claudeProfileRuntime(profileId: string): ClaudeProfileRuntime {
+  const profile = credentialProfileById(profileId);
+  if (!profile || profile.provider !== "claude")
+    throw new Error("That credential profile cannot run Claude.");
+  return profileId === DEFAULT_CLAUDE_PROFILE_ID
+    ? {}
+    : { configDir: claudeConfigDir(profileId) };
+}
+
 /** Scrub inherited Claude credentials and bind the SDK only to this profile. */
 export function claudeProfileEnvironment(
   profileId: string,
 ): Record<string, string> {
-  const profile = credentialProfileById(profileId);
-  if (!profile || profile.provider !== "claude")
-    throw new Error("That credential profile cannot run Claude.");
-  // Provider switches and credentials must never leak from the service into a
-  // profile. Keep ordinary process settings (PATH, locale, proxy, etc.) only.
-  const env = Object.fromEntries(
-    Object.entries(childProcessEnv()).filter(
-      ([key, value]) =>
-        value !== undefined &&
-        !key.startsWith("ANTHROPIC_") &&
-        !key.startsWith("CLAUDE_") &&
-        !key.startsWith("AWS_") &&
-        !key.startsWith("VERTEXAI_") &&
-        key !== "GOOGLE_APPLICATION_CREDENTIALS",
-    ),
-  ) as Record<string, string>;
-  return profileId === DEFAULT_CLAUDE_PROFILE_ID
-    ? env
-    : { ...env, CLAUDE_CONFIG_DIR: claudeConfigDir(profileId) };
+  return claudeChildEnvironment(
+    childProcessEnv(),
+    claudeProfileRuntime(profileId),
+  );
 }
 
 /** Non-secret readiness hint for the profile-local OpenAI credential. */

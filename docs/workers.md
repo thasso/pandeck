@@ -805,9 +805,11 @@ which imports no server state) and `workers/` (the server's side and placement);
     items, each with a positive, increasing `seq` and a harness-defined `kind`.
     One delivery per engine is in flight; the next follows the server's `{}`,
     sent once the items are applied. A delivery for an engine the connection did
-    not open answers `engine_gone`. An engine's app-tool call waits until every
-    item it emitted before the call is acknowledged, so the server's mirror
-    holds what the engine wrote before the tool runs.
+    not open answers `engine_gone`. An engine's app-tool call, and each of
+    Claude's four session-hook calls the engine host offers
+    (`sessionHooks.canUseTool`, `preToolUse`, `stop`, `postCompact`), waits
+    until every item the engine emitted before the call is acknowledged, so the
+    server's mirror holds what the engine wrote before the tool or hook runs.
   - `engine.dispose { engineId, discard? }` removes the engine, deleting its
     file with `discard`; an engine still opening is disposed when its factory
     returns.

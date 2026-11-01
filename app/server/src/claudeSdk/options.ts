@@ -39,6 +39,10 @@ import { SKILLS_RUNTIME_DIR } from "../config.ts";
 import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
 import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
 import {
+  claudeChildEnvironment,
+  type ClaudeProfileRuntime,
+} from "./childEnvironment.ts";
+import {
   claudeOutputPolicyHooks,
   type ClaudeQuerySessionHooks,
   withClaudeOutputBudgetEnvironment,
@@ -199,7 +203,7 @@ export interface BuildClaudeSdkQueryOptionsInput {
 }
 
 /** What a session's Claude tool policy derives from. */
-interface ClaudeToolPolicyInput {
+export interface ClaudeToolPolicyInput {
   agentType?: AgentType;
   agent?: SessionAgent | undefined;
   nativeTools?: readonly string[];
@@ -365,9 +369,161 @@ function buildCanUseTool(
  */
 export const CLAUDE_AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 
+/** The options a query opens with that are fixed JSON: all but its bindings. */
+type ClaudeQuerySpecOptions = Omit<
+  ClaudeSdkOptions,
+  "abortController" | "env" | "hooks" | "canUseTool" | "mcpServers"
+>;
+
+/** Where a query's child environment comes from, as JSON. */
+export interface ClaudeQueryEnvSpec {
+  /**
+   * The credential profile, resolved on the server (`claudeProfileRuntime`).
+   * Absent: the host's base environment as is.
+   */
+  profile?: ClaudeProfileRuntime;
+  /** Set over the base, such as the epoch's `TMPDIR` pair. */
+  set?: Record<string, string>;
+  /** The query carries a stored compaction window: drop the base's variable. */
+  dropAutoCompactWindow?: true;
+}
+
+/**
+ * A query as the server computes it, all JSON: everything
+ * {@link claudeQueryOptions} needs besides what only the query's host can
+ * bind. `policy` decides tool calls when the query has no session hooks.
+ */
+export interface ClaudeQueryOpenSpec {
+  sessionId: string;
+  options: ClaudeQuerySpecOptions;
+  policy: ClaudeToolPolicyInput;
+  /** Mount the session's `pa` tool server. */
+  mountToolServer: boolean;
+  /** The query's epoch key when its hooks are the session's. */
+  sessionHooksEpoch?: string;
+  /** Capture the `PostCompact` summary locally (the standalone `/compact`). */
+  captureCompactSummary?: boolean;
+  env: ClaudeQueryEnvSpec;
+}
+
+/** What only a query's host can bind: objects and callbacks, not JSON. */
+export interface ClaudeQueryBindings {
+  abortController: AbortController;
+  /** The complete child environment ({@link claudeQueryEnvironment}). */
+  env: Record<string, string>;
+  sessionHooks?: ClaudeQuerySessionHooks;
+  mcpServer?: Server;
+}
+
+type ClaudeQuerySpecInput = Omit<
+  BuildClaudeSdkQueryOptionsInput,
+  "abortController" | "env" | "sessionHooks" | "mcpServer"
+>;
+
+/**
+ * A query's open spec, computed on the server from the same input as
+ * {@link buildClaudeSdkQueryOptions}; its profile arrives already resolved.
+ */
+export function claudeQueryOpenSpec(
+  input: ClaudeQuerySpecInput & {
+    sessionId: string;
+    mountToolServer: boolean;
+    sessionHooksEpoch?: string;
+    captureCompactSummary?: boolean;
+    env?: Omit<ClaudeQueryEnvSpec, "dropAutoCompactWindow">;
+  },
+): ClaudeQueryOpenSpec {
+  return {
+    sessionId: input.sessionId,
+    ...claudeQuerySpec(input),
+    mountToolServer: input.mountToolServer,
+    ...(input.sessionHooksEpoch !== undefined
+      ? { sessionHooksEpoch: input.sessionHooksEpoch }
+      : {}),
+    ...(input.captureCompactSummary ? { captureCompactSummary: true } : {}),
+    env: {
+      ...input.env,
+      ...(input.compactionWindow !== undefined
+        ? { dropAutoCompactWindow: true as const }
+        : {}),
+    },
+  };
+}
+
+/**
+ * A query's child environment over its host's `base`: the profile's
+ * environment, then `set`, then the output budget and the window rule.
+ */
+export function claudeQueryEnvironment(
+  spec: ClaudeQueryEnvSpec,
+  base: NodeJS.ProcessEnv,
+): Record<string, string> {
+  return boundedQueryEnvironment(
+    { ...claudeChildEnvironment(base, spec.profile), ...spec.set },
+    spec.dropAutoCompactWindow === true,
+  );
+}
+
+function boundedQueryEnvironment(
+  env: Record<string, string> | undefined,
+  dropAutoCompactWindow: boolean,
+): Record<string, string> {
+  const bounded = withClaudeOutputBudgetEnvironment(env);
+  if (dropAutoCompactWindow) delete bounded[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
+  return bounded;
+}
+
+/** A query's options: its spec's JSON with the host's bindings added. */
+export function claudeQueryOptions(
+  spec: Pick<ClaudeQueryOpenSpec, "options" | "policy">,
+  bindings: ClaudeQueryBindings,
+): ClaudeSdkOptions {
+  return {
+    ...spec.options,
+    abortController: bindings.abortController,
+    env: bindings.env,
+    ...(bindings.sessionHooks
+      ? { hooks: claudeOutputPolicyHooks(bindings.sessionHooks) }
+      : {}),
+    canUseTool: buildCanUseTool(
+      bindings.sessionHooks?.canUseTool ??
+        claudeToolPermission({
+          ...spec.policy,
+          allowPaMcp: Boolean(bindings.mcpServer),
+          mode: () => "build",
+        }),
+    ),
+    ...(bindings.mcpServer
+      ? {
+          mcpServers: {
+            [MCP_SERVER_NAME]: {
+              type: "sdk" as const,
+              name: MCP_SERVER_NAME,
+              instance: bindings.mcpServer as never,
+            },
+          },
+        }
+      : {}),
+  };
+}
+
 export function buildClaudeSdkQueryOptions(
   input: BuildClaudeSdkQueryOptionsInput,
 ): ClaudeSdkOptions {
+  return claudeQueryOptions(claudeQuerySpec(input), {
+    abortController: input.abortController,
+    env: boundedQueryEnvironment(
+      input.env,
+      input.compactionWindow !== undefined,
+    ),
+    ...(input.sessionHooks ? { sessionHooks: input.sessionHooks } : {}),
+    ...(input.mcpServer ? { mcpServer: input.mcpServer } : {}),
+  });
+}
+
+function claudeQuerySpec(
+  input: ClaudeQuerySpecInput,
+): Pick<ClaudeQueryOpenSpec, "options" | "policy"> {
   const agentType = input.agentType ?? "workshop";
   const { native, tools: toolsAllowlist } = claudeToolsAllowlist(input);
   const allowed = new Set(native);
@@ -375,9 +531,6 @@ export function buildClaudeSdkQueryOptions(
     (name) => !allowed.has(name),
   );
   const cwd = isAbsolute(input.cwd) ? input.cwd : pathResolve(input.cwd);
-  const env = withClaudeOutputBudgetEnvironment(input.env);
-  if (input.compactionWindow !== undefined)
-    delete env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
   const frozenSkillNames = input.frozenSkillNames ?? [];
   const librarySkillPlugin =
     isCodingAgentType(agentType) &&
@@ -388,15 +541,11 @@ export function buildClaudeSdkQueryOptions(
   // Do not set `allowedTools`: bare entries auto-approve before `canUseTool` is
   // consulted, which both logs SDK shadowing warnings and bypasses this policy.
   // The mounted session MCP server owns which `mcp__pa__*` tools are listed; the
-  // callback below permits that namespace and denies everything else.
-  return {
+  // callback in `claudeQueryOptions` permits that namespace and denies
+  // everything else.
+  const options: ClaudeQuerySpecOptions = {
     cwd,
-    abortController: input.abortController,
     ...packagedClaudeSdkOptions(),
-    env,
-    ...(input.sessionHooks
-      ? { hooks: claudeOutputPolicyHooks(input.sessionHooks) }
-      : {}),
     includePartialMessages: true,
     strictMcpConfig: true,
     // The host-owned persona/tool policy is authoritative: bypass mode
@@ -404,7 +553,7 @@ export function buildClaudeSdkQueryOptions(
     // most shell use behaves like pi. The native tool allowlist above still
     // prevents personas without native access from receiving file/shell tools.
     // Org-managed settings can silently downgrade this to `default`; the
-    // `canUseTool` callback below then approves the same policy.
+    // `canUseTool` callback (`claudeQueryOptions`) then approves the same policy.
     //
     // CAVEAT: bypass is NOT total. The bundled Claude Code CLI has a git-safety
     // gate that denies `git push` (and file deletes outside the cwd) BEFORE the
@@ -444,14 +593,6 @@ export function buildClaudeSdkQueryOptions(
       : {}),
     // Deliberately omit the SDK `skills` filter: coding sessions retain the
     // CLI-default discovery of repository `.claude/skills` alongside the plugin.
-    canUseTool: buildCanUseTool(
-      input.sessionHooks?.canUseTool ??
-        claudeToolPermission({
-          ...input,
-          allowPaMcp: Boolean(input.mcpServer),
-          mode: () => "build",
-        }),
-    ),
     model: claudeQueryModel(input.modelId, input.agent),
     systemPrompt: claudeSdkSystemPrompt(
       agentType,
@@ -463,17 +604,19 @@ export function buildClaudeSdkQueryOptions(
     ),
     ...reasoningToThinking(input.thinkingLevel, input.modelId),
     ...(input.providerSessionId ? { resume: input.providerSessionId } : {}),
-    ...(input.mcpServer
-      ? {
-          mcpServers: {
-            [MCP_SERVER_NAME]: {
-              type: "sdk" as const,
-              name: MCP_SERVER_NAME,
-              instance: input.mcpServer as never,
-            },
-          },
-        }
-      : {}),
+  };
+  return {
+    options,
+    policy: {
+      ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
+      ...(input.agent !== undefined ? { agent: input.agent } : {}),
+      ...(input.nativeTools !== undefined
+        ? { nativeTools: input.nativeTools }
+        : {}),
+      ...(input.disableTools !== undefined
+        ? { disableTools: input.disableTools }
+        : {}),
+    },
   };
 }
 
