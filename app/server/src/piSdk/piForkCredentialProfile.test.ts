@@ -22,24 +22,35 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const { piStore } = await import("./piStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 
-interface FakeSessionManager {
-  getSessionId(): string;
-  getSessionFile(): string | undefined;
-}
+const { openPiEngine } = await import("./piEngineHost.ts");
+
+type PiEngineOpened = import("./piEngineHost.ts").PiEngineOpened;
+type SessionManager = import("@earendil-works/pi-coding-agent").SessionManager;
 
 interface StoreInternals {
-  create: (
-    ...args: unknown[]
-  ) => Promise<{ session: unknown; notices: unknown[] }>;
+  openEngine: (
+    spec: import("./piEngineHost.ts").PiEngineOpenSpec,
+  ) => Promise<PiEngineOpened>;
   track: (
     _kind: string,
-    session: { sessionId: string; sessionFile?: string },
-    _notices: unknown[],
-    _cwd: string,
+    opened: PiEngineOpened,
     credentialProfileId: string | undefined,
     _scope?: string,
     requiresEnterprise?: boolean,
   ) => { sessionId: string; sessionFile?: string };
+}
+
+/** A stand-in for pi's agent session over the transcript the opener opened. */
+function standInSession(sm: SessionManager, dispose = () => {}): never {
+  return {
+    sessionId: sm.getSessionId(),
+    get sessionFile() {
+      return sm.getSessionFile();
+    },
+    sessionManager: sm,
+    subscribe: () => () => {},
+    dispose,
+  } as never;
 }
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -110,44 +121,44 @@ test("a pi fork persists its inherited profile and enterprise requirement", asyn
   });
 
   const internals = piStore as unknown as StoreInternals;
-  const originalCreate = internals.create;
+  const originalOpenEngine = internals.openEngine;
   const originalTrack = internals.track;
   let childFile: string | undefined;
   let reopenedProfileId: string | undefined;
   const trackedProfiles: Array<string | undefined> = [];
 
-  internals.create = async (...args: unknown[]) => {
-    const manager = args[1] as FakeSessionManager;
-    const session = {
-      sessionId: manager.getSessionId(),
-      sessionFile: manager.getSessionFile(),
-      sessionManager: manager,
-    };
-    childFile = session.sessionFile;
-    reopenedProfileId = args[5] as string;
-    return { session, notices: [] };
+  internals.openEngine = async (spec) => {
+    reopenedProfileId = spec.credentialProfileId;
+    const opened = await openPiEngine(
+      spec,
+      {} as never,
+      async (_spec, _ctx, { sm }) => ({
+        session: standInSession(sm),
+        notices: [],
+      }),
+    );
+    childFile = opened.info.sessionFile;
+    return opened;
   };
   internals.track = (
     _kind,
-    session,
-    _notices,
-    _cwd,
+    { engine },
     credentialProfileId,
     _scope,
     requiresEnterprise,
   ) => {
     if (requiresEnterprise)
       sessionStore.claimScope({
-        id: session.sessionId,
+        id: engine.sessionId,
         harness: "pi",
         agentType: "assistant",
         requiresEnterprise: true,
       });
     trackedProfiles.push(credentialProfileId);
     return {
-      sessionId: session.sessionId,
-      ...(session.sessionFile !== undefined
-        ? { sessionFile: session.sessionFile }
+      sessionId: engine.sessionId,
+      ...(engine.sessionFile !== undefined
+        ? { sessionFile: engine.sessionFile }
         : {}),
     };
   };
@@ -213,7 +224,7 @@ test("a pi fork persists its inherited profile and enterprise requirement", asyn
     });
     assert.deepEqual(trackedProfiles, [profile.id], "a new session runs on it");
   } finally {
-    internals.create = originalCreate;
+    internals.openEngine = originalOpenEngine;
     internals.track = originalTrack;
   }
 });
@@ -237,7 +248,7 @@ test.each([false, true])(
     });
     if (tombstoned) sessionStore.remove(parentId);
     const internals = piStore as unknown as StoreInternals;
-    const create = vi.spyOn(internals, "create");
+    const create = vi.spyOn(internals, "openEngine");
 
     await assert.rejects(
       piStore.forkSession("assistant", file, entryId, "at", `${parentId}-app`),
@@ -271,25 +282,24 @@ test("pi removes a forked child if its enterprise profile is demoted during crea
   });
 
   const internals = piStore as unknown as StoreInternals;
-  const originalCreate = internals.create;
+  const originalOpenEngine = internals.openEngine;
   const originalTrack = internals.track;
   const disposed = vi.fn();
   let childId: string | undefined;
   let childFile: string | undefined;
-  internals.create = async (...args: unknown[]) => {
-    const manager = args[1] as FakeSessionManager;
-    childId = manager.getSessionId();
-    childFile = manager.getSessionFile();
-    await Promise.resolve();
-    patchCredentialProfile(profile.id, { enterprise: false });
-    return {
-      session: {
-        sessionId: childId,
-        sessionFile: childFile,
-        dispose: disposed,
+  internals.openEngine = async (spec) => {
+    const opened = await openPiEngine(
+      spec,
+      {} as never,
+      async (_spec, _ctx, { sm }) => {
+        childId = sm.getSessionId();
+        await Promise.resolve();
+        patchCredentialProfile(profile.id, { enterprise: false });
+        return { session: standInSession(sm, disposed), notices: [] };
       },
-      notices: [],
-    };
+    );
+    childFile = opened.info.sessionFile;
+    return opened;
   };
   const track = vi.spyOn(internals, "track");
 
@@ -300,7 +310,7 @@ test("pi removes a forked child if its enterprise profile is demoted during crea
     );
   } finally {
     patchCredentialProfile(profile.id, { enterprise: true });
-    internals.create = originalCreate;
+    internals.openEngine = originalOpenEngine;
     internals.track = originalTrack;
   }
 

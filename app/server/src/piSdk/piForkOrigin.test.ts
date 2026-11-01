@@ -31,15 +31,15 @@ const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 
 type SessionManager = import("@earendil-works/pi-coding-agent").SessionManager;
 
+const { openPiEngine } = await import("./piEngineHost.ts");
+
 interface StoreInternals {
-  create: (
-    ...args: unknown[]
-  ) => Promise<{ session: unknown; notices: unknown[] }>;
+  openEngine: (
+    spec: import("./piEngineHost.ts").PiEngineOpenSpec,
+  ) => Promise<import("./piEngineHost.ts").PiEngineOpened>;
   track: (
     _kind: string,
-    session: { sessionId: string; sessionFile?: string },
-    _notices: unknown[],
-    _cwd: string,
+    opened: import("./piEngineHost.ts").PiEngineOpened,
   ) => { sessionId: string; sessionFile?: string };
 }
 
@@ -104,26 +104,27 @@ test("the fork's recorded parent entry is OUR id, not pi's branch anchor", async
   sessionStore.upsert({ id: parentId, harness: "pi", agentType: "developer" });
 
   const internals = piStore as unknown as StoreInternals;
-  const originalCreate = internals.create;
+  const originalOpenEngine = internals.openEngine;
   const originalTrack = internals.track;
   let childManager: SessionManager | undefined;
 
-  internals.create = async (...args: unknown[]) => {
-    const manager = args[1] as SessionManager;
-    childManager = manager;
-    return {
-      session: {
-        sessionId: manager.getSessionId(),
-        sessionFile: manager.getSessionFile(),
-        sessionManager: manager,
-      },
-      notices: [],
-    };
-  };
-  internals.track = (_kind, session) => ({
-    sessionId: session.sessionId,
-    ...(session.sessionFile !== undefined
-      ? { sessionFile: session.sessionFile }
+  internals.openEngine = (spec) =>
+    openPiEngine(spec, {} as never, async (_spec, _ctx, { sm }) => {
+      childManager = sm;
+      return {
+        session: {
+          sessionId: sm.getSessionId(),
+          sessionFile: sm.getSessionFile(),
+          sessionManager: sm,
+          subscribe: () => () => {},
+        } as never,
+        notices: [],
+      };
+    });
+  internals.track = (_kind, { engine }) => ({
+    sessionId: engine.sessionId,
+    ...(engine.sessionFile !== undefined
+      ? { sessionFile: engine.sessionFile }
       : {}),
   });
 
@@ -159,7 +160,7 @@ test("the fork's recorded parent entry is OUR id, not pi's branch anchor", async
       "the native id still did its own job: the branch runs through the tool result",
     );
   } finally {
-    internals.create = originalCreate;
+    internals.openEngine = originalOpenEngine;
     internals.track = originalTrack;
     rmSync(tmp, { recursive: true, force: true });
   }

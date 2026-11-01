@@ -19,6 +19,7 @@ const { harnessRegistry } = await import("./registry.ts");
 const { hub } = await import("../hub.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { PiSessionDeletedError, piStore } = await import("../piSdk/piStore.ts");
+const { openPiEngine } = await import("../piSdk/piEngineHost.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 const { sessionDirFor } = await import("../piSdk/options.ts");
@@ -406,19 +407,21 @@ test("the Claude store never registers an id pi holds resident", () => {
 test("a pi reopen never registers an id the Claude store took meanwhile", async () => {
   const file = legacyPiTranscript("claude-took-it");
   const internals = piStore as unknown as {
-    create: (...args: unknown[]) => Promise<unknown>;
+    openEngine: (
+      spec: import("../piSdk/piEngineHost.ts").PiEngineOpenSpec,
+    ) => Promise<import("../piSdk/piEngineHost.ts").PiEngineOpened>;
   };
   const disposed: string[] = [];
-  vi.spyOn(internals, "create").mockImplementation(async (...args) => {
-    const manager = args[1] as { getSessionId(): string };
-    return {
+  vi.spyOn(internals, "openEngine").mockImplementation((spec) =>
+    openPiEngine(spec, {} as never, async (_spec, _ctx, { sm }) => ({
       session: {
-        sessionId: manager.getSessionId(),
-        dispose: () => disposed.push(manager.getSessionId()),
-      },
+        sessionId: sm.getSessionId(),
+        subscribe: () => () => {},
+        dispose: () => disposed.push(sm.getSessionId()),
+      } as never,
       notices: [],
-    };
-  });
+    })),
+  );
   // The Claude session registered while the transcript was opening.
   vi.spyOn(claudeSdkStore, "get").mockImplementation((id) =>
     id === "claude-took-it" ? ({ id } as never) : undefined,

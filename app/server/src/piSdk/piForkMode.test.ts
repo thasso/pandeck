@@ -26,20 +26,16 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const { piStore } = await import("./piStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 
-interface FakeSessionManager {
-  getSessionId(): string;
-  getSessionFile(): string | undefined;
-}
+const { openPiEngine } = await import("./piEngineHost.ts");
+
+type PiEngineOpenSpec = import("./piEngineHost.ts").PiEngineOpenSpec;
+type PiEngineOpened = import("./piEngineHost.ts").PiEngineOpened;
 
 interface StoreInternals {
-  create: (
-    ...args: unknown[]
-  ) => Promise<{ session: unknown; notices: unknown[] }>;
+  openEngine: (spec: PiEngineOpenSpec) => Promise<PiEngineOpened>;
   track: (
     _kind: string,
-    session: { sessionId: string; sessionFile?: string },
-    _notices: unknown[],
-    _cwd: string,
+    opened: PiEngineOpened,
   ) => { sessionId: string; sessionFile?: string };
 }
 
@@ -103,33 +99,32 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
   sessionStore.freezeAgent(parentId, JSON.stringify(parentAgent));
 
   const internals = piStore as unknown as StoreInternals;
-  const originalCreate = internals.create;
+  const originalOpenEngine = internals.openEngine;
   const originalTrack = internals.track;
   let requestedMode: unknown;
   let inheritedSkills: unknown;
   let inheritedAgent: unknown;
 
-  internals.create = async (...args: unknown[]) => {
-    const manager = args[1] as FakeSessionManager;
-    inheritedSkills = (args[6] as { inheritSkills?: unknown } | undefined)
-      ?.inheritSkills;
-    inheritedAgent = (args[6] as { agent?: unknown } | undefined)?.agent;
-    requestedMode = args[7];
-    return {
+  internals.openEngine = (spec) => {
+    inheritedSkills = spec.promptStart?.inheritSkills;
+    inheritedAgent = spec.promptStart?.agent;
+    requestedMode = spec.mode;
+    return openPiEngine(spec, {} as never, async (_spec, _ctx, { sm }) => ({
       session: {
-        sessionId: manager.getSessionId(),
+        sessionId: sm.getSessionId(),
         get sessionFile() {
-          return manager.getSessionFile();
+          return sm.getSessionFile();
         },
-        sessionManager: manager,
-      },
+        sessionManager: sm,
+        subscribe: () => () => {},
+      } as never,
       notices: [],
-    };
+    }));
   };
-  internals.track = (_kind, session) => ({
-    sessionId: session.sessionId,
-    ...(session.sessionFile !== undefined
-      ? { sessionFile: session.sessionFile }
+  internals.track = (_kind, { engine }) => ({
+    sessionId: engine.sessionId,
+    ...(engine.sessionFile !== undefined
+      ? { sessionFile: engine.sessionFile }
       : {}),
   });
 
@@ -171,7 +166,7 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
       "the fork's durable record starts in Plan",
     );
   } finally {
-    internals.create = originalCreate;
+    internals.openEngine = originalOpenEngine;
     internals.track = originalTrack;
     rmSync(tmp, { recursive: true, force: true });
   }

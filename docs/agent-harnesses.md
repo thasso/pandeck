@@ -200,7 +200,12 @@ Four layers, each depending only on the ones below it:
    SDK object. The engine's loop policy (retry suppression, the compaction
    window's check on each run start and model change) runs behind the handle,
    before any listener sees the event. A commit dry run is recorded on the
-   handle's tool session manager. Each session class composes a shared session
+   handle's tool session manager. Only `openPiEngine` (`piSdk/piEngineHost.ts`)
+   constructs an interactive engine: `piStore` describes the session to open in
+   a JSON `PiEngineOpenSpec` and holds only the handle and the JSON info it
+   answers with; the engine applies its own Build/Plan tools (`setToolMode`,
+   `commitStaged`) and prunes cold tool loads on `submit` (`docs/workers.md` "pi
+   engine construction (W9b-1)"). Each session class composes a shared session
    kit (`sessionKit/`) instead of carrying a copy: `SessionResidency` owns the
    viewer set and the idle clock, and the engine says only when it is idle and
    how its store releases it. `hostCommandTurn.ts` emits a synthetic

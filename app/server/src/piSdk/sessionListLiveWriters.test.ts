@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { PiEngineOpenSpec, PiEngineOpened } from "./piEngineHost.ts";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -24,6 +25,7 @@ const { hub } = await import("../hub.ts");
 const { assertSessionRowsReported: oracle, publicSessionRows } =
   await import("../test/sessionListPublicOracle.ts");
 const { piStore } = await import("./piStore.ts");
+const { nativePiSessionForTests } = await import("./piEngine.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { ensureRuntimeSessionWithRuntime } =
@@ -79,17 +81,12 @@ const opens: AgentSession[] = [];
 const response = { failure: false, throwSubmit: false, encrypted: false };
 function interceptPi() {
   const internals = piStore as unknown as {
-    create: (...args: unknown[]) => Promise<{
-      session: AgentSession;
-      notices: unknown[];
-      commit(): void;
-      dispose(): void;
-    }>;
+    openEngine: (spec: PiEngineOpenSpec) => Promise<PiEngineOpened>;
   };
-  const original = internals.create.bind(piStore);
-  return vi.spyOn(internals, "create").mockImplementation(async (...args) => {
-    const created = await original(...args);
-    const native = created.session;
+  const original = internals.openEngine.bind(piStore);
+  return vi.spyOn(internals, "openEngine").mockImplementation(async (spec) => {
+    const opened = await original(spec);
+    const native = nativePiSessionForTests(opened.engine);
     opens.push(native);
     native.setAutoRetryEnabled(false);
     native.agent.streamFunction = (model) => {
@@ -137,7 +134,7 @@ function interceptPi() {
       });
       return stream;
     };
-    return created;
+    return opened;
   });
 }
 async function freshPi(profile = account("openai-codex")) {

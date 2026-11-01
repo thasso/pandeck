@@ -23,6 +23,7 @@ process.env.DATA_DIR = join(tmp, "data");
 const { PiLiveSession } = await import("./PiLiveSession.ts");
 const { localPiEngine } = await import("./piEngine.ts");
 const { PiSessionDeletedError, piStore } = await import("./piStore.ts");
+const { openPiEngine } = await import("./piEngineHost.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { closeDb } = await import("../db/index.ts");
 
@@ -99,18 +100,22 @@ test("a registered session nobody views idles out like one a viewer left", () =>
   assert.deepEqual(evicted, ["pi-unviewed", "pi-watched"]);
 });
 
+type PiEngineOpened = import("./piEngineHost.ts").PiEngineOpened;
+type PiEngineStart = import("./piEngineHost.ts").PiEngineStart;
+
 interface StoreInternals {
-  create: (...args: unknown[]) => Promise<{ session: unknown; notices: [] }>;
-  track: (
-    kind: string,
-    session: { sessionId: string; sessionFile?: string },
-    notices: unknown[],
-    cwd: string,
-  ) => unknown;
+  openEngine: (
+    spec: import("./piEngineHost.ts").PiEngineOpenSpec,
+  ) => Promise<PiEngineOpened>;
+  track: (kind: string, opened: PiEngineOpened) => unknown;
   live: Map<string, unknown>;
   opening: Map<string, Promise<unknown>>;
-  toolRuntimes: Map<string, { dispose: () => void }>;
   sessionModes: Map<string, string>;
+}
+
+/** The real opener over a stand-in for what pi starts on the transcript. */
+function openOver(start: PiEngineStart): StoreInternals["openEngine"] {
+  return (spec) => openPiEngine(spec, {} as never, start);
 }
 
 /** A transcript on disk for `id`, as a cold reopen finds it. */
@@ -135,7 +140,7 @@ async function writeTranscript(id: string): Promise<string> {
 
 test("concurrent reopens of one session share a single open and registration", async () => {
   const internals = piStore as unknown as StoreInternals;
-  const originalCreate = internals.create;
+  const originalOpenEngine = internals.openEngine;
   const originalTrack = internals.track;
   let creates = 0;
   let tracks = 0;
@@ -144,35 +149,32 @@ test("concurrent reopens of one session share a single open and registration", a
     releaseOpen = resolve;
   });
   const wrappers: unknown[] = [];
-  internals.create = async (...args: unknown[]) => {
+  internals.openEngine = openOver(async (_spec, _ctx, { sm }) => {
     creates += 1;
     await opened;
-    const manager = args[1] as {
-      getSessionId(): string;
-      getSessionFile(): string | undefined;
-    };
     return {
       session: {
-        sessionId: manager.getSessionId(),
-        sessionFile: manager.getSessionFile(),
-        sessionManager: manager,
-      },
+        sessionId: sm.getSessionId(),
+        sessionFile: sm.getSessionFile(),
+        sessionManager: sm,
+        subscribe: () => () => {},
+      } as never,
       notices: [],
     };
-  };
-  internals.track = (kind, session) => {
+  });
+  internals.track = (kind, { engine }) => {
     tracks += 1;
     // What the live-map lookup reads of a registered session.
     const wrapper = {
       kind,
-      key: session.sessionId,
-      sessionId: session.sessionId,
-      engine: session,
+      key: engine.sessionId,
+      sessionId: engine.sessionId,
+      engine,
       // Reusing a resident session restarts its idle clock.
       armIdleIfUnviewed: () => {},
     };
     wrappers.push(wrapper);
-    internals.live.set(session.sessionId, wrapper);
+    internals.live.set(engine.sessionId, wrapper);
     return wrapper;
   };
   try {
@@ -191,7 +193,7 @@ test("concurrent reopens of one session share a single open and registration", a
     assert.equal(third, a);
     assert.equal(creates, 1);
   } finally {
-    internals.create = originalCreate;
+    internals.openEngine = originalOpenEngine;
     internals.track = originalTrack;
     internals.live.delete("pi-reopen-twice");
   }
@@ -199,7 +201,7 @@ test("concurrent reopens of one session share a single open and registration", a
 
 test("a reopen the delete beat to registration registers nothing, disposes what it built, and refuses every sharer", async () => {
   const internals = piStore as unknown as StoreInternals;
-  const originalCreate = internals.create;
+  const originalOpenEngine = internals.openEngine;
   const originalTrack = internals.track;
   let releaseOpen!: () => void;
   const opened = new Promise<void>((resolve) => {
@@ -208,33 +210,32 @@ test("a reopen the delete beat to registration registers nothing, disposes what 
   let creates = 0;
   let tracks = 0;
   const disposed: string[] = [];
-  internals.create = async (...args: unknown[]) => {
+  internals.openEngine = openOver(async (_spec, _ctx, { sm }) => {
     creates += 1;
     if (creates === 1) await opened;
-    const manager = args[1] as {
-      getSessionId(): string;
-      getSessionFile(): string | undefined;
-    };
-    const sessionId = manager.getSessionId();
-    // What `create` leaves behind for the session it built, before `track`.
-    internals.toolRuntimes.set(sessionId, {
-      dispose: () => disposed.push(`runtime:${sessionId}`),
-    });
-    internals.sessionModes.set(sessionId, "build");
+    const sessionId = sm.getSessionId();
+    // What the opener builds for the session, before `track`.
     return {
       session: {
         sessionId,
-        sessionFile: manager.getSessionFile(),
-        sessionManager: manager,
+        sessionFile: sm.getSessionFile(),
+        sessionManager: sm,
+        subscribe: () => () => {},
         dispose: () => disposed.push(`session:${sessionId}`),
+      } as never,
+      tools: {
+        activation: {
+          dispose: () => disposed.push(`runtime:${sessionId}`),
+        } as never,
+        mode: { current: "build" },
       },
       notices: [],
     };
-  };
-  internals.track = (kind, session) => {
+  });
+  internals.track = (kind, { engine }) => {
     tracks += 1;
-    const wrapper = { kind, key: session.sessionId, session };
-    internals.live.set(session.sessionId, wrapper);
+    const wrapper = { kind, key: engine.sessionId, engine };
+    internals.live.set(engine.sessionId, wrapper);
     return wrapper;
   };
   const id = "pi-deleted-while-opening";
@@ -258,7 +259,6 @@ test("a reopen the delete beat to registration registers nothing, disposes what 
     assert.equal(piStore.getLiveById(id), undefined);
     // What was built is torn down at once, not left for idle eviction.
     assert.deepEqual(disposed, [`runtime:${id}`, `session:${id}`]);
-    assert.equal(internals.toolRuntimes.has(id), false);
     assert.equal(internals.sessionModes.has(id), false);
     // The in-flight slot is released exactly once: a later acquisition of the
     // id opens afresh (and is refused again — the session is gone), while a
@@ -280,7 +280,7 @@ test("a reopen the delete beat to registration registers nothing, disposes what 
     assert.equal(tracks, 1);
     assert.equal(internals.live.get(other), live);
   } finally {
-    internals.create = originalCreate;
+    internals.openEngine = originalOpenEngine;
     internals.track = originalTrack;
     internals.live.delete(id);
     internals.live.delete(other);

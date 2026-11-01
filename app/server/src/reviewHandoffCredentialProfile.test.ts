@@ -34,20 +34,15 @@ function git(cwd: string, ...args: string[]): void {
   );
 }
 
-interface FakeSessionManager {
-  getSessionId(): string;
-  getSessionFile(): string | undefined;
-}
+const { openPiEngine } = await import("./piSdk/piEngineHost.ts");
 
 interface PiStoreInternals {
-  create: (
-    ...args: unknown[]
-  ) => Promise<{ session: unknown; notices: unknown[] }>;
+  openEngine: (
+    spec: import("./piSdk/piEngineHost.ts").PiEngineOpenSpec,
+  ) => Promise<import("./piSdk/piEngineHost.ts").PiEngineOpened>;
   track: (
     _kind: string,
-    session: { sessionId: string; sessionFile?: string },
-    _notices: unknown[],
-    _cwd: string,
+    opened: import("./piSdk/piEngineHost.ts").PiEngineOpened,
   ) => { sessionId: string; sessionFile?: string };
 }
 
@@ -144,32 +139,32 @@ test("pi review handoff persists the selected profile and cold reopen recovers i
     );
 
     const internals = piStore as unknown as PiStoreInternals;
-    const originalCreate = internals.create;
+    const originalOpenEngine = internals.openEngine;
     const originalTrack = internals.track;
     let reopenedProfileId: string | undefined;
-    internals.create = async (...args: unknown[]) => {
-      const manager = args[1] as FakeSessionManager;
-      reopenedProfileId = args[5] as string;
-      return {
+    internals.openEngine = (spec) => {
+      reopenedProfileId = spec.credentialProfileId;
+      return openPiEngine(spec, {} as never, async (_spec, _ctx, { sm }) => ({
         session: {
-          sessionId: manager.getSessionId(),
-          sessionFile: manager.getSessionFile(),
-          sessionManager: manager,
-        },
+          sessionId: sm.getSessionId(),
+          sessionFile: sm.getSessionFile(),
+          sessionManager: sm,
+          subscribe: () => () => {},
+        } as never,
         notices: [],
-      };
+      }));
     };
-    internals.track = (_kind, session) => ({
-      sessionId: session.sessionId,
-      ...(session.sessionFile !== undefined
-        ? { sessionFile: session.sessionFile }
+    internals.track = (_kind, { engine }) => ({
+      sessionId: engine.sessionId,
+      ...(engine.sessionFile !== undefined
+        ? { sessionFile: engine.sessionFile }
         : {}),
     });
     try {
       await piStore.acquireExisting("assistant", file, sessionId);
       assert.equal(reopenedProfileId, profile.id);
     } finally {
-      internals.create = originalCreate;
+      internals.openEngine = originalOpenEngine;
       internals.track = originalTrack;
     }
   } finally {

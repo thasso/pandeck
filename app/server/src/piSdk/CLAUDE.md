@@ -16,10 +16,10 @@
 - Coding resource loaders use only the session's frozen skill names,
   rematerialized before every reload; assistant personas keep `noSkills: true`,
   no library path.
-- Outside `piSdk/` and in `PiLiveSession`, reach a live engine only via
-  `PiEngineHandle`: synchronous reads, promise commands the reporting consumer
-  awaits before reading their effect. In-loop policy is engine-side;
-  `nativePiSessionForTests` is test-only.
+- Outside `piSdk/` and in `PiLiveSession`/`piStore`, reach a live engine only
+  via `PiEngineHandle`, built only by `openPiEngine`: synchronous reads, promise
+  commands awaited before reading their effect. In-loop policy is engine-side;
+  `*ForTests` are test-only.
 - Failover stages a registry/runtime on the same file/id; tools swap after
   admission. SDK `display: false` custom turns retain settlement, retry,
   compaction and queues; `Agent.continue` does not. Context edits retain

@@ -4129,11 +4129,11 @@ export class Connection implements Viewer {
       return;
     }
     // Mode is the next turn's tool policy, which only the harness can hold.
-    return this.withViewedSession((driver) => {
+    return this.withViewedSession(async (driver) => {
       const session = isLiveSession(driver) ? driver : undefined;
       if (!session) return;
       try {
-        session.setMode(mode);
+        await session.setMode(mode);
       } catch (err) {
         this.send({
           type: "error",

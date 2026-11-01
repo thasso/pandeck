@@ -19,7 +19,9 @@ import type {
   SessionManager,
   SessionStats,
 } from "@earendil-works/pi-coding-agent";
-import type { ProviderErrorInfo } from "@assistant/shared";
+import type { ProviderErrorInfo, SessionMode } from "@assistant/shared";
+import { unlinkSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   analyzeProviderError,
   shouldSuppressProviderRetry,
@@ -32,6 +34,10 @@ import type {
 import type { ToolSessionManager } from "../mcp/tool.ts";
 import { compactionWindowFor } from "./compactionWindow.ts";
 import { modelRegistry, type PiModel } from "./models.ts";
+import {
+  prepareToolsForUserTurn,
+  type PiToolActivation,
+} from "./toolActivation.ts";
 
 /** pi's model data, read by its fields only (never compared by identity). */
 export type PiEngineModel = Parameters<AgentSession["setModel"]>[0];
@@ -84,12 +90,14 @@ export interface PiEngineHandle {
    * Start a turn, or steer the running one, as the caller decided in its own
    * synchronous span. `steerOnly` is carried for an engine whose streaming
    * state the caller read late; the local engine needs no reconciliation.
-   * Settles as pi's call does: a steer on pi's acceptance.
+   * Settles as pi's call does: a steer on pi's acceptance. `userTurnIdleMs`
+   * is how long the session sat idle before this user turn; the engine prunes
+   * never-used tool loads first when it crossed the cold boundary.
    */
   submit(
     text: string,
     images: PiEngineImages,
-    intent: { steer: boolean; steerOnly: boolean },
+    intent: { steer: boolean; steerOnly: boolean; userTurnIdleMs: number },
   ): Promise<void>;
   /** Continue a failed turn with model-only custom input. */
   continueFailedTurn(context: string): Promise<void>;
@@ -111,6 +119,26 @@ export interface PiEngineHandle {
     previous: number | null,
     reason: string,
   ): Promise<CompactionWindowLowerResult>;
+  /**
+   * Bring the engine's own Build/Plan copy (its active-set merge and the gate
+   * of the tools it executes) to `mode`. Rejects, keeping the old mode, when
+   * the engine could not apply it.
+   */
+  setToolMode(mode: SessionMode): Promise<void>;
+  /** Publish a staged engine's tools under `mode`, after its swap is admitted. */
+  commitStaged(options: { mode: SessionMode }): Promise<void>;
+  /**
+   * Note that one of the session's routed app tools is about to execute, from
+   * the server's binding after its gate admitted the call, so a cold prune
+   * keeps it. A notification: nothing reads its effect but the engine's own
+   * next `submit`.
+   */
+  markToolUsed(name: string): void;
+  /**
+   * Tear down an engine that was never registered. `removeFile` also deletes
+   * its transcript, best-effort, unless that is the `except` file.
+   */
+  discard(options: { removeFile?: { except?: string } }): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -179,10 +207,27 @@ export function piProviderErrorInfo(
   });
 }
 
-const nativeSessions = new WeakMap<PiEngineHandle, AgentSession>();
+/**
+ * What an engine the host opened owns beside its session: its tool
+ * activation, and the Build/Plan copy that activation's merge and the
+ * engine-executed tools' gate read.
+ */
+export interface PiEngineTools {
+  activation: PiToolActivation;
+  mode: { current: SessionMode };
+}
 
-/** The handle over an in-process pi `AgentSession`. */
-export function localPiEngine(session: AgentSession): PiEngineHandle {
+const nativeSessions = new WeakMap<PiEngineHandle, AgentSession>();
+const toolActivations = new WeakMap<PiEngineHandle, PiToolActivation>();
+
+/**
+ * The handle over an in-process pi `AgentSession`. Without `tools` (suites
+ * over a fake session) the mode, commit and use-noting commands do nothing.
+ */
+export function localPiEngine(
+  session: AgentSession,
+  tools?: PiEngineTools,
+): PiEngineHandle {
   const listeners: Array<(event: AgentSessionEvent) => void> = [];
   let retrySettingsBeforeSuppression:
     ReturnType<AgentSession["settingsManager"]["getRetrySettings"]> | undefined;
@@ -301,6 +346,7 @@ export function localPiEngine(session: AgentSession): PiEngineHandle {
     // pi is called in the caller's synchronous span, before the first await;
     // only its settlement crosses, not a steer's queue disposition.
     async submit(text, images, intent) {
+      prepareToolsForUserTurn(session.sessionId, intent.userTurnIdleMs);
       await (intent.steer
         ? session.steer(text, images)
         : session.prompt(text, { images }));
@@ -401,12 +447,53 @@ export function localPiEngine(session: AgentSession): PiEngineHandle {
         ? controller.restore(previous, reason)
         : { ok: false, message: reason };
     },
+    async setToolMode(mode) {
+      if (!tools) return;
+      const previous = tools.mode.current;
+      tools.mode.current = mode;
+      try {
+        tools.activation.reapply();
+      } catch (err) {
+        tools.mode.current = previous;
+        throw err;
+      }
+    },
+    async commitStaged({ mode }) {
+      if (!tools) return;
+      tools.mode.current = mode;
+      tools.activation.register();
+      // A staged engine may have waited across a live Build/Plan change.
+      tools.activation.reapply();
+    },
+    markToolUsed(name) {
+      tools?.activation.markUsed(name);
+    },
+    async discard({ removeFile }) {
+      const sessionFile = session.sessionFile;
+      unsubscribe();
+      tools?.activation.dispose();
+      session.dispose();
+      if (
+        !removeFile ||
+        !sessionFile ||
+        (removeFile.except &&
+          resolve(sessionFile) === resolve(removeFile.except))
+      )
+        return;
+      try {
+        unlinkSync(sessionFile);
+      } catch {
+        // Best-effort cleanup must not hide the refusal that discarded it.
+      }
+    },
     async dispose() {
       unsubscribe();
+      tools?.activation.dispose();
       session.dispose();
     },
   };
   nativeSessions.set(engine, session);
+  if (tools) toolActivations.set(engine, tools.activation);
   return engine;
 }
 
@@ -418,4 +505,16 @@ export function nativePiSessionForTests(engine: PiEngineHandle): AgentSession {
   const session = nativeSessions.get(engine);
   if (!session) throw new Error("Not a local pi engine.");
   return session;
+}
+
+/**
+ * Test seam only: the tool activation of an engine the host opened. Production
+ * code never calls it.
+ */
+export function piToolActivationForTests(
+  engine: PiEngineHandle,
+): PiToolActivation {
+  const activation = toolActivations.get(engine);
+  if (!activation) throw new Error("Not a host-opened pi engine.");
+  return activation;
 }

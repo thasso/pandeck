@@ -19,6 +19,7 @@ const { installClaudeStateBuilder } =
   await import("../test/claudeSdkSession.ts");
 installClaudeStateBuilder(claudeSdkStore);
 const { piStore } = await import("../piSdk/piStore.ts");
+const { openPiEngine } = await import("../piSdk/piEngineHost.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { createCredentialProfile, patchCredentialProfile } =
   await import("../credentialProfiles.ts");
@@ -180,19 +181,24 @@ test("a Claude account changed after lookup is revalidated before creation", asy
 
 test("pi revalidates enterprise metadata after async creation and disposes a refused session", async () => {
   const disposed = vi.fn();
-  const storeWithCreate = piStore as unknown as {
-    create: (...args: never[]) => Promise<{
-      session: { sessionId: string; dispose: () => void };
-      notices: never[];
-    }>;
+  const storeWithOpen = piStore as unknown as {
+    openEngine: (
+      spec: import("../piSdk/piEngineHost.ts").PiEngineOpenSpec,
+    ) => Promise<import("../piSdk/piEngineHost.ts").PiEngineOpened>;
   };
-  vi.spyOn(storeWithCreate, "create").mockImplementation(async () => {
-    await Promise.resolve();
-    return {
-      session: { sessionId: "pi-enterprise-race", dispose: disposed },
-      notices: [],
-    };
-  });
+  vi.spyOn(storeWithOpen, "openEngine").mockImplementation((spec) =>
+    openPiEngine(spec, {} as never, async () => {
+      await Promise.resolve();
+      return {
+        session: {
+          sessionId: "pi-enterprise-race",
+          subscribe: () => () => {},
+          dispose: disposed,
+        } as never,
+        notices: [],
+      };
+    }),
+  );
   const pending = piStore.acquireNew("assistant", undefined, undefined, {
     credentialProfileId: enterpriseProfileId,
     requiresEnterprise: true,

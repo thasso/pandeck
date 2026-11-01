@@ -8,52 +8,28 @@
  * never import hub.ts.
  */
 import {
-  type AgentSession,
-  createAgentSession,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
-import {
   AGENT_TYPE_IDS,
-  hasNativeTools,
   sessionModeOrDefault,
   type AgentType,
-  type NoticeSeverity,
   type SessionMode,
   type SessionScope,
   type ThinkingLevel,
 } from "@assistant/shared";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { CWD } from "../config.ts";
 import {
   planModeToolUnavailableMessage,
-  type AgentTool,
   type ToolSession,
 } from "../mcp/tool.ts";
-import {
-  buildAgentOptions,
-  PI_PLAN_RESTRICTED_BUILTIN_TOOLS,
-  sessionDirFor,
-} from "./options.ts";
-import { piAppToolBinding, toPiToolDefinitions } from "./agentToolAdapter.ts";
+import { AGENT_TYPES } from "../agentTypes.ts";
+import { piAppToolBinding } from "./agentToolAdapter.ts";
 import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
-import { installToolPayloadProbe } from "./toolPayloadProbe.ts";
-import { installCompactionWindow } from "./compactionWindow.ts";
-import {
-  calledToolNamesFromMessages,
-  createPiToolActivation,
-  loadedToolNamesFromMessages,
-  mergedActiveToolNames,
-  type PiToolActivation,
-} from "./toolActivation.ts";
-import { findModelForProfile, modelRuntimeForProfile } from "./models.ts";
 import type { LiveListInfo } from "../sessions.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import {
   canonicalPiSessionPath,
   migrateFileToCanonical,
 } from "../sessionStorage.ts";
-import { FORK_ORIGIN_CUSTOM_TYPE } from "./forkOrigin.ts";
 import {
   findLegacySessionFile,
   openExistingSession,
@@ -67,29 +43,31 @@ import {
 import { sessionStore } from "../db/sessionStore.ts";
 import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 import {
-  deniesNative,
-  freezeSessionAgent,
   sessionAgent,
+  withoutDeniedTools,
   type SessionAgent,
 } from "../agents/sessionAgent.ts";
 import {
   parsePromptConditions,
-  sessionPromptConditions,
-  type PromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
 import { PiLiveSession } from "./PiLiveSession.ts";
-import { localPiEngine } from "./piEngine.ts";
+import type { PiEngineHandle, PiEngineModel } from "./piEngine.ts";
+import {
+  openPiEngine,
+  type PiEngineOpened,
+  type PiEngineOpenSpec,
+} from "./piEngineHost.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
   DEFAULT_OPENAI_PROFILE_ID,
 } from "../credentialProfiles.ts";
-import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
-import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
+import { sessionSkills } from "../sessionSkills.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
 import { registerAppToolSession } from "../workers/appToolHost.ts";
 import { appToolExecutorFor } from "../workers/inProcessWorker.ts";
+import { childProcessEnv } from "../subprocessEnv.ts";
 
 /** Every persona a legacy per-persona transcript directory can hold. */
 const LEGACY_KINDS: readonly AgentType[] = AGENT_TYPE_IDS;
@@ -106,100 +84,28 @@ export class PiSessionDeletedError extends Error {
   }
 }
 
-/**
- * How a pi session decides its frozen prompt conditions: from what it starts
- * with (`evidence`), or by inheriting a parent's record (a fork). Neither is
- * consulted once the session has frozen conditions of its own.
- */
-interface PiPromptStart {
-  evidence?: SessionPromptEvidence;
-  inherit?: PromptConditions;
-  inheritSkills?: readonly string[];
-  /**
-   * The agent definition it starts as: a spawn's, or a fork's parent's. Frozen
-   * inside creation, where pi mints the id; a reopen reads the stored row.
-   */
-  agent?: SessionAgent;
-}
-
-/** The model and thinking level a branch last selected, if any. */
-function branchRuntime(sm: SessionManager): {
-  provider?: string;
-  modelId?: string;
-  thinkingLevel?: ThinkingLevel;
-} {
-  let selected: { provider?: string; modelId?: string } = {};
-  let thinkingLevel: ThinkingLevel | undefined;
-  for (const entry of sm.getBranch()) {
-    if (entry.type === "model_change")
-      selected = { provider: entry.provider, modelId: entry.modelId };
-    if (entry.type === "thinking_level_change")
-      thinkingLevel = entry.thinkingLevel as ThinkingLevel;
-  }
-  return { ...selected, ...(thinkingLevel ? { thinkingLevel } : {}) };
-}
-
-function safeSessionId(sm: SessionManager): string | undefined {
-  try {
-    const id = sm.getSessionId();
-    return typeof id === "string" && id.trim() ? id : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The cwd the opened SessionManager resolved (override or header), if exposed. */
-function sessionManagerCwd(sm: SessionManager): string | undefined {
-  const cwd = (sm as unknown as { getCwd?: () => unknown }).getCwd?.();
-  return typeof cwd === "string" && cwd ? cwd : undefined;
-}
+const ENTERPRISE_REQUIRED =
+  "This session requires an enterprise account. Select an account marked as enterprise.";
 
 /**
- * Fully-populated {@link ToolSession} for a pi session backed by `sm`. Read
- * fresh on every tool call so sessionFile/title appear once persisted; the
- * session-manager surface is the real pi {@link SessionManager}, narrowed to
- * the {@link ToolSession} contract.
+ * The {@link ToolSession} the server's app tools see for a pi session: read
+ * fresh per call from its engine handle, whose transcript append is a command.
  */
-function piToolSession(
+function piToolSessionFromHandle(
   kind: AgentType,
-  sm: SessionManager,
+  engine: PiEngineHandle,
   cwd: string,
 ): ToolSession {
-  const sessionFileValue = sm.getSessionFile();
-  const titleValue = sm.getSessionName();
+  const sessionFile = engine.sessionFile;
+  const title = engine.sessionName;
   return {
-    sessionId: sm.getSessionId(),
+    sessionId: engine.sessionId,
     harness: "pi",
     agentType: kind,
     cwd,
-    ...(sessionFileValue !== undefined
-      ? { sessionFile: sessionFileValue }
-      : {}),
-    ...(titleValue !== undefined ? { title: titleValue } : {}),
-    sessionManager: {
-      getSessionId: () => sm.getSessionId(),
-      getBranch: () => sm.getBranch(),
-      appendCustomEntry: async (type, data) => sm.appendCustomEntry(type, data),
-    },
-  };
-}
-
-function installDynamicToolTurnRefresh(session: AgentSession): void {
-  const previousPrepareNextTurn = session.agent.prepareNextTurn?.bind(
-    session.agent,
-  );
-  session.agent.prepareNextTurn = async (signal) => {
-    const previous = await previousPrepareNextTurn?.(signal);
-    const previousContext = previous?.context;
-    return {
-      ...previous,
-      context: {
-        systemPrompt: session.agent.state.systemPrompt,
-        messages:
-          previousContext?.messages ?? session.agent.state.messages.slice(),
-        tools: session.agent.state.tools.slice(),
-      },
-    };
+    ...(sessionFile !== undefined ? { sessionFile } : {}),
+    ...(title !== undefined ? { title } : {}),
+    sessionManager: engine.toolSessionManager(),
   };
 }
 
@@ -217,12 +123,18 @@ class PiSessionStore {
    * subscriptions alive, unreachable to eviction.
    */
   private readonly opening = new Map<string, Promise<PiLiveSession>>();
-  /** Per-session tool activation (change subscriptions), disposed on eviction. */
-  private toolRuntimes = new Map<string, PiToolActivation>();
-  /** Each committed runtime's app-tool binding disposer, by session id. */
+  /** Each committed engine's app-tool binding disposer, by session id. */
   private appToolBindings = new Map<string, () => void>();
-  /** Live policy read by the built-in/bridge active-set merge. */
+  /** Live Build/Plan policy, read by the routed app tools' gate. */
   private sessionModes = new Map<string, SessionMode>();
+  /** Opens a live engine; the seam suites replace. */
+  private openEngine: (spec: PiEngineOpenSpec) => Promise<PiEngineOpened> = (
+    spec,
+  ) =>
+    openPiEngine(spec, {
+      childEnv: childProcessEnv,
+      appToolExecutor: appToolExecutorFor,
+    });
   private host: HarnessHost | undefined;
   /** Whether another engine holds an id resident; registration refuses it. */
   private heldElsewhere: (id: string) => boolean = () => false;
@@ -283,7 +195,7 @@ class PiSessionStore {
   /** A fresh session for `kind`, carrying over the caller's model/thinking level. */
   async acquireNew(
     kind: AgentType,
-    model?: AgentSession["model"],
+    model?: PiEngineModel,
     thinkingLevel?: ThinkingLevel,
     opts?: {
       cwd?: string;
@@ -310,65 +222,43 @@ class PiSessionStore {
     const cwd = opts?.cwd ?? CWD;
     const credentialProfileId =
       opts?.credentialProfileId ?? DEFAULT_OPENAI_PROFILE_ID;
-    const created = await this.create(
+    // A freshly minted id has no record, so the requested mode is the mode.
+    const mode = sessionModeOrDefault(opts?.mode);
+    const opened = await this.openEngine({
       kind,
-      SessionManager.create(cwd, sessionDirFor(kind)),
-      model,
-      thinkingLevel,
-      cwd,
       credentialProfileId,
-      opts?.promptEvidence || opts?.agent
+      transcript: { type: "new", cwd },
+      ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
+      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+      ...(opts?.promptEvidence || opts?.agent
         ? {
-            ...(opts.promptEvidence ? { evidence: opts.promptEvidence } : {}),
-            ...(opts.agent ? { agent: opts.agent } : {}),
+            promptStart: {
+              ...(opts.promptEvidence ? { evidence: opts.promptEvidence } : {}),
+              ...(opts.agent ? { agent: opts.agent } : {}),
+            },
           }
-        : undefined,
-      opts?.mode,
-    );
+        : {}),
+      mode,
+      canonicalize: true,
+    });
+    const id = opened.info.sessionId;
     if (
       opts?.requiresEnterprise &&
       !credentialProfileById(credentialProfileId)?.enterprise
     ) {
-      this.discardUnregisteredAndFiles(created.session);
-      throw new Error(
-        "This session requires an enterprise account. Select an account marked as enterprise.",
-      );
+      closeToolGroupSession(id);
+      await opened.engine.discard({ removeFile: {} });
+      sessionStore.deleteSkills(id);
+      throw new Error(ENTERPRISE_REQUIRED);
     }
-    this.canonicalizeCreatedPiSession(created.session);
+    this.sessionModes.set(id, mode);
     return this.track(
       kind,
-      created.session,
-      created.notices,
-      cwd,
+      opened,
       credentialProfileId,
       opts?.scope,
       opts?.requiresEnterprise,
     );
-  }
-
-  private canonicalizeCreatedPiSession(session: AgentSession): void {
-    const id = session.sessionId;
-    const file = session.sessionFile;
-    if (!file) return;
-    const canonical = canonicalPiSessionPath(id);
-    if (file === canonical) return;
-    if (!existsSync(file)) {
-      // Empty bootstrap sessions do not have a native transcript yet. Do not use
-      // SessionManager.setSessionFile() here: for a missing file it calls
-      // newSession() and mints another id. Retarget only the pending output path
-      // so the first real persist writes the existing in-memory header/id to the
-      // canonical per-id native transcript.
-      mkdirSync(dirname(canonical), { recursive: true });
-      const manager = session.sessionManager as unknown as {
-        sessionFile?: string;
-        flushed?: boolean;
-      };
-      manager.sessionFile = canonical;
-      manager.flushed = false;
-      return;
-    }
-    const moved = migrateFileToCanonical(file, canonical);
-    session.sessionManager.setSessionFile(moved);
   }
 
   /**
@@ -422,43 +312,42 @@ class PiSessionStore {
             worktreeCwdForSession(candidateId, checked),
           )
         : undefined;
-      const sm = await openExistingSession(kind, openFile, {
-        ...(candidateId !== undefined ? { expectedId: candidateId } : {}),
-        ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
-      });
-      const cwd = edgeCwd ?? sessionManagerCwd(sm) ?? CWD;
-      const profileId =
-        sessionStore.get(candidateId ?? sm.getSessionId())
-          ?.credentialProfileId ?? "default";
-      const created = await this.create(
+      const record = candidateId ? sessionStore.get(candidateId) : undefined;
+      const profileId = record?.credentialProfileId ?? "default";
+      // A durable server record decides the mode; an unrecorded session is Build.
+      const mode = sessionModeOrDefault(record?.mode);
+      const opened = await this.openEngine({
         kind,
-        sm,
-        undefined,
-        undefined,
-        cwd,
-        profileId,
-      );
+        credentialProfileId: profileId,
+        transcript: {
+          type: "open",
+          file: openFile,
+          ...(candidateId !== undefined ? { expectedId: candidateId } : {}),
+          ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
+        },
+        mode,
+      });
+      const id = opened.info.sessionId;
       // Deletion may have won while the transcript was opening: the record is
       // tombstoned and `evict` found nothing to drop yet. Registering now would
       // install a wrapper and its listeners for a session that is gone — and
       // hand it to EVERY owner sharing this open (a load, a comment handoff, a
       // continuation), which could attach or prompt it until it idled out.
       // Ownership is decided here, once, for all of them.
-      if (
-        sessionStore.getIncludingDeleted(created.session.sessionId)
-          ?.deletedAt !== undefined
-      ) {
-        this.discardUnregistered(created.session);
-        throw new PiSessionDeletedError(created.session.sessionId);
+      if (sessionStore.getIncludingDeleted(id)?.deletedAt !== undefined) {
+        closeToolGroupSession(id);
+        await opened.engine.discard({});
+        throw new PiSessionDeletedError(id);
       }
       // An id belongs to one engine: one the Claude store took while this
       // transcript was opening stays Claude's. Only a reopen registers an id
       // it did not mint, so this is the one place pi has to ask.
-      if (this.heldElsewhere(created.session.sessionId)) {
-        this.discardRefused(created.session);
-        throw new SessionHeldElsewhereError(created.session.sessionId);
+      if (this.heldElsewhere(id)) {
+        await opened.engine.discard({});
+        throw new SessionHeldElsewhereError(id);
       }
-      return this.track(kind, created.session, created.notices, cwd, profileId);
+      this.sessionModes.set(id, mode);
+      return this.track(kind, opened, profileId);
     })();
     this.opening.set(canonical, open);
     try {
@@ -519,7 +408,7 @@ class PiSessionStore {
 
   /**
    * Branch a pi session at `nativeEntryId` — pi's own id, the only one its
-   * SessionManager can resolve.
+   * transcript can resolve.
    *
    * `originEntryId` is the APP log entry the user picked, and the two are
    * different ids in different spaces: the branch anchor can name an entry the
@@ -543,12 +432,9 @@ class PiSessionStore {
     if (!existsSync(file))
       throw new Error("Cannot fork: source session file does not exist yet.");
 
-    const sm = await openExistingSession(kind, file);
-    const entry = sm.getEntry(nativeEntryId);
-    if (!entry)
-      throw new Error("Cannot fork: selected message is no longer available.");
-
-    const parentSessionId = sm.getSessionId();
+    const parentSessionId = readSessionHeaderId(file);
+    if (!parentSessionId)
+      throw new Error("Cannot fork: source session has no id.");
     const parentMeta = sessionStore.getIncludingDeleted(parentSessionId);
     const credentialProfileId = parentMeta?.credentialProfileId ?? "default";
     const requiresEnterprise = sourceRequiresEnterprise([parentSessionId]);
@@ -557,9 +443,7 @@ class PiSessionStore {
         requiresEnterprise &&
         !credentialProfileById(credentialProfileId)?.enterprise
       ) {
-        throw new Error(
-          "This session requires an enterprise account. Select an account marked as enterprise.",
-        );
+        throw new Error(ENTERPRISE_REQUIRED);
       }
     };
     ensureEnterpriseAccount();
@@ -577,33 +461,6 @@ class PiSessionStore {
     );
     ensureEnterpriseAccount();
 
-    if (position === "before") {
-      if (entry.type !== "message" || entry.message.role !== "user") {
-        throw new Error("Can only fork before user messages.");
-      }
-      if (entry.parentId) {
-        sm.createBranchedSession(entry.parentId);
-      } else {
-        sm.newSession({ parentSession: file });
-      }
-    } else {
-      sm.createBranchedSession(nativeEntryId);
-    }
-
-    sm.appendCustomEntry(FORK_ORIGIN_CUSTOM_TYPE, {
-      harness: "pi",
-      agentType: kind,
-      parentSessionFile: file,
-      parentSessionId,
-      parentEntryId: originEntryId,
-      position,
-      createdAt: Date.now(),
-    });
-
-    // Forks inherit the parent's execution context (the caller copies the
-    // in_worktree edge to the forked session id for durable reopen). Without a
-    // worktree link, the parent's header cwd (applied by the open above) wins.
-    const cwd = edgeCwd ?? sessionManagerCwd(sm) ?? CWD;
     // A fork continues the parent's conversation, so it inherits the parent's
     // frozen prompt conditions rather than recomputing against today's gates.
     const inherit = parsePromptConditions(
@@ -613,38 +470,43 @@ class PiSessionStore {
     // A fork continues the parent's conversation in the parent's mode too —
     // Build/Plan travels like model and thinking level do.
     const mode = sessionModeOrDefault(parentMeta?.mode);
-    const created = await this.create(
+    const opened = await this.openEngine({
       kind,
-      sm,
-      undefined,
-      undefined,
-      cwd,
       credentialProfileId,
-      {
+      transcript: {
+        type: "fork",
+        file,
+        parentSessionId,
+        nativeEntryId,
+        position,
+        originEntryId,
+        ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
+      },
+      promptStart: {
         ...(inherit ? { inherit } : {}),
         inheritSkills,
         ...(inheritAgent ? { agent: inheritAgent } : {}),
       },
       mode,
-    );
+      canonicalize: true,
+    });
+    const id = opened.info.sessionId;
     if (
       requiresEnterprise &&
       !credentialProfileById(credentialProfileId)?.enterprise
     ) {
-      this.discardUnregisteredAndFiles(created.session, file);
-      throw new Error(
-        "This session requires an enterprise account. Select an account marked as enterprise.",
-      );
+      closeToolGroupSession(id);
+      await opened.engine.discard({ removeFile: { except: file } });
+      sessionStore.deleteSkills(id);
+      throw new Error(ENTERPRISE_REQUIRED);
     }
-    this.canonicalizeCreatedPiSession(created.session);
+    this.sessionModes.set(id, mode);
     // A fork inherits the parent's SCOPE as well, claimed inside `track` before
     // the child can be listed: branching is not a way for a session outside the
     // user's scope to produce one inside it.
     const live = this.track(
       kind,
-      created.session,
-      created.notices,
-      cwd,
+      opened,
       credentialProfileId,
       parentMeta?.scope,
       requiresEnterprise,
@@ -660,323 +522,37 @@ class PiSessionStore {
     return live;
   }
 
-  private async create(
-    kind: AgentType,
-    sm: SessionManager,
-    model?: AgentSession["model"],
-    thinkingLevel?: ThinkingLevel,
-    cwd: string = CWD,
-    credentialProfileId = "default",
-    promptStart?: PiPromptStart,
-    requestedMode?: SessionMode,
-    staged = false,
-  ): Promise<{
-    session: AgentSession;
-    commit(): void;
-    dispose(): void;
-    notices: Array<{ severity: NoticeSeverity; message: string }>;
-  }> {
-    // Session-START prompt conditions (Task 287). pi rebuilds the system prompt
-    // on every active-tool change and on every reopen, so this reads the frozen
-    // record whenever the session already has one — creation is the only call
-    // that can decide it.
-    const sessionId = safeSessionId(sm);
-    const conditions = sessionId
-      ? sessionPromptConditions(
-          sessionId,
-          kind,
-          promptStart?.evidence,
-          promptStart?.inherit,
-        )
-      : undefined;
-    // The agent definition, when it has one: frozen from the start's, else
-    // the stored row a reopen reads. Before the skills, which it adds to.
-    if (promptStart?.agent && !sessionId)
-      throw new Error(
-        `Agent "${promptStart.agent.name}" cannot start: pi gave the session no id to freeze it under.`,
-      );
-    const agent = !sessionId
-      ? undefined
-      : promptStart?.agent
-        ? freezeSessionAgent(sessionId, promptStart.agent)
-        : sessionAgent(sessionId);
-    // pi restores a session's model from its messages; one with none yet (a
-    // fork before the first prompt, a spawn reopened before it ran) would get
-    // pi's default model. An agent session never runs on a model it did not
-    // select: its branch's last selection, else the frozen one, or a refusal.
-    let startModel = model;
-    let startThinkingLevel = thinkingLevel;
-    if (
-      agent &&
-      startModel === undefined &&
-      sm.buildSessionContext().messages.length === 0
-    ) {
-      const selected = branchRuntime(sm);
-      const provider = selected.provider ?? agent.provider;
-      const modelId = selected.modelId ?? agent.model;
-      startModel = await findModelForProfile(
-        credentialProfileId,
-        provider,
-        modelId,
-      );
-      if (!startModel)
-        throw new Error(
-          `Agent "${agent.name}" runs on ${provider}/${modelId}, which its account no longer offers; it does not run on another model.`,
-        );
-      startThinkingLevel ??= selected.thinkingLevel ?? agent.effort;
-    }
-    const skillPreset =
-      promptStart?.inheritSkills ??
-      (sessionId && promptStart?.agent
-        ? await sessionSkillPreset(
-            sessionId,
-            kind,
-            undefined,
-            promptStart.agent.skills,
-          )
-        : undefined);
-    const frozenSkillNames = sessionId
-      ? await sessionSkills(sessionId, kind, skillPreset)
-      : [];
-    const opts = await buildAgentOptions(
-      kind,
-      cwd,
-      credentialProfileId,
-      conditions,
-      frozenSkillNames,
-      agent,
-    );
-    const activeSessionId = sm.getSessionId();
-    // A durable server record wins over a caller's requested starting mode.
-    // Legacy/unrecorded sessions normalize to Build.
-    if (!staged)
-      this.sessionModes.set(
-        activeSessionId,
-        sessionModeOrDefault(
-          sessionStore.get(activeSessionId)?.mode ?? requestedMode,
-        ),
-      );
-
-    // The persona's AgentTools are adapted straight into pi customTools (no
-    // MCP hop — the session MCP server serves the Claude harness only). The full universe is registered up front (pi cannot add
-    // definitions mid-session); toolActivation keeps only eager + loaded tools
-    // ACTIVE so the initial context stays small, reconciles toolGroup/
-    // integration-gate changes, and activates find_tools matches inside the
-    // loader's execute window (pi records addedToolNames → native deferred
-    // loading on supported models).
-    let sessionRef: AgentSession | undefined;
-    // Its background bash and monitor run shell commands: a definition that
-    // denies bash denies them too.
-    const piBackgroundTools =
-      hasNativeTools(kind) && !deniesNative(agent, "bash")
-        ? createPiBackgroundTools({
-            session: () => piToolSession(kind, sm, cwd),
-            bashConfig: () => {
-              const settings = sessionRef?.settingsManager;
-              const shellPath = settings?.getShellPath();
-              const commandPrefix = settings?.getShellCommandPrefix();
-              return {
-                ...(shellPath ? { shellPath } : {}),
-                ...(commandPrefix ? { commandPrefix } : {}),
-              };
-            },
-            identity: () => {
-              const current = sessionRef;
-              const selectedModel = current?.model as
-                { provider?: string; id?: string } | undefined;
-              const sessionFile = sm.getSessionFile();
-              return {
-                sessionId: sm.getSessionId(),
-                ...(sessionFile ? { sessionFile } : {}),
-                ...(selectedModel?.provider
-                  ? { provider: selectedModel.provider }
-                  : {}),
-                ...(selectedModel?.id ? { model: selectedModel.id } : {}),
-                ...(current?.thinkingLevel
-                  ? { reasoningLevel: current.thinkingLevel }
-                  : {}),
-              };
-            },
-          })
-        : [];
-    const agentTools = [...opts.agentTools, ...piBackgroundTools];
-    const eagerToolNames = new Set([
-      ...opts.eagerToolNames,
-      ...piBackgroundTools.map((tool) => tool.name),
-    ]);
-    const activation = createPiToolActivation({
-      sessionId: sm.getSessionId(),
-      agentType: kind,
-      agentTools,
-      eagerToolNames,
-      deferToolLoading: opts.deferToolLoading,
-      deferRegistration: staged,
-      mode: () => this.sessionModes.get(activeSessionId) ?? "build",
-      applyActiveToolNames: (activeNames) => {
-        // Merge pi's non-bridge tools (built-ins) with the bridge-active names.
-        // `sessionRef` is assigned once the AgentSession exists; earlier
-        // callbacks are impossible because change events only follow toolGroup/
-        // gate changes emitted after creation, and initialize() runs after.
-        const session = sessionRef;
-        if (!session) return;
-        // `extraBuiltinToolNames` (the search builtins pi registers but leaves
-        // inactive, Task-316) rides this merge rather than a `tools:` allowlist,
-        // which pi force-re-activates on every registry refresh — that would
-        // defeat the deferred app-tool active set. The merge itself is pure and
-        // tested in `toolActivation.test.ts`.
-        session.setActiveToolsByName(
-          mergedActiveToolNames({
-            current: session.getActiveToolNames(),
-            bridgeToolNames: activation.toolNames,
-            extraBuiltin: opts.extraBuiltinToolNames,
-            planRestrictedBuiltin: opts.noTools
-              ? []
-              : PI_PLAN_RESTRICTED_BUILTIN_TOOLS,
-            mode: this.sessionModes.get(activeSessionId) ?? "build",
-            activeBridge: activeNames,
-          }),
-        );
-      },
-    });
-    const toolConfig = {
-      session: () => piToolSession(kind, sm, cwd),
-      unavailableReason: (tool: AgentTool) =>
-        (this.sessionModes.get(activeSessionId) ?? "build") === "plan" &&
-        !isPlanModeToolAllowed(tool)
-          ? planModeToolUnavailableMessage(tool.name)
-          : undefined,
-      onExecute: (name: string) => activation.markUsed(name),
-    };
-    // The persona's app tools run on the server, through the session's
-    // Worker, gated there by the binding `commit()` registers; `find_tools`
-    // and the background shell tools run and are gated here.
-    const customTools = toPiToolDefinitions(activation.piToolUniverse, {
-      ...toolConfig,
-      appTools: {
-        routes: new Set(opts.agentTools),
-        execute: appToolExecutorFor(activeSessionId),
-      },
-    });
-
-    let session: AgentSession;
-    let extensionsResult: Awaited<
-      ReturnType<typeof createAgentSession>
-    >["extensionsResult"];
-    let modelFallbackMessage: string | undefined;
-    try {
-      ({ session, extensionsResult, modelFallbackMessage } =
-        await createAgentSession({
-          cwd,
-          modelRuntime: await modelRuntimeForProfile(credentialProfileId),
-          sessionManager: sm,
-          resourceLoader: opts.resourceLoader,
-          ...(opts.noTools !== undefined ? { noTools: opts.noTools } : {}),
-          ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
-          customTools,
-          excludeTools: opts.excludeTools,
-          ...(startModel !== undefined ? { model: startModel } : {}),
-          ...(startThinkingLevel !== undefined
-            ? { thinkingLevel: startThinkingLevel }
-            : {}),
-        }));
-    } catch (err) {
-      activation.dispose();
-      if (!staged) this.sessionModes.delete(activeSessionId);
-      throw err;
-    }
-    // Nor when the model it was on cannot be restored: pi would quietly pick
-    // another one.
-    if ((agent || staged) && modelFallbackMessage) {
-      activation.dispose();
-      if (!staged) this.sessionModes.delete(activeSessionId);
-      session.dispose();
-      throw new Error(
-        agent
-          ? `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`
-          : `Cannot switch accounts: ${modelFallbackMessage}. The session must keep its model.`,
-      );
-    }
-    const commit = () => {
-      this.closeToolRuntime(session.sessionId);
-      this.toolRuntimes.set(session.sessionId, activation);
-      this.appToolBindings.set(
-        session.sessionId,
-        registerAppToolSession(
-          session.sessionId,
-          piAppToolBinding(opts.agentTools, toolConfig),
-        ),
-      );
-      activation.register();
-      // A staged runtime may have waited across a live Build/Plan change.
-      activation.reapply();
-    };
-    if (!staged) commit();
-    // Before any prompt: the controller must observe every settings rebuild.
-    installCompactionWindow(
-      session,
-      sessionStore.get(session.sessionId)?.compactionWindow,
-    );
-    installToolPayloadProbe(session);
-    installDynamicToolTurnRefresh(session);
-    // Initial active set: eager + find_tools + everything the transcript
-    // already loaded (addedToolNames), gate/pack-filtered — so a reopened
-    // session keeps its loaded tools and a fresh one starts small.
-    sessionRef = session;
-    activation.initialize(
-      loadedToolNamesFromMessages(session.messages),
-      calledToolNamesFromMessages(session.messages),
-    );
-    const notices: Array<{ severity: NoticeSeverity; message: string }> = [];
-    if (modelFallbackMessage)
-      notices.push({ severity: "warning", message: modelFallbackMessage });
-    for (const err of extensionsResult.errors) {
-      notices.push({
-        severity: "error",
-        message: `Extension "${err.path}" failed to load: ${err.error}`,
-      });
-    }
-    return {
-      session,
-      notices,
-      commit,
-      dispose: () => {
-        activation.dispose();
-        session.dispose();
-      },
-    };
-  }
-
   private track(
     kind: AgentType,
-    session: AgentSession,
-    initialNotices: Array<{ severity: NoticeSeverity; message: string }>,
-    cwd: string,
+    opened: PiEngineOpened,
     credentialProfileId: string,
     scope?: SessionScope,
     requiresEnterprise?: boolean,
   ): PiLiveSession {
+    const { engine, info } = opened;
+    const id = info.sessionId;
     // The scope is claimed BEFORE the live map can hand this session to the
     // session list: a not-yet-persisted live row is treated as the user's
     // everywhere, so a session that is not may never reach the registry first.
     // A claim that contradicts the stored scope throws rather than registering.
     sessionStore.claimScope({
-      id: session.sessionId,
+      id,
       harness: "pi",
       agentType: kind,
       ...(scope ? { scope } : {}),
       ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
     });
+    this.registerAppTools(kind, id, engine, info.cwd);
     // The injected host inverts the session→hub calls so piSdk never imports hub.ts.
-    // The engine subscribes as it is made, right where the wrapper always did.
-    const ls = new PiLiveSession(
+    const ls: PiLiveSession = new PiLiveSession(
       kind,
-      localPiEngine(session),
+      engine,
       this.requireHost(),
       (key) => this.onLiveSessionEvicted(key, ls),
-      initialNotices,
-      cwd,
-      this.sessionModes.get(session.sessionId) ?? "build",
-      (mode) => this.applySessionMode(session.sessionId, mode),
+      info.notices,
+      info.cwd,
+      this.sessionModes.get(id) ?? "build",
+      (mode) => this.applySessionMode(id, mode, ls),
       credentialProfileId,
       async (profileId) => {
         const file = ls.sessionFile;
@@ -985,34 +561,32 @@ class PiSessionStore {
           throw new Error(
             "The pi session has no transcript or model to reopen.",
           );
-        const model = await findModelForProfile(
-          profileId,
-          selected.model.provider,
-          selected.model.id,
-        );
-        if (!model)
-          throw new Error(
-            "The replacement account no longer offers this session's model.",
-          );
-        const sm = await openExistingSession(kind, file, {
-          expectedId: ls.id,
-          cwd: ls.cwd,
-        });
-        const replacement = await this.create(
+        const { engine: replacement } = await this.openEngine({
           kind,
-          sm,
-          model,
-          selected.thinkingLevel,
-          ls.cwd,
-          profileId,
-          undefined,
-          ls.sessionMode,
-          true,
-        );
+          credentialProfileId: profileId,
+          transcript: { type: "open", file, expectedId: ls.id, cwd: ls.cwd },
+          model: {
+            provider: selected.model.provider,
+            id: selected.model.id,
+          },
+          ...(selected.thinkingLevel !== undefined
+            ? { thinkingLevel: selected.thinkingLevel }
+            : {}),
+          mode: ls.sessionMode,
+          staged: true,
+        });
         return {
-          engine: localPiEngine(replacement.session),
-          commit: replacement.commit,
-          dispose: replacement.dispose,
+          engine: replacement,
+          commit: async () => {
+            this.closeAppTools(id);
+            this.registerAppTools(kind, id, replacement, ls.cwd);
+            // Read in the swap's own synchronous span: no flip falls between.
+            await replacement.commitStaged({
+              mode: this.sessionModes.get(id) ?? "build",
+            });
+          },
+          // Touches nothing the resident engine owns.
+          dispose: () => replacement.discard({}),
         };
       },
     );
@@ -1039,48 +613,9 @@ class PiSessionStore {
     if (this.live.get(key) !== ls) return;
     this.live.delete(key);
     this.requireHost().sessionRowsChanged([key]);
-    this.closeToolRuntime(key);
+    this.closeAppTools(key);
     this.sessionModes.delete(key);
     void sessionRuntime.releaseHarness(key);
-  }
-
-  /**
-   * Tear down a session `create` built for an id another engine holds: only
-   * what pi made for it. Resources keyed by the id alone, its browser runtime
-   * above all, belong to the holder and stay open.
-   */
-  private discardRefused(session: AgentSession): void {
-    this.closeToolRuntime(session.sessionId);
-    this.sessionModes.delete(session.sessionId);
-    session.dispose();
-  }
-
-  /** Tear down a session `create` built that will never be registered. */
-  private discardUnregistered(session: AgentSession): void {
-    this.closeToolRuntime(session.sessionId);
-    this.sessionModes.delete(session.sessionId);
-    closeToolGroupSession(session.sessionId);
-    session.dispose();
-  }
-
-  /** Dispose a refused, not-yet-registered session and remove only its new file. */
-  private discardUnregisteredAndFiles(
-    session: AgentSession,
-    sourceFile?: string,
-  ): void {
-    const sessionFile = session.sessionFile;
-    this.discardUnregistered(session);
-    sessionStore.deleteSkills(session.sessionId);
-    if (
-      !sessionFile ||
-      (sourceFile && resolve(sessionFile) === resolve(sourceFile))
-    )
-      return;
-    try {
-      unlinkSync(sessionFile);
-    } catch {
-      // Best-effort cleanup must not hide the enterprise refusal.
-    }
   }
 
   /** Remove and dispose a live session (e.g. on delete). */
@@ -1093,35 +628,67 @@ class PiSessionStore {
     // can still tell it: disposing the pi session stops its events first.
     sessionRuntime.closeForTeardown(key);
     ls.dispose();
-    this.closeToolRuntime(key);
+    this.closeAppTools(key);
     this.sessionModes.delete(key);
     void sessionRuntime.disposeSession(key);
   }
 
-  /** Apply a live mode flip through the same active-set merge as every load. */
-  private applySessionMode(key: string, mode: SessionMode): void {
+  /**
+   * Apply a live mode flip: the server's gate at once, then the engine's own
+   * copy, on whichever engine the session holds by then. A refused flip puts
+   * the gate back, unless a later flip has moved it on.
+   */
+  private async applySessionMode(
+    key: string,
+    mode: SessionMode,
+    ls: PiLiveSession,
+  ): Promise<void> {
     const previous = this.sessionModes.get(key) ?? "build";
     if (previous === mode) return;
     this.sessionModes.set(key, mode);
     try {
-      this.toolRuntimes.get(key)?.reapply();
+      await ls.engine.setToolMode(mode);
     } catch (err) {
-      this.sessionModes.set(key, previous);
+      if (this.sessionModes.get(key) === mode)
+        this.sessionModes.set(key, previous);
       throw err;
     }
   }
 
   /**
-   * Dispose a session's tool activation subscriptions and its app-tool
-   * binding (no-op when none).
+   * Serve `id`'s app tools from `engine`, gated by the session's live mode.
+   * The tools are the persona's, narrowed by its frozen agent definition.
    */
-  private closeToolRuntime(key: string): void {
+  private registerAppTools(
+    kind: AgentType,
+    id: string,
+    engine: PiEngineHandle,
+    cwd: string,
+  ): void {
+    this.appToolBindings.set(
+      id,
+      registerAppToolSession(
+        id,
+        piAppToolBinding(
+          withoutDeniedTools(AGENT_TYPES[kind].tools(), sessionAgent(id)),
+          {
+            session: () => piToolSessionFromHandle(kind, engine, cwd),
+            unavailableReason: (tool) =>
+              (this.sessionModes.get(id) ?? "build") === "plan" &&
+              !isPlanModeToolAllowed(tool)
+                ? planModeToolUnavailableMessage(tool.name)
+                : undefined,
+            onExecute: (name) => engine.markToolUsed(name),
+          },
+        ),
+      ),
+    );
+  }
+
+  /** Dispose a session's app-tool binding (no-op when none). */
+  private closeAppTools(key: string): void {
     this.appToolBindings.get(key)?.();
     this.appToolBindings.delete(key);
-    const runtime = this.toolRuntimes.get(key);
-    if (!runtime) return;
-    this.toolRuntimes.delete(key);
-    runtime.dispose();
   }
 
   /**

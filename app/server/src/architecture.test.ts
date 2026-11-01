@@ -190,7 +190,7 @@ test("the background-work provider-folder guard rejects every import form", () =
 });
 
 test("pi provider-native background tools use the shared native-tool capability predicate", () => {
-  const source = readFileSync(join(SRC_ROOT, "piSdk/piStore.ts"), "utf8");
+  const source = readFileSync(join(SRC_ROOT, "piSdk/piEngineHost.ts"), "utf8");
   assert.match(
     source,
     /hasNativeTools\(kind\)[\s\S]{0,120}createPiBackgroundTools/,

@@ -170,7 +170,7 @@ export interface LiveSession extends HarnessDriver, RuntimePromptDriver {
   readonly sessionMode: SessionMode;
   /** The account the session runs on, when the engine recorded it. */
   readonly credentialProfileId: string | undefined;
-  setMode(mode: SessionMode): void;
+  setMode(mode: SessionMode): void | Promise<void>;
   /** Send a message to everyone viewing this session. */
   broadcast(message: ServerMessage): void;
   /** The title the session shows as, when it has one yet. */
