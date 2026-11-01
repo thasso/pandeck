@@ -154,6 +154,23 @@ export function computePromptConditions(
 }
 
 /**
+ * The conditions a session starting now freezes, before it has an id: `preset`
+ * (a fork's parent record) or computed from `evidence`, under the persona's
+ * memory rule — what {@link sessionPromptConditions} answers for a session
+ * without a record.
+ */
+export function startPromptConditions(
+  agentType: AgentType,
+  evidence?: SessionPromptEvidence,
+  preset?: PromptConditions,
+): PromptConditions {
+  return withPersonaMemoryRule(
+    preset ?? computePromptConditions(agentType, evidence),
+    agentType,
+  );
+}
+
+/**
  * This session's conditions: the frozen record if it has one, otherwise
  * computed from `evidence` and frozen now.
  *

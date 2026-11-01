@@ -28,13 +28,16 @@ import type {
   HostedEngineFactory,
   HostedEngineItem,
 } from "../workerProtocol/engineMethods.ts";
-import { findModel } from "./models.ts";
 import type {
   PiEngineHandle,
   PiEngineModel,
   PiTranscriptView,
 } from "./piEngine.ts";
-import { openPiEngine, type PiEngineOpenSpec } from "./piEngineHost.ts";
+import {
+  openPiEngine,
+  type PiEngineOpenSpec,
+  type PiModelPort,
+} from "./piEngineHost.ts";
 
 /** A `steerOnly` submit found the engine idle: nothing was sent to pi. */
 export const STEER_NOT_TAKEN = "steer_not_taken";
@@ -106,14 +109,15 @@ const hosted = new Map<
 >();
 
 /**
- * Serve `local` as a hosted engine. `engineId` registers it for the test
- * seams until it is disposed.
+ * Serve `local` as a hosted engine. `findModel` resolves a `setModel`'s
+ * model; `engineId` registers it for the test seams until it is disposed.
  */
 export function hostPiEngine(
   local: PiEngineHandle,
   info: unknown,
-  engineId?: number,
+  options: { findModel: PiModelPort["find"]; engineId?: number },
 ): HostedEngine {
+  const { engineId } = options;
   let listener: ((item: HostedEngineItem) => void) | undefined;
   let sentState: string | undefined;
   let sentHeader: PiTranscriptHeader | undefined;
@@ -236,7 +240,7 @@ export function hostPiEngine(
       }
       case "setModel": {
         const { provider, id } = args[0] as { provider: string; id: string };
-        const model = findModel(provider, id);
+        const model = options.findModel(provider, id);
         if (!model)
           throw new Error(`Model ${provider}/${id} is not available.`);
         return local.setModel(model);
@@ -325,24 +329,35 @@ export function hostPiEngine(
   };
 }
 
-/** The `"pi"` factory the in-process Worker hosts. */
-export const piHostedEngineFactory: HostedEngineFactory = async (
-  spec,
-  host,
-) => {
-  const { engine, info } = await openPiEngine(spec as PiEngineOpenSpec, {
-    childEnv: host.childEnv,
-    appToolExecutor: (sessionId) => (tool, args, ctx) =>
-      host.callAppTool(
-        { sessionId, tool, toolCallId: ctx.toolCallId, args },
-        {
-          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-          ...(ctx.progress !== undefined ? { onProgress: ctx.progress } : {}),
-        },
-      ),
-  });
-  return hostPiEngine(engine, info, host.engineId);
-};
+/**
+ * The `"pi"` factory a Worker hosts, reaching pi's model runtime through
+ * `models`; the composition root injects the server's (`piStore.ts`).
+ */
+export function createPiHostedEngineFactory({
+  models,
+}: {
+  models: PiModelPort;
+}): HostedEngineFactory {
+  return async (spec, host) => {
+    const { engine, info } = await openPiEngine(spec as PiEngineOpenSpec, {
+      childEnv: host.childEnv,
+      appToolExecutor: (sessionId) => (tool, args, ctx) =>
+        host.callAppTool(
+          { sessionId, tool, toolCallId: ctx.toolCallId, args },
+          {
+            ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+            ...(ctx.progress !== undefined ? { onProgress: ctx.progress } : {}),
+          },
+        ),
+      models,
+      persistOutput: (request) => host.persistOutput(request),
+    });
+    return hostPiEngine(engine, info, {
+      findModel: models.find,
+      engineId: host.engineId,
+    });
+  };
+}
 
 /**
  * The local handle a hosted engine drives, while the in-process Worker holds

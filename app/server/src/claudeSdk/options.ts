@@ -30,8 +30,8 @@ import {
 import {
   agentPromptLayer,
   deniesNative,
-  type SessionAgent,
-} from "../agents/sessionAgent.ts";
+} from "../agents/agentDefinitionPolicy.ts";
+import type { SessionAgent } from "../agents/sessionAgent.ts";
 import type { PromptAssetOptions } from "../promptAssets.ts";
 import type { PromptConditions } from "../promptConditions.ts";
 import type { ClaudeSdkOptions } from "./sdkSeam.ts";

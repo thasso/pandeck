@@ -51,6 +51,7 @@ await import("../hub.ts");
 const { Connection } = await import("../connection.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { AGENT_TYPES } = await import("../agentTypes.ts");
+const { agentPromptLayer } = await import("../agents/agentDefinitionPolicy.ts");
 const { piStore } = await import("./piStore.ts");
 const { openPiEngine } = await import("./piEngineHost.ts");
 const { nativePiSessionForTests, piToolActivationForTests } =
@@ -58,13 +59,24 @@ const { nativePiSessionForTests, piToolActivationForTests } =
 const { readSessionHeaderId } = await import("./sessionOpen.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 const { findModelForProfile } = await import("./models.ts");
+const { serverPiModelPort } = await import("./piModelPort.ts");
+const { piPersonaOptions, resolvePiEngineStart } =
+  await import("./piEngineStart.ts");
+const { SKILLS_LIBRARY_DIR } = await import("../config.ts");
+const { updateSettings } = await import("../settings.ts");
 const { childProcessEnv } = await import("../subprocessEnv.ts");
-const { appToolExecutorFor } = await import("../workers/inProcessWorker.ts");
+const { appToolExecutorFor, persistSessionOutput } =
+  await import("../workers/inProcessWorker.ts");
 
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-const ctx = { childEnv: childProcessEnv, appToolExecutor: appToolExecutorFor };
+const ctx = {
+  childEnv: childProcessEnv,
+  appToolExecutor: appToolExecutorFor,
+  models: serverPiModelPort,
+  persistOutput: persistSessionOutput,
+};
 
 /** A persisted pi transcript on the fixture model: one user turn, one reply. */
 function transcript(id: string): string {
@@ -346,6 +358,159 @@ test("a mode flip the engine refuses changes nothing and reaches the viewer as a
   }
 });
 
+test("the opener builds from the spec's start records and writes none of them", async () => {
+  const skillDir = join(SKILLS_LIBRARY_DIR, "host-skill");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(
+    join(skillDir, "SKILL.md"),
+    "---\nname: host-skill\ndescription: host skill\n---\n# host-skill\n",
+  );
+  const agent = {
+    name: "host-reviewer",
+    blob: "2".repeat(40),
+    persona: "developer" as const,
+    provider: "openai-compatible",
+    model: "chosen",
+    effort: "low" as const,
+    runtimeSource: "definition" as const,
+    denyTools: ["write"],
+    skills: ["host-skill"],
+    body: "Review the opener.",
+  };
+  const conditions = {
+    attachments: true,
+    slack: true,
+    google: false,
+    tempo: true,
+    knowledgeBase: true,
+    projectRegistryPointer: true,
+    memoryWrite: false,
+  };
+  const { engine, info } = await openPiEngine(
+    {
+      kind: "developer",
+      credentialProfileId: "default",
+      transcript: { type: "new", cwd: tmp },
+      start: { conditions, skillNames: ["host-skill"], agent },
+      persona: piPersonaOptions("developer", "default", conditions, agent),
+      mode: "build",
+    },
+    ctx,
+  );
+  try {
+    const id = info.sessionId;
+    assert.equal(sessionStore.getPromptConditions(id), undefined);
+    assert.equal(sessionStore.getSkills(id), undefined);
+    assert.equal(sessionStore.getAgent(id), undefined);
+    const native = nativePiSessionForTests(engine);
+    // The developer sections the spec's conditions add, then the agent layer;
+    // not the persona those conditions switched off would build.
+    const prompt = native.systemPrompt;
+    const layered = (persona: string) =>
+      `${persona}\n\n${agentPromptLayer(agent)}`;
+    assert.ok(
+      prompt.includes(
+        layered(AGENT_TYPES.developer.systemPrompt({ conditions })),
+      ),
+    );
+    assert.ok(
+      !prompt.includes(
+        layered(
+          AGENT_TYPES.developer.systemPrompt({
+            conditions: {
+              ...conditions,
+              knowledgeBase: false,
+              projectRegistryPointer: false,
+            },
+          }),
+        ),
+      ),
+    );
+    assert.ok(prompt.includes("host-skill"));
+    assert.equal(engine.model?.id, "chosen");
+    assert.ok(!native.getActiveToolNames().includes("write"));
+  } finally {
+    await engine.discard({});
+  }
+});
+
+test("the personal assistant's spec carries the profile suffix from settings at open, and a later change does not reach the open engine", async () => {
+  updateSettings({
+    permanentAssistant: {
+      name: "Host Fixture",
+      additionalInstructions: "Answer in one line.",
+    } as never,
+  });
+  const started = await resolvePiEngineStart({
+    kind: "personal-assistant",
+    credentialProfileId: "default",
+  });
+  const suffix =
+    '## Personal profile instructions\n\nYour name is "Host Fixture". Use this name when identifying yourself or when the user asks your name.\n\nAnswer in one line.';
+  const persona = started.persona.systemPrompt;
+  assert.ok("replace" in persona && persona.replace.endsWith(suffix));
+  const { engine } = await openPiEngine(
+    {
+      kind: "personal-assistant",
+      credentialProfileId: "default",
+      transcript: { type: "new", cwd: tmp },
+      model: { provider: "openai-compatible", id: "chosen" },
+      ...started,
+      mode: "build",
+    },
+    ctx,
+  );
+  try {
+    const native = nativePiSessionForTests(engine);
+    const before = native.systemPrompt;
+    assert.ok(before.includes(suffix));
+    updateSettings({
+      permanentAssistant: {
+        name: "Renamed",
+        additionalInstructions: "",
+      } as never,
+    });
+    // pi rebuilds its prompt on every active-set change, from what it loaded.
+    native.setActiveToolsByName(native.getActiveToolNames());
+    assert.equal(native.systemPrompt, before);
+  } finally {
+    await engine.discard({});
+    updateSettings({
+      permanentAssistant: {
+        name: "Personal Assistant",
+        additionalInstructions: "",
+      } as never,
+    });
+  }
+});
+
+test("an open spec's compaction window is installed with no session record behind it", async () => {
+  const id = "host-compaction-window";
+  const file = transcript(id);
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  const { engine } = await openPiEngine(
+    {
+      kind: "developer",
+      credentialProfileId: "default",
+      transcript: { type: "open", file, expectedId: id, cwd: tmp },
+      ...(await resolvePiEngineStart({
+        kind: "developer",
+        credentialProfileId: "default",
+        knownId: id,
+      })),
+      compactionWindow: 60_000,
+      mode: "build",
+    },
+    ctx,
+  );
+  try {
+    assert.equal(engine.compactionWindowStatus().live.appliedTokens, 60_000);
+    assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  } finally {
+    await engine.discard({});
+  }
+});
+
 test("a staged engine committed under Plan activates no edit or write, and its local gated tools deny before they run", async () => {
   const id = "host-staged-plan";
   const file = transcript(id);
@@ -355,6 +520,11 @@ test("a staged engine committed under Plan activates no edit or write, and its l
       credentialProfileId: "default",
       transcript: { type: "open", file, expectedId: id, cwd: tmp },
       model: { provider: "openai-compatible", id: "chosen" },
+      ...(await resolvePiEngineStart({
+        kind: "developer",
+        credentialProfileId: "default",
+        knownId: id,
+      })),
       mode: "build",
       staged: true,
     },

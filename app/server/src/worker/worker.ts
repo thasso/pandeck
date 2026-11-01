@@ -98,6 +98,7 @@ export function startWorker(options: {
     factories: options.engines,
     childEnv: options.childEnv,
     callAppTool: appTools.call,
+    persistOutput: sessionHooks.persistOutput,
     deliver: (payload) => connection.request(ENGINE_METHODS.events, payload),
   });
   const handlers = Object.fromEntries(

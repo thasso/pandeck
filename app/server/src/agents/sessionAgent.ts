@@ -16,12 +16,7 @@ import {
   type ThinkingLevel,
 } from "@assistant/shared";
 import { sessionStore } from "../db/sessionStore.ts";
-import {
-  AGENT_NATIVE_TOOLS,
-  AGENT_PERSONAS,
-  type AgentNativeTool,
-  type AgentPersona,
-} from "./agentLibrary.ts";
+import { AGENT_PERSONAS, type AgentPersona } from "./agentLibrary.ts";
 
 /** One definition as a session froze it at spawn. */
 export interface SessionAgent {
@@ -135,38 +130,6 @@ export function freezeSessionAgent(
       `The agent definition for session ${sessionId} could not be stored.`,
     );
   return parseSessionAgent(sessionId, stored);
-}
-
-/** The system-prompt layer the definition's body becomes, after the persona's. */
-export function agentPromptLayer(agent: SessionAgent): string {
-  // The persona's own layers may still name a tool the definition denies.
-  const denied =
-    agent.denyTools.length > 0
-      ? `\n\nThis session does not have these tools, whatever the instructions above say: ${agent.denyTools.join(", ")}.`
-      : "";
-  return `## Agent definition: ${agent.name}\n\nYou were started as the "${agent.name}" agent. These instructions define your role in this session:\n\n${agent.body}${denied}`;
-}
-
-/** Whether the definition denies one of the harness-neutral native tools. */
-export function deniesNative(
-  agent: SessionAgent | undefined,
-  native: AgentNativeTool,
-): boolean {
-  return agent?.denyTools.includes(native) ?? false;
-}
-
-/** The persona's app tools without the ones the definition denies. */
-export function withoutDeniedTools<T extends { name: string }>(
-  tools: T[],
-  agent: SessionAgent | undefined,
-): T[] {
-  if (!agent || agent.denyTools.length === 0) return tools;
-  const denied = new Set(
-    agent.denyTools.filter(
-      (name) => !(AGENT_NATIVE_TOOLS as readonly string[]).includes(name),
-    ),
-  );
-  return tools.filter((tool) => !denied.has(tool.name));
 }
 
 /** The frozen definition for display, where an unreadable row reads as none. */

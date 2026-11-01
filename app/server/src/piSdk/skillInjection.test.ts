@@ -12,7 +12,7 @@ process.env.DATA_DIR = join(tmp, "data");
 const { SKILLS_LIBRARY_DIR, SKILLS_RUNTIME_DIR } = await import("../config.ts");
 const { SkillRuntimeMaterializationError } =
   await import("../skills/skillRuntimeMaterializer.ts");
-const { buildAgentOptions } = await import("./options.ts");
+const { buildAgentOptions } = await import("./piEngineStart.ts");
 
 async function writeSkill(
   root: string,

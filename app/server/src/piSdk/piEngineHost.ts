@@ -9,14 +9,16 @@
  * worker protocol unchanged. The {@link PiEngineHostContext} is host wiring
  * and never crosses: each host supplies its own child env and app-tool route.
  *
- * Some of what the opener reads still lives in the server process (frozen
- * prompt conditions and agent, skills, options, the model registry, the
- * compaction-window record, background work); `docs/workers.md` lists them
- * and `harnessBoundary.test.ts` pins them.
+ * The server resolves everything fixed at open into the spec
+ * (`piEngineStart.ts`) and reaches the model runtime through the host's
+ * {@link PiModelPort}. What the opener still reads in the server process
+ * (skill materialization, background work) `docs/workers.md` lists and
+ * `harnessBoundary.test.ts` pins.
  */
 import {
   type AgentSession,
   createAgentSession,
+  type ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -36,9 +38,11 @@ import {
   type ToolSession,
 } from "../mcp/tool.ts";
 import {
-  buildAgentOptions,
+  buildPiEngineOptions,
   PI_PLAN_RESTRICTED_BUILTIN_TOOLS,
   sessionDirFor,
+  type PiOutputPersist,
+  type PiPersonaOptions,
 } from "./options.ts";
 import { toPiToolDefinitions } from "./agentToolAdapter.ts";
 import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
@@ -50,31 +54,21 @@ import {
   loadedToolNamesFromMessages,
   mergedActiveToolNames,
 } from "./toolActivation.ts";
-import { findModelForProfile, modelRuntimeForProfile } from "./models.ts";
 import {
   canonicalPiSessionPath,
   migrateFileToCanonical,
 } from "../sessionStorage.ts";
 import { FORK_ORIGIN_CUSTOM_TYPE } from "./forkOrigin.ts";
 import { openExistingSession } from "./sessionOpen.ts";
-import { sessionStore } from "../db/sessionStore.ts";
-import {
-  deniesNative,
-  freezeSessionAgent,
-  sessionAgent,
-  type SessionAgent,
-} from "../agents/sessionAgent.ts";
-import {
-  sessionPromptConditions,
-  type PromptConditions,
-  type SessionPromptEvidence,
-} from "../promptConditions.ts";
+import { deniesNative } from "../agents/agentDefinitionPolicy.ts";
+import type { SessionAgent } from "../agents/sessionAgent.ts";
+import type { PromptConditions } from "../promptConditions.ts";
 import {
   localPiEngine,
   type PiEngineHandle,
+  type PiEngineModel,
   type PiEngineTools,
 } from "./piEngine.ts";
-import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
 
 /** Which transcript an engine runs on. */
@@ -102,18 +96,16 @@ type PiEngineTranscript =
     };
 
 /**
- * How a pi session decides its frozen prompt conditions: from what it starts
- * with (`evidence`), or by inheriting a parent's record (a fork). Neither is
- * consulted once the session has frozen conditions of its own.
+ * The records a session starts with (`piEngineStart.ts`): a reopen's stored
+ * rows, or what a new session or fork freezes under the id its open mints.
+ * The engine builds from exactly these and freezes nothing itself.
  */
-interface PiPromptStart {
-  evidence?: SessionPromptEvidence;
-  inherit?: PromptConditions;
-  inheritSkills?: string[];
-  /**
-   * The agent definition it starts as: a spawn's, or a fork's parent's. Frozen
-   * inside creation, where pi mints the id; a reopen reads the stored row.
-   */
+export interface PiEngineStartRecords {
+  /** The frozen conditional prompt sections. */
+  conditions: PromptConditions;
+  /** Sorted library skill names; empty for a non-coding persona, which stores none. */
+  skillNames: string[];
+  /** The agent definition it runs as: a spawn's, a fork's parent's, or a reopen's row. */
   agent?: SessionAgent;
 }
 
@@ -128,7 +120,11 @@ export interface PiEngineOpenSpec {
   /** Resolved in the account's own registry; pi's model objects never travel. */
   model?: { provider: string; id: string };
   thinkingLevel?: ThinkingLevel;
-  promptStart?: PiPromptStart;
+  start: PiEngineStartRecords;
+  /** The persona's prompt and tool policy, computed by the server. */
+  persona: PiPersonaOptions;
+  /** The session's stored compaction window: only a reopen has one. */
+  compactionWindow?: number;
   /** The Build/Plan mode the engine's tools start under, resolved by the server. */
   mode: SessionMode;
   /** An account reopen: its tools register only once its swap commits. */
@@ -146,22 +142,38 @@ interface PiEngineOpenInfo {
   notices: Array<{ severity: NoticeSeverity; message: string }>;
 }
 
+/**
+ * How the engine reaches pi's model runtime and registry, per credential
+ * profile. The in-process Worker's host wires the server's own runtimes
+ * (`models.ts`: one cached runtime and refresher per profile), so no
+ * credential crosses the wire; it is the phase-3 credential gateway's seam.
+ */
+export interface PiModelPort {
+  runtime(profileId: string): Promise<ModelRuntime>;
+  findForProfile(
+    profileId: string,
+    provider: string,
+    id: string,
+  ): Promise<PiEngineModel | undefined>;
+  /** The default registry's model, which a hosted `setModel` resolves in. */
+  find(provider: string, id: string): PiEngineModel | undefined;
+}
+
 /** Host wiring, never on the wire: each host supplies its own. */
 export interface PiEngineHostContext {
   /** The base environment of the engine's shell children. */
   childEnv(): NodeJS.ProcessEnv;
   /** How the session's app tools reach the server. */
   appToolExecutor(sessionId: string): AppToolExecutor;
+  models: PiModelPort;
+  /** How an elided native result's full output is persisted by the server. */
+  persistOutput: PiOutputPersist;
 }
 
 export interface PiEngineOpened {
   engine: PiEngineHandle;
   info: PiEngineOpenInfo;
 }
-
-type PiResolvedModel = NonNullable<
-  Awaited<ReturnType<typeof findModelForProfile>>
->;
 
 /** What starting pi on an opened transcript built. */
 interface PiEngineStarted {
@@ -178,7 +190,7 @@ interface PiEngineStarted {
 export type PiEngineStart = (
   spec: PiEngineOpenSpec,
   ctx: PiEngineHostContext,
-  opened: { sm: SessionManager; cwd: string; model?: PiResolvedModel },
+  opened: { sm: SessionManager; cwd: string; model?: PiEngineModel },
 ) => Promise<PiEngineStarted>;
 
 /** The model and thinking level a branch last selected, if any. */
@@ -353,9 +365,9 @@ export async function openPiEngine(
   ctx: PiEngineHostContext,
   start: PiEngineStart = startPiSession,
 ): Promise<PiEngineOpened> {
-  let model: PiResolvedModel | undefined;
+  let model: PiEngineModel | undefined;
   if (spec.model) {
-    model = await findModelForProfile(
+    model = await ctx.models.findForProfile(
       spec.credentialProfileId,
       spec.model.provider,
       spec.model.id,
@@ -394,32 +406,15 @@ export async function openPiEngine(
 
 /** Build pi's agent session, tools and policy on an opened transcript. */
 const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
-  const { kind, credentialProfileId, promptStart } = spec;
+  const { kind, credentialProfileId } = spec;
   const staged = spec.staged === true;
-  // Session-START prompt conditions (Task 287). pi rebuilds the system prompt
-  // on every active-tool change and on every reopen, so this reads the frozen
-  // record whenever the session already has one — creation is the only call
-  // that can decide it.
-  const sessionId = safeSessionId(sm);
-  const conditions = sessionId
-    ? sessionPromptConditions(
-        sessionId,
-        kind,
-        promptStart?.evidence,
-        promptStart?.inherit,
-      )
-    : undefined;
-  // The agent definition, when it has one: frozen from the start's, else
-  // the stored row a reopen reads. Before the skills, which it adds to.
-  if (promptStart?.agent && !sessionId)
+  // The session-start records arrive resolved (`piEngineStart.ts`); the server
+  // freezes them under the id pi mints here, so an agent needs one.
+  const { agent } = spec.start;
+  if (agent && !safeSessionId(sm))
     throw new Error(
-      `Agent "${promptStart.agent.name}" cannot start: pi gave the session no id to freeze it under.`,
+      `Agent "${agent.name}" cannot start: pi gave the session no id to freeze it under.`,
     );
-  const agent = !sessionId
-    ? undefined
-    : promptStart?.agent
-      ? freezeSessionAgent(sessionId, promptStart.agent)
-      : sessionAgent(sessionId);
   // pi restores a session's model from its messages; one with none yet (a
   // fork before the first prompt, a spawn reopened before it ran) would get
   // pi's default model. An agent session never runs on a model it did not
@@ -434,7 +429,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
     const selected = branchRuntime(sm);
     const provider = selected.provider ?? agent.provider;
     const modelId = selected.modelId ?? agent.model;
-    startModel = await findModelForProfile(
+    startModel = await ctx.models.findForProfile(
       credentialProfileId,
       provider,
       modelId,
@@ -445,27 +440,14 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
       );
     startThinkingLevel ??= selected.thinkingLevel ?? agent.effort;
   }
-  const skillPreset =
-    promptStart?.inheritSkills ??
-    (sessionId && promptStart?.agent
-      ? await sessionSkillPreset(
-          sessionId,
-          kind,
-          undefined,
-          promptStart.agent.skills,
-        )
-      : undefined);
-  const frozenSkillNames = sessionId
-    ? await sessionSkills(sessionId, kind, skillPreset)
-    : [];
-  const opts = await buildAgentOptions(
+  const opts = await buildPiEngineOptions({
     kind,
     cwd,
-    credentialProfileId,
-    conditions,
-    frozenSkillNames,
+    persona: spec.persona,
+    skillNames: spec.start.skillNames,
     agent,
-  );
+    persistOutput: ctx.persistOutput,
+  });
   const activeSessionId = sm.getSessionId();
   // The engine's own Build/Plan copy; the server keeps it in step.
   const mode = { current: spec.mode };
@@ -578,7 +560,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
     ({ session, extensionsResult, modelFallbackMessage } =
       await createAgentSession({
         cwd,
-        modelRuntime: await modelRuntimeForProfile(credentialProfileId),
+        modelRuntime: await ctx.models.runtime(credentialProfileId),
         sessionManager: sm,
         resourceLoader: opts.resourceLoader,
         ...(opts.noTools !== undefined ? { noTools: opts.noTools } : {}),
@@ -604,10 +586,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
           : `Cannot switch accounts: ${modelFallbackMessage}. The session must keep its model.`,
       );
     // Before any prompt: the controller must observe every settings rebuild.
-    installCompactionWindow(
-      session,
-      sessionStore.get(session.sessionId)?.compactionWindow,
-    );
+    installCompactionWindow(session, spec.compactionWindow);
     installToolPayloadProbe(session);
     installDynamicToolTurnRefresh(session);
     // Initial active set: eager + find_tools + everything the transcript

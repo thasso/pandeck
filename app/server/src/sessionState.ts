@@ -27,8 +27,8 @@ import { activeSkillsForSession } from "./sessionSkills.ts";
 import {
   displayedSessionAgent,
   sessionAgentSummary,
-  withoutDeniedTools,
 } from "./agents/sessionAgent.ts";
+import { withoutDeniedTools } from "./agents/agentDefinitionPolicy.ts";
 import { skillInvocationTrail } from "./skills/skillInvocations.ts";
 import {
   findOriginTask,

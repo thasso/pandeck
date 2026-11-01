@@ -78,6 +78,11 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
+        "freezeStart discardRefused",
+        "Freeze a new or forked session's start records, or undo its refused open, before track publishes anything.",
+      ),
+      group(
+        "nonprojected",
         "applySessionMode registerAppTools closeAppTools",
         "Policy mode and tool/browser resources are absent from LiveListInfo; map removal owns eviction reporting.",
       ),

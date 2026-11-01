@@ -165,19 +165,15 @@ const PI_SESSION_CONSTRUCTIONS: Record<string, string[]> = {
 const W9C_INVENTORY = "W9c inventory";
 const ENGINE_OWN = "pure or engine-own";
 const PI_ENGINE_HOST_IMPORTS: Record<string, string> = {
-  "../agents/sessionAgent.ts": W9C_INVENTORY,
+  "../agents/agentDefinitionPolicy.ts": ENGINE_OWN,
   "../config.ts": ENGINE_OWN,
-  "../db/sessionStore.ts": W9C_INVENTORY,
   "../mcp/tool.ts": ENGINE_OWN,
-  "../promptConditions.ts": W9C_INVENTORY,
-  "../sessionSkills.ts": W9C_INVENTORY,
   "../sessionStorage.ts": ENGINE_OWN,
   "../tools/toolPolicy.ts": ENGINE_OWN,
   "./agentToolAdapter.ts": ENGINE_OWN,
   "./backgroundWorkBackend.ts": W9C_INVENTORY,
-  "./compactionWindow.ts": W9C_INVENTORY,
+  "./compactionWindow.ts": ENGINE_OWN,
   "./forkOrigin.ts": ENGINE_OWN,
-  "./models.ts": W9C_INVENTORY,
   "./options.ts": W9C_INVENTORY,
   "./piEngine.ts": ENGINE_OWN,
   "./sessionOpen.ts": ENGINE_OWN,

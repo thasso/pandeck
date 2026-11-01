@@ -24,10 +24,10 @@ import {
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";
 import { agentToolsFor, eagerToolNamesFor } from "../tools/catalog.ts";
 import {
-  buildAgentOptions,
   PI_PLAN_RESTRICTED_BUILTIN_TOOLS,
   PI_SEARCH_BUILTIN_TOOLS,
 } from "./options.ts";
+import { buildAgentOptions } from "./piEngineStart.ts";
 
 const CTX: ToolCallContext = {
   toolCallId: "act-1",

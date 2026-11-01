@@ -40,6 +40,20 @@ export async function sessionSkillPreset(
 ): Promise<string[] | undefined> {
   if (!isCodingAgentType(agentType)) return undefined;
   if (deps.getFrozen(sessionId) !== undefined) return undefined;
+  return startSessionSkillNames(agentType, agentSkills, deps);
+}
+
+/**
+ * The names a coding session starting now freezes, before it has an id: the
+ * globally enabled skills plus `agentSkills`, a spawned definition's. Empty
+ * for a non-coding persona, which never freezes a row.
+ */
+export async function startSessionSkillNames(
+  agentType: AgentType,
+  agentSkills: readonly string[] = [],
+  deps: SessionSkillsDeps = REAL_DEPS,
+): Promise<string[]> {
+  if (!isCodingAgentType(agentType)) return [];
   return normalizePreset([
     ...(await resolveSessionSkillNames(deps)),
     ...agentSkills,

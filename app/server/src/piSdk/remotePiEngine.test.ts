@@ -28,8 +28,12 @@ profiles.setCredentialProfileEnabled(profiles.DEFAULT_OPENAI_PROFILE_ID, false);
 const { piStore } = await import("./piStore.ts");
 const { nativePiSessionForTests, piToolActivationForTests } =
   await import("./piEngine.ts");
-const { hostedPiEngine, piHostedEngineFactory } =
+const { hostedPiEngine, createPiHostedEngineFactory } =
   await import("./piEngineHosted.ts");
+const { serverPiModelPort } = await import("./piModelPort.ts");
+const piHostedEngineFactory = createPiHostedEngineFactory({
+  models: serverPiModelPort,
+});
 const { UNUSED_TOOL_PRUNE_IDLE_MS } = await import("./toolActivation.ts");
 const { piModelForAccount } = await import("../harnesses/models.ts");
 const { createSession } = await import("../harnesses/create.ts");

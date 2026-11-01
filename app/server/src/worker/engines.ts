@@ -71,6 +71,7 @@ export function engineHandlers(options: {
   factories: EngineFactories | undefined;
   childEnv: () => NodeJS.ProcessEnv;
   callAppTool: AppToolCaller;
+  persistOutput: HostedEngineHost["persistOutput"];
   deliver: (payload: Payload) => Promise<Payload>;
 }): {
   handlers: MethodHandlers;
@@ -122,6 +123,7 @@ export function engineHandlers(options: {
         await new Promise<void>((resume) => entry.drained.push(resume));
       return options.callAppTool(request, callOptions);
     },
+    persistOutput: options.persistOutput,
   });
 
   const handlers: MethodHandlers = {
