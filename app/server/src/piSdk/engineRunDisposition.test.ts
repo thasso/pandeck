@@ -5,7 +5,9 @@
  *
  * A steer the engine ran as a prompt (it found itself idle) is a new turn: the
  * steering caller does not wait for that turn, and its failure fails it as a
- * new run rather than as a queued steer. A continuation whose transcript write
+ * new run rather than as a queued steer. A steer the session itself sent as a
+ * prompt, because pi was between streams of a running turn, stays a steer of
+ * that turn even though the engine reports it "started". A continuation whose transcript write
  * failed started nothing: the adapter rejects, and the session neither marks a
  * run nor manufactures a failed one.
  */
@@ -46,7 +48,8 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 /**
  * A live session over a scripted engine: reads come from a fake pi session,
  * whose events the test emits; `submit` and `continueFailedTurn` answer the
- * scripted run.
+ * scripted run. Without them the local engine drives the fake pi's own
+ * `prompt` and `steer`.
  */
 function harness(
   sessionId: string,
@@ -54,6 +57,8 @@ function harness(
     streaming: boolean;
     submit?: PiEngineHandle["submit"];
     continueFailedTurn?: PiEngineHandle["continueFailedTurn"];
+    prompt?: (text: string) => Promise<void>;
+    steer?: (text: string) => Promise<void>;
   },
 ) {
   let emit: ((event: unknown) => void) | undefined;
@@ -77,8 +82,8 @@ function harness(
       cost: 0,
       contextSize: 0,
     }),
-    steer: () => Promise.resolve(),
-    prompt: () => Promise.resolve(),
+    steer: options.steer ?? (() => Promise.resolve()),
+    prompt: options.prompt ?? (() => Promise.resolve()),
     dispose: () => {},
   };
   const base = localPiEngine(fake as never);
@@ -220,6 +225,76 @@ test("a steer the engine took as a steer stays a steer", async () => {
   settled.resolve();
   await pending;
   assert.equal(h.live.isRunning, true, "the joined turn keeps running");
+  h.live.dispose();
+});
+
+test("a steer sent as a prompt because pi was not streaming stays a steer of the running turn", async () => {
+  const turn = deferred<void>();
+  const steerRun = deferred<void>();
+  steerRun.promise.catch(() => {});
+  const prompts: string[] = [];
+  const steers: string[] = [];
+  const h = harness("pi-steer-not-streaming", {
+    // The session's own turn is running, but pi is between streams.
+    streaming: false,
+    prompt: (text) => {
+      prompts.push(text);
+      return prompts.length === 1 ? turn.promise : steerRun.promise;
+    },
+    steer: (text) => {
+      steers.push(text);
+      return Promise.resolve();
+    },
+  });
+
+  const first = h.adapter.prompt("Fix the build.");
+  first.catch(() => {});
+  h.emit({ type: "agent_start" });
+  assert.equal(h.live.isRunning, true);
+
+  let resolved = false;
+  const pending = h.adapter
+    .prompt("Also check the tests.", { steer: true })
+    .then(() => {
+      resolved = true;
+    });
+  pending.catch(() => {});
+  await tick();
+  // The local engine ran it as pi's prompt (`steer: false`) and reports it
+  // "started"; the session did not ask to steer, so it is no new turn.
+  assert.deepEqual(prompts, ["Fix the build.", "Also check the tests."]);
+  assert.deepEqual(steers, []);
+  assert.equal(
+    resolved,
+    false,
+    "the steering caller waits for pi's settlement",
+  );
+
+  steerRun.reject(new Error("provider down"));
+  await assert.rejects(pending, /provider down/);
+  await tick();
+  assert.equal(
+    errorNotices(h.seen).length,
+    1,
+    "the failure is a banner beside the running turn",
+  );
+  assert.equal(h.live.isRunning, true, "the running turn is not failed");
+  assert.ok(
+    !h.seen.some((m) => (m as { type: string }).type === "assistantEnd"),
+    "the running turn does not end",
+  );
+  assert.ok(!h.adapterEvents.includes("runFailing"));
+
+  // The drive completion the session waits on is still the running turn.
+  let admitted = false;
+  const dropped = h.live.dropEncryptedReasoning(() => {
+    admitted = true;
+  });
+  await tick();
+  assert.equal(admitted, false, "the session waits for the running turn's end");
+  turn.resolve();
+  await dropped;
+  assert.equal(admitted, true);
   h.live.dispose();
 });
 
