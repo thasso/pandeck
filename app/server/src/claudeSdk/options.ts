@@ -41,7 +41,7 @@ import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
 import {
   claudeChildEnvironment,
   type ClaudeProfileRuntime,
-} from "./childEnvironment.ts";
+} from "../claudeChildEnvironment.ts";
 import {
   claudeOutputPolicyHooks,
   type ClaudeQuerySessionHooks,

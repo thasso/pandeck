@@ -2,7 +2,9 @@
  * The Claude CLI's child environment, from the base its host hands children
  * and the non-secret half of a credential profile. A leaf with no server
  * state: the server resolves the profile (`claudeProfileRuntime`), and whoever
- * starts the CLI applies it over its own base.
+ * starts the CLI applies it over its own base. It lives outside `claudeSdk/`
+ * so `credentialProfiles.ts` composes from it without reaching an engine
+ * folder (`harnessBoundary.test.ts`).
  */
 
 /** What a Claude credential profile changes in the CLI's environment. */

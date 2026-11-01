@@ -10,7 +10,7 @@ import {
   type ReadWindowDecision,
 } from "../outputPolicy.ts";
 import { childProcessEnv } from "../subprocessEnv.ts";
-import { claudeChildEnvironment } from "./childEnvironment.ts";
+import { claudeChildEnvironment } from "../claudeChildEnvironment.ts";
 import type { SessionHooks } from "../workers/inProcessWorker.ts";
 
 const POLICY_TOOLS = new Set(["Read", "Bash", "Grep", "Glob"]);

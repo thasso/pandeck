@@ -18,7 +18,7 @@ import { childProcessEnv } from "./subprocessEnv.ts";
 import {
   claudeChildEnvironment,
   type ClaudeProfileRuntime,
-} from "./claudeSdk/childEnvironment.ts";
+} from "./claudeChildEnvironment.ts";
 import {
   readAccountHealth,
   reportAccountLoginCompleted,
