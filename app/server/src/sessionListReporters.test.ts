@@ -348,6 +348,7 @@ const CLASSIFIED: Record<
       handlingCounts: "read",
       interruptedRefs: "read",
       dismissRefs: "projected-write",
+      dismissInterrupted: "projected-write",
       protectedArtifactIds: "read",
       list: "read",
       deleteSession: "projected-write",

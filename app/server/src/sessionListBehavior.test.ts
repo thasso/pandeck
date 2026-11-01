@@ -346,7 +346,11 @@ test("outbox phase writers preserve or change the independently built public han
     () => outbox.settleAttempt(a, "attempt3", "stopped"),
     [a],
   );
-  outbox.dismissRefs(a, [{ ...item, attemptId: "attempt3" }]);
+  await check(
+    "outbox.dismissInterrupted",
+    () => assert.equal(outbox.dismissInterrupted(a), 1),
+    [a],
+  );
   save();
   outbox.reserve(a, "attempt4", [item], "owed");
   await check(

@@ -597,8 +597,8 @@ a turn that fails, is stopped or is cut off leaves it for the user
   It runs inside the synchronous listen callback, before anything this process
   prompts. Interrupted rows outlive every later restart, retained or not, and
   are never offered on their own.
-- **Recover and Dismiss.** Only the user moves an interrupted fact, and only the
-  ones they were shown: the session state carries the oldest 20 as identities
+- **Recover and Dismiss.** The user's commands move only the interrupted facts
+  they were shown: the session state carries the oldest 20 as identities
   (`unhandledBackgroundBatch`: job, owed revision, the attempt it was
   interrupted in), and both commands name them. A fact interrupted after the
   user looked, a newer attempt of the same fact, or one a Recover is carrying
@@ -631,6 +631,18 @@ a turn that fails, is stopped or is cut off leaves it for the user
   That turn's clean end retires its rows; any other end interrupts them again
   under the recovery's attempt. Nothing promises that the agent's side effects
   happen exactly once, or that the job's purpose was achieved.
+
+  One agent exception permits Dismiss, never Recover. The direct coordinator
+  that spawned a child and still owns its `coordinator` edge may call
+  `session_control` with `dismiss_background_updates` while the child is not
+  running. It dismisses every interrupted receipt at call time in one
+  transaction, not just the user's batch of 20. Idle, stopped and held children
+  are allowed; a user takeover revokes the authority and a hand-back restores
+  it. Dismissal leaves jobs, output and the Stop hold untouched, records nothing
+  as handled, and adds no child timeline note. The result reports dismissed and
+  remaining counts. A Recover's already-claimed receipts are not interrupted and
+  cannot be dismissed by this operation. Recover stays user-only.
+
 - **What the user sees.** `SessionState.unhandledBackgroundUpdates` and
   `unhandledBackgroundBatch` (sent with `backgroundUpdateQueue`) put a row on
   `PromptQueueLedge`: "N background updates were given to a turn that did not
@@ -641,7 +653,10 @@ a turn that fails, is stopped or is cut off leaves it for the user
   `unhandledBackgroundUpdates` and `handlingBackgroundUpdates` (claimed or bound
   rows whose outcome is not recorded), and either holds settlement and automatic
   archival (`settleBlockedReason`), so the only place to recover them never
-  disappears.
+  disappears. Worktree removal and retirement refusals name every blocking live
+  session by full id, quoted title up to 80 characters and reason. Each
+  unhandled-update blocker carries the prompt-queue Recover or Dismiss remedy
+  and the still-owning direct coordinator's `dismiss_background_updates` option.
 - **Sources stay readable.** The per-session artifact cap (80) never evicts the
   artifact being added (a background output is captured before the evidence
   naming it is recorded), the output of background work not yet terminal, or the

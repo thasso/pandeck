@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "vitest";
+import {
+  holdAutomaticTurns,
+  automaticTurnsHeld,
+} from "../../automaticTurnHold.ts";
+import { backgroundDeliveryOutboxStore as outbox } from "../../db/backgroundDeliveryOutboxStore.ts";
+import { backgroundWorkStore } from "../../db/backgroundWorkStore.ts";
+import { unhandledBackground } from "../../backgroundCompletionNotices.ts";
 import { peerPromptStore } from "../../db/peerPromptStore.ts";
 import { sessionStore } from "../../db/sessionStore.ts";
 import {
@@ -21,6 +28,43 @@ function seed(title: string, scope: "user" | "internal" = "user"): string {
   });
   sessions.push(id);
   return id;
+}
+
+/** A real job with an interrupted delivery receipt, not a queued prompt. */
+function interrupt(sessionId: string, count = 1) {
+  return Array.from({ length: count }, () => {
+    const item = backgroundWorkStore.reserveItem({
+      ownerSessionId: sessionId,
+      backend: "host-process",
+      kind: "shell",
+      label: "finished job",
+      sourceRequestId: `control-job-${sequence++}`,
+      lifetimeMs: 60_000,
+      settingsGeneration: 1,
+      bootEpoch: "test",
+      ownerLimit: 100,
+    });
+    const finished = backgroundWorkStore.terminalize({
+      itemId: item.id,
+      state: "completed",
+    });
+    interruptReceipt(sessionId, {
+      itemId: item.id,
+      revision: finished.revision,
+    });
+    return finished;
+  });
+}
+
+function interruptReceipt(
+  sessionId: string,
+  ref: { itemId: string; revision: number },
+) {
+  const attempt = `attempt-${sequence++}`;
+  outbox.save({ sessionId, ...ref, disposition: "wake", retained: false });
+  assert.ok(outbox.reserve(sessionId, attempt, [ref], "owed"));
+  outbox.bind(sessionId, attempt, attempt, "entry");
+  outbox.settleRun(sessionId, attempt, "failed");
 }
 
 function enqueue(senderSessionId: string, recipientSessionId: string) {
@@ -76,12 +120,17 @@ afterEach(() => {
 });
 
 describe("session_control tool", () => {
-  it("exposes the two operations and validates operation-specific fields", async () => {
+  it("exposes the operations and validates operation-specific fields", async () => {
     const schema = tool().parameters as {
       required: string[];
       properties: Record<string, unknown>;
     };
     assert.deepEqual(schema.required.sort(), ["operation", "targetSessionId"]);
+    assert.deepEqual((schema.properties.operation as { enum: string[] }).enum, [
+      "cancel_queued_prompts",
+      "stop",
+      "dismiss_background_updates",
+    ]);
     assert.deepEqual(Object.keys(schema.properties).sort(), [
       "clearQueue",
       "operation",
@@ -110,6 +159,130 @@ describe("session_control tool", () => {
         ),
       /clearQueue must be a boolean/,
     );
+  });
+
+  it("dismisses all 23 interrupted receipts without deleting jobs or recording handling", async () => {
+    const caller = seed("Caller");
+    const child = seed("Child");
+    sessionStore.linkSpawned(caller, child);
+    const jobs = interrupt(child, 23);
+    setSessionControlRuntimeForTests({
+      isRunning: () => false,
+      abort: () => assert.fail("no turn is started or stopped"),
+    });
+    const dismiss = () =>
+      tool().execute(
+        { operation: "dismiss_background_updates", targetSessionId: child },
+        context(caller),
+      );
+    assert.equal(unhandledBackground(child).count, 23);
+    const result = resultText(await dismiss());
+    assert.match(result, /Dismissed 23 unhandled background updates/);
+    assert.match(result, /not handled/);
+    assert.match(result, /0 remain/);
+    assert.equal(outbox.interruptedCount(child), 0);
+    assert.equal(unhandledBackground(child).count, 0);
+    for (const job of jobs)
+      assert.deepEqual(backgroundWorkStore.getItem(job.id), job);
+    assert.match(
+      resultText(await dismiss()),
+      /had no unhandled background updates.*Dismissed 0; 0 remain/,
+    );
+  });
+
+  it("refuses unauthorized dismissal without changing any interrupted receipts", async () => {
+    const caller = seed("Caller");
+    const other = seed("Other parent");
+    const internal = seed("Internal", "internal");
+    const deleted = seed("Deleted");
+    const unrelated = seed("Other parent's child");
+    sessionStore.linkSpawned(other, unrelated);
+    const taken = seed("Taken over");
+    sessionStore.linkSpawned(caller, taken, 123, "taken-over");
+    const child = seed("Child");
+    sessionStore.linkSpawned(caller, child);
+    const grandchild = seed("Grandchild");
+    sessionStore.linkSpawned(child, grandchild);
+    for (const target of [caller, deleted, unrelated, taken, child, grandchild])
+      interrupt(target);
+    // Internal sessions cannot own jobs, but the authority guard must also
+    // preserve any receipt already present for one.
+    interruptReceipt(internal, { itemId: "internal-receipt", revision: 1 });
+    sessionStore.remove(deleted);
+    setSessionControlRuntimeForTests({
+      isRunning: () => false,
+      abort: () => assert.fail("no abort"),
+    });
+    const cases = [
+      { target: caller, error: /current session/ },
+      { target: "unknown-session", error: /No session found/ },
+      { target: deleted, error: /deleted/ },
+      { target: internal, error: /not a user session/ },
+      { target: unrelated, error: /not spawned/ },
+      { target: taken, error: /no longer owned.*cannot be dismissed here/ },
+      { target: grandchild, error: /not spawned/ },
+      { target: child, error: /clearQueue is only valid/, clearQueue: false },
+    ];
+    const before = outbox.handlingCounts();
+    for (const { target, error, ...extra } of cases) {
+      await assert.rejects(
+        () =>
+          tool().execute(
+            {
+              operation: "dismiss_background_updates",
+              targetSessionId: target,
+              ...extra,
+            },
+            context(caller),
+          ),
+        error,
+      );
+      assert.deepEqual(outbox.handlingCounts(), before, target);
+    }
+    sessionStore.setSpawnedOwnership(taken, "coordinator");
+    assert.match(
+      resultText(
+        await tool().execute(
+          { operation: "dismiss_background_updates", targetSessionId: taken },
+          context(caller),
+        ),
+      ),
+      /Dismissed 1/,
+    );
+    assert.equal(outbox.interruptedCount(taken), 0);
+  });
+
+  it("refuses dismissal while running, then permits a stopped held child without lifting its hold", async () => {
+    const caller = seed("Caller");
+    const child = seed("Child");
+    sessionStore.linkSpawned(caller, child);
+    interrupt(child);
+    let running = true;
+    setSessionControlRuntimeForTests({
+      isRunning: () => running,
+      abort: () => {
+        running = false;
+        holdAutomaticTurns(child);
+      },
+    });
+    const dismiss = () =>
+      tool().execute(
+        { operation: "dismiss_background_updates", targetSessionId: child },
+        context(caller),
+      );
+    await assert.rejects(
+      dismiss,
+      /is running; dismiss its background updates once its turn ends/,
+    );
+    assert.equal(outbox.interruptedCount(child), 1);
+    await tool().execute(
+      { operation: "stop", targetSessionId: child },
+      context(caller),
+    );
+    assert.equal(automaticTurnsHeld(child), true);
+    assert.match(resultText(await dismiss()), /Dismissed 1.*0 remain/);
+    assert.equal(outbox.interruptedCount(child), 0);
+    assert.equal(automaticTurnsHeld(child), true);
   });
 
   it("cancels only the caller's own waiting prompts", async () => {

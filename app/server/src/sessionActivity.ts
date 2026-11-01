@@ -556,19 +556,45 @@ export async function sessionSettleBlockedReason(
  * settleSessionsForRemovedWorktree}), so both removal surfaces owe them this
  * predicate before any git side effect — settling a session that is mid-run,
  * or holding a queued prompt or an unanswered approval, would be settling work
- * that is not done. One list read for all of them; the first blocker answers.
+ * that is not done. One list read supplies every blocker in live-session order.
  */
 export interface BackgroundItemExemption {
   itemId: string;
   ownerSessionId: string;
 }
 
+interface WorktreeSettleBlocker {
+  sessionId: string;
+  title?: string;
+  reason: string;
+  unhandled: boolean;
+}
+
 export async function worktreeSettleBlockedReason(
   worktreeId: string,
   exempt?: BackgroundItemExemption,
 ): Promise<string | undefined> {
+  const blockers = await worktreeSettleBlockers(worktreeId, exempt);
+  if (blockers.length === 0) return undefined;
+  return blockers
+    .map(({ sessionId, title, reason, unhandled }) => {
+      const name = title?.trim().slice(0, 80);
+      const identity = `${name ? `${JSON.stringify(name)} ` : ""}${sessionId}`;
+      const remedy = unhandled
+        ? " Recover or Dismiss them in that session's prompt queue, or the coordinator that spawned it and still owns it can call session_control with dismiss_background_updates."
+        : "";
+      return `session ${identity}: ${reason}${remedy}`;
+    })
+    .join(" ");
+}
+
+async function worktreeSettleBlockers(
+  worktreeId: string,
+  exempt?: BackgroundItemExemption,
+): Promise<WorktreeSettleBlocker[]> {
   const live = liveSessionIdsForWorktree(worktreeId);
-  if (live.length === 0) return undefined;
+  const blockers: WorktreeSettleBlocker[] = [];
+  if (live.length === 0) return blockers;
   const { hub } = await import("./hub.ts");
   const rows = hub.listSessions({
     includeArchived: true,
@@ -612,7 +638,13 @@ export async function worktreeSettleBlockedReason(
             : {}),
         })
       : undefined;
-    if (blocked) return blocked;
+    if (blocked)
+      blockers.push({
+        sessionId,
+        title: row?.title,
+        reason: blocked,
+        unhandled: (row?.unhandledBackgroundUpdates ?? 0) > 0,
+      });
   }
-  return undefined;
+  return blockers;
 }
