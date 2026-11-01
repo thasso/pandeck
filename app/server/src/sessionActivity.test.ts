@@ -803,7 +803,9 @@ test("worktree refusals name every blocker in live-session order with safely bou
           ? {}
           : { title: `Blocker ${index}` }),
       isStreaming: index < 12 && index % 2 === 0,
-      unhandledBackgroundUpdates: index < 12 && index % 2 === 1 ? 3 : 0,
+      // Every blocker has interrupted updates, but only odd rows select that
+      // reason; even rows exercise higher-precedence running + interrupted.
+      unhandledBackgroundUpdates: index < 12 ? 3 : 0,
     } as import("./sessions.ts").InternalSessionListItem);
   }
   // Reverse the projection to prove ordering comes from the live-session list.
@@ -838,17 +840,17 @@ test("worktree refusals name every blocker in live-session order with safely bou
           ? undefined
           : fragment.indexOf("session ", position + id.length),
       );
-      if (row.unhandledBackgroundUpdates) {
-        assert.match(entry, /not handled/);
-        assert.match(entry, /Recover or Dismiss/);
-        assert.match(entry, /coordinator that spawned it and still owns it/);
-        assert.match(entry, /session_control with dismiss_background_updates/);
-      } else {
+      if (row.isStreaming) {
         assert.match(entry, /it is still running\./);
         assert.doesNotMatch(
           entry,
           /Recover or Dismiss|dismiss_background_updates/,
         );
+      } else {
+        assert.match(entry, /not handled/);
+        assert.match(entry, /Recover or Dismiss/);
+        assert.match(entry, /coordinator that spawned it and still owns it/);
+        assert.match(entry, /session_control with dismiss_background_updates/);
       }
     }
     // Running-only refusals carry no irrelevant recovery advice.

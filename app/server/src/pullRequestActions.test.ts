@@ -712,6 +712,7 @@ test("default cleanup uses projected blocker identities and remedies, excluding 
       title: "Card session",
       isStreaming: false,
       queuedWork: true,
+      unhandledBackgroundUpdates: 2,
     },
     {
       id: unhandled,
@@ -719,7 +720,7 @@ test("default cleanup uses projected blocker identities and remedies, excluding 
       isStreaming: false,
       unhandledBackgroundUpdates: 2,
     },
-    { id: running, isStreaming: true },
+    { id: running, isStreaming: true, unhandledBackgroundUpdates: 2 },
     ...[acting, archived, settled, deleted].map((id) => ({
       id,
       isStreaming: true,
@@ -744,13 +745,35 @@ test("default cleanup uses projected blocker identities and remedies, excluding 
       ),
       (error: Error) => {
         const message = error.message;
-        assert.ok(message.includes(`"Card session" ${cardSession}:`));
+        assert.ok(
+          message.includes(
+            `"Card session" ${cardSession}: work is queued behind it.`,
+          ),
+        );
         assert.ok(
           message.includes(
             `${JSON.stringify(projected[1]!.title!.slice(0, 80))} ${unhandled}: background updates it was given were not handled.`,
           ),
         );
         assert.ok(message.includes(`session ${running}: it is still running.`));
+        const queuedEntry = message.slice(
+          message.indexOf(`"Card session" ${cardSession}:`),
+          message.indexOf(
+            ' session "',
+            message.indexOf(`"Card session" ${cardSession}:`),
+          ),
+        );
+        assert.doesNotMatch(
+          queuedEntry,
+          /Recover or Dismiss|dismiss_background_updates/,
+        );
+        const runningEntry = message.slice(
+          message.indexOf(`session ${running}:`),
+        );
+        assert.doesNotMatch(
+          runningEntry,
+          /Recover or Dismiss|dismiss_background_updates/,
+        );
         assert.match(message, /Recover or Dismiss.*dismiss_background_updates/);
         assert.equal((message.match(/Recover or Dismiss/g) ?? []).length, 1);
         for (const excluded of [acting, archived, settled, deleted])

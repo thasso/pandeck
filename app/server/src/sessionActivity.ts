@@ -667,6 +667,6 @@ function settleBlockerOf(
     sessionId: row.id,
     ...(row.title !== undefined ? { title: row.title } : {}),
     reason,
-    unhandled: (row.unhandledBackgroundUpdates ?? 0) > 0,
+    unhandled: reason === "background updates it was given were not handled.",
   };
 }
