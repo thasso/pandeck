@@ -127,13 +127,66 @@ const ENGINE_COMPUTED_IMPORT_EXCEPTIONS: Record<string, number> = {
 };
 
 /**
- * pi's session types. Only `piSdk/` may name them, and not `PiLiveSession`,
- * which reaches its engine through `PiEngineHandle` (`piSdk/piEngine.ts`).
+ * pi's session types. Only `piSdk/` may name them, and neither `PiLiveSession`
+ * nor `piStore`, which reach their engines through `PiEngineHandle`
+ * (`piSdk/piEngine.ts`).
  */
 const PI_SESSION_TYPES = new Set(["AgentSession", "SessionManager"]);
 
-/** The handle's test seam; no module but its own may name it. */
-const PI_ENGINE_TEST_SEAM = "nativePiSessionForTests";
+/** piSdk modules that hold engines only through the handle. */
+const PI_HANDLE_HOLDERS = new Set([
+  "piSdk/PiLiveSession.ts",
+  "piSdk/piStore.ts",
+]);
+
+/** The handle's test seams; no module but its own may name them. */
+const PI_ENGINE_TEST_SEAMS = new Set([
+  "nativePiSessionForTests",
+  "piToolActivationForTests",
+]);
+
+/**
+ * Where production code creates or opens a live pi session: the interactive
+ * engine's opener, the existing-transcript open it calls, and one-shot runs.
+ */
+const PI_SESSION_CONSTRUCTIONS: Record<string, string[]> = {
+  "piSdk/oneShot.ts": ["createAgentSession"],
+  "piSdk/piEngineHost.ts": ["SessionManager.create", "createAgentSession"],
+  "piSdk/sessionOpen.ts": ["SessionManager.open"],
+};
+
+/**
+ * Every module the pi engine opener imports a value from, besides pi itself,
+ * `@assistant/shared`, `node:*` and `typebox`. The W9c inventory is server
+ * state the opener still reads in the server process (`docs/workers.md`
+ * "pi engine construction (W9b-1)"); the rest is pure or the engine's own.
+ */
+const W9C_INVENTORY = "W9c inventory";
+const ENGINE_OWN = "pure or engine-own";
+const PI_ENGINE_HOST_IMPORTS: Record<string, string> = {
+  "../agents/sessionAgent.ts": W9C_INVENTORY,
+  "../config.ts": ENGINE_OWN,
+  "../db/sessionStore.ts": W9C_INVENTORY,
+  "../mcp/tool.ts": ENGINE_OWN,
+  "../promptConditions.ts": W9C_INVENTORY,
+  "../sessionSkills.ts": W9C_INVENTORY,
+  "../sessionStorage.ts": ENGINE_OWN,
+  "../tools/toolPolicy.ts": ENGINE_OWN,
+  "./agentToolAdapter.ts": ENGINE_OWN,
+  "./backgroundWorkBackend.ts": W9C_INVENTORY,
+  "./compactionWindow.ts": W9C_INVENTORY,
+  "./forkOrigin.ts": ENGINE_OWN,
+  "./models.ts": W9C_INVENTORY,
+  "./options.ts": W9C_INVENTORY,
+  "./piEngine.ts": ENGINE_OWN,
+  "./sessionOpen.ts": ENGINE_OWN,
+  "./toolActivation.ts": W9C_INVENTORY,
+  "./toolPayloadProbe.ts": ENGINE_OWN,
+};
+
+/** Imports the residual pin does not count: pi itself and pure packages. */
+const PI_ENGINE_HOST_IGNORED_IMPORT =
+  /^(?:@earendil-works\/|@assistant\/shared$|node:|typebox$)/;
 
 const EQUALITY_OPERATORS = new Set(["==", "===", "!=", "!=="]);
 
@@ -203,6 +256,8 @@ function scanModule(
   computedImports: number;
   piSessionTypeNames: string[];
   engineTestSeamReferences: number;
+  piSessionConstructions: string[];
+  valueImports: string[];
 } {
   const parsed = parseSync(file, source, { lang: "ts", sourceType: "module" });
   assert.deepEqual(
@@ -218,6 +273,8 @@ function scanModule(
   // Named from any path, a re-export shim included.
   const piSessionTypeNames: string[] = [];
   let engineTestSeamReferences = 0;
+  const piSessionConstructions: string[] = [];
+  const valueImports = new Set<string>();
   const notePiSessionType = (binding: unknown) => {
     const name = isNode(binding) ? (binding.name ?? binding.value) : undefined;
     if (typeof name === "string" && PI_SESSION_TYPES.has(name))
@@ -339,8 +396,42 @@ function scanModule(
   };
 
   const visit = (node: AstNode): void => {
-    if (node.type === "Identifier" && node.name === PI_ENGINE_TEST_SEAM)
+    if (
+      node.type === "Identifier" &&
+      PI_ENGINE_TEST_SEAMS.has(node.name as string)
+    )
       engineTestSeamReferences++;
+    if (node.type === "CallExpression") {
+      const callee = unwrap(node.callee);
+      if (
+        isNode(callee) &&
+        callee.type === "Identifier" &&
+        callee.name === "createAgentSession"
+      )
+        piSessionConstructions.push("createAgentSession");
+      const object = isNode(callee) ? unwrap(callee.object) : undefined;
+      if (
+        isNode(callee) &&
+        callee.type === "MemberExpression" &&
+        isNode(object) &&
+        object.type === "Identifier" &&
+        object.name === "SessionManager" &&
+        isNode(callee.property) &&
+        (callee.property.name === "create" || callee.property.name === "open")
+      )
+        piSessionConstructions.push(`SessionManager.${callee.property.name}`);
+    }
+    // A value import: neither `import type` nor only `type` specifiers.
+    if (node.type === "ImportDeclaration" && node.importKind !== "type") {
+      const specifiers = (node.specifiers ?? []) as AstNode[];
+      const source = constantString(node.source);
+      if (
+        source !== undefined &&
+        (specifiers.length === 0 ||
+          specifiers.some((specifier) => specifier.importKind !== "type"))
+      )
+        valueImports.add(source);
+    }
     // An import or re-export names the source's export: `imported`, or a
     // re-export's `local`. Qualified names catch `import("…").X` and `ns.X`.
     if (
@@ -410,6 +501,8 @@ function scanModule(
     computedImports,
     piSessionTypeNames: piSessionTypeNames.sort(),
     engineTestSeamReferences,
+    piSessionConstructions: piSessionConstructions.sort(),
+    valueImports: [...valueImports].sort(),
   };
 }
 
@@ -503,24 +596,24 @@ test("app code compares harness ids only where pinned", () => {
   );
 });
 
-test("only piSdk names pi's session types, and PiLiveSession holds only the engine handle", () => {
+test("only piSdk names pi's session types, and PiLiveSession and piStore hold only the engine handle", () => {
   const actual: Record<string, string[]> = {};
   for (const file of sourceFiles(SRC_ROOT)) {
     const rel = relative(SRC_ROOT, file);
     // Test support is not app code; the engine folder owns the types.
     if (/^test\//.test(rel)) continue;
-    if (/^piSdk\//.test(rel) && rel !== "piSdk/PiLiveSession.ts") continue;
+    if (/^piSdk\//.test(rel) && !PI_HANDLE_HOLDERS.has(rel)) continue;
     const { piSessionTypeNames } = scanModule(file, readFileSync(file, "utf8"));
     if (piSessionTypeNames.length) actual[rel] = piSessionTypeNames;
   }
   assert.deepEqual(
     actual,
     {},
-    "A live pi engine is reached only through PiEngineHandle (piSdk/piEngine.ts); outside piSdk/, and in PiLiveSession, name neither AgentSession nor SessionManager (docs/agent-harnesses.md).",
+    "A live pi engine is reached only through PiEngineHandle (piSdk/piEngine.ts); outside piSdk/, and in PiLiveSession and piStore, name neither AgentSession nor SessionManager (docs/agent-harnesses.md).",
   );
 });
 
-test("only the engine handle's own module names its test seam", () => {
+test("only the engine handle's own module names its test seams", () => {
   const actual: string[] = [];
   for (const file of sourceFiles(SRC_ROOT)) {
     const { engineTestSeamReferences } = scanModule(
@@ -532,8 +625,69 @@ test("only the engine handle's own module names its test seam", () => {
   assert.deepEqual(
     actual,
     ["piSdk/piEngine.ts"],
-    `${PI_ENGINE_TEST_SEAM} is for tests only; production code reads the engine through PiEngineHandle.`,
+    `${[...PI_ENGINE_TEST_SEAMS].join(" and ")} are for tests only; production code reads the engine through PiEngineHandle.`,
   );
+});
+
+test("only the pi engine opener, the transcript open and one-shot runs construct a pi session", () => {
+  const actual: Record<string, string[]> = {};
+  for (const file of sourceFiles(SRC_ROOT)) {
+    const { piSessionConstructions } = scanModule(
+      file,
+      readFileSync(file, "utf8"),
+    );
+    if (piSessionConstructions.length)
+      actual[relative(SRC_ROOT, file)] = piSessionConstructions;
+  }
+  assert.deepEqual(
+    actual,
+    PI_SESSION_CONSTRUCTIONS,
+    "An interactive pi session is opened only by openPiEngine (piSdk/piEngineHost.ts); describe it in a PiEngineOpenSpec instead (docs/workers.md).",
+  );
+});
+
+test("the pi engine opener reaches only the pinned server modules", () => {
+  const file = join(SRC_ROOT, "piSdk", "piEngineHost.ts");
+  const { valueImports } = scanModule(file, readFileSync(file, "utf8"));
+  const actual = Object.fromEntries(
+    valueImports
+      .filter((source) => !PI_ENGINE_HOST_IGNORED_IMPORT.test(source))
+      .map((source) => [source, PI_ENGINE_HOST_IMPORTS[source] ?? "unlisted"]),
+  );
+  assert.deepEqual(
+    actual,
+    PI_ENGINE_HOST_IMPORTS,
+    'piEngineHost.ts reaches server state only through the W9c inventory in docs/workers.md "pi engine construction (W9b-1)"; a new reach is a plan change, not a new entry.',
+  );
+});
+
+test("the construction and import scans see every form they pin", () => {
+  const file = join(SRC_ROOT, "probe.ts");
+  const constructions = [
+    "createAgentSession({});",
+    "SessionManager.create(cwd, dir);",
+    "(SessionManager as never as typeof SessionManager).open(file);",
+    "SessionManager.inMemory(cwd);",
+    "other.createAgentSession({});",
+    '// SessionManager.open("x");',
+  ].join("\n");
+  assert.deepEqual(scanModule(file, constructions).piSessionConstructions, [
+    "SessionManager.create",
+    "SessionManager.open",
+    "createAgentSession",
+  ]);
+  const imports = [
+    'import { a } from "./value.ts";',
+    'import { type B, c } from "./mixed.ts";',
+    'import "./sideEffect.ts";',
+    'import type { D } from "./typeOnly.ts";',
+    'import { type E } from "./typeSpecifiers.ts";',
+  ].join("\n");
+  assert.deepEqual(scanModule(file, imports).valueImports, [
+    "./mixed.ts",
+    "./sideEffect.ts",
+    "./value.ts",
+  ]);
 });
 
 test("the session-type scan sees a re-export shim and every naming form", () => {

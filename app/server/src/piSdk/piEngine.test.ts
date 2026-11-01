@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { installCompactionWindow } from "./compactionWindow.ts";
 import { PiLiveSession } from "./PiLiveSession.ts";
@@ -18,6 +18,11 @@ import {
   nativePiSessionForTests,
   type PiEngineHandle,
 } from "./piEngine.ts";
+import {
+  createPiToolActivation,
+  UNUSED_TOOL_PRUNE_IDLE_MS,
+} from "./toolActivation.ts";
+import { agentToolsFor, eagerToolNamesFor } from "../tools/catalog.ts";
 
 /** A content-policy refusal pi must not retry (see `providerErrors.test.ts`). */
 const SUPPRESSIBLE_ERROR = `Codex error: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request.`;
@@ -220,6 +225,7 @@ test("submit makes the caller's steer-or-prompt call before it returns, and sett
   const steered = engine.submit("more", images as never, {
     steer: true,
     steerOnly: true,
+    userTurnIdleMs: 0,
   });
   assert.deepEqual(calls, [["steer", "more", images]]);
   assert.equal(await steered, undefined, "a steer's disposition stays in pi");
@@ -228,6 +234,7 @@ test("submit makes the caller's steer-or-prompt call before it returns, and sett
   const started = engine.submit("hello", images as never, {
     steer: false,
     steerOnly: false,
+    userTurnIdleMs: 0,
   });
   assert.deepEqual(calls, [["prompt", "hello", { images }]]);
   await assert.rejects(started, /prompt refused/);
@@ -486,4 +493,105 @@ test("a lowered compaction window whose save fails is put back to the previous o
   assert.deepEqual(saved, [120_000], "a successful lower persists once");
   assert.equal(controller.status().live.appliedTokens, 120_000);
   live.dispose();
+});
+
+/* ------------------------ the cold-boundary prune ------------------------- */
+
+/**
+ * The production engine over a fake session whose `prompt` and `steer` record
+ * the active set they were invoked under, with a real registered activation
+ * holding one deferred tool loaded and never used.
+ */
+function prunableEngine(sessionId: string) {
+  let active: ReadonlySet<string> = new Set();
+  const seenAtCall: Array<ReadonlySet<string>> = [];
+  const fake = fakeSession({
+    sessionId,
+    steer: () => {
+      seenAtCall.push(active);
+      return Promise.resolve();
+    },
+    prompt: () => {
+      seenAtCall.push(active);
+      return Promise.resolve();
+    },
+  });
+  const activation = createPiToolActivation({
+    sessionId,
+    agentType: "assistant",
+    agentTools: agentToolsFor("assistant"),
+    eagerToolNames: eagerToolNamesFor("assistant"),
+    deferToolLoading: true,
+    applyActiveToolNames: (names) => {
+      active = new Set(names);
+    },
+  });
+  activation.initialize(["kb_read"]);
+  assert.ok(active.has("kb_read"), "the deferred tool starts loaded");
+  const engine = localPiEngine(fake.session as never, {
+    activation,
+    mode: { current: "build" },
+  });
+  return { engine, seenAtCall };
+}
+
+for (const steer of [false, true])
+  test(`submit (steer=${steer}) prunes a never-used load before pi is called, only past the cold boundary`, async () => {
+    const cold = prunableEngine(`prune-cold-${steer}`);
+    await cold.engine.submit("hello", [], {
+      steer,
+      steerOnly: false,
+      userTurnIdleMs: UNUSED_TOOL_PRUNE_IDLE_MS,
+    });
+    assert.equal(cold.seenAtCall.length, 1);
+    assert.equal(cold.seenAtCall[0]!.has("kb_read"), false);
+    await cold.engine.dispose();
+
+    const warm = prunableEngine(`prune-warm-${steer}`);
+    await warm.engine.submit("hello", [], {
+      steer,
+      steerOnly: false,
+      userTurnIdleMs: UNUSED_TOOL_PRUNE_IDLE_MS - 1,
+    });
+    assert.equal(warm.seenAtCall.length, 1);
+    assert.equal(warm.seenAtCall[0]!.has("kb_read"), true);
+    await warm.engine.dispose();
+  });
+
+test("the live session tells the engine how long it sat idle before each user turn", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: 1_000_000 });
+  const fake = fakeSession(LIVE_READS);
+  const base = localPiEngine(fake.session as never);
+  const idle: number[] = [];
+  const engine: PiEngineHandle = Object.create(base, {
+    submit: {
+      value: (
+        _text: string,
+        _images: unknown,
+        intent: { userTurnIdleMs: number },
+      ) => {
+        idle.push(intent.userTurnIdleMs);
+        return Promise.resolve();
+      },
+    },
+  });
+  const { live } = liveOver(engine);
+  const adapter = live.createRuntimeAdapter();
+  const settled = () => new Promise((resolve) => setImmediate(resolve));
+  try {
+    const turn = async (text: string) => {
+      const run = adapter.prompt(text);
+      await settled();
+      fake.emit({ type: "agent_start" });
+      fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      await run;
+    };
+    await turn("first");
+    vi.setSystemTime(1_000_000 + 7_000);
+    await turn("second");
+    assert.deepEqual(idle, [0, 7_000]);
+  } finally {
+    vi.useRealTimers();
+    live.dispose();
+  }
 });

@@ -17,6 +17,8 @@ import {
   type AssistantMessage,
   type Context,
 } from "@earendil-works/pi-ai";
+import type { PiEngineHandle } from "./piSdk/piEngine.ts";
+import type { PiEngineOpenSpec } from "./piSdk/piEngineHost.ts";
 import type {
   ClaudeSdkSeam,
   ClaudeQueryParams,
@@ -33,7 +35,8 @@ profiles.setCredentialProfileEnabled(profiles.DEFAULT_CLAUDE_PROFILE_ID, false);
 profiles.setCredentialProfileEnabled(profiles.DEFAULT_OPENAI_PROFILE_ID, false);
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
-const { nativePiSessionForTests } = await import("./piSdk/piEngine.ts");
+const { nativePiSessionForTests, piToolActivationForTests } =
+  await import("./piSdk/piEngine.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piModelForAccount } = await import("./harnesses/models.ts");
 const { createSession } = await import("./harnesses/create.ts");
@@ -123,26 +126,24 @@ test.each([
     }[] = [];
     const opens: { profile: string; session: AgentSession }[] = [];
     const internals = piStore as unknown as {
-      create: (...args: unknown[]) => Promise<{
-        session: AgentSession;
-        notices: unknown[];
-        commit: () => void;
-        dispose: () => void;
-      }>;
+      openEngine: (
+        spec: PiEngineOpenSpec,
+      ) => Promise<{ engine: PiEngineHandle; info: unknown }>;
     };
-    const original = internals.create.bind(piStore);
+    const original = internals.openEngine.bind(piStore);
     const factory = vi
-      .spyOn(internals, "create")
-      .mockImplementation(async (...args) => {
-        const opened = await original(...args);
-        const profile = args[5] as string;
-        opens.push({ profile, session: opened.session });
-        opened.session.setAutoRetryEnabled(false);
-        opened.session.agent.streamFunction = (model, context) => {
+      .spyOn(internals, "openEngine")
+      .mockImplementation(async (spec) => {
+        const opened = await original(spec);
+        const session = nativePiSessionForTests(opened.engine);
+        const profile = spec.credentialProfileId;
+        opens.push({ profile, session });
+        session.setAutoRetryEnabled(false);
+        session.agent.streamFunction = (model, context) => {
           calls.push({
             profile,
             context: structuredClone(context),
-            activeTools: opened.session.getActiveToolNames(),
+            activeTools: session.getActiveToolNames(),
           });
           const rejectedReasoning =
             encryptedRejection &&
@@ -201,8 +202,8 @@ test.each([
           });
           return stream;
         };
-        if (profile === b && args[8] === true) renameDuringReopen?.();
-        if (modeFlip && profile === b && args[8] === true) {
+        if (profile === b && spec.staged === true) renameDuringReopen?.();
+        if (modeFlip && profile === b && spec.staged === true) {
           staged = true;
           await new Promise<void>((resolve) => {
             releaseMove = resolve;
@@ -235,6 +236,7 @@ test.each([
       if (mode === "background") {
         const { createPiBackgroundTools } =
           await import("./piSdk/backgroundWorkBackend.ts");
+        const { childProcessEnv } = await import("./subprocessEnv.ts");
         updateSettings({
           backgroundWork: { ...getSettings().backgroundWork, enabled: true },
         });
@@ -246,6 +248,7 @@ test.each([
         };
         const bash = createPiBackgroundTools({
           session: () => toolSession,
+          childEnv: childProcessEnv,
           identity: () => ({ sessionId: id!, sessionFile: file }),
         })[0]!;
         const marker = join(tmp, `background-pid-${id}`);
@@ -519,7 +522,7 @@ test.each([
             replacement.getActiveToolNames().includes(name),
             initialMode === "build",
           );
-        pi.setMode(targetMode);
+        await pi.setMode(targetMode);
         for (const name of ["edit", "write"])
           assert.equal(
             old.getActiveToolNames().includes(name),
@@ -849,15 +852,9 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
   });
   const pi = live as import("./piSdk/PiLiveSession.ts").PiLiveSession;
   const internals = piStore as unknown as {
-    toolRuntimes: Map<
-      string,
-      import("./piSdk/toolActivation.ts").PiToolActivation
-    >;
-    create: (...args: unknown[]) => Promise<{
-      session: AgentSession;
-      commit: () => void;
-      dispose: () => void;
-    }>;
+    openEngine: (
+      spec: PiEngineOpenSpec,
+    ) => Promise<{ engine: PiEngineHandle; info: unknown }>;
   };
   const old = nativePiSessionForTests(pi.engine);
   // A native transcript must have a persisted conversation to reopen its id.
@@ -883,18 +880,18 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   });
-  const previous = internals.toolRuntimes.get(live.id)!;
+  const previous = piToolActivationForTests(pi.engine);
   previous.initialize(["kb_read"]);
   const exposure = previous.exposure();
   let staged: AgentSession | undefined;
   let release: (() => void) | undefined;
-  const create = internals.create.bind(piStore);
+  const openEngine = internals.openEngine.bind(piStore);
   const factory = vi
-    .spyOn(internals, "create")
-    .mockImplementation(async (...args) => {
-      const replacement = await create(...args);
-      if (args[8] === true) {
-        staged = replacement.session;
+    .spyOn(internals, "openEngine")
+    .mockImplementation(async (spec) => {
+      const replacement = await openEngine(spec);
+      if (spec.staged === true) {
+        staged = nativePiSessionForTests(replacement.engine);
         await new Promise<void>((resolve) => {
           release = resolve;
         });
@@ -936,7 +933,7 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
     );
     factory.mockRestore();
     await pi.switchAccount(b, () => {});
-    const current = internals.toolRuntimes.get(live.id)!;
+    const current = piToolActivationForTests(pi.engine);
     assert.notEqual(current, previous);
     assert.notEqual(nativePiSessionForTests(pi.engine), old);
     assert.deepEqual(toolExposureForSession(live.id), current.exposure());

@@ -39,6 +39,11 @@ import { ensureRuntimeSessionWithRuntime } from "./session/runtimePrompt.ts";
 import { piStore } from "./piSdk/piStore.ts";
 import { PiLiveSession } from "./piSdk/PiLiveSession.ts";
 import { localPiEngine } from "./piSdk/piEngine.ts";
+import {
+  openPiEngine,
+  type PiEngineOpenSpec,
+  type PiEngineOpened,
+} from "./piSdk/piEngineHost.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { touchSessionRows } from "./db/sessionListChanges.ts";
 import type {
@@ -1252,10 +1257,10 @@ test("piStore public reopen and eviction report live-map overlay changes", async
   // Replace provider construction only. The exported acquire/track/evict paths,
   // live wrapper, persisted row and full projection are real.
   const internals = piStore as unknown as {
-    create: (...args: unknown[]) => Promise<{ session: unknown; notices: [] }>;
+    openEngine: (spec: PiEngineOpenSpec) => Promise<PiEngineOpened>;
   };
-  vi.spyOn(internals, "create").mockImplementation(
-    async (_kind, sessionManager) => ({
+  vi.spyOn(internals, "openEngine").mockImplementation((spec) =>
+    openPiEngine(spec, {} as never, async (_spec, _ctx, { sm }) => ({
       session: {
         sessionId: a,
         sessionFile: file,
@@ -1263,7 +1268,7 @@ test("piStore public reopen and eviction report live-map overlay changes", async
         setSessionName(this: { sessionName: string }, name: string) {
           this.sessionName = name;
         },
-        sessionManager,
+        sessionManager: sm,
         isStreaming: false,
         model: {
           provider: "test",
@@ -1278,9 +1283,9 @@ test("piStore public reopen and eviction report live-map overlay changes", async
           contextSize: 0,
         }),
         dispose: () => {},
-      },
+      } as never,
       notices: [],
-    }),
+    })),
   );
   try {
     await check(

@@ -118,10 +118,7 @@ import {
 } from "../sessionNaming.ts";
 import { acceptCommitDryRun, toCommitDisplay } from "../commitWorkflow.ts";
 import { isForkAutoRenamePending, readForkOrigin } from "./forkOrigin.ts";
-import {
-  prepareToolsForUserTurn,
-  toolLoadingForSession,
-} from "./toolActivation.ts";
+import { toolLoadingForSession } from "./toolActivation.ts";
 import { restorePiLiveTitle, shouldAutoNamePiSession } from "./titleState.ts";
 import {
   hasPendingApproval,
@@ -215,8 +212,9 @@ function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
 /** A replacement engine prepared without changing the live wrapper or its tools. */
 export interface PiAccountSession {
   engine: PiEngineHandle;
-  commit(): void;
-  dispose(): void;
+  /** Publish its tools; called in the swap's own synchronous span. */
+  commit(): Promise<void>;
+  dispose(): Promise<void>;
 }
 
 export class PiLiveSession implements LiveSession {
@@ -298,7 +296,9 @@ export class PiLiveSession implements LiveSession {
     /** Where this session executes: its worktree path, else the app CWD. */
     readonly cwd: string = CWD,
     private mode: SessionMode = "build",
-    private readonly onModeChange: (mode: SessionMode) => void = () => {},
+    private readonly onModeChange: (
+      mode: SessionMode,
+    ) => void | Promise<void> = () => {},
     /** The account the session runs on; its model resolves in that registry. */
     private profileId: string | undefined = undefined,
     private readonly reopenForAccount?: (
@@ -1150,12 +1150,12 @@ export class PiLiveSession implements LiveSession {
       this.unsubscribe = this.engine.subscribe((event) =>
         this.onAgentEvent(event),
       );
-      replacement.commit();
+      await replacement.commit();
       void old.dispose();
       this.broadcastState();
       this.host.sessionRowsChanged([this.key]);
     } catch (error) {
-      if (!committed) replacement.dispose();
+      if (!committed) void replacement.dispose();
       throw error;
     }
   }
@@ -1232,10 +1232,7 @@ export class PiLiveSession implements LiveSession {
       this.titleGenerationPending = Boolean(namingSettings?.enabled);
     }
     const now = Date.now();
-    prepareToolsForUserTurn(
-      this.engine.sessionId,
-      this.updatedAt > 0 ? now - this.updatedAt : 0,
-    );
+    const userTurnIdleMs = this.updatedAt > 0 ? now - this.updatedAt : 0;
     this.updatedAt = now;
     const blocks: DisplayBlock[] = [{ kind: "text", text: titleText }];
     blocks.push(
@@ -1281,6 +1278,7 @@ export class PiLiveSession implements LiveSession {
     const run = this.engine.submit(promptWithFiles, images, {
       steer: this.engine.isStreaming,
       steerOnly: Boolean(options.steerOnly),
+      userTurnIdleMs,
     });
     if (!wasRunning) this.driveCompletion = run;
     if (options.steerOnly) {
@@ -1561,10 +1559,13 @@ export class PiLiveSession implements LiveSession {
     return this.mode;
   }
 
-  /** Apply + persist the per-turn tool policy immediately for the next turn. */
-  setMode(mode: SessionMode): void {
+  /**
+   * Apply + persist the per-turn tool policy for the next turn. Nothing is
+   * persisted or broadcast unless the engine applied it.
+   */
+  async setMode(mode: SessionMode): Promise<void> {
     if (this.mode === mode) return;
-    this.onModeChange(mode);
+    await this.onModeChange(mode);
     this.mode = mode;
     sessionStore.upsert({
       id: this.sessionId,

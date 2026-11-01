@@ -28,7 +28,8 @@ const { BackgroundWorkSupervisor, backgroundWorkSupervisor } =
 const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings } = await import("../settings.ts");
-const { setChildProcessEnvOverlay } = await import("../subprocessEnv.ts");
+const { childProcessEnv, setChildProcessEnvOverlay } =
+  await import("../subprocessEnv.ts");
 const { listSessionArtifacts } =
   await import("../mcp/toolGroups/packRuntime.ts");
 
@@ -169,6 +170,7 @@ test("Plan keeps the existing bash capability but removes monitor", () => {
   };
   const tools = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
   });
   let applied = new Set<string>();
@@ -202,6 +204,7 @@ test("foreground bash delegates to upstream with streaming, cwd, PI identity and
   };
   const tools = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({
       sessionId,
       sessionFile: session.sessionFile!,
@@ -248,6 +251,120 @@ test("foreground bash delegates to upstream with streaming, cwd, PI identity and
   assert.ok(updates.length > 0, "upstream progress updates were preserved");
 });
 
+/** The environment a pi shell child of `childEnv` saw, foreground and background. */
+async function shellChildEnvironments(
+  childEnv: () => NodeJS.ProcessEnv,
+): Promise<{
+  sessionId: string;
+  foreground: Map<string, string>;
+  background: Map<string, string>;
+}> {
+  const sessionId = owner();
+  const session: ToolSession = {
+    sessionId,
+    harness: "pi",
+    agentType: "developer",
+    cwd: dataDir,
+  };
+  const bash = createPiBackgroundTools({
+    session: () => session,
+    childEnv,
+    identity: () => ({ sessionId }),
+  })[0]!;
+  const read = (file: string) =>
+    new Map(
+      readFileSync(file, "utf8")
+        .split("\0")
+        .filter(Boolean)
+        .map((line) => {
+          const at = line.indexOf("=");
+          return [line.slice(0, at), line.slice(at + 1)] as [string, string];
+        }),
+    );
+  const foregroundFile = join(dataDir, `child-env-fg-${serial}.txt`);
+  await bash.execute(
+    { command: `env -0 > ${JSON.stringify(foregroundFile)}` },
+    { toolCallId: `child-env-fg-${serial}`, session },
+  );
+  const backgroundFile = join(dataDir, `child-env-bg-${serial}.txt`);
+  const completed = new Promise<void>((resolve) => {
+    backgroundWorkSupervisor.setCompletionRecordedHandler((item) => {
+      if (item.ownerSessionId === sessionId) resolve();
+    });
+  });
+  await bash.execute(
+    {
+      command: `env -0 > ${JSON.stringify(backgroundFile)}`,
+      run_in_background: true,
+    },
+    { toolCallId: `child-env-bg-${serial}`, session },
+  );
+  await completed;
+  backgroundWorkSupervisor.setCompletionRecordedHandler(undefined);
+  return {
+    sessionId,
+    foreground: read(foregroundFile),
+    background: read(backgroundFile),
+  };
+}
+
+const PI_BIN_DIR = join(
+  process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+  "bin",
+);
+
+test("pi shell children take their base environment from the injected childEnv", async () => {
+  const { foreground, background } = await shellChildEnvironments(() => ({
+    ...process.env,
+    W9B_PROBE: "1",
+  }));
+  for (const env of [foreground, background]) {
+    assert.equal(env.get("W9B_PROBE"), "1");
+    assert.ok(env.get("PATH")?.split(":").includes(PI_BIN_DIR));
+  }
+});
+
+test("with the server's childProcessEnv, a pi shell child sees today's environment", async () => {
+  setChildProcessEnvOverlay({ PA_PI_OVERLAY_PROBE: "today" });
+  try {
+    const { sessionId, foreground, background } =
+      await shellChildEnvironments(childProcessEnv);
+    // Today's construction: pi's shell env (the server's own, pi's bin dir
+    // first on PATH), the child overlay over it, then the PI identity.
+    const path = process.env.PATH ?? "";
+    const expected: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: path.split(":").includes(PI_BIN_DIR)
+        ? path
+        : [PI_BIN_DIR, path].filter(Boolean).join(":"),
+      PA_PI_OVERLAY_PROBE: "today",
+      PI_SESSION_ID: sessionId,
+    };
+    for (const name of [
+      "PI_SESSION_FILE",
+      "PI_PROVIDER",
+      "PI_MODEL",
+      "PI_REASONING_LEVEL",
+    ])
+      delete expected[name];
+    // The shell itself sets these.
+    const shellOwned = new Set(["PWD", "OLDPWD", "SHLVL", "_"]);
+    for (const env of [foreground, background]) {
+      const seen = Object.fromEntries(
+        [...env].filter(([name]) => !shellOwned.has(name)),
+      );
+      const want = Object.fromEntries(
+        Object.entries(expected).filter(
+          ([name, value]) => value !== undefined && !shellOwned.has(name),
+        ),
+      );
+      assert.deepEqual(seen, want);
+    }
+  } finally {
+    setChildProcessEnvOverlay(null);
+  }
+});
+
 test("foreground shadow passes pi shell path and command prefix through", async () => {
   const sessionId = owner();
   const marker = join(dataDir, `custom-shell-${serial}.txt`);
@@ -265,6 +382,7 @@ test("foreground shadow passes pi shell path and command prefix through", async 
   };
   const bash = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
     bashConfig: () => ({
       shellPath: shell,
@@ -290,6 +408,7 @@ test("foreground bash preserves upstream truncation and cancellation cleanup", a
   };
   const bash = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
   })[0]!;
   const truncated = await bash.execute(
@@ -353,6 +472,7 @@ test("background bash returns a PA id and freezes all five PI values and the chi
   };
   const bash = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     bashConfig: () => ({
       shellPath: shell,
       commandPrefix: "export PI_BACKGROUND_PREFIX=yes",
@@ -442,6 +562,7 @@ test("command monitor uses the configured shell and command prefix", async () =>
   };
   const monitor = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
     bashConfig: () => ({
       shellPath: shell,
@@ -479,6 +600,7 @@ test("a nonzero foreground exit fails the call with its output and exit code", a
   };
   const bash = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
   })[0]!;
   // pi resolves this as an `isError` result; the app contract is a rejection.
@@ -511,6 +633,7 @@ test("excluded owners keep foreground bash while background admission is denied"
   };
   const bash = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
   })[0]!;
   const foreground = await bash.execute(
@@ -543,6 +666,7 @@ test("WebSocket monitor reuses public-host SSRF policy before admission", async 
   };
   const monitor = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
   })[1]!;
   for (const url of [
@@ -579,6 +703,7 @@ test("persistent monitor freezes timeout_ms and still stops through the supervis
   };
   const monitor = createPiBackgroundTools({
     session: () => session,
+    childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
   })[1]!;
   const result = await monitor.execute(

@@ -47,7 +47,6 @@ import {
 } from "../mcp/tool.ts";
 import { captureTaskOutputArtifact } from "../outputPolicy.ts";
 import { assertPublicHost } from "../publicNetwork.ts";
-import { childProcessEnv, withChildProcessEnv } from "../subprocessEnv.ts";
 import {
   PI_BACKGROUND_BASH_TOOL_DEFINITION,
   PI_MONITOR_TOOL_DEFINITION,
@@ -243,9 +242,10 @@ function withPiEnvironment(
   return env;
 }
 
-function piShellEnvironment(): NodeJS.ProcessEnv {
+/** `base` with pi's bin dir on its PATH, as pi's own shell env has it. */
+function piShellEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const binDir = piBinDir();
-  const env = childProcessEnv();
+  const env = base;
   const pathKey =
     Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
   const current = env[pathKey] ?? "";
@@ -852,6 +852,8 @@ function registerPiBackgroundWorkBackend(): void {
 
 interface PiBackgroundToolsOptions {
   session(): ToolSession;
+  /** The base environment of every shell child, read per launch. */
+  childEnv(): NodeJS.ProcessEnv;
   identity(): PiProcessEnvironment;
   bashConfig?(): { shellPath?: string; commandPrefix?: string };
 }
@@ -889,7 +891,10 @@ export function createPiBackgroundTools(
             : {}),
           spawnHook: (spawn) => ({
             ...spawn,
-            env: withPiEnvironment(withChildProcessEnv(spawn.env), identity),
+            env: withPiEnvironment(
+              piShellEnvironment(options.childEnv()),
+              identity,
+            ),
           }),
         });
         const result = await upstream.execute(
@@ -914,6 +919,7 @@ export function createPiBackgroundTools(
       return admitProcess({
         session,
         identity,
+        childEnv: options.childEnv,
         toolCallId: ctx.toolCallId,
         kind: "shell",
         label: backgroundWorkTitle({
@@ -944,6 +950,7 @@ export function createPiBackgroundTools(
         return admitProcess({
           session,
           identity: options.identity(),
+          childEnv: options.childEnv,
           toolCallId: ctx.toolCallId,
           kind: "monitor-command",
           label: backgroundWorkTitle({
@@ -1008,6 +1015,7 @@ function validateBashTimeout(timeout: number | undefined): void {
 async function admitProcess(input: {
   session: ToolSession;
   identity: PiProcessEnvironment;
+  childEnv(): NodeJS.ProcessEnv;
   toolCallId: string;
   kind: "shell" | "monitor-command";
   label: string;
@@ -1041,7 +1049,10 @@ async function admitProcess(input: {
       kind: input.kind,
       command: input.command,
       cwd: input.session.cwd ?? process.cwd(),
-      env: withPiEnvironment(piShellEnvironment(), input.identity),
+      env: withPiEnvironment(
+        piShellEnvironment(input.childEnv()),
+        input.identity,
+      ),
       ...(input.shellPath ? { shellPath: input.shellPath } : {}),
       ...(input.commandPrefix ? { commandPrefix: input.commandPrefix } : {}),
       ...(input.timeoutSeconds !== undefined

@@ -32,9 +32,10 @@ const owners: Record<string, Owner> = {
     groups: [
       group(
         "projected",
-        "acquireNew canonicalizeCreatedPiSession create track",
-        "Publish a native handle into the live overlay; empty handles intentionally have equal public lists.",
+        "acquireNew track",
+        "Publish a native handle into the live overlay; empty handles intentionally have equal public lists. A refused open discards its unregistered engine, skill snapshot and files before publishing.",
         pi + "PiStore.acquireNew",
+        pi + "PiStore.acquireNew failure cleanup",
       ),
       group(
         "projected",
@@ -66,19 +67,12 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "discardRefused discardUnregistered discardUnregisteredAndFiles",
-        "Cleanup of an unregistered native handle, skill snapshot and files cannot remove a public live member.",
-        pi + "PiStore.acquireNew failure cleanup",
-        pi + "PiStore.forkSession revoked-account cleanup",
-      ),
-      group(
-        "nonprojected",
         "setHost setHeldElsewhere getForDrive",
         "Install host callbacks/an ownership predicate or rearm an idle timer, not session data.",
       ),
       group(
         "nonprojected",
-        "applySessionMode closeToolRuntime",
+        "applySessionMode registerAppTools closeAppTools",
         "Policy mode and tool/browser resources are absent from LiveListInfo; map removal owns eviction reporting.",
       ),
       group(
