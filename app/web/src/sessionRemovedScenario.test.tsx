@@ -2,7 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientMessage, ServerMessage } from "@assistant/shared";
+import type {
+  ClientMessage,
+  ServerMessage,
+  SessionListItem,
+} from "@assistant/shared";
+import { sessionListMessage } from "./test/sessionTopic.ts";
 
 /**
  * What the app does when the SERVER takes a session away — `sessionViewCleared`
@@ -129,6 +134,13 @@ function sessionRow(id: string, title: string) {
   };
 }
 
+function listedSessions(): SessionListItem[] {
+  return [
+    sessionRow(SESSION_A, "A"),
+    sessionRow(SESSION_B, "B"),
+  ] as unknown as SessionListItem[];
+}
+
 function readyMessage(): ServerMessage {
   return {
     type: "ready",
@@ -136,7 +148,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: [sessionRow(SESSION_A, "A"), sessionRow(SESSION_B, "B")],
     settings: {},
     speechToText: {
       configured: false,
@@ -209,6 +220,7 @@ async function openChat(): Promise<ScenarioSocket> {
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
+    socket.receive(sessionListMessage(listedSessions()));
   });
   await act(async () => socket.receive(snapshotMessage(SESSION_A)));
   await settle();

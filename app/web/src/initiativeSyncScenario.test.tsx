@@ -61,7 +61,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: [],
     settings: {},
     speechToText: {
       configured: false,

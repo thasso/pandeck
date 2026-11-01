@@ -14,6 +14,7 @@ import type {
 } from "@assistant/shared";
 import { Connection } from "./connection.ts";
 import { hub } from "./hub.ts";
+import { sessionRowIn, sessionTopicViewer } from "./test/sessionListClient.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 
@@ -26,7 +27,7 @@ function fakeSocket(sent: ServerMessage[]) {
   } as unknown as ConstructorParameters<typeof Connection>[0];
 }
 
-/** The session broadcast is debounced (`hub.flushSessionsBroadcast`). */
+/** Topic publications are debounced (`stateTopicKernel.ts`). */
 const settled = () => hub.flushPendingBroadcastsForTests();
 
 /** The newest row this listener saw for the session, from a list or a delta. */
@@ -34,15 +35,7 @@ function rowFor(
   messages: ServerMessage[],
   id: string,
 ): SessionListItem | undefined {
-  for (const message of [...messages].reverse()) {
-    if (message.type === "sessionUpdated" && message.session.id === id)
-      return message.session;
-    if (message.type === "sessions") {
-      const row = message.sessions.find((session) => session.id === id);
-      if (row) return row;
-    }
-  }
-  return undefined;
+  return sessionRowIn(messages, id) ?? undefined;
 }
 
 test("settling in one tab reaches every other subscribed tab", async () => {
@@ -62,7 +55,7 @@ test("settling in one tab reaches every other subscribed tab", async () => {
   // The OTHER tab: an ordinary registered listener, exactly as `hub.register`
   // holds every open connection.
   const otherTab: ServerMessage[] = [];
-  hub.register({ send: (message: ServerMessage) => otherTab.push(message) });
+  hub.register(sessionTopicViewer(otherTab));
 
   try {
     await connection.handle({
@@ -147,7 +140,7 @@ test("settling a coordinator settles the peers it still coordinates", async () =
   const clicked: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(clicked));
   const otherTab: ServerMessage[] = [];
-  hub.register({ send: (message: ServerMessage) => otherTab.push(message) });
+  hub.register(sessionTopicViewer(otherTab));
 
   try {
     await connection.handle({

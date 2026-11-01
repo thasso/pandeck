@@ -6,6 +6,7 @@
  *   pnpm --filter @assistant/server exec vitest run src/stateTopicKernel.test.ts
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import type { BroadcastTopic, StateEventsMessage } from "@assistant/shared";
 import {
@@ -15,7 +16,13 @@ import {
   type StateTopicWrites,
 } from "./db/changeSet.ts";
 import { getDb, withDbTransaction } from "./db/index.ts";
-import { createStateTopic } from "./stateTopicKernel.ts";
+import {
+  createStateTopic,
+  failOnStateTopicInvariantsForTests,
+  isStateTopicInvariant,
+  StateTopicInvariantError,
+  takeStateTopicInvariantsForTests,
+} from "./stateTopicKernel.ts";
 
 const DEBOUNCE_MS = 25;
 
@@ -23,30 +30,63 @@ interface FakeRow {
   revision: number;
   live: boolean;
   summary?: string;
+  /** Batch summaries answer `null`: a candidate live row that is no member. */
+  member?: false;
 }
 
 type LogEntry =
   | { type: "frame"; message: StateEventsMessage<"tasks", string> }
   | { type: "listener"; name: string };
 
-/** A topic whose rows live in a map, attached to a broadcaster that logs. */
+/**
+ * A topic whose rows live in a map, attached to a broadcaster that logs.
+ * `batch` declares the `summaries` hook; `faults` makes a read or a frame send
+ * throw; `calls` records every summary read.
+ */
 function fakeTopic(
-  options: { batchMax?: number; digest?: boolean; attach?: boolean } = {},
+  options: {
+    batchMax?: number;
+    digest?: boolean;
+    attach?: boolean;
+    batch?: boolean;
+  } = {},
 ) {
   const rows = new Map<string, FakeRow>();
   const log: LogEntry[] = [];
+  const calls = { summary: [] as string[], summaries: [] as string[][] };
+  const faults: {
+    read?: (() => void) | undefined;
+    send?: ((seq: number) => void) | undefined;
+  } = {};
   const base = {
     topic: "tasks" as const,
-    revisions: (ids: readonly string[]) =>
-      new Map(
+    revisions: (ids: readonly string[]) => {
+      faults.read?.();
+      return new Map(
         ids.flatMap((id) => {
           const row = rows.get(id);
           return row
             ? [[id, { revision: row.revision, live: row.live }] as const]
             : [];
         }),
-      ),
-    summary: (id: string) => rows.get(id)?.summary,
+      );
+    },
+    summary: (id: string) => {
+      calls.summary.push(id);
+      return rows.get(id)?.summary;
+    },
+    ...(options.batch && {
+      summaries: (ids: readonly string[]) => {
+        calls.summaries.push([...ids]);
+        const items = new Map<string, string | null>();
+        for (const id of ids) {
+          const row = rows.get(id);
+          if (row?.member === false) items.set(id, null);
+          else if (row?.summary !== undefined) items.set(id, row.summary);
+        }
+        return items;
+      },
+    }),
     snapshot: (seq: number) => ({ type: "fakeSnapshot" as const, seq }),
     batchMax: options.batchMax ?? 200,
   };
@@ -63,14 +103,25 @@ function fakeTopic(
       )
     : createStateTopic(base, { debounceMs: DEBOUNCE_MS });
   if (options.attach !== false)
-    kernel.attach((_topic, message) => log.push({ type: "frame", message }));
+    kernel.attach((_topic, message) => {
+      faults.send?.(message.seq);
+      log.push({ type: "frame", message });
+    });
   const frames = () =>
     log.flatMap((entry) => (entry.type === "frame" ? [entry.message] : []));
   const events = () =>
     frames().flatMap((frame) =>
       frame.events.map((event) => [event.kind, event.id, event.revision]),
     );
-  return { rows, log, kernel, frames, events };
+  /** Every listener outcome, as `[delivered, [kind, id, revision][]]`. */
+  const outcomes: Array<[boolean, Array<[string, string, number]>]> = [];
+  kernel.onPublished(({ events, delivered }) =>
+    outcomes.push([
+      delivered,
+      events.map((event) => [event.kind, event.id, event.revision]),
+    ]),
+  );
+  return { rows, log, calls, faults, outcomes, kernel, frames, events };
 }
 
 describe("publishing from reported ids", () => {
@@ -566,5 +617,382 @@ describe("the change set", () => {
     });
     assert.equal(ran, false);
     assert.deepEqual(reports, []);
+  });
+});
+
+describe("the batch summaries hook", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  test("without the hook, a flush and items read one summary per live id", () => {
+    const topic = fakeTopic();
+    topic.rows.set("a", { revision: 1, live: true, summary: "A" });
+    topic.rows.set("gone", { revision: 2, live: false });
+    topic.rows.set("b", { revision: 3, live: true, summary: "B" });
+    topic.kernel.report(["a", "gone", "b", "never"]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(topic.calls.summary, ["a", "b"]);
+    assert.deepEqual(topic.events(), [
+      ["upsert", "a", 1],
+      ["delete", "gone", 2],
+      ["upsert", "b", 3],
+    ]);
+    topic.kernel.items(["b", "gone"]);
+    assert.deepEqual(topic.calls.summary, ["a", "b", "b"]);
+  });
+
+  test("with the hook, one call per flush and per items read, with the candidate live ids", () => {
+    const topic = fakeTopic({ batch: true });
+    topic.rows.set("a", { revision: 1, live: true, summary: "A" });
+    topic.rows.set("gone", { revision: 2, live: false });
+    topic.rows.set("b", { revision: 3, live: true, summary: "B" });
+    topic.kernel.report(["a", "gone", "b", "never"]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(topic.calls.summaries, [["a", "b"]]);
+    assert.deepEqual(topic.calls.summary, []);
+    assert.deepEqual(topic.events(), [
+      ["upsert", "a", 1],
+      ["delete", "gone", 2],
+      ["upsert", "b", 3],
+    ]);
+    assert.deepEqual(topic.kernel.items(["b", "gone", "a", "b"]), [
+      { kind: "upsert", id: "b", revision: 3, item: "B" },
+      { kind: "delete", id: "gone", revision: 2 },
+      { kind: "upsert", id: "a", revision: 1, item: "A" },
+    ]);
+    assert.deepEqual(topic.calls.summaries, [
+      ["a", "b"],
+      ["b", "a"],
+    ]);
+  });
+
+  test("a null entry deletes at the stored revision, in flushes and items", () => {
+    const topic = fakeTopic({ batch: true });
+    topic.rows.set("hidden", { revision: 7, live: true, member: false });
+    topic.kernel.report(["hidden"]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(topic.events(), [["delete", "hidden", 7]]);
+    assert.deepEqual(topic.kernel.items(["hidden"]), [
+      { kind: "delete", id: "hidden", revision: 7 },
+    ]);
+  });
+
+  test("an absent entry stays pending with the warning, and publishes on a later report", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const topic = fakeTopic({ batch: true });
+    topic.rows.set("x", { revision: 4, live: true });
+    topic.kernel.report(["x"]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(topic.frames(), []);
+    assert.equal(warn.mock.calls.length, 1);
+    assert.match(String(warn.mock.calls[0]?.[0]), /\[tasks\].*\bx\b/);
+    assert.deepEqual(topic.kernel.items(["x"]), []);
+
+    topic.rows.set("x", { revision: 4, live: true, summary: "X" });
+    topic.kernel.report([]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(topic.events(), [["upsert", "x", 4]]);
+    assert.deepEqual(topic.calls.summaries, [["x"], ["x"], ["x"]]);
+  });
+});
+
+describe("the failure boundary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  test("a delivered flush hands listeners its events, and an empty one none", () => {
+    const topic = fakeTopic();
+    topic.rows.set("a", { revision: 1, live: true, summary: "A" });
+    topic.rows.set("gone", { revision: 2, live: false });
+    topic.kernel.report(["a", "gone"]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    topic.kernel.report([]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(topic.outcomes, [
+      [
+        true,
+        [
+          ["upsert", "a", 1],
+          ["delete", "gone", 2],
+        ],
+      ],
+      [true, []],
+    ]);
+  });
+
+  for (const stage of ["revisions", "summary", "summaries"] as const)
+    test(`a throwing ${stage} read in a timer flush is logged, sends nothing and keeps its ids`, () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const topic = fakeTopic({ batch: stage === "summaries" });
+      let fail = true;
+      topic.rows.set("a", { revision: 1, live: true, summary: "A" });
+      topic.rows.set("b", {
+        revision: 2,
+        live: true,
+        get summary(): string {
+          if (fail && stage !== "revisions")
+            throw new Error("row build failed");
+          return "B";
+        },
+      });
+      topic.faults.read = () => {
+        if (fail && stage === "revisions")
+          throw new Error("database is locked");
+      };
+      topic.kernel.report(["a", "b"]);
+      vi.advanceTimersByTime(DEBOUNCE_MS);
+      assert.deepEqual(topic.frames(), []);
+      assert.equal(topic.kernel.seq(), 0);
+      assert.deepEqual(topic.outcomes, [[false, []]]);
+      assert.equal(error.mock.calls.length, 1);
+      assert.match(String(error.mock.calls[0]?.[0]), /\[tasks\] flush failed/);
+
+      // Nothing reschedules; the next report retries the kept ids first.
+      vi.advanceTimersByTime(DEBOUNCE_MS * 10);
+      assert.equal(vi.getTimerCount(), 0);
+      fail = false;
+      topic.rows.set("c", { revision: 3, live: true, summary: "C" });
+      topic.kernel.report(["c"]);
+      vi.advanceTimersByTime(DEBOUNCE_MS);
+      assert.deepEqual(topic.events(), [
+        ["upsert", "a", 1],
+        ["upsert", "b", 2],
+        ["upsert", "c", 3],
+      ]);
+      assert.equal(topic.outcomes.at(-1)?.[0], true);
+      assert.deepEqual(takeStateTopicInvariantsForTests(), []);
+    });
+
+  test("a throwing frame send is logged, the remaining frames still go, and every id is kept", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const topic = fakeTopic({ batchMax: 1 });
+    for (const [id, revision] of [
+      ["a", 1],
+      ["b", 2],
+      ["c", 3],
+    ] as const)
+      topic.rows.set(id, { revision, live: true, summary: id.toUpperCase() });
+    topic.faults.send = (seq) => {
+      if (seq === 2) throw new Error("socket closed");
+    };
+    topic.kernel.report(["a", "b", "c"]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    // Frame 2 spent its seq; frames 1 and 3 went out.
+    assert.deepEqual(
+      topic.frames().map((frame) => frame.seq),
+      [1, 3],
+    );
+    assert.equal(topic.kernel.seq(), 3);
+    assert.deepEqual(topic.outcomes, [
+      [
+        false,
+        [
+          ["upsert", "a", 1],
+          ["upsert", "b", 2],
+          ["upsert", "c", 3],
+        ],
+      ],
+    ]);
+    assert.equal(error.mock.calls.length, 1);
+    assert.match(
+      String(error.mock.calls[0]?.[0]),
+      /\[tasks\] frame 2 delivery failed/,
+    );
+
+    // A later ordinary report republishes every id of the failed flush at
+    // its same revision, ahead of the new one.
+    topic.faults.send = undefined;
+    topic.rows.set("d", { revision: 4, live: true, summary: "D" });
+    topic.kernel.report(["d"]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(
+      topic.frames().map((frame) => [frame.seq, frame.events[0]?.id]),
+      [
+        [1, "a"],
+        [3, "c"],
+        [4, "a"],
+        [5, "b"],
+        [6, "c"],
+        [7, "d"],
+      ],
+    );
+    assert.equal(topic.outcomes.at(-1)?.[0], true);
+  });
+
+  test("flushNow never throws an ordinary read or send failure", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const topic = fakeTopic();
+    topic.rows.set("a", { revision: 1, live: true, summary: "A" });
+    topic.faults.read = () => {
+      throw new Error("read failed");
+    };
+    topic.kernel.report(["a"]);
+    topic.kernel.flushNow();
+    topic.faults.read = undefined;
+    topic.faults.send = () => {
+      throw new Error("send failed");
+    };
+    topic.kernel.report([]);
+    topic.kernel.flushNow();
+    assert.deepEqual(
+      topic.outcomes.map(([delivered]) => delivered),
+      [false, false],
+    );
+  });
+
+  test("an invariant escapes flushNow and a timer flush, with its ids kept and recorded", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const topic = fakeTopic();
+    topic.rows.set("a", { revision: 1, live: true, summary: "A" });
+    topic.faults.read = () => {
+      throw new StateTopicInvariantError("unreported row change: a");
+    };
+    topic.kernel.report(["a"]);
+    assert.throws(() => topic.kernel.flushNow(), /unreported row change: a/);
+    topic.kernel.report([]);
+    assert.throws(
+      () => vi.advanceTimersByTime(DEBOUNCE_MS),
+      /unreported row change: a/,
+    );
+    assert.deepEqual(topic.frames(), []);
+    assert.deepEqual(topic.outcomes, [], "no listener runs for an invariant");
+    assert.equal(error.mock.calls.length, 0, "an invariant is not logged");
+    assert.deepEqual(
+      takeStateTopicInvariantsForTests().map((violation) => violation.message),
+      ["unreported row change: a", "unreported row change: a"],
+    );
+
+    topic.faults.read = undefined;
+    topic.kernel.report([]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.deepEqual(topic.events(), [["upsert", "a", 1]]);
+  });
+
+  test("a listener's throw, invariant or not, is logged and silences no other listener", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const topic = fakeTopic();
+    topic.kernel.onPublished(() => {
+      throw new StateTopicInvariantError("audit at publication");
+    });
+    let after = 0;
+    topic.kernel.onPublished(() => {
+      after += 1;
+    });
+    topic.kernel.report([]);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    assert.equal(after, 1);
+    assert.equal(error.mock.calls.length, 1);
+    // The ledger, not the exception, fails the test.
+    assert.equal(takeStateTopicInvariantsForTests().length, 1);
+  });
+});
+
+describe("the invariant ledger", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("a violation is recorded at construction, so the checker fails even after a catch", () => {
+    try {
+      throw new StateTopicInvariantError("unreported session row change: s1");
+    } catch (err) {
+      assert.ok(isStateTopicInvariant(err));
+    }
+    assert.throws(
+      () => failOnStateTopicInvariantsForTests(),
+      /state topic invariant violated \(1\): unreported session row change: s1/,
+    );
+    // Checking takes the ledger: the next check is quiet.
+    failOnStateTopicInvariantsForTests();
+  });
+
+  test("only the brand counts", () => {
+    assert.equal(isStateTopicInvariant(new Error("ordinary")), false);
+    assert.equal(isStateTopicInvariant(undefined), false);
+    assert.equal(isStateTopicInvariant("unreported"), false);
+    const violation = new StateTopicInvariantError("branded");
+    assert.equal(violation.name, "StateTopicInvariantError");
+    assert.equal(isStateTopicInvariant(violation), true);
+    assert.deepEqual(takeStateTopicInvariantsForTests(), [violation]);
+  });
+
+  test("the server test setup checks the ledger after every test", () => {
+    const setup = readFileSync(
+      new URL("./test/setup.ts", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      setup,
+      /^afterEach\(\(\) => failOnStateTopicInvariantsForTests\(\)\);$/m,
+    );
+  });
+
+  test("a module reset shares one brand and one ledger across kernel instances", async () => {
+    vi.resetModules();
+    const other = await import("./stateTopicKernel.ts");
+    assert.notEqual(
+      other.StateTopicInvariantError,
+      StateTopicInvariantError,
+      "the re-import is a second instance",
+    );
+
+    // A violation from the second instance: this instance recognises it and
+    // its checker fails on it, though `instanceof` cannot see it.
+    const foreign = new other.StateTopicInvariantError("from instance B");
+    assert.equal(foreign instanceof StateTopicInvariantError, false);
+    assert.equal(isStateTopicInvariant(foreign), true);
+    assert.throws(
+      () => failOnStateTopicInvariantsForTests(),
+      /from instance B/,
+    );
+    failOnStateTopicInvariantsForTests();
+
+    // And the reverse.
+    const local = new StateTopicInvariantError("from instance A");
+    assert.equal(other.isStateTopicInvariant(local), true);
+    assert.throws(
+      () => other.failOnStateTopicInvariantsForTests(),
+      /from instance A/,
+    );
+
+    // This instance's kernel rethrows a violation the other constructed,
+    // rather than logging it as an ordinary failure.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const topic = fakeTopic();
+    topic.rows.set("a", { revision: 1, live: true, summary: "A" });
+    topic.faults.read = () => {
+      throw new other.StateTopicInvariantError("raised in B");
+    };
+    topic.kernel.report(["a"]);
+    assert.throws(() => topic.kernel.flushNow(), /raised in B/);
+    assert.equal(error.mock.calls.length, 0);
+    assert.equal(takeStateTopicInvariantsForTests().length, 1);
+    failOnStateTopicInvariantsForTests();
+
+    // An ordinary publication failure in the other instance records nothing.
+    const plain = other.createStateTopic({
+      topic: "tasks",
+      revisions: () => {
+        throw new Error("database is closed");
+      },
+      summary: () => undefined,
+      snapshot: (seq: number) => ({ seq }),
+      batchMax: 10,
+    });
+    plain.attach(() => {});
+    plain.report(["a"]);
+    plain.flushNow();
+    assert.equal(error.mock.calls.length, 1);
+    assert.deepEqual(other.takeStateTopicInvariantsForTests(), []);
   });
 });

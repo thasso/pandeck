@@ -153,7 +153,8 @@ import {
   BackgroundWorkValidationError,
   backgroundWorkStore,
 } from "./db/backgroundWorkStore.ts";
-import { stateTopicFor } from "./stateTopics.ts";
+import { isStateTopicInvariant } from "./stateTopicKernel.ts";
+import { publishSessionRowsNow, stateTopicFor } from "./stateTopics.ts";
 import {
   backgroundWorkHumanStopDeps,
   stopAllBackgroundWorkForHuman,
@@ -545,7 +546,6 @@ export class Connection implements Viewer {
   private engineStateViewer:
     { live: HarnessDriver; viewer: Viewer } | undefined;
   private disposed = false;
-  private archivedSessionsLoaded = false;
   /** Bounded per-object comment subscriptions. */
   private readonly openComments = new Map<string, CommentTarget>();
   /** Latest list generation per target; unwatch cancels an in-flight read. */
@@ -585,10 +585,6 @@ export class Connection implements Viewer {
 
   private settings(): AppSettings {
     return getSettings(this.publicBaseUrl);
-  }
-
-  wantsArchivedSessions(): boolean {
-    return this.archivedSessionsLoaded;
   }
 
   viewingSessionId(): string | undefined {
@@ -638,16 +634,14 @@ export class Connection implements Viewer {
     // must win over a slow deep-link reopen (or the route would stick on the
     // row the reader left). Same ticket discipline as `onLoadSession`.
     const ticket = this.claimViewRequest(this.initialRoute?.sessionId);
-    const initial = await this.initialView();
+    const initial = this.initialView();
     if (initial.view && this.viewRequestIsCurrent(ticket)) {
       this.view(initial.view, this.initialRoute?.timelineCache);
       this.armReadDwell(initial.view);
     }
-    // Everything `ready` awaits is gathered BEFORE the viewed session is read:
-    // a load can attach another session during any await here, and `state`
-    // and `contextInfo` must describe the same session as the snapshot the
-    // client already holds — captured together, synchronously, at send time.
-    const archivedSessionCount = await hub.archivedSessionCount();
+    // `state` and `contextInfo` must describe the same session as the snapshot
+    // the client already holds — captured together, synchronously, at send
+    // time. The session list arrives by the `sessions` topic subscribe.
     const viewing = this.viewing;
     this.send({
       type: "ready",
@@ -655,9 +649,6 @@ export class Connection implements Viewer {
       state: viewing ? this.stateFor(viewing) : null,
       models: pickerModels(),
       agents: availableAgents(),
-      sessions: initial.sessions,
-      archivedSessionCount,
-      archivedSessionsLoaded: false,
       settings: readySettings(this.settings()),
       serverBuild: serverBuildInfo(),
       speechToText: {
@@ -678,13 +669,11 @@ export class Connection implements Viewer {
     await this.maybeStartPostReloadContinuation();
   }
 
-  private async initialView(): Promise<{
+  private initialView(): {
     view?: HarnessDriver;
-    sessions: Awaited<ReturnType<typeof hub.listSessions>>;
     /** The error for a deep-linked session that exists but cannot be shown. */
     unavailable?: Extract<ServerMessage, { type: "error" }>;
-  }> {
-    const sessions = await hub.listSessions();
+  } {
     const route = this.initialRoute;
     if (route?.sessionId) {
       // Deep link `/sessions/<id>`: resolve by OUR id against the metadata
@@ -704,18 +693,18 @@ export class Connection implements Viewer {
         const view = hub.viewById(route.sessionId);
         // Deep-linked too: the read mark waits for the dwell (armed in `init`
         // once the view is attached), so the listed row is still unread here.
-        if (view) return { view, sessions };
+        if (view) return { view };
         // Nothing to show. The connection still becomes ready; a record that
         // exists but cannot be read is reported after `ready`, below.
         const unreadable = this.unopenableSession(route.sessionId, ref);
-        if (unreadable) return { sessions, unavailable: unreadable };
+        if (unreadable) return { unavailable: unreadable };
       }
     }
 
     // New-session routes are client-staged: do not create an empty server
     // session, attach a runtime, or send an empty chat snapshot until the first
     // prompt arrives via harnessSend.
-    return { sessions };
+    return {};
   }
 
   private async deliverInitialPendingAgentRelays(): Promise<void> {
@@ -1019,7 +1008,7 @@ export class Connection implements Viewer {
         return;
       }
       case "loadArchivedSessions":
-        return this.onLoadArchivedSessions();
+        return this.onLoadArchivedSessions(msg.requestId);
       case "ping":
         this.send({ type: "pong", id: msg.id });
         return;
@@ -1063,14 +1052,7 @@ export class Connection implements Viewer {
           msg.draftText,
           msg.notice,
         );
-      case "listSessions":
-        this.send({
-          type: "sessions",
-          sessions: await hub.listSessions(),
-          archivedSessionCount: await hub.archivedSessionCount(),
-          archivedSessionsLoaded: false,
-        });
-        return;
+
       case "resolveTimelineAnchor":
         return this.onResolveTimelineAnchor(msg.requestId, msg.target);
       case "requestSettings":
@@ -1231,7 +1213,9 @@ export class Connection implements Viewer {
       case "setSessionPeerTurnCap":
         try {
           setSessionPeerTurnCap(msg.sessionId, msg.cap);
-          await hub.sessionRowsSent();
+          // Delivery failures stay in the topic (Task-1310), so only the
+          // write itself can report an error here.
+          publishSessionRowsNow();
         } catch (err) {
           this.send({
             type: "error",
@@ -1240,6 +1224,7 @@ export class Connection implements Viewer {
           });
         }
         return;
+
       case "grantApprovalForSession":
         grantApprovalForSession(
           msg.sessionId,
@@ -1693,7 +1678,7 @@ export class Connection implements Viewer {
       }),
     );
     // Now that the session has a turn, refresh the sidebar so it appears.
-    await hub.sessionRowsSent();
+    publishSessionRowsNow();
   }
 
   /**
@@ -1842,7 +1827,16 @@ export class Connection implements Viewer {
     try {
       this.send(kernel.subscribeAnswer(digestRequested));
     } catch (err) {
-      if (topic === "tasks")
+      // A missed-reporter invariant is a test failure, never a collection
+      // error (`docs/state-sync.md`, "Failure boundary").
+      if (isStateTopicInvariant(err)) throw err;
+      if (topic === "sessions")
+        this.send({
+          type: "error",
+          message: `Failed to list sessions: ${errorText(err)}`,
+          target: { type: "session" },
+        });
+      else if (topic === "tasks")
         this.send({
           type: "error",
           message: `Failed to list tasks: ${errorText(err)}`,
@@ -2373,7 +2367,7 @@ export class Connection implements Viewer {
     if (!setInboxPositions(placement))
       return refuse("a session or run no longer exists");
     if (placement.runs.length > 0) broadcastWorkflowRuns();
-    if (placement.sessions.length > 0) await hub.sessionRowsSent();
+    if (placement.sessions.length > 0) publishSessionRowsNow();
   }
 
   /**
@@ -2857,7 +2851,7 @@ export class Connection implements Viewer {
           target: { type: "session", id: driver.sessionId },
         }),
       );
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
     } catch (err) {
       this.send({
         type: "error",
@@ -4245,7 +4239,7 @@ export class Connection implements Viewer {
         sessionId: live.sessionId,
         info: live.contextInfo(),
       });
-    await hub.sessionRowsSent();
+    publishSessionRowsNow();
   }
 
   /**
@@ -4364,7 +4358,7 @@ export class Connection implements Viewer {
         });
       }
     }
-    await hub.sessionRowsSent();
+    publishSessionRowsNow();
   }
 
   /**
@@ -4378,7 +4372,7 @@ export class Connection implements Viewer {
     // From its own Worker check; a Worker failure rejects.
     if (!(await acknowledgeMissingSessionWorktree(id))) return; // nothing to acknowledge
     if (this.viewing?.sessionId === id) this.viewing.broadcastState();
-    await hub.sessionRowsSent();
+    publishSessionRowsNow();
   }
 
   /**
@@ -4553,14 +4547,34 @@ export class Connection implements Viewer {
    * brand-new optimistic id with no record simply no-ops (the client keeps its
    * optimistic placeholder until the first prompt creates it via harnessSend).
    */
-  private async onLoadArchivedSessions(): Promise<void> {
-    this.archivedSessionsLoaded = true;
-    this.send({
-      type: "sessions",
-      sessions: await hub.listSessions({ includeArchived: true }),
-      archivedSessionCount: await hub.archivedSessionCount(),
-      archivedSessionsLoaded: true,
-    });
+  /**
+   * The archived slice (`docs/session-list.md`, "Archived sessions"): an
+   * explicit read beside the `sessions` topic, answered with the archived rows
+   * only, or with an error carrying the same `requestId` the client's single
+   * flight waits for.
+   */
+  private onLoadArchivedSessions(requestId: string): void {
+    let answer: Extract<ServerMessage, { type: "archivedSessions" }>;
+    try {
+      answer = {
+        type: "archivedSessions",
+        requestId,
+        sessions: hub
+          .listSessions({ includeArchived: true })
+          .filter((session) => session.archived),
+        archivedSessionCount: hub.archivedSessionCount(),
+      };
+    } catch (err) {
+      if (isStateTopicInvariant(err)) throw err;
+      this.send({
+        type: "error",
+        requestId,
+        message: `Failed to load archived sessions: ${errorText(err)}`,
+        target: { type: "session" },
+      });
+      return;
+    }
+    this.send(answer);
   }
 
   private async onLoadSession(
@@ -4621,19 +4635,19 @@ export class Connection implements Viewer {
       });
       return;
     }
-    // Everything the route message needs is gathered BEFORE attaching, so the
-    // snapshot and the message that moves the client to it leave back to back
-    // with no await between them: a competing load completing in such a gap
-    // would put its own snapshot between the two, and the client would wear
-    // this session's state over that session's timeline.
-    const sessions = await hub.listSessions();
+    // The snapshot and the message that moves the client to it leave back to
+    // back with no await between them: a competing load completing in such a
+    // gap would put its own snapshot between the two, and the client would
+    // wear this session's state over that session's timeline. Pending rows are
+    // published first, so the session is in the client's list before the
+    // route message names it.
+    publishSessionRowsNow();
     if (!this.viewRequestIsCurrent(ticket)) return;
     this.view(view, timelineCache);
     this.armReadDwell(view);
     this.send({
       type: "permanentAssistantOpened",
       state: this.stateFor(view),
-      sessions,
       contextInfo: view.contextInfo(),
     });
   }
@@ -4703,15 +4717,14 @@ export class Connection implements Viewer {
         requiresEnterprise,
         purpose: "draft",
       });
-      // Listed before attaching: snapshot and route message leave together
-      // (see `onOpenPermanentAssistant`). A newer navigation meanwhile keeps
-      // the draft unviewed: it exists, and the client is where it went.
-      const sessions = await hub.listSessions();
+      // Published before attaching (see `onOpenPermanentAssistant`). A newer
+      // navigation meanwhile keeps the draft unviewed: it exists, and the
+      // client is where it went.
+      publishSessionRowsNow();
       if (!this.viewIfCurrent(ticket, live)) return;
       this.send({
         type: "draftSession",
         state: this.stateFor(live),
-        sessions,
         contextInfo: live.contextInfo(),
         draftText: text,
         notice:
@@ -4719,7 +4732,7 @@ export class Connection implements Viewer {
           "Draft session created — review model/thinking and edit the prompt before sending.",
       });
       sessionStore.markRead(live.key, Date.now());
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
     } catch (err) {
       this.send({
         type: "error",
@@ -4740,14 +4753,14 @@ export class Connection implements Viewer {
     // blocker is checked before any destructive step. It is the SAME predicate
     // settlement uses, and unlike settlement's other reasons it is not a
     // judgement about tidiness: the user is told to stop the work first.
-    const projected = (await hub.listSessions({ includeArchived: true })).find(
-      (item) => item.id === id,
-    );
+    const projected = hub
+      .listSessions({ includeArchived: true })
+      .find((item) => item.id === id);
     const backgroundBlocked = backgroundWorkBlockedReason(
       projected?.backgroundActivity,
     );
-    const refuseForBackgroundWork = async (reason: string): Promise<void> => {
-      await hub.broadcastSessionUpdated(id);
+    const refuseForBackgroundWork = (reason: string): void => {
+      hub.republishSessionRow(id);
       this.send({
         type: "error",
         message: `Failed to delete session: ${reason} Stop it first.`,
@@ -4760,8 +4773,7 @@ export class Connection implements Viewer {
     // supplies the id. Resolved before the delete below, from which on nothing
     // awaits until every viewer has left and the harness is evicted.
     const resolved =
-      ref.file ??
-      (await hub.listSessions()).find((item) => item.id === id)?.file;
+      ref.file ?? hub.listSessions().find((item) => item.id === id)?.file;
     // The delete itself is ONE store transaction, run before any other
     // destructive step: it rechecks live work (closing the window the
     // projection above was read in), marks the session deleted and tombstones
@@ -4773,7 +4785,7 @@ export class Connection implements Viewer {
     } catch (err) {
       if (err instanceof BackgroundWorkValidationError)
         return refuseForBackgroundWork("its background work is still running.");
-      await hub.broadcastSessionUpdated(id);
+      hub.republishSessionRow(id);
       this.send({
         type: "error",
         message: `Failed to delete session: ${errorText(err)}`,
@@ -4836,7 +4848,7 @@ export class Connection implements Viewer {
       }
     }
     await removal;
-    await hub.sessionRowsSent();
+    publishSessionRowsNow();
   }
 
   private async onArchiveSession(id: string, archived: boolean): Promise<void> {
@@ -4858,7 +4870,7 @@ export class Connection implements Viewer {
     // first real send creates its durable session. Another connection viewing
     // the session keeps it: an archived session can be viewed on purpose.
     if (archived) this.clearSessionView(id, "archived");
-    await hub.sessionRowsSent();
+    publishSessionRowsNow();
   }
 
   /**
@@ -4948,14 +4960,14 @@ export class Connection implements Viewer {
         });
         return;
       }
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
       return;
     }
     const answer = await settleSessionWithPeers(id, throughRevision);
     if ("blocked" in answer) {
       // Re-send the authoritative row first, so a stale client cannot stay on
       // a false settled state after its optimistic update is rejected.
-      await hub.broadcastSessionUpdated(id);
+      hub.republishSessionRow(id);
       this.send({
         type: "error",
         message: `Failed to settle session: ${answer.blocked}`,
@@ -4998,12 +5010,12 @@ export class Connection implements Viewer {
       outcomeRevision,
     });
     if (answer === "dismissed") {
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
       return;
     }
     // Re-send the authoritative row either way, so the clicking tab shows
     // what replaced the failure it dismissed.
-    await hub.broadcastSessionUpdated(id);
+    hub.republishSessionRow(id);
     // Already gone (another tab, a run start): nothing went wrong.
     if (answer === "unchanged") return;
     this.send({
@@ -5082,21 +5094,21 @@ export class Connection implements Viewer {
           ? sessionRuntime.entryText(id, entryId)
           : undefined;
       const live = await prepared.fork();
-      // Listed before attaching: snapshot and route message leave together
-      // (see `onOpenPermanentAssistant`). A newer navigation meanwhile keeps
-      // the fork unviewed: it exists, and the client is where it went.
-      const sessions = await hub.listSessions();
+      // The new row is published before attaching, so it is in the client's
+      // list before the route message (see `onOpenPermanentAssistant`). A
+      // newer navigation meanwhile keeps the fork unviewed: it exists, and the
+      // client is where it went.
+      publishSessionRowsNow();
       if (!this.viewIfCurrent(ticket, live)) return;
       const state = this.stateFor(live);
       this.send({
         type: "forkedSession",
         state,
-        sessions,
         contextInfo: live.contextInfo(),
         ...(selectedText ? { selectedText } : {}),
       });
       sessionStore.markRead(live.key, Date.now());
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
     } catch (err) {
       this.send({
         type: "error",
@@ -5124,10 +5136,10 @@ export class Connection implements Viewer {
         { harness: ref.harness, id, agentType: ref.kind, file: ref.file },
         title,
       );
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
     } catch (err) {
       // A cancelled `/rename` dropped its pending state: that row goes first.
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
       this.send({
         type: "error",
         message: `Failed to rename session: ${errorText(err)}`,
@@ -5175,10 +5187,10 @@ export class Connection implements Viewer {
             title,
           ),
       });
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
     } catch (err) {
       // The cleared pending state reaches the list before the error.
-      await hub.sessionRowsSent();
+      publishSessionRowsNow();
       this.send({
         type: "error",
         message: `Failed to rename session: ${errorText(err)}`,
@@ -5312,7 +5324,7 @@ export class Connection implements Viewer {
       if (this.disposed || this.viewing?.sessionId !== sessionId) return;
       void (async () => {
         if (sessionStore.markRead(key, Date.now()))
-          await hub.broadcastSessionUpdated(sessionId);
+          hub.republishSessionRow(sessionId);
       })();
     }, SESSION_READ_DWELL_MS);
     timer.unref?.();
@@ -5741,9 +5753,6 @@ export class Connection implements Viewer {
         message = { ...message, requestId: scope.requestId };
     }
     const wireMessage = publicServerMessage(message);
-    // The only message that is dropped outright: a one-row update about a
-    // session no list may show has nothing left to say.
-    if (!wireMessage) return;
     if (this.ws.readyState === this.ws.OPEN)
       this.ws.send(encodeServerFrame(JSON.stringify(wireMessage)));
   }
@@ -5792,23 +5801,18 @@ function readySettings(settings: AppSettings): Partial<AppSettings> {
  * is not an ordinary session — it lives behind its own entry point, so no list
  * a client renders may carry it.
  *
- * Structural on purpose — every message with a `sessions` array, plus the
- * one-row `sessionUpdated` — rather than an enumeration of message types: the
- * leak that put the singleton back in the sidebar was exactly a later
- * sessions-carrying message (`permanentAssistantOpened`, and `forkedSession` /
- * `draftSession` beside it) that a per-type list had never been extended for.
- * A new one is covered the day it is added. It assumes what is true of every
- * such message today: a top-level `sessions` array IS a list of session rows.
- *
- * `undefined` means "send nothing at all"; only a hidden single row can produce
- * it, since a list simply loses that row.
+ * Structural on purpose — every message with a `sessions` array — rather than
+ * an enumeration of message types: the leak that put the singleton back in the
+ * sidebar was exactly a later sessions-carrying message that a per-type list
+ * had never been extended for. A new one is covered the day it is added. It
+ * assumes what is true of every such message today: a top-level `sessions`
+ * array IS a list of session rows. The `sessions` topic's events are built
+ * public already (`sessionsTopic.ts`).
  *
  * The binding lookup happens only for a message that actually carries rows —
  * every frame of a streaming run passes through here.
  */
-function publicServerMessage(
-  message: ServerMessage,
-): ServerMessage | undefined {
+function publicServerMessage(message: ServerMessage): ServerMessage {
   if ("sessions" in message && Array.isArray(message.sessions)) {
     const hidden = sessionListHiddenProbe();
     return {
@@ -5817,10 +5821,6 @@ function publicServerMessage(
         .filter((session) => !hidden(session))
         .map(publicSessionListItem),
     };
-  }
-  if (message.type === "sessionUpdated") {
-    if (sessionListHiddenProbe()(message.session)) return undefined;
-    return { ...message, session: publicSessionListItem(message.session) };
   }
   return message;
 }

@@ -214,11 +214,14 @@ test("an empty registry drops both tables and only the subagent revision sequenc
     Object.fromEntries(
       Object.entries(counts).filter(
         ([name]) =>
+          // A later migration's new table is not this one's doing.
+          name in before.counts &&
           !/^(subagent_runs|subagent_threads|schema_migrations|sequences)$/.test(
             name,
           ),
       ),
     );
+
   assert.deepEqual(
     untouchedCounts(after.counts),
     untouchedCounts(before.counts),

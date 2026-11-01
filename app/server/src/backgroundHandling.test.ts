@@ -1777,7 +1777,7 @@ test("unhandled updates of a coordinator-owned, a born-user-owned and a handed-b
 
     const settledLongAgo = Date.now() - SESSION_AUTO_ARCHIVE_AFTER_MS - 60_000;
     sessionStore.setSettled(id, true, settledLongAgo);
-    const [row] = await listSessions([], () => 0, {
+    const [row] = listSessions([], () => 0, {
       includeArchived: true,
       onlyIds: new Set([id]),
     });
@@ -1804,7 +1804,7 @@ test("unhandled updates of a coordinator-owned, a born-user-owned and a handed-b
     const recovering = await w.recover(id, refs);
     assert.ok("done" in recovering, ownership);
     await settle();
-    const [running] = await listSessions([], () => 0, {
+    const [running] = listSessions([], () => 0, {
       includeArchived: true,
       onlyIds: new Set([id]),
     });
@@ -1812,7 +1812,7 @@ test("unhandled updates of a coordinator-owned, a born-user-owned and a handed-b
     assert.equal(running?.unhandledBackgroundUpdates, undefined, ownership);
     provider.open.shift()!({ stopReason: "end" });
     await recovering.done;
-    const [done] = await listSessions([], () => 0, {
+    const [done] = listSessions([], () => 0, {
       includeArchived: true,
       onlyIds: new Set([id]),
     });

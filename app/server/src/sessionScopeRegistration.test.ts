@@ -91,7 +91,7 @@ test("a live pi row is listed only while the store does not classify it otherwis
   };
 
   // Before anything is persisted the row is the user's by construction …
-  const before = await listSessions([liveRow], () => 0);
+  const before = listSessions([liveRow], () => 0);
   assert.ok(before.some((s) => s.id === id));
 
   // … and the moment a claim classifies it otherwise, the same live row is out.
@@ -101,6 +101,6 @@ test("a live pi row is listed only while the store does not classify it otherwis
     agentType: "assistant",
     scope: "internal",
   });
-  const after = await listSessions([liveRow], () => 0);
+  const after = listSessions([liveRow], () => 0);
   assert.ok(!after.some((s) => s.id === id));
 });

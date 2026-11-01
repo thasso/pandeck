@@ -288,8 +288,8 @@ test("work admitted after the delete's projection read still refuses the delete"
   const history = finishedBackgroundWork(id);
   // The projection says the session is idle; work starts while it is read.
   const listSessions = hub.listSessions.bind(hub);
-  hub.listSessions = (async (...args: Parameters<typeof listSessions>) => {
-    const listed = await listSessions(...args);
+  hub.listSessions = ((...args: Parameters<typeof listSessions>) => {
+    const listed = listSessions(...args);
     hub.listSessions = listSessions;
     backgroundWorkStore.reserveItem({
       ownerSessionId: id,

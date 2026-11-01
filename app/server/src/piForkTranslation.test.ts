@@ -30,18 +30,8 @@ const forkCalls: Array<{
 }> = [];
 /** Set by a test that needs the fork to SUCCEED; otherwise piStore is stubbed out. */
 let forkOutcome: (() => Promise<unknown>) | null = null;
-vi.mock("./hub.ts", async (importOriginal) => {
-  const actual = await importOriginal<{ hub: Record<string, unknown> }>();
-  return {
-    ...actual,
-    hub: {
-      ...actual.hub,
-      listSessions: () => Promise.resolve([]),
-    },
-  };
-});
-
 const { Connection } = await import("./connection.ts");
+const { hub } = await import("./hub.ts");
 const settings = await import("./settings.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 vi.spyOn(piStore, "forkSession").mockImplementation(
@@ -57,6 +47,7 @@ const { SessionLogStore } = await import("./session/log/store.ts");
 type AdapterEvent = import("./session/adapters/contract.ts").AdapterEvent;
 
 function makeConnection(): {
+  connection: InstanceType<typeof Connection>;
   fork: (
     id: string,
     entryId: string,
@@ -73,6 +64,7 @@ function makeConnection(): {
     send: (s: string) => sent.push(JSON.parse(s) as ServerMessage),
   });
   return {
+    connection: conn as unknown as InstanceType<typeof Connection>,
     fork: (id, entryId, position) =>
       (
         conn as unknown as {
@@ -338,6 +330,55 @@ test("a pi edit-and-retry draft excludes model-only memory", async () => {
     "a pi prompt",
     "the composer draft comes from the clean app log",
   );
+});
+
+test("a connection fork publishes its listed child before the navigation reply", async () => {
+  const parent = "pi-topic-order-parent";
+  const child = "pi-topic-order-child";
+  const [, anchor] = await seedPiSession(parent, true);
+  const { connection, sent } = makeConnection();
+  hub.register(connection);
+  try {
+    await connection.handle({ type: "subscribe", topics: ["sessions"] });
+    await hub.flushPendingBroadcastsForTests();
+    sent.length = 0;
+    forkOutcome = async () => {
+      sessionStore.upsert({
+        id: child,
+        harness: "pi",
+        agentType: "developer",
+        title: "Fork",
+        messageCount: 2,
+      });
+      return makeFakeLive(child);
+    };
+    await connection.handle({
+      type: "forkSession",
+      id: parent,
+      entryId: anchor!,
+      position: "at",
+    });
+    const reply = sent.findIndex(
+      (m) => m.type === "forkedSession" && m.state.sessionId === child,
+    );
+    assert.ok(reply >= 0, "the fork opened");
+    const row = sent.findIndex(
+      (m) =>
+        m.type === "stateEvents" &&
+        m.topic === "sessions" &&
+        m.events.some((e) => e.id === child && e.kind === "upsert"),
+    );
+    assert.ok(
+      row >= 0 && row < reply,
+      "the replica knows the child before navigation",
+    );
+    assert.ok(!("sessions" in sent[reply]!), "no list rider");
+  } finally {
+    forkOutcome = null;
+    hub.unregister(connection);
+    connection.dispose();
+    await hub.flushPendingBroadcastsForTests();
+  }
 });
 
 test("a pi fork seeds the child transcript from the parent's log", async () => {

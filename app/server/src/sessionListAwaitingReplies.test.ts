@@ -32,7 +32,7 @@ test("a session row lists the peers it awaits a reply from", async () => {
     responseRequested: true,
   });
   const row = async (id: string) =>
-    (await listSessions([], () => Date.now())).find((item) => item.id === id);
+    listSessions([], () => Date.now()).find((item) => item.id === id);
   try {
     // Still being delivered: nothing is owed yet.
     assert.equal((await row(coordinator))?.awaitingRepliesFrom, undefined);
@@ -67,7 +67,7 @@ test("an unresolved hop refusal stays on the sending session across list rebuild
     assert.equal(peerPromptStore.recordHopRefusal(id, chainId, 3), true);
     assert.equal(peerPromptStore.recordHopRefusal(id, chainId, 3), false);
     for (let i = 0; i < 2; i++) {
-      const row = (await listSessions([], () => Date.now())).find(
+      const row = listSessions([], () => Date.now()).find(
         (item) => item.id === id,
       );
       assert.deepEqual(row?.peerPromptHopRefusal, { chainId, maxHops: 3 });
@@ -78,7 +78,7 @@ test("an unresolved hop refusal stays on the sending session across list rebuild
       false,
       "a reset racing a refusal wins",
     );
-    const row = (await listSessions([], () => Date.now())).find(
+    const row = listSessions([], () => Date.now()).find(
       (item) => item.id === id,
     );
     assert.equal(row?.peerPromptHopRefusal, undefined);
@@ -125,7 +125,7 @@ test("a report still being delivered or retried keeps the row's queued work", as
     responseRequested: false,
   });
   const row = async (id: string) =>
-    (await listSessions([], () => Date.now())).find((item) => item.id === id);
+    listSessions([], () => Date.now()).find((item) => item.id === id);
   try {
     peerPromptStore.claimNext(coordinator, "drainer", 1_000);
     // Mid-delivery, then waiting out a retry backoff: still owed, but the
@@ -168,7 +168,7 @@ test("a session row lists who still awaits it after the last reminder", async ()
   peerPromptStore.markAdmitted(request.id);
   peerPromptStore.markCompleted(request.id);
   const row = async (id: string) =>
-    (await listSessions([], () => Date.now())).find((item) => item.id === id);
+    listSessions([], () => Date.now()).find((item) => item.id === id);
   try {
     // Reminders left: the session is reminded, not the user.
     peerPromptStore.markReminded([request.id, request.id]);

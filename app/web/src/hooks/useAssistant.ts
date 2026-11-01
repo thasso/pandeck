@@ -471,21 +471,39 @@ export interface UIState {
   modelsRefreshRequestId: string | null;
   /** Agents the server offers (Workshop only in dev). */
   agents: AgentInfo[];
+  /**
+   * The rows every consumer reads, composed: `liveSessions` plus the archived
+   * slice's rows that are not live, newest first. Never written directly; a
+   * row transform goes through `updateSessionRows`.
+   */
   sessions: SessionListItem[];
   /**
-   * An authoritative session list arrived in the CURRENT socket episode.
-   *
-   * The sibling of `taskListFresh` for a list that is not a subscription: it
-   * arrives whole with `ready`, so that is the only step that may set this.
-   * `hydrationSource === "live"` is NOT a substitute — it is historical, and a
-   * reconnect turns `connected` back on before the new `ready` lands, which
-   * would bless previous-episode rows as current.
+   * The `sessions` replica's held rows: the canonical live projection ONLY
+   * (`docs/state-sync.md`, "Adopted domains"), so a `delete` for an archived
+   * id can never drop a shown archived row.
+   */
+  liveSessions: SessionListItem[];
+  /** The archived slice, replaced whole by each `archivedSessions` answer. */
+  archivedSessions: SessionListItem[];
+  /**
+   * The `sessions` subscription's snapshot arrived in the CURRENT socket
+   * episode. `hydrationSource === "live"` is NOT a substitute — it is
+   * historical, and a reconnect turns `connected` back on before the new
+   * snapshot lands, which would bless previous-episode rows as current.
    */
   sessionListFresh: boolean;
   /** Count of archived sessions omitted until the archived sidebar section is expanded. */
   archivedSessionCount: number;
-  /** True once archived session rows have been loaded into `sessions`. */
+  /** True once the archived slice was read, until a snapshot makes it stale. */
   archivedSessionsLoaded: boolean;
+  /**
+   * An archived read is due: at most one waits behind the flight and a dropped
+   * disconnect read remains queued until the next sessions snapshot. The effect
+   * layer sends it (`docs/session-list.md`, "Archived sessions").
+   */
+  archivedReadQueued: boolean;
+  /** The `requestId` of the archived read in flight; only its answer counts. */
+  archivedReadFlight: string | null;
   session: SessionState | null;
   settings: AppSettings;
   /** Deployment dictation availability from `ready`; null before first connect. */
@@ -914,8 +932,12 @@ const emptyInitial: UIState = {
   modelsRefreshRequestId: null,
   agents: [],
   sessions: [],
+  liveSessions: [],
+  archivedSessions: [],
   archivedSessionCount: 0,
   archivedSessionsLoaded: false,
+  archivedReadQueued: false,
+  archivedReadFlight: null,
   session: null,
   settings: defaultSettings,
   speechToText: null,
@@ -1208,34 +1230,79 @@ function normalizeCachedSessions(
     });
 }
 
-function mergeSessionList(
-  current: SessionListItem[],
-  incoming: SessionListItem[],
-  archivedSessionsLoaded: boolean,
+const byUpdatedAt = (a: SessionListItem, b: SessionListItem) =>
+  b.updatedAt - a.updatedAt;
+
+/** `rows` newest first; the same array when it already is. */
+function sortedByUpdatedAt(rows: SessionListItem[]): SessionListItem[] {
+  for (let i = 1; i < rows.length; i++)
+    if (byUpdatedAt(rows[i - 1]!, rows[i]!) > 0)
+      return rows.slice().sort(byUpdatedAt);
+  return rows;
+}
+
+/**
+ * What consumers read: the live rows plus the archived slice's rows that are
+ * not live (a restore shows once), newest first. With no such archived row it
+ * IS the live array, identity included.
+ */
+function composeSessions(
+  live: SessionListItem[],
+  archived: SessionListItem[],
 ): SessionListItem[] {
-  if (archivedSessionsLoaded) return incoming;
-  // Default session broadcasts intentionally omit archived rows. If the user has
-  // already expanded and loaded the archive, preserve those rows locally while
-  // replacing active rows with the authoritative fresh list.
-  const incomingIds = new Set(incoming.map((session) => session.id));
-  const preservedArchived = current.filter(
-    (session) => session.archived && !incomingIds.has(session.id),
-  );
-  return [...incoming, ...preservedArchived].sort(
-    (a, b) => b.updatedAt - a.updatedAt,
+  if (archived.length === 0) return live;
+  const liveIds = new Set(live.map((session) => session.id));
+  const extra = archived.filter((session) => !liveIds.has(session.id));
+  return extra.length === 0 ? live : [...live, ...extra].sort(byUpdatedAt);
+}
+
+function sessionSlices(
+  live: SessionListItem[],
+  archived: SessionListItem[],
+): Pick<UIState, "liveSessions" | "archivedSessions" | "sessions"> {
+  return {
+    liveSessions: live,
+    archivedSessions: archived,
+    sessions: composeSessions(live, archived),
+  };
+}
+
+/** Write both session slices and recompose; unchanged slices keep `state`. */
+function withSessionSlices(
+  state: UIState,
+  live: SessionListItem[],
+  archived: SessionListItem[],
+): UIState {
+  if (live === state.liveSessions && archived === state.archivedSessions)
+    return state;
+  return { ...state, ...sessionSlices(live, archived) };
+}
+
+/**
+ * The one way a reducer branch changes session rows: `update` runs on each
+ * slice separately — the live rows through the replica's `write`, so they stay
+ * sorted and keep the sidecar, the archived slice directly — and the consumer
+ * list is recomposed.
+ */
+function updateSessionRows(
+  state: UIState,
+  update: (rows: SessionListItem[]) => SessionListItem[],
+): UIState {
+  const archived = update(state.archivedSessions);
+  const held = sessionReplica.read(state);
+  return sessionReplica.write(
+    archived === state.archivedSessions
+      ? state
+      : withSessionSlices(state, state.liveSessions, archived),
+    { items: update(held.items), revisions: held.revisions },
   );
 }
 
-function upsertSessionListItem(
-  current: SessionListItem[],
-  incoming: SessionListItem,
-): SessionListItem[] {
-  const idx = current.findIndex((session) => session.id === incoming.id);
-  if (idx < 0)
-    return [incoming, ...current].sort((a, b) => b.updatedAt - a.updatedAt);
-  const next = current.slice();
-  next[idx] = incoming;
-  return next.sort((a, b) => b.updatedAt - a.updatedAt);
+/** Due an archived re-read: only while the slice is shown. */
+function queueArchivedRead(state: UIState): UIState {
+  return state.archivedSessionsLoaded && !state.archivedReadQueued
+    ? { ...state, archivedReadQueued: true }
+    : state;
 }
 
 /** Preserve row identities across authoritative snapshots when content agrees. */
@@ -1356,8 +1423,13 @@ export function createInitialState(): UIState {
     shellCachedAt: cache.savedAt,
     models: cache.models,
     agents: cache.agents,
-    sessions: cache.sessions,
+    // No revisions: the first snapshot replaces the live rows.
+    ...sessionSlices(
+      sortedByUpdatedAt(cache.sessions.filter((session) => !session.archived)),
+      cache.sessions.filter((session) => session.archived),
+    ),
     archivedSessionCount: cache.archivedSessionCount ?? 0,
+
     archivedSessionsLoaded: cache.archivedSessionsLoaded === true,
     settings: cache.settings,
     slashCommands: cache.slashCommands,
@@ -1538,6 +1610,9 @@ const SHELL_CACHE_IDLE_TIMEOUT_MS = 2_000;
  * also block the shell cache, which deliberately never persists optimistic data.
  */
 const MUTATION_SETTLE_TIMEOUT_MS = 30_000;
+/** An archived read with no answer by then releases its flight. */
+const ARCHIVED_READ_TIMEOUT_MS = 30_000;
+
 /**
  * Clone/remove and every remote card action (merge, update-with-main, cleanup)
  * are real long operations; their settle follows COMPLETION, so the short
@@ -1883,6 +1958,13 @@ type Action =
    */
   | { kind: "optimisticInboxPositions"; positions: InboxPositionEntry[] }
   | { kind: "optimisticSessionDelete"; sessionId: string }
+  /** Opening the shelf or a recovery: an archived read is due. */
+  | { kind: "archivedReadRequested" }
+  /** The scheduler sent the due archived read under `requestId`. */
+  | { kind: "archivedReadSent"; requestId: string }
+  /** That read's error or timeout: it no longer holds the flight. */
+  | { kind: "archivedReadReleased"; requestId: string }
+
   /** A human Stop left this browser; the server's answer retires it. */
   | { kind: "backgroundStopSent"; itemId?: string; ownerSessionId?: string }
   | { kind: "optimisticWorktreeRemove"; worktreeId: string }
@@ -3611,6 +3693,113 @@ const backgroundReplica: TopicDescriptor<
   }),
 };
 
+type SessionListMessage = Extract<ServerMessage, { type: "sessionList" }>;
+type SessionStateEventsMessage = StateEventsMessage<
+  "sessions",
+  SessionListItem
+>;
+
+/**
+ * Value-equal rows of `incoming` keep their held identity, and so does the
+ * held array when every row is reused, in whatever order the server sent
+ * them, since `write` sorts (a reconnect redraws nothing).
+ */
+function reconcileSessions(
+  held: SessionListItem[],
+  incoming: SessionListItem[],
+): SessionListItem[] {
+  if (held.length === 0 || incoming.length === 0) return incoming;
+  const heldById = new Map(held.map((row) => [row.id, row]));
+  let reused = 0;
+  const rows = incoming.map((row) => {
+    const existing = heldById.get(row.id);
+    if (!existing || !wireValueEqual(existing, row)) return row;
+    reused++;
+    return existing;
+  });
+  return reused === held.length && rows.length === held.length ? held : rows;
+}
+
+/**
+ * The `sessions` topic's replica lenses over the LIVE rows only
+ * (`docs/session-list.md`). A row goes in `updatedAt` order, and `write`
+ * re-sorts when an upsert moved one, keeping identity when nothing moved. An
+ * archived-slice id is restored by a live upsert and re-read on a `delete`;
+ * a `delete` for an id held nowhere (the hidden singleton, a zero-message
+ * child) does nothing. No digest: PR3 adds one.
+ */
+const sessionReplica: TopicDescriptor<
+  UIState,
+  SessionListItem,
+  SessionListMessage
+> = {
+  read: (state) => ({
+    items: state.liveSessions,
+    revisions: state.stateEventRevisions.sessions ?? {},
+  }),
+  write: (state, replica) => {
+    const written = withSessionSlices(
+      state,
+      sortedByUpdatedAt(replica.items),
+      state.archivedSessions,
+    );
+    return written.stateEventRevisions.sessions === replica.revisions
+      ? written
+      : {
+          ...written,
+          stateEventRevisions: {
+            ...written.stateEventRevisions,
+            sessions: replica.revisions,
+          },
+        };
+  },
+  snapshot: (message, held) => {
+    const revisions = revisionSidecar(message.revisions);
+    return {
+      items: reconcileSessions(held.items, message.sessions),
+      // A sidecar missing a row cannot vouch for the list: none is held.
+      revisions:
+        revisions &&
+        message.sessions.every((session) => session.id in revisions)
+          ? message.revisions
+          : [],
+    };
+  },
+  place: (items, item) => {
+    const at = items.findIndex((row) => row.updatedAt < item.updatedAt);
+    return at < 0
+      ? [...items, item]
+      : [...items.slice(0, at), item, ...items.slice(at)];
+  },
+  adoptSnapshot: (state, message) => ({
+    ...state,
+    sessionListFresh: true,
+    archivedSessionCount: message.archivedSessionCount,
+    // An open shelf re-reads the slice it shows, as after any reconnect.
+    archivedSessionsLoaded: false,
+  }),
+  afterEvents: (state, applied) => {
+    if (state.archivedSessions.length === 0) return state;
+    const archivedIds = new Set(state.archivedSessions.map((row) => row.id));
+    const restored = new Set<string>();
+    let reread = false;
+    for (const event of applied) {
+      if (!archivedIds.has(event.id)) continue;
+      if (event.kind === "upsert") restored.add(event.id);
+      else reread = true;
+    }
+    const next =
+      restored.size === 0
+        ? state
+        : withSessionSlices(
+            state,
+            state.liveSessions,
+            state.archivedSessions.filter((row) => !restored.has(row.id)),
+          );
+    return reread ? queueArchivedRead(next) : next;
+  },
+};
+
 type ProjectListMessage = Extract<ServerMessage, { type: "projectList" }>;
 const NO_PROJECTS: ProjectSummary[] = [];
 
@@ -3980,8 +4169,11 @@ function applyEvent(
     | TaskStateEventsMessage
     | ProjectStateEventsMessage
     | InitiativeStateEventsMessage
-    | BackgroundStateEventsMessage,
+    | BackgroundStateEventsMessage
+    | SessionStateEventsMessage,
 ): UIState {
+  if (message.topic === "sessions")
+    return applyTopicMessage(sessionReplica, state, message);
   if (message.topic === "tasks")
     return applyTopicMessage(taskReplica, state, message);
   if (message.topic === "projects")
@@ -4713,6 +4905,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return applyTopicMessage(projectReplica, state, input);
     if (action.topic === "initiatives")
       return applyTopicMessage(initiativeReplica, state, input);
+    if (action.topic === "sessions")
+      return applyTopicMessage(sessionReplica, state, input);
     return state;
   }
   if (action.kind === "optimisticProjectSave") {
@@ -4915,50 +5109,57 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   }
   if (action.kind === "optimisticSessionRename") {
     return {
-      ...state,
-      sessions: applyOptimisticSessionRename(
-        state.sessions,
-        action.sessionId,
-        action.title,
-        action.now,
+      ...updateSessionRows(state, (rows) =>
+        applyOptimisticSessionRename(
+          rows,
+          action.sessionId,
+          action.title,
+          action.now,
+        ),
       ),
       error: null,
     };
   }
   if (action.kind === "optimisticSpawnOwnership") {
     return {
-      ...state,
-      sessions: state.sessions.map((session) =>
-        session.id === action.sessionId && session.spawnedBySessionId
-          ? { ...session, spawnOwnership: action.ownership }
-          : session,
+      ...updateSessionRows(state, (rows) =>
+        rows.map((session) =>
+          session.id === action.sessionId && session.spawnedBySessionId
+            ? { ...session, spawnOwnership: action.ownership }
+            : session,
+        ),
       ),
       error: null,
     };
   }
   if (action.kind === "optimisticSessionSettle") {
-    let sessions = applyOptimisticSessionSettle(
-      state.sessions,
-      action.sessionId,
-      action.settled,
-      action.now,
-    );
     // A peer already down keeps its settled time, as the server's cascade
     // does, so it does not jump to the top of the shelf until the list lands.
     const alreadySettled = new Set(
-      sessions
+      state.sessions
         .filter((session) => session.settledAt !== undefined)
         .map((session) => session.id),
     );
-    for (const sessionId of action.peerSessionIds)
-      if (!alreadySettled.has(sessionId))
-        sessions = applyOptimisticSessionSettle(
-          sessions,
-          sessionId,
-          true,
+    return {
+      ...updateSessionRows(state, (rows) => {
+        let next = applyOptimisticSessionSettle(
+          rows,
+          action.sessionId,
+          action.settled,
           action.now,
         );
-    return { ...state, sessions, error: null };
+        for (const sessionId of action.peerSessionIds)
+          if (!alreadySettled.has(sessionId))
+            next = applyOptimisticSessionSettle(
+              next,
+              sessionId,
+              true,
+              action.now,
+            );
+        return next;
+      }),
+      error: null,
+    };
   }
   if (action.kind === "compactionWindowRequested")
     return {
@@ -4990,17 +5191,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     };
   }
   if (action.kind === "optimisticWorkflowRunSettle") {
-    let sessions = state.sessions;
-    for (const sessionId of action.sessionIds)
-      sessions = applyOptimisticSessionSettle(
-        sessions,
-        sessionId,
-        true,
-        action.now,
-      );
+    const settled = updateSessionRows(state, (rows) => {
+      let next = rows;
+      for (const sessionId of action.sessionIds)
+        next = applyOptimisticSessionSettle(next, sessionId, true, action.now);
+      return next;
+    });
     return {
-      ...state,
-      sessions,
+      ...settled,
       workflowRuns:
         state.workflowRuns?.map((run) =>
           run.id === action.runId && run.attention
@@ -5029,17 +5227,19 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       if (entry.kind === "session")
         sessionPositions.set(entry.id, entry.position);
       else runPositions.set(entry.runId, entry.position);
-    return {
-      ...state,
-      sessions:
-        sessionPositions.size > 0
-          ? state.sessions.map((session) => {
+    const placed =
+      sessionPositions.size > 0
+        ? updateSessionRows(state, (rows) =>
+            rows.map((session) => {
               const inboxPosition = sessionPositions.get(session.id);
               return inboxPosition === undefined
                 ? session
                 : { ...session, inboxPosition };
-            })
-          : state.sessions,
+            }),
+          )
+        : state;
+    return {
+      ...placed,
       workflowRuns:
         runPositions.size > 0 && state.workflowRuns
           ? state.workflowRuns.map((run) => {
@@ -5054,13 +5254,29 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   }
   if (action.kind === "optimisticSessionDelete") {
     return {
-      ...state,
-      sessions: state.sessions.filter(
-        (session) => session.id !== action.sessionId,
+      ...updateSessionRows(state, (rows) =>
+        rows.some((session) => session.id === action.sessionId)
+          ? rows.filter((session) => session.id !== action.sessionId)
+          : rows,
       ),
       error: null,
     };
   }
+  if (action.kind === "archivedReadRequested")
+    return state.archivedReadQueued
+      ? state
+      : { ...state, archivedReadQueued: true };
+  if (action.kind === "archivedReadSent")
+    return {
+      ...state,
+      archivedReadQueued: false,
+      archivedReadFlight: action.requestId,
+    };
+  if (action.kind === "archivedReadReleased")
+    return state.archivedReadFlight === action.requestId
+      ? { ...state, archivedReadFlight: null }
+      : state;
+
   if (action.kind === "backgroundStopSent") {
     return {
       ...state,
@@ -5401,7 +5617,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // Cache-seeded and previous-episode lists stay visible, but a disconnect
       // makes them due for either a subscription snapshot or one-off read.
       sessionListFresh: action.connected ? state.sessionListFresh : false,
+      // An in-flight read on the closed socket is never answered. Preserve it
+      // as one queued read, and let the scheduler wait for the reconnect snapshot.
+      archivedReadFlight: action.connected ? state.archivedReadFlight : null,
+      archivedReadQueued: action.connected
+        ? state.archivedReadQueued
+        : state.archivedReadQueued || state.archivedReadFlight !== null,
       taskListFresh: action.connected ? state.taskListFresh : false,
+
       initiativesFresh: action.connected ? state.initiativesFresh : false,
       initiativesRefreshing: action.connected
         ? state.initiativesRefreshing
@@ -5484,14 +5707,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           connected: true,
           models: msg.models,
           agents: msg.agents,
-          sessions: msg.sessions,
-          // This step, and only this step: the list it installs is the
-          // server's answer for the episode that just opened.
-          sessionListFresh: true,
-          archivedSessionCount:
-            msg.archivedSessionCount ??
-            msg.sessions.filter((session) => session.archived).length,
-          archivedSessionsLoaded: msg.archivedSessionsLoaded === true,
+          // The session list is the `sessions` subscription's snapshot.
           session: msg.state,
           settings: { ...defaultSettings, ...msg.settings },
           speechToText: msg.speechToText,
@@ -5664,7 +5880,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return withChat(
         {
           ...state,
-          sessions: mergeSessionList(state.sessions, msg.sessions, false),
           session: msg.state,
           contextInfo: msg.contextInfo,
           historySessionId: msg.state.sessionId,
@@ -5744,31 +5959,29 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         forgejoStatus: msg.status,
         error: null,
       };
-    case "sessions": {
+    case "sessionList":
       // The session list reaches every connection (not just the session's
       // viewers), but the viewed chat's runState is owned by the runtime snapshot
       // and ordered runtime events. Treat list rows as sidebar metadata only.
-      const nextSessions = mergeSessionList(
-        state.sessions,
-        msg.sessions,
-        msg.archivedSessionsLoaded === true,
-      );
-      const archivedSessionCount =
-        msg.archivedSessionCount ??
-        nextSessions.filter((session) => session.archived).length;
-      const archivedSessionsLoaded =
-        state.archivedSessionsLoaded || msg.archivedSessionsLoaded === true;
+      return applyTopicMessage(sessionReplica, state, msg);
+    case "archivedSessionCount": {
+      if (msg.count === state.archivedSessionCount) return state;
+      return queueArchivedRead({ ...state, archivedSessionCount: msg.count });
+    }
+    case "archivedSessions":
+      // Only the flight's own answer: a timed-out or pre-disconnect read's
+      // late answer neither releases the flight nor overwrites the slice.
+      if (msg.requestId !== state.archivedReadFlight) return state;
       return {
-        ...state,
-        sessions: nextSessions,
-        archivedSessionCount,
-        archivedSessionsLoaded,
+        ...withSessionSlices(
+          state,
+          state.liveSessions,
+          sortedByUpdatedAt(msg.sessions),
+        ),
+        archivedSessionCount: msg.archivedSessionCount,
+        archivedSessionsLoaded: true,
+        archivedReadFlight: null,
       };
-    }
-    case "sessionUpdated": {
-      const nextSessions = upsertSessionListItem(state.sessions, msg.session);
-      return { ...state, sessions: nextSessions };
-    }
     case "objectLinksResolved":
       return {
         ...state,
@@ -6070,7 +6283,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return withChat(
         {
           ...state,
-          sessions: mergeSessionList(state.sessions, msg.sessions, false),
           session: msg.state,
           contextInfo: msg.contextInfo,
           historySessionId: msg.state.sessionId,
@@ -6087,8 +6299,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return withChat(
         {
           ...state,
-          sessions: mergeSessionList(state.sessions, msg.sessions, false),
           session: msg.state,
+
           contextInfo: msg.contextInfo,
           historySessionId: msg.state.sessionId,
           error: null,
@@ -6164,6 +6376,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         },
       };
     case "error":
+      // Collection reads belong to the replica/archive scheduler, not the chat.
+      if (msg.target?.type === "session" && !msg.target.id) return state;
       return withChat(
         {
           ...state,
@@ -7109,6 +7323,7 @@ export function useAssistant({
       tasks: taskReplica,
       projects: projectReplica,
       initiatives: initiativeReplica,
+      sessions: sessionReplica,
     },
     send: (message) => socketRef.current?.send(message),
     holds: (topic) => topicsRef.current.has(topic),
@@ -7121,6 +7336,37 @@ export function useAssistant({
       dispatch({ kind: "replicaBaselineLost", topic, ids }),
   });
   const replicaTransport = replicaTransportRef.current;
+
+  // The archived slice's one scheduler (`docs/session-list.md`, "Archived
+  // sessions"): the reducer queues a read, and this sends it once the flight
+  // is free, under a fresh `requestId` only its own answer or error matches.
+  useEffect(() => {
+    if (
+      !state.connected ||
+      !state.sessionListFresh ||
+      !state.archivedReadQueued ||
+      state.archivedReadFlight !== null
+    )
+      return;
+    const requestId = createClientId();
+    dispatch({ kind: "archivedReadSent", requestId });
+    socketRef.current?.send({ type: "loadArchivedSessions", requestId });
+  }, [
+    state.connected,
+    state.sessionListFresh,
+    state.archivedReadQueued,
+    state.archivedReadFlight,
+  ]);
+  // A lost answer releases its flight; a late one is then ignored.
+  useEffect(() => {
+    const flight = state.archivedReadFlight;
+    if (flight === null) return;
+    const timer = setTimeout(
+      () => dispatch({ kind: "archivedReadReleased", requestId: flight }),
+      ARCHIVED_READ_TIMEOUT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [state.archivedReadFlight]);
   const transportHasConnectedRef = useRef(false);
   /** Canonical one-off list reads already requested in this socket episode. */
   const episodeListReadsRef = useRef({
@@ -7359,6 +7605,8 @@ export function useAssistant({
         replicaTransport.snapshotReceived("background", msg.seq);
       if (msg.type === "initiativeList")
         replicaTransport.snapshotReceived("initiatives", msg.seq);
+      if (msg.type === "sessionList")
+        replicaTransport.snapshotReceived("sessions", msg.seq);
       if (msg.type === "stateDigest") {
         // A digest the transport fell back from never reaches the reducer.
         const answer = replicaTransport.digestReceived(msg, stateRef.current);
@@ -7494,6 +7742,22 @@ export function useAssistant({
         episodeListReadsRef.current.tasks = false;
         if (!msg.requestId) replicaTransport.snapshotFailed("tasks");
       }
+      // The session collection's failures: unstamped, the `sessions` snapshot
+      // read (the awaited answer will not come); stamped with the archived
+      // flight's id, that read, whose flight it releases. A stale flight's
+      // late error releases nothing.
+      if (
+        msg.type === "error" &&
+        msg.target?.type === "session" &&
+        !msg.target.id
+      ) {
+        if (!msg.requestId) replicaTransport.snapshotFailed("sessions");
+        else
+          dispatch({ kind: "archivedReadReleased", requestId: msg.requestId });
+        // In particular, a stale archive error must have no other effect.
+        return;
+      }
+
       // And the project list: the Projects pane's note offers the same Retry,
       // and every collection whose note does has to reopen its gate — otherwise
       // the button calls a loader that returns early and the note is permanent
@@ -7693,6 +7957,10 @@ export function useAssistant({
               mutationLifecycleRef.current.recoveryTopics().has("tasks")
             )
               replicaTransport.snapshotRequested("tasks");
+            // Sessions never asks for a digest: its subscribe is always
+            // answered by a snapshot, which a recovery's resync joins.
+            if (topics.includes("sessions"))
+              replicaTransport.snapshotRequested("sessions");
             socket.send(
               replicaTransport.subscribeRequest(
                 topics,
@@ -7809,11 +8077,18 @@ export function useAssistant({
       dispatch({ kind: "revealRequested", requestId, target });
       send({ type: "resolveTimelineAnchor", requestId, target });
     };
-    /** Authoritative re-reads used to recover a failed optimistic mutation. */
-    const refetchSessions = () => {
+    /**
+     * The authoritative re-read after a failed optimistic session mutation:
+     * the transport's silent `sessions` resubscribe (forgetting the ids'
+     * revisions), and an archived re-read while the slice is shown.
+     */
+    const resyncSessions = (mutation?: PendingMutation) => {
+      const ids =
+        mutation?.topic === "sessions" ? [...new Set(mutation.objectIds)] : [];
+      for (const message of replicaTransport.resync("sessions", ids))
+        send(message);
       if (stateRef.current.archivedSessionsLoaded)
-        send({ type: "loadArchivedSessions" });
-      else send({ type: "listSessions" });
+        dispatch({ kind: "archivedReadRequested" });
     };
     // There is no list command for runs: a resubscribe answers with the run
     // list as the stores hold it (the same resync a delivery settle uses). A
@@ -8219,14 +8494,14 @@ export function useAssistant({
       },
       releasePermanentAssistant: (sessionId) =>
         send({ type: "releasePermanentAssistant", sessionId }),
-      loadArchivedSessions: () => send({ type: "loadArchivedSessions" }),
+      loadArchivedSessions: () => dispatch({ kind: "archivedReadRequested" }),
       deleteSession: (id) => {
         timelineCacheRef.current.delete(id);
         void deleteSessionTimelineCache(id);
         forgetTranscriptScrollPosition(id);
         const requestId = trackMutation(
           { topic: "sessions", objectIds: [id] },
-          refetchSessions,
+          resyncSessions,
         );
         dispatch({ kind: "optimisticSessionDelete", sessionId: id });
         send({ type: "deleteSession", id, requestId });
@@ -8243,7 +8518,7 @@ export function useAssistant({
         void deleteSessionTimelineCache(id);
         const requestId = trackMutation(
           { topic: "sessions", objectIds: [id] },
-          refetchSessions,
+          resyncSessions,
         );
         dispatch({ kind: "optimisticSessionDelete", sessionId: id });
         send({ type: "archiveSession", id, archived, requestId });
@@ -8267,7 +8542,7 @@ export function useAssistant({
         // (carrying this requestId) triggers the recovery refetch below.
         const requestId = trackMutation(
           { topic: "sessions", objectIds: [id, ...peers] },
-          refetchSessions,
+          resyncSessions,
         );
         // What the user actually SAW when they clicked, read from the current
         // rows rather than passed in by the caller, so every surface that
@@ -8312,7 +8587,7 @@ export function useAssistant({
         // refusal.
         const requestId = trackMutation(
           { topic: "workflow", objectIds: [runId] },
-          refetchSessions,
+          resyncSessions,
         );
         const card = stateRef.current.workflowCards[runId];
         const observed = Math.max(0, Math.trunc(throughRevision));
@@ -8358,7 +8633,7 @@ export function useAssistant({
           // settle was lost to a reconnect), and the server's lists are right
           // either way.
           () => {
-            refetchSessions();
+            resyncSessions();
             refetchWorkflowRuns();
           },
         );
@@ -8387,7 +8662,7 @@ export function useAssistant({
       setSpawnOwnership: (id, ownership) => {
         const requestId = trackMutation(
           { topic: "sessions", objectIds: [id] },
-          refetchSessions,
+          resyncSessions,
         );
         dispatch({
           kind: "optimisticSpawnOwnership",
@@ -8404,7 +8679,7 @@ export function useAssistant({
         }
         const requestId = trackMutation(
           { topic: "sessions", objectIds: [id] },
-          refetchSessions,
+          resyncSessions,
         );
         dispatch({
           kind: "optimisticSessionRename",
@@ -8903,7 +9178,7 @@ export function useAssistant({
           if (pending.topic === "tasks") recoverTasks(pending);
           if (pending.topic === "worktrees") {
             refetchWorktrees();
-            refetchSessions();
+            resyncSessions();
           }
         };
         // Domain evidence survives either signal order; the core alone owns

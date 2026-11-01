@@ -242,7 +242,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
       updatedAt: Date.now(),
     });
     const rowOf = async (isStreaming: boolean) =>
-      (await listSessions([liveInfo(isStreaming)], () => 0)).find(
+      listSessions([liveInfo(isStreaming)], () => 0).find(
         (row) => row.id === id,
       );
     assert.equal((await rowOf(true))?.providerRetry?.attempt, 1);
@@ -752,7 +752,7 @@ test("worktree removal ignores an empty retained host, but not active work or a 
     isStreaming: false,
     backgroundActivity: { activeCount: 0, retainedHost: true },
   } as import("./sessions.ts").InternalSessionListItem;
-  const list = vi.spyOn(hub, "listSessions").mockResolvedValue([projected]);
+  const list = vi.spyOn(hub, "listSessions").mockReturnValue([projected]);
   try {
     assert.equal(
       await worktreeSettleBlockedReason("wt-finished-host"),
@@ -792,7 +792,7 @@ test("removal exempts only the named active item for its actual owner", async ()
     isStreaming: false,
     backgroundActivity: { activeCount: 1, retainedHost: true },
   } as import("./sessions.ts").InternalSessionListItem;
-  const list = vi.spyOn(hub, "listSessions").mockResolvedValue([projected]);
+  const list = vi.spyOn(hub, "listSessions").mockReturnValue([projected]);
   const item = vi.spyOn(backgroundWorkStore, "getItem").mockReturnValue({
     id: "job",
     ownerSessionId: id,

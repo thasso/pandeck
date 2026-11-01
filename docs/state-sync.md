@@ -75,10 +75,14 @@ failure, and explicit recovery reads.
 - The state topic kernel (`stateTopicKernel.ts`) carries a migrated topic from
   committed write to wire, one kernel per topic, and its domain supplies only a
   descriptor: revisions for given ids, the summary, the snapshot, an optional
-  digest and a batch maximum. `stateTopics.ts` registers the kernels, the hub
+  digest and a batch maximum. An optional `summaries(ids)` supplies the batch
+  form of `summary`: flush and items call it once for the candidate-live ids. An
+  item upserts, `null` deletes at the stored revision, and an absent entry stays
+  pending with a warning on flush and is omitted from items. Without the hook,
+  each live id calls `summary`. `stateTopics.ts` registers the kernels, the hub
   attaches its topic broadcaster to them, and `connection.ts` routes a kernel
   topic's subscribe and `getStateItems` to its kernel. Background, Projects,
-  Tasks and Initiatives run on it; `hub.ts` diffs no domain.
+  Tasks, Initiatives and Sessions run on it; `hub.ts` diffs no domain.
 - The change set (`db/changeSet.ts`) is the kernel's write half. A write runs as
   one top-level transaction with a change set, which stamps each topic's touched
   rows inside that transaction with one revision per topic, drawn from the
@@ -120,14 +124,51 @@ failure, and explicit recovery reads.
   the flush's event rules without consuming a `seq` or touching pending ids.
 - Cross-domain effects stay outside the kernel as post-publish listeners. Each
   runs once after every flush, an empty one included, after its frames were
-  sent; a throwing listener is logged and stops neither the frames nor the other
-  listeners. Background's only listener is the session-list refresh for the
-  owner's `backgroundActivity`, which therefore lands one Background debounce
-  window after the write. Tasks' only listener refreshes the state of the
-  sessions linked to a Task, and of one whose last link just went, since that
-  state carries a session's Task back-links.
+  attempted. Its argument is `{ events, delivered }`: all events built for the
+  flush and whether its reads and every frame succeeded. An empty successful
+  flush has `events: []` and `delivered: true`; a failed read has `events: []`
+  and `delivered: false`. A throwing listener is logged and stops neither the
+  other listeners nor delivery. Background's only listener is the session-list
+  refresh for the owner's `backgroundActivity`, which therefore lands one
+  Background debounce window after the write. Tasks' only listener refreshes the
+  state of the sessions linked to a Task, and of one whose last link just went,
+  since that state carries a session's Task back-links.
 - Server-internal mutations (agent tools, sweeps such as auto-archive) flow
   through the same seam and mint the same events; there is no second write path.
+
+### Failure boundary
+
+A flush retains all its ids when a revision or summary read throws. Ordinary
+read failures log `[<topic>] flush failed` and notify listeners with
+`delivered: false`, without escaping to the command or timer. Each frame send is
+caught separately: it logs `[<topic>] frame <seq> delivery failed`, continues
+with later frames, retains every id of the flush, and reports
+`delivered: false`. Retained ids precede later reports, and the next ordinary
+report, even an empty one, retries them. The kernel never schedules its own
+retry. `seq` stays advanced after a failed send so the affected replica sees a
+gap; clients that received a retained event ignore its same-revision repeat.
+Successful-publication markers and per-id audit baselines advance only on
+delivery.
+
+The read boundary rethrows a branded `StateTopicInvariantError` after restoring
+ids. Only the test-mode sessions audit constructs one. Its brand and ledger use
+`Symbol.for("pandeck.stateTopicInvariant")` and
+`Symbol.for("pandeck.stateTopicInvariants")` on `globalThis`, shared by every
+module instance in the test worker. Construction records the violation before
+any command/socket catch can convert it. `isStateTopicInvariant` checks the
+brand, never `instanceof`; `test/setup.ts` calls
+`failOnStateTopicInvariantsForTests` after every server test. Intentional audit
+tests take and assert the ledger. Listener throws, including invariants, are
+logged rather than rethrown; the ledger still fails the test. Snapshot and item
+reads propagate ordinary failures to their stamped collection/read errors and
+rethrow branded invariants. `publishSessionRowsNow` additionally refuses an open
+transaction, since uncommitted rows must not reach clients.
+
+`hub.broadcastTopic` and `publishPermanentAssistantUnread` isolate each
+connection's send, attempt every holder, then throw one `AggregateError` if any
+failed. The kernel applies its frame policy to that aggregate; non-kernel
+callers still receive the failure after all sends. Archived-count and unread
+markers advance only after a send returns without throwing.
 
 ## Client contract
 
@@ -525,6 +566,34 @@ per-surface sub-tasks — no page invents its own delta format.
   comment streams do not join a domain-wide `broadcastAll` topic. Session
   transcript comments and chat comments remain browser-local and never enter the
   wire protocol.
+- Sessions: the live session-list rows (`docs/session-list.md`). Every
+  connection holds the topic. The subscribe answer, `sessionList`, carries the
+  live rows, their revision sidecar and `archivedSessionCount`; `ready` carries
+  no rows. A touch stamps `session_list_revisions` in the write's change set,
+  and every touched id is published at its new revision, even with unchanged
+  content: an archived, tombstoned, hidden or zero-message row is a `delete`,
+  which a client holding nothing for it ignores. Archived rows are never in the
+  replica: they are an on-demand `loadArchivedSessions` read answered by
+  `archivedSessions` with the request's id, re-read while shown when
+  `archivedSessionCount` moves or a `delete` names one of them. A failed
+  optimistic session mutation resyncs the topic (forget the ids' revisions,
+  resubscribe or join the awaited snapshot). A command whose reply must follow
+  its rows flushes them first (`publishSessionRowsNow`, outside transactions).
+  Revisions live in a separate table because live engine ids need not have a
+  `session_index` row. The peer deadline watermark is the builder's only clock
+  input. One `summaries` batch builds all touched ids. The archived-inclusive
+  audit rebaselines each id at delivered publication; tests check every
+  flush/read, while production logs and repairs missed reporters on a 60 s
+  sweep. A pending global refresh excuses only rows archived in both builds
+  until its delivered publication. Global-stamp provenance preserves the
+  preceding explicit revision for membership checks, so a global stamp cannot
+  report archive/unarchive, appearance or disappearance. That check precedes
+  installing delivered rows. Explicit reporters still cover transitions within
+  the window, including across repeated globals and retries. Collection read
+  errors are consumed by the replica/archive scheduler, never the running chat;
+  stale archive errors have no effect. Archived reads are single-flight with one
+  queued, released only by their own answer/error, disconnect or 30 s timeout.
+  No digest or session items/cache revisions yet.
 
 ## Enforcement
 

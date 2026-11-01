@@ -906,7 +906,12 @@ test("the change set hands the background topic sorted item ids, host-only commi
     );
     reports.length = 0;
     backgroundWorkStore.setHostState({ hostId, state: "closed" });
-    assert.deepEqual(reports, [["background", [...itemIds, more.id].sort()]]);
+    // The same change set also stamps the owner's session row, whose
+    // background activity the close changed (`docs/session-list.md`).
+    assert.deepEqual(reports, [
+      ["background", [...itemIds, more.id].sort()],
+      ["sessions", [owner]],
+    ]);
 
     // No public write leaves a live host with no member items, so the fixture
     // is written directly. Its Stop-all touches only the host, and must still
@@ -927,7 +932,11 @@ test("the change set hands the background topic sorted item ids, host-only commi
       hostId: emptyHostId,
       reason: "empty host",
     });
-    assert.deepEqual(reports, [["background", []]]);
+    assert.deepEqual(reports, [
+      ["background", []],
+      ["sessions", [emptyOwner]],
+    ]);
+
     assert.ok(stopped.revision > 0, "the host is still stamped");
   } finally {
     setStateChangeSink(undefined);

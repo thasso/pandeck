@@ -124,10 +124,7 @@ test("a broadcast reaches every viewer", () => {
   const b: ServerMessage[] = [];
   r.addViewer(viewer(a));
   r.addViewer(viewer(b));
-  const message = {
-    type: "sessions",
-    sessions: [],
-  } as unknown as ServerMessage;
+  const message: ServerMessage = { type: "archivedSessionCount", count: 0 };
   r.broadcast(message);
   assert.deepEqual([a, b], [[message], [message]]);
 });

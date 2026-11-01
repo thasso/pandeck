@@ -13,6 +13,7 @@ import { insertWorktree, linkSessionToWorktree } from "./db/worktreeStore.ts";
 import { touchSessionRows } from "./db/sessionListChanges.ts";
 import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
 import { publicSessionRows } from "./test/sessionListPublicOracle.ts";
+import { sessionRowIn, sessionTopicViewer } from "./test/sessionListClient.ts";
 import {
   admitDirectPeerTurns,
   recordDirectPeerChild,
@@ -78,18 +79,12 @@ for (const reset of [
     }
     assert.ok(!(await publicSessionRows()).has(`default:${child}`));
     const sent: ServerMessage[] = [];
-    const viewer = { send: (message: ServerMessage) => sent.push(message) };
+    const viewer = sessionTopicViewer(sent);
     hub.register(viewer);
     try {
       touchSessionRows([parent]);
       await hub.flushPendingBroadcastsForTests();
-      assert.ok(
-        sent.some(
-          (m) =>
-            m.type === "sessions" &&
-            !m.sessions.some((row) => row.id === child),
-        ),
-      );
+      assert.equal(sessionRowIn(sent, child), null, "published as a delete");
       touchSessionRows([parent]);
       await hub.flushPendingBroadcastsForTests();
     } finally {

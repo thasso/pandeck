@@ -10,7 +10,7 @@ export async function publicSessionRows() {
   const rows = new Map<string, SessionListItem>();
   for (const archived of [false, true]) {
     const hidden = sessionListHiddenProbe();
-    for (const row of await hub.listSessions({ includeArchived: archived })) {
+    for (const row of hub.listSessions({ includeArchived: archived })) {
       if (hidden(row)) continue;
       const { file: _file, ...item } = row;
       rows.set(`${archived ? "archived" : "default"}:${row.id}`, item);

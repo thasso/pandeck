@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
 import type { ClientTimelineEntry } from "@assistant/shared/runtime";
 import { dataOf, ready } from "../lib/loadState.ts";
+import { sessionTopic } from "../test/sessionTopic.ts";
 import {
   createInitialState,
   projectSaveOperation,
@@ -60,6 +61,17 @@ const contextInfo = (sessionId = "s1"): ContextInfo => ({
 
 function apply(msg: ServerMessage, state = createInitialState()) {
   return reduceAssistantState(state, { kind: "server", msg });
+}
+
+/** The `sessions` subscription's answer holding `sessions` as live rows. */
+function sessionListOf(sessions: SessionListItem[], seq = 0): ServerMessage {
+  return {
+    type: "sessionList",
+    seq,
+    sessions,
+    revisions: sessions.map(({ id }, index) => ({ id, revision: index + 1 })),
+    archivedSessionCount: 0,
+  };
 }
 
 describe("useAssistant message arrivals on their object", () => {
@@ -186,7 +198,6 @@ describe("useAssistant message arrivals on their object", () => {
     state: null,
     models: [],
     agents: [],
-    sessions: [],
     settings: {},
     speechToText: {
       configured: false,
@@ -440,10 +451,7 @@ describe("useAssistant run-state reducer", () => {
       },
     });
 
-    state = apply(
-      { type: "sessions", sessions: [row({ isStreaming: true })] },
-      state,
-    );
+    state = apply(sessionListOf([row({ isStreaming: true })]), state);
 
     expect(state.sessions[0]?.isStreaming).toBe(true);
     expect(state.runState).toBe("idle");
@@ -457,7 +465,6 @@ describe("staged session drafts", () => {
     let state = apply({
       type: "forkedSession",
       state: session({ sessionId: "s2" }),
-      sessions: [row({ id: "s2" })],
       contextInfo: contextInfo("s2"),
       selectedText: "the forked prompt",
     });
@@ -488,7 +495,6 @@ describe("staged session drafts", () => {
     let state = apply({
       type: "draftSession",
       state: session({ sessionId: "s3" }),
-      sessions: [row({ id: "s3" })],
       contextInfo: contextInfo("s3"),
       draftText: "review this",
     });
@@ -1709,7 +1715,6 @@ describe("useAssistant task reducer", () => {
         state: null,
         models: [],
         agents: [],
-        sessions: [],
         settings: {},
         speechToText: {
           configured: false,
@@ -2149,7 +2154,6 @@ describe("useAssistant permanent Assistant reducer", () => {
       {
         type: "permanentAssistantOpened",
         state: session({ sessionId: "assistant-1" }),
-        sessions: [row({ id: "assistant-1", title: "Personal Assistant" })],
         contextInfo: contextInfo("assistant-1"),
       },
       state,
@@ -2158,7 +2162,8 @@ describe("useAssistant permanent Assistant reducer", () => {
     expect(state.session?.sessionId).toBe("assistant-1");
     // The dedicated /assistant route owns navigation, so this must not reuse the
     // ordinary fork-switch path that canonicalizes empty sessions to /sessions/create.
-    expect(state.sessions.some((s) => s.id === "assistant-1")).toBe(true);
+    // The singleton is never a list row: its route needs none.
+    expect(state.sessions.some((s) => s.id === "assistant-1")).toBe(false);
     expect(state.forkSwitch).toBeNull();
   });
 
@@ -2872,34 +2877,37 @@ describe("windowed transcript reducer", () => {
 });
 
 describe("session-list freshness across a reconnect", () => {
-  const readyWith = (sessions: SessionListItem[]): ServerMessage => ({
-    type: "ready",
-    serverBuild: { version: "0.0.0-test" },
-    state: null,
-    models: [],
-    agents: [],
-    sessions,
-    settings: {},
-    speechToText: {
-      configured: false,
-      availableModelIds: [],
-      maxUtteranceSeconds: 120,
-    },
-    slashCommands: [],
-    contextInfo: null,
-  });
-
-  it("is false until `ready`, and STALE again from the drop to the next one", () => {
+  it("is false until the `sessions` snapshot, and STALE again from the drop to the next one", () => {
     // The window this flag exists for. `hydrationSource` is historical and the
     // status reducer turns `connected` back on immediately for a
-    // previously-live shell — BEFORE the new episode's `ready` replaces the
-    // session list. Anything deriving freshness from those two blesses
+    // previously-live shell — BEFORE the new episode's subscription snapshot
+    // replaces the session list. Anything deriving freshness from those two blesses
     // previous-episode rows, and a surface joining session ids against them
     // then reports a just-linked session as authoritatively absent.
     let state = createInitialState();
     expect(state.sessionListFresh).toBe(false);
 
-    state = apply(readyWith([row({ id: "s1" })]), state);
+    // `ready` carries no rows, so it blesses none.
+    state = apply(
+      {
+        type: "ready",
+        serverBuild: { version: "0.0.0-test" },
+        state: null,
+        models: [],
+        agents: [],
+        settings: {},
+        speechToText: {
+          configured: false,
+          availableModelIds: [],
+          maxUtteranceSeconds: 120,
+        },
+        slashCommands: [],
+        contextInfo: null,
+      },
+      state,
+    );
+    expect(state.sessionListFresh).toBe(false);
+    state = apply(sessionListOf([row({ id: "s1" })]), state);
     expect(state.sessionListFresh).toBe(true);
 
     state = reduceAssistantState(state, { kind: "status", connected: false });
@@ -2912,8 +2920,8 @@ describe("session-list freshness across a reconnect", () => {
     expect(state.sessionListFresh).toBe(false);
     expect(state.sessions).toHaveLength(1);
 
-    // …and only the next `ready` restores it, with its own list.
-    state = apply(readyWith([row({ id: "s2" })]), state);
+    // …and only the next snapshot restores it, with its own list.
+    state = apply(sessionListOf([row({ id: "s2" })]), state);
     expect(state.sessionListFresh).toBe(true);
     expect(state.sessions.map((row) => row.id)).toEqual(["s2"]);
   });
@@ -2932,9 +2940,8 @@ describe("the dragged Sessions inbox order", () => {
 
   it("places sessions and runs in one dispatch, leaving the rest untouched", () => {
     const untouched = row("b");
-    const state: UIState = {
+    const state: UIState = apply(sessionListOf([row("a"), untouched]), {
       ...createInitialState(),
-      sessions: [row("a"), untouched],
       workflowRuns: [
         {
           id: "7",
@@ -2947,7 +2954,7 @@ describe("the dragged Sessions inbox order", () => {
           updatedAt: 2_000,
         },
       ],
-    };
+    });
     const next = reduceAssistantState(state, {
       kind: "optimisticInboxPositions",
       positions: [
@@ -2959,5 +2966,204 @@ describe("the dragged Sessions inbox order", () => {
     expect(next.sessions[0]?.updatedAt).toBe(2_000);
     expect(next.sessions[1]).toBe(untouched);
     expect(next.workflowRuns?.[0]?.inboxPosition).toBe(4_000);
+  });
+});
+
+// V7: the `sessions` replica (`docs/session-list.md`). Live rows only, each
+// at its revision; the archived slice is the on-demand read beside it.
+describe("the sessions replica", () => {
+  const listed = (id: string, updatedAt: number) =>
+    row({ id, updatedAt, messageCount: 2 });
+
+  it("holds a snapshot's live rows newest first, and keeps them for an equal one", () => {
+    const topic = sessionTopic();
+    const state = apply(topic.snapshot([listed("a", 1), listed("b", 2)], 3));
+    expect(state.sessions.map((session) => session.id)).toEqual(["b", "a"]);
+    expect(state.sessions).toBe(state.liveSessions);
+    expect(Object.keys(state.stateEventRevisions.sessions ?? {})).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(state.archivedSessionCount).toBe(3);
+    const again = apply(
+      topic.snapshot([listed("a", 1), listed("b", 2)], 3),
+      state,
+    );
+    expect(again.sessions).toBe(state.sessions);
+  });
+
+  it("holds no revision a snapshot's sidecar does not vouch for", () => {
+    const state = apply({
+      type: "sessionList",
+      seq: 0,
+      sessions: [listed("a", 1), listed("b", 2)],
+      revisions: [{ id: "a", revision: 1 }],
+      archivedSessionCount: 0,
+    });
+    expect(state.sessions).toHaveLength(2);
+    expect(state.stateEventRevisions.sessions).toEqual({});
+  });
+
+  it("places an upsert by updatedAt, ignores one at a held revision, and drops a delete", () => {
+    const topic = sessionTopic();
+    let state = apply(topic.snapshot([listed("a", 1), listed("b", 3)]));
+    state = apply(topic.upsert(listed("c", 2)), state);
+    expect(state.sessions.map((session) => session.id)).toEqual([
+      "b",
+      "c",
+      "a",
+    ]);
+    const held = state.stateEventRevisions.sessions!.c!;
+    const stale = apply(
+      {
+        type: "stateEvents",
+        topic: "sessions",
+        seq: 2,
+        events: [
+          {
+            kind: "upsert",
+            id: "c",
+            revision: held,
+            item: { ...listed("c", 2), title: "stale" },
+          },
+        ],
+      },
+      state,
+    );
+    expect(stale.sessions).toBe(state.sessions);
+    state = apply(topic.remove("a"), stale);
+    expect(state.sessions.map((session) => session.id)).toEqual(["b", "c"]);
+    // A delete for an id held nowhere (the hidden singleton) changes nothing.
+    const quiet = apply(topic.remove("never-listed"), state);
+    expect(quiet.sessions).toBe(state.sessions);
+  });
+
+  it("re-reads a shown archived slice for a delete, and restores it for a live upsert", () => {
+    const topic = sessionTopic();
+    let state = apply(topic.snapshot([listed("a", 2)], 1));
+    state = reduceAssistantState(state, { kind: "archivedReadRequested" });
+    state = reduceAssistantState(state, {
+      kind: "archivedReadSent",
+      requestId: "r1",
+    });
+    state = apply(
+      {
+        type: "archivedSessions",
+        requestId: "r1",
+        sessions: [listed("x", 1)],
+        archivedSessionCount: 1,
+      },
+      state,
+    );
+    expect(state.sessions.map((session) => session.id)).toEqual(["a", "x"]);
+    expect(state.liveSessions.map((session) => session.id)).toEqual(["a"]);
+
+    // A delete for the shown archived row cannot drop it; it re-reads.
+    const deleted = apply(topic.remove("x"), state);
+    expect(deleted.archivedSessions).toBe(state.archivedSessions);
+    expect(deleted.archivedReadQueued).toBe(true);
+
+    // An upsert is a restore: the row moves to the live replica.
+    const restored = apply(topic.upsert(listed("x", 3)), state);
+    expect(restored.archivedSessions).toEqual([]);
+    expect(restored.liveSessions.map((session) => session.id)).toEqual([
+      "x",
+      "a",
+    ]);
+  });
+});
+
+// V10: the archived slice's single-flight scheduler.
+describe("archived session reads", () => {
+  const answer = (requestId: string): ServerMessage => ({
+    type: "archivedSessions",
+    requestId,
+    sessions: [row({ id: "x", archived: true, messageCount: 2 })],
+    archivedSessionCount: 1,
+  });
+  const inFlight = (requestId: string) =>
+    reduceAssistantState(
+      reduceAssistantState(createInitialState(), {
+        kind: "archivedReadRequested",
+      }),
+      { kind: "archivedReadSent", requestId },
+    );
+
+  it("flies one read and queues at most one more", () => {
+    let state = reduceAssistantState(createInitialState(), {
+      kind: "archivedReadRequested",
+    });
+    expect(state.archivedReadQueued).toBe(true);
+    state = reduceAssistantState(state, {
+      kind: "archivedReadSent",
+      requestId: "r1",
+    });
+    expect(state).toMatchObject({
+      archivedReadQueued: false,
+      archivedReadFlight: "r1",
+    });
+    state = reduceAssistantState(state, { kind: "archivedReadRequested" });
+    const twice = reduceAssistantState(state, {
+      kind: "archivedReadRequested",
+    });
+    expect(twice).toBe(state);
+    expect(state.archivedReadQueued).toBe(true);
+  });
+
+  it("adopts only its own answer, and a stale answer, error or settle releases nothing", () => {
+    const state = inFlight("r2");
+    expect(apply(answer("r1"), state)).toBe(state);
+    expect(
+      reduceAssistantState(state, {
+        kind: "archivedReadReleased",
+        requestId: "r1",
+      }),
+    ).toBe(state);
+    expect(
+      apply({ type: "mutationSettled", requestId: "r2" }, state)
+        .archivedReadFlight,
+    ).toBe("r2");
+    const adopted = apply(answer("r2"), state);
+    expect(adopted).toMatchObject({
+      archivedSessionsLoaded: true,
+      archivedReadFlight: null,
+      archivedSessionCount: 1,
+    });
+    expect(adopted.sessions.map((session) => session.id)).toEqual(["x"]);
+  });
+
+  it("is released by its own error or timeout, and by a disconnect", () => {
+    const state = inFlight("r1");
+    expect(
+      reduceAssistantState(state, {
+        kind: "archivedReadReleased",
+        requestId: "r1",
+      }).archivedReadFlight,
+    ).toBeNull();
+    const queued = reduceAssistantState(state, {
+      kind: "archivedReadRequested",
+    });
+    const dropped = reduceAssistantState(queued, {
+      kind: "status",
+      connected: false,
+    });
+    expect(dropped).toMatchObject({
+      archivedReadFlight: null,
+      archivedReadQueued: true,
+    });
+  });
+
+  it("re-reads on a count change only while the slice is shown", () => {
+    const hidden = apply({ type: "archivedSessionCount", count: 2 });
+    expect(hidden.archivedSessionCount).toBe(2);
+    expect(hidden.archivedReadQueued).toBe(false);
+    const shown = apply(answer("r1"), inFlight("r1"));
+    expect(
+      apply({ type: "archivedSessionCount", count: 2 }, shown)
+        .archivedReadQueued,
+    ).toBe(true);
+    expect(apply({ type: "archivedSessionCount", count: 1 }, shown)).toBe(
+      shown,
+    );
   });
 });

@@ -95,5 +95,6 @@
   "0094_session_compaction_window.sql": "e673fc39686f11da58498d55d7bde5d7560443d8a4b1b67978e9751ca8362c1b",
   "0095_session_compaction_window_note.sql": "b16017a94d87259ee1d95ed1ae487410e703f984933007f29e7f3810f60cb941",
   "0096_drop_initiative_attention.sql": "fa93d363e1a45c5523a94e710eb804b6112694ff5f1dc287d0e2c213a3f746a5",
-  "0097_drop_subagent_registry.sql": "fc0829dde120552e3dc085cd567db212f1de4c36086109968f9b147924c2690d"
+  "0097_drop_subagent_registry.sql": "fc0829dde120552e3dc085cd567db212f1de4c36086109968f9b147924c2690d",
+  "0098_session_list_revisions.sql": "dfe8caaedd2961da40480bbf7191ff8bb43273a1f99f41ddb1e689ef8d33a1f8"
 }

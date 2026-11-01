@@ -22,3 +22,11 @@ export function nextId(entityType: string): number {
     .get(entityType) as { next_id: number };
   return row.next_id;
 }
+
+/** The last id allocated for an entity type, 0 when none was; allocates nothing. */
+export function currentId(entityType: string): number {
+  const row = getDb()
+    .prepare("SELECT next_id FROM sequences WHERE entity_type = ?")
+    .get(entityType) as { next_id: number } | undefined;
+  return row?.next_id ?? 0;
+}

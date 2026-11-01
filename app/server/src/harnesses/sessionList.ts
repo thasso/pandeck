@@ -14,13 +14,21 @@ import { listSessions, type SessionListOptions } from "../sessions.ts";
 
 const SESSION_LIST_SLOW_MS = 50;
 
+/** Every session id either engine's live registry holds now. */
+export function liveSessionIds(): string[] {
+  return [
+    ...piStore.listInfo().map((info) => info.sessionId),
+    ...claudeSdkStore.list().map((sdk) => sdk.id),
+  ];
+}
+
 /** Every listed session, newest first, across both engines. */
-export async function mergedSessionList(
+export function mergedSessionList(
   opts: SessionListOptions = {},
-): Promise<Awaited<ReturnType<typeof listSessions>>> {
+): ReturnType<typeof listSessions> {
   const startedAt = Date.now();
   const live = piStore.listInfo();
-  const merged = await listSessions(live, sessionStore.getReadAt, opts);
+  const merged = listSessions(live, sessionStore.getReadAt, opts);
   const byId = new Map(merged.map((session, index) => [session.id, index]));
   // One query each against the approval and pull-request-card tables for the
   // whole merge, never one per SDK row (`sessions.ts`'s one-pass contract).

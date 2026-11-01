@@ -5,6 +5,8 @@ const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { validateClientMessage } = await import("./validateClientMessage.ts");
+const { sessionRowIn, sessionTopicViewer } =
+  await import("./test/sessionListClient.ts");
 
 test("inspector command persists, broadcasts explicit and reset caps, and refuses deleted sessions", async () => {
   const id = "cap-command";
@@ -21,17 +23,10 @@ test("inspector command persists, broadcasts explicit and reset caps, and refuse
     readyState: 1,
     send: (raw: string) => sent.push(JSON.parse(raw)),
   } as never);
-  const viewer = { send: (msg: ServerMessage) => other.push(msg) };
+  const viewer = sessionTopicViewer(other);
   hub.register(viewer);
-  const seen = (): SessionListItem | undefined => {
-    for (const msg of [...other].reverse()) {
-      if (msg.type === "sessionUpdated" && msg.session.id === id)
-        return msg.session;
-      if (msg.type === "sessions")
-        return msg.sessions.find((row) => row.id === id);
-    }
-    return undefined;
-  };
+  const seen = (): SessionListItem | undefined =>
+    sessionRowIn(other, id) ?? undefined;
   try {
     for (const cap of [8, null]) {
       await connection.handle({

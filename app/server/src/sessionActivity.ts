@@ -289,7 +289,7 @@ export async function settleSessionsForRemovedWorktree(
   // through `sessions.ts`.
   const { hub } = await import("./hub.ts");
   for (const sessionId of linked) hub.getLiveById(sessionId)?.broadcastState();
-  if (linked.length) await hub.sessionRowsSent();
+  if (linked.length) hub.publishSessionRowsNow();
 }
 
 /**
@@ -343,7 +343,7 @@ export async function settleWorkflowRunRoleSessions(
   // through `sessions.ts`.
   const { hub } = await import("./hub.ts");
   for (const sessionId of settled) hub.getLiveById(sessionId)?.broadcastState();
-  await hub.sessionRowsSent();
+  hub.publishSessionRowsNow();
 }
 
 /**
@@ -372,7 +372,7 @@ export async function settleSessionWithPeers(
   // Imported here, not at module scope: `hub.ts` reaches back into this module
   // through `sessions.ts`.
   const { hub } = await import("./hub.ts");
-  const rows = await hub.listSessions({ includeArchived: true });
+  const rows = hub.listSessions({ includeArchived: true });
   if (!rows.some((row) => row.id === sessionId))
     return { blocked: "it could not be resolved." };
   const runs = listRuns();
@@ -399,7 +399,7 @@ export async function settleSessionWithPeers(
   if (!sessionStore.settleWithPeers(sessionId, throughRevision, peers))
     return { written: false };
   for (const id of [sessionId, ...peers]) hub.getLiveById(id)?.broadcastState();
-  await hub.sessionRowsSent();
+  hub.publishSessionRowsNow();
   return { written: true };
 }
 
@@ -494,7 +494,7 @@ async function settleIdleSessions(sessionIds: string[]): Promise<void> {
   // through `sessions.ts`.
   const { hub } = await import("./hub.ts");
   for (const sessionId of settled) hub.getLiveById(sessionId)?.broadcastState();
-  await hub.sessionRowsSent();
+  hub.publishSessionRowsNow();
 }
 
 /**
@@ -542,12 +542,9 @@ export async function sessionSettleBlockedReason(
   sessionId: string,
 ): Promise<string | undefined> {
   const { hub } = await import("./hub.ts");
-  const row = (
-    await hub.listSessions({
-      includeArchived: true,
-      onlyIds: new Set([sessionId]),
-    })
-  ).find((item) => item.id === sessionId);
+  const row = hub
+    .listSessions({ includeArchived: true, onlyIds: new Set([sessionId]) })
+    .find((item) => item.id === sessionId);
   return row ? settleBlockedReason(row) : undefined;
 }
 
@@ -573,7 +570,7 @@ export async function worktreeSettleBlockedReason(
   const live = liveSessionIdsForWorktree(worktreeId);
   if (live.length === 0) return undefined;
   const { hub } = await import("./hub.ts");
-  const rows = await hub.listSessions({
+  const rows = hub.listSessions({
     includeArchived: true,
     onlyIds: new Set(live),
   });

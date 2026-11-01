@@ -15,6 +15,7 @@ import type {
 } from "@assistant/shared";
 import { Connection } from "./connection.ts";
 import { hub } from "./hub.ts";
+import { sessionRowIn, sessionTopicViewer } from "./test/sessionListClient.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import {
@@ -32,7 +33,7 @@ function fakeSocket(sent: ServerMessage[]) {
   } as unknown as ConstructorParameters<typeof Connection>[0];
 }
 
-/** The session broadcast is debounced (`hub.flushSessionsBroadcast`). */
+/** Topic publications are debounced (`stateTopicKernel.ts`). */
 const settled = () => hub.flushPendingBroadcastsForTests();
 
 /** The newest row this listener saw for the session, from a list or a delta. */
@@ -40,15 +41,7 @@ function rowFor(
   messages: ServerMessage[],
   id: string,
 ): SessionListItem | undefined {
-  for (const message of [...messages].reverse()) {
-    if (message.type === "sessionUpdated" && message.session.id === id)
-      return message.session;
-    if (message.type === "sessions") {
-      const row = message.sessions.find((session) => session.id === id);
-      if (row) return row;
-    }
-  }
-  return undefined;
+  return sessionRowIn(messages, id) ?? undefined;
 }
 
 function seed(id: string, title: string): void {
@@ -109,9 +102,9 @@ test("dismissing a queued peer's failure settles nothing and reaches every tab",
   const clicked: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(clicked));
   const otherTab: ServerMessage[] = [];
-  hub.register({ send: (message: ServerMessage) => otherTab.push(message) });
+  hub.register(sessionTopicViewer(otherTab));
   try {
-    const before = (await hub.listSessions()).find((row) => row.id === peer);
+    const before = hub.listSessions().find((row) => row.id === peer);
     assert.equal(before?.queuedWork, true);
     assert.equal(before?.lastError?.at, 5_000);
 
@@ -162,7 +155,7 @@ test("a stale click is refused, and the newer failure re-sent to it", async () =
   const connection = new Connection(fakeSocket(clicked));
   // Every registered tab, the clicking one included, is re-sent the row.
   const tabs: ServerMessage[] = [];
-  hub.register({ send: (message: ServerMessage) => tabs.push(message) });
+  hub.register(sessionTopicViewer(tabs));
   try {
     await connection.handle({
       type: "dismissSessionFailure",
@@ -209,7 +202,7 @@ test("dismissing a failure from an old shelf keeps the session active and out of
       false,
     );
 
-    const rows = await hub.listSessions();
+    const rows = hub.listSessions();
     const row = rows.find((candidate) => candidate.id === id);
     assert.ok(row);
     assert.equal(row.lastError, undefined);

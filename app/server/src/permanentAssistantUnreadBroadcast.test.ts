@@ -49,7 +49,7 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 test("unchanged row updates and full flushes do not resend the singleton boolean", async () => {
   const sent = seed();
   await hub.sendPermanentAssistantUnreadTo(viewer);
-  await hub.broadcastSessionUpdated(id);
+  hub.republishSessionRow(id);
   vi.useFakeTimers();
   touchAllSessionRows("test");
   await vi.advanceTimersByTimeAsync(1_000);
@@ -57,8 +57,8 @@ test("unchanged row updates and full flushes do not resend the singleton boolean
     sent.filter((message) => message.type === "permanentAssistantUnread"),
   ).toEqual([{ type: "permanentAssistantUnread", unread: true }]);
   sessionStore.markRead(id, 100);
-  await hub.broadcastSessionUpdated(id);
-  await hub.broadcastSessionUpdated(id);
+  hub.republishSessionRow(id);
+  hub.republishSessionRow(id);
   expect(
     sent.filter((message) => message.type === "permanentAssistantUnread"),
   ).toHaveLength(2);
@@ -74,7 +74,7 @@ test("a late connect read sends the cache after a newer live change, not its sta
   );
   const initial = hub.sendPermanentAssistantUnreadTo(viewer);
   sessionStore.markRead(id, 100);
-  await hub.broadcastSessionUpdated(id);
+  hub.republishSessionRow(id);
   resolve(true);
   await initial;
   expect(

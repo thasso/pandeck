@@ -1036,7 +1036,7 @@ test("Send now on a waiting child updates the list before its delivery is append
       expect.arrayContaining([a.child, b.child]),
     );
     const { listSessions } = await import("./sessions.ts");
-    const rows = await listSessions([], () => Date.now(), {
+    const rows = listSessions([], () => Date.now(), {
       onlyIds: new Set([a.child, b.child]),
     });
     const row = (id: string) => rows.find((r) => r.id === id);

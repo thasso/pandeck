@@ -90,7 +90,7 @@ test("a stored retired subagent value stays hidden and reads as internal", async
   assert.ok(!sessionStore.list().some((row) => row.id === retired));
   assert.equal(sessionStore.get(retired)?.scope, "internal");
   assert.equal(sessionStore.liveDefaultScopeGate([retired])(retired), false);
-  const sessions = await listSessions([liveInfo(retired)], () => 0, {
+  const sessions = listSessions([liveInfo(retired)], () => 0, {
     includeArchived: true,
   });
   assert.ok(
@@ -206,12 +206,12 @@ test("claimScope persists the scope before a live registry may see the id", () =
 });
 
 test("the archived count matches the listable user's shelf only", async () => {
-  const before = await archivedSessionCount();
+  const before = archivedSessionCount();
   seedRetiredSubagent({ archived: true });
   seed("internal", { archived: true });
   seed("user", { archived: true });
   assert.equal(
-    await archivedSessionCount(),
+    archivedSessionCount(),
     before,
     "zero-message rows hidden from the archive are not counted",
   );
@@ -223,32 +223,32 @@ test("the archived count matches the listable user's shelf only", async () => {
     messageCount: 2,
   });
   sessionStore.setArchived(prompted, true);
-  assert.equal(await archivedSessionCount(), before + 1);
+  assert.equal(archivedSessionCount(), before + 1);
 });
 
 test("the session list excludes metadata-only sessions until a prompt exists", async () => {
   const id = seed("user");
 
-  const persistedOnly = await listSessions([], () => 0);
+  const persistedOnly = listSessions([], () => 0);
   assert.ok(
     !persistedOnly.some((session) => session.id === id),
     "a zero-message metadata claim is not a conversation",
   );
 
-  const emptyLive = await listSessions([liveInfo(id, 0)], () => 0);
+  const emptyLive = listSessions([liveInfo(id, 0)], () => 0);
   assert.ok(
     !emptyLive.some((session) => session.id === id),
     "merely acquiring the runtime does not make it listable",
   );
 
-  const promptedLive = await listSessions([liveInfo(id)], () => 0);
+  const promptedLive = listSessions([liveInfo(id)], () => 0);
   assert.equal(
     promptedLive.find((session) => session.id === id)?.messageCount,
     1,
   );
 
   const draftId = seed("user", { purpose: "draft" });
-  const drafts = await listSessions([liveInfo(draftId, 0)], () => 0);
+  const drafts = listSessions([liveInfo(draftId, 0)], () => 0);
   assert.equal(
     drafts.find((session) => session.id === draftId)?.messageCount,
     1,
@@ -272,11 +272,9 @@ test("the session list projects stored spawn provenance in one batch", async () 
 
   const listed = async () =>
     new Map(
-      (
-        await listSessions(
-          [liveInfo(parent), liveInfo(child), liveInfo(legacyChild)],
-          () => 0,
-        )
+      listSessions(
+        [liveInfo(parent), liveInfo(child), liveInfo(legacyChild)],
+        () => 0,
       ).map((session) => [session.id, session]),
     );
 
@@ -305,11 +303,9 @@ test("the session list excludes out-of-scope rows even while they are live", asy
   const user = seed("user");
   const internal = seed("internal");
 
-  const sessions = await listSessions(
-    [liveInfo(internal), liveInfo(user)],
-    () => 0,
-    { includeArchived: true },
-  );
+  const sessions = listSessions([liveInfo(internal), liveInfo(user)], () => 0, {
+    includeArchived: true,
+  });
   const ids = new Set(sessions.map((session) => session.id));
   assert.ok(ids.has(user));
   assert.ok(
@@ -321,7 +317,7 @@ test("the session list excludes out-of-scope rows even while they are live", asy
   // A live row with no persisted metadata at all is the user's by
   // construction: the scope is written before anything can register a session.
   const unpersisted = `scope-live-only-${Date.now()}`;
-  const withLiveOnly = await listSessions([liveInfo(unpersisted)], () => 0);
+  const withLiveOnly = listSessions([liveInfo(unpersisted)], () => 0);
   assert.ok(withLiveOnly.some((session) => session.id === unpersisted));
 });
 
@@ -342,10 +338,8 @@ test("onlyIds projects just the named sessions, stored or live", async () => {
   });
   const liveOnly = seed("user");
 
-  const rows = await listSessions(
-    [liveInfo(liveOnly), liveInfo(other)],
-    () => 0,
-    { onlyIds: new Set([wanted, liveOnly]) },
-  );
+  const rows = listSessions([liveInfo(liveOnly), liveInfo(other)], () => 0, {
+    onlyIds: new Set([wanted, liveOnly]),
+  });
   assert.deepEqual(rows.map((row) => row.id).sort(), [wanted, liveOnly].sort());
 });

@@ -78,7 +78,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: [],
     settings: {},
     speechToText: {
       configured: false,
@@ -210,7 +209,10 @@ describe("Task-route socket load scenario", () => {
     await openReady(first);
 
     expect(sentOf(first, "subscribe")).toEqual([
-      { type: "subscribe", topics: ["tasks", "projects", "workflow"] },
+      {
+        type: "subscribe",
+        topics: ["sessions", "tasks", "projects", "workflow"],
+      },
     ]);
     expect(sentOf(first, "listTasks")).toEqual([]);
     expect(sentOf(first, "listProjects")).toEqual([]);
@@ -240,6 +242,7 @@ describe("Task-route socket load scenario", () => {
 
     expect(sentOf(second, "subscribe")).toHaveLength(1);
     expect(sentOf(second, "subscribe")[0]!.topics).toEqual([
+      "sessions",
       "tasks",
       "projects",
       "workflow",
@@ -281,7 +284,7 @@ describe("Task-route socket load scenario", () => {
     expect(sentOf(socket, "subscribe")).toEqual([
       {
         type: "subscribe",
-        topics: ["tasks", "projects", "workflow"],
+        topics: ["sessions", "tasks", "projects", "workflow"],
         digests: ["tasks"],
       },
     ]);

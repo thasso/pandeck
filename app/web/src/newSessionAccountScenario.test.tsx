@@ -250,7 +250,6 @@ function readyMessage(
     state: null,
     models: [sonnet],
     agents,
-    sessions: [],
     settings,
     speechToText: {
       configured: false,

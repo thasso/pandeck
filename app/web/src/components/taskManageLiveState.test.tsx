@@ -106,7 +106,6 @@ const READY = {
   state: SESSION,
   models: [],
   agents: [],
-  sessions: [],
   settings: {},
   speechToText: {
     configured: false,

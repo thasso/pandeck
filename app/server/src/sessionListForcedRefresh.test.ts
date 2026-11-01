@@ -1,8 +1,8 @@
 /**
- * V6: a refused command re-sends the authoritative row before its error, with
- * no server write in between to make it differ (`docs/session-list.md`,
- * "Touched rows", forced ids). An archived row reaches only viewers holding
- * the archived list; the singleton's row never travels.
+ * A refused command re-publishes the authoritative row before its error, at a
+ * new revision, with no other write needed to make it differ
+ * (`docs/session-list.md`, "Republishing a row"). An archived row and the
+ * singleton travel only as a `delete`, never as a row.
  *   pnpm --filter @assistant/server test src/sessionListForcedRefresh.test.ts
  */
 import assert from "node:assert/strict";
@@ -13,24 +13,21 @@ import { hub } from "./hub.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { permanentAssistantStore } from "./db/permanentAssistantStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import {
+  sessionEventsIn,
+  sessionTopicViewer,
+} from "./test/sessionListClient.ts";
 
 let serial = 0;
 const plain: ServerMessage[] = [];
-const archived: ServerMessage[] = [];
-const plainViewer = { send: (message: ServerMessage) => plain.push(message) };
-const archivedViewer = {
-  send: (message: ServerMessage) => archived.push(message),
-  wantsArchivedSessions: () => true,
-};
+const plainViewer = sessionTopicViewer(plain);
 
 beforeEach(() => {
   hub.register(plainViewer);
-  hub.register(archivedViewer);
 });
 
 afterEach(async () => {
   hub.unregister(plainViewer);
-  hub.unregister(archivedViewer);
   await hub.flushPendingBroadcastsForTests();
 });
 
@@ -80,10 +77,10 @@ async function refused(command: ClientMessage): Promise<ServerMessage[]> {
   // A connected tab without `init`'s snapshots.
   hub.register(connection);
   try {
+    await connection.handle({ type: "subscribe", topics: ["sessions"] });
     await hub.flushPendingBroadcastsForTests();
     clicked.length = 0;
     plain.length = 0;
-    archived.length = 0;
     await connection.handle(command);
     await hub.flushPendingBroadcastsForTests();
     return clicked;
@@ -92,15 +89,20 @@ async function refused(command: ClientMessage): Promise<ServerMessage[]> {
   }
 }
 
+const eventsFor = (messages: ServerMessage[], id: string) =>
+  sessionEventsIn(messages).filter((event) => event.id === id);
 const rowsFor = (messages: ServerMessage[], id: string) =>
-  messages.filter(
-    (message) => message.type === "sessionUpdated" && message.session.id === id,
-  );
+  eventsFor(messages, id).filter((event) => event.kind === "upsert");
 
 /** The row arrived, then the error, on the clicking tab. */
 function rowBeforeError(clicked: ServerMessage[], id: string): void {
   const row = clicked.findIndex(
-    (message) => message.type === "sessionUpdated" && message.session.id === id,
+    (message) =>
+      message.type === "stateEvents" &&
+      message.topic === "sessions" &&
+      message.events.some(
+        (event) => event.kind === "upsert" && event.id === id,
+      ),
   );
   const error = clicked.findIndex((message) => message.type === "error");
   assert.ok(row >= 0, `the authoritative row for ${id} was sent`);
@@ -119,7 +121,6 @@ describe("a refused command re-sends the unchanged row first", () => {
     } as ClientMessage);
     rowBeforeError(clicked, id);
     assert.equal(rowsFor(plain, id).length, 1);
-    assert.equal(rowsFor(archived, id).length, 1);
   });
 
   test("a refused delete", async () => {
@@ -148,7 +149,7 @@ describe("a refused command re-sends the unchanged row first", () => {
     assert.equal(rowsFor(plain, id).length, 1);
   });
 
-  test("an archived row reaches only viewers holding the archived list", async () => {
+  test("an archived row travels only as a delete", async () => {
     const id = seed("archived-delete");
     sessionStore.setArchived(id, true);
     runningWork(id);
@@ -158,21 +159,25 @@ describe("a refused command re-sends the unchanged row first", () => {
     } as ClientMessage);
     assert.ok(clicked.some((message) => message.type === "error"));
     assert.equal(rowsFor(clicked, id).length, 0);
-    assert.equal(rowsFor(plain, id).length, 0);
-    assert.equal(rowsFor(archived, id).length, 1);
+    assert.deepEqual(
+      eventsFor(plain, id).map((event) => event.kind),
+      ["delete"],
+    );
   });
 
-  test("the singleton's row never travels, not even forced", async () => {
+  test("the singleton's row never travels, not even republished", async () => {
     const previous = permanentAssistantStore.sessionId();
     const id = seed("singleton");
     permanentAssistantStore.setSessionId(id);
     try {
       await hub.flushPendingBroadcastsForTests();
       plain.length = 0;
-      archived.length = 0;
-      await hub.broadcastSessionUpdated(id);
+      hub.republishSessionRow(id);
       assert.deepEqual(rowsFor(plain, id), []);
-      assert.deepEqual(rowsFor(archived, id), []);
+      assert.deepEqual(
+        eventsFor(plain, id).map((event) => event.kind),
+        ["delete"],
+      );
     } finally {
       if (previous) permanentAssistantStore.setSessionId(previous);
       else permanentAssistantStore.clearSessionId();

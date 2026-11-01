@@ -2,8 +2,13 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientMessage, ServerMessage } from "@assistant/shared";
+import type {
+  ClientMessage,
+  ServerMessage,
+  SessionListItem,
+} from "@assistant/shared";
 import type { RunProgress } from "@assistant/shared/session";
+import { sessionListMessage } from "./test/sessionTopic.ts";
 
 /**
  * The running turn's progress line in the real app: it follows the runtime's
@@ -117,6 +122,18 @@ const SESSION_A = "00000000-0000-4000-8000-00000000000a";
 const SESSION_B = "00000000-0000-4000-8000-00000000000b";
 const ASSISTANT = "00000000-0000-4000-8000-0000000000aa";
 
+function listedSessions(): SessionListItem[] {
+  return [SESSION_A, SESSION_B].map((id) => ({
+    id,
+    harness: "claude-sdk",
+    agentType: "coding",
+    title: id === SESSION_A ? "A" : "B",
+    updatedAt: 1_700_000_000_000,
+    messageCount: 1,
+    isStreaming: true,
+  })) as unknown as SessionListItem[];
+}
+
 function readyMessage(): ServerMessage {
   return {
     type: "ready",
@@ -124,15 +141,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: [SESSION_A, SESSION_B].map((id) => ({
-      id,
-      harness: "claude-sdk",
-      agentType: "coding",
-      title: id === SESSION_A ? "A" : "B",
-      updatedAt: 1_700_000_000_000,
-      messageCount: 1,
-      isStreaming: true,
-    })),
     settings: {},
     speechToText: {
       configured: false,
@@ -221,6 +229,7 @@ async function open(
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
+    socket.receive(sessionListMessage(listedSessions()));
   });
   await act(async () => socket.receive(first));
   await settle();

@@ -68,7 +68,6 @@ function readyMessage() {
     },
     models: [],
     agents: [],
-    sessions: [],
     settings: {},
     speechToText: {
       configured: false,
@@ -483,7 +482,11 @@ it("unmount abandons correlations/timers and a remounted hook is usable", async 
   const abandoned = state;
   await act(async () => vi.advanceTimersByTime(30_000));
   expect(state).toBe(abandoned);
-  expect(socket.sent.filter((msg) => msg.type === "listSessions")).toEqual([]);
+  expect(
+    socket.sent.filter(
+      (msg) => msg.type === "unsubscribe" && msg.topics.includes("sessions"),
+    ),
+  ).toEqual([]);
   root = createRoot(container);
   await act(async () => root.render(<Harness />));
   const fresh = ScenarioSocket.instances.at(-1)!;

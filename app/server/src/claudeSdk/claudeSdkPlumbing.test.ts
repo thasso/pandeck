@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 
   // 2. Acquiring the runtime alone is not a conversation. Prompt acceptance is
   // covered in ClaudeSdkSession.test.ts; until then the merged list hides it.
-  const sessions = await hub.listSessions();
+  const sessions = hub.listSessions();
   const listed = sessions.find(
     (s) => s.harness === "claude-sdk" && s.id === ID,
   );
@@ -148,7 +148,7 @@ async function main(): Promise<void> {
     undefined,
     "live session is dropped after remove",
   );
-  const afterSessions = await hub.listSessions();
+  const afterSessions = hub.listSessions();
   assert.ok(
     !afterSessions.find((s) => s.harness === "claude-sdk" && s.id === ID),
     "removed session is gone from hub.listSessions()",

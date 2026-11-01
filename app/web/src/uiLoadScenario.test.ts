@@ -103,6 +103,33 @@ function apply(state: UIState, msg: ServerMessage): UIState {
   return reduceAssistantState(state, { kind: "server", msg });
 }
 
+let listRevision = 0;
+/** A `sessions` snapshot: the server's whole live list, freshly revisioned. */
+function sessionList(sessions: SessionListItem[]): ServerMessage {
+  return {
+    type: "sessionList",
+    seq: 0,
+    sessions,
+    revisions: sessions.map(({ id }) => ({ id, revision: ++listRevision })),
+    archivedSessionCount: 0,
+  };
+}
+
+/** One `sessions` event batch upserting `rows` at fresh revisions. */
+function sessionEvents(...rows: SessionListItem[]): ServerMessage {
+  return {
+    type: "stateEvents",
+    topic: "sessions",
+    seq: 0,
+    events: rows.map((item) => ({
+      kind: "upsert" as const,
+      id: item.id,
+      revision: ++listRevision,
+      item,
+    })),
+  };
+}
+
 function loadedState(): UIState {
   let state = createInitialState();
   state = apply(state, {
@@ -121,10 +148,7 @@ function loadedState(): UIState {
       streaming: [],
     },
   } as unknown as ServerMessage);
-  return apply(state, {
-    type: "sessions",
-    sessions: sessionRows(SESSION_COUNT, true),
-  });
+  return apply(state, sessionList(sessionRows(SESSION_COUNT, true)));
 }
 
 const NOW = 1_800_000_000_000;
@@ -569,13 +593,11 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
 
   it("keeps the transcript's derived props stable across a session broadcast", () => {
     const state = loadedState();
-    // A rebroadcast while ten agents stream: brand-new row objects, same content.
-    const next = apply(state, {
-      type: "sessions",
-      sessions: sessionRows(SESSION_COUNT, true),
-    });
+    // A resubscribe while ten agents stream: brand-new row objects, same
+    // content. The snapshot keeps the held rows, and so the held list.
+    const next = apply(state, sessionList(sessionRows(SESSION_COUNT, true)));
 
-    expect(next.sessions).not.toBe(state.sessions);
+    expect(next.sessions).toBe(state.sessions);
     expect(backlogSessionsKey(next.sessions)).toBe(
       backlogSessionsKey(state.sessions),
     );
@@ -586,20 +608,18 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     const idle = rows.map((row, i) =>
       i === 3 ? { ...row, isStreaming: false } : row,
     );
-    const quiet = apply(state, { type: "sessions", sessions: idle });
+    const quiet = apply(state, sessionList(idle));
     expect(
-      backlogSessionsKey(
-        apply(quiet, { type: "sessions", sessions: idle.slice(1) }).sessions,
-      ),
+      backlogSessionsKey(apply(quiet, sessionList(idle.slice(1))).sessions),
     ).not.toBe(backlogSessionsKey(quiet.sessions));
     expect(
       backlogSessionsKey(
-        apply(quiet, {
-          type: "sessions",
-          sessions: idle.map((row, i) =>
-            i === 3 ? { ...row, archived: true } : row,
+        apply(
+          quiet,
+          sessionList(
+            idle.map((row, i) => (i === 3 ? { ...row, archived: true } : row)),
           ),
-        }).sessions,
+        ).sessions,
       ),
     ).not.toBe(backlogSessionsKey(quiet.sessions));
     const references = (sessions: SessionListItem[]) =>
@@ -647,10 +667,7 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     expect(skillSummariesKey(dataOf(state.skillLibrary)!.entries)).toBe(key);
     // An unrelated broadcast leaves the scan itself alone.
     const library = state.skillLibrary;
-    state = apply(state, {
-      type: "sessions",
-      sessions: sessionRows(SESSION_COUNT, true),
-    });
+    state = apply(state, sessionList(sessionRows(SESSION_COUNT, true)));
     expect(state.skillLibrary).toBe(library);
     // What a row shows or refuses on is content.
     for (const change of [
@@ -674,7 +691,7 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     const bumped = sessionRows(SESSION_COUNT, true).map((row, i) =>
       i === 3 ? { ...row, updatedAt: row.updatedAt + 10_000 } : row,
     );
-    const next = apply(state, { type: "sessions", sessions: bumped });
+    const next = apply(state, sessionList(bumped));
 
     expect(next.sessions.map((session) => session.id)).not.toEqual(
       state.sessions.map((session) => session.id),
@@ -691,7 +708,7 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     const state = loadedState();
     const moved = sessionRows(SESSION_COUNT, true);
     moved[3] = { ...moved[3]!, title: "Renamed while streaming" };
-    const next = apply(state, { type: "sessions", sessions: moved });
+    const next = apply(state, sessionList(moved));
 
     const changed = state.sessions.filter(
       (row, index) =>
@@ -723,7 +740,7 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     const state = loadedState();
     const moved = sessionRows(SESSION_COUNT, true);
     moved[3] = { ...moved[3]!, title: "Renamed while streaming" };
-    const next = apply(state, { type: "sessions", sessions: moved });
+    const next = apply(state, sessionList(moved));
 
     const before = inboxCards(state.sessions);
     const after = inboxCards(next.sessions);
@@ -735,13 +752,55 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     expect(invalidated).toBe(1);
   });
 
+  // The `sessions` topic's own frames (`docs/session-list.md`): an event
+  // carries one row, so it reaches that row's consumers alone, and the echo of
+  // an optimistic edit is value-equal, so it reaches none.
+  it("redraws only the changed row's consumers for one row event", () => {
+    const state = loadedState();
+    const renamed = {
+      ...sessionRows(SESSION_COUNT, true)[3]!,
+      title: "Renamed by an event",
+    };
+    const next = apply(state, sessionEvents(renamed));
+
+    const byId = new Map(next.sessions.map((row) => [row.id, row]));
+    expect(
+      state.sessions.filter((row) => byId.get(row.id) !== row).map((r) => r.id),
+    ).toEqual(["s3"]);
+    const before = new Map(
+      inboxCards(state.sessions).map((card) => [
+        card.session.id,
+        sessionCardKey(card, NOW),
+      ]),
+    );
+    expect(
+      inboxCards(next.sessions)
+        .filter(
+          (card) => before.get(card.session.id) !== sessionCardKey(card, NOW),
+        )
+        .map((card) => card.session.id),
+    ).toEqual(["s3"]);
+  });
+
+  it("redraws nothing for the echo of an optimistic rename", () => {
+    const renamed = reduceAssistantState(loadedState(), {
+      kind: "optimisticSessionRename",
+      sessionId: "s3",
+      title: "Renamed here",
+      now: 0,
+    });
+    const shown = renamed.sessions.find((row) => row.id === "s3")!;
+    expect(shown.title).toBe("Renamed here");
+    const echoed = apply(renamed, sessionEvents({ ...shown }));
+    expect(echoed.sessions).toBe(renamed.sessions);
+    expect(echoed.sessions.find((row) => row.id === "s3")).toBe(shown);
+  });
+
   it("re-renders no inbox card for a broadcast that changes nothing", () => {
     const state = loadedState();
-    const next = apply(state, {
-      type: "sessions",
-      sessions: sessionRows(SESSION_COUNT, true),
-    });
-    expect(next.sessions).not.toBe(state.sessions);
+    const next = apply(state, sessionList(sessionRows(SESSION_COUNT, true)));
+    // Value-equal rows are kept, so the list itself is too.
+    expect(next.sessions).toBe(state.sessions);
 
     const before = inboxCards(state.sessions);
     const after = inboxCards(next.sessions);
@@ -758,7 +817,7 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     // rendered label changed must not reach the layout pass at all — that pass
     // measuring on every commit is what turned a scroll into a flicker.
     const idle = sessionRows(SESSION_COUNT, false);
-    const quiet = apply(state, { type: "sessions", sessions: idle });
+    const quiet = apply(state, sessionList(idle));
     expect(inboxLayoutKey(quiet.sessions, NOW + 999)).toBe(
       inboxLayoutKey(quiet.sessions, NOW),
     );
@@ -800,15 +859,10 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
   };
 
   it("re-renders no cluster for a broadcast that changes nothing", () => {
-    const state = apply(loadedState(), {
-      type: "sessions",
-      sessions: clusterRows(true),
-    });
-    const next = apply(state, {
-      type: "sessions",
-      sessions: clusterRows(true),
-    });
-    expect(next.sessions).not.toBe(state.sessions);
+    const state = apply(loadedState(), sessionList(clusterRows(true)));
+    const next = apply(state, sessionList(clusterRows(true)));
+    // Value-equal rows are kept, so the list itself is too.
+    expect(next.sessions).toBe(state.sessions);
 
     const before = inboxCards(state.sessions);
     const after = inboxCards(next.sessions);
@@ -822,17 +876,14 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
   });
 
   it("repaints one cluster when one of its peers changes, and nothing else", () => {
-    const state = apply(loadedState(), {
-      type: "sessions",
-      sessions: clusterRows(true),
-    });
+    const state = apply(loadedState(), sessionList(clusterRows(true)));
     // The peer of the FIRST coordinator stops running: its cluster's summary
     // moves, the second coordinator's does not, and neither do the eight cards
     // that have nothing to do with either.
     const moved = clusterRows(true).map((row) =>
       row.id === "s2" ? { ...row, isStreaming: false } : row,
     );
-    const next = apply(state, { type: "sessions", sessions: moved });
+    const next = apply(state, sessionList(moved));
 
     const before = new Map(
       inboxCards(state.sessions).map((card) => [

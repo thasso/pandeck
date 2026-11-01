@@ -112,8 +112,11 @@ export function topicsForSurface({
   backgroundLedgeOpen = false,
   settingsSection,
 }: TopicSurface): BroadcastTopic[] {
-  const topics = new Set<BroadcastTopic>();
+  // Always held: the session list is in every surface's chrome (sidebar,
+  // inbox, routing), so every connection subscribes at socket open.
+  const topics = new Set<BroadcastTopic>(["sessions"]);
   const shownSection = sidebarVisible ? sidebarSection : null;
+
   const taskSurface = shownSection === "tasks" || routeName === "tasks";
   const projectBrowser = shownSection === "projects";
   // Pull Requests resolves its local joins — the worktree behind a PR, the

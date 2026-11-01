@@ -50,7 +50,7 @@ function setup(extraPrompt = false) {
     snapshot: () => messages,
   };
   vi.spyOn(hub, "acquireById").mockResolvedValue(driver as never);
-  vi.spyOn(hub, "broadcastSessionUpdated").mockResolvedValue();
+  vi.spyOn(hub, "republishSessionRow").mockReturnValue(undefined);
   vi.mocked(promptRuntimeSession).mockClear();
   vi.mocked(promptRuntimeSession).mockImplementation(
     (_driver, text) =>
