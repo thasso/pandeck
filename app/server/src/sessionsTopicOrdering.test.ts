@@ -24,7 +24,6 @@ function seed(
   label: string,
   agentType: "assistant" | "personal-assistant" = "assistant",
 ): string {
-
   const id = `ordering-${label}-${++serial}`;
   sessionStore.upsert({
     id,

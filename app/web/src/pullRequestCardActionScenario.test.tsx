@@ -97,7 +97,6 @@ function readyMessage(): ServerMessage {
     },
     models: [],
     agents: [],
-    sessions: [],
     settings: {},
     speechToText: {
       configured: false,
@@ -176,6 +175,12 @@ const viewedLinkedTask = () =>
 const sentAfter = (mark: number, type: ClientMessage["type"]) =>
   ScenarioSocket.instances[0]!.sent.slice(mark).filter(
     (message) => message.type === type,
+  );
+/** The `sessions` resubscribes a recovery sent: its authoritative re-read. */
+const sessionResyncsAfter = (mark: number) =>
+  ScenarioSocket.instances[0]!.sent.slice(mark).filter(
+    (message) =>
+      message.type === "unsubscribe" && message.topics.includes("sessions"),
   );
 
 beforeEach(() => {
@@ -549,7 +554,7 @@ it("recovers when a competing busy echo precedes mutationSettled", async () => {
   expect(viewedCard()?.pendingAction).toBeUndefined();
   expect(viewedCard()?.busyAction).toBe("mark-task-done");
   expect(sentAfter(mark, "listWorktrees")).toHaveLength(0);
-  expect(sentAfter(mark, "listSessions")).toHaveLength(0);
+  expect(sessionResyncsAfter(mark)).toHaveLength(0);
 
   // The refusal's mutationSettled follows the card broadcast. Recovery must
   // happen here, without waiting for the long-action timeout.
@@ -557,7 +562,7 @@ it("recovers when a competing busy echo precedes mutationSettled", async () => {
     socket.receive({ type: "mutationSettled", requestId });
   });
   expect(sentAfter(mark, "listWorktrees")).toHaveLength(1);
-  expect(sentAfter(mark, "listSessions")).toHaveLength(1);
+  expect(sessionResyncsAfter(mark)).toHaveLength(1);
 });
 
 it("restores the card's linked Task when a competing echo wins first", async () => {
@@ -677,7 +682,7 @@ it("does not settle a click on the refusal a retry was answering", async () => {
   expect(viewedCard()?.pendingAction).toBe("cleanup");
   expect(viewedCard()?.actionError).toBeUndefined();
   expect(sentAfter(mark, "listWorktrees")).toHaveLength(0);
-  expect(sentAfter(mark, "listSessions")).toHaveLength(0);
+  expect(sessionResyncsAfter(mark)).toHaveLength(0);
 
   // The action's OWN refusal, after the server's dequeue, does settle it — and
   // restores the worktree row this tab removed optimistically.
@@ -702,7 +707,7 @@ it("does not settle a click on the refusal a retry was answering", async () => {
     "A session is still running on that worktree.",
   );
   expect(sentAfter(mark, "listWorktrees")).toHaveLength(1);
-  expect(sentAfter(mark, "listSessions")).toHaveLength(1);
+  expect(sessionResyncsAfter(mark)).toHaveLength(1);
   const command = socket.sent.findLast(
     (msg) => msg.type === "pullRequestCardAction",
   );
@@ -714,7 +719,7 @@ it("does not settle a click on the refusal a retry was answering", async () => {
   );
   expect(resultActions()).toHaveLength(results);
   expect(sentAfter(mark, "listWorktrees")).toHaveLength(1);
-  expect(sentAfter(mark, "listSessions")).toHaveLength(1);
+  expect(sessionResyncsAfter(mark)).toHaveLength(1);
 });
 
 it.each(["card", "viewed", "listed"] as const)(
@@ -764,9 +769,14 @@ it.each(["card", "viewed", "listed"] as const)(
         },
       });
       socket.receive({
-        type: "sessions",
+        type: "sessionList",
+        seq: 0,
         sessions: [session("s1"), session("s2")],
-        archivedSessionsLoaded: source === "listed",
+        revisions: [
+          { id: "s1", revision: 1 },
+          { id: "s2", revision: 2 },
+        ],
+        archivedSessionCount: source === "listed" ? 1 : 0,
       });
       socket.receive({
         type: "worktreeList",
@@ -779,7 +789,24 @@ it.each(["card", "viewed", "listed"] as const)(
         card: subject,
       });
     });
-    await act(async () => latestActions.setTopics(["worktrees"]));
+    if (source === "listed") {
+      // The shelf is open: its slice was read under the flight's id.
+      await act(async () => latestActions.loadArchivedSessions());
+      const read = socket.sent.findLast(
+        (msg) => msg.type === "loadArchivedSessions",
+      );
+      if (read?.type !== "loadArchivedSessions") throw new Error("no read");
+      await act(async () =>
+        socket.receive({
+          type: "archivedSessions",
+          requestId: read.requestId,
+          sessions: [],
+          archivedSessionCount: 1,
+        }),
+      );
+      expect(latestState.archivedSessionsLoaded).toBe(true);
+    }
+    await act(async () => latestActions.setTopics(["sessions", "worktrees"]));
     await act(async () =>
       latestActions.runPullRequestCardAction(card.id, "cleanup"),
     );
@@ -798,33 +825,42 @@ it.each(["card", "viewed", "listed"] as const)(
     expect(
       next.sent.filter((msg) => msg.type === "listWorktrees"),
     ).toHaveLength(1);
+    // The live rows' re-read IS the reconnect's `sessions` subscribe; the
+    // recovery joins it rather than resubscribing again. Only a shown archive
+    // is read once more.
     expect(
       next.sent.filter(
-        (msg) =>
-          msg.type ===
-          (source === "listed" ? "loadArchivedSessions" : "listSessions"),
+        (msg) => msg.type === "subscribe" && msg.topics.includes("sessions"),
       ),
     ).toHaveLength(1);
     expect(
       next.sent.filter(
-        (msg) =>
-          msg.type ===
-          (source === "listed" ? "listSessions" : "loadArchivedSessions"),
+        (msg) => msg.type === "unsubscribe" && msg.topics.includes("sessions"),
       ),
     ).toHaveLength(0);
+    const archivedRead = next.sent.filter(
+      (msg) => msg.type === "loadArchivedSessions",
+    );
+    expect(archivedRead).toHaveLength(source === "listed" ? 1 : 0);
     await act(async () => {
       next.receive({
         type: "worktreeList",
         worktrees: source === "listed" ? [] : [worktree],
         updatedAt: 2,
       });
+      const settled = [session("s1"), session("s2")].map((row) => ({
+        ...row,
+        settledAt: 2,
+      }));
       next.receive({
-        type: "sessions",
-        sessions: [session("s1"), session("s2")].map((row) => ({
-          ...row,
-          settledAt: 2,
-        })),
-        archivedSessionsLoaded: source === "listed",
+        type: "sessionList",
+        seq: 0,
+        sessions: settled,
+        revisions: [
+          { id: "s1", revision: 3 },
+          { id: "s2", revision: 4 },
+        ],
+        archivedSessionCount: source === "listed" ? 1 : 0,
       });
     });
     expect(latestState.worktrees?.map((row) => row.id)).toEqual(
@@ -1016,7 +1052,7 @@ it.each(["mark-task-done", "merge", "update-with-main", "cleanup"] as const)(
     expect(sentAfter(mark, "listWorktrees")).toHaveLength(
       action === "cleanup" ? 1 : 0,
     );
-    expect(sentAfter(mark, "listSessions")).toHaveLength(
+    expect(sessionResyncsAfter(mark)).toHaveLength(
       action === "cleanup" ? 1 : 0,
     );
     await act(async () => vi.advanceTimersByTime(deadline));
@@ -1110,9 +1146,11 @@ it.each(["mark-task-done", "cleanup"] as const)(
     expect(
       open.sent.filter((msg) => msg.type === "listWorktrees"),
     ).toHaveLength(action === "cleanup" ? 1 : 0);
-    expect(open.sent.filter((msg) => msg.type === "listSessions")).toHaveLength(
-      action === "cleanup" ? 1 : 0,
-    );
+    expect(
+      open.sent.filter(
+        (msg) => msg.type === "unsubscribe" && msg.topics.includes("sessions"),
+      ),
+    ).toHaveLength(action === "cleanup" ? 1 : 0);
     await act(async () =>
       open.receive({ type: "mutationSettled", requestId: a }),
     );

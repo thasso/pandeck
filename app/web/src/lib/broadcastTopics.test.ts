@@ -2,9 +2,31 @@ import { describe, expect, it } from "vitest";
 import {
   backgroundInspectorSubscribes,
   topicsForSurface,
+  type TopicSurface,
 } from "./broadcastTopics.ts";
 
+/** The surface-dependent topics; `sessions` is held everywhere. */
+const domainTopics = (surface: TopicSurface) =>
+  topicsForSurface(surface).filter((topic) => topic !== "sessions");
+
 describe("topicsForSurface", () => {
+  it("holds the session list on every surface", () => {
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "settings",
+        routeName: "settings",
+      }),
+    ).toEqual(["sessions"]);
+    expect(
+      topicsForSurface({
+        sidebarVisible: true,
+        sidebarSection: "tasks",
+        routeName: "tasks",
+      }),
+    ).toContain("sessions");
+  });
+
   it.each([
     "personal-assistant",
     "memory",
@@ -23,17 +45,17 @@ describe("topicsForSurface", () => {
       routeName: "settings",
       settingsSection,
     };
-    expect(topicsForSurface(surface)).toEqual(["usage"]);
-    expect(
-      topicsForSurface({ ...surface, routeName: "session" }),
-    ).not.toContain("usage");
+    expect(domainTopics(surface)).toEqual(["usage"]);
+    expect(domainTopics({ ...surface, routeName: "session" })).not.toContain(
+      "usage",
+    );
   });
 
   it.each([undefined, "appearance", "models", "peer-runtimes", "skills"])(
     "does not hold usage for the %s Settings section",
     (settingsSection) => {
       expect(
-        topicsForSurface({
+        domainTopics({
           sidebarVisible: true,
           sidebarSection: "settings",
           routeName: "settings",
@@ -44,14 +66,14 @@ describe("topicsForSurface", () => {
   );
   it("subscribes for a visible browser's section", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "tasks",
         routeName: "session",
       }).sort(),
     ).toEqual(["projects", "tasks", "workflow", "worktrees"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "knowledge",
         routeName: "session",
@@ -65,7 +87,7 @@ describe("topicsForSurface", () => {
     // and the detail page render perfectly and resolve nothing.
     const expected = ["projects", "tasks", "workflow", "worktrees"];
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "pull-requests",
         routeName: "session",
@@ -73,7 +95,7 @@ describe("topicsForSurface", () => {
     ).toEqual(expected);
     // The detail ROUTE counts on its own, with no sidebar at all (a phone).
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "pullRequests",
@@ -82,7 +104,7 @@ describe("topicsForSurface", () => {
     // …and a selected-but-hidden browser adds nothing to the conversation's
     // own Projects, on the general rule.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "pull-requests",
         routeName: "session",
@@ -92,7 +114,7 @@ describe("topicsForSurface", () => {
 
   it("holds the background registry only for its route and its one section", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "backgroundTasks",
@@ -101,7 +123,7 @@ describe("topicsForSurface", () => {
     // A conversation whose session owns background work, with the inspector
     // rendering the section — and the same conversation without it.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -109,7 +131,7 @@ describe("topicsForSurface", () => {
       }),
     ).toEqual(["projects", "background"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -118,7 +140,7 @@ describe("topicsForSurface", () => {
     // The composer's ledge subscribes only while it is OPEN: its collapsed
     // line reads the session row's own projection.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -128,7 +150,7 @@ describe("topicsForSurface", () => {
     // The session LIST never subscribes: its per-session activity rides on the
     // session row, so a visible sidebar costs nothing here.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "sessions",
         routeName: "session",
@@ -209,21 +231,21 @@ describe("topicsForSurface", () => {
     // The phone case: a Task was opened, the section stayed selected, and the
     // conversation must not keep paying for Task broadcasts.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "tasks",
         routeName: "session",
       }),
     ).toEqual(["projects"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "knowledge",
         routeName: "session",
       }),
     ).toEqual(["projects"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "settings",
         routeName: "permanentAssistant",
@@ -233,21 +255,21 @@ describe("topicsForSurface", () => {
 
   it("always subscribes for the main pane's own route", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "tasks",
       }).sort(),
     ).toEqual(["projects", "tasks", "workflow"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "projects",
       }).sort(),
     ).toEqual(["projects", "worktrees"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "projects",
@@ -255,14 +277,14 @@ describe("topicsForSurface", () => {
       }).sort(),
     ).toEqual(["projects", "tasks", "workflow", "worktrees"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "new",
       }).sort(),
     ).toEqual(["agents", "projects", "usage", "workflow", "worktrees"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "knowledge",
@@ -272,7 +294,7 @@ describe("topicsForSurface", () => {
 
   it("subscribes to Tasks only while either staged-session picker is open", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "new",
@@ -287,7 +309,7 @@ describe("topicsForSurface", () => {
       "worktrees",
     ]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "sessions",
@@ -295,7 +317,7 @@ describe("topicsForSurface", () => {
       }),
     ).toEqual(["tasks"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "sessions",
@@ -303,7 +325,7 @@ describe("topicsForSurface", () => {
       }),
     ).toEqual([]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "tasks",
         routeName: "new",
@@ -326,26 +348,26 @@ describe("topicsForSurface", () => {
       routeName: "sessions",
     };
     expect(
-      topicsForSurface({ ...surface, sessionsQuickStartVisible: true }),
+      domainTopics({ ...surface, sessionsQuickStartVisible: true }),
     ).toEqual(["usage"]);
     expect(
-      topicsForSurface({ ...surface, sessionsQuickStartVisible: false }),
+      domainTopics({ ...surface, sessionsQuickStartVisible: false }),
     ).toEqual([]);
-    expect(
-      topicsForSurface({ ...surface, routeName: "session" }),
-    ).not.toContain("usage");
+    expect(domainTopics({ ...surface, routeName: "session" })).not.toContain(
+      "usage",
+    );
   });
 
   it("carries usage only on the surfaces that meter accounts", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "usage",
       }),
     ).toEqual(["usage"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "tasks",
         routeName: "session",
@@ -357,7 +379,7 @@ describe("topicsForSurface", () => {
     // The sheet meters every account and offers active Project worktree branches
     // over whatever surface it was opened from.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -365,7 +387,7 @@ describe("topicsForSurface", () => {
       }),
     ).toEqual(["worktrees", "projects", "usage"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "tasks",
         routeName: "tasks",
@@ -374,7 +396,7 @@ describe("topicsForSurface", () => {
     ).toEqual(["projects", "tasks", "usage", "workflow", "worktrees"]);
     // Closed again, the surface stops paying for it.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -385,7 +407,7 @@ describe("topicsForSurface", () => {
 
   it("subscribes to agents on its settings section and the new-session page", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "settings",
@@ -393,7 +415,7 @@ describe("topicsForSurface", () => {
       }),
     ).toEqual(["agents"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "settings",
@@ -404,7 +426,7 @@ describe("topicsForSurface", () => {
 
   it("subscribes to skills only while that settings section renders", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "settings",
@@ -414,7 +436,7 @@ describe("topicsForSurface", () => {
     // Other sections, the index and the browser do not read the skills library:
     // subscribing rescans it. Worktree settings holds usage for its model slots.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "settings",
         routeName: "settings",
@@ -422,14 +444,14 @@ describe("topicsForSurface", () => {
       }),
     ).toEqual(["usage"]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "settings",
         routeName: "settings",
       }),
     ).toEqual([]);
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "settings",
         routeName: "session",
@@ -440,7 +462,7 @@ describe("topicsForSurface", () => {
 
   it("subscribes to skills while the session inspector renders them", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -451,7 +473,7 @@ describe("topicsForSurface", () => {
 
   it("subscribes to skills while a session composer offers frozen skills", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -460,7 +482,7 @@ describe("topicsForSurface", () => {
     ).toEqual(["projects", "skills"]);
     // A session without frozen skills reads no library.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -471,7 +493,7 @@ describe("topicsForSurface", () => {
 
   it("holds Worktrees while the session inspector lists the spawn tree's worktrees", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
@@ -484,14 +506,14 @@ describe("topicsForSurface", () => {
     // Initiatives mark the cards. Project filters join sessions through
     // worktrees; Task titles remain best-effort without Backlog broadcasts.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "sessions",
         routeName: "session",
       }),
     ).toEqual(["workflow", "initiatives", "projects", "worktrees"]);
     // A hidden Sessions browser holds neither.
-    const hidden = topicsForSurface({
+    const hidden = domainTopics({
       sidebarVisible: false,
       sidebarSection: "sessions",
       routeName: "session",
@@ -502,7 +524,7 @@ describe("topicsForSurface", () => {
 
   it("holds Initiatives for the Projects browser and the Initiative pages", () => {
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: true,
         sidebarSection: "projects",
         routeName: "session",
@@ -511,7 +533,7 @@ describe("topicsForSurface", () => {
     // One Initiative's map recolours from the Tasks topic and names lanes from
     // Projects; it reads no Worktree projection.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "projects",
         routeName: "initiatives",
@@ -519,7 +541,7 @@ describe("topicsForSurface", () => {
     ).toEqual(["initiatives", "projects", "tasks"]);
     // A selected Task's detail reads its Workflow Runs, as on the Task page.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "projects",
         routeName: "initiatives",
@@ -528,7 +550,7 @@ describe("topicsForSurface", () => {
     ).toEqual(["initiatives", "projects", "tasks", "workflow"]);
     // A hidden Projects browser holds nothing on a conversation.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "projects",
         routeName: "session",
@@ -539,7 +561,7 @@ describe("topicsForSurface", () => {
   it("holds only Projects for a conversation with the browser hidden", () => {
     // A session's title bar names its project and links to it.
     expect(
-      topicsForSurface({
+      domainTopics({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",

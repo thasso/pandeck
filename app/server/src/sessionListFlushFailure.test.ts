@@ -60,7 +60,11 @@ function settleableRun(coordinator: string): number {
     payload: { role: "coordinator", objective: "plan" },
     actor: system,
   });
-  workflowStore.startStep(step.id, { kind: "session", id: coordinator }, system);
+  workflowStore.startStep(
+    step.id,
+    { kind: "session", id: coordinator },
+    system,
+  );
   workflowStore.completeStep(step.id, {
     status: "completed",
     result: { status: "completed", summary: "done" },
@@ -180,7 +184,9 @@ test("a frame one connection cannot take is retained and repeated; the command s
   const revision = (id: string) =>
     (
       getDb()
-        .prepare("SELECT revision FROM session_list_revisions WHERE session_id = ?")
+        .prepare(
+          "SELECT revision FROM session_list_revisions WHERE session_id = ?",
+        )
         .get(id) as { revision: number }
     ).revision;
 
@@ -199,7 +205,10 @@ test("a frame one connection cannot take is retained and repeated; the command s
   touchSessionRows([later]);
   await hub.flushPendingBroadcastsForTests();
   assert.equal(outcomes.at(-1), true);
-  const repeated = steady.events().slice(2).flatMap((batch) => batch.events);
+  const repeated = steady
+    .events()
+    .slice(2)
+    .flatMap((batch) => batch.events);
   for (const id of [first, capped])
     assert.equal(
       repeated.find((event) => event.id === id)?.revision,
@@ -224,9 +233,11 @@ test("an archived-count signal that fails to send is sent again by the next publ
   client.clear();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  const broadcast = (hub as unknown as {
-    broadcastTopic: (topic: string, message: ServerMessage) => void;
-  }).broadcastTopic.bind(hub);
+  const broadcast = (
+    hub as unknown as {
+      broadcastTopic: (topic: string, message: ServerMessage) => void;
+    }
+  ).broadcastTopic.bind(hub);
   let failed = false;
   vi.spyOn(
     hub as unknown as { broadcastTopic: typeof broadcast },

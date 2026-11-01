@@ -27,7 +27,7 @@ function seed(): string {
 }
 
 async function projected(id: string) {
-  const rows = await listSessions([], () => 0);
+  const rows = listSessions([], () => 0);
   const row = rows.find((item) => item.id === id);
   assert.ok(row, "the session is listed");
   return row;

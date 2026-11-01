@@ -73,6 +73,22 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
+    settings: {},
+    speechToText: {
+      configured: false,
+      availableModelIds: [],
+      maxUtteranceSeconds: 120,
+    },
+    slashCommands: [],
+    contextInfo: null,
+  };
+}
+
+/** The `sessions` subscription's answer: the one session the test reads. */
+function sessionListMessage(): ServerMessage {
+  return {
+    type: "sessionList",
+    seq: 0,
     sessions: [
       {
         id: "s1",
@@ -84,14 +100,8 @@ function readyMessage(): ServerMessage {
         messageCount: 0,
       },
     ],
-    settings: {},
-    speechToText: {
-      configured: false,
-      availableModelIds: [],
-      maxUtteranceSeconds: 120,
-    },
-    slashCommands: [],
-    contextInfo: null,
+    revisions: [{ id: "s1", revision: 1 }],
+    archivedSessionCount: 0,
   };
 }
 
@@ -158,6 +168,7 @@ beforeEach(async () => {
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
+    socket.receive(sessionListMessage());
   });
 });
 

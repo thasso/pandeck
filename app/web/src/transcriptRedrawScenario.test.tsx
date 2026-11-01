@@ -2,8 +2,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ServerMessage } from "@assistant/shared";
+import type { ServerMessage, SessionListItem } from "@assistant/shared";
 import { FakeSocket } from "./test/fakeSocket.ts";
+import { sessionListMessage } from "./test/sessionTopic.ts";
 
 /**
  * What an open transcript is allowed to REDRAW, measured on the whole app.
@@ -147,6 +148,17 @@ function sessionRows(updatedAt: (index: number) => number) {
   }));
 }
 
+/** A `sessions` snapshot of these loose fixture rows. */
+function listedMessage(rows: object[]): ServerMessage {
+  return sessionListMessage(rows as unknown as SessionListItem[]);
+}
+
+function listedSessions(): SessionListItem[] {
+  return sessionRows(
+    (i) => 1_700_000_000_000 + i,
+  ) as unknown as SessionListItem[];
+}
+
 function readyMessage(): ServerMessage {
   return {
     type: "ready",
@@ -154,7 +166,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: sessionRows((i) => 1_700_000_000_000 + i),
     settings: {},
     speechToText: {
       configured: false,
@@ -203,15 +214,17 @@ async function openChat(): Promise<FakeSocket> {
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
+    socket.receive(sessionListMessage(listedSessions()));
   });
   await act(async () => socket.receive(snapshotMessage()));
   // The list arrives sorted once before measuring, so what follows is the
   // steady state the reader sits in rather than the first sort.
   await act(async () =>
-    socket.receive({
-      type: "sessions",
-      sessions: sessionRows((i) => 1_700_000_000_000 + i),
-    } as unknown as ServerMessage),
+    socket.receive(
+      listedMessage(
+        sessionRows((i) => 1_700_000_000_000 + i),
+      ) as unknown as ServerMessage,
+    ),
   );
   await settle();
   return socket;
@@ -242,12 +255,9 @@ function peerSessionRows(updatedAt: (index: number) => number) {
 
 /** Another session finished a turn: same rows, same titles, new ORDER. */
 function reorderedSessions(): ServerMessage {
-  return {
-    type: "sessions",
-    sessions: sessionRows((i) =>
-      i === 3 ? 1_700_000_009_999 : 1_700_000_000_000 + i,
-    ),
-  } as unknown as ServerMessage;
+  return listedMessage(
+    sessionRows((i) => (i === 3 ? 1_700_000_009_999 : 1_700_000_000_000 + i)),
+  ) as unknown as ServerMessage;
 }
 
 function countOf(
@@ -399,10 +409,11 @@ describe("what a broadcast re-renders", () => {
         body: { kind: "commit", message: "wip", files: ["a.ts"] },
       },
     } as unknown as ServerMessage;
-    await peers({
-      type: "sessions",
-      sessions: peerSessionRows((i) => 1_700_000_000_000 + i),
-    } as unknown as ServerMessage);
+    await peers(
+      listedMessage(
+        peerSessionRows((i) => 1_700_000_000_000 + i),
+      ) as unknown as ServerMessage,
+    );
     await settle();
     // The strip is on screen to begin with: a count of zero must mean "did not
     // re-render", never "was never mounted".
@@ -413,12 +424,13 @@ describe("what a broadcast re-renders", () => {
     try {
       // Row 3 moved; it is not one of the peers, so nothing the strip draws
       // changed — and the list is rebroadcast like this several times a second.
-      await peers({
-        type: "sessions",
-        sessions: peerSessionRows((i) =>
-          i === 3 ? 1_700_000_009_999 : 1_700_000_000_000 + i,
-        ),
-      } as unknown as ServerMessage);
+      await peers(
+        listedMessage(
+          peerSessionRows((i) =>
+            i === 3 ? 1_700_000_009_999 : 1_700_000_000_000 + i,
+          ),
+        ) as unknown as ServerMessage,
+      );
       await settle();
       expect(countOf(perfSnapshot(), "Composer")).toBe(0);
       // And the case the strip is actually FOR: a peer of THIS chat streaming.
@@ -428,12 +440,11 @@ describe("what a broadcast re-renders", () => {
       // them may reach the composer. The moves here even cross what would be a
       // rendered age boundary, which is the case a bucketed gate would miss.
       const streamingPeer = (at: number) =>
-        peers({
-          type: "sessions",
-          sessions: peerSessionRows((i) =>
-            i === 1 ? at : 1_700_000_000_000 + i,
-          ),
-        } as unknown as ServerMessage);
+        peers(
+          listedMessage(
+            peerSessionRows((i) => (i === 1 ? at : 1_700_000_000_000 + i)),
+          ) as unknown as ServerMessage,
+        );
       await streamingPeer(Date.now() - 90_000);
       await settle();
       setPerfStatsEnabled(false);
@@ -679,12 +690,13 @@ describe("link references", () => {
     setPerfStatsEnabled(true);
     try {
       await act(async () =>
-        socket.receive({
-          type: "sessions",
-          sessions: sessionRows((i) => 1_700_000_000_000 + i).map((row, i) =>
-            i === 5 ? { ...row, title: "Named by its first prompt" } : row,
-          ),
-        } as unknown as ServerMessage),
+        socket.receive(
+          listedMessage(
+            sessionRows((i) => 1_700_000_000_000 + i).map((row, i) =>
+              i === 5 ? { ...row, title: "Named by its first prompt" } : row,
+            ),
+          ) as unknown as ServerMessage,
+        ),
       );
       await settle();
       expect(countOf(perfSnapshot(), "MessageRow")).toBe(0);
@@ -731,12 +743,13 @@ describe("link references", () => {
     setPerfStatsEnabled(true);
     try {
       await act(async () =>
-        socket.receive({
-          type: "sessions",
-          sessions: sessionRows((i) => 1_700_000_000_000 + i).map((row, i) =>
-            i === 5 ? { ...row, title: "Named by its first prompt" } : row,
-          ),
-        } as unknown as ServerMessage),
+        socket.receive(
+          listedMessage(
+            sessionRows((i) => 1_700_000_000_000 + i).map((row, i) =>
+              i === 5 ? { ...row, title: "Named by its first prompt" } : row,
+            ),
+          ) as unknown as ServerMessage,
+        ),
       );
       await settle();
       expect(countOf(perfSnapshot(), "MessageRow")).toBeGreaterThan(0);

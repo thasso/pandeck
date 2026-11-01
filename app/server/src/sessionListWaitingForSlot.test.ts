@@ -72,11 +72,7 @@ function waitingChild(
 }
 
 async function rows(onlyIds?: Set<string>) {
-  const list = await listSessions(
-    [],
-    () => Date.now(),
-    onlyIds ? { onlyIds } : {},
-  );
+  const list = listSessions([], () => Date.now(), onlyIds ? { onlyIds } : {});
   return new Map(list.map((row) => [row.id, row]));
 }
 

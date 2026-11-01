@@ -14,6 +14,7 @@ import { FakeSocket } from "./test/fakeSocket.ts";
 import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 import { HOSTED_LABS_DETAIL } from "../component-preview/fixtures/initiatives.ts";
 import { dismissToast, getToasts } from "./lib/toast.ts";
+import { sessionListMessage } from "./test/sessionTopic.ts";
 
 /**
  * The Task an Initiative page selects (`/initiatives/:id#task-<n>`), measured
@@ -53,14 +54,13 @@ async function settle(frames = 3): Promise<void> {
     });
 }
 
-function readyMessage(sessions: SessionListItem[] = []): ServerMessage {
+function readyMessage(): ServerMessage {
   return {
     type: "ready",
     serverBuild: { version: "0.0.0-test" },
     state: null,
     models: [],
     agents: [],
-    sessions,
     settings: {},
     speechToText: {
       configured: false,
@@ -164,7 +164,8 @@ async function connect(
 ): Promise<void> {
   await act(async () => {
     socket.open();
-    socket.receive(readyMessage(sessions));
+    socket.receive(readyMessage());
+    socket.receive(sessionListMessage(sessions));
   });
   await settle(1);
   await act(async () => {

@@ -94,7 +94,8 @@ function seed(messageCount = 2): string {
 async function projection() {
   const hidden = sessionListHiddenProbe();
   return new Map(
-    (await hub.listSessions({ includeArchived: true }))
+    hub
+      .listSessions({ includeArchived: true })
       .filter((row) => !hidden(row))
       .map((row) => {
         const { file: _file, ...publicRow } = row;

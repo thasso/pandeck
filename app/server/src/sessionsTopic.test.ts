@@ -513,9 +513,8 @@ describe("the test-mode audit", () => {
   test("a module reset: the re-imported audit's violation is this instance's", async () => {
     const id = seed("reset");
     vi.resetModules();
-    const other = (await import(
-      "./sessionsTopic.ts"
-    )) as typeof import("./sessionsTopic.ts");
+    const other =
+      (await import("./sessionsTopic.ts")) as typeof import("./sessionsTopic.ts");
     // Its first snapshot captures its own baseline; the second sees the edit.
     other.sessionsStateTopic.subscribeAnswer(false);
     rawTitle(id, "edited under a re-imported module");
@@ -553,7 +552,10 @@ describe("consistency races", () => {
     assert.ok(snapshot?.type === "sessionList");
     const snapRevision = snapshot.revisions.find((e) => e.id === id)?.revision;
     await flush();
-    const event = client.events().flatMap((b) => b.events).find((e) => e.id === id);
+    const event = client
+      .events()
+      .flatMap((b) => b.events)
+      .find((e) => e.id === id);
     assert.equal(event?.revision, snapRevision);
     assert.equal(client.row(id)?.title, "new content");
     client.close();
@@ -571,7 +573,10 @@ describe("consistency races", () => {
     const client = sessionListClient();
     client.clear();
     await flush();
-    const events = client.events().flatMap((b) => b.events).filter((e) => e.id === id);
+    const events = client
+      .events()
+      .flatMap((b) => b.events)
+      .filter((e) => e.id === id);
     assert.equal(events.length, 1);
     assert.equal(events[0]!.revision, committed);
     client.close();

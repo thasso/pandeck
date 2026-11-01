@@ -170,7 +170,7 @@ export function touchAllSessionRows(reason: string): void {
  * The database closed, or its rows were replaced behind the stores: forget
  * what was captured from it. No database access.
  */
-export function invalidateSessionList(reason: string): void {
+function invalidateSessionList(reason: string): void {
   hooks?.invalidated(reason);
 }
 

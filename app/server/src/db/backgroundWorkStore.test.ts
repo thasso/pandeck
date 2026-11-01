@@ -913,7 +913,6 @@ test("the change set hands the background topic sorted item ids, host-only commi
       ["sessions", [owner]],
     ]);
 
-
     // No public write leaves a live host with no member items, so the fixture
     // is written directly. Its Stop-all touches only the host, and must still
     // enlist the topic: the empty report is what schedules a flush.

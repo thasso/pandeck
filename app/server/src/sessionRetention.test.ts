@@ -224,7 +224,7 @@ test("the sweep archives old settled sessions in one batch with one row report, 
     assert.ok(!defaults.some((r) => r.id === first));
     const archive = hub.listSessions({ includeArchived: true });
     assert.equal(archive.find((r) => r.id === first)?.archived, true);
-    assert.ok((await hub.archivedSessionCount()) >= eligible.length);
+    assert.ok(hub.archivedSessionCount() >= eligible.length);
     sessionStore.setArchived(first, false);
     assert.ok(hub.listSessions().some((r) => r.id === first));
     // A bare store restore keeps the old settlement, so the next sweep takes
@@ -379,7 +379,7 @@ test("the default projection reads only unarchived rows and never reintroduces a
     updatedAt: NOW,
   };
 
-  const defaults = await listSessions([liveArchived], readAt);
+  const defaults = listSessions([liveArchived], readAt);
   assert.deepEqual(storeList.mock.calls.at(-1), [{ excludeArchived: true }]);
   assert.ok(defaults.some((r) => r.id === active));
   assert.ok(
@@ -387,7 +387,7 @@ test("the default projection reads only unarchived rows and never reintroduces a
     "the live runtime of an archived session does not ride back into the list",
   );
 
-  const archive = await listSessions([liveArchived], readAt, {
+  const archive = listSessions([liveArchived], readAt, {
     includeArchived: true,
   });
   assert.deepEqual(storeList.mock.calls.at(-1), [{}]);
@@ -425,9 +425,7 @@ test("a waiting child the sweep does archive has its opening prompt cancelled", 
   const child = seed("archived-waiting", { settledAt: OLD });
   const opener = heldOpenerTo(child);
   // Reach the writer deliberately: the listed row is an eligible candidate.
-  vi.spyOn(hub, "listSessions").mockReturnValue([
-    { ...row(child), file: "" },
-  ]);
+  vi.spyOn(hub, "listSessions").mockReturnValue([{ ...row(child), file: "" }]);
   const archived = await sweepSettledSessionArchive(NOW);
   assert.deepEqual(archived, [child]);
   assert.equal(peerPromptStore.getById(opener.id)?.status, "cancelled");

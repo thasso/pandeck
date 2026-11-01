@@ -58,7 +58,7 @@ test("the singleton uses the ordinary session unread projection", async () => {
   expect(await permanentAssistantUnread()).toBe(false);
   const id = seed();
   expect(await permanentAssistantUnread()).toBe(
-    (await mergedSessionList()).find((row) => row.id === id)?.unread,
+    mergedSessionList().find((row) => row.id === id)?.unread,
   );
   expect(await permanentAssistantUnread()).toBe(true);
   sessionStore.markRead(id, 100);

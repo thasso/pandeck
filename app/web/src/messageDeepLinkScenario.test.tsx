@@ -2,8 +2,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ServerMessage } from "@assistant/shared";
+import type { ServerMessage, SessionListItem } from "@assistant/shared";
 import { FakeSocket } from "./test/fakeSocket.ts";
+import { sessionListMessage } from "./test/sessionTopic.ts";
 
 /**
  * `/sessions/:id#m-<entryId>` — one message, addressed in the URL — measured on
@@ -48,6 +49,20 @@ async function settle(frames = 3): Promise<void> {
     });
 }
 
+function listedSessions(): SessionListItem[] {
+  return [
+    {
+      id: SESSION_ID,
+      harness: "pi",
+      agentType: "assistant",
+      title: "Session",
+      updatedAt: 1_700_000_000_000,
+      messageCount: 2,
+      isStreaming: false,
+    },
+  ] as unknown as SessionListItem[];
+}
+
 function readyMessage(): ServerMessage {
   return {
     type: "ready",
@@ -55,17 +70,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: [
-      {
-        id: SESSION_ID,
-        harness: "pi",
-        agentType: "assistant",
-        title: "Session",
-        updatedAt: 1_700_000_000_000,
-        messageCount: 2,
-        isStreaming: false,
-      },
-    ],
     settings: {},
     speechToText: {
       configured: false,
@@ -141,6 +145,7 @@ async function boot(path: string): Promise<FakeSocket> {
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
+    socket.receive(sessionListMessage(listedSessions()));
   });
   await act(async () => socket.receive(snapshotMessage()));
   await settle();

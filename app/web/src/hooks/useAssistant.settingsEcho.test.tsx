@@ -62,7 +62,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: [],
     settings: { skills: {} },
     speechToText: null,
     serverBuild: { version: "test" },

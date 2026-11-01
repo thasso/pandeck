@@ -67,7 +67,6 @@ function readyMessage(): ServerMessage {
     },
     models: [],
     agents: [],
-    sessions: [],
     settings: {},
     speechToText: {
       configured: false,
@@ -160,7 +159,12 @@ it("re-reads sessions and runs when a reorder is refused", async () => {
     }),
   );
   const recovery = socket.sent.slice(mark);
-  expect(recovery).toContainEqual({ type: "listSessions" });
+  // Both lists are re-read by resubscribing for a fresh snapshot.
+  expect(recovery).toContainEqual({
+    type: "unsubscribe",
+    topics: ["sessions"],
+  });
+  expect(recovery).toContainEqual({ type: "subscribe", topics: ["sessions"] });
   expect(recovery).toContainEqual({
     type: "unsubscribe",
     topics: ["workflow"],

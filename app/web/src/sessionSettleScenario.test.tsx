@@ -16,6 +16,7 @@ import {
   type SessionInboxCard,
   type SessionInboxItem,
 } from "./lib/sessionInbox.ts";
+import { sessionTopic } from "./test/sessionTopic.ts";
 
 /** The session cards of a shaped list; the inbox also carries run items. */
 function cards(items: SessionInboxItem[]): SessionInboxCard[] {
@@ -86,14 +87,13 @@ function row(partial: Partial<SessionListItem>): SessionListItem {
   };
 }
 
-function readyMessage(sessions: SessionListItem[]): ServerMessage {
+function readyMessage(): ServerMessage {
   return {
     type: "ready",
     serverBuild: { version: "0.0.0-test" },
     state: null,
     models: [],
     agents: [],
-    sessions,
     settings: {},
     speechToText: {
       configured: false,
@@ -149,13 +149,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** The server side of the booted connection's `sessions` topic. */
+let topic = sessionTopic();
+
 /** Boot the hook with these session rows already in the list. */
 async function bootAll(sessions: SessionListItem[]): Promise<ScenarioSocket> {
+  topic = sessionTopic();
   await act(async () => root!.render(<AssistantHarness />));
   const socket = ScenarioSocket.instances.at(-1)!;
   await act(async () => {
     socket.open();
-    socket.receive(readyMessage(sessions));
+    socket.receive(readyMessage());
+    socket.receive(topic.snapshot(sessions));
   });
   return socket;
 }
@@ -226,18 +231,19 @@ describe("settling a direct session", () => {
     // revision 3 had already happened, so the row carries no `settledAt`. Every
     // subscribed tab receives this exact row.
     await act(async () => {
-      socket.receive({
-        type: "sessionUpdated",
-        session: row({
-          unread: false,
-          outcomeAttention: {
-            revision: 3,
-            settledRevision: 2,
-            kind: "failed",
-            at: NOW - 1_000,
-          },
-        }),
-      });
+      socket.receive(
+        topic.upsert(
+          row({
+            unread: false,
+            outcomeAttention: {
+              revision: 3,
+              settledRevision: 2,
+              kind: "failed",
+              at: NOW - 1_000,
+            },
+          }),
+        ),
+      );
     });
 
     const authoritative = current("s-1");
@@ -330,13 +336,14 @@ describe("dismissing a session failure", () => {
       actions!.dismissSessionFailure("s-1", NOW - 1_000, 3),
     );
     await act(async () => {
-      socket.receive({
-        type: "sessionUpdated",
-        session: row({
-          unread: false,
-          outcomeAttention: { ...failedOutcome, settledRevision: 3 },
-        }),
-      });
+      socket.receive(
+        topic.upsert(
+          row({
+            unread: false,
+            outcomeAttention: { ...failedOutcome, settledRevision: 3 },
+          }),
+        ),
+      );
     });
     const dismissed = current("s-1");
     expect(classifySessionStatus(dismissed)).toBe("quiet");
@@ -344,19 +351,20 @@ describe("dismissing a session failure", () => {
     expect(buildSessionInbox([dismissed]).active).toHaveLength(1);
 
     await act(async () => {
-      socket.receive({
-        type: "sessionUpdated",
-        session: row({
-          unread: false,
-          lastError: { at: NOW, message: "again" },
-          outcomeAttention: {
-            ...failedOutcome,
-            revision: 4,
-            settledRevision: 3,
-            at: NOW,
-          },
-        }),
-      });
+      socket.receive(
+        topic.upsert(
+          row({
+            unread: false,
+            lastError: { at: NOW, message: "again" },
+            outcomeAttention: {
+              ...failedOutcome,
+              revision: 4,
+              settledRevision: 3,
+              at: NOW,
+            },
+          }),
+        ),
+      );
     });
     expect(classifySessionStatus(current("s-1"))).toBe("failed");
   });
@@ -646,10 +654,11 @@ describe("settling a cluster", () => {
     expect(current("s-1").settledAt).toBeDefined();
 
     await act(async () => {
-      ScenarioSocket.instances.at(-1)!.receive({
-        type: "sessionUpdated",
-        session: peer({ attention: "question", awaitingInput: true }),
-      });
+      ScenarioSocket.instances
+        .at(-1)!
+        .receive(
+          topic.upsert(peer({ attention: "question", awaitingInput: true })),
+        );
     });
 
     const view = buildSessionInbox(uiState!.sessions);
@@ -716,10 +725,12 @@ describe("taking a peer over", () => {
     expect(command.requestId).toBeDefined();
 
     // The refusal carries the command's id, so that exact change is
-    // recovered: the list is re-read and its answer replaces the guess.
-    const listsBefore = socket.sent.filter(
-      (msg) => msg.type === "listSessions",
-    ).length;
+    // recovered: the topic resubscribes and its snapshot replaces the guess.
+    const resubscribes = () =>
+      socket.sent.filter(
+        (msg) => msg.type === "subscribe" && msg.topics.includes("sessions"),
+      ).length;
+    const resubscribesBefore = resubscribes();
     await act(async () => {
       socket.receive({
         type: "error",
@@ -728,11 +739,9 @@ describe("taking a peer over", () => {
         target: { type: "session", id: "s-2" },
       });
     });
-    expect(
-      socket.sent.filter((msg) => msg.type === "listSessions").length,
-    ).toBeGreaterThan(listsBefore);
+    expect(resubscribes()).toBeGreaterThan(resubscribesBefore);
     await act(async () => {
-      socket.receive({ type: "sessions", sessions: rows });
+      socket.receive(topic.snapshot(rows));
     });
     expect(current("s-2").spawnOwnership).toBe("coordinator");
   });

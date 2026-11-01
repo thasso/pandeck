@@ -3,42 +3,13 @@
 What one rebuild of the session list costs, and the rules that keep it bounded
 by what is shown rather than by what the database has accumulated.
 
-The hub rebuilds the rows a write reported (`hub.mergedSessions` →
-`sessions.ts`'s `listSessions` with `onlyIds`; see "Touched rows" below): up to
-~4 times a second while agents stream, about 30 times in four minutes with two
-or three agents running. Every rebuild runs on the thread that serves every
-connection, so its cost is latency for everyone. The flush then sends only what
-changed: single-row `sessionUpdated`s when the row set is unchanged, the full
-`sessions` list otherwise (`planSessionListSends` in `hub.ts`).
-
-## What it cost
-
-Measured with
-`pnpm --filter @assistant/server measure:session-list --data-dir /home/alice/assistant-data`
-on a copy of the production database (~4,300 sessions: 257 in the default list,
-2,245 with the archive). Medians of 30 runs:
-
-| part                                     |  before |   after |
-| ---------------------------------------- | ------: | ------: |
-| `worktreeIdBySession`                    |  7.7 ms | 0.01 ms |
-| `projectStore.sessionProjectIndex`       |  5.3 ms | 0.01 ms |
-| `objectRefsBySession`                    |  4.5 ms | 0.01 ms |
-| missing-worktree probe (default rows)    |  3.7 ms |  1.3 ms |
-| missing-worktree probe (with archive)    | 12.9 ms |  2.0 ms |
-| Task progress index, after a Task write  | 43.2 ms |  1.1 ms |
-| **default list**                         | 23.4 ms |  4.8 ms |
-| default list, right after a session edge |       — | 21.9 ms |
-| **list with archive**                    | 58.7 ms | 27.7 ms |
-| **one row (`broadcastSessionUpdated`)**  | 58.7 ms |  0.4 ms |
-
-Before, `broadcastSessionUpdated` built the whole list with the archive to send
-one row. `onlyIds` existed, but the rows were still read from the store in full
-and then filtered, which alone cost 33 ms.
-
-What is left of a default rebuild is mostly reading and mapping the listed
-`session_index` rows (~2 ms). What is left of the archive variant is the same
-work for 2,245 rows (~16 ms). The archive variant is built only while some
-connection has the archive view open.
+The `sessions` state topic (`sessionsTopic.ts`, on the kernel described in
+`docs/state-sync.md`) rebuilds the rows a write reported (`mergedSessionList`
+with `onlyIds`; see "Touched rows" below): up to ~4 times a second while agents
+stream, about 30 times in four minutes with two or three agents running. Every
+rebuild runs on the thread that serves every connection, so its cost is latency
+for everyone. The flush sends each touched row as one revisioned `stateEvents`
+event; a full list travels only as the subscribe answer.
 
 ## The rules
 
@@ -157,42 +128,81 @@ because another flush could see the change first. `touchAllSessionRows` is only
 for inputs every row reads with no bounded id set: the reminder-limit setting, a
 cleared pull-request card table, a closed database.
 
-The hub's sink coalesces touches (25 ms debounce, 250 ms under churn) and
-rebuilds only the touched rows (`onlyIds`), or every row on a global touch or
-before the first publish. It compares each against what it last published per
-archived variant (`publishedSessionRows`), with hidden rows absent and `file`
-stripped. The shared predicate (`permanentAssistantVisibility.ts`) is separate
-from the singleton runtime, keeping the hub dependency acyclic. Binding an
-ordinary legacy row as the singleton removes its public membership; clearing
-that binding reveals it again. A variant gets the full `sessions` list when its
-row set changed, the archived count moved, or more than `SESSION_DELTA_MAX_ROWS`
-rows changed; otherwise one `sessionUpdated` per changed row. A forced touch
-(`hub.broadcastSessionUpdated`, used before a refusal's error) sends the row
-even when it is equal. The singleton Personal Assistant's row never travels as a
-row, only as `permanentAssistantUnread`. Removing its binding publishes false,
-including to later connections, only if that scalar changed. A caller whose
-reply or later broadcast must follow the list (`mutationSettled`, a Workflow Run
-list after its roles) awaits `hub.sessionRowsSent()`.
+A touch stamps each id's `session_list_revisions` row with a fresh revision in
+the write's change set (`db/changeSet.ts`); the committed ids report into the
+kernel, which coalesces them (25 ms debounce, 250 ms under churn) and builds
+only those rows, in one `mergedSessionList` call per flush. Every touched id is
+published at its new revision, even when its content did not change. A listed
+row is an `upsert`; an archived, tombstoned, hidden or zero-message row is a
+`delete`, which a client holding nothing for that id ignores. The singleton
+Personal Assistant never travels as a row, only as `permanentAssistantUnread`,
+which a listener recomputes when the singleton's revision moved.
 
-A failed build or send retains its captured touched ids, forced ids and global
-refresh intent alongside any reports received during that attempt. Published
-rows, archived count and singleton-unread cache advance only after successful
-publication. An awaiting caller rejects on failure rather than acknowledging a
-row that was not sent. There is no automatic retry loop: the next ordinary
-report retries the retained work, and the audit still recognizes it as reported.
-A partially completed send may be repeated on that retry.
+The subscribe answer, `sessionList`, carries the live rows (archived rows
+excluded), their revision sidecar and the archived count. Connect pays for that
+one build; `ready` carries no session fields.
+
+### Republishing a row
+
+A caller whose reply or later broadcast must follow the rows (an `error` after a
+refusal, `mutationSettled`, a Workflow Run list after its roles, the
+`forkedSession`, `draftSession` and `permanentAssistantOpened` route replies)
+calls `publishSessionRowsNow()` first: it flushes what is pending,
+synchronously, so the rows precede the reply on every socket. A refusal that
+must re-send a row the write did not change touches it first
+(`hub.republishSessionRow`), which stamps a new revision, so a client holding an
+optimistic guess at an older revision adopts the authoritative row.
+
+Failures stay in the topic (Task-1310, `docs/state-sync.md`, "Failure
+boundary"): a failed row read or frame send is logged, its ids are retained and
+publish on the next ordinary report, and the command that caused the flush still
+succeeds. There is no retry loop. A retained id repeats at the same revision,
+which a client already holding it ignores; a connection that missed a frame sees
+the `seq` gap and resubscribes.
+
+### Archived sessions
+
+Archived rows never enter the client's replica, so a `delete` for an archived id
+cannot drop a shown archived row. A client reads the archived slice on demand
+with `loadArchivedSessions` and its `requestId`; the server answers
+`archivedSessions` with that id (archived rows only), or, if the build fails, an
+`error` with the same id and the target `{ type: "session" }`. An
+`archivedSessionCount` broadcast on the topic tells clients the count moved; its
+last-sent value is seeded at boot and advances only after a send that did not
+throw.
+
+While the slice is shown, the client re-reads it when the count moves or a
+`delete` arrives for an id the slice holds; a live `upsert` for such an id is a
+restore and moves it to the live rows. Reads are single-flight with at most one
+queued, released by their own answer or error, a disconnect, or a 30 s timeout;
+an answer or error carrying another `requestId` is ignored. A reconnect snapshot
+marks the slice stale, so an open shelf reads it once more.
+
+### Audit
 
 Two backstops catch a writer that forgot to touch:
 
-- **Audit (tests).** Under Vitest every flush first builds every row and throws
-  `unreported session row change: <id> <fields>` for a row that differs from the
-  published one without a touch, before anything is published, so a full-list
-  fallback cannot hide it. `hub.setSessionListAuditForTests(false)` pauses it
-  for a test that counts store reads.
-- **Sweep (production).** Every 60 s (`startSessionListSweep`) the hub advances
-  the deadline watermark, compares a full build with what it published, logs
-  each unreported row once with its changed fields, and touches it, which
-  repairs it. Nothing relies on it.
+- **Audit (tests).** Under Vitest every flush, item read and snapshot first
+  builds every row (archived included) and compares it with the baseline: a row
+  whose public content or presence changed while its revision did not move above
+  the one the baseline recorded raises `StateTopicInvariantError`
+  (`unreported session row change: <id> <fields>`). The invariant is recorded in
+  a ledger the test setup fails on, and it escapes every command boundary; only
+  `sessionsTopic.ts` constructs one, and code recognises it by brand
+  (`isStateTopicInvariant`), never by `instanceof`. A delivered publication
+  moves the baseline of each id it published. While a global touch's publication
+  is owed, a row archived in both builds is excused, since the global touch
+  stamps only the live superset; that publication then checks everything and
+  recaptures. `setSessionListAuditForTests(false)` runs a test as production
+  does.
+- **Sweep (production).** Every 60 s (`startSessionListSweep`) the topic
+  advances the deadline watermark, compares a full build with the baseline, logs
+  each unreported row once with its changed fields and touches it, which repairs
+  it, then retries retained ids. Nothing relies on it. Boot touches every row,
+  captures the baseline and seeds the archived count before serving.
+
+Closing the database (`closeDb`) forgets the baseline; a global touch with the
+database closed only invalidates and never reopens it.
 
 A main checkout's cached "no repository" verdict keeps its existing 60 s TTL.
 `worktreeResolve.ts` reports the expiry synchronously before marking the cached
@@ -282,8 +292,15 @@ and events.
 - `app/server/src/db/linksMemo.test.ts` shows that every write path misses, that
   a Task edge does not, and that another connection's commit, a rolled-back
   transaction and a reopened database all miss.
-- `app/server/src/sessionDelta.test.ts` shows that `broadcastSessionUpdated`
-  reads only the named row and sends exactly what a full build lists.
+- `app/server/src/sessionsTopicSweep.test.ts` drives the production sweep
+  through each kind of unreported change, a failed global flush and a retained
+  id; `db/sessionListLifecycle.test.ts` shows a closed database forgets the
+  baseline and is never reopened by a global touch;
+  `sessionsTopicOrdering.test.ts` shows each reply follows its rows' events.
+- `app/web/src/sessionTopicScenario.test.tsx` and the `sessions replica` and
+  `archived session reads` cases in `hooks/useAssistant.test.ts` pin the client:
+  live rows only, revision order, a `seq` gap resubscribe, and the archived
+  slice's single-flight read.
 - `app/server/src/sessionListReporters.test.ts` guards export classifications
   (including in-memory exported classes/owners), fan-out, audit, sweep and wire
   parity. Its source-name checks are secondary guards, not behavioral proof.

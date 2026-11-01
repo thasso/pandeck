@@ -159,7 +159,7 @@ test("an idle session reports background activity without any provider run state
   reserve(owner, { kind: "monitor-websocket", label: "socket" });
   backgroundWorkStore.markRunning({ itemId: shell.id });
 
-  const sessions = await listSessions([], () => Date.now());
+  const sessions = listSessions([], () => Date.now());
   const row = sessions.find((session) => session.id === owner);
   assert.ok(row, "the owning session is listed");
   assert.equal(row.backgroundActivity?.activeCount, 2);
@@ -183,7 +183,7 @@ test("an idle session reports background activity without any provider run state
     state: "active",
   }))
     backgroundWorkStore.terminalize({ itemId: item.id, state: "completed" });
-  const settled = (await listSessions([], () => Date.now())).find(
+  const settled = listSessions([], () => Date.now()).find(
     (session) => session.id === owner,
   );
   assert.equal(settled?.backgroundActivity, undefined);
@@ -206,7 +206,7 @@ test("a retained epoch with no children left still blocks settle and delete", as
   backgroundWorkStore.setHostState({ hostId: item.hostId!, state: "live" });
   backgroundWorkStore.terminalize({ itemId: item.id, state: "completed" });
 
-  const row = (await listSessions([], () => Date.now())).find(
+  const row = listSessions([], () => Date.now()).find(
     (session) => session.id === owner,
   );
   // No items left, but the query is still retained and still holds the owner
@@ -219,7 +219,7 @@ test("a retained epoch with no children left still blocks settle and delete", as
   );
 
   backgroundWorkStore.setHostState({ hostId: item.hostId!, state: "closed" });
-  const closed = (await listSessions([], () => Date.now())).find(
+  const closed = listSessions([], () => Date.now()).find(
     (session) => session.id === owner,
   );
   assert.equal(closed?.backgroundActivity, undefined);

@@ -16,6 +16,7 @@ import {
   spawnedSessionsView,
   type SessionInboxCard,
 } from "./lib/sessionInbox.ts";
+import { sessionTopic } from "./test/sessionTopic.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -144,7 +145,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+let topic = sessionTopic();
+
 async function boot(): Promise<void> {
+  topic = sessionTopic();
   await act(async () => rootNode!.render(<Harness />));
   socket = ScenarioSocket.instances.at(-1)!;
   await act(async () => {
@@ -155,7 +159,6 @@ async function boot(): Promise<void> {
       state: null,
       models: [],
       agents: [],
-      sessions: [parent, peer],
       settings: {},
       speechToText: {
         configured: false,
@@ -165,15 +168,15 @@ async function boot(): Promise<void> {
       slashCommands: [],
       contextInfo: null,
     });
+    socket.receive(topic.snapshot([parent, peer]));
   });
 }
 
 async function replaceFailure(): Promise<void> {
   await act(async () =>
-    socket.receive({
-      type: "sessionUpdated",
-      session: { ...peer, lastError: { at: NOW, message: "second" } },
-    }),
+    socket.receive(
+      topic.upsert({ ...peer, lastError: { at: NOW, message: "second" } }),
+    ),
   );
 }
 

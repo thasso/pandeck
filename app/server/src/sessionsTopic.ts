@@ -27,7 +27,10 @@ import { errorText } from "./errors.ts";
 import { liveSessionIds, mergedSessionList } from "./harnesses/sessionList.ts";
 import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import { archivedSessionCount } from "./sessions.ts";
-import { createStateTopic, StateTopicInvariantError } from "./stateTopicKernel.ts";
+import {
+  createStateTopic,
+  StateTopicInvariantError,
+} from "./stateTopicKernel.ts";
 
 type SessionRow = ReturnType<typeof mergedSessionList>[number];
 
@@ -370,4 +373,3 @@ export function setSessionListAuditForTests(on: boolean): void {
 export function setSessionsBatchMaxForTests(max = 100): void {
   batchMax = max;
 }
-

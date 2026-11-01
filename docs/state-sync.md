@@ -525,6 +525,19 @@ per-surface sub-tasks — no page invents its own delta format.
   comment streams do not join a domain-wide `broadcastAll` topic. Session
   transcript comments and chat comments remain browser-local and never enter the
   wire protocol.
+- Sessions: the live session-list rows (`docs/session-list.md`). Every
+  connection holds the topic. The subscribe answer, `sessionList`, carries the
+  live rows, their revision sidecar and `archivedSessionCount`; `ready` carries
+  no rows. A touch stamps `session_list_revisions` in the write's change set,
+  and every touched id is published at its new revision, even with unchanged
+  content: an archived, hidden or zero-message row is a `delete`, which a client
+  holding nothing for it ignores. Archived rows are never in the replica: they
+  are an on-demand `loadArchivedSessions` read answered by `archivedSessions`
+  with the request's id, re-read while shown when `archivedSessionCount` moves
+  or a `delete` names one of them. A failed optimistic session mutation resyncs
+  the topic (forget the ids' revisions, resubscribe or join the awaited
+  snapshot). A command whose reply must follow its rows flushes them first
+  (`publishSessionRowsNow`). No digest yet.
 
 ## Enforcement
 

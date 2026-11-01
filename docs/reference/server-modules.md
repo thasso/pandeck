@@ -129,24 +129,18 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   applied structurally to ANY message carrying them rather than to an enumerated
   list of message types: it strips the server-internal provider-native `file`
   handle and drops the rows no ordinary list may show (the singleton Personal
-  Assistant), and a one-row `sessionUpdated` about a hidden session is not sent
-  at all. Enumerating types is what let `permanentAssistantOpened` answer an
+  Assistant). Enumerating types is what let `permanentAssistantOpened` answer an
   open with the unfiltered list and put the singleton back in the sidebar.
-- `hub.ts` rebuilds only the session-list rows writers touched through
-  `db/sessionListChanges.ts` (`docs/session-list.md`, "Touched rows") and
-  broadcasts them as single-row `sessionUpdated`s, and as the full `sessions`
-  list only when the SET of rows changed, when more than
-  `SESSION_DELTA_MAX_ROWS` moved, or on connect. `planSessionListSends` decides,
-  per archived-variant, by comparing the touched rows it just built against the
-  last ones it published (`publishedSessionRows`); a client's upsert is
-  idempotent and re-sorts, so a delta is safe to apply whatever that client last
-  saw, and anything a single-row upsert cannot express forces the list: an
-  added, removed or archived session, and a changed `archivedSessionCount` —
-  which travels only on a full list and can move while a variant's own row set
-  does not (restoring a session for an archived-loaded client, deleting an
-  archived one for everyone else). Under Vitest every flush audits a full build
-  for an untouched change and throws; in production a 60 s sweep logs and
-  repairs one. The full list is ~30 KB against production data.
+- `sessionsTopic.ts` is the `sessions` state topic (`docs/session-list.md`,
+  "Touched rows"): it builds only the rows writers touched through
+  `db/sessionListChanges.ts`, each at the revision the touch stamped, and
+  publishes each as one `stateEvents` upsert or delete; the full live list is
+  only the subscribe answer, `sessionList`. `archivedSessionCount` is its own
+  broadcast; the archived rows are the on-demand `archivedSessions` read.
+  `publishSessionRowsNow` flushes pending rows ahead of a reply that must follow
+  them. Under Vitest every flush, item read and snapshot audits a full build for
+  an unreported change and raises an invariant; in production a 60 s sweep logs
+  and repairs one. The full list is ~30 KB against production data.
 - `hub.ts` owns the harness-neutral live-session registry: merged
   listing/broadcast, restore dispatch, dev/deploy restart draining, and
   session-driver lookup. Which engine holds a session is the harness registry's

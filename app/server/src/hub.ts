@@ -372,7 +372,6 @@ class SessionHub {
   }
 
   private publishArchivedSessionCount(): void {
-
     const count = archivedSessionCount();
     if (count === this.lastArchivedSessionCount) return;
     this.broadcastTopic("sessions", { type: "archivedSessionCount", count });
@@ -386,9 +385,7 @@ class SessionHub {
    */
   private publishPermanentAssistantUnreadIfMoved(): void {
     const id = permanentAssistantStore.sessionId();
-    const marker = id
-      ? `${id}@${sessionListRevisions([id]).get(id) ?? 0}`
-      : "";
+    const marker = id ? `${id}@${sessionListRevisions([id]).get(id) ?? 0}` : "";
     if (marker === this.permanentAssistantUnreadMarker) return;
     const [row] = id
       ? mergedSessionList({ includeArchived: true, onlyIds: new Set([id]) })

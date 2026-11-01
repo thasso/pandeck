@@ -80,13 +80,9 @@ const VARIANTS: SessionListOptions[] = [{}, { includeArchived: true }];
  * which misses every memo — for both the default and the archived variant.
  */
 async function listedAfter(label: string) {
-  const warm = await Promise.all(
-    VARIANTS.map((opts) => listSessions([], () => 0, opts)),
-  );
+  const warm = VARIANTS.map((opts) => listSessions([], () => 0, opts));
   closeDb();
-  const cold = await Promise.all(
-    VARIANTS.map((opts) => listSessions([], () => 0, opts)),
-  );
+  const cold = VARIANTS.map((opts) => listSessions([], () => 0, opts));
   assert.deepEqual(warm, cold, `${label}: memoized list equals a fresh build`);
   return new Map(warm[1]!.map((row) => [row.id, row]));
 }
@@ -225,7 +221,7 @@ test("Task progress counts exactly what the listed Tasks say", async () => {
 test("a row's refs are not the memo's: writing to one cannot change the next build", async () => {
   const id = seed();
   linkSessionToObject(id, "task", "7", "manual");
-  const row = (await listSessions([], () => 0)).find((item) => item.id === id);
+  const row = listSessions([], () => 0).find((item) => item.id === id);
   const ref = row?.objectRefs?.[0];
   assert.ok(ref, "the row carries its ref");
   assert.throws(() => {
@@ -233,7 +229,7 @@ test("a row's refs are not the memo's: writing to one cannot change the next bui
   }, TypeError);
   row.objectRefs!.push({ ...ref, id: "extra" });
 
-  const next = (await listSessions([], () => 0)).find((item) => item.id === id);
+  const next = listSessions([], () => 0).find((item) => item.id === id);
   assert.deepEqual(
     next?.objectRefs?.map((item) => item.id),
     ["7"],
@@ -291,7 +287,7 @@ test("a stored Claude SDK row lists the picker's model, not its credential kind"
     model: "claude-opus-5-5[1m]",
     thinkingLevel: "high",
   });
-  const row = (await listSessions([], () => 0)).find((item) => item.id === id);
+  const row = listSessions([], () => 0).find((item) => item.id === id);
   assert.deepEqual(row?.model, {
     provider: "claude-sdk",
     id: "opus",

@@ -56,8 +56,11 @@ test("every command that resumes/starts a run is covered", () => {
     );
   }
   // A read-only command must not be gated by the drain.
-  assert.equal(isRunStartingMessage({
+  assert.equal(
+    isRunStartingMessage({
       type: "loadArchivedSessions",
       requestId: "archived-1",
-    }), false);
+    }),
+    false,
+  );
 });

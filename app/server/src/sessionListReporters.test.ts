@@ -153,7 +153,6 @@ async function assertReported(
     assert.ok(stamped.has(id), `${label}: ${id} was touched but not stamped`);
   }
   return touched;
-
 }
 
 /* ----------------------------- V2: classification ----------------------------- */

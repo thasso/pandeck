@@ -67,7 +67,6 @@ function readyMessage(): ServerMessage {
     state: null,
     models: [],
     agents: [],
-    sessions: [],
     settings: {},
     speechToText: {
       configured: false,
@@ -224,16 +223,20 @@ describe("new-session load request counts", () => {
       socket.open();
       socket.receive(readyMessage());
     });
+    // Only the session list, which every surface holds.
     expect(
       socket.sent.filter((message) => message.type === "subscribe"),
-    ).toEqual([]);
+    ).toEqual([{ type: "subscribe", topics: ["sessions"] }]);
 
     await act(async () =>
       root!.render(<NewRouteHarness routeName="sessions" taskPickerOpen />),
     );
     expect(
       socket.sent.filter((message) => message.type === "subscribe"),
-    ).toEqual([{ type: "subscribe", topics: ["tasks"] }]);
+    ).toEqual([
+      { type: "subscribe", topics: ["sessions"] },
+      { type: "subscribe", topics: ["tasks"] },
+    ]);
     expect(
       socket.sent.filter((message) => message.type === "listTasks"),
     ).toEqual([]);
@@ -287,7 +290,9 @@ describe("new-session load request counts", () => {
 
     expect(
       socket.sent.filter((message) => message.type === "subscribe"),
-    ).toEqual([{ type: "subscribe", topics: ["tasks"], digests: ["tasks"] }]);
+    ).toEqual([
+      { type: "subscribe", topics: ["sessions", "tasks"], digests: ["tasks"] },
+    ]);
 
     await act(async () =>
       socket.receive({
@@ -751,7 +756,8 @@ describe("new-session bootstrap shell", () => {
     const socket = await connect();
     await act(async () => {
       socket.receive({
-        type: "sessions",
+        type: "sessionList",
+        seq: 0,
         sessions: [
           {
             id: "s-old",
@@ -772,6 +778,11 @@ describe("new-session bootstrap shell", () => {
             messageCount: 1,
           },
         ],
+        revisions: [
+          { id: "s-old", revision: 1 },
+          { id: "s-other", revision: 2 },
+        ],
+        archivedSessionCount: 0,
       });
       socket.receive(
         sessionSnapshot("s-old", [userEntry("old-1", 1, "Earlier question")]),

@@ -322,7 +322,7 @@ test("activity caps and record drop order preserve bounded paging across 200 mem
   const id = initiative(ids);
   for (const t of ids) session(t);
   for (let i = 0; i < 7; i++) session(ids[0]);
-  const rows = await listSessions([], () => 0, { includeArchived: true });
+  const rows = listSessions([], () => 0, { includeArchived: true });
   setInitiativeActivitySessionReaderForTests((ids) => {
     const requested = new Set(ids);
     return rows.filter((row) => requested.has(row.id));

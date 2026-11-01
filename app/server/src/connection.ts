@@ -587,7 +587,6 @@ export class Connection implements Viewer {
     return getSettings(this.publicBaseUrl);
   }
 
-
   viewingSessionId(): string | undefined {
     return this.viewing?.id;
   }
@@ -706,7 +705,6 @@ export class Connection implements Viewer {
     // session, attach a runtime, or send an empty chat snapshot until the first
     // prompt arrives via harnessSend.
     return {};
-
   }
 
   private async deliverInitialPendingAgentRelays(): Promise<void> {
@@ -1226,7 +1224,6 @@ export class Connection implements Viewer {
           });
         }
         return;
-
 
       case "grantApprovalForSession":
         grantApprovalForSession(
@@ -4756,14 +4753,13 @@ export class Connection implements Viewer {
     // blocker is checked before any destructive step. It is the SAME predicate
     // settlement uses, and unlike settlement's other reasons it is not a
     // judgement about tidiness: the user is told to stop the work first.
-    const projected = hub.listSessions({ includeArchived: true }).find(
-      (item) => item.id === id,
-    );
+    const projected = hub
+      .listSessions({ includeArchived: true })
+      .find((item) => item.id === id);
     const backgroundBlocked = backgroundWorkBlockedReason(
       projected?.backgroundActivity,
     );
     const refuseForBackgroundWork = (reason: string): void => {
-
       hub.republishSessionRow(id);
       this.send({
         type: "error",
@@ -4777,8 +4773,7 @@ export class Connection implements Viewer {
     // supplies the id. Resolved before the delete below, from which on nothing
     // awaits until every viewer has left and the harness is evicted.
     const resolved =
-      ref.file ??
-      hub.listSessions().find((item) => item.id === id)?.file;
+      ref.file ?? hub.listSessions().find((item) => item.id === id)?.file;
     // The delete itself is ONE store transaction, run before any other
     // destructive step: it rechecks live work (closing the window the
     // projection above was read in), marks the session deleted and tombstones
@@ -5758,8 +5753,7 @@ export class Connection implements Viewer {
         message = { ...message, requestId: scope.requestId };
     }
     const wireMessage = publicServerMessage(message);
-    if (this.ws.readyState
- === this.ws.OPEN)
+    if (this.ws.readyState === this.ws.OPEN)
       this.ws.send(encodeServerFrame(JSON.stringify(wireMessage)));
   }
 

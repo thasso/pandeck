@@ -125,7 +125,7 @@ function lostReply(sender: string, recipient: string, request: { id: string }) {
 }
 
 async function rows(): Promise<Map<string, SessionListItem>> {
-  const list = await hub.listSessions({ includeArchived: true });
+  const list = hub.listSessions({ includeArchived: true });
   return new Map(list.map((row) => [row.id, row as SessionListItem]));
 }
 

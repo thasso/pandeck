@@ -14,10 +14,7 @@ import type {
 } from "@assistant/shared";
 import { Connection } from "./connection.ts";
 import { hub } from "./hub.ts";
-import {
-  sessionRowIn,
-  sessionTopicViewer,
-} from "./test/sessionListClient.ts";
+import { sessionRowIn, sessionTopicViewer } from "./test/sessionListClient.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 

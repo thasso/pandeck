@@ -693,21 +693,22 @@ backlog/task interaction and drag/reorder behavior.
   the detail arrives.
 - `settleSession` mints a `requestId` like
   `renameSession`/`deleteSession`/`archiveSession` and is tracked in
-  `pendingMutationsRef`: the server's `error` carrying that id triggers a
-  `listSessions`/`loadArchivedSessions` refetch, which is how an ineligible
-  settle (running/queued/blocked work) rolls back. Settlement is a LIFECYCLE
-  bit, not activity: the optimistic update must never move `updatedAt`, or the
-  inbox re-sorts around a row on its way out of the working set. It carries
-  `throughRevision` — the `outcomeAttention.revision` the CURRENT row holds,
-  read from `stateRef` so every settling surface sends the same observed value,
-  and 0 when the row has none, which is the fail-closed answer — and the
-  optimistic row acknowledges exactly that revision. `normalizeCachedSessions`
-  drops every live-derived field on shell-cache hydration — `isStreaming`,
-  `runStartedAt`, `awaitingInput`, `attention`, `queuedWork`, `waitingForSlot` —
-  keeping durable `lastError`/`settledAt`/`outcomeAttention`/ `archived`; a
-  cached elapsed label would otherwise count up from a run that ended while the
-  tab was shut, and a stale "Needs your approval" row would both lie and disable
-  Settle until the socket re-asserted the truth.
+  `pendingMutationsRef`: the server's `error` carrying that id resyncs the
+  `sessions` topic (and re-reads a shown archived slice), which is how an
+  ineligible settle (running/queued/blocked work) rolls back. Settlement is a
+  LIFECYCLE bit, not activity: the optimistic update must never move
+  `updatedAt`, or the inbox re-sorts around a row on its way out of the working
+  set. It carries `throughRevision` — the `outcomeAttention.revision` the
+  CURRENT row holds, read from `stateRef` so every settling surface sends the
+  same observed value, and 0 when the row has none, which is the fail-closed
+  answer — and the optimistic row acknowledges exactly that revision.
+  `normalizeCachedSessions` drops every live-derived field on shell-cache
+  hydration — `isStreaming`, `runStartedAt`, `awaitingInput`, `attention`,
+  `queuedWork`, `waitingForSlot` — keeping durable
+  `lastError`/`settledAt`/`outcomeAttention`/ `archived`; a cached elapsed label
+  would otherwise count up from a run that ended while the tab was shut, and a
+  stale "Needs your approval" row would both lie and disable Settle until the
+  socket re-asserted the truth.
 - Worktree review comments are held as authoritative per-worktree projections
   from comment broadcasts; components request/mutate them only through
   `useAssistant` actions. The list/unwatch pair goes through

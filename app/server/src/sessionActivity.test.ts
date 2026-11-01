@@ -242,7 +242,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
       updatedAt: Date.now(),
     });
     const rowOf = async (isStreaming: boolean) =>
-      (await listSessions([liveInfo(isStreaming)], () => 0)).find(
+      listSessions([liveInfo(isStreaming)], () => 0).find(
         (row) => row.id === id,
       );
     assert.equal((await rowOf(true))?.providerRetry?.attempt, 1);

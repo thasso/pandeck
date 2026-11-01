@@ -98,7 +98,10 @@ export function sessionListClient(
 export function sessionTopicViewer(
   sent: ServerMessage[],
   extra: readonly string[] = [],
-): { send: (message: ServerMessage) => void; wantsTopic: (t: string) => boolean } {
+): {
+  send: (message: ServerMessage) => void;
+  wantsTopic: (t: string) => boolean;
+} {
   return {
     send: (message) => sent.push(message),
     wantsTopic: (topic) => topic === "sessions" || extra.includes(topic),

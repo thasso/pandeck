@@ -13,10 +13,7 @@ import { insertWorktree, linkSessionToWorktree } from "./db/worktreeStore.ts";
 import { touchSessionRows } from "./db/sessionListChanges.ts";
 import { recordSessionRowTouches } from "./test/sessionRowTouches.ts";
 import { publicSessionRows } from "./test/sessionListPublicOracle.ts";
-import {
-  sessionRowIn,
-  sessionTopicViewer,
-} from "./test/sessionListClient.ts";
+import { sessionRowIn, sessionTopicViewer } from "./test/sessionListClient.ts";
 import {
   admitDirectPeerTurns,
   recordDirectPeerChild,
