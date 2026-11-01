@@ -11,7 +11,6 @@
  * register their elements with the parent for jump-to-file navigation.
  */
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight } from "lucide-react";
 import type {
   WorktreeChangeFile,
   WorktreeDiffScope,
@@ -23,8 +22,9 @@ import type { LineCommentsConfig } from "../diff/comments.tsx";
 import { fetchWorktreeFileDiff, hashContent } from "../../lib/worktrees.ts";
 import { useNearViewport } from "../common/useNearViewport.ts";
 import { Spinner } from "../common/load.tsx";
-import { IconButton } from "../common/IconButton.tsx";
-import { Toggle } from "../ui/toggle.tsx";
+import { ListGroupSection } from "../ListGroupSection.tsx";
+import { fileIconFor } from "./WorktreeFileNavigator.tsx";
+import { Checkbox } from "../ui/checkbox.tsx";
 
 /** Diffs beyond this many changed lines start collapsed. */
 const LARGE_DIFF_LINES = 600;
@@ -66,7 +66,7 @@ export function WorktreeChangesetList({
     );
   }
   return (
-    <div className="border-y border-border">
+    <div className="border-b border-border/60">
       {files.map((file) => (
         <ChangesetFileSection
           key={file.path}
@@ -160,80 +160,79 @@ function ChangesetFileSection({
   };
 
   const parts = splitPath(file.path);
+  const FileIcon = fileIconFor(file.path);
   const current = scope.kind === "workingTree" || !scope.to;
   const cacheKey = diff
     ? `${worktreeId}:${diff.path}:${hashContent(diff.diff)}`
     : "";
 
   return (
-    <div
-      ref={sectionRef}
-      className={`overflow-hidden border-b border-border last:border-b-0 ${collapsed ? "" : "min-h-24"}`}
-    >
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background px-2 py-1.5">
-        <IconButton
-          size="icon-xs"
-          label={collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`}
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
-        >
-          {collapsed ? <ChevronRight /> : <ChevronDown />}
-        </IconButton>
-        <span className="min-w-0 flex-1 truncate text-sm">
-          <span className="font-medium text-foreground">{parts.name}</span>
-          {parts.dir ? (
-            <span className="ml-1.5 font-mono text-xs text-muted-foreground">
+    <div ref={sectionRef} className={collapsed ? "" : "min-h-24"}>
+      <ListGroupSection
+        id={`changeset-file:${file.path}`}
+        open={!collapsed}
+        onOpenChange={(open) => setCollapsed(!open)}
+        icon={
+          <FileIcon size={14} aria-hidden className="shrink-0 opacity-70" />
+        }
+        title={parts.name}
+        detail={
+          parts.dir ? (
+            <span className="ml-1.5 font-mono text-xs font-normal text-muted-foreground">
               {parts.dir}
             </span>
-          ) : null}
-        </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
-          {file.additions > 0 ? (
-            <span className="text-success">+{file.additions}</span>
-          ) : null}
-          {file.deletions > 0 ? (
-            <span className="ml-1 text-destructive">−{file.deletions}</span>
-          ) : null}
-        </span>
-        <Toggle
-          variant="outline"
-          size="sm"
-          pressed={viewed}
-          onPressedChange={toggleViewed}
-          title={viewed ? "Mark as not viewed" : "Mark as viewed"}
-        >
-          <Check data-icon="inline-start" /> Viewed
-        </Toggle>
-      </div>
-      {collapsed ? null : file.binary ? (
-        <div className="p-4 text-sm text-muted-foreground">Binary file.</div>
-      ) : failed ? (
-        <div className="p-4 text-sm text-muted-foreground">
-          This file is no longer changed in this scope.
-        </div>
-      ) : !diff ? (
-        // Inline rather than a centred `PaneLoading`: the section already
-        // reserves `min-h-24`, and this row sits where the diff's first line
-        // will be. The deferral above it is the perf contract, untouched.
-        <div
-          role="status"
-          className="flex items-center gap-2 p-4 text-sm text-muted-foreground"
-        >
-          <Spinner size="sm" /> Loading diff…
-        </div>
-      ) : (
-        <DiffSurface
-          prefs={prefs}
-          patch={diff.diff}
-          oldFile={{
-            name: diff.oldPath ?? diff.path,
-            contents: diff.oldContent,
-          }}
-          newFile={{ name: diff.path, contents: diff.newContent }}
-          cacheKey={cacheKey}
-          comments={commentsConfigFor(diff.path, current, diff.newOid)}
-        />
-      )}
+          ) : null
+        }
+        actions={
+          <>
+            <span className="shrink-0 whitespace-nowrap font-mono text-xs">
+              {file.additions > 0 ? (
+                <span className="text-success">+{file.additions}</span>
+              ) : null}
+              {file.deletions > 0 ? (
+                <span className="ml-1 text-destructive">−{file.deletions}</span>
+              ) : null}
+            </span>
+            <label
+              className="flex cursor-pointer items-center gap-1.5 px-1 text-xs text-muted-foreground"
+              title={viewed ? "Mark as not viewed" : "Mark as viewed"}
+            >
+              Viewed
+              <Checkbox checked={viewed} onCheckedChange={toggleViewed} />
+            </label>
+          </>
+        }
+      >
+        {collapsed ? null : file.binary ? (
+          <div className="p-4 text-sm text-muted-foreground">Binary file.</div>
+        ) : failed ? (
+          <div className="p-4 text-sm text-muted-foreground">
+            This file is no longer changed in this scope.
+          </div>
+        ) : !diff ? (
+          // Inline rather than a centred `PaneLoading`: the section already
+          // reserves `min-h-24`, and this row sits where the diff's first line
+          // will be. The deferral above it is the perf contract, untouched.
+          <div
+            role="status"
+            className="flex items-center gap-2 p-4 text-sm text-muted-foreground"
+          >
+            <Spinner size="sm" /> Loading diff…
+          </div>
+        ) : (
+          <DiffSurface
+            prefs={prefs}
+            patch={diff.diff}
+            oldFile={{
+              name: diff.oldPath ?? diff.path,
+              contents: diff.oldContent,
+            }}
+            newFile={{ name: diff.path, contents: diff.newContent }}
+            cacheKey={cacheKey}
+            comments={commentsConfigFor(diff.path, current, diff.newOid)}
+          />
+        )}
+      </ListGroupSection>
     </div>
   );
 }

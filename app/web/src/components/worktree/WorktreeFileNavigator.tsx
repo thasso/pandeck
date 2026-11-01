@@ -581,7 +581,7 @@ const ICON_COLOR = new Map<LucideIcon, string>([
 ]);
 
 /** A file's glyph by its name: its type at a glance, in the same muted grey. */
-function fileIconFor(path: string): LucideIcon {
+export function fileIconFor(path: string): LucideIcon {
   const name = (path.split("/").pop() ?? path).toLowerCase();
   const byName = ICON_BY_NAME[name];
   if (byName) return byName;
