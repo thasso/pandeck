@@ -841,7 +841,7 @@ it.each(["card", "viewed", "listed"] as const)(
     const archivedRead = next.sent.filter(
       (msg) => msg.type === "loadArchivedSessions",
     );
-    expect(archivedRead).toHaveLength(source === "listed" ? 1 : 0);
+    expect(archivedRead).toHaveLength(0);
     await act(async () => {
       next.receive({
         type: "worktreeList",
@@ -863,6 +863,9 @@ it.each(["card", "viewed", "listed"] as const)(
         archivedSessionCount: source === "listed" ? 1 : 0,
       });
     });
+    expect(
+      next.sent.filter((msg) => msg.type === "loadArchivedSessions"),
+    ).toHaveLength(source === "listed" ? 1 : 0);
     expect(latestState.worktrees?.map((row) => row.id)).toEqual(
       source === "listed" ? [] : ["wt-1"],
     );

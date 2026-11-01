@@ -564,22 +564,22 @@ it("a fork event precedes navigation and prevents empty-route canonicalization w
   ).toBe(false);
 });
 
-it("drops the flight with the socket, and a reconnect reads once on request", async () => {
+it("recovers a dropped archive read after the reconnect snapshot", async () => {
   const socket = await connect();
   await act(async () => latestActions.loadArchivedSessions());
   await act(async () => latestActions.loadArchivedSessions());
   expect(archivedReads(socket)).toHaveLength(1);
   await act(async () => socket.close());
   expect(latestState.archivedReadFlight).toBeNull();
-  expect(latestState.archivedReadQueued).toBe(false);
+  expect(latestState.archivedReadQueued).toBe(true);
   await act(async () => vi.advanceTimersByTimeAsync(1_000));
   const next = ScenarioSocket.instances.at(-1)!;
   expect(next).not.toBe(socket);
   await act(async () => next.open());
+  expect(archivedReads(next)).toHaveLength(0);
   await act(async () =>
     next.receive(sessionTopic().snapshot([listed("a", 1)])),
   );
-  expect(archivedReads(next)).toHaveLength(0);
-  await act(async () => latestActions.loadArchivedSessions());
   expect(archivedReads(next)).toHaveLength(1);
+  expect(latestState.archivedReadFlight).toBe(archivedReads(next)[0]);
 });

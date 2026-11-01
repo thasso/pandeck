@@ -3149,7 +3149,7 @@ describe("archived session reads", () => {
     });
     expect(dropped).toMatchObject({
       archivedReadFlight: null,
-      archivedReadQueued: false,
+      archivedReadQueued: true,
     });
   });
 

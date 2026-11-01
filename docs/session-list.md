@@ -177,8 +177,10 @@ restore and moves it to the live rows. Reads are single-flight with at most one
 queued, released by their own answer or error, a disconnect, or a 30 s timeout;
 an answer or error carrying another `requestId` is ignored. Collection errors
 are consumed here or by the snapshot transport, without changing the viewed
-chat's runtime, streams or error. A reconnect snapshot marks the slice stale, so
-an open shelf reads it once more.
+chat's runtime, streams or error. If a disconnect drops an in-flight or queued
+read, the client preserves one pending read and sends it only after the
+reconnect's `sessions` snapshot. That snapshot marks the slice stale, so an open
+shelf gets exactly one fresh read.
 
 ### Audit
 

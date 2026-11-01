@@ -497,8 +497,9 @@ export interface UIState {
   /** True once the archived slice was read, until a snapshot makes it stale. */
   archivedSessionsLoaded: boolean;
   /**
-   * An archived re-read is due: at most one waits behind the flight
-   * (`docs/session-list.md`, "Archived sessions"). The effect layer sends it.
+   * An archived read is due: at most one waits behind the flight and a dropped
+   * disconnect read remains queued until the next sessions snapshot. The effect
+   * layer sends it (`docs/session-list.md`, "Archived sessions").
    */
   archivedReadQueued: boolean;
   /** The `requestId` of the archived read in flight; only its answer counts. */
@@ -5616,10 +5617,12 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // Cache-seeded and previous-episode lists stay visible, but a disconnect
       // makes them due for either a subscription snapshot or one-off read.
       sessionListFresh: action.connected ? state.sessionListFresh : false,
-      // A read in flight on the closed socket is never answered; the
-      // reconnect snapshot marks the slice stale, so an open shelf re-reads.
+      // An in-flight read on the closed socket is never answered. Preserve it
+      // as one queued read, and let the scheduler wait for the reconnect snapshot.
       archivedReadFlight: action.connected ? state.archivedReadFlight : null,
-      archivedReadQueued: action.connected ? state.archivedReadQueued : false,
+      archivedReadQueued: action.connected
+        ? state.archivedReadQueued
+        : state.archivedReadQueued || state.archivedReadFlight !== null,
       taskListFresh: action.connected ? state.taskListFresh : false,
 
       initiativesFresh: action.connected ? state.initiativesFresh : false,
@@ -7340,6 +7343,7 @@ export function useAssistant({
   useEffect(() => {
     if (
       !state.connected ||
+      !state.sessionListFresh ||
       !state.archivedReadQueued ||
       state.archivedReadFlight !== null
     )
@@ -7347,7 +7351,12 @@ export function useAssistant({
     const requestId = createClientId();
     dispatch({ kind: "archivedReadSent", requestId });
     socketRef.current?.send({ type: "loadArchivedSessions", requestId });
-  }, [state.connected, state.archivedReadQueued, state.archivedReadFlight]);
+  }, [
+    state.connected,
+    state.sessionListFresh,
+    state.archivedReadQueued,
+    state.archivedReadFlight,
+  ]);
   // A lost answer releases its flight; a late one is then ignored.
   useEffect(() => {
     const flight = state.archivedReadFlight;
