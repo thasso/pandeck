@@ -23,7 +23,13 @@ import {
 } from "../mcp/tool.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
 import { piAppToolBinding } from "./agentToolAdapter.ts";
-import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
+import {
+  currentIntegrationToolGates,
+  isPlanModeToolAllowed,
+  type IntegrationToolGates,
+} from "../tools/toolPolicy.ts";
+import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
+import { registerSessionToolExposure } from "../tools/sessionToolExposure.ts";
 import type { LiveListInfo } from "../sessions.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import {
@@ -87,6 +93,15 @@ export class PiSessionDeletedError extends Error {
 const ENTERPRISE_REQUIRED =
   "This session requires an enterprise account. Select an account marked as enterprise.";
 
+function sameIntegrationGates(
+  a: IntegrationToolGates,
+  b: IntegrationToolGates,
+): boolean {
+  return (Object.keys(b) as Array<keyof IntegrationToolGates>).every(
+    (gate) => a[gate] === b[gate],
+  );
+}
+
 /**
  * The {@link ToolSession} the server's app tools see for a pi session: read
  * fresh per call from its engine handle, whose transcript append is a command.
@@ -123,7 +138,10 @@ class PiSessionStore {
    * subscriptions alive, unreachable to eviction.
    */
   private readonly opening = new Map<string, Promise<PiLiveSession>>();
-  /** Each committed engine's app-tool binding disposer, by session id. */
+  /**
+   * Each committed engine's app-tool binding and Tools-inspector source
+   * disposer, by session id.
+   */
   private appToolBindings = new Map<string, () => void>();
   /** Live Build/Plan policy, read by the routed app tools' gate. */
   private sessionModes = new Map<string, SessionMode>();
@@ -137,6 +155,11 @@ class PiSessionStore {
   private host: HarnessHost | undefined;
   /** Whether another engine holds an id resident; registration refuses it. */
   private heldElsewhere: (id: string) => boolean = () => false;
+
+  constructor() {
+    // Every live engine applies the gates the server sends it; it reads none.
+    subscribeIntegrationToolChanges(() => this.sendIntegrationGates());
+  }
 
   /**
    * Wire the hub-side callbacks every {@link PiLiveSession} needs. The harness
@@ -249,12 +272,15 @@ class PiSessionStore {
       throw new Error(ENTERPRISE_REQUIRED);
     }
     this.sessionModes.set(id, mode);
-    return this.track(
-      kind,
-      opened,
-      credentialProfileId,
-      opts?.scope,
-      opts?.requiresEnterprise,
+    return this.catchUpIntegrationGates(
+      this.track(
+        kind,
+        opened,
+        credentialProfileId,
+        opts?.scope,
+        opts?.requiresEnterprise,
+      ),
+      started.integrationGates,
     );
   }
 
@@ -361,7 +387,11 @@ class PiSessionStore {
         }
       }
       this.sessionModes.set(id, mode);
-      return this.track(kind, opened, profileId);
+      // Inside the shared open, so every owner of it waits for the catch-up.
+      return this.catchUpIntegrationGates(
+        this.track(kind, opened, profileId),
+        started.integrationGates,
+      );
     })();
     this.opening.set(canonical, open);
     try {
@@ -535,7 +565,46 @@ class PiSessionStore {
       mode,
     });
     this.requireHost().sessionRowsChanged([live.sessionId]);
+    return this.catchUpIntegrationGates(live, started.integrationGates);
+  }
+
+  /**
+   * Send a gate flip that landed while `live`'s open was in flight. Called
+   * with `track`'s result, so the comparison runs in the synchronous span
+   * that made the session live: a flip before it is caught here, one after it
+   * by {@link sendIntegrationGates}. A failed catch-up ends the session
+   * rather than leave it registered under stale gates.
+   */
+  private async catchUpIntegrationGates(
+    live: PiLiveSession,
+    openedWith: IntegrationToolGates,
+  ): Promise<PiLiveSession> {
+    const current = currentIntegrationToolGates();
+    if (sameIntegrationGates(openedWith, current)) return live;
+    try {
+      await live.engine.setIntegrationGates(current);
+    } catch (err) {
+      if (this.live.get(live.key) === live) this.evict(live.key);
+      throw err;
+    }
     return live;
+  }
+
+  /**
+   * Send the current integration gates to every live engine. One engine's
+   * failure is its own: the others still hear.
+   */
+  private sendIntegrationGates(): void {
+    // With no live engine nothing reads the settings, as before.
+    if (this.live.size === 0) return;
+    const gates = currentIntegrationToolGates();
+    for (const ls of this.live.values())
+      ls.engine.setIntegrationGates(gates).catch((err: unknown) => {
+        console.warn(
+          `[pi] sending integration gates to ${ls.key} failed:`,
+          err,
+        );
+      });
   }
 
   /**
@@ -640,6 +709,7 @@ class PiSessionStore {
             // Read in the swap's own synchronous span: no flip falls between.
             await replacement.commitStaged({
               mode: this.sessionModes.get(id) ?? "build",
+              integrationGates: currentIntegrationToolGates(),
             });
           },
           // Touches nothing the resident engine owns.
@@ -733,8 +803,9 @@ class PiSessionStore {
   }
 
   /**
-   * Serve `id`'s app tools from `engine`, gated by the session's live mode.
-   * The tools are the persona's, narrowed by its frozen agent definition.
+   * Serve `id`'s app tools from `engine`, gated by the session's live mode,
+   * and its Tools-inspector projection from `engine`'s mirror. The tools are
+   * the persona's, narrowed by its frozen agent definition.
    */
   private registerAppTools(
     kind: AgentType,
@@ -742,24 +813,28 @@ class PiSessionStore {
     engine: PiEngineHandle,
     cwd: string,
   ): void {
-    this.appToolBindings.set(
+    const unregisterExposure = registerSessionToolExposure(id, () =>
+      engine.toolExposure(),
+    );
+    const unbind = registerAppToolSession(
       id,
-      registerAppToolSession(
-        id,
-        piAppToolBinding(
-          withoutDeniedTools(AGENT_TYPES[kind].tools(), sessionAgent(id)),
-          {
-            session: () => piToolSessionFromHandle(kind, engine, cwd),
-            unavailableReason: (tool) =>
-              (this.sessionModes.get(id) ?? "build") === "plan" &&
-              !isPlanModeToolAllowed(tool)
-                ? planModeToolUnavailableMessage(tool.name)
-                : undefined,
-            onExecute: (name) => engine.markToolUsed(name),
-          },
-        ),
+      piAppToolBinding(
+        withoutDeniedTools(AGENT_TYPES[kind].tools(), sessionAgent(id)),
+        {
+          session: () => piToolSessionFromHandle(kind, engine, cwd),
+          unavailableReason: (tool) =>
+            (this.sessionModes.get(id) ?? "build") === "plan" &&
+            !isPlanModeToolAllowed(tool)
+              ? planModeToolUnavailableMessage(tool.name)
+              : undefined,
+          onExecute: (name) => engine.markToolUsed(name),
+        },
       ),
     );
+    this.appToolBindings.set(id, () => {
+      unbind();
+      unregisterExposure();
+    });
   }
 
   /** Dispose a session's app-tool binding (no-op when none). */

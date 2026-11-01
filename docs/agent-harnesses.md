@@ -186,12 +186,12 @@ Four layers, each depending only on the ones below it:
      existing-session guard, and the account and model checks before
      `createSession`.
    - A session's tool exposure for the Tools inspector is read from
-     `tools/sessionToolExposure.ts`, which the engine that runs the session
-     registers into; the reader never learns which engine answered. Live pi
-     state instead hands raw loading/usage and wire sizes to
-     `buildSessionState`, which applies catalog, agent, integration and mode
-     gates. Registrations remain available to detached views during this
-     migration.
+     `tools/sessionToolExposure.ts`, which the harness's store registers into
+     against the session's engine handle (pi: `piStore`, from the handle's
+     mirror); the reader never learns which engine answered. Live pi state
+     instead hands raw loading/usage and wire sizes to `buildSessionState`,
+     which applies catalog, agent, integration and mode gates. Registrations
+     remain available to detached views during this migration.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Server code, `PiLiveSession`
    included, reaches a live pi engine only through `PiEngineHandle`

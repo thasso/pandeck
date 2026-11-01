@@ -63,6 +63,7 @@ import { openExistingSession } from "./sessionOpen.ts";
 import { deniesNative } from "../agents/agentDefinitionPolicy.ts";
 import type { SessionAgent } from "../agents/sessionAgent.ts";
 import type { PromptConditions } from "../promptConditions.ts";
+import type { IntegrationToolGates } from "../tools/toolPolicy.ts";
 import {
   localPiEngine,
   type PiEngineHandle,
@@ -125,6 +126,12 @@ export interface PiEngineOpenSpec {
   persona: PiPersonaOptions;
   /** The session's stored compaction window: only a reopen has one. */
   compactionWindow?: number;
+  /**
+   * The integration gates when the server resolved the open. The server
+   * sends every later change (`setIntegrationGates`), including one that
+   * landed while this open was in flight (`piStore`).
+   */
+  integrationGates: IntegrationToolGates;
   /** The Build/Plan mode the engine's tools start under, resolved by the server. */
   mode: SessionMode;
   /** An account reopen: its tools register only once its swap commits. */
@@ -507,6 +514,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
     eagerToolNames,
     deferToolLoading: opts.deferToolLoading,
     deferRegistration: staged,
+    integrationGates: spec.integrationGates,
     mode: () => mode.current,
     applyActiveToolNames: (activeNames) => {
       // Merge pi's non-bridge tools (built-ins) with the bridge-active names.

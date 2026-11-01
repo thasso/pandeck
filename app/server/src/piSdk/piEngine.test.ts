@@ -23,6 +23,7 @@ import {
   UNUSED_TOOL_PRUNE_IDLE_MS,
 } from "./toolActivation.ts";
 import { agentToolsFor, eagerToolNamesFor } from "../tools/catalog.ts";
+import { currentIntegrationToolGates } from "../tools/toolPolicy.ts";
 
 /** A content-policy refusal pi must not retry (see `providerErrors.test.ts`). */
 const SUPPRESSIBLE_ERROR = `Codex error: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request.`;
@@ -589,6 +590,7 @@ function prunableEngine(sessionId: string) {
   const activation = createPiToolActivation({
     sessionId,
     agentType: "assistant",
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor("assistant"),
     eagerToolNames: eagerToolNamesFor("assistant"),
     deferToolLoading: true,

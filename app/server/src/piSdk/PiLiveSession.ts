@@ -118,7 +118,6 @@ import {
 } from "../sessionNaming.ts";
 import { acceptCommitDryRun, toCommitDisplay } from "../commitWorkflow.ts";
 import { isForkAutoRenamePending, readForkOrigin } from "./forkOrigin.ts";
-import { toolLoadingForSession } from "./toolActivation.ts";
 import { restorePiLiveTitle, shouldAutoNamePiSession } from "./titleState.ts";
 import {
   hasPendingApproval,
@@ -1778,7 +1777,7 @@ export class PiLiveSession implements LiveSession {
         canSteer: this.canSteer,
         compactionWindow: this.compactionWindowStatus(),
         skillInvocationTranscript: (names) => this.branchToolCalls(names),
-        toolLoading: toolLoadingForSession(this.sessionId),
+        toolLoading: this.engine.toolLoading(),
       },
     };
   }

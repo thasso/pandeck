@@ -12,6 +12,7 @@ process.env.DATA_DIR = join(tmp, "data");
 const { PiLiveSession } = await import("./PiLiveSession.ts");
 const { localPiEngine } = await import("./piEngine.ts");
 const { createPiToolActivation } = await import("./toolActivation.ts");
+const { currentIntegrationToolGates } = await import("../tools/toolPolicy.ts");
 const { agentToolsFor, eagerToolNamesFor } =
   await import("../tools/catalog.ts");
 const { toModelOption } = await import("./models.ts");
@@ -111,9 +112,20 @@ test("pi hands the owner native identity, live limits, tool loading and the comm
   const buildSessionState = vi.fn(
     (_id: string, _facts: unknown) => ({ sessionId: id }) as SessionState,
   );
+  const activation = createPiToolActivation({
+    sessionId: id,
+    agentType: "developer",
+    integrationGates: currentIntegrationToolGates(),
+    agentTools: agentToolsFor("developer"),
+    eagerToolNames: eagerToolNamesFor("developer"),
+    deferToolLoading: true,
+    mode: () => "plan",
+    applyActiveToolNames() {},
+  });
   const live = new PiLiveSession(
     "developer",
-    localPiEngine(native as never),
+    // The session reads its tool loading through the engine that owns it.
+    localPiEngine(native as never, { activation, mode: { current: "plan" } }),
     {
       sessionRowsChanged() {},
       noteRunStarted() {},
@@ -126,15 +138,6 @@ test("pi hands the owner native identity, live limits, tool loading and the comm
     tmp,
     "plan",
   );
-  const activation = createPiToolActivation({
-    sessionId: id,
-    agentType: "developer",
-    agentTools: agentToolsFor("developer"),
-    eagerToolNames: eagerToolNamesFor("developer"),
-    deferToolLoading: true,
-    mode: () => "plan",
-    applyActiveToolNames() {},
-  });
   activation.initialize(["worktree_commit"], ["task_read"]);
   const window = {
     contextWindow: 200_000,

@@ -64,6 +64,7 @@ const { piPersonaOptions, resolvePiEngineStart } =
   await import("./piEngineStart.ts");
 const { SKILLS_LIBRARY_DIR } = await import("../config.ts");
 const { updateSettings } = await import("../settings.ts");
+const { currentIntegrationToolGates } = await import("../tools/toolPolicy.ts");
 const { childProcessEnv } = await import("../subprocessEnv.ts");
 const { appToolExecutorFor, persistSessionOutput } =
   await import("../workers/inProcessWorker.ts");
@@ -393,6 +394,7 @@ test("the opener builds from the spec's start records and writes none of them", 
       transcript: { type: "new", cwd: tmp },
       start: { conditions, skillNames: ["host-skill"], agent },
       persona: piPersonaOptions("developer", "default", conditions, agent),
+      integrationGates: currentIntegrationToolGates(),
       mode: "build",
     },
     ctx,
@@ -531,7 +533,10 @@ test("a staged engine committed under Plan activates no edit or write, and its l
     ctx,
   );
   try {
-    await engine.commitStaged({ mode: "plan" });
+    await engine.commitStaged({
+      mode: "plan",
+      integrationGates: currentIntegrationToolGates(),
+    });
     const native = nativePiSessionForTests(engine);
     const active = native.getActiveToolNames();
     for (const name of ["edit", "write"])

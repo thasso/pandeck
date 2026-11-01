@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { buildToolExposure } from "./toolExposure.ts";
 import { agentToolsFor, eagerToolNamesFor } from "./catalog.ts";
+import { currentIntegrationToolGates } from "./toolPolicy.ts";
 import {
   createPiToolActivation,
   toolExposureForSession,
@@ -59,6 +60,7 @@ test("pi activation exposes the live projection by session id until disposed", (
   const activation = createPiToolActivation({
     sessionId,
     agentType: "assistant",
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor("assistant"),
     eagerToolNames: eagerToolNamesFor("assistant"),
     deferToolLoading: true,

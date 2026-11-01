@@ -1164,7 +1164,25 @@ export function integrationGatedActiveToolNames(
   tools: AgentTool[],
   otherwiseActive: ReadonlySet<string>,
 ): ReadonlySet<string> {
-  const gates = currentIntegrationToolGates();
+  return integrationGatedToolNames(
+    currentIntegrationToolGates(),
+    agentType,
+    tools,
+    otherwiseActive,
+  );
+}
+
+/**
+ * {@link integrationGatedActiveToolNames} under the given gates rather than
+ * the current ones: what an engine applies from the snapshot it was handed
+ * (`piSdk/toolActivation.ts`).
+ */
+export function integrationGatedToolNames(
+  gates: IntegrationToolGates,
+  agentType: AgentType,
+  tools: AgentTool[],
+  otherwiseActive: ReadonlySet<string>,
+): ReadonlySet<string> {
   const gatedOff = new Set(
     toolGroupsFor(agentType)
       .filter((group) => group.gate && !gates[group.gate])

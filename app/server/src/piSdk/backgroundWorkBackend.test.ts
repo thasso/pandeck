@@ -28,6 +28,7 @@ const { BackgroundWorkSupervisor, backgroundWorkSupervisor } =
 const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings } = await import("../settings.ts");
+const { currentIntegrationToolGates } = await import("../tools/toolPolicy.ts");
 const { childProcessEnv, setChildProcessEnvOverlay } =
   await import("../subprocessEnv.ts");
 const { listSessionArtifacts } =
@@ -177,6 +178,7 @@ test("Plan keeps the existing bash capability but removes monitor", () => {
   const activation = createPiToolActivation({
     sessionId: `plan-background-${serial}`,
     agentType: "developer",
+    integrationGates: currentIntegrationToolGates(),
     agentTools: tools,
     eagerToolNames: new Set(["bash", "monitor"]),
     deferToolLoading: true,

@@ -34,6 +34,7 @@ import {
 import { sessionSkills, startSessionSkillNames } from "../sessionSkills.ts";
 import { getSettings } from "../settings.ts";
 import { eagerToolNamesFor } from "../tools/catalog.ts";
+import { currentIntegrationToolGates } from "../tools/toolPolicy.ts";
 import { persistSessionOutput } from "../workers/inProcessWorker.ts";
 import {
   buildPiEngineOptions,
@@ -157,9 +158,13 @@ interface PiEngineStartInput {
 
 /**
  * The spec fields {@link resolvePiEngineStart} fills: the start records, the
- * persona's options and a reopen's compaction window.
+ * persona's options, the current integration gates and a reopen's compaction
+ * window.
  */
-export type PiEngineStartFields = Pick<PiEngineOpenSpec, "start" | "persona"> &
+export type PiEngineStartFields = Pick<
+  PiEngineOpenSpec,
+  "start" | "persona" | "integrationGates"
+> &
   Partial<Pick<PiEngineOpenSpec, "compactionWindow">>;
 
 /**
@@ -203,6 +208,9 @@ export async function resolvePiEngineStart(
       conditions,
       agent,
     ),
+    // Read last: `piStore` compares it with the gates once the session is
+    // live and sends any flip that landed in between.
+    integrationGates: currentIntegrationToolGates(),
     ...(compactionWindow !== undefined ? { compactionWindow } : {}),
   };
 }

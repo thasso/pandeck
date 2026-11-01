@@ -7,7 +7,9 @@
  * tool block stays small. This module owns that active-set state machine:
  *
  *  - usable  = integration gates applied (same semantics the session tool
- *    server enforces for Claude — see `tools/catalog.ts` `IntegrationToolGates`);
+ *    server enforces for Claude — see `tools/catalog.ts` `IntegrationToolGates`),
+ *    from the snapshot the server handed the engine at open and updates with
+ *    `setIntegrationGates`: the engine reads no settings;
  *  - loaded  = names activated during the session (find_tools) plus names
  *    recorded as `addedToolNames` in the reopened transcript, so previously
  *    loaded tools stay active across reopen;
@@ -34,24 +36,66 @@ import type {
   SessionToolLoadEvent,
 } from "@assistant/shared";
 import {
-  integrationGatedActiveToolNames,
+  integrationGatedToolNames,
   modeGatedActiveToolNames,
 } from "../tools/catalog.ts";
 import type { AgentTool } from "../mcp/tool.ts";
-import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
 import { createFindToolsTool } from "../tools/findTools.ts";
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";
-import { registerSessionToolExposure } from "../tools/sessionToolExposure.ts";
 import {
   buildToolExposure,
   toolDefinitionChars,
   type BuildToolExposureInput,
 } from "../tools/toolExposure.ts";
+import type { IntegrationToolGates } from "../tools/toolPolicy.ts";
 
-type PiToolLoading = Omit<
+export type PiToolLoading = Omit<
   BuildToolExposureInput,
   "agentType" | "usableToolNames"
 >;
+
+/**
+ * An activation's tool state as JSON, which the hosted engine mirrors to the
+ * server (`piEngineHosted.ts`). `loaded` is pi's native loaded set and
+ * `active` the bridge names exposed now: they differ (an integration gate or
+ * Plan hides a loaded tool), so both travel.
+ */
+export interface PiToolState {
+  loaded: string[];
+  used: string[];
+  usable: string[];
+  active: string[];
+  loadEvents: SessionToolLoadEvent[];
+  includeFindTools: boolean;
+}
+
+/** {@link PiToolActivation.loading}, from a state and the definition sizes. */
+export function piToolLoadingOf(
+  state: PiToolState,
+  definitionChars: Readonly<Record<string, number>>,
+): PiToolLoading {
+  return {
+    loadedToolNames: new Set(state.loaded),
+    usedToolNames: new Set(state.used),
+    definitionCharsByName: new Map(Object.entries(definitionChars)),
+    includeFindTools: state.includeFindTools,
+    loadEvents: state.loadEvents,
+  };
+}
+
+/** {@link PiToolActivation.exposure}, from a state and the definition sizes. */
+export function piToolExposureOf(
+  agentType: AgentType,
+  state: PiToolState,
+  definitionChars: Readonly<Record<string, number>>,
+): SessionToolExposure {
+  return buildToolExposure({
+    ...piToolLoadingOf(state, definitionChars),
+    agentType,
+    usableToolNames: new Set(state.usable),
+    loadedToolNames: new Set(state.active),
+  });
+}
 
 export interface PiToolActivationConfig {
   sessionId: string;
@@ -64,6 +108,8 @@ export interface PiToolActivationConfig {
   deferToolLoading: boolean;
   /** A staged replacement registers only after its account move is admitted. */
   deferRegistration?: boolean;
+  /** The integration gates at open; {@link PiToolActivation.setIntegrationGates} replaces them. */
+  integrationGates: IntegrationToolGates;
   /** Current Build/Plan mode; omitted only by mode-agnostic tests/callers. */
   mode?(): SessionMode;
   /**
@@ -88,10 +134,18 @@ export interface PiToolActivation {
    * active (and stay natively deferred at their original load point).
    */
   initialize(loadedSeed: Iterable<string>, usedSeed?: Iterable<string>): void;
-  /** Publish this activation for the live session after staged admission. */
+  /**
+   * Publish this activation engine-side (the cold prune and the test seams)
+   * after staged admission. The server registers the Tools inspector source.
+   */
   register(): void;
   /** Reapply the current bridge set (for a Build/Plan policy change). */
   reapply(): void;
+  /**
+   * Replace the integration gates and reapply, once initialized: a flip only
+   * changes `usable`, it never auto-loads a tool.
+   */
+  setIntegrationGates(gates: IntegrationToolGates): void;
   /** Record a real tool call for diagnostics and prune protection. */
   markUsed(name: string): void;
   /** Prune never-called deferred loads at a cold user-turn boundary. */
@@ -100,21 +154,28 @@ export interface PiToolActivation {
   loading(): PiToolLoading;
   /** The session's Tools-inspector projection. */
   exposure(): SessionToolExposure;
-  /** Unsubscribe change listeners (session eviction/teardown). */
+  /** {@link loading} and {@link exposure}'s inputs, as JSON. */
+  state(): PiToolState;
+  /** Every tool definition's exact wire size, fixed at creation. */
+  readonly definitionChars: Readonly<Record<string, number>>;
+  /** Drop the engine-side registration (session eviction/teardown). */
   dispose(): void;
 }
 
-/** Live activations by session id (for the SessionState exposure projection). */
+/**
+ * Live activations by session id, engine-side: the cold prune and the
+ * suites' readers. The server reads a session's tools through its handle.
+ */
 const activations = new Map<string, PiToolActivation>();
 
-/** Registered Tools inspector projection, also used by detached views. */
+/** The registered activation's Tools-inspector projection. */
 export function toolExposureForSession(
   sessionId: string,
 ): SessionToolExposure | undefined {
   return activations.get(sessionId)?.exposure();
 }
 
-/** Native tool-loading facts for a live pi session, if one is registered. */
+/** The registered activation's native tool-loading facts. */
 export function toolLoadingForSession(
   sessionId: string,
 ): PiToolLoading | undefined {
@@ -143,9 +204,10 @@ export function createPiToolActivation(
   const loaded = new Set<string>();
   const used = new Set<string>();
   const loadEvents: SessionToolLoadEvent[] = [];
+  let integrationGates = config.integrationGates;
   let initialized = false;
   let disposed = false;
-  let unregisterExposure: (() => void) | undefined;
+  let registered = false;
 
   const recordLoad = (
     via: SessionToolLoadEvent["via"],
@@ -158,7 +220,8 @@ export function createPiToolActivation(
   };
 
   const usableToolNames = (): ReadonlySet<string> => {
-    const integrationActive = integrationGatedActiveToolNames(
+    const integrationActive = integrationGatedToolNames(
+      integrationGates,
       config.agentType,
       config.agentTools,
       new Set(config.agentTools.map((tool) => tool.name)),
@@ -209,14 +272,9 @@ export function createPiToolActivation(
     ...config.agentTools,
     ...(findToolsTool ? [findToolsTool] : []),
   ];
-  const definitionCharsByName = new Map(
+  const definitionChars = Object.fromEntries(
     piToolUniverse.map((tool) => [tool.name, toolDefinitionChars(tool)]),
   );
-
-  // Integration gate flips only change `usable`; they never auto-load tools.
-  const unsubscribeIntegrations = subscribeIntegrationToolChanges(() => {
-    if (initialized) apply();
-  });
 
   const activation: PiToolActivation = {
     piToolUniverse,
@@ -230,13 +288,15 @@ export function createPiToolActivation(
       apply();
     },
     register() {
-      if (disposed || unregisterExposure) return;
+      if (disposed || registered) return;
+      registered = true;
       activations.set(config.sessionId, activation);
-      unregisterExposure = registerSessionToolExposure(config.sessionId, () =>
-        activation.exposure(),
-      );
     },
     reapply() {
+      if (initialized) apply();
+    },
+    setIntegrationGates(gates) {
+      integrationGates = gates;
       if (initialized) apply();
     },
     markUsed(name) {
@@ -253,33 +313,37 @@ export function createPiToolActivation(
       return pruned;
     },
     loading() {
-      return {
-        loadedToolNames: config.deferToolLoading
-          ? new Set([...config.eagerToolNames, ...loaded, FIND_TOOLS_NAME])
-          : new Set(config.agentTools.map((tool) => tool.name)),
-        usedToolNames: used,
-        definitionCharsByName,
-        includeFindTools: config.deferToolLoading,
-        loadEvents,
-      };
+      return piToolLoadingOf(activation.state(), definitionChars);
     },
     exposure() {
-      return buildToolExposure({
-        ...activation.loading(),
-        agentType: config.agentType,
-        usableToolNames: usableToolNames(),
-        loadedToolNames: activeToolNames(),
-      });
+      return piToolExposureOf(
+        config.agentType,
+        activation.state(),
+        definitionChars,
+      );
     },
+    state() {
+      return {
+        loaded: config.deferToolLoading
+          ? [...new Set([...config.eagerToolNames, ...loaded, FIND_TOOLS_NAME])]
+          : config.agentTools.map((tool) => tool.name),
+        used: [...used],
+        usable: [...usableToolNames()],
+        active: [...activeToolNames()],
+        loadEvents: loadEvents.map((event) => ({
+          ...event,
+          names: [...event.names],
+        })),
+        includeFindTools: config.deferToolLoading,
+      };
+    },
+    definitionChars,
     dispose() {
       // A stale activation disposed after its replacement registered must not
       // take the replacement's entry with it.
       if (activations.get(config.sessionId) === activation)
         activations.delete(config.sessionId);
       disposed = true;
-      unregisterExposure?.();
-      unregisterExposure = undefined;
-      unsubscribeIntegrations();
     },
   };
   if (!config.deferRegistration) activation.register();
