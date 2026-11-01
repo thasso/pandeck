@@ -53,11 +53,9 @@ import {
 } from "../promptConditions.ts";
 import { PiLiveSession } from "./PiLiveSession.ts";
 import type { PiEngineHandle, PiEngineModel } from "./piEngine.ts";
-import {
-  openPiEngine,
-  type PiEngineOpened,
-  type PiEngineOpenSpec,
-} from "./piEngineHost.ts";
+import type { PiEngineOpened, PiEngineOpenSpec } from "./piEngineHost.ts";
+import { piHostedEngineFactory } from "./piEngineHosted.ts";
+import { openRemotePiEngine } from "./remotePiEngine.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
@@ -66,8 +64,7 @@ import {
 import { sessionSkills } from "../sessionSkills.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
 import { registerAppToolSession } from "../workers/appToolHost.ts";
-import { appToolExecutorFor } from "../workers/inProcessWorker.ts";
-import { childProcessEnv } from "../subprocessEnv.ts";
+import { registerInProcessEngineFactory } from "../workers/inProcessWorker.ts";
 
 /** Every persona a legacy per-persona transcript directory can hold. */
 const LEGACY_KINDS: readonly AgentType[] = AGENT_TYPE_IDS;
@@ -127,14 +124,13 @@ class PiSessionStore {
   private appToolBindings = new Map<string, () => void>();
   /** Live Build/Plan policy, read by the routed app tools' gate. */
   private sessionModes = new Map<string, SessionMode>();
-  /** Opens a live engine; the seam suites replace. */
+  /**
+   * Opens a live engine on the session's Worker (the in-process one in phase
+   * 1); the seam suites replace.
+   */
   private openEngine: (spec: PiEngineOpenSpec) => Promise<PiEngineOpened> = (
     spec,
-  ) =>
-    openPiEngine(spec, {
-      childEnv: childProcessEnv,
-      appToolExecutor: appToolExecutorFor,
-    });
+  ) => openRemotePiEngine(spec, (engine) => this.onEngineLost(engine));
   private host: HarnessHost | undefined;
   /** Whether another engine holds an id resident; registration refuses it. */
   private heldElsewhere: (id: string) => boolean = () => false;
@@ -634,6 +630,25 @@ class PiSessionStore {
   }
 
   /**
+   * A live session's engine went with its Worker connection. End the session
+   * like {@link evict}, closing a running turn first, but keep its record:
+   * the next acquisition reopens it on a fresh connection. A lost engine no
+   * live session holds (a staged replacement) fails its own pending command.
+   */
+  private onEngineLost(engine: PiEngineHandle): void {
+    const ls = [...this.live.values()].find((live) => live.engine === engine);
+    if (!ls) return;
+    const key = ls.key;
+    this.live.delete(key);
+    this.requireHost().sessionRowsChanged([key]);
+    sessionRuntime.closeForTeardown(key);
+    ls.dispose();
+    this.closeAppTools(key);
+    this.sessionModes.delete(key);
+    void sessionRuntime.releaseHarness(key);
+  }
+
+  /**
    * Apply a live mode flip: the server's gate at once, then the engine's own
    * copy, on whichever engine the session holds by then. A refused flip puts
    * the gate back, unless a later flip has moved it on (the live session runs
@@ -782,3 +797,6 @@ class PiSessionStore {
 }
 
 export const piStore = new PiSessionStore();
+
+// The composition root's injection: the in-process Worker hosts pi engines.
+registerInProcessEngineFactory("pi", piHostedEngineFactory);

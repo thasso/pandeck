@@ -12,10 +12,12 @@ import {
   WorkerConnection,
   type MethodHandler,
 } from "../workerProtocol/connection.ts";
+import { ENGINE_METHODS } from "../workerProtocol/engineMethods.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import { WATCH_METHODS } from "../workerProtocol/watchMethods.ts";
 import { appToolCalls, type AppToolCaller } from "./appTools.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
+import { engineHandlers, type EngineFactories } from "./engines.ts";
 import { fileHandlers } from "./files.ts";
 import { lifecycleHandlers } from "./lifecycle.ts";
 import { sessionHookCalls, type SessionHookCalls } from "./sessionHooks.ts";
@@ -26,9 +28,10 @@ export interface RunningWorker {
    * Resolves once the connection has ended and every request the Worker was
    * serving has settled: with the exit receipt, once every git child it
    * started has exited, once every lifecycle handler has made its last
-   * deletion or signal, and once every file handle it held is closed. Native
-   * opens still awaiting a descriptor are orphaned on end; their eventual
-   * descriptors close without registration and do not hold this promise.
+   * deletion or signal, once every file handle it held is closed, and once
+   * every engine it hosted is disposed. Native opens still awaiting a
+   * descriptor are orphaned on end; their eventual descriptors close without
+   * registration and do not hold this promise.
    */
   readonly quiescent: Promise<void>;
   /**
@@ -45,6 +48,8 @@ export interface RunningWorker {
   fileHandles(): number;
   /** Test seam: the native watch subscriptions the Worker holds. */
   watches(): WatchSnapshot[];
+  /** Test seam: how many engines the Worker holds or is opening. */
+  engines(): number;
 }
 
 /**
@@ -68,6 +73,11 @@ export function startWorker(options: {
    */
   childEnv: () => NodeJS.ProcessEnv;
   /**
+   * The engine factory for each harness this Worker hosts, injected by the
+   * composition root; without one, `engine.open` refuses the harness.
+   */
+  engines?: EngineFactories;
+  /**
    * Test seam: sees each request the Worker decoded and serves, and may
    * answer a substitute that serves that one request instead.
    */
@@ -84,6 +94,12 @@ export function startWorker(options: {
   const sessionHooks = sessionHookCalls((method, payload, signal) =>
     connection.request(method, payload, signal),
   );
+  const engines = engineHandlers({
+    factories: options.engines,
+    childEnv: options.childEnv,
+    callAppTool: appTools.call,
+    deliver: (payload) => connection.request(ENGINE_METHODS.events, payload),
+  });
   const handlers = Object.fromEntries(
     Object.entries({
       ...checkoutGitHandlers(options.workerId, options.childEnv),
@@ -91,6 +107,7 @@ export function startWorker(options: {
       ...lifecycleHandlers(options.workerId),
       ...watches.handlers,
       ...appTools.handlers,
+      ...engines.handlers,
     }).map(([method, handler]) => [
       method,
       (payload: Payload, signal: AbortSignal) => {
@@ -107,16 +124,19 @@ export function startWorker(options: {
     onEnd: () => {
       files.end();
       watches.end();
+      engines.end();
     },
   });
   return {
     quiescent: connection.ended
       .then(() => connection.handlersSettled())
-      .then(() => files.sweep()),
+      .then(() => files.sweep())
+      .then(() => engines.released()),
     watchesReleased: watches.released,
     callAppTool: appTools.call,
     sessionHooks,
     fileHandles: () => files.size,
     watches: () => watches.snapshot(),
+    engines: () => engines.size,
   };
 }

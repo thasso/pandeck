@@ -4,8 +4,10 @@
  * Reads are synchronous and answer engine-reported state; every command
  * returns a promise that reaches the consumer reporting its outcome; no member
  * returns an SDK object, only pi's plain data (models, stats, transcript
- * entries). That is the shape the worker protocol serves later (W9b): the
- * reads become its mirror, the commands its requests, `subscribe` its events.
+ * entries). That is the shape the worker protocol serves (`docs/workers.md`):
+ * production holds the remote handle (`remotePiEngine.ts`), whose reads are
+ * its mirror, its commands `engine.command` requests and `subscribe` its
+ * events, over the local handle the Worker hosts (`piEngineHosted.ts`).
  *
  * The engine's loop policy lives here, because it must run synchronously
  * inside pi's own event loop and needs the session's settings: retry
@@ -98,10 +100,11 @@ export interface PiEngineHandle {
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 
   /**
-   * Start a turn, or steer the running one, as the caller decided in its own
-   * synchronous span. `steerOnly` is carried for an engine whose streaming
-   * state the caller read late; the local engine needs no reconciliation, so
-   * its disposition is always the caller's `steer`. `settled` settles as pi's
+   * Start a turn, or steer the running one. The local engine does as the
+   * caller decided in its own synchronous span, so its disposition is always
+   * the caller's `steer`. The hosted engine reconciles on its own streaming
+   * state (`piEngineHosted.ts`): it steers exactly when it streams, and
+   * refuses a `steerOnly` steer when idle. `settled` settles as pi's
    * call does: a steer on pi's acceptance. `userTurnIdleMs` is how long the
    * session sat idle before this user turn; the engine prunes never-used tool
    * loads first when it crossed the cold boundary.
@@ -541,23 +544,66 @@ export function localPiEngine(
 }
 
 /**
- * Test seam only: the native session behind a local handle, for suites that
- * observe pi itself. Production code never calls it.
+ * What the test seams below reach through a remote handle while the
+ * in-process Worker hosts its engine: the local handle it drives, and a
+ * refresh of its mirror.
+ */
+interface HostedLink {
+  local: () => PiEngineHandle | undefined;
+  refresh: () => Promise<void>;
+}
+
+/** Remote handles, each with its link into the in-process Worker. */
+const hostedLinks = new WeakMap<PiEngineHandle, HostedLink>();
+
+/** Record a remote handle's link, so the test seams see through it. */
+export function linkRemotePiEngine(
+  remote: PiEngineHandle,
+  link: HostedLink,
+): void {
+  hostedLinks.set(remote, link);
+}
+
+/** The local handle `engine` is, or drives through the in-process Worker. */
+function localHandleOf(engine: PiEngineHandle): PiEngineHandle {
+  const link = hostedLinks.get(engine);
+  if (!link) return engine;
+  const handle = link.local();
+  if (!handle) throw new Error("The pi engine is no longer hosted.");
+  return handle;
+}
+
+/**
+ * Test seam only: the native session behind a local handle, or behind the
+ * Worker-side handle a remote one drives, for suites that observe pi itself.
+ * Production code never calls it.
  */
 export function nativePiSessionForTests(engine: PiEngineHandle): AgentSession {
-  const session = nativeSessions.get(engine);
+  const session = nativeSessions.get(localHandleOf(engine));
   if (!session) throw new Error("Not a local pi engine.");
   return session;
 }
 
 /**
- * Test seam only: the tool activation of an engine the host opened. Production
- * code never calls it.
+ * Test seam only: the tool activation of an engine the host opened, directly
+ * or through the in-process Worker. Production code never calls it.
  */
 export function piToolActivationForTests(
   engine: PiEngineHandle,
 ): PiToolActivation {
-  const activation = toolActivations.get(engine);
+  const activation = toolActivations.get(localHandleOf(engine));
   if (!activation) throw new Error("Not a host-opened pi engine.");
   return activation;
+}
+
+/**
+ * Test seam only: bring a remote handle's mirror up to date with what a suite
+ * wrote to pi natively (through {@link nativePiSessionForTests}), outside any
+ * command. A local handle has no mirror. Production code never calls it, and
+ * no engine command or protocol method reaches the refresh.
+ */
+export async function syncPiEngineMirrorForTests(
+  engine: PiEngineHandle,
+): Promise<void> {
+  await hostedLinks.get(engine)?.refresh();
 }

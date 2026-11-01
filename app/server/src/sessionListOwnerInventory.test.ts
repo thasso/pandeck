@@ -59,6 +59,12 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "projected",
+        "onEngineLost",
+        "A Worker connection end ends the live session like an eviction, keeping its record; map removal reports it before runtime/native teardown.",
+        "piSdk/remotePiEngine.test.ts::PiStore.onEngineLost connection end",
+      ),
+      group(
+        "projected",
         "renameSession",
         "Live rename delegates to PiLiveSession.rename; cold native rename leaves indexed title unchanged until indexing.",
         old + "piStore.renameSession live",
