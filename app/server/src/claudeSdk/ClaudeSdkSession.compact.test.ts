@@ -15,10 +15,8 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
-import {
-  agentPromptLayer,
-  freezeSessionAgent,
-} from "../agents/sessionAgent.ts";
+import { agentPromptLayer } from "../agents/agentDefinitionPolicy.ts";
+import { freezeSessionAgent } from "../agents/sessionAgent.ts";
 import { ClaudeSdkSession } from "../test/claudeSdkSession.ts";
 import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";
 import { sessionHookCallsServedForTests } from "../workers/sessionHookHost.ts";

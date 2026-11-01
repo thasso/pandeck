@@ -6,8 +6,10 @@ import {
   integrationToolsForGates,
   toolGroupsFor,
 } from "./tools/catalog.ts";
-import type { IntegrationToolGates } from "./tools/toolPolicy.ts";
-import { notifyIntegrationToolsChanged } from "./integrationToolChanges.ts";
+import {
+  currentIntegrationToolGates,
+  type IntegrationToolGates,
+} from "./tools/toolPolicy.ts";
 import { updateGithubSettings } from "./githubSettings.ts";
 import { createPiToolActivation } from "./piSdk/toolActivation.ts";
 import { updateSlackSettings } from "./slackSettings.ts";
@@ -96,6 +98,7 @@ describe("integration tool exposure", () => {
     const activation = createPiToolActivation({
       sessionId: "integration-live-gate",
       agentType: "assistant",
+      integrationGates: currentIntegrationToolGates(),
       agentTools: tools,
       // Deferral off: this test isolates the integration-gate reconciliation.
       eagerToolNames: new Set(),
@@ -114,14 +117,14 @@ describe("integration tool exposure", () => {
         "gated-off tools start inactive",
       );
       updateSlackSettings({ enabled: true });
-      notifyIntegrationToolsChanged();
+      // What piStore sends every live engine on a settings change.
+      activation.setIntegrationGates(currentIntegrationToolGates());
       assert.ok(
         applied[applied.length - 1]!.has("slack_search"),
         "gate enable reconciles the active set",
       );
     } finally {
       updateSlackSettings({ enabled: false });
-      notifyIntegrationToolsChanged();
       activation.dispose();
     }
   });
@@ -133,6 +136,7 @@ describe("integration tool exposure", () => {
     const activation = createPiToolActivation({
       sessionId: "integration-live-github-gate",
       agentType: "assistant",
+      integrationGates: currentIntegrationToolGates(),
       agentTools: tools,
       eagerToolNames: new Set(["current_time"]),
       deferToolLoading: true,
@@ -145,7 +149,7 @@ describe("integration tool exposure", () => {
         false,
       );
       updateGithubSettings({ enabled: true });
-      notifyIntegrationToolsChanged();
+      activation.setIntegrationGates(currentIntegrationToolGates());
       // Usable now, but still deferred: the tool joins the active set only via
       // find_tools (or a transcript-loaded seed), never by a gate flip alone.
       const latest = applied[applied.length - 1]!;
@@ -154,7 +158,6 @@ describe("integration tool exposure", () => {
       assert.ok(latest.has("find_tools"));
     } finally {
       updateGithubSettings({ enabled: false });
-      notifyIntegrationToolsChanged();
       activation.dispose();
     }
   });

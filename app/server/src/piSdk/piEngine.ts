@@ -21,7 +21,11 @@ import type {
   SessionManager,
   SessionStats,
 } from "@earendil-works/pi-coding-agent";
-import type { ProviderErrorInfo, SessionMode } from "@assistant/shared";
+import type {
+  ProviderErrorInfo,
+  SessionMode,
+  SessionToolExposure,
+} from "@assistant/shared";
 import { unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -34,11 +38,13 @@ import type {
   CompactionWindowLowerResult,
 } from "../harness.ts";
 import type { ToolSessionManager } from "../mcp/tool.ts";
+import type { IntegrationToolGates } from "../tools/toolPolicy.ts";
 import { compactionWindowFor } from "./compactionWindow.ts";
 import { modelRegistry, type PiModel } from "./models.ts";
 import {
   prepareToolsForUserTurn,
   type PiToolActivation,
+  type PiToolLoading,
 } from "./toolActivation.ts";
 
 /** pi's model data, read by its fields only (never compared by identity). */
@@ -95,6 +101,13 @@ export interface PiEngineHandle {
   compactionWindowStatus(): CompactionWindowHarnessStatus;
   /** Reads from {@link transcript}; its append is a command. */
   toolSessionManager(): PiCommitSessionManager;
+  /**
+   * Native tool loading: what pi has loaded and the session called, with the
+   * definition sizes. Undefined for an engine without app tools.
+   */
+  toolLoading(): PiToolLoading | undefined;
+  /** The Tools-inspector projection, under the engine's own gates and mode. */
+  toolExposure(): SessionToolExposure | undefined;
 
   /** Listeners see each event after the engine's policy has run for it. */
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
@@ -143,8 +156,19 @@ export interface PiEngineHandle {
    * the engine could not apply it.
    */
   setToolMode(mode: SessionMode): Promise<void>;
-  /** Publish a staged engine's tools under `mode`, after its swap is admitted. */
-  commitStaged(options: { mode: SessionMode }): Promise<void>;
+  /**
+   * Bring the engine's integration gates (what its active set and
+   * `find_tools` treat as usable) to `gates`. The server sends every change.
+   */
+  setIntegrationGates(gates: IntegrationToolGates): Promise<void>;
+  /**
+   * Publish a staged engine's tools under `mode` and `integrationGates`, after
+   * its swap is admitted.
+   */
+  commitStaged(options: {
+    mode: SessionMode;
+    integrationGates: IntegrationToolGates;
+  }): Promise<void>;
   /**
    * Note that one of the session's routed app tools is about to execute, from
    * the server's binding after its gate admitted the call, so a cold prune
@@ -368,6 +392,8 @@ export function localPiEngine(
       appendCustomEntry: async (type, data) =>
         session.sessionManager.appendCustomEntry(type, data),
     }),
+    toolLoading: () => tools?.activation.loading(),
+    toolExposure: () => tools?.activation.exposure(),
 
     subscribe(listener) {
       listeners.push(listener);
@@ -504,12 +530,16 @@ export function localPiEngine(
         throw err;
       }
     },
-    async commitStaged({ mode }) {
+    async setIntegrationGates(gates) {
+      tools?.activation.setIntegrationGates(gates);
+    },
+    async commitStaged({ mode, integrationGates }) {
       if (!tools) return;
       tools.mode.current = mode;
       tools.activation.register();
-      // A staged engine may have waited across a live Build/Plan change.
-      tools.activation.reapply();
+      // A staged engine may have waited across a live Build/Plan change or a
+      // gate flip: this reapplies under both.
+      tools.activation.setIntegrationGates(integrationGates);
     },
     markToolUsed(name) {
       tools?.activation.markUsed(name);
@@ -541,6 +571,16 @@ export function localPiEngine(
   nativeSessions.set(engine, session);
   if (tools) toolActivations.set(engine, tools.activation);
   return engine;
+}
+
+/**
+ * The tool state a local engine's host mirrors to the server
+ * (`piEngineHosted.ts`), when the host opened it with app tools.
+ */
+export function piEngineToolMirror(
+  engine: PiEngineHandle,
+): Pick<PiToolActivation, "state" | "definitionChars"> | undefined {
+  return toolActivations.get(engine);
 }
 
 /**

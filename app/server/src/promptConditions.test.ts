@@ -26,7 +26,7 @@ import {
 } from "./promptConditions.ts";
 import { upsertProject } from "./projectRegistry.ts";
 import { buildProjectContext } from "./sessionProjectContext.ts";
-import { buildAgentOptions } from "./piSdk/options.ts";
+import { buildAgentOptions } from "./piSdk/piEngineStart.ts";
 import { updateSlackSettings } from "./slackSettings.ts";
 import { updateTempoSettings } from "./tempoSettings.ts";
 import { eagerToolNamesFor } from "./tools/catalog.ts";

@@ -106,8 +106,8 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
   let inheritedAgent: unknown;
 
   internals.openEngine = (spec) => {
-    inheritedSkills = spec.promptStart?.inheritSkills;
-    inheritedAgent = spec.promptStart?.agent;
+    inheritedSkills = spec.start.skillNames;
+    inheritedAgent = spec.start.agent;
     requestedMode = spec.mode;
     return openPiEngine(spec, {} as never, async (_spec, _ctx, { sm }) => ({
       session: {

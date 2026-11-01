@@ -889,6 +889,9 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
   await syncPiEngineMirrorForTests(pi.engine);
   const previous = piToolActivationForTests(pi.engine);
   previous.initialize(["kb_read"]);
+  // The seed bypassed the handle; its mirror (the inspector's source) learns
+  // of it here.
+  await syncPiEngineMirrorForTests(pi.engine);
   const exposure = previous.exposure();
   let staged: AgentSession | undefined;
   let release: (() => void) | undefined;

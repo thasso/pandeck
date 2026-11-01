@@ -12,6 +12,7 @@
  * order before any later command.
  */
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentType } from "@assistant/shared";
 import { setImmediate } from "node:timers";
 import type { EngineItem } from "../workerProtocol/engineMethods.ts";
 import {
@@ -35,6 +36,7 @@ import {
   type PiTranscriptEntry,
 } from "./piEngineHosted.ts";
 import type { PiEngineOpened, PiEngineOpenSpec } from "./piEngineHost.ts";
+import { piToolExposureOf, piToolLoadingOf } from "./toolActivation.ts";
 
 type RunDisposition = "steered" | "started";
 
@@ -114,11 +116,13 @@ const yieldToRunConsumers = () =>
   new Promise<void>((resolve) => setImmediate(resolve));
 
 function remotePiEngine(
+  kind: AgentType,
   snapshot: PiHostedSnapshot,
   channel: EngineChannel,
   onLost: (engine: PiEngineHandle) => void,
 ): { engine: PiEngineHandle; sink: EngineSink } {
   let state: PiHostedState = snapshot.state;
+  const definitionChars = snapshot.toolDefinitionChars ?? {};
   const transcript = new TranscriptMirror(snapshot);
   const transcriptView = transcript.view(() => state.sessionId);
   const listeners: Array<(event: AgentSessionEvent) => void> = [];
@@ -225,6 +229,10 @@ function remotePiEngine(
       appendCustomEntry: (type, data) =>
         command<string>("appendCustomEntry", [type, data]),
     }),
+    toolLoading: () =>
+      state.tools && piToolLoadingOf(state.tools, definitionChars),
+    toolExposure: () =>
+      state.tools && piToolExposureOf(kind, state.tools, definitionChars),
 
     subscribe(listener) {
       listeners.push(listener);
@@ -251,6 +259,7 @@ function remotePiEngine(
       command("lowerCompactionWindow", [tokens]),
     restoreCompactionWindow: (previous, reason) =>
       command("restoreCompactionWindow", [previous, reason]),
+    setIntegrationGates: (gates) => command("setIntegrationGates", [gates]),
     setToolMode: (mode) => command("setToolMode", [mode]),
     commitStaged: (options) => command("commitStaged", [options]),
     markToolUsed(name) {
@@ -300,6 +309,7 @@ export async function openRemotePiEngine(
     spec,
     ({ snapshot }, channel) => {
       const remote = remotePiEngine(
+        spec.kind,
         snapshot as PiHostedSnapshot,
         channel,
         onLost,

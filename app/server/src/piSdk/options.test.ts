@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { hasNativeTools } from "@assistant/shared";
 import {
-  buildAgentOptions,
   PI_SEARCH_BUILTIN_TOOLS,
   PI_PLAN_RESTRICTED_BUILTIN_TOOLS,
 } from "./options.ts";
+import { buildAgentOptions } from "./piEngineStart.ts";
 import { mergedActiveToolNames } from "./toolActivation.ts";
 
 for (const persona of [

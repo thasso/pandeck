@@ -28,13 +28,18 @@ import type {
   HostedEngineFactory,
   HostedEngineItem,
 } from "../workerProtocol/engineMethods.ts";
-import { findModel } from "./models.ts";
-import type {
-  PiEngineHandle,
-  PiEngineModel,
-  PiTranscriptView,
+import {
+  piEngineToolMirror,
+  type PiEngineHandle,
+  type PiEngineModel,
+  type PiTranscriptView,
 } from "./piEngine.ts";
-import { openPiEngine, type PiEngineOpenSpec } from "./piEngineHost.ts";
+import {
+  openPiEngine,
+  type PiEngineOpenSpec,
+  type PiModelPort,
+} from "./piEngineHost.ts";
+import type { PiToolState } from "./toolActivation.ts";
 
 /** A `steerOnly` submit found the engine idle: nothing was sent to pi. */
 export const STEER_NOT_TAKEN = "steer_not_taken";
@@ -56,6 +61,8 @@ export interface PiHostedState {
   contextMessageCount: number;
   skills: Array<{ name: string; filePath: string }>;
   compactionWindowStatus: CompactionWindowHarnessStatus;
+  /** The tool activation's state; absent for an engine without app tools. */
+  tools?: PiToolState;
 }
 
 /**
@@ -71,6 +78,8 @@ export interface PiHostedTranscriptChange {
 
 export interface PiHostedSnapshot {
   state: PiHostedState;
+  /** Every tool definition's wire size: fixed at open, so sent only here. */
+  toolDefinitionChars?: Record<string, number>;
   header: PiTranscriptHeader;
   entries: PiTranscriptEntry[];
   leafId: string | null;
@@ -106,14 +115,15 @@ const hosted = new Map<
 >();
 
 /**
- * Serve `local` as a hosted engine. `engineId` registers it for the test
- * seams until it is disposed.
+ * Serve `local` as a hosted engine. `findModel` resolves a `setModel`'s
+ * model; `engineId` registers it for the test seams until it is disposed.
  */
 export function hostPiEngine(
   local: PiEngineHandle,
   info: unknown,
-  engineId?: number,
+  options: { findModel: PiModelPort["find"]; engineId?: number },
 ): HostedEngine {
+  const { engineId } = options;
   let listener: ((item: HostedEngineItem) => void) | undefined;
   let sentState: string | undefined;
   let sentHeader: PiTranscriptHeader | undefined;
@@ -141,6 +151,7 @@ export function hostPiEngine(
       contextMessageCount,
     ]);
     if (stats?.key !== key) stats = { key, value: local.stats() };
+    const tools = piEngineToolMirror(local)?.state();
     return {
       sessionId: local.sessionId,
       ...(sessionFile !== undefined ? { sessionFile } : {}),
@@ -152,6 +163,7 @@ export function hostPiEngine(
       contextMessageCount,
       skills: [...local.skills()],
       compactionWindowStatus: local.compactionWindowStatus(),
+      ...(tools ? { tools } : {}),
     };
   };
 
@@ -236,7 +248,7 @@ export function hostPiEngine(
       }
       case "setModel": {
         const { provider, id } = args[0] as { provider: string; id: string };
-        const model = findModel(provider, id);
+        const model = options.findModel(provider, id);
         if (!model)
           throw new Error(`Model ${provider}/${id} is not available.`);
         return local.setModel(model);
@@ -271,6 +283,10 @@ export function hostPiEngine(
           args[0] as number | null,
           args[1] as string,
         );
+      case "setIntegrationGates":
+        return local.setIntegrationGates(
+          args[0] as Parameters<PiEngineHandle["setIntegrationGates"]>[0],
+        );
       case "setToolMode":
         return local.setToolMode(
           args[0] as Parameters<PiEngineHandle["setToolMode"]>[0],
@@ -298,7 +314,14 @@ export function hostPiEngine(
       sentLength = entries.length;
       const state = readState();
       sentState = JSON.stringify(state);
-      return { state, header: sentHeader, entries, leafId: sentLeaf };
+      const toolDefinitionChars = piEngineToolMirror(local)?.definitionChars;
+      return {
+        state,
+        ...(toolDefinitionChars ? { toolDefinitionChars } : {}),
+        header: sentHeader,
+        entries,
+        leafId: sentLeaf,
+      };
     },
     command(name, args, commandId) {
       let outcome: Promise<unknown>;
@@ -325,24 +348,35 @@ export function hostPiEngine(
   };
 }
 
-/** The `"pi"` factory the in-process Worker hosts. */
-export const piHostedEngineFactory: HostedEngineFactory = async (
-  spec,
-  host,
-) => {
-  const { engine, info } = await openPiEngine(spec as PiEngineOpenSpec, {
-    childEnv: host.childEnv,
-    appToolExecutor: (sessionId) => (tool, args, ctx) =>
-      host.callAppTool(
-        { sessionId, tool, toolCallId: ctx.toolCallId, args },
-        {
-          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-          ...(ctx.progress !== undefined ? { onProgress: ctx.progress } : {}),
-        },
-      ),
-  });
-  return hostPiEngine(engine, info, host.engineId);
-};
+/**
+ * The `"pi"` factory a Worker hosts, reaching pi's model runtime through
+ * `models`; the composition root injects the server's (`piStore.ts`).
+ */
+export function createPiHostedEngineFactory({
+  models,
+}: {
+  models: PiModelPort;
+}): HostedEngineFactory {
+  return async (spec, host) => {
+    const { engine, info } = await openPiEngine(spec as PiEngineOpenSpec, {
+      childEnv: host.childEnv,
+      appToolExecutor: (sessionId) => (tool, args, ctx) =>
+        host.callAppTool(
+          { sessionId, tool, toolCallId: ctx.toolCallId, args },
+          {
+            ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+            ...(ctx.progress !== undefined ? { onProgress: ctx.progress } : {}),
+          },
+        ),
+      models,
+      persistOutput: (request) => host.persistOutput(request),
+    });
+    return hostPiEngine(engine, info, {
+      findModel: models.find,
+      engineId: host.engineId,
+    });
+  };
+}
 
 /**
  * The local handle a hosted engine drives, while the in-process Worker holds

@@ -20,16 +20,16 @@ process.env.DATA_DIR = join(tmp, "data");
 
 const { sessionStore } = await import("../db/sessionStore.ts");
 const {
-  agentPromptLayer,
   freezeSessionAgent,
   sessionAgent,
   sessionAgentSummary,
   SessionAgentUnreadableError,
-  withoutDeniedTools,
 } = await import("./sessionAgent.ts");
+const { agentPromptLayer, withoutDeniedTools } =
+  await import("./agentDefinitionPolicy.ts");
 const { buildClaudeSdkQueryOptions, claudeSdkSystemPrompt } =
   await import("../claudeSdk/options.ts");
-const { buildAgentOptions } = await import("../piSdk/options.ts");
+const { buildAgentOptions } = await import("../piSdk/piEngineStart.ts");
 const { CLAUDE_SDK_MODELS } = await import("../claudeSdk/modelSettings.ts");
 const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { createClaudeSessionToolServer } =

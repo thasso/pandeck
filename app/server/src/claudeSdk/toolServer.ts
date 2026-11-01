@@ -17,7 +17,8 @@
 import type { AgentType, SessionMode } from "@assistant/shared";
 import type { ClientTimelineEntry } from "@assistant/shared/runtime";
 import { AGENT_TYPES } from "../agentTypes.ts";
-import { sessionAgent, withoutDeniedTools } from "../agents/sessionAgent.ts";
+import { withoutDeniedTools } from "../agents/agentDefinitionPolicy.ts";
+import { sessionAgent } from "../agents/sessionAgent.ts";
 import {
   integrationGatedActiveToolNames,
   catalogSearchHintFor,

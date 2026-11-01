@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "vitest";
 import { createPiOutputPolicyExtension } from "./outputPolicyExtension.ts";
-import { buildAgentOptions } from "./options.ts";
+import { buildAgentOptions } from "./piEngineStart.ts";
 import { deleteToolGroupSessionData } from "../mcp/toolGroups/registry.ts";
 import { listSessionArtifacts } from "../mcp/toolGroups/packRuntime.ts";
 import { SESSION_HOOK_METHODS } from "../workerProtocol/sessionHookMethods.ts";

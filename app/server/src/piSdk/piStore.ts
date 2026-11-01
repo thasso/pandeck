@@ -23,7 +23,13 @@ import {
 } from "../mcp/tool.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
 import { piAppToolBinding } from "./agentToolAdapter.ts";
-import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
+import {
+  currentIntegrationToolGates,
+  isPlanModeToolAllowed,
+  type IntegrationToolGates,
+} from "../tools/toolPolicy.ts";
+import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
+import { registerSessionToolExposure } from "../tools/sessionToolExposure.ts";
 import type { LiveListInfo } from "../sessions.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import {
@@ -42,19 +48,22 @@ import {
 } from "../worktrees/sessionCwd.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
-import {
-  sessionAgent,
-  withoutDeniedTools,
-  type SessionAgent,
-} from "../agents/sessionAgent.ts";
+import { withoutDeniedTools } from "../agents/agentDefinitionPolicy.ts";
+import { sessionAgent, type SessionAgent } from "../agents/sessionAgent.ts";
 import {
   parsePromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
 import { PiLiveSession } from "./PiLiveSession.ts";
 import type { PiEngineHandle, PiEngineModel } from "./piEngine.ts";
-import type { PiEngineOpened, PiEngineOpenSpec } from "./piEngineHost.ts";
-import { piHostedEngineFactory } from "./piEngineHosted.ts";
+import type {
+  PiEngineOpened,
+  PiEngineOpenSpec,
+  PiEngineStartRecords,
+} from "./piEngineHost.ts";
+import { freezePiEngineStart, resolvePiEngineStart } from "./piEngineStart.ts";
+import { createPiHostedEngineFactory } from "./piEngineHosted.ts";
+import { serverPiModelPort } from "./piModelPort.ts";
 import { openRemotePiEngine } from "./remotePiEngine.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
@@ -83,6 +92,15 @@ export class PiSessionDeletedError extends Error {
 
 const ENTERPRISE_REQUIRED =
   "This session requires an enterprise account. Select an account marked as enterprise.";
+
+function sameIntegrationGates(
+  a: IntegrationToolGates,
+  b: IntegrationToolGates,
+): boolean {
+  return (Object.keys(b) as Array<keyof IntegrationToolGates>).every(
+    (gate) => a[gate] === b[gate],
+  );
+}
 
 /**
  * The {@link ToolSession} the server's app tools see for a pi session: read
@@ -120,7 +138,10 @@ class PiSessionStore {
    * subscriptions alive, unreachable to eviction.
    */
   private readonly opening = new Map<string, Promise<PiLiveSession>>();
-  /** Each committed engine's app-tool binding disposer, by session id. */
+  /**
+   * Each committed engine's app-tool binding and Tools-inspector source
+   * disposer, by session id.
+   */
   private appToolBindings = new Map<string, () => void>();
   /** Live Build/Plan policy, read by the routed app tools' gate. */
   private sessionModes = new Map<string, SessionMode>();
@@ -134,6 +155,11 @@ class PiSessionStore {
   private host: HarnessHost | undefined;
   /** Whether another engine holds an id resident; registration refuses it. */
   private heldElsewhere: (id: string) => boolean = () => false;
+
+  constructor() {
+    // Every live engine applies the gates the server sends it; it reads none.
+    subscribeIntegrationToolChanges(() => this.sendIntegrationGates());
+  }
 
   /**
    * Wire the hub-side callbacks every {@link PiLiveSession} needs. The harness
@@ -220,40 +246,41 @@ class PiSessionStore {
       opts?.credentialProfileId ?? DEFAULT_OPENAI_PROFILE_ID;
     // A freshly minted id has no record, so the requested mode is the mode.
     const mode = sessionModeOrDefault(opts?.mode);
+    const started = await resolvePiEngineStart({
+      kind,
+      credentialProfileId,
+      ...(opts?.promptEvidence ? { evidence: opts.promptEvidence } : {}),
+      ...(opts?.agent ? { agent: opts.agent } : {}),
+    });
     const opened = await this.openEngine({
       kind,
       credentialProfileId,
       transcript: { type: "new", cwd },
       ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
       ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-      ...(opts?.promptEvidence || opts?.agent
-        ? {
-            promptStart: {
-              ...(opts.promptEvidence ? { evidence: opts.promptEvidence } : {}),
-              ...(opts.agent ? { agent: opts.agent } : {}),
-            },
-          }
-        : {}),
+      ...started,
       mode,
       canonicalize: true,
     });
     const id = opened.info.sessionId;
+    await this.freezeStart(kind, opened, started.start, {});
     if (
       opts?.requiresEnterprise &&
       !credentialProfileById(credentialProfileId)?.enterprise
     ) {
-      closeToolGroupSession(id);
-      await opened.engine.discard({ removeFile: {} });
-      sessionStore.deleteSkills(id);
+      await this.discardRefused(id, opened.engine, {});
       throw new Error(ENTERPRISE_REQUIRED);
     }
     this.sessionModes.set(id, mode);
-    return this.track(
-      kind,
-      opened,
-      credentialProfileId,
-      opts?.scope,
-      opts?.requiresEnterprise,
+    return this.catchUpIntegrationGates(
+      this.track(
+        kind,
+        opened,
+        credentialProfileId,
+        opts?.scope,
+        opts?.requiresEnterprise,
+      ),
+      started.integrationGates,
     );
   }
 
@@ -312,6 +339,12 @@ class PiSessionStore {
       const profileId = record?.credentialProfileId ?? "default";
       // A durable server record decides the mode; an unrecorded session is Build.
       const mode = sessionModeOrDefault(record?.mode);
+      // The stored start records; an id-less legacy file freezes after.
+      const started = await resolvePiEngineStart({
+        kind,
+        credentialProfileId: profileId,
+        ...(candidateId !== undefined ? { knownId: candidateId } : {}),
+      });
       const opened = await this.openEngine({
         kind,
         credentialProfileId: profileId,
@@ -321,6 +354,7 @@ class PiSessionStore {
           ...(candidateId !== undefined ? { expectedId: candidateId } : {}),
           ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
         },
+        ...started,
         mode,
       });
       const id = opened.info.sessionId;
@@ -342,8 +376,22 @@ class PiSessionStore {
         await opened.engine.discard({});
         throw new SessionHeldElsewhereError(id);
       }
+      // A file whose id was unreadable before the open freezes what it
+      // resolved, under the id the open found; its transcript stays.
+      if (candidateId === undefined) {
+        try {
+          await freezePiEngineStart(id, kind, started.start);
+        } catch (err) {
+          await opened.engine.discard({});
+          throw err;
+        }
+      }
       this.sessionModes.set(id, mode);
-      return this.track(kind, opened, profileId);
+      // Inside the shared open, so every owner of it waits for the catch-up.
+      return this.catchUpIntegrationGates(
+        this.track(kind, opened, profileId),
+        started.integrationGates,
+      );
     })();
     this.opening.set(canonical, open);
     try {
@@ -462,6 +510,13 @@ class PiSessionStore {
     const inherit = parsePromptConditions(
       sessionStore.getPromptConditions(parentSessionId),
     );
+    const started = await resolvePiEngineStart({
+      kind,
+      credentialProfileId,
+      ...(inherit ? { inheritConditions: inherit } : {}),
+      inheritSkills,
+      ...(inheritAgent ? { agent: inheritAgent } : {}),
+    });
 
     // A fork continues the parent's conversation in the parent's mode too —
     // Build/Plan travels like model and thinking level do.
@@ -478,22 +533,17 @@ class PiSessionStore {
         originEntryId,
         ...(edgeCwd !== undefined ? { cwd: edgeCwd } : {}),
       },
-      promptStart: {
-        ...(inherit ? { inherit } : {}),
-        inheritSkills,
-        ...(inheritAgent ? { agent: inheritAgent } : {}),
-      },
+      ...started,
       mode,
       canonicalize: true,
     });
     const id = opened.info.sessionId;
+    await this.freezeStart(kind, opened, started.start, { except: file });
     if (
       requiresEnterprise &&
       !credentialProfileById(credentialProfileId)?.enterprise
     ) {
-      closeToolGroupSession(id);
-      await opened.engine.discard({ removeFile: { except: file } });
-      sessionStore.deleteSkills(id);
+      await this.discardRefused(id, opened.engine, { except: file });
       throw new Error(ENTERPRISE_REQUIRED);
     }
     this.sessionModes.set(id, mode);
@@ -515,7 +565,81 @@ class PiSessionStore {
       mode,
     });
     this.requireHost().sessionRowsChanged([live.sessionId]);
+    return this.catchUpIntegrationGates(live, started.integrationGates);
+  }
+
+  /**
+   * Send a gate flip that landed while `live`'s open was in flight. Called
+   * with `track`'s result, so the comparison runs in the synchronous span
+   * that made the session live: a flip before it is caught here, one after it
+   * by {@link sendIntegrationGates}. A failed catch-up ends the session
+   * rather than leave it registered under stale gates.
+   */
+  private async catchUpIntegrationGates(
+    live: PiLiveSession,
+    openedWith: IntegrationToolGates,
+  ): Promise<PiLiveSession> {
+    const current = currentIntegrationToolGates();
+    if (sameIntegrationGates(openedWith, current)) return live;
+    try {
+      await live.engine.setIntegrationGates(current);
+    } catch (err) {
+      if (this.live.get(live.key) === live) this.evict(live.key);
+      throw err;
+    }
     return live;
+  }
+
+  /**
+   * Send the current integration gates to every live engine. One engine's
+   * failure is its own: the others still hear.
+   */
+  private sendIntegrationGates(): void {
+    // With no live engine nothing reads the settings, as before.
+    if (this.live.size === 0) return;
+    const gates = currentIntegrationToolGates();
+    for (const ls of this.live.values())
+      ls.engine.setIntegrationGates(gates).catch((err: unknown) => {
+        console.warn(
+          `[pi] sending integration gates to ${ls.key} failed:`,
+          err,
+        );
+      });
+  }
+
+  /**
+   * Freeze an opened session's start records under the id its open minted,
+   * before anything reads them. A failed freeze refuses the session like any
+   * refused open (`discardRefused`).
+   */
+  private async freezeStart(
+    kind: AgentType,
+    opened: PiEngineOpened,
+    start: PiEngineStartRecords,
+    removeFile: { except?: string },
+  ): Promise<void> {
+    const id = opened.info.sessionId;
+    try {
+      await freezePiEngineStart(id, kind, start);
+    } catch (err) {
+      await this.discardRefused(id, opened.engine, removeFile);
+      throw err;
+    }
+  }
+
+  /**
+   * Undo a new or forked session the server refuses before tracking it: the
+   * tool groups the id may hold, the engine and the transcript it created (a
+   * fork keeps its parent's file, `except`), and its skills row.
+   */
+  private async discardRefused(
+    id: string,
+    engine: PiEngineHandle,
+    removeFile: { except?: string },
+  ): Promise<void> {
+    closeToolGroupSession(id);
+    await engine.discard({ removeFile });
+    sessionStore.deleteSkills(id);
   }
 
   private track(
@@ -557,10 +681,16 @@ class PiSessionStore {
           throw new Error(
             "The pi session has no transcript or model to reopen.",
           );
+        const started = await resolvePiEngineStart({
+          kind,
+          credentialProfileId: profileId,
+          knownId: ls.id,
+        });
         const { engine: replacement } = await this.openEngine({
           kind,
           credentialProfileId: profileId,
           transcript: { type: "open", file, expectedId: ls.id, cwd: ls.cwd },
+          ...started,
           model: {
             provider: selected.model.provider,
             id: selected.model.id,
@@ -579,6 +709,7 @@ class PiSessionStore {
             // Read in the swap's own synchronous span: no flip falls between.
             await replacement.commitStaged({
               mode: this.sessionModes.get(id) ?? "build",
+              integrationGates: currentIntegrationToolGates(),
             });
           },
           // Touches nothing the resident engine owns.
@@ -672,8 +803,9 @@ class PiSessionStore {
   }
 
   /**
-   * Serve `id`'s app tools from `engine`, gated by the session's live mode.
-   * The tools are the persona's, narrowed by its frozen agent definition.
+   * Serve `id`'s app tools from `engine`, gated by the session's live mode,
+   * and its Tools-inspector projection from `engine`'s mirror. The tools are
+   * the persona's, narrowed by its frozen agent definition.
    */
   private registerAppTools(
     kind: AgentType,
@@ -681,24 +813,28 @@ class PiSessionStore {
     engine: PiEngineHandle,
     cwd: string,
   ): void {
-    this.appToolBindings.set(
+    const unregisterExposure = registerSessionToolExposure(id, () =>
+      engine.toolExposure(),
+    );
+    const unbind = registerAppToolSession(
       id,
-      registerAppToolSession(
-        id,
-        piAppToolBinding(
-          withoutDeniedTools(AGENT_TYPES[kind].tools(), sessionAgent(id)),
-          {
-            session: () => piToolSessionFromHandle(kind, engine, cwd),
-            unavailableReason: (tool) =>
-              (this.sessionModes.get(id) ?? "build") === "plan" &&
-              !isPlanModeToolAllowed(tool)
-                ? planModeToolUnavailableMessage(tool.name)
-                : undefined,
-            onExecute: (name) => engine.markToolUsed(name),
-          },
-        ),
+      piAppToolBinding(
+        withoutDeniedTools(AGENT_TYPES[kind].tools(), sessionAgent(id)),
+        {
+          session: () => piToolSessionFromHandle(kind, engine, cwd),
+          unavailableReason: (tool) =>
+            (this.sessionModes.get(id) ?? "build") === "plan" &&
+            !isPlanModeToolAllowed(tool)
+              ? planModeToolUnavailableMessage(tool.name)
+              : undefined,
+          onExecute: (name) => engine.markToolUsed(name),
+        },
       ),
     );
+    this.appToolBindings.set(id, () => {
+      unbind();
+      unregisterExposure();
+    });
   }
 
   /** Dispose a session's app-tool binding (no-op when none). */
@@ -798,5 +934,9 @@ class PiSessionStore {
 
 export const piStore = new PiSessionStore();
 
-// The composition root's injection: the in-process Worker hosts pi engines.
-registerInProcessEngineFactory("pi", piHostedEngineFactory);
+// The composition root's injection: the in-process Worker hosts pi engines,
+// on the server's own model runtimes.
+registerInProcessEngineFactory(
+  "pi",
+  createPiHostedEngineFactory({ models: serverPiModelPort }),
+);

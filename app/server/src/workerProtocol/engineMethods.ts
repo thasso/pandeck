@@ -30,6 +30,10 @@ import type { AppToolCall, AppToolResult } from "./appToolMethods.ts";
 import { INVALID_PARAMS } from "./checkoutMethods.ts";
 import type { Payload } from "./codec.ts";
 import { WorkerMethodError } from "./connection.ts";
+import type {
+  PersistOutputRequest,
+  SessionOutputArtifact,
+} from "./sessionHookMethods.ts";
 
 export const ENGINE_METHODS = {
   /** Server → Worker: open an engine under a server-assigned id. */
@@ -131,6 +135,14 @@ export interface HostedEngineHost {
       onProgress?: (partial: AppToolResult) => void;
     },
   ): Promise<AppToolResult>;
+  /**
+   * Persist an elided native result's full output on the server: the
+   * Worker's own `sessionHooks.persistOutput` call, for either harness.
+   */
+  persistOutput(
+    request: PersistOutputRequest,
+    signal?: AbortSignal,
+  ): Promise<SessionOutputArtifact>;
 }
 
 /** Opens one harness's engine from its JSON spec. */

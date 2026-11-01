@@ -22,12 +22,13 @@ import {
   piPromptExtras,
 } from "./piPromptMeasure.ts";
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";
+import { currentIntegrationToolGates } from "../tools/toolPolicy.ts";
 import { agentToolsFor, eagerToolNamesFor } from "../tools/catalog.ts";
 import {
-  buildAgentOptions,
   PI_PLAN_RESTRICTED_BUILTIN_TOOLS,
   PI_SEARCH_BUILTIN_TOOLS,
 } from "./options.ts";
+import { buildAgentOptions } from "./piEngineStart.ts";
 
 const CTX: ToolCallContext = {
   toolCallId: "act-1",
@@ -45,6 +46,7 @@ function assistantActivation(
   const activation = createPiToolActivation({
     sessionId: `activation-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     agentType: "assistant",
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor("assistant"),
     eagerToolNames: eagerToolNamesFor("assistant"),
     deferToolLoading: true,
@@ -59,6 +61,7 @@ test("staged activation registers only at commit and cannot remove live exposure
   const config = {
     sessionId,
     agentType: "assistant" as const,
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor("assistant"),
     eagerToolNames: eagerToolNamesFor("assistant"),
     deferToolLoading: true,
@@ -78,15 +81,15 @@ test("staged activation registers only at commit and cannot remove live exposure
   committed.initialize([]);
   try {
     assert.deepEqual(toolLoadingForSession(sessionId), live.loading());
-    assert.deepEqual(sessionToolExposure(sessionId), live.exposure());
+    assert.equal(sessionToolExposure(sessionId), undefined);
     abandoned.dispose();
     abandoned.register();
     assert.deepEqual(toolLoadingForSession(sessionId), live.loading());
-    assert.deepEqual(sessionToolExposure(sessionId), live.exposure());
+    assert.equal(sessionToolExposure(sessionId), undefined);
     committed.register();
     live.dispose();
     assert.deepEqual(toolLoadingForSession(sessionId), committed.loading());
-    assert.deepEqual(sessionToolExposure(sessionId), committed.exposure());
+    assert.equal(sessionToolExposure(sessionId), undefined);
   } finally {
     abandoned.dispose();
     committed.dispose();
@@ -117,6 +120,7 @@ test("Plan keeps Task mutations but removes other side-effecting app tools", () 
   const activation = createPiToolActivation({
     sessionId: `mode-activation-${Date.now()}`,
     agentType: "assistant",
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor("assistant"),
     eagerToolNames: eagerToolNamesFor("assistant"),
     deferToolLoading: true,
@@ -152,6 +156,7 @@ test("find_tools only knows the tools this session has (an agent's denied ones a
   const activation = createPiToolActivation({
     sessionId: `activation-denied-${Date.now()}`,
     agentType: "assistant",
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor("assistant").filter(
       (tool) => tool.name !== "web_fetch",
     ),
@@ -502,6 +507,7 @@ test("activating a deferred tool leaves pi's system prompt byte-identical", asyn
   const activation = createPiToolActivation({
     sessionId: `activation-prefix-${Date.now()}`,
     agentType,
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor(agentType),
     eagerToolNames: eagerToolNamesFor(agentType),
     deferToolLoading: true,
@@ -621,6 +627,7 @@ test("find_tools still discovers app tools by capability", async () => {
   const activation = createPiToolActivation({
     sessionId: `activation-discovery-${Date.now()}`,
     agentType: "assistant",
+    integrationGates: currentIntegrationToolGates(),
     agentTools: agentToolsFor("assistant"),
     eagerToolNames: eagerToolNamesFor("assistant"),
     deferToolLoading: true,
@@ -668,6 +675,7 @@ test("a stale activation disposed after its replacement leaves the replacement r
     createPiToolActivation({
       sessionId,
       agentType: "assistant",
+      integrationGates: currentIntegrationToolGates(),
       agentTools: agentToolsFor("assistant"),
       eagerToolNames: eagerToolNamesFor("assistant"),
       deferToolLoading: true,
@@ -679,10 +687,7 @@ test("a stale activation disposed after its replacement leaves the replacement r
     stale.dispose();
     // Both readers still answer from the replacement, and agree.
     assert.ok(toolExposureForSession(sessionId));
-    assert.deepEqual(
-      sessionToolExposure(sessionId),
-      toolExposureForSession(sessionId),
-    );
+    assert.equal(sessionToolExposure(sessionId), undefined);
   } finally {
     replacement.dispose();
   }

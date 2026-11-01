@@ -699,38 +699,84 @@ it.
     with its file, expected id and checked cwd, `fork` with the parent's file
     and id, pi's entry, the position and the app log's origin entry), the
     account, the model as `{ provider, id }` (resolved in that account's own
-    registry), thinking level, prompt start, the Build/Plan mode, and the
-    `staged` and `canonicalize` flags. The answer is a `PiEngineHandle` and a
-    JSON `PiEngineOpenInfo` (id, file, cwd, notices). `piStore` holds only
-    these; the server keeps its own state (modes, app-tool bindings, scope
-    claims, enterprise and ownership checks) and drives the engine's tools by
-    command: `setToolMode`, `commitStaged({ mode })` once an account swap
-    commits, `discard` for a refused open, and `submit`'s `userTurnIdleMs`, on
-    which the engine prunes cold tool loads before calling pi.
+    registry), thinking level, the start records, persona options, integration
+    gates and compaction window the server resolved (W9c-1, below), the
+    Build/Plan mode, and the `staged` and `canonicalize` flags. The answer is a
+    `PiEngineHandle` and a JSON `PiEngineOpenInfo` (id, file, cwd, notices).
+    `piStore` holds only these; the server keeps its own state (modes, app-tool
+    bindings, scope claims, enterprise and ownership checks) and drives the
+    engine's tools by command: `setToolMode`, `setIntegrationGates`,
+    `commitStaged({ mode, integrationGates })` once an account swap commits,
+    `discard` for a refused open, and `submit`'s `userTurnIdleMs`, on which the
+    engine prunes cold tool loads before calling pi.
   - The `PiEngineHostContext` is host wiring and never crosses: `childEnv()` is
     the base environment of pi's shell children (foreground `bash` and
-    background launches; pi's bin dir is added on top), and `appToolExecutor`
-    routes the session's app tools. The Worker's pi factory passes its own child
-    env (the isolation boundary's) and its `appTools.call`, which waits for the
-    engine's items first (W9b-2).
+    background launches; pi's bin dir is added on top), `appToolExecutor` routes
+    the session's app tools, `models` is the model port and `persistOutput`
+    stores an elided native result's full output (W9c-1). The Worker's pi
+    factory passes its own child env (the isolation boundary's) and its
+    `appTools.call`, which waits for the engine's items first (W9b-2).
   - App tools see the transcript only through the handle's
     `toolSessionManager()`. The server's binding keeps the routed call's order,
     gate → `onExecute` → execute: its `onExecute` notes the use on the engine
     (`markToolUsed`), so a Plan denial never counts as a use and a failed run
     still does.
-  - The W9c inventory (Task-1305): what the opener still reads in the server
-    process. `../promptConditions.ts` and `../agents/sessionAgent.ts` (frozen
-    prompt conditions and agent), `../sessionSkills.ts`, `./options.ts`
-    (`getSettings`, `AGENT_TYPES`, the skill library), `./models.ts`
-    (`findModelForProfile`, `modelRuntimeForProfile`), `../db/sessionStore.ts`
-    (the compaction-window record), `./backgroundWorkBackend.ts` (admission and
-    the backend bridge), `./toolActivation.ts` and `./compactionWindow.ts`. Its
+  - The W9c inventory: what the opener still reads in the server process,
+    exactly two reaches, both W9c-2's (Task-1313). `./options.ts` materializes
+    the frozen skills from the skill library before every loader reload, and
+    `./backgroundWorkBackend.ts` holds admission and the backend bridge. Its
     other imports are pure or the engine's own: `../config.ts`,
-    `../mcp/tool.ts`, `../tools/toolPolicy.ts`, `../sessionStorage.ts`,
+    `../mcp/tool.ts`, `../tools/toolPolicy.ts`,
+    `../agents/agentDefinitionPolicy.ts`, `../sessionStorage.ts`,
     `./sessionOpen.ts`, `./forkOrigin.ts`, `./agentToolAdapter.ts`,
-    `./toolPayloadProbe.ts` and `./piEngine.ts`. `harnessBoundary.test.ts` ("the
-    pi engine opener reaches only the pinned server modules") pins both lists; a
-    new reach is a plan change.
+    `./compactionWindow.ts`, `./toolActivation.ts`, `./toolPayloadProbe.ts` and
+    `./piEngine.ts`. `harnessBoundary.test.ts` ("the pi engine opener reaches
+    only the pinned server modules") pins both lists; a new reach is a plan
+    change.
+
+- **pi engine start resolution (W9c-1).** Everything the server owns that the
+  engine reads at open is resolved before the open, into the spec, by
+  `resolvePiEngineStart` (`piSdk/piEngineStart.ts`); the engine reads no
+  settings, session record or frozen row.
+  - Spec fields: `start` (prompt conditions, skill names and agent definition: a
+    reopen's stored records, a new session's or fork's computed ones), `persona`
+    (the persona's prompt and tool policy), `compactionWindow` (a reopen's
+    stored window) and `integrationGates` (the gates at resolution, read last).
+  - Freeze after open. A new session or fork freezes exactly its spec's `start`
+    under the id the open minted, after a successful open and before `track`. A
+    refused open or a failed freeze is undone (`discardRefused`): the id's tool
+    groups, the engine and the transcript it created (a fork keeps its parent's
+    file) and the skills row.
+  - The model port. The opener and a hosted `setModel` resolve models and
+    runtimes only through the host context's `PiModelPort` (`runtime`,
+    `findForProfile`, `find`), which the composition root wires to `models.ts`.
+    It is the seam the phase-3 credential gateway replaces; no secret crosses
+    the wire.
+  - Integration gates are a command. The engine's tool activation applies the
+    gates it was handed and subscribes to nothing; `piStore` subscribes once and
+    sends `setIntegrationGates(current)` to every live engine, each failure
+    caught on its own. Open-to-live catch-up: `acquireNew`, the shared open of
+    `acquireExisting` (every owner of a deduplicated open waits) and
+    `forkSession` compare the spec's gates with the current ones in the
+    synchronous span `track` returns in, and await the command when they differ,
+    so a flip lands either before the comparison or with the session already
+    live. A failed catch-up evicts the session and rethrows. A staged
+    replacement is sent nothing; its `commitStaged` carries the gates and mode
+    read in the commit's own span.
+  - Mirrored tools. pi's `state` item carries the activation's tool state as
+    JSON (native-loaded, used, usable and active names, load events, whether
+    `find_tools` is present); the definition sizes cross once, in the open's
+    snapshot. The handle's `toolLoading()` and `toolExposure()` build from that
+    mirror exactly as the engine does, so loaded (native) and active stay apart.
+    `piStore` registers the Tools inspector against the handle in `track` and in
+    the staged commit, and drops it with the session's app tools; the activation
+    registers nothing.
+  - No protocol change: the gates command is an `engine.command`, and the tool
+    state rides the existing `state` item and snapshot.
+  - Known limits: the engine still holds the catalog's tool objects for their
+    static fields (JSON tool descriptors are phase-2 packaging); the model port
+    is in-process wiring until the phase-3 gateway; the tool state is rebuilt
+    for every `state` item.
 
 - **pi engine host (W9b-2).** An interactive pi engine runs on the session's
   Worker, and the server drives it through protocol `1.8`
@@ -1148,25 +1194,26 @@ natural shape anyway.
 
 Phase 1 ships as slices; each keeps behavior unchanged.
 
-| Slice | Change                                                                                                                    | State   |
-| ----- | ------------------------------------------------------------------------------------------------------------------------- | ------- |
-| W1    | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it                                      | landed  |
-| W2    | Served files (`/api/files`, `show_files`) read through the Worker                                                         | landed  |
-| W3a   | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                                            | landed  |
-| W3b   | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                                                 | landed  |
-| W3c   | The KB row's typed server-local side for its git and checkout reads (Task-1183)                                           | landed  |
-| W3d   | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                                             | landed  |
-| W4    | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                                          | landed  |
-| W5    | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                                         | landed  |
-| W6    | Callers pass their own side; the string-cwd executors and both pin lists are gone                                         | landed  |
-| W7    | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                                         | landed  |
-| W8    | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)                        | landed  |
-| W9a   | The pi engine handle: every live consumer reaches pi through `PiEngineHandle`, with its loop policy behind it (Task-1176) | landed  |
-| W9b-1 | pi engine construction behind one opener over a JSON open spec, its child env injected (Task-1304)                        | landed  |
-| W9b-2 | The engine host protocol: the Worker's engine table, the handle's mirror, the opener behind the Worker (Task-1308)        | landed  |
-| W9c   | The pi engine's own server reach: admission, the background-work backend bridge, tool activation (Task-1305)              | planned |
-| W10   | The engine host for Claude sessions (Task-1177)                                                                           | planned |
-| W11   | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178)            | landed  |
+| Slice | Change                                                                                                                       | State   |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------- | ------- |
+| W1    | Protocol 1.0, in-process transport and Worker; every checkout git process crosses it                                         | landed  |
+| W2    | Served files (`/api/files`, `show_files`) read through the Worker                                                            | landed  |
+| W3a   | Protocol 1.2; worktree surfaces' checkout reads through the Worker (Task-1170)                                               | landed  |
+| W3b   | Workflow checkout reads through the same access, protocol 1.3 (Task-1182)                                                    | landed  |
+| W3c   | The KB row's typed server-local side for its git and checkout reads (Task-1183)                                              | landed  |
+| W3d   | Synchronous checkout probes: session cwd and main-repo resolution (Task-1184)                                                | landed  |
+| W4    | Protocol 1.4; the worktree watcher's watches and reads on the Worker (Task-1171)                                             | landed  |
+| W5    | Protocol 1.5; checkout create, removal and provisioning on the Worker (Task-1172)                                            | landed  |
+| W6    | Callers pass their own side; the string-cwd executors and both pin lists are gone                                            | landed  |
+| W7    | Protocol 1.6; interactive sessions' app tools and `ls` via the Worker (Task-1174)                                            | landed  |
+| W8    | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)                           | landed  |
+| W9a   | The pi engine handle: every live consumer reaches pi through `PiEngineHandle`, with its loop policy behind it (Task-1176)    | landed  |
+| W9b-1 | pi engine construction behind one opener over a JSON open spec, its child env injected (Task-1304)                           | landed  |
+| W9b-2 | The engine host protocol: the Worker's engine table, the handle's mirror, the opener behind the Worker (Task-1308)           | landed  |
+| W9c-1 | pi engine start resolved on the server: spec records, model port, integration gates as a command, mirrored tools (Task-1305) | landed  |
+| W9c-2 | The pi engine's remaining server reach: skill materialization and the background-work backend bridge (Task-1313)             | planned |
+| W10   | The engine host for Claude sessions (Task-1177)                                                                              | planned |
+| W11   | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178)               | landed  |
 
 A failed-turn continuation reports asynchronously, across the protocol: a
 transcript write that fails in the engine's `appendContextEdit` rejects the

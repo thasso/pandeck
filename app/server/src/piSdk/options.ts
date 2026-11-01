@@ -1,16 +1,16 @@
 /**
- * Pi option construction: the resource loader + tool policy handed to
- * `createAgentSession` for each {@link AgentType}, plus the pi session store
- * directories. Extracted from agents.ts / agentTypes.ts so the persona modules
- * stay free of pi imports; prompts and MCP toolsets are consumed from the
- * harness-independent {@link AGENT_TYPES} registry.
+ * The engine half of pi option construction: the resource loader and tool
+ * universe `createAgentSession` gets, built from the {@link PiPersonaOptions}
+ * the server computed (`piEngineStart.ts`) and the session's frozen records,
+ * plus the pi session store directories. Nothing here reads settings or the
+ * session store; the frozen skills' materialization before every reload is
+ * the one server reach left (`docs/workers.md`).
  */
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { type AgentType, hasNativeTools } from "@assistant/shared";
+import type { AgentType } from "@assistant/shared";
 import {
   CHAT_SESSION_DIR,
-  CWD,
   DEVELOPER_SESSION_DIR,
   PERSONAL_ASSISTANT_SESSION_DIR,
   SKILLS_RUNTIME_DIR,
@@ -18,23 +18,10 @@ import {
   WORKSHOP_SESSION_DIR,
 } from "../config.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
-import {
-  AGENT_NATIVE_TOOLS,
-  type AgentNativeTool,
-} from "../agents/agentLibrary.ts";
-import {
-  agentPromptLayer,
-  withoutDeniedTools,
-  type SessionAgent,
-} from "../agents/sessionAgent.ts";
-import type { PromptConditions } from "../promptConditions.ts";
+import { withoutDeniedTools } from "../agents/agentDefinitionPolicy.ts";
+import type { SessionAgent } from "../agents/sessionAgent.ts";
 import type { AgentTool } from "../mcp/tool.ts";
-import { eagerToolNamesFor } from "../tools/catalog.ts";
-import { getSettings } from "../settings.ts";
-import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
-import { piAgentDir } from "../credentialProfiles.ts";
 import { createPiOutputPolicyExtension } from "./outputPolicyExtension.ts";
-import { persistSessionOutput } from "../workers/inProcessWorker.ts";
 import { scanSkillLibrary, skillLibraryStore } from "../skills/skillLibrary.ts";
 import {
   materializeSkillRuntime,
@@ -131,165 +118,105 @@ export const PI_SEARCH_BUILTIN_TOOLS = ["grep", "find"] as const;
 export const PI_PLAN_RESTRICTED_BUILTIN_TOOLS = ["edit", "write"] as const;
 
 /**
- * pi's tools behind each harness-neutral name an agent definition may deny.
- * `bash` is command execution as a whole: pi's own shells and the background
- * `monitor` runner too.
+ * A persona's pi options as the server computes them at open
+ * (`piEngineStart.ts`), as JSON: everything settings, the persona registry
+ * and the frozen conditions and agent decide.
  */
-const PI_TOOLS_FOR_AGENT_DENY: Readonly<
-  Record<AgentNativeTool, readonly string[]>
-> = {
-  bash: ["bash", "powershell", "monitor"],
-  edit: ["edit"],
-  write: ["write"],
-};
-
-/**
- * Build the resource loader + tool policy for an {@link AgentType}. Async because
- * the loader must `reload()` before a session can use it. Delegates to the
- * harness-independent {@link AGENT_TYPES} registry (the single source of truth)
- * so any harness can apply any agentType.
- *
- * `conditions` and `frozenSkillNames` are the session's frozen session-start
- * records. pi rebuilds resources and its system prompt during a session, so
- * these must be the SAME values on reopen/fork as on creation — the caller
- * reads them from the session record rather than recomputing live settings.
- */
-export async function buildAgentOptions(
-  agentType: AgentType,
-  cwd: string = CWD,
-  credentialProfileId = "default",
-  conditions?: PromptConditions,
-  frozenSkillNames: readonly string[] = [],
-  agent?: SessionAgent,
-): Promise<AgentSessionOptions> {
-  return buildPiOptions(
-    agentType,
-    cwd,
-    credentialProfileId,
-    conditions,
-    frozenSkillNames,
-    agent,
-  );
+export interface PiPersonaOptions {
+  /**
+   * The assistant personas' whole system prompt on a clean-slate loader
+   * (`replace`), or the layers a coding persona appends to pi's own prompt and
+   * resource discovery (`append`).
+   */
+  systemPrompt: { replace: string } | { append: string[] };
+  /** The credential profile's pi agent directory: a path, never a secret. */
+  agentDir: string;
+  noTools?: "builtin";
+  eagerToolNames: string[];
+  deferToolLoading: boolean;
+  extraBuiltinToolNames: string[];
+  excludeTools: string[];
 }
 
+/** How the bounded-output extension persists an elided result's full output. */
+export type PiOutputPersist = Parameters<
+  typeof createPiOutputPolicyExtension
+>[0]["persistOutput"];
+
 /**
- * Build the pi resource loader + tool policy for an agentType. The toolset is
- * always `AGENT_TYPES[agentType].tools()` — the single source of truth shared
- * with the Claude harness; only the loader construction is pi-specific.
+ * Build the resource loader and tool universe from the server's
+ * {@link PiPersonaOptions}. Async because the loader must `reload()` before a
+ * session can use it.
+ *
+ * `skillNames` and `agent` are the session's frozen start records. pi rebuilds
+ * resources and its system prompt during a session, so these must be the SAME
+ * values on reopen/fork as on creation — the server resolves them from the
+ * session record rather than recomputing live settings.
  */
-async function buildPiOptions(
-  agentType: AgentType,
-  cwd: string,
-  credentialProfileId: string,
-  conditions: PromptConditions | undefined,
-  frozenSkillNames: readonly string[],
-  agent: SessionAgent | undefined,
-): Promise<AgentSessionOptions> {
-  const agentDir = piAgentDir(credentialProfileId);
-  const promptOptions = conditions ? { conditions } : undefined;
-  // A spawned agent definition narrows the persona's tools and adds one
-  // system-prompt layer after the persona's (`docs/agent-definitions.md`).
-  const agentTools = withoutDeniedTools(AGENT_TYPES[agentType].tools(), agent);
-  const agentLayer = agent ? [agentPromptLayer(agent)] : [];
-  // EVERY denied name is excluded, not just the natives: pi has built-ins and
-  // extension tools of its own under app-tool names (`ls`), which repository
-  // settings could otherwise switch back on.
-  const deniedTools = [
-    ...new Set(
-      (agent?.denyTools ?? []).flatMap((name) =>
-        (AGENT_NATIVE_TOOLS as readonly string[]).includes(name)
-          ? PI_TOOLS_FOR_AGENT_DENY[name as AgentNativeTool]
-          : [name],
-      ),
-    ),
+export async function buildPiEngineOptions(input: {
+  kind: AgentType;
+  cwd: string;
+  persona: PiPersonaOptions;
+  skillNames: readonly string[];
+  agent: SessionAgent | undefined;
+  persistOutput: PiOutputPersist;
+}): Promise<AgentSessionOptions> {
+  const { persona } = input;
+  // The persona's tools from the registry the server's app-tool binding
+  // reads too, narrowed by a spawned agent definition; its prompt layer is
+  // already in `persona.systemPrompt` (`docs/agent-definitions.md`).
+  const agentTools = withoutDeniedTools(
+    AGENT_TYPES[input.kind].tools(),
+    input.agent,
+  );
+  const extensionFactories = [
+    {
+      name: "bounded-output",
+      factory: createPiOutputPolicyExtension({
+        persistOutput: input.persistOutput,
+      }),
+      hidden: true,
+    },
   ];
-  switch (agentType) {
-    case "assistant":
-    case "personal-assistant":
-    case "workflow-coordinator": {
-      // Clean slate: no AGENTS.md context, no extensions/skills, a minimal prompt,
-      // and the persona's dedicated tools. Native access is independent of
-      // project discovery. The permanent singleton
-      // (`personal-assistant`) always carries the profile suffix.
-      const withProfileSuffix = agentType === "personal-assistant";
-      const loader = new DefaultResourceLoader({
-        cwd,
-        agentDir,
-        noExtensions: true,
-        noSkills: true,
-        noPromptTemplates: true,
-        noContextFiles: true,
-        extensionFactories: [
+  const { systemPrompt } = persona;
+  // Clean slate: no AGENTS.md context, no extensions/skills, a minimal
+  // prompt, and the persona's dedicated tools. Coding personas keep pi's full
+  // prompt + discovery + tools, with the persona's layers appended so they
+  // still benefit from upstream prompt updates.
+  const loader =
+    "replace" in systemPrompt
+      ? new DefaultResourceLoader({
+          cwd: input.cwd,
+          agentDir: persona.agentDir,
+          noExtensions: true,
+          noSkills: true,
+          noPromptTemplates: true,
+          noContextFiles: true,
+          extensionFactories,
+          systemPrompt: systemPrompt.replace,
+        })
+      : new FrozenSkillsResourceLoader(
           {
-            name: "bounded-output",
-            factory: createPiOutputPolicyExtension({
-              persistOutput: persistSessionOutput,
-            }),
-            hidden: true,
+            cwd: input.cwd,
+            agentDir: persona.agentDir,
+            extensionFactories,
+            appendSystemPromptOverride: (base) => [
+              ...base,
+              ...systemPrompt.append,
+            ],
           },
-        ],
-        systemPrompt: [
-          withProfileSuffix
-            ? `${AGENT_TYPES[agentType].systemPrompt(promptOptions)}\n\n## Personal profile instructions\n\n${permanentAssistantProfileInstructions(getSettings().permanentAssistant)}`
-            : AGENT_TYPES[agentType].systemPrompt(promptOptions),
-          ...agentLayer,
-        ].join("\n\n"),
-      });
-      await loader.reload();
-      // noTools "builtin" (not a `tools:` allowlist): pi force-re-activates
-      // every allowlisted tool on registry refresh, which would defeat the
-      // deferred active set managed by toolActivation.ts.
-      return {
-        resourceLoader: loader,
-        ...(hasNativeTools(agentType) ? {} : { noTools: "builtin" as const }),
-        agentTools,
-        eagerToolNames: eagerToolNamesFor(agentType, conditions),
-        deferToolLoading: agentType !== "workflow-coordinator",
-        extraBuiltinToolNames: hasNativeTools(agentType)
-          ? [...PI_SEARCH_BUILTIN_TOOLS]
-          : [],
-        excludeTools: ["ask_question", ...deniedTools],
-      };
-    }
-    case "workshop":
-    case "developer": {
-      // Keep pi's full prompt + discovery + tools, just append the persona
-      // extension so we still benefit from upstream prompt updates.
-      const extension = AGENT_TYPES[agentType].systemPrompt(promptOptions);
-      const loader = new FrozenSkillsResourceLoader(
-        {
-          cwd,
-          agentDir,
-          extensionFactories: [
-            {
-              name: "bounded-output",
-              factory: createPiOutputPolicyExtension({
-                persistOutput: persistSessionOutput,
-              }),
-              hidden: true,
-            },
-          ],
-          appendSystemPromptOverride: (base) => [
-            ...base,
-            extension,
-            ...agentLayer,
-          ],
-        },
-        frozenSkillNames,
-      );
-      await loader.reload();
-      // ask_question blocks on an interactive responder the web app doesn't have.
-      return {
-        resourceLoader: loader,
-        agentTools,
-        eagerToolNames: eagerToolNamesFor(agentType, conditions),
-        deferToolLoading: true,
-        extraBuiltinToolNames: [...PI_SEARCH_BUILTIN_TOOLS],
-        // pi's own built-ins carry the harness-neutral native names.
-        excludeTools: ["ask_question", ...deniedTools],
-      };
-    }
-  }
+          input.skillNames,
+        );
+  await loader.reload();
+  return {
+    resourceLoader: loader,
+    ...(persona.noTools !== undefined ? { noTools: persona.noTools } : {}),
+    agentTools,
+    eagerToolNames: new Set(persona.eagerToolNames),
+    deferToolLoading: persona.deferToolLoading,
+    extraBuiltinToolNames: [...persona.extraBuiltinToolNames],
+    excludeTools: [...persona.excludeTools],
+  };
 }
 
 /** Where each agent kind's pi sessions are stored on disk. */

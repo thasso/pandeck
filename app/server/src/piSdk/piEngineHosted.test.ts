@@ -127,7 +127,14 @@ function scriptedLocal() {
 }
 
 function hosted(script = scriptedLocal(), engineId?: number) {
-  const engine = hostPiEngine(script.local, { sessionId: "sid" }, engineId);
+  const engine = hostPiEngine(
+    script.local,
+    { sessionId: "sid" },
+    {
+      findModel: () => undefined,
+      ...(engineId !== undefined ? { engineId } : {}),
+    },
+  );
   engine.snapshot();
   const items: HostedEngineItem[] = [];
   engine.onItem((item) => items.push(item));

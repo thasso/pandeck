@@ -158,30 +158,28 @@ const PI_SESSION_CONSTRUCTIONS: Record<string, string[]> = {
 
 /**
  * Every module the pi engine opener imports a value from, besides pi itself,
- * `@assistant/shared`, `node:*` and `typebox`. The W9c inventory is server
- * state the opener still reads in the server process (`docs/workers.md`
- * "pi engine construction (W9b-1)"); the rest is pure or the engine's own.
+ * `@assistant/shared`, `node:*` and `typebox`. The W9c inventory is the two
+ * reaches into server state W9c-2 removes (`docs/workers.md` "pi engine
+ * construction (W9b-1)"): skill materialization in `./options.ts` and the
+ * background-work store behind `./backgroundWorkBackend.ts`. The rest is pure
+ * or the engine's own.
  */
 const W9C_INVENTORY = "W9c inventory";
 const ENGINE_OWN = "pure or engine-own";
 const PI_ENGINE_HOST_IMPORTS: Record<string, string> = {
-  "../agents/sessionAgent.ts": W9C_INVENTORY,
+  "../agents/agentDefinitionPolicy.ts": ENGINE_OWN,
   "../config.ts": ENGINE_OWN,
-  "../db/sessionStore.ts": W9C_INVENTORY,
   "../mcp/tool.ts": ENGINE_OWN,
-  "../promptConditions.ts": W9C_INVENTORY,
-  "../sessionSkills.ts": W9C_INVENTORY,
   "../sessionStorage.ts": ENGINE_OWN,
   "../tools/toolPolicy.ts": ENGINE_OWN,
   "./agentToolAdapter.ts": ENGINE_OWN,
   "./backgroundWorkBackend.ts": W9C_INVENTORY,
-  "./compactionWindow.ts": W9C_INVENTORY,
+  "./compactionWindow.ts": ENGINE_OWN,
   "./forkOrigin.ts": ENGINE_OWN,
-  "./models.ts": W9C_INVENTORY,
   "./options.ts": W9C_INVENTORY,
   "./piEngine.ts": ENGINE_OWN,
   "./sessionOpen.ts": ENGINE_OWN,
-  "./toolActivation.ts": W9C_INVENTORY,
+  "./toolActivation.ts": ENGINE_OWN,
   "./toolPayloadProbe.ts": ENGINE_OWN,
 };
 
