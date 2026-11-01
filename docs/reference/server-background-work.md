@@ -463,9 +463,11 @@ wait the supervisor already decided.
 ## Provider implementations
 
 The Claude port lives under `../claudeSdk/backgroundWorkBackend.ts`; this folder
-keeps no provider import. The pi port is under
-`../piSdk/backgroundWorkBackend.ts`. The human registry, session-card chip and
-Settings card live in `app/web` (`docs/reference/web-*.md`).
+keeps no provider import. The pi port is `../workers/backgroundWorkHost.ts`,
+which launches and stops the work on the owner's Worker
+(`../piSdk/backgroundWorkExecutor.ts` executes it there). The human registry,
+session-card chip and Settings card live in `app/web`
+(`docs/reference/web-*.md`).
 
 `../serverTasks.ts` is the third port, `server-task`: jobs PA's own server runs,
 running PR and ref check waits (`check-watch`), container image pulls

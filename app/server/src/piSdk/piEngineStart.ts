@@ -21,7 +21,8 @@ import {
   sessionAgent,
   type SessionAgent,
 } from "../agents/sessionAgent.ts";
-import { CWD } from "../config.ts";
+import { join } from "node:path";
+import { CWD, SKILLS_RUNTIME_DIR } from "../config.ts";
 import { piAgentDir } from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
@@ -33,9 +34,13 @@ import {
 } from "../promptConditions.ts";
 import { sessionSkills, startSessionSkillNames } from "../sessionSkills.ts";
 import { getSettings } from "../settings.ts";
+import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
 import { eagerToolNamesFor } from "../tools/catalog.ts";
 import { currentIntegrationToolGates } from "../tools/toolPolicy.ts";
-import { persistSessionOutput } from "../workers/inProcessWorker.ts";
+import {
+  materializeSkillsThroughWorker,
+  persistSessionOutput,
+} from "../workers/inProcessWorker.ts";
 import {
   buildPiEngineOptions,
   PI_SEARCH_BUILTIN_TOOLS,
@@ -156,14 +161,19 @@ interface PiEngineStartInput {
   agent?: SessionAgent;
 }
 
+/** The runtime directory a frozen skill set is materialized into. */
+function frozenSkillsDir(skillNames: readonly string[]): string {
+  return join(SKILLS_RUNTIME_DIR, skillSetHash(skillNames), "skills");
+}
+
 /**
  * The spec fields {@link resolvePiEngineStart} fills: the start records, the
- * persona's options, the current integration gates and a reopen's compaction
- * window.
+ * frozen skills' runtime directory, the persona's options, the current
+ * integration gates and a reopen's compaction window.
  */
 export type PiEngineStartFields = Pick<
   PiEngineOpenSpec,
-  "start" | "persona" | "integrationGates"
+  "start" | "skillsDir" | "persona" | "integrationGates"
 > &
   Partial<Pick<PiEngineOpenSpec, "compactionWindow">>;
 
@@ -202,6 +212,7 @@ export async function resolvePiEngineStart(
   };
   return {
     start,
+    skillsDir: frozenSkillsDir(skillNames),
     persona: piPersonaOptions(
       kind,
       input.credentialProfileId,
@@ -253,6 +264,8 @@ export async function buildAgentOptions(
       agent,
     ),
     skillNames: frozenSkillNames,
+    skillsDir: frozenSkillsDir(frozenSkillNames),
+    materializeSkills: materializeSkillsThroughWorker,
     agent,
     persistOutput: persistSessionOutput,
   });

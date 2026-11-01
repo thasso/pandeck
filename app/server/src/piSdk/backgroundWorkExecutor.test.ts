@@ -3,27 +3,23 @@ import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { afterEach, test } from "vitest";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
-import type {
-  BackgroundWorkActivity,
-  BackgroundWorkActivityRateExceeded,
-  BackgroundWorkBackendEvents,
-  BackgroundWorkCompletion,
-  BackgroundWorkOutputCaptured,
-  BackgroundWorkProviderBinding,
-} from "../backgroundWork/backends.ts";
+import type { BackgroundWorkActivity } from "../backgroundWork/backends.ts";
 import type { ToolSession } from "../mcp/tool.ts";
+import type {
+  BackgroundWorkAdmitter,
+  BackgroundWorkOutputReport,
+} from "../workerProtocol/backgroundWorkMethods.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "pi-background-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 
-const { PiBackgroundWorkBackend, createPiBackgroundTools } =
-  await import("./backgroundWorkBackend.ts");
+const { createPiBackgroundTools } = await import("./backgroundWorkExecutor.ts");
 const { createPiToolActivation, mergedActiveToolNames } =
   await import("./toolActivation.ts");
-const { BackgroundWorkSupervisor, backgroundWorkSupervisor } =
+const { backgroundWorkSupervisor } =
   await import("../backgroundWork/supervisor.ts");
 const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
@@ -33,6 +29,18 @@ const { childProcessEnv, setChildProcessEnvOverlay } =
   await import("../subprocessEnv.ts");
 const { listSessionArtifacts } =
   await import("../mcp/toolGroups/packRuntime.ts");
+const {
+  answerNextInProcessWorkerCallForTests,
+  inProcessBackgroundWorkForTests,
+} = await import("../workers/inProcessWorker.ts");
+
+/** Every tool admits through the in-process Worker, as an engine on it does. */
+const backgroundWork = inProcessBackgroundWorkForTests();
+
+afterEach(() => {
+  backgroundWorkSupervisor.setActivityRecordedHandler(undefined);
+  backgroundWorkSupervisor.setCompletionRecordedHandler(undefined);
+});
 
 function artifactPath(url: string): string {
   const pathname = new URL(url, "http://localhost").pathname;
@@ -66,39 +74,6 @@ function owner(): string {
   return id;
 }
 
-function eventProxy(): {
-  events: BackgroundWorkBackendEvents;
-  setTarget(target: BackgroundWorkBackendEvents): void;
-} {
-  let target: BackgroundWorkBackendEvents | undefined;
-  return {
-    events: {
-      providerBound(binding: BackgroundWorkProviderBinding) {
-        target?.providerBound(binding);
-      },
-      activity(activity: BackgroundWorkActivity) {
-        target?.activity(activity);
-      },
-      activityRateExceeded(event: BackgroundWorkActivityRateExceeded) {
-        target?.activityRateExceeded(event);
-      },
-      outputCaptured(output: BackgroundWorkOutputCaptured) {
-        target?.outputCaptured(output);
-      },
-      completed(completion: BackgroundWorkCompletion) {
-        target?.completed(completion);
-      },
-    },
-    setTarget(next) {
-      target = next;
-    },
-  };
-}
-
-async function flush(): Promise<void> {
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
-}
-
 class FakeActivityScheduler {
   readonly delays: number[] = [];
   private callbacks: Array<{ callback: () => void; cancelled: boolean }> = [];
@@ -116,24 +91,6 @@ class FakeActivityScheduler {
     if (!next.cancelled) next.callback();
     return true;
   }
-}
-
-function admit(
-  supervisor: InstanceType<typeof BackgroundWorkSupervisor>,
-  ownerSessionId: string,
-  kind: "shell" | "monitor-command" | "monitor-websocket",
-) {
-  serial += 1;
-  const admission = supervisor.admit({
-    ownerSessionId,
-    backend: "host-process",
-    kind,
-    label: `work ${serial}`,
-    sourceRequestId: `source-${serial}`,
-  });
-  assert.equal(admission.admitted, true);
-  if (!admission.admitted) throw new Error("background admission failed");
-  return admission;
 }
 
 class FakeSocket extends EventEmitter {
@@ -173,6 +130,7 @@ test("Plan keeps the existing bash capability but removes monitor", () => {
     session: () => session,
     childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
+    backgroundWork,
   });
   let applied = new Set<string>();
   const activation = createPiToolActivation({
@@ -207,6 +165,7 @@ test("foreground bash delegates to upstream with streaming, cwd, PI identity and
   const tools = createPiBackgroundTools({
     session: () => session,
     childEnv: childProcessEnv,
+    backgroundWork,
     identity: () => ({
       sessionId,
       sessionFile: session.sessionFile!,
@@ -271,6 +230,7 @@ async function shellChildEnvironments(
   const bash = createPiBackgroundTools({
     session: () => session,
     childEnv,
+    backgroundWork,
     identity: () => ({ sessionId }),
   })[0]!;
   const read = (file: string) =>
@@ -385,6 +345,7 @@ test("foreground shadow passes pi shell path and command prefix through", async 
   const bash = createPiBackgroundTools({
     session: () => session,
     childEnv: childProcessEnv,
+    backgroundWork,
     identity: () => ({ sessionId }),
     bashConfig: () => ({
       shellPath: shell,
@@ -412,6 +373,7 @@ test("foreground bash preserves upstream truncation and cancellation cleanup", a
     session: () => session,
     childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
+    backgroundWork,
   })[0]!;
   const truncated = await bash.execute(
     { command: "seq 1 5000" },
@@ -475,6 +437,7 @@ test("background bash returns a PA id and freezes all five PI values and the chi
   const bash = createPiBackgroundTools({
     session: () => session,
     childEnv: childProcessEnv,
+    backgroundWork,
     bashConfig: () => ({
       shellPath: shell,
       commandPrefix: "export PI_BACKGROUND_PREFIX=yes",
@@ -565,6 +528,7 @@ test("command monitor uses the configured shell and command prefix", async () =>
   const monitor = createPiBackgroundTools({
     session: () => session,
     childEnv: childProcessEnv,
+    backgroundWork,
     identity: () => ({ sessionId }),
     bashConfig: () => ({
       shellPath: shell,
@@ -604,6 +568,7 @@ test("a nonzero foreground exit fails the call with its output and exit code", a
     session: () => session,
     childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
+    backgroundWork,
   })[0]!;
   // pi resolves this as an `isError` result; the app contract is a rejection.
   await assert.rejects(
@@ -637,6 +602,7 @@ test("excluded owners keep foreground bash while background admission is denied"
     session: () => session,
     childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
+    backgroundWork,
   })[0]!;
   const foreground = await bash.execute(
     { command: "printf foreground" },
@@ -670,6 +636,7 @@ test("WebSocket monitor reuses public-host SSRF policy before admission", async 
     session: () => session,
     childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
+    backgroundWork,
   })[1]!;
   for (const url of [
     "ws://127.0.0.1:3000/",
@@ -707,6 +674,7 @@ test("persistent monitor freezes timeout_ms and still stops through the supervis
     session: () => session,
     childEnv: childProcessEnv,
     identity: () => ({ sessionId }),
+    backgroundWork,
   })[1]!;
   const result = await monitor.execute(
     {
@@ -729,43 +697,121 @@ test("persistent monitor freezes timeout_ms and still stops through the supervis
   assert.equal(stopped.state, "stopped");
 });
 
+type Executor = NonNullable<
+  Parameters<typeof createPiBackgroundTools>[0]["executor"]
+>;
+
+/** A literal public address: it passes the monitor's host check without DNS, and the fake socket connects nowhere. */
+const PUBLIC_WS_URL = "ws://203.0.113.10/";
+
+const TERMINAL_STATES = new Set([
+  "completed",
+  "failed",
+  "not-started",
+  "stopped",
+  "lost",
+]);
+
+/** Waits up to 5 s for `condition`: reports now cross the worker protocol. */
+async function until(condition: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function terminal(itemId: string): Promise<void> {
+  return until(
+    () => TERMINAL_STATES.has(backgroundWorkStore.getItem(itemId)?.state ?? ""),
+    `${itemId} to end`,
+  );
+}
+
+/** The activity batches the supervisor records for these owners' items. */
+function recordActivity(...owners: string[]): BackgroundWorkActivity[] {
+  const activities: BackgroundWorkActivity[] = [];
+  backgroundWorkSupervisor.setActivityRecordedHandler((item, activity) => {
+    if (owners.includes(item.ownerSessionId)) activities.push(activity);
+  });
+  return activities;
+}
+
+/**
+ * Starts one item on the production path: the tool admits through the
+ * in-process Worker, the server's supervisor launches it on the `host-process`
+ * port, and the Worker's table runs it with `executor`'s operations.
+ */
+async function start(
+  kind: "shell" | "monitor-command" | "monitor-websocket",
+  executor: Executor,
+  input: {
+    ownerSessionId?: string;
+    command?: string;
+    cwd?: string;
+    shellPath?: string;
+  } = {},
+): Promise<{ ownerSessionId: string; itemId: string; state: string }> {
+  const ownerSessionId = input.ownerSessionId ?? owner();
+  const session: ToolSession = {
+    sessionId: ownerSessionId,
+    harness: "pi",
+    agentType: "developer",
+    cwd: input.cwd ?? dataDir,
+  };
+  const shellPath = input.shellPath;
+  const [bash, monitor] = createPiBackgroundTools({
+    session: () => session,
+    childEnv: childProcessEnv,
+    identity: () => ({ sessionId: ownerSessionId }),
+    ...(shellPath !== undefined ? { bashConfig: () => ({ shellPath }) } : {}),
+    backgroundWork,
+    executor,
+  });
+  serial += 1;
+  const ctx = { toolCallId: `start-${serial}`, session };
+  const result =
+    kind === "shell"
+      ? await bash!.execute(
+          { command: input.command ?? "probe", run_in_background: true },
+          ctx,
+        )
+      : await monitor!.execute(
+          {
+            description: `work ${serial}`,
+            timeout_ms: 60_000,
+            persistent: false,
+            ...(kind === "monitor-websocket"
+              ? { ws: { url: PUBLIC_WS_URL } }
+              : { command: input.command ?? "probe" }),
+          },
+          ctx,
+        );
+  const details = result.details as { taskId: string; state: string };
+  return { ownerSessionId, itemId: details.taskId, state: details.state };
+}
+
 test("a background shell command pushes nothing while it runs", async () => {
-  const proxy = eventProxy();
   const operations: BashOperations = {
     exec: (_command, _cwd, options) => {
       options.onData(Buffer.from("one\ntwo\n"));
       return Promise.resolve({ exitCode: 0 });
     },
   };
-  const activities: BackgroundWorkActivity[] = [];
   const scheduler = new FakeActivityScheduler();
-  const backend = new PiBackgroundWorkBackend({
-    operations,
-    events: proxy.events,
-    scheduleActivity: scheduler.schedule,
-  });
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => activities.push(activity),
-  });
-  proxy.setTarget(supervisor);
   const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "shell");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "shell",
-    command: "probe",
-    cwd: dataDir,
-    env: {},
-  });
-  await supervisor.launch(admission);
-  await flush();
+  const activities = recordActivity(ownerSessionId);
+  const { itemId } = await start(
+    "shell",
+    { operations, scheduleActivity: scheduler.schedule },
+    { ownerSessionId },
+  );
+  await terminal(itemId);
   // Not merely unsent: never scheduled, so a chatty server cannot arm a timer
   // per output chunk for the whole time it runs.
   assert.deepEqual(scheduler.delays, []);
   assert.deepEqual(activities, []);
-  const completed = backgroundWorkStore.getItem(admission.item.id);
+  const completed = backgroundWorkStore.getItem(itemId);
   assert.equal(completed?.state, "completed");
   assert.equal(completed?.outcomeSummary, "Exited with code 0");
   // The lines still reached the artifact: the agent reads them when it wants to.
@@ -777,37 +823,22 @@ test("a background shell command pushes nothing while it runs", async () => {
 });
 
 test("monitor completion records bounded activity, terminal counts and evidence", async () => {
-  const proxy = eventProxy();
   const operations: BashOperations = {
     exec: (_command, _cwd, options) => {
       options.onData(Buffer.from("one\ntwo\n"));
       return Promise.resolve({ exitCode: 0 });
     },
   };
-  const activities: BackgroundWorkActivity[] = [];
-  const backend = new PiBackgroundWorkBackend({
-    operations,
-    events: proxy.events,
-  });
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => activities.push(activity),
-  });
-  proxy.setTarget(supervisor);
   const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "monitor-command");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "monitor-command",
-    command: "probe",
-    cwd: dataDir,
-    env: {},
-  });
-  const running = await supervisor.launch(admission);
-  assert.equal(running?.state, "running");
-  await flush();
-  const completed = backgroundWorkStore.getItem(admission.item.id);
+  const activities = recordActivity(ownerSessionId);
+  const running = await start(
+    "monitor-command",
+    { operations },
+    { ownerSessionId },
+  );
+  assert.equal(running.state, "running");
+  await terminal(running.itemId);
+  const completed = backgroundWorkStore.getItem(running.itemId);
   assert.equal(completed?.state, "completed");
   assert.equal(completed?.outcomeSummary, "Exited with code 0");
   assert.ok(completed?.evidence?.artifactId);
@@ -819,7 +850,6 @@ test("monitor completion records bounded activity, terminal counts and evidence"
 });
 
 test("capture writer preserves the real final 32 KiB after its bounded head", async () => {
-  const proxy = eventProxy();
   const output = Buffer.from(
     Array.from(
       { length: 40_000 },
@@ -833,25 +863,13 @@ test("capture writer preserves the real final 32 KiB after its bounded head", as
       return Promise.resolve({ exitCode: 0 });
     },
   };
-  const backend = new PiBackgroundWorkBackend({
-    operations,
-    events: proxy.events,
-  });
-  const supervisor = new BackgroundWorkSupervisor({ ports: [backend] });
-  proxy.setTarget(supervisor);
-  const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "shell");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "shell",
-    command: "noisy",
-    cwd: dataDir,
-    env: {},
-  });
-  await supervisor.launch(admission);
-  await flush();
-  const item = backgroundWorkStore.getItem(admission.item.id);
+  const { ownerSessionId, itemId } = await start(
+    "shell",
+    { operations },
+    { command: "noisy" },
+  );
+  await terminal(itemId);
+  const item = backgroundWorkStore.getItem(itemId);
   assert.equal(item?.evidence?.originalBytes, output.length);
   assert.equal(item?.evidence?.truncated, true);
   assert.match(
@@ -868,7 +886,6 @@ test("capture writer preserves the real final 32 KiB after its bounded head", as
 });
 
 test("activity bounding reports the exact dropped-line count", async () => {
-  const proxy = eventProxy();
   const operations: BashOperations = {
     exec: (_command, _cwd, options) => {
       options.onData(
@@ -881,39 +898,24 @@ test("activity bounding reports the exact dropped-line count", async () => {
       return Promise.resolve({ exitCode: 0 });
     },
   };
-  const activities: BackgroundWorkActivity[] = [];
-  const backend = new PiBackgroundWorkBackend({
-    operations,
-    events: proxy.events,
-  });
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => activities.push(activity),
-  });
-  proxy.setTarget(supervisor);
   const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "monitor-command");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "monitor-command",
-    command: "noisy",
-    cwd: dataDir,
-    env: {},
-  });
-  await supervisor.launch(admission);
-  await flush();
+  const activities = recordActivity(ownerSessionId);
+  const { itemId } = await start(
+    "monitor-command",
+    { operations },
+    { ownerSessionId, command: "noisy" },
+  );
+  await terminal(itemId);
   assert.equal(activities.length, 1);
   assert.equal(activities[0]?.lines.length, 100);
   assert.equal(activities[0]?.droppedEventCount, 3);
   assert.match(
-    backgroundWorkStore.getItem(admission.item.id)?.outcomeSummary ?? "",
+    backgroundWorkStore.getItem(itemId)?.outcomeSummary ?? "",
     /^Exited with code 0 · 3 activity event\(s\) dropped/,
   );
 });
 
 test("an unfiltered monitor is stopped once it exceeds its notification rate", async () => {
-  const proxy = eventProxy();
   const scheduler = new FakeActivityScheduler();
   let onData!: (data: Buffer) => void;
   let rejectRun!: (error: Error) => void;
@@ -930,52 +932,36 @@ test("an unfiltered monitor is stopped once it exceeds its notification rate", a
       });
     },
   };
-  const activities: BackgroundWorkActivity[] = [];
   // One window: everything below happens at the same instant.
   const clock = 1_000;
-  const backend = new PiBackgroundWorkBackend({
-    operations,
-    events: proxy.events,
-    scheduleActivity: scheduler.schedule,
-    now: () => clock,
-  });
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => activities.push(activity),
-  });
-  proxy.setTarget(supervisor);
   const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "monitor-command");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "monitor-command",
-    command: "chatty",
-    cwd: dataDir,
-    env: {},
-  });
-  await supervisor.launch(admission);
-  await flush();
+  const activities = recordActivity(ownerSessionId);
+  const { itemId } = await start(
+    "monitor-command",
+    { operations, scheduleActivity: scheduler.schedule, now: () => clock },
+    { ownerSessionId, command: "chatty" },
+  );
+  await until(() => onData !== undefined, "the operation to start");
   // 200 flushes inside one window, against a budget of 20.
   for (let index = 0; index < 200; index += 1) {
     onData(Buffer.from(`line-${index}\n`));
     scheduler.runNext();
   }
+  // The trip's Stop crosses the protocol; the run ends once it lands.
+  await terminal(itemId);
   rejectRun(new Error("aborted"));
-  await flush();
   assert.equal(activities.length, 20);
   // Batched by arrival, not by a clock tick the agent waits out.
   assert.ok(scheduler.delays.every((delay) => delay === 200));
   // The item is Stopped, not merely muted: a live monitor nobody hears from is
   // indistinguishable from one with nothing to say.
-  const item = backgroundWorkStore.getItem(admission.item.id);
+  const item = backgroundWorkStore.getItem(itemId);
   assert.equal(item?.state, "stopped");
   assert.equal(item?.terminalReason, "stopped-for-event-rate");
   assert.match(item?.stopReason ?? "", /Restart it with a filter/);
 });
 
 test("a monitor under its rate keeps streaming and is never stopped", async () => {
-  const proxy = eventProxy();
   const scheduler = new FakeActivityScheduler();
   let onData!: (data: Buffer) => void;
   const operations: BashOperations = {
@@ -990,31 +976,15 @@ test("a monitor under its rate keeps streaming and is never stopped", async () =
       });
     },
   };
-  const activities: BackgroundWorkActivity[] = [];
   let clock = 1_000;
-  const backend = new PiBackgroundWorkBackend({
-    operations,
-    events: proxy.events,
-    scheduleActivity: scheduler.schedule,
-    now: () => clock,
-  });
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => activities.push(activity),
-  });
-  proxy.setTarget(supervisor);
   const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "monitor-command");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "monitor-command",
-    command: "filtered",
-    cwd: dataDir,
-    env: {},
-  });
-  await supervisor.launch(admission);
-  await flush();
+  const activities = recordActivity(ownerSessionId);
+  const { itemId } = await start(
+    "monitor-command",
+    { operations, scheduleActivity: scheduler.schedule, now: () => clock },
+    { ownerSessionId, command: "filtered" },
+  );
+  await until(() => onData !== undefined, "the operation to start");
   // Ten notifications per window, sustained over six windows: well past the old
   // 120-wakeup budget, and none of it trips the rate.
   for (let index = 0; index < 60; index += 1) {
@@ -1022,16 +992,19 @@ test("a monitor under its rate keeps streaming and is never stopped", async () =
     onData(Buffer.from(`ERROR ${index}\n`));
     scheduler.runNext();
   }
-  await flush();
+  // Every batch is recorded while the item still runs.
+  await until(() => activities.length >= 60, "60 activity records");
   assert.equal(activities.length, 60);
-  assert.equal(
-    backgroundWorkStore.getItem(admission.item.id)?.state,
-    "running",
-  );
+  assert.equal(backgroundWorkStore.getItem(itemId)?.state, "running");
+  await backgroundWorkSupervisor.stopOne({
+    itemId,
+    ownerSessionId,
+    sourceRequestId: `under-rate-cleanup-${itemId}`,
+    reason: "test cleanup",
+  });
 });
 
 test("targeted Stop aborts the exact process operation", async () => {
-  const proxy = eventProxy();
   let aborted = false;
   const operations: BashOperations = {
     exec: (_command, _cwd, options) =>
@@ -1046,26 +1019,13 @@ test("targeted Stop aborts the exact process operation", async () => {
         );
       }),
   };
-  const backend = new PiBackgroundWorkBackend({
-    operations,
-    events: proxy.events,
-  });
-  const supervisor = new BackgroundWorkSupervisor({ ports: [backend] });
-  proxy.setTarget(supervisor);
-  const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "shell");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "shell",
-    command: "long",
-    cwd: dataDir,
-    env: {},
-  });
-  await supervisor.launch(admission);
-  await flush();
-  const stopped = await supervisor.stopOne({
-    itemId: admission.item.id,
+  const { ownerSessionId, itemId } = await start(
+    "shell",
+    { operations },
+    { command: "long" },
+  );
+  const stopped = await backgroundWorkSupervisor.stopOne({
+    itemId,
     ownerSessionId,
     sourceRequestId: "stop-process",
     reason: "test Stop",
@@ -1074,38 +1034,86 @@ test("targeted Stop aborts the exact process operation", async () => {
   assert.equal(stopped.state, "stopped");
 });
 
+test("a Stop is answered only after the item's output evidence is recorded", async () => {
+  const operations: BashOperations = {
+    exec: (_command, _cwd, options) => {
+      options.onData(Buffer.from("held line\n"));
+      return new Promise((_resolve, reject) => {
+        options.signal?.addEventListener(
+          "abort",
+          () => reject(new Error("aborted")),
+          { once: true },
+        );
+      });
+    },
+  };
+  const { ownerSessionId, itemId } = await start(
+    "monitor-command",
+    { operations },
+    { command: "held" },
+  );
+  // Hold the server's copy of the output file on the Worker.
+  let entered!: () => void;
+  const opening = new Promise<void>((resolve) => (entered = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const disarm = answerNextInProcessWorkerCallForTests(
+    "files.open",
+    async (payload, signal, real) => {
+      entered();
+      await gate;
+      return real(payload, signal);
+    },
+  );
+  try {
+    let settled = false;
+    const stopping = backgroundWorkSupervisor
+      .stopOne({
+        itemId,
+        ownerSessionId,
+        sourceRequestId: `held-stop-${itemId}`,
+        reason: "test held Stop",
+      })
+      .finally(() => (settled = true));
+    await opening;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(settled, false, "the Stop waits for the output report");
+    assert.equal(
+      TERMINAL_STATES.has(backgroundWorkStore.getItem(itemId)?.state ?? ""),
+      false,
+    );
+    release();
+    const stopped = await stopping;
+    assert.equal(stopped.state, "stopped");
+    const item = backgroundWorkStore.getItem(itemId);
+    const artifact = listSessionArtifacts(ownerSessionId).find(
+      (candidate) => candidate.id === item?.evidence?.artifactId,
+    );
+    assert.ok(artifact, "the evidence names an artifact that still exists");
+    assert.match(readFileSync(artifactPath(artifact.url), "utf8"), /held line/);
+  } finally {
+    release();
+    disarm();
+  }
+});
+
 test("background diagnostics distinguish cwd, shell and timeout failures", async () => {
   async function runFailure(input: {
     cwd: string;
     shellPath?: string;
     operations?: BashOperations;
   }) {
-    const proxy = eventProxy();
-    let terminal!: () => void;
-    const completed = new Promise<void>((resolve) => (terminal = resolve));
-    const backend = new PiBackgroundWorkBackend({
-      events: proxy.events,
-      ...(input.operations ? { operations: input.operations } : {}),
-    });
-    const supervisor = new BackgroundWorkSupervisor({
-      ports: [backend],
-      completionRecorded: () => terminal(),
-    });
-    proxy.setTarget(supervisor);
-    const ownerSessionId = owner();
-    const admission = admit(supervisor, ownerSessionId, "shell");
-    backend.reserve(admission.item.id, {
-      type: "process",
-      ownerSessionId,
-      kind: "shell",
-      command: "printf unreachable",
-      cwd: input.cwd,
-      env: {},
-      ...(input.shellPath ? { shellPath: input.shellPath } : {}),
-    });
-    await supervisor.launch(admission);
-    await completed;
-    return backgroundWorkStore.getItem(admission.item.id)?.outcomeSummary ?? "";
+    const { itemId } = await start(
+      "shell",
+      input.operations ? { operations: input.operations } : {},
+      {
+        command: "printf unreachable",
+        cwd: input.cwd,
+        ...(input.shellPath ? { shellPath: input.shellPath } : {}),
+      },
+    );
+    await terminal(itemId);
+    return backgroundWorkStore.getItem(itemId)?.outcomeSummary ?? "";
   }
 
   const missingCwd = join(dataDir, `missing-cwd-${serial}`);
@@ -1133,88 +1141,54 @@ test("background diagnostics distinguish cwd, shell and timeout failures", async
   );
 });
 
+const MICROTASK_ACTIVITY: Executor["scheduleActivity"] = (_delay, callback) => {
+  queueMicrotask(callback);
+  return { cancel: () => undefined };
+};
+
 test("natural leader exit reaps descendants before terminal completion", async () => {
-  const proxy = eventProxy();
-  let childPid: number | undefined;
-  const backend = new PiBackgroundWorkBackend({
-    events: proxy.events,
-    scheduleActivity: (_delay, callback) => {
-      queueMicrotask(callback);
-      return { cancel: () => undefined };
-    },
-  });
-  let terminal!: () => void;
-  const completed = new Promise<void>((resolve) => (terminal = resolve));
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => {
-      const line = activity.lines.find((candidate) => /^\d+$/.test(candidate));
-      if (line) childPid = Number(line);
-    },
-    completionRecorded: () => terminal(),
-  });
-  proxy.setTarget(supervisor);
   const ownerSessionId = owner();
+  const activities = recordActivity(ownerSessionId);
   // A monitor, because the pids reach this test through the activity stream that
   // only a monitor has. The subject is process-group reaping, which is identical
   // for both kinds.
-  const admission = admit(supervisor, ownerSessionId, "monitor-command");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "monitor-command",
-    command: "sh -c 'sleep 300 & echo $!; exit 0'",
-    cwd: dataDir,
-    env: process.env,
-  });
-  await supervisor.launch(admission);
-  await completed;
-  assert.ok(childPid);
-  assert.equal(
-    backgroundWorkStore.getItem(admission.item.id)?.state,
-    "completed",
+  const { itemId } = await start(
+    "monitor-command",
+    { scheduleActivity: MICROTASK_ACTIVITY },
+    { ownerSessionId, command: "sh -c 'sleep 300 & echo $!; exit 0'" },
   );
+  await terminal(itemId);
+  const line = activities
+    .flatMap((batch) => batch.lines)
+    .find((candidate) => /^\d+$/.test(candidate));
+  const childPid = line ? Number(line) : undefined;
+  assert.ok(childPid);
+  assert.equal(backgroundWorkStore.getItem(itemId)?.state, "completed");
   await assertProcessGone(childPid!);
 });
 
 test("the supervised local operation Stop terminates the process group", async () => {
-  const proxy = eventProxy();
-  let reportPids!: (line: string) => void;
-  const pids = new Promise<string>((resolve) => (reportPids = resolve));
-  const backend = new PiBackgroundWorkBackend({
-    events: proxy.events,
-    scheduleActivity: (_delay, callback) => {
-      queueMicrotask(callback);
-      return { cancel: () => undefined };
-    },
-  });
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => {
-      const line = activity.lines.find((candidate) =>
-        /^\d+ \d+$/.test(candidate),
-      );
-      if (line) reportPids(line);
-    },
-  });
-  proxy.setTarget(supervisor);
   const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "monitor-command");
-  backend.reserve(admission.item.id, {
-    type: "process",
-    ownerSessionId,
-    kind: "monitor-command",
-    command:
-      'sh -c \'sleep 300 & child=$!; printf "%s %s\\n" "$$" "$child"; wait "$child"\'',
-    cwd: dataDir,
-    env: process.env,
-  });
-  await supervisor.launch(admission);
-  const [leader, child] = (await pids).split(" ").map(Number);
+  const activities = recordActivity(ownerSessionId);
+  const pidLine = () =>
+    activities
+      .flatMap((batch) => batch.lines)
+      .find((candidate) => /^\d+ \d+$/.test(candidate));
+  const { itemId } = await start(
+    "monitor-command",
+    { scheduleActivity: MICROTASK_ACTIVITY },
+    {
+      ownerSessionId,
+      command:
+        'sh -c \'sleep 300 & child=$!; printf "%s %s\\n" "$$" "$child"; wait "$child"\'',
+    },
+  );
+  await until(() => pidLine() !== undefined, "the process ids");
+  const [leader, child] = pidLine()!.split(" ").map(Number);
   assert.equal(processIsRunning(leader!), true);
   assert.equal(processIsRunning(child!), true);
-  const stopped = await supervisor.stopOne({
-    itemId: admission.item.id,
+  const stopped = await backgroundWorkSupervisor.stopOne({
+    itemId,
     ownerSessionId,
     sourceRequestId: "stop-process-group",
     reason: "test process-group Stop",
@@ -1251,50 +1225,32 @@ async function assertProcessGone(pid: number): Promise<void> {
 }
 
 test("WebSocket monitor emits activity and Stop closes only its owned socket", async () => {
-  const proxy = eventProxy();
   const sockets: FakeSocket[] = [];
-  const activities: BackgroundWorkActivity[] = [];
-  const backend = new PiBackgroundWorkBackend({
+  const executor: Executor = {
     createSocket: () => {
       const socket = new FakeSocket();
       sockets.push(socket);
       return socket;
     },
-    events: proxy.events,
-    scheduleActivity: (_delay, callback) => {
-      queueMicrotask(callback);
-      return { cancel: () => undefined };
-    },
-  });
-  const supervisor = new BackgroundWorkSupervisor({
-    ports: [backend],
-    activityRecorded: (_item, activity) => activities.push(activity),
-  });
-  proxy.setTarget(supervisor);
+    scheduleActivity: MICROTASK_ACTIVITY,
+  };
   const firstOwner = owner();
   const secondOwner = owner();
-  const first = admit(supervisor, firstOwner, "monitor-websocket");
-  const second = admit(supervisor, secondOwner, "monitor-websocket");
-  for (const [admission, ownerSessionId] of [
-    [first, firstOwner],
-    [second, secondOwner],
-  ] as const) {
-    backend.reserve(admission.item.id, {
-      type: "socket",
-      ownerSessionId,
-      kind: "monitor-websocket",
-      url: "ws://probe.invalid",
-    });
-    await supervisor.launch(admission);
-  }
+  const activities = recordActivity(firstOwner, secondOwner);
+  const first = await start("monitor-websocket", executor, {
+    ownerSessionId: firstOwner,
+  });
+  const second = await start("monitor-websocket", executor, {
+    ownerSessionId: secondOwner,
+  });
   sockets[0]!.emit("message", Buffer.from("changed\n"));
-  await flush();
+  await until(() => activities.length > 0, "the socket's activity");
   assert.deepEqual(
     activities.flatMap((batch) => batch.lines),
     ["changed"],
   );
-  const stopped = await supervisor.stopOne({
-    itemId: first.item.id,
+  const stopped = await backgroundWorkSupervisor.stopOne({
+    itemId: first.itemId,
     ownerSessionId: firstOwner,
     sourceRequestId: "stop-socket",
     reason: "test Stop",
@@ -1303,37 +1259,99 @@ test("WebSocket monitor emits activity and Stop closes only its owned socket", a
   assert.equal(sockets[0]!.closeCalls, 1);
   assert.equal(sockets[1]!.closeCalls, 0);
   sockets[1]!.emit("close");
-  await flush();
-  assert.equal(backgroundWorkStore.getItem(second.item.id)?.state, "completed");
+  await terminal(second.itemId);
+  assert.equal(backgroundWorkStore.getItem(second.itemId)?.state, "completed");
 });
 
 test("a WebSocket monitor survives the second error Bun emits for one refused connection", async () => {
-  const proxy = eventProxy();
   const sockets: FakeSocket[] = [];
-  const backend = new PiBackgroundWorkBackend({
+  const { itemId } = await start("monitor-websocket", {
     createSocket: () => {
       const socket = new FakeSocket();
       sockets.push(socket);
       return socket;
     },
-    events: proxy.events,
   });
-  const supervisor = new BackgroundWorkSupervisor({ ports: [backend] });
-  proxy.setTarget(supervisor);
-  const ownerSessionId = owner();
-  const admission = admit(supervisor, ownerSessionId, "monitor-websocket");
-  backend.reserve(admission.item.id, {
-    type: "socket",
-    ownerSessionId,
-    kind: "monitor-websocket",
-    url: "ws://127.0.0.1:1",
-  });
-  await supervisor.launch(admission);
   const refused = new Error("WebSocket connection failed: Failed to connect");
   // An "error" with no listener throws synchronously from `emit`.
   sockets[0]!.emit("error", refused);
   sockets[0]!.emit("error", refused);
   sockets[0]!.emit("close");
-  await flush();
-  assert.equal(backgroundWorkStore.getItem(admission.item.id)?.state, "failed");
+  await terminal(itemId);
+  assert.equal(backgroundWorkStore.getItem(itemId)?.state, "failed");
+});
+
+test("a runner reports its item's activity, output file and completion in order", async () => {
+  // Mechanics only: a recording admitter launches the runner directly; no row
+  // or artifact exists, and the reporter reads the file before it is removed.
+  const reports: Array<[string, unknown]> = [];
+  let launched!: Promise<void>;
+  const recording: BackgroundWorkAdmitter = {
+    async admit(request, runner) {
+      const itemId = "bgw_direct";
+      const started = await runner.launch(
+        {
+          target: {
+            itemId,
+            ownerSessionId: request.sessionId,
+            kind: runner.kind,
+          },
+          deadlineAt: Date.now() + 60_000,
+          emptyHostGraceMs: 0,
+        },
+        {
+          activity: (activity) => reports.push(["activity", activity.lines]),
+          rateExceeded: (event) => reports.push(["rateExceeded", event]),
+          output: async (output: BackgroundWorkOutputReport) => {
+            reports.push([
+              "output",
+              output.file ? readFileSync(output.file) : output,
+            ]);
+          },
+          completed: (completion) =>
+            reports.push(["completed", completion.outcomeSummary]),
+        },
+      );
+      assert.equal(started.launched, true);
+      if (started.launched) launched = started.run.done;
+      return { admitted: true, itemId, state: "running", reused: false };
+    },
+  };
+  const sessionId = owner();
+  const session: ToolSession = {
+    sessionId,
+    harness: "pi",
+    agentType: "developer",
+    cwd: dataDir,
+  };
+  const monitor = createPiBackgroundTools({
+    session: () => session,
+    childEnv: childProcessEnv,
+    identity: () => ({ sessionId }),
+    backgroundWork: recording,
+    executor: {
+      operations: {
+        exec: (_command, _cwd, options) => {
+          options.onData(Buffer.from([0x61, 0x0a, 0xc3]));
+          options.onData(Buffer.from([0xa9, 0x0a]));
+          return Promise.resolve({ exitCode: 0 });
+        },
+      },
+    },
+  })[1]!;
+  await monitor.execute(
+    {
+      description: "direct runner",
+      timeout_ms: 1_000,
+      persistent: false,
+      command: "direct",
+    },
+    { toolCallId: `direct-${serial}`, session },
+  );
+  await launched;
+  assert.deepEqual(reports, [
+    ["activity", ["a", "é"]],
+    ["output", Buffer.from([0x61, 0x0a, 0xc3, 0xa9, 0x0a])],
+    ["completed", "Exited with code 0"],
+  ]);
 });

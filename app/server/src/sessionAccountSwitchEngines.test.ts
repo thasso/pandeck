@@ -240,7 +240,9 @@ test.each([
       let backgroundPid: number | undefined;
       if (mode === "background") {
         const { createPiBackgroundTools } =
-          await import("./piSdk/backgroundWorkBackend.ts");
+          await import("./piSdk/backgroundWorkExecutor.ts");
+        const { inProcessBackgroundWorkForTests } =
+          await import("./workers/inProcessWorker.ts");
         const { childProcessEnv } = await import("./subprocessEnv.ts");
         updateSettings({
           backgroundWork: { ...getSettings().backgroundWork, enabled: true },
@@ -255,6 +257,7 @@ test.each([
           session: () => toolSession,
           childEnv: childProcessEnv,
           identity: () => ({ sessionId: id!, sessionFile: file }),
+          backgroundWork: inProcessBackgroundWorkForTests(),
         })[0]!;
         const marker = join(tmp, `background-pid-${id}`);
         await bash.execute(

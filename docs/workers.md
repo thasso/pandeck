@@ -216,18 +216,19 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.8` (`1.0` plus the file methods, `1.2`'s path
+What runs today is protocol `1.9` (`1.0` plus the file methods, `1.2`'s path
 methods for checkout reads, `1.3`'s `files.readlink` and inspect `mode` for the
 workflows' reads, `1.4`'s watch methods for the worktree watcher, `1.5`'s
 lifecycle methods for creating, removing and provisioning checkouts, `1.6`'s
 app-tool methods for interactive sessions' app tools, `1.7`'s session-hook
 methods for their permission and hook decisions and output artifacts, and
-`1.8`'s engine methods for interactive pi sessions' engines), between the server
-and the in-process Worker. The code lives in `app/server/src/workerProtocol/`
-(the protocol), `worker/` (the Worker's side, which imports no server state) and
-`workers/` (the server's side and placement); `workerBoundary.test.ts` keeps
-that split. The protocol stays out of `app/shared/`: the web client never speaks
-it.
+`1.8`'s engine methods for interactive pi sessions' engines, and `1.9`'s
+background-work and skill methods for those engines' background work and frozen
+skills), between the server and the in-process Worker. The code lives in
+`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
+which imports no server state) and `workers/` (the server's side and placement);
+`workerBoundary.test.ts` keeps that split. The protocol stays out of
+`app/shared/`: the web client never speaks it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -721,18 +722,18 @@ it.
     gate → `onExecute` → execute: its `onExecute` notes the use on the engine
     (`markToolUsed`), so a Plan denial never counts as a use and a failed run
     still does.
-  - The W9c inventory: what the opener still reads in the server process,
-    exactly two reaches, both W9c-2's (Task-1313). `./options.ts` materializes
-    the frozen skills from the skill library before every loader reload, and
-    `./backgroundWorkBackend.ts` holds admission and the backend bridge. Its
-    other imports are pure or the engine's own: `../config.ts`,
-    `../mcp/tool.ts`, `../tools/toolPolicy.ts`,
-    `../agents/agentDefinitionPolicy.ts`, `../sessionStorage.ts`,
+  - The opener reads no server state. Since W9c-2 (below) skills and background
+    work reach the server only through the engine's Worker, and its imports are
+    pure or the engine's own: `../config.ts`, `../mcp/tool.ts`,
+    `../tools/toolPolicy.ts`, `../agents/agentDefinitionPolicy.ts`,
+    `../sessionStorage.ts`, `./options.ts`, `./backgroundWorkExecutor.ts`,
     `./sessionOpen.ts`, `./forkOrigin.ts`, `./agentToolAdapter.ts`,
     `./compactionWindow.ts`, `./toolActivation.ts`, `./toolPayloadProbe.ts` and
     `./piEngine.ts`. `harnessBoundary.test.ts` ("the pi engine opener reaches
-    only the pinned server modules") pins both lists; a new reach is a plan
-    change.
+    only the pinned server modules") pins the list, and its companion pins that
+    `./options.ts` and `./backgroundWorkExecutor.ts` import neither the
+    supervisor, the background-work store, output capture nor the skill library
+    and materializer; a new reach is a plan change.
 
 - **pi engine start resolution (W9c-1).** Everything the server owns that the
   engine reads at open is resolved before the open, into the spec, by
@@ -841,6 +842,56 @@ it.
     arrive in JSON form, as for app tools (W7); the transcript is held twice, in
     the engine and in the server's mirror; a `message_update` carries pi's whole
     partial message.
+
+- **pi background work and skills (W9c-2).** A pi engine's background `bash` and
+  `monitor` work executes on the engine's Worker, and its frozen skills are
+  materialized by the server, both through protocol `1.9`
+  (`workerProtocol/backgroundWorkMethods.ts`, `skillMethods.ts`), which adds
+  nine methods and changes no earlier method's meaning, payload or failure
+  shape. The server keeps admission, the row, Stop and output evidence; the
+  Worker's table (`worker/backgroundWork.ts`) knows no harness and runs what an
+  engine hands it (`piSdk/backgroundWorkExecutor.ts`).
+  - `backgroundWork.admit` (Worker → server) carries the tool's admission and a
+    launch key the Worker minted, its runner reserved under that key until the
+    answer settles. The server admits through the supervisor (so
+    `admitBackgroundWork` stays the only creation path) and, for a new item,
+    launches it in the same span: the `host-process` port, registered at the
+    first admission, sends `backgroundWork.launch { launchKey, request }` on the
+    asking connection. The answer is today's admission outcome (denied with its
+    message, or the row's id, state, reuse, intent and launch summary), from
+    which the tool builds today's texts.
+  - `backgroundWork.stop` and `backgroundWork.stopAll` (server → Worker) go to
+    the owner's Worker by placement. They act only on items the table holds for
+    the named owner (Stop-all only on the ids it reserved) and answer once each
+    item's work is done and its reports have settled, so an item's output
+    evidence always precedes its Stop answer. Today's texts answer a launch
+    without its reservation and a Stop of an item not held for that owner.
+  - Four item reports (Worker → server): `activity`, `rateExceeded`, `output`
+    (`{ file }` or `{ writeFailed }`, with the head cap's `originalBytes` and
+    `truncated`) and `completed`. One item's reports go out in order, each after
+    the previous answer, the first only once its admission was answered, so the
+    row is running before any report lands; a failed report is logged and
+    dropped. The server copies an output file from the Worker through
+    `files.open` (`workers/copyFromWorker.ts`) and captures it there, where the
+    artifact store lives; an unreadable file is `output-path-unavailable`.
+  - `skills.materialize { names }` (Worker → server) materializes a frozen skill
+    set into its content-addressed runtime before every loader reload; the spec
+    carries that runtime's `skillsDir`, which the server resolves. A set it
+    cannot materialize fails `skills_unavailable` with the materializer's
+    message, which option construction surfaces as before.
+  - Refusals, before any effect: an admission for a session, or a report for an
+    item, not placed on the asking Worker (or not a `host-process` row) fails
+    `not_placed`; a malformed request fails `invalid_params`.
+  - Connection end. The table stops every held item and drops every reservation;
+    their reports are lost with the connection, and the supervisor's deadline
+    and Stop paths settle the rows as they do for any unanswered backend.
+  - Test seams: `inProcessBackgroundWorkForTests` admits through the current
+    in-process Worker; `backgroundWorkCallsServedForTests` and
+    `skillMaterializationsServedForTests` count what the server served.
+  - Known limits: an in-process transport fault mid-request is not modelled
+    beyond the connection's end; a report lost with the connection leaves the
+    row to its deadline; output crosses twice (written on the Worker, copied to
+    the server).
 
 - **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
   answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and
@@ -1211,7 +1262,7 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W9b-1 | pi engine construction behind one opener over a JSON open spec, its child env injected (Task-1304)                           | landed  |
 | W9b-2 | The engine host protocol: the Worker's engine table, the handle's mirror, the opener behind the Worker (Task-1308)           | landed  |
 | W9c-1 | pi engine start resolved on the server: spec records, model port, integration gates as a command, mirrored tools (Task-1305) | landed  |
-| W9c-2 | The pi engine's remaining server reach: skill materialization and the background-work backend bridge (Task-1313)             | planned |
+| W9c-2 | Protocol 1.9; the pi engine's remaining server reach: skill materialization and the background-work bridge (Task-1313)       | landed  |
 | W10   | The engine host for Claude sessions (Task-1177)                                                                              | planned |
 | W11   | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178)               | landed  |
 

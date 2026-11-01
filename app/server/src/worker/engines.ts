@@ -72,6 +72,8 @@ export function engineHandlers(options: {
   childEnv: () => NodeJS.ProcessEnv;
   callAppTool: AppToolCaller;
   persistOutput: HostedEngineHost["persistOutput"];
+  backgroundWork: HostedEngineHost["backgroundWork"];
+  materializeSkills: HostedEngineHost["materializeSkills"];
   deliver: (payload: Payload) => Promise<Payload>;
 }): {
   handlers: MethodHandlers;
@@ -124,6 +126,8 @@ export function engineHandlers(options: {
       return options.callAppTool(request, callOptions);
     },
     persistOutput: options.persistOutput,
+    backgroundWork: options.backgroundWork,
+    materializeSkills: options.materializeSkills,
   });
 
   const handlers: MethodHandlers = {

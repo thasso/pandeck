@@ -66,7 +66,7 @@ function frameBytes(): Buffer {
         text: { message: AWKWARD },
       },
     ),
-    encodeControlFrame({ type: "welcome", version: "1.8" }),
+    encodeControlFrame({ type: "welcome", version: "1.9" }),
   ]);
 }
 

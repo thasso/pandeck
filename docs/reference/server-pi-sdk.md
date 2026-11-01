@@ -90,8 +90,9 @@ and headless one-shot utility runs.
   respect `.gitignore`, unlike the `bash` searches they replace: generated trees
   (`assistant-data/`, `node_modules/`, `app/web/dist/`) are invisible to them,
   and a session that must look there still needs the shell.
-- `backgroundWorkBackend.ts` owns pi's `host-process` backend and the coding
-  personas' eager `bash`/`monitor` provider-native shadow definitions.
+- `backgroundWorkExecutor.ts` executes pi's `host-process` work on the engine's
+  Worker (the server's port is `workers/backgroundWorkHost.ts`) and owns the
+  coding personas' eager `bash`/`monitor` provider-native shadow definitions.
   Foreground Bash delegates to a fresh upstream `createBashTool` with the same
   cwd, streaming, truncation, timeout, cancellation and process-tree cleanup
   behavior. It passes through pi's shell path and command prefix; its spawn hook
@@ -253,7 +254,7 @@ and headless one-shot utility runs.
   characters between a CI container and a developer checkout) and shift on a pi
   version bump, which pnpm encodes in the store path.
 - `toolBinaries.ts` owns pi's managed bin dir (`piBinDir()`, which
-  `backgroundWorkBackend.ts` also prepends to PATH) and the boot-time links of
+  `backgroundWorkExecutor.ts` also prepends to PATH) and the boot-time links of
   the host's `rg`/`fd` into it. With those links in place, pi's grep/find stop
   probing PATH with a synchronous fork on every call
   (`docs/child-processes.md`). The directory comes from pi's process-wide agent
