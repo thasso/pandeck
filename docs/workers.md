@@ -1102,12 +1102,12 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W10   | The engine host for Claude sessions (Task-1177)                                                                           | planned |
 | W11   | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178)            | landed  |
 
-W9a keeps the handle's failed-turn continuation synchronous up to pi's own
-promise, so a transcript write that throws still reaches `PiAdapter.prompt`'s
-catch. W9b-2's protocol makes that continuation asynchronous, so it has to keep
-the route from account recovery through `PiAdapter.prompt`'s drive and
-`PiLiveSession.continueFailedTurn` to the engine's `appendContextEdit` write
-reporting its error the same way.
+The handle's failed-turn continuation reports asynchronously, ready for W9b-2's
+protocol: a transcript write that fails in the engine's `appendContextEdit`
+rejects the run's disposition, and pi is never called. `PiLiveSession`'s
+`continueFailedTurn` marks the run only once the disposition resolves, so on the
+route from account recovery the failure reaches `PiAdapter.prompt` as its
+rejection, with no banner, no failed run and no synthetic turn.
 
 `workerBoundary.test.ts` asserts that no module of the checkout family imports
 `node:fs`, that `gitExec.ts` and `checkoutFileAccess.ts` export no read or

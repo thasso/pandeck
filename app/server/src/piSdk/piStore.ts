@@ -636,7 +636,8 @@ class PiSessionStore {
   /**
    * Apply a live mode flip: the server's gate at once, then the engine's own
    * copy, on whichever engine the session holds by then. A refused flip puts
-   * the gate back, unless a later flip has moved it on.
+   * the gate back, unless a later flip has moved it on (the live session runs
+   * its flips one at a time, so none is in flight then).
    */
   private async applySessionMode(
     key: string,

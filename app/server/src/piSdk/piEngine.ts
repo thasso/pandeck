@@ -65,6 +65,17 @@ type PiCommitSessionManager = ToolSessionManager &
 type PiClearContextResult =
   { kind: "skipped" } | { kind: "cleared"; tokensBefore?: number };
 
+/**
+ * What the engine did with a submit or a continuation, and when pi settled it.
+ * `disposition` precedes the turn's first event and rejects when the engine
+ * did nothing; `settled` is a steer's acceptance, or a turn's end. Both are
+ * handled inside the engine, so an unread rejection is never unhandled.
+ */
+interface PiEngineRun {
+  disposition: Promise<"steered" | "started">;
+  settled: Promise<void>;
+}
+
 export interface PiEngineHandle {
   readonly sessionId: string;
   /** Read per access: canonicalization may retarget the file. */
@@ -89,18 +100,22 @@ export interface PiEngineHandle {
   /**
    * Start a turn, or steer the running one, as the caller decided in its own
    * synchronous span. `steerOnly` is carried for an engine whose streaming
-   * state the caller read late; the local engine needs no reconciliation.
-   * Settles as pi's call does: a steer on pi's acceptance. `userTurnIdleMs`
-   * is how long the session sat idle before this user turn; the engine prunes
-   * never-used tool loads first when it crossed the cold boundary.
+   * state the caller read late; the local engine needs no reconciliation, so
+   * its disposition is always the caller's `steer`. `settled` settles as pi's
+   * call does: a steer on pi's acceptance. `userTurnIdleMs` is how long the
+   * session sat idle before this user turn; the engine prunes never-used tool
+   * loads first when it crossed the cold boundary.
    */
   submit(
     text: string,
     images: PiEngineImages,
     intent: { steer: boolean; steerOnly: boolean; userTurnIdleMs: number },
-  ): Promise<void>;
-  /** Continue a failed turn with model-only custom input. */
-  continueFailedTurn(context: string): Promise<void>;
+  ): PiEngineRun;
+  /**
+   * Continue a failed turn with model-only custom input. A failed transcript
+   * write rejects the disposition: no turn starts.
+   */
+  continueFailedTurn(context: string): PiEngineRun;
   /** Omit opaque OpenAI reasoning from context; `false` while streaming. */
   dropEncryptedReasoning(): Promise<boolean>;
   abort(): Promise<void>;
@@ -215,6 +230,22 @@ export function piProviderErrorInfo(
 export interface PiEngineTools {
   activation: PiToolActivation;
   mode: { current: SessionMode };
+}
+
+function engineRun(
+  disposition: "steered" | "started" | Promise<never>,
+  settled: Promise<void>,
+): PiEngineRun {
+  const run: PiEngineRun = {
+    disposition:
+      typeof disposition === "string"
+        ? Promise.resolve(disposition)
+        : disposition,
+    settled,
+  };
+  run.disposition.catch(() => {});
+  run.settled.catch(() => {});
+  return run;
 }
 
 const nativeSessions = new WeakMap<PiEngineHandle, AgentSession>();
@@ -345,37 +376,49 @@ export function localPiEngine(
 
     // pi is called in the caller's synchronous span, before the first await;
     // only its settlement crosses, not a steer's queue disposition.
-    async submit(text, images, intent) {
-      prepareToolsForUserTurn(session.sessionId, intent.userTurnIdleMs);
-      await (intent.steer
-        ? session.steer(text, images)
-        : session.prompt(text, { images }));
+    submit(text, images, intent) {
+      const settled = (async () => {
+        prepareToolsForUserTurn(session.sessionId, intent.userTurnIdleMs);
+        await (intent.steer
+          ? session.steer(text, images)
+          : session.prompt(text, { images }));
+      })();
+      return engineRun(intent.steer ? "steered" : "started", settled);
     },
     continueFailedTurn(context) {
-      const branch = session.sessionManager.getBranch();
-      const last = [...branch]
-        .reverse()
-        .find((entry) => entry.type === "message");
-      // Like pi's own recovery, retain the failed response in the native file but
-      // omit it from model context; Agent.continue requires a user/tool-result tail.
-      if (
-        last?.type === "message" &&
-        last.message.role === "assistant" &&
-        last.message.stopReason === "error"
-      )
-        session.sessionManager.appendContextEdit(last.id, null);
-      session.state.messages =
-        session.sessionManager.buildSessionContext().messages;
+      try {
+        const branch = session.sessionManager.getBranch();
+        const last = [...branch]
+          .reverse()
+          .find((entry) => entry.type === "message");
+        // Like pi's own recovery, retain the failed response in the native file but
+        // omit it from model context; Agent.continue requires a user/tool-result tail.
+        if (
+          last?.type === "message" &&
+          last.message.role === "assistant" &&
+          last.message.stopReason === "error"
+        )
+          session.sessionManager.appendContextEdit(last.id, null);
+        session.state.messages =
+          session.sessionManager.buildSessionContext().messages;
+      } catch (error) {
+        // The write failed before pi was called: nothing started.
+        const failed = Promise.reject(error);
+        return engineRun(failed, failed);
+      }
       // Agent.continue alone bypasses AgentSession's settle/retry/compaction and
       // queue lifecycle. Its public custom-message turn preserves that lifecycle
       // without persisting another user role or making this instruction visible.
-      return session.sendCustomMessage(
-        {
-          customType: "account-continuation",
-          content: context,
-          display: false,
-        },
-        { triggerTurn: true },
+      return engineRun(
+        "started",
+        session.sendCustomMessage(
+          {
+            customType: "account-continuation",
+            content: context,
+            display: false,
+          },
+          { triggerTurn: true },
+        ),
       );
     },
     async dropEncryptedReasoning() {

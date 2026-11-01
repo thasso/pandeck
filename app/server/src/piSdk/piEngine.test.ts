@@ -207,7 +207,7 @@ test("listeners each see every event once, in order, after the policy ran for it
   ]);
 });
 
-test("submit makes the caller's steer-or-prompt call before it returns, and settles as pi's call does", async () => {
+test("submit makes the caller's steer-or-prompt call before it returns, reports it as its disposition, and settles as pi's call does", async () => {
   const calls: unknown[] = [];
   const fake = fakeSession({
     steer: (text: string, images: unknown) => {
@@ -228,7 +228,12 @@ test("submit makes the caller's steer-or-prompt call before it returns, and sett
     userTurnIdleMs: 0,
   });
   assert.deepEqual(calls, [["steer", "more", images]]);
-  assert.equal(await steered, undefined, "a steer's disposition stays in pi");
+  assert.equal(await steered.disposition, "steered");
+  assert.equal(
+    await steered.settled,
+    undefined,
+    "a steer's queue disposition stays in pi",
+  );
 
   calls.length = 0;
   const started = engine.submit("hello", images as never, {
@@ -237,7 +242,72 @@ test("submit makes the caller's steer-or-prompt call before it returns, and sett
     userTurnIdleMs: 0,
   });
   assert.deepEqual(calls, [["prompt", "hello", { images }]]);
-  await assert.rejects(started, /prompt refused/);
+  assert.equal(await started.disposition, "started");
+  await assert.rejects(started.settled, /prompt refused/);
+});
+
+test("a continuation whose transcript write fails rejects its disposition and never calls pi", async () => {
+  const failed = {
+    type: "message",
+    id: "E1",
+    message: { role: "assistant", stopReason: "error" },
+  };
+  const calls: unknown[] = [];
+  const fake = fakeSession({
+    sessionManager: {
+      getBranch: () => [failed],
+      appendContextEdit: () => {
+        throw new Error("ENOSPC: no space left on device");
+      },
+    },
+    sendCustomMessage: (...args: unknown[]) => {
+      calls.push(["sendCustomMessage", ...args]);
+      return Promise.resolve();
+    },
+  });
+  const engine = localPiEngine(fake.session as never);
+
+  const run = engine.continueFailedTurn("Continue on the new account.");
+  await assert.rejects(run.disposition, /ENOSPC/);
+  await assert.rejects(run.settled, /ENOSPC/);
+  assert.deepEqual(calls, [], "no turn was started");
+});
+
+test("a continuation whose transcript write succeeds reports started before pi's turn settles", async () => {
+  const failed = {
+    type: "message",
+    id: "E1",
+    message: { role: "assistant", stopReason: "error" },
+  };
+  const calls: unknown[] = [];
+  let finish!: () => void;
+  const fake = fakeSession({
+    sessionManager: {
+      getBranch: () => [failed],
+      appendContextEdit: (...args: unknown[]) =>
+        calls.push(["appendContextEdit", ...args]),
+      buildSessionContext: () => ({ messages: [] }),
+    },
+    state: { messages: undefined },
+    sendCustomMessage: (message: { customType: string }) => {
+      calls.push(["sendCustomMessage", message.customType]);
+      return new Promise<void>((resolve) => (finish = resolve));
+    },
+  });
+  const engine = localPiEngine(fake.session as never);
+
+  const run = engine.continueFailedTurn("Continue on the new account.");
+  assert.deepEqual(calls, [
+    ["appendContextEdit", "E1", null],
+    ["sendCustomMessage", "account-continuation"],
+  ]);
+  assert.equal(await run.disposition, "started");
+  let settled = false;
+  void run.settled.then(() => (settled = true));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "settled is the turn's end");
+  finish();
+  await run.settled;
 });
 
 test("dispose drops the engine's subscription and disposes the session within the call", () => {
@@ -542,7 +612,7 @@ for (const steer of [false, true])
       steer,
       steerOnly: false,
       userTurnIdleMs: UNUSED_TOOL_PRUNE_IDLE_MS,
-    });
+    }).settled;
     assert.equal(cold.seenAtCall.length, 1);
     assert.equal(cold.seenAtCall[0]!.has("kb_read"), false);
     await cold.engine.dispose();
@@ -552,7 +622,7 @@ for (const steer of [false, true])
       steer,
       steerOnly: false,
       userTurnIdleMs: UNUSED_TOOL_PRUNE_IDLE_MS - 1,
-    });
+    }).settled;
     assert.equal(warm.seenAtCall.length, 1);
     assert.equal(warm.seenAtCall[0]!.has("kb_read"), true);
     await warm.engine.dispose();
@@ -571,7 +641,10 @@ test("the live session tells the engine how long it sat idle before each user tu
         intent: { userTurnIdleMs: number },
       ) => {
         idle.push(intent.userTurnIdleMs);
-        return Promise.resolve();
+        return {
+          disposition: Promise.resolve("started"),
+          settled: Promise.resolve(),
+        };
       },
     },
   });

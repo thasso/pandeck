@@ -197,28 +197,35 @@ Four layers, each depending only on the ones below it:
    included, reaches a live pi engine only through `PiEngineHandle`
    (`piSdk/piEngine.ts`): reads are synchronous, commands return promises the
    consumer awaits before reading what they changed, and no member returns an
-   SDK object. The engine's loop policy (retry suppression, the compaction
-   window's check on each run start and model change) runs behind the handle,
-   before any listener sees the event. A commit dry run is recorded on the
-   handle's tool session manager. Only `openPiEngine` (`piSdk/piEngineHost.ts`)
-   constructs an interactive engine: `piStore` describes the session to open in
-   a JSON `PiEngineOpenSpec` and holds only the handle and the JSON info it
-   answers with; the engine applies its own Build/Plan tools (`setToolMode`,
-   `commitStaged`) and prunes cold tool loads on `submit` (`docs/workers.md` "pi
-   engine construction (W9b-1)"). Each session class composes a shared session
-   kit (`sessionKit/`) instead of carrying a copy: `SessionResidency` owns the
-   viewer set and the idle clock, and the engine says only when it is idle and
-   how its store releases it. `hostCommandTurn.ts` emits a synthetic
-   host-command turn (open, progress, discard, tool output or card) to viewers
-   and the runtime adapter alike, while the engine keeps the turn's ids, running
-   state and teardown. A host command ends its turn with one
-   `finishSyntheticCard`, whichever card it renders. The live display-block
-   helpers live in `session/runtime/liveBlocks.ts`. Both engines supply native
-   facts to the app's state owner. Their state broadcasts use the injected
-   `HarnessHost.buildSessionState` callback, so neither engine imports the
-   owner. Claude requires the builder at construction, and pi requires its host.
-   The Claude store refuses acquisition before wiring and updates
-   already-resident sessions when its builder changes. The hub wires the
+   SDK object. `submit` and `continueFailedTurn` answer a `PiEngineRun`: its
+   `disposition` is what the engine actually did (`"steered"` or `"started"`,
+   ahead of the turn's first event; rejected when it did nothing) and `settled`
+   is pi's settlement. `PiLiveSession` acts on the disposition, not on what it
+   asked for: a steer the engine ran as a prompt is a new turn, never labelled a
+   steer; a refused `steerOnly` steer frees its request id for the retry; a
+   continuation marks its run only once started. A session's Build/Plan flips
+   run one at a time. The engine's loop policy (retry suppression, the
+   compaction window's check on each run start and model change) runs behind the
+   handle, before any listener sees the event. A commit dry run is recorded on
+   the handle's tool session manager. Only `openPiEngine`
+   (`piSdk/piEngineHost.ts`) constructs an interactive engine: `piStore`
+   describes the session to open in a JSON `PiEngineOpenSpec` and holds only the
+   handle and the JSON info it answers with; the engine applies its own
+   Build/Plan tools (`setToolMode`, `commitStaged`) and prunes cold tool loads
+   on `submit` (`docs/workers.md` "pi engine construction (W9b-1)"). Each
+   session class composes a shared session kit (`sessionKit/`) instead of
+   carrying a copy: `SessionResidency` owns the viewer set and the idle clock,
+   and the engine says only when it is idle and how its store releases it.
+   `hostCommandTurn.ts` emits a synthetic host-command turn (open, progress,
+   discard, tool output or card) to viewers and the runtime adapter alike, while
+   the engine keeps the turn's ids, running state and teardown. A host command
+   ends its turn with one `finishSyntheticCard`, whichever card it renders. The
+   live display-block helpers live in `session/runtime/liveBlocks.ts`. Both
+   engines supply native facts to the app's state owner. Their state broadcasts
+   use the injected `HarnessHost.buildSessionState` callback, so neither engine
+   imports the owner. Claude requires the builder at construction, and pi
+   requires its host. The Claude store refuses acquisition before wiring and
+   updates already-resident sessions when its builder changes. The hub wires the
    browser-owner lookup into that callback. Connections project the current view
    directly, including after a detached view upgrades. The owner never imports
    the engine registry.

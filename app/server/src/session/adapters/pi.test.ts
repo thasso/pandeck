@@ -823,6 +823,78 @@ test("steer-only prompt mapping", async () => {
   );
 });
 
+test("the engine's reported acceptance replaces the driver's synchronous outcome", async () => {
+  class AcceptingDriver implements PiDriver {
+    private events = new NativeAdapterEventSource();
+    readonly sessionFile = undefined;
+    constructor(
+      private readonly answer: () => {
+        outcome: "started" | "steered";
+        accepted: Promise<"started" | "steered">;
+        completed: Promise<void>;
+      },
+    ) {}
+    subscribeAdapterEvents(listener: AdapterEventListener): () => void {
+      return this.events.subscribe(listener);
+    }
+    prompt() {
+      return this.answer();
+    }
+    abort(): void {}
+    setModel(): void {}
+    setThinkingLevel(): void {}
+  }
+  const never = new Promise<void>(() => {});
+
+  // A steer the engine ran as a new turn: the caller does not wait for it.
+  const asTurn = await createPiAdapter(
+    "p-accepted-started",
+    new AcceptingDriver(() => ({
+      outcome: "steered",
+      accepted: Promise.resolve("started"),
+      completed: never,
+    })),
+  ).prompt("x", { steer: true });
+  assert.equal(asTurn.stopReason, "end");
+
+  // Under steerOnly, a turn the engine reports started is no steer.
+  const steerOnlyTurn = await createPiAdapter(
+    "p-accepted-steer-only-started",
+    new AcceptingDriver(() => ({
+      outcome: "steered",
+      accepted: Promise.resolve("started"),
+      completed: never,
+    })),
+  ).prompt("x", { steer: true, steerOnly: true });
+  assert.equal(steerOnlyTurn.steered, false);
+
+  // A rejected acceptance rejects the run and frees the adapter for the next.
+  let reject!: (error: unknown) => void;
+  let answers = 0;
+  const driver = new AcceptingDriver(() => {
+    answers += 1;
+    if (answers === 1) {
+      const accepted = new Promise<"started">((_resolve, fail) => {
+        reject = fail;
+      });
+      const completed = accepted.then(() => undefined);
+      completed.catch(() => {});
+      return { outcome: "started", accepted, completed };
+    }
+    // Completes through the driver-completion fallback.
+    return {
+      outcome: "started",
+      accepted: Promise.resolve("started"),
+      completed: Promise.resolve(),
+    };
+  });
+  const adapter = createPiAdapter("p-accepted-rejected", driver);
+  const first = adapter.prompt("continue", { continuation: true });
+  reject(new Error("transcript write failed"));
+  await assert.rejects(first, /transcript write failed/);
+  assert.equal((await adapter.prompt("next")).stopReason, "end");
+});
+
 test("skill prompt: context inline after the command, the typed text for naming", async () => {
   // pi binds nothing: everything after the command's first space joins the
   // skill block, so the context rides in the same prompt string. A name-only

@@ -24,6 +24,8 @@ const { PiLiveSession } = await import("./PiLiveSession.ts");
 const { localPiEngine } = await import("./piEngine.ts");
 const { closeDb } = await import("../db/index.ts");
 
+type PiEngineHandle = import("./piEngine.ts").PiEngineHandle;
+
 afterAll(() => {
   closeDb();
   rmSync(tmp, { recursive: true, force: true });
@@ -155,6 +157,86 @@ test("an accepted steerOnly prompt shows its bubble once pi takes it", async () 
     kinds(seen).includes("userMessage"),
     "and appears once pi has taken the message",
   );
+});
+
+test("an engine's steerOnly refusal frees the request id for its retry, and only that", async () => {
+  let nativeSteers = 0;
+  const base = localPiEngine(
+    fakeAgentSession("pi-refusal-retry", () => {
+      nativeSteers += 1;
+      return Promise.resolve();
+    }) as never,
+  );
+  // The driver's read says streaming; the engine refuses the first steer, as
+  // an engine that found itself idle does, without calling pi.
+  let submits = 0;
+  const engine: PiEngineHandle = Object.create(base, {
+    submit: {
+      value: (...args: Parameters<PiEngineHandle["submit"]>) => {
+        submits += 1;
+        if (submits > 1) return base.submit(...args);
+        const refused = Promise.reject(
+          Object.assign(new Error("The engine is not streaming."), {
+            code: "steer_not_taken",
+          }),
+        );
+        refused.catch(() => {});
+        return { disposition: refused, settled: refused };
+      },
+    },
+  });
+  const seen: ServerMessage[] = [];
+  const live = new PiLiveSession(
+    "coding" as never,
+    engine,
+    host() as never,
+    () => {},
+  );
+  live.addViewer({ send: (m: ServerMessage) => seen.push(m) });
+  const adapter = live.createRuntimeAdapter();
+  const steerOnly = {
+    steer: true,
+    steerOnly: true,
+    clientRequestId: "bg:retry",
+  } as const;
+  const userMessages = () =>
+    seen.filter((m) => (m as { type: string }).type === "userMessage");
+
+  // (a) The refusal shows nothing and reports not-delivered.
+  const refused = await adapter.prompt("Background work updated.", steerOnly);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(refused.steered, false);
+  assert.equal(submits, 1);
+  assert.equal(nativeSteers, 0);
+  assert.deepEqual(userMessages(), [], "no bubble for the refused steer");
+  assert.ok(
+    !seen.some(
+      (m) =>
+        (m as { type: string }).type === "notice" &&
+        (m as { severity?: string }).severity === "error",
+    ),
+    "no error banner",
+  );
+  assert.ok(
+    !kinds(seen).some((t) => t.startsWith("assistant")),
+    "no synthetic assistant turn",
+  );
+
+  // (b) The same request retried while the engine streams is taken once.
+  const retried = await adapter.prompt("Background work updated.", steerOnly);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(retried.steered, true, "the retry is not a duplicate");
+  assert.equal(submits, 2);
+  assert.equal(nativeSteers, 1);
+  assert.equal(userMessages().length, 1);
+
+  // (c) After acceptance the id stays claimed: a resend is a duplicate.
+  const duplicate = await adapter.prompt("Background work updated.", steerOnly);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(duplicate.steered, false);
+  assert.equal(submits, 2, "the duplicate never reaches the engine");
+  assert.equal(nativeSteers, 1);
+  assert.equal(userMessages().length, 1);
 });
 
 test("a peer prompt waits for agent_settled across a pi retry", async () => {

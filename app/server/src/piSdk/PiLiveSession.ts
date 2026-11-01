@@ -266,7 +266,11 @@ export class PiLiveSession implements LiveSession {
    * (it only settles afterwards) and so can't tell "running" from "just ended".
    */
   private running = false;
+  /** A continuation was handed to the engine and has not reported back yet. */
+  private continuing = false;
   private driveCompletion: Promise<unknown> | undefined;
+  /** Mode operations run one at a time; each link continues past a failure. */
+  private modeOperations: Promise<void> = Promise.resolve();
 
   /** The only way this wrapper reaches its pi engine (`piEngine.ts`). */
   get engine(): PiEngineHandle {
@@ -1275,20 +1279,43 @@ export class PiLiveSession implements LiveSession {
       this.running = true;
       this.host.noteRunStarted();
     }
+    const steer = this.engine.isStreaming;
     const run = this.engine.submit(promptWithFiles, images, {
-      steer: this.engine.isStreaming,
+      steer,
       steerOnly: Boolean(options.steerOnly),
       userTurnIdleMs,
     });
-    if (!wasRunning) this.driveCompletion = run;
+    if (!wasRunning) this.driveCompletion = run.settled;
+    // An engine that found itself idle runs a steer as a prompt and reports
+    // it "started": a new turn, never labelled a steer. Its `agent_start`,
+    // which the disposition precedes, marks the run; a failure fails it as a
+    // new run, not a queued steer. A local engine always does as asked.
+    const newTurn = run.disposition.then(
+      (disposition) => steer && disposition === "started",
+      () => false,
+    );
+    const accepted = newTurn.then((isNew): "steered" | "started" => {
+      if (!isNew) return wasRunning ? "steered" : "started";
+      this.driveCompletion = run.settled;
+      return "started";
+    });
     if (options.steerOnly) {
       // A refused `steerOnly` is expected control flow, not a provider failure:
       // the adapter reports it as `steered: false` and delivery retries. Routing
       // it through `finishPromptError` would post an error banner and — once the
       // original turn has cleared — manufacture a synthetic assistant error turn
-      // and adapter events for a message that was never meant to be sent.
-      void run.then(emitUserMessage, () => {});
-    } else run.catch((err: unknown) => this.finishPromptError(err, wasRunning));
+      // and adapter events for a message that was never meant to be sent. The
+      // refusal also frees the request id, so the retry is not a duplicate.
+      void run.settled.then(emitUserMessage, () => {
+        if (options.clientRequestId)
+          this.handledRequestIds.delete(options.clientRequestId);
+      });
+    } else
+      run.settled.catch((err: unknown) =>
+        newTurn.then((isNew) =>
+          this.finishPromptError(err, isNew ? false : wasRunning),
+        ),
+      );
     // The chat should appear in every tab the moment its first prompt is sent.
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
     this.host.sessionRowsChanged([this.key]);
@@ -1301,7 +1328,13 @@ export class PiLiveSession implements LiveSession {
         forkOriginalName,
         attachments,
       );
-    return { outcome: wasRunning ? "steered" : "started", completed: run };
+    // A failed submit fails through `finishPromptError` as before, so the
+    // adapter's acceptance never rejects here.
+    return {
+      outcome: wasRunning ? "steered" : "started",
+      accepted,
+      completed: run.settled,
+    };
   }
 
   /** Only after explicit rejection: omit opaque OpenAI reasoning, not text/tools/history. */
@@ -1315,18 +1348,37 @@ export class PiLiveSession implements LiveSession {
 
   /** SDK-owned continuation: model-only custom input, never another user message. */
   private continueFailedTurn(context: string): PiPromptResponse {
-    if (this.disposed || this.running || this.engine.isStreaming)
+    if (
+      this.disposed ||
+      this.running ||
+      this.continuing ||
+      this.engine.isStreaming
+    )
       throw new Error("Cannot continue a running or released pi session.");
-    // The engine edits the transcript in this synchronous span, so a failed
-    // write throws here, before the run is marked. pi emits the turn's first
-    // event only after an await, so the run is still marked before it.
+    // The run is marked only once the engine reports it started. A failed
+    // transcript write rejects the disposition instead: nothing is marked and
+    // nothing fails, so the adapter's rejection is the whole outcome, with no
+    // banner and no synthetic turn.
     const run = this.engine.continueFailedTurn(context);
-    this.residency.cancel();
-    this.running = true;
-    this.host.noteRunStarted();
-    this.driveCompletion = run;
-    void run.catch((error: unknown) => this.finishPromptError(error, false));
-    return { outcome: "started", completed: run };
+    this.continuing = true;
+    const accepted = run.disposition.then(
+      (disposition) => {
+        this.continuing = false;
+        this.residency.cancel();
+        this.running = true;
+        this.host.noteRunStarted();
+        this.driveCompletion = run.settled;
+        void run.settled.catch((error: unknown) =>
+          this.finishPromptError(error, false),
+        );
+        return disposition;
+      },
+      (error: unknown) => {
+        this.continuing = false;
+        throw error;
+      },
+    );
+    return { outcome: "started", accepted, completed: run.settled };
   }
 
   private finishPromptError(err: unknown, wasRunning: boolean): void {
@@ -1561,9 +1613,18 @@ export class PiLiveSession implements LiveSession {
 
   /**
    * Apply + persist the per-turn tool policy for the next turn. Nothing is
-   * persisted or broadcast unless the engine applied it.
+   * persisted or broadcast unless the engine applied it. A session's flips run
+   * one at a time, each checking the mode current when its turn comes: the
+   * engine's apply is awaited, so an overlapping flip would otherwise compare
+   * against a mode about to change.
    */
-  async setMode(mode: SessionMode): Promise<void> {
+  setMode(mode: SessionMode): Promise<void> {
+    const operation = this.modeOperations.then(() => this.applyMode(mode));
+    this.modeOperations = operation.catch(() => {});
+    return operation;
+  }
+
+  private async applyMode(mode: SessionMode): Promise<void> {
     if (this.mode === mode) return;
     await this.onModeChange(mode);
     this.mode = mode;
