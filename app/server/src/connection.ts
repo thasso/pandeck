@@ -1825,7 +1825,16 @@ export class Connection implements Viewer {
     digestRequested: boolean,
   ): void {
     try {
-      this.send(kernel.subscribeAnswer(digestRequested));
+      const answer = kernel.subscribeAnswer(digestRequested);
+      // A digest carries no archived count; the snapshot does. Send it to this
+      // connection right after, without touching the hub's broadcast marker.
+      const count =
+        topic === "sessions" && answer.type === "stateDigest"
+          ? hub.archivedSessionCount()
+          : undefined;
+      this.send(answer);
+      if (count !== undefined)
+        this.send({ type: "archivedSessionCount", count });
     } catch (err) {
       // A missed-reporter invariant is a test failure, never a collection
       // error (`docs/state-sync.md`, "Failure boundary").
@@ -1859,7 +1868,7 @@ export class Connection implements Viewer {
   }
 
   private onGetStateItems(
-    topic: "tasks" | "projects" | "initiatives",
+    topic: Extract<ClientMessage, { type: "getStateItems" }>["topic"],
     ids: string[],
     requestId: string,
   ): void {
@@ -1877,6 +1886,7 @@ export class Connection implements Viewer {
         tasks: "Task",
         projects: "Project",
         initiatives: "Initiative",
+        sessions: "Session",
       }[topic];
       this.send({
         type: "error",

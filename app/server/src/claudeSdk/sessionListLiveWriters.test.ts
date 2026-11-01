@@ -507,3 +507,33 @@ test("Claude compaction usage and context clearing report actual native/canonica
   );
   assert.equal(applied.pendingReason, "next-turn");
 });
+
+test("a resting live Claude row is a digest member, already at rest", async () => {
+  installSeam();
+  const live = await freshClaude();
+  ensureRuntimeSessionWithRuntime(sessionRuntime, live);
+  await sessionRuntime.prompt(live.id, "one Claude turn");
+  const { sessionListItemAtRest } = await import("@assistant/shared");
+  const { hub } = await import("../hub.ts");
+  const { sessionListRevisions } = await import("../db/sessionListChanges.ts");
+  const { sessionsStateTopic } = await import("../sessionsTopic.ts");
+  await hub.flushPendingBroadcastsForTests();
+  assert.equal(claudeSdkStore.get(live.id), live);
+  const snapshot = sessionsStateTopic.subscribeAnswer(false);
+  const digest = sessionsStateTopic.subscribeAnswer(true);
+  assert.ok(snapshot.type === "sessionList" && digest.type === "stateDigest");
+  // Membership, through the Claude overlay of the merged projection.
+  const row = snapshot.sessions.find((session) => session.id === live.id);
+  const revision = sessionListRevisions([live.id]).get(live.id);
+  assert.equal(row?.harness, "claude-sdk");
+  assert.ok(revision !== undefined && revision >= 1);
+  assert.deepEqual(
+    digest.entries.find((entry) => entry.id === live.id),
+    { id: live.id, revision },
+  );
+  assert.deepEqual(digest.entries, snapshot.revisions);
+  // The builder's resting values are the at-rest projection's.
+  assert.equal(row.isStreaming, false);
+  assert.equal(row.awaitingInput, false);
+  assert.deepEqual(sessionListItemAtRest(row), row);
+});

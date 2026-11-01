@@ -28,14 +28,18 @@ import { wireValueEqual } from "./wireValueEqual.ts";
  */
 export const STATE_ITEMS_TIMEOUT_MS = 10_000;
 
-/** The topics a digest and `getStateItems` serve, in subscribe-digest order. */
-type ItemTopic = Extract<ClientMessage, { type: "getStateItems" }>["topic"];
 /**
- * A topic an optimistic mutation can resync: the item topics, and `sessions`,
- * which has no item read yet (`recoveryRequest` stays item-only).
+ * The topics a digest and `getStateItems` serve, which are also the ones an
+ * optimistic mutation can resync.
  */
-type ResyncTopic = ItemTopic | "sessions";
-const DIGEST_ORDER: readonly ItemTopic[] = ["tasks", "projects", "initiatives"];
+type ItemTopic = Extract<ClientMessage, { type: "getStateItems" }>["topic"];
+/** Subscribe-digest order. */
+const DIGEST_ORDER: readonly ItemTopic[] = [
+  "tasks",
+  "projects",
+  "initiatives",
+  "sessions",
+];
 
 /** Why an item fetch is open: a digest's catch-up, or an edit's recovery. */
 export type RequestPurpose = "catchUp" | "recovery";
@@ -403,7 +407,7 @@ interface ReplicaTransportConfig<State> {
    * A recovery that could not complete, or a resync: forget those ids' held
    * revisions.
    */
-  onBaselineLost(topic: ResyncTopic, ids: readonly string[]): void;
+  onBaselineLost(topic: ItemTopic, ids: readonly string[]): void;
 }
 
 type SubscribeMessage = Extract<ClientMessage, { type: "subscribe" }>;
@@ -451,9 +455,9 @@ export interface ReplicaTransport<State> {
    * the snapshot resubscribe, or joins one already awaiting its answer; while
    * unheld, nothing. Silent, unlike a fallback, and it touches no hold.
    */
-  resync(topic: ResyncTopic, ids: readonly string[]): ClientMessage[];
+  resync(topic: ItemTopic, ids: readonly string[]): ClientMessage[];
   /** Forget unsafe optimism without sending or changing topic holds. */
-  invalidate(topic: ResyncTopic, ids: readonly string[]): void;
+  invalidate(topic: ItemTopic, ids: readonly string[]): void;
   /** Record a reconnect snapshot immediately before its subscribe is sent. */
   snapshotRequested(topic: BroadcastTopic): void;
   /**
@@ -576,7 +580,7 @@ export function createReplicaTransport<State>(
   const baseline = (topic: ItemTopic, state: State) =>
     config.topics[topic]?.digest?.baseline(state) === true;
 
-  const invalidate = (topic: ResyncTopic, ids: readonly string[]) => {
+  const invalidate = (topic: ItemTopic, ids: readonly string[]) => {
     if (ids.length > 0) config.onBaselineLost(topic, ids);
     snapshotRequired.add(topic);
   };

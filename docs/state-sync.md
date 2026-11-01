@@ -216,7 +216,9 @@ markers advance only after a send returns without throwing.
   each migrated domain's canonical objects plus sidecar revisions, so a warm
   start can paint immediately and digest-diff rather than replacing the list. A
   cache missing an object's revision is not digest-capable and falls back to a
-  full snapshot.
+  full snapshot. Sessions are the exception: a row cached without a revision
+  (one that was live when saved, or an unconfirmed settle prediction) is re-read
+  by the digest's catch-up instead.
 - Worktree git statuses are cached too, but as a SILHOUETTE, not as state: they
   hydrate into their own `cachedWorktreeStatuses` slice so a cold Projects view
   paints rows at their real height instead of growing each one as its watch
@@ -337,8 +339,8 @@ and replica read ownership are unchanged.
 ## Client replica
 
 `app/web/src/lib/stateReplica.ts` is the client's one implementation of the
-generic mechanics for a migrated topic: Background, Tasks, Projects and
-Initiatives. The module has no React and two halves, and `useAssistant` stays
+generic mechanics for a migrated topic: Background, Tasks, Projects, Initiatives
+and Sessions. The module has no React and two halves, and `useAssistant` stays
 the single owner of both:
 
 - The DATA half is a pure reducer step,
@@ -382,9 +384,11 @@ the single owner of both:
     apply the `updatedAt` rule when the list changed.
   - `digest` says when the held objects are a baseline (Projects and Tasks: the
     canonical list with a revision for every row; Initiatives: a sidecar this
-    hook instance set, covering every row) and sets the topic's flags for a
-    digest and for its catch-up. Tasks' digest also forgets the statuses of held
-    rows it leaves out and re-judges held bodies. Background declares none.
+    hook instance set, covering every row; Sessions: at least one held live row
+    with a revision, since an unrevisioned row is simply fetched) and sets the
+    topic's flags for a digest and for its catch-up. Tasks' digest also forgets
+    the statuses of held rows it leaves out and re-judges held bodies.
+    Background declares none.
   - `settle` places a direct reply's object. Only Tasks have one: the saved
     summary replaces the create's temp row, or the row of its id, in place; an
     archived Task's row is removed; a filtered or absent list is left alone.
@@ -428,8 +432,8 @@ the single owner of both:
     snapshot and the forgotten revisions; the next failure sends its own pair.
   - The one subscribe composer. A topic asks for a digest when it declares one,
     has no pending mutation, is not due a snapshot, and its baseline holds.
-    `digests` keeps the order `tasks`, `projects`, `initiatives` and is omitted
-    when empty.
+    `digests` keeps the order `tasks`, `projects`, `initiatives`, `sessions` and
+    is omitted when empty.
 
 Frame batching stays in `useAssistant`; the replica sees messages in the order
 they are applied.
@@ -438,19 +442,20 @@ they are applied.
 
 A `seq` gap while subscribed triggers a resubscribe for a fresh snapshot and a
 loud log. A client with settled canonical objects and a revision for every
-object requests a `{id, revision}` digest. It keeps equal rows by identity,
-deletes cached objects absent from the digest, and batch-fetches changed/new ids
-as ordinary events. The digest's `seq` becomes the new tripwire baseline. Only a
-canonical full snapshot may replace that baseline or cancel its item catch-up;
-filtered list replies are ordinary one-off answers and change neither.
-Missing/invalid revisions, an incomplete or failed item batch, and a bounded
-item-fetch timeout all fall back to the full snapshot: a resubscribe without
-`digests`. A failed optimistic Task mutation takes the same snapshot through the
-transport's `resync`. The snapshot returns objects and sidecar revisions so the
-next resubscribe is warm. An edit recovery that cannot complete leaves its
-objects without a revision, so the next subscribe takes a snapshot rather than a
-digest that would keep the rejected value. Archived projections never enter the
-digest and keep their explicit request/response reads.
+object requests a `{id, revision}` digest (Sessions: at least one; a held row
+without one is fetched). It keeps equal rows by identity, deletes cached objects
+absent from the digest, and batch-fetches changed/new ids as ordinary events.
+The digest's `seq` becomes the new tripwire baseline. Only a canonical full
+snapshot may replace that baseline or cancel its item catch-up; filtered list
+replies are ordinary one-off answers and change neither. Missing/invalid
+revisions, an incomplete or failed item batch, and a bounded item-fetch timeout
+all fall back to the full snapshot: a resubscribe without `digests`. A failed
+optimistic Task mutation takes the same snapshot through the transport's
+`resync`. The snapshot returns objects and sidecar revisions so the next
+resubscribe is warm. An edit recovery that cannot complete leaves its objects
+without a revision, so the next subscribe takes a snapshot rather than a digest
+that would keep the rejected value. Archived projections never enter the digest
+and keep their explicit request/response reads.
 
 ## Phases
 
@@ -575,10 +580,21 @@ per-surface sub-tasks — no page invents its own delta format.
   which a client holding nothing for it ignores. Archived rows are never in the
   replica: they are an on-demand `loadArchivedSessions` read answered by
   `archivedSessions` with the request's id, re-read while shown when
-  `archivedSessionCount` moves or a `delete` names one of them. A failed
-  optimistic session mutation resyncs the topic (forget the ids' revisions,
-  resubscribe or join the awaited snapshot). A command whose reply must follow
-  its rows flushes them first (`publishSessionRowsNow`, outside transactions).
+  `archivedSessionCount` moves or a `delete` names one of them. A failed or lost
+  optimistic mutation that touched session rows (a `sessions` write, or another
+  domain's write declaring a `sessions` effect: a Workflow Run settle's role
+  sessions, a card cleanup's worktree sessions) resyncs the topic: it forgets
+  every touched row's revision, so a cache save before the snapshot lands keeps
+  no guess at a revision, then resubscribes or joins the awaited snapshot. A
+  command whose reply must follow its rows flushes them first
+  (`publishSessionRowsNow`, outside transactions). An optimistic session settle
+  or Workflow Run settle forgets the predicted session rows' revisions in the
+  same reducer step. Workflow membership may be stale, so even success need not
+  stamp every predicted peer or role. Only authoritative session events or reads
+  restore their revisions; mutation success and a corrected workflow list do
+  not. An unconfirmed guess may remain displayed until an authoritative read,
+  but the next reconnect or warm digest must fetch it even at the old revision.
+  Equal authoritative echoes keep row identity and restore the sidecar normally.
   Revisions live in a separate table because live engine ids need not have a
   `session_index` row. The peer deadline watermark is the builder's only clock
   input. One `summaries` batch builds all touched ids. The archived-inclusive
@@ -593,7 +609,17 @@ per-surface sub-tasks — no page invents its own delta format.
   errors are consumed by the replica/archive scheduler, never the running chat;
   stale archive errors have no effect. Archived reads are single-flight with one
   queued, released only by their own answer/error, disconnect or 30 s timeout.
-  No digest or session items/cache revisions yet.
+  The descriptor has a digest: a digest subscribe is answered by
+  `stateDigest<"sessions">` over exactly the snapshot's rows and revisions (one
+  full build), then one `archivedSessionCount`; `getStateItems` reads live rows
+  by id, and an archived, tombstoned, hidden or unknown id is a `delete` at its
+  stored revision. The shell cache stores rows at rest (`sessionListItemAtRest`:
+  live-derived fields reset to the server's resting values) and a
+  `sessionRevisions` sidecar holding only rows that were already at rest when
+  saved; a row hydrated without a revision is re-read by the digest's catch-up.
+  The client's digest baseline is one held live row with a revision. A server
+  restart touches every row (`boot`), so the first digest after it re-reads
+  every row.
 
 ## Enforcement
 

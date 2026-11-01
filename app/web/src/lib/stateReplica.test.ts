@@ -462,6 +462,7 @@ describe("the replica transport", () => {
       "tasks",
       "projects",
       "initiatives",
+      "sessions",
     ]);
     const transport = createReplicaTransport<FakeState>({
       topics: {
@@ -474,6 +475,7 @@ describe("the replica transport", () => {
         },
         projects: digestFake,
         initiatives: digestFake,
+        sessions: digestFake,
       },
       send: (message) => {
         sent.push(message);
@@ -1062,9 +1064,10 @@ describe("the replica transport", () => {
       });
     });
 
-    it("orders digests tasks, projects, initiatives whatever the topic order", () => {
+    it("orders digests tasks, projects, initiatives, sessions whatever the topic order", () => {
       const { transport } = harness();
       const topics: BroadcastTopic[] = [
+        "sessions",
         "initiatives",
         TOPIC,
         "projects",
@@ -1073,7 +1076,7 @@ describe("the replica transport", () => {
       expect(transport.subscribeRequest(topics, safe(), new Set())).toEqual({
         type: "subscribe",
         topics,
-        digests: ["tasks", "projects", "initiatives"],
+        digests: ["tasks", "projects", "initiatives", "sessions"],
       });
     });
 

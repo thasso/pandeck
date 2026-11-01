@@ -4,7 +4,8 @@
  * the state topic kernel. Every row change is a revisioned `upsert`/`delete`
  * whose revision a write stamped at the touch seam
  * (`db/sessionListChanges.ts`); the subscribe answer is the live projection
- * with its revision sidecar and the archived count.
+ * with its revision sidecar and the archived count, or, when the client asks,
+ * that projection's `{id, revision}` digest.
  *
  * It also owns the missed-reporter safety net: a public change not covered by
  * a stamp newer than the row's last delivered publication or capture is an
@@ -273,6 +274,20 @@ function summaries(
   return items;
 }
 
+/** The subscribe answer's rows: the listed, unarchived, unhidden sessions. */
+function liveProjection(): SessionListItem[] {
+  const hidden = sessionListHiddenProbe();
+  return mergedSessionList()
+    .filter((row) => !hidden(row))
+    .map(publicSessionRow);
+}
+
+/** Each row's stored revision, in row order. */
+function revisionEntries(rows: readonly SessionListItem[]): StateDigestEntry[] {
+  const revisions = sessionListRevisions(rows.map((row) => row.id));
+  return rows.map(({ id }) => ({ id, revision: revisions.get(id) ?? 0 }));
+}
+
 /** The live session list on the kernel. */
 export const sessionsStateTopic = createStateTopic({
   topic: "sessions",
@@ -292,21 +307,22 @@ export const sessionsStateTopic = createStateTopic({
   summaries,
   snapshot(seq): SessionListSnapshot {
     if (auditEnabled) auditForTests(true);
-    const hidden = sessionListHiddenProbe();
-    const sessions = mergedSessionList()
-      .filter((row) => !hidden(row))
-      .map(publicSessionRow);
-    const revisions = sessionListRevisions(sessions.map((row) => row.id));
+    const sessions = liveProjection();
     return {
       type: "sessionList",
       seq,
       sessions,
-      revisions: sessions.map(({ id }) => ({
-        id,
-        revision: revisions.get(id) ?? 0,
-      })),
+      revisions: revisionEntries(sessions),
       archivedSessionCount: archivedSessionCount(),
     };
+  },
+  // The snapshot's own build, so the digest names exactly the rows a snapshot
+  // would list: membership has no cheaper index (drafts, recorded children
+  // and the live registries' rows), and a missed member would be pruned. A
+  // bandwidth saving, not a CPU one.
+  digest() {
+    if (auditEnabled) auditForTests(true);
+    return revisionEntries(liveProjection());
   },
   get batchMax() {
     return batchMax;

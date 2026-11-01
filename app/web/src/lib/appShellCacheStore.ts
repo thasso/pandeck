@@ -26,7 +26,7 @@ const SLICES = {
     "slashCommands",
     "credentialProfileProjection",
   ],
-  sessions: ["sessions"],
+  sessions: ["sessions", "sessionRevisions"],
   tasks: ["taskList", "taskRevisions"],
   projects: ["projectList", "projectRevisions"],
   worktrees: ["worktrees"],
