@@ -1329,6 +1329,8 @@ test("Stop-all protects an ordinary retained turn", async () => {
   query.output.emit(result("protected-second"));
   await ordinary;
   backgroundWorkSupervisor.setOrdinaryTurnActiveHandler(() => false);
+  // The hosted query's end crosses the Worker: let its epoch end first.
+  await until(() => !backgroundWorkStore.hostForOwner(session.id));
   session.dispose();
 });
 
@@ -1460,6 +1462,8 @@ test("an owner Stop-all whose Stop never answers closes the host when the turn e
   query.output.emit(result("hung-turn-end"));
   await turn;
   await until(() => query.closeCalls === 1);
+  // The hosted query's end crosses the Worker: let its epoch end first.
+  await until(() => !backgroundWorkStore.hostForOwner(session.id));
   session.dispose();
 });
 
@@ -1523,6 +1527,8 @@ test("an owner Stop-all whose Stop never answers closes the host even after a St
     vi.useRealTimers();
   }
   await until(() => query.closeCalls === 1);
+  // The hosted query's end crosses the Worker: let its epoch end first.
+  await until(() => !backgroundWorkStore.hostForOwner(session.id));
   session.dispose();
 });
 
@@ -1593,6 +1599,8 @@ test("a Stop-all reserved while a slash command runs closes the host when it fin
   assert.equal(query.closeCalls, 0, "not while the slash command runs");
   session.finishSyntheticTool(synthetic.toolId, "committed");
   await until(() => query.closeCalls === 1);
+  // The hosted query's end crosses the Worker: let its epoch end first.
+  await until(() => !backgroundWorkStore.hostForOwner(session.id));
   session.dispose();
 });
 
@@ -2196,9 +2204,12 @@ test("retained Claude controls, retry and follow-up callbacks report independent
     provider: "claude",
   }).id;
   const queries: FakeRetainedQuery[] = [];
+  let contextUsage: ClaudeQuery["getContextUsage"];
   claudeSdkStore.setSeam(async () => ({
     query(params) {
       const query = new FakeRetainedQuery(params);
+      (query as ClaudeQuery).getContextUsage = (opts) =>
+        contextUsage ? contextUsage(opts) : Promise.reject(new Error("unread"));
       queries.push(query);
       return query;
     },
@@ -2387,6 +2398,7 @@ test("retained Claude controls, retry and follow-up callbacks report independent
       async () => {
         const changing = session.setModel("claude-opus-4-6");
         assert.equal(session.modelSelection().model?.id, "haiku");
+        await until(() => typeof releaseModel === "function");
         releaseModel();
         await changing;
       },
@@ -2407,6 +2419,7 @@ test("retained Claude controls, retry and follow-up callbacks report independent
       async () => {
         const changing = session.setThinkingLevel("high");
         assert.notEqual(session.toRecord().thinkingLevel, "high");
+        await until(() => typeof releaseThinking === "function");
         releaseThinking();
         await changing;
       },
@@ -2414,8 +2427,7 @@ test("retained Claude controls, retry and follow-up callbacks report independent
     );
     assert.equal(session.toRecord().thinkingLevel, "high");
     assert.equal(vi.mocked(query.setMaxThinkingTokens).mock.calls.length, 1);
-    const controls: ClaudeQuery = query;
-    controls.getContextUsage = async () => ({
+    contextUsage = async () => ({
       isAutoCompactEnabled: true,
       autoCompactThreshold: 180000,
       mcpTools: [],
