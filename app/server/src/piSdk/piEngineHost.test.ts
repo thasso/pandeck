@@ -62,12 +62,17 @@ const { findModelForProfile } = await import("./models.ts");
 const { serverPiModelPort } = await import("./piModelPort.ts");
 const { piPersonaOptions, resolvePiEngineStart } =
   await import("./piEngineStart.ts");
-const { SKILLS_LIBRARY_DIR } = await import("../config.ts");
+const { SKILLS_LIBRARY_DIR, SKILLS_RUNTIME_DIR } = await import("../config.ts");
+const { skillSetHash } = await import("../skills/skillRuntimeMaterializer.ts");
 const { updateSettings } = await import("../settings.ts");
 const { currentIntegrationToolGates } = await import("../tools/toolPolicy.ts");
 const { childProcessEnv } = await import("../subprocessEnv.ts");
-const { appToolExecutorFor, persistSessionOutput } =
-  await import("../workers/inProcessWorker.ts");
+const {
+  appToolExecutorFor,
+  inProcessBackgroundWorkForTests,
+  materializeSkillsThroughWorker,
+  persistSessionOutput,
+} = await import("../workers/inProcessWorker.ts");
 
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -77,6 +82,8 @@ const ctx = {
   appToolExecutor: appToolExecutorFor,
   models: serverPiModelPort,
   persistOutput: persistSessionOutput,
+  materializeSkills: materializeSkillsThroughWorker,
+  backgroundWork: inProcessBackgroundWorkForTests(),
 };
 
 /** A persisted pi transcript on the fixture model: one user turn, one reply. */
@@ -393,6 +400,11 @@ test("the opener builds from the spec's start records and writes none of them", 
       credentialProfileId: "default",
       transcript: { type: "new", cwd: tmp },
       start: { conditions, skillNames: ["host-skill"], agent },
+      skillsDir: join(
+        SKILLS_RUNTIME_DIR,
+        skillSetHash(["host-skill"]),
+        "skills",
+      ),
       persona: piPersonaOptions("developer", "default", conditions, agent),
       integrationGates: currentIntegrationToolGates(),
       mode: "build",

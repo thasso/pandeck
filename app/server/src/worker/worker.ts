@@ -7,6 +7,7 @@
  * server's own process (`workers/inProcessWorker.ts`); phase 2 moves this
  * folder into a process of its own (`docs/workers.md`).
  */
+import type { BackgroundWorkAdmitter } from "../workerProtocol/backgroundWorkMethods.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
   WorkerConnection,
@@ -14,8 +15,14 @@ import {
 } from "../workerProtocol/connection.ts";
 import { ENGINE_METHODS } from "../workerProtocol/engineMethods.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
+import {
+  SKILL_METHODS,
+  decodeSkillMaterialized,
+  encodeSkillMaterialize,
+} from "../workerProtocol/skillMethods.ts";
 import { WATCH_METHODS } from "../workerProtocol/watchMethods.ts";
 import { appToolCalls, type AppToolCaller } from "./appTools.ts";
+import { backgroundWorkTable } from "./backgroundWork.ts";
 import { checkoutGitHandlers } from "./checkoutGit.ts";
 import { engineHandlers, type EngineFactories } from "./engines.ts";
 import { fileHandlers } from "./files.ts";
@@ -44,6 +51,10 @@ export interface RunningWorker {
   readonly callAppTool: AppToolCaller;
   /** Asks the server for a session's hook decisions (`sessionHooks.*`). */
   readonly sessionHooks: SessionHookCalls;
+  /** Admits an engine's background work, which this Worker executes. */
+  readonly backgroundWork: BackgroundWorkAdmitter;
+  /** Asks the server to materialize a frozen skill set (`skills.materialize`). */
+  materializeSkills(names: readonly string[]): Promise<void>;
   /** Test seam: how many file handles the Worker holds. */
   fileHandles(): number;
   /** Test seam: the native watch subscriptions the Worker holds. */
@@ -94,11 +105,23 @@ export function startWorker(options: {
   const sessionHooks = sessionHookCalls((method, payload, signal) =>
     connection.request(method, payload, signal),
   );
+  const backgroundWork = backgroundWorkTable((method, payload, signal) =>
+    connection.request(method, payload, signal),
+  );
+  const materializeSkills = async (names: readonly string[]) =>
+    decodeSkillMaterialized(
+      await connection.request(
+        SKILL_METHODS.materialize,
+        encodeSkillMaterialize({ names: [...names] }),
+      ),
+    );
   const engines = engineHandlers({
     factories: options.engines,
     childEnv: options.childEnv,
     callAppTool: appTools.call,
     persistOutput: sessionHooks.persistOutput,
+    backgroundWork: backgroundWork.admitter,
+    materializeSkills,
     deliver: (payload) => connection.request(ENGINE_METHODS.events, payload),
   });
   const handlers = Object.fromEntries(
@@ -108,6 +131,7 @@ export function startWorker(options: {
       ...lifecycleHandlers(options.workerId),
       ...watches.handlers,
       ...appTools.handlers,
+      ...backgroundWork.handlers,
       ...engines.handlers,
     }).map(([method, handler]) => [
       method,
@@ -125,6 +149,7 @@ export function startWorker(options: {
     onEnd: () => {
       files.end();
       watches.end();
+      backgroundWork.end();
       engines.end();
     },
   });
@@ -136,6 +161,8 @@ export function startWorker(options: {
     watchesReleased: watches.released,
     callAppTool: appTools.call,
     sessionHooks,
+    backgroundWork: backgroundWork.admitter,
+    materializeSkills,
     fileHandles: () => files.size,
     watches: () => watches.snapshot(),
     engines: () => engines.size,

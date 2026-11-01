@@ -3,17 +3,15 @@
  * universe `createAgentSession` gets, built from the {@link PiPersonaOptions}
  * the server computed (`piEngineStart.ts`) and the session's frozen records,
  * plus the pi session store directories. Nothing here reads settings or the
- * session store; the frozen skills' materialization before every reload is
- * the one server reach left (`docs/workers.md`).
+ * session store; the frozen skills are materialized before every reload by
+ * the host's `materializeSkills`, which asks the server (`docs/workers.md`).
  */
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
 import type { AgentType } from "@assistant/shared";
 import {
   CHAT_SESSION_DIR,
   DEVELOPER_SESSION_DIR,
   PERSONAL_ASSISTANT_SESSION_DIR,
-  SKILLS_RUNTIME_DIR,
   WORKFLOW_COORDINATOR_SESSION_DIR,
   WORKSHOP_SESSION_DIR,
 } from "../config.ts";
@@ -22,11 +20,6 @@ import { withoutDeniedTools } from "../agents/agentDefinitionPolicy.ts";
 import type { SessionAgent } from "../agents/sessionAgent.ts";
 import type { AgentTool } from "../mcp/tool.ts";
 import { createPiOutputPolicyExtension } from "./outputPolicyExtension.ts";
-import { scanSkillLibrary, skillLibraryStore } from "../skills/skillLibrary.ts";
-import {
-  materializeSkillRuntime,
-  skillSetHash,
-} from "../skills/skillRuntimeMaterializer.ts";
 
 // Never discover ~/.pi resources/settings. Each loader receives its profile's
 // PA-owned directory, including coding personas.
@@ -38,6 +31,9 @@ type DefaultResourceLoaderOptions = ConstructorParameters<
   typeof DefaultResourceLoader
 >[0];
 
+/** Materializes a frozen skill set into its runtime directory, on the server. */
+export type PiSkillMaterialize = (names: readonly string[]) => Promise<void>;
+
 /**
  * A coding-session loader whose frozen library layout is restored before every
  * pi resource reload. The reload hook matters after generated-runtime cleanup:
@@ -46,25 +42,24 @@ type DefaultResourceLoaderOptions = ConstructorParameters<
  */
 class FrozenSkillsResourceLoader extends DefaultResourceLoader {
   private readonly frozenSkillNames: readonly string[];
+  private readonly materialize: PiSkillMaterialize;
 
   constructor(
     options: DefaultResourceLoaderOptions,
-    frozenSkillNames: readonly string[],
+    frozen: {
+      names: readonly string[];
+      /** The runtime directory the server materializes these names into. */
+      skillsDir: string;
+      materialize: PiSkillMaterialize;
+    },
   ) {
-    const names = [...frozenSkillNames];
-    super({
-      ...options,
-      additionalSkillPaths: [
-        join(SKILLS_RUNTIME_DIR, skillSetHash(names), "skills"),
-      ],
-    });
-    this.frozenSkillNames = names;
+    super({ ...options, additionalSkillPaths: [frozen.skillsDir] });
+    this.frozenSkillNames = [...frozen.names];
+    this.materialize = frozen.materialize;
   }
 
   override async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
-    await skillLibraryStore.ensureInitialized();
-    const scan = await scanSkillLibrary(skillLibraryStore.root);
-    await materializeSkillRuntime(this.frozenSkillNames, scan);
+    await this.materialize(this.frozenSkillNames);
     await super.reload(options);
   }
 }
@@ -151,13 +146,16 @@ export type PiOutputPersist = Parameters<
  * `skillNames` and `agent` are the session's frozen start records. pi rebuilds
  * resources and its system prompt during a session, so these must be the SAME
  * values on reopen/fork as on creation — the server resolves them from the
- * session record rather than recomputing live settings.
+ * session record rather than recomputing live settings. `skillsDir` is their
+ * runtime directory, resolved by the server with them.
  */
 export async function buildPiEngineOptions(input: {
   kind: AgentType;
   cwd: string;
   persona: PiPersonaOptions;
   skillNames: readonly string[];
+  skillsDir: string;
+  materializeSkills: PiSkillMaterialize;
   agent: SessionAgent | undefined;
   persistOutput: PiOutputPersist;
 }): Promise<AgentSessionOptions> {
@@ -205,7 +203,11 @@ export async function buildPiEngineOptions(input: {
               ...systemPrompt.append,
             ],
           },
-          input.skillNames,
+          {
+            names: input.skillNames,
+            skillsDir: input.skillsDir,
+            materialize: input.materializeSkills,
+          },
         );
   await loader.reload();
   return {

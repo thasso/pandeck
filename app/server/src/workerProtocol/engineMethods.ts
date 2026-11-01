@@ -27,6 +27,7 @@
  * the Worker side may import only this folder.
  */
 import type { AppToolCall, AppToolResult } from "./appToolMethods.ts";
+import type { BackgroundWorkAdmitter } from "./backgroundWorkMethods.ts";
 import { INVALID_PARAMS } from "./checkoutMethods.ts";
 import type { Payload } from "./codec.ts";
 import { WorkerMethodError } from "./connection.ts";
@@ -143,6 +144,16 @@ export interface HostedEngineHost {
     request: PersistOutputRequest,
     signal?: AbortSignal,
   ): Promise<SessionOutputArtifact>;
+  /**
+   * Admit background work through the Worker's item table, which executes it
+   * and reports its facts (`backgroundWork.*`).
+   */
+  readonly backgroundWork: BackgroundWorkAdmitter;
+  /**
+   * Materialize a frozen skill set on the server (`skills.materialize`),
+   * before every loader reload.
+   */
+  materializeSkills(names: readonly string[]): Promise<void>;
 }
 
 /** Opens one harness's engine from its JSON spec. */

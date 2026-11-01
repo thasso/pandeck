@@ -14,8 +14,6 @@
  *
  * Imports no connection acquisition, so `inProcessWorker.ts` can wire it.
  */
-import { createWriteStream } from "node:fs";
-import { pipeline } from "node:stream/promises";
 import { persistOutputArtifact } from "../outputPolicy.ts";
 import {
   WorkerMethodError,
@@ -36,7 +34,8 @@ import {
   type SessionToolPermission,
 } from "../workerProtocol/sessionHookMethods.ts";
 import type { AdmittedPeer } from "./appToolHost.ts";
-import { sessionCheckoutSide, type CheckoutSide } from "./placement.ts";
+import { copyFromWorker } from "./copyFromWorker.ts";
+import { sessionCheckoutSide } from "./placement.ts";
 
 /** The error code of a request for a session not placed on the asking Worker. */
 const NOT_PLACED = "not_placed";
@@ -78,30 +77,6 @@ export function registerSessionHooks(
     if (rest.length > 0) bindings.set(sessionId, rest);
     else bindings.delete(sessionId);
   };
-}
-
-/**
- * Copies a vendor full-output file from the session's Worker to `destination`
- * as a stream, one read piece in memory at a time. Never read on the server:
- * the path may come from the agent's own output.
- */
-async function copyFromWorker(
-  side: CheckoutSide,
-  source: string,
-  destination: string,
-): Promise<void> {
-  // Lazy: `servedFileAccess.ts` reaches the in-process Worker, which imports
-  // this module, so a static import would close a cycle.
-  const { openServedFile } = await import("../servedFileAccess.ts");
-  const handle = await openServedFile(source, { stat: false, side });
-  try {
-    await pipeline(
-      handle.createReadStream({ start: 0, end: Number.MAX_SAFE_INTEGER }),
-      createWriteStream(destination),
-    );
-  } finally {
-    await handle.close();
-  }
 }
 
 /**

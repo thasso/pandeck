@@ -10,8 +10,11 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
 const { SKILLS_LIBRARY_DIR, SKILLS_RUNTIME_DIR } = await import("../config.ts");
-const { SkillRuntimeMaterializationError } =
-  await import("../skills/skillRuntimeMaterializer.ts");
+const { WorkerRequestError } = await import("../workerProtocol/connection.ts");
+const { SKILLS_UNAVAILABLE } =
+  await import("../workerProtocol/skillMethods.ts");
+const { skillMaterializationsServedForTests } =
+  await import("../workers/skillHost.ts");
 const { buildAgentOptions } = await import("./piEngineStart.ts");
 
 async function writeSkill(
@@ -47,6 +50,7 @@ test("coding option builders load whole frozen skill folders and recreate them o
 
   const loaders = [];
   for (const agentType of ["developer", "workshop"] as const) {
+    const before = skillMaterializationsServedForTests();
     const options = await buildAgentOptions(
       agentType,
       cwd,
@@ -54,6 +58,8 @@ test("coding option builders load whole frozen skill folders and recreate them o
       undefined,
       ["whole-folder"],
     );
+    // The engine's loader asks the server, through its Worker, once per load.
+    assert.equal(skillMaterializationsServedForTests(), before + 1);
     const loaded = options.resourceLoader.getSkills();
     const skill = loaded.skills.find(({ name }) => name === "whole-folder");
     assert.ok(skill, `${agentType} loads the frozen library skill`);
@@ -73,7 +79,9 @@ test("coding option builders load whole frozen skill folders and recreate them o
 
   const first = loaders[0]!;
   await rm(first.root, { recursive: true, force: true });
+  const beforeReload = skillMaterializationsServedForTests();
   await first.loader.reload();
+  assert.equal(skillMaterializationsServedForTests(), beforeReload + 1);
   const reloaded = first.loader
     .getSkills()
     .skills.find(({ name }) => name === "whole-folder");
@@ -96,7 +104,8 @@ test("a missing frozen library skill fails option construction loudly", async ()
       "missing-frozen",
     ]),
     (error: unknown) =>
-      error instanceof SkillRuntimeMaterializationError &&
+      error instanceof WorkerRequestError &&
+      error.code === SKILLS_UNAVAILABLE &&
       /Frozen skill "missing-frozen" is missing or invalid/.test(error.message),
   );
 });

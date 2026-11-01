@@ -370,6 +370,8 @@ export function createPiHostedEngineFactory({
         ),
       models,
       persistOutput: (request) => host.persistOutput(request),
+      materializeSkills: (names) => host.materializeSkills(names),
+      backgroundWork: host.backgroundWork,
     });
     return hostPiEngine(engine, info, {
       findModel: models.find,

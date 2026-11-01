@@ -7,13 +7,13 @@
  *
  * Both are JSON as they stand, so a Worker can host this opener across the
  * worker protocol unchanged. The {@link PiEngineHostContext} is host wiring
- * and never crosses: each host supplies its own child env and app-tool route.
+ * and never crosses: each host supplies its own child env, app-tool route,
+ * skill materialization and background-work admission.
  *
  * The server resolves everything fixed at open into the spec
  * (`piEngineStart.ts`) and reaches the model runtime through the host's
- * {@link PiModelPort}. What the opener still reads in the server process
- * (skill materialization, background work) `docs/workers.md` lists and
- * `harnessBoundary.test.ts` pins.
+ * {@link PiModelPort}. The opener imports only pure or engine-own modules
+ * (`harnessBoundary.test.ts`).
  */
 import {
   type AgentSession,
@@ -43,6 +43,7 @@ import {
   sessionDirFor,
   type PiOutputPersist,
   type PiPersonaOptions,
+  type PiSkillMaterialize,
 } from "./options.ts";
 import { toPiToolDefinitions } from "./agentToolAdapter.ts";
 import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
@@ -64,13 +65,14 @@ import { deniesNative } from "../agents/agentDefinitionPolicy.ts";
 import type { SessionAgent } from "../agents/sessionAgent.ts";
 import type { PromptConditions } from "../promptConditions.ts";
 import type { IntegrationToolGates } from "../tools/toolPolicy.ts";
+import type { BackgroundWorkAdmitter } from "../workerProtocol/backgroundWorkMethods.ts";
 import {
   localPiEngine,
   type PiEngineHandle,
   type PiEngineModel,
   type PiEngineTools,
 } from "./piEngine.ts";
-import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
+import { createPiBackgroundTools } from "./backgroundWorkExecutor.ts";
 
 /** Which transcript an engine runs on. */
 type PiEngineTranscript =
@@ -122,6 +124,8 @@ export interface PiEngineOpenSpec {
   model?: { provider: string; id: string };
   thinkingLevel?: ThinkingLevel;
   start: PiEngineStartRecords;
+  /** The runtime directory the frozen skills are materialized into. */
+  skillsDir: string;
   /** The persona's prompt and tool policy, computed by the server. */
   persona: PiPersonaOptions;
   /** The session's stored compaction window: only a reopen has one. */
@@ -175,6 +179,10 @@ export interface PiEngineHostContext {
   models: PiModelPort;
   /** How an elided native result's full output is persisted by the server. */
   persistOutput: PiOutputPersist;
+  /** How the frozen skills are materialized on the server before a reload. */
+  materializeSkills: PiSkillMaterialize;
+  /** How background `bash` and `monitor` work is admitted by the server. */
+  backgroundWork: BackgroundWorkAdmitter;
 }
 
 export interface PiEngineOpened {
@@ -452,6 +460,8 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
     cwd,
     persona: spec.persona,
     skillNames: spec.start.skillNames,
+    skillsDir: spec.skillsDir,
+    materializeSkills: ctx.materializeSkills,
     agent,
     persistOutput: ctx.persistOutput,
   });
@@ -474,6 +484,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
       ? createPiBackgroundTools({
           session: () => piToolSession(kind, sm, cwd),
           childEnv: ctx.childEnv,
+          backgroundWork: ctx.backgroundWork,
           bashConfig: () => {
             const settings = sessionRef?.settingsManager;
             const shellPath = settings?.getShellPath();

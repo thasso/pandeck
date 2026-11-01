@@ -158,13 +158,11 @@ const PI_SESSION_CONSTRUCTIONS: Record<string, string[]> = {
 
 /**
  * Every module the pi engine opener imports a value from, besides pi itself,
- * `@assistant/shared`, `node:*` and `typebox`. The W9c inventory is the two
- * reaches into server state W9c-2 removes (`docs/workers.md` "pi engine
- * construction (W9b-1)"): skill materialization in `./options.ts` and the
- * background-work store behind `./backgroundWorkBackend.ts`. The rest is pure
- * or the engine's own.
+ * `@assistant/shared`, `node:*` and `typebox`. Each is pure or the engine's
+ * own: since W9c-2 (`docs/workers.md` "pi background work and skills
+ * (W9c-2)"), skills and background work reach the server only through the
+ * engine's Worker, so the opener holds no reach into server state.
  */
-const W9C_INVENTORY = "W9c inventory";
 const ENGINE_OWN = "pure or engine-own";
 const PI_ENGINE_HOST_IMPORTS: Record<string, string> = {
   "../agents/agentDefinitionPolicy.ts": ENGINE_OWN,
@@ -173,15 +171,27 @@ const PI_ENGINE_HOST_IMPORTS: Record<string, string> = {
   "../sessionStorage.ts": ENGINE_OWN,
   "../tools/toolPolicy.ts": ENGINE_OWN,
   "./agentToolAdapter.ts": ENGINE_OWN,
-  "./backgroundWorkBackend.ts": W9C_INVENTORY,
+  "./backgroundWorkExecutor.ts": ENGINE_OWN,
   "./compactionWindow.ts": ENGINE_OWN,
   "./forkOrigin.ts": ENGINE_OWN,
-  "./options.ts": W9C_INVENTORY,
+  "./options.ts": ENGINE_OWN,
   "./piEngine.ts": ENGINE_OWN,
   "./sessionOpen.ts": ENGINE_OWN,
   "./toolActivation.ts": ENGINE_OWN,
   "./toolPayloadProbe.ts": ENGINE_OWN,
 };
+
+/**
+ * The server state W9c-2 moved behind the Worker protocol: the engine's skill
+ * loader and background tools import none of it.
+ */
+const W9C_SERVER_STATE = [
+  "../backgroundWork/supervisor.ts",
+  "../db/backgroundWorkStore.ts",
+  "../outputPolicy.ts",
+  "../skills/skillLibrary.ts",
+  "../skills/skillRuntimeMaterializer.ts",
+];
 
 /** Imports the residual pin does not count: pi itself and pure packages. */
 const PI_ENGINE_HOST_IGNORED_IMPORT =
@@ -656,8 +666,20 @@ test("the pi engine opener reaches only the pinned server modules", () => {
   assert.deepEqual(
     actual,
     PI_ENGINE_HOST_IMPORTS,
-    'piEngineHost.ts reaches server state only through the W9c inventory in docs/workers.md "pi engine construction (W9b-1)"; a new reach is a plan change, not a new entry.',
+    'piEngineHost.ts reaches no server state (docs/workers.md "pi background work and skills (W9c-2)"); a new reach is a plan change, not a new entry.',
   );
+});
+
+test("the engine's skill loader and background tools reach no moved server state", () => {
+  for (const module of ["options.ts", "backgroundWorkExecutor.ts"]) {
+    const file = join(SRC_ROOT, "piSdk", module);
+    const { valueImports } = scanModule(file, readFileSync(file, "utf8"));
+    assert.deepEqual(
+      valueImports.filter((source) => W9C_SERVER_STATE.includes(source)),
+      [],
+      `piSdk/${module} reaches skills and background work only through the engine's Worker (docs/workers.md "pi background work and skills (W9c-2)").`,
+    );
+  }
 });
 
 test("the construction and import scans see every form they pin", () => {

@@ -43,7 +43,7 @@ instead:
 | Child                                                                                        | Where it gets the overlay                                                           |
 | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | Claude CLI (sessions, one-shots, usage queries, login), and so its Bash and background tasks | `claudeProfileEnvironment`, `withClaudeOutputBudgetEnvironment`, `ClaudeSdkSession` |
-| pi foreground `bash` (its `spawnHook`), background `bash` and command monitors               | `piSdk/backgroundWorkBackend.ts`                                                    |
+| pi foreground `bash` (its `spawnHook`), background `bash` and command monitors               | `piSdk/backgroundWorkExecutor.ts`                                                   |
 | git, through the spawn broker or its in-process fallback                                     | `gitExec.ts`                                                                        |
 | docker                                                                                       | `containerImages.ts`                                                                |
 | Playwright MCP and the browser it starts                                                     | `externalSubprocessEnv()`, which reads `childProcessEnv()` by default               |

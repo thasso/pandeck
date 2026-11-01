@@ -20,19 +20,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import WebSocket, { type RawData } from "ws";
-import type {
-  BackgroundWorkActivity,
-  BackgroundWorkBackendEvents,
-  BackgroundWorkBackendPort,
-  BackgroundWorkLaunchAck,
-  BackgroundWorkLaunchRequest,
-  BackgroundWorkStopAck,
-  BackgroundWorkStopAllAck,
-  BackgroundWorkStopAllRequest,
-  BackgroundWorkStopRequest,
-} from "../backgroundWork/backends.ts";
+import type { BackgroundWorkActivity } from "../backgroundWork/backends.ts";
 import { BoundedBackgroundMonitorBuffer } from "../backgroundWork/monitorBuffer.ts";
-import { backgroundWorkSupervisor } from "../backgroundWork/supervisor.ts";
 import { backgroundWorkIntentHint } from "../backgroundWork/intent.ts";
 import {
   backgroundWorkDescription,
@@ -45,8 +34,15 @@ import {
   type ToolResult,
   type ToolSession,
 } from "../mcp/tool.ts";
-import { captureTaskOutputArtifact } from "../outputPolicy.ts";
 import { assertPublicHost } from "../publicNetwork.ts";
+import type {
+  BackgroundWorkAdmitAnswer,
+  BackgroundWorkAdmitter,
+  BackgroundWorkOutputReport,
+  BackgroundWorkReporter,
+  BackgroundWorkRun,
+  BackgroundWorkRunner,
+} from "../workerProtocol/backgroundWorkMethods.ts";
 import {
   PI_BACKGROUND_BASH_TOOL_DEFINITION,
   PI_MONITOR_TOOL_DEFINITION,
@@ -107,22 +103,15 @@ interface SocketLike {
   close(): void;
 }
 
-interface RunningWork {
-  ownerSessionId: string;
-  stop(): void;
-  done: Promise<void>;
-  stopping: boolean;
-}
-
 interface ActivityTimer {
   cancel(): void;
 }
 
-interface PiBackgroundBackendDependencies {
+/** What the executor runs work with; each defaults to the real one. */
+interface PiBackgroundExecutorDependencies {
   operations?: BashOperations;
   scheduleActivity?: (delayMs: number, callback: () => void) => ActivityTimer;
   createSocket?: (url: string, protocols?: string[]) => SocketLike;
-  events?: BackgroundWorkBackendEvents;
   /** Drives the activity rate window only; the supervisor owns every deadline. */
   now?: () => number;
 }
@@ -302,7 +291,8 @@ interface BackgroundOutputResult {
   eventCount: number;
   droppedEventCount: number;
   writerDroppedBytes: number;
-  evidence: ReturnType<typeof captureTaskOutputArtifact>;
+  /** What the server captures as the item's output evidence. */
+  output: Omit<BackgroundWorkOutputReport, "itemId" | "eventId">;
 }
 
 /**
@@ -342,8 +332,7 @@ class BackgroundOutput {
 
   constructor(
     private readonly itemId: string,
-    private readonly ownerSessionId: string,
-    private readonly events: BackgroundWorkBackendEvents,
+    private readonly reporter: BackgroundWorkReporter,
     private readonly schedule: (
       delayMs: number,
       callback: () => void,
@@ -402,6 +391,11 @@ class BackgroundOutput {
     } catch {
       // Nothing was launched, so no evidence can refer to this file.
     }
+    this.remove();
+  }
+
+  /** Delete the output tree once the server has copied or refused its file. */
+  remove(): void {
     try {
       rmSync(this.root, { recursive: true, force: true });
     } catch {
@@ -443,36 +437,18 @@ class BackgroundOutput {
     } catch {
       this.outputWriteFailed = true;
     }
-    const evidence = this.outputWriteFailed
-      ? {
-          capturedBytes: 0,
-          text: false,
-          truncated: false,
-          refusalReason: "output-write-failed",
-        }
-      : captureTaskOutputArtifact({
-          sessionId: this.ownerSessionId,
-          outputFile: this.outputPath,
-          trustedRoot: this.root,
-          sourceTool: "pi background work",
-          artifactLabel: "pi background work output",
-        });
-    try {
-      rmSync(this.root, { recursive: true, force: true });
-    } catch {
-      // Artifact capture already copied or refused the output. Cleanup is best effort.
-    }
     this.finalResult = {
       eventCount: this.totalEventCount,
       droppedEventCount: this.droppedEventCount,
       writerDroppedBytes: omittedBytes,
-      evidence: exceededHeadCap
-        ? {
-            ...evidence,
-            originalBytes: this.observedBytes,
-            truncated: true,
-          }
-        : evidence,
+      output: {
+        ...(this.outputWriteFailed
+          ? { writeFailed: true as const }
+          : { file: this.outputPath }),
+        ...(exceededHeadCap
+          ? { originalBytes: this.observedBytes, truncated: true as const }
+          : {}),
+      },
     };
     return this.finalResult;
   }
@@ -504,7 +480,7 @@ class BackgroundOutput {
       this.droppedEventCount += batch.droppedEventCount + batch.lines.length;
       // The item is on its way to a Stop, so this batch is the last thing it
       // would have said. Report the trip rather than the truncated batch.
-      this.events.activityRateExceeded({
+      this.reporter.rateExceeded({
         itemId: this.itemId,
         eventId: `${this.itemId}:activity-rate:${this.sequence + 1}`,
         notificationCount: this.windowCount,
@@ -521,7 +497,7 @@ class BackgroundOutput {
       droppedEventCount: batch.droppedEventCount,
       eventId: `${this.itemId}:activity:${this.sequence}`,
     };
-    this.events.activity(activity);
+    this.reporter.activity(activity);
     if (!finishing) this.scheduleActivity();
   }
 
@@ -547,11 +523,13 @@ class BackgroundOutput {
   }
 }
 
-/** Process-local host-process port. State is isolated by PA item and owner. */
-export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
-  readonly backend = "host-process" as const;
-  private readonly pending = new Map<string, PendingLaunch>();
-  private readonly running = new Map<string, RunningWork>();
+/**
+ * Runs pi's background work on this process: one runner per admission, each
+ * holding the launch frozen at admission (command, cwd, env, shell, or socket
+ * URL). Runners report their item's facts through the reporter the Worker's
+ * table hands them, and never touch a row or an artifact.
+ */
+class PiBackgroundWorkExecutor {
   private readonly operations: BashOperations | undefined;
   private readonly scheduleActivity: (
     delayMs: number,
@@ -561,10 +539,9 @@ export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
     url: string,
     protocols?: string[],
   ) => SocketLike;
-  private readonly events: BackgroundWorkBackendEvents;
   private readonly now: () => number;
 
-  constructor(deps: PiBackgroundBackendDependencies = {}) {
+  constructor(deps: PiBackgroundExecutorDependencies = {}) {
     this.operations = deps.operations;
     this.now = deps.now ?? Date.now;
     this.scheduleActivity =
@@ -578,106 +555,35 @@ export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
       deps.createSocket ??
       ((url, protocols) =>
         protocols ? new WebSocket(url, protocols) : new WebSocket(url));
-    this.events = deps.events ?? backgroundWorkSupervisor;
   }
 
-  reserve(itemId: string, launch: PendingLaunch): void {
-    if (this.pending.has(itemId) || this.running.has(itemId))
-      throw new Error(`pi background item ${itemId} is already reserved`);
-    this.pending.set(itemId, launch);
-  }
-
-  discard(itemId: string): void {
-    this.pending.delete(itemId);
-  }
-
-  launch(
-    request: BackgroundWorkLaunchRequest,
-  ): Promise<BackgroundWorkLaunchAck> {
-    const pending = this.pending.get(request.target.itemId);
-    if (
-      !pending ||
-      pending.ownerSessionId !== request.target.ownerSessionId ||
-      pending.kind !== request.target.kind
-    )
-      return Promise.resolve({
-        launched: false,
-        reason: "the pi launch reservation is no longer available",
-      });
-    this.pending.delete(request.target.itemId);
-    return pending.type === "process"
-      ? this.launchProcess(request.target.itemId, pending)
-      : this.launchSocket(request.target.itemId, pending);
-  }
-
-  async stop(
-    request: BackgroundWorkStopRequest,
-  ): Promise<BackgroundWorkStopAck> {
-    const work = this.running.get(request.target.itemId);
-    if (!work || work.ownerSessionId !== request.target.ownerSessionId)
-      return {
-        acknowledged: false,
-        evidence: "the owned process group or socket is unavailable",
-      };
-    work.stopping = true;
-    work.stop();
-    try {
-      await work.done;
-      return { acknowledged: true };
-    } catch (error) {
-      return {
-        acknowledged: false,
-        evidence:
-          error instanceof Error ? error.message.slice(0, 500) : "Stop failed",
-      };
-    }
-  }
-
-  async stopAll(
-    request: BackgroundWorkStopAllRequest,
-  ): Promise<BackgroundWorkStopAllAck> {
-    const reserved = new Set(request.itemIds);
-    const targets = [...this.running.entries()].filter(
-      ([itemId, work]) =>
-        reserved.has(itemId) && work.ownerSessionId === request.ownerSessionId,
-    );
-    const acknowledgedItemIds: string[] = [];
-    const unconfirmedItemIds: string[] = [];
-    await Promise.all(
-      targets.map(async ([itemId, work]) => {
-        work.stopping = true;
-        work.stop();
-        try {
-          await work.done;
-          acknowledgedItemIds.push(itemId);
-        } catch {
-          unconfirmedItemIds.push(itemId);
-        }
-      }),
-    );
-    return { acknowledgedItemIds, unconfirmedItemIds };
+  runner(launch: PendingLaunch): BackgroundWorkRunner {
+    return {
+      ownerSessionId: launch.ownerSessionId,
+      kind: launch.kind,
+      launch: (request, reporter) =>
+        launch.type === "process"
+          ? this.launchProcess(request.target.itemId, launch, reporter)
+          : this.launchSocket(request.target.itemId, launch, reporter),
+    };
   }
 
   private launchProcess(
     itemId: string,
     launch: ProcessLaunch,
-  ): Promise<BackgroundWorkLaunchAck> {
+    reporter: BackgroundWorkReporter,
+  ): Promise<{ launched: true; run: BackgroundWorkRun }> {
     const controller = new AbortController();
     const output = new BackgroundOutput(
       itemId,
-      launch.ownerSessionId,
-      this.events,
+      reporter,
       this.scheduleActivity,
       launch.kind === "monitor-command",
       this.now,
     );
-    const running: RunningWork = {
-      ownerSessionId: launch.ownerSessionId,
-      stop: () => controller.abort(),
-      done: Promise.resolve(),
-      stopping: false,
-    };
-    running.done = Promise.resolve()
+    // A stopped item reports no completion: the supervisor's Stop ends it.
+    let stopping = false;
+    const done = Promise.resolve()
       .then(() =>
         (this.operations ?? createSupervisedOperations(launch.shellPath)).exec(
           launch.commandPrefix
@@ -694,40 +600,53 @@ export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
           },
         ),
       )
-      .then(({ exitCode }) => {
-        const result = this.finishOutput(itemId, output);
-        if (running.stopping) return;
-        this.events.completed({
-          itemId,
-          state: exitCode === 0 ? "completed" : "failed",
-          ...(exitCode !== null ? { exitCode } : {}),
-          outcomeSummary: humanSummary(processSummary(exitCode), result),
-          eventId: `${itemId}:exit`,
-        });
-      })
-      .catch((error) => {
-        const result = this.finishOutput(itemId, output);
-        if (running.stopping || controller.signal.aborted) return;
-        this.events.completed({
-          itemId,
-          state: "failed",
-          outcomeSummary: humanSummary(processErrorMessage(error), result),
-          eventId: `${itemId}:error`,
-        });
-      })
-      .finally(() => this.running.delete(itemId));
-    this.running.set(itemId, running);
-    return Promise.resolve({ launched: true });
+      .then(
+        async ({ exitCode }) => {
+          const result = await finishOutput(itemId, output, reporter);
+          if (stopping) return;
+          reporter.completed({
+            itemId,
+            state: exitCode === 0 ? "completed" : "failed",
+            ...(exitCode !== null ? { exitCode } : {}),
+            outcomeSummary: humanSummary(processSummary(exitCode), result),
+            eventId: `${itemId}:exit`,
+          });
+        },
+        async (error: unknown) => {
+          const result = await finishOutput(itemId, output, reporter);
+          if (stopping || controller.signal.aborted) return;
+          reporter.completed({
+            itemId,
+            state: "failed",
+            outcomeSummary: humanSummary(processErrorMessage(error), result),
+            eventId: `${itemId}:error`,
+          });
+        },
+      );
+    return Promise.resolve({
+      launched: true,
+      run: {
+        done,
+        stop: () => {
+          stopping = true;
+          controller.abort();
+          return done;
+        },
+      },
+    });
   }
 
   private launchSocket(
     itemId: string,
     launch: SocketLaunch,
-  ): Promise<BackgroundWorkLaunchAck> {
+    reporter: BackgroundWorkReporter,
+  ): Promise<
+    | { launched: true; run: BackgroundWorkRun }
+    | { launched: false; reason: string }
+  > {
     const output = new BackgroundOutput(
       itemId,
-      launch.ownerSessionId,
-      this.events,
+      reporter,
       this.scheduleActivity,
       true,
       this.now,
@@ -747,28 +666,24 @@ export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
     }
     let settle!: () => void;
     const done = new Promise<void>((resolve) => (settle = resolve));
-    const running: RunningWork = {
-      ownerSessionId: launch.ownerSessionId,
-      stop: () => socket.close(),
-      done,
-      stopping: false,
-    };
+    let stopping = false;
     let ended = false;
     const finish = (error?: Error) => {
       if (ended) return;
       ended = true;
-      const result = this.finishOutput(itemId, output);
-      if (!running.stopping)
-        this.events.completed({
-          itemId,
-          state: error ? "failed" : "completed",
-          outcomeSummary: humanSummary(
-            error ? error.message : "WebSocket closed",
-            result,
-          ),
-          eventId: `${itemId}:${error ? "socket-error" : "socket-close"}`,
-        });
-      settle();
+      void finishOutput(itemId, output, reporter).then((result) => {
+        if (!stopping)
+          reporter.completed({
+            itemId,
+            state: error ? "failed" : "completed",
+            outcomeSummary: humanSummary(
+              error ? error.message : "WebSocket closed",
+              result,
+            ),
+            eventId: `${itemId}:${error ? "socket-error" : "socket-close"}`,
+          });
+        settle();
+      });
     };
     socket.on("message", (data) => output.push(rawData(data)));
     // `on`, never `once`: Bun's `ws` emits "error" twice for one refused
@@ -776,27 +691,37 @@ export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
     // already idempotent.
     socket.on("error", (error) => finish(error));
     socket.once("close", () => finish());
-    void done.finally(() => this.running.delete(itemId));
-    this.running.set(itemId, running);
-    return Promise.resolve({ launched: true });
+    return Promise.resolve({
+      launched: true,
+      run: {
+        done,
+        stop: () => {
+          stopping = true;
+          socket.close();
+          return done;
+        },
+      },
+    });
   }
+}
 
-  private finishOutput(
-    itemId: string,
-    output: BackgroundOutput,
-  ): ReturnType<BackgroundOutput["finish"]> {
-    const result = output.finish();
-    try {
-      this.events.outputCaptured({
-        itemId,
-        eventId: `${itemId}:output`,
-        evidence: result.evidence,
-      });
-    } catch (error) {
-      console.warn(`[background] output evidence failed for ${itemId}:`, error);
-    }
-    return result;
-  }
+/**
+ * Close the item's output, report it, and only then delete its file: the
+ * server copies it during the report. Completion follows the answer.
+ */
+async function finishOutput(
+  itemId: string,
+  output: BackgroundOutput,
+  reporter: BackgroundWorkReporter,
+): Promise<BackgroundOutputResult> {
+  const result = output.finish();
+  await reporter.output({
+    itemId,
+    eventId: `${itemId}:output`,
+    ...result.output,
+  });
+  output.remove();
+  return result;
 }
 
 function rawData(data: RawData): Buffer | string {
@@ -841,21 +766,16 @@ function processErrorMessage(error: unknown): string {
   return `Command timed out after ${message.slice("timeout:".length)} seconds`;
 }
 
-const piBackgroundWorkBackend = new PiBackgroundWorkBackend();
-let registered = false;
-
-function registerPiBackgroundWorkBackend(): void {
-  if (registered) return;
-  backgroundWorkSupervisor.registerBackend(piBackgroundWorkBackend);
-  registered = true;
-}
-
 interface PiBackgroundToolsOptions {
   session(): ToolSession;
   /** The base environment of every shell child, read per launch. */
   childEnv(): NodeJS.ProcessEnv;
   identity(): PiProcessEnvironment;
   bashConfig?(): { shellPath?: string; commandPrefix?: string };
+  /** How background work is admitted: the session's Worker asks the server. */
+  backgroundWork: BackgroundWorkAdmitter;
+  /** Test seam: what the runners execute with. Production never passes it. */
+  executor?: PiBackgroundExecutorDependencies;
 }
 
 interface BackgroundBashInput extends BashToolInput, Record<string, unknown> {
@@ -875,7 +795,8 @@ interface MonitorInput extends Record<string, unknown> {
 export function createPiBackgroundTools(
   options: PiBackgroundToolsOptions,
 ): AgentTool[] {
-  registerPiBackgroundWorkBackend();
+  const executor = new PiBackgroundWorkExecutor(options.executor);
+  const admission = { backgroundWork: options.backgroundWork, executor };
   const bash = defineAgentTool<BackgroundBashInput>({
     ...PI_BACKGROUND_BASH_TOOL_DEFINITION,
     async execute(params, ctx) {
@@ -917,6 +838,7 @@ export function createPiBackgroundTools(
       }
       validateBashTimeout(params.timeout);
       return admitProcess({
+        ...admission,
         session,
         identity,
         childEnv: options.childEnv,
@@ -948,6 +870,7 @@ export function createPiBackgroundTools(
       if (params.command) {
         const bashConfig = options.bashConfig?.() ?? {};
         return admitProcess({
+          ...admission,
           session,
           identity: options.identity(),
           childEnv: options.childEnv,
@@ -966,6 +889,7 @@ export function createPiBackgroundTools(
       }
       const ws = await validateMonitorWebSocket(params.ws!);
       return admitSocket({
+        ...admission,
         session,
         toolCallId: ctx.toolCallId,
         label: backgroundWorkTitle({
@@ -1012,38 +936,41 @@ function validateBashTimeout(timeout: number | undefined): void {
     throw new Error(`Invalid timeout: maximum is ${maxSeconds} seconds`);
 }
 
-async function admitProcess(input: {
-  session: ToolSession;
-  identity: PiProcessEnvironment;
-  childEnv(): NodeJS.ProcessEnv;
-  toolCallId: string;
-  kind: "shell" | "monitor-command";
-  label: string;
-  description?: string | undefined;
-  command: string;
-  timeoutSeconds?: number;
-  requestedLifetimeMs?: number;
-  shellPath?: string;
-  commandPrefix?: string;
-}): Promise<ToolResult> {
+interface Admission {
+  backgroundWork: BackgroundWorkAdmitter;
+  executor: PiBackgroundWorkExecutor;
+}
+
+async function admitProcess(
+  input: Admission & {
+    session: ToolSession;
+    identity: PiProcessEnvironment;
+    childEnv(): NodeJS.ProcessEnv;
+    toolCallId: string;
+    kind: "shell" | "monitor-command";
+    label: string;
+    description?: string | undefined;
+    command: string;
+    timeoutSeconds?: number;
+    requestedLifetimeMs?: number;
+    shellPath?: string;
+    commandPrefix?: string;
+  },
+): Promise<ToolResult> {
   const description = backgroundWorkDescription(input.description);
-  const admission = backgroundWorkSupervisor.admit({
-    ownerSessionId: input.session.sessionId,
-    backend: "host-process",
-    kind: input.kind,
-    label: input.label,
-    ...(description ? { description } : {}),
-    command: input.command,
-    sourceRequestId: input.toolCallId,
-    ...(input.requestedLifetimeMs !== undefined
-      ? { requestedLifetimeMs: input.requestedLifetimeMs }
-      : {}),
-  });
-  if (!admission.admitted)
-    throw new Error(`Background work denied: ${admission.message}`);
-  let state = admission.item.state;
-  if (!admission.reused) {
-    piBackgroundWorkBackend.reserve(admission.item.id, {
+  const answer = await input.backgroundWork.admit(
+    {
+      sessionId: input.session.sessionId,
+      kind: input.kind,
+      label: input.label,
+      ...(description ? { description } : {}),
+      command: input.command,
+      sourceRequestId: input.toolCallId,
+      ...(input.requestedLifetimeMs !== undefined
+        ? { requestedLifetimeMs: input.requestedLifetimeMs }
+        : {}),
+    },
+    input.executor.runner({
       type: "process",
       ownerSessionId: input.session.sessionId,
       kind: input.kind,
@@ -1058,67 +985,60 @@ async function admitProcess(input: {
       ...(input.timeoutSeconds !== undefined
         ? { timeoutSeconds: input.timeoutSeconds }
         : {}),
-    });
-    const launched = await backgroundWorkSupervisor.launch(admission);
-    if (!launched || launched.state !== "running") {
-      piBackgroundWorkBackend.discard(admission.item.id);
-      throw new Error(launched?.outcomeSummary ?? "Background launch failed");
-    }
-    state = launched.state;
-  }
-  return jsonResult({
-    taskId: admission.item.id,
-    state,
-    ...(admission.item.intent === "service"
-      ? { intent: "service" }
-      : { hint: backgroundWorkIntentHint(admission.item.id) }),
-  });
+    }),
+  );
+  return admittedResult(answer, "Background launch failed");
 }
 
-async function admitSocket(input: {
-  session: ToolSession;
-  toolCallId: string;
-  label: string;
-  description?: string | undefined;
-  requestedLifetimeMs: number;
-  ws: { url: string; protocols?: string[] };
-}): Promise<ToolResult> {
+async function admitSocket(
+  input: Admission & {
+    session: ToolSession;
+    toolCallId: string;
+    label: string;
+    description?: string | undefined;
+    requestedLifetimeMs: number;
+    ws: { url: string; protocols?: string[] };
+  },
+): Promise<ToolResult> {
   const description = backgroundWorkDescription(input.description);
-  const admission = backgroundWorkSupervisor.admit({
-    ownerSessionId: input.session.sessionId,
-    backend: "host-process",
-    kind: "monitor-websocket",
-    label: input.label,
-    ...(description ? { description } : {}),
-    command: input.ws.url,
-    sourceRequestId: input.toolCallId,
-    requestedLifetimeMs: input.requestedLifetimeMs,
-  });
-  if (!admission.admitted)
-    throw new Error(`Background work denied: ${admission.message}`);
-  let state = admission.item.state;
-  if (!admission.reused) {
-    piBackgroundWorkBackend.reserve(admission.item.id, {
+  const answer = await input.backgroundWork.admit(
+    {
+      sessionId: input.session.sessionId,
+      kind: "monitor-websocket",
+      label: input.label,
+      ...(description ? { description } : {}),
+      command: input.ws.url,
+      sourceRequestId: input.toolCallId,
+      requestedLifetimeMs: input.requestedLifetimeMs,
+    },
+    input.executor.runner({
       type: "socket",
       ownerSessionId: input.session.sessionId,
       kind: "monitor-websocket",
       url: input.ws.url,
       ...(input.ws.protocols ? { protocols: input.ws.protocols } : {}),
-    });
-    const launched = await backgroundWorkSupervisor.launch(admission);
-    if (!launched || launched.state !== "running") {
-      piBackgroundWorkBackend.discard(admission.item.id);
-      throw new Error(
-        launched?.outcomeSummary ?? "WebSocket monitor launch failed",
-      );
-    }
-    state = launched.state;
-  }
+    }),
+  );
+  return admittedResult(answer, "WebSocket monitor launch failed");
+}
+
+/**
+ * The tool's answer to an admission: a denial or a new item that is not
+ * running fails the call; a retried call answers the item it admitted before.
+ */
+function admittedResult(
+  answer: BackgroundWorkAdmitAnswer,
+  launchFailure: string,
+): ToolResult {
+  if (!answer.admitted)
+    throw new Error(`Background work denied: ${answer.message}`);
+  if (!answer.reused && answer.state !== "running")
+    throw new Error(answer.outcomeSummary ?? launchFailure);
   return jsonResult({
-    taskId: admission.item.id,
-    state,
-    ...(admission.item.intent === "service"
+    taskId: answer.itemId,
+    state: answer.state,
+    ...(answer.intent === "service"
       ? { intent: "service" }
-      : { hint: backgroundWorkIntentHint(admission.item.id) }),
+      : { hint: backgroundWorkIntentHint(answer.itemId) }),
   });
 }

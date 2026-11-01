@@ -22,6 +22,7 @@ import {
   type SubstituteHandler,
 } from "../worker/worker.ts";
 import type { WatchSnapshot } from "../worker/watch.ts";
+import type { BackgroundWorkAdmitter } from "../workerProtocol/backgroundWorkMethods.ts";
 import type { WorkerConnection } from "../workerProtocol/connection.ts";
 import type { HostedEngineFactory } from "../workerProtocol/engineMethods.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
@@ -34,10 +35,12 @@ import type {
   SessionToolPermission,
 } from "../workerProtocol/sessionHookMethods.ts";
 import { appToolHandlers, type AdmittedPeer } from "./appToolHost.ts";
+import { backgroundWorkHandlers } from "./backgroundWorkHost.ts";
 import { engineDeliveries } from "./engineClient.ts";
 import { isolationBoundary } from "./isolationBoundary.ts";
 import { DEFAULT_WORKER_ID } from "./placement.ts";
 import { sessionHookHandlers } from "./sessionHookHost.ts";
+import { skillHandlers } from "./skillHost.ts";
 import { watchDeliveries } from "./watchDeliveries.ts";
 import { workerRegistry } from "./workerRegistry.ts";
 
@@ -83,6 +86,8 @@ export function ensureInProcessWorker(): WorkerConnection {
       ...deliveries.handlers,
       ...appToolHandlers(peer),
       ...sessionHookHandlers(peer),
+      ...backgroundWorkHandlers(peer),
+      ...skillHandlers(peer),
       ...engineDeliveries(() => connection),
     },
   });
@@ -186,9 +191,34 @@ export function persistSessionOutput(
   return sessionHookCallsNow().persistOutput(request, signal);
 }
 
+/**
+ * How server-built pi options materialize a frozen skill set before a loader
+ * reload (`buildAgentOptions`): the in-process Worker's `skills.materialize`,
+ * as an engine on it asks.
+ */
+export function materializeSkillsThroughWorker(
+  names: readonly string[],
+): Promise<void> {
+  ensureInProcessWorker();
+  return current!.worker.materializeSkills(names);
+}
+
 /** Boot: dial the in-process Worker before the first checkout needs it. */
 export function startInProcessWorker(): void {
   ensureInProcessWorker();
+}
+
+/**
+ * Test seam: how a test's pi background tools admit their work, as an engine
+ * on the current in-process Worker does (`backgroundWork.admit`).
+ */
+export function inProcessBackgroundWorkForTests(): BackgroundWorkAdmitter {
+  return {
+    admit: (request, runner, signal) => {
+      ensureInProcessWorker();
+      return current!.worker.backgroundWork.admit(request, runner, signal);
+    },
+  };
 }
 
 /** Test seam: how many requests in-process Workers have decoded and served. */
