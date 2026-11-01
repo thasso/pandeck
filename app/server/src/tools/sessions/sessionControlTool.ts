@@ -1,12 +1,13 @@
 /**
- * `session_control`: cancel the caller's queued peer prompts, or stop a peer
- * session that the caller spawned and still owns.
- *
- * The two operations share one target and one authority boundary. A sender may
- * retract only its own not-yet-dispatched messages. A coordinator may abort only
- * a child whose durable spawn edge still says `coordinator`; the user's explicit
- * takeover revokes that authority.
+ * `session_control`: retract the caller's waiting peer prompts, stop an owned
+ * child, or dismiss its unhandled background updates while it is not running.
+ * A sender may retract only its own messages. Stopping and dismissal require a
+ * direct spawn edge still owned by `coordinator`; user takeover revokes both.
  */
+import {
+  dismissAllBackgroundHandling,
+  unhandledBackground,
+} from "../../backgroundCompletionNotices.ts";
 import { sessionStore } from "../../db/sessionStore.ts";
 import { noteDelegationStandDown } from "../../delegationFailureNotice.ts";
 import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
@@ -14,7 +15,8 @@ import { cancelQueuedPeerPrompts } from "../../peerPrompt.ts";
 import { sessionRuntime } from "../../session/runtimeInstance.ts";
 import { cleanSessionId, SessionInspectionError } from "./sessionInspection.ts";
 
-type SessionControlOperation = "cancel_queued_prompts" | "stop";
+type SessionControlOperation =
+  "cancel_queued_prompts" | "stop" | "dismiss_background_updates";
 type SessionControlParams = {
   operation?: unknown;
   targetSessionId?: unknown;
@@ -48,9 +50,9 @@ function makeSessionControlTool() {
     name: "session_control",
     label: "Control Session",
     description:
-      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it.",
+      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it. dismiss_background_updates is the user's Dismiss for every unhandled update of your still-owned direct child, refused while it runs; dismissal is not handling and leaves jobs and output unchanged.",
     searchHint:
-      "stop abort spawned child cancel retract remove queued peer delivery clear queue",
+      "stop abort spawned child cancel retract remove queued peer delivery clear queue dismiss unhandled background updates",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -58,9 +60,9 @@ function makeSessionControlTool() {
       properties: {
         operation: {
           type: "string",
-          enum: ["cancel_queued_prompts", "stop"],
+          enum: ["cancel_queued_prompts", "stop", "dismiss_background_updates"],
           description:
-            '"cancel_queued_prompts" retracts only your own waiting messages. "stop" aborts a still-owned spawned child.',
+            '"cancel_queued_prompts" retracts your waiting messages. "stop" aborts an owned child. "dismiss_background_updates" dismisses its interrupted receipts.',
         },
         targetSessionId: {
           type: "string",
@@ -80,6 +82,8 @@ function makeSessionControlTool() {
 
       const operation = readOperation(params.operation);
       const targetSessionId = requireSessionId(params.targetSessionId);
+      if (operation !== "stop" && params.clearQueue !== undefined)
+        throw new Error('clearQueue is only valid with operation "stop".');
       if (targetSessionId === ctx.session.sessionId)
         throw new Error(
           "Cannot control the current session through session_control.",
@@ -87,8 +91,6 @@ function makeSessionControlTool() {
       requireUserTarget(targetSessionId);
 
       if (operation === "cancel_queued_prompts") {
-        if (params.clearQueue !== undefined)
-          throw new Error('clearQueue is only valid with operation "stop".');
         const cancelled = cancelQueuedPeerPrompts({
           senderSessionId: ctx.session.sessionId,
           recipientSessionId: targetSessionId,
@@ -98,6 +100,21 @@ function makeSessionControlTool() {
           cancelled.length === 0
             ? `No queued prompts from this session to ${targetSessionId} were waiting.`
             : `Cancelled ${cancelled.length} queued prompt${cancelled.length === 1 ? "" : "s"} from this session to ${targetSessionId}.`,
+        );
+      }
+
+      if (operation === "dismiss_background_updates") {
+        requireOwnedChild(ctx.session.sessionId, targetSessionId, "dismissed");
+        if (runtime().isRunning(targetSessionId))
+          throw new Error(
+            `Session ${targetSessionId} is running; dismiss its background updates once its turn ends.`,
+          );
+        const dismissed = dismissAllBackgroundHandling(targetSessionId);
+        const remaining = unhandledBackground(targetSessionId).count;
+        return textResult(
+          dismissed === 0
+            ? `${targetSessionId} had no unhandled background updates. Dismissed 0; ${remaining} remain.`
+            : `Dismissed ${dismissed} unhandled background update${dismissed === 1 ? "" : "s"} of ${targetSessionId}; they were not handled, and their jobs and output files are unchanged. ${remaining} remain.`,
         );
       }
 
@@ -127,8 +144,15 @@ function makeSessionControlTool() {
 }
 
 function readOperation(value: unknown): SessionControlOperation {
-  if (value === "cancel_queued_prompts" || value === "stop") return value;
-  throw new Error('operation must be "cancel_queued_prompts" or "stop".');
+  if (
+    value === "cancel_queued_prompts" ||
+    value === "stop" ||
+    value === "dismiss_background_updates"
+  )
+    return value;
+  throw new Error(
+    'operation must be "cancel_queued_prompts", "stop" or "dismiss_background_updates".',
+  );
 }
 
 function requireSessionId(value: unknown): string {
@@ -156,6 +180,7 @@ function requireUserTarget(sessionId: string): void {
 function requireOwnedChild(
   coordinatorSessionId: string,
   childSessionId: string,
+  verb = "stopped",
 ): void {
   const spawn = sessionStore
     .spawnedParentsByChildIds([childSessionId])
@@ -166,7 +191,7 @@ function requireOwnedChild(
     );
   if (spawn.ownership !== "coordinator")
     throw new Error(
-      `Session ${childSessionId} is no longer owned by the current session (${spawn.ownership}); it cannot be stopped here.`,
+      `Session ${childSessionId} is no longer owned by the current session (${spawn.ownership}); it cannot be ${verb} here.`,
     );
 }
 

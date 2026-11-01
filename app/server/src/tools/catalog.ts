@@ -544,9 +544,9 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       id: "session-controls",
       label: "Session controls",
       description:
-        "Stop a still-owned spawned child or retract queued peer deliveries, or lower this session's own compaction window.",
+        "Stop a still-owned child, dismiss its unhandled background updates, retract queued peer deliveries, or lower this session's compaction window.",
       searchHint:
-        "stop abort spawned child cancel retract remove queued delivery clear queue compaction window context lower",
+        "stop abort spawned child dismiss unhandled background updates cancel retract remove queued delivery clear queue compaction window context lower",
       loading: "deferred",
       family: "shared",
       tools: [...sessionControlTools(), ...sessionCompactionWindowTools()],

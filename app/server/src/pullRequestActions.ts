@@ -62,8 +62,10 @@ import {
 import { runPushWorkflow } from "./pushWorkflow.ts";
 import { taskSummaryOf, updateTask } from "./tasks.ts";
 import {
-  sessionSettleBlockedReason,
+  formatSessionSettleBlockers,
+  sessionSettleBlocker,
   settleSessionsForRemovedWorktree,
+  type SessionSettleBlocker,
 } from "./sessionActivity.ts";
 import {
   removeWorktree,
@@ -139,15 +141,18 @@ export interface PullRequestActionOperations {
    */
   headCommit(row: WorktreeRow): Promise<string | undefined>;
   /**
-   * Why a session may NOT leave the inbox yet, in the shared wording, or
-   * `undefined` when it may. Cleanup ends by settling the card's session and
-   * every other live session on its worktree, so each answers to the same
+   * Why a session may NOT leave the inbox yet, with identity and recovery
+   * facts for the shared formatter, or `undefined` when it may. Cleanup settles
+   * the card's session and every other live session on its worktree, so each
+   * answers to the same
    * predicate `connection.onSettleSession` and the browser use — "still
    * running" is not the only thing that is not done enough to leave; a queued
    * prompt and a pending approval/question are not either, and this action also
    * takes the worktree away.
    */
-  sessionSettleBlockedReason(sessionId: string): Promise<string | undefined>;
+  sessionSettleBlocker(
+    sessionId: string,
+  ): Promise<SessionSettleBlocker | undefined>;
   /**
    * Hold the WORKTREE against any run starting on it. `undefined` = refused,
    * because a run is already in flight there. Checking "is this session
@@ -207,7 +212,7 @@ const defaultOperations: PullRequestActionOperations = {
   },
   // The shared predicate, so this button, the worktree page's Remove and
   // `connection.onSettleSession` block on exactly the same thing.
-  sessionSettleBlockedReason,
+  sessionSettleBlocker,
   reserveWorktreeForRemoval,
   liveSessionsForWorktree: liveSessionIdsForWorktree,
   // The SHARED answer to "the checkout is gone, what happens to its sessions",
@@ -717,8 +722,8 @@ async function cleanup(
   if (card.cleanedUp) throw new Error("This worktree was already cleaned up.");
   const row = await requireWorktree(card, operations, "clean up");
   // Adapt the card's injectable seams to the shared retire sequence. Its own
-  // session stays first so this surface can preserve its subject-aware refusal
-  // and outcome wording; the inbox uses the worktree-wide defaults directly.
+  // session stays first, even when it is no longer in the live worktree list.
+  // Share refusal rendering, but keep this surface's selection and exemptions.
   const retireOperations: WorktreeRetireOperations = {
     resolveWorktree: operations.worktreeRow,
     refreshBase: operations.refreshBase,
@@ -839,15 +844,16 @@ async function requireSettleable(
   sessionIds: string[],
   operations: PullRequestActionOperations,
 ): Promise<void> {
-  for (const [index, sessionId] of sessionIds.entries()) {
-    const blocked = await operations.sessionSettleBlockedReason(sessionId);
-    if (!blocked) continue;
-    const subject =
-      index === 0 ? "this session" : "another session on this worktree";
-    throw new Error(
-      `Cleanup ends by settling ${subject}, but ${blocked} Nothing was removed — try again once that is resolved.`,
-    );
+  const blockers: SessionSettleBlocker[] = [];
+  for (const sessionId of sessionIds) {
+    const blocked = await operations.sessionSettleBlocker(sessionId);
+    if (blocked) blockers.push(blocked);
   }
+  const blocked = formatSessionSettleBlockers(blockers);
+  if (blocked)
+    throw new Error(
+      `Cleanup ends by settling the sessions on this worktree, but ${blocked} Nothing was removed — try again once that is resolved.`,
+    );
 }
 
 async function requireWorktree(

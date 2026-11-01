@@ -458,6 +458,21 @@ export const backgroundDeliveryOutboxStore = {
     });
   },
 
+  /** Dismiss every interrupted receipt of this session at call time. */
+  dismissInterrupted(sessionId: string): number {
+    return withDbTransaction(() => {
+      const dismissed = Number(
+        getDb()
+          .prepare(
+            "DELETE FROM background_delivery_outbox WHERE session_id=? AND phase='interrupted'",
+          )
+          .run(sessionId).changes,
+      );
+      touchSessionRows([sessionId]);
+      return dismissed;
+    });
+  },
+
   /**
    * The output artifacts no cap may evict for this session: those of its
    * background work not yet terminal (evidence is recorded before the end is),

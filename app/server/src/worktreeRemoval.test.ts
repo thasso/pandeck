@@ -9,7 +9,7 @@
  *   pnpm --filter @assistant/server test src/worktreeRemoval.test.ts
  */
 import assert from "node:assert/strict";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import {
   removeWorktreeAndSettleSessions,
   retireWorktree,
@@ -96,6 +96,73 @@ function retireRecorder(overrides: Partial<WorktreeRetireOperations> = {}) {
   };
   return { calls, operations };
 }
+
+test("default Retire and Remove wrappers preserve every session identity and the clearing remedy before git effects", async () => {
+  const { insertWorktree, linkSessionToWorktree } =
+    await import("./db/worktreeStore.ts");
+  const { sessionStore } = await import("./db/sessionStore.ts");
+  const { hub } = await import("./hub.ts");
+  const worktreeId = "wt-default-retire-blockers";
+  const sessionId = "default-retire-blocking-session";
+  insertWorktree({
+    ...row,
+    id: worktreeId,
+    mainRepoRoot: "/nonexistent/retire",
+    path: "/nonexistent/retire/wt",
+  });
+  sessionStore.upsert({
+    id: sessionId,
+    title: "Retired helper",
+    harness: "pi",
+    agentType: "assistant",
+  });
+  linkSessionToWorktree(sessionId, worktreeId);
+  const list = vi.spyOn(hub, "listSessions").mockReturnValue([
+    {
+      id: sessionId,
+      title: "Retired helper",
+      unhandledBackgroundUpdates: 3,
+      isStreaming: false,
+    } as import("./sessions.ts").InternalSessionListItem,
+  ]);
+  try {
+    // No checkout exists, so reaching any git effect would fail this test.
+    const retired = await retireWorktree(worktreeId);
+    assert.equal(retired.status, "refused");
+    if (retired.status !== "refused")
+      assert.fail("must refuse before refreshing base");
+    assert.equal(retired.refusalKind, "sessions");
+    assert.match(
+      retired.refusal!,
+      /^Retiring this worktree settles the sessions working in it, but /,
+    );
+    assert.ok(retired.refusal!.includes(`"Retired helper" ${sessionId}`));
+    assert.match(
+      retired.refusal!,
+      /Recover or Dismiss.*dismiss_background_updates/,
+    );
+    assert.match(retired.refusal!, /Nothing was removed/);
+    const { worktreeSettleBlockedReason } =
+      await import("./sessionActivity.ts");
+    const fragment = (await worktreeSettleBlockedReason(worktreeId))!;
+    const { operations, calls } = recorder({
+      settleBlockedReason: async () => fragment,
+    });
+    const removed = await removeWorktreeAndSettleSessions(
+      worktreeId,
+      {},
+      operations,
+    );
+    assert.equal(
+      removed,
+      `Removing this worktree settles the sessions working in it, but ${fragment} Nothing was removed — try again once that is resolved.`,
+    );
+    assert.deepEqual(calls, []);
+  } finally {
+    list.mockRestore();
+    sessionStore.remove(sessionId);
+  }
+});
 
 test("own-job exemption reaches both gate reads and the tracked-work sweep before settlement", async () => {
   const exempt = { itemId: "merge-job", ownerSessionId: "requester" };

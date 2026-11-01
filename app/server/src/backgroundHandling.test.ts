@@ -1609,6 +1609,80 @@ async function failedBatch(count = 1) {
   return { id, provider, w, items, refs, before };
 }
 
+test("dismiss-all deletes only this session's interrupted receipts and publishes only real changes", () => {
+  const target = session().id;
+  const other = session().id;
+  const changed: string[] = [];
+  notices.setBackgroundHandlingHost({ changed: (id) => changed.push(id) });
+  const seed = (
+    id: string,
+    itemId: string,
+    phase: "owed" | "reserved" | "handling" | "interrupted",
+  ) => {
+    const item = { itemId, revision: 1 };
+    const attempt = `claim-${itemId}`;
+    backgroundDeliveryOutboxStore.save({
+      sessionId: id,
+      ...item,
+      disposition: "wake",
+      retained: false,
+    });
+    if (phase === "owed") return;
+    assert.ok(
+      backgroundDeliveryOutboxStore.reserve(id, attempt, [item], "owed"),
+    );
+    if (phase === "reserved") return;
+    backgroundDeliveryOutboxStore.bind(id, attempt, attempt, "entry");
+    if (phase === "interrupted")
+      backgroundDeliveryOutboxStore.settleRun(id, attempt, "failed");
+  };
+  seed(target, "target-owed", "owed");
+  seed(target, "target-reserved", "reserved");
+  seed(target, "target-handling", "handling");
+  seed(target, "target-interrupted-a", "interrupted");
+  seed(target, "target-interrupted-b", "interrupted");
+  seed(other, "other-owed", "owed");
+  seed(other, "other-interrupted", "interrupted");
+  try {
+    assert.equal(notices.dismissAllBackgroundHandling(target), 2);
+    // Expected identities and phases come from the fixture, not the deletion predicate.
+    assert.deepEqual(rows(target), [
+      { itemId: "target-owed", phase: "owed", interruption: null },
+      { itemId: "target-reserved", phase: "reserved", interruption: null },
+      { itemId: "target-handling", phase: "handling", interruption: null },
+    ]);
+    assert.deepEqual(rows(other), [
+      { itemId: "other-owed", phase: "owed", interruption: null },
+      {
+        itemId: "other-interrupted",
+        phase: "interrupted",
+        interruption: "failed",
+      },
+    ]);
+    assert.equal(notices.dismissAllBackgroundHandling(target), 0);
+    assert.deepEqual(changed, [target]);
+  } finally {
+    notices.setBackgroundHandlingHost(undefined);
+  }
+});
+
+test("dismiss-all cannot take the receipts a manual Recover already claimed", async () => {
+  const { id, provider, w, refs } = await failedBatch(2);
+  provider.mode = "manual";
+  const recovering = await w.recover(id, refs);
+  assert.ok("done" in recovering);
+  await settle();
+  assert.deepEqual(
+    rows(id).map((row) => row.phase),
+    ["handling", "handling"],
+  );
+  assert.equal(notices.dismissAllBackgroundHandling(id), 0);
+  assert.equal(rows(id).length, 2);
+  provider.open.shift()!({ stopReason: "end" });
+  await recovering.done;
+  assert.deepEqual(rows(id), []);
+});
+
 test("a Recover refused after its claim by a busy runtime or a released harness keeps the failed receipt, its refs and its transcript locator", async () => {
   for (const race of ["busy", "released"] as const) {
     const { id, provider, w, items, refs, before } = await failedBatch(3);

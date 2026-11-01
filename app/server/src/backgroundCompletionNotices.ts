@@ -765,6 +765,16 @@ export function dismissBackgroundHandling(
 }
 
 /**
+ * The owning coordinator's Dismiss door: cancel every interrupted receipt at
+ * call time, recording nothing as handled. Jobs and output stay untouched.
+ */
+export function dismissAllBackgroundHandling(sessionId: string): number {
+  const dismissed = backgroundDeliveryOutboxStore.dismissInterrupted(sessionId);
+  if (dismissed > 0) handlingChanged(sessionId);
+  return dismissed;
+}
+
+/**
  * How many facts this session was given and did not finish handling, and
  * the oldest of them as the user's commands name them.
  */

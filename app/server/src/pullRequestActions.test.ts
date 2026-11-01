@@ -10,14 +10,19 @@
  * git, not these decisions.
  */
 import assert from "node:assert/strict";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import {
   applyPatch,
   type Patch,
   type PullRequestMergeMethod,
 } from "@assistant/shared";
 import { taskStore } from "./db/taskStore.ts";
-import { insertWorktree, type WorktreeRow } from "./db/worktreeStore.ts";
+import {
+  insertWorktree,
+  linkSessionToWorktree,
+  type WorktreeRow,
+} from "./db/worktreeStore.ts";
+import { sessionStore } from "./db/sessionStore.ts";
 import type { GitHostingProvider } from "./gitHosting.ts";
 import {
   beginPullRequestCardObservation,
@@ -182,7 +187,7 @@ function recorder(
       calls.push("head-commit");
       return "local-head";
     },
-    sessionSettleBlockedReason: async () => undefined,
+    sessionSettleBlocker: async () => undefined,
     // The REAL lease: the race these tests are about is between this hold and
     // the prompt facade's check, so faking it would test nothing.
     reserveWorktreeForRemoval,
@@ -546,7 +551,11 @@ test("cleanup is refused before the pull request is merged", async () => {
 test("cleanup is refused whenever the session may not be settled", async () => {
   const subject = card({ status: "merged" });
   const rec = recorder({
-    sessionSettleBlockedReason: async () => "work is queued behind it.",
+    sessionSettleBlocker: async (sessionId) => ({
+      sessionId,
+      reason: "work is queued behind it.",
+      unhandled: false,
+    }),
   });
 
   await assert.rejects(
@@ -556,10 +565,242 @@ test("cleanup is refused whenever the session may not be settled", async () => {
   assert.deepEqual(rec.calls, []);
 });
 
+test("cleanup reports both blocked helpers and their recovery remedy before any git effect", async () => {
+  const subject = card({ status: "merged" });
+  const ids = ["first-blocking-child-full-id", "second-blocking-child-full-id"];
+  const checked: string[] = [];
+  const rec = recorder({
+    liveSessionsForWorktree: () => ["session-1", ...ids],
+    sessionSettleBlocker: async (sessionId) => {
+      checked.push(sessionId);
+      return ids.includes(sessionId)
+        ? {
+            sessionId,
+            reason: "background updates it was given were not handled.",
+            unhandled: true,
+          }
+        : undefined;
+    },
+  });
+  await assert.rejects(
+    runPullRequestCardAction(subject.id, "cleanup", {}, rec.operations),
+    (error: Error) => {
+      for (const id of ids)
+        assert.ok(
+          error.message.includes(
+            `${id}: background updates it was given were not handled.`,
+          ),
+        );
+      assert.equal(
+        (error.message.match(/Recover or Dismiss/g) ?? []).length,
+        2,
+      );
+      assert.equal(
+        (error.message.match(/dismiss_background_updates/g) ?? []).length,
+        2,
+      );
+      assert.match(error.message, /Nothing was removed/);
+      return true;
+    },
+  );
+  assert.deepEqual(checked, ["session-1", ...ids]);
+  assert.deepEqual(rec.calls, []);
+});
+
+test("cleanup keeps the card session first when absent from live ids and exempts only its acting session", async () => {
+  const subject = card({ status: "merged" });
+  const checked: string[] = [];
+  const title = `helper "quoted"\n${"x".repeat(200)}`;
+  const rec = recorder({
+    liveSessionsForWorktree: () => ["acting-session", "sibling-with-updates"],
+    sessionSettleBlocker: async (sessionId) => {
+      checked.push(sessionId);
+      assert.notEqual(
+        sessionId,
+        "acting-session",
+        "acting-session exemption survives aggregation",
+      );
+      return sessionId === "session-1"
+        ? { sessionId, reason: "work is queued behind it.", unhandled: false }
+        : {
+            sessionId,
+            title,
+            reason: "background updates it was given were not handled.",
+            unhandled: true,
+          };
+    },
+  });
+  await assert.rejects(
+    runPullRequestCardActionWithActor(
+      subject.id,
+      "cleanup",
+      {},
+      { kind: "user" },
+      "acting-session",
+      rec.operations,
+    ),
+    (error: Error) => {
+      const message = error.message;
+      assert.ok(
+        message.includes("session session-1: work is queued behind it."),
+      );
+      assert.ok(
+        message.includes(
+          `session ${JSON.stringify(title.slice(0, 80))} sibling-with-updates: background updates`,
+        ),
+      );
+      assert.ok(
+        message.indexOf("session-1:") <
+          message.indexOf("sibling-with-updates:"),
+      );
+      assert.equal((message.match(/Recover or Dismiss/g) ?? []).length, 1);
+      assert.equal(
+        (message.match(/dismiss_background_updates/g) ?? []).length,
+        1,
+      );
+      assert.ok(!message.includes("acting-session"));
+      assert.match(message, /Nothing was removed/);
+      return true;
+    },
+  );
+  assert.deepEqual(checked, ["session-1", "sibling-with-updates"]);
+  assert.deepEqual(rec.calls, []);
+});
+
+test("default cleanup uses projected blocker identities and remedies, excluding only acting and finished siblings", async () => {
+  const { hub } = await import("./hub.ts");
+  const worktreeId = "wt-pr-default-blockers";
+  const cardSession = "pr-default-card-session";
+  const unhandled = "pr-default-unhandled-session";
+  const running = "pr-default-running-session";
+  const acting = "pr-default-acting-session";
+  const archived = "pr-default-archived-session";
+  const settled = "pr-default-settled-session";
+  const deleted = "pr-default-deleted-session";
+  const ids = [
+    cardSession,
+    unhandled,
+    running,
+    acting,
+    archived,
+    settled,
+    deleted,
+  ];
+  insertWorktree({
+    ...worktreeRow,
+    id: worktreeId,
+    mainRepoRoot: "/nonexistent/pr-default",
+    path: "/nonexistent/pr-default/wt",
+  });
+  for (const id of ids) {
+    sessionStore.upsert({
+      id,
+      title: id,
+      harness: "pi",
+      agentType: "assistant",
+    });
+    linkSessionToWorktree(id, worktreeId);
+  }
+  // The card's own session remains part of its consequence even off the live list.
+  sessionStore.setSettled(cardSession, true);
+  sessionStore.setArchived(archived, true);
+  sessionStore.setSettled(settled, true);
+  sessionStore.remove(deleted);
+  const projected = [
+    {
+      id: cardSession,
+      title: "Card session",
+      isStreaming: false,
+      queuedWork: true,
+      unhandledBackgroundUpdates: 2,
+    },
+    {
+      id: unhandled,
+      title: 'Helper "quoted"\n' + "x".repeat(200),
+      isStreaming: false,
+      unhandledBackgroundUpdates: 2,
+    },
+    { id: running, isStreaming: true, unhandledBackgroundUpdates: 2 },
+    ...[acting, archived, settled, deleted].map((id) => ({
+      id,
+      isStreaming: true,
+    })),
+  ] as import("./sessions.ts").InternalSessionListItem[];
+  const list = vi.spyOn(hub, "listSessions").mockReturnValue(projected);
+  const subject = card({
+    status: "merged",
+    sessionId: cardSession,
+    worktreeId,
+  });
+  try {
+    // Uses ALL default action operations, with a nonexistent checkout. Refusal
+    // must occur before the base refresh, lease or any git effects.
+    await assert.rejects(
+      runPullRequestCardActionWithActor(
+        subject.id,
+        "cleanup",
+        {},
+        { kind: "user" },
+        acting,
+      ),
+      (error: Error) => {
+        const message = error.message;
+        assert.ok(
+          message.includes(
+            `"Card session" ${cardSession}: work is queued behind it.`,
+          ),
+        );
+        assert.ok(
+          message.includes(
+            `${JSON.stringify(projected[1]!.title!.slice(0, 80))} ${unhandled}: background updates it was given were not handled.`,
+          ),
+        );
+        assert.ok(message.includes(`session ${running}: it is still running.`));
+        const queuedEntry = message.slice(
+          message.indexOf(`"Card session" ${cardSession}:`),
+          message.indexOf(
+            ' session "',
+            message.indexOf(`"Card session" ${cardSession}:`),
+          ),
+        );
+        assert.doesNotMatch(
+          queuedEntry,
+          /Recover or Dismiss|dismiss_background_updates/,
+        );
+        const runningEntry = message.slice(
+          message.indexOf(`session ${running}:`),
+        );
+        assert.doesNotMatch(
+          runningEntry,
+          /Recover or Dismiss|dismiss_background_updates/,
+        );
+        assert.match(message, /Recover or Dismiss.*dismiss_background_updates/);
+        assert.equal((message.match(/Recover or Dismiss/g) ?? []).length, 1);
+        for (const excluded of [acting, archived, settled, deleted])
+          assert.ok(!message.includes(excluded), excluded);
+        assert.match(message, /Nothing was removed/);
+        return true;
+      },
+    );
+    assert.deepEqual(
+      list.mock.calls.map(([options]) => [...options!.onlyIds!]),
+      [[cardSession], [unhandled], [running]],
+    );
+    assert.equal(pullRequestCardById(subject.id)?.cleanedUp, undefined);
+  } finally {
+    list.mockRestore();
+    for (const id of ids) sessionStore.remove(id);
+  }
+});
+
 test("coordinator cleanup excludes its own active turn from settlement blocking", async () => {
   const subject = card({ status: "merged" });
   const rec = recorder({
-    sessionSettleBlockedReason: async () => "it is still running.",
+    sessionSettleBlocker: async (sessionId) => ({
+      sessionId,
+      reason: "it is still running.",
+      unhandled: false,
+    }),
   });
 
   const { card: updated } = await runPullRequestCardActionWithActor(
@@ -609,10 +850,12 @@ test("cleanup re-checks the session immediately before removing the worktree", a
   const subject = card({ status: "merged" });
   let checks = 0;
   const rec = recorder({
-    sessionSettleBlockedReason: async () => {
+    sessionSettleBlocker: async (sessionId) => {
       checks += 1;
       // Idle when the action starts; running by the time the fetch is done.
-      return checks === 1 ? undefined : "it is still running.";
+      return checks === 1
+        ? undefined
+        : { sessionId, reason: "it is still running.", unhandled: false };
     },
   });
 
@@ -1154,13 +1397,15 @@ test("cleanup refuses while another session on the worktree is running", async (
   const subject = card({ status: "merged" });
   const rec = recorder({
     liveSessionsForWorktree: () => ["session-1", "session-review"],
-    sessionSettleBlockedReason: async (sessionId) =>
-      sessionId === "session-review" ? "it is still running." : undefined,
+    sessionSettleBlocker: async (sessionId) =>
+      sessionId === "session-review"
+        ? { sessionId, reason: "it is still running.", unhandled: false }
+        : undefined,
   });
 
   await assert.rejects(
     runPullRequestCardAction(subject.id, "cleanup", {}, rec.operations),
-    /another session on this worktree, but it is still running/,
+    /session session-review: it is still running/,
   );
   assert.deepEqual(rec.calls, [], "nothing is touched, not even the base pull");
 });
@@ -1174,8 +1419,10 @@ test("a session linked while the base was fetched is re-checked under the hold",
   let linked = ["session-1"];
   const rec = recorder({
     liveSessionsForWorktree: () => linked,
-    sessionSettleBlockedReason: async (sessionId) =>
-      sessionId === "session-handoff" ? "it is still running." : undefined,
+    sessionSettleBlocker: async (sessionId) =>
+      sessionId === "session-handoff"
+        ? { sessionId, reason: "it is still running.", unhandled: false }
+        : undefined,
     async refreshBase(row) {
       rec.calls.push(`refresh-base:${row.baseBranch}`);
       linked = ["session-1", "session-handoff"];
@@ -1185,7 +1432,7 @@ test("a session linked while the base was fetched is re-checked under the hold",
 
   await assert.rejects(
     runPullRequestCardAction(subject.id, "cleanup", {}, rec.operations),
-    /another session on this worktree, but it is still running/,
+    /session session-handoff: it is still running/,
   );
   assert.ok(!rec.calls.some((call) => call.startsWith("remove:")));
   assert.ok(!rec.calls.includes("settle"));

@@ -194,8 +194,10 @@ the outcome:
   fails with a fixed reason and the spawner gets a notice saying why
   (`docs/delegation-failure-notices.md`). A refused child frees nothing and
   blocks nothing. The spawner cancels a waiting child with `session_control`
-  (`cancel_queued_prompts`, or `stop` with `clearQueue`); the user withdraws it,
-  or sends it now, in the child's composer queue
+  (`cancel_queued_prompts`, or `stop` with `clearQueue`); it may also dismiss a
+  still-owned child's unhandled background updates with
+  `dismiss_background_updates` once the child is not running. The user withdraws
+  it, or sends it now, in the child's composer queue
   (`docs/steering-and-queueing.md`). Deleting the spawner or the child cancels
   its waiting prompt, as does archiving the child (manually, through a run's
   cleanup, or by retention, which a waiting child's queued work normally keeps
@@ -312,7 +314,14 @@ the outcome:
   the running-to-idle hook from immediately starting the next queued prompt.
   Clearing another session's messages is allowed only through that owned-child
   stop operation. Stopping leaves the ordinary session and its transcript
-  intact.
+  intact. `dismiss_background_updates` uses the same direct-parent,
+  `coordinator`-owned edge, with no grandchild or worktree-creator authority. It
+  refuses while the child runs but allows idle, stopped and held children. It
+  dismisses every interrupted background receipt at call time and reports
+  dismissed and remaining counts. Takeover revokes dismissal and hand-back
+  restores it. Dismiss is not handling: jobs, output and the Stop hold stay
+  untouched, and no child timeline note is added. Recover stays user-only; later
+  ordinary turns recover nothing.
 
   #### Peer-message hop limit
 

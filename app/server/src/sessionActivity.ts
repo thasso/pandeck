@@ -541,11 +541,18 @@ function untouchedSinceRunEnded(
 export async function sessionSettleBlockedReason(
   sessionId: string,
 ): Promise<string | undefined> {
+  return (await sessionSettleBlocker(sessionId))?.reason;
+}
+
+/** The same gate with the identity and facts needed for a cleanup refusal. */
+export async function sessionSettleBlocker(
+  sessionId: string,
+): Promise<SessionSettleBlocker | undefined> {
   const { hub } = await import("./hub.ts");
   const row = hub
     .listSessions({ includeArchived: true, onlyIds: new Set([sessionId]) })
     .find((item) => item.id === sessionId);
-  return row ? settleBlockedReason(row) : undefined;
+  return row ? settleBlockerOf(row) : undefined;
 }
 
 /**
@@ -556,19 +563,53 @@ export async function sessionSettleBlockedReason(
  * settleSessionsForRemovedWorktree}), so both removal surfaces owe them this
  * predicate before any git side effect — settling a session that is mid-run,
  * or holding a queued prompt or an unanswered approval, would be settling work
- * that is not done. One list read for all of them; the first blocker answers.
+ * that is not done. One list read supplies every blocker in live-session order.
  */
 export interface BackgroundItemExemption {
   itemId: string;
   ownerSessionId: string;
 }
 
+export interface SessionSettleBlocker {
+  sessionId: string;
+  title?: string;
+  reason: string;
+  unhandled: boolean;
+}
+
 export async function worktreeSettleBlockedReason(
   worktreeId: string,
   exempt?: BackgroundItemExemption,
 ): Promise<string | undefined> {
+  return formatSessionSettleBlockers(
+    await worktreeSettleBlockers(worktreeId, exempt),
+  );
+}
+
+/** One refusal format for worktree Remove, Retire and the /pr cleanup. */
+export function formatSessionSettleBlockers(
+  blockers: readonly SessionSettleBlocker[],
+): string | undefined {
+  if (blockers.length === 0) return undefined;
+  return blockers
+    .map(({ sessionId, title, reason, unhandled }) => {
+      const name = title?.trim().slice(0, 80);
+      const identity = `${name ? `${JSON.stringify(name)} ` : ""}${sessionId}`;
+      const remedy = unhandled
+        ? " Recover or Dismiss them in that session's prompt queue, or the coordinator that spawned it and still owns it can call session_control with dismiss_background_updates."
+        : "";
+      return `session ${identity}: ${reason}${remedy}`;
+    })
+    .join(" ");
+}
+
+async function worktreeSettleBlockers(
+  worktreeId: string,
+  exempt?: BackgroundItemExemption,
+): Promise<SessionSettleBlocker[]> {
   const live = liveSessionIdsForWorktree(worktreeId);
-  if (live.length === 0) return undefined;
+  const blockers: SessionSettleBlocker[] = [];
+  if (live.length === 0) return blockers;
   const { hub } = await import("./hub.ts");
   const rows = hub.listSessions({
     includeArchived: true,
@@ -600,7 +641,7 @@ export async function worktreeSettleBlockedReason(
     // in its quiet grace is safe to close there, unlike ordinary Settle which
     // does not close hosts. Every real job and all other blockers still apply.
     const blocked = row
-      ? settleBlockedReason({
+      ? settleBlockerOf({
           ...row,
           ...(row.backgroundActivity?.activeCount === 0
             ? {
@@ -612,7 +653,20 @@ export async function worktreeSettleBlockedReason(
             : {}),
         })
       : undefined;
-    if (blocked) return blocked;
+    if (blocked) blockers.push(blocked);
   }
-  return undefined;
+  return blockers;
+}
+
+function settleBlockerOf(
+  row: SessionListItem,
+): SessionSettleBlocker | undefined {
+  const reason = settleBlockedReason(row);
+  if (!reason) return undefined;
+  return {
+    sessionId: row.id,
+    ...(row.title !== undefined ? { title: row.title } : {}),
+    reason,
+    unhandled: reason === "background updates it was given were not handled.",
+  };
 }

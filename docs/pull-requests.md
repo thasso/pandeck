@@ -1448,7 +1448,13 @@ a branch another surface just merged and deleted.
   — or holds a queued prompt or a pending approval — refuses the whole action
   instead of being settled while it is not done. The list is taken again under
   the hold, so a session linked while the base was being fetched is included or
-  refuses, never settled unasked.
+  refuses, never settled unasked. A refusal names every blocking live session in
+  live-session order, with its full id, reason and safely quoted title truncated
+  to 80 characters. No blocker identity is omitted. For unhandled background
+  updates it names Recover or Dismiss in that session's prompt queue, or
+  `session_control` `dismiss_background_updates` from the direct coordinator
+  that spawned and still owns it. Removal, Retire and managed-merge cleanup keep
+  this guidance and state that nothing was removed.
 
   The worktree inspector's own Remove is the removal-only variant of the same
   act (it deliberately does not pull or verify main), so it answers the session

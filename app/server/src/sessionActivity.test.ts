@@ -765,15 +765,101 @@ test("worktree removal ignores an empty retained host, but not active work or a 
     );
     projected.backgroundActivity!.activeCount = 0;
     projected.isStreaming = true;
-    assert.equal(
-      await worktreeSettleBlockedReason("wt-finished-host"),
-      "it is still running.",
+    const running = (await worktreeSettleBlockedReason("wt-finished-host"))!;
+    assert.ok(running.includes(id));
+    assert.match(running, /it is still running\./);
+    assert.doesNotMatch(
+      running,
+      /Recover or Dismiss|dismiss_background_updates/,
     );
     projected.isStreaming = false;
     projected.unhandledBackgroundUpdates = 1;
     assert.match(
       (await worktreeSettleBlockedReason("wt-finished-host"))!,
       /not handled/,
+    );
+  } finally {
+    list.mockRestore();
+  }
+});
+
+test("worktree refusals name every blocker in live-session order with safely bounded titles and the applicable remedy", async () => {
+  const { worktreeSettleBlockedReason } = await import("./sessionActivity.ts");
+  const { linkSessionToWorktree, liveSessionIdsForWorktree } =
+    await import("./db/worktreeStore.ts");
+  const { hub } = await import("./hub.ts");
+  const ids: string[] = [];
+  const longTitle = `a"\n${"b".repeat(200)}`;
+  const projected = [] as import("./sessions.ts").InternalSessionListItem[];
+  for (let index = 0; index < 13; index++) {
+    const id = (await liveSession()).id;
+    ids.push(id);
+    linkSessionToWorktree(id, "wt-many-blockers");
+    projected.push({
+      id,
+      ...(index === 0
+        ? { title: longTitle }
+        : index === 1
+          ? {}
+          : { title: `Blocker ${index}` }),
+      isStreaming: index < 12 && index % 2 === 0,
+      // Every blocker has interrupted updates, but only odd rows select that
+      // reason; even rows exercise higher-precedence running + interrupted.
+      unhandledBackgroundUpdates: index < 12 ? 3 : 0,
+    } as import("./sessions.ts").InternalSessionListItem);
+  }
+  // Reverse the projection to prove ordering comes from the live-session list.
+  const list = vi
+    .spyOn(hub, "listSessions")
+    .mockReturnValue([...projected].reverse());
+  try {
+    const fragment = (await worktreeSettleBlockedReason("wt-many-blockers"))!;
+    assert.ok(
+      fragment.includes(
+        `session ${JSON.stringify(longTitle.slice(0, 80))} ${ids[0]}: it is still running.`,
+      ),
+    );
+    assert.ok(!fragment.includes(longTitle.slice(0, 81)));
+    assert.ok(
+      fragment.includes(
+        `session ${ids[1]}: background updates it was given were not handled.`,
+      ),
+    );
+    assert.ok(!fragment.includes(ids[12]!));
+    let previous = -1;
+    for (const id of liveSessionIdsForWorktree("wt-many-blockers").filter(
+      (id) => id !== ids[12],
+    )) {
+      const position = fragment.indexOf(`${id}:`);
+      assert.ok(position > previous, `${id}: present in live order`);
+      previous = position;
+      const row = projected.find((row) => row.id === id)!;
+      const entry = fragment.slice(
+        fragment.lastIndexOf("session ", position),
+        fragment.indexOf("session ", position + id.length) === -1
+          ? undefined
+          : fragment.indexOf("session ", position + id.length),
+      );
+      if (row.isStreaming) {
+        assert.match(entry, /it is still running\./);
+        assert.doesNotMatch(
+          entry,
+          /Recover or Dismiss|dismiss_background_updates/,
+        );
+      } else {
+        assert.match(entry, /not handled/);
+        assert.match(entry, /Recover or Dismiss/);
+        assert.match(entry, /coordinator that spawned it and still owns it/);
+        assert.match(entry, /session_control with dismiss_background_updates/);
+      }
+    }
+    // Running-only refusals carry no irrelevant recovery advice.
+    projected.forEach((row) => {
+      row.unhandledBackgroundUpdates = 0;
+    });
+    assert.doesNotMatch(
+      (await worktreeSettleBlockedReason("wt-many-blockers"))!,
+      /Recover or Dismiss|dismiss_background_updates/,
     );
   } finally {
     list.mockRestore();
@@ -818,10 +904,12 @@ test("removal exempts only the named active item for its actual owner", async ()
     );
     projected.backgroundActivity!.activeCount = 1;
     projected.isStreaming = true;
-    assert.equal(
-      await worktreeSettleBlockedReason("wt-self-removal", exempt),
-      "it is still running.",
-    );
+    const running = (await worktreeSettleBlockedReason(
+      "wt-self-removal",
+      exempt,
+    ))!;
+    assert.ok(running.includes(id));
+    assert.match(running, /it is still running\./);
   } finally {
     item.mockRestore();
     list.mockRestore();
