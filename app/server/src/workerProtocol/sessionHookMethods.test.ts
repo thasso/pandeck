@@ -27,7 +27,6 @@ import {
   type PreToolUseRequest,
   type StopRequest,
 } from "./sessionHookMethods.ts";
-import { WORKER_PROTOCOL_VERSION } from "./version.ts";
 
 /** `payload` through the real framing, as the peer receives it. */
 function wire(payload: Payload, frames = encodeFrames(payload)): Payload {
@@ -65,8 +64,7 @@ function assertInvalid(run: () => unknown, message?: RegExp): void {
   );
 }
 
-test("protocol 1.7 adds the five session-hook methods", () => {
-  assert.equal(WORKER_PROTOCOL_VERSION, "1.7");
+test("protocol 1.7 added the five session-hook methods", () => {
   assert.deepEqual(Object.values(SESSION_HOOK_METHODS).sort(), [
     "sessionHooks.canUseTool",
     "sessionHooks.persistOutput",

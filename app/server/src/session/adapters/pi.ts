@@ -30,6 +30,11 @@ type PiPromptOutcome = "started" | "steered" | "ignored";
 interface PiPromptResult {
   outcome: PiPromptOutcome;
   /**
+   * What the engine actually did, when it reports later than the synchronous
+   * `outcome`; it then replaces `outcome`. A rejection means nothing started.
+   */
+  accepted?: Promise<"steered" | "started">;
+  /**
    * Optional backing engine completion. The adapter uses it only as a fallback:
    * normal pi turns still complete from the observed runCompleted event.
    */
@@ -208,15 +213,26 @@ class PiAdapter implements PromptableAdapter {
         return;
       }
       if (this.pendingRun !== run) return; // synchronous runCompleted already resolved the run.
-      if (result.outcome === "ignored") {
-        this.pendingRun = undefined;
-        reject(new Error("Prompt was not accepted by the pi session."));
-      } else if (result.outcome === "steered") {
-        this.pendingRun = undefined;
-        resolve({ stopReason: "end" });
-      } else {
-        this.watchDriverCompletion(run, result.completed);
+      const settle = (outcome: PiPromptOutcome): void => {
+        if (this.pendingRun !== run) return; // runCompleted already resolved the run.
+        if (outcome === "ignored") {
+          this.pendingRun = undefined;
+          reject(new Error("Prompt was not accepted by the pi session."));
+        } else if (outcome === "steered") {
+          this.pendingRun = undefined;
+          resolve({ stopReason: "end" });
+        } else {
+          this.watchDriverCompletion(run, result.completed);
+        }
+      };
+      if (result.outcome === "ignored" || !result.accepted) {
+        settle(result.outcome);
+        return;
       }
+      result.accepted.then(settle, (err: unknown) => {
+        if (this.pendingRun === run) this.pendingRun = undefined;
+        reject(err);
+      });
     });
   }
 
@@ -231,8 +247,9 @@ class PiAdapter implements PromptableAdapter {
    * failed), but not once model-only context rides along: the facade commits a
    * deferred background fact when this resolves, and the fact would be gone.
    *
-   * A lost race that started a whole turn instead (`"started"`) keeps resolving
-   * immediately: awaiting there would block until the turn ends.
+   * A lost race that started a whole turn instead (`"started"`, whether the
+   * driver saw it or the engine reported it) keeps resolving without waiting
+   * for the turn: awaiting there would block until the turn ends.
    */
   private async promptSteer(
     drive: () => PiPromptResult,
@@ -240,7 +257,8 @@ class PiAdapter implements PromptableAdapter {
     const result = drive();
     if (result.outcome === "ignored")
       throw new Error("Prompt was not accepted by the pi session.");
-    if (result.outcome === "steered") await result.completed;
+    const outcome = (await result.accepted) ?? result.outcome;
+    if (outcome === "steered") await result.completed;
     return { stopReason: "end" };
   }
 
@@ -268,6 +286,8 @@ class PiAdapter implements PromptableAdapter {
     if (result.outcome !== "steered")
       return { stopReason: "end", steered: false };
     try {
+      if ((await result.accepted) === "started")
+        return { stopReason: "end", steered: false };
       await result.completed;
     } catch {
       return { stopReason: "end", steered: false };

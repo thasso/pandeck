@@ -4,8 +4,10 @@
  * Reads are synchronous and answer engine-reported state; every command
  * returns a promise that reaches the consumer reporting its outcome; no member
  * returns an SDK object, only pi's plain data (models, stats, transcript
- * entries). That is the shape the worker protocol serves later (W9b): the
- * reads become its mirror, the commands its requests, `subscribe` its events.
+ * entries). That is the shape the worker protocol serves (`docs/workers.md`):
+ * production holds the remote handle (`remotePiEngine.ts`), whose reads are
+ * its mirror, its commands `engine.command` requests and `subscribe` its
+ * events, over the local handle the Worker hosts (`piEngineHosted.ts`).
  *
  * The engine's loop policy lives here, because it must run synchronously
  * inside pi's own event loop and needs the session's settings: retry
@@ -65,6 +67,17 @@ type PiCommitSessionManager = ToolSessionManager &
 type PiClearContextResult =
   { kind: "skipped" } | { kind: "cleared"; tokensBefore?: number };
 
+/**
+ * What the engine did with a submit or a continuation, and when pi settled it.
+ * `disposition` precedes the turn's first event and rejects when the engine
+ * did nothing; `settled` is a steer's acceptance, or a turn's end. Both are
+ * handled inside the engine, so an unread rejection is never unhandled.
+ */
+interface PiEngineRun {
+  disposition: Promise<"steered" | "started">;
+  settled: Promise<void>;
+}
+
 export interface PiEngineHandle {
   readonly sessionId: string;
   /** Read per access: canonicalization may retarget the file. */
@@ -87,20 +100,25 @@ export interface PiEngineHandle {
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 
   /**
-   * Start a turn, or steer the running one, as the caller decided in its own
-   * synchronous span. `steerOnly` is carried for an engine whose streaming
-   * state the caller read late; the local engine needs no reconciliation.
-   * Settles as pi's call does: a steer on pi's acceptance. `userTurnIdleMs`
-   * is how long the session sat idle before this user turn; the engine prunes
-   * never-used tool loads first when it crossed the cold boundary.
+   * Start a turn, or steer the running one. The local engine does as the
+   * caller decided in its own synchronous span, so its disposition is always
+   * the caller's `steer`. The hosted engine reconciles on its own streaming
+   * state (`piEngineHosted.ts`): it steers exactly when it streams, and
+   * refuses a `steerOnly` steer when idle. `settled` settles as pi's
+   * call does: a steer on pi's acceptance. `userTurnIdleMs` is how long the
+   * session sat idle before this user turn; the engine prunes never-used tool
+   * loads first when it crossed the cold boundary.
    */
   submit(
     text: string,
     images: PiEngineImages,
     intent: { steer: boolean; steerOnly: boolean; userTurnIdleMs: number },
-  ): Promise<void>;
-  /** Continue a failed turn with model-only custom input. */
-  continueFailedTurn(context: string): Promise<void>;
+  ): PiEngineRun;
+  /**
+   * Continue a failed turn with model-only custom input. A failed transcript
+   * write rejects the disposition: no turn starts.
+   */
+  continueFailedTurn(context: string): PiEngineRun;
   /** Omit opaque OpenAI reasoning from context; `false` while streaming. */
   dropEncryptedReasoning(): Promise<boolean>;
   abort(): Promise<void>;
@@ -215,6 +233,22 @@ export function piProviderErrorInfo(
 export interface PiEngineTools {
   activation: PiToolActivation;
   mode: { current: SessionMode };
+}
+
+function engineRun(
+  disposition: "steered" | "started" | Promise<never>,
+  settled: Promise<void>,
+): PiEngineRun {
+  const run: PiEngineRun = {
+    disposition:
+      typeof disposition === "string"
+        ? Promise.resolve(disposition)
+        : disposition,
+    settled,
+  };
+  run.disposition.catch(() => {});
+  run.settled.catch(() => {});
+  return run;
 }
 
 const nativeSessions = new WeakMap<PiEngineHandle, AgentSession>();
@@ -345,37 +379,49 @@ export function localPiEngine(
 
     // pi is called in the caller's synchronous span, before the first await;
     // only its settlement crosses, not a steer's queue disposition.
-    async submit(text, images, intent) {
-      prepareToolsForUserTurn(session.sessionId, intent.userTurnIdleMs);
-      await (intent.steer
-        ? session.steer(text, images)
-        : session.prompt(text, { images }));
+    submit(text, images, intent) {
+      const settled = (async () => {
+        prepareToolsForUserTurn(session.sessionId, intent.userTurnIdleMs);
+        await (intent.steer
+          ? session.steer(text, images)
+          : session.prompt(text, { images }));
+      })();
+      return engineRun(intent.steer ? "steered" : "started", settled);
     },
     continueFailedTurn(context) {
-      const branch = session.sessionManager.getBranch();
-      const last = [...branch]
-        .reverse()
-        .find((entry) => entry.type === "message");
-      // Like pi's own recovery, retain the failed response in the native file but
-      // omit it from model context; Agent.continue requires a user/tool-result tail.
-      if (
-        last?.type === "message" &&
-        last.message.role === "assistant" &&
-        last.message.stopReason === "error"
-      )
-        session.sessionManager.appendContextEdit(last.id, null);
-      session.state.messages =
-        session.sessionManager.buildSessionContext().messages;
+      try {
+        const branch = session.sessionManager.getBranch();
+        const last = [...branch]
+          .reverse()
+          .find((entry) => entry.type === "message");
+        // Like pi's own recovery, retain the failed response in the native file but
+        // omit it from model context; Agent.continue requires a user/tool-result tail.
+        if (
+          last?.type === "message" &&
+          last.message.role === "assistant" &&
+          last.message.stopReason === "error"
+        )
+          session.sessionManager.appendContextEdit(last.id, null);
+        session.state.messages =
+          session.sessionManager.buildSessionContext().messages;
+      } catch (error) {
+        // The write failed before pi was called: nothing started.
+        const failed = Promise.reject(error);
+        return engineRun(failed, failed);
+      }
       // Agent.continue alone bypasses AgentSession's settle/retry/compaction and
       // queue lifecycle. Its public custom-message turn preserves that lifecycle
       // without persisting another user role or making this instruction visible.
-      return session.sendCustomMessage(
-        {
-          customType: "account-continuation",
-          content: context,
-          display: false,
-        },
-        { triggerTurn: true },
+      return engineRun(
+        "started",
+        session.sendCustomMessage(
+          {
+            customType: "account-continuation",
+            content: context,
+            display: false,
+          },
+          { triggerTurn: true },
+        ),
       );
     },
     async dropEncryptedReasoning() {
@@ -498,23 +544,66 @@ export function localPiEngine(
 }
 
 /**
- * Test seam only: the native session behind a local handle, for suites that
- * observe pi itself. Production code never calls it.
+ * What the test seams below reach through a remote handle while the
+ * in-process Worker hosts its engine: the local handle it drives, and a
+ * refresh of its mirror.
+ */
+interface HostedLink {
+  local: () => PiEngineHandle | undefined;
+  refresh: () => Promise<void>;
+}
+
+/** Remote handles, each with its link into the in-process Worker. */
+const hostedLinks = new WeakMap<PiEngineHandle, HostedLink>();
+
+/** Record a remote handle's link, so the test seams see through it. */
+export function linkRemotePiEngine(
+  remote: PiEngineHandle,
+  link: HostedLink,
+): void {
+  hostedLinks.set(remote, link);
+}
+
+/** The local handle `engine` is, or drives through the in-process Worker. */
+function localHandleOf(engine: PiEngineHandle): PiEngineHandle {
+  const link = hostedLinks.get(engine);
+  if (!link) return engine;
+  const handle = link.local();
+  if (!handle) throw new Error("The pi engine is no longer hosted.");
+  return handle;
+}
+
+/**
+ * Test seam only: the native session behind a local handle, or behind the
+ * Worker-side handle a remote one drives, for suites that observe pi itself.
+ * Production code never calls it.
  */
 export function nativePiSessionForTests(engine: PiEngineHandle): AgentSession {
-  const session = nativeSessions.get(engine);
+  const session = nativeSessions.get(localHandleOf(engine));
   if (!session) throw new Error("Not a local pi engine.");
   return session;
 }
 
 /**
- * Test seam only: the tool activation of an engine the host opened. Production
- * code never calls it.
+ * Test seam only: the tool activation of an engine the host opened, directly
+ * or through the in-process Worker. Production code never calls it.
  */
 export function piToolActivationForTests(
   engine: PiEngineHandle,
 ): PiToolActivation {
-  const activation = toolActivations.get(engine);
+  const activation = toolActivations.get(localHandleOf(engine));
   if (!activation) throw new Error("Not a host-opened pi engine.");
   return activation;
+}
+
+/**
+ * Test seam only: bring a remote handle's mirror up to date with what a suite
+ * wrote to pi natively (through {@link nativePiSessionForTests}), outside any
+ * command. A local handle has no mirror. Production code never calls it, and
+ * no engine command or protocol method reaches the refresh.
+ */
+export async function syncPiEngineMirrorForTests(
+  engine: PiEngineHandle,
+): Promise<void> {
+  await hostedLinks.get(engine)?.refresh();
 }

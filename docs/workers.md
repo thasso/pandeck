@@ -216,17 +216,18 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.7` (`1.0` plus the file methods, `1.2`'s path
+What runs today is protocol `1.8` (`1.0` plus the file methods, `1.2`'s path
 methods for checkout reads, `1.3`'s `files.readlink` and inspect `mode` for the
 workflows' reads, `1.4`'s watch methods for the worktree watcher, `1.5`'s
 lifecycle methods for creating, removing and provisioning checkouts, `1.6`'s
-app-tool methods for interactive sessions' app tools, and `1.7`'s session-hook
-methods for their permission and hook decisions and output artifacts), between
-the server and the in-process Worker. The code lives in
-`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
-which imports no server state) and `workers/` (the server's side and placement);
-`workerBoundary.test.ts` keeps that split. The protocol stays out of
-`app/shared/`: the web client never speaks it.
+app-tool methods for interactive sessions' app tools, `1.7`'s session-hook
+methods for their permission and hook decisions and output artifacts, and
+`1.8`'s engine methods for interactive pi sessions' engines), between the server
+and the in-process Worker. The code lives in `app/server/src/workerProtocol/`
+(the protocol), `worker/` (the Worker's side, which imports no server state) and
+`workers/` (the server's side and placement); `workerBoundary.test.ts` keeps
+that split. The protocol stays out of `app/shared/`: the web client never speaks
+it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -690,10 +691,10 @@ which imports no server state) and `workers/` (the server's side and placement);
     throwing hook does today; a binding closes over the live engine's objects,
     which W9/W10 replace.
 
-- **pi engine construction (W9b-1).** No protocol method yet: this slice puts
-  pi's construction where W9b-2 can host it. `openPiEngine(spec, ctx)`
-  (`piSdk/piEngineHost.ts`) is the only production code that creates or opens an
-  interactive pi session; one-shot runs keep their own (`oneShot.ts`).
+- **pi engine construction (W9b-1).** The Worker's pi engine factory calls the
+  opener (W9b-2, below). `openPiEngine(spec, ctx)` (`piSdk/piEngineHost.ts`) is
+  the only production code that creates or opens an interactive pi session;
+  one-shot runs keep their own (`oneShot.ts`).
   - The `PiEngineOpenSpec` is JSON: the transcript (`new` with its cwd, `open`
     with its file, expected id and checked cwd, `fork` with the parent's file
     and id, pi's entry, the position and the app log's origin entry), the
@@ -709,8 +710,9 @@ which imports no server state) and `workers/` (the server's side and placement);
   - The `PiEngineHostContext` is host wiring and never crosses: `childEnv()` is
     the base environment of pi's shell children (foreground `bash` and
     background launches; pi's bin dir is added on top), and `appToolExecutor`
-    routes the session's app tools. The server's opener passes `childProcessEnv`
-    and the in-process Worker's `appTools.call`.
+    routes the session's app tools. The Worker's pi factory passes its own child
+    env (the isolation boundary's) and its `appTools.call`, which waits for the
+    engine's items first (W9b-2).
   - App tools see the transcript only through the handle's
     `toolSessionManager()`. The server's binding keeps the routed call's order,
     gate → `onExecute` → execute: its `onExecute` notes the use on the engine
@@ -729,6 +731,70 @@ which imports no server state) and `workers/` (the server's side and placement);
     `./toolPayloadProbe.ts` and `./piEngine.ts`. `harnessBoundary.test.ts` ("the
     pi engine opener reaches only the pinned server modules") pins both lists; a
     new reach is a plan change.
+
+- **pi engine host (W9b-2).** An interactive pi engine runs on the session's
+  Worker, and the server drives it through protocol `1.8`
+  (`workerProtocol/engineMethods.ts`), which adds four methods keyed by harness
+  and changes no earlier method's meaning, payload or failure shape:
+  - `engine.open { engineId, harness, spec }` opens an engine through the
+    factory the composition root injected for that harness
+    (`startWorker({ engines })`; `worker/` imports no engine folder). It answers
+    the engine's JSON info, a snapshot and the `seq` of the last item before the
+    answer. The server assigns every engine id, unique in its process, and
+    registers it before the request goes out, so items that precede the answer
+    are held and applied after the snapshot. A harness without a factory answers
+    `unknown_harness`; an id the Worker holds, or is still opening, answers
+    `engine_id_taken`.
+  - `engine.command { engineId, commandId, command, args }` runs one
+    harness-defined command. It answers `{ seq, result }`, or, when the engine's
+    command failed, `{ seq, failed, code? }` with the message as text; only a
+    request the Worker cannot serve (an engine it does not hold: `engine_gone`;
+    malformed parameters) fails as a protocol error, without a `seq`. The server
+    settles a result or a failure only once it applied every item up to that
+    `seq`, so a read after awaiting a command sees its effect. The Worker hands
+    each command to its engine in the span that received it, so an engine's
+    commands start in arrival order and a long turn holds back none of them.
+  - `engine.events { engineId, items }` (Worker → server) carries an engine's
+    items, each with a positive, increasing `seq` and a harness-defined `kind`.
+    One delivery per engine is in flight; the next follows the server's `{}`,
+    sent once the items are applied. A delivery for an engine the connection did
+    not open answers `engine_gone`. An engine's app-tool call waits until every
+    item it emitted before the call is acknowledged, so the server's mirror
+    holds what the engine wrote before the tool runs.
+  - `engine.dispose { engineId, discard? }` removes the engine, deleting its
+    file with `discard`; an engine still opening is disposed when its factory
+    returns.
+  - pi's items (`piSdk/piEngineHosted.ts`): `event`, each engine event after the
+    engine's own policy; `disposition`, what the engine did with a `submit` or
+    `continueFailedTurn`, before pi's first event of it; and `state`, after
+    every command, success or failure, before its answer. `event` and `state`
+    carry the handle's state when it changed and the transcript entries appended
+    since the last item (all of them, `reset`, after the file was replaced). The
+    engine reconciles a submit on its own streaming state: it steers exactly
+    when it streams, so a steer that found it idle runs as a prompt and reports
+    `"started"`, and an idle engine refuses a `steerOnly` steer
+    (`steer_not_taken`) without calling pi. A continuation reports `"started"`
+    only once its transcript write succeeded.
+  - The production `PiEngineHandle` is the server's remote handle
+    (`piSdk/remotePiEngine.ts`): every synchronous read answers from the mirror
+    the items keep, each item applied before listeners see it, and every command
+    is an `engine.command`. `markToolUsed` is sent without waiting, ahead of any
+    later command. The model crosses as `{ provider, id }`.
+  - Connection end. The Worker disposes every engine it holds, including one
+    whose factory returns after the end, which is never registered. The server
+    rejects the engines' pending and later commands with `engine_gone` and ends
+    their live sessions as an eviction does (`piStore.onEngineLost`): a running
+    turn is closed through `closeForTeardown`, the session is not deleted, and
+    the next acquisition opens it again on a new connection epoch.
+  - Test seams: `nativePiSessionForTests` and `piToolActivationForTests` resolve
+    a remote handle to the local handle the in-process Worker hosts for it;
+    `syncPiEngineMirrorForTests` brings its mirror up to date after a suite
+    wrote to pi natively, through that in-process link only: no engine command
+    or protocol method reaches it.
+  - Known limits: events cross as JSON, so a tool result's non-JSON `details`
+    arrive in JSON form, as for app tools (W7); the transcript is held twice, in
+    the engine and in the server's mirror; a `message_update` carries pi's whole
+    partial message.
 
 - **Checkout presence (W3d).** Whether a session's checkout exists is a Worker
   answer (`files.exists`), held in `worktrees/checkoutPresence.ts`. Protocol and
@@ -1097,17 +1163,18 @@ Phase 1 ships as slices; each keeps behavior unchanged.
 | W8    | Protocol 1.7; Claude permission and hook decisions and output artifacts via the Worker (Task-1175)                        | landed  |
 | W9a   | The pi engine handle: every live consumer reaches pi through `PiEngineHandle`, with its loop policy behind it (Task-1176) | landed  |
 | W9b-1 | pi engine construction behind one opener over a JSON open spec, its child env injected (Task-1304)                        | landed  |
-| W9b-2 | The engine host protocol: the Worker's engine table, the handle's mirror, the opener behind the Worker (Task-1308)        | planned |
+| W9b-2 | The engine host protocol: the Worker's engine table, the handle's mirror, the opener behind the Worker (Task-1308)        | landed  |
 | W9c   | The pi engine's own server reach: admission, the background-work backend bridge, tool activation (Task-1305)              | planned |
 | W10   | The engine host for Claude sessions (Task-1177)                                                                           | planned |
 | W11   | Isolation boundary and secret store ports: Worker endpoint and child env; the Context7 key's reads (Task-1178)            | landed  |
 
-W9a keeps the handle's failed-turn continuation synchronous up to pi's own
-promise, so a transcript write that throws still reaches `PiAdapter.prompt`'s
-catch. W9b-2's protocol makes that continuation asynchronous, so it has to keep
-the route from account recovery through `PiAdapter.prompt`'s drive and
-`PiLiveSession.continueFailedTurn` to the engine's `appendContextEdit` write
-reporting its error the same way.
+A failed-turn continuation reports asynchronously, across the protocol: a
+transcript write that fails in the engine's `appendContextEdit` rejects the
+run's disposition, pi is never called, and no `disposition` item is sent, so the
+command's failure is what reaches the server. `PiLiveSession`'s
+`continueFailedTurn` marks the run only once the disposition resolves, so on the
+route from account recovery the failure reaches `PiAdapter.prompt` as its
+rejection, with no banner, no failed run and no synthetic turn.
 
 `workerBoundary.test.ts` asserts that no module of the checkout family imports
 `node:fs`, that `gitExec.ts` and `checkoutFileAccess.ts` export no read or

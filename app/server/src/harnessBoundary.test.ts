@@ -143,6 +143,7 @@ const PI_HANDLE_HOLDERS = new Set([
 const PI_ENGINE_TEST_SEAMS = new Set([
   "nativePiSessionForTests",
   "piToolActivationForTests",
+  "syncPiEngineMirrorForTests",
 ]);
 
 /**

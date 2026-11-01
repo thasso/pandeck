@@ -23,6 +23,7 @@ import {
 } from "../worker/worker.ts";
 import type { WatchSnapshot } from "../worker/watch.ts";
 import type { WorkerConnection } from "../workerProtocol/connection.ts";
+import type { HostedEngineFactory } from "../workerProtocol/engineMethods.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import type {
   PersistOutputRequest,
@@ -33,6 +34,7 @@ import type {
   SessionToolPermission,
 } from "../workerProtocol/sessionHookMethods.ts";
 import { appToolHandlers, type AdmittedPeer } from "./appToolHost.ts";
+import { engineDeliveries } from "./engineClient.ts";
 import { isolationBoundary } from "./isolationBoundary.ts";
 import { DEFAULT_WORKER_ID } from "./placement.ts";
 import { sessionHookHandlers } from "./sessionHookHost.ts";
@@ -49,6 +51,19 @@ let current:
 let served = 0;
 const servedByMethod = new Map<string, number>();
 const substitutes = new Map<string, SubstituteHandler>();
+/** The engine factory per harness, registered by each harness's store. */
+const engineFactories = new Map<string, HostedEngineFactory>();
+
+/**
+ * Host `harness`'s engines on in-process Workers from now on: the composition
+ * root's injection, kept here so `workers/` imports no engine folder.
+ */
+export function registerInProcessEngineFactory(
+  harness: string,
+  factory: HostedEngineFactory,
+): void {
+  engineFactories.set(harness, factory);
+}
 
 /** The server's connection to the in-process Worker, dialing one if needed. */
 export function ensureInProcessWorker(): WorkerConnection {
@@ -68,12 +83,14 @@ export function ensureInProcessWorker(): WorkerConnection {
       ...deliveries.handlers,
       ...appToolHandlers(peer),
       ...sessionHookHandlers(peer),
+      ...engineDeliveries(() => connection),
     },
   });
   const worker = startWorker({
     workerId: DEFAULT_WORKER_ID,
     transport: workerEnd,
     childEnv: () => isolationBoundary.workerChildEnv(),
+    engines: (harness) => engineFactories.get(harness),
     onRequest: (method) => {
       served += 1;
       servedByMethod.set(method, (servedByMethod.get(method) ?? 0) + 1);
@@ -182,6 +199,11 @@ export function inProcessWorkerServedForTests(): number {
 /** Test seam: how many `method` requests in-process Workers have served. */
 export function inProcessWorkerServedMethodForTests(method: string): number {
   return servedByMethod.get(method) ?? 0;
+}
+
+/** Test seam: the engines the current in-process Worker holds or is opening. */
+export function inProcessWorkerEnginesForTests(): number {
+  return current?.worker.engines() ?? 0;
 }
 
 /** Test seam: the file handles the current in-process Worker holds. */

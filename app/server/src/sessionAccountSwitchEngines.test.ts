@@ -35,8 +35,11 @@ profiles.setCredentialProfileEnabled(profiles.DEFAULT_CLAUDE_PROFILE_ID, false);
 profiles.setCredentialProfileEnabled(profiles.DEFAULT_OPENAI_PROFILE_ID, false);
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
-const { nativePiSessionForTests, piToolActivationForTests } =
-  await import("./piSdk/piEngine.ts");
+const {
+  nativePiSessionForTests,
+  piToolActivationForTests,
+  syncPiEngineMirrorForTests,
+} = await import("./piSdk/piEngine.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piModelForAccount } = await import("./harnesses/models.ts");
 const { createSession } = await import("./harnesses/create.ts");
@@ -113,7 +116,7 @@ test.each([
     const initialMode = mode === "plan-to-build" ? "plan" : "build";
     const targetMode = mode === "plan-to-build" ? "build" : "plan";
     let staged = false;
-    let renameDuringReopen: (() => void) | undefined;
+    let renameDuringReopen: (() => Promise<unknown>) | undefined;
     const extraTurns = mode === "admission" ? 3 : 0;
     const cleanup: (() => void)[] = [];
     let releaseMove: (() => void) | undefined;
@@ -202,7 +205,9 @@ test.each([
           });
           return stream;
         };
-        if (profile === b && spec.staged === true) renameDuringReopen?.();
+        // Awaited: the rename's write reaches the old handle's mirror with
+        // its answer, as a rename arriving in its own macrotask would.
+        if (profile === b && spec.staged === true) await renameDuringReopen?.();
         if (modeFlip && profile === b && spec.staged === true) {
           staged = true;
           await new Promise<void>((resolve) => {
@@ -230,7 +235,7 @@ test.each([
       const pi = live as import("./piSdk/PiLiveSession.ts").PiLiveSession;
       const old = nativePiSessionForTests(pi.engine);
       if (mode === "rename-during-reopen") {
-        renameDuringReopen = () => void pi.rename("Named while reopening");
+        renameDuringReopen = () => pi.rename("Named while reopening");
       }
       let backgroundPid: number | undefined;
       if (mode === "background") {
@@ -880,6 +885,8 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   });
+  // The appends bypassed the handle; its mirror learns of them here.
+  await syncPiEngineMirrorForTests(pi.engine);
   const previous = piToolActivationForTests(pi.engine);
   previous.initialize(["kb_read"]);
   const exposure = previous.exposure();

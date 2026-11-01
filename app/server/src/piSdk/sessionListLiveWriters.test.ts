@@ -25,7 +25,8 @@ const { hub } = await import("../hub.ts");
 const { assertSessionRowsReported: oracle, publicSessionRows } =
   await import("../test/sessionListPublicOracle.ts");
 const { piStore } = await import("./piStore.ts");
-const { nativePiSessionForTests } = await import("./piEngine.ts");
+const { nativePiSessionForTests, syncPiEngineMirrorForTests } =
+  await import("./piEngine.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { ensureRuntimeSessionWithRuntime } =
@@ -695,10 +696,12 @@ test("Pi native message, tool and retry callbacks report individual native proje
   const count = native.getSessionStats().totalMessages;
   await oracle(
     "Pi native message_end callback",
-    () => {
+    async () => {
       // The installed SDK notifies listeners, then persists in the same span.
       dispatch({ type: "message_end", message });
       native.sessionManager.appendMessage(message);
+      // The append bypassed the handle; its mirror learns of it here.
+      await syncPiEngineMirrorForTests(live.engine);
     },
     { changed: [live.id] },
   );
