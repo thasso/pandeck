@@ -36,11 +36,11 @@ import {
 } from "../mcp/sessionToolServer.ts";
 import {
   planModeToolUnavailableMessage,
+  type AppToolExecutor,
   type ToolSession,
   type ToolSessionManager,
 } from "../mcp/tool.ts";
 import { registerAppToolSession } from "../workers/appToolHost.ts";
-import { appToolExecutorFor } from "../workers/inProcessWorker.ts";
 
 /** The narrow ClaudeSdkSession surface the tool server needs (test-friendly). */
 export interface ClaudeToolSessionSource {
@@ -87,18 +87,29 @@ function sessionTools(source: ClaudeToolSessionSource) {
   );
 }
 
+/** A Claude session's tool server, run by whichever engine mounts it now. */
+export interface ClaudeSessionToolServer extends SessionToolServer {
+  /**
+   * Run calls through `executor` from now on: the engine's own
+   * `appTools.call` path. Answers the release, which clears the slot only
+   * while it is still this binding.
+   */
+  bindExecutor(executor: AppToolExecutor): () => void;
+}
+
 /**
  * Build the per-session tool server a `claude-sdk` session mounts as `pa`.
  * Integration-gate changes push tools/list_changed (wired inside the generic
  * server), so the Claude client can refresh its tool list mid-session.
  *
- * Its calls run on the server through the session's Worker: the server
- * resolves them against this session's binding, registered until `close()`,
- * with the same unknown and inactive checks as the listing.
+ * Its calls run on the server through the engine that mounted it last
+ * (`bindExecutor`), never through another path: the server resolves them
+ * against this session's binding, registered until `close()`, with the same
+ * unknown and inactive checks as the listing. A call no engine runs fails.
  */
 export function createClaudeSessionToolServer(
   source: ClaudeToolSessionSource,
-): SessionToolServer {
+): ClaudeSessionToolServer {
   // The generic server asks for fresh ToolSession facts per call, but commit
   // checkpoints must span tool rounds within one Claude turn. Keep this narrow
   // manager for the lifetime of the per-session tool server.
@@ -135,6 +146,7 @@ export function createClaudeSessionToolServer(
     resolve: (name) => resolveSessionTool(toolset, name),
     session,
   });
+  let executor: AppToolExecutor | undefined;
   const server = createSessionToolServer({
     sessionId: source.id,
     harness: "claude-sdk",
@@ -151,10 +163,20 @@ export function createClaudeSessionToolServer(
       ),
     session,
     onToolExecuted: () => source.broadcastState(),
-    execute: appToolExecutorFor(source.id),
+    execute: (tool, args, ctx) => {
+      if (!executor)
+        throw new Error(`No Claude engine runs ${source.id}'s tools now.`);
+      return executor(tool, args, ctx);
+    },
   });
   return {
     ...server,
+    bindExecutor(next) {
+      executor = next;
+      return () => {
+        if (executor === next) executor = undefined;
+      };
+    },
     close: async () => {
       unregister();
       await server.close();
