@@ -1778,6 +1778,21 @@ interface PendingMutation extends PendingMutationEffect {
   tempId?: string;
 }
 
+/**
+ * The session rows a mutation may have changed: its own ids when it is a
+ * `sessions` write, plus every `sessions` effect it declares. A recovery
+ * forgets exactly these revisions.
+ */
+function touchedSessionIds(mutation: PendingMutation): string[] {
+  return [
+    ...new Set(
+      [mutation, ...(mutation.additionalEffects ?? [])].flatMap((effect) =>
+        effect.topic === "sessions" ? effect.objectIds : [],
+      ),
+    ),
+  ];
+}
+
 type MutationContext =
   | (PendingMutation & {
       pullRequestCardId?: string;
@@ -8152,13 +8167,17 @@ export function useAssistant({
     };
     /**
      * The authoritative re-read after a failed optimistic session mutation:
-     * the transport's silent `sessions` resubscribe (forgetting the ids'
-     * revisions), and an archived re-read while the slice is shown.
+     * the transport's silent `sessions` resubscribe, and an archived re-read
+     * while the slice is shown. It forgets the revisions of every row the
+     * mutation touched (`touchedSessionIds`), so a cache save before the
+     * snapshot lands cannot keep a refused guess at a revision the server
+     * never gave it.
      */
-    const resyncSessions = (mutation?: PendingMutation) => {
-      const ids =
-        mutation?.topic === "sessions" ? [...new Set(mutation.objectIds)] : [];
-      for (const message of replicaTransport.resync("sessions", ids))
+    const resyncSessions = (mutation: PendingMutation) => {
+      for (const message of replicaTransport.resync(
+        "sessions",
+        touchedSessionIds(mutation),
+      ))
         send(message);
       if (stateRef.current.archivedSessionsLoaded)
         dispatch({ kind: "archivedReadRequested" });
@@ -8655,20 +8674,28 @@ export function useAssistant({
         // Optimistic for the same reason a session settle is; the server's
         // `error` (carrying this requestId) triggers the recovery refetch, and
         // the authoritative `workflowRunList` corrects the run either way.
-        // The roles were shelved optimistically too, so the recovery re-reads
-        // the session list; the server re-sends the run list itself with any
-        // refusal.
+        // The roles were shelved optimistically too, so they are a declared
+        // `sessions` effect: a reconnect meanwhile takes the snapshot, and the
+        // recovery forgets their revisions and re-reads the session list; the
+        // server re-sends the run list itself with any refusal.
+        const card = stateRef.current.workflowCards[runId];
+        const roleSessionIds = card ? workflowRunRoleSessionIds(card) : [];
         const requestId = trackMutation(
-          { topic: "workflow", objectIds: [runId] },
+          {
+            topic: "workflow",
+            objectIds: [runId],
+            additionalEffects: [
+              { topic: "sessions", objectIds: roleSessionIds },
+            ],
+          },
           resyncSessions,
         );
-        const card = stateRef.current.workflowCards[runId];
         const observed = Math.max(0, Math.trunc(throughRevision));
         dispatch({
           kind: "optimisticWorkflowRunSettle",
           runId,
           throughRevision: observed,
-          sessionIds: card ? workflowRunRoleSessionIds(card) : [],
+          sessionIds: roleSessionIds,
           now: Date.now(),
         });
         send({
@@ -8705,8 +8732,8 @@ export function useAssistant({
           // list that has since confirmed the same number (a success whose
           // settle was lost to a reconnect), and the server's lists are right
           // either way.
-          () => {
-            resyncSessions();
+          (mutation) => {
+            resyncSessions(mutation);
             refetchWorkflowRuns();
           },
         );
@@ -9251,7 +9278,7 @@ export function useAssistant({
           if (pending.topic === "tasks") recoverTasks(pending);
           if (pending.topic === "worktrees") {
             refetchWorktrees();
-            resyncSessions();
+            resyncSessions(pending);
           }
         };
         // Domain evidence survives either signal order; the core alone owns
@@ -9269,10 +9296,14 @@ export function useAssistant({
           disconnected: () => {
             if (mutation.topic === "tasks")
               replicaTransport.invalidate("tasks", mutation.objectIds);
-            // Its recovery re-reads the live rows: the reconnect subscribe
-            // takes that snapshot instead of a digest, and the resync joins it.
+            // Its recovery re-reads the live rows: forget the touched rows'
+            // revisions and make the reconnect subscribe take that snapshot
+            // instead of a digest, which the resync joins.
             if (mutation.topic === "worktrees")
-              replicaTransport.invalidate("sessions", []);
+              replicaTransport.invalidate(
+                "sessions",
+                touchedSessionIds(mutation),
+              );
           },
           done: (settled, observation) => {
             if (observation) {

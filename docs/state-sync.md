@@ -579,29 +579,33 @@ per-surface sub-tasks — no page invents its own delta format.
   which a client holding nothing for it ignores. Archived rows are never in the
   replica: they are an on-demand `loadArchivedSessions` read answered by
   `archivedSessions` with the request's id, re-read while shown when
-  `archivedSessionCount` moves or a `delete` names one of them. A failed
-  optimistic session mutation resyncs the topic (forget the ids' revisions,
-  resubscribe or join the awaited snapshot). A command whose reply must follow
-  its rows flushes them first (`publishSessionRowsNow`, outside transactions).
-  Revisions live in a separate table because live engine ids need not have a
-  `session_index` row. The peer deadline watermark is the builder's only clock
-  input. One `summaries` batch builds all touched ids. The archived-inclusive
-  audit rebaselines each id at delivered publication; tests check every
-  flush/read, while production logs and repairs missed reporters on a 60 s
-  sweep. A pending global refresh excuses only rows archived in both builds
-  until its delivered publication. Global-stamp provenance preserves the
-  preceding explicit revision for membership checks, so a global stamp cannot
-  report archive/unarchive, appearance or disappearance. That check precedes
-  installing delivered rows. Explicit reporters still cover transitions within
-  the window, including across repeated globals and retries. Collection read
-  errors are consumed by the replica/archive scheduler, never the running chat;
-  stale archive errors have no effect. Archived reads are single-flight with one
-  queued, released only by their own answer/error, disconnect or 30 s timeout.
-  The descriptor has a digest: a digest subscribe is answered by
-  `stateDigest<"sessions">` over exactly the snapshot's rows and revisions (one
-  full build), then one `archivedSessionCount`; `getStateItems` reads live rows
-  by id, and an archived, tombstoned, hidden or unknown id is a `delete` at its
-  stored revision. The shell cache stores rows at rest (`sessionListItemAtRest`:
+  `archivedSessionCount` moves or a `delete` names one of them. A failed or lost
+  optimistic mutation that touched session rows (a `sessions` write, or another
+  domain's write declaring a `sessions` effect: a Workflow Run settle's role
+  sessions, a card cleanup's worktree sessions) resyncs the topic: it forgets
+  every touched row's revision, so a cache save before the snapshot lands keeps
+  no guess at a revision, then resubscribes or joins the awaited snapshot. A
+  command whose reply must follow its rows flushes them first
+  (`publishSessionRowsNow`, outside transactions). Revisions live in a separate
+  table because live engine ids need not have a `session_index` row. The peer
+  deadline watermark is the builder's only clock input. One `summaries` batch
+  builds all touched ids. The archived-inclusive audit rebaselines each id at
+  delivered publication; tests check every flush/read, while production logs and
+  repairs missed reporters on a 60 s sweep. A pending global refresh excuses
+  only rows archived in both builds until its delivered publication.
+  Global-stamp provenance preserves the preceding explicit revision for
+  membership checks, so a global stamp cannot report archive/unarchive,
+  appearance or disappearance. That check precedes installing delivered rows.
+  Explicit reporters still cover transitions within the window, including across
+  repeated globals and retries. Collection read errors are consumed by the
+  replica/archive scheduler, never the running chat; stale archive errors have
+  no effect. Archived reads are single-flight with one queued, released only by
+  their own answer/error, disconnect or 30 s timeout. The descriptor has a
+  digest: a digest subscribe is answered by `stateDigest<"sessions">` over
+  exactly the snapshot's rows and revisions (one full build), then one
+  `archivedSessionCount`; `getStateItems` reads live rows by id, and an
+  archived, tombstoned, hidden or unknown id is a `delete` at its stored
+  revision. The shell cache stores rows at rest (`sessionListItemAtRest`:
   live-derived fields reset to the server's resting values) and a
   `sessionRevisions` sidecar holding only rows that were already at rest when
   saved; a row hydrated without a revision is re-read by the digest's catch-up.
