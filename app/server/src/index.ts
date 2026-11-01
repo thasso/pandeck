@@ -191,7 +191,7 @@ import { probeTtsRuntime } from "./speech/ttsConfig.ts";
 import { ttsEngine } from "./speech/ttsEngine.ts";
 import { handleTtsRequest } from "./speech/ttsHttp.ts";
 import { getSettings } from "./settings.ts";
-import { validateClientMessage } from "./validateClientMessage.ts";
+import { attachClientMessageSocket } from "./clientMessageSocket.ts";
 import { handleWorktreeApi } from "./worktrees/worktreeHttp.ts";
 import { handlePullRequestApi } from "./pullRequestHttp.ts";
 import { handleSessionStatusApi } from "./sessionStatus/sessionStatusHttp.ts";
@@ -1662,30 +1662,7 @@ wss.on("connection", (ws, req) => {
     );
   });
 
-  ws.on("message", (raw) => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
-    // Validate at the trust boundary before dispatch: reject malformed payloads
-    // with a structured error naming the offending type, rather than letting them
-    // crash a handler or corrupt persisted settings.
-    const result = validateClientMessage(parsed);
-    if (!result.ok) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: `Rejected ${result.type} message: ${result.reason}`,
-        }),
-      );
-      return;
-    }
-    connection.handle(result.msg).catch((err) => {
-      ws.send(JSON.stringify({ type: "error", message: String(err) }));
-    });
-  });
+  attachClientMessageSocket(ws, connection);
 
   ws.on("close", () => connection.dispose());
   ws.on("error", () => connection.dispose());

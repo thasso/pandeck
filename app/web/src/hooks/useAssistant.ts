@@ -6373,6 +6373,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         },
       };
     case "error":
+      // Collection reads belong to the replica/archive scheduler, not the chat.
+      if (msg.target?.type === "session" && !msg.target.id) return state;
       return withChat(
         {
           ...state,
@@ -7743,6 +7745,8 @@ export function useAssistant({
         if (!msg.requestId) replicaTransport.snapshotFailed("sessions");
         else
           dispatch({ kind: "archivedReadReleased", requestId: msg.requestId });
+        // In particular, a stale archive error must have no other effect.
+        return;
       }
 
       // And the project list: the Projects pane's note offers the same Retry,

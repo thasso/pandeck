@@ -114,23 +114,43 @@ test("a failed row read reaches neither command; its ids publish on the next rep
   const [capped, coordinator, later] = [seed(), seed(), seed()];
   const runId = settleableRun(coordinator);
   const client = sessionListClient();
+  await client.connection.handle({ type: "subscribe", topics: ["workflow"] });
   await hub.flushPendingBroadcastsForTests();
   client.clear();
   const runList = vi.spyOn(workflowRuns, "broadcastWorkflowRuns");
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
   const reads = failRowReads();
-  try {
-    await client.connection.handle({
-      type: "setSessionPeerTurnCap",
-      sessionId: capped,
-      cap: 4,
+  const originalSettle = sessionStore.setSettled;
+  let capStarted = false;
+  const capDone = new Promise<void>((resolve, reject) => {
+    vi.spyOn(sessionStore, "setSettled").mockImplementation((...args) => {
+      const result = originalSettle(...args);
+      if (args[0] === coordinator && !capStarted) {
+        capStarted = true;
+        // The role write is pending, while its dynamic hub import has not yet
+        // resumed. Start the second command in that same debounce window.
+        queueMicrotask(() => {
+          client.connection
+            .handle({
+              type: "setSessionPeerTurnCap",
+              sessionId: capped,
+              cap: 4,
+              requestId: "req-cap-1310",
+            } as ClientMessage)
+            .then(resolve, reject);
+        });
+      }
+      return result;
     });
-    await client.connection.handle({
+  });
+  try {
+    const settleDone = client.connection.handle({
       type: "settleWorkflowRun",
       runId: String(runId),
       throughRevision: 1,
       requestId: "req-settle-1310",
     } as ClientMessage);
+    await Promise.all([settleDone, capDone]);
   } finally {
     reads.stop();
   }
@@ -140,9 +160,32 @@ test("a failed row read reaches neither command; its ids publish on the next rep
       (m) => m.type === "mutationSettled" && m.requestId === "req-settle-1310",
     ),
   );
+  assert.ok(
+    client.sent.some(
+      (m) => m.type === "mutationSettled" && m.requestId === "req-cap-1310",
+    ),
+  );
+  assert.ok(
+    reads.spy.mock.calls.some(
+      ([opts]) => opts?.onlyIds?.has(capped) && opts.onlyIds.has(coordinator),
+    ),
+    "both callers' ids were coalesced in the failing row build",
+  );
   assert.equal(sessionStore.get(capped)?.peerTurnCap, 4);
   assert.equal(sessionStore.isSettled(coordinator), true);
   assert.ok(runList.mock.calls.length > 0, "the run list followed settlement");
+  assert.ok(
+    client.sent.some(
+      (m) =>
+        m.type === "workflowRunList" &&
+        m.runs.some(
+          (run) =>
+            run.id === String(runId) &&
+            run.attention?.settledRevision === run.attention?.revision,
+        ),
+    ),
+    "the settled run reached the workflow subscriber despite the row failure",
+  );
   assert.ok(
     logged.mock.calls.some((call) =>
       String(call[0]).includes("[sessions] flush failed"),

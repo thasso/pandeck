@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import type { ClientMessage } from "@assistant/shared";
 import { hub } from "./hub.ts";
 import { getDb } from "./db/index.ts";
+import { withChangeSet } from "./db/changeSet.ts";
 import { permanentAssistantStore as pa } from "./db/permanentAssistantStore.ts";
 import {
   sessionListRevisions,
@@ -156,6 +157,34 @@ describe("events", () => {
     } finally {
       if (previous) pa.setSessionId(previous);
       else pa.clearSessionId();
+      client.close();
+    }
+  });
+
+  test("one-row refreshes hide an unbound PA persona while ordinary rows stay public", async () => {
+    const [hidden, ordinary] = [seed("persona"), seed("ordinary")];
+    sessionStore.upsert({
+      id: hidden,
+      harness: "pi",
+      agentType: "personal-assistant",
+    });
+    const client = sessionListClient();
+    try {
+      await flush();
+      client.clear();
+      touchSessionRows([hidden, ordinary]);
+      await flush();
+      const events = client.events().flatMap((batch) => batch.events);
+      assert.ok(
+        events.some((event) => event.id === hidden && event.kind === "delete"),
+      );
+      assert.ok(
+        !events.some((event) => event.id === hidden && event.kind === "upsert"),
+      );
+      const row = events.find((event) => event.id === ordinary);
+      assert.ok(row?.kind === "upsert");
+      assert.equal("file" in row.item, false);
+    } finally {
       client.close();
     }
   });
@@ -398,6 +427,113 @@ describe("the test-mode audit", () => {
     violation(id, "archived");
   });
 
+  test.each(["archive", "tombstone", "disappear", "appear"] as const)(
+    "(j) a global stamp does not report a raw %s transition",
+    async (kind) => {
+      const id = seed(`j-${kind}`, kind === "appear" ? 0 : 2);
+      await unrelatedFlush();
+      touchAllSessionRows("test global");
+      if (kind === "archive") rawArchive(id, Date.now());
+      else if (kind === "tombstone")
+        raw(
+          "UPDATE session_index SET deleted_at_ms = ? WHERE id = ?",
+          Date.now(),
+          id,
+        );
+      else
+        raw(
+          "UPDATE session_index SET message_count = ? WHERE id = ?",
+          kind === "appear" ? 2 : 0,
+          id,
+        );
+      await flush();
+      violation(id);
+    },
+  );
+
+  test("explicit transitions before and after repeated global stamps are reported", async () => {
+    const [before, after, appeared] = [
+      seed("j-before"),
+      seed("j-after"),
+      seed("j-appeared", 0),
+    ];
+    await unrelatedFlush();
+    sessionStore.setArchived(before, true);
+    touchAllSessionRows("first global");
+    sessionStore.setArchived(after, true);
+    sessionStore.upsert({
+      id: appeared,
+      harness: "pi",
+      agentType: "developer",
+      messageCount: 2,
+    });
+    touchAllSessionRows("second global");
+    await flush();
+    clean();
+  });
+
+  test("a rolled-back explicit touch cannot legitimise a global-only transition", async () => {
+    const id = seed("j-rollback");
+    await unrelatedFlush();
+    touchAllSessionRows("test global");
+    getDb().exec("BEGIN");
+    touchSessionRows([id]);
+    getDb().exec("ROLLBACK");
+    rawArchive(id, Date.now());
+    await flush();
+    violation(id, "archived");
+  });
+
+  test.each(["before", "after"] as const)(
+    "an explicit transition %s a global stamp in the same change set is reported",
+    async (order) => {
+      const id = seed(`j-same-${order}`);
+      await unrelatedFlush();
+      withChangeSet(() => {
+        if (order === "before") sessionStore.setArchived(id, true);
+        touchAllSessionRows("same transaction");
+        if (order === "after") sessionStore.setArchived(id, true);
+      });
+      await flush();
+      clean();
+    },
+  );
+
+  test("a rolled-back second global stamp preserves the first stamp's provenance", async () => {
+    const id = seed("j-global-rollback");
+    await unrelatedFlush();
+    touchAllSessionRows("committed global");
+    assert.throws(
+      () =>
+        withChangeSet(() => {
+          touchAllSessionRows("rolled-back global");
+          throw new Error("rollback");
+        }),
+      /rollback/,
+    );
+    rawArchive(id, Date.now());
+    await flush();
+    violation(id, "archived");
+  });
+
+  test("unbinding a hidden row during a global window is an unreported appearance", async () => {
+    const id = seed("j-unbound");
+    const previous = pa.sessionId();
+    pa.setSessionId(id);
+    try {
+      await unrelatedFlush();
+      touchAllSessionRows("hidden global");
+      raw(
+        "UPDATE permanent_assistant_state SET session_id = NULL WHERE singleton_id = 1",
+      );
+      await flush();
+      violation(id, "added");
+    } finally {
+      if (previous) pa.setSessionId(previous);
+      else pa.clearSessionId();
+    }
+  });
+
   test("(k) a raw edit after a delivered publication of the same row is recorded", async () => {
     const id = seed("k");
     await unrelatedFlush();
@@ -438,6 +574,50 @@ describe("the test-mode audit", () => {
     client.close();
   });
 
+  test.each(["read", "send"] as const)(
+    "a failed %s does not capture a retained id before its delivered retry",
+    async (failure) => {
+      const id = seed(`retained-${failure}`);
+      const client = sessionListClient();
+      try {
+        await unrelatedFlush();
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        if (failure === "send")
+          vi.spyOn(client.connection, "send").mockImplementationOnce(() => {
+            throw new Error("injected send failure");
+          });
+        else {
+          const original = list.mergedSessionList;
+          let failed = false;
+          vi.spyOn(list, "mergedSessionList").mockImplementation(
+            (opts = {}) => {
+              if (opts.onlyIds && !failed) {
+                failed = true;
+                throw new Error("injected read failure");
+              }
+              return original(opts);
+            },
+          );
+        }
+        touchSessionRows([id]);
+        await flush();
+        clean();
+        rawTitle(id, "still covered by the retained touch");
+        await unrelatedFlush();
+        clean();
+        assert.equal(
+          client.row(id)?.title,
+          "still covered by the retained touch",
+        );
+        rawTitle(id, "after delivered retry");
+        await unrelatedFlush();
+        violation(id, "title");
+      } finally {
+        client.close();
+      }
+    },
+  );
+
   test("the command boundary: the reply resolves, the ledger holds the violation", async () => {
     const [capped, quiet] = [seed("cmd-cap"), seed("cmd-quiet")];
     const client = sessionListClient();
@@ -463,16 +643,22 @@ describe("the test-mode audit", () => {
     client.close();
   });
 
-  test("a snapshot after an unreported change records and throws", async () => {
-    const id = seed("snapshot");
-    await unrelatedFlush();
-    rawTitle(id, "unreported");
-    assert.throws(
-      () => sessionsStateTopic.subscribeAnswer(false),
-      (err: unknown) => isStateTopicInvariant(err),
-    );
-    violation(id, "title");
-  });
+  test.each(["snapshot", "items"] as const)(
+    "a %s read after an unreported change records and throws",
+    async (path) => {
+      const id = seed(path);
+      await unrelatedFlush();
+      rawTitle(id, "unreported");
+      assert.throws(
+        () =>
+          path === "snapshot"
+            ? sessionsStateTopic.subscribeAnswer(false)
+            : sessionsStateTopic.items([id]),
+        (err: unknown) => isStateTopicInvariant(err),
+      );
+      violation(id, "title");
+    },
+  );
 
   test("the error surfaces from direct publication and a fake-timer flush, ids kept", async () => {
     const [id, touched] = [seed("timer"), seed("timer-touched")];

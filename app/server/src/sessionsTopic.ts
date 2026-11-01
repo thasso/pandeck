@@ -115,6 +115,13 @@ interface AuditBaseline {
 let baseline: AuditBaseline | undefined;
 /** A global touch stamped the live superset; its publication is owed. */
 let globalPending = false;
+/**
+ * For each global stamp, the revision that last explicitly reported membership.
+ * Keep older entries until delivery too: a later transaction may roll back, in
+ * which case its global stamp must not erase the committed stamp's provenance.
+ * Only an entry matching the revision actually in SQLite can affect the check.
+ */
+const globalStamps = new Map<string, Map<number, number>>();
 /** The current flush's built rows, for the rebaseline at its publication. */
 let flushRows = new Map<string, AuditRow>();
 
@@ -141,7 +148,9 @@ function unreportedChanges(
   current: Map<string, AuditRow>,
   from: AuditBaseline,
 ): { id: string; fields: string[] }[] {
-  const ids = [...new Set([...current.keys(), ...from.rows.keys()])];
+  const ids = [
+    ...new Set([...current.keys(), ...from.rows.keys(), ...from.rev.keys()]),
+  ];
   const revisions = sessionListRevisions(ids);
   const changes: { id: string; fields: string[] }[] = [];
   for (const id of ids) {
@@ -150,7 +159,13 @@ function unreportedChanges(
     if (before === after?.json) continue;
     const revision = revisions.get(id) ?? 0;
     const established = from.rev.get(id);
-    if (revision > (established ?? from.highWater)) continue;
+    const membershipChanged =
+      (before === undefined) !== (after === undefined) ||
+      from.archived.has(id) !== Boolean(after?.archived);
+    const reportingRevision = membershipChanged
+      ? (globalStamps.get(id)?.get(revision) ?? revision)
+      : revision;
+    if (reportingRevision > (established ?? from.highWater)) continue;
     if (globalPending && from.archived.has(id) && after?.archived) continue;
     changes.push({ id, fields: changedSessionRowFields(before, after?.json) });
   }
@@ -165,10 +180,11 @@ function describe(changes: { id: string; fields: string[] }[]): string {
 
 /**
  * The test-mode check, run first by every flush, `items` read and snapshot.
- * The first run captures; a clean run recaptures; an unreported change is
- * recorded and thrown, the baseline left as it was.
+ * The first run captures. Subsequent flush checks leave the per-id delivered
+ * baseline alone: advancing it here would adopt ids even if the read or send
+ * later fails. A snapshot may establish a new captured baseline after checking.
  */
-function auditForTests(): void {
+function auditForTests(capture = false): void {
   const rows = auditRows();
   if (baseline) {
     const changes = unreportedChanges(rows, baseline);
@@ -177,7 +193,7 @@ function auditForTests(): void {
         `unreported session row change: ${describe(changes)}`,
       );
   }
-  fullCapture(rows);
+  if (!baseline || capture) fullCapture(rows);
 }
 
 /** Production: log the drift, recapture, then re-stamp so the repair publishes. */
@@ -203,6 +219,14 @@ function rebaseline(
   const built = flushRows;
   flushRows = new Map();
   if (!delivered || !baseline) return;
+  // Check against the undelivered baseline before installing any built row.
+  // Otherwise a global-only transition is adopted before the check can see it.
+  const rows = globalPending ? auditRows() : undefined;
+  const changes = rows ? unreportedChanges(rows, baseline) : [];
+  if (changes.length > 0 && auditEnabled)
+    throw new StateTopicInvariantError(
+      `unreported session row change at a global publication: ${describe(changes)}`,
+    );
   for (const { id, revision } of events) {
     const row = built.get(id);
     if (row) baseline.rows.set(id, row.json);
@@ -211,17 +235,11 @@ function rebaseline(
     else baseline.archived.delete(id);
     baseline.rev.set(id, revision);
   }
-  if (!globalPending) return;
-  const rows = auditRows();
-  const changes = unreportedChanges(rows, baseline);
+  if (!rows) return;
   fullCapture(rows);
   globalPending = false;
-  if (changes.length === 0) return;
-  if (auditEnabled)
-    throw new StateTopicInvariantError(
-      `unreported session row change at a global publication: ${describe(changes)}`,
-    );
-  repair(changes);
+  globalStamps.clear();
+  if (changes.length > 0) repair(changes);
 }
 
 /**
@@ -273,7 +291,7 @@ export const sessionsStateTopic = createStateTopic({
   summary: (id) => summaries([id]).get(id) ?? undefined,
   summaries,
   snapshot(seq): SessionListSnapshot {
-    if (auditEnabled) auditForTests();
+    if (auditEnabled) auditForTests(true);
     const hidden = sessionListHiddenProbe();
     const sessions = mergedSessionList()
       .filter((row) => !hidden(row))
@@ -303,12 +321,27 @@ sessionsStateTopic.onPublished(({ events, delivered }) =>
 
 setSessionListHooks({
   liveIds: liveSessionIds,
+  explicitlyStamped(ids, revision) {
+    for (const id of ids) {
+      const stamps = globalStamps.get(id);
+      if (stamps?.has(revision)) stamps.set(revision, revision);
+    }
+  },
+  globallyStamped(previous, ids, revision) {
+    for (const id of ids) {
+      const stamps = globalStamps.get(id) ?? new Map<number, number>();
+      const prior = previous.get(id) ?? 0;
+      stamps.set(revision, stamps.get(prior) ?? prior);
+      globalStamps.set(id, stamps);
+    }
+  },
   globalTouched: () => {
     globalPending = true;
   },
   invalidated: () => {
     baseline = undefined;
     globalPending = false;
+    globalStamps.clear();
   },
 });
 
@@ -320,6 +353,7 @@ setSessionListHooks({
 export function captureSessionListBaseline(): void {
   fullCapture();
   globalPending = false;
+  globalStamps.clear();
 }
 
 /**
@@ -359,6 +393,7 @@ export function startSessionListSweep(): () => void {
 export function resetSessionListAuditBaselineForTests(): void {
   baseline = undefined;
   globalPending = false;
+  globalStamps.clear();
 }
 
 /**

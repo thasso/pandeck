@@ -147,9 +147,9 @@ one build; `ready` carries no session fields.
 A caller whose reply or later broadcast must follow the rows (an `error` after a
 refusal, `mutationSettled`, a Workflow Run list after its roles, the
 `forkedSession`, `draftSession` and `permanentAssistantOpened` route replies)
-calls `publishSessionRowsNow()` first: it flushes what is pending,
-synchronously, so the rows precede the reply on every socket. A refusal that
-must re-send a row the write did not change touches it first
+calls `publishSessionRowsNow()` outside transactions first: it flushes what is
+pending, synchronously, so the rows precede the reply on every socket. A refusal
+that must re-send a row the write did not change touches it first
 (`hub.republishSessionRow`), which stamps a new revision, so a client holding an
 optimistic guess at an older revision adopts the authoritative row.
 
@@ -175,8 +175,10 @@ While the slice is shown, the client re-reads it when the count moves or a
 `delete` arrives for an id the slice holds; a live `upsert` for such an id is a
 restore and moves it to the live rows. Reads are single-flight with at most one
 queued, released by their own answer or error, a disconnect, or a 30 s timeout;
-an answer or error carrying another `requestId` is ignored. A reconnect snapshot
-marks the slice stale, so an open shelf reads it once more.
+an answer or error carrying another `requestId` is ignored. Collection errors
+are consumed here or by the snapshot transport, without changing the viewed
+chat's runtime, streams or error. A reconnect snapshot marks the slice stale, so
+an open shelf reads it once more.
 
 ### Audit
 
@@ -187,14 +189,22 @@ Two backstops catch a writer that forgot to touch:
   whose public content or presence changed while its revision did not move above
   the one the baseline recorded raises `StateTopicInvariantError`
   (`unreported session row change: <id> <fields>`). The invariant is recorded in
-  a ledger the test setup fails on, and it escapes every command boundary; only
-  `sessionsTopic.ts` constructs one, and code recognises it by brand
-  (`isStateTopicInvariant`), never by `instanceof`. A delivered publication
-  moves the baseline of each id it published. While a global touch's publication
-  is owed, a row archived in both builds is excused, since the global touch
-  stamps only the live superset; that publication then checks everything and
-  recaptures. `setSessionListAuditForTests(false)` runs a test as production
-  does.
+  a worker-wide ledger the test setup fails on, even if a command or socket
+  boundary converts the throw into a routine error; only `sessionsTopic.ts`
+  constructs one, and code recognises it by brand (`isStateTopicInvariant`),
+  never by `instanceof`. A delivered publication moves the baseline of each id
+  it published. While a global touch's publication is owed, a row archived in
+  both builds is excused, since the global touch stamps only the live superset.
+  Global stamps retain their preceding explicit revision for membership checks,
+  so they never excuse archive/unarchive, appearance or disappearance. Explicit
+  reporters inside the window still cover their transitions. Provenance is
+  matched against SQLite's committed revision, retained across failed delivery
+  and rollback, and cleared after the global publication or database
+  invalidation. That publication checks against the old baseline before
+  installing delivered rows, then recaptures. Ordinary pre-flush checks do not
+  recapture pending ids: a later read or send failure must leave their previous
+  delivered baseline intact, so the retained touch still covers its retry.
+  `setSessionListAuditForTests(false)` runs a test as production does.
 - **Sweep (production).** Every 60 s (`startSessionListSweep`) the topic
   advances the deadline watermark, compares a full build with the baseline, logs
   each unreported row once with its changed fields and touches it, which repairs

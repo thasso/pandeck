@@ -15,9 +15,16 @@ import {
   touchSessionRows,
 } from "./db/sessionListChanges.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { peerPromptStore } from "./db/peerPromptStore.ts";
+import {
+  deadlineWatermark,
+  resetPeerDeadlineClockForTests,
+  startPeerDeadlineClock,
+} from "./db/peerDeadlineClock.ts";
 import * as list from "./harnesses/sessionList.ts";
 import {
   captureSessionListBaseline,
+  sessionsStateTopic,
   resetSessionListAuditBaselineForTests,
   setSessionListAuditForTests,
   startSessionListSweep,
@@ -215,6 +222,82 @@ describe("the production sweep", () => {
     assert.deepEqual(logged(), [live]);
   });
 
+  test.each(["archive", "tombstone", "disappear", "appear"] as const)(
+    "a global-only raw %s transition is repaired before recapture, not adopted",
+    async (kind) => {
+      const id = seed(`global-${kind}`);
+      if (kind === "appear")
+        sessionStore.upsert({
+          id,
+          harness: "pi",
+          agentType: "developer",
+          messageCount: 0,
+        });
+      const client = sessionListClient();
+      try {
+        await flush();
+        captureSessionListBaseline();
+        client.clear();
+        touchAllSessionRows("test global");
+        if (kind === "archive") rawArchive(id, Date.now());
+        else if (kind === "tombstone")
+          raw(
+            "UPDATE session_index SET deleted_at_ms = ? WHERE id = ?",
+            Date.now(),
+            id,
+          );
+        else
+          raw(
+            "UPDATE session_index SET message_count = ? WHERE id = ?",
+            kind === "appear" ? 2 : 0,
+            id,
+          );
+        await flush();
+        assert.deepEqual(logged(), [id]);
+        await flush();
+        if (kind === "appear") assert.ok(client.row(id));
+        else assert.ok(client.deleted().includes(id));
+        await sweep();
+        await sweep();
+        assert.deepEqual(
+          logged(),
+          [],
+          "the repaired transition is logged once",
+        );
+      } finally {
+        client.close();
+      }
+    },
+  );
+
+  test("a failed global send preserves transition provenance and pending ids until repair", async () => {
+    const [id, unrelated] = [seed("failed-transition"), seed("retained")];
+    const client = sessionListClient();
+    try {
+      await flush();
+      captureSessionListBaseline();
+      client.clear();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(client.connection, "send").mockImplementationOnce(() => {
+        throw new Error("injected frame failure");
+      });
+      touchAllSessionRows("test global");
+      await flush();
+      assert.deepEqual(logged(), []);
+      rawArchive(id, Date.now());
+      touchSessionRows([unrelated]);
+      await flush();
+      assert.deepEqual(logged(), [id]);
+      await flush();
+      assert.ok(client.deleted().includes(id));
+      assert.ok(client.upserted().includes(unrelated));
+      await sweep();
+      assert.deepEqual(logged(), []);
+    } finally {
+      client.close();
+    }
+  });
+
   test("a retained id (summaries failing once) is retried by the sweep, not logged", async () => {
     const id = seed("retained");
     const client = sessionListClient();
@@ -235,6 +318,72 @@ describe("the production sweep", () => {
     assert.deepEqual(logged(), []);
     assert.deepEqual(client.upserted(), [id]);
     client.close();
+  });
+
+  test("the sweep advances a crossed deadline with its timer stopped; snapshots keep content and revision paired", async () => {
+    const now = Math.max(Date.now(), deadlineWatermark()) + 1_000;
+    vi.useFakeTimers({ now, toFake: ["Date", "setTimeout", "clearTimeout"] });
+    resetPeerDeadlineClockForTests(now); // Stopped: only the sweep can advance W.
+    const [sender, recipient] = [
+      seed("deadline-sender"),
+      seed("deadline-recipient"),
+    ];
+    const deadline = now + 10_000;
+    const chainId = peerPromptStore.createChain(`sweep-deadline-${++serial}`);
+    const request = peerPromptStore.enqueue({
+      conversationId: `sweep-deadline-${serial}`,
+      chainId,
+      hop: peerPromptStore.reserveHop(chainId),
+      senderSessionId: sender,
+      recipientSessionId: recipient,
+      prompt: "report",
+      responseRequested: true,
+      expiresAt: deadline,
+    });
+    try {
+      peerPromptStore.claimNext(recipient, "test", 1_000);
+      peerPromptStore.markAdmitted(request.id);
+      peerPromptStore.markCompleted(request.id);
+      await flush();
+      captureSessionListBaseline();
+      const before = sessionsStateTopic.subscribeAnswer(false);
+      const row = before.sessions.find((row) => row.id === sender)!;
+      assert.ok(row.awaitingRepliesFrom?.includes(recipient));
+      const revision = before.revisions.find(
+        (entry) => entry.id === sender,
+      )!.revision;
+      vi.setSystemTime(deadline + 1);
+      const crossed = sessionsStateTopic.subscribeAnswer(false);
+      assert.deepEqual(
+        crossed.sessions.find((row) => row.id === sender),
+        row,
+      );
+      assert.equal(
+        crossed.revisions.find((entry) => entry.id === sender)!.revision,
+        revision,
+      );
+      await sweep();
+      const after = sessionsStateTopic.subscribeAnswer(false);
+      assert.ok(
+        !after.sessions
+          .find((row) => row.id === sender)
+          ?.awaitingRepliesFrom?.includes(recipient),
+      );
+      assert.ok(
+        after.revisions.find((entry) => entry.id === sender)!.revision >
+          revision,
+      );
+      assert.ok(deadlineWatermark() > deadline);
+      assert.deepEqual(
+        logged(),
+        [],
+        "the deadline advance is a reporter, not drift repair",
+      );
+    } finally {
+      vi.useRealTimers();
+      resetPeerDeadlineClockForTests(Math.max(Date.now(), deadlineWatermark()));
+      startPeerDeadlineClock();
+    }
   });
 
   test("drift between the boot touch and the first sweep is caught by it", async () => {

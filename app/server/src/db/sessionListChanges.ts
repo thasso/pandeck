@@ -33,15 +33,30 @@ export const sessionsWrites: StateTopicWrites = {
   topic: "sessions",
   sequence: "session_list_revision",
   stamp: (ids, revision) => {
-    const db = getDb();
-    for (let start = 0; start < ids.length; start += IDS_PER_STATEMENT) {
-      const chunk = ids.slice(start, start + IDS_PER_STATEMENT);
-      db.prepare(
-        `INSERT INTO session_list_revisions (session_id, revision)
-         VALUES ${chunk.map(() => "(?, ?)").join(", ")}
-         ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision`,
-      ).run(...(chunk.flatMap((id) => [id, revision]) as never[]));
-    }
+    stampSessionRevisions(ids, revision);
+    hooks?.explicitlyStamped(ids, revision);
+  },
+};
+
+function stampSessionRevisions(ids: readonly string[], revision: number): void {
+  const db = getDb();
+  for (let start = 0; start < ids.length; start += IDS_PER_STATEMENT) {
+    const chunk = ids.slice(start, start + IDS_PER_STATEMENT);
+    db.prepare(
+      `INSERT INTO session_list_revisions (session_id, revision)
+       VALUES ${chunk.map(() => "(?, ?)").join(", ")}
+       ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision`,
+    ).run(...(chunk.flatMap((id) => [id, revision]) as never[]));
+  }
+}
+
+/** A global refresh reports fields, not membership transitions. */
+const globalSessionsWrites: StateTopicWrites = {
+  ...sessionsWrites,
+  stamp(ids, revision) {
+    const previous = sessionListRevisions(ids);
+    stampSessionRevisions(ids, revision);
+    hooks?.globallyStamped(previous, ids, revision);
   },
 };
 
@@ -89,6 +104,13 @@ export function tombstonedSessionIds(ids: readonly string[]): Set<string> {
 interface SessionListHooks {
   /** Every id the pi and Claude live registries hold now. */
   liveIds(): Iterable<string>;
+  /** Distinguish global refreshes from explicit row reporters at the stamp. */
+  explicitlyStamped(ids: readonly string[], revision: number): void;
+  globallyStamped(
+    previous: ReadonlyMap<string, number>,
+    ids: readonly string[],
+    revision: number,
+  ): void;
   /** A global touch stamped its superset: its publication is now owed. */
   globalTouched(reason: string): void;
   /** The database closed: nothing stamped before describes what opens next. */
@@ -162,7 +184,7 @@ export function touchAllSessionRows(reason: string): void {
     ).map((row) => row.id),
   );
   for (const id of hooks?.liveIds() ?? []) ids.add(id);
-  touchStateTopic(sessionsWrites, [...ids]);
+  touchStateTopic(globalSessionsWrites, [...ids]);
   hooks?.globalTouched(reason);
 }
 
