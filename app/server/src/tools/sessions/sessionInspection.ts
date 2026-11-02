@@ -215,7 +215,7 @@ const secondsSince = (at: number, now: number) =>
 const BACKGROUND_ITEMS_SHOWN = 5;
 
 interface BackgroundWorkField {
-  /** Items the session waits on: its turn resumes when one ends. */
+  /** Items the session waits on: each one's end is delivered to it. */
   awaited: number;
   /** Items declared `service` (dev servers, watchers): nothing waits on them. */
   services: number;
