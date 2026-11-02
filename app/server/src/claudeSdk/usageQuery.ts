@@ -16,7 +16,6 @@ import {
 } from "../credentialProfiles.ts";
 import type {
   ClaudeUsageSnapshot,
-  UsageBehaviorWindow,
   UsageGenericLimit,
   UsageModelScoped,
 } from "@assistant/shared/usage";
@@ -162,50 +161,6 @@ function mapModelScoped(raw: unknown): UsageModelScoped[] {
   });
 }
 
-function mapBehaviorWindow(raw: unknown): UsageBehaviorWindow {
-  const w =
-    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const behaviors = Array.isArray(w.behaviors)
-    ? w.behaviors.flatMap((b): UsageBehaviorWindow["behaviors"] => {
-        if (!b || typeof b !== "object") return [];
-        const item = b as Record<string, unknown>;
-        return [
-          {
-            key: stringOrNull(item.key) ?? "unknown",
-            pct: numberOrNull(item.pct) ?? 0,
-            count: numberOrNull(item.count) ?? 0,
-          },
-        ];
-      })
-    : [];
-  const contributors: UsageBehaviorWindow["topContributors"] = [];
-  const collect = (
-    key: "agents" | "skills" | "plugins" | "mcp_servers",
-    kind: UsageBehaviorWindow["topContributors"][number]["kind"],
-  ) => {
-    const list = w[key];
-    if (!Array.isArray(list)) return;
-    for (const item of list) {
-      if (!item || typeof item !== "object") continue;
-      const row = item as Record<string, unknown>;
-      const name = stringOrNull(row.name);
-      const pct = numberOrNull(row.pct);
-      if (name && pct !== null) contributors.push({ name, pct, kind });
-    }
-  };
-  collect("agents", "agent");
-  collect("skills", "skill");
-  collect("plugins", "plugin");
-  collect("mcp_servers", "mcp_server");
-  contributors.sort((a, b) => b.pct - a.pct);
-  return {
-    requestCount: numberOrNull(w.request_count) ?? 0,
-    sessionCount: numberOrNull(w.session_count) ?? 0,
-    behaviors,
-    topContributors: contributors.slice(0, 8),
-  };
-}
-
 /** Maps the raw (loosely-typed, experimental-shape) control response to our stable wire type. */
 export function mapClaudeUsageResponse(
   raw: Record<string, unknown>,
@@ -218,10 +173,6 @@ export function mapClaudeUsageResponse(
     raw.session && typeof raw.session === "object"
       ? (raw.session as Record<string, unknown>)
       : {};
-  const behaviorsRaw =
-    raw.behaviors && typeof raw.behaviors === "object"
-      ? (raw.behaviors as Record<string, unknown>)
-      : null;
   return {
     fetchedAt: Date.now(),
     subscriptionType: stringOrNull(raw.subscription_type),
@@ -236,12 +187,6 @@ export function mapClaudeUsageResponse(
       totalApiDurationMs: numberOrNull(session.total_api_duration_ms) ?? 0,
       totalDurationMs: numberOrNull(session.total_duration_ms) ?? 0,
     },
-    behaviors: behaviorsRaw
-      ? {
-          day: mapBehaviorWindow(behaviorsRaw.day),
-          week: mapBehaviorWindow(behaviorsRaw.week),
-        }
-      : null,
   };
 }
 
@@ -274,7 +219,9 @@ export async function fetchClaudeSdkUsage(
       );
     }
     const raw =
-      await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+        skipBehaviors: true,
+      });
     return mapClaudeUsageResponse(raw);
   } catch (err) {
     if (timedOut) throw new Error("Fetching Claude usage timed out.");

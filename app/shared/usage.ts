@@ -56,19 +56,6 @@ export interface UsageModelScoped {
   resetsAt: string | null;
 }
 
-/** One local-transcript attribution window (approximate; excludes other devices). */
-export interface UsageBehaviorWindow {
-  requestCount: number;
-  sessionCount: number;
-  behaviors: { key: string; pct: number; count: number }[];
-  /** Top agents/skills/plugins/mcp servers by weighted share, merged and capped. */
-  topContributors: {
-    name: string;
-    pct: number;
-    kind: "agent" | "skill" | "plugin" | "mcp_server";
-  }[];
-}
-
 export interface ClaudeUsageSnapshot {
   /** Epoch ms this snapshot was fetched, for a "last updated" display. */
   fetchedAt: number;
@@ -86,8 +73,6 @@ export interface ClaudeUsageSnapshot {
     totalApiDurationMs: number;
     totalDurationMs: number;
   };
-  /** Local-transcript behavioral attribution, or null when unavailable/non-subscriber. */
-  behaviors: { day: UsageBehaviorWindow; week: UsageBehaviorWindow } | null;
 }
 
 /**

@@ -23,7 +23,6 @@ const claude: ClaudeUsageSnapshot = {
   modelScoped: [],
   extraUsage: null,
   session: { totalCostUsd: 0, totalApiDurationMs: 0, totalDurationMs: 0 },
-  behaviors: null,
 };
 
 const openai: OpenAiUsageSnapshot = {

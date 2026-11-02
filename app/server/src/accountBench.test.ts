@@ -97,7 +97,6 @@ function snapshot(
     modelScoped: model ? [{ modelDisplayName: model, ...window }] : [],
     extraUsage: null,
     session: { totalCostUsd: 0, totalApiDurationMs: 0, totalDurationMs: 0 },
-    behaviors: null,
   };
 }
 

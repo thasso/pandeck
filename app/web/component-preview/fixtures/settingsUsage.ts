@@ -37,16 +37,6 @@ export const usageProfiles: CredentialProfileSummary[] = [
   },
 ];
 
-const behaviorWindow = {
-  requestCount: 82,
-  sessionCount: 6,
-  behaviors: [],
-  topContributors: [
-    { name: "Claude Sonnet 4.6", pct: 72, kind: "agent" as const },
-    { name: "Review skill", pct: 18, kind: "skill" as const },
-  ],
-};
-
 export const claudeUsage: ClaudeUsageSnapshot = {
   fetchedAt: now,
   subscriptionType: "max",
@@ -80,7 +70,6 @@ export const claudeUsage: ClaudeUsageSnapshot = {
     decimalPlaces: 2,
   },
   session: { totalCostUsd: 0, totalApiDurationMs: 0, totalDurationMs: 0 },
-  behaviors: { day: behaviorWindow, week: behaviorWindow },
 };
 
 export const openAiUsage: OpenAiUsageSnapshot = {
