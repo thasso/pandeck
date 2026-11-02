@@ -514,8 +514,15 @@ function WorktreeRailLayout({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
         {railCollapsed && collapsedSummary ? (
-          <div className="flex items-center gap-2 border-b border-border bg-background/40 px-3 py-2 text-sm text-muted-foreground">
+          // The phone's file bar on a wide screen: the name and folder, the
+          // detail's controls at the end.
+          <div
+            className={`flex items-center gap-2 border-b border-border bg-background/40 px-3 text-sm text-muted-foreground ${detailControls ? "py-1.5" : "py-2"}`}
+          >
             {collapsedSummary}
+            {detailControls ? (
+              <div className="ml-auto shrink-0">{detailControls}</div>
+            ) : null}
           </div>
         ) : null}
         {children}
@@ -1300,7 +1307,8 @@ function FilesView({
   const pivotControls =
     pivots.length > 1 ? (
       <ToggleGroup
-        variant="outline"
+        // In the file bar beside the name: quiet icons, the bar's own weight.
+        variant={sidebarNavigation ? "default" : "outline"}
         size="sm"
         spacing={0}
         aria-label="File view"
@@ -1310,8 +1318,13 @@ function FilesView({
         }}
       >
         {pivots.map(({ id, label, icon }) => (
-          <ToggleGroupItem key={id} value={id} aria-label={label}>
-            {narrow ? icon : label}
+          <ToggleGroupItem
+            key={id}
+            value={id}
+            aria-label={label}
+            title={label}
+          >
+            {narrow || sidebarNavigation ? icon : label}
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
@@ -1335,7 +1348,7 @@ function FilesView({
         ) : null
       ) : // With the sidebar navigating, a phone's toolbar would be empty: the
       // pivots sit in the file bar and the options in the header's menu.
-      sidebarNavigation && (!filePath || narrow) ? null : (
+      sidebarNavigation ? null : (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
           {navigationControls}
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -1386,7 +1399,9 @@ function FilesView({
             </div>
           ) : undefined
         }
-        detailControls={narrow ? pivotControls : undefined}
+        detailControls={
+          narrow || sidebarNavigation ? pivotControls : undefined
+        }
         prefs={prefs}
         onUpdatePrefs={onUpdatePrefs}
         narrow={narrow}
@@ -1420,7 +1435,7 @@ function FilesView({
                 label={shownRefresh}
               />
             ) : null}
-            {!narrow && !browseAsDocuments ? (
+            {!narrow && !browseAsDocuments && !sidebarNavigation ? (
               <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                 <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
                   {filePath}
@@ -1531,9 +1546,11 @@ function FilesView({
                     Binary file.
                   </div>
                 ) : (
-                  <div className="flex flex-col gap-3 p-3">
+                  // Edge to edge, as Review's diffs: the pane is the frame.
+                  <div className="flex flex-col">
                     {fileError !== undefined ? (
                       <ErrorNote
+                        className="m-3"
                         message={`Could not refresh this file: ${fileError}`}
                         onRetry={fileFetch.reload}
                       />
