@@ -2186,7 +2186,26 @@ export const BACKGROUND_WORK_REGISTRY_SQL = {
      WHERE is_member = 1 AND state NOT IN ('pending-launch', 'running')
      ORDER BY created_at_ms DESC, id
      LIMIT ?`,
+  ownerActiveCounts: `SELECT COUNT(*) AS active,
+       COALESCE(SUM(intent = 'service'), 0) AS services
+     FROM background_work_items
+     WHERE owner_session_id = ? AND is_member = 1
+       AND state IN ('pending-launch', 'running')`,
 } as const;
+
+/**
+ * Every active item one owner has, and how many of them are services: totals
+ * a capped `listItems` window cannot give, for a caller that lists only a few.
+ */
+function activeCountsForOwner(ownerSessionId: string): {
+  active: number;
+  services: number;
+} {
+  const row = getDb()
+    .prepare(BACKGROUND_WORK_REGISTRY_SQL.ownerActiveCounts)
+    .get(ownerSessionId) as { active: number; services: number };
+  return { active: row.active, services: row.services };
+}
 
 /**
  * The newest `limit` member rows, active first, plus whether more exist. Two
@@ -2288,6 +2307,7 @@ export const backgroundWorkStore = {
   listItems,
   listRegistryWindow,
   activityByOwner,
+  activeCountsForOwner,
   itemRevisions,
   ownerSlotCount,
 };

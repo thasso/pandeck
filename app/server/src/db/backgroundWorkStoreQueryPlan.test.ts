@@ -114,6 +114,17 @@ test("an active listItems read uses a partial active index, globally and per own
   }
 });
 
+test("an owner's active counts search the owner's partial active index", () => {
+  const plan = planText(BACKGROUND_WORK_REGISTRY_SQL.ownerActiveCounts, [
+    OWNER,
+  ]);
+  assert.match(
+    plan,
+    /SEARCH background_work_items USING INDEX background_work_items_owner_active_idx/,
+    plan,
+  );
+});
+
 test("the window holds exactly its limit of active rows without truncating", () => {
   for (let i = 0; i < 200; i += 1) row(10_000 + i, false);
   const window = backgroundWorkStore.listRegistryWindow(200);

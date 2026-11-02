@@ -8,6 +8,7 @@ import { sessionRuntime } from "../../session/runtimeInstance.ts";
 import { installBackgroundUpdateQueue } from "../../backgroundUpdateQueue.ts";
 import { backgroundWorkStore } from "../../db/backgroundWorkStore.ts";
 import { sessionStore } from "../../db/sessionStore.ts";
+import { backgroundWorkTitle } from "../../backgroundWork/title.ts";
 import { liveActivityFields } from "./sessionInspection.ts";
 import type {
   AdapterEvent,
@@ -114,10 +115,23 @@ test("a running peer reports what it is observed doing, in seconds", () => {
   );
 });
 
+let reserved = 0;
+
+/**
+ * One active item, titled the way production admission titles it: a server
+ * task by its own label, a shell through `backgroundWorkTitle`, which falls
+ * back to the command line when the agent gave no description.
+ */
 function reserve(
   owner: string,
-  label: string,
-  options: { kind?: "shell" | "check-watch"; start?: boolean } = {},
+  options: {
+    watch?: string;
+    description?: string;
+    command?: string;
+    service?: boolean;
+    start?: boolean;
+    now?: number;
+  } = {},
 ) {
   sessionStore.upsert({
     id: owner,
@@ -126,44 +140,58 @@ function reserve(
     title: owner,
     scope: "user",
   });
+  const command = options.command ?? "deploy --target secret-ish-argument";
+  const now = options.now ?? 1_000_000;
   const item = backgroundWorkStore.reserveItem({
     ownerSessionId: owner,
-    backend: options.kind === "check-watch" ? "server-task" : "host-process",
-    kind: options.kind ?? "shell",
-    label,
-    command: "curl -H 'Authorization: secret-ish'",
-    sourceRequestId: `${owner}-${label}`,
+    ...(options.watch
+      ? {
+          backend: "server-task" as const,
+          kind: "check-watch" as const,
+          label: options.watch,
+          command: `github_watch_pull_request_checks ${options.watch}`,
+        }
+      : {
+          backend: "host-process" as const,
+          kind: "shell" as const,
+          label: backgroundWorkTitle({
+            description: options.description,
+            command,
+            fallback: "Background shell command",
+          }),
+          ...(options.description ? { description: options.description } : {}),
+          command,
+        }),
+    sourceRequestId: `${owner}-${(reserved += 1)}`,
     lifetimeMs: 3_600_000,
     settingsGeneration: 1,
     bootEpoch: "test",
-    ownerLimit: 100,
-    now: 1_000_000,
+    ownerLimit: 1_000,
+    now,
   });
+  if (options.service)
+    backgroundWorkStore.setIntent({
+      itemId: item.id,
+      ownerSessionId: owner,
+      intent: "service",
+      now,
+    });
   return options.start === false
     ? item
-    : backgroundWorkStore.markRunning({ itemId: item.id, now: 1_000_000 });
+    : backgroundWorkStore.markRunning({ itemId: item.id, now: now + 5_000 });
 }
 
 test("an idle or unloaded session still reports the background work it waits on", () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_090_000);
-  reserve("watcher", "GitHub PR checks o/r#1", { kind: "check-watch" });
-  const server = reserve("watcher", "Vite dev server");
-  backgroundWorkStore.setIntent({
-    itemId: server.id,
-    ownerSessionId: "watcher",
-    intent: "service",
-  });
+  reserve("watcher", { watch: "GitHub PR checks o/r#1" });
+  reserve("watcher", { description: "Vite dev server", service: true });
 
   const fields = liveActivityFields("watcher", "not_loaded");
   assert.equal(fields.liveActivity, undefined, "no turn, so no run activity");
-  assert.deepEqual(
-    {
-      awaited: fields.backgroundWork?.awaited,
-      services: fields.backgroundWork?.services,
-    },
-    { awaited: 1, services: 1 },
-  );
+  assert.equal(fields.backgroundWork?.awaited, 1);
+  assert.equal(fields.backgroundWork?.services, 1);
+  assert.equal(fields.backgroundWork?.more, undefined);
   const watch = fields.backgroundWork?.items.find(
     (item) => item.kind === "check-watch",
   );
@@ -172,27 +200,68 @@ test("an idle or unloaded session still reports the background work it waits on"
     label: "GitHub PR checks o/r#1",
     intent: "awaited",
     state: "running",
-    forSec: 90,
+    forSec: 85,
     deadlineInSec: 3_510,
   });
   assert.ok(
     !JSON.stringify(fields).includes("secret-ish"),
     "the command never leaves the registry",
   );
-  assert.equal(
-    liveActivityFields("watcher", "idle").backgroundWork?.awaited,
-    1,
+  assert.deepEqual(
+    liveActivityFields("watcher", "idle").backgroundWork,
+    fields.backgroundWork,
     "idle reports it the same",
   );
 });
 
-test("background work lists a bounded window and counts every item", () => {
-  for (let index = 0; index < 7; index++)
-    reserve("busy", `job ${index}`, { start: index !== 0 });
-  const work = liveActivityFields("busy", "idle").backgroundWork!;
-  assert.equal(work.awaited, 7);
+test("a shell is listed without its title, whether command line or description", () => {
+  reserve("untitled", { command: "deploy --target COMMAND_LINE_ARGUMENT" });
+  reserve("untitled", { description: "deploy with DESCRIBED_ARGUMENT" });
+  const fields = liveActivityFields("untitled", "idle");
+  const items = fields.backgroundWork!.items;
+  assert.equal(items.length, 2);
+  for (const item of items) {
+    assert.equal(item.kind, "shell");
+    assert.equal(item.label, undefined);
+  }
+  const text = JSON.stringify(fields);
+  assert.ok(!text.includes("COMMAND_LINE_ARGUMENT"), "the command line");
+  assert.ok(!text.includes("DESCRIBED_ARGUMENT"), "the agent's free text");
+});
+
+test("a services-only session reports no awaited work", () => {
+  reserve("server-only", { description: "Vite dev server", service: true });
+  const work = liveActivityFields("server-only", "not_loaded").backgroundWork!;
+  assert.equal(work.awaited, 0);
+  assert.equal(work.services, 1);
+});
+
+test("finished items are not counted", () => {
+  const done = reserve("finished", { description: "build" });
+  backgroundWorkStore.terminalize({ itemId: done.id, state: "completed" });
+  assert.equal(
+    liveActivityFields("finished", "idle").backgroundWork,
+    undefined,
+  );
+});
+
+test("counts cover every active item, not the listed window", () => {
+  // One old awaited job under 200 newer services: the window holds only
+  // services, and the awaited job must still be counted.
+  reserve("crowded", { description: "awaited job", now: 1_000 });
+  for (let index = 0; index < 200; index++)
+    reserve("crowded", {
+      description: `service ${index}`,
+      service: true,
+      start: index % 2 === 0,
+      now: 2_000 + index,
+    });
+  const work = liveActivityFields("crowded", "idle").backgroundWork!;
+  assert.equal(work.awaited, 1);
+  assert.equal(work.services, 200);
   assert.equal(work.items.length, 5);
-  assert.equal(work.more, 2);
+  assert.equal(work.more, 196);
+  assert.ok(work.items.every((item) => item.intent === "service"));
 });
 
 test("an idle or unloaded session reports no activity; queued work is counted either way", () => {

@@ -219,9 +219,11 @@ interface BackgroundWorkField {
   awaited: number;
   /** Items declared `service` (dev servers, watchers): nothing waits on them. */
   services: number;
+  /** The newest active items. */
   items: Array<{
     kind: BackgroundWorkItem["kind"];
-    label: string;
+    /** A server task's label only ({@link safeTitle}). */
+    label?: string;
     intent: BackgroundWorkItem["intent"];
     state: BackgroundWorkItem["state"];
     stopping?: true;
@@ -233,40 +235,56 @@ interface BackgroundWorkField {
 }
 
 /**
+ * A title PA wrote itself: a server task's label, built from a validated
+ * target ("GitHub PR checks owner/repo#1"). A shell's or monitor's title is
+ * the agent's free-text description or, without one, its first command line
+ * (`backgroundWorkTitle`), and either can carry arguments or credentials, so
+ * it never reaches another session.
+ */
+function safeTitle(item: BackgroundWorkItem): string | undefined {
+  return item.backend === "server-task" ? item.label : undefined;
+}
+
+/**
  * The session's active background work, whatever its runtime state: a session
  * whose turn ended can still be waiting on a watch or command, which is what
- * the web's working tier shows (`backgroundWorkBusy`). Labels, kinds and
- * seconds only: never the command, output or evidence.
+ * the web's working tier shows (`backgroundWorkBusy`). Counts cover every
+ * active item; titles, kinds and seconds only, never the command, output or
+ * evidence.
  */
 function backgroundWorkField(id: string): BackgroundWorkField | undefined {
-  let active: BackgroundWorkItem[];
+  let counts: { active: number; services: number };
+  let shown: BackgroundWorkItem[];
   try {
-    active = backgroundWorkStore.listItems({
+    counts = backgroundWorkStore.activeCountsForOwner(id);
+    if (counts.active === 0) return undefined;
+    shown = backgroundWorkStore.listItems({
       ownerSessionId: id,
       state: "active",
-      limit: 200,
+      limit: BACKGROUND_ITEMS_SHOWN,
     });
   } catch {
     // Best-effort, like the queue counts: the read itself still answers.
     return undefined;
   }
-  if (active.length === 0) return undefined;
   const now = Date.now();
-  const services = active.filter((item) => item.intent === "service").length;
   return {
-    awaited: active.length - services,
-    services,
-    items: active.slice(0, BACKGROUND_ITEMS_SHOWN).map((item) => ({
-      kind: item.kind,
-      label: item.label,
-      intent: item.intent,
-      state: item.state,
-      ...(item.stopState !== "none" ? { stopping: true as const } : {}),
-      forSec: secondsSince(item.startedAt ?? item.createdAt, now),
-      deadlineInSec: Math.max(0, Math.round((item.deadlineAt - now) / 1000)),
-    })),
-    ...(active.length > BACKGROUND_ITEMS_SHOWN
-      ? { more: active.length - BACKGROUND_ITEMS_SHOWN }
+    awaited: counts.active - counts.services,
+    services: counts.services,
+    items: shown.map((item) => {
+      const label = safeTitle(item);
+      return {
+        kind: item.kind,
+        ...(label ? { label } : {}),
+        intent: item.intent,
+        state: item.state,
+        ...(item.stopState !== "none" ? { stopping: true as const } : {}),
+        forSec: secondsSince(item.startedAt ?? item.createdAt, now),
+        deadlineInSec: Math.max(0, Math.round((item.deadlineAt - now) / 1000)),
+      };
+    }),
+    ...(counts.active > shown.length
+      ? { more: counts.active - shown.length }
       : {}),
   };
 }
