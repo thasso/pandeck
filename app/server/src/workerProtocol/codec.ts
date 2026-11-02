@@ -77,7 +77,7 @@ function encodeFrame(header: FrameHeader, payload?: Uint8Array): Buffer {
   const head = Buffer.from(JSON.stringify(header), "utf8");
   const body = payload ?? new Uint8Array(0);
   if (head.length > MAX_FRAME_HEADER_BYTES)
-    throw new Error(`A ${header.type} frame header is over the frame cap.`);
+    fail(`A ${header.type} frame header is over the frame cap.`);
   const prefix = Buffer.alloc(PREFIX_BYTES);
   prefix.writeUInt32BE(head.length, 0);
   prefix.writeUInt32BE(body.length, 4);

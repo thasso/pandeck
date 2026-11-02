@@ -143,6 +143,19 @@ async function rejectsBranded(
   });
 }
 
+const malformedAnswer = (error: unknown) =>
+  assert.ok(error instanceof MalformedWorkerAnswerError, String(error));
+
+/** A well-formed `files.stat` answer's stat. */
+const STAT = {
+  isFile: true,
+  isDirectory: false,
+  size: 3,
+  mtimeMs: 4,
+  dev: 1,
+  ino: 2,
+};
+
 const refusedWith = (code: string) => (error: unknown) => {
   assert.ok(error instanceof WorkerRequestError, String(error));
   assert.equal(error.code, code);
@@ -234,6 +247,84 @@ describe("Worker failures are branded", () => {
       dial.handlers[method] = answer(payload);
       await rejectsBranded(HANDLE_CALLS[method]!(file), (error) =>
         assert.ok(error instanceof MalformedWorkerAnswerError, String(error)),
+      );
+    }
+  });
+
+  test("a read answering more bytes than it asked for", async () => {
+    const dial = await testWorker();
+    const file = await openedOn(dial);
+    dial.handlers[FILE_METHODS.stat] = answer({ json: { stat: STAT } });
+    for (const size of [5, 4, 3, 0]) {
+      dial.handlers[FILE_METHODS.read] = answer({
+        bytes: { data: new Uint8Array(size) },
+      });
+      if (size > 4) await rejectsBranded(file.read(0, 4), malformedAnswer);
+      // Equal or short: a short read is how EOF looks.
+      else assert.equal((await file.read(0, 4)).length, size);
+      assert.deepEqual(
+        await statOnWorker({ workerId: dial.id, path: "/p" }),
+        STAT,
+        "the connection still serves",
+      );
+    }
+  });
+
+  test("a malformed open naming a valid handle closes that handle once", async () => {
+    const dial = await testWorker();
+    dial.handlers[FILE_METHODS.stat] = answer({ json: { stat: STAT } });
+    const closed: unknown[] = [];
+    const cases = [
+      { stat: false, opened: { handle: 7, stat: "x" } },
+      // Asked for, the stat must be there.
+      { stat: true, opened: { handle: 8 } },
+    ];
+    for (const failingClose of [false, true])
+      for (const { stat, opened } of cases) {
+        closed.length = 0;
+        dial.handlers[FILE_METHODS.close] = async (payload) => {
+          closed.push(payload.json);
+          if (failingClose) throw new WorkerMethodError("failed", "No.");
+          return { json: {} };
+        };
+        dial.handlers[FILE_METHODS.open] = answer({ json: { opened } });
+        // The open's own error, even when the close fails.
+        await rejectsBranded(
+          openOnWorker({ workerId: dial.id, path: "/p" }, stat),
+          malformedAnswer,
+        );
+        await settle();
+        assert.deepEqual(closed, [
+          { workerId: dial.id, handle: opened.handle },
+        ]);
+        assert.deepEqual(
+          await statOnWorker({ workerId: dial.id, path: "/p" }),
+          STAT,
+          "the connection still serves",
+        );
+      }
+  });
+
+  test("a malformed open naming no valid handle closes nothing", async () => {
+    const dial = await testWorker();
+    dial.handlers[FILE_METHODS.stat] = answer({ json: { stat: STAT } });
+    let closes = 0;
+    dial.handlers[FILE_METHODS.close] = async () => {
+      closes++;
+      return { json: {} };
+    };
+    for (const opened of [{ handle: 0 }, {}]) {
+      dial.handlers[FILE_METHODS.open] = answer({ json: { opened } });
+      await rejectsBranded(
+        openOnWorker({ workerId: dial.id, path: "/p" }, false),
+        malformedAnswer,
+      );
+      await settle();
+      assert.equal(closes, 0);
+      assert.deepEqual(
+        await statOnWorker({ workerId: dial.id, path: "/p" }),
+        STAT,
+        "the connection still serves",
       );
     }
   });

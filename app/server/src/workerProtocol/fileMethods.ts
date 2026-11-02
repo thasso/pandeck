@@ -364,11 +364,20 @@ export function decodeOpenOutcome(payload: Payload): WorkerOpenOutcome {
     return { error: failure, phase };
   }
   const opened = record(record(payload.json)?.opened);
-  if (!opened || !isCount(opened.handle) || opened.handle === 0)
-    malformed("opened file");
+  const handle = openedHandle(payload);
+  if (!opened || handle === undefined) malformed("opened file");
   return opened.stat === undefined
-    ? { handle: opened.handle }
-    : { handle: opened.handle, stat: statOf(opened.stat) };
+    ? { handle }
+    : { handle, stat: statOf(opened.stat) };
+}
+
+/**
+ * The handle a `files.open` answer names, if it is a valid one, whatever else
+ * the answer holds: what the client closes when the rest is malformed.
+ */
+export function openedHandle(payload: Payload): number | undefined {
+  const handle = record(record(payload.json)?.opened)?.handle;
+  return isCount(handle) && handle !== 0 ? handle : undefined;
 }
 
 export function encodeBytes(bytes: Uint8Array): Payload {

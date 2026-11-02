@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   FrameDecoder,
+  MAX_FRAME_HEADER_BYTES,
   encodeControlFrame,
   type Frame,
 } from "../workerProtocol/codec.ts";
@@ -25,14 +26,12 @@ async function settle(): Promise<void> {
 }
 
 /** A Worker end that speaks raw frames, so its hello can name any version. */
-function rawWorker(workerEnd: ByteEndpoint, version: string) {
+function rawWorker(workerEnd: ByteEndpoint, version: string, workerId = "w") {
   const received: Frame[] = [];
   const decoder = new FrameDecoder();
   workerEnd.onData((bytes) => decoder.push(bytes, (f) => received.push(f)));
   workerEnd.onClose(() => undefined);
-  workerEnd.write(
-    encodeControlFrame({ type: "hello", workerId: "w", version }),
-  );
+  workerEnd.write(encodeControlFrame({ type: "hello", workerId, version }));
   return received;
 }
 
@@ -134,6 +133,152 @@ test("a second connection under a connected id is refused; a reconnect is a new 
   await settle();
   assert.equal(registry.connection("w"), third.server);
   assert.equal(registry.epoch("w"), 2, "the refused dial took no epoch");
+});
+
+/** The bytes of `header` as a frame carries it. */
+const headerBytes = (header: object): number =>
+  Buffer.byteLength(JSON.stringify(header));
+
+/**
+ * The longest repeat of `unit` with which `header` still fits the frame
+ * header cap, so a hello carrying it is legal.
+ */
+function budgeted(unit: string, header: (text: string) => object): string {
+  const unitBytes = headerBytes({ t: unit }) - headerBytes({ t: "" });
+  const room = MAX_FRAME_HEADER_BYTES - headerBytes(header(""));
+  return unit.repeat(Math.floor(room / unitBytes));
+}
+
+/** Plain ASCII, and characters JSON escapes, which quoting makes longer. */
+const PEER_TEXT_UNITS = ["x", '"\\'];
+
+/** `received` is one refusal, bounded and quoting the start of `text`. */
+function boundedRefusal(received: Frame[], text: string): string {
+  assert.deepEqual(
+    received.map((frame) => frame.type),
+    ["refused"],
+  );
+  const { reason } = received[0] as Extract<Frame, { type: "refused" }>;
+  assert.ok(Buffer.byteLength(reason) < 1024, `${reason.length} characters`);
+  assert.ok(reason.includes(JSON.stringify(text.slice(0, 64)).slice(0, -1)));
+  return reason;
+}
+
+test("a refusal quotes a hello's version bounded, however long the hello", async () => {
+  for (const unit of PEER_TEXT_UNITS) {
+    const hello = (version: string) => ({
+      type: "hello",
+      workerId: "w",
+      version,
+    });
+    const version = budgeted(unit, hello);
+    assert.ok(headerBytes(hello(version)) <= MAX_FRAME_HEADER_BYTES);
+    // Base's reason held the version whole, which put its refusal over the cap.
+    assert.ok(
+      headerBytes({
+        type: "refused",
+        version: WORKER_PROTOCOL_VERSION,
+        reason: `Worker protocol ${version} cannot talk to ${WORKER_PROTOCOL_VERSION}.`,
+      }) > MAX_FRAME_HEADER_BYTES,
+    );
+    const registry = new WorkerRegistry();
+    const [serverEnd, workerEnd] = createInProcessTransport();
+    const connection = registry.accept(serverEnd, quiet);
+    const received = rawWorker(workerEnd, version);
+    const ended = await connection.ended;
+    await settle();
+    const reason = boundedRefusal(received, version);
+    assert.match(reason, /^Worker protocol ".*"… cannot talk to 1\.9\.$/s);
+    assert.equal(ended, `refused: ${reason}`);
+    assert.equal(registry.connection("w"), undefined);
+    assert.equal(registry.epoch("w"), undefined);
+  }
+});
+
+test("a refusal quotes a connected Worker id bounded, and that Worker stays served", async () => {
+  for (const unit of PEER_TEXT_UNITS) {
+    const hello = (workerId: string) => ({
+      type: "hello",
+      workerId,
+      version: WORKER_PROTOCOL_VERSION,
+    });
+    const id = budgeted(unit, hello);
+    assert.ok(headerBytes(hello(id)) <= MAX_FRAME_HEADER_BYTES);
+    assert.ok(
+      headerBytes({
+        type: "refused",
+        version: WORKER_PROTOCOL_VERSION,
+        reason: `Worker "${id}" is already connected.`,
+      }) > MAX_FRAME_HEADER_BYTES,
+    );
+    const registry = new WorkerRegistry();
+    const [firstServerEnd, firstWorkerEnd] = createInProcessTransport();
+    const first = registry.accept(firstServerEnd, quiet);
+    const worker = new WorkerConnection(firstWorkerEnd, {
+      handshake: { role: "worker", workerId: id },
+      handlers: { "test.worker.echo": async (payload) => payload },
+    });
+    await settle();
+    assert.equal(registry.connection(id), first);
+
+    const [serverEnd, workerEnd] = createInProcessTransport();
+    const second = registry.accept(serverEnd, quiet);
+    const received = rawWorker(workerEnd, WORKER_PROTOCOL_VERSION, id);
+    const ended = await second.ended;
+    await settle();
+    const reason = boundedRefusal(received, id);
+    assert.match(reason, /^Worker ".*"… is already connected\.$/s);
+    assert.equal(ended, `refused: ${reason}`);
+    assert.equal(registry.connection(id), first);
+    assert.equal(registry.epoch(id), 1);
+    assert.deepEqual(
+      (await first.request("test.worker.echo", { json: 1 })).json,
+      1,
+    );
+    assert.equal(first.isEnded, false);
+    worker.end("test");
+  }
+});
+
+test("a local error while handling peer bytes ends only that connection, logged once", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const registry = new WorkerRegistry();
+    const [healthyServerEnd, healthyWorkerEnd] = createInProcessTransport();
+    const healthy = registry.accept(healthyServerEnd, quiet);
+    const healthyWorker = new WorkerConnection(healthyWorkerEnd, {
+      handshake: { role: "worker", workerId: "w" },
+      handlers: { "test.worker.echo": async (payload) => payload },
+    });
+
+    const defect = new Error("admit broke");
+    const [serverEnd, workerEnd] = createInProcessTransport();
+    const broken = new WorkerConnection(serverEnd, {
+      handshake: {
+        role: "server",
+        admit: () => {
+          throw defect;
+        },
+      },
+    });
+    const worker = new WorkerConnection(workerEnd, {
+      handshake: { role: "worker", workerId: "other" },
+    });
+    assert.equal(await broken.ended, "protocol error: admit broke");
+    assert.equal(await worker.ended, "the peer closed the connection");
+    await settle();
+    assert.equal(errors.mock.calls.length, 1);
+    assert.equal(errors.mock.calls[0]![1], defect);
+
+    assert.deepEqual(
+      (await healthy.request("test.worker.echo", { json: 1 })).json,
+      1,
+    );
+    assert.equal(healthy.isEnded, false);
+    healthyWorker.end("test");
+  } finally {
+    errors.mockRestore();
+  }
 });
 
 test("an unknown method is a typed error both ways, and the connection stays usable", async () => {

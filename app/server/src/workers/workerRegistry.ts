@@ -15,6 +15,19 @@ import {
   compatibleProtocolVersion,
 } from "../workerProtocol/version.ts";
 
+/** How much of a peer's string a refusal reason quotes, in UTF-16 code units. */
+const QUOTED_PEER_TEXT = 128;
+
+/**
+ * `text` as JSON, cut to its first {@link QUOTED_PEER_TEXT} code units with
+ * `…` after the closing quote, so a refusal stays small whatever the peer sent.
+ */
+function quoted(text: string): string {
+  return text.length > QUOTED_PEER_TEXT
+    ? `${JSON.stringify(text.slice(0, QUOTED_PEER_TEXT))}…`
+    : JSON.stringify(text);
+}
+
 export class WorkerRegistry {
   private readonly connections = new Map<
     string,
@@ -37,9 +50,9 @@ export class WorkerRegistry {
         role: "server",
         admit: (hello) => {
           if (!compatibleProtocolVersion(hello.version))
-            return `Worker protocol ${hello.version} cannot talk to ${WORKER_PROTOCOL_VERSION}.`;
+            return `Worker protocol ${quoted(hello.version)} cannot talk to ${WORKER_PROTOCOL_VERSION}.`;
           if (this.connections.has(hello.workerId))
-            return `Worker "${hello.workerId}" is already connected.`;
+            return `Worker ${quoted(hello.workerId)} is already connected.`;
           const epoch = (this.epochs.get(hello.workerId) ?? 0) + 1;
           this.epochs.set(hello.workerId, epoch);
           this.connections.set(hello.workerId, { connection, epoch });

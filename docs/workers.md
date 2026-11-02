@@ -237,7 +237,11 @@ which imports no server state) and `workers/` (the server's side and placement);
   streams travel as numbered `data` frames before the `request` or `response`
   frame that completes it, so only an executor's own parameters (`maxBuffer`,
   `maxChars`, the caller's input) bound what one moves. Anything malformed, out
-  of sequence or over a cap is a protocol error that ends the connection.
+  of sequence or over a cap is a protocol error that ends the connection, and so
+  is a header this side would encode over the cap. Nothing thrown while handling
+  a peer's bytes escapes the connection: it ends that connection only, and an
+  error other than a protocol error, which is this side's own defect, is logged
+  as well.
 - **Lossless payloads.** Byte streams (raw stdout, stdin) travel as bytes. Every
   string an executor produced (stdout, stderr, a truncated patch, an error
   message) travels as UTF-16LE, so it arrives code unit for code unit, lone
@@ -245,9 +249,11 @@ which imports no server state) and `workers/` (the server's side and placement);
 - **Handshake.** The Worker sends `hello` with its Worker id and version. The
   server answers `welcome` on the same major (a higher minor included) or
   `refused`, and closes. A second connection under a connected Worker id is
-  refused. Requests made before the handshake wait for it. Either side may send
-  requests; an unknown method gets a typed `unknown_method` error and the
-  connection stays open.
+  refused. A refusal reason quotes the peer's version or Worker id as JSON, cut
+  to its first 128 UTF-16 code units with `…` after the closing quote, so a
+  refusal stays small however long the `hello`. Requests made before the
+  handshake wait for it. Either side may send requests; an unknown method gets a
+  typed `unknown_method` error and the connection stays open.
 - **Transport.** Phase 1 uses an in-process pair of byte endpoints:
   asynchronous, never re-entrant, holding no handle, so an idle pair never keeps
   a process alive. Tests and dev keep it after phase 2. The server dials the
@@ -336,16 +342,22 @@ which imports no server state) and `workers/` (the server's side and placement);
   the old or replacement connection. Descriptors already returned, including
   their pending stats and reads, still settle and close before quiescence. A
   caller that gives up during an open on a live connection closes the handle
-  when it arrives. Reads are positional and bounded; a stream pulls one chunk of
-  at most 1 MiB, one `data` frame, only when its consumer has room. Placement
-  keeps a path named inside `DATA_DIR` or the Knowledge Base (as named or as its
-  observed real path, with the served-file settings fallback above) on the
-  server, which reads it with the same `fileReads.ts`; session artifacts are
-  server data by kind, whatever their path. Every other path goes to the default
-  Worker as named: the server never resolves a requested path to choose its
-  side, since following an agent's symlink there would let the server read for
-  the agent what the Worker may not. When the Worker fails, the read fails;
-  there is no local fallback.
+  when it arrives. An open answer that names a valid handle but is otherwise
+  malformed (a bad `stat`, or no `stat` when one was asked for) is closed once
+  by the client, which then rejects with the malformed answer; an answer naming
+  no valid handle rejects the same way, and a handle the Worker did open then
+  stays in its table until the connection ends (a known limit). Reads are
+  positional and bounded: an answer with more bytes than asked for is a
+  malformed answer, fewer is a short read. A stream pulls one chunk of at most 1
+  MiB, one `data` frame, only when its consumer has room. Placement keeps a path
+  named inside `DATA_DIR` or the Knowledge Base (as named or as its observed
+  real path, with the served-file settings fallback above) on the server, which
+  reads it with the same `fileReads.ts`; session artifacts are server data by
+  kind, whatever their path. Every other path goes to the default Worker as
+  named: the server never resolves a requested path to choose its side, since
+  following an agent's symlink there would let the server read for the agent
+  what the Worker may not. When the Worker fails, the read fails; there is no
+  local fallback.
 - **Checkout files.** Checkout surfaces read checkout files only through
   `checkoutFileAccess.ts`. Protocol `1.2` adds three path methods beside W2's:
   `files.exists` answers as `existsSync` does and never a failure;
