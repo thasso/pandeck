@@ -29,6 +29,7 @@ import {
 } from "./worktree/WorktreeFileNavigator.tsx";
 import {
   WorktreeFileTree,
+  useWorktreeFileChanges,
   useWorktreeFileTree,
 } from "./worktree/WorktreeFileTree.tsx";
 
@@ -162,24 +163,26 @@ export function WorktreeChangeList({
 }
 
 export function WorktreeFilesList({
-  worktreeId,
+  worktree,
   selectedPath,
   refreshToken,
   onSelectFile,
 }: {
-  worktreeId: string;
+  worktree: WorktreeRecord;
   selectedPath?: string | undefined;
   refreshToken: number;
   onSelectFile: (path: string) => void;
 }) {
   const tree = useWorktreeFileTree({
-    worktreeId,
+    worktreeId: worktree.id,
     filePath: selectedPath,
     refreshToken,
   });
+  const changes = useWorktreeFileChanges(worktree, refreshToken);
   return (
     <WorktreeFileTree
       tree={tree}
+      changes={changes}
       selectedPath={selectedPath}
       onSelectFile={(file) => onSelectFile(file.path)}
       ariaLabel="Worktree files"

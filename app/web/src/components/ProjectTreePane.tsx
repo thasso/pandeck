@@ -63,6 +63,9 @@ import {
 
 const INDENT_WIDTH = 12;
 const COLLAPSE_STORAGE_KEY = "assistant.sidebarProjects.collapsed.v1";
+const SECTIONS_STORAGE_KEY = "assistant.sidebarProjects.openSections.v1";
+/** Open sections remembered; the oldest opened fall off past this. */
+const MAX_REMEMBERED_SECTIONS = 200;
 const WORKTREE_NODE_PREFIX = "worktree:";
 const SESSION_NODE_PREFIX = "session:";
 const MORE_NODE_PREFIX = "more-sessions:";
@@ -172,18 +175,31 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   const [sessionLimits, setSessionLimits] = useState<Record<string, number>>(
     {},
   );
-  // Section node ids that are open; every section starts collapsed.
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    () => new Set(),
+  // Section node ids that are open, remembered like the projects' folding;
+  // a section never opened starts collapsed.
+  const [expandedSections, setExpandedSectionsState] = useState<Set<string>>(
+    () => loadOpenSectionIds(),
   );
-  const onToggleSection = useCallback((id: string) => {
-    setExpandedSections((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const setExpandedSections = useCallback(
+    (update: (current: Set<string>) => Set<string>) =>
+      setExpandedSectionsState((current) => {
+        const next = update(current);
+        if (next !== current) persistOpenSectionIds(next);
+        return next;
+      }),
+    [],
+  );
+  const onToggleSection = useCallback(
+    (id: string) => {
+      setExpandedSections((current) => {
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    },
+    [setExpandedSections],
+  );
   // Which section holds the page's open file: Files, or the change set its
   // Review scope is (uncommitted, or the branch against its base).
   const selectedSection = useMemo(() => {
@@ -222,10 +238,16 @@ export const ProjectTreePane = memo(function ProjectTreePane({
       persistCollapsedIds(next);
       return next;
     });
-    setExpandedSections((current) =>
-      new Set(current).add(sectionNodeId(id, selectedKind)),
-    );
-  }, [selectedWorktreeForUnfold, selectedKind, selectedPathForUnfold]);
+    setExpandedSections((current) => {
+      const sectionId = sectionNodeId(id, selectedKind);
+      return current.has(sectionId) ? current : new Set(current).add(sectionId);
+    });
+  }, [
+    selectedWorktreeForUnfold,
+    selectedKind,
+    selectedPathForUnfold,
+    setExpandedSections,
+  ]);
   // The change lists the open worktrees need: the branch's against its base
   // for every open worktree (its header shows the totals, and an empty one
   // hides), uncommitted only once that section is open.
@@ -571,7 +593,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                 <RowContentHost>
                   {section === "files" ? (
                     <WorktreeFilesList
-                      worktreeId={worktree.id}
+                      worktree={worktree}
                       selectedPath={selectedPathIn(worktree.id, "files")}
                       refreshToken={
                         worktreeStatuses?.[worktree.id]?.updatedAt ?? 0
@@ -1257,6 +1279,35 @@ function loadCollapsedIds(): Set<string> {
     );
   } catch {
     return new Set();
+  }
+}
+
+function loadOpenSectionIds(): Set<string> {
+  try {
+    const raw = persistentStore().getItem(SECTIONS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.filter((id): id is string => typeof id === "string")
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function persistOpenSectionIds(ids: Set<string>): void {
+  // Before the backend answered, this window's copy is empty: writing now
+  // would replace every remembered section with this render's few.
+  if (!persistentStore().isLoaded()) return;
+  try {
+    // A Set keeps insertion order, so the last ones are the latest opened.
+    persistentStore().setItem(
+      SECTIONS_STORAGE_KEY,
+      JSON.stringify([...ids].slice(-MAX_REMEMBERED_SECTIONS)),
+    );
+  } catch {
+    // Best-effort only.
   }
 }
 

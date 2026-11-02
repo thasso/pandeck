@@ -22,6 +22,7 @@ export function EdgeSheet({
   onClose,
   side = "bottom",
   offsetTop = 0,
+  flush = false,
   children,
 }: {
   open: boolean;
@@ -30,6 +31,11 @@ export function EdgeSheet({
   side?: "bottom" | "top";
   /** Distance from the viewport top for `side="top"`; ignored otherwise. */
   offsetTop?: number;
+  /**
+   * No body padding: the content runs edge to edge, so a sticky band pins
+   * flush under the title bar instead of a padding's height below it.
+   */
+  flush?: boolean;
   children: ReactNode;
 }) {
   const top = side === "top";
@@ -60,7 +66,9 @@ export function EdgeSheet({
         <SheetHeader className="border-b pr-12">
           <SheetTitle className="truncate">{title}</SheetTitle>
         </SheetHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">{children}</div>
+        <div className={`min-h-0 flex-1 overflow-y-auto ${flush ? "" : "p-2"}`}>
+          {children}
+        </div>
       </SheetContent>
     </Sheet>
   );

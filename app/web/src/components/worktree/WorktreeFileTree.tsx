@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { WorktreeTreeEntry } from "@assistant/shared";
+import type {
+  WorktreeChangeFile,
+  WorktreeChangeStatus,
+  WorktreeRecord,
+  WorktreeTreeEntry,
+} from "@assistant/shared";
 import { ErrorNote } from "../common/load.tsx";
 import { useReloadOnToken } from "../../hooks/useFetchState.ts";
-import { fetchWorktreeTree } from "../../lib/worktrees.ts";
+import {
+  fetchWorktreeChanges,
+  fetchWorktreeTree,
+} from "../../lib/worktrees.ts";
 import { useIgnoredFilesShown } from "../../lib/worktreeIgnoredFiles.ts";
 import {
   loadExpandedTreeDirs,
@@ -223,6 +231,120 @@ export function useWorktreeFileTree({
 export type WorktreeFileTreeState = ReturnType<typeof useWorktreeFileTree>;
 
 /**
+ * What the branch changed, for the file browser to mark: the working tree
+ * against the base (the Review tab's "Whole branch"), or against HEAD on a
+ * main checkout, which has no base of its own. Re-read when the status moves.
+ */
+export function useWorktreeFileChanges(
+  worktree: WorktreeRecord,
+  refreshToken: number,
+): readonly WorktreeChangeFile[] | undefined {
+  const [files, setFiles] = useState<WorktreeChangeFile[]>();
+  useEffect(() => {
+    let cancelled = false;
+    fetchWorktreeChanges(
+      worktree.id,
+      worktree.isMain
+        ? { kind: "workingTree" }
+        : { kind: "range", from: worktree.baseCommit },
+    ).then(
+      (response) => {
+        if (!cancelled) setFiles(response.files);
+      },
+      // Marks are a nicety over the tree: a failed read leaves it unmarked.
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [worktree.id, worktree.isMain, worktree.baseCommit, refreshToken]);
+  return files;
+}
+
+/**
+ * The loaded tree with the change set laid over it: changed files carry their
+ * status and line counts, folders whose listing is not loaded carry their
+ * totals, and deleted files (and folders) — which no listing has — are put
+ * back where they were. A deleted folder's contents are all known, so it is
+ * reported as loaded and never asks the server for a listing it cannot give.
+ */
+function overlayChanges(
+  entries: WorktreeNavigatorEntry[],
+  loadedDirs: string[],
+  changes: readonly WorktreeChangeFile[],
+): { entries: WorktreeNavigatorEntry[]; syntheticDirs: string[] } {
+  const byPath = new Map(changes.map((file) => [file.path, file]));
+  const marked = entries.map((entry) => {
+    if (entry.kind === "file") {
+      const change = byPath.get(entry.path);
+      return change
+        ? {
+            ...entry,
+            status: change.status,
+            additions: change.additions,
+            deletions: change.deletions,
+          }
+        : entry;
+    }
+    const prefix = `${entry.path}/`;
+    let additions = 0;
+    let deletions = 0;
+    let files = 0;
+    const statuses = new Set<WorktreeChangeStatus>();
+    for (const change of changes) {
+      if (!change.path.startsWith(prefix)) continue;
+      additions += change.additions;
+      deletions += change.deletions;
+      files += 1;
+      statuses.add(change.status);
+    }
+    if (files === 0) return entry;
+    return {
+      ...entry,
+      additions,
+      deletions,
+      files,
+      status: statuses.size === 1 ? [...statuses][0]! : "modified",
+    } satisfies WorktreeNavigatorEntry;
+  });
+
+  const present = new Set(marked.map((entry) => `${entry.kind}:${entry.path}`));
+  const known = new Set(loadedDirs);
+  const syntheticDirs: string[] = [];
+  const added: WorktreeNavigatorEntry[] = [];
+  for (const change of changes) {
+    if (change.status !== "deleted") continue;
+    const parts = change.path.split("/");
+    let reachable = true;
+    for (let index = 1; index < parts.length && reachable; index += 1) {
+      const dir = parts.slice(0, index).join("/");
+      const parent = parts.slice(0, index - 1).join("/");
+      if (!known.has(parent)) reachable = false;
+      else if (present.has(`dir:${dir}`)) reachable = known.has(dir);
+      else {
+        // Listed parent, no such folder: it went with its files.
+        present.add(`dir:${dir}`);
+        known.add(dir);
+        syntheticDirs.push(dir);
+        added.push({ kind: "dir", path: dir, status: "deleted" });
+      }
+    }
+    const parent = parts.slice(0, -1).join("/");
+    if (reachable && known.has(parent) && !present.has(`file:${change.path}`)) {
+      present.add(`file:${change.path}`);
+      added.push({
+        kind: "file",
+        path: change.path,
+        status: "deleted",
+        additions: change.additions,
+        deletions: change.deletions,
+      });
+    }
+  }
+  return { entries: [...marked, ...added], syntheticDirs };
+}
+
+/**
  * The navigator over a `useWorktreeFileTree` cache, with its per-directory
  * error and retry: the worktree Files rail and the Knowledge sidebar draw this.
  */
@@ -233,8 +355,11 @@ export function WorktreeFileTree({
   viewMode = "tree",
   ariaLabel,
   compact,
+  changes,
 }: {
   tree: WorktreeFileTreeState;
+  /** The branch's changes, marked on the files (`useWorktreeFileChanges`). */
+  changes?: readonly WorktreeChangeFile[] | undefined;
   selectedPath?: string | undefined;
   onSelectFile: (entry: WorktreeNavigatorEntry) => void;
   viewMode?: WorktreeNavigatorViewMode;
@@ -242,6 +367,20 @@ export function WorktreeFileTree({
   compact?: boolean;
 }) {
   const { treeError, rootLoaded } = tree;
+  const overlay = useMemo(
+    () =>
+      changes && changes.length > 0
+        ? overlayChanges(tree.entries, tree.loadedDirs, changes)
+        : { entries: tree.entries, syntheticDirs: [] },
+    [changes, tree.entries, tree.loadedDirs],
+  );
+  const loadedDirectoryPaths = useMemo(
+    () =>
+      overlay.syntheticDirs.length > 0
+        ? [...tree.loadedDirs, ...overlay.syntheticDirs]
+        : tree.loadedDirs,
+    [overlay.syntheticDirs, tree.loadedDirs],
+  );
   return (
     <div className="flex flex-col gap-2">
       {treeError !== null ? (
@@ -259,7 +398,7 @@ export function WorktreeFileTree({
         (R1). */}
       {rootLoaded || treeError === null ? (
         <WorktreeFileNavigator
-          entries={tree.entries}
+          entries={overlay.entries}
           selectedPath={selectedPath}
           // Not "a root request is in flight": until the root has ANSWERED the
           // tree is loading, so an empty first frame can never read as an
@@ -267,7 +406,7 @@ export function WorktreeFileTree({
           loading={!rootLoaded}
           expandedDirectoryPaths={tree.expandedDirs}
           onExpandedDirectoryPathsChange={tree.setExpandedDirs}
-          loadedDirectoryPaths={tree.loadedDirs}
+          loadedDirectoryPaths={loadedDirectoryPaths}
           loadingDirectoryPaths={tree.loadingDirs}
           onLoadDirectory={tree.loadDirectory}
           listDirectoryPath={

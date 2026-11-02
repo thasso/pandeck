@@ -168,6 +168,7 @@ import {
 import {
   WorktreeFileTree,
   splitWorktreePath,
+  useWorktreeFileChanges,
   useWorktreeFileTree,
 } from "./WorktreeFileTree.tsx";
 
@@ -1177,6 +1178,7 @@ function FilesView({
     filePath,
     refreshToken,
   });
+  const fileChanges = useWorktreeFileChanges(worktree, refreshToken);
 
   // The file's own path is the fetch key, so opening another file shows ITS
   // placeholder instead of the previous file's source under the new path (R3);
@@ -1331,7 +1333,9 @@ function FilesView({
             </div>
           </div>
         ) : null
-      ) : sidebarNavigation && !filePath ? null : (
+      ) : // With the sidebar navigating, a phone's toolbar would be empty: the
+      // pivots sit in the file bar and the options in the header's menu.
+      sidebarNavigation && (!filePath || narrow) ? null : (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
           {navigationControls}
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -1364,8 +1368,14 @@ function FilesView({
                 {selectedParts.name}
               </span>
               {selectedParts.dir ? (
-                <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
-                  {selectedParts.dir}
+                // Cut from the LEFT: the nearest folders tell two files apart,
+                // not the shared root.
+                <span
+                  className="min-w-0 flex-1 truncate text-left font-mono text-sm text-muted-foreground"
+                  dir="rtl"
+                  title={selectedParts.dir}
+                >
+                  <span dir="ltr">{selectedParts.dir}</span>
                 </span>
               ) : null}
               {/* The narrow detail bar and the rail-collapsed bar are the only
@@ -1391,6 +1401,7 @@ function FilesView({
         rail={
           <WorktreeFileTree
             tree={tree}
+            changes={fileChanges}
             selectedPath={filePath}
             onSelectFile={(entry) =>
               navigate(worktreePath(worktree.id, "files", { path: entry.path }))
@@ -1575,13 +1586,14 @@ function FilesView({
           <div data-dock-scroll className="min-h-0 flex-1 overflow-y-auto p-2">
             <WorktreeFileTree
               tree={tree}
+              changes={fileChanges}
               onSelectFile={(entry) =>
                 navigate(
                   worktreePath(worktree.id, "files", { path: entry.path }),
                 )
               }
               ariaLabel="Worktree files"
-              viewMode="list"
+              viewMode={navigatorMode}
             />
           </div>
         ) : (
@@ -1920,7 +1932,9 @@ function WorktreeHeaderActions({
           ) : null}
           {ignoredFiles ? (
             <>
-              {actions.length > 0 || diffView ? <DropdownMenuSeparator /> : null}
+              {actions.length > 0 || diffView ? (
+                <DropdownMenuSeparator />
+              ) : null}
               <DropdownMenuCheckboxItem
                 checked={ignoredFiles.shown}
                 closeOnClick={false}

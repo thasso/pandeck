@@ -51,6 +51,8 @@ export interface WorktreeNavigatorEntry {
   status?: WorktreeChangeStatus;
   additions?: number;
   deletions?: number;
+  /** A folder's changed files, where its own listing is not loaded. */
+  files?: number;
   binary?: boolean;
   size?: number;
   oldPath?: string;
@@ -155,7 +157,7 @@ function dataFromEntry(entry: WorktreeNavigatorEntry): NavigatorNodeData {
     ...(entry.status !== undefined ? { status: entry.status } : {}),
     additions: entry.additions ?? 0,
     deletions: entry.deletions ?? 0,
-    files: entry.kind === "file" ? 1 : 0,
+    files: entry.files ?? (entry.kind === "file" && entry.status ? 1 : 0),
     ...(entry.binary !== undefined ? { binary: entry.binary } : {}),
     ...(entry.size !== undefined ? { size: entry.size } : {}),
     ...(entry.oldPath !== undefined ? { oldPath: entry.oldPath } : {}),
@@ -216,7 +218,22 @@ function aggregate(node: TreeNode<NavigatorNodeData>): {
     return {
       additions: node.data.additions,
       deletions: node.data.deletions,
-      files: 1,
+      files: node.data.status ? 1 : 0,
+      statuses,
+    };
+  }
+  // A folder whose listing is not loaded carries its own totals (a browser
+  // reads them off the change set); there are no children to sum.
+  if (
+    !(node.children ?? []).some((child) => child.data.kind !== "placeholder")
+  ) {
+    const statuses = new Set<WorktreeChangeStatus>();
+    if (node.data.status && node.data.status !== "mixed")
+      statuses.add(node.data.status);
+    return {
+      additions: node.data.additions,
+      deletions: node.data.deletions,
+      files: node.data.files,
       statuses,
     };
   }
@@ -283,6 +300,15 @@ function buildNodes(
         ...node.data,
         name: entry.name ?? entryName(entry.path),
         ...(entry.size !== undefined ? { size: entry.size } : {}),
+        // A folder's own change totals: what it shows until it is loaded.
+        ...(entry.status !== undefined ? { status: entry.status } : {}),
+        ...(entry.additions !== undefined
+          ? { additions: entry.additions }
+          : {}),
+        ...(entry.deletions !== undefined
+          ? { deletions: entry.deletions }
+          : {}),
+        ...(entry.files !== undefined ? { files: entry.files } : {}),
         deferred: entry.deferred ?? !loaded,
       };
       continue;
@@ -636,8 +662,7 @@ function EntryParts({
       {isDir && drillDown && !loading ? (
         <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
       ) : null}
-      {showChangeStats &&
-      (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
+      {(isDir ? data.files > 0 : data.status !== undefined) ? (
         <ChangeStats data={data} isDir={isDir} />
       ) : data.size != null && !isDir ? (
         <span
@@ -686,7 +711,11 @@ function NavigatorRow({
         showChangeStats={showChangeStats}
         loading={loading}
       >
-        <span className="min-w-0 flex-1 truncate">{data.name}</span>
+        <span
+          className={`min-w-0 flex-1 truncate ${data.status ? statusClass(data.status) : ""}`}
+        >
+          {data.name}
+        </span>
       </EntryParts>
     </span>
   );
@@ -729,7 +758,11 @@ function NavigatorListRow({
       >
         <ItemContent className="min-w-0">
           <ItemTitle className="w-full">
-            <span className="truncate">{data.name}</span>
+            <span
+              className={`truncate ${data.status ? statusClass(data.status) : ""}`}
+            >
+              {data.name}
+            </span>
           </ItemTitle>
           {showParentPath && dir ? (
             <ItemDescription className="truncate font-mono">
