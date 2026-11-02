@@ -67,7 +67,7 @@ Evidence rules:
   credential was revoked, expired or rejected. Generic Unauthorized,
   authentication_error or permission wording on a 403 does not. OpenAI/Codex
   keeps its stricter rule: a run failure without a known HTTP status never
-  proves login death. The installed pi-ai 1.1.0 Codex SSE transport drops HTTP
+  proves login death. The installed pi-ai 1.5.0 Codex SSE transport drops HTTP
   status and returns only `error.message`, so bare Unauthorized cannot
   distinguish a 401 from a 403 or 503. Status-bearing token-refresh failures
   prove rejection on 401, or on 400 with invalid_grant or explicitly

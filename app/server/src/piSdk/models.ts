@@ -127,7 +127,7 @@ export interface PiModel {
   name: string;
   provider: string;
   reasoning: boolean;
-  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
+  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null | undefined>>;
   contextWindow: number;
 }
 

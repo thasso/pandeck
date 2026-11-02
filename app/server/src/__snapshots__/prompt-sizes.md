@@ -19,11 +19,11 @@ sizes only.
 | assistant | claude | 6,188 | 9,994 | 16,182 |
 | personal-assistant | pi | 5,542 | 18,557 | 24,099 |
 | personal-assistant | claude | 5,522 | 9,994 | 15,516 |
-| workshop | pi | 13,145 | 20,475 | 33,620 |
+| workshop | pi | 12,698 | 20,475 | 33,173 |
 | workshop | claude | 6,892 | 11,957 | 18,849 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
 | workflow-coordinator | claude | 3,366 | 1,475 | 4,841 |
-| developer | pi | 13,590 | 19,988 | 33,578 |
+| developer | pi | 13,143 | 19,988 | 33,131 |
 | developer | claude | 7,337 | 11,461 | 18,798 |
 
 ## assistant — pi
@@ -126,11 +126,11 @@ sizes only.
 
 | Layer | Section | Counted | Chars |
 | --- | --- | --- | ---: |
-| `harness-base` | prompt | yes | 1,567 |
-| `harness-base:pi-docs` | prompt | no | 1,137 |
+| `harness-base` | prompt | yes | 1,370 |
+| `harness-base:pi-docs` | prompt | no | 1,048 |
 | `pi-tool-list:builtin` | prompt | yes | 283 |
 | `pi-tool-list:app-eager` | prompt | yes | 0 |
-| `pi-guidelines:builtin` | prompt | yes | 609 |
+| `pi-guidelines:builtin` | prompt | yes | 359 |
 | `pi-guidelines:app-eager` | prompt | yes | 0 |
 | `persona:workshop` | prompt | yes | 3,404 |
 | `project-registry` | prompt | yes | 413 |
@@ -206,11 +206,11 @@ sizes only.
 
 | Layer | Section | Counted | Chars |
 | --- | --- | --- | ---: |
-| `harness-base` | prompt | yes | 1,567 |
-| `harness-base:pi-docs` | prompt | no | 1,137 |
+| `harness-base` | prompt | yes | 1,370 |
+| `harness-base:pi-docs` | prompt | no | 1,048 |
 | `pi-tool-list:builtin` | prompt | yes | 283 |
 | `pi-tool-list:app-eager` | prompt | yes | 0 |
-| `pi-guidelines:builtin` | prompt | yes | 609 |
+| `pi-guidelines:builtin` | prompt | yes | 359 |
 | `pi-guidelines:app-eager` | prompt | yes | 0 |
 | `persona:developer` | prompt | yes | 3,849 |
 | `project-registry` | prompt | yes | 413 |
