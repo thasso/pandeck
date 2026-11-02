@@ -232,6 +232,11 @@ export class WorkerConnection {
     );
   }
 
+  /**
+   * Nothing thrown while handling the peer's bytes leaves here: it ends this
+   * connection only. Anything but a {@link WorkerProtocolError} is this side's
+   * own defect, so it is logged as well.
+   */
   private receive(bytes: Uint8Array): void {
     if (this.endReason !== undefined) return;
     try {
@@ -239,8 +244,9 @@ export class WorkerConnection {
         if (this.endReason === undefined) this.onFrame(frame);
       });
     } catch (err) {
-      if (!(err instanceof WorkerProtocolError)) throw err;
-      this.end(`protocol error: ${err.message}`);
+      if (!(err instanceof WorkerProtocolError))
+        console.error("[worker-protocol] internal error on peer input:", err);
+      this.end(`protocol error: ${errorText(err)}`);
     }
   }
 

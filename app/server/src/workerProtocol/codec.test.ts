@@ -269,6 +269,20 @@ test("a malformed or over-cap frame is a protocol error, found before buffering"
   assert.throws(() => truncated.finish(), WorkerProtocolError);
 });
 
+test("a header over the frame cap is a protocol error to encode, too", () => {
+  assert.throws(
+    () =>
+      encodeControlFrame({
+        type: "refused",
+        version: WORKER_PROTOCOL_VERSION,
+        reason: "x".repeat(MAX_FRAME_HEADER_BYTES),
+      }),
+    (error: unknown) =>
+      error instanceof WorkerProtocolError &&
+      error.message === "A refused frame header is over the frame cap.",
+  );
+});
+
 test("data out of sequence, or a count that does not match, is a protocol error", () => {
   const [first, second, last] = decodeAll(
     encodeMessage(

@@ -41,7 +41,9 @@ import {
   encodeLocation,
   encodeOpen,
   encodeRead,
+  openedHandle,
   type WorkerFileLocation,
+  type WorkerOpenOutcome,
 } from "../workerProtocol/fileMethods.ts";
 import { workerConnection } from "./checkoutClient.ts";
 
@@ -183,17 +185,40 @@ export function readdirOnWorker(
 
 /**
  * Opens `location` on its Worker. Sent without an abort signal, so it always
- * settles with the Worker's real answer and no handle goes unclaimed.
+ * settles with the Worker's real answer and no handle goes unclaimed. A
+ * malformed answer that still names a valid handle closes that handle before
+ * the open rejects; one naming none leaves the Worker's handle, if any, to its
+ * sweep at the connection's end.
  */
 export async function openOnWorker(
   location: WorkerFileLocation,
   stat: boolean,
 ): Promise<FileOpenOutcome<WorkerFileHandle>> {
   const connection = connectionTo(location.workerId);
-  const outcome = decoded(
-    await requestOn(connection, FILE_METHODS.open, encodeOpen(location, stat)),
-    decodeOpenOutcome,
+  const answer = await requestOn(
+    connection,
+    FILE_METHODS.open,
+    encodeOpen(location, stat),
   );
+  let outcome: WorkerOpenOutcome;
+  try {
+    outcome = decoded(answer, (payload) => {
+      const opened = decodeOpenOutcome(payload);
+      if (stat && !("error" in opened) && !opened.stat)
+        throw new MalformedWorkerAnswerError(
+          "The Worker answered an open without the stat it was asked for.",
+        );
+      return opened;
+    });
+  } catch (error) {
+    const handle = openedHandle(answer);
+    // The open's own error is what the caller gets; a failed close adds nothing.
+    if (handle !== undefined)
+      await boundHandle(connection, { workerId: location.workerId, handle })
+        .close()
+        .catch(() => undefined);
+    throw error;
+  }
   if ("error" in outcome) return outcome;
   const file = boundHandle(connection, {
     workerId: location.workerId,
@@ -207,6 +232,7 @@ function boundHandle(
   ref: { workerId: string; handle: number },
 ): WorkerFileHandle {
   return {
+    /** Fewer bytes than `length` is a short read; more is a malformed answer. */
     async read(position, length) {
       return decoded(
         await requestOn(
@@ -214,7 +240,14 @@ function boundHandle(
           FILE_METHODS.read,
           encodeRead(ref, position, length),
         ),
-        decodeBytes,
+        (answer) => {
+          const bytes = decodeBytes(answer);
+          if (bytes.length > length)
+            throw new MalformedWorkerAnswerError(
+              `The Worker answered ${bytes.length} bytes to a read of ${length}.`,
+            );
+          return bytes;
+        },
       );
     },
     async close() {
