@@ -18,6 +18,10 @@ import { runProgressPhase } from "@assistant/shared/session";
 import { sessionRuntime } from "../../session/runtimeInstance.ts";
 import { peerPromptStore } from "../../db/peerPromptStore.ts";
 import { backgroundUpdateQueueField } from "../../backgroundUpdateQueue.ts";
+import {
+  backgroundWorkStore,
+  type BackgroundWorkItem,
+} from "../../db/backgroundWorkStore.ts";
 
 /* ------------------------------ budgets ---------------------------------- */
 
@@ -207,6 +211,66 @@ export async function runtimeStateReader(): Promise<
 const secondsSince = (at: number, now: number) =>
   Math.max(0, Math.round((now - at) / 1000));
 
+/** Background items listed per session; the counts always cover every one. */
+const BACKGROUND_ITEMS_SHOWN = 5;
+
+interface BackgroundWorkField {
+  /** Items the session waits on: its turn resumes when one ends. */
+  awaited: number;
+  /** Items declared `service` (dev servers, watchers): nothing waits on them. */
+  services: number;
+  items: Array<{
+    kind: BackgroundWorkItem["kind"];
+    label: string;
+    intent: BackgroundWorkItem["intent"];
+    state: BackgroundWorkItem["state"];
+    stopping?: true;
+    forSec: number;
+    deadlineInSec: number;
+  }>;
+  /** Active items not listed. */
+  more?: number;
+}
+
+/**
+ * The session's active background work, whatever its runtime state: a session
+ * whose turn ended can still be waiting on a watch or command, which is what
+ * the web's working tier shows (`backgroundWorkBusy`). Labels, kinds and
+ * seconds only: never the command, output or evidence.
+ */
+function backgroundWorkField(id: string): BackgroundWorkField | undefined {
+  let active: BackgroundWorkItem[];
+  try {
+    active = backgroundWorkStore.listItems({
+      ownerSessionId: id,
+      state: "active",
+      limit: 200,
+    });
+  } catch {
+    // Best-effort, like the queue counts: the read itself still answers.
+    return undefined;
+  }
+  if (active.length === 0) return undefined;
+  const now = Date.now();
+  const services = active.filter((item) => item.intent === "service").length;
+  return {
+    awaited: active.length - services,
+    services,
+    items: active.slice(0, BACKGROUND_ITEMS_SHOWN).map((item) => ({
+      kind: item.kind,
+      label: item.label,
+      intent: item.intent,
+      state: item.state,
+      ...(item.stopState !== "none" ? { stopping: true as const } : {}),
+      forSec: secondsSince(item.startedAt ?? item.createdAt, now),
+      deadlineInSec: Math.max(0, Math.round((item.deadlineAt - now) / 1000)),
+    })),
+    ...(active.length > BACKGROUND_ITEMS_SHOWN
+      ? { more: active.length - BACKGROUND_ITEMS_SHOWN }
+      : {}),
+  };
+}
+
 /**
  * What a running session's run has been OBSERVED doing, and what waits for
  * it — so a caller can tell work in progress from a quiet run without reading
@@ -220,6 +284,7 @@ export function liveActivityFields(
   runtime: RuntimeState,
 ): {
   liveActivity?: Record<string, unknown>;
+  backgroundWork?: BackgroundWorkField;
   queuedWork?: {
     peerMessages?: number;
     backgroundUpdates?: number;
@@ -281,6 +346,8 @@ export function liveActivityFields(
         : {}),
     };
   }
+  const backgroundWork = backgroundWorkField(id);
+  if (backgroundWork) fields.backgroundWork = backgroundWork;
   let peerMessages = 0;
   try {
     peerMessages = peerPromptStore.listUndeliveredForRecipient(id).length;

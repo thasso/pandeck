@@ -150,9 +150,13 @@ shows.
 - **Agents**: `session_lookup` and `session_read` add `liveActivity` (phase, run
   age, seconds since the last activity and model output, wait, running tools,
   last tool, provider retry) for a running session, and `queuedWork` (peer
-  messages, background updates) for any session. A coordinator can check whether
-  a peer is working without its transcript, whose assistant turn only lands when
-  it completes. Names and seconds only: no arguments or output.
+  messages, background updates) for any session. They also add `backgroundWork`
+  for any session with active background items: awaited and service counts, and
+  up to five items with kind, label, intent, state, age and seconds to deadline.
+  An idle or unloaded peer waiting on a check watch is still busy, as the web's
+  working tier shows it. A coordinator can check whether a peer is working
+  without its transcript, whose assistant turn only lands when it completes.
+  Names and seconds only: no arguments, commands or output.
 
 ## Queued work
 
