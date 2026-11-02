@@ -161,7 +161,7 @@
               dontFixup = true;
               outputHashMode = "recursive";
               outputHashAlgo = "sha256";
-              outputHash = "sha256-/CF9iPTDRs5jlO0O5QC/+Zp9MGzcP7fQCEox0ONyo6w=";
+              outputHash = "sha256-3CuZiRL8Cof2hrSbqIcbhsbAN+2+8VQ3PWhC434sRNM=";
             };
 
             # Appended here, not set as `pnpmInstallFlags`: without structured
