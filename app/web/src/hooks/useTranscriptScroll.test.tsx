@@ -847,21 +847,18 @@ describe("useTranscriptScroll view toggle", () => {
 });
 
 describe("useTranscriptScroll end pin", () => {
+  const content = () => container().firstElementChild as HTMLElement;
   /** The content's margin plus its height, in CSS pixels. */
   const extent = () => {
-    const content = container().firstElementChild as HTMLElement;
-    const margin = Number.parseFloat(content.style.marginTop) || 0;
-    return content.getBoundingClientRect().height + margin;
+    const margin = Number.parseFloat(content().style.marginTop) || 0;
+    return content().getBoundingClientRect().height + margin;
   };
-  /**
-   * How far that extent is from the scroll grid of either engine: whole device
-   * pixels for Chromium, whole CSS pixels for WebKit.
-   */
-  const offGrid = (scale: number) => {
-    const fromWhole = (value: number) => Math.abs(value - Math.round(value));
-    return Math.max(fromWhole(extent() * scale), fromWhole(extent()));
-  };
+  const fromWhole = (value: number) => Math.abs(value - Math.round(value));
 
+  /**
+   * Both engines' grids where one small grid serves both: Chromium scrolls in
+   * whole device pixels, WebKit in whole CSS pixels.
+   */
   it.each([1, 1.25, 1.5, 2, 3])(
     "keeps the content on both engines' scroll grids at %sx as rows above resolve",
     (scale) => {
@@ -872,14 +869,52 @@ describe("useTranscriptScroll end pin", () => {
           layout={[...skippedRows(2), ...realRows(2, 321.1, "prose")]}
         />,
       );
+      const offGrid = () =>
+        Math.max(fromWhole(extent() * scale), fromWhole(extent()));
       // Within a layout unit: what is left is below anything a pixel can show.
-      expect(offGrid(scale)).toBeLessThan(1 / 64);
+      expect(offGrid()).toBeLessThan(1 / 64);
       skippedRowResolves("skipped-0", 456.789);
-      expect(offGrid(scale)).toBeLessThan(1 / 64);
+      expect(offGrid()).toBeLessThan(1 / 64);
       skippedRowResolves("skipped-1", 1000.03);
-      expect(offGrid(scale)).toBeLessThan(1 / 64);
+      expect(offGrid()).toBeLessThan(1 / 64);
     },
   );
+
+  // Fractional OS scaling times browser zoom: a shared grid would be 10px and
+  // 20px, so these get Chromium's alone, and a pad of under a device pixel.
+  it.each([1.1, 1.65])(
+    "keeps the content on whole device pixels at %sx",
+    (scale) => {
+      vi.stubGlobal("devicePixelRatio", scale);
+      render(
+        <TranscriptSurface
+          sessionId={`test:end-${scale}`}
+          layout={[...skippedRows(2), ...realRows(2, 321.1, "prose")]}
+        />,
+      );
+      expect(fromWhole(extent() * scale)).toBeLessThan(1 / 64);
+      skippedRowResolves("skipped-0", 456.789);
+      expect(fromWhole(extent() * scale)).toBeLessThan(1 / 64);
+      expect(Number.parseFloat(content().style.marginTop)).toBeLessThan(
+        1 / scale,
+      );
+    },
+  );
+
+  it("leaves a transcript shorter than the viewport unpadded", () => {
+    vi.stubGlobal("devicePixelRatio", 1.25);
+    render(
+      <TranscriptSurface
+        sessionId="test:end-short"
+        layout={[
+          { id: "short-0", h: 100.3 },
+          { id: "short-1", h: 28.7 },
+        ]}
+      />,
+    );
+    // Nothing scrolls to absorb a margin here, so one would move these rows.
+    expect(content().style.marginTop).toBe("");
+  });
 });
 
 describe("useTranscriptScroll persisted restoration", () => {

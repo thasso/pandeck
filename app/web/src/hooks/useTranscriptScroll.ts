@@ -186,16 +186,18 @@ export interface TranscriptScrollController {
 }
 
 /**
- * The smallest whole number of CSS pixels that is also a whole number of device
- * pixels at `scale` — the grid `pinToEnd` pads the content onto. Past 16px the
- * pad would start to show at the top of the transcript, so a scale with no grid
- * that small falls back to whole CSS pixels, which is WebKit's grid anyway.
+ * The grid `pinToEnd` pads the content onto, in CSS px: the smallest whole
+ * number of CSS pixels that is also whole in device pixels, which is both
+ * engines' scroll grid at once — 1px at an integer scale, 4px at 1.25x. Past
+ * 4px (20px at 1.65x, 10px at 1.1x) it falls back to one device pixel,
+ * Chromium's grid: those scales come from fractional OS scaling and browser
+ * zoom, which Safari, scrolling in whole CSS pixels, does not produce.
  */
 function endGridPx(scale: number): number {
-  for (let px = 1; px <= 16; px += 1) {
+  for (let px = 1; px <= 4; px += 1) {
     if (Math.abs(px * scale - Math.round(px * scale)) < 1e-3) return px;
   }
-  return 1;
+  return 1 / scale;
 }
 
 function metricsOf(element: HTMLElement) {
@@ -526,10 +528,13 @@ export function useTranscriptScroll({
    * they differ: Chromium scrolls in whole device pixels (13991.2 at 1.25x),
    * WebKit in whole CSS pixels (100.5 reads back as 100 at 2x). Whole device
    * pixels alone left Safari a device pixel of wobble at 2x; whole CSS pixels
-   * alone left Chromium wobbling at 1.25x. The pad is therefore to the smallest
-   * whole number of CSS pixels that is also whole in device pixels: 1px at an
-   * integer scale, 4px at 1.25x. Only here: away from the end the margin is left
-   * alone, since moving it would shift the reader's rows.
+   * alone left Chromium wobbling at 1.25x, so the pad is onto both
+   * (`endGridPx`).
+   *
+   * Only while the content overflows: a transcript shorter than the viewport has
+   * no scroll offset to absorb the margin, so a pad there would move every row
+   * on screen as the answer streams in below them. And only here: away from the
+   * end the margin is left alone, since moving it would shift the reader's rows.
    */
   const pinToEnd = useCallback(
     (element: HTMLElement) => {
@@ -538,16 +543,20 @@ export function useTranscriptScroll({
         // Read on every pin: zoom and moving the window to another monitor
         // change it.
         const scale = window.devicePixelRatio || 1;
-        const grid = endGridPx(scale);
-        // Counted in the finer of the engines' layout units — 1/64 device px in
-        // Chromium, 1/64 CSS px in WebKit — so the remainder is exact.
-        const unit = 1 / 64 / Math.max(scale, 1);
-        const units = Math.round(content.getBoundingClientRect().height / unit);
-        const gridUnits = Math.round(grid / unit);
-        const pad = (gridUnits - (units % gridUnits)) % gridUnits;
-        // A quarter unit over, because Chromium truncates the margin back into
-        // its units after scaling: at 1.5x, 1/1.5px came out one unit short.
-        const margin = pad ? (pad + 0.25) * unit : 0;
+        const height = content.getBoundingClientRect().height;
+        let margin = 0;
+        if (height > element.clientHeight) {
+          // Counted in Chromium's layout unit, 1/64 device px, which also
+          // divides WebKit's 1/64 CSS px at an integer scale, so the remainder
+          // is exact on both.
+          const unit = 1 / 64 / scale;
+          const gridUnits = Math.round(endGridPx(scale) / unit);
+          const units = Math.round(height / unit);
+          const pad = (gridUnits - (units % gridUnits)) % gridUnits;
+          // A quarter unit over, because Chromium truncates the margin back
+          // into its units after scaling: at 1.5x, 1/1.5px came out one short.
+          if (pad) margin = (pad + 0.25) * unit;
+        }
         if (margin !== endMargin.current) {
           endMargin.current = margin;
           content.style.marginTop = margin ? `${margin}px` : "";
