@@ -120,8 +120,11 @@ export function DocumentNavigationActions({
   className = "",
   showClose = true,
   showZoom = true,
+  showHistory = true,
 }: {
   className?: string;
+  /** False where the browser's own Back and Forward are the page's (desktop worktree). */
+  showHistory?: boolean;
   /** False where the page's own menu carries zoom (the worktree page). */
   showZoom?: boolean;
   /**
@@ -132,33 +135,39 @@ export function DocumentNavigationActions({
 }) {
   const navigation = useDocumentNavigationRegistration();
   if (!navigation) return null;
+  const zoom = showZoom ? navigation.zoom : undefined;
+  if (!showHistory && !zoom && !showClose) return null;
   // Back and Forward are the leading pair, everything else follows, and Close
   // is last — the same order the phone's dock row uses.
   return (
     <div className={`items-center gap-1 ${className}`}>
-      <IconButton
-        label="Back"
-        onClick={() => void navigation.back()}
-        disabled={!navigation.canBack}
-      >
-        <ArrowLeft />
-      </IconButton>
-      <IconButton
-        label="Forward"
-        onClick={navigation.forward}
-        disabled={!navigation.canForward}
-      >
-        <ArrowRight />
-      </IconButton>
-      {showZoom && navigation.zoom ? (
+      {showHistory ? (
         <>
-          <GroupSeparator />
-          <DocumentZoomActions zoom={navigation.zoom} />
+          <IconButton
+            label="Back"
+            onClick={() => void navigation.back()}
+            disabled={!navigation.canBack}
+          >
+            <ArrowLeft />
+          </IconButton>
+          <IconButton
+            label="Forward"
+            onClick={navigation.forward}
+            disabled={!navigation.canForward}
+          >
+            <ArrowRight />
+          </IconButton>
+        </>
+      ) : null}
+      {zoom ? (
+        <>
+          {showHistory ? <GroupSeparator /> : null}
+          <DocumentZoomActions zoom={zoom} />
         </>
       ) : null}
       {showClose ? (
         <>
-          <GroupSeparator />
+          {showHistory || zoom ? <GroupSeparator /> : null}
           <IconButton label="Close document" onClick={navigation.close}>
             <X />
           </IconButton>

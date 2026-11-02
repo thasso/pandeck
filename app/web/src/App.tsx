@@ -330,7 +330,10 @@ import {
   DockSegmentGroup,
   type DockPeek,
 } from "./components/shell/ObjectDock.tsx";
-import { WORKTREE_VIEWS } from "./components/worktree/worktreeViews.tsx";
+import {
+  WORKTREE_VIEWS,
+  openedFromOutsideWorktree,
+} from "./components/worktree/worktreeViews.tsx";
 import { DocumentZoomSection } from "./components/DocumentZoom.tsx";
 import { documentDockPeek } from "./components/DocumentDockRow.tsx";
 import {
@@ -6687,17 +6690,22 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       // `DocumentDockRow` owns the order — Back, Forward, Close, then the
       // source's and the object's actions, and no zoom controls at all.
       const peek = documentDockPeek(documentNavigation, rowActions);
-      return worktreeViews
-        ? {
-            ...peek,
-            back: (
-              <>
-                {peek.back}
-                {worktreeViews}
-              </>
-            ),
-          }
-        : peek;
+      if (!worktreeViews) return peek;
+      // A worktree file opened from its own sidebar has nowhere to close to:
+      // Close only returns to where it came from outside the worktree.
+      const { trailing, ...rest } = peek;
+      return {
+        ...rest,
+        ...(worktreeRouteId && openedFromOutsideWorktree(worktreeRouteId)
+          ? { trailing }
+          : {}),
+        back: (
+          <>
+            {peek.back}
+            {worktreeViews}
+          </>
+        ),
+      };
     }
     // A session screen's row IS the resting composer, bookended two controls a side
     // around the field (`SessionDockActions` owns that arrangement). It always

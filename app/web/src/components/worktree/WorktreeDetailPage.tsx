@@ -26,6 +26,7 @@ import {
 import {
   BookOpen,
   Check,
+  FolderOpen,
   RotateCcw,
   ZoomOut,
   ZoomIn,
@@ -71,7 +72,7 @@ import type {
   ProjectRecord,
 } from "@assistant/shared";
 import { WorktreeOverview } from "./WorktreeOverview.tsx";
-import { WORKTREE_VIEWS } from "./worktreeViews.tsx";
+import { WORKTREE_VIEWS, openedFromOutsideWorktree } from "./worktreeViews.tsx";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
 import {
   DocumentNavigationActions,
@@ -150,6 +151,7 @@ import {
   fetchWorktreeFile,
   fetchWorktreeFileDiff,
   fetchWorktreeStatus,
+  fetchWorktreeTree,
   hashContent,
   worktreeFileRawUrl,
 } from "../../lib/worktrees.ts";
@@ -699,19 +701,48 @@ function ChangesView({
   const jumpSheetOpen = jumpOpen;
   const setJumpSheetOpen = onJumpOpenChange;
   // A file picked in the sidebar arrives as the route's path: scroll the
-  // changeset to it, retrying while its lazily mounted section appears.
+  // changeset to it, retrying while its lazily mounted section appears. Then
+  // HOLD it there for a moment: the jump brings its neighbours near the
+  // viewport, their diffs load and grow above it, and a single scroll ends up
+  // with the file pushed out of view again. Any scroll of the reader's own
+  // ends the hold.
   const changesLoaded = changes !== undefined;
   useEffect(() => {
     if (reviewMode !== "changeset" || !filePath || !changesLoaded) return;
     let frame = 0;
     let tries = 0;
+    let held = 0;
+    let released = false;
+    const release = () => {
+      released = true;
+    };
+    const userInput = ["wheel", "touchstart", "pointerdown", "keydown"];
+    for (const type of userInput)
+      window.addEventListener(type, release, { capture: true, passive: true });
     const attempt = () => {
+      if (released) return;
       const section = sectionsRef.current.get(filePath);
-      if (section) section.scrollIntoView({ block: "start" });
-      else if (tries++ < 30) frame = requestAnimationFrame(attempt);
+      if (!section) {
+        if (tries++ < 30) frame = requestAnimationFrame(attempt);
+        return;
+      }
+      const scroller = section.closest<HTMLElement>("[data-dock-scroll]");
+      const offset = scroller
+        ? section.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top
+        : 0;
+      if (held === 0 || Math.abs(offset) > 1)
+        section.scrollIntoView({ block: "start" });
+      // About a second and a half of frames: long enough for the diffs
+      // around it to load and lay out.
+      if (held++ < 90) frame = requestAnimationFrame(attempt);
     };
     frame = requestAnimationFrame(attempt);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const type of userInput)
+        window.removeEventListener(type, release, { capture: true });
+    };
   }, [reviewMode, filePath, changesLoaded]);
   // The changeset stacks every file in one scroller, so a narrow layout needs a
   // way to jump. WHERE that list opens is a phone question, not a width one: a
@@ -1143,6 +1174,111 @@ function filePivotsFor(
   ];
 }
 
+const README_NAMES = ["readme.md", "readme.markdown", "readme", "readme.txt"];
+
+/**
+ * The worktree's top-level README, for the Files view to open on when no file
+ * is picked (the sidebar browses; the page shows what the folder says about
+ * itself). Undefined while unknown or when there is none.
+ */
+function useWorktreeReadme(
+  worktreeId: string,
+  enabled: boolean,
+): string | undefined {
+  const [readme, setReadme] = useState<{ id: string; path: string | null }>();
+  useEffect(() => {
+    if (!enabled || readme?.id === worktreeId) return;
+    let cancelled = false;
+    fetchWorktreeTree(worktreeId, "", false).then(
+      (entries) => {
+        if (cancelled) return;
+        const byName = new Map(
+          entries
+            .filter((entry) => entry.kind === "file")
+            .map((entry) => [entry.name.toLowerCase(), entry.path]),
+        );
+        const path =
+          README_NAMES.map((name) => byName.get(name)).find(Boolean) ?? null;
+        setReadme({ id: worktreeId, path });
+      },
+      () => {
+        if (!cancelled) setReadme({ id: worktreeId, path: null });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, worktreeId, readme?.id]);
+  return enabled && readme?.id === worktreeId
+    ? (readme.path ?? undefined)
+    : undefined;
+}
+
+/**
+ * A phone's file browser: the worktree's tree, with its changes marked, in a
+ * sheet from the page header on every view. Mounted only while open, so its
+ * listings load when asked for.
+ */
+function WorktreeBrowseSheet({
+  worktree,
+  open,
+  onClose,
+  selectedPath,
+  refreshToken,
+  navigate,
+}: {
+  worktree: WorktreeRecord;
+  open: boolean;
+  onClose: () => void;
+  selectedPath?: string | undefined;
+  refreshToken: number;
+  navigate: (path: string) => void;
+}) {
+  return (
+    <EdgeSheet open={open} title="Files" onClose={onClose}>
+      {open ? (
+        <WorktreeBrowseTree
+          worktree={worktree}
+          selectedPath={selectedPath}
+          refreshToken={refreshToken}
+          onPick={(path) => {
+            onClose();
+            navigate(worktreePath(worktree.id, "files", { path }));
+          }}
+        />
+      ) : null}
+    </EdgeSheet>
+  );
+}
+
+function WorktreeBrowseTree({
+  worktree,
+  selectedPath,
+  refreshToken,
+  onPick,
+}: {
+  worktree: WorktreeRecord;
+  selectedPath?: string | undefined;
+  refreshToken: number;
+  onPick: (path: string) => void;
+}) {
+  const tree = useWorktreeFileTree({
+    worktreeId: worktree.id,
+    filePath: selectedPath,
+    refreshToken,
+  });
+  const changes = useWorktreeFileChanges(worktree, refreshToken);
+  return (
+    <WorktreeFileTree
+      tree={tree}
+      changes={changes}
+      selectedPath={selectedPath}
+      onSelectFile={(entry) => onPick(entry.path)}
+      ariaLabel="Worktree files"
+    />
+  );
+}
+
 function FilesView({
   worktree,
   narrow,
@@ -1404,9 +1540,11 @@ function FilesView({
         narrow={narrow}
         narrowListHeader={false}
         // The document header already names the file and holds its pivots.
-        narrowDetailBar={!browseAsDocuments}
+        narrowDetailBar={
+          !browseAsDocuments && !(sidebarNavigation && !filePath)
+        }
         railHidden={browseAsDocuments || sidebarNavigation}
-        detailActive={Boolean(filePath)}
+        detailActive={Boolean(filePath) || sidebarNavigation}
         {...(!filePath
           ? { onBack: () => navigate(worktreePath(worktree.id, "files")) }
           : {})}
@@ -1595,26 +1733,15 @@ function FilesView({
               />
             ) : null}
           </>
-        ) : sidebarNavigation && !narrow ? (
-          // No file yet: the worktree's top folder, to start from.
-          <div data-dock-scroll className="min-h-0 flex-1 overflow-y-auto p-2">
-            <WorktreeFileTree
-              tree={tree}
-              changes={fileChanges}
-              onSelectFile={(entry) =>
-                navigate(
-                  worktreePath(worktree.id, "files", { path: entry.path }),
-                )
-              }
-              ariaLabel="Worktree files"
-              viewMode={navigatorMode}
-            />
-          </div>
         ) : (
           <div className="p-6 text-sm text-muted-foreground">
-            {browseAsDocuments && !narrow
-              ? "Pick a file in the sidebar to read it."
-              : "Select a file to view it."}
+            {sidebarNavigation
+              ? narrow
+                ? "No README here. Browse the files to open one."
+                : "No README here. Pick a file in the sidebar to open it."
+              : browseAsDocuments && !narrow
+                ? "Pick a file in the sidebar to read it."
+                : "Select a file to view it."}
           </div>
         )}
       </WorktreeRailLayout>
@@ -1692,6 +1819,7 @@ function WorktreeHeaderActions({
   actions,
   showComment,
   onJumpToFile,
+  onBrowseFiles,
   diffView,
   ignoredFiles,
   zoomInMenu = false,
@@ -1702,6 +1830,8 @@ function WorktreeHeaderActions({
   zoomInMenu?: boolean;
   /** Opens the Jump to file sheet: Review's changed files on a phone. */
   onJumpToFile?: (() => void) | undefined;
+  /** Opens the file tree sheet: the Files view's browser on a phone. */
+  onBrowseFiles?: (() => void) | undefined;
   /** The diff display options, where a diff can be on screen. */
   diffView?:
     | {
@@ -1728,6 +1858,11 @@ function WorktreeHeaderActions({
     : "Select text to comment";
   return (
     <div className="flex shrink-0 items-center gap-1">
+      {onBrowseFiles ? (
+        <IconButton label="Browse files" size="icon" onClick={onBrowseFiles}>
+          <FolderOpen />
+        </IconButton>
+      ) : null}
       {onJumpToFile ? (
         <IconButton label="Jump to file" size="icon" onClick={onJumpToFile}>
           <Files />
@@ -2011,7 +2146,7 @@ export default function WorktreeDetailPage({
   status: pushedStatus,
   narrow,
   view,
-  filePath,
+  filePath: routeFilePath,
   from,
   to,
   anchor,
@@ -2091,6 +2226,14 @@ export default function WorktreeDetailPage({
   );
   const [ignoredShown, setIgnoredShown] = useIgnoredFilesShown(worktree.id);
   const [jumpOpen, setJumpOpen] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  // With the sidebar browsing, the Files view opens on the README: the page
+  // shows the folder's own account of itself rather than a second tree.
+  const readmePath = useWorktreeReadme(
+    worktree.id,
+    sidebarNavigation && view === "files" && !routeFilePath,
+  );
+  const filePath = routeFilePath ?? readmePath;
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
   // Same default rule ChangesView applies, so the view-options segment and the
   // comment-following below both know what the pane is actually doing.
@@ -2510,6 +2653,11 @@ export default function WorktreeDetailPage({
                     zoomInMenu={sidebarNavigation && !narrow}
                     // The sidebar lists the files on a wide screen; a phone
                     // jumps through the header.
+                    onBrowseFiles={
+                      sidebarNavigation && narrow
+                        ? () => setBrowseOpen(true)
+                        : undefined
+                    }
                     onJumpToFile={
                       sidebarNavigation && narrow && view === "changes"
                         ? () => setJumpOpen(true)
@@ -2551,6 +2699,16 @@ export default function WorktreeDetailPage({
                         // Zoom lives in the `…` menu: the row has the views
                         // and comment to fit beside the branch.
                         showZoom={!sidebarNavigation}
+                        // The browser's own Back and Forward serve here, and
+                        // Close only when the file came from outside the
+                        // worktree (a chat): from the sidebar there is
+                        // nothing to return to.
+                        showHistory={!sidebarNavigation}
+                        showClose={
+                          !sidebarNavigation ||
+                          (Boolean(routeFilePath) &&
+                            openedFromOutsideWorktree(worktree.id))
+                        }
                       />
                     ) : null}
                     {sidebarNavigation && !narrow ? (
@@ -2628,7 +2786,9 @@ export default function WorktreeDetailPage({
               viewOptionsControl={sidebarNavigation ? null : viewOptionsControl}
               pivot={filePivot}
               onPivotChange={setFilePivot}
-              markdownPreviewFirst={markdownPreviewFirst}
+              markdownPreviewFirst={
+                markdownPreviewFirst || (!routeFilePath && Boolean(readmePath))
+              }
               browseAsDocuments={browseAsDocuments}
               documentComments={documentComments}
               commentsConfigFor={commentsConfigFor}
@@ -2653,6 +2813,16 @@ export default function WorktreeDetailPage({
               onJumpOpenChange={setJumpOpen}
             />
           )}
+          {sidebarNavigation && narrow && !embedded ? (
+            <WorktreeBrowseSheet
+              worktree={worktree}
+              open={browseOpen}
+              onClose={() => setBrowseOpen(false)}
+              selectedPath={routeFilePath}
+              refreshToken={refreshToken}
+              navigate={navigate}
+            />
+          ) : null}
           {delivery.dialogs}
           {retire.dialog}
         </div>
