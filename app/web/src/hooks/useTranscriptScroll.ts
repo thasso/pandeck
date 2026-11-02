@@ -416,6 +416,8 @@ export function useTranscriptScroll({
   const lastReaderScroll = useRef(0);
   /** The content height as of the last position we looked at. */
   const lastHeight = useRef(0);
+  /** The sub-pixel margin that keeps the content whole for `pinToEnd`. */
+  const endMargin = useRef(0);
   /**
    * The row the reader's eye is on, and where it sat — kept even after a hold is
    * released, and even while they are scrolling.
@@ -498,6 +500,33 @@ export function useTranscriptScroll({
     expected.current = element.scrollTop;
     lastHeight.current = element.scrollHeight;
   }, []);
+
+  /**
+   * Follow the end, to the pixel. `scrollTop` is whole pixels and the rows are
+   * not, so a plain pin leaves the content's bottom edge wherever the height's
+   * FRACTION puts it — and every resize above the reader deals a new one.
+   * Measured on load: the warm-up's 25 batches each moved the rows on screen by
+   * 0–0.98px (two device pixels at 2x), a visible wobble for the four seconds
+   * they ran. A sub-pixel top margin on the content keeps its height whole, so
+   * the end lands on the same pixel every time. Only here: away from the end the
+   * margin is left alone, since moving it would shift the reader's rows instead.
+   */
+  const pinToEnd = useCallback(
+    (element: HTMLElement) => {
+      const content = contentRef.current;
+      if (content) {
+        const height = content.getBoundingClientRect().height;
+        // Layout positions are 1/64px, so the remainder is exact at that step.
+        const margin = Math.round((Math.ceil(height) - height) * 64) / 64;
+        if (margin !== endMargin.current) {
+          endMargin.current = margin;
+          content.style.marginTop = margin ? `${margin}px` : "";
+        }
+      }
+      setScrollTop(element, element.scrollHeight);
+    },
+    [setScrollTop],
+  );
 
   /**
    * Forget the input that ASKED for what we are about to do. Tapping "load
@@ -835,7 +864,7 @@ export function useTranscriptScroll({
       warmed.current.add(row);
       row.style.contentVisibility = "visible";
     }
-    if (mode.current === "bottom") setScrollTop(element, element.scrollHeight);
+    if (mode.current === "bottom") pinToEnd(element);
     else putRowBack(held);
     // A frame LATER, not this one's `requestAnimationFrame`: the size a skipped
     // row keeps is recorded at the end of a rendering update it was rendered in,
@@ -858,14 +887,13 @@ export function useTranscriptScroll({
           lastReaderScroll.current > flippedAt
         )
           return;
-        if (mode.current === "bottom")
-          setScrollTop(container, container.scrollHeight);
+        if (mode.current === "bottom") pinToEnd(container);
         else putRowBack(held);
       });
       if (warmInFlight.current) warmInFlight.current.frame = second;
     });
     warmInFlight.current = { rows: batch, frame: first };
-  }, [putRowBack, readerRow, scheduleWarm, setScrollTop]);
+  }, [pinToEnd, putRowBack, readerRow, scheduleWarm]);
   warmBatchRef.current = warmBatch;
 
   /**
@@ -911,7 +939,7 @@ export function useTranscriptScroll({
     const element = containerRef.current;
     if (!element) return;
     if (mode.current === "bottom") {
-      setScrollTop(element, element.scrollHeight);
+      pinToEnd(element);
       return;
     }
     if (mode.current !== "anchor") return;
@@ -940,7 +968,7 @@ export function useTranscriptScroll({
       // looking until the deadline rather than dropping the reader at the bottom
       // on the first commit — that giving-up-early is what made the old restore
       // feel random.
-      if (target.restAtEnd) setScrollTop(element, element.scrollHeight);
+      if (target.restAtEnd) pinToEnd(element);
       if (!expired) {
         // A remembered row's distance from the end is measured when it is
         // SAVED, so messages that arrived while the reader was away can have
@@ -961,7 +989,7 @@ export function useTranscriptScroll({
       pending.current = null;
       if (!target.applied && target.restAtEnd) {
         setMode("bottom");
-        setScrollTop(element, element.scrollHeight);
+        pinToEnd(element);
         return;
       }
       settle();
@@ -987,7 +1015,7 @@ export function useTranscriptScroll({
     // the one that lands after the container has already been quiet.
     if (expired) settle();
     else armRestoreTimer(Math.max(0, target.expiresAt - Date.now()), settle);
-  }, [armRestoreTimer, setMode, setScrollTop, settle]);
+  }, [armRestoreTimer, pinToEnd, setMode, setScrollTop, settle]);
   applyRef.current = apply;
 
   const startRestore = useCallback(
