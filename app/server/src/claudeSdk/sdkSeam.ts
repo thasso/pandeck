@@ -69,7 +69,7 @@ export type ClaudeQuery = AsyncIterable<ClaudeSdkMessage> & {
    * runtime payload already carries fields beyond the package's declared
    * `SDKControlGetUsageResponse` type. Optional; fakes omit it.
    * `skipBehaviors` skips the CLI's scan of local transcripts that fills the
-   * response's `behaviors` section; the Usage page reads only the rate limits.
+   * response's `behaviors` section, which nothing reads.
    */
   usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (opts?: {
     skipBehaviors?: boolean;

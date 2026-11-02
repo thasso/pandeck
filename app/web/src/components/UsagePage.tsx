@@ -746,10 +746,6 @@ function ClaudeUsageContent({
         </Card>
       ) : null}
 
-      {snapshot.behaviors ? (
-        <BehaviorsSection behaviors={snapshot.behaviors} />
-      ) : null}
-
       <div className="text-sm text-muted-foreground">
         Last updated {new Date(snapshot.fetchedAt).toLocaleTimeString()}
       </div>
@@ -820,49 +816,6 @@ function ExtraUsageCard({
         </Badge>
       ) : null}
     </Card>
-  );
-}
-
-function BehaviorsSection({
-  behaviors,
-}: {
-  behaviors: NonNullable<ClaudeUsageSnapshot["behaviors"]>;
-}) {
-  return (
-    <Card>
-      <CardTitle>Local activity (approximate, this machine only)</CardTitle>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <BehaviorWindow label="Last 24 hours" window={behaviors.day} />
-        <BehaviorWindow label="Last 7 days" window={behaviors.week} />
-      </div>
-    </Card>
-  );
-}
-
-function BehaviorWindow({
-  label,
-  window,
-}: {
-  label: string;
-  window: NonNullable<ClaudeUsageSnapshot["behaviors"]>["day"];
-}) {
-  return (
-    <div>
-      <div className="text-sm font-medium text-muted-foreground">{label}</div>
-      <div className="text-sm text-foreground">
-        {window.requestCount.toLocaleString()} requests ·{" "}
-        {window.sessionCount.toLocaleString()} sessions
-      </div>
-      {window.topContributors.length > 0 ? (
-        <ul className="mt-1 space-y-0.5 text-sm text-muted-foreground">
-          {window.topContributors.slice(0, 4).map((c) => (
-            <li key={`${c.kind}-${c.name}`}>
-              {c.name} — {Math.round(c.pct)}%
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
   );
 }
 

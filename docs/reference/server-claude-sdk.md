@@ -259,7 +259,7 @@ SDK option construction, stream/message mapping, persistence, and tests.
   prompt is a streaming generator that never yields, so the CLI subprocess
   starts and can answer the control request without ever running a model turn
   (no tokens spent). It passes `skipBehaviors: true`, so the CLI does not scan
-  local transcripts for the `behaviors` section the page never reads.
+  local transcripts for the `behaviors` section, which nothing reads.
   `mapClaudeUsageResponse` defensively projects the loosely-typed raw response
   into the stable `@assistant/shared/usage` `ClaudeUsageSnapshot` shape.
   Test-seam override mirrors `oneShot.ts`'s pattern (`setClaudeSdkUsageSeam`).

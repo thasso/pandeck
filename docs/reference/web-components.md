@@ -2166,9 +2166,9 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   page keeps all meters fresh) renders every window. No chart library is used
   here.
   - **Claude** (`fetchClaudeUsage`, `/usage`-equivalent SDK control request):
-    5-hour/weekly/per-model windows, generic `limits[]` table, overage credits,
-    approximate local activity. Overage credits format from MINOR currency units
-    via `extraUsage.decimalPlaces` (raw 5025 EUR-cents ⇒ €50.25). Per-model caps
+    5-hour/weekly/per-model windows, generic `limits[]` table, overage credits.
+    Overage credits format from MINOR currency units via
+    `extraUsage.decimalPlaces` (raw 5025 EUR-cents ⇒ €50.25). Per-model caps
     (e.g. Fable) come from `modelScoped`.
   - **OpenAI** (`fetchOpenAiUsage`, ChatGPT `/wham/usage` via pi's login):
     windows classified by duration (never the raw primary/secondary names — the

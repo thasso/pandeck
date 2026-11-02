@@ -86,7 +86,6 @@ function claudeSnapshot(
     modelScoped: [],
     extraUsage: null,
     session: { totalCostUsd: 0, totalApiDurationMs: 0, totalDurationMs: 0 },
-    behaviors: null,
     ...overrides,
   };
 }
