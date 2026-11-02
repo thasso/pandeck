@@ -18,6 +18,10 @@ import { runProgressPhase } from "@assistant/shared/session";
 import { sessionRuntime } from "../../session/runtimeInstance.ts";
 import { peerPromptStore } from "../../db/peerPromptStore.ts";
 import { backgroundUpdateQueueField } from "../../backgroundUpdateQueue.ts";
+import {
+  backgroundWorkStore,
+  type BackgroundWorkItem,
+} from "../../db/backgroundWorkStore.ts";
 
 /* ------------------------------ budgets ---------------------------------- */
 
@@ -207,6 +211,84 @@ export async function runtimeStateReader(): Promise<
 const secondsSince = (at: number, now: number) =>
   Math.max(0, Math.round((now - at) / 1000));
 
+/** Background items listed per session; the counts always cover every one. */
+const BACKGROUND_ITEMS_SHOWN = 5;
+
+interface BackgroundWorkField {
+  /** Items the session waits on: each one's end is delivered to it. */
+  awaited: number;
+  /** Items declared `service` (dev servers, watchers): nothing waits on them. */
+  services: number;
+  /** The newest active items. */
+  items: Array<{
+    kind: BackgroundWorkItem["kind"];
+    /** A server task's label only ({@link safeTitle}). */
+    label?: string;
+    intent: BackgroundWorkItem["intent"];
+    state: BackgroundWorkItem["state"];
+    stopping?: true;
+    forSec: number;
+    deadlineInSec: number;
+  }>;
+  /** Active items not listed. */
+  more?: number;
+}
+
+/**
+ * A title PA wrote itself: a server task's label, built from a validated
+ * target ("GitHub PR checks owner/repo#1"). A shell's or monitor's title is
+ * the agent's free-text description or, without one, its first command line
+ * (`backgroundWorkTitle`), and either can carry arguments or credentials, so
+ * it never reaches another session.
+ */
+function safeTitle(item: BackgroundWorkItem): string | undefined {
+  return item.backend === "server-task" ? item.label : undefined;
+}
+
+/**
+ * The session's active background work, whatever its runtime state: a session
+ * whose turn ended can still be waiting on a watch or command, which is what
+ * the web's working tier shows (`backgroundWorkBusy`). Counts cover every
+ * active item; titles, kinds and seconds only, never the command, output or
+ * evidence.
+ */
+function backgroundWorkField(id: string): BackgroundWorkField | undefined {
+  let counts: { active: number; services: number };
+  let shown: BackgroundWorkItem[];
+  try {
+    counts = backgroundWorkStore.activeCountsForOwner(id);
+    if (counts.active === 0) return undefined;
+    shown = backgroundWorkStore.listItems({
+      ownerSessionId: id,
+      state: "active",
+      limit: BACKGROUND_ITEMS_SHOWN,
+    });
+  } catch {
+    // Best-effort, like the queue counts: the read itself still answers.
+    return undefined;
+  }
+  const now = Date.now();
+  return {
+    awaited: counts.active - counts.services,
+    services: counts.services,
+    items: shown.map((item) => {
+      const label = safeTitle(item);
+      return {
+        kind: item.kind,
+        ...(label ? { label } : {}),
+        intent: item.intent,
+        state: item.state,
+        ...(item.stopState !== "none" ? { stopping: true as const } : {}),
+        forSec: secondsSince(item.startedAt ?? item.createdAt, now),
+        deadlineInSec: Math.max(0, Math.round((item.deadlineAt - now) / 1000)),
+      };
+    }),
+    ...(counts.active > shown.length
+      ? { more: counts.active - shown.length }
+      : {}),
+  };
+}
+
 /**
  * What a running session's run has been OBSERVED doing, and what waits for
  * it — so a caller can tell work in progress from a quiet run without reading
@@ -220,6 +302,7 @@ export function liveActivityFields(
   runtime: RuntimeState,
 ): {
   liveActivity?: Record<string, unknown>;
+  backgroundWork?: BackgroundWorkField;
   queuedWork?: {
     peerMessages?: number;
     backgroundUpdates?: number;
@@ -281,6 +364,8 @@ export function liveActivityFields(
         : {}),
     };
   }
+  const backgroundWork = backgroundWorkField(id);
+  if (backgroundWork) fields.backgroundWork = backgroundWork;
   let peerMessages = 0;
   try {
     peerMessages = peerPromptStore.listUndeliveredForRecipient(id).length;

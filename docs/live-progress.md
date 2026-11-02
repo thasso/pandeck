@@ -150,9 +150,18 @@ shows.
 - **Agents**: `session_lookup` and `session_read` add `liveActivity` (phase, run
   age, seconds since the last activity and model output, wait, running tools,
   last tool, provider retry) for a running session, and `queuedWork` (peer
-  messages, background updates) for any session. A coordinator can check whether
-  a peer is working without its transcript, whose assistant turn only lands when
-  it completes. Names and seconds only: no arguments or output.
+  messages, background updates) for any session. They also add `backgroundWork`
+  for any session with active background items: awaited and service counts over
+  every active item, and the newest five with kind, intent, state, age and
+  seconds to deadline. Only a server task carries a `label`, which PA builds
+  from a validated target ("GitHub PR checks owner/repo#1"). A shell or
+  monitor's title is the agent's free text or its command line, and either can
+  hold arguments or credentials. An idle or unloaded peer waiting on a check
+  watch is still busy, as the web's working tier shows it. A retained Claude
+  host with no items left is not reported: nothing is pending, only its grace. A
+  coordinator can check whether a peer is working without its transcript, whose
+  assistant turn only lands when it completes. Names and seconds only: no
+  arguments, commands or output.
 
 ## Queued work
 
