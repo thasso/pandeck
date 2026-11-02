@@ -74,6 +74,11 @@ function rect(top: number, height: number): DOMRect {
  */
 let gapAtTopEdgePx = 0;
 let blockAtTopEdge = false;
+/**
+ * The container's unrounded box height. `clientHeight` stays `VIEWPORT`, which
+ * is what a real engine rounds a fractional box to.
+ */
+let viewportBoxPx = VIEWPORT;
 
 const scrollOffsets = new WeakMap<Element, number>();
 const isTranscript = (el: Element) =>
@@ -186,7 +191,7 @@ function installGeometry() {
     },
   });
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    if (isTranscript(this)) return rect(0, VIEWPORT);
+    if (isTranscript(this)) return rect(0, viewportBoxPx);
     // The content column spans the rows, which is what the end pin measures.
     const parent = this.parentElement;
     if (parent && isTranscript(parent))
@@ -453,6 +458,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   gapAtTopEdgePx = 0;
   blockAtTopEdge = false;
+  viewportBoxPx = VIEWPORT;
   installGeometry();
   resizeCallbacks.length = 0;
   class CapturingResizeObserver {
@@ -913,6 +919,22 @@ describe("useTranscriptScroll end pin", () => {
       />,
     );
     // Nothing scrolls to absorb a margin here, so one would move these rows.
+    expect(content().style.marginTop).toBe("");
+  });
+
+  it("leaves content that fits a fractional viewport unpadded", () => {
+    vi.stubGlobal("devicePixelRatio", 1.25);
+    // Taller than the rounded `clientHeight`, shorter than the box itself.
+    viewportBoxPx = VIEWPORT + 0.3;
+    render(
+      <TranscriptSurface
+        sessionId="test:end-fits"
+        layout={[
+          { id: "fits-0", h: 400 },
+          { id: "fits-1", h: VIEWPORT - 400 + 0.1 },
+        ]}
+      />,
+    );
     expect(content().style.marginTop).toBe("");
   });
 });

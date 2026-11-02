@@ -545,7 +545,15 @@ export function useTranscriptScroll({
         const scale = window.devicePixelRatio || 1;
         const height = content.getBoundingClientRect().height;
         let margin = 0;
-        if (height > element.clientHeight) {
+        // Overflowing by BOTH measures. `clientHeight` is rounded: content of
+        // 700.1px in a 700.3px container fits, yet passes `> 700`, and its pad
+        // can add a classic scrollbar that rewraps a line — a 28px jump in
+        // review. The engine's own scroll range is the other half, so a pad
+        // never creates the scrollbar it is meant to hide in.
+        if (
+          height > element.getBoundingClientRect().height &&
+          element.scrollHeight > element.clientHeight
+        ) {
           // Counted in Chromium's layout unit, 1/64 device px, which also
           // divides WebKit's 1/64 CSS px at an integer scale, so the remainder
           // is exact on both.
