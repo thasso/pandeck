@@ -847,26 +847,29 @@ describe("useTranscriptScroll view toggle", () => {
 });
 
 describe("useTranscriptScroll end pin", () => {
-  /** The content's margin plus its height, in device pixels. */
-  const deviceExtent = (scale: number) => {
+  /** The content's margin plus its height, in CSS pixels. */
+  const extent = () => {
     const content = container().firstElementChild as HTMLElement;
     const margin = Number.parseFloat(content.style.marginTop) || 0;
-    return (content.getBoundingClientRect().height + margin) * scale;
+    return content.getBoundingClientRect().height + margin;
   };
-  /** How far that extent is from a whole device pixel. */
+  /**
+   * How far that extent is from the scroll grid of either engine: whole device
+   * pixels for Chromium, whole CSS pixels for WebKit.
+   */
   const offGrid = (scale: number) => {
-    const extent = deviceExtent(scale);
-    return Math.abs(extent - Math.round(extent));
+    const fromWhole = (value: number) => Math.abs(value - Math.round(value));
+    return Math.max(fromWhole(extent() * scale), fromWhole(extent()));
   };
 
-  it.each([1, 1.25, 1.5, 2])(
-    "keeps the content whole in device pixels at %sx as rows above resolve",
+  it.each([1, 1.25, 1.5, 2, 3])(
+    "keeps the content on both engines' scroll grids at %sx as rows above resolve",
     (scale) => {
       vi.stubGlobal("devicePixelRatio", scale);
       render(
         <TranscriptSurface
           sessionId={`test:end-${scale}`}
-          layout={[...skippedRows(2), ...realRows(2, 321.37, "prose")]}
+          layout={[...skippedRows(2), ...realRows(2, 321.1, "prose")]}
         />,
       );
       // Within a layout unit: what is left is below anything a pixel can show.

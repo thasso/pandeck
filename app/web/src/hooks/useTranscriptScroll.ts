@@ -185,6 +185,19 @@ export interface TranscriptScrollController {
   ) => void;
 }
 
+/**
+ * The smallest whole number of CSS pixels that is also a whole number of device
+ * pixels at `scale` — the grid `pinToEnd` pads the content onto. Past 16px the
+ * pad would start to show at the top of the transcript, so a scale with no grid
+ * that small falls back to whole CSS pixels, which is WebKit's grid anyway.
+ */
+function endGridPx(scale: number): number {
+  for (let px = 1; px <= 16; px += 1) {
+    if (Math.abs(px * scale - Math.round(px * scale)) < 1e-3) return px;
+  }
+  return 1;
+}
+
 function metricsOf(element: HTMLElement) {
   return {
     scrollTop: element.scrollTop,
@@ -502,32 +515,39 @@ export function useTranscriptScroll({
   }, []);
 
   /**
-   * Follow the end, to the pixel. Chromium scrolls in whole DEVICE pixels and
-   * the rows are not, so a plain pin leaves the content's bottom edge wherever
-   * the height's FRACTION puts it — and every resize above the reader deals a
-   * new one. Measured on load: the warm-up's 25 batches each moved the rows on
-   * screen by up to 0.98px at 1x and 2x and 0.63px at 1.25x and 1.5x, a visible
-   * wobble for the four seconds they ran. A sub-pixel top margin on the content
-   * keeps its height whole in device pixels, so the end lands on the same pixel
-   * every time; whole CSS pixels are not enough at a fractional scale, where a
-   * CSS pixel is no whole number of device pixels. Only here: away from the end
-   * the margin is left alone, since moving it would shift the reader's rows.
+   * Follow the end, to the pixel. The scroll offset is quantized and the rows
+   * are not, so a plain pin leaves the content's bottom edge wherever the
+   * height's FRACTION puts it — and every resize above the reader deals a new
+   * one. Measured on load: the warm-up's 25 batches each moved the rows on
+   * screen by up to 0.98px, a visible wobble for the four seconds they ran.
+   *
+   * A top margin on the content pads its height onto the scroll grid, so the
+   * end lands on the same pixel every time — on BOTH engines' grids, because
+   * they differ: Chromium scrolls in whole device pixels (13991.2 at 1.25x),
+   * WebKit in whole CSS pixels (100.5 reads back as 100 at 2x). Whole device
+   * pixels alone left Safari a device pixel of wobble at 2x; whole CSS pixels
+   * alone left Chromium wobbling at 1.25x. The pad is therefore to the smallest
+   * whole number of CSS pixels that is also whole in device pixels: 1px at an
+   * integer scale, 4px at 1.25x. Only here: away from the end the margin is left
+   * alone, since moving it would shift the reader's rows.
    */
   const pinToEnd = useCallback(
     (element: HTMLElement) => {
       const content = contentRef.current;
       if (content) {
+        // Read on every pin: zoom and moving the window to another monitor
+        // change it.
         const scale = window.devicePixelRatio || 1;
-        // Chromium lays out in 1/64 device px, so counting in those units makes
-        // the remainder exact. The scale is read on every pin: zoom and moving
-        // the window to another monitor change it.
-        const units = Math.round(
-          content.getBoundingClientRect().height * scale * 64,
-        );
-        const pad = (64 - (units % 64)) % 64;
-        // A quarter unit over, because the engine truncates the margin back into
+        const grid = endGridPx(scale);
+        // Counted in the finer of the engines' layout units — 1/64 device px in
+        // Chromium, 1/64 CSS px in WebKit — so the remainder is exact.
+        const unit = 1 / 64 / Math.max(scale, 1);
+        const units = Math.round(content.getBoundingClientRect().height / unit);
+        const gridUnits = Math.round(grid / unit);
+        const pad = (gridUnits - (units % gridUnits)) % gridUnits;
+        // A quarter unit over, because Chromium truncates the margin back into
         // its units after scaling: at 1.5x, 1/1.5px came out one unit short.
-        const margin = pad ? (pad + 0.25) / 64 / scale : 0;
+        const margin = pad ? (pad + 0.25) * unit : 0;
         if (margin !== endMargin.current) {
           endMargin.current = margin;
           content.style.marginTop = margin ? `${margin}px` : "";
