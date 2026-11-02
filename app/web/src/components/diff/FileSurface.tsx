@@ -77,7 +77,6 @@ function FileSurfaceContent({
     setSelectedLines(anchorSelection(lineAnchor));
   }, [lineAnchor]);
   const commentSource = useRef<object>({}).current;
-  const clearSelectedLines = useCallback(() => setSelectedLines(null), []);
   const completionVersion = useDiffWorkerCompletionVersion();
   const remountVersion = cacheKey ? completionVersion : 0;
 
@@ -103,15 +102,6 @@ function FileSurfaceContent({
     setComposerDirty(false);
     setComposerSelectors(null);
     setSelectedLines(null);
-  }, []);
-  const openComposerForRange = useCallback((range: SelectedLineRange) => {
-    setComposerSelectors(null);
-    // Drop pierre's selection paint: the composer opens directly under the line
-    // and says which one it is by being there. Leaving the range selected left a
-    // block of highlight behind the composer that the next tap anywhere cleared,
-    // which read as the composer having lost the line it is attached to.
-    setSelectedLines(null);
-    setComposerLine(range.end);
   }, []);
   const entries = useLineComments(
     comments,
@@ -202,34 +192,11 @@ function FileSurfaceContent({
     () => ({ name, contents, ...(cacheKey ? { cacheKey } : {}) }),
     [name, contents, cacheKey],
   );
-  const onLineSelectionChange = useCallback(
-    (range: SelectedLineRange | null) => setSelectedLines(range),
-    [],
-  );
-  const commentsEnabled = Boolean(comments);
+  // Comments start from a text selection and the header's comment button,
+  // as everywhere else: no Pierre gutter "+" or line-number selection.
   const options = useMemo(
-    () => ({
-      ...codeOptionsFromPrefs(prefs, prefs.theme),
-      // Native selection/gutter handling keeps pointer capture and touch
-      // suppression inside Pierre instead of racing a custom slotted button.
-      ...(commentsEnabled
-        ? {
-            enableLineSelection: composerLine === null,
-            enableGutterUtility: composerLine === null,
-            onLineSelectionChange,
-            onLineClick: clearSelectedLines,
-            onGutterUtilityClick: openComposerForRange,
-          }
-        : {}),
-    }),
-    [
-      prefs,
-      commentsEnabled,
-      composerLine,
-      onLineSelectionChange,
-      clearSelectedLines,
-      openComposerForRange,
-    ],
+    () => codeOptionsFromPrefs(prefs, prefs.theme),
+    [prefs],
   );
   const renderAnnotation = useCallback(
     (annotation: LineAnnotation<AnnotationMeta>) => annotation.metadata.node,

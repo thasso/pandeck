@@ -519,7 +519,8 @@ export function CommentComposer({
           submit();
         }}
       >
-        <InputGroup className="items-end">
+        {/* Centred: the field and the buttons beside it share one axis. */}
+        <InputGroup className="items-center">
           {recording ? (
             <InputGroupAddon align="inline-start" className="flex-1">
               <DictationTrace dictation={dictationControls} />

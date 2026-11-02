@@ -48,7 +48,6 @@ import {
   useStableCommentsConfig,
   type LineCommentsConfig,
 } from "./comments.tsx";
-import { showToast } from "../../lib/toast.ts";
 import { useDiffScrollRestoration } from "./useDiffScrollRestoration.ts";
 import { anchorSelection } from "./anchorSelection.ts";
 import { DocumentRangeNotice } from "../DocumentAnchorRegion.tsx";
@@ -132,7 +131,6 @@ function DiffSurfaceContent({
     setSelectedLines(anchorSelection(lineAnchor, "additions"));
   }, [lineAnchor]);
   const commentSource = useRef<object>({}).current;
-  const clearSelectedLines = useCallback(() => setSelectedLines(null), []);
   const completionVersion = useDiffWorkerCompletionVersion();
   const remountVersion = cacheKey ? completionVersion : 0;
 
@@ -158,23 +156,6 @@ function DiffSurfaceContent({
     setComposerDirty(false);
     setComposerSelectors(null);
     setSelectedLines(null);
-  }, []);
-  const openComposerForRange = useCallback((range: SelectedLineRange) => {
-    const side = range.endSide ?? range.side;
-    if (side === "deletions") {
-      showToast("Comments attach to the new side of a diff.", {
-        key: "diff-comment-side",
-      });
-      setSelectedLines(null);
-      return;
-    }
-    setComposerSelectors(null);
-    // Drop pierre's selection paint: the composer opens directly under the line
-    // and says which one it is by being there. Leaving the range selected left a
-    // block of highlight behind the composer that the next tap anywhere cleared,
-    // which read as the composer having lost the line it is attached to.
-    setSelectedLines(null);
-    setComposerLine(range.end);
   }, []);
   const entries = useLineComments(
     comments,
@@ -278,36 +259,11 @@ function DiffSurfaceContent({
   // capture, touch-action, and pointerup dispatch; custom slotted buttons race
   // that logic on iOS and can turn the interaction into a double-tap zoom.
   //
-  // Pierre compares these options SHALLOWLY and force-renders the diff when any
-  // entry differs, so the handlers below have to be stable callbacks and the
-  // object itself memoized — an inline arrow here re-rendered the diff on every
-  // render of this component.
-  const onLineSelectionChange = useCallback(
-    (range: SelectedLineRange | null) => setSelectedLines(range),
-    [],
-  );
-  const commentsEnabled = Boolean(comments);
+  // Comments start from a text selection and the header's comment button,
+  // as everywhere else: no Pierre gutter "+" or line-number selection.
   const options = useMemo(
-    () => ({
-      ...diffOptionsFromPrefs(prefs, prefs.theme),
-      ...(commentsEnabled
-        ? {
-            enableLineSelection: composerLine === null,
-            enableGutterUtility: composerLine === null,
-            onLineSelectionChange,
-            onLineClick: clearSelectedLines,
-            onGutterUtilityClick: openComposerForRange,
-          }
-        : {}),
-    }),
-    [
-      prefs,
-      commentsEnabled,
-      composerLine,
-      onLineSelectionChange,
-      clearSelectedLines,
-      openComposerForRange,
-    ],
+    () => diffOptionsFromPrefs(prefs, prefs.theme),
+    [prefs],
   );
   const renderAnnotation = useCallback(
     (annotation: DiffLineAnnotation<AnnotationMeta>) =>

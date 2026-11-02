@@ -86,6 +86,7 @@ export function DiffCommentBarProvider({
   const onComment = useCallback(() => {
     const activate = target?.activate;
     setTarget(null);
+    if (activate) primeKeyboard();
     activate?.();
   }, [target]);
   const actuation = useMemo(
@@ -103,6 +104,36 @@ export function DiffCommentBarProvider({
       {children}
     </DiffCommentActuationContext.Provider>
   );
+}
+
+/**
+ * iOS raises the keyboard only for a focus inside the tap's own handler, and
+ * the composer appears a render later, inside Pierre. So the tap focuses this
+ * stand-in first; the composer takes the focus over when it mounts and the
+ * keyboard stays up through the hand-over.
+ */
+let keyboardPrimer: HTMLInputElement | null = null;
+
+function primeKeyboard() {
+  releaseKeyboardPrimer();
+  const input = document.createElement("input");
+  input.setAttribute("aria-hidden", "true");
+  input.tabIndex = -1;
+  // 16px: iOS zooms the page into any smaller focused field.
+  input.style.cssText =
+    "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;pointer-events:none";
+  document.body.appendChild(input);
+  input.focus({ preventScroll: true });
+  keyboardPrimer = input;
+  // No composer took over (it failed to open): never leave focus parked here.
+  window.setTimeout(() => {
+    if (keyboardPrimer === input) releaseKeyboardPrimer();
+  }, 2000);
+}
+
+function releaseKeyboardPrimer() {
+  keyboardPrimer?.remove();
+  keyboardPrimer = null;
 }
 
 function useDiffCommentActuation(): DiffCommentActuationContextValue | null {
@@ -158,13 +189,14 @@ function selectedRange(
       ranges = composed.getComposedRanges({ shadowRoots });
     } catch {
       // Safari 17–18.1 shipped the earlier variadic signature. If neither form
-      // works, fail this secondary affordance closed instead of throwing on
-      // every selectionchange; the gutter remains the primary path.
+      // works, fail closed instead of throwing on every selectionchange.
       try {
         const legacy = composed.getComposedRanges as unknown as (
           ...roots: ShadowRoot[]
         ) => StaticRange[];
-        ranges = legacy(...shadowRoots);
+        // Called ON the selection: detached, it throws "Illegal invocation"
+        // and an older WebKit's selection failed closed here.
+        ranges = legacy.call(selection, ...shadowRoots);
       } catch {
         return null;
       }
@@ -175,7 +207,8 @@ function selectedRange(
 }
 
 /**
- * Snapshot a single-line native selection rendered inside Pierre's shadow root.
+ * Snapshot a native selection rendered inside Pierre's shadow root — one line
+ * or several, anchored at the last.
  * This intentionally cannot delegate to `useSelectionAnchor`: that hook owns a
  * cloneable light-DOM `Range` and paints it once a composer takes over, while
  * Pierre requires a composed `StaticRange` plus line/side metadata from inside
@@ -206,54 +239,68 @@ export function useDiffTextSelection({
     const evaluate = () => {
       timer = 0;
       const selection = window.getSelection();
-      if (!selection || selection.isCollapsed) {
+      // Not `selection.isCollapsed`: that describes the range as seen from
+      // the document, which a browser may collapse at the shadow host. The
+      // composed range is the judge.
+      if (!selection || selection.rangeCount === 0) {
         actuation.clearTarget(source);
         return;
       }
       const range = selectedRange(selection, root);
-      if (!range) {
+      if (
+        !range ||
+        (range.startContainer === range.endContainer &&
+          range.startOffset === range.endOffset)
+      ) {
         actuation.clearTarget(source);
         return;
       }
       const startLine = selectedLineElement(range.startContainer);
       const endLine = selectedLineElement(range.endContainer);
-      if (!startLine || startLine !== endLine) {
+      if (!startLine || !endLine) {
         actuation.clearTarget(source);
         return;
       }
+      // One surface's lines: a selection running from one file's diff into
+      // the next has no single place to anchor.
       const tree = startLine.getRootNode();
-      if (!(tree instanceof ShadowRoot) || !root.contains(tree.host)) {
+      if (
+        !(tree instanceof ShadowRoot) ||
+        endLine.getRootNode() !== tree ||
+        !root.contains(tree.host)
+      ) {
         actuation.clearTarget(source);
         return;
       }
-      if (
-        startLine.closest("[data-deletions]") ||
-        startLine.dataset.lineType === "change-deletion"
-      ) {
+      const onDeletionSide = (line: HTMLElement) =>
+        Boolean(line.closest("[data-deletions]")) ||
+        line.dataset.lineType === "change-deletion";
+      if (onDeletionSide(startLine) || onDeletionSide(endLine)) {
         actuation.clearTarget(source);
         showToast("Comments attach to the new side of a diff.", {
           key: "diff-comment-side",
         });
         return;
       }
-      const line = Number(startLine.dataset.line);
-      const lineStart = lineStartOffset(contents, line);
-      if (!Number.isInteger(line) || lineStart === null) {
+      // Several lines anchor at the LAST one, where the thread then shows;
+      // the quote keeps the whole passage. Removed lines between the ends
+      // are not in the new file, so the quote simply skips them.
+      const offsetAt = (line: HTMLElement, node: Node, offset: number) => {
+        const number = Number(line.dataset.line);
+        const lineStart = lineStartOffset(contents, number);
+        return Number.isInteger(number) && lineStart !== null
+          ? { number, offset: lineStart + offsetInLine(line, node, offset) }
+          : null;
+      };
+      const from = offsetAt(startLine, range.startContainer, range.startOffset);
+      const to = offsetAt(endLine, range.endContainer, range.endOffset);
+      if (!from || !to) {
         actuation.clearTarget(source);
         return;
       }
-      const localStart = offsetInLine(
-        startLine,
-        range.startContainer,
-        range.startOffset,
-      );
-      const localEnd = offsetInLine(
-        startLine,
-        range.endContainer,
-        range.endOffset,
-      );
-      const start = lineStart + Math.min(localStart, localEnd);
-      const end = lineStart + Math.max(localStart, localEnd);
+      const line = Math.max(from.number, to.number);
+      const start = Math.min(from.offset, to.offset);
+      const end = Math.max(from.offset, to.offset);
       const bundle = bundleFromOffsets(contents, start, end);
       if (!bundle) {
         actuation.clearTarget(source);
@@ -492,18 +539,43 @@ export function CommentComposer({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onCancel]);
-  const finePointer =
-    typeof window !== "undefined" &&
-    window.matchMedia("(pointer: fine)").matches;
+  // Ready to type the moment it opens, on every pointer: the field mounts
+  // inside Pierre's annotation slot a few frames after the button press, so
+  // `autoFocus` alone misses it. Take the focus (from the keyboard primer, on
+  // a phone) once the field is there.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    let frame = 0;
+    let tries = 0;
+    const attempt = () => {
+      const field = rootRef.current?.querySelector("textarea");
+      if (field && field.isConnected) {
+        field.focus({ preventScroll: true });
+        if (document.activeElement === field || tries > 30) {
+          releaseKeyboardPrimer();
+          return;
+        }
+      }
+      if (tries++ > 60) {
+        releaseKeyboardPrimer();
+        return;
+      }
+      frame = requestAnimationFrame(attempt);
+    };
+    frame = requestAnimationFrame(attempt);
+    return () => cancelAnimationFrame(frame);
+  }, []);
   return (
-    <div className="mx-1 my-1 border-l-2 border-primary pl-2 font-sans">
+    <div
+      ref={rootRef}
+      className="mx-1 my-1 border-l-2 border-primary pl-2 font-sans"
+    >
       <CommentComposerRow
         onSubmit={onSubmit}
         onCancel={onCancel}
         onDirtyChange={onDirtyChange}
         placeholder="Comment on this line…"
         ariaLabel="Comment on this line"
-        autoFocus={finePointer}
       />
     </div>
   );
