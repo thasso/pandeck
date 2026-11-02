@@ -26,6 +26,9 @@ import {
 import {
   BookOpen,
   Check,
+  RotateCcw,
+  ZoomOut,
+  ZoomIn,
   Columns2,
   Files,
   Rows2,
@@ -72,6 +75,7 @@ import { WORKTREE_VIEWS } from "./worktreeViews.tsx";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
 import {
   DocumentNavigationActions,
+  useDocumentNavigationRegistration,
   DocumentNavigationMarker,
   useDocumentScrollRestoration,
 } from "../DocumentNavigationShell.tsx";
@@ -1318,12 +1322,7 @@ function FilesView({
         }}
       >
         {pivots.map(({ id, label, icon }) => (
-          <ToggleGroupItem
-            key={id}
-            value={id}
-            aria-label={label}
-            title={label}
-          >
+          <ToggleGroupItem key={id} value={id} aria-label={label} title={label}>
             {narrow || sidebarNavigation ? icon : label}
           </ToggleGroupItem>
         ))}
@@ -1399,9 +1398,7 @@ function FilesView({
             </div>
           ) : undefined
         }
-        detailControls={
-          narrow || sidebarNavigation ? pivotControls : undefined
-        }
+        detailControls={narrow || sidebarNavigation ? pivotControls : undefined}
         prefs={prefs}
         onUpdatePrefs={onUpdatePrefs}
         narrow={narrow}
@@ -1697,9 +1694,12 @@ function WorktreeHeaderActions({
   onJumpToFile,
   diffView,
   ignoredFiles,
+  zoomInMenu = false,
 }: {
   actions: InspectorAction[];
   showComment: boolean;
+  /** The open document's zoom, as menu rows (a wide header's room saver). */
+  zoomInMenu?: boolean;
   /** Opens the Jump to file sheet: Review's changed files on a phone. */
   onJumpToFile?: (() => void) | undefined;
   /** The diff display options, where a diff can be on screen. */
@@ -1716,6 +1716,8 @@ function WorktreeHeaderActions({
     { shown: boolean; onChange: (shown: boolean) => void } | undefined;
 }) {
   const actuation = useCommentActuation();
+  const navigation = useDocumentNavigationRegistration();
+  const zoom = zoomInMenu ? navigation?.zoom : undefined;
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetTop, setSheetTop] = useState(0);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1947,9 +1949,37 @@ function WorktreeHeaderActions({
               ))}
             </>
           ) : null}
+          {zoom ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                closeOnClick={false}
+                disabled={!zoom.canIncrease}
+                onClick={zoom.increase}
+              >
+                <ZoomIn />
+                Zoom in
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                closeOnClick={false}
+                disabled={!zoom.canDecrease}
+                onClick={zoom.decrease}
+              >
+                <ZoomOut />
+                Zoom out
+              </DropdownMenuItem>
+              <DropdownMenuItem closeOnClick={false} onClick={zoom.reset}>
+                <RotateCcw />
+                Reset zoom
+                <span className="ml-auto pl-3 text-xs text-muted-foreground tabular-nums">
+                  {Math.round(zoom.scale * 100)}%
+                </span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
           {ignoredFiles ? (
             <>
-              {actions.length > 0 || diffView ? (
+              {actions.length > 0 || diffView || zoom ? (
                 <DropdownMenuSeparator />
               ) : null}
               <DropdownMenuCheckboxItem
@@ -2477,6 +2507,7 @@ export default function WorktreeDetailPage({
                     actions={menuActions}
                     // A wide header draws Add comment itself.
                     showComment={narrow}
+                    zoomInMenu={sidebarNavigation && !narrow}
                     // The sidebar lists the files on a wide screen; a phone
                     // jumps through the header.
                     onJumpToFile={
@@ -2503,7 +2534,9 @@ export default function WorktreeDetailPage({
                 )
               }
               title={
-                <span className="truncate font-mono text-sm text-muted-foreground">
+                // `block`: an inline span's `truncate` never clips, and the
+                // branch ran under the header's icons.
+                <span className="block truncate font-mono text-sm text-muted-foreground">
                   {title ?? worktree.branch}
                 </span>
               }
@@ -2513,7 +2546,12 @@ export default function WorktreeDetailPage({
                 ) : (
                   <>
                     {filePath ? (
-                      <DocumentNavigationActions className="hidden desktop:flex" />
+                      <DocumentNavigationActions
+                        className="hidden desktop:flex"
+                        // Zoom lives in the `…` menu: the row has the views
+                        // and comment to fit beside the branch.
+                        showZoom={!sidebarNavigation}
+                      />
                     ) : null}
                     {sidebarNavigation && !narrow ? (
                       // The views, as the dock row draws them on a phone.

@@ -119,8 +119,11 @@ export function useDocumentNavigationRegistration(): DocumentNavigationRegistrat
 export function DocumentNavigationActions({
   className = "",
   showClose = true,
+  showZoom = true,
 }: {
   className?: string;
+  /** False where the page's own menu carries zoom (the worktree page). */
+  showZoom?: boolean;
   /**
    * False where the page IS the place the document lives (a Knowledge file):
    * there is nothing to close back to, so Close would only navigate away.
@@ -147,7 +150,7 @@ export function DocumentNavigationActions({
       >
         <ArrowRight />
       </IconButton>
-      {navigation.zoom ? (
+      {showZoom && navigation.zoom ? (
         <>
           <GroupSeparator />
           <DocumentZoomActions zoom={navigation.zoom} />
