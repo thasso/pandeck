@@ -258,10 +258,11 @@ SDK option construction, stream/message mapping, persistence, and tests.
   usage never falls back to an ambient login. It uses a throwaway query whose
   prompt is a streaming generator that never yields, so the CLI subprocess
   starts and can answer the control request without ever running a model turn
-  (no tokens spent). `mapClaudeUsageResponse` defensively projects the
-  loosely-typed raw response into the stable `@assistant/shared/usage`
-  `ClaudeUsageSnapshot` shape. Test-seam override mirrors `oneShot.ts`'s pattern
-  (`setClaudeSdkUsageSeam`).
+  (no tokens spent). It passes `skipBehaviors: true`, so the CLI does not scan
+  local transcripts for the `behaviors` section the page never reads.
+  `mapClaudeUsageResponse` defensively projects the loosely-typed raw response
+  into the stable `@assistant/shared/usage` `ClaudeUsageSnapshot` shape.
+  Test-seam override mirrors `oneShot.ts`'s pattern (`setClaudeSdkUsageSeam`).
 - `oneShot.ts` owns the Claude engine half of headless helper queries, reached
   only through `runOneShot` (`harnesses/oneShot.ts`). An error result is
   reported as `failure`, not thrown. Native tools and inherited settings are

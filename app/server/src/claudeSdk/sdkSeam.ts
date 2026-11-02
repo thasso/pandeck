@@ -68,10 +68,12 @@ export type ClaudeQuery = AsyncIterable<ClaudeSdkMessage> & {
    * purpose: the SDK marks this API EXPERIMENTAL_MAY_CHANGE, and the observed
    * runtime payload already carries fields beyond the package's declared
    * `SDKControlGetUsageResponse` type. Optional; fakes omit it.
+   * `skipBehaviors` skips the CLI's scan of local transcripts that fills the
+   * response's `behaviors` section; the Usage page reads only the rate limits.
    */
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<
-    Record<string, unknown>
-  >;
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (opts?: {
+    skipBehaviors?: boolean;
+  }) => Promise<Record<string, unknown>>;
 };
 
 export type ClaudeQueryParams = {

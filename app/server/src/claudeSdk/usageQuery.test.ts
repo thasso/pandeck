@@ -98,7 +98,9 @@ const RAW_RESPONSE = {
 };
 
 function fakeQuery(
-  usage?: () => Promise<Record<string, unknown>>,
+  usage?: (opts?: {
+    skipBehaviors?: boolean;
+  }) => Promise<Record<string, unknown>>,
   onParams?: (p: ClaudeQueryParams) => void,
 ): (params: ClaudeQueryParams) => ClaudeQuery {
   return (params) => {
@@ -135,6 +137,20 @@ test("maps the raw experimental usage response to the stable wire shape", () => 
   assert.equal(snapshot.modelScoped[0]?.utilizationPct, 3);
   assert.equal(snapshot.behaviors?.day.requestCount, 1967);
   assert.equal(snapshot.behaviors?.day.topContributors[0]?.name, "pa");
+});
+
+test("asks the CLI to skip its local transcript scan", async () => {
+  let received: unknown;
+  const seam: ClaudeSdkSeam = {
+    query: fakeQuery((opts) => {
+      received = opts;
+      return Promise.resolve(RAW_RESPONSE);
+    }),
+  };
+  setClaudeSdkUsageSeam(() => Promise.resolve(seam));
+
+  await fetchClaudeSdkUsage();
+  assert.deepEqual(received, { skipBehaviors: true });
 });
 
 test("fetches usage through a fake seam without sending any prompt turn", async () => {

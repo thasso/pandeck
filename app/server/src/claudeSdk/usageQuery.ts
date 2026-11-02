@@ -274,7 +274,9 @@ export async function fetchClaudeSdkUsage(
       );
     }
     const raw =
-      await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+        skipBehaviors: true,
+      });
     return mapClaudeUsageResponse(raw);
   } catch (err) {
     if (timedOut) throw new Error("Fetching Claude usage timed out.");
