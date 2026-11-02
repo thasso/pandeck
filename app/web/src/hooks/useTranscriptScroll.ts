@@ -502,22 +502,32 @@ export function useTranscriptScroll({
   }, []);
 
   /**
-   * Follow the end, to the pixel. `scrollTop` is whole pixels and the rows are
-   * not, so a plain pin leaves the content's bottom edge wherever the height's
-   * FRACTION puts it — and every resize above the reader deals a new one.
-   * Measured on load: the warm-up's 25 batches each moved the rows on screen by
-   * 0–0.98px (two device pixels at 2x), a visible wobble for the four seconds
-   * they ran. A sub-pixel top margin on the content keeps its height whole, so
-   * the end lands on the same pixel every time. Only here: away from the end the
-   * margin is left alone, since moving it would shift the reader's rows instead.
+   * Follow the end, to the pixel. Chromium scrolls in whole DEVICE pixels and
+   * the rows are not, so a plain pin leaves the content's bottom edge wherever
+   * the height's FRACTION puts it — and every resize above the reader deals a
+   * new one. Measured on load: the warm-up's 25 batches each moved the rows on
+   * screen by up to 0.98px at 1x and 2x and 0.63px at 1.25x and 1.5x, a visible
+   * wobble for the four seconds they ran. A sub-pixel top margin on the content
+   * keeps its height whole in device pixels, so the end lands on the same pixel
+   * every time; whole CSS pixels are not enough at a fractional scale, where a
+   * CSS pixel is no whole number of device pixels. Only here: away from the end
+   * the margin is left alone, since moving it would shift the reader's rows.
    */
   const pinToEnd = useCallback(
     (element: HTMLElement) => {
       const content = contentRef.current;
       if (content) {
-        const height = content.getBoundingClientRect().height;
-        // Layout positions are 1/64px, so the remainder is exact at that step.
-        const margin = Math.round((Math.ceil(height) - height) * 64) / 64;
+        const scale = window.devicePixelRatio || 1;
+        // Chromium lays out in 1/64 device px, so counting in those units makes
+        // the remainder exact. The scale is read on every pin: zoom and moving
+        // the window to another monitor change it.
+        const units = Math.round(
+          content.getBoundingClientRect().height * scale * 64,
+        );
+        const pad = (64 - (units % 64)) % 64;
+        // A quarter unit over, because the engine truncates the margin back into
+        // its units after scaling: at 1.5x, 1/1.5px came out one unit short.
+        const margin = pad ? (pad + 0.25) / 64 / scale : 0;
         if (margin !== endMargin.current) {
           endMargin.current = margin;
           content.style.marginTop = margin ? `${margin}px` : "";

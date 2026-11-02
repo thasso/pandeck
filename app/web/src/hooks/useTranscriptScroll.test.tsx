@@ -187,6 +187,10 @@ function installGeometry() {
   });
   Element.prototype.getBoundingClientRect = function (this: Element) {
     if (isTranscript(this)) return rect(0, VIEWPORT);
+    // The content column spans the rows, which is what the end pin measures.
+    const parent = this.parentElement;
+    if (parent && isTranscript(parent))
+      return rect(-parent.scrollTop, totalHeight(parent));
     if (!(this instanceof HTMLElement) || !this.hasAttribute("data-message-id"))
       return rect(0, 0);
     const container = this.closest<HTMLElement>("[data-transcript-container]");
@@ -840,6 +844,39 @@ describe("useTranscriptScroll view toggle", () => {
     expect(offsetOf("after-0")).toBe(-100);
     expect(container().scrollTop).toBe(14 * 600 + 100);
   });
+});
+
+describe("useTranscriptScroll end pin", () => {
+  /** The content's margin plus its height, in device pixels. */
+  const deviceExtent = (scale: number) => {
+    const content = container().firstElementChild as HTMLElement;
+    const margin = Number.parseFloat(content.style.marginTop) || 0;
+    return (content.getBoundingClientRect().height + margin) * scale;
+  };
+  /** How far that extent is from a whole device pixel. */
+  const offGrid = (scale: number) => {
+    const extent = deviceExtent(scale);
+    return Math.abs(extent - Math.round(extent));
+  };
+
+  it.each([1, 1.25, 1.5, 2])(
+    "keeps the content whole in device pixels at %sx as rows above resolve",
+    (scale) => {
+      vi.stubGlobal("devicePixelRatio", scale);
+      render(
+        <TranscriptSurface
+          sessionId={`test:end-${scale}`}
+          layout={[...skippedRows(2), ...realRows(2, 321.37, "prose")]}
+        />,
+      );
+      // Within a layout unit: what is left is below anything a pixel can show.
+      expect(offGrid(scale)).toBeLessThan(1 / 64);
+      skippedRowResolves("skipped-0", 456.789);
+      expect(offGrid(scale)).toBeLessThan(1 / 64);
+      skippedRowResolves("skipped-1", 1000.03);
+      expect(offGrid(scale)).toBeLessThan(1 / 64);
+    },
+  );
 });
 
 describe("useTranscriptScroll persisted restoration", () => {
