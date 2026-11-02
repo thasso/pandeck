@@ -3,6 +3,88 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.64.0] - 2026-11-02
+
+### Upgrade notes
+
+- This release adds SQLite migration `0098`, which creates the
+  `session_list_revisions` table for the revisioned session list. It is additive
+  and changes no existing row, but an older version does not reverse it. Back up
+  `DATA_DIR` before upgrading if you may need to roll back to 0.63.0.
+
+### Other changes
+
+- Host live Claude sessions on the in-process Worker
+  ([PR #271](https://github.com/thasso/pandeck/pull/271))
+- Let coordinators dismiss owned helpers' unhandled background updates
+  ([PR #270](https://github.com/thasso/pandeck/pull/270))
+- Bridge pi background work and skills over Worker protocol 1.9
+  ([PR #269](https://github.com/thasso/pandeck/pull/269))
+- Resync sessions by digest and preserve safe cache revisions
+  ([PR #268](https://github.com/thasso/pandeck/pull/268))
+- Resolve pi engine starts on the server and mirror live tool policy
+  ([PR #267](https://github.com/thasso/pandeck/pull/267))
+- Move the session list to revisioned state events
+  ([PR #266](https://github.com/thasso/pandeck/pull/266))
+- Host pi engines over Worker protocol 1.8
+  ([PR #265](https://github.com/thasso/pandeck/pull/265))
+- refactor(pi): open live engines through one JSON-spec opener
+  ([PR #264](https://github.com/thasso/pandeck/pull/264))
+- Report session-list changes at their write sites
+  ([PR #263](https://github.com/thasso/pandeck/pull/263))
+- refactor(pi): put live engines behind PiEngineHandle
+  ([PR #262](https://github.com/thasso/pandeck/pull/262))
+- Add isolation boundary and secret store ports
+  ([PR #261](https://github.com/thasso/pandeck/pull/261))
+- feat(workers): carry session hooks across the worker protocol
+  ([PR #260](https://github.com/thasso/pandeck/pull/260))
+- Probe the socket when the page comes back and replace a dead one
+  ([PR #259](https://github.com/thasso/pandeck/pull/259))
+- fix(ws): deflate large server frames in the app and ping session sockets
+  ([PR #258](https://github.com/thasso/pandeck/pull/258))
+- feat(workers): run interactive sessions' app tools across the worker protocol
+  ([PR #257](https://github.com/thasso/pandeck/pull/257))
+- feat(workers): pass typed checkout sides and drop the string-cwd executors
+  ([PR #256](https://github.com/thasso/pandeck/pull/256))
+- Keep sticky group bands opaque and flush to the top
+  ([PR #254](https://github.com/thasso/pandeck/pull/254))
+- Stop the Bun SQLite adapter's exec at the first failing statement
+  ([PR #255](https://github.com/thasso/pandeck/pull/255))
+- feat(workers): move checkout lifecycle onto the Worker
+  ([PR #253](https://github.com/thasso/pandeck/pull/253))
+- Upgrade production Bun to 1.4.2
+  ([PR #251](https://github.com/thasso/pandeck/pull/251))
+- Keep failed worktree creation cleanup within its owned resources
+  ([PR #250](https://github.com/thasso/pandeck/pull/250))
+- Resolve the home directory from HOME on every call
+  ([PR #249](https://github.com/thasso/pandeck/pull/249))
+- Answer checkout presence from Worker-verified state
+  ([PR #248](https://github.com/thasso/pandeck/pull/248))
+- Run checkout watches on Worker protocol 1.4
+  ([PR #247](https://github.com/thasso/pandeck/pull/247))
+- Keep Knowledge Base checkout operations server-local by type
+  ([PR #246](https://github.com/thasso/pandeck/pull/246))
+- Route checkout workflow reads through Worker protocol 1.3
+  ([PR #245](https://github.com/thasso/pandeck/pull/245))
+- Route checkout surface reads through Worker protocol 1.2
+  ([PR #244](https://github.com/thasso/pandeck/pull/244))
+- Route served-file reads through Worker protocol 1.1
+  ([PR #243](https://github.com/thasso/pandeck/pull/243))
+- Route checkout git through the in-process Worker protocol
+  ([PR #242](https://github.com/thasso/pandeck/pull/242))
+- Surface every spawned session that needs you in the composer strip
+  ([PR #241](https://github.com/thasso/pandeck/pull/241))
+- Move PR card actions onto the mutation lifecycle
+  ([PR #240](https://github.com/thasso/pandeck/pull/240))
+- Move workflow and compaction onto the mutation lifecycle
+  ([PR #239](https://github.com/thasso/pandeck/pull/239))
+- Route remaining pull request writes through the hosting port
+  ([PR #238](https://github.com/thasso/pandeck/pull/238))
+- Document the Worker design: agent sessions apart from the server
+  ([PR #237](https://github.com/thasso/pandeck/pull/237))
+- Close pull requests with a comment and optional branch deletion
+  ([PR #236](https://github.com/thasso/pandeck/pull/236))
+
 ## [0.63.0] - 2026-10-23
 
 ### Other changes
