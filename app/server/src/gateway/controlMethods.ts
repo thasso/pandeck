@@ -1,12 +1,12 @@
 /**
- * Gateway control 1.0: the methods the server sends the credential gateway
- * over the worker protocol's codec and `WorkerConnection` framing, under a
- * version of its own (`docs/workers.md` "Credentials"). Its handshake refuses
- * a Worker, and a Worker refuses it.
+ * Gateway control 1.1: the methods the server and the credential gateway send
+ * each other over the worker protocol's codec and `WorkerConnection` framing,
+ * under a version of its own (`docs/workers.md` "Credentials"). Its handshake
+ * refuses a Worker, and a Worker refuses it; a 1.0 peer is admitted.
  *
- * Every method is server → gateway and is answered only once its effect is
- * applied and saved. `control.hello` comes first on each connection; anything
- * before it fails with `hello_required`.
+ * Every server → gateway method is answered only once its effect is applied
+ * and saved. `control.hello` comes first on each connection; anything before
+ * it fails with `hello_required`.
  *
  * - `control.hello {serverBootId, pid, startTime}` names the server's boot and
  *   answers the server leases of other boots it revoked.
@@ -20,18 +20,30 @@
  * - `leases.revoke {leaseId, reason}` answers whether it revoked the lease.
  * - `leases.reconcileWorker {workerId, live}` revokes that Worker's engine
  *   leases not in `live`.
+ * - `profiles.loginHold {profileId, holdId}` takes the profile's writer lane
+ *   for a login and answers `held` once the hold is saved, or a refusal naming
+ *   the hold that stands (`holds.ts`).
+ * - `profiles.loginWriter {holdId, pid, startTime}` names a Claude hold's
+ *   writer, `profiles.loginRelease {holdId}` ends a hold of this boot and
+ *   `profiles.loginForceRelease {holdId}` ends any hold (the operator's
+ *   assertion).
+ *
+ * Gateway → server: `profiles.status {profileId, loginStuck, holdId}` reports
+ * a hold that became login-stuck or a stuck one that ended, answered `{}`.
  */
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
   WorkerMethodError,
   type ConnectionProtocol,
 } from "../workerProtocol/connection.ts";
+import { isHoldId, type HoldAcquired, type HoldStatus } from "./holds.ts";
 import { isLeaseId } from "./leases.ts";
+import { isPid, isStartTime } from "./processIdentity.ts";
 import { isProfileId, parseProfile, type GatewayProfile } from "./profiles.ts";
 import type { RevokeReason } from "./refusals.ts";
 import { isOwnerId } from "./state.ts";
 
-export const GATEWAY_CONTROL_VERSION = "gateway-control/1.0";
+export const GATEWAY_CONTROL_VERSION = "gateway-control/1.1";
 
 const CONTROL_VERSION_RE =
   /^gateway-control\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -51,6 +63,12 @@ export const CONTROL_METHODS = {
   bindSession: "leases.bindSession",
   revoke: "leases.revoke",
   reconcileWorker: "leases.reconcileWorker",
+  loginHold: "profiles.loginHold",
+  loginWriter: "profiles.loginWriter",
+  loginRelease: "profiles.loginRelease",
+  loginForceRelease: "profiles.loginForceRelease",
+  /** Gateway → server. */
+  status: "profiles.status",
 } as const;
 
 /** A method other than `control.hello` came before it. */
@@ -65,6 +83,12 @@ export const OWNER_CONFLICT = "owner_conflict";
 export const INVALID_PARAMS = "invalid_params";
 /** The gateway could not save its state; see the method for what stands. */
 export const STATE_WRITE_FAILED = "state_write_failed";
+/** The gateway holds no login hold by this id. */
+export const UNKNOWN_HOLD = "unknown_hold";
+/** The login hold belongs to another server boot, or to none. */
+export const NOT_HOLD_OWNER = "not_hold_owner";
+/** The login hold already names another writer. */
+export const WRITER_CONFLICT = "writer_conflict";
 
 export interface ControlHello {
   serverBootId: string;
@@ -95,6 +119,18 @@ export interface LeaseRevoke {
 export interface WorkerReconcile {
   workerId: string;
   live: string[];
+}
+
+export interface LoginHoldRequest {
+  profileId: string;
+  holdId: string;
+}
+
+export interface LoginWriterRequest {
+  holdId: string;
+  pid: number;
+  /** As in {@link ControlHello}. */
+  startTime: string | null;
 }
 
 /** What `control.hello`, the profile methods and the reconcile answer. */
@@ -142,7 +178,10 @@ export function encodeControlRequest(
     | LeaseGrant
     | LeaseSessionBind
     | LeaseRevoke
-    | WorkerReconcile,
+    | WorkerReconcile
+    | LoginHoldRequest
+    | LoginWriterRequest
+    | { holdId: string },
 ): Payload {
   return { json: { ...request } };
 }
@@ -150,13 +189,8 @@ export function encodeControlRequest(
 export function decodeControlHello(payload: Payload): ControlHello {
   const { serverBootId, pid, startTime } = json(payload);
   if (!isOwnerId(serverBootId)) invalid("server boot id");
-  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0)
-    invalid("pid");
-  if (
-    startTime !== null &&
-    !(typeof startTime === "string" && /^\d{1,20}$/.test(startTime))
-  )
-    invalid("start time");
+  if (!isPid(pid)) invalid("pid");
+  if (!isStartTime(startTime)) invalid("start time");
   return { serverBootId, pid, startTime };
 }
 
@@ -217,6 +251,72 @@ export function decodeWorkerReconcile(payload: Payload): WorkerReconcile {
   return { workerId, live: [...live] };
 }
 
+export function decodeLoginHold(payload: Payload): LoginHoldRequest {
+  const { profileId, holdId } = json(payload);
+  if (!isProfileId(profileId)) invalid("profile id");
+  if (!isHoldId(holdId)) invalid("hold id");
+  return { profileId, holdId };
+}
+
+export function decodeLoginWriter(payload: Payload): LoginWriterRequest {
+  const { holdId, pid, startTime } = json(payload);
+  if (!isHoldId(holdId)) invalid("hold id");
+  if (!isPid(pid)) invalid("pid");
+  if (!isStartTime(startTime)) invalid("start time");
+  return { holdId, pid, startTime };
+}
+
+/** `profiles.loginRelease` and `profiles.loginForceRelease`. */
+export function decodeHoldId(payload: Payload): string {
+  const { holdId } = json(payload);
+  if (!isHoldId(holdId)) invalid("hold id");
+  return holdId;
+}
+
+export function encodeLoginHold(acquired: HoldAcquired): Payload {
+  return { json: { ...acquired } };
+}
+
+export function decodeLoginHeld(payload: Payload): HoldAcquired {
+  const answer = record(payload.json);
+  if (answer?.held === true) return { held: true };
+  if (
+    answer?.held !== false ||
+    (answer.refusal !== "hold_exists" && answer.refusal !== "login_stuck") ||
+    (answer.holdId !== undefined && !isHoldId(answer.holdId))
+  )
+    malformed("login hold answer");
+  return {
+    held: false,
+    refusal: answer.refusal,
+    ...(answer.holdId !== undefined ? { holdId: answer.holdId } : {}),
+  };
+}
+
+export function encodeHoldReleased(released: boolean): Payload {
+  return { json: { released } };
+}
+
+export function decodeHoldReleased(payload: Payload): boolean {
+  const answer = record(payload.json);
+  if (!answer || typeof answer.released !== "boolean")
+    malformed("login release answer");
+  return answer.released;
+}
+
+export function encodeHoldStatus(status: HoldStatus): Payload {
+  return { json: { ...status } };
+}
+
+/** The server side of `profiles.status`. */
+export function decodeHoldStatus(payload: Payload): HoldStatus {
+  const { profileId, loginStuck, holdId } = json(payload);
+  if (!isProfileId(profileId)) invalid("profile id");
+  if (typeof loginStuck !== "boolean") invalid("login stuck flag");
+  if (!isHoldId(holdId)) invalid("hold id");
+  return { profileId, loginStuck, holdId };
+}
+
 export function encodeLeasesRevoked(revoked: string[]): Payload {
   return { json: { revoked } };
 }
@@ -249,7 +349,7 @@ export function decodeLeaseRevoked(payload: Payload): boolean {
   return answer.revoked;
 }
 
-/** What `leases.bindSession` answers. */
+/** What `leases.bindSession`, `profiles.loginWriter` and `profiles.status` answer. */
 export function encodeControlDone(): Payload {
   return { json: {} };
 }

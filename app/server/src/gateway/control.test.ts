@@ -1,12 +1,21 @@
 /**
- * Gateway control 1.0 against a running gateway: the handshake, the hello
+ * Gateway control 1.1 against a running gateway: the handshake, the hello
  * rule, the registry binding every grant, deletion as the only revoking
  * registry change, the server-boot rule, the per-Worker reconcile, revocation
- * and owner completion. Control runs over an in-process pair; model requests
- * go over loopback HTTP to fake TLS upstreams. Every credential is fake.
+ * and owner completion, and the login hold methods. Control runs over an
+ * in-process pair; model requests go over loopback HTTP to fake TLS
+ * upstreams. Every credential is fake, and every hold's processes are
+ * observed through a fake probe.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rmdir,
+  stat,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
 import { DATA_DIR } from "../config.ts";
@@ -17,6 +26,7 @@ import {
   CODEX_ACCOUNT,
   CODEX_PATH,
   dialControl,
+  fakeProcesses,
   modelRequest,
   startFakeUpstreams,
   writeTokenFiles,
@@ -26,6 +36,7 @@ import {
   FrameDecoder,
   encodeControlFrame,
   type Frame,
+  type Payload,
 } from "../workerProtocol/codec.ts";
 import {
   WorkerConnection,
@@ -38,12 +49,19 @@ import {
   GATEWAY_CONTROL_PROTOCOL,
   GATEWAY_CONTROL_VERSION,
   decodeLeaseGranted,
+  decodeHoldReleased,
   decodeLeaseRevoked,
   decodeLeasesRevoked,
+  decodeLoginHeld,
   encodeControlRequest,
   type LeaseGrant,
 } from "./controlMethods.ts";
-import { startGateway, type RunningGateway } from "./gateway.ts";
+import {
+  startGateway,
+  type GatewayOptions,
+  type RunningGateway,
+} from "./gateway.ts";
+import type { HoldStatus } from "./holds.ts";
 import type { GatewayProfile } from "./profiles.ts";
 import { refusalText, type RevokeReason } from "./refusals.ts";
 
@@ -98,11 +116,17 @@ afterAll(async () => {
   await upstreams.close();
 });
 
-async function gateway(stateDir?: string): Promise<RunningGateway> {
+async function gateway(
+  stateDir?: string,
+  options: GatewayOptions = {},
+): Promise<RunningGateway> {
   const gw = await startGateway({
     log: (line) => lines.push(line),
     upstreams: upstreams.overrides,
+    // The hello below names pid 4242, which no test may observe for real.
+    processProbe: fakeProcesses().probe,
     ...(stateDir ? { stateDir } : {}),
+    ...options,
   });
   running.push(gw);
   return gw;
@@ -579,4 +603,300 @@ test("malformed params are invalid_params", async () => {
   for (const [method, json] of cases)
     await rejectsWith(connection.request(method, { json }), "invalid_params");
   assert.deepEqual(gw.leases.records(), []);
+});
+
+/** A connection after hello and a sync of A and B whose `profiles.status` requests land in `statuses`. */
+async function heard(
+  gw: RunningGateway,
+  bootId: string,
+): Promise<{ connection: WorkerConnection; statuses: HoldStatus[] }> {
+  const statuses: HoldStatus[] = [];
+  const connection = dialControl(
+    createInProcessTransport(),
+    gw.attachControl,
+    GATEWAY_CONTROL_PROTOCOL,
+    {
+      [CONTROL_METHODS.status]: (payload: Payload) => {
+        statuses.push(payload.json as HoldStatus);
+        return Promise.resolve({ json: {} });
+      },
+    },
+  );
+  await hello(connection, bootId);
+  await sync(connection, [profileA, profileB]);
+  return { connection, statuses };
+}
+
+async function loginHold(
+  connection: WorkerConnection,
+  profileId: string,
+  holdId: string,
+) {
+  return decodeLoginHeld(
+    await connection.request(
+      CONTROL_METHODS.loginHold,
+      encodeControlRequest({ profileId, holdId }),
+    ),
+  );
+}
+
+function loginWriter(
+  connection: WorkerConnection,
+  holdId: string,
+  pid: number,
+  startTime: string | null = "77",
+): Promise<Payload> {
+  return connection.request(
+    CONTROL_METHODS.loginWriter,
+    encodeControlRequest({ holdId, pid, startTime }),
+  );
+}
+
+async function release(
+  connection: WorkerConnection,
+  holdId: string,
+  method: string = CONTROL_METHODS.loginRelease,
+): Promise<boolean> {
+  return decodeHoldReleased(
+    await connection.request(method, encodeControlRequest({ holdId })),
+  );
+}
+
+interface StoredHolds {
+  v: number;
+  holds: Record<string, unknown>[];
+}
+
+async function storedHolds(stateDir: string): Promise<StoredHolds> {
+  return JSON.parse(
+    await readFile(join(stateDir, "holds.json"), "utf8"),
+  ) as StoredHolds;
+}
+
+/** Lets the gateway's status requests, sent after their answers, arrive. */
+const settled = () =>
+  new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+
+test("AC1: gateway control 1.1 welcomes a 1.0 dialer too", async () => {
+  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.1");
+  const gw = await gateway();
+  for (const version of ["gateway-control/1.1", "gateway-control/1.0"])
+    assert.deepEqual(await rawHandshake(gw, version), [
+      { type: "welcome", version: "gateway-control/1.1" },
+    ]);
+});
+
+test("AC2: a login hold is saved before it is held; before hello, for an unknown profile or on a failed save it is not", async () => {
+  const stateDir = join(await mkdtemp(join(DATA_DIR, "gateway-state-")), "gw");
+  const gw = await gateway(stateDir);
+  const early = control(gw);
+  await rejectsWith(
+    early.request(
+      CONTROL_METHODS.loginHold,
+      encodeControlRequest({ profileId: profileA.id, holdId: "h0" }),
+    ),
+    "hello_required",
+  );
+  const connection = await ready(gw);
+  await rejectsWith(loginHold(connection, "nobody", "h0"), "unknown_profile");
+
+  // The writer's temp file cannot be opened while a directory holds its name.
+  await mkdir(join(stateDir, "holds.json.tmp"), { recursive: true });
+  await rejectsWith(
+    loginHold(connection, profileA.id, "h1"),
+    "state_write_failed",
+  );
+  assert.deepEqual(gw.holds(), []);
+  assert.ok(
+    lines.includes(
+      `control profiles.loginHold (profile ${profileA.id}, hold h1): state_write_failed`,
+    ),
+  );
+  await rmdir(join(stateDir, "holds.json.tmp"));
+
+  assert.deepEqual(await loginHold(connection, profileA.id, "h2"), {
+    held: true,
+  });
+  const saved = await storedHolds(stateDir);
+  assert.equal(saved.v, 1);
+  assert.equal(saved.holds.length, 1);
+  const record = saved.holds[0]!;
+  assert.equal(record.holdId, "h2");
+  assert.equal(record.profileId, profileA.id);
+  assert.equal(record.provider, "claude");
+  assert.deepEqual(record.owner, {
+    serverBootId: "boot-x",
+    pid: 4242,
+    startTime: "1234",
+  });
+  assert.equal(
+    (record.deadline as number) - (record.acquiredAt as number),
+    1_800_000,
+  );
+  assert.equal((await stat(join(stateDir, "holds.json"))).mode & 0o777, 0o600);
+  assert.equal((await stat(stateDir)).mode & 0o777, 0o700);
+  assert.deepEqual(
+    (await readdir(stateDir)).filter((name) => name.endsWith(".tmp")),
+    [],
+  );
+});
+
+test("AC4: one hold per profile: a second is refused with the standing hold's id; a retried one is the same hold", async () => {
+  let now = 1_800_000_000_000;
+  const gw = await gateway(undefined, { now: () => now });
+  const x = await ready(gw, "boot-x");
+  assert.deepEqual(await loginHold(x, profileA.id, "h1"), { held: true });
+  assert.deepEqual(await loginHold(x, profileA.id, "h9"), {
+    held: false,
+    refusal: "hold_exists",
+    holdId: "h1",
+  });
+  assert.deepEqual(await loginHold(x, profileA.id, "h1"), { held: true });
+  assert.equal(gw.holds().length, 1);
+  // Another profile is its own lane.
+  assert.deepEqual(await loginHold(x, profileB.id, "h2"), { held: true });
+
+  const y = await ready(gw, "boot-y");
+  assert.deepEqual(await loginHold(y, profileA.id, "h9"), {
+    held: false,
+    refusal: "login_stuck",
+    holdId: "h1",
+  });
+  assert.deepEqual(await loginHold(y, profileA.id, "h1"), {
+    held: false,
+    refusal: "login_stuck",
+    holdId: "h1",
+  });
+
+  const x2 = await ready(gw, "boot-x");
+  now += 30 * 60 * 1000;
+  gw.checkHolds();
+  assert.deepEqual(await loginHold(x2, profileA.id, "h9"), {
+    held: false,
+    refusal: "login_stuck",
+    holdId: "h1",
+  });
+  assert.equal(gw.holds().length, 2);
+});
+
+test("AC5: only the owning boot names a Claude hold's writer, once, and it is saved before the answer", async () => {
+  const stateDir = join(await mkdtemp(join(DATA_DIR, "gateway-state-")), "gw");
+  const gw = await gateway(stateDir);
+  const x = await ready(gw, "boot-x");
+  await loginHold(x, profileA.id, "h1");
+  await loginHold(x, profileB.id, "h2");
+  assert.deepEqual((await loginWriter(x, "h1", 5151)).json, {});
+  assert.deepEqual((await storedHolds(stateDir)).holds[0]?.writer, {
+    pid: 5151,
+    startTime: "77",
+  });
+  assert.deepEqual((await loginWriter(x, "h1", 5151)).json, {});
+  await rejectsWith(loginWriter(x, "h1", 5152), "writer_conflict");
+  await rejectsWith(loginWriter(x, "h1", 5151, "78"), "writer_conflict");
+  await rejectsWith(loginWriter(x, "h2", 5151), "invalid_params");
+  await rejectsWith(loginWriter(x, "nope", 5151), "unknown_hold");
+  await rejectsWith(loginWriter(x, "h1", 0), "invalid_params");
+
+  const y = await ready(gw, "boot-y");
+  await rejectsWith(loginWriter(y, "h1", 5151), "not_hold_owner");
+  assert.deepEqual(gw.holds()[0]?.writer, { pid: 5151, startTime: "77" });
+
+  // A failed save leaves no writer.
+  const x2 = await ready(gw, "boot-x");
+  await loginHold(x2, profileA.id, "h1");
+  await release(x2, "h1");
+  await loginHold(x2, profileA.id, "h3");
+  await mkdir(join(stateDir, "holds.json.tmp"));
+  await rejectsWith(loginWriter(x2, "h3", 6161), "state_write_failed");
+  await rmdir(join(stateDir, "holds.json.tmp"));
+  assert.equal(
+    gw.holds().find((hold) => hold.holdId === "h3")?.writer,
+    undefined,
+  );
+});
+
+test("AC6: release (a) comes from the owning boot only", async () => {
+  const stateDir = join(await mkdtemp(join(DATA_DIR, "gateway-state-")), "gw");
+  const gw = await gateway(stateDir);
+  const x = await ready(gw, "boot-x");
+  await loginHold(x, profileA.id, "h1");
+
+  const y = await ready(gw, "boot-y");
+  assert.equal(x.isEnded, true, "the newer hello superseded it");
+  await rejectsWith(release(y, "h1"), "not_hold_owner");
+  assert.deepEqual(
+    gw.holds().map((hold) => hold.holdId),
+    ["h1"],
+  );
+  assert.ok(
+    lines.includes(
+      `control profiles.loginRelease (profile ${profileA.id}, hold h1): not_hold_owner`,
+    ),
+  );
+
+  const x2 = await ready(gw, "boot-x");
+  assert.equal(await release(x2, "h1"), true);
+  assert.deepEqual((await storedHolds(stateDir)).holds, []);
+  assert.deepEqual(await loginHold(x2, profileA.id, "h2"), { held: true });
+  assert.equal(await release(x2, "never-held"), false);
+});
+
+test("AC11: force release clears a stuck hold from any boot and reports it", async () => {
+  let now = 1_800_000_000_000;
+  const gw = await gateway(undefined, { now: () => now });
+  const x = await ready(gw, "boot-x");
+  await loginHold(x, profileA.id, "h1");
+  now += 30 * 60 * 1000;
+  gw.checkHolds();
+
+  const y = await heard(gw, "boot-y");
+  await settled();
+  assert.deepEqual(y.statuses, [
+    { profileId: profileA.id, loginStuck: true, holdId: "h1" },
+  ]);
+  assert.equal(
+    await release(y.connection, "h1", CONTROL_METHODS.loginForceRelease),
+    true,
+  );
+  await settled();
+  assert.deepEqual(y.statuses.at(-1), {
+    profileId: profileA.id,
+    loginStuck: false,
+    holdId: "h1",
+  });
+  assert.deepEqual(gw.holds(), []);
+  assert.deepEqual(await loginHold(y.connection, profileA.id, "h2"), {
+    held: true,
+  });
+  await rejectsWith(
+    release(y.connection, "never-held", CONTROL_METHODS.loginForceRelease),
+    "unknown_hold",
+  );
+  // A hold that is not stuck is cleared without a status.
+  const count = y.statuses.length;
+  assert.equal(
+    await release(y.connection, "h2", CONTROL_METHODS.loginForceRelease),
+    true,
+  );
+  await settled();
+  assert.equal(y.statuses.length, count);
+});
+
+test("the hold methods' malformed params are invalid_params", async () => {
+  const gw = await gateway();
+  const connection = await ready(gw);
+  const cases: [string, unknown][] = [
+    [CONTROL_METHODS.loginHold, { profileId: profileA.id, holdId: "a b" }],
+    [CONTROL_METHODS.loginHold, { profileId: "a/b", holdId: "h1" }],
+    [
+      CONTROL_METHODS.loginHold,
+      { profileId: profileA.id, holdId: "h".repeat(65) },
+    ],
+    [CONTROL_METHODS.loginWriter, { holdId: "h1", pid: 1, startTime: "x" }],
+    [CONTROL_METHODS.loginRelease, { holdId: "" }],
+    [CONTROL_METHODS.loginForceRelease, {}],
+  ];
+  for (const [method, json] of cases)
+    await rejectsWith(connection.request(method, { json }), "invalid_params");
+  assert.deepEqual(gw.holds(), []);
 });

@@ -6,9 +6,11 @@
  * endpoint (`control.ts`) through which the server syncs profiles and grants
  * and revokes leases.
  *
- * With a state directory, the leases and the profile registry are loaded at
- * start and saved on every change (`state.ts`), so a restarted gateway
- * forwards before any control connects. Without one they live in memory.
+ * With a state directory, the leases, the profile registry and the login
+ * holds are loaded at start and saved on every change (`state.ts`), so a
+ * restarted gateway forwards before any control connects and keeps every
+ * hold. Without one they live in memory. A timer rechecks the holds once a
+ * minute (`holds.ts`).
  *
  * It runs in the process that starts it: the server's, through
  * `gatewayLink.ts` under `ASSISTANT_GATEWAY=1`, and tests', against fake
@@ -25,7 +27,9 @@ import {
   type UpstreamOverrides,
 } from "./forward.ts";
 import { createControlEndpoint } from "./control.ts";
+import { HoldTable, WriterLane, type HoldRecord } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
+import type { ProcessProbe } from "./processIdentity.ts";
 import { ProfileRegistry } from "./profiles.ts";
 import { openGatewayState } from "./state.ts";
 
@@ -39,6 +43,10 @@ export interface GatewayOptions {
   stateDir?: string;
   /** Epoch milliseconds; the clock tests inject. */
   now?: () => number;
+  /** How often the login holds are rechecked; 60 s. */
+  holdCheckIntervalMs?: number;
+  /** Test seam: how hold owners and writers are observed. */
+  processProbe?: ProcessProbe;
 }
 
 export interface RunningGateway {
@@ -46,10 +54,16 @@ export interface RunningGateway {
   readonly port: number;
   readonly leases: LeaseTable;
   readonly stats: Readonly<GatewayStats>;
-  /** Serves gateway control 1.0 on `endpoint`, as the listener. */
+  /** The profiles' writer lane, for in-gateway writers (G4, G5). */
+  readonly lane: Pick<WriterLane, "run">;
+  /** Serves gateway control 1.1 on `endpoint`, as the listener. */
   attachControl(endpoint: ByteEndpoint): void;
   /** The last `control.hello` a control connection said, as recorded. */
   lastHello(): ControlHello | undefined;
+  /** The login holds, as records; tests and the probe read them. */
+  holds(): HoldRecord[];
+  /** Rechecks the holds now, as the timer does; tests and the probe. */
+  checkHolds(): void;
   /** Stops listening, ends control connections and destroys open sockets. */
   close(): Promise<void>;
 }
@@ -67,11 +81,29 @@ export async function startGateway(
     persist: state?.persistLeases,
   });
   const profiles = new ProfileRegistry(state?.persistProfiles);
+  const holds = new HoldTable({
+    now: options.now,
+    persist: state?.persistHolds,
+    probe: options.processProbe,
+    fenced: state?.holdsUnreadable,
+  });
   if (state) {
     leases.restore(state.leases);
     profiles.restore(state.profiles);
+    holds.restore(state.holds);
+    // Fence holds are stuck: the next hello reports them.
+    if (holds.fence(profiles.ids()).saveError !== undefined)
+      log("hold fence: holds.json not saved; the change stands in memory");
   }
-  const control = createControlEndpoint({ leases, profiles, log });
+  const lane = new WriterLane(holds, (id) => profiles.get(id)?.provider);
+  const control = createControlEndpoint({
+    leases,
+    profiles,
+    holds,
+    lane,
+    log,
+  });
+
   const stats: GatewayStats = {
     forwarded: 0,
     refused: 0,
@@ -109,15 +141,24 @@ export async function startGateway(
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   log(`listening on 127.0.0.1:${port}`);
+  const holdCheck = setInterval(
+    control.checkHolds,
+    options.holdCheckIntervalMs ?? 60_000,
+  );
+  holdCheck.unref();
 
   return {
     url: `http://127.0.0.1:${port}`,
     port,
     leases,
     stats,
+    lane,
     attachControl: control.attach,
     lastHello: control.hello,
+    holds: () => holds.records(),
+    checkHolds: control.checkHolds,
     async close() {
+      clearInterval(holdCheck);
       control.close();
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),

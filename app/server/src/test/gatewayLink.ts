@@ -3,12 +3,19 @@
  * port with a temp state directory and no upstream, so a test reads the
  * leases its engines were granted. Import it only after the test has set its
  * `DATA_DIR`, as the link reads credential profiles from there.
+ *
+ * A test that names its own `stateDir`, to start another link on it, owns
+ * that directory: closing leaves it in place.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startGatewayLink, type GatewayLink } from "../gatewayLink.ts";
+import {
+  startGatewayLink,
+  type GatewayLink,
+  type GatewayLinkOptions,
+} from "../gatewayLink.ts";
 
 /** A gateway lease record, named through the link: only it imports `gateway/`. */
 type LeaseRecord = ReturnType<
@@ -25,13 +32,21 @@ export interface TestGatewayLink {
   close(): Promise<void>;
 }
 
-export async function startGatewayLinkForTests(): Promise<TestGatewayLink> {
-  const stateDir = join(mkdtempSync(join(tmpdir(), "gateway-link-")), "state");
+export async function startGatewayLinkForTests(
+  options: Partial<Pick<GatewayLinkOptions, "stateDir" | "start">> = {},
+): Promise<TestGatewayLink> {
+  /** The temp directory this helper made and removes, if it made one. */
+  const own =
+    options.stateDir === undefined
+      ? mkdtempSync(join(tmpdir(), "gateway-link-"))
+      : undefined;
+  const stateDir = options.stateDir ?? join(own!, "state");
   const lines: string[] = [];
   const link = startGatewayLink({
     stateDir,
     port: 0,
     log: (line) => lines.push(line),
+    ...(options.start ? { start: options.start } : {}),
   });
   assert.equal(await link.ready, true, lines.join("\n"));
   return {
@@ -48,7 +63,7 @@ export async function startGatewayLinkForTests(): Promise<TestGatewayLink> {
         .sort((a, b) => a.grantedAt - b.grantedAt),
     async close() {
       await link.close();
-      rmSync(join(stateDir, ".."), { recursive: true, force: true });
+      if (own) rmSync(own, { recursive: true, force: true });
     },
   };
 }

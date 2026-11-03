@@ -126,6 +126,10 @@ import { checkoutWatchOn } from "../app/server/src/checkoutWatchAccess.ts";
 import { checkoutLifecycleOn } from "../app/server/src/checkoutLifecycle.ts";
 import { errorText } from "../app/server/src/errors.ts";
 import { startGateway } from "../app/server/src/gateway/gateway.ts";
+import {
+  processStartTime,
+  processState,
+} from "../app/server/src/gateway/processIdentity.ts";
 import { GATEWAY_REFUSAL_MARKER } from "../app/server/src/gateway/refusals.ts";
 import { startGatewayLink } from "../app/server/src/gatewayLink.ts";
 import {
@@ -4553,7 +4557,7 @@ async function checkGatewayLink() {
     });
     const refusal = await worker.ended;
     assert(
-      refusal.includes("gateway-control/1.0"),
+      refusal.includes("gateway-control/1.1"),
       `A worker-protocol dialer was not refused by gateway control: ${refusal}`,
     );
     const hello = gateway.lastHello();
@@ -4627,6 +4631,42 @@ async function checkGatewayLink() {
   }
 }
 
+/**
+ * A login hold is released only on its processes' observed exit
+ * (`gateway/processIdentity.ts`): signal 0 and `/proc/<pid>/stat` must answer
+ * under Bun as under Node, or a hold would never be released. Observes and
+ * signals only the probe's own child.
+ */
+async function checkProcessState() {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], {
+    stdio: "ignore",
+  });
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  let startTime;
+  try {
+    startTime = processStartTime(child.pid);
+    assert(
+      typeof startTime === "string" && /^\d+$/.test(startTime),
+      `The child's start time is unreadable: ${startTime}`,
+    );
+    assert(
+      processState(child.pid, startTime) === "running",
+      "A live child does not read as running.",
+    );
+    assert(
+      processState(child.pid, "1") === "exited",
+      "A start-time mismatch does not read as an exit.",
+    );
+  } finally {
+    child.kill();
+    await exited;
+  }
+  assert(
+    processState(child.pid, startTime) === "exited",
+    "An exited child does not read as exited.",
+  );
+}
+
 checkMigrationGuard();
 await checkManagedStdioFdReuse();
 await checkGit();
@@ -4639,6 +4679,7 @@ if (mode === "broker") {
   await checkPiOAuthFlows();
   await checkInitiativeLayout();
   await checkGatewayLink();
+  await checkProcessState();
 }
 console.log(`Bun runtime probe (${mode}) passed.`);
 process.exit(0);

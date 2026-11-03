@@ -1171,12 +1171,13 @@ ships in phase 2, on the server's host. Its same-host form:
   counts until the gateway reports login state itself.
 - Remote Workers reach it over TLS from phase 4.
 
-The server drives the gateway over its control channel, **gateway control 1.0**:
+The server drives the gateway over its control channel, **gateway control 1.1**:
 the worker protocol's codec and connection framing under a version of its own,
-`gateway-control/1.0`, so a Worker and a control peer refuse each other. Only a
-control connection grants a lease, and the gateway binds each lease to a profile
-from its own registry, never from the request. Every method is answered once its
-effect is applied and saved, and each connection starts with
+`gateway-control/1.1`, so a Worker and a control peer refuse each other; a 1.0
+dialer is still admitted, as is any 1.x. Only a control connection grants a
+lease, and the gateway binds each lease to a profile from its own registry,
+never from the request. Every method is answered once its effect is applied and
+saved, and each connection starts with
 `control.hello {serverBootId, pid, startTime}`; anything before it is refused.
 The server then syncs every profile (`profiles.sync`, later `profiles.upsert`
 and `profiles.remove`). A newer connection's hello ends the older one.
@@ -1213,6 +1214,55 @@ and `profiles.remove`). A newer connection's hello ends the older one.
   restored leases keep forwarding on their own binding. A revoked lease is
   forgotten 24 hours after its revocation.
 
+Each profile has one **writer lane**: one writer of its token file at a time. An
+item in the lane (a renewal or usage child, from later slices) or a login's
+hold, in arrival order, each waiting until the one before it has settled,
+whether it succeeded or failed. No item runs while the profile is held.
+
+- `profiles.loginHold {profileId, holdId}` waits for the lane, saves the hold
+  and only then answers `{held: true}`. A profile that is held already answers
+  at once `{held: false, refusal, holdId}`, naming the hold that stands:
+  `hold_exists` for the asking boot's own hold, `login_stuck` for a stuck hold,
+  a fence hold or another boot's. The same `holdId` again from its boot answers
+  `held` (a retry). An acquire whose connection ends or that is cancelled while
+  it waits leaves no hold. It is the only method answered after other methods
+  that arrived later; every other method still applies in arrival order.
+- A hold records its owner (the hello's boot id, pid and start time), a
+  30-minute check deadline and, for a Claude login, its writer, the
+  `claude auth login` child, named by
+  `profiles.loginWriter {holdId, pid, startTime}` from the owning boot only
+  (`writer_conflict` for a different one). A pi login writes from its owner
+  process.
+- A hold ends only on evidence: `profiles.loginRelease {holdId}` from its owning
+  boot (`not_hold_owner` from another), or the observed exit of its owner and,
+  for a Claude hold, its registered writer. An exit is observed when signal 0
+  fails with `ESRCH` or the process's `/proc` start time differs from the
+  recorded one; anything uncertain counts as alive. A Claude hold without a
+  writer has no exit evidence. Elapsed time, a lost connection, a gateway
+  restart, a new boot's sync and a profile's removal are never evidence.
+- The gateway rechecks the exits of every hold whose owner is not the current
+  connection's boot on each hello, before answering it, and once a minute. So a
+  server that restarts during a login, whose new boot says hello with a new boot
+  id, releases a pi hold once the old server process is gone and a Claude hold
+  once its login child is gone too.
+- At the deadline without evidence a hold becomes **login stuck**: it stays
+  held, so nothing renews the profile, and evidence still ends it later.
+  `profiles.loginForceRelease {holdId}`, from any boot after its hello, is the
+  operator's assertion that no login runs and clears any hold.
+- The gateway reports each hold that becomes stuck, and each stuck hold that
+  ends, to the connection current at the change as
+  `profiles.status {profileId, loginStuck, holdId}`, a gateway → server request
+  answered `{}`, once the answer that caused it has gone out; a new hello hears
+  every stuck hold again. A lost status is only logged.
+- Holds are kept in `holds.json` beside the other files, with the same writer
+  rules: an acquire or a writer registration is saved before its answer and
+  undone when saving fails; a release, a stuck hold or a fence takes effect at
+  once and stays in force even then. A restarted gateway keeps every hold under
+  the same rules. An unreadable `holds.json` fences every profile: until the
+  registry is known every acquire answers `login_stuck` and every lane item is
+  refused; then each registered profile gets a stuck **fence hold**, owned by no
+  boot and cleared only by force release.
+
 The server's link to the gateway (`gatewayLink.ts`) is opt-in:
 `ASSISTANT_GATEWAY=1` starts the gateway inside the server process, its model
 listener on `127.0.0.1:${ASSISTANT_GATEWAY_PORT}` (8788) and its state in
@@ -1241,6 +1291,21 @@ until the gateway runs as its own process.
 - Binding a session and revoking are best-effort and only logged. A revocation
   the gateway applied but could not save holds in its memory until a later save
   or the next boot's reconcile.
+- **Login holds** (unused until the login flows wire them). The link mints a
+  hold id and `acquireLoginHold` waits for ready (10 seconds) and for the lane;
+  a hold waiting for the lane is ordered after the queue but holds up no grant,
+  profile change or other request. `registerLoginWriter` sends the writer's pid
+  and start time, `releaseLoginHold` is best-effort, and the link records each
+  profile's latest `profiles.status` for the login-stuck state. The login flows
+  map what these answer to existing texts only. `login_stuck` shows the
+  account's login-stuck state in Settings → Accounts with U7's text ("The last
+  login for `<name>` didn't finish, so Pandeck has paused renewing this
+  account's token. If no login is still running, choose Clear the unfinished
+  login.") and the Clear action, which force-releases the named hold.
+  `hold_exists` shows nothing new: each login flow is single-flight per profile,
+  so a second start attaches to the running login. A link that is not ready, has
+  ended or gets any other failure answers "Pandeck can't start this login while
+  the credential gateway is unreachable; try again shortly."
 - The token stays with the engine's entry in the server. No engine uses it yet:
   engines authenticate as before.
 
@@ -1436,8 +1501,10 @@ forwarding core, its control channel and persisted leases, and the server's link
 to it behind `ASSISTANT_GATEWAY=1`, off by default. With the switch on, every
 engine open on a profile holds a lease first, but engines still authenticate as
 before: no model request is routed to the gateway yet. It reads token files and
-never writes or refreshes them. Login holds, renewal, engine routing and its own
-service unit come in later slices.
+never writes or refreshes them. The writer lane and login holds have landed,
+unused until the login flows hold their profile (G5): no hold is created and no
+lane item runs yet. Renewal, engine routing and its own service unit come in
+later slices.
 
 ## Open questions
 

@@ -1,9 +1,11 @@
 /**
  * The gateway's state directory: private files holding hashes and paths only,
  * a gateway-only restart that forwards with control down, pruning of revoked
- * leases, unreadable state, owner completion across a restart, and write
- * failures. Every credential is fake; every state directory is under the
- * test's temp `DATA_DIR`.
+ * leases, unreadable state, owner completion across a restart, write
+ * failures, and login holds kept across a restart or fenced by an unreadable
+ * `holds.json`. Every credential is fake; every state directory is under the
+ * test's temp `DATA_DIR`. A hold's processes are children of this test or
+ * observed through a fake probe.
  */
 import assert from "node:assert/strict";
 import {
@@ -24,11 +26,15 @@ import {
   CODEX_ACCESS,
   CODEX_ACCOUNT,
   dialControl,
+  endChild,
+  fakeProcesses,
   modelRequest,
+  spawnIdleChild,
   startFakeUpstreams,
   writeTokenFiles,
   type FakeUpstreams,
 } from "../test/gatewayFixtures.ts";
+import type { Payload } from "../workerProtocol/codec.ts";
 import {
   WorkerRequestError,
   type WorkerConnection,
@@ -39,9 +45,16 @@ import {
   GATEWAY_CONTROL_PROTOCOL,
   decodeLeaseGranted,
   decodeLeasesRevoked,
+  decodeLoginHeld,
   encodeControlRequest,
 } from "./controlMethods.ts";
-import { startGateway, type RunningGateway } from "./gateway.ts";
+import {
+  startGateway,
+  type GatewayOptions,
+  type RunningGateway,
+} from "./gateway.ts";
+import { LaneHeldError, type HoldStatus } from "./holds.ts";
+import { processStartTime } from "./processIdentity.ts";
 import { LeaseTable } from "./leases.ts";
 import type { GatewayProfile } from "./profiles.ts";
 import { refusalText, type Refusal, type RevokeReason } from "./refusals.ts";
@@ -653,4 +666,272 @@ test("a retried profiles.remove after a failed write saves the removal", async (
     (err) =>
       err instanceof WorkerRequestError && err.code === "unknown_profile",
   );
+});
+
+/** A gateway on `stateDir` whose holds are observed as `options` says. */
+async function holdGateway(
+  stateDir: string,
+  options: GatewayOptions = {},
+): Promise<RunningGateway> {
+  const gw = await startGateway({
+    log: (line) => lines.push(line),
+    upstreams: upstreams.overrides,
+    stateDir,
+    holdCheckIntervalMs: 3_600_000,
+    ...options,
+  });
+  running.push(gw);
+  return gw;
+}
+
+/** A control connection after a hello whose `profiles.status` requests land in `statuses`. */
+async function hello(
+  gw: RunningGateway,
+  serverBootId: string,
+  pid = 4242,
+  startTime: string | null = null,
+) {
+  const statuses: HoldStatus[] = [];
+  const connection = dialControl(
+    createInProcessTransport(),
+    gw.attachControl,
+    GATEWAY_CONTROL_PROTOCOL,
+    {
+      [CONTROL_METHODS.status]: (payload: Payload) => {
+        statuses.push(payload.json as HoldStatus);
+        return Promise.resolve({ json: {} });
+      },
+    },
+  );
+  await connection.request(
+    CONTROL_METHODS.hello,
+    encodeControlRequest({ serverBootId, pid, startTime }),
+  );
+  return { connection, statuses };
+}
+
+async function syncAB(connection: WorkerConnection): Promise<void> {
+  await connection.request(
+    CONTROL_METHODS.syncProfiles,
+    encodeControlRequest({ profiles: [profileA, profileB] }),
+  );
+}
+
+async function loginHold(
+  connection: WorkerConnection,
+  profileId: string,
+  holdId: string,
+) {
+  return decodeLoginHeld(
+    await connection.request(
+      CONTROL_METHODS.loginHold,
+      encodeControlRequest({ profileId, holdId }),
+    ),
+  );
+}
+
+/** Lets the gateway's status requests, sent after their answers, arrive. */
+const settled = () =>
+  new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+
+test("AC9: a gateway restart is not evidence: the hold loads and a new boot's hello keeps it", async () => {
+  const stateDir = await freshStateDir();
+  const processes = fakeProcesses();
+  const first = await holdGateway(stateDir, { processProbe: processes.probe });
+  const x = await hello(first, "boot-x");
+  await syncAB(x.connection);
+  assert.deepEqual(await loginHold(x.connection, profileB.id, "h1"), {
+    held: true,
+  });
+  await close(first);
+
+  const second = await holdGateway(stateDir, { processProbe: processes.probe });
+  assert.deepEqual(
+    second.holds().map((hold) => hold.holdId),
+    ["h1"],
+  );
+  await hello(second, "boot-y");
+  second.checkHolds();
+  assert.deepEqual(
+    second.holds().map((hold) => hold.holdId),
+    ["h1"],
+  );
+  assert.ok(processes.probed.includes(4242), "observed through the fake only");
+});
+
+test("AC12: a hold is kept across a restart under the same rules, and released there by its processes' exits", async () => {
+  const stateDir = await freshStateDir();
+  // Real processes: the owner and writer are idle children of this test.
+  const owner = spawnIdleChild();
+  const writer = spawnIdleChild();
+  try {
+    const first = await holdGateway(stateDir);
+    const x = await hello(
+      first,
+      "boot-x",
+      owner.pid,
+      processStartTime(owner.pid),
+    );
+    await syncAB(x.connection);
+    await loginHold(x.connection, profileA.id, "h1");
+    await x.connection.request(
+      CONTROL_METHODS.loginWriter,
+      encodeControlRequest({
+        holdId: "h1",
+        pid: writer.pid,
+        startTime: processStartTime(writer.pid),
+      }),
+    );
+    await close(first);
+
+    const second = await holdGateway(stateDir);
+    const [held] = second.holds();
+    assert.equal(held?.holdId, "h1");
+    assert.equal(held?.owner?.pid, owner.pid);
+    assert.equal(held?.writer?.pid, writer.pid);
+    // Boot Y holds nothing, so its pid is never observed.
+    const y = await hello(second, "boot-y");
+    assert.deepEqual(await loginHold(y.connection, profileA.id, "h2"), {
+      held: false,
+      refusal: "login_stuck",
+      holdId: "h1",
+    });
+    await assert.rejects(
+      second.lane.run(profileA.id, () => Promise.resolve()),
+      LaneHeldError,
+    );
+    await endChild(owner);
+    await endChild(writer);
+    second.checkHolds();
+    assert.deepEqual(second.holds(), []);
+    assert.deepEqual(await loginHold(y.connection, profileA.id, "h2"), {
+      held: true,
+    });
+  } finally {
+    await endChild(owner);
+    await endChild(writer);
+  }
+});
+
+test("AC15: an unreadable holds.json fences every registered profile until each fence hold is force-released", async () => {
+  const stateDir = await freshStateDir();
+  const processes = fakeProcesses();
+  const first = await holdGateway(stateDir, { processProbe: processes.probe });
+  await syncAB((await hello(first, "boot-x")).connection);
+  await close(first);
+  await writeFile(join(stateDir, "holds.json"), "{");
+
+  const fenced = await holdGateway(stateDir, { processProbe: processes.probe });
+  const unreadable = lines.filter((line) => line.includes("holds.json"));
+  assert.deepEqual(unreadable, [
+    "holds.json unreadable; fencing every profile",
+  ]);
+  const fences = fenced.holds();
+  assert.deepEqual(fences.map((hold) => hold.profileId).sort(), [
+    profileA.id,
+    profileB.id,
+  ]);
+  assert.ok(fences.every((hold) => hold.owner === null));
+  const idOf = (profileId: string) =>
+    fences.find((hold) => hold.profileId === profileId)!.holdId;
+
+  const y = await hello(fenced, "boot-y");
+  await settled();
+  assert.deepEqual(
+    [...y.statuses].sort((a, b) => a.profileId.localeCompare(b.profileId)),
+    [
+      { profileId: profileA.id, loginStuck: true, holdId: idOf(profileA.id) },
+      { profileId: profileB.id, loginStuck: true, holdId: idOf(profileB.id) },
+    ],
+  );
+  for (const profile of [profileA, profileB])
+    assert.deepEqual(await loginHold(y.connection, profile.id, "h1"), {
+      held: false,
+      refusal: "login_stuck",
+      holdId: idOf(profile.id),
+    });
+  await y.connection.request(
+    CONTROL_METHODS.loginForceRelease,
+    encodeControlRequest({ holdId: idOf(profileA.id) }),
+  );
+  assert.deepEqual(await loginHold(y.connection, profileA.id, "h1"), {
+    held: true,
+  });
+  assert.deepEqual(await loginHold(y.connection, profileB.id, "h2"), {
+    held: false,
+    refusal: "login_stuck",
+    holdId: idOf(profileB.id),
+  });
+  // The fence holds are saved: a restart keeps B fenced, not fenced anew.
+  await close(fenced);
+  const reloaded = await holdGateway(stateDir, {
+    processProbe: processes.probe,
+  });
+  assert.deepEqual(
+    reloaded
+      .holds()
+      .map((hold) => hold.holdId)
+      .sort(),
+    ["h1", idOf(profileB.id)].sort(),
+  );
+});
+
+test("AC15: with no registry, an unreadable holds.json fences every profile with no hold until the first sync", async () => {
+  const stateDir = await freshStateDir();
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  await writeFile(join(stateDir, "holds.json"), "{", { mode: 0o600 });
+  const processes = fakeProcesses();
+  const first = await holdGateway(stateDir, { processProbe: processes.probe });
+  const y = await hello(first, "boot-y");
+  assert.deepEqual(await loginHold(y.connection, profileA.id, "h1"), {
+    held: false,
+    refusal: "login_stuck",
+  });
+  await assert.rejects(
+    first.lane.run(profileA.id, () => Promise.resolve()),
+    LaneHeldError,
+  );
+  assert.deepEqual(first.holds(), []);
+  assert.equal(await readFile(join(stateDir, "holds.json"), "utf8"), "{");
+  await close(first);
+
+  lines = [];
+  const second = await holdGateway(stateDir, { processProbe: processes.probe });
+  assert.ok(lines.includes("holds.json unreadable; fencing every profile"));
+  const z = await hello(second, "boot-z");
+  await syncAB(z.connection);
+  const fences = second.holds();
+  assert.deepEqual(fences.map((hold) => hold.profileId).sort(), [
+    profileA.id,
+    profileB.id,
+  ]);
+  await settled();
+  assert.equal(z.statuses.length, 2);
+  assert.ok(z.statuses.every((status) => status.loginStuck));
+  const saved = JSON.parse(
+    await readFile(join(stateDir, "holds.json"), "utf8"),
+  ) as { v: number; holds: unknown[] };
+  assert.equal(saved.v, 1);
+  assert.equal(saved.holds.length, 2);
+});
+
+test("AC20: holds.json holds pids, start times and ids, never a token or credential", async () => {
+  const stateDir = await freshStateDir();
+  const gw = await holdGateway(stateDir, {
+    processProbe: fakeProcesses().probe,
+  });
+  const connection = await ready(gw);
+  const lease = await grant(connection, profileA.id, "s1");
+  await loginHold(connection, profileA.id, "h1");
+  await loginHold(connection, profileB.id, "h2");
+  const saved = await readFile(join(stateDir, "holds.json"), "utf8");
+  for (const value of [
+    lease.token,
+    lease.token.split(".")[2]!,
+    ...gw.leases.records().map((record) => record.secretHash),
+    CLAUDE_ACCESS,
+    CODEX_ACCESS,
+    CODEX_ACCOUNT,
+  ])
+    assert.ok(!saved.includes(value), "holds.json leaks a secret");
 });

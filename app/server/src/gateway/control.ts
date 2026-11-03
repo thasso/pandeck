@@ -1,19 +1,28 @@
 /**
  * The gateway's control endpoint (`docs/workers.md` "Credentials"): the
- * listener side of gateway control 1.0. Only a control connection grants a
- * lease, and a grant binds the lease from the registry, never from the
- * request (C5).
+ * listener side of gateway control 1.1. Only a control connection grants a
+ * lease or takes, names or ends a login hold, and a grant binds the lease from
+ * the registry, never from the request (C5).
  *
  * Each method runs to completion synchronously, saving included, so methods
- * apply one at a time in arrival order across every connection. A hello on a
- * newer connection ends the older one. Lease tokens appear only in the grant
- * answer; a log line names the method, the profile and lease ids and the
- * outcome, never a token, secret, hash or credential.
+ * apply one at a time in arrival order across every connection. The one
+ * exception is `profiles.loginHold`: its checks and refusal run so, then it
+ * waits for the profile's writer lane and saves the hold at its turn. A hello
+ * on a newer connection ends the older one. Lease tokens appear only in the
+ * grant answer; a log line names the method, the profile, lease and hold ids
+ * and the outcome, never a token, secret, hash or credential.
+ *
+ * Every hold is rechecked on each hello, before its answer, and when the
+ * gateway's timer calls `checkHolds`. Each change, and after a hello every
+ * login-stuck hold, is sent to the current connection as `profiles.status`
+ * once the answer that caused it has gone out; a failure is logged, never
+ * retried.
  */
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
   WorkerConnection,
   WorkerMethodError,
+  WorkerRequestError,
   type MethodHandler,
 } from "../workerProtocol/connection.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
@@ -23,24 +32,34 @@ import {
   GATEWAY_CONTROL_VERSION,
   HELLO_REQUIRED,
   INVALID_PARAMS,
+  NOT_HOLD_OWNER,
   OWNER_CONFLICT,
   STATE_WRITE_FAILED,
+  UNKNOWN_HOLD,
   UNKNOWN_LEASE,
   UNKNOWN_PROFILE,
+  WRITER_CONFLICT,
   decodeControlHello,
+  decodeHoldId,
   decodeLeaseGrant,
   decodeLeaseRevoke,
   decodeLeaseSessionBind,
+  decodeLoginHold,
+  decodeLoginWriter,
   decodeProfileRemove,
   decodeProfileSync,
   decodeProfileUpsert,
   decodeWorkerReconcile,
   encodeControlDone,
+  encodeHoldReleased,
+  encodeHoldStatus,
   encodeLeaseGranted,
   encodeLeaseRevoked,
   encodeLeasesRevoked,
+  encodeLoginHold,
   type ControlHello,
 } from "./controlMethods.ts";
+import type { HoldStatus, HoldTable, HoldUpdate, WriterLane } from "./holds.ts";
 import type { LeaseTable } from "./leases.ts";
 import type { ProfileRegistry } from "./profiles.ts";
 import { StateWriteError } from "./state.ts";
@@ -48,21 +67,36 @@ import { StateWriteError } from "./state.ts";
 interface ControlContext {
   leases: LeaseTable;
   profiles: ProfileRegistry;
+  holds: HoldTable;
+  lane: WriterLane;
   log: (line: string) => void;
 }
 
-/** What a method's log line names besides the method and outcome. */
+/** What a method's log line names besides the method, and its outcome. */
 interface Subject {
   profileId?: string;
   leaseId?: string;
+  holdId?: string;
+  /** What an answer that is not a failure says; "ok" when unset. */
+  outcome?: string;
 }
 
-/** A control method body; it runs synchronously with the connection's boot id. */
+/** A connection's hello, once it said one. */
+interface ConnectionState {
+  bootId: string | undefined;
+  hello: ControlHello | undefined;
+}
+
+/**
+ * A control method body; it runs synchronously with the connection's hello.
+ * Only `profiles.loginHold` answers a promise, once the lane gives its turn.
+ */
 type ControlMethod = (
   payload: Payload,
-  connection: { bootId: string | undefined },
+  connection: ConnectionState,
   subject: Subject,
-) => Payload;
+  signal: AbortSignal,
+) => Payload | Promise<Payload>;
 
 function fail(code: string, message: string): never {
   throw new WorkerMethodError(code, message);
@@ -73,6 +107,8 @@ export interface ControlEndpoint {
   attach(endpoint: ByteEndpoint): void;
   /** The last hello a connection said, as recorded. */
   hello(): ControlHello | undefined;
+  /** Rechecks every hold whose owner is not the current connection's boot. */
+  checkHolds(): void;
   /** Ends every attached connection. */
   close(): void;
 }
@@ -80,12 +116,65 @@ export interface ControlEndpoint {
 export function createControlEndpoint({
   leases,
   profiles,
+  holds,
+  lane,
   log,
 }: ControlContext): ControlEndpoint {
   const connections = new Set<WorkerConnection>();
   /** The connection whose hello came last; an older one is ended. */
   let current: WorkerConnection | undefined;
   let lastHello: ControlHello | undefined;
+  /**
+   * Statuses waiting for the answer that caused them to go out, each to the
+   * connection that was current then: a newer hello resends what is stuck.
+   */
+  let unsent: { status: HoldStatus; to: WorkerConnection | undefined }[] = [];
+
+  const sendStatuses = (): void => {
+    const statuses = unsent;
+    unsent = [];
+    for (const { status, to } of statuses) {
+      const subject = { profileId: status.profileId, holdId: status.holdId };
+      if (!to) {
+        logOutcome(CONTROL_METHODS.status, subject, "not connected");
+        continue;
+      }
+      to.request(CONTROL_METHODS.status, encodeHoldStatus(status)).then(
+        () => logOutcome(CONTROL_METHODS.status, subject, "ok"),
+        (err: unknown) =>
+          logOutcome(
+            CONTROL_METHODS.status,
+            subject,
+            err instanceof WorkerRequestError ? err.code : "failed",
+          ),
+      );
+    }
+  };
+
+  /** Sends `statuses` to the current connection after this turn's answers. */
+  const report = (statuses: HoldStatus[]): void => {
+    if (statuses.length === 0) return;
+    if (unsent.length === 0) setImmediate(sendStatuses);
+    for (const status of statuses) unsent.push({ status, to: current });
+  };
+
+  /** Reports a memory-first hold change; a failed save is only logged. */
+  const settle = (update: HoldUpdate, context: string): void => {
+    report(update.statuses);
+    if (update.saveError !== undefined)
+      log(`${context}: holds.json not saved; the change stands in memory`);
+  };
+
+  /** A hold method's log subject: the hold, and its profile when known. */
+  const holdSubject = (holdId: string): Subject => {
+    const profileId = holds.get(holdId)?.profileId;
+    return profileId !== undefined ? { profileId, holdId } : { holdId };
+  };
+
+  /** After a registry change: an unreadable `holds.json` fences what it names. */
+  const fenceRegistry = (): void => {
+    if (holds.fencing) settle(holds.fence(profiles.ids()), "hold fence");
+  };
 
   /** Revokes every live lease of a profile `kept` does not hold. */
   const revokeRemoved = (kept: (profileId: string) => boolean): string[] =>
@@ -115,16 +204,24 @@ export function createControlEndpoint({
     [CONTROL_METHODS.syncProfiles]: (payload) => {
       const next = decodeProfileSync(payload);
       const ids = new Set(next.map((profile) => profile.id));
-      return changeProfiles(
-        () => profiles.sync(next),
-        (id) => ids.has(id),
-      );
+      try {
+        return changeProfiles(
+          () => profiles.sync(next),
+          (id) => ids.has(id),
+        );
+      } finally {
+        fenceRegistry();
+      }
     },
     [CONTROL_METHODS.upsertProfile]: (payload, _connection, subject) => {
       const profile = decodeProfileUpsert(payload);
       subject.profileId = profile.id;
       // Metadata only, `enabled` included: nothing is revoked (RD-G2-1).
-      profiles.upsert(profile);
+      try {
+        profiles.upsert(profile);
+      } finally {
+        fenceRegistry();
+      }
       return encodeLeasesRevoked([]);
     },
     [CONTROL_METHODS.removeProfile]: (payload, _connection, subject) => {
@@ -194,21 +291,83 @@ export function createControlEndpoint({
         ),
       );
     },
+    [CONTROL_METHODS.loginHold]: (payload, connection, subject, signal) => {
+      const { profileId, holdId } = decodeLoginHold(payload);
+      subject.profileId = profileId;
+      subject.holdId = holdId;
+      // A pending fence covers every profile, known or not (`holds.ts`).
+      if (!profiles.has(profileId) && !holds.fencing)
+        fail(UNKNOWN_PROFILE, "The gateway does not know this profile.");
+      const { serverBootId, pid, startTime } = connection.hello!;
+      return lane
+        .acquire(profileId, holdId, { serverBootId, pid, startTime }, signal)
+        .then((acquired) => {
+          if (!acquired)
+            fail(UNKNOWN_PROFILE, "The gateway does not know this profile.");
+          if (!acquired.held) subject.outcome = acquired.refusal;
+          return encodeLoginHold(acquired);
+        });
+    },
+    [CONTROL_METHODS.loginWriter]: (payload, connection, subject) => {
+      const { holdId, pid, startTime } = decodeLoginWriter(payload);
+      Object.assign(subject, holdSubject(holdId));
+      const outcome = holds.registerWriter(holdId, connection.bootId!, {
+        pid,
+        startTime,
+      });
+      if (outcome === "unknown")
+        fail(UNKNOWN_HOLD, "The gateway holds no login hold by this id.");
+      if (outcome === "not_owner")
+        fail(NOT_HOLD_OWNER, "The login hold belongs to another server boot.");
+      if (outcome === "not_claude")
+        fail(INVALID_PARAMS, "Only a Claude login hold has a writer.");
+      if (outcome === "conflict")
+        fail(WRITER_CONFLICT, "The login hold names another writer.");
+      return encodeControlDone();
+    },
+    [CONTROL_METHODS.loginRelease]: (payload, connection, subject) => {
+      const holdId = decodeHoldId(payload);
+      Object.assign(subject, holdSubject(holdId));
+      const outcome = holds.release(holdId, connection.bootId!);
+      if (!outcome.released) {
+        if (outcome.reason === "not_owner")
+          fail(
+            NOT_HOLD_OWNER,
+            "The login hold belongs to another server boot.",
+          );
+        subject.outcome = "unknown";
+        return encodeHoldReleased(false);
+      }
+      report(outcome.statuses);
+      if (outcome.saveError !== undefined) throw outcome.saveError;
+      return encodeHoldReleased(true);
+    },
+    [CONTROL_METHODS.loginForceRelease]: (payload, _connection, subject) => {
+      const holdId = decodeHoldId(payload);
+      Object.assign(subject, holdSubject(holdId));
+      // The operator's assertion that no login runs: from any boot.
+      const update = holds.forceRelease(holdId);
+      if (!update)
+        fail(UNKNOWN_HOLD, "The gateway holds no login hold by this id.");
+      report(update.statuses);
+      if (update.saveError !== undefined) throw update.saveError;
+      return encodeHoldReleased(true);
+    },
   };
 
   const attach = (endpoint: ByteEndpoint): void => {
-    const state: { bootId: string | undefined } = { bootId: undefined };
+    const state: ConnectionState = { bootId: undefined, hello: undefined };
     const handlers: Record<string, MethodHandler> = {};
     // Not async: the body runs in the handler's own synchronous span.
     const run =
       (method: string, body: ControlMethod): MethodHandler =>
-      (payload) => {
+      (payload, signal) => {
         const subject: Subject = {};
-        try {
-          const answer = body(payload, state, subject);
-          logOutcome(method, subject, "ok");
-          return Promise.resolve(answer);
-        } catch (err) {
+        const answered = (answer: Payload): Payload => {
+          logOutcome(method, subject, subject.outcome ?? "ok");
+          return answer;
+        };
+        const failed = (err: unknown): Promise<never> => {
           const failure =
             err instanceof StateWriteError
               ? new WorkerMethodError(STATE_WRITE_FAILED, err.message)
@@ -216,19 +375,45 @@ export function createControlEndpoint({
           logOutcome(
             method,
             subject,
-            failure instanceof WorkerMethodError ? failure.code : "failed",
+            failure instanceof WorkerMethodError
+              ? failure.code
+              : signal.aborted
+                ? "cancelled"
+                : "failed",
           );
           return Promise.reject(failure);
+        };
+        try {
+          const answer = body(payload, state, subject, signal);
+          return answer instanceof Promise
+            ? answer.then(answered, failed)
+            : Promise.resolve(answered(answer));
+        } catch (err) {
+          return failed(err);
         }
       };
     handlers[CONTROL_METHODS.hello] = run(CONTROL_METHODS.hello, (payload) => {
       const hello = decodeControlHello(payload);
       state.bootId = hello.serverBootId;
+      state.hello = hello;
       lastHello = hello;
       if (current !== connection) {
         current?.end("a newer control connection said hello");
         current = connection;
       }
+      // Evidence for every other boot's hold (RD-G2b-1); then this boot hears
+      // of every stuck hold.
+      const update = holds.check(hello.serverBootId);
+      settle(
+        {
+          ...update,
+          statuses: [
+            ...update.statuses.filter((status) => !status.loginStuck),
+            ...holds.stuck(),
+          ],
+        },
+        "control.hello hold check",
+      );
       return encodeLeasesRevoked(
         leases.revokeWhere(
           (record) =>
@@ -239,10 +424,10 @@ export function createControlEndpoint({
       );
     });
     for (const [method, body] of Object.entries(methods))
-      handlers[method] = run(method, (payload, connection, subject) => {
+      handlers[method] = run(method, (payload, connection, subject, signal) => {
         if (connection.bootId === undefined)
           fail(HELLO_REQUIRED, "Send control.hello first.");
-        return body(payload, connection, subject);
+        return body(payload, connection, subject, signal);
       });
     const connection: WorkerConnection = new WorkerConnection(endpoint, {
       protocol: GATEWAY_CONTROL_PROTOCOL,
@@ -270,6 +455,7 @@ export function createControlEndpoint({
     const names = [
       subject.profileId !== undefined ? `profile ${subject.profileId}` : "",
       subject.leaseId !== undefined ? `lease ${subject.leaseId}` : "",
+      subject.holdId !== undefined ? `hold ${subject.holdId}` : "",
     ].filter(Boolean);
     log(
       `control ${method}${names.length ? ` (${names.join(", ")})` : ""}: ${outcome}`,
@@ -279,6 +465,10 @@ export function createControlEndpoint({
   return {
     attach,
     hello: () => lastHello,
+    checkHolds() {
+      // `current` said the last hello: a newer one ends the older connection.
+      settle(holds.check(current && lastHello?.serverBootId), "hold check");
+    },
     close() {
       for (const connection of [...connections])
         connection.end("the gateway closed");
