@@ -74,6 +74,11 @@ function rect(top: number, height: number): DOMRect {
  */
 let gapAtTopEdgePx = 0;
 let blockAtTopEdge = false;
+/**
+ * The container's unrounded box height. `clientHeight` stays `VIEWPORT`, which
+ * is what a real engine rounds a fractional box to.
+ */
+let viewportBoxPx = VIEWPORT;
 
 const scrollOffsets = new WeakMap<Element, number>();
 const isTranscript = (el: Element) =>
@@ -186,7 +191,11 @@ function installGeometry() {
     },
   });
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    if (isTranscript(this)) return rect(0, VIEWPORT);
+    if (isTranscript(this)) return rect(0, viewportBoxPx);
+    // The content column spans the rows, which is what the end pin measures.
+    const parent = this.parentElement;
+    if (parent && isTranscript(parent))
+      return rect(-parent.scrollTop, totalHeight(parent));
     if (!(this instanceof HTMLElement) || !this.hasAttribute("data-message-id"))
       return rect(0, 0);
     const container = this.closest<HTMLElement>("[data-transcript-container]");
@@ -449,6 +458,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   gapAtTopEdgePx = 0;
   blockAtTopEdge = false;
+  viewportBoxPx = VIEWPORT;
   installGeometry();
   resizeCallbacks.length = 0;
   class CapturingResizeObserver {
@@ -839,6 +849,93 @@ describe("useTranscriptScroll view toggle", () => {
 
     expect(offsetOf("after-0")).toBe(-100);
     expect(container().scrollTop).toBe(14 * 600 + 100);
+  });
+});
+
+describe("useTranscriptScroll end pin", () => {
+  const content = () => container().firstElementChild as HTMLElement;
+  /** The content's margin plus its height, in CSS pixels. */
+  const extent = () => {
+    const margin = Number.parseFloat(content().style.marginTop) || 0;
+    return content().getBoundingClientRect().height + margin;
+  };
+  const fromWhole = (value: number) => Math.abs(value - Math.round(value));
+
+  /**
+   * Both engines' grids where one small grid serves both: Chromium scrolls in
+   * whole device pixels, WebKit in whole CSS pixels.
+   */
+  it.each([1, 1.25, 1.5, 2, 3])(
+    "keeps the content on both engines' scroll grids at %sx as rows above resolve",
+    (scale) => {
+      vi.stubGlobal("devicePixelRatio", scale);
+      render(
+        <TranscriptSurface
+          sessionId={`test:end-${scale}`}
+          layout={[...skippedRows(2), ...realRows(2, 321.1, "prose")]}
+        />,
+      );
+      const offGrid = () =>
+        Math.max(fromWhole(extent() * scale), fromWhole(extent()));
+      // Within a layout unit: what is left is below anything a pixel can show.
+      expect(offGrid()).toBeLessThan(1 / 64);
+      skippedRowResolves("skipped-0", 456.789);
+      expect(offGrid()).toBeLessThan(1 / 64);
+      skippedRowResolves("skipped-1", 1000.03);
+      expect(offGrid()).toBeLessThan(1 / 64);
+    },
+  );
+
+  // Fractional OS scaling times browser zoom: a shared grid would be 10px and
+  // 20px, so these get Chromium's alone, and a pad of under a device pixel.
+  it.each([1.1, 1.65])(
+    "keeps the content on whole device pixels at %sx",
+    (scale) => {
+      vi.stubGlobal("devicePixelRatio", scale);
+      render(
+        <TranscriptSurface
+          sessionId={`test:end-${scale}`}
+          layout={[...skippedRows(2), ...realRows(2, 321.1, "prose")]}
+        />,
+      );
+      expect(fromWhole(extent() * scale)).toBeLessThan(1 / 64);
+      skippedRowResolves("skipped-0", 456.789);
+      expect(fromWhole(extent() * scale)).toBeLessThan(1 / 64);
+      expect(Number.parseFloat(content().style.marginTop)).toBeLessThan(
+        1 / scale,
+      );
+    },
+  );
+
+  it("leaves a transcript shorter than the viewport unpadded", () => {
+    vi.stubGlobal("devicePixelRatio", 1.25);
+    render(
+      <TranscriptSurface
+        sessionId="test:end-short"
+        layout={[
+          { id: "short-0", h: 100.3 },
+          { id: "short-1", h: 28.7 },
+        ]}
+      />,
+    );
+    // Nothing scrolls to absorb a margin here, so one would move these rows.
+    expect(content().style.marginTop).toBe("");
+  });
+
+  it("leaves content that fits a fractional viewport unpadded", () => {
+    vi.stubGlobal("devicePixelRatio", 1.25);
+    // Taller than the rounded `clientHeight`, shorter than the box itself.
+    viewportBoxPx = VIEWPORT + 0.3;
+    render(
+      <TranscriptSurface
+        sessionId="test:end-fits"
+        layout={[
+          { id: "fits-0", h: 400 },
+          { id: "fits-1", h: VIEWPORT - 400 + 0.1 },
+        ]}
+      />,
+    );
+    expect(content().style.marginTop).toBe("");
   });
 });
 

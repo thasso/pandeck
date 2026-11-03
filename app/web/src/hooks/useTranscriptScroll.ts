@@ -185,6 +185,21 @@ export interface TranscriptScrollController {
   ) => void;
 }
 
+/**
+ * The grid `pinToEnd` pads the content onto, in CSS px: the smallest whole
+ * number of CSS pixels that is also whole in device pixels, which is both
+ * engines' scroll grid at once — 1px at an integer scale, 4px at 1.25x. Past
+ * 4px (20px at 1.65x, 10px at 1.1x) it falls back to one device pixel,
+ * Chromium's grid: those scales come from fractional OS scaling and browser
+ * zoom, which Safari, scrolling in whole CSS pixels, does not produce.
+ */
+function endGridPx(scale: number): number {
+  for (let px = 1; px <= 4; px += 1) {
+    if (Math.abs(px * scale - Math.round(px * scale)) < 1e-3) return px;
+  }
+  return 1 / scale;
+}
+
 function metricsOf(element: HTMLElement) {
   return {
     scrollTop: element.scrollTop,
@@ -416,6 +431,8 @@ export function useTranscriptScroll({
   const lastReaderScroll = useRef(0);
   /** The content height as of the last position we looked at. */
   const lastHeight = useRef(0);
+  /** The sub-pixel margin that keeps the content whole for `pinToEnd`. */
+  const endMargin = useRef(0);
   /**
    * The row the reader's eye is on, and where it sat — kept even after a hold is
    * released, and even while they are scrolling.
@@ -498,6 +515,65 @@ export function useTranscriptScroll({
     expected.current = element.scrollTop;
     lastHeight.current = element.scrollHeight;
   }, []);
+
+  /**
+   * Follow the end, to the pixel. The scroll offset is quantized and the rows
+   * are not, so a plain pin leaves the content's bottom edge wherever the
+   * height's FRACTION puts it — and every resize above the reader deals a new
+   * one. Measured on load: the warm-up's 25 batches each moved the rows on
+   * screen by up to 0.98px, a visible wobble for the four seconds they ran.
+   *
+   * A top margin on the content pads its height onto the scroll grid, so the
+   * end lands on the same pixel every time — on BOTH engines' grids, because
+   * they differ: Chromium scrolls in whole device pixels (13991.2 at 1.25x),
+   * WebKit in whole CSS pixels (100.5 reads back as 100 at 2x). Whole device
+   * pixels alone left Safari a device pixel of wobble at 2x; whole CSS pixels
+   * alone left Chromium wobbling at 1.25x, so the pad is onto both
+   * (`endGridPx`).
+   *
+   * Only while the content overflows: a transcript shorter than the viewport has
+   * no scroll offset to absorb the margin, so a pad there would move every row
+   * on screen as the answer streams in below them. And only here: away from the
+   * end the margin is left alone, since moving it would shift the reader's rows.
+   */
+  const pinToEnd = useCallback(
+    (element: HTMLElement) => {
+      const content = contentRef.current;
+      if (content) {
+        // Read on every pin: zoom and moving the window to another monitor
+        // change it.
+        const scale = window.devicePixelRatio || 1;
+        const height = content.getBoundingClientRect().height;
+        let margin = 0;
+        // Overflowing by BOTH measures. `clientHeight` is rounded: content of
+        // 700.1px in a 700.3px container fits, yet passes `> 700`, and its pad
+        // can add a classic scrollbar that rewraps a line — a 28px jump in
+        // review. The engine's own scroll range is the other half, so a pad
+        // never creates the scrollbar it is meant to hide in.
+        if (
+          height > element.getBoundingClientRect().height &&
+          element.scrollHeight > element.clientHeight
+        ) {
+          // Counted in Chromium's layout unit, 1/64 device px, which also
+          // divides WebKit's 1/64 CSS px at an integer scale, so the remainder
+          // is exact on both.
+          const unit = 1 / 64 / scale;
+          const gridUnits = Math.round(endGridPx(scale) / unit);
+          const units = Math.round(height / unit);
+          const pad = (gridUnits - (units % gridUnits)) % gridUnits;
+          // A quarter unit over, because Chromium truncates the margin back
+          // into its units after scaling: at 1.5x, 1/1.5px came out one short.
+          if (pad) margin = (pad + 0.25) * unit;
+        }
+        if (margin !== endMargin.current) {
+          endMargin.current = margin;
+          content.style.marginTop = margin ? `${margin}px` : "";
+        }
+      }
+      setScrollTop(element, element.scrollHeight);
+    },
+    [setScrollTop],
+  );
 
   /**
    * Forget the input that ASKED for what we are about to do. Tapping "load
@@ -835,7 +911,7 @@ export function useTranscriptScroll({
       warmed.current.add(row);
       row.style.contentVisibility = "visible";
     }
-    if (mode.current === "bottom") setScrollTop(element, element.scrollHeight);
+    if (mode.current === "bottom") pinToEnd(element);
     else putRowBack(held);
     // A frame LATER, not this one's `requestAnimationFrame`: the size a skipped
     // row keeps is recorded at the end of a rendering update it was rendered in,
@@ -858,14 +934,13 @@ export function useTranscriptScroll({
           lastReaderScroll.current > flippedAt
         )
           return;
-        if (mode.current === "bottom")
-          setScrollTop(container, container.scrollHeight);
+        if (mode.current === "bottom") pinToEnd(container);
         else putRowBack(held);
       });
       if (warmInFlight.current) warmInFlight.current.frame = second;
     });
     warmInFlight.current = { rows: batch, frame: first };
-  }, [putRowBack, readerRow, scheduleWarm, setScrollTop]);
+  }, [pinToEnd, putRowBack, readerRow, scheduleWarm]);
   warmBatchRef.current = warmBatch;
 
   /**
@@ -911,7 +986,7 @@ export function useTranscriptScroll({
     const element = containerRef.current;
     if (!element) return;
     if (mode.current === "bottom") {
-      setScrollTop(element, element.scrollHeight);
+      pinToEnd(element);
       return;
     }
     if (mode.current !== "anchor") return;
@@ -940,7 +1015,7 @@ export function useTranscriptScroll({
       // looking until the deadline rather than dropping the reader at the bottom
       // on the first commit — that giving-up-early is what made the old restore
       // feel random.
-      if (target.restAtEnd) setScrollTop(element, element.scrollHeight);
+      if (target.restAtEnd) pinToEnd(element);
       if (!expired) {
         // A remembered row's distance from the end is measured when it is
         // SAVED, so messages that arrived while the reader was away can have
@@ -961,7 +1036,7 @@ export function useTranscriptScroll({
       pending.current = null;
       if (!target.applied && target.restAtEnd) {
         setMode("bottom");
-        setScrollTop(element, element.scrollHeight);
+        pinToEnd(element);
         return;
       }
       settle();
@@ -987,7 +1062,7 @@ export function useTranscriptScroll({
     // the one that lands after the container has already been quiet.
     if (expired) settle();
     else armRestoreTimer(Math.max(0, target.expiresAt - Date.now()), settle);
-  }, [armRestoreTimer, setMode, setScrollTop, settle]);
+  }, [armRestoreTimer, pinToEnd, setMode, setScrollTop, settle]);
   applyRef.current = apply;
 
   const startRestore = useCallback(
