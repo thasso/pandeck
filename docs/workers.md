@@ -9,7 +9,7 @@ lease, credential gateway, placement, Worker id, isolation boundary, secret
 store) are defined in [glossary.md](glossary.md), and the decisions that are
 hard to reverse are recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
 [ADR-0002](adr/0002-server-runs-under-its-own-account.md),
-[ADR-0003](adr/0003-worker-owns-checkout-operations.md) and, proposed,
+[ADR-0003](adr/0003-worker-owns-checkout-operations.md) and
 [ADR-0004](adr/0004-credential-gateway.md).
 
 ## Goals
@@ -763,7 +763,7 @@ which imports no server state) and `workers/` (the server's side and placement);
   - The model port. The opener and a hosted `setModel` resolve models and
     runtimes only through the host context's `PiModelPort` (`runtime`,
     `findForProfile`, `find`), which the composition root wires to `models.ts`.
-    It is the seam the phase-3 credential gateway replaces; no secret crosses
+    It is the seam the credential gateway (phase 2) replaces; no secret crosses
     the wire.
   - Integration gates are a command. The engine's tool activation applies the
     gates it was handed and subscribes to nothing; `piStore` subscribes once and
@@ -1142,13 +1142,34 @@ machines. The package proxy lives in the same service, so builds keep working
 through server deploys and remote Workers reach registries the same way. Its
 public trust material lives outside `DATA_DIR`, where Workers can read it.
 
-The gateway depends on both engines accepting a custom endpoint with a bearer
-token on subscription credentials. Phase 3 starts with a spike that tests this.
-If it fails, the fallback is **exclusive leases**: one Worker, or the server,
-holds a profile at a time, refreshes it and writes the result back; sessions on
-that account then run only on its holder, and server one-shots borrow the
-holder's current token. In that case the package proxy stays in the server
-process, and builds through it fail for the few seconds a server restart takes.
+The Task-1321 spike showed both engines running on subscription credentials
+through a custom endpoint with a placeholder bearer (ADR-0004), so the gateway
+ships in phase 2, on the server's host. Its same-host form:
+
+- Engines reach it over loopback HTTP. One listener serves every upstream,
+  selected by path prefix: `/anthropic` for Claude Messages, `/chatgpt` for
+  Codex responses. A prefix allows only the exact method and path its engine
+  sends, with no path normalisation.
+- A lease token is JWT-shaped,
+  `base64url(header).base64url(payload).base64url(secret)`, because pi's
+  `openai-codex` provider accepts only a JWT that carries a ChatGPT account id.
+  The payload names the lease and a placeholder account, `pandeck-gateway`. The
+  32-byte secret is the capability. The gateway keeps only its SHA-256 and
+  answers with the lease's own profile binding, so a request never names its
+  profile.
+- Bytes pass through unchanged. The gateway never decodes a compressed body,
+  streams SSE as it arrives and lets a client that stops reading hold the
+  upstream back. It replaces only the credential headers, Claude's
+  `Authorization` and Codex's `Authorization` and `ChatGPT-Account-Id`, and
+  strips `Set-Cookie` on the way back. pi talks SSE; the gateway refuses
+  WebSocket upgrades.
+- A refusal the gateway answers itself (an unknown or revoked lease, a route the
+  lease does not cover, an unreadable credential, an unreachable upstream) has
+  the provider's error shape, and its message starts with "Pandeck gateway:".
+  The server's error classifier never counts a marked message as a dead login
+  (`providerErrors.ts`). An upstream 401 passes through unchanged and still
+  counts until the gateway reports login state itself.
+- Remote Workers reach it over TLS from phase 4.
 
 ## When the server is down
 
@@ -1279,16 +1300,16 @@ natural shape anyway.
 2. **The Worker as its own process and unit, same account.** Turns survive a
    server restart (goal 2). Done when the server's boot recovery waits for
    Worker inventories and fences stale reports, rather than marking live Worker
-   runs interrupted.
-3. **The server under its own account** (goal 1). Starts with the gateway spike,
-   then ships the credential gateway (or exclusive leases), moves every
-   app-managed secret behind the secret store with its destination binding in an
-   audited migration that removes the old plaintext copies, replaces the shared
-   auth token with device pairing (gated on a hostile same-host, different-port
-   page test), moves `DATA_DIR`, adds the boot check and the root-equivalent
-   access warning, and moves every app tool that opens agent-supplied paths. It
-   comes after phase 2 because before it, the server would have nothing to hand
-   checkout work to.
+   runs interrupted. The credential gateway ships here too, with the package
+   proxy in the same service; each PR preview gets its own.
+3. **The server under its own account** (goal 1). Moves every app-managed secret
+   behind the secret store with its destination binding in an audited migration
+   that removes the old plaintext copies, replaces the shared auth token with
+   device pairing (gated on a hostile same-host, different-port page test),
+   moves `DATA_DIR`, adds the boot check and the root-equivalent access warning,
+   and moves every app tool that opens agent-supplied paths. It comes after
+   phase 2 because before it, the server would have nothing to hand checkout
+   work to.
 4. **Several Workers, then remote Workers** over TCP with TLS, with tunnels for
    the server's loopback features.
 5. **Isolation levels** inside a Worker: bubblewrap, containers, microVMs.
@@ -1337,13 +1358,16 @@ declaration. The in-process Worker gets its endpoint and its children's
 environment only from `workers/isolationBoundary.ts`, and `worker/` never reads
 the server's child-env overlay.
 
+### Phase 2 status
+
+The credential gateway's forwarding core (`app/server/src/gateway/`) has landed
+off by default: nothing in the server starts it or routes a model request to it,
+and only tests run it, against fake upstreams. It reads token files and never
+writes or refreshes them. The control channel, persisted leases, renewal, engine
+routing and its own service unit come in later slices.
+
 ## Open questions
 
-- **The gateway spike.** Whether the Claude CLI and pi run on subscription
-  credentials through a custom endpoint, how each behaves on a 401 and in a
-  long-running process, and whether the provider's terms allow routing the
-  operator's own subscription through the operator's own gateway. The answer
-  picks between the gateway and exclusive leases.
 - **The desktop spike.** Before phase 6: whether a Developer ID build can use a
   Keychain access group without a provisioning profile; whether the hardened
   runtime keeps same-user processes out of the server's and the gateway's

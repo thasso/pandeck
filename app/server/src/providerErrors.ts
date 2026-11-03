@@ -4,6 +4,7 @@ import {
   accountLimitMatches,
   isSubscriptionAccountModel,
 } from "@assistant/shared/accountHealth";
+import { isGatewayRefusal } from "./gateway/refusals.ts";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
 
 export interface ProviderErrorContext {
@@ -60,6 +61,9 @@ export function isLoginDeath(
   context: ProviderErrorContext = {},
 ): boolean {
   if (!message) return false;
+  // The credential gateway's own refusal says nothing about the login, whatever
+  // status carries it: the Claude engine passes a 401 lease refusal's status.
+  if (isGatewayRefusal(message)) return false;
   const status = context.statusCode ?? responseStatus(message);
   const codex =
     isSubscriptionAccountModel("openai-codex", context.provider) ||
@@ -226,6 +230,9 @@ function classify(
   context: ProviderErrorContext,
 ): Classification {
   const loginDeath = isLoginDeath(raw, context);
+  // A gateway refusal is never a content, quota or auth verdict on the account:
+  // it falls to its status class, or to `unknown`, which shows its text.
+  const gatewayRefusal = isGatewayRefusal(raw);
   const status = context.statusCode ?? responseStatus(raw);
   const serverStatus = (status ?? 0) >= 500;
   const claudeUsageLimit =
@@ -234,6 +241,7 @@ function classify(
     CLAUDE_USAGE_LIMIT_RE.test(raw) &&
     !/rate.?limit|too many requests/i.test(raw);
   if (
+    !gatewayRefusal &&
     !loginDeath &&
     !serverStatus &&
     status !== 429 &&
@@ -250,6 +258,7 @@ function classify(
     };
   }
   if (
+    !gatewayRefusal &&
     !loginDeath &&
     !serverStatus &&
     (parsed?.kind === "quota" || QUOTA_RE.test(raw) || claudeUsageLimit)
@@ -267,12 +276,13 @@ function classify(
     };
   }
   if (
-    loginDeath ||
-    (!serverStatus &&
-      status !== 429 &&
-      (AUTH_RE.test(raw) ||
-        LOGIN_DEATH_RE.test(raw) ||
-        REJECTED_CREDENTIAL_RE.test(raw)))
+    !gatewayRefusal &&
+    (loginDeath ||
+      (!serverStatus &&
+        status !== 429 &&
+        (AUTH_RE.test(raw) ||
+          LOGIN_DEATH_RE.test(raw) ||
+          REJECTED_CREDENTIAL_RE.test(raw))))
   ) {
     return {
       kind: "auth",

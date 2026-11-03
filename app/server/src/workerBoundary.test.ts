@@ -2,7 +2,8 @@
  * The Worker boundary ratchet (`docs/workers.md`).
  *
  * `worker/` is the Worker's side: in phase 2 it runs in a process of its own,
- * so it reaches no server state, and only the in-process Worker starts it.
+ * so it reaches no server state, and only the in-process Worker starts it. The
+ * credential gateway (`gateway/`) is held to the same rule.
  * Checkout git runs only through the checkout family (`gitExec.ts`), whose
  * runner crosses the Worker protocol; the server's own repositories use the
  * local family (`serverRepoGit.ts`), and only the modules named below may.
@@ -435,6 +436,38 @@ test("the Worker side reaches no server state", () => {
         `${module} imports ${target}`,
       );
   }
+});
+
+/**
+ * What `gateway/` (the credential gateway) may import besides `node:` and
+ * itself: `errors.ts`, which imports nothing. No package either, so the
+ * closure ends here and it can run as its own process (ADR-0004).
+ */
+const GATEWAY_ALLOWED = new Set(["errors.ts"]);
+
+test("the gateway reaches no server state", () => {
+  const modules = [...scans].filter(([module]) =>
+    module.startsWith("gateway/"),
+  );
+  assert.ok(modules.length > 0, "the scan found the gateway modules");
+  for (const [module, scan] of modules)
+    for (const target of scan.imports)
+      assert.ok(
+        target.startsWith("node:") ||
+          target.startsWith("gateway/") ||
+          GATEWAY_ALLOWED.has(target),
+        `${module} imports ${target}`,
+      );
+});
+
+test("only the error classifier imports the gateway", () => {
+  // It reads the local-refusal marker. Nothing starts the gateway yet.
+  assert.deepEqual(
+    importersOf((target) => target.startsWith("gateway/")).filter(
+      (module) => !module.startsWith("gateway/"),
+    ),
+    ["providerErrors.ts"],
+  );
 });
 
 test("the session-hook protocol runs no server module", () => {
