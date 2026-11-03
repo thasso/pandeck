@@ -247,8 +247,8 @@ function statusText(window: SessionCompactionWindow): string {
   if (window.applied === "confirmed") return "Applied";
   if (window.applied === "unknown") return "Unknown after a failed change";
   return window.pendingReason === "process-restart"
-    ? "Applies when this process restarts"
-    : "Applies when the next turn starts";
+    ? "Applies once the session is idle"
+    : "Applies on the next turn";
 }
 
 function format(tokens: number): string {
