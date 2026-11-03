@@ -2027,7 +2027,9 @@ function WorktreeHeaderActions({
         <OverflowMenu
           label="Worktree actions"
           size="icon"
-          contentClassName="min-w-56"
+          // As wide as a row needs, up to a cap: a label and its reason sit on
+          // ONE line, and only the reason gives way (truncates) past the cap.
+          contentClassName="w-max min-w-56 max-w-[min(26rem,calc(100vw-2rem))]"
         >
           {actions.map((action) => (
             <DropdownMenuItem
@@ -2035,11 +2037,12 @@ function WorktreeHeaderActions({
               disabled={action.disabled || action.busy}
               title={action.disabled ? action.disabledReason : action.hint}
               onClick={action.onRun}
+              className="whitespace-nowrap"
             >
               {action.icon}
-              {action.label}
+              <span className="shrink-0">{action.label}</span>
               {action.disabled && action.disabledReason ? (
-                <span className="ml-auto pl-3 text-xs text-muted-foreground">
+                <span className="ml-auto min-w-0 truncate pl-4 text-xs text-muted-foreground">
                   {action.disabledReason}
                 </span>
               ) : null}
