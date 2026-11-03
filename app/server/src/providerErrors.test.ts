@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "vitest";
 import {
+  GATEWAY_REFUSAL_MARKER,
+  refusalResponse,
+  refusalText,
+  type Refusal,
+} from "./gateway/refusals.ts";
+import {
   analyzeProviderError,
+  isLoginDeath,
   providerErrorDisplayText,
   runFailureFacts,
   shouldSuppressProviderRetry,
@@ -203,4 +210,93 @@ describe("unclassified errors", () => {
     assert.ok(text.length < 450);
     assert.ok(text.endsWith("…"));
   });
+});
+
+describe("credential gateway refusals (C16)", () => {
+  const unreachable: Refusal = {
+    case: "unreachable",
+    upstream: "Anthropic",
+    reason: "ECONNREFUSED",
+  };
+  const refusals: Refusal[] = [
+    { case: "unknown-lease" },
+    { case: "revoked-lease", reason: "profile-removed" },
+    { case: "revoked-lease", reason: "account-switch" },
+    { case: "revoked-lease", reason: "session-ended" },
+    { case: "forbidden" },
+    { case: "unknown-prefix" },
+    { case: "websocket" },
+    { case: "credential", problem: "missing" },
+    { case: "credential", problem: "unreadable" },
+    { case: "credential", problem: "malformed" },
+    unreachable,
+    { case: "unreachable", upstream: "ChatGPT", reason: "connection failed" },
+  ];
+  const CLAUDE_401 = { provider: "anthropic", statusCode: 401 };
+
+  /** The shapes the spike saw engines report a gateway 401 in. */
+  function renderings(text: string, claudeBody: string) {
+    return [
+      analyzeProviderError(
+        `Failed to authenticate. API Error: 401 ${text}`,
+        CLAUDE_401,
+      ),
+      analyzeProviderError(
+        `Failed to authenticate. API Error: 401 ${claudeBody}`,
+        CLAUDE_401,
+      ),
+      analyzeProviderError(text, { ...CODEX, statusCode: 401 }),
+    ];
+  }
+
+  test.each(refusals.map((refusal) => [refusalText(refusal), refusal]))(
+    "a marked refusal is never a dead login: %s",
+    (text, refusal) => {
+      const [claude, claudeBody, codex] = renderings(
+        text,
+        refusalResponse(refusal, "claude").body,
+      );
+      for (const info of [claude!, claudeBody!, codex!]) {
+        // Directly too: the Claude engine passes the 401 as `statusCode`.
+        assert.equal(isLoginDeath(info.rawMessage, info), false);
+        assert.equal(runFailureFacts(info).loginDeath, undefined);
+        assert.ok(
+          !["auth", "quota", "content_policy"].includes(info.kind),
+          `${info.rawMessage} classified as ${info.kind}`,
+        );
+      }
+      assert.ok(providerErrorDisplayText(claude!).includes(text));
+    },
+  );
+
+  test("an unreachable upstream is a retryable server error", () => {
+    const info = analyzeProviderError(
+      `API Error: 502 ${refusalText(unreachable)}`,
+      { provider: "anthropic", statusCode: 502 },
+    );
+    assert.equal(info.kind, "server");
+    assert.equal(info.retryable, true);
+  });
+
+  test.each(refusals.map((refusal) => [refusalText(refusal), refusal]))(
+    "the same text without the marker is classified as before: %s",
+    (text, refusal) => {
+      const unmark = (value: string) =>
+        value.replaceAll(GATEWAY_REFUSAL_MARKER, "spike gateway:");
+      for (const info of renderings(
+        unmark(text),
+        unmark(refusalResponse(refusal, "claude").body),
+      )) {
+        assert.equal(info.kind, "auth", info.rawMessage);
+        assert.equal(runFailureFacts(info).loginDeath, true, info.rawMessage);
+      }
+      assert.equal(
+        analyzeProviderError(`API Error: 502 ${unmark(text)}`, {
+          provider: "anthropic",
+          statusCode: 502,
+        }).kind,
+        "server",
+      );
+    },
+  );
 });
