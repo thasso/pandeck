@@ -1156,8 +1156,10 @@ ships in phase 2, on the server's host. Its same-host form:
 
 - Engines reach it over loopback HTTP. One listener serves every upstream,
   selected by path prefix: `/anthropic` for Claude Messages, `/chatgpt` for
-  Codex responses. A prefix allows only the exact method and path its engine
-  sends, with no path normalisation.
+  Codex responses, `/compat` for the OpenAI-compatible endpoint's chat
+  completions. A prefix allows only the exact method and path its engine sends,
+  with no path normalisation; `/compat` allows only
+  `POST <base path>/chat/completions`, under the base path the server pushed.
 - A lease token is JWT-shaped,
   `base64url(header).base64url(payload).base64url(secret)`, because pi's
   `openai-codex` provider accepts only a JWT that carries a ChatGPT account id.
@@ -1168,28 +1170,41 @@ ships in phase 2, on the server's host. Its same-host form:
 - Bytes pass through unchanged. The gateway never decodes a compressed body,
   streams SSE as it arrives and lets a client that stops reading hold the
   upstream back. It replaces only the credential headers, Claude's
-  `Authorization` and Codex's `Authorization` and `ChatGPT-Account-Id`, and
+  `Authorization`, Codex's `Authorization` and `ChatGPT-Account-Id`, and the
+  compatible endpoint's `Authorization` (`Bearer` and the pushed key), and
   strips `Set-Cookie` on the way back. pi talks SSE; the gateway refuses
   WebSocket upgrades.
+- `/compat` serves any live engine lease on an `openai-codex` profile, since
+  every pi engine under the switch holds one. It forwards over http or https as
+  the pushed base URL says, with the pushed key and never a token file.
 - A refusal the gateway answers itself (an unknown or revoked lease, a route the
-  lease does not cover, an unreadable credential, an unreachable upstream) has
+  lease does not cover, an unreadable credential, an unreachable upstream, a
+  `/compat` request before the server pushed its endpoint, which gets a 503) has
   the provider's error shape, and its message starts with "Pandeck gateway:".
   The server's error classifier never counts a marked message as a dead login
   (`providerErrors.ts`). An upstream 401 passes through unchanged and still
   counts until the gateway reports login state itself.
 - Remote Workers reach it over TLS from phase 4.
 
-The server drives the gateway over its control channel, **gateway control 1.1**:
+The server drives the gateway over its control channel, **gateway control 1.2**:
 the worker protocol's codec and connection framing under a version of its own,
-`gateway-control/1.1`, so a Worker and a control peer refuse each other; a 1.0
-dialer is still admitted, as is any 1.x. Only a control connection grants a
-lease, and the gateway binds each lease to a profile from its own registry,
+`gateway-control/1.2`, so a Worker and a control peer refuse each other; 1.0 and
+1.1 dialers are still admitted, as is any 1.x. Only a control connection grants
+a lease, and the gateway binds each lease to a profile from its own registry,
 never from the request. Every method is answered once its effect is applied and
 saved, and each connection starts with
 `control.hello {serverBootId, pid, startTime}`; anything before it is refused.
 The server then syncs every profile (`profiles.sync`, later `profiles.upsert`
 and `profiles.remove`). A newer connection's hello ends the older one.
 
+- `compat.set {baseUrl, apiKey}` and `compat.clear {}` (1.2) carry the
+  OpenAI-compatible endpoint. The server pushes one of them after its reconcile
+  and before the link is ready, then after every compatible-settings change, on
+  the same request queue. The gateway holds the pair in memory only, one
+  immutable pair per push, so a request keeps the pair it took. Every hello
+  clears it, as does a malformed `compat.set` (`invalid_params`), and `/compat`
+  then answers 503 until the next push. A failed push is logged by its error
+  code only; the link stays ready.
 - A lease has a kind and an owner. An engine lease belongs to
   `{workerId, sessionId}`. It is granted before the engine opens; an open that
   mints its session id (a new or forked pi session) completes the owner with
@@ -1210,14 +1225,15 @@ and `profiles.remove`). A newer connection's hello ends the older one.
 - The state lives in the gateway's state directory (0700), in `leases.json`
   (lease id, secret hash, kind, owner, profile, provider, token file path, grant
   and revocation times) and `profiles.json`, each written whole to a 0600 temp
-  file and renamed. Neither holds a token, a lease token or its secret. A grant
-  or session bind is saved before it is answered and undone when saving fails; a
-  revocation takes effect at once and stays in force even then. After a failed
-  save, repeating a revocation or profile removal saves again even though it
-  changes nothing, so it fails again or succeeds with the earlier change saved;
-  a repeated revocation keeps its first reason and time. Both files load at
-  start, so a gateway restarted with the server down still forwards. An
-  unreadable `leases.json` starts empty, refusing every old token; an unreadable
+  file and renamed. Neither holds a token, a lease token or its secret, and no
+  file holds the pushed compatible key or endpoint. A grant or session bind is
+  saved before it is answered and undone when saving fails; a revocation takes
+  effect at once and stays in force even then. After a failed save, repeating a
+  revocation or profile removal saves again even though it changes nothing, so
+  it fails again or succeeds with the earlier change saved; a repeated
+  revocation keeps its first reason and time. Both files load at start, so a
+  gateway restarted with the server down still forwards. An unreadable
+  `leases.json` starts empty, refusing every old token; an unreadable
   `profiles.json` starts an empty registry, so grants wait for a sync while
   restored leases keep forwarding on their own binding. A revoked lease is
   forgotten 24 hours after its revocation.
@@ -1355,10 +1371,13 @@ until the gateway runs as its own process.
     Codex model still at `chatgpt.com`, or an OpenAI-compatible model from an
     endpoint the settings have since replaced, gets no auth, and pi refuses it
     ("Provider is not configured") before it connects.
-  - The OpenAI-compatible provider goes direct with its configured key; G3b-2
-    moves it to the gateway. The port registers it from the server's settings
-    and follows each change through `compatProviderFeed.ts`, which the settings
-    sync notifies after re-registering the server's own runtimes.
+  - The OpenAI-compatible provider goes through the gateway's
+    `/compat<base path>` with the lease as its key. The port registers it from
+    `compatProviderFeed.ts`, which projects the server's settings without the
+    key and is notified by the settings sync after it re-registers the server's
+    own runtimes. A change that keeps the base path keeps the registration, so
+    an open engine follows a new endpoint and key; a new base path re-registers,
+    and the old model is then refused.
 
 ### Engine-version guard
 
@@ -1385,22 +1404,25 @@ CLI still talks only to the gateway.
   turn on a named profile and on the default one; an upstream 401; a revoked
   lease; a server-catalog Codex id opened, reopened and forked; Codex, then the
   compatible provider, then Codex on one engine; a key rotation, a cleared key
-  and a disable on an open engine beside a switch-off one; and an endpoint
-  change under an open named and default engine. They assert:
+  and a disable on an open engine beside a switch-off one; an endpoint change at
+  the same base path and then at another under an open named and default engine;
+  and, last, a new control hello clearing the pushed endpoint. They assert:
   - one `POST /backend-api/codex/responses` per turn reaches the upstream, with
     the profile's token and account id and never the lease, and no upgrade;
-  - the compatible provider reaches its endpoint directly with the current key,
-    and the gateway sees nothing for it;
-  - an open engine follows the settings as a switch-off engine does, and after
-    an endpoint change refuses its old model without contacting either endpoint
-    until reselected;
+  - the compatible provider reaches its endpoint through the gateway, one
+    gateway line per request, with the pushed key and never the lease;
+  - an open engine follows the settings as a switch-off engine does, follows an
+    endpoint change at the same base path, and after a base-path change refuses
+    its old model without contacting any endpoint until reselected;
+  - without a pushed endpoint a compatible turn ends in the marked 503 after
+    pi's retries and sends nothing;
   - a 401 and a refusal are not dead logins, and a refusal carries the marker;
   - an egress observer on undici's and `node:http`'s diagnostics channels sees
     no attempt beyond the gateway, the fakes and loopback, and a canary fetch to
     pi.dev shows it is not blind;
   - no engine writes `auth.json`, `models.json` or `models-store.json`, changes
-    a fixture's login or catalog file, or stores a lease, and no log line holds
-    a token.
+    a fixture's login or catalog file, or stores a lease or a compatible key
+    outside the compatible settings file, and no log line holds a token or key.
 - **Isolation.** Only `pnpm run test:engine-contract`
   (`scripts/run-engine-contract.mjs`) runs both files. That command starts them
   in a user, network and PID namespace with loopback alone, and with a temp
@@ -1435,11 +1457,21 @@ CLI still talks only to the gateway.
     marker until a later slice allows it with contract evidence.
   - C2: a pi open, like a Claude one, awaits the link's readiness without a
     bound (G5, G7a).
-  - With the switch on, pi engines send OpenAI-compatible requests directly with
-    the configured key. G3b-2 moves them to the gateway and must land before G5.
-  - After an OpenAI-compatible endpoint change, an open pi engine on the old
-    model fails with pi's `Provider is not configured` until the user reselects
-    the model or reopens the session.
+  - Task-1357 (open): with the switch off, an open pi engine can send a new
+    OpenAI-compatible key to the old endpoint after an endpoint change.
+  - After an OpenAI-compatible endpoint change that changes the base path, an
+    open pi engine on the old model fails with pi's `Provider is not configured`
+    until the user reselects the model or reopens the session.
+  - pi retries a gateway 503 or 502 on `/compat` 3 times, about 14 seconds,
+    before the turn fails.
+  - A request racing a push goes to the previous endpoint with its own key, or
+    gets the marked 403. A failed push leaves `/compat` at 503 until the next
+    settings change or restart; the link does not retry (G5).
+  - In-process, the hosted engine shares the server's process: the key-less feed
+    bounds the engine's dependencies, not its memory. The server's own runtimes
+    keep the key for compatible discovery, one-shots and usage, which stay
+    direct (G4). An endpoint reachable only through a proxy in the server's
+    environment is not measured.
   - A pi summary request may try one refused upgrade before SSE.
   - pi providers other than Codex and OpenAI-compatible, through an ambient
     environment key, behave as today. Model listing, catalog refresh and model
@@ -1637,12 +1669,13 @@ forwarding core, its control channel and persisted leases, and the server's link
 to it behind `ASSISTANT_GATEWAY=1`, off by default. With the switch on, every
 Claude engine sends its model requests through the gateway with its lease, a
 profile-less session as `claude-default`, and every pi engine sends its Codex
-requests through it with its lease, both under the engine-version guard; pi's
-OpenAI-compatible provider still goes direct (G3b-2). One-shots and usage
-queries do not use the gateway yet. It reads token files and never writes or
-refreshes them. The writer lane and login holds have landed, unused until the
-login flows hold their profile (G5): no hold is created and no lane item runs
-yet. Renewal, engine routing and its own service unit come in later slices.
+requests and its OpenAI-compatible requests through it with its lease, both
+under the engine-version guard; the server pushes the compatible endpoint and
+key, held in the gateway's memory only. One-shots and usage queries do not use
+the gateway yet. It reads token files and never writes or refreshes them. The
+writer lane and login holds have landed, unused until the login flows hold their
+profile (G5): no hold is created and no lane item runs yet. Renewal, engine
+routing and its own service unit come in later slices.
 
 ## Open questions
 

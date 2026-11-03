@@ -3,7 +3,8 @@
  * (`docs/workers.md` "pi engines use the lease"): without it, the server's
  * own port runs the engine exactly as before; with it, the engine's gateway
  * port resolves every model, a reopened transcript's included, turns are
- * pinned to SSE, and the port's feed subscription ends with the engine.
+ * pinned to SSE, the port's feed subscription ends with the engine, and
+ * nothing the engine side reads from the feed holds the compatible key.
  *
  * Real pi sessions; nothing here sends a prompt, so no request leaves the
  * process.
@@ -27,25 +28,30 @@ const tmp = mkdtempSync(join(tmpdir(), "pi-hosted-gateway-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 mkdirSync(join(tmp, "data", "settings"), { recursive: true });
-writeFileSync(
-  join(tmp, "data", "settings", "openai-compatible.json"),
-  JSON.stringify({
-    enabled: true,
-    name: "Fixture",
-    baseUrl: "http://127.0.0.1:9/v1",
-    apiKey: "fixture",
-    models: [
-      {
-        id: "chosen",
-        name: "chosen",
-        input: ["text"],
-        contextWindow: 100_000,
-        maxTokens: 4_000,
-        reasoning: false,
-      },
-    ],
-  }),
-);
+
+/** The compatible settings as a settings write leaves them. */
+function writeCompatSettings(baseUrl: string, apiKey: string): void {
+  writeFileSync(
+    join(tmp, "data", "settings", "openai-compatible.json"),
+    JSON.stringify({
+      enabled: true,
+      name: "Fixture",
+      baseUrl,
+      apiKey,
+      models: [
+        {
+          id: "chosen",
+          name: "chosen",
+          input: ["text"],
+          contextWindow: 100_000,
+          maxTokens: 4_000,
+          reasoning: false,
+        },
+      ],
+    }),
+  );
+}
+writeCompatSettings("http://127.0.0.1:9/v1", "fixture");
 
 await import("../hub.ts");
 const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
@@ -54,7 +60,11 @@ const { createPiHostedEngineFactory, hostedPiEngine } =
   await import("./piEngineHosted.ts");
 const { nativePiSessionForTests } = await import("./piEngine.ts");
 const { serverPiModelPort } = await import("./piModelPort.ts");
-const { compatProviderFeed } = await import("./compatProviderFeed.ts");
+const { compatProviderFeed, notifyCompatProviderChanged } =
+  await import("./compatProviderFeed.ts");
+const { COMPAT_KEY_A, COMPAT_KEY_B, COMPAT_KEY_C } =
+  await import("../test/gatewayFixtures.ts");
+type CompatProviderFeed = import("./gatewayPiModelPort.ts").CompatProviderFeed;
 const { piPersonaOptions } = await import("./piEngineStart.ts");
 const { SKILLS_RUNTIME_DIR } = await import("../config.ts");
 const { skillSetHash } = await import("../skills/skillRuntimeMaterializer.ts");
@@ -359,7 +369,12 @@ test("a gateway engine reopens a catalog-id transcript on that model, rebased, w
       [{ provider: "openai-compatible", id: "chosen" }],
       2,
     );
-    assert.equal(native.model?.baseUrl, "http://127.0.0.1:9/v1");
+    // On the gateway's /compat, with the lease (G3b-2).
+    assert.equal(native.model?.baseUrl, `${GATEWAY}/compat/v1`);
+    assert.equal(
+      (await native.modelRuntime.getAuth(native.model!))?.auth.apiKey,
+      FAKE_LEASE,
+    );
     assert.equal(native.agent.transport, "sse");
   } finally {
     await hosted.dispose({});
@@ -422,5 +437,49 @@ test("when the port has no model for the restored id, pi's own restore runs: an 
       assert.equal(native.model.baseUrl, CODEX_BASE);
   } finally {
     await hosted.dispose({});
+  }
+});
+
+test("AC22: across a leased open, a key rotation and an endpoint change, nothing the factory or port reads from the feed holds the key", async () => {
+  writeCompatSettings("http://127.0.0.1:9/v1", COMPAT_KEY_A);
+  const read: unknown[] = [];
+  const recording: CompatProviderFeed = {
+    current() {
+      const value = compatProviderFeed.current();
+      read.push(value);
+      return value;
+    },
+    subscribe: (listener) => compatProviderFeed.subscribe(listener),
+  };
+  const factory = createPiHostedEngineFactory({
+    models: recordingServerPort(),
+    compat: recording,
+  });
+  const { hosted, native } = await open(
+    factory,
+    spec(
+      { type: "new", cwd: tmp },
+      { model: { provider: "openai-compatible", id: "chosen" } },
+    ),
+    true,
+  );
+  try {
+    assert.equal(native.model?.baseUrl, `${GATEWAY}/compat/v1`);
+    writeCompatSettings("http://127.0.0.1:9/v1", COMPAT_KEY_B);
+    notifyCompatProviderChanged();
+    // Same base path, new origin and key: the held model follows.
+    writeCompatSettings("http://127.0.0.2:9/v1", COMPAT_KEY_C);
+    notifyCompatProviderChanged();
+    assert.equal(
+      (await native.modelRuntime.getAuth(native.model!))?.auth.apiKey,
+      FAKE_LEASE,
+    );
+    assert.ok(read.length >= 3, `the feed was read ${read.length} times`);
+    const text = JSON.stringify(read);
+    for (const key of [COMPAT_KEY_A, COMPAT_KEY_B, COMPAT_KEY_C])
+      assert.ok(!text.includes(key), `the engine side read ${key}`);
+  } finally {
+    await hosted.dispose({});
+    writeCompatSettings("http://127.0.0.1:9/v1", "fixture");
   }
 });

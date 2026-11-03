@@ -2,15 +2,18 @@
  * The credential gateway composition (ADR-0004, `docs/workers.md`
  * "Credentials"): a loopback HTTP model listener that checks lease tokens
  * against its lease table and forwards Claude Messages and Codex responses
- * requests with the bound profile's real credential, plus the control
- * endpoint (`control.ts`) through which the server syncs profiles and grants
- * and revokes leases.
+ * requests with the bound profile's real credential, and OpenAI-compatible
+ * chat completions with the key the server pushed, plus the control endpoint
+ * (`control.ts`) through which the server syncs profiles, grants and revokes
+ * leases, and pushes that endpoint and key.
  *
  * With a state directory, the leases, the profile registry and the login
  * holds are loaded at start and saved on every change (`state.ts`), so a
  * restarted gateway forwards before any control connects and keeps every
- * hold. Without one they live in memory. A timer rechecks the holds once a
- * minute (`holds.ts`).
+ * hold. Without one they live in memory. The pushed endpoint and key live
+ * only in memory either way (`compatUpstream.ts`): a restarted gateway
+ * answers 503 on `/compat` until the next push. A timer rechecks the holds
+ * once a minute (`holds.ts`).
  *
  * It runs in the process that starts it: the server's, through
  * `gatewayLink.ts` under `ASSISTANT_GATEWAY=1`, and tests', against fake
@@ -26,6 +29,7 @@ import {
   type GatewayStats,
   type UpstreamOverrides,
 } from "./forward.ts";
+import { createCompatUpstream } from "./compatUpstream.ts";
 import { createControlEndpoint } from "./control.ts";
 import { HoldTable, WriterLane, type HoldRecord } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
@@ -39,6 +43,8 @@ export interface GatewayOptions {
   log?: (line: string) => void;
   /** Per-provider connect address and CA; TLS name and `Host` stay logical. */
   upstreams?: UpstreamOverrides;
+  /** Test seam: the CA an https compatible endpoint is checked against. */
+  compatCa?: string | string[];
   /** Where leases and profiles persist; without it they live in memory. */
   stateDir?: string;
   /** Epoch milliseconds; the clock tests inject. */
@@ -56,7 +62,7 @@ export interface RunningGateway {
   readonly stats: Readonly<GatewayStats>;
   /** The profiles' writer lane, for in-gateway writers (G4, G5). */
   readonly lane: Pick<WriterLane, "run">;
-  /** Serves gateway control 1.1 on `endpoint`, as the listener. */
+  /** Serves gateway control 1.2 on `endpoint`, as the listener. */
   attachControl(endpoint: ByteEndpoint): void;
   /** The last `control.hello` a control connection said, as recorded. */
   lastHello(): ControlHello | undefined;
@@ -96,11 +102,13 @@ export async function startGateway(
       log("hold fence: holds.json not saved; the change stands in memory");
   }
   const lane = new WriterLane(holds, (id) => profiles.get(id)?.provider);
+  const compat = createCompatUpstream();
   const control = createControlEndpoint({
     leases,
     profiles,
     holds,
     lane,
+    compat,
     log,
   });
 
@@ -111,11 +119,15 @@ export async function startGateway(
     upstreamErrors: 0,
   };
   const agent = new https.Agent({ keepAlive: true });
+  const httpAgent = new http.Agent({ keepAlive: true });
   const forwarder = createForwarder({
     leases,
     log,
     agent,
+    httpAgent,
     upstreams: options.upstreams ?? {},
+    compat,
+    compatCa: options.compatCa,
     stats,
   });
   const sockets = new Set<net.Socket>();
@@ -166,6 +178,7 @@ export async function startGateway(
       for (const socket of sockets) socket.destroy();
       sockets.clear();
       agent.destroy();
+      httpAgent.destroy();
       await closed;
     },
   };

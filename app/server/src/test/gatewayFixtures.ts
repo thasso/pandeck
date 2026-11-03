@@ -37,9 +37,10 @@ export const CODEX_ACCOUNT = "acct-test";
 /** The default profile's own, so a test can tell which file was read. */
 export const CODEX_DEFAULT_ACCESS = "fake-codex-default-access";
 export const CODEX_DEFAULT_ACCOUNT = "acct-default-test";
-/** Two OpenAI-compatible endpoints' keys. */
+/** Three OpenAI-compatible endpoints' keys. */
 export const COMPAT_KEY_A = "fake-compat-key-a";
 export const COMPAT_KEY_B = "fake-compat-key-b";
+export const COMPAT_KEY_C = "fake-compat-key-c";
 
 export const CLAUDE_PATH = "/anthropic/v1/messages";
 export const CODEX_PATH = "/chatgpt/backend-api/codex/responses";
@@ -265,20 +266,22 @@ interface CompatSeen {
 }
 
 export interface FakeCompatEndpoint {
-  /** Its base URL, as the settings name it: `http://127.0.0.1:<port>/v1`. */
+  /** Its base URL, as the settings name it: `http://127.0.0.1:<port><basePath>`. */
   readonly baseUrl: string;
   readonly seen: CompatSeen[];
   close(): Promise<void>;
 }
 
 /**
- * A plain-HTTP OpenAI-compatible endpoint on loopback: `GET /v1/models` lists
- * `models`, and `POST /v1/chat/completions` streams `reply` as one chunk.
- * Every request is recorded with the authorization it carried.
+ * A plain-HTTP OpenAI-compatible endpoint on loopback: `GET <basePath>/models`
+ * lists `models`, and `POST <basePath>/chat/completions` streams `reply` as
+ * one chunk. `basePath` is `/v1` unless named. Every request is recorded with
+ * the authorization it carried.
  */
 export async function startFakeCompatEndpoint(
   models: string[],
   reply: string,
+  { basePath = "/v1" }: { basePath?: string } = {},
 ): Promise<FakeCompatEndpoint> {
   const seen: CompatSeen[] = [];
   const server = http.createServer((req, res) => {
@@ -289,7 +292,7 @@ export async function startFakeCompatEndpoint(
         url: req.url ?? "",
         authorization: req.headers.authorization,
       });
-      if (req.method === "GET" && req.url === "/v1/models") {
+      if (req.method === "GET" && req.url === `${basePath}/models`) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
@@ -299,7 +302,7 @@ export async function startFakeCompatEndpoint(
         );
         return;
       }
-      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+      if (req.method !== "POST" || req.url !== `${basePath}/chat/completions`) {
         res.writeHead(404).end();
         return;
       }
@@ -324,7 +327,7 @@ export async function startFakeCompatEndpoint(
   );
   const { port } = server.address() as net.AddressInfo;
   return {
-    baseUrl: `http://127.0.0.1:${port}/v1`,
+    baseUrl: `http://127.0.0.1:${port}${basePath}`,
     seen,
     async close() {
       server.closeAllConnections();

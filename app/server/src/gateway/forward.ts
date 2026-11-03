@@ -2,7 +2,12 @@
  * The model listener's request handling (`docs/workers.md` "Credentials").
  *
  * Order: route by prefix, then the lease, then the route's allowlist and the
- * lease's provider, then the credential, then the upstream. Bytes pass through
+ * lease's provider, then the credential, then the upstream. `/compat` instead
+ * takes any live engine lease of an `openai-codex` profile, then one snapshot
+ * of the pushed endpoint (503 without one), then its allowlist, and sends the
+ * pushed key over http or https as the push says; it reads no token file.
+ * A request keeps its snapshot, so a push meanwhile never mixes an origin
+ * with another's key. Bytes pass through
  * unchanged both ways: compressed bodies are never decoded, and SSE streams as
  * it arrives. Both directions use `pipe`, so a client that stops reading holds
  * the upstream back instead of growing this process's memory. Only the
@@ -14,14 +19,21 @@
 import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
+import type { CompatTarget, CompatUpstream } from "./compatUpstream.ts";
 import { readCredential } from "./profileCredential.ts";
 import type { LeaseProvider, LeaseTable } from "./leases.ts";
 import {
   refusalResponse,
   type Refusal,
   type RefusalShape,
+  type UpstreamLabel,
 } from "./refusals.ts";
-import { isAllowed, routeFor, type Route } from "./upstreams.ts";
+import {
+  isAllowed,
+  isCompatAllowed,
+  routeFor,
+  type Route,
+} from "./upstreams.ts";
 
 /** Where to connect for an upstream instead of its logical host (tests). */
 export type UpstreamOverrides = Partial<
@@ -42,8 +54,26 @@ interface ForwarderDeps {
   leases: LeaseTable;
   log: (line: string) => void;
   agent: https.Agent;
+  /** For a plain-HTTP compatible endpoint. */
+  httpAgent: http.Agent;
   upstreams: UpstreamOverrides;
+  compat: CompatUpstream;
+  /** Test seam: the CA an https compatible endpoint is checked against. */
+  compatCa: string | string[] | undefined;
   stats: GatewayStats;
+}
+
+/** Where a request goes once it is allowed, credential included. */
+interface Destination {
+  secure: boolean;
+  /** Where to connect, and the TLS options; no method, path or headers. */
+  options: https.RequestOptions;
+  /** The `Host` header: the logical host, never the connect address. */
+  host: string;
+  /** Request headers replaced, besides `host` and the credential's. */
+  replaced: readonly string[];
+  credentialHeaders: Record<string, string>;
+  label: UpstreamLabel;
 }
 
 const HOP_BY_HOP = [
@@ -95,8 +125,9 @@ function headerText(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value.join(", ") : (value ?? "");
 }
 
+/** Codex and the compatible endpoint both take the OpenAI error shape. */
 function shapeOf(route: Route | undefined): RefusalShape {
-  return route?.upstream.provider === "openai-codex" ? "codex" : "claude";
+  return !route || route.upstream.provider === "claude" ? "claude" : "codex";
 }
 
 function refusalCase(refusal: Refusal): string {
@@ -116,7 +147,7 @@ export function createForwarder(deps: ForwarderDeps): {
   handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => void;
   handleUpgrade: (req: http.IncomingMessage, socket: Duplex) => void;
 } {
-  const { leases, log, agent, stats } = deps;
+  const { leases, log, agent, httpAgent, compat, stats } = deps;
   const loggedClients = new Set<string>();
 
   /** Logs the first request of each distinct client, bounded and quoted. */
@@ -188,10 +219,30 @@ export function createForwarder(deps: ForwarderDeps): {
           )
         : refuse(res, shape, { case: "unknown-lease" }, done);
     const { leaseId, binding } = lease;
-    if (
-      binding.provider !== route.upstream.provider ||
-      !isAllowed(route, req.method)
-    )
+    const { upstream } = route;
+    if (upstream.kind === "compat") {
+      // Any engine lease of a pi engine; no Claude or server lease (RD-G3b2-1).
+      if (
+        leases.kindOf(leaseId) !== "engine" ||
+        binding.provider !== "openai-codex"
+      )
+        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+      const target = compat.current();
+      if (!target)
+        return refuse(res, shape, { case: "compat-unset" }, done, leaseId);
+      if (!isCompatAllowed(route, req.method, target.basePath))
+        return refuse(res, shape, { case: "forbidden" }, done, leaseId);
+      return send(
+        req,
+        res,
+        route,
+        compatDestination(target),
+        shape,
+        done,
+        leaseId,
+      );
+    }
+    if (binding.provider !== upstream.provider || !isAllowed(route, req.method))
       return refuse(res, shape, { case: "forbidden" }, done, leaseId);
     const credential = await readCredential(
       binding.provider,
@@ -205,6 +256,62 @@ export function createForwarder(deps: ForwarderDeps): {
         done,
         leaseId,
       );
+    const override = deps.upstreams[upstream.provider];
+    send(
+      req,
+      res,
+      route,
+      {
+        secure: true,
+        options: {
+          host: override?.connect.host ?? upstream.host,
+          port: override?.connect.port ?? 443,
+          servername: upstream.host,
+          agent,
+          ...(override?.ca ? { ca: override.ca } : {}),
+        },
+        host: upstream.host,
+        replaced:
+          upstream.provider === "openai-codex" ? ["chatgpt-account-id"] : [],
+        credentialHeaders: credential.headers,
+        label: upstream.label,
+      },
+      shape,
+      done,
+      leaseId,
+    );
+  }
+
+  /** The pushed endpoint as the snapshot names it, with the pushed key. */
+  function compatDestination(target: CompatTarget): Destination {
+    const secure = target.protocol === "https";
+    return {
+      secure,
+      options: {
+        host: target.hostname,
+        port: target.port,
+        agent: secure ? agent : httpAgent,
+        ...(secure && target.servername !== undefined
+          ? { servername: target.servername }
+          : {}),
+        ...(secure && deps.compatCa ? { ca: deps.compatCa } : {}),
+      },
+      host: target.host,
+      replaced: [],
+      credentialHeaders: { authorization: `Bearer ${target.apiKey}` },
+      label: "the OpenAI-compatible endpoint",
+    };
+  }
+
+  function send(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    route: Route,
+    destination: Destination,
+    shape: RefusalShape,
+    done: (outcome: string, leaseId?: string) => void,
+    leaseId: string,
+  ): void {
     if (res.destroyed) {
       stats.clientClosed += 1;
       return done("client closed", leaseId);
@@ -213,7 +320,7 @@ export function createForwarder(deps: ForwarderDeps): {
       req,
       res,
       route,
-      credential.headers,
+      destination,
       (outcome) => done(outcome, leaseId),
       (refusal) => refuse(res, shape, refusal, done, leaseId),
     );
@@ -223,30 +330,27 @@ export function createForwarder(deps: ForwarderDeps): {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     route: Route,
-    credentialHeaders: Record<string, string>,
+    destination: Destination,
     done: (outcome: string) => void,
     refuseLocally: (refusal: Refusal) => void,
   ): void {
-    const { upstream } = route;
-    const override = deps.upstreams[upstream.provider];
-    const replaced = ["host", "authorization", "x-api-key"];
-    if (upstream.provider === "openai-codex")
-      replaced.push("chatgpt-account-id");
+    const { options } = destination;
     let ended: "client" | "upstream" | undefined;
 
-    const upstreamReq = https.request({
-      host: override?.connect.host ?? upstream.host,
-      port: override?.connect.port ?? 443,
-      servername: upstream.host,
+    const upstreamReq = (destination.secure ? https : http).request({
+      ...options,
       method: req.method,
       path: route.path,
       headers: {
-        ...forwardable(req.headers, replaced),
-        host: upstream.host,
-        ...credentialHeaders,
+        ...forwardable(req.headers, [
+          "host",
+          "authorization",
+          "x-api-key",
+          ...destination.replaced,
+        ]),
+        host: destination.host,
+        ...destination.credentialHeaders,
       },
-      agent,
-      ...(override?.ca ? { ca: override.ca } : {}),
     });
 
     /** The upstream failed after headers: the engine sees a truncated stream. */
@@ -283,7 +387,7 @@ export function createForwarder(deps: ForwarderDeps): {
       req.unpipe(upstreamReq);
       refuseLocally({
         case: "unreachable",
-        upstream: upstream.label,
+        upstream: destination.label,
         reason: errorCode(err),
       });
     });

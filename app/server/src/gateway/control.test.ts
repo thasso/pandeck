@@ -1,8 +1,9 @@
 /**
- * Gateway control 1.1 against a running gateway: the handshake, the hello
+ * Gateway control 1.2 against a running gateway: the handshake, the hello
  * rule, the registry binding every grant, deletion as the only revoking
  * registry change, the server-boot rule, the per-Worker reconcile, revocation
- * and owner completion, and the login hold methods. Control runs over an
+ * and owner completion, the login hold methods, and the compatible endpoint's
+ * push. Control runs over an
  * in-process pair; model requests go over loopback HTTP to fake TLS
  * upstreams. Every credential is fake, and every hold's processes are
  * observed through a fake probe.
@@ -25,9 +26,11 @@ import {
   CODEX_ACCESS,
   CODEX_ACCOUNT,
   CODEX_PATH,
+  COMPAT_KEY_A,
   dialControl,
   fakeProcesses,
   modelRequest,
+  startFakeCompatEndpoint,
   startFakeUpstreams,
   writeTokenFiles,
   type FakeUpstreams,
@@ -68,6 +71,9 @@ import { refusalText, type RevokeReason } from "./refusals.ts";
 let upstreams: FakeUpstreams;
 let profileA: GatewayProfile;
 let profileB: GatewayProfile;
+/** A synthetic pushed key that would add a header if forwarded raw. */
+const HEADER_INJECTING_KEY = `${"key"}\r\nx-injected: 1`;
+
 const running: RunningGateway[] = [];
 /** The current test's gateway log lines and the capabilities it saw. */
 let lines: string[] = [];
@@ -677,13 +683,20 @@ async function storedHolds(stateDir: string): Promise<StoredHolds> {
 const settled = () =>
   new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
 
-test("AC1: gateway control 1.1 welcomes a 1.0 dialer too", async () => {
-  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.1");
+test("AC1: gateway control 1.2 welcomes 1.0 and 1.1 dialers too, and refuses 2.0", async () => {
+  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.2");
   const gw = await gateway();
-  for (const version of ["gateway-control/1.1", "gateway-control/1.0"])
+  for (const version of [
+    "gateway-control/1.2",
+    "gateway-control/1.1",
+    "gateway-control/1.0",
+  ])
     assert.deepEqual(await rawHandshake(gw, version), [
-      { type: "welcome", version: "gateway-control/1.1" },
+      { type: "welcome", version: "gateway-control/1.2" },
     ]);
+  const refused = await rawHandshake(gw, "gateway-control/2.0");
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0]!.type, "refused");
 });
 
 test("AC2: a login hold is saved before it is held; before hello, for an unknown profile or on a failed save it is not", async () => {
@@ -899,4 +912,86 @@ test("the hold methods' malformed params are invalid_params", async () => {
   for (const [method, json] of cases)
     await rejectsWith(connection.request(method, { json }), "invalid_params");
   assert.deepEqual(gw.holds(), []);
+});
+
+test("AC3: compat.set and compat.clear need hello; a malformed push is invalid_params and clears the held endpoint", async () => {
+  const endpoint = await startFakeCompatEndpoint(["m"], "compatible reply");
+  // No log line may name the pushed key or the endpoint.
+  capabilities.push(
+    COMPAT_KEY_A,
+    endpoint.baseUrl,
+    new URL(endpoint.baseUrl).host,
+  );
+  try {
+    const gw = await gateway();
+    const valid = { baseUrl: endpoint.baseUrl, apiKey: COMPAT_KEY_A };
+    const early = control(gw);
+    await rejectsWith(
+      early.request(CONTROL_METHODS.compatSet, { json: valid }),
+      "hello_required",
+    );
+    await rejectsWith(
+      early.request(CONTROL_METHODS.compatClear, { json: {} }),
+      "hello_required",
+    );
+
+    const connection = await ready(gw);
+    const { token } = await grant(connection, engine(profileB.id));
+    const set = (json: unknown) =>
+      connection.request(CONTROL_METHODS.compatSet, { json });
+    const compatRequest = () =>
+      modelRequest(gw.port, "/compat/v1/chat/completions", token);
+    const assertUnset = async () => {
+      const reply = await compatRequest();
+      assert.equal(reply.status, 503, reply.text);
+      assert.equal(
+        JSON.parse(reply.text).error.message,
+        refusalText({ case: "compat-unset" }),
+      );
+    };
+
+    assert.deepEqual((await set(valid)).json, {});
+    assert.equal((await compatRequest()).status, 200);
+    const posts = () =>
+      endpoint.seen.filter((seen) => seen.method === "POST").length;
+    assert.equal(posts(), 1);
+
+    const malformed: Record<string, unknown>[] = [
+      { baseUrl: 7 },
+      { baseUrl: undefined },
+      { baseUrl: `${endpoint.baseUrl}/${"x".repeat(2048)}` },
+      { baseUrl: "not a url" },
+      { baseUrl: "ftp://127.0.0.1/v1" },
+      { baseUrl: "http://fixture:fixture@127.0.0.1/v1" },
+      { baseUrl: `${endpoint.baseUrl}?q=1` },
+      { baseUrl: `${endpoint.baseUrl}#f` },
+      { apiKey: 5 },
+      { apiKey: undefined },
+      { apiKey: "" },
+      { apiKey: "k".repeat(8193) },
+      { apiKey: HEADER_INJECTING_KEY },
+      { apiKey: "key\nx" },
+      { apiKey: "key\u0000x" },
+      { apiKey: "key x" },
+      { apiKey: "key\u007fx" },
+      { apiKey: "kéy" },
+    ];
+    for (const change of malformed) {
+      assert.deepEqual((await set(valid)).json, {});
+      await rejectsWith(set({ ...valid, ...change }), "invalid_params");
+      await assertUnset();
+    }
+    assert.equal(posts(), 1, "no refused request reached the endpoint");
+
+    assert.deepEqual((await set(valid)).json, {});
+    assert.deepEqual(
+      (await connection.request(CONTROL_METHODS.compatClear, { json: {} }))
+        .json,
+      {},
+    );
+    await assertUnset();
+    assert.equal(posts(), 1);
+  } finally {
+    await endpoint.close();
+  }
 });
