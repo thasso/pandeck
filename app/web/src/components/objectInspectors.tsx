@@ -1791,7 +1791,7 @@ function SessionDetails({
       ) : null}
       {onSetPeerTurnCap ? (
         <>
-          <PropertyLabel>Peer turns at once</PropertyLabel>
+          <PropertyLabel>Peer turns</PropertyLabel>
           <Select
             value={peerTurnCap?.toString() ?? "default"}
             onValueChange={(value) => {
@@ -1799,12 +1799,23 @@ function SessionDetails({
                 onSetPeerTurnCap(value === "default" ? null : Number(value));
             }}
           >
-            <SelectTrigger size="sm" aria-label="Peer turns at once">
+            <SelectTrigger
+              size="sm"
+              aria-label="Peer turns at once"
+              className={PROPERTY_TRIGGER}
+            >
               <SelectValue>
-                {peerTurnCap ?? `Default (${DEFAULT_SESSION_PEER_TURN_CAP})`}
+                {peerTurnCap === undefined ? (
+                  <>
+                    {DEFAULT_SESSION_PEER_TURN_CAP} at once
+                    <span className="text-muted-foreground"> · default</span>
+                  </>
+                ) : (
+                  `${peerTurnCap} at once`
+                )}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent align="start">
               <SelectItem value="default">
                 Default ({DEFAULT_SESSION_PEER_TURN_CAP})
               </SelectItem>
