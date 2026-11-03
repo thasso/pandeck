@@ -1,8 +1,10 @@
 /**
- * Fixtures for the credential gateway's control and state tests: fake TLS
- * upstreams for `api.anthropic.com` and `chatgpt.com`, token files under the
- * test's temp `DATA_DIR`, a control dialer on an in-process pair, a model
- * request, and the processes a login hold names: a fake probe, or idle
+ * Fixtures for the credential gateway's control and state tests and the
+ * engine contract tests: fake TLS upstreams for `api.anthropic.com` and
+ * `chatgpt.com` (a minimal Anthropic stream among their answers), an egress
+ * recorder that refuses everything sent through it as a proxy, token files
+ * under the test's temp `DATA_DIR`, a control dialer on an in-process pair, a
+ * model request, and the processes a login hold names: a fake probe, or idle
  * children of this test. Every value is fake. It imports nothing from
  * `gateway/`, whose only importer outside itself is pinned
  * (`workerBoundary.test.ts`).
@@ -35,8 +37,74 @@ export const CLAUDE_PATH = "/anthropic/v1/messages";
 export const CODEX_PATH = "/chatgpt/backend-api/codex/responses";
 
 interface Seen {
+  method: string;
   url: string;
   headers: http.IncomingHttpHeaders;
+}
+
+/** Answers one upstream request, once its body was read. */
+export type UpstreamResponder = (seen: Seen, res: http.ServerResponse) => void;
+
+const answerOk: UpstreamResponder = (_seen, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end('{"ok":true}');
+};
+
+/** A 200 Anthropic message stream whose one text block is `text`. */
+export function fakeClaudeStream(text: string): UpstreamResponder {
+  const events: [string, unknown][] = [
+    [
+      "message_start",
+      {
+        type: "message_start",
+        message: {
+          id: "msg_fake",
+          type: "message",
+          role: "assistant",
+          model: "claude-fake",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      },
+    ],
+    [
+      "content_block_start",
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      },
+    ],
+    [
+      "content_block_delta",
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text },
+      },
+    ],
+    ["content_block_stop", { type: "content_block_stop", index: 0 }],
+    [
+      "message_delta",
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 1 },
+      },
+    ],
+    ["message_stop", { type: "message_stop" }],
+  ];
+  const body = events
+    .map(
+      ([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+    )
+    .join("");
+  return (_seen, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(body);
+  };
 }
 
 export interface FakeUpstreams {
@@ -52,19 +120,30 @@ export interface FakeUpstreams {
   close(): Promise<void>;
 }
 
-export async function startFakeUpstreams(): Promise<FakeUpstreams> {
+/** The fake upstreams; each answers 200 `{"ok":true}` unless given a responder. */
+export async function startFakeUpstreams(
+  respond: { claude?: UpstreamResponder } = {},
+): Promise<FakeUpstreams> {
   const ca = await loadOrCreateCa();
   const servers: https.Server[] = [];
-  const start = async (host: string, seen: Seen[]) => {
+  const start = async (
+    host: string,
+    seen: Seen[],
+    responder: UpstreamResponder,
+  ) => {
     const leaf = issueLeafCertificate(ca, host);
     const server = https.createServer(
       { key: leaf.keyPem, cert: leaf.certPem },
       (req, res) => {
         req.resume();
         req.on("end", () => {
-          seen.push({ url: req.url ?? "", headers: req.headers });
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end('{"ok":true}');
+          const request = {
+            method: req.method ?? "",
+            url: req.url ?? "",
+            headers: req.headers,
+          };
+          seen.push(request);
+          responder(request, res);
         });
       },
     );
@@ -78,8 +157,12 @@ export async function startFakeUpstreams(): Promise<FakeUpstreams> {
   const anthropic: Seen[] = [];
   const chatgpt: Seen[] = [];
   const overrides = {
-    claude: await start("api.anthropic.com", anthropic),
-    "openai-codex": await start("chatgpt.com", chatgpt),
+    claude: await start(
+      "api.anthropic.com",
+      anthropic,
+      respond.claude ?? answerOk,
+    ),
+    "openai-codex": await start("chatgpt.com", chatgpt, answerOk),
   };
   return {
     anthropic,
@@ -95,6 +178,45 @@ export async function startFakeUpstreams(): Promise<FakeUpstreams> {
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
+    },
+  };
+}
+
+export interface EgressRecorder {
+  /** The proxy URL, for `HTTPS_PROXY` and its siblings. */
+  readonly url: string;
+  /** Every request and CONNECT sent through it, in arrival order. */
+  readonly seen: { method: string; target: string }[];
+  close(): Promise<void>;
+}
+
+/**
+ * A loopback HTTP proxy that refuses every request and CONNECT with 403 and
+ * records it: what a child sends through its proxy variables, such as a
+ * token-host refresh, shows up here instead of leaving.
+ */
+export async function startEgressRecorder(): Promise<EgressRecorder> {
+  const seen: { method: string; target: string }[] = [];
+  const server = http.createServer((req, res) => {
+    seen.push({ method: req.method ?? "", target: req.url ?? "" });
+    req.resume();
+    res.writeHead(403).end();
+  });
+  server.on("connect", (req, socket) => {
+    seen.push({ method: "CONNECT", target: req.url ?? "" });
+    socket.on("error", () => socket.destroy());
+    socket.end("HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n");
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const { port } = server.address() as net.AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    seen,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
 }

@@ -45,7 +45,7 @@ test("a Worker on another protocol major is refused and served nothing", async (
   const early = connection.request("checkout.git.run", { json: {} });
   const received = rawWorker(workerEnd, "2.0");
   await assert.rejects(early, /The Worker connection ended: refused: /);
-  assert.match(await connection.ended, /cannot talk to 1\.9/);
+  assert.match(await connection.ended, /cannot talk to 1\.10/);
   assert.deepEqual(
     received.map((frame) => frame.type),
     ["refused"],
@@ -60,7 +60,7 @@ test("a Worker on a higher minor is welcomed and served", async () => {
   const registry = new WorkerRegistry();
   const [serverEnd, workerEnd] = createInProcessTransport();
   const connection = registry.accept(serverEnd, quiet);
-  const received = rawWorker(workerEnd, "1.10");
+  const received = rawWorker(workerEnd, "1.11");
   void connection.request("checkout.git.run", { json: {} });
   await settle();
   assert.deepEqual(
@@ -72,9 +72,9 @@ test("a Worker on a higher minor is welcomed and served", async () => {
   assert.equal(connection.isEnded, false);
 });
 
-test("the server speaks 1.9 and still welcomes a 1.0 or 1.8 Worker", async () => {
-  assert.equal(WORKER_PROTOCOL_VERSION, "1.9");
-  for (const version of ["1.0", "1.8"]) {
+test("the server speaks 1.10 and still welcomes a 1.0, 1.8 or 1.9 Worker", async () => {
+  assert.equal(WORKER_PROTOCOL_VERSION, "1.10");
+  for (const version of ["1.0", "1.8", "1.9"]) {
     const registry = new WorkerRegistry();
     const [serverEnd, workerEnd] = createInProcessTransport();
     const connection = registry.accept(serverEnd, quiet);
@@ -91,6 +91,7 @@ test("the server speaks 1.9 and still welcomes a 1.0 or 1.8 Worker", async () =>
 test("a Worker refuses a server on another major and accepts a higher minor", async () => {
   for (const [version, open] of [
     ["1.9", true],
+    ["1.11", true],
     ["2.0", false],
     ["one", false],
   ] as const) {
@@ -188,7 +189,7 @@ test("a refusal quotes a hello's version bounded, however long the hello", async
     const ended = await connection.ended;
     await settle();
     const reason = boundedRefusal(received, version);
-    assert.match(reason, /^Worker protocol ".*"… cannot talk to 1\.9\.$/s);
+    assert.match(reason, /^Worker protocol ".*"… cannot talk to 1\.10\.$/s);
     assert.equal(ended, `refused: ${reason}`);
     assert.equal(registry.connection("w"), undefined);
     assert.equal(registry.epoch("w"), undefined);

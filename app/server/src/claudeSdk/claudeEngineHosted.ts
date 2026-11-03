@@ -6,8 +6,9 @@
  *
  * - The open spec is the server's {@link ClaudeQueryOpenSpec}. The factory
  *   binds only what is not JSON: the abort controller, the child environment
- *   over `host.childEnv()`, the permission and hook callbacks over
- *   `host.sessionHooks`, and the session's `pa` tool server.
+ *   over `host.childEnv()` (with `host.gateway`, the lease is its only
+ *   credential), the permission and hook callbacks over `host.sessionHooks`,
+ *   and the session's `pa` tool server.
  * - The SDK seam and the tool server come from the session's in-process
  *   binding ({@link registerClaudeHostedSession}). An open for a session with
  *   none fails: it never falls back to the real SDK.
@@ -180,7 +181,7 @@ function hostClaudeQuery(
 
   const options = claudeQueryOptions(spec, {
     abortController,
-    env: claudeQueryEnvironment(spec.env, host.childEnv()),
+    env: claudeQueryEnvironment(spec.env, host.childEnv(), host.gateway),
     ...(spec.sessionHooksEpoch !== undefined
       ? {
           sessionHooks: hostedSessionHooks(

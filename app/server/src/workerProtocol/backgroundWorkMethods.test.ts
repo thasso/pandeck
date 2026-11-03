@@ -86,7 +86,7 @@ const TARGET = {
 };
 
 test("protocol 1.9 adds the eight background-work methods and skill materialization", () => {
-  assert.equal(WORKER_PROTOCOL_VERSION, "1.9");
+  assert.equal(WORKER_PROTOCOL_VERSION, "1.10");
   assert.deepEqual(Object.values(BACKGROUND_WORK_METHODS).sort(), [
     "backgroundWork.activity",
     "backgroundWork.admit",

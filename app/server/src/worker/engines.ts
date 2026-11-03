@@ -36,6 +36,7 @@ import {
   encodeEngineDisposed,
   encodeEngineEvents,
   encodeEngineOpened,
+  type EngineGatewayAccess,
   type EngineItem,
   type HostedEngine,
   type HostedEngineFactory,
@@ -126,8 +127,13 @@ export function engineHandlers(options: {
       await new Promise<void>((resume) => entry.drained.push(resume));
   };
 
-  const hostFor = (engineId: number, entry: Entry): HostedEngineHost => ({
+  const hostFor = (
+    engineId: number,
+    entry: Entry,
+    gateway: EngineGatewayAccess | undefined,
+  ): HostedEngineHost => ({
     engineId,
+    ...(gateway ? { gateway } : {}),
     childEnv: options.childEnv,
     callAppTool: async (request, callOptions) => {
       await delivered(entry);
@@ -158,7 +164,7 @@ export function engineHandlers(options: {
 
   const handlers: MethodHandlers = {
     [ENGINE_METHODS.open]: async (payload) => {
-      const { engineId, harness, spec } = decodeEngineOpen(payload);
+      const { engineId, harness, spec, gateway } = decodeEngineOpen(payload);
       const factory = options.factories?.(harness);
       if (!factory)
         throw new WorkerMethodError(
@@ -175,7 +181,7 @@ export function engineHandlers(options: {
       table.set(engineId, entry);
       let engine: HostedEngine;
       try {
-        engine = await factory(spec, hostFor(engineId, entry));
+        engine = await factory(spec, hostFor(engineId, entry, gateway));
       } catch (err) {
         if (table.get(engineId) === entry) table.delete(engineId);
         throw err;

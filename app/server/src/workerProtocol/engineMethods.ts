@@ -7,7 +7,9 @@
  *
  * - `engine.open` (server → Worker) names a server-assigned engine id, the
  *   harness and its JSON spec, and answers the engine's info, its snapshot and
- *   the `seq` of the last item emitted before the answer.
+ *   the `seq` of the last item emitted before the answer. A leased open also
+ *   carries the engine's gateway access (1.10): the loopback gateway's URL
+ *   and the lease token its model requests present.
  * - `engine.command` (server → Worker) names the engine, a command id the
  *   server assigns per engine, and a harness-defined command with JSON
  *   arguments. It answers `{ seq, result }`, or `{ seq, failed, code? }` with
@@ -66,10 +68,20 @@ export interface EngineDiscard {
   removeFile?: { except?: string };
 }
 
+/** How a leased engine reaches the credential gateway. */
+export interface EngineGatewayAccess {
+  /** The gateway's loopback listener, `http://127.0.0.1:<port>`. */
+  baseUrl: string;
+  /** The engine's lease; it stands in for the model token. */
+  leaseToken: string;
+}
+
 export interface EngineOpen {
   engineId: number;
   harness: string;
   spec: unknown;
+  /** Only on a leased open. */
+  gateway?: EngineGatewayAccess;
 }
 
 export interface EngineOpened {
@@ -143,6 +155,8 @@ export interface EngineSessionHookCalls {
 /** What the table gives each engine it opens. */
 export interface HostedEngineHost {
   readonly engineId: number;
+  /** The open's gateway access: the engine authenticates only through it. */
+  readonly gateway?: EngineGatewayAccess;
   /** The base environment of the engine's children. */
   childEnv(): NodeJS.ProcessEnv;
   /**
@@ -227,12 +241,43 @@ export function encodeEngineOpen(open: EngineOpen): Payload {
   return { json: { ...open } };
 }
 
+const GATEWAY_BASE_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}$/;
+const LEASE_TOKEN = /^[\w-]+\.[\w-]+\.[\w-]+$/;
+const LEASE_TOKEN_MAX = 1024;
+
+/** Loopback only, and nothing but the URL and the lease. */
+function decodeGatewayAccess(value: unknown): EngineGatewayAccess {
+  const json = record(value);
+  if (
+    !json ||
+    Object.keys(json).some((key) => key !== "baseUrl" && key !== "leaseToken")
+  )
+    invalid("gateway access");
+  const { baseUrl, leaseToken } = json;
+  if (typeof baseUrl !== "string" || !GATEWAY_BASE_URL.test(baseUrl))
+    invalid("gateway URL");
+  if (
+    typeof leaseToken !== "string" ||
+    leaseToken.length > LEASE_TOKEN_MAX ||
+    !LEASE_TOKEN.test(leaseToken)
+  )
+    invalid("lease token");
+  return { baseUrl, leaseToken };
+}
+
 export function decodeEngineOpen(payload: Payload): EngineOpen {
   const json = record(payload.json);
   if (!json || !isId(json.engineId)) invalid("engine id");
   if (typeof json.harness !== "string" || json.harness === "")
     invalid("harness");
-  return { engineId: json.engineId, harness: json.harness, spec: json.spec };
+  return {
+    engineId: json.engineId,
+    harness: json.harness,
+    spec: json.spec,
+    ...(json.gateway !== undefined
+      ? { gateway: decodeGatewayAccess(json.gateway) }
+      : {}),
+  };
 }
 
 export function encodeEngineOpened(opened: EngineOpened): Payload {

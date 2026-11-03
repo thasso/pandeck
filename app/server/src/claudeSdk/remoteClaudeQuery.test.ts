@@ -27,8 +27,9 @@ const dataDir = mkdtempSync(join(tmpdir(), "claude-hosted-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 const SENTINEL = "hosted-credential-sentinel";
-// Synthetic fixture value; not a real credential.
+// Synthetic fixture values; not real credentials.
 const CLAUDE_ACCESS = "fake-claude-access";
+const LEASE_TOKEN = `${"aGVhZGVy"}.${"cGF5bG9hZA"}.${"c2VjcmV0"}`;
 const savedApiKey = process.env.ANTHROPIC_API_KEY;
 process.env.ANTHROPIC_API_KEY = SENTINEL;
 afterAll(() => {
@@ -56,6 +57,7 @@ const { buildClaudeSdkQueryOptions, claudeQueryOpenSpec } =
 const { registerClaudeHostedSession } = await import("./claudeEngineHosted.ts");
 const { openHostedClaudeQuery } = await import("./remoteClaudeQuery.ts");
 const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
+const { installedGatewayLink } = await import("../gatewayLink.ts");
 type LeaseRecord = import("../gateway/leases.ts").LeaseRecord;
 type ClaudeSessionToolServer =
   import("./toolServer.ts").ClaudeSessionToolServer;
@@ -377,6 +379,47 @@ test.each([
     }
   },
 );
+
+/** A turn's environment with the switch off, as the env test above builds it. */
+function switchOffEnv(
+  profileId: string | undefined,
+  tmp: string,
+): Record<string, string> {
+  return buildClaudeSdkQueryOptions({
+    cwd: dataDir,
+    modelId: "sonnet",
+    thinkingLevel: "medium",
+    abortController: new AbortController(),
+    env: {
+      ...(profileId
+        ? profiles.claudeProfileEnvironment(profileId)
+        : childProcessEnv()),
+      TMPDIR: tmp,
+      CLAUDE_CODE_TMPDIR: tmp,
+    },
+  }).env as Record<string, string>;
+}
+
+/** The three variables a gateway engine adds, and the rest of its env. */
+function splitGatewayEnv(env: Record<string, string | undefined>): {
+  gateway: Record<string, string | undefined>;
+  rest: Record<string, string | undefined>;
+} {
+  const {
+    ANTHROPIC_BASE_URL,
+    CLAUDE_CODE_OAUTH_TOKEN,
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,
+    ...rest
+  } = env;
+  return {
+    gateway: {
+      ANTHROPIC_BASE_URL,
+      CLAUDE_CODE_OAUTH_TOKEN,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,
+    },
+    rest,
+  };
+}
 
 /** One hosted query opened directly, on a session binding of its own. */
 async function openDirect(
@@ -840,6 +883,11 @@ test("with a gateway link, a profiled session's turns, its account switch and a 
     gateway.engineLeases().filter((record) => record.revoked === undefined);
   const lease = (leaseId: string) =>
     gateway.engineLeases().find((record) => record.leaseId === leaseId);
+  /** The live lease an engine's token names, if the gateway accepts it. */
+  const leaseOf = (token: string | undefined) => {
+    const check = gateway.link.gateway!.leases.verify(token);
+    return check.ok ? check.leaseId : undefined;
+  };
   const a = claudeProfile("Leased A");
   const b = claudeProfile("Leased B");
   for (const id of [a, b])
@@ -867,6 +915,20 @@ test("with a gateway link, a profiled session's turns, its account switch and a 
     const [turn] = atQuery[0]!;
     assert.equal(turn!.profileId, a);
     assert.deepEqual(turn!.owner, { workerId: "local", sessionId: session.id });
+    // Only the three gateway variables differ from the switch-off env.
+    const firstEnv = splitGatewayEnv(queries[0]!.env);
+    assert.deepEqual(firstEnv.gateway, {
+      ANTHROPIC_BASE_URL: `${gateway.link.gateway!.url}/anthropic`,
+      CLAUDE_CODE_OAUTH_TOKEN: firstEnv.gateway.CLAUDE_CODE_OAUTH_TOKEN,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    });
+    assert.equal(
+      leaseOf(firstEnv.gateway.CLAUDE_CODE_OAUTH_TOKEN),
+      turn!.leaseId,
+    );
+    assert.deepEqual(firstEnv.rest, switchOffEnv(a, queries[0]!.env.TMPDIR!));
+    assert.equal(firstEnv.rest.CLAUDE_CONFIG_DIR, profiles.claudeConfigDir(a));
+    assert.ok(!Object.values(queries[0]!.env).includes(SENTINEL));
     queries[0]!.output.emit(result("leased-first"));
     await first;
     await until(() => lease(turn!.leaseId)?.revoked === "session-ended");
@@ -886,6 +948,13 @@ test("with a gateway link, a profiled session's turns, its account switch and a 
       sessionId: session.id,
     });
     assert.equal(lease(turn!.leaseId)?.revoked, "session-ended");
+    const secondEnv = queries[1]!.env;
+    assert.equal(leaseOf(secondEnv.CLAUDE_CODE_OAUTH_TOKEN), switched!.leaseId);
+    assert.notEqual(
+      secondEnv.CLAUDE_CODE_OAUTH_TOKEN,
+      firstEnv.gateway.CLAUDE_CODE_OAUTH_TOKEN,
+    );
+    assert.equal(secondEnv.CLAUDE_CONFIG_DIR, profiles.claudeConfigDir(b));
     queries[1]!.output.emit(result("leased-second"));
     await second;
     await until(() => lease(switched!.leaseId)?.revoked === "session-ended");
@@ -927,20 +996,154 @@ test("with a gateway link, a profiled session's turns, its account switch and a 
   }
   await until(() => inProcessWorkerEnginesForTests() === 0);
 
-  // A session without a profile grants nothing.
+  // A session without a profile runs as claude-default (U12): one lease
+  // the session owns, the default profile's scrubbed env, its records as
+  // they were.
   const granted = gateway.engineLeases().length;
   const plain = makeSession();
   try {
-    const turn = plain.session.createRuntimeAdapter().prompt("unleased");
+    const turn = plain.session.createRuntimeAdapter().prompt("unprofiled");
     await until(() => plain.queries.length === 1);
-    plain.queries[0]!.output.emit(result("unleased"));
+    const leases = gateway.engineLeases().slice(granted);
+    assert.equal(leases.length, 1);
+    const [unprofiled] = leases;
+    assert.equal(unprofiled!.profileId, profiles.DEFAULT_CLAUDE_PROFILE_ID);
+    assert.deepEqual(unprofiled!.owner, {
+      workerId: "local",
+      sessionId: plain.session.id,
+    });
+    const env = plain.queries[0]!.env;
+    assert.equal(env.ANTHROPIC_API_KEY, undefined);
+    assert.ok(!Object.values(env).includes(SENTINEL));
+    assert.equal(env.CLAUDE_CONFIG_DIR, undefined);
+    assert.equal(
+      env.ANTHROPIC_BASE_URL,
+      `${gateway.link.gateway!.url}/anthropic`,
+    );
+    assert.equal(leaseOf(env.CLAUDE_CODE_OAUTH_TOKEN), unprofiled!.leaseId);
+    assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
+    assert.ok(env.TMPDIR);
+    // Exactly what the default profile's session gets with the switch off.
+    assert.deepEqual(
+      splitGatewayEnv(env).rest,
+      switchOffEnv(profiles.DEFAULT_CLAUDE_PROFILE_ID, env.TMPDIR),
+    );
+    plain.queries[0]!.output.emit(result("unprofiled"));
     await turn;
-    assert.equal(gateway.engineLeases().length, granted);
+    await until(() => lease(unprofiled!.leaseId)?.revoked === "session-ended");
+    assert.equal(plain.session.credentialProfileId, undefined);
+    assert.equal(
+      sessionStore.get(plain.session.id)?.credentialProfileId,
+      undefined,
+    );
   } finally {
     plain.session.dispose();
+  }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+
+  // And its standalone /compact, too.
+  serial += 1;
+  let compactEnv: Record<string, string | undefined> = {};
+  const compactingPlain = new ClaudeSdkSession(
+    `claude-unprofiled-compact-${serial}`,
+    {
+      seam: async () => ({
+        query(params) {
+          atQuery.push(live());
+          compactEnv = params.options?.env ?? {};
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield result("compacted-unprofiled");
+            },
+          };
+        },
+      }),
+      providerSessionId: "provider-hosted",
+      title: "Unprofiled compact",
+      agentType: "workshop",
+    },
+  );
+  try {
+    await compactingPlain.compactContext();
+    const [compact] = atQuery.at(-1)!;
+    assert.equal(compact!.profileId, profiles.DEFAULT_CLAUDE_PROFILE_ID);
+    assert.deepEqual(compact!.owner, {
+      workerId: "local",
+      sessionId: compactingPlain.id,
+    });
+    assert.equal(leaseOf(compactEnv.CLAUDE_CODE_OAUTH_TOKEN), compact!.leaseId);
+    assert.equal(compactEnv.ANTHROPIC_API_KEY, undefined);
+    assert.equal(compactEnv.CLAUDE_CONFIG_DIR, undefined);
+    await until(() => lease(compact!.leaseId)?.revoked === "session-ended");
+    assert.equal(compactingPlain.credentialProfileId, undefined);
+  } finally {
+    compactingPlain.dispose();
     profiles.setCredentialProfileEnabled(a, false);
     profiles.setCredentialProfileEnabled(b, false);
     await gateway.close();
   }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+});
+
+test("without a link, a session's open carries no gateway access and its env is today's", async () => {
+  assert.equal(installedGatewayLink(), undefined);
+  const { session, queries } = makeSession();
+  let sent: Payload | undefined;
+  const disarm = answerNextInProcessWorkerCallForTests(
+    ENGINE_METHODS.open,
+    (payload, signal, real) => {
+      sent = payload;
+      return real(payload, signal);
+    },
+  );
+  try {
+    const turn = session.createRuntimeAdapter().prompt("off");
+    await until(() => queries.length === 1);
+    assert.equal("gateway" in decodeEngineOpen(sent!), false);
+    const env = queries[0]!.env;
+    assert.equal(env.ANTHROPIC_API_KEY, SENTINEL);
+    assert.equal(env.ANTHROPIC_BASE_URL, undefined);
+    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+    assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, undefined);
+    queries[0]!.output.emit(result("off"));
+    await turn;
+  } finally {
+    disarm();
+    session.dispose();
+  }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+});
+
+test("a Claude engine opened with gateway access and no profile is refused before any query", async () => {
+  let queried = 0;
+  const disarm = answerNextInProcessWorkerCallForTests(
+    ENGINE_METHODS.open,
+    (payload, signal, real) =>
+      real(
+        {
+          ...payload,
+          json: {
+            ...(payload.json as object),
+            gateway: {
+              baseUrl: "http://127.0.0.1:8788",
+              leaseToken: LEASE_TOKEN,
+            },
+          },
+        },
+        signal,
+      ),
+  );
+  try {
+    await assert.rejects(
+      openDirect(() => {
+        queried += 1;
+        return new FakeQuery({ prompt: "" });
+      }),
+      /a gateway Claude engine needs a credential profile/i,
+    );
+  } finally {
+    disarm();
+  }
+  assert.equal(queried, 0);
   await until(() => inProcessWorkerEnginesForTests() === 0);
 });

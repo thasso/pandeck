@@ -693,6 +693,8 @@ function comparable(options: ClaudeSdkOptions) {
 }
 
 const SENTINEL_KEY = "options-test-sentinel-api-key";
+// Synthetic fixture value in the lease token's three-segment shape.
+const LEASE_TOKEN = `${"aGVhZGVy"}.${"cGF5bG9hZA"}.${"c2VjcmV0"}`;
 
 test("a query's open spec is JSON, and composing it on its host gives today's options", async () => {
   const {
@@ -890,4 +892,47 @@ test("a query's environment applies the profile, then its variables, the output 
   );
   assert.equal(Object.hasOwn(windowed, CLAUDE_AUTO_COMPACT_WINDOW_ENV), false);
   assert.equal(base[CLAUDE_AUTO_COMPACT_WINDOW_ENV], "150000");
+});
+
+test("a gateway engine's lease is its only credential, set after everything else, and it needs a profile", () => {
+  const base = {
+    PATH: "/bin",
+    ANTHROPIC_API_KEY: SENTINEL_KEY,
+    ANTHROPIC_BASE_URL: "https://elsewhere.example",
+    CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+    [CLAUDE_AUTO_COMPACT_WINDOW_ENV]: "150000",
+  };
+  const epoch = { TMPDIR: "/tmp/epoch", CLAUDE_CODE_TMPDIR: "/tmp/epoch" };
+  const gateway = {
+    baseUrl: "http://127.0.0.1:8788",
+    leaseToken: LEASE_TOKEN,
+  };
+  const env = claudeQueryEnvironment(
+    {
+      profile: { configDir: "/data/profile/claude" },
+      set: {
+        ...epoch,
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:1/set",
+        CLAUDE_CODE_OAUTH_TOKEN: "set-token",
+        [CLAUDE_AUTO_COMPACT_WINDOW_ENV]: "90000",
+      },
+      dropAutoCompactWindow: true,
+    },
+    base,
+    gateway,
+  );
+  assert.deepStrictEqual(env, {
+    ...withClaudeOutputBudgetEnvironment({
+      PATH: "/bin",
+      CLAUDE_CONFIG_DIR: "/data/profile/claude",
+      ...epoch,
+    }),
+    ANTHROPIC_BASE_URL: "http://127.0.0.1:8788/anthropic",
+    CLAUDE_CODE_OAUTH_TOKEN: LEASE_TOKEN,
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  });
+  assert.throws(
+    () => claudeQueryEnvironment({ set: epoch }, base, gateway),
+    /a gateway Claude engine needs a credential profile/i,
+  );
 });

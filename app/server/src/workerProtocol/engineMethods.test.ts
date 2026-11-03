@@ -116,6 +116,68 @@ test("open, command, dispose and events round-trip through the real codec", () =
   );
 });
 
+// Synthetic fixture value in the lease token's three-segment shape.
+const LEASE_TOKEN = `${"aGVhZGVy"}.${"cGF5bG9hZA"}.${"c2VjcmV0"}`;
+const GATEWAY = { baseUrl: "http://127.0.0.1:8788", leaseToken: LEASE_TOKEN };
+
+test("protocol 1.10's open carries a leased engine's gateway access, loopback only", () => {
+  const open = { engineId: 7, harness: "claude-sdk", spec: { a: 1 } };
+  assert.deepEqual(
+    decodeEngineOpen(wire(encodeEngineOpen({ ...open, gateway: GATEWAY }))),
+    { ...open, gateway: GATEWAY },
+  );
+  const unleased = decodeEngineOpen(wire(encodeEngineOpen(open)));
+  assert.deepEqual(unleased, open);
+  assert.equal("gateway" in unleased, false);
+  assert.deepEqual(
+    decodeEngineOpen(
+      wire(
+        encodeEngineOpen({
+          ...open,
+          gateway: { ...GATEWAY, leaseToken: `a.b.${"c".repeat(1020)}` },
+        }),
+      ),
+    ).gateway?.leaseToken.length,
+    1024,
+  );
+
+  const withGateway = (gateway: unknown): Payload => ({
+    json: { ...open, gateway },
+  });
+  for (const baseUrl of [
+    "http://localhost:1",
+    "https://127.0.0.1:1",
+    "http://127.0.0.1:1/x",
+    "http://127.0.0.1",
+    "http://127.0.0.1:123456",
+  ])
+    assertInvalid(
+      () => decodeEngineOpen(withGateway({ ...GATEWAY, baseUrl })),
+      /gateway URL/,
+    );
+  for (const leaseToken of [
+    "aGVhZGVy.cGF5bG9hZA",
+    `a.b.${"c".repeat(1021)}`,
+    "a.b.c d",
+    "a..c",
+    7,
+  ])
+    assertInvalid(
+      () => decodeEngineOpen(withGateway({ ...GATEWAY, leaseToken })),
+      /lease token/,
+    );
+  for (const gateway of [
+    { ...GATEWAY, token: "extra" },
+    "http://127.0.0.1:8788",
+    null,
+    [GATEWAY],
+  ])
+    assertInvalid(
+      () => decodeEngineOpen(withGateway(gateway)),
+      /gateway access/,
+    );
+});
+
 test("a command answer names its seq on success and on failure", () => {
   assert.deepEqual(
     decodeEngineCommandAnswer(

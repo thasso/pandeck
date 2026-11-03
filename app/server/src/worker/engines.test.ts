@@ -190,6 +190,29 @@ test("an open answers the factory's info and snapshot; an unknown harness and a 
   assert.equal(worker.engines(), 1);
 });
 
+// Synthetic fixture value in the lease token's three-segment shape.
+const LEASE_TOKEN = `${"aGVhZGVy"}.${"cGF5bG9hZA"}.${"c2VjcmV0"}`;
+
+test("the factory's host carries the open's gateway access, and none without it", async () => {
+  const { server, engines } = start();
+  const gateway = { baseUrl: "http://127.0.0.1:8788", leaseToken: LEASE_TOKEN };
+  await server
+    .request(
+      ENGINE_METHODS.open,
+      encodeEngineOpen({
+        engineId: 1,
+        harness: "fake",
+        spec: { label: "leased" },
+        gateway,
+      }),
+    )
+    .then(decodeEngineOpened);
+  await open(server, 2);
+  assert.deepEqual(engines[0]!.host.gateway, gateway);
+  assert.equal(engines[1]!.host.gateway, undefined);
+  assert.equal("gateway" in engines[1]!.host, false);
+});
+
 test("an id is taken while its engine opens", async () => {
   let release!: () => void;
   const opened: FakeEngine[] = [];

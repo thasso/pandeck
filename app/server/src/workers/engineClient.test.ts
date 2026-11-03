@@ -3,6 +3,7 @@ import net from "node:net";
 import { afterAll, afterEach, test } from "vitest";
 import { DEFAULT_OPENAI_PROFILE_ID } from "../credentialProfiles.ts";
 import type { LeaseRecord } from "../gateway/leases.ts";
+import type { Payload } from "../workerProtocol/codec.ts";
 import {
   GATEWAY_UNAVAILABLE_TEXT,
   installedGatewayLink,
@@ -29,6 +30,7 @@ import {
   type EngineLeaseContext,
 } from "./engineClient.ts";
 import {
+  answerNextInProcessWorkerCallForTests,
   ensureInProcessWorker,
   inProcessWorkerQuiescentForTests,
   inProcessWorkerServedMethodForTests,
@@ -308,6 +310,10 @@ test("with a link, a profiled open holds one engine lease from before engine.ope
   const [held] = atFactory!;
   assert.deepEqual(held!.owner, { workerId: "local", sessionId: "s1" });
   assert.equal(held!.profileId, DEFAULT_OPENAI_PROFILE_ID);
+  // The open carried the gateway's URL and the granted lease's token.
+  assert.equal(host!.gateway?.baseUrl, gateway.link.gateway!.url);
+  const check = gateway.link.gateway!.leases.verify(host!.gateway?.leaseToken);
+  assert.equal(check.ok && check.leaseId, held!.leaseId);
   await disposed.channel.dispose();
   const ended = () =>
     gateway!.engineLeases().find((r) => r.leaseId === held!.leaseId);
@@ -344,10 +350,24 @@ test("with a link, a profiled open holds one engine lease from before engine.ope
   assert.equal(thrown[0]!.revoked, "session-ended");
   assert.equal(revokes(thrown[0]!.leaseId), 1);
 
-  // An open without a lease context grants nothing.
+  // An open without a lease context grants nothing and carries no access.
   const count = gateway.engineLeases().length;
-  const plain = await openScripted();
+  let sent: Payload | undefined;
+  const disarm = answerNextInProcessWorkerCallForTests(
+    ENGINE_METHODS.open,
+    (payload, signal, real) => {
+      sent = payload;
+      return real(payload, signal);
+    },
+  );
+  const plain = await openScripted().finally(disarm);
   assert.equal(gateway.engineLeases().length, count);
+  assert.deepEqual(Object.keys(sent!.json as object).sort(), [
+    "engineId",
+    "harness",
+    "spec",
+  ]);
+  assert.equal(host!.gateway, undefined);
   await plain.channel.dispose();
 });
 
@@ -394,23 +414,30 @@ test("a failed grant fails the open with U7's text before the Worker sees engine
   let factoryRuns = 0;
   atOpen = () => (factoryRuns += 1);
 
-  // The gateway failed to start: its port is taken.
+  // The gateway failed to start: its port is taken. With no gateway to
+  // send a lease to, the open is refused before any grant.
   const taken = net.createServer();
   await new Promise<void>((resolve) =>
     taken.listen(0, "127.0.0.1", () => resolve()),
   );
+  const failedLines: string[] = [];
   const failed = startGatewayLink({
     stateDir: `${process.env.DATA_DIR}/gateway-failed`,
     port: (taken.address() as net.AddressInfo).port,
-    log: () => {},
+    log: (line) => failedLines.push(line),
   });
   failedLinks.push(failed);
   assert.equal(await failed.ready, false);
+  assert.equal(failed.gateway, undefined);
   const before = opens();
   await assert.rejects(openScripted(lease), {
     message: GATEWAY_UNAVAILABLE_TEXT,
   });
   assert.equal(opens(), before);
+  assert.equal(
+    failedLines.filter((line) => line.includes("leases.grant")).length,
+    0,
+  );
   await failedLinks.pop()!.close();
   await new Promise<void>((resolve) => taken.close(() => resolve()));
 

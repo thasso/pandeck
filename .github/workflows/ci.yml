@@ -97,6 +97,7 @@ jobs:
         run: |
           pnpm run test:release
           pnpm run test:package-config-secrets
+          node --test scripts/run-engine-contract.test.mjs
           pnpm --filter @assistant/shared test
 
       - name: Build
@@ -150,6 +151,30 @@ jobs:
         run:
           pnpm --filter @assistant/web exec vitest run --maxWorkers=100%
           --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # The real engine CLI against fakes, in a user, network and PID namespace
+  # with loopback alone (`docs/workers.md` "Engine-version guard").
+  engine-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up the workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Engine contract
+        run: pnpm run test:engine-contract
 
   nix-build:
     runs-on: ubuntu-latest
@@ -239,7 +264,16 @@ jobs:
   # not skip it.
   ci:
     if: always()
-    needs: [check, test-server, test-web, nix-build, nix-rebuild, reproducible]
+    needs:
+      [
+        check,
+        test-server,
+        test-web,
+        engine-contract,
+        nix-build,
+        nix-rebuild,
+        reproducible,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
