@@ -1,9 +1,10 @@
 /**
  * The server's link to the in-process credential gateway (`gatewayLink.ts`):
- * its boot order, profile changes reaching the gateway in order, and an
- * unavailable gateway failing grants with U7's text. Fake profiles under the
- * setup's temp `DATA_DIR` and a temp `HOME`; a fake TLS upstream stands in
- * for ChatGPT.
+ * its boot order, profile changes reaching the gateway in order, an
+ * unavailable gateway failing grants with U7's text, and the login hold calls
+ * across link lifetimes. Fake profiles under the setup's temp `DATA_DIR` and a
+ * temp `HOME`; a fake TLS upstream stands in for ChatGPT. Every hold's owner
+ * is this process, so its holds are observed through a fake probe.
  */
 import assert from "node:assert/strict";
 import {
@@ -25,8 +26,17 @@ process.env.HOME = home;
 const profiles = await import("./credentialProfiles.ts");
 const config = await import("./config.ts");
 const { DEFAULT_WORKER_ID } = await import("./workers/placement.ts");
-const { GATEWAY_UNAVAILABLE_TEXT, installedGatewayLink, startGatewayLink } =
-  await import("./gatewayLink.ts");
+const {
+  GATEWAY_LOGIN_UNAVAILABLE_TEXT,
+  GATEWAY_UNAVAILABLE_TEXT,
+  LoginHeldError,
+  installedGatewayLink,
+  startGatewayLink,
+} = await import("./gatewayLink.ts");
+const { startGatewayLinkForTests } = await import("./test/gatewayLink.ts");
+const { endChild, fakeProcesses, spawnIdleChild } =
+  await import("./test/gatewayFixtures.ts");
+const { processStartTime } = await import("./gateway/processIdentity.ts");
 const { startGateway } = await import("./gateway/gateway.ts");
 const { refusalText } = await import("./gateway/refusals.ts");
 const {
@@ -44,6 +54,7 @@ const { analyzeProviderError, isLoginDeath, runFailureFacts } =
   await import("./providerErrors.ts");
 type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 type GatewayLinkOptions = import("./gatewayLink.ts").GatewayLinkOptions;
+type GatewayOptions = import("./gateway/gateway.ts").GatewayOptions;
 
 // Synthetic fixture values; none is a real credential.
 const FAKE_ACCESS = "fake-codex-access";
@@ -475,4 +486,190 @@ test("a link not ready in 10 s fails the grant then", async () => {
   assert.equal(failure.message, GATEWAY_UNAVAILABLE_TEXT);
   fail(new Error("the test ends the start"));
   assert.equal(await pending.ready, false);
+});
+
+/** Starts the gateway with its holds' processes observed as `state`, never for real. */
+function observed(
+  state: "running" | "exited",
+  extra: Partial<GatewayOptions> = {},
+) {
+  const processes = fakeProcesses(state);
+  return (options: GatewayOptions) =>
+    startGateway({ ...options, processProbe: processes.probe, ...extra });
+}
+
+const heldBy =
+  (refusal: "hold_exists" | "login_stuck", holdId: string) =>
+  (err: unknown): boolean =>
+    err instanceof LoginHeldError &&
+    err.refusal === refusal &&
+    err.holdId === holdId;
+
+test("AC16: the login hold calls, the recorded status, and a hold waiting for the lane holding up no other request", async () => {
+  const claude = profiles.createCredentialProfile({
+    provider: "claude",
+    name: "Link Claude",
+  }).id;
+  const codex = codexProfile("Link hold B");
+  let now = Date.now();
+  const linked = await startGatewayLinkForTests({
+    start: observed("running", { now: () => now }),
+  });
+  const child = spawnIdleChild();
+  try {
+    const { link } = linked;
+    const gw = link.gateway!;
+    const id = await link.acquireLoginHold(claude);
+    const hello = gw.lastHello()!;
+    const [record] = gw.holds();
+    assert.equal(record?.holdId, id);
+    assert.deepEqual(record?.owner, {
+      serverBootId: hello.serverBootId,
+      pid: hello.pid,
+      startTime: hello.startTime,
+    });
+    // The writer is this test's own child.
+    await link.registerLoginWriter(id, child.pid);
+    assert.deepEqual(gw.holds()[0]?.writer, {
+      pid: child.pid,
+      startTime: processStartTime(child.pid),
+    });
+    await assert.rejects(
+      link.acquireLoginHold(claude),
+      heldBy("hold_exists", id),
+    );
+    await link.releaseLoginHold(id);
+    assert.deepEqual(gw.holds(), []);
+
+    const stuck = await link.acquireLoginHold(claude);
+    assert.equal(link.loginStatus(claude), undefined);
+    now += 30 * 60 * 1000;
+    gw.checkHolds();
+    await until(() => link.loginStatus(claude)?.loginStuck === true);
+    assert.deepEqual(link.loginStatus(claude), {
+      loginStuck: true,
+      holdId: stuck,
+    });
+    await link.forceReleaseLoginHold(stuck);
+    await until(() => link.loginStatus(claude)?.loginStuck === false);
+    assert.deepEqual(gw.holds(), []);
+
+    let finish!: () => void;
+    const item = gw.lane.run(
+      claude,
+      () => new Promise<void>((resolve) => (finish = resolve)),
+    );
+    let answered = false;
+    const waiting = link.acquireLoginHold(claude).finally(() => {
+      answered = true;
+    });
+    const lease = await link.grantEngineLease({
+      workerId: "local",
+      sessionId: "s-hold",
+      profileId: codex,
+    });
+    profiles.renameCredentialProfile(codex, "Link hold renamed");
+    await until(() =>
+      (registry(linked.stateDir) as { id: string; name: string }[]).some(
+        (p) => p.id === codex && p.name === "Link hold renamed",
+      ),
+    );
+    // A request after them is answered after them; the hold still waits.
+    await link.revokeLease(lease.leaseId, "session-ended");
+    assert.equal(answered, false);
+    finish();
+    await item;
+    const third = await waiting;
+    assert.deepEqual(
+      gw.holds().map((hold) => hold.holdId),
+      [third],
+    );
+    await link.releaseLoginHold(third);
+  } finally {
+    await endChild(child);
+    await linked.close();
+    profiles.deleteCredentialProfile(claude);
+    profiles.deleteCredentialProfile(codex);
+  }
+});
+
+test("AC16: a link that is not ready fails the login calls with U7's login text", async () => {
+  const failed = link({
+    start: () => Promise.reject(new Error("the test refuses the start")),
+  });
+  assert.equal(await failed.ready, false);
+  await assert.rejects(
+    failed.acquireLoginHold(profiles.DEFAULT_OPENAI_PROFILE_ID),
+    {
+      message: GATEWAY_LOGIN_UNAVAILABLE_TEXT,
+    },
+  );
+  await assert.rejects(failed.forceReleaseLoginHold("h1"), {
+    message: GATEWAY_LOGIN_UNAVAILABLE_TEXT,
+  });
+  // Best-effort: only logged.
+  await failed.releaseLoginHold("h1");
+  assert.equal(
+    failed.loginStatus(profiles.DEFAULT_OPENAI_PROFILE_ID),
+    undefined,
+  );
+});
+
+test("AC22: every link lifetime is a new boot; an earlier boot's hold stays while its owner runs and ends once it exited", async () => {
+  const id = codexProfile("Link restart");
+  const dir = stateDir();
+  try {
+    const first = await startGatewayLinkForTests({
+      stateDir: dir,
+      start: observed("running"),
+    });
+    let held: string;
+    let firstBoot: string;
+    try {
+      held = await first.link.acquireLoginHold(id);
+      firstBoot = first.link.gateway!.lastHello()!.serverBootId;
+    } finally {
+      await first.close();
+    }
+    assert.ok(
+      existsSync(join(dir, "holds.json")),
+      "the helper leaves a state directory it did not make",
+    );
+
+    const second = await startGatewayLinkForTests({
+      stateDir: dir,
+      start: observed("running"),
+    });
+    try {
+      assert.notEqual(
+        second.link.gateway!.lastHello()!.serverBootId,
+        firstBoot,
+      );
+      assert.deepEqual(
+        second.link.gateway!.holds().map((hold) => hold.holdId),
+        [held],
+      );
+      await assert.rejects(
+        second.link.acquireLoginHold(id),
+        heldBy("login_stuck", held),
+      );
+    } finally {
+      await second.close();
+    }
+
+    const third = await startGatewayLinkForTests({
+      stateDir: dir,
+      start: observed("exited"),
+    });
+    try {
+      assert.deepEqual(third.link.gateway!.holds(), []);
+      const next = await third.link.acquireLoginHold(id);
+      assert.notEqual(next, held);
+      await third.link.releaseLoginHold(next);
+    } finally {
+      await third.close();
+    }
+  } finally {
+    profiles.deleteCredentialProfile(id);
+  }
 });

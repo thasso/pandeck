@@ -1,10 +1,14 @@
 /**
  * Fixtures for the credential gateway's control and state tests: fake TLS
  * upstreams for `api.anthropic.com` and `chatgpt.com`, token files under the
- * test's temp `DATA_DIR`, a control dialer on an in-process pair, and a model
- * request. Every value is fake. It imports nothing from `gateway/`, whose only
- * importer outside itself is pinned (`workerBoundary.test.ts`).
+ * test's temp `DATA_DIR`, a control dialer on an in-process pair, a model
+ * request, and the processes a login hold names: a fake probe, or idle
+ * children of this test. Every value is fake. It imports nothing from
+ * `gateway/`, whose only importer outside itself is pinned
+ * (`workerBoundary.test.ts`).
  */
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -18,6 +22,7 @@ import {
 import {
   WorkerConnection,
   type ConnectionProtocol,
+  type MethodHandlers,
 } from "../workerProtocol/connection.ts";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 
@@ -128,18 +133,21 @@ export async function writeTokenFiles(): Promise<{
 
 /**
  * Attaches the listener end of a fresh in-process pair through `attach` and
- * dials the other with `protocol` (the worker protocol when absent). The test
- * makes the pair: only the isolation boundary makes one outside tests.
+ * dials the other with `protocol` (the worker protocol when absent), serving
+ * `handlers` (what the gateway sends the server). The test makes the pair:
+ * only the isolation boundary makes one outside tests.
  */
 export function dialControl(
   [server, gateway]: [ByteEndpoint, ByteEndpoint],
   attach: (endpoint: ByteEndpoint) => void,
   protocol?: ConnectionProtocol,
+  handlers?: MethodHandlers,
 ): WorkerConnection {
   attach(gateway);
   return new WorkerConnection(server, {
     handshake: { role: "worker", workerId: "pandeck-server" },
     ...(protocol ? { protocol } : {}),
+    ...(handlers ? { handlers } : {}),
   });
 }
 
@@ -177,4 +185,63 @@ export async function modelRequest(
     request.on("error", reject);
     request.end('{"model":"fixture"}');
   });
+}
+
+/** What a fake process answers `processState`'s probe. */
+type FakeProcessState = "running" | "exited" | "eperm";
+
+/**
+ * A `processProbe` that observes no real process: each pid answers as `set`
+ * says, `fallback` otherwise, and has no readable start time.
+ */
+export interface FakeProcesses {
+  probe: {
+    kill(pid: number, signal: 0): void;
+    startTime(pid: number): string | null;
+  };
+  set(pid: number, state: FakeProcessState): void;
+  /** Every pid the probe was asked about, in order. */
+  readonly probed: number[];
+}
+
+export function fakeProcesses(
+  fallback: FakeProcessState = "running",
+): FakeProcesses {
+  const states = new Map<number, FakeProcessState>();
+  const probed: number[] = [];
+  const failure = (code: string) =>
+    Object.assign(new Error(`fake ${code}`), { code });
+  return {
+    probe: {
+      kill(pid) {
+        probed.push(pid);
+        const state = states.get(pid) ?? fallback;
+        if (state === "exited") throw failure("ESRCH");
+        if (state === "eperm") throw failure("EPERM");
+      },
+      startTime: () => null,
+    },
+    set: (pid, state) => states.set(pid, state),
+    probed,
+  };
+}
+
+/**
+ * An idle child of this test, the only kind of process a test observes for
+ * real; end it with {@link endChild}, through its own handle.
+ */
+export function spawnIdleChild(): ChildProcess & { pid: number } {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], {
+    stdio: "ignore",
+  });
+  if (child.pid === undefined) throw new Error("the idle child did not start");
+  return child as ChildProcess & { pid: number };
+}
+
+/** Ends `child` through its handle and waits until it has exited. */
+export async function endChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, "exit");
+  child.kill();
+  await exited;
 }

@@ -12,6 +12,10 @@ Contract: `docs/workers.md` "Credentials" and ADR-0004.
   and paths: a lease's secret only as its hash, never a token or lease token.
 - Token files are only read here, never written, renamed or chmodded, until a
   later slice owns renewal.
+- A login hold ends only on its owning boot's release, the observed exit of its
+  owner and registered writer (`processState`; uncertain is alive), or the
+  operator's force release; never on elapsed time, a lost connection, a restart
+  or a sync.
 - Forward bodies with `pipe` in both directions, never `on("data")` writes that
   ignore `write()`'s result: a paused client must hold the upstream back.
 - No log line or refusal holds a credential, lease token or secret, query or

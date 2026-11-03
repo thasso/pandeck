@@ -1,19 +1,28 @@
 /**
  * The gateway's state directory (`docs/workers.md` "Credentials"):
- * `leases.json` and `profiles.json`, each a `{ v: 1, … }` document written
- * whole through the private atomic writer (directory 0700, file 0600, temp
- * file plus rename). Neither holds a token, a lease token or its secret: a
- * lease is saved with its secret's hash, a profile with its token file's path.
+ * `leases.json`, `profiles.json` and `holds.json`, each a `{ v: 1, … }`
+ * document written whole through the private atomic writer (directory 0700,
+ * file 0600, temp file plus rename). None holds a token, a lease token or its
+ * secret: a lease is saved with its secret's hash, a profile with its token
+ * file's path, a login hold with its processes' pids and start times.
  *
- * Both load when the gateway starts, so it forwards with the server down. A
+ * All load when the gateway starts, so it forwards with the server down. A
  * missing file is empty. An unreadable file, or one of another version, is
  * logged by name and loaded as empty, so an unreadable `leases.json` refuses
- * every old token. A record that does not validate is skipped and logged the
+ * every old token; an unreadable `holds.json` instead fences every profile
+ * (`holds.ts`). A record that does not validate is skipped and logged the
  * same way. No log line holds file content. The next save replaces the file.
  */
 import { join } from "node:path";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
+import {
+  isHoldId,
+  type HoldOwner,
+  type HoldProcess,
+  type HoldRecord,
+} from "./holds.ts";
 import { isLeaseId, type LeaseOwnership, type LeaseRecord } from "./leases.ts";
+import { isPid, isStartTime } from "./processIdentity.ts";
 import {
   isAbsolutePath,
   isLeaseProvider,
@@ -38,8 +47,12 @@ export class StateWriteError extends Error {}
 export interface GatewayState {
   leases: LeaseRecord[];
   profiles: GatewayProfile[];
+  holds: HoldRecord[];
+  /** `holds.json` was unreadable: every profile is fenced. */
+  holdsUnreadable: boolean;
   persistLeases(records: LeaseRecord[]): void;
   persistProfiles(profiles: GatewayProfile[]): void;
+  persistHolds(records: HoldRecord[]): void;
 }
 
 /** Whether `value` is a non-empty owner id of bounded length. */
@@ -112,9 +125,55 @@ function parseLeaseRecord(value: unknown): LeaseRecord | undefined {
   };
 }
 
+function parseHoldProcess(value: unknown): HoldProcess | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { pid, startTime } = value as Record<string, unknown>;
+  return isPid(pid) && isStartTime(startTime) ? { pid, startTime } : undefined;
+}
+
+function parseHoldOwner(value: unknown): HoldOwner | null | undefined {
+  if (value === null) return null;
+  const process = parseHoldProcess(value);
+  const { serverBootId } = value as Record<string, unknown>;
+  return process && isOwnerId(serverBootId)
+    ? { serverBootId, ...process }
+    : undefined;
+}
+
+function parseHoldRecord(value: unknown): HoldRecord | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return undefined;
+  const r = value as Record<string, unknown>;
+  const owner = parseHoldOwner(r.owner);
+  const writer =
+    r.writer === undefined ? undefined : parseHoldProcess(r.writer);
+  if (
+    owner === undefined ||
+    (r.writer !== undefined && writer === undefined) ||
+    !isHoldId(r.holdId) ||
+    !isProfileId(r.profileId) ||
+    !isLeaseProvider(r.provider) ||
+    !isTime(r.acquiredAt) ||
+    !isTime(r.deadline) ||
+    (r.stuckAt !== undefined && !isTime(r.stuckAt))
+  )
+    return undefined;
+  return {
+    holdId: r.holdId,
+    profileId: r.profileId,
+    provider: r.provider,
+    owner,
+    ...(writer ? { writer } : {}),
+    acquiredAt: r.acquiredAt,
+    deadline: r.deadline,
+    ...(r.stuckAt !== undefined ? { stuckAt: r.stuckAt } : {}),
+  };
+}
+
 /**
- * Loads one state file's records, or none when it is unreadable. Duplicate
- * keys keep the first record.
+ * Loads one state file's records, or undefined when it is unreadable, which
+ * is logged with `unreadable` saying what follows. Duplicate keys keep the
+ * first record.
  */
 function loadRecords<T>(
   file: ReturnType<typeof createPrivateJsonFile>,
@@ -123,7 +182,8 @@ function loadRecords<T>(
   parse: (value: unknown) => T | undefined,
   key: (record: T) => string,
   log: (line: string) => void,
-): T[] {
+  unreadable = "starting without it",
+): T[] | undefined {
   let values: unknown[];
   try {
     values = file.read<unknown, unknown[]>((stored) => {
@@ -135,8 +195,8 @@ function loadRecords<T>(
       return records;
     });
   } catch {
-    log(`${name} unreadable; starting without it`);
-    return [];
+    log(`${name} unreadable; ${unreadable}`);
+    return undefined;
   }
   const records = new Map<string, T>();
   let skipped = 0;
@@ -179,24 +239,44 @@ export function openGatewayState(
     "gateway profiles",
     { privateDirectory: "enforce" },
   );
+  const holdsFile = createPrivateJsonFile(
+    join(stateDir, "holds.json"),
+    "gateway login holds",
+    { privateDirectory: "enforce" },
+  );
+  const holds = loadRecords(
+    holdsFile,
+    "holds.json",
+    "holds",
+    parseHoldRecord,
+    // One hold per profile.
+    (record) => record.profileId,
+    log,
+    "fencing every profile",
+  );
   return {
-    leases: loadRecords(
-      leasesFile,
-      "leases.json",
-      "leases",
-      parseLeaseRecord,
-      (record) => record.leaseId,
-      log,
-    ),
-    profiles: loadRecords(
-      profilesFile,
-      "profiles.json",
-      "profiles",
-      parseProfile,
-      (profile) => profile.id,
-      log,
-    ),
+    leases:
+      loadRecords(
+        leasesFile,
+        "leases.json",
+        "leases",
+        parseLeaseRecord,
+        (record) => record.leaseId,
+        log,
+      ) ?? [],
+    profiles:
+      loadRecords(
+        profilesFile,
+        "profiles.json",
+        "profiles",
+        parseProfile,
+        (profile) => profile.id,
+        log,
+      ) ?? [],
+    holds: holds ?? [],
+    holdsUnreadable: holds === undefined,
     persistLeases: writer(leasesFile, "leases.json", "leases"),
     persistProfiles: writer(profilesFile, "profiles.json", "profiles"),
+    persistHolds: writer(holdsFile, "holds.json", "holds"),
   };
 }

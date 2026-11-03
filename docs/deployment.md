@@ -309,9 +309,11 @@ the server's credential gateway link as `ASSISTANT_GATEWAY=1` does: its control
 endpoint must refuse a worker-protocol dialer, a granted engine lease must reach
 a loopback fake ChatGPT upstream with the seeded credential, `leases.json` must
 be 0600 in a 0700 directory without the token, and a gateway restarted without
-control must still forward that lease and refuse a revoked one. From an
-unrelated cwd and a clean environment, it also runs the packaged browser MCP
-CLI's version command and an MCP initialize plus `tools/list`, covering the
+control must still forward that lease and refuse a revoked one;
+`checkProcessState` then reads its own child's start time under Bun and sees
+that child running, then exited once it is killed, which login holds rely on.
+From an unrelated cwd and a clean environment, it also runs the packaged browser
+MCP CLI's version command and an MCP initialize plus `tools/list`, covering the
 patched local imports without a workspace `node_modules`. When Chrome or
 Chromium is available, the check also launches it and navigates a page. The Nix
 sandbox has neither browser, so that last probe reports an explicit skip there;

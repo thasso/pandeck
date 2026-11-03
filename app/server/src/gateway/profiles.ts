@@ -108,6 +108,10 @@ export class ProfileRegistry {
     return this.profiles.has(id);
   }
 
+  ids(): string[] {
+    return [...this.profiles.keys()];
+  }
+
   private save(): void {
     this.unsaved = true;
     this.persist?.([...this.profiles.values()].map((p) => ({ ...p })));
