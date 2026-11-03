@@ -19,6 +19,8 @@
  *   holds an engine lease, granted before `engine.open` goes out and revoked
  *   once at the engine's first end: dispose, connection end, or a throw before
  *   the open returns. A failed grant fails the open; the Worker never sees it.
+ *   The open carries the gateway's URL and the lease token, so the engine
+ *   authenticates only through the gateway; an unleased open carries neither.
  *
  * Imports no connection acquisition, so `inProcessWorker.ts` can wire it.
  */
@@ -40,9 +42,14 @@ import {
   encodeEngineEventsApplied,
   encodeEngineOpen,
   type EngineDiscard,
+  type EngineGatewayAccess,
   type EngineItem,
 } from "../workerProtocol/engineMethods.ts";
-import { installedGatewayLink, type GatewayLink } from "../gatewayLink.ts";
+import {
+  GatewayUnavailableError,
+  installedGatewayLink,
+  type GatewayLink,
+} from "../gatewayLink.ts";
 import { workerRegistry } from "./workerRegistry.ts";
 
 /** How a harness's remote handle takes its engine's items. */
@@ -95,7 +102,7 @@ interface Entry {
   pending: Set<(err: Error) => void>;
   /** The tail of the items being applied, so deliveries apply in order. */
   applying: Promise<void>;
-  /** The engine's lease, when it holds one; its token goes nowhere yet. */
+  /** The engine's lease, when it holds one; its token went with the open. */
   lease?: { leaseId: string; token: string };
   /** Revokes the lease, the first time only. */
   endLease?: () => Promise<void>;
@@ -228,6 +235,11 @@ async function openLeased<T>(
   spec: unknown,
   attach: Attach<T>,
 ): Promise<{ info: unknown; value: T }> {
+  // A link that started no gateway gives the engine nowhere to send the
+  // lease: refuse before granting one. Ready implies a started gateway.
+  const baseUrl =
+    link.gateway?.url ?? ((await link.ready) ? link.gateway?.url : undefined);
+  if (baseUrl === undefined) throw new GatewayUnavailableError();
   // Before an open the Worker can see: a failed grant throws here.
   const granted = await link.grantEngineLease({
     workerId: workerRegistry.admittedAs(connection),
@@ -240,6 +252,7 @@ async function openLeased<T>(
   try {
     return await openEngine(connection, harness, spec, attach, {
       lease: granted,
+      gateway: { baseUrl, leaseToken: granted.token },
       endLease,
       ...(lease.sessionId === undefined && lease.sessionIdOf
         ? {
@@ -263,6 +276,8 @@ async function openEngine<T>(
   spec: unknown,
   attach: Attach<T>,
   leased?: Pick<Entry, "lease" | "endLease"> & {
+    /** What the engine's open carries to reach the gateway. */
+    gateway: EngineGatewayAccess;
     /** Completes the lease's owner from the open's answer, before `attach`. */
     bindSession?: (info: unknown) => Promise<void>;
   },
@@ -284,7 +299,12 @@ async function openEngine<T>(
     answer = decodeEngineOpened(
       await connection.request(
         ENGINE_METHODS.open,
-        encodeEngineOpen({ engineId, harness, spec }),
+        encodeEngineOpen({
+          engineId,
+          harness,
+          spec,
+          ...(leased ? { gateway: leased.gateway } : {}),
+        }),
       ),
     );
   } catch (err) {

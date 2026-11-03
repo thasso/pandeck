@@ -35,6 +35,7 @@ import type { SessionAgent } from "../agents/sessionAgent.ts";
 import type { PromptAssetOptions } from "../promptAssets.ts";
 import type { PromptConditions } from "../promptConditions.ts";
 import type { ClaudeSdkOptions } from "./sdkSeam.ts";
+import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
 import { SKILLS_RUNTIME_DIR } from "../config.ts";
 import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
 import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
@@ -452,16 +453,30 @@ export function claudeQueryOpenSpec(
 
 /**
  * A query's child environment over its host's `base`: the profile's
- * environment, then `set`, then the output budget and the window rule.
+ * environment, then `set`, then the output budget and the window rule. With
+ * `gateway` the engine's only credential is its lease, set last: the
+ * gateway's Anthropic prefix and the lease as the OAuth token, which nothing
+ * before overrides. A gateway engine needs the profile's scrub.
  */
 export function claudeQueryEnvironment(
   spec: ClaudeQueryEnvSpec,
   base: NodeJS.ProcessEnv,
+  gateway?: EngineGatewayAccess,
 ): Record<string, string> {
-  return boundedQueryEnvironment(
+  if (gateway && !spec.profile)
+    throw new Error("A gateway Claude engine needs a credential profile.");
+  const env = boundedQueryEnvironment(
     { ...claudeChildEnvironment(base, spec.profile), ...spec.set },
     spec.dropAutoCompactWindow === true,
   );
+  return gateway
+    ? {
+        ...env,
+        ANTHROPIC_BASE_URL: `${gateway.baseUrl}/anthropic`,
+        CLAUDE_CODE_OAUTH_TOKEN: gateway.leaseToken,
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      }
+    : env;
 }
 
 function boundedQueryEnvironment(

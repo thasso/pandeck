@@ -16,6 +16,11 @@
  *   item arrived and every command sent before has its answer. `discard()`
  *   is for a handle never iterated: a forced dispose.
  */
+import {
+  DEFAULT_CLAUDE_PROFILE_ID,
+  claudeProfileRuntime,
+} from "../credentialProfiles.ts";
+import { installedGatewayLink } from "../gatewayLink.ts";
 import type { EngineItem } from "../workerProtocol/engineMethods.ts";
 import {
   openEngineChannel,
@@ -249,8 +254,10 @@ function remoteClaudeQuery(
 /**
  * Open `spec`'s query on the session's Worker. Aborting `signal` aborts the
  * hosted query's own controller; its stream then ends as the query does.
- * With `credentialProfileId` and a gateway link, the query's engine holds a
- * lease for that profile, owned by the session.
+ * With a gateway link, the query's engine holds a lease for
+ * `credentialProfileId`, owned by the session. A session without one runs as
+ * `claude-default` with that profile's environment (U12), so no gateway
+ * engine runs on the service's own; its binding and records stay as they are.
  */
 export async function openHostedClaudeQuery(input: {
   prompt: AsyncIterable<ClaudeSdkUserMessage>;
@@ -259,10 +266,25 @@ export async function openHostedClaudeQuery(input: {
   onCompactSummary?: (summary: string) => void;
   credentialProfileId?: string;
 }): Promise<RemoteClaudeQuery> {
+  const asDefault =
+    input.credentialProfileId === undefined &&
+    installedGatewayLink() !== undefined;
+  const profileId = asDefault
+    ? DEFAULT_CLAUDE_PROFILE_ID
+    : input.credentialProfileId;
+  const spec: ClaudeQueryOpenSpec = asDefault
+    ? {
+        ...input.spec,
+        env: {
+          ...input.spec.env,
+          profile: claudeProfileRuntime(DEFAULT_CLAUDE_PROFILE_ID),
+        },
+      }
+    : input.spec;
   const { value: remote } = await openEngineChannel(
     ensureInProcessWorker(),
     "claude-sdk",
-    input.spec,
+    spec,
     ({ info }, channel) => {
       const remote = remoteClaudeQuery(
         info as ClaudeHostedInfo,
@@ -272,11 +294,8 @@ export async function openHostedClaudeQuery(input: {
       );
       return { sink: remote.sink, value: remote };
     },
-    input.credentialProfileId !== undefined
-      ? {
-          profileId: input.credentialProfileId,
-          sessionId: input.spec.sessionId,
-        }
+    profileId !== undefined
+      ? { profileId, sessionId: spec.sessionId }
       : undefined,
   );
   // Only a live channel takes commands, and it is live once the open

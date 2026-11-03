@@ -1,7 +1,7 @@
 /**
  * A test's gateway link (`gatewayLink.ts`): the in-process gateway on a free
- * port with a temp state directory and no upstream, so a test reads the
- * leases its engines were granted. Import it only after the test has set its
+ * port with a temp state directory and no upstream unless the test names its
+ * fakes, so a test reads the leases its engines were granted. Import it only after the test has set its
  * `DATA_DIR`, as the link reads credential profiles from there.
  *
  * A test that names its own `stateDir`, to start another link on it, owns
@@ -33,7 +33,9 @@ export interface TestGatewayLink {
 }
 
 export async function startGatewayLinkForTests(
-  options: Partial<Pick<GatewayLinkOptions, "stateDir" | "start">> = {},
+  options: Partial<
+    Pick<GatewayLinkOptions, "stateDir" | "start" | "upstreams">
+  > = {},
 ): Promise<TestGatewayLink> {
   /** The temp directory this helper made and removes, if it made one. */
   const own =
@@ -47,6 +49,7 @@ export async function startGatewayLinkForTests(
     port: 0,
     log: (line) => lines.push(line),
     ...(options.start ? { start: options.start } : {}),
+    ...(options.upstreams ? { upstreams: options.upstreams } : {}),
   });
   assert.equal(await link.ready, true, lines.join("\n"));
   return {

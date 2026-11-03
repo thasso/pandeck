@@ -216,7 +216,7 @@ nothing beyond what its own Worker already runs.
 
 ### Protocol in phase 1
 
-What runs today is protocol `1.9` (`1.0` plus the file methods, `1.2`'s path
+What runs today is protocol `1.10` (`1.0` plus the file methods, `1.2`'s path
 methods for checkout reads, `1.3`'s `files.readlink` and inspect `mode` for the
 workflows' reads, `1.4`'s watch methods for the worktree watcher, `1.5`'s
 lifecycle methods for creating, removing and provisioning checkouts, `1.6`'s
@@ -224,11 +224,12 @@ app-tool methods for interactive sessions' app tools, `1.7`'s session-hook
 methods for their permission and hook decisions and output artifacts, and
 `1.8`'s engine methods for interactive pi and Claude sessions' engines, and
 `1.9`'s background-work and skill methods for pi engines' background work and
-frozen skills), between the server and the in-process Worker. The code lives in
-`app/server/src/workerProtocol/` (the protocol), `worker/` (the Worker's side,
-which imports no server state) and `workers/` (the server's side and placement);
-`workerBoundary.test.ts` keeps that split. The protocol stays out of
-`app/shared/`: the web client never speaks it.
+frozen skills, and `1.10`'s gateway access on `engine.open`), between the server
+and the in-process Worker. The code lives in `app/server/src/workerProtocol/`
+(the protocol), `worker/` (the Worker's side, which imports no server state) and
+`workers/` (the server's side and placement); `workerBoundary.test.ts` keeps
+that split. The protocol stays out of `app/shared/`: the web client never speaks
+it.
 
 - **Framing.** A connection is a byte stream of frames: two big-endian `u32`s
   (header length, payload length), a UTF-8 JSON header, then the payload. A
@@ -803,7 +804,13 @@ which imports no server state) and `workers/` (the server's side and placement);
     registers it before the request goes out, so items that precede the answer
     are held and applied after the snapshot. A harness without a factory answers
     `unknown_harness`; an id the Worker holds, or is still opening, answers
-    `engine_id_taken`.
+    `engine_id_taken`. Since `1.10` a leased open also carries
+    `gateway { baseUrl, leaseToken }` (see "Credentials"), and an unleased one
+    has no `gateway` key. The Worker refuses as `INVALID_PARAMS` a base URL
+    other than `http://127.0.0.1:<port>`, a lease token that is not three
+    base64url segments or is longer than 1024 characters, and any other key. It
+    hands the field to the factory as `host.gateway`. The field belongs to no
+    harness, and pi's factory ignores it until G3b.
   - `engine.command { engineId, commandId, command, args }` runs one
     harness-defined command. It answers `{ seq, result }`, or, when the engine's
     command failed, `{ seq, failed, code? }` with the message as text; only a
@@ -1306,8 +1313,78 @@ until the gateway runs as its own process.
   so a second start attaches to the running login. A link that is not ready, has
   ended or gets any other failure answers "Pandeck can't start this login while
   the credential gateway is unreachable; try again shortly."
-- The token stays with the engine's entry in the server. No engine uses it yet:
-  engines authenticate as before.
+- **Claude engines use the lease.** The grant answers the lease token, and the
+  open sends it with the gateway's URL as `engine.open`'s `gateway`. A link with
+  no running gateway refuses the open before any grant. The Claude factory
+  builds the CLI's environment from the profile's scrub, then the session's
+  variables and the output budget, then, last, `ANTHROPIC_BASE_URL` (the
+  gateway's `/anthropic` prefix), `CLAUDE_CODE_OAUTH_TOKEN` (the lease token)
+  and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so nothing before them
+  overrides them. A gateway engine without a profile's scrub is refused.
+- **Profile-less sessions run as `claude-default`** (U12). With the switch on, a
+  Claude session without a profile, for a turn or a standalone `/compact`,
+  leases `claude-default` and gets the default profile's scrub (no
+  `CLAUDE_CONFIG_DIR`, so `~/.claude`). Its `credentialProfileId`, records, auth
+  mode and account routing are unchanged. The scrub drops every `ANTHROPIC_*`,
+  `CLAUDE_*` (including `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`/`_VERTEX`
+  and tunings such as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`), `AWS_*` and
+  `VERTEXAI_*` variable and `GOOGLE_APPLICATION_CREDENTIALS`
+  (`claudeChildEnvironment.ts`). So a profile-less session changes only on a
+  service whose environment sets one of them; a service-level
+  `CLAUDE_CONFIG_DIR` no longer applies to it, and the CLI then writes its
+  transcripts in `~/.claude`, where the store already reads them. pi engines
+  authenticate as before until G3b.
+
+### Engine-version guard
+
+The engines' CLIs are pinned, and a pin moves only with evidence that the new
+CLI still talks only to the gateway.
+
+- **The contract (C17.1).** `claudeSdk/engineContract.test.ts` drives the
+  installed SDK and its bundled CLI through the hosted engine and an in-process
+  gateway against a fake upstream. Its four cases are: a turn on a named
+  profile; a profile-less turn as `claude-default`; an upstream 401; and a lease
+  revoked before the prompt. They assert:
+  - only `POST /v1/messages` reaches the upstream, with the profile's credential
+    and never the lease;
+  - the egress recorder (the proxy every case sets) sees nothing;
+  - the credential file keeps its hash, size, mtime and inode;
+  - no log line holds a token;
+  - the CLI's version equals the lock's;
+  - a 401 is a dead login as today;
+  - a refusal carries the marker and is not a dead login.
+- **Isolation.** Only `pnpm run test:engine-contract`
+  (`scripts/run-engine-contract.mjs`) runs it. That command starts it in a user,
+  network and PID namespace with loopback alone, and with a temp HOME, DATA_DIR
+  and fake credentials. The outer namespace maps root to bring loopback up.
+  Vitest and the CLI then run in a nested user namespace as the invoking uid,
+  because the CLI refuses the sessions' `bypassPermissions` as root. The
+  production options are unchanged. Anywhere else the file is skipped, and none
+  of its setup runs. Where no namespace can be made, the command prints
+  `engine-contract: SKIP: no network namespace: …` and exits 0 locally. Under
+  `CI=true` it fails. Once a run starts, a failure, an unrun test or zero tests
+  fail it. CI's `engine-contract` job is the evidence where a contributor's
+  machine skips.
+- **The pin lock (C17.2).** `gateway/verifiedEngines.json` names the verified
+  versions, and `verifiedEngines.test.ts` fails when the `pnpm-workspace.yaml`
+  catalog differs. It covers only the Claude SDK and its CLI until G3b adds the
+  pi pins.
+- **The bump rule.** A bump updates `verifiedEngines.json` only with the
+  contract test green and one operator live smoke per engine, of the live-smoke
+  script's shape. Agents never run the smoke.
+- **Known limits.**
+  - C13: the CLI reads the profile's `.credentials.json` (and an agent's Bash
+    can too), as before.
+  - With the switch on, engines no longer refresh their tokens, and no renewal
+    exists before G5. An expired token gives upstream 401s, classified as today,
+    until a login, a direct CLI child (usage, one-shot) or the user's terminal
+    refreshes the file.
+  - A missing or unreadable credential (for example `claude-default` never
+    logged in) gets the gateway's 503. The CLI retries it for more than 22
+    seconds instead of failing at once as not logged in (RD-G3a-3; G5 owns it).
+  - Agent Bash children inherit the lease and the base URL.
+  - A native tool that calls another Anthropic endpoint is refused with the
+    marker until a later slice allows it with contract evidence.
 
 ## When the server is down
 
@@ -1499,12 +1576,13 @@ the server's child-env overlay.
 The credential gateway (`app/server/src/gateway/`) has landed with its
 forwarding core, its control channel and persisted leases, and the server's link
 to it behind `ASSISTANT_GATEWAY=1`, off by default. With the switch on, every
-engine open on a profile holds a lease first, but engines still authenticate as
-before: no model request is routed to the gateway yet. It reads token files and
-never writes or refreshes them. The writer lane and login holds have landed,
-unused until the login flows hold their profile (G5): no hold is created and no
-lane item runs yet. Renewal, engine routing and its own service unit come in
-later slices.
+Claude engine sends its model requests through the gateway with its lease, a
+profile-less session as `claude-default`, under the engine-version guard; pi
+engines still hold a lease but authenticate as before until G3b. One-shots and
+usage queries do not use the gateway yet. It reads token files and never writes
+or refreshes them. The writer lane and login holds have landed, unused until the
+login flows hold their profile (G5): no hold is created and no lane item runs
+yet. Renewal, engine routing and its own service unit come in later slices.
 
 ## Open questions
 

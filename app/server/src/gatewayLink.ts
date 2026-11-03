@@ -68,7 +68,7 @@ export const GATEWAY_UNAVAILABLE_TEXT =
   "Pandeck's credential gateway isn't reachable, so this session can't start a model request. It restarts automatically; try again shortly.";
 
 /** No lease could be granted: the engine must not open. */
-class GatewayUnavailableError extends Error {
+export class GatewayUnavailableError extends Error {
   constructor() {
     super(GATEWAY_UNAVAILABLE_TEXT);
   }

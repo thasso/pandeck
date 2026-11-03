@@ -22,3 +22,5 @@ Contract: `docs/workers.md` "Credentials" and ADR-0004.
   body. Refusal texts hold no peer-supplied string.
 - Every local refusal carries `GATEWAY_REFUSAL_MARKER` in the provider's error
   shape, so the classifier never reads it as a dead login.
+- `verifiedEngines.json` changes only with that engine's contract test green and
+  the operator's live smoke (`docs/workers.md` "Engine-version guard").

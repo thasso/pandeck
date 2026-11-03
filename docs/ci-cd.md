@@ -29,6 +29,13 @@ in the test suites on two vCPUs:
   them by count, so the split is stable until a test file is added, removed or
   renamed. Measured shards stay within about 30% of each other, and their sum
   matches the unsharded suite, so a shard costs only its ~25s of setup.
+- `engine-contract` — `pnpm run test:engine-contract`: the real Claude CLI
+  against fakes in a user, network and PID namespace with loopback alone
+  (`docs/workers.md` "Engine-version guard"). Ubuntu's AppArmor restricts
+  unprivileged user namespaces, so the job first sets
+  `kernel.apparmor_restrict_unprivileged_userns=0` when that sysctl exists; the
+  runner is a fresh single-job VM, so nothing else sees it. `CI=true` makes a
+  missing namespace fail the job instead of skipping it.
 - `nix-build` — the production package `.#personal-assistant` (the Bun bundle,
   whose install check boots it under the packaged Bun) and the flake checks:
   closure policy, preview isolation and OOM policy of the NixOS module. The
@@ -60,12 +67,13 @@ overrides the flag (Vitest reads it after the CLI), so CI must not set it.
 The workflow has read-only repository permissions, uses no secrets, pins actions
 to commit SHAs, and cancels superseded PR runs per ref. Active `main` runs are
 not cancelled, preserving their verdict and cache saves. Job timeouts are 30
-minutes for the Node jobs, 60 for the Nix builds and 5 for the comparison and
-gate jobs. Before the repository goes public, it must require workflow approval
-for all external contributors in its Actions settings. Dependabot checks only
-GitHub Actions (workflows and the local composite action) weekly, groups updates
-into one PR and applies a seven-day cooldown; the pnpm catalog remains manually
-managed. There are no deployment, preview or release workflows.
+minutes for the Node jobs, 10 for `engine-contract`, 60 for the Nix builds and 5
+for the comparison and gate jobs. Before the repository goes public, it must
+require workflow approval for all external contributors in its Actions settings.
+Dependabot checks only GitHub Actions (workflows and the local composite action)
+weekly, groups updates into one PR and applies a seven-day cooldown; the pnpm
+catalog remains manually managed. There are no deployment, preview or release
+workflows.
 
 ## Gates
 
@@ -73,10 +81,13 @@ managed. There are no deployment, preview or release workflows.
 `pnpm run format:check` → `pnpm run lint` → `pnpm run lint:deadcode` →
 `pnpm run check:instructions` → `check-migrations-lock.mjs` →
 `pnpm run check:prompts` → `pnpm run typecheck` → `pnpm run test:release`,
-`pnpm run test:package-config-secrets` and the shared suite → `pnpm run build`.
-The umbrella `pnpm run test` remains the local gate: it runs lint, the fast
-repository checks and every suite. CI names those gates separately so a failure
-says which one broke, and runs the server and web suites in their own jobs.
+`pnpm run test:package-config-secrets`, the engine-contract runner's own tests
+and the shared suite → `pnpm run build`. The umbrella `pnpm run test` remains
+the local gate: it runs lint, the fast repository checks, every suite and then
+`pnpm run test:engine-contract`, which prints a SKIP line and passes on a
+machine that cannot make user namespaces. CI names those gates separately so a
+failure says which one broke, and runs the server and web suites in their own
+jobs.
 
 `pnpm run lint` (oxlint, `docs/linting.md`) takes about 5s on four CPUs at about
 1.7 GB peak, so it needs no cache, no worker tuning and no heap flag. Under
