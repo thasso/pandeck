@@ -78,6 +78,7 @@ import {
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { Button } from "./ui/button.tsx";
+import { ProjectTreePane } from "./ProjectTreePane.tsx";
 import {
   PROPERTY_TRIGGER,
   PropertyLabel,
@@ -707,6 +708,50 @@ export function sessionTreeWorktreeRecords(
 }
 
 const TREE_WORKTREES_LABEL = "Worktrees from this session";
+const NO_WORKTREE_STATUSES: Record<string, WorktreeGitStatus> = {};
+
+/**
+ * The tree group as the sidebar draws worktrees: each row unfolds into its
+ * uncommitted changes, its branch against the base, its files and its
+ * sessions, and a file picked there opens on the worktree page.
+ */
+function withTreeWorktreesTree(
+  groups: InspectorRelationGroup[],
+  tree: {
+    worktreeIds: string[];
+    projects: ProjectRecord[];
+    sessions: SessionListItem[];
+    worktrees: readonly WorktreeRecord[] | null | undefined;
+    worktreeStatuses: Record<string, WorktreeGitStatus> | undefined;
+    openers: ObjectOpeners;
+    onNavigate: ((path: string) => void) | undefined;
+  },
+): InspectorRelationGroup[] {
+  if (tree.worktreeIds.length === 0 || !tree.worktrees) return groups;
+  // Out to the panel's edges like the session rows beside it, with their
+  // hairlines and hover, and the chevrons on their line.
+  const content = (
+    <div className="-mx-3 [--tree-row-inset:7px] [&_[role=tree]>li:last-child_.border-b]:border-b-0 [&_.tree-row-indent]:border-border dark:[&_.tree-row-indent:hover]:bg-muted/50">
+      <ProjectTreePane
+        rootWorktreeIds={tree.worktreeIds}
+        storageScope="session-inspector"
+        projects={tree.projects}
+        loading={false}
+        sessions={tree.sessions}
+        worktrees={tree.worktrees as WorktreeRecord[]}
+        worktreeStatuses={tree.worktreeStatuses ?? NO_WORKTREE_STATUSES}
+        onOpenSession={tree.openers.onOpenSession}
+        onNavigate={tree.onNavigate}
+        flush
+      />
+    </div>
+  );
+  return groups.map((group) =>
+    group.id === "tree-worktrees"
+      ? { ...group, alwaysShown: true, content }
+      : group,
+  );
+}
 
 /**
  * The tree group's load states (`docs/loading-states.md`). The group is drawn
@@ -1485,6 +1530,7 @@ export function SessionInspector({
   peerPromptPeers,
   stagedRefs = [],
   openers,
+  onNavigate,
   view,
   children,
 }: {
@@ -1532,6 +1578,8 @@ export function SessionInspector({
   /** Draft-session staged context (task/project/worktree refs before the first send). */
   stagedRefs?: ObjectRef[];
   openers: ObjectOpeners;
+  /** Opens a file picked in a tree worktree's sections. */
+  onNavigate?: ((path: string) => void) | undefined;
   /**
    * Transcript view toggles, rendered as a **View** section. Passed only where
    * this inspector is the session's control centre (the mobile object dock);
@@ -1606,7 +1654,20 @@ export function SessionInspector({
           ),
         },
         ...withTreeWorktreesLoadState(
-          toInspectorGroups(groups, openers, sessions, worktreeHosting),
+          withTreeWorktreesTree(
+            toInspectorGroups(groups, openers, sessions, worktreeHosting),
+            {
+              worktreeIds: sessionTreeWorktreeRecords(sessionId, worktrees).map(
+                (item) => item.id,
+              ),
+              projects,
+              sessions,
+              worktrees,
+              worktreeStatuses,
+              openers,
+              onNavigate,
+            },
+          ),
           {
             awaited:
               sessionId !== undefined &&

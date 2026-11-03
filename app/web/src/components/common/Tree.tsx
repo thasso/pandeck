@@ -788,7 +788,11 @@ function RowBody<T>({
                   : "bg-accent/60"
                 : "hover:bg-muted",
       )}
-      style={{ paddingLeft: inset + depth * indentWidth }}
+      // A host may push every row in (`--tree-row-inset`) to line the
+      // chevrons up with other rows beside the tree.
+      style={{
+        paddingLeft: `calc(var(--tree-row-inset, 0px) + ${inset + depth * indentWidth}px)`,
+      }}
     >
       {showGuides &&
         Array.from({ length: depth }).map((_, i) => (

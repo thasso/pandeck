@@ -433,10 +433,13 @@ export const INITIAL_SESSION_LIMIT = 5;
 export const SESSION_LIMIT_STEP = 5;
 const EXPANDED_WORKTREES_STORAGE_KEY = "assistant.worktreeBrowser.expanded.v1";
 
-export function loadExpandedWorktreeIds(): Set<string> {
+/** A `scope` keeps a tree's folding apart from the sidebar's. */
+export function loadExpandedWorktreeIds(scope?: string): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = persistentStore().getItem(EXPANDED_WORKTREES_STORAGE_KEY);
+    const raw = persistentStore().getItem(
+      scopedKey(EXPANDED_WORKTREES_STORAGE_KEY, scope),
+    );
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(
       Array.isArray(parsed)
@@ -448,15 +451,19 @@ export function loadExpandedWorktreeIds(): Set<string> {
   }
 }
 
-export function persistExpandedWorktreeIds(ids: Set<string>) {
+export function persistExpandedWorktreeIds(ids: Set<string>, scope?: string) {
   try {
     persistentStore().setItem(
-      EXPANDED_WORKTREES_STORAGE_KEY,
+      scopedKey(EXPANDED_WORKTREES_STORAGE_KEY, scope),
       JSON.stringify([...ids]),
     );
   } catch {
     // Best-effort only; the in-memory state still applies for this render.
   }
+}
+
+export function scopedKey(key: string, scope: string | undefined): string {
+  return scope ? `${key}:${scope}` : key;
 }
 
 type WorktreeContextTask = TaskBackRef & { blocked?: boolean };

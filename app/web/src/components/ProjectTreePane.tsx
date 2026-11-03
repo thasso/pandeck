@@ -50,6 +50,7 @@ import {
   compareWorktrees,
   loadExpandedWorktreeIds,
   persistExpandedWorktreeIds,
+  scopedKey,
 } from "./worktreeRowParts.tsx";
 import { persistentStore } from "../lib/persistentStore.ts";
 import { worktreePath, type WorktreeView } from "../hooks/useSessionRouting.ts";
@@ -120,6 +121,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   flush = false,
   density = "tight",
   rootProjectId,
+  rootWorktreeIds,
+  storageScope,
 }: {
   projects: ProjectRecord[];
   loading: boolean;
@@ -161,6 +164,14 @@ export const ProjectTreePane = memo(function ProjectTreePane({
    * paging and remembered expansion as the sidebar's.
    */
   rootProjectId?: string | undefined;
+  /**
+   * Show only these worktrees, in this order, as the top level — each with
+   * the sidebar's sections and sessions under it: a session inspector's
+   * worktrees from its spawn tree.
+   */
+  rootWorktreeIds?: readonly string[] | undefined;
+  /** Remember folding under its own keys, apart from the sidebar's. */
+  storageScope?: string | undefined;
 }) {
   const ordered = projects;
   const lastReorder = useRef<{
@@ -173,7 +184,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     loadCollapsedIds(),
   );
   const [expandedWorktreeIds, setExpandedWorktreeIds] = useState<Set<string>>(
-    () => loadExpandedWorktreeIds(),
+    () => loadExpandedWorktreeIds(storageScope),
   );
   const [sessionLimits, setSessionLimits] = useState<Record<string, number>>(
     {},
@@ -181,16 +192,16 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   // Section node ids that are open, remembered like the projects' folding;
   // a section never opened starts collapsed.
   const [expandedSections, setExpandedSectionsState] = useState<Set<string>>(
-    () => loadOpenSectionIds(),
+    () => loadOpenSectionIds(storageScope),
   );
   const setExpandedSections = useCallback(
     (update: (current: Set<string>) => Set<string>) =>
       setExpandedSectionsState((current) => {
         const next = update(current);
-        if (next !== current) persistOpenSectionIds(next);
+        if (next !== current) persistOpenSectionIds(next, storageScope);
         return next;
       }),
-    [],
+    [storageScope],
   );
   const onToggleSection = useCallback(
     (id: string) => {
@@ -231,7 +242,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     setExpandedWorktreeIds((current) => {
       if (current.has(id)) return current;
       const next = new Set(current).add(id);
-      persistExpandedWorktreeIds(next);
+      persistExpandedWorktreeIds(next, storageScope);
       return next;
     });
     setCollapsedProjects((current) => {
@@ -250,6 +261,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     selectedKind,
     selectedPathForUnfold,
     setExpandedSections,
+    storageScope,
   ]);
   // The change lists the open worktrees need: the branch's against its base
   // for every open worktree (its header shows the totals, and an empty one
@@ -313,12 +325,17 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   // One project's contents (not its subprojects), or the whole registry.
   const shownNodes = useMemo(
     () =>
-      rootProjectId
-        ? (findNode(nodes, rootProjectId)?.children ?? []).filter(
-            (node) => node.data.kind !== "project",
-          )
-        : nodes,
-    [nodes, rootProjectId],
+      rootWorktreeIds
+        ? rootWorktreeIds.flatMap((id) => {
+            const node = findNode(nodes, worktreeNodeId(id));
+            return node ? [node] : [];
+          })
+        : rootProjectId
+          ? (findNode(nodes, rootProjectId)?.children ?? []).filter(
+              (node) => node.data.kind !== "project",
+            )
+          : nodes,
+    [nodes, rootProjectId, rootWorktreeIds],
   );
 
   const expandableProjects = useMemo(
@@ -404,9 +421,9 @@ export const ProjectTreePane = memo(function ProjectTreePane({
       if (next.has(id)) next.delete(id);
       else next.add(id);
       setExpandedWorktreeIds(next);
-      persistExpandedWorktreeIds(next);
+      persistExpandedWorktreeIds(next, storageScope);
     },
-    [expandedWorktreeIds],
+    [expandedWorktreeIds, storageScope],
   );
 
   const onExpandedChange = (ids: string[]) => {
@@ -421,12 +438,12 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     );
     // Under one project the project rows are not in the tree, so its answer
     // says nothing about them: leave the sidebar's collapsed set alone.
-    if (!rootProjectId) {
+    if (!rootProjectId && !rootWorktreeIds) {
       setCollapsedProjects(nextCollapsed);
       persistCollapsedIds(nextCollapsed);
     }
     setExpandedWorktreeIds(nextWorktrees);
-    persistExpandedWorktreeIds(nextWorktrees);
+    persistExpandedWorktreeIds(nextWorktrees, storageScope);
     // Sections not in the tree right now (a folded worktree) keep their state.
     setExpandedSections((current) => {
       const next = new Set(
@@ -520,7 +537,13 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         getRowPlain={(node) => node.data.kind === "sectionContent"}
         flush={flush}
         showGuides={false}
-        aria-label={rootProjectId ? "Worktrees and sessions" : "Projects"}
+        aria-label={
+          rootWorktreeIds
+            ? "Worktrees"
+            : rootProjectId
+              ? "Worktrees and sessions"
+              : "Projects"
+        }
         expandedIds={expandedIds}
         onExpandedChange={onExpandedChange}
         selectedIds={selectedIds}
@@ -537,7 +560,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
           else if (!id.startsWith(MORE_NODE_PREFIX)) onToggleProject(id);
         }}
         // Projects are reordered in the registry tree, never under one.
-        {...(rootProjectId
+        {...(rootProjectId || rootWorktreeIds
           ? {}
           : {
               onMove: (result: { items: ProjectBrowserNode[] }) =>
@@ -1330,9 +1353,11 @@ function loadCollapsedIds(): Set<string> {
   }
 }
 
-function loadOpenSectionIds(): Set<string> {
+function loadOpenSectionIds(scope: string | undefined): Set<string> {
   try {
-    const raw = persistentStore().getItem(SECTIONS_STORAGE_KEY);
+    const raw = persistentStore().getItem(
+      scopedKey(SECTIONS_STORAGE_KEY, scope),
+    );
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(
       Array.isArray(parsed)
@@ -1344,14 +1369,17 @@ function loadOpenSectionIds(): Set<string> {
   }
 }
 
-function persistOpenSectionIds(ids: Set<string>): void {
+function persistOpenSectionIds(
+  ids: Set<string>,
+  scope: string | undefined,
+): void {
   // Before the backend answered, this window's copy is empty: writing now
   // would replace every remembered section with this render's few.
   if (!persistentStore().isLoaded()) return;
   try {
     // A Set keeps insertion order, so the last ones are the latest opened.
     persistentStore().setItem(
-      SECTIONS_STORAGE_KEY,
+      scopedKey(SECTIONS_STORAGE_KEY, scope),
       JSON.stringify([...ids].slice(-MAX_REMEMBERED_SECTIONS)),
     );
   } catch {

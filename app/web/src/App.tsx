@@ -7773,6 +7773,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         peerPromptPeers={displaySession?.peerPromptPeers}
         stagedRefs={stagedContextRefs}
         openers={inspectorOpeners}
+        onNavigate={navigateFromInspector}
       >
         <SessionContextSections
           sessionId={displaySession?.sessionId}
