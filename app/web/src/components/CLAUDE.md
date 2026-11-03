@@ -6,6 +6,8 @@
   share `TaskListRowContent`; only actions/hierarchy vary. Attention offers only
   Settle. Disclosures lead with chevrons; controls use `interaction="content"`.
   Session lists use `SessionTitleRow`.
+- A header's one `…` is `PageHeader`'s `menu` (`HeaderMenu`), rightmost but
+  Close; zoom is in it.
 
 - Markdown: `[x](target)` is a link, `![x](target)` a chrome-free lazy embed,
   and tool output the ONLY card. `[![x](y)](z)` keeps the authored link z and
@@ -16,7 +18,7 @@
   `rehype-katex` runs LAST because sanitize strips MathML. Keep the `components`
   map at MODULE scope and per-render data in `MarkdownRenderContext`, or React
   remounts every element, losing scroll and re-running Shiki
-  (`Markdown.test.tsx` re-renders; `docs/served-files.md`).
+  (`Markdown.test.tsx`; `docs/served-files.md`).
 - Settings/integrations are end-user surfaces: keep deployment details, protocol
   names, scopes, token diagnostics and test controls outside the primary flow;
   never show tokens or raw credential files.
@@ -30,14 +32,14 @@
   and `Button`'s `busy` (`loadingStateAudit.test.ts`;
   `../../docs/loading-states.md`).
 - Memoized rows (session, worktree, task, message) take ids in callbacks, never
-  close over the row, and get stable host handlers; the parent file says why.
-- Import `diff/`, `common/ChartBlock.tsx` and `rehype-katex` lazily — statically
-  they pull pierre/Shiki, Chart.js and KaTeX into the main bundle — and never
-  call `common/highlighter.ts` outside its cache on a render path.
+  close over the row, and get stable host handlers.
+- Import `diff/`, `common/ChartBlock.tsx` and `rehype-katex` lazily (they pull
+  pierre/Shiki, Chart.js, KaTeX into the bundle); never call
+  `common/highlighter.ts` outside its cache on a render path.
 - Transcript rows never rely on overflowing their box. Rows use
   `content-visibility: auto` off iOS, `visible` on iOS; portal popovers to the
   body. Keep hit-testable overlays and sticky headers off the transcript's top
   edge: `useTranscriptScroll` hits that edge to hold the reader's row on iOS.
-  Blocks between rows are safe.
+
 - Side activity follows `docs/chat-activity.md`: collapsed, one-line rows;
   actions addressed to the user and failure indicators stay visible.

@@ -103,16 +103,16 @@ target, with “Select text to comment” naming the enabling gesture.
 
 A chat session is the first surface on the unified model, on EVERY layout: its
 header carries exactly two actions — **Add comment** on the transcript
-selection, then **⋯** (`ChatHeaderMenu`: transcript view options and the
-session's actions, a top sheet on a phone). The session header publishes those
-actions itself (`sessionInspectorActions`), because on a phone the inspector
-only mounts while its sheet is open; the inspector panel therefore lists no
-Actions and no View section on any layout — it holds the session's relations and
-sections. Neither the composer nor the dock row offers Comment any more, and the
-session header has no separate worktree button: in a worktree its title block
-(title, branch, uncommitted counts) is the link to the worktree's changes.
-Documents and worktree changes still follow the split above until they move to
-the same model.
+selection, then **⋯** (the shared `HeaderMenu`: `chatViewMenuGroups`' transcript
+view options and the session's actions, a top sheet on a phone). The session
+header publishes those actions itself (`sessionInspectorActions`), because on a
+phone the inspector only mounts while its sheet is open; the inspector panel
+therefore lists no Actions and no View section on any layout — it holds the
+session's relations and sections. Neither the composer nor the dock row offers
+Comment any more, and the session header has no separate worktree button: in a
+worktree its title block (title, branch, uncommitted counts) is the link to the
+worktree's changes. Documents and worktree changes still follow the split above
+until they move to the same model.
 
 Until every bottom-edge surface has migrated into shell furniture, the shell
 keeps `--app-bottom-chrome-inset` equal to the resting bottom card plus the safe
@@ -1108,9 +1108,18 @@ user's one write, Settle, belongs to its inbox card.
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action
 remains visible in that header beside the comment controls. The inspector does
-not repeat an **Actions** section there. On small layouts the header `…` holds
-no object action (at most a document's view pivots, see Small Screens), so the
-object dock's inspector retains the full **Actions** section.
+not repeat an **Actions** section there. Every header has exactly ONE `…`, and
+it is always the header's rightmost control (only a Close follows it):
+`PageHeader` draws it from the page's own `menu` groups merged with those
+published object actions, through `common/HeaderMenu`, so it is the same
+dropdown on every wide page and the same sheet dropping from under the header on
+a phone — chat, worktree, Knowledge Base and document viewers alike. A page
+never builds its own menu or trigger. Zoom is a group in that menu, never a row
+of header buttons. A Knowledge Base page's view pivots (File / Preview /
+History) sit before it as icons, so no second toolbar sits under the header. On
+small layouts the header `…` holds no object action (at most a document's view
+pivots, see Small Screens), so the object dock's inspector retains the full
+**Actions** section.
 
 There is no embedded agent panel. The **Start a new session** action navigates
 to the new-session page (`/sessions/create`) with the inspected object (and any

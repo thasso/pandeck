@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
-  ChatHeaderMenu,
+  chatViewMenuGroups,
   type ChatViewPrefs,
 } from "../../../src/components/ChatHeaderMenu.tsx";
+import { HeaderMenu } from "../../../src/components/common/HeaderMenu.tsx";
+import { MobileLayoutContext } from "../../../src/components/shell/useMobileLayout.ts";
 function HeaderMenuPreview({ mobile }: { mobile: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ChatViewPrefs>({
@@ -25,14 +27,16 @@ function HeaderMenuPreview({ mobile }: { mobile: boolean }) {
     <div ref={host} className="min-h-96 bg-background">
       <header className="flex items-center justify-between p-4">
         <h2 className="text-lg">Chat regression review</h2>
-        <ChatHeaderMenu
-          mobile={mobile}
-          view={{
-            ...view,
-            onChange: (patch) =>
-              setView((current) => ({ ...current, ...patch })),
-          }}
-        />
+        <MobileLayoutContext.Provider value={mobile}>
+          <HeaderMenu
+            label="Chat options"
+            groups={chatViewMenuGroups({
+              ...view,
+              onChange: (patch) =>
+                setView((current) => ({ ...current, ...patch })),
+            })}
+          />
+        </MobileLayoutContext.Provider>
       </header>
     </div>
   );

@@ -378,7 +378,7 @@ import {
   orderProjectsByActivity,
   orderWorktreesByActivity,
 } from "./components/NewSessionQuickStart.tsx";
-import { ChatHeaderMenu } from "./components/ChatHeaderMenu.tsx";
+import { chatViewMenuGroups } from "./components/ChatHeaderMenu.tsx";
 import type { TranscriptViewPrefs } from "./components/transcriptView.ts";
 import {
   PageHeader,
@@ -8572,8 +8572,16 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                           iconLabel={
                             sessionIdCopied ? "Copied!" : "Copy session ID"
                           }
-                          objectOverflow={false}
                           title={sessionTitleHeading}
+                          menu={{
+                            label: "Chat options",
+                            groups: displayHasMessages
+                              ? chatViewMenuGroups({
+                                  ...transcriptView,
+                                  onChange: updateTranscriptView,
+                                })
+                              : [],
+                          }}
                           // Exactly two actions, on every layout: Comment on the
                           // transcript selection, and ⋯ for the rest. The worktree
                           // is reached through the title block itself.
@@ -8600,17 +8608,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                                 actions={sessionInspectorActions(
                                   sessionActionInputs,
                                 )}
-                              />
-                              <ChatHeaderMenu
-                                mobile={mobileLayout}
-                                view={
-                                  displayHasMessages
-                                    ? {
-                                        ...transcriptView,
-                                        onChange: updateTranscriptView,
-                                      }
-                                    : undefined
-                                }
                               />
                             </div>
                           }

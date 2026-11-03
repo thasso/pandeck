@@ -26,9 +26,6 @@ import {
   BookOpen,
   Check,
   FolderOpen,
-  RotateCcw,
-  ZoomOut,
-  ZoomIn,
   Columns2,
   Files,
   Rows2,
@@ -37,7 +34,6 @@ import {
   WholeWord,
   WrapText,
   Download,
-  Ellipsis,
   ExternalLink,
   Eye,
   File,
@@ -72,22 +68,18 @@ import {
   useDocumentScrollRestoration,
 } from "../DocumentNavigationShell.tsx";
 import { Button } from "../ui/button.tsx";
-import {
-  DropdownMenuCheckboxItem,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "../ui/dropdown-menu.tsx";
 import { Badge } from "../ui/badge.tsx";
 import { useCommentActuation } from "../review/CommentActuation.tsx";
-import type { InspectorAction } from "../shell/Inspector.tsx";
 import { useWorktreeDelivery } from "./WorktreeDelivery.tsx";
 import { useWorktreeRetire } from "./useWorktreeRetire.tsx";
 import { worktreeInspectorActions } from "../objectInspectors.tsx";
 import { useIgnoredFilesShown } from "../../lib/worktreeIgnoredFiles.ts";
-import { Separator } from "../ui/separator.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
+import { zoomMenuGroup } from "../DocumentZoom.tsx";
+import {
+  actionMenuItems,
+  type HeaderMenuGroup,
+} from "../common/HeaderMenu.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
 import { DIFF_VIEW_SWITCHES } from "../diff/DiffModeToolbar.tsx";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
@@ -110,15 +102,7 @@ import { pendingWorktreeReviewIds } from "./worktreeReview.tsx";
 import { WorktreeScopePicker } from "./WorktreeScopePicker.tsx";
 import { useViewedFiles } from "./useViewedFiles.ts";
 import { EdgeSheet } from "../common/EdgeSheet.tsx";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemMedia,
-  ItemTitle,
-} from "../ui/item.tsx";
 import { IconButton } from "../common/IconButton.tsx";
-import { OverflowMenu } from "../common/OverflowMenu.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "../common/load.tsx";
 import {
   externalDocumentActionEnabled,
@@ -804,7 +788,6 @@ function FilesView({
     pivots.length > 1 ? (
       <ToggleGroup
         // In the file bar beside the name: quiet icons, the bar's own weight.
-        variant={browseAsDocuments ? "outline" : "default"}
         size="sm"
         spacing={0}
         aria-label="File view"
@@ -815,7 +798,7 @@ function FilesView({
       >
         {pivots.map(({ id, label, icon }) => (
           <ToggleGroupItem key={id} value={id} aria-label={label} title={label}>
-            {browseAsDocuments && !narrow ? label : icon}
+            {icon}
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
@@ -823,22 +806,6 @@ function FilesView({
 
   return (
     <>
-      {/* A document folder's wide page: only the file's own pivots (Preview /
-        File / History) in a toolbar; with no file open there is nothing to
-        switch. A phone has none: the page header's `…` holds the pivots. */}
-      {browseAsDocuments &&
-      filePath &&
-      !narrow &&
-      (pivotControls || shownRefresh !== null) ? (
-        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
-          {shownRefresh !== null ? (
-            <RefreshIndicator label={shownRefresh} />
-          ) : null}
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            {pivotControls}
-          </div>
-        </div>
-      ) : null}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-card">
         {/* A worktree's file bar: the name and folder, the pivots at the end
           (a document folder's header already names the file). */}
@@ -870,7 +837,7 @@ function FilesView({
         ) : null}
         {filePath ? (
           <>
-            {narrow && browseAsDocuments && shownRefresh !== null ? (
+            {browseAsDocuments && shownRefresh !== null ? (
               // No bar to carry R2's marker here, so it floats over the pane.
               <RefreshIndicator
                 className="absolute right-3 top-2 z-10"
@@ -1046,20 +1013,6 @@ function FilesView({
 
 /* ---------------------------------- page ----------------------------------- */
 
-function SheetGroupLabel({ children }: { children: ReactNode }) {
-  return (
-    // The rows' own inset, so a label lines up with the icons under it.
-    <div className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
-      {children}
-    </div>
-  );
-}
-
-/**
- * A phone's worktree header, the shape the other object pages draw: Add comment
- * (and Submit review while comments wait) beside one menu of the worktree's
- * delivery actions.
- */
 const DIFF_SWITCH_ICONS: Record<
   (typeof DIFF_VIEW_SWITCHES)[number]["pref"],
   ReactNode
@@ -1075,73 +1028,139 @@ const DIFF_STYLES = [
   { value: "split", label: "Split", icon: <Columns2 /> },
 ] as const;
 
-/** One checkable row of the phone's menu sheet. */
-function SheetCheckRow({
-  icon,
-  label,
-  checked,
-  role = "menuitemcheckbox",
-  onSelect,
+/** The diff display options, where a diff can be on screen. */
+interface DiffViewMenu {
+  prefs: Prefs;
+  onUpdate: (patch: Partial<Prefs>) => void;
+  /** Unified/split: a narrow screen always renders unified. */
+  showStyle: boolean;
+}
+
+function diffViewMenuGroups(diffView: DiffViewMenu): HeaderMenuGroup[] {
+  return [
+    ...(diffView.showStyle
+      ? [
+          {
+            key: "diff-style",
+            label: "Diff view",
+            choice: true,
+            items: DIFF_STYLES.map((style) => ({
+              key: style.value,
+              icon: style.icon,
+              label: style.label,
+              checked: diffView.prefs.diffStyle === style.value,
+              keepOpen: true,
+              onSelect: () => diffView.onUpdate({ diffStyle: style.value }),
+            })),
+          },
+        ]
+      : []),
+    {
+      key: "diff-options",
+      ...(diffView.showStyle ? {} : { label: "Diff view" }),
+      items: DIFF_VIEW_SWITCHES.map(({ pref, label }) => ({
+        key: pref,
+        icon: DIFF_SWITCH_ICONS[pref],
+        label,
+        checked: diffView.prefs[pref],
+        onSelect: () => diffView.onUpdate({ [pref]: !diffView.prefs[pref] }),
+      })),
+    },
+  ];
+}
+
+/**
+ * A document folder's page header (the `/knowledge` route): the open file's
+ * pivots as icons, then Back and Forward. A phone has room for one header row,
+ * so there its pivots are rows of the header's `…` (`documentPivotMenuGroup`).
+ */
+function DocumentPageActions({
+  narrow,
+  pivots,
+  pivot,
+  onPivotChange,
+  showHistory,
 }: {
-  icon: ReactNode;
-  label: string;
-  checked: boolean;
-  role?: "menuitemcheckbox" | "menuitemradio";
-  onSelect: () => void;
+  narrow: boolean;
+  /** The open file's pivots; empty with no file open. */
+  pivots: readonly FilePivotOption[];
+  pivot: FilePivot;
+  onPivotChange: (pivot: FilePivot) => void;
+  showHistory: boolean;
 }) {
   return (
-    <Item
-      size="sm"
-      render={<button type="button" />}
-      role={role}
-      aria-checked={checked}
-      onClick={onSelect}
-    >
-      <ItemMedia variant="icon">{icon}</ItemMedia>
-      <ItemContent>
-        <ItemTitle>{label}</ItemTitle>
-      </ItemContent>
-      <ItemActions>{checked ? <Check size={14} /> : null}</ItemActions>
-    </Item>
+    <>
+      {!narrow && pivots.length > 1 ? (
+        <ToggleGroup
+          size="sm"
+          spacing={0}
+          aria-label="File view"
+          value={[pivot]}
+          onValueChange={(next) => {
+            if (next[0]) onPivotChange(next[0] as FilePivot);
+          }}
+        >
+          {pivots.map(({ id, label, icon }) => (
+            <ToggleGroupItem
+              key={id}
+              value={id}
+              aria-label={label}
+              title={label}
+            >
+              {icon}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      ) : null}
+      {showHistory ? (
+        <DocumentNavigationActions
+          className="hidden desktop:flex"
+          showClose={false}
+        />
+      ) : null}
+    </>
   );
 }
 
-function WorktreeHeaderActions({
-  actions,
+function documentPivotMenuGroup(
+  pivots: readonly FilePivotOption[],
+  pivot: FilePivot,
+  onPivotChange: (pivot: FilePivot) => void,
+): HeaderMenuGroup {
+  return {
+    key: "file-view",
+    label: "File view",
+    choice: true,
+    items:
+      pivots.length > 1
+        ? pivots.map(({ id, label, icon }) => ({
+            key: id,
+            icon,
+            label,
+            checked: id === pivot,
+            onSelect: () => onPivotChange(id),
+          }))
+        : [],
+  };
+}
+
+/**
+ * The worktree header's own buttons, before its `…`: on a phone the browse and
+ * jump sheets, and Add comment (and Submit review while comments wait), which a
+ * wide header draws itself.
+ */
+function WorktreeHeaderButtons({
   showComment,
   onJumpToFile,
   onBrowseFiles,
-  diffView,
-  ignoredFiles,
-  zoomInMenu = false,
 }: {
-  actions: InspectorAction[];
   showComment: boolean;
-  /** The open document's zoom, as menu rows (a wide header's room saver). */
-  zoomInMenu?: boolean;
   /** Opens the Jump to file sheet: Review's changed files on a phone. */
   onJumpToFile?: (() => void) | undefined;
   /** Opens the file tree sheet: the Files view's browser on a phone. */
   onBrowseFiles?: (() => void) | undefined;
-  /** The diff display options, where a diff can be on screen. */
-  diffView?:
-    | {
-        prefs: Prefs;
-        onUpdate: (patch: Partial<Prefs>) => void;
-        /** Unified/split: a narrow screen always renders unified. */
-        showStyle: boolean;
-      }
-    | undefined;
-  /** The file trees' "show ignored and hidden files", shared per worktree. */
-  ignoredFiles?:
-    { shown: boolean; onChange: (shown: boolean) => void } | undefined;
 }) {
   const actuation = useCommentActuation();
-  const navigation = useDocumentNavigationRegistration();
-  const zoom = zoomInMenu ? navigation?.zoom : undefined;
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [sheetTop, setSheetTop] = useState(0);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const pendingCount = Math.max(0, actuation?.pendingCount ?? 0);
   const canComment = actuation?.canComment === true;
   const commentLabel = canComment
@@ -1187,241 +1206,6 @@ function WorktreeHeaderActions({
           <SendHorizontal />
           <Badge className="absolute -right-1 -top-1">{pendingCount}</Badge>
         </IconButton>
-      ) : null}
-      {(actions.length > 0 || ignoredFiles || diffView) && showComment ? (
-        // A phone's menu is the chat header's: a sheet dropping from under
-        // the header, its rows a thumb's height.
-        <>
-          <IconButton
-            ref={triggerRef}
-            label="Worktree actions"
-            aria-haspopup="dialog"
-            onClick={() => {
-              const anchor =
-                triggerRef.current?.closest("header") ?? triggerRef.current;
-              setSheetTop(anchor?.getBoundingClientRect().bottom ?? 0);
-              setSheetOpen(true);
-            }}
-          >
-            <Ellipsis />
-          </IconButton>
-          <EdgeSheet
-            open={sheetOpen}
-            side="top"
-            offsetTop={sheetTop}
-            title="Worktree actions"
-            onClose={() => setSheetOpen(false)}
-          >
-            <div role="menu">
-              {actions.length > 0 ? (
-                <>
-                  <SheetGroupLabel>Actions</SheetGroupLabel>
-                  {actions.map((action) => (
-                    <Item
-                      key={action.key}
-                      size="sm"
-                      render={
-                        <button
-                          type="button"
-                          disabled={action.busy || action.disabled}
-                        />
-                      }
-                      // One line: the reason gives way (truncates), never wraps.
-                      className="flex-nowrap disabled:pointer-events-none disabled:opacity-50"
-                      role="menuitem"
-                      title={action.disabledReason}
-                      onClick={() => {
-                        setSheetOpen(false);
-                        action.onRun();
-                      }}
-                    >
-                      {action.icon ? (
-                        <ItemMedia variant="icon">{action.icon}</ItemMedia>
-                      ) : null}
-                      {/* The act keeps its full label; the reason gives way. */}
-                      <ItemContent className="shrink-0">
-                        <ItemTitle>
-                          <span className="truncate">{action.label}</span>
-                        </ItemTitle>
-                      </ItemContent>
-                      {/* A disabled row says why: a phone shows no tooltip. */}
-                      {(action.disabled && action.disabledReason) ||
-                      action.hint ? (
-                        <ItemActions className="min-w-0 shrink text-xs text-muted-foreground">
-                          <span className="truncate">
-                            {action.disabled && action.disabledReason
-                              ? action.disabledReason
-                              : action.hint}
-                          </span>
-                        </ItemActions>
-                      ) : null}
-                    </Item>
-                  ))}
-                </>
-              ) : null}
-              {diffView ? (
-                <>
-                  {actions.length > 0 ? <Separator /> : null}
-                  <SheetGroupLabel>Diff view</SheetGroupLabel>
-                  {diffView.showStyle
-                    ? DIFF_STYLES.map((style) => (
-                        <SheetCheckRow
-                          key={style.value}
-                          role="menuitemradio"
-                          icon={style.icon}
-                          label={style.label}
-                          checked={diffView.prefs.diffStyle === style.value}
-                          onSelect={() =>
-                            diffView.onUpdate({ diffStyle: style.value })
-                          }
-                        />
-                      ))
-                    : null}
-                  {DIFF_VIEW_SWITCHES.map(({ pref, label }) => (
-                    <SheetCheckRow
-                      key={pref}
-                      icon={DIFF_SWITCH_ICONS[pref]}
-                      label={label}
-                      checked={diffView.prefs[pref]}
-                      onSelect={() =>
-                        diffView.onUpdate({ [pref]: !diffView.prefs[pref] })
-                      }
-                    />
-                  ))}
-                </>
-              ) : null}
-              {ignoredFiles ? (
-                <>
-                  {actions.length > 0 || diffView ? <Separator /> : null}
-                  <SheetGroupLabel>Files</SheetGroupLabel>
-                  <Item
-                    size="sm"
-                    render={<button type="button" />}
-                    role="menuitemcheckbox"
-                    aria-checked={ignoredFiles.shown}
-                    onClick={() => ignoredFiles.onChange(!ignoredFiles.shown)}
-                  >
-                    <ItemMedia variant="icon">
-                      <Eye />
-                    </ItemMedia>
-                    <ItemContent>
-                      <ItemTitle>Show ignored files</ItemTitle>
-                    </ItemContent>
-                    <ItemActions>
-                      {ignoredFiles.shown ? <Check size={14} /> : null}
-                    </ItemActions>
-                  </Item>
-                </>
-              ) : null}
-            </div>
-          </EdgeSheet>
-        </>
-      ) : actions.length > 0 || ignoredFiles || diffView ? (
-        <OverflowMenu
-          label="Worktree actions"
-          size="icon"
-          // As wide as a row needs, up to a cap: a label and its reason sit on
-          // ONE line, and only the reason gives way (truncates) past the cap.
-          contentClassName="w-max min-w-56 max-w-[min(26rem,calc(100vw-2rem))]"
-        >
-          {actions.map((action) => (
-            <DropdownMenuItem
-              key={action.key}
-              disabled={action.disabled || action.busy}
-              title={action.disabled ? action.disabledReason : action.hint}
-              onClick={action.onRun}
-              className="whitespace-nowrap"
-            >
-              {action.icon}
-              <span className="shrink-0">{action.label}</span>
-              {action.disabled && action.disabledReason ? (
-                <span className="ml-auto min-w-0 truncate pl-4 text-xs text-muted-foreground">
-                  {action.disabledReason}
-                </span>
-              ) : null}
-            </DropdownMenuItem>
-          ))}
-          {diffView ? (
-            <>
-              {actions.length > 0 ? <DropdownMenuSeparator /> : null}
-              {diffView.showStyle ? (
-                <DropdownMenuRadioGroup
-                  value={diffView.prefs.diffStyle}
-                  onValueChange={(next) =>
-                    diffView.onUpdate({ diffStyle: next as Prefs["diffStyle"] })
-                  }
-                >
-                  {DIFF_STYLES.map((style) => (
-                    <DropdownMenuRadioItem
-                      key={style.value}
-                      value={style.value}
-                      closeOnClick={false}
-                    >
-                      {style.icon}
-                      {style.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              ) : null}
-              {DIFF_VIEW_SWITCHES.map(({ pref, label }) => (
-                <DropdownMenuCheckboxItem
-                  key={pref}
-                  checked={diffView.prefs[pref]}
-                  closeOnClick={false}
-                  onCheckedChange={(checked) =>
-                    diffView.onUpdate({ [pref]: checked })
-                  }
-                >
-                  {DIFF_SWITCH_ICONS[pref]}
-                  {label}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </>
-          ) : null}
-          {zoom ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                closeOnClick={false}
-                disabled={!zoom.canIncrease}
-                onClick={zoom.increase}
-              >
-                <ZoomIn />
-                Zoom in
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                closeOnClick={false}
-                disabled={!zoom.canDecrease}
-                onClick={zoom.decrease}
-              >
-                <ZoomOut />
-                Zoom out
-              </DropdownMenuItem>
-              <DropdownMenuItem closeOnClick={false} onClick={zoom.reset}>
-                <RotateCcw />
-                Reset zoom
-                <span className="ml-auto pl-3 text-xs text-muted-foreground tabular-nums">
-                  {Math.round(zoom.scale * 100)}%
-                </span>
-              </DropdownMenuItem>
-            </>
-          ) : null}
-          {ignoredFiles ? (
-            <>
-              {actions.length > 0 || diffView || zoom ? (
-                <DropdownMenuSeparator />
-              ) : null}
-              <DropdownMenuCheckboxItem
-                checked={ignoredFiles.shown}
-                closeOnClick={false}
-                onCheckedChange={(checked) => ignoredFiles.onChange(checked)}
-              >
-                <Eye />
-                Show ignored files
-              </DropdownMenuCheckboxItem>
-            </>
-          ) : null}
-        </OverflowMenu>
       ) : null}
     </div>
   );
@@ -1522,6 +1306,15 @@ export default function WorktreeDetailPage({
   );
   const filePath = routeFilePath ?? readmePath;
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
+  // The open file's pivots, for a document folder's header.
+  const documentPivots =
+    filePath && view === "files"
+      ? filePivotsFor(filePath, worktree.isMain)
+      : [];
+  // Zoom is a `…` group on a wide page; a phone's is the dock's, and a side
+  // panel's page is not the document the shell zooms.
+  const navigation = useDocumentNavigationRegistration();
+  const menuZoom = narrow ? undefined : navigation?.zoom;
 
   // Split diffs are unusable in a column this narrow: it always renders
   // unified, and the remembered split pref applies in a wide pane only (its
@@ -1795,39 +1588,32 @@ export default function WorktreeDetailPage({
                 <>
                   {embedded ? (
                     headerActions
-                  ) : filePath ? (
-                    <DocumentNavigationActions
-                      className="hidden desktop:flex"
-                      showClose={false}
+                  ) : (
+                    <DocumentPageActions
+                      narrow={narrow}
+                      pivots={documentPivots}
+                      pivot={filePivot}
+                      onPivotChange={setFilePivot}
+                      showHistory={Boolean(filePath)}
                     />
-                  ) : null}
-                  {/* A phone has room for one header row, so the file's pivots
-                    move off their own toolbar into its overflow. */}
-                  {narrow && filePath && view === "files" ? (
-                    <OverflowMenu
-                      label="File view"
-                      size="icon"
-                      contentClassName="min-w-48"
-                    >
-                      <DropdownMenuRadioGroup
-                        value={filePivot}
-                        onValueChange={(next) =>
-                          setFilePivot(next as FilePivot)
-                        }
-                      >
-                        {filePivotsFor(filePath, worktree.isMain).map(
-                          ({ id, label, icon }) => (
-                            <DropdownMenuRadioItem key={id} value={id}>
-                              {icon}
-                              {label}
-                            </DropdownMenuRadioItem>
-                          ),
-                        )}
-                      </DropdownMenuRadioGroup>
-                    </OverflowMenu>
-                  ) : null}
+                  )}
                 </>
               }
+              menu={{
+                label: "Document actions",
+                groups: [
+                  ...(narrow
+                    ? [
+                        documentPivotMenuGroup(
+                          documentPivots,
+                          filePivot,
+                          setFilePivot,
+                        ),
+                      ]
+                    : []),
+                  ...(menuZoom ? [zoomMenuGroup(menuZoom)] : []),
+                ],
+              }}
             />
           ) : (
             <PageHeader
@@ -1854,38 +1640,38 @@ export default function WorktreeDetailPage({
               iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
               // One row of identity, as the Task page's id: the branch, muted
               // and mono. The Overview's body carries it as the title.
-              // Rightmost: after the header's own comment and Start session.
-              // The side panel's copy keeps it too, as a desktop menu: its
-              // header draws Add comment itself.
-              menu={
-                <WorktreeHeaderActions
-                  actions={menuActions}
-                  // A wide header draws Add comment itself.
-                  showComment={narrow && !embedded}
-                  zoomInMenu={!narrow}
-                  // The sidebar lists the files on a wide screen; a phone
-                  // jumps through the header.
-                  onBrowseFiles={narrow ? () => setBrowseOpen(true) : undefined}
-                  onJumpToFile={
-                    narrow && view === "changes"
-                      ? () => setJumpOpen(true)
-                      : undefined
-                  }
-                  diffView={
-                    view === "changes" || (view === "files" && filePath)
-                      ? {
-                          prefs: effectivePrefs,
-                          onUpdate: onUpdatePrefs,
-                          showStyle: !narrow,
-                        }
-                      : undefined
-                  }
-                  ignoredFiles={{
-                    shown: ignoredShown,
-                    onChange: setIgnoredShown,
-                  }}
-                />
-              }
+              // The header's one `…`, its rightmost control (`HeaderMenu`).
+              menu={{
+                label: "Worktree actions",
+                groups: [
+                  {
+                    key: "actions",
+                    label: "Actions",
+                    items: actionMenuItems(menuActions),
+                  },
+                  ...(view === "changes" || (view === "files" && filePath)
+                    ? diffViewMenuGroups({
+                        prefs: effectivePrefs,
+                        onUpdate: onUpdatePrefs,
+                        showStyle: !narrow,
+                      })
+                    : []),
+                  ...(menuZoom ? [zoomMenuGroup(menuZoom)] : []),
+                  {
+                    key: "files",
+                    label: "Files",
+                    items: [
+                      {
+                        key: "show-ignored",
+                        icon: <Eye />,
+                        label: "Show ignored files",
+                        checked: ignoredShown,
+                        onSelect: () => setIgnoredShown(!ignoredShown),
+                      },
+                    ],
+                  },
+                ],
+              }}
               title={
                 // `block`: an inline span's `truncate` never clips, and the
                 // branch ran under the header's icons.
@@ -1917,29 +1703,42 @@ export default function WorktreeDetailPage({
                 </div>
               }
               actions={
-                embedded ? (
-                  headerActions
-                ) : (
-                  <>
-                    {filePath ? (
-                      <DocumentNavigationActions
-                        className="hidden desktop:flex"
-                        // Zoom lives in the `…` menu: the row has the views
-                        // and comment to fit beside the branch.
-                        showZoom={false}
-                        // The browser's own Back and Forward serve here, and
-                        // Close only when the file came from outside the
-                        // worktree (a chat): from the sidebar there is
-                        // nothing to return to.
-                        showHistory={false}
-                        showClose={
-                          Boolean(routeFilePath) &&
-                          openedFromOutsideWorktree(worktree.id)
-                        }
-                      />
-                    ) : null}
-                  </>
-                )
+                <>
+                  {embedded ? (
+                    headerActions
+                  ) : (
+                    <>
+                      {filePath ? (
+                        <DocumentNavigationActions
+                          className="hidden desktop:flex"
+                          // The browser's own Back and Forward serve here, and
+                          // Close only when the file came from outside the
+                          // worktree (a chat): from the sidebar there is
+                          // nothing to return to.
+                          showHistory={false}
+                          showClose={
+                            Boolean(routeFilePath) &&
+                            openedFromOutsideWorktree(worktree.id)
+                          }
+                        />
+                      ) : null}
+                    </>
+                  )}
+                  <WorktreeHeaderButtons
+                    // A wide header draws Add comment itself.
+                    showComment={narrow && !embedded}
+                    // The sidebar lists the files on a wide screen; a phone
+                    // jumps through the header.
+                    onBrowseFiles={
+                      narrow ? () => setBrowseOpen(true) : undefined
+                    }
+                    onJumpToFile={
+                      narrow && view === "changes"
+                        ? () => setJumpOpen(true)
+                        : undefined
+                    }
+                  />
+                </>
               }
             />
           )}
