@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import {
   ChevronsUpDown,
   GitBranch,
@@ -22,27 +22,21 @@ import { IconButton } from "../common/IconButton.tsx";
 import { EdgeSheetContainer } from "../common/EdgeSheet.tsx";
 import { EmptyBox, PaneLoading } from "../common/load.tsx";
 import type { Prefs } from "../../hooks/usePrefs.ts";
+import { parseRoute, worktreePath } from "../../hooks/useSessionRouting.ts";
+import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
 import {
-  parseRoute,
-  worktreePath,
-  type WorktreeView,
-} from "../../hooks/useSessionRouting.ts";
+  decodeStoredPanelLocations,
+  withPanelLocation,
+  type PanelLocation,
+  type PanelLocations,
+} from "../../lib/panelLocation.ts";
 import { RoutePrimaryActionProvider } from "./RoutePrimaryAction.tsx";
 
-/**
- * Where inside the worktree the panel is looking. The same four coordinates the
- * `/worktrees/:id` route carries in its URL, held as panel state instead: the
- * panel reads a worktree BESIDE whatever the main pane is on, so the URL keeps
- * naming the main pane's object.
- */
-interface PanelLocation {
-  view: WorktreeView;
-  path?: string | undefined;
-  from?: string | undefined;
-  to?: string | undefined;
-}
-
 const PANEL_HOME: PanelLocation = { view: "changes" };
+// Per worktree and tab-scoped like the panel's tab itself: a reload, or coming
+// back to a session, reopens each worktree where it was.
+const LOCATIONS_STORAGE_KEY = "assistant.worktree-panel.locations.v1";
+const NO_LOCATIONS: PanelLocations = {};
 
 const NO_COMMENTS: WorktreeComment[] = [];
 
@@ -113,22 +107,40 @@ export function WorktreePanel({
     | "onStartSessionInWorktree"
   >;
 }) {
-  const [location, setLocation] = useState<PanelLocation>(PANEL_HOME);
+  const [locations, setLocations] = useSessionStorageState(
+    LOCATIONS_STORAGE_KEY,
+    NO_LOCATIONS,
+    decodeStoredPanelLocations,
+  );
   // A different worktree is a different set of coordinates: a file path or a
-  // commit range from the last one addresses nothing here.
-  useEffect(() => setLocation(PANEL_HOME), [worktreeId]);
-  // After the reset above, so a request that also changed the worktree lands.
+  // commit range from the last one addresses nothing here, so each keeps its own.
+  const location = (worktreeId && locations[worktreeId]) || PANEL_HOME;
+  const moveTo = useCallback(
+    (id: string, next: PanelLocation) =>
+      setLocations((current) => withPanelLocation(current, id, next)),
+    [setLocations],
+  );
+  const setLocation = useCallback(
+    (next: PanelLocation) => {
+      if (worktreeId) moveTo(worktreeId, next);
+    },
+    [moveTo, worktreeId],
+  );
+  // Addressed to the request's own worktree, so one that also changes the
+  // worktree lands there.
   useEffect(() => {
     if (!openRequest) return;
     const route = parseRoute(openRequest.path);
-    if (route.name !== "worktrees") return;
-    setLocation({
-      view: route.view ?? "changes",
+    // A bare worktree route only points the panel there (App switches it), so
+    // that worktree keeps its remembered place.
+    if (route.name !== "worktrees" || !route.id || !route.view) return;
+    moveTo(route.id, {
+      view: route.view,
       path: route.path,
       from: route.from,
       to: route.to,
     });
-  }, [openRequest]);
+  }, [moveTo, openRequest]);
 
   /**
    * The page navigates by route path (`worktreePath`), which is how it moves
@@ -151,7 +163,7 @@ export function WorktreePanel({
         to: route.to,
       });
     },
-    [onNavigate, worktreeId],
+    [onNavigate, setLocation, worktreeId],
   );
 
   if (!worktreeId)

@@ -6901,7 +6901,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       setWorktreePanelRequest((current) => ({
         sessionId: displayCurrentId,
         worktreeId,
-        path: worktreePath(worktreeId, "changes"),
+        // No view: the panel reopens that worktree where it was left.
+        path: worktreePath(worktreeId),
         nonce: (current?.nonce ?? 0) + 1,
       })),
     [displayCurrentId],

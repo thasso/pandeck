@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { SquareArrowOutUpRight } from "lucide-react";
 import type { WorktreeComment, WorktreeGitStatus } from "@assistant/shared";
 import WorktreeDetailPage from "../worktree/WorktreeDetailPage.tsx";
@@ -8,7 +8,6 @@ import {
   knowledgePath,
   parseRoute,
   worktreePath,
-  type WorktreeView,
 } from "../../hooks/useSessionRouting.ts";
 import {
   knowledgeCheckoutRecord,
@@ -17,17 +16,17 @@ import {
 import { IconButton } from "../common/IconButton.tsx";
 import { EdgeSheetContainer } from "../common/EdgeSheet.tsx";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
+import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
+import {
+  decodeStoredPanelLocation,
+  type PanelLocation,
+} from "../../lib/panelLocation.ts";
 import { RoutePrimaryActionProvider } from "./RoutePrimaryAction.tsx";
 
-/** Where inside the Knowledge Base the panel is looking (the route's coordinates, as panel state). */
-interface PanelLocation {
-  view: WorktreeView;
-  path?: string | undefined;
-  from?: string | undefined;
-  to?: string | undefined;
-}
-
 const PANEL_HOME: PanelLocation = { view: "files" };
+// Tab-scoped like the panel's tab itself, so a reload reopens it where it was.
+const LOCATION_STORAGE_KEY = "assistant.knowledge-panel.location.v1";
+
 const NO_COMMENTS: WorktreeComment[] = [];
 // Never read: the page takes no line comments for the Knowledge Base.
 const NO_COMMENT_ACTIONS = {} as CommentActions;
@@ -59,13 +58,17 @@ export function KnowledgePanel({
   /** Take a destination the panel does not own to the main pane. */
   onNavigate: (path: string) => void;
 }) {
-  const [location, setLocation] = useState<PanelLocation>(PANEL_HOME);
+  const [location, setLocation] = useSessionStorageState(
+    LOCATION_STORAGE_KEY,
+    PANEL_HOME,
+    decodeStoredPanelLocation,
+  );
   const worktree = useMemo(() => knowledgeCheckoutRecord(status), [status]);
   const requestedPath = openRequest?.path;
   const requestNonce = openRequest?.nonce;
   useEffect(() => {
     if (requestedPath) setLocation({ view: "files", path: requestedPath });
-  }, [requestedPath, requestNonce]);
+  }, [requestedPath, requestNonce, setLocation]);
 
   const navigate = useCallback(
     (path: string) => {
@@ -81,7 +84,7 @@ export function KnowledgePanel({
         to: route.to,
       });
     },
-    [onNavigate],
+    [onNavigate, setLocation],
   );
 
   return (

@@ -1043,13 +1043,15 @@ over the page, and its diffs are unified. In a panel those sheets are bound to
 the panel (`EdgeSheetContainer`) rather than dropped over the whole app, since
 this panel exists to sit beside what the reader is comparing against. Moving
 inside it (a view, a file, a diff scope) is panel state and never touches the
-address bar, which keeps naming the main pane's object; its one action hands the
-worktree, at the view it is on, to the main pane. A session with no worktree,
-and one whose worktree is gone, each say so rather than drawing an empty page.
-The tab bar is panel chrome, not a second object-title row. On small layouts
-none of this tab state exists: the right panel remains the direct flip-up
-Inspector dock, and a Knowledge card there offers its route alone. Top to
-bottom, for the current main-pane object:
+address bar, which keeps naming the main pane's object. Like the tabs, that
+place is kept in `sessionStorage` (per worktree here, so a session brought back
+reopens its worktree where it was) and survives a reload; its one action hands
+the worktree, at the view it is on, to the main pane. A session with no
+worktree, and one whose worktree is gone, each say so rather than drawing an
+empty page. The tab bar is panel chrome, not a second object-title row. On small
+layouts none of this tab state exists: the right panel remains the direct
+flip-up Inspector dock, and a Knowledge card there offers its route alone. Top
+to bottom, for the current main-pane object:
 
 1. **Summary** — type, title, key status.
 2. **Related objects** — the object's references resolved and rendered as links
