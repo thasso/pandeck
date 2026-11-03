@@ -17,7 +17,15 @@
  * @intent Range semantics match the old History view: from = the older commit
  *   (exclusive), to = the newer one.
  */
-import { cloneElement, useCallback, useState, type ReactNode } from "react";
+import {
+  cloneElement,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Check,
   ChevronDown,
@@ -29,11 +37,8 @@ import {
 import type { WorktreeCommitLogEntry, WorktreeRecord } from "@assistant/shared";
 import { fetchWorktreeLog } from "../../lib/worktrees.ts";
 import { Button } from "../ui/button.tsx";
-import { Item, ItemContent, ItemMedia, ItemTitle } from "../ui/item.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
-import { Toggle } from "../ui/toggle.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
-import { CommitItem } from "./FileHistoryList.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
 import { EdgeSheet } from "../common/EdgeSheet.tsx";
 import { ErrorNote, PaneLoading } from "../common/load.tsx";
@@ -44,6 +49,27 @@ import { dataOf, errorOf, isInitialLoad } from "../../lib/loadState.ts";
 function shortRev(ref: string): string {
   const match = /^([0-9a-f]{12,})(~\d+)?$/i.exec(ref);
   return match ? `${match[1]!.slice(0, 7)}${match[2] ?? ""}` : ref;
+}
+
+/**
+ * The log indexes a scope covers, `[newest, oldest]` inclusive, or null when
+ * the log does not reach an end. The log is newest-first; `from` is the
+ * EXCLUSIVE older end (a commit, or `oid~1` — that commit's parent, so the
+ * commit itself is in), `to` the newer end or the working tree.
+ */
+function scopeIndexes(
+  entries: readonly WorktreeCommitLogEntry[] | undefined,
+  from: string | undefined,
+  to: string | undefined,
+): [number, number] | null {
+  if (!entries || !from) return null;
+  const indexOf = (oid: string) =>
+    entries.findIndex((entry) => entry.oid === oid);
+  const parentOf = /^(.+)~1$/.exec(from)?.[1];
+  const oldest = parentOf ? indexOf(parentOf) : indexOf(from) - 1;
+  const newest = to ? indexOf(to) : 0;
+  if (newest < 0 || oldest < newest || (parentOf && oldest < 0)) return null;
+  return [newest, oldest];
 }
 
 /** What the trigger says: the scope, in the words you would use for it. */
@@ -58,14 +84,10 @@ function worktreeScopeLabel(
   // One commit is the common case and reads as one thing, not as a range against
   // its own parent.
   if (to && from === `${to}~1`) return `Commit ${shortRev(to)}`;
-  // A range reads as how much it holds; the hashes stay in the tooltip. The log
-  // is newest-first and `from` is exclusive, so the count is the index gap.
-  const fromIndex = entries?.findIndex((entry) => entry.oid === from) ?? -1;
-  const toIndex = to
-    ? (entries?.findIndex((entry) => entry.oid === to) ?? -1)
-    : 0;
-  if (fromIndex >= 0 && toIndex >= 0 && fromIndex > toIndex) {
-    const count = fromIndex - toIndex;
+  // A range reads as how much it holds; the hashes stay in the tooltip.
+  const span = scopeIndexes(entries, from, to);
+  if (span) {
+    const count = span[1] - span[0] + 1;
     const commits = `${count} commit${count === 1 ? "" : "s"}`;
     return to ? commits : `${commits} + uncommitted`;
   }
@@ -156,7 +178,6 @@ export function WorktreeScopePicker({
     <ScopePanel
       worktree={worktree}
       log={log}
-      phone={phone}
       from={from}
       to={to}
       onPick={onPick}
@@ -194,11 +215,58 @@ export function WorktreeScopePicker({
   );
 }
 
-/** The presets and the commit log in ONE surface: every scope this view has. */
+/** Which of the three scopes is current. */
+type ScopeKind = "uncommitted" | "branch" | "commits";
+
+function scopeKind(
+  worktree: WorktreeRecord,
+  from: string | undefined,
+  to: string | undefined,
+): ScopeKind {
+  if (!from) return "uncommitted";
+  if (from === worktree.baseCommit && !to) return "branch";
+  return "commits";
+}
+
+/**
+ * One option row, drawn the way the app's menus draw a checkable item: icon,
+ * label, and a plain check at the end when it is the current one — no tint.
+ */
+function OptionRow({
+  icon,
+  label,
+  checked,
+  onSelect,
+}: {
+  icon: ReactNode;
+  label: string;
+  checked: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={checked}
+      onClick={onSelect}
+      className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent [&_svg]:size-4 [&_svg]:shrink-0"
+    >
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {checked ? <Check aria-hidden /> : null}
+    </button>
+  );
+}
+
+/**
+ * Three scopes, one list: uncommitted changes, the whole branch against its
+ * base, or commits. The first two apply at once. Commits unfolds the log, where
+ * a tap picks one commit and a second tap makes it a range — both ends
+ * included — and the button at the bottom applies it.
+ */
 function ScopePanel({
   worktree,
   log,
-  phone,
   from,
   to,
   onPick,
@@ -206,139 +274,172 @@ function ScopePanel({
 }: {
   worktree: WorktreeRecord;
   log: WorktreeLog;
-  phone: boolean;
   from?: string | undefined;
   to?: string | undefined;
   onPick: (from?: string, to?: string) => void;
   onClose: () => void;
 }) {
-  const active = !from
-    ? "uncommitted"
-    : from === worktree.baseCommit && !to
-      ? "vs-base"
-      : "custom";
-  const preset = (
-    id: string,
-    label: string,
-    icon: typeof FileDiff,
-    pick: () => void,
-  ) => {
-    const Icon = icon;
-    return (
-      <Item
-        size="xs"
-        variant={active === id ? "muted" : "default"}
-        render={<button type="button" />}
-        onClick={() => {
-          pick();
-          onClose();
-        }}
-        className="flex-nowrap text-left"
-      >
-        <ItemMedia variant="icon">
-          <Icon />
-        </ItemMedia>
-        <ItemContent className="min-w-0">
-          <ItemTitle className="w-full">
-            <span className="truncate">{label}</span>
-          </ItemTitle>
-        </ItemContent>
-        {active === id ? <Check size={13} className="text-primary" /> : null}
-      </Item>
-    );
-  };
+  const current = scopeKind(worktree, from, to);
+  const [commitsOpen, setCommitsOpen] = useState(current === "commits");
   return (
     <div className="flex flex-col">
-      <ListGroupSection
-        id={`scope-picker:${worktree.id}:scope`}
-        title="Scope"
-        icon={<GitCompareArrows size={14} aria-hidden className="shrink-0" />}
-      >
-        <div className="flex flex-col gap-1 p-1">
-          {preset("uncommitted", "Uncommitted changes", FileDiff, () =>
-            onPick(),
-          )}
-          {worktree.isMain
-            ? null
-            : preset(
-                "vs-base",
-                `Whole branch vs ${worktree.baseBranch}`,
-                GitCompareArrows,
-                () => onPick(worktree.baseCommit),
-              )}
-        </div>
-      </ListGroupSection>
-      <CommitListPanel
-        worktree={worktree}
-        log={log}
-        phone={phone}
-        onPick={onPick}
-        onClose={onClose}
-      />
+      <div role="menu" className="flex flex-col gap-0.5 p-1">
+        <OptionRow
+          icon={<FileDiff />}
+          label="Uncommitted changes"
+          checked={current === "uncommitted" && !commitsOpen}
+          onSelect={() => {
+            onPick();
+            onClose();
+          }}
+        />
+        {worktree.isMain ? null : (
+          <OptionRow
+            icon={<GitCompareArrows />}
+            label={`Whole branch vs ${worktree.baseBranch}`}
+            checked={current === "branch" && !commitsOpen}
+            onSelect={() => {
+              onPick(worktree.baseCommit);
+              onClose();
+            }}
+          />
+        )}
+        <OptionRow
+          icon={<GitCommitHorizontal />}
+          label="Commits…"
+          checked={commitsOpen}
+          onSelect={() => setCommitsOpen(true)}
+        />
+      </div>
+      {commitsOpen ? (
+        <CommitPicker
+          worktree={worktree}
+          log={log}
+          from={current === "commits" ? from : undefined}
+          to={current === "commits" ? to : undefined}
+          onPick={onPick}
+          onClose={onClose}
+        />
+      ) : null}
     </div>
   );
 }
 
-function CommitListPanel({
+function CommitPicker({
   worktree,
   log,
-  phone,
+  from,
+  to,
   onPick,
   onClose,
 }: {
   worktree: WorktreeRecord;
   log: WorktreeLog;
-  phone: boolean;
-  onPick: (from: string, to: string) => void;
+  from?: string | undefined;
+  to?: string | undefined;
+  onPick: (from?: string, to?: string) => void;
   onClose: () => void;
 }) {
-  const [rangeMode, setRangeMode] = useState(false);
-  const [rangeStart, setRangeStart] = useState<string | null>(null);
-
   const { state, reload } = log;
   const entries = dataOf(state);
   const error = errorOf(state);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
-  const pickRange = (a: WorktreeCommitLogEntry, b: WorktreeCommitLogEntry) => {
-    if (!entries) return;
-    // Entries are newest-first: the larger index is the OLDER commit, which
-    // becomes the exclusive `from` side of the range.
-    const [older, newer] =
-      entries.indexOf(a) > entries.indexOf(b) ? [a, b] : [b, a];
-    onPick(older.oid, newer.oid);
-    setRangeStart(null);
+  // The selection, as its two ends by oid (`b` null: one commit). It starts
+  // as the scope on screen, so reopening the picker shows what is compared.
+  const [ends, setEnds] = useState<{ a: string; b: string | null } | null>(
+    null,
+  );
+  const initial = useMemo(() => {
+    const span = scopeIndexes(entries, from, to);
+    if (!span || !entries) return null;
+    const newest = entries[span[0]]!.oid;
+    const oldest = entries[span[1]]!.oid;
+    return { a: oldest, b: newest === oldest ? null : newest };
+  }, [entries, from, to]);
+  const selection = ends ?? initial;
+
+  const span = useMemo(() => {
+    if (!selection || !entries) return null;
+    const ia = entries.findIndex((entry) => entry.oid === selection.a);
+    const ib = selection.b
+      ? entries.findIndex((entry) => entry.oid === selection.b)
+      : ia;
+    if (ia < 0 || ib < 0) return null;
+    return [Math.min(ia, ib), Math.max(ia, ib)] as const;
+  }, [selection, entries]);
+  const picked = useMemo(
+    () =>
+      new Set(
+        span && entries
+          ? entries.slice(span[0], span[1] + 1).map((entry) => entry.oid)
+          : [],
+      ),
+    [span, entries],
+  );
+
+  // Bring the current selection into view as the picker opens — once, so a
+  // later tap never scrolls the list under the finger.
+  const scrolled = useRef(false);
+  const hasPicked = picked.size > 0;
+  useEffect(() => {
+    if (scrolled.current || !hasPicked) return;
+    scrolled.current = true;
+    rootRef.current
+      ?.querySelector("[data-picked]")
+      ?.scrollIntoView({ block: "nearest" });
+  }, [hasPicked]);
+
+  const tap = (oid: string) =>
+    setEnds(() => {
+      // First tap: one commit. Second, on another: the range between them.
+      // A third starts over from the commit tapped.
+      if (!selection || selection.b !== null || selection.a === oid)
+        return { a: oid, b: null };
+      return { a: selection.a, b: oid };
+    });
+
+  const apply = () => {
+    if (!span || !entries) return;
+    const newest = entries[span[0]]!.oid;
+    const oldest = entries[span[1]]!.oid;
+    // `oldest~1` is its parent, so the range includes the oldest commit.
+    onPick(`${oldest}~1`, newest);
     onClose();
   };
 
-  const pick = (entry: WorktreeCommitLogEntry, shiftKey: boolean) => {
-    if (rangeStart) {
-      const start = entries?.find((item) => item.oid === rangeStart);
-      if (start && start.oid !== entry.oid) pickRange(start, entry);
-      else setRangeStart(null);
-      return;
-    }
-    if (rangeMode || shiftKey) {
-      setRangeStart(entry.oid);
-      return;
-    }
-    onPick(`${entry.oid}~1`, entry.oid);
-    onClose();
-  };
+  const count = span ? span[1] - span[0] + 1 : 0;
+  const applyLabel = !span
+    ? "Pick a commit"
+    : count === 1
+      ? `Review commit ${entries![span[0]]!.shortOid}`
+      : `Review ${count} commits`;
 
   const row = (entry: WorktreeCommitLogEntry) => (
-    <CommitItem
+    <button
       key={entry.oid}
-      subject={entry.subject}
-      shortOid={entry.shortOid}
-      selected={rangeStart === entry.oid}
-      dimmed={entry.onBase}
-      onClick={(event) => pick(entry, event.shiftKey)}
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={picked.has(entry.oid)}
+      data-picked={picked.has(entry.oid) || undefined}
+      onClick={() => tap(entry.oid)}
+      className={`flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent ${entry.onBase && !picked.has(entry.oid) ? "opacity-60" : ""}`}
     >
-      {entry.author} · {new Date(entry.authoredAt).toLocaleDateString()}
-    </CommitItem>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-sm">{entry.subject}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          <span className="font-mono">{entry.shortOid}</span> · {entry.author} ·{" "}
+          {new Date(entry.authoredAt).toLocaleDateString()}
+        </span>
+      </span>
+      {picked.has(entry.oid) ? (
+        <Check aria-hidden className="size-4 shrink-0" />
+      ) : (
+        <span className="size-4 shrink-0" />
+      )}
+    </button>
   );
-  // The branch's own commits are what a review is about; the base's history
-  // under them is context, folded until asked for.
+
   const branchCommits = entries?.filter((entry) => !entry.onBase) ?? [];
   const baseCommits = entries?.filter((entry) => entry.onBase) ?? [];
   const band = (
@@ -355,33 +456,16 @@ function CommitListPanel({
         count={rows.length}
         icon={icon}
         defaultOpen={defaultOpen}
+        containsSelected={rows.some((entry) => picked.has(entry.oid))}
       >
-        <div className="flex flex-col gap-1 p-1">{rows.map(row)}</div>
+        <div role="menu" className="flex flex-col gap-0.5 p-1">
+          {rows.map(row)}
+        </div>
       </ListGroupSection>
     );
 
   return (
-    <div className="flex flex-col">
-      <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-        <p className="min-w-0 text-sm text-muted-foreground">
-          {rangeStart
-            ? "Pick the other end of the range."
-            : phone
-              ? "Tap a commit for its diff."
-              : "Click a commit for its diff. Shift-click compares a range."}
-        </p>
-        <Toggle
-          variant="outline"
-          size="sm"
-          pressed={rangeMode}
-          onPressedChange={(pressed) => {
-            setRangeMode(pressed);
-            setRangeStart(null);
-          }}
-        >
-          Range
-        </Toggle>
-      </div>
+    <div ref={rootRef} className="flex flex-col border-t border-border">
       {entries === undefined ? (
         isInitialLoad(state) ? (
           <PaneLoading label="Loading commits…" />
@@ -421,6 +505,11 @@ function CommitListPanel({
           )}
         </>
       )}
+      <div className="sticky bottom-0 border-t border-border bg-popover p-2">
+        <Button className="w-full" size="sm" disabled={!span} onClick={apply}>
+          {applyLabel}
+        </Button>
+      </div>
     </div>
   );
 }

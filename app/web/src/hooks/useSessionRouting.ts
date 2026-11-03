@@ -231,6 +231,13 @@ export function backgroundTasksPath(taskId?: string): string {
     : BACKGROUND_TASKS_PATH;
 }
 
+/** The Review scope a worktree href carries, for navigation to compare. */
+function reviewScopeOf(href: string): string {
+  const query = href.split("#")[0]!.split("?")[1] ?? "";
+  const params = new URLSearchParams(query);
+  return `${params.get("from") ?? ""}\u0000${params.get("to") ?? ""}`;
+}
+
 export function worktreePath(
   id: string,
   view?: WorktreeView,
@@ -809,10 +816,14 @@ export function useSessionRouting({
     if (currentHref !== path) {
       const nextDocument = resolveInternalDocumentTarget(path);
       const currentDocument = resolveInternalDocumentTarget(currentHref);
+      // A worktree file's Review scope (`from`/`to`) is not part of its
+      // document identity, but it IS a different page: switching scope with
+      // a file open must navigate, not be folded into "same document".
       const sameDocument =
         nextDocument !== null &&
         currentDocument !== null &&
-        sameDocumentIdentity(nextDocument, currentDocument);
+        sameDocumentIdentity(nextDocument, currentDocument) &&
+        reviewScopeOf(path) === reviewScopeOf(currentHref);
       // Valid line anchors are part of document navigation even when the source
       // identity is unchanged. Unrelated fragments such as transcript `#m-*`
       // parse with no document anchor and must not manufacture an entry.
