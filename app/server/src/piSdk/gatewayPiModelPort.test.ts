@@ -1,9 +1,9 @@
 /**
  * A leased pi engine's model port (`gatewayPiModelPort.ts`): every Codex
  * model it hands out is on the gateway and authenticates with the lease, the
- * OpenAI-compatible provider follows the settings feed, and the runtime's
- * auth is guarded per request, so neither credential is ever paired with
- * another `baseUrl`. Nothing here leaves the process: every request pi would
+ * OpenAI-compatible provider follows the key-less settings feed onto the
+ * gateway's `/compat` with the lease too, and the runtime's auth is guarded
+ * per request, so the lease is never paired with another `baseUrl`. Nothing here leaves the process: every request pi would
  * send goes to a recording `fetch`, and the egress observer sees none.
  *
  * Run: pnpm --filter @assistant/server test src/piSdk/gatewayPiModelPort.test.ts
@@ -17,7 +17,6 @@ import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@assistant/shared";
 import {
   COMPAT_KEY_A,
-  COMPAT_KEY_B,
   startEgressObserver,
   type EgressObserver,
 } from "../test/gatewayFixtures.ts";
@@ -25,8 +24,8 @@ import type { PiEngineModel } from "./piEngine.ts";
 import type { PiModelPort } from "./piEngineHost.ts";
 import {
   gatewayPiModelPort,
-  type CompatProviderConfig,
   type CompatProviderFeed,
+  type EngineCompatConfig,
 } from "./gatewayPiModelPort.ts";
 
 const GATEWAY = "http://127.0.0.1:9";
@@ -44,6 +43,7 @@ const CATALOG_ID = "gpt-catalog-only";
 const BUILTIN_ID = "gpt-5.6-luna";
 const COMPAT_A = "http://127.0.0.1:7/v1";
 const COMPAT_B = "http://127.0.0.1:8/v1";
+const COMPAT_OTHER_PATH = "http://127.0.0.1:8/api/openai/v1/";
 
 const root = mkdtempSync(join(tmpdir(), "gateway-port-"));
 const watched = ["home", "agent", "data"].map((dir) => join(root, dir));
@@ -109,11 +109,11 @@ function serverPort(): PiModelPort & { calls: string[] } {
   };
 }
 
-function compatConfig(baseUrl: string, apiKey: string): CompatProviderConfig {
+/** A key-less compatible configuration, as the server's feed answers it. */
+function compatConfig(baseUrl: string): EngineCompatConfig {
   return {
     name: "Fixture",
     baseUrl,
-    apiKey,
     api: "openai-completions",
     models: [
       {
@@ -130,7 +130,7 @@ function compatConfig(baseUrl: string, apiKey: string): CompatProviderConfig {
 }
 
 /** A feed the test drives: `set` changes the config and notifies. */
-function fakeFeed(initial?: CompatProviderConfig) {
+function fakeFeed(initial?: EngineCompatConfig) {
   let config = initial;
   const listeners = new Set<() => void>();
   const feed: CompatProviderFeed = {
@@ -143,7 +143,7 @@ function fakeFeed(initial?: CompatProviderConfig) {
   return {
     feed,
     listeners,
-    set(next: CompatProviderConfig | undefined) {
+    set(next: EngineCompatConfig | undefined) {
       config = next;
       for (const listener of [...listeners]) listener();
     },
@@ -267,8 +267,38 @@ test("every Codex model the port returns authenticates with the lease, and creat
   }
 });
 
-test("the compatible registration follows the feed: re-registered on a change, removed on none, unchanged skipped, unsubscribed on dispose", async () => {
-  const driven = fakeFeed(compatConfig(COMPAT_A, COMPAT_KEY_A));
+test("the compatible provider is registered on the gateway's /compat with the lease, and its key never reaches the port", async () => {
+  const driven = fakeFeed(compatConfig(COMPAT_A));
+  const port = gatewayPiModelPort(ACCESS, {
+    server: serverPort(),
+    compat: driven.feed,
+  });
+  try {
+    const runtime = await port.runtime("default");
+    const model = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+    assert.equal(model.baseUrl, `${GATEWAY}/compat/v1`);
+    assert.equal((await runtime.getAuth(model))?.auth.apiKey, FAKE_LEASE);
+    const sent = await sendThrough(port, model);
+    assert.deepEqual(sent.requests, [
+      {
+        url: `${GATEWAY}/compat/v1/chat/completions`,
+        authorization: `Bearer ${FAKE_LEASE}`,
+      },
+    ]);
+    // The feed's type admits no key: the engine side cannot be handed one.
+    const keyed: EngineCompatConfig = {
+      ...compatConfig(COMPAT_A),
+      // @ts-expect-error -- `apiKey` is `never` on the engine's config.
+      apiKey: COMPAT_KEY_A,
+    };
+    assert.ok(keyed);
+  } finally {
+    port.dispose();
+  }
+});
+
+test("the compatible registration follows the feed: unchanged and same-base-path changes keep it, a base-path change re-registers, none or an invalid URL removes it, dispose unsubscribes", async () => {
+  const driven = fakeFeed(compatConfig(COMPAT_A));
   const port = gatewayPiModelPort(ACCESS, {
     server: serverPort(),
     compat: driven.feed,
@@ -277,69 +307,90 @@ test("the compatible registration follows the feed: re-registered on a change, r
   const register = vi.spyOn(ModelRegistry.prototype, "registerProvider");
   const unregister = vi.spyOn(ModelRegistry.prototype, "unregisterProvider");
 
-  const atA = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m");
-  assert.equal(atA?.baseUrl, COMPAT_A);
-  assert.equal((await runtime.getAuth(atA!))?.auth.apiKey, COMPAT_KEY_A);
+  const held = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+  assert.equal((await runtime.getAuth(held))?.auth.apiKey, FAKE_LEASE);
 
-  // The same signature again: no registration.
-  driven.set(compatConfig(COMPAT_A, COMPAT_KEY_A));
+  // A notification with the feed unchanged (a key rotation): nothing churns.
+  driven.set(compatConfig(COMPAT_A));
   assert.equal(register.mock.calls.length, 0);
+  assert.equal((await runtime.getAuth(held))?.auth.apiKey, FAKE_LEASE);
 
-  // A key rotation on the same endpoint applies to the model already held.
-  driven.set(compatConfig(COMPAT_A, COMPAT_KEY_B));
+  // Another origin at the same base path: the gateway follows the push, so
+  // the held model keeps its auth (RD-G3b2-4).
+  driven.set(compatConfig(COMPAT_B));
+  assert.equal(register.mock.calls.length, 0);
+  assert.equal((await runtime.getAuth(held))?.auth.apiKey, FAKE_LEASE);
+
+  // Another base path: re-registered; the held model gets no auth, the new
+  // one does.
+  driven.set(compatConfig(COMPAT_OTHER_PATH));
   assert.equal(register.mock.calls.length, 1);
-  assert.equal((await runtime.getAuth(atA!))?.auth.apiKey, COMPAT_KEY_B);
+  assert.equal(await runtime.getAuth(held), undefined);
+  const moved = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+  assert.equal(moved.baseUrl, `${GATEWAY}/compat/api/openai/v1`);
+  assert.equal((await runtime.getAuth(moved))?.auth.apiKey, FAKE_LEASE);
 
-  // A new endpoint is recorded; the model held at the old one gets no auth.
-  driven.set(compatConfig(COMPAT_B, COMPAT_KEY_B));
-  assert.equal(register.mock.calls.length, 2);
-  const atB = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m");
-  assert.equal(atB?.baseUrl, COMPAT_B);
-  assert.equal((await runtime.getAuth(atB!))?.auth.apiKey, COMPAT_KEY_B);
-
-  // No configuration: unregistered, and nothing authenticates.
+  // A URL the gateway would refuse, then none: unregistered, nothing
+  // authenticates.
+  for (const invalid of [
+    "ftp://127.0.0.1:7/v1",
+    "http://user:pw@127.0.0.1:7/v1",
+    "http://127.0.0.1:7/v1?x=1",
+    "http://127.0.0.1:7/v1#f",
+    "not a url",
+  ]) {
+    driven.set(compatConfig(COMPAT_A));
+    driven.set(compatConfig(invalid));
+    assert.equal(port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m"), undefined);
+    assert.equal(await runtime.getAuth(held), undefined, invalid);
+  }
   driven.set(undefined);
-  assert.equal(unregister.mock.calls.length, 1);
   assert.equal(port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m"), undefined);
-  assert.equal(await runtime.getAuth(atB!), undefined);
+  assert.equal(await runtime.getAuth(moved), undefined);
+  const unregistered = unregister.mock.calls.length;
   driven.set(undefined);
-  assert.equal(unregister.mock.calls.length, 1);
+  assert.equal(unregister.mock.calls.length, unregistered);
 
   assert.equal(driven.listeners.size, 1);
   port.dispose();
   port.dispose();
   assert.equal(driven.listeners.size, 0);
-  driven.set(compatConfig(COMPAT_A, COMPAT_KEY_A));
+  const registered = register.mock.calls.length;
+  driven.set(compatConfig(COMPAT_OTHER_PATH));
   assert.equal(
     register.mock.calls.length,
-    2,
+    registered,
     "a disposed port registers nothing",
   );
 });
 
-test("after an endpoint change, a model held at the old endpoint is refused before any request, and the new one gets the new key", async () => {
-  const driven = fakeFeed(compatConfig(COMPAT_A, COMPAT_KEY_A));
+test("after a base-path change, a model held at the old one is refused before any request, and the new one goes to the gateway", async () => {
+  const driven = fakeFeed(compatConfig(COMPAT_A));
   const port = gatewayPiModelPort(ACCESS, {
     server: serverPort(),
     compat: driven.feed,
   });
   try {
     const runtime = await port.runtime("default");
-    const atA = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
-    driven.set(compatConfig(COMPAT_B, COMPAT_KEY_A));
-    driven.set(compatConfig(COMPAT_B, COMPAT_KEY_B));
-    assert.equal(await runtime.getAuth(atA), undefined);
-    const stale = await sendThrough(port, atA);
+    const held = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+    driven.set(compatConfig(COMPAT_OTHER_PATH));
+    assert.equal(await runtime.getAuth(held), undefined);
+    const stale = await sendThrough(port, held);
     assert.deepEqual(stale.requests, []);
     assert.match(
       stale.errorMessage ?? "",
       /Provider is not configured: openai-compatible/,
     );
-    const atB = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
-    const fresh = await sendThrough(port, atB);
+    const moved = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+    const fresh = await sendThrough(port, moved);
     assert.deepEqual(
       fresh.requests.map((r) => [r.url, r.authorization]),
-      [[`${COMPAT_B}/chat/completions`, `Bearer ${COMPAT_KEY_B}`]],
+      [
+        [
+          `${GATEWAY}/compat/api/openai/v1/chat/completions`,
+          `Bearer ${FAKE_LEASE}`,
+        ],
+      ],
     );
   } finally {
     port.dispose();

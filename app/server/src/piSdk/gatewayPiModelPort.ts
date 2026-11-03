@@ -1,22 +1,25 @@
 /**
  * A leased pi engine's model port (`docs/workers.md` "pi engines use the
  * lease"): one in-memory pi runtime per engine open, holding only the
- * engine's lease, so every `openai-codex` request goes to the credential
- * gateway and nothing is written to disk or fetched from a catalog.
+ * engine's lease, so every `openai-codex` and OpenAI-compatible request goes
+ * to the credential gateway and nothing is written to disk or fetched from a
+ * catalog.
  *
  * pi sends a request to the model object's own `baseUrl` and adds the key
  * its runtime holds for that provider. So every Codex model this port hands
- * out is rebased onto the gateway, and the runtime's `getAuth` is guarded per
- * request: a credential is paired only with the `baseUrl` of the
- * configuration it belongs to. Any other object, such as a catalog model
- * still at `chatgpt.com`, or an OpenAI-compatible model from an endpoint the
- * settings have since replaced, gets no auth, and pi refuses it before it
- * connects ("Provider is not configured").
+ * out is rebased onto the gateway's `/chatgpt`, and the OpenAI-compatible
+ * provider is registered at the gateway's `/compat<base path>` with the lease
+ * as its key: the gateway adds the endpoint's own key. The runtime's
+ * `getAuth` is guarded per request: a credential is paired only with the
+ * `baseUrl` of the configuration it belongs to. Any other object, such as a
+ * catalog model still at `chatgpt.com`, or an OpenAI-compatible model from a
+ * base path the settings have since replaced, gets no auth, and pi refuses it
+ * before it connects ("Provider is not configured"). A change of origin under
+ * the same base path keeps the registration: the gateway follows the push.
  *
- * The OpenAI-compatible provider still goes direct, with the configured key,
- * until the gateway carries that key too (G3b-2). Its configuration arrives
- * through an injected {@link CompatProviderFeed}; the catalog through the
- * server's own port. This module imports neither.
+ * The OpenAI-compatible configuration arrives key-less through an injected
+ * {@link CompatProviderFeed}; the catalog through the server's own port. This
+ * module imports neither.
  */
 import {
   ModelRegistry,
@@ -35,16 +38,40 @@ import type { PiModelPort } from "./piEngineHost.ts";
 const CODEX_PROVIDER_ID = "openai-codex";
 
 /** The OpenAI-compatible provider as pi's registry takes it. */
-export type CompatProviderConfig = Parameters<
-  ModelRegistry["registerProvider"]
->[1] & { baseUrl: string };
+type CompatProviderConfig = Parameters<ModelRegistry["registerProvider"]>[1] & {
+  baseUrl: string;
+};
+
+/**
+ * The OpenAI-compatible provider as an engine sees it: no key, which only
+ * the gateway holds. `apiKey` cannot be set, so no caller adds one unnoticed.
+ */
+export type EngineCompatConfig = Omit<CompatProviderConfig, "apiKey"> & {
+  apiKey?: never;
+};
 
 /** The OpenAI-compatible configuration and its changes, as the server has them. */
 export interface CompatProviderFeed {
   /** The configuration to register now; undefined when there is none. */
-  current(): CompatProviderConfig | undefined;
+  current(): EngineCompatConfig | undefined;
   /** Calls `listener` after every settings change; answers the unsubscribe. */
   subscribe(listener: () => void): () => void;
+}
+
+/**
+ * The base URL's path as the gateway's `/compat` takes it, without trailing
+ * slashes; undefined for one the gateway refuses (`gateway/compatUpstream.ts`).
+ */
+function compatBasePath(baseUrl: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+  if (url.username || url.password || url.search || url.hash) return undefined;
+  return url.pathname.replace(/\/+$/, "");
 }
 
 export type GatewayPiModelPort = PiModelPort & {
@@ -68,11 +95,20 @@ export function gatewayPiModelPort(
 
   const syncCompat = (into: ModelRegistry): void => {
     const config = deps.compat.current();
-    const signature = config ? JSON.stringify(config) : "disabled";
+    const basePath = config && compatBasePath(config.baseUrl);
+    // On the gateway: a new origin at the same base path keeps the signature.
+    const registered =
+      config && basePath !== undefined
+        ? { ...config, baseUrl: `${access.baseUrl}/compat${basePath}` }
+        : undefined;
+    const signature = registered ? JSON.stringify(registered) : "disabled";
     if (signature === compatSignature) return;
-    if (config) {
-      into.registerProvider(OPENAI_COMPATIBLE_PROVIDER_ID, config);
-      compatBase = config.baseUrl;
+    if (registered) {
+      into.registerProvider(OPENAI_COMPATIBLE_PROVIDER_ID, {
+        ...registered,
+        apiKey: access.leaseToken,
+      });
+      compatBase = registered.baseUrl;
     } else {
       if (compatSignature !== undefined)
         into.unregisterProvider(OPENAI_COMPATIBLE_PROVIDER_ID);

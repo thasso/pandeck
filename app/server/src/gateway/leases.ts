@@ -239,6 +239,11 @@ export class LeaseTable {
     return [...this.leases].map(([leaseId, lease]) => recordOf(leaseId, lease));
   }
 
+  /** Whose a held lease is: the routes beyond its provider's depend on it. */
+  kindOf(leaseId: string): LeaseOwnership["kind"] | undefined {
+    return this.leases.get(leaseId)?.ownership.kind;
+  }
+
   private prune(): void {
     const cutoff = this.now() - REVOKED_KEPT_MS;
     for (const [leaseId, lease] of this.leases)

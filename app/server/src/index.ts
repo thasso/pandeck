@@ -43,7 +43,7 @@ import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
-import { startGatewayLink } from "./gatewayLink.ts";
+import { settingsCompatSource, startGatewayLink } from "./gatewayLink.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
 import { assertPromptAssets } from "./promptAssets.ts";
@@ -77,6 +77,7 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
+  compatProviderFeed,
   notifyCompatProviderChanged,
   startOpenAiProfileLogin,
   syncConfiguredModelProviders,
@@ -1852,9 +1853,14 @@ startInProcessWorker();
 // Opt-in: the credential gateway runs in this process, and every engine open
 // on a profile holds a lease first. A failed start is logged and only fails
 // those opens. Graceful shutdown leaves it running, as the package proxy, for
-// a draining turn; it dies with the process.
+// a draining turn; it dies with the process. The link pushes the
+// OpenAI-compatible endpoint and key, which only the gateway then holds.
 if (GATEWAY_ENABLED)
-  startGatewayLink({ stateDir: join(DATA_DIR, "gateway"), port: GATEWAY_PORT });
+  startGatewayLink({
+    stateDir: join(DATA_DIR, "gateway"),
+    port: GATEWAY_PORT,
+    compat: settingsCompatSource(compatProviderFeed),
+  });
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.
 startChildOomScoreRelease();

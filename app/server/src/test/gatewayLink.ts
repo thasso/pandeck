@@ -34,7 +34,7 @@ export interface TestGatewayLink {
 
 export async function startGatewayLinkForTests(
   options: Partial<
-    Pick<GatewayLinkOptions, "stateDir" | "start" | "upstreams">
+    Pick<GatewayLinkOptions, "stateDir" | "start" | "upstreams" | "compat">
   > = {},
 ): Promise<TestGatewayLink> {
   /** The temp directory this helper made and removes, if it made one. */
@@ -50,6 +50,7 @@ export async function startGatewayLinkForTests(
     log: (line) => lines.push(line),
     ...(options.start ? { start: options.start } : {}),
     ...(options.upstreams ? { upstreams: options.upstreams } : {}),
+    ...(options.compat ? { compat: options.compat } : {}),
   });
   assert.equal(await link.ready, true, lines.join("\n"));
   return {

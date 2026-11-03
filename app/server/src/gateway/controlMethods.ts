@@ -1,8 +1,8 @@
 /**
- * Gateway control 1.1: the methods the server and the credential gateway send
+ * Gateway control 1.2: the methods the server and the credential gateway send
  * each other over the worker protocol's codec and `WorkerConnection` framing,
  * under a version of its own (`docs/workers.md` "Credentials"). Its handshake
- * refuses a Worker, and a Worker refuses it; a 1.0 peer is admitted.
+ * refuses a Worker, and a Worker refuses it; any 1.x peer is admitted.
  *
  * Every server → gateway method is answered only once its effect is applied
  * and saved. `control.hello` comes first on each connection; anything before
@@ -27,6 +27,9 @@
  *   writer, `profiles.loginRelease {holdId}` ends a hold of this boot and
  *   `profiles.loginForceRelease {holdId}` ends any hold (the operator's
  *   assertion).
+ * - `compat.set {baseUrl, apiKey}` holds the OpenAI-compatible endpoint and
+ *   its key in memory only (`compatUpstream.ts`); one it refuses clears the
+ *   held pair. `compat.clear {}` drops it, and so does every hello.
  *
  * Gateway → server: `profiles.status {profileId, loginStuck, holdId}` reports
  * a hold that became login-stuck or a stuck one that ended, answered `{}`.
@@ -36,6 +39,7 @@ import {
   WorkerMethodError,
   type ConnectionProtocol,
 } from "../workerProtocol/connection.ts";
+import { compatBaseUrl } from "./compatUpstream.ts";
 import { isHoldId, type HoldAcquired, type HoldStatus } from "./holds.ts";
 import { isLeaseId } from "./leases.ts";
 import { isPid, isStartTime } from "./processIdentity.ts";
@@ -43,7 +47,7 @@ import { isProfileId, parseProfile, type GatewayProfile } from "./profiles.ts";
 import type { RevokeReason } from "./refusals.ts";
 import { isOwnerId } from "./state.ts";
 
-export const GATEWAY_CONTROL_VERSION = "gateway-control/1.1";
+export const GATEWAY_CONTROL_VERSION = "gateway-control/1.2";
 
 const CONTROL_VERSION_RE =
   /^gateway-control\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -67,6 +71,8 @@ export const CONTROL_METHODS = {
   loginWriter: "profiles.loginWriter",
   loginRelease: "profiles.loginRelease",
   loginForceRelease: "profiles.loginForceRelease",
+  compatSet: "compat.set",
+  compatClear: "compat.clear",
   /** Gateway → server. */
   status: "profiles.status",
 } as const;
@@ -133,6 +139,16 @@ export interface LoginWriterRequest {
   startTime: string | null;
 }
 
+/** The OpenAI-compatible endpoint and key `compat.set` pushes. */
+export interface CompatConfig {
+  baseUrl: string;
+  apiKey: string;
+}
+
+const MAX_BASE_URL_BYTES = 2048;
+/** Printable ASCII only: a key can never end a header or start another. */
+const API_KEY_RE = /^[\x21-\x7e]{1,8192}$/;
+
 /** What `control.hello`, the profile methods and the reconcile answer. */
 export interface LeasesRevoked {
   revoked: string[];
@@ -181,7 +197,9 @@ export function encodeControlRequest(
     | WorkerReconcile
     | LoginHoldRequest
     | LoginWriterRequest
-    | { holdId: string },
+    | { holdId: string }
+    | CompatConfig
+    | Record<string, never>,
 ): Payload {
   return { json: { ...request } };
 }
@@ -271,6 +289,20 @@ export function decodeHoldId(payload: Payload): string {
   const { holdId } = json(payload);
   if (!isHoldId(holdId)) invalid("hold id");
   return holdId;
+}
+
+/** No error message names the URL or key: a refusal holds no peer text. */
+export function decodeCompatSet(payload: Payload): CompatConfig {
+  const { baseUrl, apiKey } = json(payload);
+  if (
+    typeof baseUrl !== "string" ||
+    Buffer.byteLength(baseUrl) > MAX_BASE_URL_BYTES ||
+    !compatBaseUrl(baseUrl)
+  )
+    invalid("base URL");
+  if (typeof apiKey !== "string" || !API_KEY_RE.test(apiKey))
+    invalid("API key");
+  return { baseUrl, apiKey };
 }
 
 export function encodeLoginHold(acquired: HoldAcquired): Payload {

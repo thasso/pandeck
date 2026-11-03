@@ -31,7 +31,8 @@ const REVOKE_WORDING: Record<RevokeReason, string> = {
 export type CredentialProblem = "missing" | "unreadable" | "malformed";
 
 /** How an upstream is named to the user. */
-export type UpstreamLabel = "Anthropic" | "ChatGPT";
+export type UpstreamLabel =
+  "Anthropic" | "ChatGPT" | "the OpenAI-compatible endpoint";
 
 export type Refusal =
   | { case: "unknown-lease" }
@@ -40,6 +41,8 @@ export type Refusal =
   | { case: "unknown-prefix" }
   | { case: "websocket" }
   | { case: "credential"; problem: CredentialProblem }
+  /** No OpenAI-compatible endpoint was pushed since the last hello or clear. */
+  | { case: "compat-unset" }
   /** `reason` is an error code or "connection failed", never peer text. */
   | { case: "unreachable"; upstream: UpstreamLabel; reason: string };
 
@@ -53,6 +56,7 @@ const STATUS: Record<Refusal["case"], number> = {
   "unknown-prefix": 404,
   websocket: 403,
   credential: 503,
+  "compat-unset": 503,
   unreachable: 502,
 };
 
@@ -83,6 +87,8 @@ export function refusalText(refusal: Refusal): string {
       return `${GATEWAY_REFUSAL_MARKER} WebSocket transport is not supported; use SSE.`;
     case "credential":
       return `${GATEWAY_REFUSAL_MARKER} the credential for this session's account could not be read (${refusal.problem}).`;
+    case "compat-unset":
+      return `${GATEWAY_REFUSAL_MARKER} the OpenAI-compatible endpoint's settings have not reached the gateway yet. Try again shortly.`;
     case "unreachable":
       return `${GATEWAY_REFUSAL_MARKER} ${refusal.upstream} could not be reached: ${refusal.reason}.`;
   }

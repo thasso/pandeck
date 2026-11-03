@@ -34,8 +34,14 @@ const {
   startGatewayLink,
 } = await import("./gatewayLink.ts");
 const { startGatewayLinkForTests } = await import("./test/gatewayLink.ts");
-const { endChild, fakeProcesses, spawnIdleChild } =
-  await import("./test/gatewayFixtures.ts");
+const {
+  COMPAT_KEY_A,
+  COMPAT_KEY_B,
+  endChild,
+  fakeProcesses,
+  spawnIdleChild,
+  startFakeCompatEndpoint,
+} = await import("./test/gatewayFixtures.ts");
 const { processStartTime } = await import("./gateway/processIdentity.ts");
 const { startGateway } = await import("./gateway/gateway.ts");
 const { refusalText } = await import("./gateway/refusals.ts");
@@ -55,6 +61,7 @@ const { analyzeProviderError, isLoginDeath, runFailureFacts } =
 type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 type GatewayLinkOptions = import("./gatewayLink.ts").GatewayLinkOptions;
 type GatewayOptions = import("./gateway/gateway.ts").GatewayOptions;
+type GatewayCompatSource = import("./gatewayLink.ts").GatewayCompatSource;
 
 // Synthetic fixture values; none is a real credential.
 const FAKE_ACCESS = "fake-codex-access";
@@ -672,4 +679,139 @@ test("AC22: every link lifetime is a new boot; an earlier boot's hold stays whil
   } finally {
     profiles.deleteCredentialProfile(id);
   }
+});
+
+/** A compatible-settings source the test drives: `set` changes it and notifies. */
+function compatSource(initial: ReturnType<GatewayCompatSource["current"]>) {
+  let value = initial;
+  const listeners = new Set<() => void>();
+  return {
+    source: {
+      current: () => value,
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } satisfies GatewayCompatSource,
+    listeners,
+    set(next: ReturnType<GatewayCompatSource["current"]>) {
+      value = next;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+}
+
+/** A compatible chat request through the link's gateway. */
+async function compatRequest(
+  gateway: { url: string },
+  token: string,
+): Promise<{ status: number; text: string }> {
+  const response = await fetch(`${gateway.url}/compat/v1/chat/completions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: "{}",
+  });
+  return { status: response.status, text: await response.text() };
+}
+
+/** The control methods the gateway logged, in order. */
+const controlOrder = () =>
+  lines
+    .filter((line) => line.startsWith("control "))
+    .map((line) => line.split(/[ :]/)[1]);
+
+test("AC13: the boot pushes the compatible endpoint before ready; changes follow on the queue, after an earlier profile change, until close", async () => {
+  const endpoint = await startFakeCompatEndpoint(["m"], "compatible reply");
+  try {
+    const driven = compatSource({
+      baseUrl: endpoint.baseUrl,
+      apiKey: COMPAT_KEY_A,
+    });
+    const booted = link({ compat: driven.source });
+    assert.equal(await booted.ready, true, lines.join("\n"));
+    assert.deepEqual(controlOrder(), [
+      CONTROL_METHODS.hello,
+      CONTROL_METHODS.syncProfiles,
+      CONTROL_METHODS.reconcileWorker,
+      CONTROL_METHODS.compatSet,
+    ]);
+    const pushed = lines.findIndex((line) =>
+      line.startsWith(`control ${CONTROL_METHODS.compatSet}: ok`),
+    );
+    const ready = lines.findIndex((line) => line.startsWith("ready: "));
+    assert.ok(pushed >= 0 && pushed < ready, lines.join("\n"));
+
+    const { token } = await booted.grantEngineLease({
+      workerId: undefined,
+      sessionId: "compat-session",
+      profileId: profiles.DEFAULT_OPENAI_PROFILE_ID,
+    });
+    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
+
+    // A profile change, then a rotation: queued in that order, and the
+    // rotation sends the value it had when it was notified.
+    const from = controlOrder().length;
+    codexProfile("Link compat");
+    driven.set({ baseUrl: endpoint.baseUrl, apiKey: COMPAT_KEY_B });
+    await until(() => controlOrder().length >= from + 2);
+    assert.deepEqual(controlOrder().slice(from), [
+      CONTROL_METHODS.upsertProfile,
+      CONTROL_METHODS.compatSet,
+    ]);
+    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
+    assert.deepEqual(
+      endpoint.seen.map((seen) => seen.authorization),
+      [`Bearer ${COMPAT_KEY_A}`, `Bearer ${COMPAT_KEY_B}`],
+    );
+
+    // None configured: a clear, and 503 again.
+    driven.set(undefined);
+    await until(() => controlOrder().at(-1) === CONTROL_METHODS.compatClear);
+    const unset = await compatRequest(booted.gateway!, token);
+    assert.equal(unset.status, 503);
+    assert.equal(
+      JSON.parse(unset.text).error.message,
+      refusalText({ case: "compat-unset" }),
+    );
+
+    await booted.close();
+    assert.equal(driven.listeners.size, 0, "close unsubscribes");
+
+    // A source with nothing configured at boot pushes a clear.
+    lines = [];
+    const empty = compatSource(undefined);
+    const cleared = link({ compat: empty.source });
+    assert.equal(await cleared.ready, true);
+    assert.equal(controlOrder().at(-1), CONTROL_METHODS.compatClear);
+    for (const line of lines)
+      for (const value of [COMPAT_KEY_A, COMPAT_KEY_B, endpoint.baseUrl])
+        assert.ok(!line.includes(value), `a log line leaks: ${line}`);
+  } finally {
+    await endpoint.close();
+  }
+});
+
+test("AC14: a push the gateway refuses is logged by its code alone and leaves the link ready, Codex granted and /compat at 503", async () => {
+  const refusedUrl = "ftp://compat.test/v1";
+  const driven = compatSource({ baseUrl: refusedUrl, apiKey: COMPAT_KEY_A });
+  const booted = link({ compat: driven.source });
+  assert.equal(await booted.ready, true, lines.join("\n"));
+  assert.ok(
+    lines.includes(`${CONTROL_METHODS.compatSet}: invalid_params`),
+    lines.join("\n"),
+  );
+  const { token } = await booted.grantEngineLease({
+    workerId: undefined,
+    sessionId: "compat-refused",
+    profileId: profiles.DEFAULT_OPENAI_PROFILE_ID,
+  });
+  const unset = await compatRequest(booted.gateway!, token);
+  assert.equal(unset.status, 503);
+  assert.equal(
+    JSON.parse(unset.text).error.message,
+    refusalText({ case: "compat-unset" }),
+  );
+  for (const line of lines)
+    for (const value of [COMPAT_KEY_A, refusedUrl, "compat.test"])
+      assert.ok(!line.includes(value), `a log line leaks: ${line}`);
 });

@@ -2,13 +2,20 @@
  * The server's link to the credential gateway (`docs/workers.md`
  * "Credentials"), behind `ASSISTANT_GATEWAY=1`. It runs the gateway in this
  * process with its state in `DATA_DIR/gateway/` and speaks gateway control
- * 1.1 to it over an in-process pair, until the gateway gets its own process
+ * 1.2 to it over an in-process pair, until the gateway gets its own process
  * and socket.
  *
  * Before it is ready the link says hello as this server boot, syncs every
- * credential profile and reconciles the in-process Worker with no live lease:
- * an engine of an earlier boot died with it. Profile changes follow, in order:
+ * credential profile, reconciles the in-process Worker with no live lease (an
+ * engine of an earlier boot died with it) and pushes the OpenAI-compatible
+ * endpoint and key. Profile and compatible-settings changes follow, in order:
  * every request takes one queue.
+ *
+ * The push source is the only reader of that key on the engine path: engines
+ * get a key-less configuration (`piSdk/compatProviderFeed.ts`) and spend
+ * their lease at the gateway's `/compat`. A failed push is logged by its code
+ * alone, never the URL or key, and leaves the link ready: `/compat` answers
+ * 503 until a later push.
  *
  * The engine seam (`workers/engineClient.ts`) grants an engine lease before
  * each profiled open and revokes it at the engine's end. A grant the link
@@ -36,6 +43,7 @@ import { errorText } from "./errors.ts";
 import {
   CONTROL_METHODS,
   GATEWAY_CONTROL_PROTOCOL,
+  type CompatConfig,
   decodeHoldReleased,
   decodeHoldStatus,
   decodeLeaseGranted,
@@ -62,6 +70,7 @@ import {
   WorkerRequestError,
 } from "./workerProtocol/connection.ts";
 import { createInProcessTransport } from "./workerProtocol/inProcessTransport.ts";
+import { getOpenAiCompatibleProviderConfigForRegistry } from "./openAiCompatibleSettings.ts";
 
 /** U7's text for an engine open that got no lease. */
 export const GATEWAY_UNAVAILABLE_TEXT =
@@ -125,6 +134,16 @@ export interface GatewayLinkOptions {
   upstreams?: UpstreamOverrides;
   /** Test seam: what starts the gateway. */
   start?: (options: GatewayOptions) => Promise<RunningGateway>;
+  /** The OpenAI-compatible endpoint to push; without it `/compat` answers 503. */
+  compat?: GatewayCompatSource;
+}
+
+/** The OpenAI-compatible endpoint and key the link pushes, and their changes. */
+export interface GatewayCompatSource {
+  /** What the settings hold now; undefined when nothing is configured. */
+  current(): CompatConfig | undefined;
+  /** Calls `listener` after every settings change; answers the unsubscribe. */
+  subscribe(listener: () => void): () => void;
 }
 
 interface EngineLeaseGrant {
@@ -175,9 +194,31 @@ export function installedGatewayLink(): GatewayLink | undefined {
   return installed;
 }
 
+/**
+ * The settings' endpoint and key, notified by `changes`, the engines' feed
+ * (`index.ts` passes it through `harnesses/`): the one reader of the key on
+ * the engine path.
+ */
+export function settingsCompatSource(
+  changes: Pick<GatewayCompatSource, "subscribe">,
+): GatewayCompatSource {
+  return {
+    current() {
+      const config = getOpenAiCompatibleProviderConfigForRegistry();
+      return config && { baseUrl: config.baseUrl, apiKey: config.apiKey };
+    },
+    subscribe: (listener) => changes.subscribe(listener),
+  };
+}
+
 /** A request failure as a log line may name it: its code, or the error's text. */
 function failure(err: unknown): string {
   return err instanceof WorkerRequestError ? err.code : errorText(err);
+}
+
+/** A failed push as a log line names it: never a text that could hold the URL or key. */
+function pushFailure(err: unknown): string {
+  return err instanceof WorkerRequestError ? err.code : "failed";
 }
 
 /** The gateway's view of `profile`, or undefined when it cannot hold it. */
@@ -213,6 +254,27 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   let connection: WorkerConnection | undefined;
   let closing: Promise<void> | undefined;
   const loginStatuses = new Map<string, LoginStatus>();
+
+  /** Sends the compatible endpoint as the source has it now; logs a failure. */
+  const pushCompat = async (
+    send: (method: string, payload: Payload) => Promise<Payload>,
+  ): Promise<void> => {
+    if (!options.compat) return;
+    const config = options.compat.current();
+    const method = config
+      ? CONTROL_METHODS.compatSet
+      : CONTROL_METHODS.compatClear;
+    try {
+      await send(
+        method,
+        encodeControlRequest(
+          config ? { baseUrl: config.baseUrl, apiKey: config.apiKey } : {},
+        ),
+      );
+    } catch (err) {
+      log(`${method}: ${pushFailure(err)}`);
+    }
+  };
 
   const boot = (async (): Promise<boolean> => {
     try {
@@ -264,6 +326,8 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
           encodeControlRequest({ workerId: IN_PROCESS_WORKER_ID, live: [] }),
         ),
       ).revoked;
+      // Before ready, so no engine's first compatible request beats it.
+      await pushCompat((method, payload) => control.request(method, payload));
       log(
         `ready: ${profiles.length} profiles; revoked ${ofOtherBoots.length} server and ${ofDeadEngines.length} engine leases of earlier boots`,
       );
@@ -320,6 +384,11 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       (err: unknown) => log(`${method} (profile ${id}): ${failure(err)}`),
     );
   });
+
+  // Read at callback time and queued, as profile changes are.
+  const unsubscribeCompat = options.compat?.subscribe(
+    () => void pushCompat(request),
+  );
 
   const link: GatewayLink = {
     ready: boot,
@@ -448,6 +517,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       closing ??= (async () => {
         if (installed === link) installed = undefined;
         unsubscribe();
+        unsubscribeCompat?.();
         await boot;
         connection?.end("the server link closed");
         await gateway?.close();

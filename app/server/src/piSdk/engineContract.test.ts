@@ -1,13 +1,13 @@
 /**
  * The pi engine contract (C17.1, `docs/workers.md` "pi engines use the
  * lease"): the installed pi SDK, driven through the real hosted engine and
- * the in-process gateway, against a fake Codex upstream and two fake
+ * the in-process gateway, against a fake Codex upstream and three fake
  * OpenAI-compatible endpoints. A Codex request carries only the engine's
- * lease, to the gateway alone, which adds the profile's own token; the
- * compatible provider goes direct with the settings as they are now (the
- * G3b-2 interim) and never with one endpoint's key at another; nothing else
- * is contacted, pi.dev included; and no engine writes a credential or catalog
- * file.
+ * lease, to the gateway alone, which adds the profile's own token; a
+ * compatible request carries the lease too, to the gateway's `/compat`, which
+ * adds the key the server pushed, so the engine never holds it and no
+ * endpoint sees another's key; nothing else is contacted, pi.dev included;
+ * and no engine writes a credential or catalog file, nor the gateway a key.
  *
  * It runs only in `pnpm run test:engine-contract`, which starts it inside a
  * user, network and PID namespace with loopback alone
@@ -48,7 +48,7 @@ const COMPAT_REPLY = "compatible reply";
 const BUILTIN_ID = "gpt-5.6-luna";
 /** A Codex id only the named profile's server catalog has. */
 const CATALOG_ID = "gpt-catalog-only";
-/** The one model both fake compatible endpoints list. */
+/** The one model every fake compatible endpoint lists. */
 const COMPAT_MODEL = "m";
 const CREDENTIAL_FILES = new Set([
   "auth.json",
@@ -224,6 +224,10 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     const settings = await import("../settingsService.ts");
     const { childProcessEnv } = await import("../subprocessEnv.ts");
     const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
+    const { settingsCompatSource } = await import("../gatewayLink.ts");
+    const { createInProcessTransport } =
+      await import("../workerProtocol/inProcessTransport.ts");
+    const controlMethods = await import("../gateway/controlMethods.ts");
 
     // The installed pi is the locked one.
     const lock = JSON.parse(
@@ -255,13 +259,16 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     });
 
     // 7. The fake upstream answers as the case says; the gateway links to
-    // it. Two compatible endpoints on their own loopback origins.
+    // it, and the link pushes the compatible settings as the server does.
+    // Three compatible endpoints on their own loopback origins, C at another
+    // base path.
     let respond = fixtures.fakeCodexStream(REPLY);
     const upstream = await fixtures.startFakeUpstreams({
       codex: (seen, res) => respond(seen, res),
     });
     const gateway = await startGatewayLinkForTests({
       upstreams: upstream.overrides,
+      compat: settingsCompatSource(compatProviderFeed),
     });
     const gatewayTarget = new URL(gateway.link.gateway!.url).host;
     const compatA = await fixtures.startFakeCompatEndpoint(
@@ -272,10 +279,16 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       [COMPAT_MODEL],
       COMPAT_REPLY,
     );
+    const compatC = await fixtures.startFakeCompatEndpoint(
+      [COMPAT_MODEL],
+      COMPAT_REPLY,
+      { basePath: "/api/v1" },
+    );
     for (const target of [
       gatewayTarget,
       new URL(compatA.baseUrl).host,
       new URL(compatB.baseUrl).host,
+      new URL(compatC.baseUrl).host,
       ...Object.values(upstream.overrides).map(
         ({ connect }) => `${connect.host}:${connect.port}`,
       ),
@@ -324,6 +337,10 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       gatewayTarget,
       compatA,
       compatB,
+      compatC,
+      createInProcessTransport,
+      controlMethods,
+      DATA_DIR,
       fixtureFiles,
       agentDirs: [namedAuth, defaultAuth].map((file) => resolve(file, "..")),
       roots,
@@ -347,6 +364,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     await env.upstream.close();
     await env.compatA.close();
     await env.compatB.close();
+    await env.compatC.close();
   });
 
   type Transcript = Parameters<typeof env.openRemotePiEngine>[0]["transcript"];
@@ -481,7 +499,9 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
   const requestLines = (from: number) =>
     env.gateway.lines
       .slice(from)
-      .filter((line) => /^(claude|openai-codex|-) [A-Z]+ "/.test(line));
+      .filter((line) =>
+        /^(claude|openai-codex|openai-compatible|-) [A-Z]+ "/.test(line),
+      );
 
   /** The newest lease the session's engines were granted. */
   const leaseFor = (sessionId: string) => {
@@ -500,6 +520,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       FAKE_REFRESH,
       env.fixtures.COMPAT_KEY_A,
       env.fixtures.COMPAT_KEY_B,
+      env.fixtures.COMPAT_KEY_C,
       ...env.leases,
     ];
     for (const line of env.gateway.lines)
@@ -795,8 +816,15 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     CASE_MS * 2,
   );
 
+  /**
+   * The compatible requests since `from` went through the gateway's `/compat`
+   * under the engine's lease, one line each, with `outcome`.
+   */
+  const compatLines = (from: number) =>
+    requestLines(from).filter((line) => line.startsWith("openai-compatible "));
+
   test(
-    "on one engine Codex goes to the gateway and the compatible provider goes direct with its key",
+    "on one engine Codex and the compatible provider both go to the gateway, which adds the pushed key",
     async () => {
       env.setResponder(env.fixtures.fakeCodexStream(REPLY));
       await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
@@ -825,6 +853,10 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
         await viaCodex();
 
         await select(engine, compatible.provider, compatible.id);
+        assert.equal(
+          engine.model?.baseUrl,
+          `${env.gateway.link.gateway!.url}/compat/v1`,
+        );
         const from = env.gateway.lines.length;
         const upstreamFrom = env.upstream.chatgpt.length;
         const compatFrom = env.compatA.seen.length;
@@ -838,7 +870,22 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
           sent[0]!.authorization,
           `Bearer ${env.fixtures.COMPAT_KEY_A}`,
         );
-        assert.deepEqual(requestLines(from), []);
+        assert.ok(
+          !String(sent[0]!.authorization).includes(leaseToken),
+          "the lease never reaches the endpoint",
+        );
+        const lines = requestLines(from);
+        assert.equal(lines.length, 1, lines.join("\n"));
+        assert.match(
+          lines[0]!,
+          /^openai-compatible POST "\/v1\/chat\/completions"/,
+        );
+        assert.ok(
+          lines[0]!.includes(
+            ` lease=${leaseFor(engine.sessionId).leaseId} 200 `,
+          ),
+          lines[0],
+        );
         assert.equal(env.upstream.chatgpt.length, upstreamFrom);
 
         await select(engine, "openai-codex", BUILTIN_ID);
@@ -871,10 +918,25 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
           sent: chats(env.compatA, from).map((seen) => seen.authorization),
         };
       };
-      const both = async () => ({
-        leased: await outcome(leased.engine),
-        off: await outcome(off.engine),
-      });
+      /** Both turns; the leased one's went through the gateway, one line each. */
+      const both = async () => {
+        const from = env.gateway.lines.length;
+        const leasedOutcome = await outcome(leased.engine);
+        const viaGateway = compatLines(from);
+        assert.equal(
+          viaGateway.length,
+          leasedOutcome.sent.length,
+          viaGateway.join("\n"),
+        );
+        for (const line of viaGateway) assert.match(line, / 200 \d+ms$/);
+        const offOutcome = await outcome(off.engine);
+        assert.equal(
+          compatLines(from).length,
+          viaGateway.length,
+          "the switch-off engine goes direct",
+        );
+        return { leased: leasedOutcome, off: offOutcome };
+      };
       try {
         await env.settings.saveSettings({
           openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_B },
@@ -920,7 +982,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
   );
 
   test(
-    "after an endpoint change an open engine refuses its old model, sends nothing to either endpoint, and runs on the new one once reselected",
+    "an open engine follows an endpoint change at the same base path to the new endpoint and key, and refuses its old model after a base-path change until reselected",
     async () => {
       await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
       const engines = [
@@ -931,20 +993,47 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
         }),
       ];
       try {
-        // Endpoint B, then its key, then its discovery: B lists `m` too.
+        // Part 1: endpoint B at the same base path, then its key, then its
+        // discovery. No reselect: the engines follow (RD-G3b2-4).
+        const changedA = env.compatA.seen.length;
         await env.settings.saveSettings({
           openAiCompatible: { baseUrl: env.compatB.baseUrl },
         });
         await env.settings.saveSettings({
           openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_B },
         });
-        const tested =
+        const testedB =
           await env.settings.testSettingsSection("openai-compatible");
-        assert.equal(tested.ok, true, JSON.stringify(tested));
+        assert.equal(testedB.ok, true, JSON.stringify(testedB));
+        for (const { engine } of engines) {
+          const fromB = env.compatB.seen.length;
+          const reply = await turn(engine, "Say hello.");
+          assert.equal(reply.stopReason, "stop", reply.errorMessage);
+          assert.deepEqual(
+            chats(env.compatB, fromB).map((seen) => seen.authorization),
+            [`Bearer ${env.fixtures.COMPAT_KEY_B}`],
+          );
+        }
+        assert.equal(
+          env.compatA.seen.length,
+          changedA,
+          "A records nothing after the change",
+        );
 
+        // Part 2: endpoint C at another base path, its key, its discovery.
+        await env.settings.saveSettings({
+          openAiCompatible: { baseUrl: env.compatC.baseUrl },
+        });
+        await env.settings.saveSettings({
+          openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_C },
+        });
+        const testedC =
+          await env.settings.testSettingsSection("openai-compatible");
+        assert.equal(testedC.ok, true, JSON.stringify(testedC));
         for (const { engine } of engines) {
           const fromA = env.compatA.seen.length;
           const fromB = env.compatB.seen.length;
+          const fromC = env.compatC.seen.length;
           const refused = await turn(engine, "Say hello.");
           assert.equal(refused.stopReason, "error");
           assert.match(
@@ -953,16 +1042,19 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
           );
           assert.deepEqual(env.compatA.seen.slice(fromA), []);
           assert.deepEqual(env.compatB.seen.slice(fromB), []);
+          assert.deepEqual(env.compatC.seen.slice(fromC), []);
 
           await select(engine, compatible.provider, compatible.id);
           const reply = await turn(engine, "Say hello.");
           assert.equal(reply.stopReason, "stop", reply.errorMessage);
           assert.deepEqual(env.compatA.seen.slice(fromA), []);
-          const sent = chats(env.compatB, fromB);
+          assert.deepEqual(env.compatB.seen.slice(fromB), []);
+          const sent = chats(env.compatC, fromC);
           assert.equal(sent.length, 1);
+          assert.equal(sent[0]!.url, "/api/v1/chat/completions");
           assert.equal(
             sent[0]!.authorization,
-            `Bearer ${env.fixtures.COMPAT_KEY_B}`,
+            `Bearer ${env.fixtures.COMPAT_KEY_C}`,
           );
         }
         assertNoEgress();
@@ -996,6 +1088,17 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       env.fixtures.CODEX_DEFAULT_ACCESS,
       FAKE_REFRESH,
     ];
+    // The compatible keys stay in the settings file that stores them today.
+    const compatKeys = [
+      env.fixtures.COMPAT_KEY_A,
+      env.fixtures.COMPAT_KEY_B,
+      env.fixtures.COMPAT_KEY_C,
+    ];
+    const settingsFile = join(
+      env.DATA_DIR,
+      "settings",
+      "openai-compatible.json",
+    );
     for (const file of [...files, ...filesUnder(env.gateway.stateDir)]) {
       const text = readFileSync(file, "latin1");
       for (const lease of env.leases)
@@ -1003,6 +1106,9 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       if (!env.fixtureFiles.has(file))
         for (const token of logins)
           assert.ok(!text.includes(token), `${file} holds a login token`);
+      if (resolve(file) !== resolve(settingsFile))
+        for (const key of compatKeys)
+          assert.ok(!text.includes(key), `${file} holds a compatible key`);
     }
   });
 
@@ -1023,6 +1129,70 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
           .unauthorized()
           .some((attempt) => attempt.target === "pi.dev:443"),
       );
+    },
+    CASE_MS,
+  );
+
+  // Last: its hello ends the link's control connection, so it follows even
+  // the egress canary.
+  test(
+    "a new control hello clears the pushed endpoint: a compatible turn ends in the marked 503 after pi's retries, sends nothing, and is no dead login",
+    async () => {
+      const egressFrom = env.egress.attempts.length;
+      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
+      const { engine } = await open({
+        profileId: env.named,
+        model: compatible,
+      });
+      const methods = env.controlMethods;
+      const control = env.fixtures.dialControl(
+        env.createInProcessTransport(),
+        env.gateway.link.gateway!.attachControl,
+        methods.GATEWAY_CONTROL_PROTOCOL,
+      );
+      try {
+        await control.request(
+          methods.CONTROL_METHODS.hello,
+          methods.encodeControlRequest({
+            serverBootId: "contract-next-boot",
+            pid: process.pid,
+            startTime: null,
+          }),
+        );
+        const from = env.gateway.lines.length;
+        const fromA = env.compatA.seen.length;
+        const reply = await turn(engine, "Say hello.");
+        assert.equal(reply.stopReason, "error");
+        const message = reply.errorMessage ?? "";
+        assert.ok(message.includes("Pandeck gateway:"), message);
+        assert.equal(
+          env.isLoginDeath(message, { provider: "openai-compatible" }),
+          false,
+          message,
+        );
+        assert.deepEqual(env.compatA.seen.slice(fromA), []);
+        // pi's first try and its three retries (MC3), each refused.
+        const refused = compatLines(from);
+        assert.equal(refused.length, 4, refused.join("\n"));
+        for (const line of refused)
+          assert.match(
+            line,
+            /^openai-compatible POST "\/v1\/chat\/completions" lease=\S+ refused compat-unset 503 /,
+          );
+        // The canary before left pi.dev unauthorized; this case adds nothing.
+        assert.deepEqual(
+          env.egress
+            .unauthorized()
+            .filter(
+              (attempt) => env.egress.attempts.indexOf(attempt) >= egressFrom,
+            ),
+          [],
+        );
+        assertNoTokenLogged();
+      } finally {
+        control.end("the contract case ended");
+        await engine.dispose();
+      }
     },
     CASE_MS,
   );

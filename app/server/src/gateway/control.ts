@@ -1,6 +1,6 @@
 /**
  * The gateway's control endpoint (`docs/workers.md` "Credentials"): the
- * listener side of gateway control 1.1. Only a control connection grants a
+ * listener side of gateway control 1.2. Only a control connection grants a
  * lease or takes, names or ends a login hold, and a grant binds the lease from
  * the registry, never from the request (C5).
  *
@@ -17,6 +17,10 @@
  * login-stuck hold, is sent to the current connection as `profiles.status`
  * once the answer that caused it has gone out; a failure is logged, never
  * retried.
+ *
+ * Every hello also clears the pushed OpenAI-compatible endpoint: its key
+ * belongs to the boot that pushed it, which the next push replaces. A
+ * connection that ends without a new hello leaves it held.
  */
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -39,6 +43,7 @@ import {
   UNKNOWN_LEASE,
   UNKNOWN_PROFILE,
   WRITER_CONFLICT,
+  decodeCompatSet,
   decodeControlHello,
   decodeHoldId,
   decodeLeaseGrant,
@@ -59,6 +64,7 @@ import {
   encodeLoginHold,
   type ControlHello,
 } from "./controlMethods.ts";
+import type { CompatUpstream } from "./compatUpstream.ts";
 import type { HoldStatus, HoldTable, HoldUpdate, WriterLane } from "./holds.ts";
 import type { LeaseTable } from "./leases.ts";
 import type { ProfileRegistry } from "./profiles.ts";
@@ -69,6 +75,7 @@ interface ControlContext {
   profiles: ProfileRegistry;
   holds: HoldTable;
   lane: WriterLane;
+  compat: CompatUpstream;
   log: (line: string) => void;
 }
 
@@ -118,6 +125,7 @@ export function createControlEndpoint({
   profiles,
   holds,
   lane,
+  compat,
   log,
 }: ControlContext): ControlEndpoint {
   const connections = new Set<WorkerConnection>();
@@ -353,6 +361,23 @@ export function createControlEndpoint({
       if (update.saveError !== undefined) throw update.saveError;
       return encodeHoldReleased(true);
     },
+    // The subject stays empty: no log line names the URL or the key.
+    [CONTROL_METHODS.compatSet]: (payload) => {
+      let pushed;
+      try {
+        pushed = decodeCompatSet(payload);
+      } catch (err) {
+        // The held pair is no longer the server's: answer 503 until a push.
+        compat.clear();
+        throw err;
+      }
+      compat.set(pushed.baseUrl, pushed.apiKey);
+      return encodeControlDone();
+    },
+    [CONTROL_METHODS.compatClear]: () => {
+      compat.clear();
+      return encodeControlDone();
+    },
   };
 
   const attach = (endpoint: ByteEndpoint): void => {
@@ -397,6 +422,7 @@ export function createControlEndpoint({
       state.bootId = hello.serverBootId;
       state.hello = hello;
       lastHello = hello;
+      compat.clear();
       if (current !== connection) {
         current?.end("a newer control connection said hello");
         current = connection;

@@ -1,0 +1,75 @@
+/**
+ * The OpenAI-compatible endpoint the server pushed (`compat.set`), held in
+ * this process's memory only: never in `stateDir`, a log or a refusal. A new
+ * server boot's hello clears it, and until the next push `/compat` answers
+ * 503 (`docs/workers.md` "Credentials").
+ *
+ * Each push replaces one immutable target, its origin and key together, so a
+ * request that took a target keeps that pairing whatever is pushed meanwhile.
+ */
+import net from "node:net";
+
+/** Where `/compat` forwards, and with which key: one push, frozen. */
+export interface CompatTarget {
+  readonly protocol: "http" | "https";
+  /** The address to connect to: an IPv6 literal without its brackets. */
+  readonly hostname: string;
+  readonly port: number;
+  /** `URL.host`, the `Host` header. */
+  readonly host: string;
+  /** The TLS name; absent for an IP literal. */
+  readonly servername: string | undefined;
+  /** The base URL's path without trailing slashes, possibly empty. */
+  readonly basePath: string;
+  readonly apiKey: string;
+}
+
+/** `baseUrl` as a URL `compat.set` accepts: http(s), no userinfo, query or fragment. */
+export function compatBaseUrl(baseUrl: string): URL | undefined {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+  if (url.username || url.password || url.search || url.hash) return undefined;
+  return url;
+}
+
+function targetOf(url: URL, apiKey: string): CompatTarget {
+  const protocol = url.protocol === "https:" ? "https" : "http";
+  const hostname = url.hostname.replace(/^\[(.*)\]$/, "$1");
+  return Object.freeze({
+    protocol,
+    hostname,
+    port: url.port ? Number(url.port) : protocol === "https" ? 443 : 80,
+    host: url.host,
+    servername: net.isIP(hostname) ? undefined : hostname,
+    basePath: url.pathname.replace(/\/+$/, ""),
+    apiKey,
+  });
+}
+
+export interface CompatUpstream {
+  /** Holds the pair; false, and holds nothing, for a base URL it refuses. */
+  set(baseUrl: string, apiKey: string): boolean;
+  clear(): void;
+  /** The target now; a request keeps the one it took. */
+  current(): CompatTarget | undefined;
+}
+
+export function createCompatUpstream(): CompatUpstream {
+  let target: CompatTarget | undefined;
+  return {
+    set(baseUrl, apiKey) {
+      const url = compatBaseUrl(baseUrl);
+      target = url ? targetOf(url, apiKey) : undefined;
+      return target !== undefined;
+    },
+    clear() {
+      target = undefined;
+    },
+    current: () => target,
+  };
+}
