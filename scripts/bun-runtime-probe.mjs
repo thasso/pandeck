@@ -3801,6 +3801,11 @@ async function checkGit() {
   const parent = Number((await sh("echo $PPID")).stdout.trim());
   if (mode === "broker") {
     assert(brokerPid, "The spawn broker did not start under Bun.");
+    // The broker collects its garbage through it; without it, it never does.
+    assert(
+      typeof globalThis.Bun?.gc === "function",
+      "The packaged Bun has no Bun.gc.",
+    );
     assert(
       realpathSync(readlinkSync(`/proc/${brokerPid}/exe`)) ===
         realpathSync(process.execPath),
