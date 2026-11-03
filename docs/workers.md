@@ -1203,8 +1203,11 @@ and `profiles.remove`). A newer connection's hello ends the older one.
   and revocation times) and `profiles.json`, each written whole to a 0600 temp
   file and renamed. Neither holds a token, a lease token or its secret. A grant
   or session bind is saved before it is answered and undone when saving fails; a
-  revocation takes effect at once and stays in force even then. Both files load
-  at start, so a gateway restarted with the server down still forwards. An
+  revocation takes effect at once and stays in force even then. After a failed
+  save, repeating a revocation or profile removal saves again even though it
+  changes nothing, so it fails again or succeeds with the earlier change saved;
+  a repeated revocation keeps its first reason and time. Both files load at
+  start, so a gateway restarted with the server down still forwards. An
   unreadable `leases.json` starts empty, refusing every old token; an unreadable
   `profiles.json` starts an empty registry, so grants wait for a sync while
   restored leases keep forwarding on their own binding. A revoked lease is

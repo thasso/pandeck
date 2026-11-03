@@ -112,14 +112,18 @@ export interface LeaseTableOptions {
 /**
  * The leases, keyed by id. With `persist`, a grant or a session bind is saved
  * before it returns and undone in memory when saving throws; a revocation
- * takes effect in memory first and stays in force when saving throws. Revoked
- * leases are pruned 24 h after their revocation, on restore and before each
- * save, so their tokens then get the unknown-lease refusal.
+ * takes effect in memory first and stays in force when saving throws. After a
+ * failed save, the next revocation call saves even when it revokes nothing, so
+ * a retry fails again or makes the earlier one durable. Revoked leases are
+ * pruned 24 h after their revocation, on restore and before each save, so
+ * their tokens then get the unknown-lease refusal.
  */
 export class LeaseTable {
   private readonly leases = new Map<string, Lease>();
   private readonly now: () => number;
   private readonly persist: ((records: LeaseRecord[]) => void) | undefined;
+  /** Whether the last save threw, so memory may be ahead of the file. */
+  private unsaved = false;
 
   constructor(options: LeaseTableOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -192,7 +196,10 @@ export class LeaseTable {
     );
   }
 
-  /** Revokes every live lease `match` selects; answers their ids. */
+  /**
+   * Revokes every live lease `match` selects; answers their ids. Saves when it
+   * revoked one or an earlier save failed.
+   */
   revokeWhere(
     match: (record: Readonly<LeaseRecord>) => boolean,
     reason: RevokeReason,
@@ -205,7 +212,7 @@ export class LeaseTable {
         lease.revokedAt = revokedAt;
         revoked.push(leaseId);
       }
-    if (revoked.length > 0) this.save();
+    if (revoked.length > 0 || this.unsaved) this.save();
     return revoked;
   }
 
@@ -241,7 +248,9 @@ export class LeaseTable {
 
   private save(): void {
     this.prune();
+    this.unsaved = true;
     this.persist?.(this.records());
+    this.unsaved = false;
   }
 
   /**

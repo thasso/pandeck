@@ -11,6 +11,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rmdir,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -43,7 +44,7 @@ import {
 import { startGateway, type RunningGateway } from "./gateway.ts";
 import { LeaseTable } from "./leases.ts";
 import type { GatewayProfile } from "./profiles.ts";
-import { refusalText, type Refusal } from "./refusals.ts";
+import { refusalText, type Refusal, type RevokeReason } from "./refusals.ts";
 
 const HOUR = 60 * 60 * 1000;
 const T0 = 1_800_000_000_000;
@@ -461,12 +462,6 @@ test("a failed write answers state_write_failed: a grant or bind is undone, a re
   const before = gw.leases.records();
   // The writer's temp file cannot be opened while a directory holds its name.
   await mkdir(join(stateDir, "leases.json.tmp"));
-  const failsToWrite = (answer: Promise<unknown>) =>
-    assert.rejects(
-      answer,
-      (err) =>
-        err instanceof WorkerRequestError && err.code === "state_write_failed",
-    );
 
   await failsToWrite(
     connection.request(
@@ -497,5 +492,165 @@ test("a failed write answers state_write_failed: a grant or bind is undone, a re
     lines.includes(
       `control leases.revoke (lease ${live.leaseId}): state_write_failed`,
     ),
+  );
+});
+
+/** Rejects unless `answer` fails with `state_write_failed`. */
+const failsToWrite = (answer: Promise<unknown>) =>
+  assert.rejects(
+    answer,
+    (err) =>
+      err instanceof WorkerRequestError && err.code === "state_write_failed",
+  );
+
+interface RetryCase {
+  method: string;
+  /** Grants the lease the method then revokes. */
+  setup(
+    connection: WorkerConnection,
+  ): Promise<{ leaseId: string; token: string }>;
+  /** The request; profiles exist only once `beforeAll` ran. */
+  params(leaseId: string): Parameters<typeof encodeControlRequest>[0];
+  reason: RevokeReason;
+  /** The answer once the retry saves. */
+  retried: unknown;
+}
+
+const engineLease = (connection: WorkerConnection) =>
+  grant(connection, profileA.id, "s1");
+
+const RETRY_CASES: RetryCase[] = [
+  {
+    method: CONTROL_METHODS.revoke,
+    setup: engineLease,
+    params: (leaseId) => ({ leaseId, reason: "session-ended" }),
+    reason: "session-ended",
+    // RD-G2a1-1: a lease already revoked answers false.
+    retried: { revoked: false },
+  },
+  {
+    method: CONTROL_METHODS.reconcileWorker,
+    setup: engineLease,
+    params: () => ({ workerId: "w", live: [] }),
+    reason: "session-ended",
+    retried: { revoked: [] },
+  },
+  {
+    method: CONTROL_METHODS.hello,
+    setup: async (connection) => {
+      const granted = decodeLeaseGranted(
+        await connection.request(
+          CONTROL_METHODS.grant,
+          encodeControlRequest({ kind: "server", profileId: profileA.id }),
+        ),
+      );
+      capabilities.push(granted.token, granted.token.split(".")[2]!);
+      return granted;
+    },
+    params: () => ({ serverBootId: "boot-y", pid: 4242, startTime: null }),
+    reason: "session-ended",
+    retried: { revoked: [] },
+  },
+  {
+    method: CONTROL_METHODS.syncProfiles,
+    setup: engineLease,
+    params: () => ({ profiles: [profileB] }),
+    reason: "profile-removed",
+    retried: { revoked: [] },
+  },
+  {
+    method: CONTROL_METHODS.removeProfile,
+    setup: engineLease,
+    params: () => ({ profileId: profileA.id }),
+    reason: "profile-removed",
+    retried: { revoked: [] },
+  },
+];
+
+for (const retry of RETRY_CASES)
+  test(`a retried ${retry.method} after a failed write saves the revocation, keeping its first reason and time`, async () => {
+    const stateDir = await freshStateDir();
+    let now = T0;
+    const first = await gateway(stateDir, () => now);
+    const connection = await ready(first);
+    const lease = await retry.setup(connection);
+    const request = () =>
+      connection.request(
+        retry.method,
+        encodeControlRequest(retry.params(lease.leaseId)),
+      );
+    const refusal = text({ case: "revoked-lease", reason: retry.reason });
+    const blocker = join(stateDir, "leases.json.tmp");
+    await mkdir(blocker);
+
+    await failsToWrite(request());
+    assert.equal(await claudeOutcome(first, lease.token), refusal);
+    now = T0 + HOUR;
+    // Still failing: the unsaved revocation must not answer as saved.
+    await failsToWrite(request());
+
+    await rmdir(blocker);
+    now = T0 + 2 * HOUR;
+    assert.deepEqual((await request()).json, retry.retried);
+    const stored = (await storedLeases(stateDir)).leases.find(
+      (record) => record.leaseId === lease.leaseId,
+    );
+    assert.equal(stored?.revoked, retry.reason);
+    assert.equal(stored?.revokedAt, T0);
+    await close(first);
+
+    const second = await gateway(stateDir, () => now);
+    assert.equal(await claudeOutcome(second, lease.token), refusal);
+    assert.equal(upstreams.anthropic.length, 0);
+  });
+
+test("a retried profiles.remove after a failed write saves the removal", async () => {
+  const stateDir = await freshStateDir();
+  const first = await gateway(stateDir);
+  const connection = await ready(first);
+  const remove = () =>
+    connection.request(
+      CONTROL_METHODS.removeProfile,
+      encodeControlRequest({ profileId: profileA.id }),
+    );
+  const blocker = join(stateDir, "profiles.json.tmp");
+  await mkdir(blocker);
+
+  await failsToWrite(remove());
+  await failsToWrite(remove());
+
+  await rmdir(blocker);
+  assert.deepEqual((await remove()).json, { revoked: [] });
+  const stored = JSON.parse(
+    await readFile(join(stateDir, "profiles.json"), "utf8"),
+  ) as { v: number; profiles: unknown[] };
+  assert.deepEqual(stored, { v: 1, profiles: [profileB] });
+  await close(first);
+
+  const second = await gateway(stateDir);
+  const control = dialControl(
+    createInProcessTransport(),
+    second.attachControl,
+    GATEWAY_CONTROL_PROTOCOL,
+  );
+  await control.request(
+    CONTROL_METHODS.hello,
+    encodeControlRequest({
+      serverBootId: "boot-y",
+      pid: 4242,
+      startTime: null,
+    }),
+  );
+  await assert.rejects(
+    control.request(
+      CONTROL_METHODS.grant,
+      encodeControlRequest({
+        kind: "engine",
+        workerId: "w",
+        profileId: profileA.id,
+      }),
+    ),
+    (err) =>
+      err instanceof WorkerRequestError && err.code === "unknown_profile",
   );
 });

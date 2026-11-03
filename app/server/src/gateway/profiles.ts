@@ -65,10 +65,13 @@ export function parseProfile(value: unknown): GatewayProfile | undefined {
 /**
  * The registry, keyed by profile id. With `persist`, every change is saved
  * after it takes effect in memory; a change stays in memory when saving
- * throws, and the server's next sync settles both.
+ * throws. After a failed save, a removal saves even when the profile is
+ * already gone, so a retry fails again or makes the earlier one durable.
  */
 export class ProfileRegistry {
   private readonly profiles = new Map<string, GatewayProfile>();
+  /** Whether the last save threw, so memory may be ahead of the file. */
+  private unsaved = false;
 
   constructor(
     private readonly persist?: (profiles: GatewayProfile[]) => void,
@@ -93,7 +96,7 @@ export class ProfileRegistry {
   }
 
   remove(id: string): void {
-    if (this.profiles.delete(id)) this.save();
+    if (this.profiles.delete(id) || this.unsaved) this.save();
   }
 
   get(id: string): GatewayProfile | undefined {
@@ -106,6 +109,8 @@ export class ProfileRegistry {
   }
 
   private save(): void {
+    this.unsaved = true;
     this.persist?.([...this.profiles.values()].map((p) => ({ ...p })));
+    this.unsaved = false;
   }
 }
