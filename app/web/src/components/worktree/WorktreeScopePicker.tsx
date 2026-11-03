@@ -102,7 +102,13 @@ export function WorktreeScopePicker({
   from,
   to,
   onPick,
+  trigger: triggerStyle = "button",
 }: {
+  /**
+   * `subtitle`: the page header's second line under the branch — small muted
+   * text and a chevron, the header's own weight — instead of a toolbar button.
+   */
+  trigger?: "button" | "subtitle";
   worktree: WorktreeRecord;
   /**
    * Compact single-column host (a phone, or the right side panel): the label
@@ -121,20 +127,31 @@ export function WorktreeScopePicker({
   const [open, setOpen] = useState(false);
   const log = useWorktreeLog(worktree.id, refreshToken);
   const label = worktreeScopeLabel(worktree, from, to, dataOf(log.state));
-  const trigger = (
-    <Button
-      variant="secondary"
-      size="sm"
-      className="min-w-0 shrink"
-      title={`Reviewing: ${from && !(to && from === `${to}~1`) && !(from === worktree.baseCommit && !to) ? scopeRangeText(from, to) : label}`}
-    >
-      {/* The chevron already says "picker", so a phone spends its width on the
+  const trigger =
+    triggerStyle === "subtitle" ? (
+      <button
+        type="button"
+        className="flex min-w-0 max-w-full items-center gap-0.5 rounded-sm text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        title={`Reviewing: ${label}`}
+        aria-label={`Reviewing: ${label}. Change what to review`}
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown className="size-3 shrink-0" aria-hidden />
+      </button>
+    ) : (
+      <Button
+        variant="secondary"
+        size="sm"
+        className="min-w-0 shrink"
+        title={`Reviewing: ${from && !(to && from === `${to}~1`) && !(from === worktree.baseCommit && !to) ? scopeRangeText(from, to) : label}`}
+      >
+        {/* The chevron already says "picker", so a phone spends its width on the
           LABEL instead of a second glyph. */}
-      {narrow ? null : <GitCompareArrows data-icon="inline-start" />}
-      <span className="min-w-0 max-w-48 truncate">{label}</span>
-      <ChevronDown data-icon="inline-end" />
-    </Button>
-  );
+        {narrow ? null : <GitCompareArrows data-icon="inline-start" />}
+        <span className="min-w-0 max-w-48 truncate">{label}</span>
+        <ChevronDown data-icon="inline-end" />
+      </Button>
+    );
   const body = (
     <ScopePanel
       worktree={worktree}

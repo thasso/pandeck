@@ -800,7 +800,9 @@ function ChangesView({
     />
   );
 
-  const toolbar = (
+  // With the sidebar navigating, the scope lives in the page header's second
+  // line and Review has no toolbar row at all.
+  const toolbar = sidebarNavigation ? null : (
     // Two kinds of thing only: WHERE you are (the tabs) and WHAT you are looking at
     // (the scope). How it is rendered lives in the view-options popover, which is
     // why this row survives a 390px viewport with words instead of six glyphs.
@@ -2672,9 +2674,32 @@ export default function WorktreeDetailPage({
               title={
                 // `block`: an inline span's `truncate` never clips, and the
                 // branch ran under the header's icons.
-                <span className="block truncate font-mono text-sm text-muted-foreground">
-                  {title ?? worktree.branch}
-                </span>
+                <div className="flex min-w-0 flex-col">
+                  <span className="block truncate font-mono text-sm text-muted-foreground">
+                    {title ?? worktree.branch}
+                  </span>
+                  {/* What Review is showing, under the branch: the header's
+                    small second line, and the way to change it. */}
+                  {sidebarNavigation && view === "changes" ? (
+                    <WorktreeScopePicker
+                      trigger="subtitle"
+                      worktree={worktree}
+                      narrow={narrow}
+                      refreshToken={refreshToken}
+                      from={from}
+                      to={to}
+                      onPick={(pickedFrom, pickedTo) =>
+                        navigate(
+                          worktreePath(worktree.id, "changes", {
+                            ...(pickedFrom ? { from: pickedFrom } : {}),
+                            ...(pickedTo ? { to: pickedTo } : {}),
+                            ...(routeFilePath ? { path: routeFilePath } : {}),
+                          }),
+                        )
+                      }
+                    />
+                  ) : null}
+                </div>
               }
               actions={
                 embedded ? (
