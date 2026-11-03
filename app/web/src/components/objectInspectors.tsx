@@ -725,6 +725,8 @@ function withTreeWorktreesTree(
     worktreeStatuses: Record<string, WorktreeGitStatus> | undefined;
     openers: ObjectOpeners;
     onNavigate: ((path: string) => void) | undefined;
+    onStartSessionInWorktree: ((id: string) => void) | undefined;
+    onRemoveWorktree: ((id: string) => void) | undefined;
   },
 ): InspectorRelationGroup[] {
   if (tree.worktreeIds.length === 0 || !tree.worktrees) return groups;
@@ -742,6 +744,8 @@ function withTreeWorktreesTree(
         worktreeStatuses={tree.worktreeStatuses ?? NO_WORKTREE_STATUSES}
         onOpenSession={tree.openers.onOpenSession}
         onNavigate={tree.onNavigate}
+        onStartSessionInWorktree={tree.onStartSessionInWorktree}
+        onRemoveWorktree={tree.onRemoveWorktree}
         flush
       />
     </div>
@@ -1531,6 +1535,8 @@ export function SessionInspector({
   stagedRefs = [],
   openers,
   onNavigate,
+  onStartSessionInWorktree,
+  onRemoveWorktree,
   view,
   children,
 }: {
@@ -1580,6 +1586,9 @@ export function SessionInspector({
   openers: ObjectOpeners;
   /** Opens a file picked in a tree worktree's sections. */
   onNavigate?: ((path: string) => void) | undefined;
+  /** A tree worktree row's `…` actions, as the sidebar's rows offer them. */
+  onStartSessionInWorktree?: ((id: string) => void) | undefined;
+  onRemoveWorktree?: ((id: string) => void) | undefined;
   /**
    * Transcript view toggles, rendered as a **View** section. Passed only where
    * this inspector is the session's control centre (the mobile object dock);
@@ -1666,6 +1675,8 @@ export function SessionInspector({
               worktreeStatuses,
               openers,
               onNavigate,
+              onStartSessionInWorktree,
+              onRemoveWorktree,
             },
           ),
           {

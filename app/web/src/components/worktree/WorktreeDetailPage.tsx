@@ -2372,7 +2372,7 @@ export default function WorktreeDetailPage({
   );
 
   // The full page switches views from its header (wide) or the dock row (a
-  // phone): no tab row. The session panel's Worktree tab keeps its tabs.
+  // phone), the session panel's Worktree tab from its own header: no tab row.
   const navigationControls = sidebarNavigation ? null : (
     <Tabs
       value={view}
@@ -2637,42 +2637,42 @@ export default function WorktreeDetailPage({
               // One row of identity, as the Task page's id: the branch, muted
               // and mono. The Overview's body carries it as the title.
               // Rightmost: after the header's own comment and Start session.
+              // The side panel's copy keeps it too, as a desktop menu: its
+              // header draws Add comment itself.
               menu={
-                embedded ? undefined : (
-                  <WorktreeHeaderActions
-                    actions={menuActions}
-                    // A wide header draws Add comment itself.
-                    showComment={narrow}
-                    zoomInMenu={sidebarNavigation && !narrow}
-                    // The sidebar lists the files on a wide screen; a phone
-                    // jumps through the header.
-                    onBrowseFiles={
-                      sidebarNavigation && narrow
-                        ? () => setBrowseOpen(true)
-                        : undefined
-                    }
-                    onJumpToFile={
-                      sidebarNavigation && narrow && view === "changes"
-                        ? () => setJumpOpen(true)
-                        : undefined
-                    }
-                    diffView={
-                      sidebarNavigation &&
-                      (view === "changes" || (view === "files" && filePath))
-                        ? {
-                            prefs: effectivePrefs,
-                            onUpdate: onUpdatePrefs,
-                            showStyle: !narrow,
-                          }
-                        : undefined
-                    }
-                    ignoredFiles={
-                      browseAsDocuments
-                        ? undefined
-                        : { shown: ignoredShown, onChange: setIgnoredShown }
-                    }
-                  />
-                )
+                <WorktreeHeaderActions
+                  actions={menuActions}
+                  // A wide header draws Add comment itself.
+                  showComment={narrow && !embedded}
+                  zoomInMenu={sidebarNavigation && !narrow}
+                  // The sidebar lists the files on a wide screen; a phone
+                  // jumps through the header.
+                  onBrowseFiles={
+                    sidebarNavigation && narrow
+                      ? () => setBrowseOpen(true)
+                      : undefined
+                  }
+                  onJumpToFile={
+                    sidebarNavigation && narrow && view === "changes"
+                      ? () => setJumpOpen(true)
+                      : undefined
+                  }
+                  diffView={
+                    sidebarNavigation &&
+                    (view === "changes" || (view === "files" && filePath))
+                      ? {
+                          prefs: effectivePrefs,
+                          onUpdate: onUpdatePrefs,
+                          showStyle: !narrow,
+                        }
+                      : undefined
+                  }
+                  ignoredFiles={
+                    browseAsDocuments
+                      ? undefined
+                      : { shown: ignoredShown, onChange: setIgnoredShown }
+                  }
+                />
               }
               title={
                 // `block`: an inline span's `truncate` never clips, and the
@@ -2774,7 +2774,7 @@ export default function WorktreeDetailPage({
               onJumpOpenChange={setJumpOpen}
             />
           )}
-          {sidebarNavigation && narrow && !embedded ? (
+          {sidebarNavigation && narrow ? (
             <WorktreeBrowseSheet
               worktree={worktree}
               open={browseOpen}

@@ -1,11 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
-import { SquareArrowOutUpRight } from "lucide-react";
+import {
+  ChevronsUpDown,
+  GitBranch,
+  GitCompareArrows,
+  SquareArrowOutUpRight,
+} from "lucide-react";
+import { Button } from "../ui/button.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu.tsx";
 import type {
   WorktreeComment,
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import WorktreeDetailPage from "../worktree/WorktreeDetailPage.tsx";
+import WorktreeDetailPage, {
+  type WorktreeDetailPageProps,
+} from "../worktree/WorktreeDetailPage.tsx";
 import type { CommentActions } from "../diff/comments.tsx";
 import type { CommentWatch } from "../../hooks/useCommentWatch.ts";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
@@ -62,6 +77,10 @@ export function WorktreePanel({
   commentActionsFor,
   onSubmitReview,
   onNavigate,
+  openRequest,
+  choices = [],
+  onSelectWorktree,
+  worktreeActions,
 }: {
   /** The session's worktree, once the registry has it. */
   worktree?: WorktreeRecord | undefined;
@@ -81,11 +100,40 @@ export function WorktreePanel({
   onSubmitReview: (worktreeId: string, commentIds: string[]) => void;
   /** Take a destination the panel does not own to the main pane. */
   onNavigate: (path: string) => void;
+  /**
+   * A file to show, picked elsewhere (the inspector's worktree tree), as its
+   * worktree route; each new request moves the panel there once.
+   */
+  openRequest?: { path: string; nonce: number } | undefined;
+  /** The worktrees the tab may show, for its picker (shown past one). */
+  choices?: readonly WorktreeRecord[];
+  onSelectWorktree?: ((worktreeId: string) => void) | undefined;
+  /** What the header's `…` menu acts with: the route's own handlers. */
+  worktreeActions?: Pick<
+    WorktreeDetailPageProps,
+    | "sessions"
+    | "sessionsFresh"
+    | "onRemoveWorktree"
+    | "onMergeWorktree"
+    | "onStartSessionInWorktree"
+  >;
 }) {
   const [location, setLocation] = useState<PanelLocation>(PANEL_HOME);
   // A different worktree is a different set of coordinates: a file path or a
   // commit range from the last one addresses nothing here.
   useEffect(() => setLocation(PANEL_HOME), [worktreeId]);
+  // After the reset above, so a request that also changed the worktree lands.
+  useEffect(() => {
+    if (!openRequest) return;
+    const route = parseRoute(openRequest.path);
+    if (route.name !== "worktrees") return;
+    setLocation({
+      view: route.view ?? "changes",
+      path: route.path,
+      from: route.from,
+      to: route.to,
+    });
+  }, [openRequest]);
 
   /**
    * The page navigates by route path (`worktreePath`), which is how it moves
@@ -147,23 +195,76 @@ export function WorktreePanel({
           // instead of the rail, and unified diffs.
           narrow
           embedded
+          // The main page's shape: Review in one scroll, its scope under the
+          // branch, files from the header's browser.
+          sidebarNavigation
           headerActions={
-            <IconButton
-              label="Open in Worktrees"
-              size="icon"
-              onClick={() =>
-                onNavigate(
-                  worktreePath(worktree.id, location.view, {
-                    ...(location.path ? { path: location.path } : {}),
-                    ...(location.from ? { from: location.from } : {}),
-                    ...(location.to ? { to: location.to } : {}),
-                  }),
-                )
-              }
-            >
-              <SquareArrowOutUpRight />
-            </IconButton>
+            <>
+              {choices.length > 1 && onSelectWorktree ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Switch worktree"
+                        title="Switch worktree"
+                      />
+                    }
+                  >
+                    <ChevronsUpDown />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-max max-w-[min(22rem,calc(100vw-2rem))]"
+                  >
+                    <DropdownMenuRadioGroup
+                      value={worktree.id}
+                      onValueChange={(id) => onSelectWorktree(id as string)}
+                    >
+                      {choices.map((choice) => (
+                        <DropdownMenuRadioItem
+                          key={choice.id}
+                          value={choice.id}
+                          className="whitespace-nowrap"
+                        >
+                          <GitBranch />
+                          <span className="min-w-0 truncate font-mono text-xs">
+                            {choice.branch}
+                          </span>
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+              {location.view === "files" ? (
+                <IconButton
+                  label="Review changes"
+                  size="icon"
+                  onClick={() => setLocation(PANEL_HOME)}
+                >
+                  <GitCompareArrows />
+                </IconButton>
+              ) : null}
+              <IconButton
+                label="Open in Worktrees"
+                size="icon"
+                onClick={() =>
+                  onNavigate(
+                    worktreePath(worktree.id, location.view, {
+                      ...(location.path ? { path: location.path } : {}),
+                      ...(location.from ? { from: location.from } : {}),
+                      ...(location.to ? { to: location.to } : {}),
+                    }),
+                  )
+                }
+              >
+                <SquareArrowOutUpRight />
+              </IconButton>
+            </>
           }
+          {...worktreeActions}
           view={location.view}
           filePath={location.path}
           from={location.from}

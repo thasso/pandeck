@@ -165,6 +165,7 @@ import {
   INITIATIVES_PATH,
   isSectionIndexRoute,
   knowledgePath,
+  parseRoute,
   PERMANENT_ASSISTANT_PATH,
   projectPath,
   pullRequestPath,
@@ -6830,6 +6831,81 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     },
     [mobileLayout, navigate, setInspectorOpen],
   );
+  /**
+   * A worktree file picked in the session inspector opens in the right
+   * panel's Worktree tab, beside the chat, pointed at that worktree until the
+   * session changes; the tab's own picker points it the same way. A phone has
+   * no tabs: the file opens as a page.
+   */
+  const [worktreePanelRequest, setWorktreePanelRequest] = useState<{
+    sessionId: string | undefined;
+    worktreeId: string;
+    path: string;
+    nonce: number;
+  } | null>(null);
+  const openWorktreeFileBeside = useCallback(
+    (path: string) => {
+      const target = parseRoute(path);
+      if (mobileLayout || target.name !== "worktrees" || !target.id) {
+        navigateFromInspector(path);
+        return;
+      }
+      const worktreeId = target.id;
+      setWorktreePanelRequest((current) => ({
+        sessionId: displayCurrentId,
+        worktreeId,
+        path,
+        nonce: (current?.nonce ?? 0) + 1,
+      }));
+      setInspectorOpen(true);
+      setRightPanelOpenRequest((current) => ({
+        panel: "worktree",
+        nonce: (current?.nonce ?? 0) + 1,
+      }));
+    },
+    [mobileLayout, navigateFromInspector, displayCurrentId, setInspectorOpen],
+  );
+  // Another session forgets the pick: the tab follows that session again.
+  const [panelRequestSession, setPanelRequestSession] =
+    useState(displayCurrentId);
+  if (panelRequestSession !== displayCurrentId) {
+    setPanelRequestSession(displayCurrentId);
+    setWorktreePanelRequest(null);
+  }
+  const panelWorktreeRequest =
+    worktreePanelRequest?.sessionId === displayCurrentId
+      ? worktreePanelRequest
+      : null;
+  // What the tab may show: the session's own worktree, then those its spawn
+  // tree owns.
+  const panelWorktreeChoices = useMemo(() => {
+    const seen = new Set<string>();
+    return [
+      displayWorktreeId,
+      ...sessionTreeWorktreeRecords(displayCurrentId, state.worktrees).map(
+        (worktree) => worktree.id,
+      ),
+    ].flatMap((id) => {
+      if (!id || seen.has(id)) return [];
+      seen.add(id);
+      const worktree = state.worktrees?.find((item) => item.id === id);
+      return worktree ? [worktree] : [];
+    });
+  }, [displayWorktreeId, displayCurrentId, state.worktrees]);
+  const panelWorktreeId =
+    panelWorktreeRequest?.worktreeId ??
+    displayWorktreeId ??
+    panelWorktreeChoices[0]?.id;
+  const selectPanelWorktree = useCallback(
+    (worktreeId: string) =>
+      setWorktreePanelRequest((current) => ({
+        sessionId: displayCurrentId,
+        worktreeId,
+        path: worktreePath(worktreeId, "changes"),
+        nonce: (current?.nonce ?? 0) + 1,
+      })),
+    [displayCurrentId],
+  );
 
   // Session rows in the object panel resolve their account and worktree the
   // way the composer strip's do, and open the worktree as the panel opens
@@ -7773,7 +7849,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         peerPromptPeers={displaySession?.peerPromptPeers}
         stagedRefs={stagedContextRefs}
         openers={inspectorOpeners}
-        onNavigate={navigateFromInspector}
+        onNavigate={openWorktreeFileBeside}
+        onStartSessionInWorktree={startSessionInWorktree}
+        onRemoveWorktree={requestRemoveWorktree}
       >
         <SessionContextSections
           sessionId={displaySession?.sessionId}
@@ -7903,15 +7981,27 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           <Suspense fallback={<PaneLoading label="Opening worktree…" />}>
             <WorktreePanel
               worktree={
-                displayWorktreeId
-                  ? state.worktrees?.find(
-                      (item) => item.id === displayWorktreeId,
-                    )
+                panelWorktreeId
+                  ? state.worktrees?.find((item) => item.id === panelWorktreeId)
                   : undefined
               }
-              worktreeId={displayWorktreeId}
+              worktreeId={panelWorktreeId}
               worktreesLoaded={state.worktrees !== null}
-              status={displayWorktreeStatus}
+              status={
+                panelWorktreeId
+                  ? state.worktreeStatuses[panelWorktreeId]
+                  : undefined
+              }
+              openRequest={panelWorktreeRequest ?? undefined}
+              choices={panelWorktreeChoices}
+              onSelectWorktree={selectPanelWorktree}
+              worktreeActions={{
+                sessions: state.sessions,
+                sessionsFresh: state.sessionListFresh,
+                onRemoveWorktree: requestRemoveWorktree,
+                onMergeWorktree: requestMergeWorktree,
+                onStartSessionInWorktree: startSessionInWorktree,
+              }}
               prefs={prefs}
               onUpdatePrefs={update}
               commentsByWorktreeId={state.worktreeComments}
