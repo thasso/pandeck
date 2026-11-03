@@ -6,13 +6,7 @@ import {
   SquareArrowOutUpRight,
 } from "lucide-react";
 import { Button } from "../ui/button.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu.tsx";
+import { SearchPicker } from "../common/SearchPicker.tsx";
 import type {
   WorktreeComment,
   WorktreeGitStatus,
@@ -205,42 +199,34 @@ export function WorktreePanel({
             headerActions={
               <>
                 {choices.length > 1 && onSelectWorktree ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Switch worktree"
-                          title="Switch worktree"
-                        />
-                      }
-                    >
-                      <ChevronsUpDown />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="end"
-                      className="w-max max-w-[min(22rem,calc(100vw-2rem))]"
-                    >
-                      <DropdownMenuRadioGroup
-                        value={worktree.id}
-                        onValueChange={(id) => onSelectWorktree(id as string)}
-                      >
-                        {choices.map((choice) => (
-                          <DropdownMenuRadioItem
-                            key={choice.id}
-                            value={choice.id}
-                            className="whitespace-nowrap"
-                          >
-                            <GitBranch />
-                            <span className="min-w-0 truncate font-mono text-xs">
-                              {choice.branch}
-                            </span>
-                          </DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <SearchPicker
+                    trigger={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Switch worktree"
+                        title="Switch worktree"
+                      />
+                    }
+                    groups={[
+                      choices.map((choice) => ({
+                        id: choice.id,
+                        search: `${choice.branch} ${choice.id}`,
+                        icon: <GitBranch aria-hidden="true" />,
+                        label: (
+                          <span className="font-mono text-xs">
+                            {choice.branch}
+                          </span>
+                        ),
+                        current: choice.id === worktree.id,
+                      })),
+                    ]}
+                    placeholder="Filter worktrees…"
+                    align="end"
+                    onSelect={onSelectWorktree}
+                  >
+                    <ChevronsUpDown />
+                  </SearchPicker>
                 ) : null}
                 {location.view === "files" ? (
                   <IconButton
