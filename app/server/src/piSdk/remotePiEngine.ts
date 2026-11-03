@@ -297,7 +297,9 @@ function remotePiEngine(
 
 /**
  * Open `spec`'s engine on the in-process Worker. `onLost` runs once if the
- * Worker connection ends while the engine is open.
+ * Worker connection ends while the engine is open. With a gateway link the
+ * engine holds a lease for its profile, owned by the session the spec names,
+ * or else by the one the Worker minted (a new or forked transcript).
  */
 export async function openRemotePiEngine(
   spec: PiEngineOpenSpec,
@@ -315,6 +317,16 @@ export async function openRemotePiEngine(
         onLost,
       );
       return { sink: remote.sink, value: remote.engine };
+    },
+    {
+      profileId: spec.credentialProfileId,
+      ...(spec.transcript.type === "open" &&
+      spec.transcript.expectedId !== undefined
+        ? { sessionId: spec.transcript.expectedId }
+        : {
+            sessionIdOf: (opened) =>
+              (opened as PiEngineOpened["info"]).sessionId,
+          }),
     },
   );
   return { engine, info: info as PiEngineOpened["info"] };

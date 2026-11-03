@@ -2118,6 +2118,9 @@ export class ClaudeSdkSession implements LiveSession {
           ...start,
         }),
         signal: abortController.signal,
+        ...(this.credentialProfileId
+          ? { credentialProfileId: this.credentialProfileId }
+          : {}),
       });
     } catch (error) {
       removeAgentTempTree(taskOutputTemp.tmpDir);
@@ -3541,6 +3544,9 @@ export class ClaudeSdkSession implements LiveSession {
         onCompactSummary: (captured) => {
           summary = captured;
         },
+        ...(this.credentialProfileId
+          ? { credentialProfileId: this.credentialProfileId }
+          : {}),
       });
       this.activeQuery = query;
       for await (const message of query) {

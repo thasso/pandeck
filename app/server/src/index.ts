@@ -29,12 +29,21 @@ import type {
   PortForwardGrantRevokeRequest,
 } from "@assistant/shared/portForwarding";
 import { formatBuildInfo } from "@assistant/shared/buildInfo";
-import { DATA_DIR, HOST, IS_PROD, PORT, PUBLIC_BASE_URL } from "./config.ts";
+import {
+  DATA_DIR,
+  GATEWAY_ENABLED,
+  GATEWAY_PORT,
+  HOST,
+  IS_PROD,
+  PORT,
+  PUBLIC_BASE_URL,
+} from "./config.ts";
 import { authTokenStartupMessage, resolveAuthToken } from "./authToken.ts";
 import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
+import { startGatewayLink } from "./gatewayLink.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
 import { assertPromptAssets } from "./promptAssets.ts";
@@ -1839,6 +1848,12 @@ startSpawnBroker();
 // Checkout git crosses the worker protocol to this process's own Worker
 // (docs/workers.md); dial it now rather than on the first checkout call.
 startInProcessWorker();
+// Opt-in: the credential gateway runs in this process, and every engine open
+// on a profile holds a lease first. A failed start is logged and only fails
+// those opens. Graceful shutdown leaves it running, as the package proxy, for
+// a draining turn; it dies with the process.
+if (GATEWAY_ENABLED)
+  startGatewayLink({ stateDir: join(DATA_DIR, "gateway"), port: GATEWAY_PORT });
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.
 startChildOomScoreRelease();

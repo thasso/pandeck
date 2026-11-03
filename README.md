@@ -95,7 +95,7 @@ pnpm run dev
   page calls the server directly on the same hostname at port 8787. If you move
   the server with `ASSISTANT_PORT`, tell the UI with `VITE_SERVER_ORIGIN`
   (`host:port`), e.g.
-  `ASSISTANT_PORT=8788 VITE_SERVER_ORIGIN=localhost:8788 pnpm run dev`.
+  `ASSISTANT_PORT=8790 VITE_SERVER_ORIGIN=localhost:8790 pnpm run dev`.
 - The server runs under a supervisor, so server-side edits reload between
   requests while the web UI stays live.
 
@@ -150,20 +150,22 @@ merging with it:
 Every field is optional. The file must not contain secrets: secret-shaped field
 names are ignored, and the package check rejects them.
 
-| Variable                               | Purpose                                                                      |
-| -------------------------------------- | ---------------------------------------------------------------------------- |
-| `ASSISTANT_CONFIG`                     | Path to your config file (replaces `config/app.json`)                        |
-| `DATA_DIR`                             | Data directory; overrides `dataDir`                                          |
-| `ASSISTANT_CWD`                        | Directory the agent is rooted at                                             |
-| `ASSISTANT_HOST`, `ASSISTANT_PORT`     | Bind address (`127.0.0.1` in production, `0.0.0.0` in dev) and port (`8787`) |
-| `ASSISTANT_TOKEN`                      | Pin the browser/API token instead of the generated one                       |
-| `ASSISTANT_PUBLIC_BASE_URL`            | Base URL for OAuth callbacks when forwarded headers are missing              |
-| `ASSISTANT_ALLOWED_ORIGINS`            | Extra browser origins allowed to call the API                                |
-| `ASSISTANT_GOOGLE_OAUTH_CLIENT_SECRET` | Google Workspace OAuth client secret                                         |
-| `ASSISTANT_TEMPO_OAUTH_CLIENT_SECRET`  | Tempo OAuth client secret                                                    |
-| `ASSISTANT_SLACK_CLIENT_SECRET`        | Slack OAuth client secret                                                    |
-| `ASSISTANT_SLACK_APP_TOKEN`            | Slack Socket Mode app token                                                  |
-| `APNS_CREDENTIAL_FILE`                 | Apple Push key for the iOS app (`docs/notifications.md`)                     |
+| Variable                               | Purpose                                                                                   |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `ASSISTANT_CONFIG`                     | Path to your config file (replaces `config/app.json`)                                     |
+| `DATA_DIR`                             | Data directory; overrides `dataDir`                                                       |
+| `ASSISTANT_CWD`                        | Directory the agent is rooted at                                                          |
+| `ASSISTANT_HOST`, `ASSISTANT_PORT`     | Bind address (`127.0.0.1` in production, `0.0.0.0` in dev) and port (`8787`)              |
+| `ASSISTANT_GATEWAY`                    | `1` runs the credential gateway in-process; development only until it becomes the default |
+| `ASSISTANT_GATEWAY_PORT`               | The credential gateway's loopback model port (`8788`)                                     |
+| `ASSISTANT_TOKEN`                      | Pin the browser/API token instead of the generated one                                    |
+| `ASSISTANT_PUBLIC_BASE_URL`            | Base URL for OAuth callbacks when forwarded headers are missing                           |
+| `ASSISTANT_ALLOWED_ORIGINS`            | Extra browser origins allowed to call the API                                             |
+| `ASSISTANT_GOOGLE_OAUTH_CLIENT_SECRET` | Google Workspace OAuth client secret                                                      |
+| `ASSISTANT_TEMPO_OAUTH_CLIENT_SECRET`  | Tempo OAuth client secret                                                                 |
+| `ASSISTANT_SLACK_CLIENT_SECRET`        | Slack OAuth client secret                                                                 |
+| `ASSISTANT_SLACK_APP_TOKEN`            | Slack Socket Mode app token                                                               |
+| `APNS_CREDENTIAL_FILE`                 | Apple Push key for the iOS app (`docs/notifications.md`)                                  |
 
 The server reads the four integration secrets once at startup and removes them
 from its environment before any agent starts. Supply them through a private

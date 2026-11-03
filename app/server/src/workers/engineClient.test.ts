@@ -1,5 +1,18 @@
 import assert from "node:assert/strict";
-import { afterAll, test } from "vitest";
+import net from "node:net";
+import { afterAll, afterEach, test } from "vitest";
+import { DEFAULT_OPENAI_PROFILE_ID } from "../credentialProfiles.ts";
+import type { LeaseRecord } from "../gateway/leases.ts";
+import {
+  GATEWAY_UNAVAILABLE_TEXT,
+  installedGatewayLink,
+  startGatewayLink,
+  type GatewayLink,
+} from "../gatewayLink.ts";
+import {
+  startGatewayLinkForTests,
+  type TestGatewayLink,
+} from "../test/gatewayLink.ts";
 import {
   ENGINE_GONE,
   ENGINE_METHODS,
@@ -13,10 +26,12 @@ import {
   engineDeliveries,
   openEngineChannel,
   type EngineChannel,
+  type EngineLeaseContext,
 } from "./engineClient.ts";
 import {
   ensureInProcessWorker,
   inProcessWorkerQuiescentForTests,
+  inProcessWorkerServedMethodForTests,
   registerInProcessEngineFactory,
   writeAsInProcessWorkerForTests,
 } from "./inProcessWorker.ts";
@@ -28,7 +43,10 @@ import {
 
 let emit: ((item: HostedEngineItem) => void) | undefined;
 let host: HostedEngineHost | undefined;
+/** Runs as the factory receives `engine.open`, in the Worker. */
+let atOpen: (() => void) | undefined;
 registerInProcessEngineFactory("scripted", async (_spec, engineHost) => {
+  atOpen?.();
   host = engineHost;
   return {
     info: { scripted: true },
@@ -60,7 +78,7 @@ interface Opened {
   lost: number;
 }
 
-async function openScripted(): Promise<Opened> {
+async function openScripted(lease?: EngineLeaseContext): Promise<Opened> {
   let gate: Promise<void> | undefined;
   const opened: Partial<Opened> & { applied: EngineItem[]; lost: number } = {
     applied: [],
@@ -86,6 +104,7 @@ async function openScripted(): Promise<Opened> {
         },
       };
     },
+    lease,
   );
   assert.deepEqual(info, { scripted: true });
   opened.channel = value;
@@ -245,4 +264,162 @@ test("connection end loses every engine: pending and later commands reject engin
     code: ENGINE_GONE,
   });
   await opened.channel.dispose();
+});
+
+registerInProcessEngineFactory("scripted-throws", async () => {
+  atOpen?.();
+  throw new Error("scripted open failure");
+});
+
+let gateway: TestGatewayLink | undefined;
+const failedLinks: GatewayLink[] = [];
+afterEach(async () => {
+  atOpen = undefined;
+  await gateway?.close();
+  gateway = undefined;
+  while (failedLinks.length) await failedLinks.pop()!.close();
+});
+
+const live = (records: LeaseRecord[]) =>
+  records.filter((record) => record.revoked === undefined);
+
+async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 500; i += 1) {
+    if (check()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error("condition was not reached");
+}
+
+/** How many times the gateway revoked `leaseId` on request. */
+const revokes = (leaseId: string) =>
+  gateway!.lines.filter((line) =>
+    line.startsWith(`control leases.revoke (lease ${leaseId})`),
+  ).length;
+
+test("with a link, a profiled open holds one engine lease from before engine.open to its end", async () => {
+  gateway = await startGatewayLinkForTests();
+  const lease = { profileId: DEFAULT_OPENAI_PROFILE_ID, sessionId: "s1" };
+  let atFactory: LeaseRecord[] | undefined;
+  atOpen = () => (atFactory = live(gateway!.engineLeases()));
+
+  const disposed = await openScripted(lease);
+  assert.equal(atFactory?.length, 1);
+  const [held] = atFactory!;
+  assert.deepEqual(held!.owner, { workerId: "local", sessionId: "s1" });
+  assert.equal(held!.profileId, DEFAULT_OPENAI_PROFILE_ID);
+  await disposed.channel.dispose();
+  const ended = () =>
+    gateway!.engineLeases().find((r) => r.leaseId === held!.leaseId);
+  assert.equal(ended()?.revoked, "session-ended");
+
+  // Connection end revokes; a later dispose revokes nothing again.
+  const lost = await openScripted(lease);
+  const lostLease = live(gateway.engineLeases())[0]!.leaseId;
+  const quiescent = inProcessWorkerQuiescentForTests();
+  writeAsInProcessWorkerForTests(new Uint8Array(8));
+  await quiescent;
+  await until(() => revokes(lostLease) === 1);
+  await lost.channel.dispose();
+  assert.equal(revokes(lostLease), 1);
+  assert.equal(revokes(held!.leaseId), 1);
+  assert.equal(
+    gateway.engineLeases().find((r) => r.leaseId === lostLease)?.revoked,
+    "session-ended",
+  );
+
+  // A factory that throws: the open rejects and its lease is revoked.
+  const before = gateway.engineLeases().length;
+  await assert.rejects(
+    openEngineChannel(
+      ensureInProcessWorker(),
+      "scripted-throws",
+      {},
+      () => assert.fail("no answer to attach"),
+      lease,
+    ),
+  );
+  const thrown = gateway.engineLeases().slice(before);
+  assert.equal(thrown.length, 1);
+  assert.equal(thrown[0]!.revoked, "session-ended");
+  assert.equal(revokes(thrown[0]!.leaseId), 1);
+
+  // An open without a lease context grants nothing.
+  const count = gateway.engineLeases().length;
+  const plain = await openScripted();
+  assert.equal(gateway.engineLeases().length, count);
+  await plain.channel.dispose();
+});
+
+test("an open whose spec does not name its session completes the owner from the answer, before attach", async () => {
+  gateway = await startGatewayLinkForTests();
+  let atFactory: LeaseRecord[] | undefined;
+  atOpen = () => (atFactory = live(gateway!.engineLeases()));
+  let atAttach: LeaseRecord | undefined;
+  const { value } = await openEngineChannel(
+    ensureInProcessWorker(),
+    "scripted",
+    {},
+    (_answer, channel) => {
+      atAttach = live(gateway!.engineLeases())[0];
+      return { value: channel, sink: { apply() {}, onLost() {} } };
+    },
+    {
+      profileId: DEFAULT_OPENAI_PROFILE_ID,
+      sessionIdOf: (info) =>
+        (info as { scripted?: boolean }).scripted ? "minted-1" : undefined,
+    },
+  );
+  assert.deepEqual(atFactory?.[0]?.owner, { workerId: "local" });
+  assert.deepEqual(atAttach?.owner, {
+    workerId: "local",
+    sessionId: "minted-1",
+  });
+  await value.dispose();
+});
+
+test("without a link, a profiled open sends no control request and opens as before", async () => {
+  assert.equal(installedGatewayLink(), undefined);
+  const opened = await openScripted({
+    profileId: DEFAULT_OPENAI_PROFILE_ID,
+    sessionId: "s-none",
+  });
+  assert.deepEqual(await opened.channel.command(1, "ok", []), "ok result");
+  await opened.channel.dispose();
+});
+
+test("a failed grant fails the open with U7's text before the Worker sees engine.open", async () => {
+  const lease = { profileId: DEFAULT_OPENAI_PROFILE_ID, sessionId: "s2" };
+  const opens = () => inProcessWorkerServedMethodForTests("engine.open");
+  let factoryRuns = 0;
+  atOpen = () => (factoryRuns += 1);
+
+  // The gateway failed to start: its port is taken.
+  const taken = net.createServer();
+  await new Promise<void>((resolve) =>
+    taken.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const failed = startGatewayLink({
+    stateDir: `${process.env.DATA_DIR}/gateway-failed`,
+    port: (taken.address() as net.AddressInfo).port,
+    log: () => {},
+  });
+  failedLinks.push(failed);
+  assert.equal(await failed.ready, false);
+  const before = opens();
+  await assert.rejects(openScripted(lease), {
+    message: GATEWAY_UNAVAILABLE_TEXT,
+  });
+  assert.equal(opens(), before);
+  await failedLinks.pop()!.close();
+  await new Promise<void>((resolve) => taken.close(() => resolve()));
+
+  // The control connection ended.
+  gateway = await startGatewayLinkForTests();
+  await gateway.link.gateway!.close();
+  await assert.rejects(openScripted(lease), {
+    message: GATEWAY_UNAVAILABLE_TEXT,
+  });
+  assert.equal(opens(), before);
+  assert.equal(factoryRuns, 0);
 });

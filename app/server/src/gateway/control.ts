@@ -39,6 +39,7 @@ import {
   encodeLeaseGranted,
   encodeLeaseRevoked,
   encodeLeasesRevoked,
+  type ControlHello,
 } from "./controlMethods.ts";
 import type { LeaseTable } from "./leases.ts";
 import type { ProfileRegistry } from "./profiles.ts";
@@ -70,6 +71,8 @@ function fail(code: string, message: string): never {
 export interface ControlEndpoint {
   /** Serves gateway control on `endpoint`, the listener side. */
   attach(endpoint: ByteEndpoint): void;
+  /** The last hello a connection said, as recorded. */
+  hello(): ControlHello | undefined;
   /** Ends every attached connection. */
   close(): void;
 }
@@ -82,6 +85,7 @@ export function createControlEndpoint({
   const connections = new Set<WorkerConnection>();
   /** The connection whose hello came last; an older one is ended. */
   let current: WorkerConnection | undefined;
+  let lastHello: ControlHello | undefined;
 
   /** Revokes every live lease of a profile `kept` does not hold. */
   const revokeRemoved = (kept: (profileId: string) => boolean): string[] =>
@@ -220,6 +224,7 @@ export function createControlEndpoint({
     handlers[CONTROL_METHODS.hello] = run(CONTROL_METHODS.hello, (payload) => {
       const hello = decodeControlHello(payload);
       state.bootId = hello.serverBootId;
+      lastHello = hello;
       if (current !== connection) {
         current?.end("a newer control connection said hello");
         current = connection;
@@ -273,6 +278,7 @@ export function createControlEndpoint({
 
   return {
     attach,
+    hello: () => lastHello,
     close() {
       for (const connection of [...connections])
         connection.end("the gateway closed");

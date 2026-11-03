@@ -979,6 +979,108 @@ test("pi staging keeps live tool exposure and pruning on refusal, then transfers
   }
 });
 
+test("with a gateway link, a pi staged switch holds the replacement's lease beside the old one; commit ends the old, refusal the replacement's", async () => {
+  const { startGatewayLinkForTests } = await import("./test/gatewayLink.ts");
+  const gateway = await startGatewayLinkForTests();
+  const live = () =>
+    gateway.engineLeases().filter((record) => record.revoked === undefined);
+  const lease = (leaseId: string) =>
+    gateway.engineLeases().find((record) => record.leaseId === leaseId);
+  const p = account("openai-codex", "Leased P");
+  const q = account("openai-codex", "Leased Q");
+  const created = await createSession({
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: p,
+    model: await piModelForAccount(p, "openai-codex", "gpt-5.5"),
+    thinkingLevel: "off",
+  });
+  const pi = created as import("./piSdk/PiLiveSession.ts").PiLiveSession;
+  const internals = piStore as unknown as {
+    openEngine: (
+      spec: PiEngineOpenSpec,
+    ) => Promise<{ engine: PiEngineHandle; info: unknown }>;
+  };
+  const old = nativePiSessionForTests(pi.engine);
+  // A native transcript must have a persisted conversation to reopen its id.
+  old.sessionManager.appendMessage({
+    role: "user",
+    content: "Existing question",
+    timestamp: Date.now(),
+  });
+  old.sessionManager.appendMessage({
+    role: "assistant",
+    api: old.model!.api,
+    provider: old.model!.provider,
+    model: old.model!.id,
+    content: [{ type: "text", text: "Existing answer" }],
+    stopReason: "stop",
+    timestamp: Date.now(),
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  });
+  await syncPiEngineMirrorForTests(pi.engine);
+  const [held] = live();
+  assert.equal(held?.profileId, p);
+  const owner = { workerId: "local", sessionId: pi.id };
+  assert.deepEqual(held.owner, owner);
+  /** The live engine leases once each staged replacement opened. */
+  const atStaged: ReturnType<typeof live>[] = [];
+  const openEngine = internals.openEngine.bind(piStore);
+  const factory = vi
+    .spyOn(internals, "openEngine")
+    .mockImplementation(async (spec) => {
+      const replacement = await openEngine(spec);
+      if (spec.staged === true) atStaged.push(live());
+      return replacement;
+    });
+  try {
+    await assert.rejects(
+      // Admitted until the replacement has opened, then withdrawn.
+      pi.switchAccount(q, () => {
+        if (atStaged.length > 0)
+          throw new Error("Recovery admission was withdrawn.");
+      }),
+      /admission was withdrawn/,
+    );
+    assert.equal(atStaged.length, 1);
+    const refused = atStaged[0]!.find((record) => record.profileId === q);
+    assert.ok(refused, "the refused replacement held a lease for Q");
+    assert.deepEqual(refused.owner, owner);
+    assert.ok(atStaged[0]!.some((record) => record.leaseId === held.leaseId));
+    await vi.waitFor(() =>
+      assert.equal(lease(refused.leaseId)?.revoked, "session-ended"),
+    );
+    assert.equal(lease(held.leaseId)?.revoked, undefined);
+    assert.equal(pi.credentialProfileId, p);
+
+    await pi.switchAccount(q, () => {});
+    assert.equal(atStaged.length, 2);
+    const committed = atStaged[1]!.find((record) => record.profileId === q);
+    assert.ok(committed, "the committed replacement held a lease for Q");
+    assert.deepEqual(committed.owner, owner);
+    assert.ok(atStaged[1]!.some((record) => record.leaseId === held.leaseId));
+    await vi.waitFor(() =>
+      assert.equal(lease(held.leaseId)?.revoked, "session-ended"),
+    );
+    assert.equal(lease(committed.leaseId)?.revoked, undefined);
+    assert.equal(pi.credentialProfileId, q);
+  } finally {
+    factory.mockRestore();
+    await sessionRuntime.disposeSession(pi.id);
+    piStore.evict(pi.id);
+    profiles.setCredentialProfileEnabled(p, false);
+    profiles.setCredentialProfileEnabled(q, false);
+    await gateway.close();
+  }
+});
+
 test("real Claude store terminates its old epoch, copies JSONL/subagents and resumes the same native id", async () => {
   const a = account("claude", "Claude A");
   const b = account("claude", "Claude B");

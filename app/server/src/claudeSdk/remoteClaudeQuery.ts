@@ -249,12 +249,15 @@ function remoteClaudeQuery(
 /**
  * Open `spec`'s query on the session's Worker. Aborting `signal` aborts the
  * hosted query's own controller; its stream then ends as the query does.
+ * With `credentialProfileId` and a gateway link, the query's engine holds a
+ * lease for that profile, owned by the session.
  */
 export async function openHostedClaudeQuery(input: {
   prompt: AsyncIterable<ClaudeSdkUserMessage>;
   spec: ClaudeQueryOpenSpec;
   signal: AbortSignal;
   onCompactSummary?: (summary: string) => void;
+  credentialProfileId?: string;
 }): Promise<RemoteClaudeQuery> {
   const { value: remote } = await openEngineChannel(
     ensureInProcessWorker(),
@@ -269,6 +272,12 @@ export async function openHostedClaudeQuery(input: {
       );
       return { sink: remote.sink, value: remote };
     },
+    input.credentialProfileId !== undefined
+      ? {
+          profileId: input.credentialProfileId,
+          sessionId: input.spec.sessionId,
+        }
+      : undefined,
   );
   // Only a live channel takes commands, and it is live once the open
   // resolves: an abort that came before is sent now, a later one as it comes.

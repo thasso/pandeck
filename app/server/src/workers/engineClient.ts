@@ -15,6 +15,10 @@
  * - On connection end every engine is lost: its pending and later commands
  *   reject with `engine_gone`, and its sink's `onLost` runs once. The server
  *   never retries; the next open dials a fresh connection.
+ * - With a gateway link (`gatewayLink.ts`), an open on a credential profile
+ *   holds an engine lease, granted before `engine.open` goes out and revoked
+ *   once at the engine's first end: dispose, connection end, or a throw before
+ *   the open returns. A failed grant fails the open; the Worker never sees it.
  *
  * Imports no connection acquisition, so `inProcessWorker.ts` can wire it.
  */
@@ -38,6 +42,8 @@ import {
   type EngineDiscard,
   type EngineItem,
 } from "../workerProtocol/engineMethods.ts";
+import { installedGatewayLink, type GatewayLink } from "../gatewayLink.ts";
+import { workerRegistry } from "./workerRegistry.ts";
 
 /** How a harness's remote handle takes its engine's items. */
 export interface EngineSink {
@@ -63,6 +69,15 @@ export interface EngineChannel {
   dispose(discard?: EngineDiscard): Promise<void>;
 }
 
+/** What an open on a credential profile tells the seam for its lease. */
+export interface EngineLeaseContext {
+  profileId: string;
+  /** The session, when the spec names it before the open. */
+  sessionId?: string;
+  /** Otherwise, the session the open's answer names. */
+  sessionIdOf?: (info: unknown) => string | undefined;
+}
+
 interface Waiter {
   seq: number;
   settle: () => void;
@@ -80,6 +95,10 @@ interface Entry {
   pending: Set<(err: Error) => void>;
   /** The tail of the items being applied, so deliveries apply in order. */
   applying: Promise<void>;
+  /** The engine's lease, when it holds one; its token goes nowhere yet. */
+  lease?: { leaseId: string; token: string };
+  /** Revokes the lease, the first time only. */
+  endLease?: () => Promise<void>;
 }
 
 let nextEngineId = 1;
@@ -105,6 +124,7 @@ class ConnectionEngines {
     entry.waiting = [];
     for (const reject of entry.pending) reject(goneError(engineId));
     entry.pending.clear();
+    if (entry.endLease) void entry.endLease();
     if (wasLive) entry.sink?.onLost();
   }
 
@@ -178,16 +198,74 @@ function commandFailure(err: unknown, engineId: number): Error {
 
 /**
  * Open a `harness` engine on `connection`. `attach` builds the harness's sink
- * from the answer, before any item is applied to it.
+ * from the answer, before any item is applied to it. With `lease` and a
+ * gateway link, the engine holds a lease for `lease.profileId`.
  */
-export async function openEngineChannel<T>(
+export function openEngineChannel<T>(
   connection: WorkerConnection,
   harness: string,
   spec: unknown,
-  attach: (
-    opened: { info: unknown; snapshot: unknown },
-    channel: EngineChannel,
-  ) => { sink: EngineSink; value: T },
+  attach: Attach<T>,
+  lease?: EngineLeaseContext,
+): Promise<{ info: unknown; value: T }> {
+  const link = lease && installedGatewayLink();
+  // Not async: without a lease the open is exactly the unleased one.
+  return lease && link
+    ? openLeased(link, lease, connection, harness, spec, attach)
+    : openEngine(connection, harness, spec, attach);
+}
+
+type Attach<T> = (
+  opened: { info: unknown; snapshot: unknown },
+  channel: EngineChannel,
+) => { sink: EngineSink; value: T };
+
+async function openLeased<T>(
+  link: GatewayLink,
+  lease: EngineLeaseContext,
+  connection: WorkerConnection,
+  harness: string,
+  spec: unknown,
+  attach: Attach<T>,
+): Promise<{ info: unknown; value: T }> {
+  // Before an open the Worker can see: a failed grant throws here.
+  const granted = await link.grantEngineLease({
+    workerId: workerRegistry.admittedAs(connection),
+    profileId: lease.profileId,
+    ...(lease.sessionId !== undefined ? { sessionId: lease.sessionId } : {}),
+  });
+  let ended: Promise<void> | undefined;
+  const endLease = (): Promise<void> =>
+    (ended ??= link.revokeLease(granted.leaseId, "session-ended"));
+  try {
+    return await openEngine(connection, harness, spec, attach, {
+      lease: granted,
+      endLease,
+      ...(lease.sessionId === undefined && lease.sessionIdOf
+        ? {
+            bindSession: async (info: unknown) => {
+              const sessionId = lease.sessionIdOf!(info);
+              if (sessionId !== undefined)
+                await link.bindLeaseSession(granted.leaseId, sessionId);
+            },
+          }
+        : {}),
+    });
+  } catch (err) {
+    await endLease();
+    throw err;
+  }
+}
+
+async function openEngine<T>(
+  connection: WorkerConnection,
+  harness: string,
+  spec: unknown,
+  attach: Attach<T>,
+  leased?: Pick<Entry, "lease" | "endLease"> & {
+    /** Completes the lease's owner from the open's answer, before `attach`. */
+    bindSession?: (info: unknown) => Promise<void>;
+  },
 ): Promise<{ info: unknown; value: T }> {
   const engines = enginesOn(connection);
   const engineId = nextEngineId++;
@@ -198,6 +276,7 @@ export async function openEngineChannel<T>(
     waiting: [],
     pending: new Set(),
     applying: Promise.resolve(),
+    ...(leased ? { lease: leased.lease, endLease: leased.endLease } : {}),
   };
   engines.entries.set(engineId, entry);
   let answer;
@@ -213,6 +292,8 @@ export async function openEngineChannel<T>(
       engines.entries.delete(engineId);
     throw err;
   }
+  // Items that arrive meanwhile wait in `early`, as before the answer.
+  if (leased?.bindSession) await leased.bindSession(answer.info);
   if (entry.state !== "opening") throw goneError(engineId);
 
   const channel: EngineChannel = {
@@ -269,6 +350,7 @@ export async function openEngineChannel<T>(
         entry.pending.clear();
         if (engines.entries.get(engineId) === entry)
           engines.entries.delete(engineId);
+        if (entry.endLease) await entry.endLease();
       }
     },
   };

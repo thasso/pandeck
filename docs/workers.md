@@ -1213,6 +1213,37 @@ and `profiles.remove`). A newer connection's hello ends the older one.
   restored leases keep forwarding on their own binding. A revoked lease is
   forgotten 24 hours after its revocation.
 
+The server's link to the gateway (`gatewayLink.ts`) is opt-in:
+`ASSISTANT_GATEWAY=1` starts the gateway inside the server process, its model
+listener on `127.0.0.1:${ASSISTANT_GATEWAY_PORT}` (8788) and its state in
+`DATA_DIR/gateway/`, and speaks gateway control to it over an in-process pair
+until the gateway runs as its own process.
+
+- Before it is ready the link says hello as this server boot (16 random bytes,
+  the pid and the process start time), syncs every credential profile with its
+  token file path (`.credentials.json` in the profile's Claude config directory,
+  `~/.claude` for the default; `auth.json` in its pi agent directory), and
+  reconciles the in-process Worker with no live lease: its engines died with the
+  previous process. Every profile change is then sent as an upsert or a removal,
+  and every request takes one queue, in order.
+- **Grant before open.** An engine open on a credential profile (a pi engine, a
+  Claude turn or standalone `/compact` of a session with a profile) is granted
+  an engine lease before `engine.open` goes out. A grant waits at most 10
+  seconds for the link; when the gateway failed to start, its control connection
+  ended or it refused, the open fails with "Pandeck's credential gateway isn't
+  reachable, so this session can't start a model request. It restarts
+  automatically; try again shortly." and no engine starts. That text never
+  counts as a dead login.
+- The engine's first end revokes its lease once, with "the session ended": its
+  disposal, its connection's end, or a failure before the open returns. An
+  account switch ends the old engine's lease with the old engine and grants the
+  replacement its own; a refused replacement's disposal revokes that one.
+- Binding a session and revoking are best-effort and only logged. A revocation
+  the gateway applied but could not save holds in its memory until a later save
+  or the next boot's reconcile.
+- The token stays with the engine's entry in the server. No engine uses it yet:
+  engines authenticate as before.
+
 ## When the server is down
 
 A running turn keeps going. Native tools never need the server, and model
@@ -1400,11 +1431,13 @@ the server's child-env overlay.
 
 ### Phase 2 status
 
-The credential gateway's forwarding core (`app/server/src/gateway/`) has landed
-off by default: nothing in the server starts it or routes a model request to it,
-and only tests run it, against fake upstreams. It reads token files and never
-writes or refreshes them. The control channel, persisted leases, renewal, engine
-routing and its own service unit come in later slices.
+The credential gateway (`app/server/src/gateway/`) has landed with its
+forwarding core, its control channel and persisted leases, and the server's link
+to it behind `ASSISTANT_GATEWAY=1`, off by default. With the switch on, every
+engine open on a profile holds a lease first, but engines still authenticate as
+before: no model request is routed to the gateway yet. It reads token files and
+never writes or refreshes them. Login holds, renewal, engine routing and its own
+service unit come in later slices.
 
 ## Open questions
 
