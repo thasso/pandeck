@@ -4,6 +4,11 @@ import {
   type PullRequestGroupBy,
   type PullRequestGroupId,
 } from "../lib/pullRequestInbox.ts";
+import {
+  normalizeProjectGroupBy,
+  type ProjectGroupBy,
+  type ProjectWorktreeFilter,
+} from "../lib/projectListView.ts";
 import { applyPatch } from "@assistant/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -150,6 +155,14 @@ export interface Prefs {
   pullRequestReasonFilter: PullRequestGroupId[];
   /** Pull Requests list: leave drafts out. */
   pullRequestHideDrafts: boolean;
+  /** Projects browser: how projects are grouped. */
+  projectGroupBy: ProjectGroupBy;
+  /** Projects browser: leave out projects with no worktree and no session. */
+  projectFilterId: string | null;
+  /** Projects browser: list archived projects too. */
+  projectShowArchived: boolean;
+  /** Projects browser: which worktrees are listed. */
+  projectWorktreeFilter: ProjectWorktreeFilter;
   /** Worktree detail views: width of the local navigator rail. */
   worktreeChangesRailWidth: number;
   /** Worktree detail views: whether the local navigator rail is collapsed. */
@@ -246,6 +259,10 @@ const defaults: Prefs = {
   pullRequestProjectFilter: null,
   pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
   pullRequestHideDrafts: false,
+  projectGroupBy: "hierarchy",
+  projectFilterId: null,
+  projectShowArchived: false,
+  projectWorktreeFilter: "all",
   worktreeChangesRailWidth: 300,
   worktreeChangesRailCollapsed: false,
   worktreeNavigatorViewMode: "tree",
@@ -275,6 +292,7 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
     backlogView: normalizeBacklogView(known.backlogView),
     attentionFilters: normalizeAttentionFilters(known.attentionFilters),
     pullRequestGroupBy: normalizePullRequestGroupBy(known.pullRequestGroupBy),
+    projectGroupBy: normalizeProjectGroupBy(known.projectGroupBy),
     ...(workflowRoleRuntimes !== undefined ? { workflowRoleRuntimes } : {}),
   };
 }

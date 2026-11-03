@@ -36,6 +36,10 @@ import {
 } from "../lib/backlogTreeModel.ts";
 import { samePlacements, type Task } from "../lib/backlogTree.ts";
 import { projectColor } from "../lib/projectDisplay.ts";
+import type {
+  ProjectListView,
+  ProjectWorktreeFacts,
+} from "../lib/projectListView.ts";
 import { SessionRowContent } from "./SessionRow.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
 import {
@@ -75,6 +79,9 @@ const WORKTREE_NODE_PREFIX = "worktree:";
 const SESSION_NODE_PREFIX = "session:";
 const MORE_NODE_PREFIX = "more-sessions:";
 const SECTION_NODE_PREFIX = "wt-section:";
+const GROUP_NODE_PREFIX = "project-group:";
+/** How recent a project's last activity keeps it under Active. */
+const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The worktree file the page has open, as its route names it. */
 export type SelectedWorktreeFile = {
@@ -123,6 +130,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   rootProjectId,
   rootWorktreeIds,
   storageScope,
+  view,
+  worktreeFacts = NO_WORKTREE_FACTS,
 }: {
   projects: ProjectRecord[];
   loading: boolean;
@@ -172,6 +181,13 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   rootWorktreeIds?: readonly string[] | undefined;
   /** Remember folding under its own keys, apart from the sidebar's. */
   storageScope?: string | undefined;
+  /**
+   * The sidebar bar's grouping and filters (`ProjectListToolbar`); absent
+   * draws the arranged hierarchy, unfiltered. Not read under a root.
+   */
+  view?: ProjectListView | undefined;
+  /** What the filters and the Activity grouping read off a worktree; stable. */
+  worktreeFacts?: (worktree: WorktreeRecord) => ProjectWorktreeFacts;
 }) {
   const ordered = projects;
   const lastReorder = useRef<{
@@ -322,6 +338,54 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     changeSets,
   ]);
 
+  // The registry as the bar groups and filters it.
+  const viewed = !rootProjectId && !rootWorktreeIds ? view : undefined;
+  // When something last HAPPENED in a project: a session's turn, a worktree's
+  // git state changing, a worktree being made. Not the project record's own
+  // stamp, which a registry edit (a reorder) moves for every project.
+  const projectActivity = useCallback(
+    (projectId: string) => {
+      let latest = 0;
+      let running = false;
+      const consider = (rows: SessionListItem[] | undefined) => {
+        for (const session of rows ?? []) {
+          latest = Math.max(latest, session.updatedAt);
+          if (session.isStreaming) running = true;
+        }
+      };
+      consider(relationIndex.sessionsByProject.get(projectId));
+      for (const worktree of worktreesByProject.get(projectId) ?? []) {
+        consider(relationIndex.sessionsByWorktree.get(worktree.id));
+        // Creation is one moment like the others: it ages out of the Active
+        // window, so an old worktree does not keep its project Active.
+        latest = Math.max(
+          latest,
+          worktree.createdAt,
+          worktreeFacts(worktree).changedAt ?? 0,
+        );
+      }
+      return { latest, running };
+    },
+    [relationIndex, worktreesByProject, worktreeFacts],
+  );
+  const viewNodes = useMemo(
+    () =>
+      viewed
+        ? applyProjectView(nodes, viewed, {
+            worktreeFacts,
+            activity: projectActivity,
+            now,
+          })
+        : nodes,
+    [nodes, viewed, worktreeFacts, projectActivity, now],
+  );
+  // Drag rearranges the registry tree, so only where it is all on screen.
+  const draggable =
+    !viewed ||
+    (viewed.groupBy === "hierarchy" &&
+      viewed.projectId === null &&
+      !viewed.showArchived);
+
   // One project's contents (not its subprojects), or the whole registry.
   const shownNodes = useMemo(
     () =>
@@ -334,21 +398,21 @@ export const ProjectTreePane = memo(function ProjectTreePane({
           ? (findNode(nodes, rootProjectId)?.children ?? []).filter(
               (node) => node.data.kind !== "project",
             )
-          : nodes,
-    [nodes, rootProjectId, rootWorktreeIds],
+          : viewNodes,
+    [nodes, viewNodes, rootProjectId, rootWorktreeIds],
   );
 
   const expandableProjects = useMemo(
-    () => collectExpandableProjectIds(nodes),
-    [nodes],
+    () => collectExpandableProjectIds(viewNodes),
+    [viewNodes],
   );
   const expandableWorktrees = useMemo(
-    () => collectExpandableWorktreeIds(nodes),
-    [nodes],
+    () => collectExpandableWorktreeIds(viewNodes),
+    [viewNodes],
   );
   const expandableSections = useMemo(
-    () => collectExpandableSectionIds(nodes),
-    [nodes],
+    () => collectExpandableSectionIds(viewNodes),
+    [viewNodes],
   );
   const expandedIds = useMemo(
     () => [
@@ -428,14 +492,21 @@ export const ProjectTreePane = memo(function ProjectTreePane({
 
   const onExpandedChange = (ids: string[]) => {
     const expanded = new Set(ids);
-    const nextCollapsed = new Set(
-      expandableProjects.filter((id) => !expanded.has(id)),
+    // Rows a filter or grouping hides right now keep their folding.
+    const shownProjects = new Set(expandableProjects);
+    const nextCollapsed = new Set([
+      ...[...collapsedProjects].filter((id) => !shownProjects.has(id)),
+      ...expandableProjects.filter((id) => !expanded.has(id)),
+    ]);
+    const shownWorktrees = new Set(
+      expandableWorktrees.map(worktreeIdFromNodeId),
     );
-    const nextWorktrees = new Set(
-      expandableWorktrees
+    const nextWorktrees = new Set([
+      ...[...expandedWorktreeIds].filter((id) => !shownWorktrees.has(id)),
+      ...expandableWorktrees
         .filter((id) => expanded.has(id))
         .map(worktreeIdFromNodeId),
-    );
+    ]);
     // Under one project the project rows are not in the tree, so its answer
     // says nothing about them: leave the sidebar's collapsed set alone.
     if (!rootProjectId && !rootWorktreeIds) {
@@ -529,11 +600,13 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         paddedContent={false}
         // Projects and worktrees lead with the tree's chevron, like a band.
         getRowDisclosure={(node) =>
+          node.data.kind === "group" ||
           node.data.kind === "project" ||
           node.data.kind === "worktree" ||
           node.data.kind === "section"
         }
         getRowClassName={() => "group/item"}
+        getRowBand={flush ? (node) => node.data.kind === "group" : undefined}
         getRowPlain={(node) => node.data.kind === "sectionContent"}
         flush={flush}
         showGuides={false}
@@ -560,19 +633,23 @@ export const ProjectTreePane = memo(function ProjectTreePane({
           else if (!id.startsWith(MORE_NODE_PREFIX)) onToggleProject(id);
         }}
         // Projects are reordered in the registry tree, never under one.
-        {...(rootProjectId || rootWorktreeIds
+        {...(rootProjectId || rootWorktreeIds || !draggable
           ? {}
           : {
               onMove: (result: { items: ProjectBrowserNode[] }) =>
                 handleMove(result.items),
             })}
-        canDrag={(node) => !reorderBusy && node.data.kind === "project"}
+        canDrag={(node) =>
+          draggable && !reorderBusy && node.data.kind === "project"
+        }
         canDrop={({ parentId }) =>
           !parentId || dataForId.get(parentId)?.kind === "project"
         }
         renderNode={(node, state) => {
           const data = node.data;
           switch (data.kind) {
+            case "group":
+              return <ProjectGroupBand label={data.label} count={data.count} />;
             case "project":
               return (
                 <ProjectRowContent
@@ -709,6 +786,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
 });
 
 type ProjectBrowserNodeData =
+  | { kind: "group"; label: string; count: number }
   | { kind: "project"; project: ProjectRecord }
   | { kind: "worktree"; worktree: WorktreeRecord; status?: WorktreeGitStatus }
   | { kind: "session"; session: SessionListItem }
@@ -1115,6 +1193,115 @@ function withRelatedChildren(
   });
 }
 
+const NO_WORKTREE_FACTS = (): ProjectWorktreeFacts => ({
+  changed: false,
+  pullRequest: false,
+});
+
+/** An Activity grouping's band, as the Tasks tree draws a project's. */
+function ProjectGroupBand({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 px-2">
+      <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+        {label}
+      </span>
+      <span className="shrink-0 text-sm opacity-70">{count}</span>
+    </div>
+  );
+}
+
+/**
+ * The registry tree as the bar asks for it: worktrees narrowed by the filter,
+ * projects without work dropped when asked, and — past Hierarchy — every
+ * project flat at the top (its subprojects beside it, not under it), sorted or
+ * banded into Active and Quiet.
+ */
+function applyProjectView(
+  nodes: ProjectBrowserNode[],
+  view: ProjectListView,
+  context: {
+    worktreeFacts: (worktree: WorktreeRecord) => ProjectWorktreeFacts;
+    activity: (projectId: string) => { latest: number; running: boolean };
+    now: number;
+  },
+): ProjectBrowserNode[] {
+  const keepWorktree = (worktree: WorktreeRecord) => {
+    if (view.worktrees === "all") return true;
+    const facts = context.worktreeFacts(worktree);
+    return view.worktrees === "changes" ? facts.changed : facts.pullRequest;
+  };
+  // A chosen project narrows the list to it and its subprojects, without its
+  // ancestors. One no longer listed (archived while hidden, or removed)
+  // narrows nothing rather than leaving the list empty.
+  const find = (list: ProjectBrowserNode[]): ProjectBrowserNode | undefined => {
+    for (const node of list) {
+      if (node.data.kind !== "project") continue;
+      if (node.data.project.id === view.projectId) return node;
+      const found = find(node.children ?? []);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  const chosen = view.projectId === null ? undefined : find(nodes);
+  const scoped = chosen ? [chosen] : nodes;
+  // Worktrees filtered by the Worktrees filter.
+  const filter = (list: ProjectBrowserNode[]): ProjectBrowserNode[] =>
+    list.flatMap((node) => {
+      if (node.data.kind !== "project") return [node];
+      const children = filter(node.children ?? []).filter(
+        (child) =>
+          child.data.kind !== "worktree" || keepWorktree(child.data.worktree),
+      );
+      return [
+        applyPatch(node, { children: children.length ? children : undefined }),
+      ];
+    });
+  const filtered = filter(scoped);
+  if (view.groupBy === "hierarchy") return filtered;
+
+  const flat: ProjectBrowserNode[] = [];
+  const visit = (node: ProjectBrowserNode) => {
+    if (node.data.kind !== "project") return;
+    const own = (node.children ?? []).filter(
+      (child) => child.data.kind !== "project",
+    );
+    flat.push(applyPatch(node, { children: own.length ? own : undefined }));
+    for (const child of node.children ?? []) visit(child);
+  };
+  for (const node of filtered) visit(node);
+  const name = (node: ProjectBrowserNode) =>
+    node.data.kind === "project" ? node.data.project.name : "";
+  const byName = (a: ProjectBrowserNode, b: ProjectBrowserNode) =>
+    name(a).localeCompare(name(b));
+  const byRecent = (a: ProjectBrowserNode, b: ProjectBrowserNode) =>
+    context.activity(b.id).latest - context.activity(a.id).latest ||
+    byName(a, b);
+  if (view.groupBy === "name") return flat.sort(byName);
+  if (view.groupBy === "recent") return flat.sort(byRecent);
+
+  // Running now, or touched within the window: unpushed commits or an open
+  // pull request nobody has moved in a week are not activity.
+  const active = (node: ProjectBrowserNode): boolean => {
+    const { latest, running } = context.activity(node.id);
+    return running || context.now - latest < ACTIVE_WINDOW_MS;
+  };
+  const groups = [
+    { id: "active", label: "Active", rows: flat.filter(active) },
+    {
+      id: "quiet",
+      label: "Quiet",
+      rows: flat.filter((node) => !active(node)),
+    },
+  ];
+  return groups
+    .filter((group) => group.rows.length > 0)
+    .map((group) => ({
+      id: `${GROUP_NODE_PREFIX}${group.id}`,
+      data: { kind: "group", label: group.label, count: group.rows.length },
+      children: group.rows.sort(byRecent),
+    }));
+}
+
 function findNode(
   nodes: ProjectBrowserNode[],
   id: string,
@@ -1193,7 +1380,10 @@ function collectVisibleWorktreeIds(
 function collectExpandableProjectIds(nodes: ProjectBrowserNode[]): string[] {
   const ids: string[] = [];
   const visit = (node: ProjectBrowserNode) => {
-    if (node.data.kind === "project" && (node.children?.length ?? 0) > 0)
+    if (
+      (node.data.kind === "project" || node.data.kind === "group") &&
+      (node.children?.length ?? 0) > 0
+    )
       ids.push(node.id);
     for (const child of node.children ?? []) visit(child);
   };

@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FileDiff, FolderKanban } from "lucide-react";
+import { FileDiff } from "lucide-react";
 import type {
   InboxPositionEntry,
   InitiativeSummary,
@@ -43,7 +43,6 @@ import {
   ProjectTreePane,
   type SelectedWorktreeFile,
 } from "./ProjectTreePane.tsx";
-import { InitiativeBrowserGroup } from "./initiative/InitiativeBrowserGroup.tsx";
 import {
   WorktreeFileTree,
   useWorktreeFileTree,
@@ -57,13 +56,16 @@ import {
   type PrimaryNavSection,
 } from "./shell/PrimaryNav.tsx";
 import type { Task, TaskPlacement } from "../lib/backlogTree.ts";
-import type { AssistantActions, UIState } from "../hooks/useAssistant.ts";
+import type { AssistantActions } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
-import type { InitiativeBrowserWorktrees } from "./initiative/InitiativeBrowserRow.tsx";
-import type { InitiativeBrowserSessions } from "./initiative/InitiativeCoordinatorRows.tsx";
 import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 import type { LoadState } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
+import type {
+  ProjectListView,
+  ProjectWorktreeFacts,
+} from "../lib/projectListView.ts";
+import { ProjectListToolbar } from "./ProjectListToolbar.tsx";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";
 import {
   NO_WORKTREE_STATUSES,
@@ -180,20 +182,8 @@ interface Props {
   ) => void;
   /** Open a Project's detail route. */
   onOpenProject: (id: string) => void;
-  /** Live Initiative summaries, for the group atop the Projects browser. */
+  /** Live Initiative summaries, for the session cards' Initiative markers. */
   initiatives: readonly InitiativeSummary[];
-  /** Keyed membership reads, separate from the Backlog-only state prop. */
-  initiativeDetails?: Readonly<UIState["initiativeDetails"]>;
-  /** An Initiative snapshot answered the current subscription. */
-  initiativesFresh: boolean;
-  /** A new Initiative snapshot is out over the list an earlier one answered. */
-  initiativesRefreshing: boolean;
-  /** The Initiative list could not be read. */
-  initiativeListError: string | null;
-  /** Ask for the Initiative list again; stable. */
-  onRetryInitiatives: () => void;
-  /** Initiative id open in the main pane, for highlighting. */
-  selectedInitiativeId: string | null;
   /** All known worktrees; null until first fetched. */
   worktrees: WorktreeRecord[] | null;
   /** Live git status per worktree id: what THIS socket episode observed. */
@@ -504,12 +494,6 @@ function SidebarImpl({
   onReorderProjects,
   onOpenProject,
   initiatives,
-  initiativeDetails,
-  initiativesFresh,
-  initiativesRefreshing,
-  initiativeListError,
-  onRetryInitiatives,
-  selectedInitiativeId,
   worktrees,
   worktreeStatuses,
   lastKnownWorktreeStatuses = NO_WORKTREE_STATUSES,
@@ -661,6 +645,60 @@ function SidebarImpl({
     () => projects.filter((project) => project.status !== "archived"),
     [projects],
   );
+  // The Projects browser's grouping and filters, browser-local like the
+  // other lists': the bar above the tree writes them, the tree reads them.
+  const projectListView = useMemo<ProjectListView>(
+    () => ({
+      groupBy: prefs.projectGroupBy,
+      projectId: prefs.projectFilterId,
+      showArchived: prefs.projectShowArchived,
+      worktrees: prefs.projectWorktreeFilter,
+    }),
+    [
+      prefs.projectGroupBy,
+      prefs.projectFilterId,
+      prefs.projectShowArchived,
+      prefs.projectWorktreeFilter,
+    ],
+  );
+  const setProjectListView = useCallback(
+    (patch: Partial<ProjectListView>) =>
+      onUpdatePrefs({
+        ...(patch.groupBy !== undefined
+          ? { projectGroupBy: patch.groupBy }
+          : {}),
+        ...(patch.projectId !== undefined
+          ? { projectFilterId: patch.projectId }
+          : {}),
+        ...(patch.showArchived !== undefined
+          ? { projectShowArchived: patch.showArchived }
+          : {}),
+        ...(patch.worktrees !== undefined
+          ? { projectWorktreeFilter: patch.worktrees }
+          : {}),
+      }),
+    [onUpdatePrefs],
+  );
+  const shownProjects = projectListView.showArchived
+    ? projects
+    : activeProjects;
+  // Every worktree's facts, not only the rows on screen: a filter decides
+  // which rows those are. Git's last word stands in until a watch answers.
+  const projectWorktreeFacts = useCallback(
+    (worktree: WorktreeRecord): ProjectWorktreeFacts => {
+      const status = rowWorktreeStatus(
+        worktreeStatuses,
+        lastKnownWorktreeStatuses,
+        worktree.id,
+      );
+      return {
+        changed: Boolean(status && (status.dirty || status.ahead > 0)),
+        pullRequest: worktreeHosting[worktree.id]?.pr?.state === "open",
+        changedAt: status?.changedAt,
+      };
+    },
+    [worktreeStatuses, lastKnownWorktreeStatuses, worktreeHosting],
+  );
   const [visibleProjectWorktreeIds, setVisibleProjectWorktreeIds] = useState<
     string[]
   >([]);
@@ -680,37 +718,9 @@ function SidebarImpl({
         : ids,
     );
   }, []);
-  const [visibleInitiativeWorktrees, setVisibleInitiativeWorktrees] = useState<
-    Record<string, string[]>
-  >({});
-  // Stable, id-addressed reports keep sibling Initiative disclosures independent
-  // and add only their actually visible rows to the shared status-watch demand.
-  const onVisibleInitiativeWorktrees = useCallback(
-    (initiativeId: string, ids: string[]) => {
-      setVisibleInitiativeWorktrees((current) => {
-        const previous = current[initiativeId] ?? [];
-        if (
-          previous.length === ids.length &&
-          previous.every((id, index) => id === ids[index])
-        )
-          return current;
-        const next = { ...current };
-        if (ids.length > 0) next[initiativeId] = ids;
-        else delete next[initiativeId];
-        return next;
-      });
-    },
-    [],
-  );
   const visibleBrowserWorktreeIds = useMemo(
-    () =>
-      [
-        ...new Set([
-          ...visibleProjectWorktreeIds,
-          ...Object.values(visibleInitiativeWorktrees).flat(),
-        ]),
-      ].sort(),
-    [visibleProjectWorktreeIds, visibleInitiativeWorktrees],
+    () => [...new Set(visibleProjectWorktreeIds)].sort(),
+    [visibleProjectWorktreeIds],
   );
   const visibleBrowserWorktreeSet = useMemo(
     () => new Set(visibleBrowserWorktreeIds),
@@ -720,7 +730,7 @@ function SidebarImpl({
     key: string;
     value: SessionListItem[];
   }>({ key: "", value: [] });
-  const activeProjectIds = new Set(activeProjects.map((project) => project.id));
+  const activeProjectIds = new Set(shownProjects.map((project) => project.id));
   const projectWorktrees = (worktrees ?? []).filter((worktree) =>
     activeProjectIds.has(worktree.projectId),
   );
@@ -770,38 +780,6 @@ function SidebarImpl({
       ),
     };
   }
-
-  const projectRowStatuses = projectStatusCache.current.value;
-  const initiativeWorktrees = useMemo<InitiativeBrowserWorktrees>(
-    () => ({
-      items: worktrees,
-      fresh: worktreesFresh,
-      statuses: projectRowStatuses,
-      hosting: worktreeHosting,
-      selectedId: selectedWorktreeId,
-      onOpen: onOpenWorktree,
-      onVisible: onVisibleInitiativeWorktrees,
-    }),
-    [
-      worktrees,
-      worktreesFresh,
-      projectRowStatuses,
-      worktreeHosting,
-      selectedWorktreeId,
-      onOpenWorktree,
-      onVisibleInitiativeWorktrees,
-    ],
-  );
-
-  const initiativeSessions = useMemo<InitiativeBrowserSessions>(
-    () => ({
-      items: sessions,
-      runs: workflowRuns,
-      cards: workflowCards,
-      selectedId: currentId ?? null,
-    }),
-    [sessions, workflowRuns, workflowCards, currentId],
-  );
 
   // While the Projects or Worktrees browser is visible, subscribe to every
   // listed worktree so dirty-file indicators stay current instead of only
@@ -916,6 +894,14 @@ function SidebarImpl({
             onRefresh={onRefreshPullRequests}
           />
         </div>
+      ) : section === "projects" ? (
+        <div className="shrink-0">
+          <ProjectListToolbar
+            view={projectListView}
+            projects={shownProjects}
+            onChange={setProjectListView}
+          />
+        </div>
       ) : section === "tasks" ? (
         <div className="shrink-0">
           <BacklogListToolbar
@@ -981,55 +967,32 @@ function SidebarImpl({
           />
         ) : section === "projects" ? (
           <>
-            <InitiativeBrowserGroup
-              initiatives={initiatives}
-              fresh={initiativesFresh}
-              refreshing={initiativesRefreshing}
-              error={initiativeListError}
-              onRetry={onRetryInitiatives}
-              selectedId={selectedInitiativeId}
-              onNavigate={onNavigate}
-              initiativeDetails={initiativeDetails}
-              worktrees={initiativeWorktrees}
-              sessions={initiativeSessions}
-              projects={projects}
-              selectedProjectId={selectedProjectId}
+            <ProjectTreePane
+              projects={shownProjects}
+              view={projectListView}
+              worktreeFacts={projectWorktreeFacts}
+              selectedId={selectedProjectId}
               density={browserRowDensity(mobile)}
-              onLoadDetail={actions.requestInitiativeDetail}
-              onRetainDetail={actions.retainInitiativeDetail}
+              loading={!projectsLoaded}
+              reorderState={projectMutations["registry:reorder"]}
+              relationsLoading={worktrees === null}
+              sessions={projectSessionCache.current.value}
+              currentSessionId={currentId}
+              worktrees={worktrees}
+              worktreeStatuses={projectStatusCache.current.value}
+              selectedWorktreeId={selectedWorktreeId}
+              selectedFile={selectedWorktreeFile}
+              onReorder={onReorderProjects}
+              onOpenProject={onOpenProject}
+              onOpenSession={onSelect}
+              onOpenWorktree={onOpenWorktree}
+              onStartSession={onStartSessionForProject}
+              onStartSessionInWorktree={onStartSessionInWorktree}
+              onRemoveWorktree={onRemoveWorktree}
+              onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+              onNavigate={onNavigate}
+              flush
             />
-            <ListGroupSection
-              id="projects"
-              title="Projects"
-              count={projectsLoaded ? activeProjects.length : undefined}
-              icon={<FolderKanban size={14} className="shrink-0" aria-hidden />}
-              containsSelected={Boolean(selectedProjectId)}
-            >
-              <ProjectTreePane
-                projects={activeProjects}
-                selectedId={selectedProjectId}
-                density={browserRowDensity(mobile)}
-                loading={!projectsLoaded}
-                reorderState={projectMutations["registry:reorder"]}
-                relationsLoading={worktrees === null}
-                sessions={projectSessionCache.current.value}
-                currentSessionId={currentId}
-                worktrees={worktrees}
-                worktreeStatuses={projectStatusCache.current.value}
-                selectedWorktreeId={selectedWorktreeId}
-                selectedFile={selectedWorktreeFile}
-                onReorder={onReorderProjects}
-                onOpenProject={onOpenProject}
-                onOpenSession={onSelect}
-                onOpenWorktree={onOpenWorktree}
-                onStartSession={onStartSessionForProject}
-                onStartSessionInWorktree={onStartSessionInWorktree}
-                onRemoveWorktree={onRemoveWorktree}
-                onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
-                onNavigate={onNavigate}
-                flush
-              />
-            </ListGroupSection>
           </>
         ) : section === "pull-requests" ? (
           <PullRequestBrowser

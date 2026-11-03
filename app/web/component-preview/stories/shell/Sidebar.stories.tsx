@@ -77,11 +77,6 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         onReorderProjects={noop}
         onOpenProject={noop}
         initiatives={[hostedLabsSummary()]}
-        initiativesFresh
-        initiativesRefreshing={false}
-        initiativeListError={null}
-        onRetryInitiatives={noop}
-        selectedInitiativeId={null}
         worktrees={fixture.worktrees}
         worktreeStatuses={fixture.worktreeStatuses}
         worktreeHosting={{}}
