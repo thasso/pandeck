@@ -380,6 +380,18 @@ clients:
   handler, which serves both modes, cuts an overflowing reply's streams to that
   length (UTF-16 code units for text, bytes for a Buffer). It changes no Node
   outcome, and the runtime probe asserts it.
+- Fixed in the server: Bun 1.4.2 does not collect the spawn broker's garbage on
+  its own. After 30 hours of production git reads its broker held 11.9 GB
+  resident and 3.8 GB swapped. Heap statistics after a forced full collection
+  showed a live heap of about 2 MB, and the garbage was mostly the `Uint8Array`s
+  that children's output was read into. 40,000 concurrent `git status` requests
+  through the packaged broker left 853 MB resident at idle; with collections,
+  105 MB. Node collects the same garbage unprompted, and bare `child_process`
+  calls under Bun do too. The broker's `-e` script therefore runs `Bun.gc(true)`
+  one second after a reply, never more than one pending. The in-process fallback
+  does not, because it would collect the whole server heap. Measuring the effect
+  takes tens of thousands of requests, too slow for the install check, so the
+  runtime probe asserts only that the broker's Bun has `Bun.gc`.
 - Guarded in the server and the broker: when the collector reclaims a
   `node:fs/promises` FileHandle nobody closed, Bun 1.4.2 closes its descriptor
   and then raises an uncaught `ERR_INVALID_STATE`, "A FileHandle object was

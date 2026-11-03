@@ -52,6 +52,8 @@ const GROUP_SCAN_GRACE_MS = 20;
 const GROUP_SCAN_INTERVAL_MS = 1_000;
 /** When a group still not exited is reported, once. */
 const GROUP_EXIT_WARN_MS = 10_000;
+/** How long after a reply the broker under Bun runs a full collection. */
+const BROKER_COLLECT_DELAY_MS = 1_000;
 
 /** Creates `handle(message)`; replies go to `send`. Plain JS by design. */
 const HANDLER_SOURCE = String.raw`(function createSpawnHandler(require, send) {
@@ -273,7 +275,25 @@ try {
   if (Number(fs.readFileSync("/proc/self/oom_score_adj", "latin1")) < 0)
     fs.writeFileSync("/proc/self/oom_score_adj", "0");
 } catch (_) {}
-const handle = ${HANDLER_SOURCE}(require, (m) => process.stdout.write(JSON.stringify(m) + "\n"));
+// Bun 1.4.2 does not collect the broker's garbage on its own, mostly buffers
+// its children's output was read into: 30 hours of git reads left 11.9 GB
+// resident and 3.8 GB swapped. One full collection BROKER_COLLECT_DELAY_MS
+// after a reply, never more than one pending, returns it; the live heap is a
+// few megabytes, so each costs milliseconds. Node collects it unprompted
+// (docs/deployment.md).
+let collection;
+function collectSoon() {
+  if (typeof Bun === "undefined" || collection) return;
+  collection = setTimeout(() => {
+    collection = undefined;
+    Bun.gc(true);
+  }, ${BROKER_COLLECT_DELAY_MS});
+  collection.unref();
+}
+const handle = ${HANDLER_SOURCE}(require, (m) => {
+  process.stdout.write(JSON.stringify(m) + "\n");
+  collectSoon();
+});
 let pending = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (data) => {
