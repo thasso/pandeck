@@ -39,7 +39,9 @@ import { diffOptionsFromPrefs } from "./diffOptions.ts";
 import {
   DiffWorkerProvider,
   useDiffWorkerCompletionVersion,
+  useDiffWorkerReady,
 } from "./DiffWorkerProvider.tsx";
+import { PlainPatch } from "./PlainSurface.tsx";
 import {
   useDismissEmptyComposerOnOutsideTap,
   useDiffTextSelection,
@@ -132,6 +134,7 @@ function DiffSurfaceContent({
   }, [lineAnchor]);
   const commentSource = useRef<object>({}).current;
   const completionVersion = useDiffWorkerCompletionVersion();
+  const workerReady = useDiffWorkerReady();
   const remountVersion = cacheKey ? completionVersion : 0;
 
   const submitComment = useCallback(
@@ -302,6 +305,10 @@ function DiffSurfaceContent({
     [newFile, cacheKey],
   );
 
+  // Before the pool can draw, the raw patch at once; Pierre takes over (and
+  // highlights in the background) the moment it is ready.
+  if (!workerReady && patch !== undefined && patch.trim())
+    return <PlainPatch patch={patch} />;
   if (oldFile && newFile && pierreOldFile && pierreNewFile) {
     return wrap(
       <MultiFileDiff<AnnotationMeta>

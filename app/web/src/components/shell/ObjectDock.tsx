@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { InputGroup } from "@/components/ui/input-group";
@@ -281,69 +281,5 @@ export function DockComposerFace({
         {text.value}
       </span>
     </Button>
-  );
-}
-
-/**
- * @component DockSegmentGroup
- * @purpose A few dock-row buttons that are ONE choice — a page's views — drawn
- * as one joined control without a box around it: the segments sit flush, a
- * hairline divides each from the next, and the current one's background fills
- * its segment edge to edge, rounded only at the group's two outer ends.
- * @useWhen The dock row offers mutually exclusive views of the object.
- */
-export function DockSegmentGroup({
-  label,
-  items,
-}: {
-  label: string;
-  items: ReadonlyArray<{
-    id: string;
-    icon: ReactNode;
-    label: string;
-    pressed: boolean;
-    onRun: () => void;
-  }>;
-}) {
-  const last = items.length - 1;
-  return (
-    <div
-      role="group"
-      aria-label={label}
-      className="flex shrink-0 items-stretch"
-    >
-      {items.map((item, index) => (
-        <Fragment key={item.id}>
-          {index > 0 ? (
-            // The segments' full height, meeting the current one's background.
-            <span
-              aria-hidden
-              className="w-px shrink-0 self-stretch bg-border"
-            />
-          ) : null}
-          <Button
-            variant="ghost"
-            size="icon-lg"
-            aria-label={item.label}
-            aria-pressed={item.pressed}
-            title={item.label}
-            onClick={item.onRun}
-            // No border: `Button` clips its background inside a transparent
-            // one, which would leave a gap between the fill and the hairline.
-            className={`border-0 ${
-              last === 0
-                ? ""
-                : index === 0
-                  ? "rounded-r-none"
-                  : index === last
-                    ? "rounded-l-none"
-                    : "rounded-none"
-            } ${item.pressed ? "bg-accent text-accent-foreground" : ""}`}
-          >
-            {item.icon}
-          </Button>
-        </Fragment>
-      ))}
-    </div>
   );
 }

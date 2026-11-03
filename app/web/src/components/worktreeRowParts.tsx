@@ -79,6 +79,7 @@ function WorktreeRowSummary({
   iconColor,
   menuActions,
   onOpen,
+  onMenuIntent,
   onStartSession,
   tasks,
   tasksExpanded = false,
@@ -223,6 +224,7 @@ function WorktreeRowSummary({
           <ListRowActions
             alwaysVisible={selected}
             menuOnly
+            onMenuIntent={onMenuIntent}
             actions={[
               ...(onOpen
                 ? [
@@ -507,6 +509,8 @@ interface WorktreeRowProps {
   menuActions?: ListRowAction[] | undefined;
   /** Opens the worktree page, where tapping the row only expands it. */
   onOpen?: ((id: string) => void) | undefined;
+  /** The row's menu is about to open: its host can build the items. */
+  onMenuIntent?: (() => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
   /** In-progress, unarchived Tasks, scoped by the host. */
   tasks?: readonly WorktreeContextTask[] | undefined;
@@ -552,6 +556,7 @@ export const WorktreeRow = memo(
     previous.onOpen === next.onOpen &&
     previous.iconColor === next.iconColor &&
     previous.menuActions === next.menuActions &&
+    previous.onMenuIntent === next.onMenuIntent &&
     previous.onStartSession === next.onStartSession &&
     previous.tasks === next.tasks &&
     previous.tasksExpanded === next.tasksExpanded &&

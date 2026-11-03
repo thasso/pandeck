@@ -69,10 +69,8 @@ import type {
   WorktreeGitStatus,
   WorktreeRecord,
   SessionListItem,
-  ProjectRecord,
 } from "@assistant/shared";
-import { WorktreeOverview } from "./WorktreeOverview.tsx";
-import { WORKTREE_VIEWS, openedFromOutsideWorktree } from "./worktreeViews.tsx";
+import { openedFromOutsideWorktree } from "./worktreeViews.tsx";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
 import {
   DocumentNavigationActions,
@@ -265,8 +263,6 @@ export interface WorktreeDetailPageProps {
   /** Opens the app's Merge back dialog for this worktree. */
   onMergeWorktree?: ((id: string) => void) | undefined;
   onStartSessionInWorktree?: ((id: string) => void) | undefined;
-  /** The worktree's Project, named in the Overview's facts. */
-  project?: ProjectRecord | undefined;
 }
 
 function scopeFromRoute(from?: string, to?: string): WorktreeDiffScope {
@@ -2135,11 +2131,6 @@ function WorktreeHeaderActions({
 
 const NO_SESSIONS: readonly SessionListItem[] = [];
 
-const OVERVIEW_TAB: { id: WorktreeView; label: string } = {
-  id: "overview",
-  label: "Overview",
-};
-
 export default function WorktreeDetailPage({
   worktree,
   back,
@@ -2172,7 +2163,6 @@ export default function WorktreeDetailPage({
   onRemoveWorktree,
   onMergeWorktree,
   onStartSessionInWorktree,
-  project,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
     WorktreeGitStatus | undefined
@@ -2397,13 +2387,11 @@ export default function WorktreeDetailPage({
       }
     >
       <TabsList variant="line">
-        {(browseAsDocuments ? VIEW_TABS : [OVERVIEW_TAB, ...VIEW_TABS]).map(
-          (tab) => (
-            <TabsTrigger key={tab.id} value={tab.id}>
-              {tab.label}
-            </TabsTrigger>
-          ),
-        )}
+        {VIEW_TABS.map((tab) => (
+          <TabsTrigger key={tab.id} value={tab.id}>
+            {tab.label}
+          </TabsTrigger>
+        ))}
       </TabsList>
     </Tabs>
   );
@@ -2711,67 +2699,12 @@ export default function WorktreeDetailPage({
                         }
                       />
                     ) : null}
-                    {sidebarNavigation && !narrow ? (
-                      // The views, as the dock row draws them on a phone.
-                      <ToggleGroup
-                        variant="outline"
-                        size="sm"
-                        spacing={0}
-                        aria-label="Worktree view"
-                        value={[view]}
-                        onValueChange={(next) => {
-                          const picked = next[0] as WorktreeView | undefined;
-                          if (!picked) return;
-                          navigate(
-                            worktreePath(
-                              worktree.id,
-                              picked,
-                              picked === "changes"
-                                ? {
-                                    ...(from !== undefined ? { from } : {}),
-                                    ...(to !== undefined ? { to } : {}),
-                                  }
-                                : {},
-                            ),
-                          );
-                        }}
-                      >
-                        {WORKTREE_VIEWS.map((item) => (
-                          <ToggleGroupItem
-                            key={item.id}
-                            value={item.id}
-                            aria-label={item.label}
-                            title={item.label}
-                          >
-                            {item.icon(14)}
-                          </ToggleGroupItem>
-                        ))}
-                      </ToggleGroup>
-                    ) : null}
                   </>
                 )
               }
             />
           )}
-          {view === "overview" ? (
-            <WorktreeOverview
-              worktree={worktree}
-              status={status}
-              project={project}
-              delivery={delivery}
-              retire={retire}
-              onRemove={onRemoveWorktree}
-              sessions={sessions}
-              navigate={navigate}
-              toolbar={
-                navigationControls ? (
-                  <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
-                    {navigationControls}
-                  </div>
-                ) : null
-              }
-            />
-          ) : view === "files" ? (
+          {view === "files" ? (
             <FilesView
               sidebarNavigation={sidebarNavigation}
               worktree={worktree}

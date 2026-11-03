@@ -3,6 +3,10 @@
  * light diff/file metadata on the main thread, but Shiki tokenization and HAST
  * rendering run in the worker pool and can be cached by each surface's
  * content/patch-derived cacheKey.
+ *
+ * Highlighting is a background refinement, never a wait: the surfaces draw
+ * their plain text at once and take the colours when the workers answer, so
+ * nothing announces the work in progress.
  */
 import {
   createContext,
@@ -22,7 +26,6 @@ import {
 import type { WorkerStats } from "@pierre/diffs/worker";
 import PierreDiffWorker from "@pierre/diffs/worker/worker.js?worker";
 import type { Prefs } from "../../hooks/usePrefs.ts";
-import { Spinner } from "../common/load.tsx";
 
 const DIFF_THEMES = {
   light: "catppuccin-latte",
@@ -41,7 +44,7 @@ const workerCount = Math.max(
   ),
 );
 
-const POOL_OPTIONS: WorkerPoolOptions = {
+export const POOL_OPTIONS: WorkerPoolOptions = {
   workerFactory: () => new PierreDiffWorker(),
   poolSize: workerCount,
   totalASTLRUCacheSize: 100,
@@ -50,7 +53,7 @@ const POOL_OPTIONS: WorkerPoolOptions = {
 // Takes the one preference it reads, not the whole `Prefs`: the memo below
 // rebuilds on `diffWordLevel` alone, and a wider parameter would only make that
 // dependency list look wrong.
-function highlighterOptionsFor(
+export function highlighterOptionsFor(
   wordLevel: boolean,
 ): WorkerInitializationRenderOptions {
   return {
@@ -126,29 +129,22 @@ function DiffWorkerStateProvider({ children }: { children: ReactNode }) {
   return (
     <DiffWorkerStatusContext.Provider value={value}>
       {children}
-      <DiffWorkerProgressIndicator stats={stats} />
     </DiffWorkerStatusContext.Provider>
   );
 }
 
-function DiffWorkerProgressIndicator({ stats }: { stats: WorkerStats | null }) {
-  if (!stats || !isWorkerBusy(stats)) return null;
-  const active = stats.activeTasks + stats.queuedTasks;
-  const label =
-    stats.managerState !== "initialized"
-      ? "Preparing syntax highlighter…"
-      : "Highlighting syntax…";
+/**
+ * Whether the pool can draw. Until then Pierre renders nothing — not even
+ * plain text — so a surface shows its own raw stand-in (`PlainSurface`).
+ */
+export function useDiffWorkerReady(): boolean {
+  const pool = useWorkerPool();
+  const stats = useContext(DiffWorkerStatusContext)?.stats;
   return (
-    <div
-      role="status"
-      className="pointer-events-none fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-full border border-border bg-card/95 px-3 py-1.5 text-sm text-muted-foreground shadow-lg backdrop-blur"
-    >
-      <Spinner size="sm" className="text-primary" />
-      <span>{label}</span>
-      {active > 0 ? (
-        <span className="font-mono text-muted-foreground">{active} queued</span>
-      ) : null}
-    </div>
+    !pool ||
+    !pool.isWorkingPool() ||
+    pool.isInitialized() ||
+    stats?.managerState === "initialized"
   );
 }
 

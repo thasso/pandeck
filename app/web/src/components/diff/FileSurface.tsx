@@ -22,7 +22,9 @@ import { codeOptionsFromPrefs } from "./diffOptions.ts";
 import {
   DiffWorkerProvider,
   useDiffWorkerCompletionVersion,
+  useDiffWorkerReady,
 } from "./DiffWorkerProvider.tsx";
+import { PlainFile } from "./PlainSurface.tsx";
 import {
   useDiffTextSelection,
   useDismissEmptyComposerOnOutsideTap,
@@ -78,6 +80,7 @@ function FileSurfaceContent({
   }, [lineAnchor]);
   const commentSource = useRef<object>({}).current;
   const completionVersion = useDiffWorkerCompletionVersion();
+  const workerReady = useDiffWorkerReady();
   const remountVersion = cacheKey ? completionVersion : 0;
 
   const submitComment = useCallback(
@@ -203,6 +206,9 @@ function FileSurfaceContent({
     [],
   );
 
+  // Before the pool can draw, the raw text at once; Pierre takes over (and
+  // highlights in the background) the moment it is ready.
+  if (!workerReady) return <PlainFile contents={contents} />;
   return (
     <div ref={setSurfaceRoot} className="contents">
       {/* The same sentence every source shows when an address asked for more

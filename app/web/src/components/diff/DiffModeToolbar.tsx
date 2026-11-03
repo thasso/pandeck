@@ -23,7 +23,10 @@ export interface DiffModeToolbarProps {
 type BooleanDiffPref =
   "diffWordLevel" | "diffIgnoreWhitespace" | "diffWrap" | "diffExpandContext";
 
-export const DIFF_VIEW_SWITCHES: Array<{ pref: BooleanDiffPref; label: string }> = [
+export const DIFF_VIEW_SWITCHES: Array<{
+  pref: BooleanDiffPref;
+  label: string;
+}> = [
   { pref: "diffWordLevel", label: "Words" },
   { pref: "diffIgnoreWhitespace", label: "Ignore whitespace" },
   { pref: "diffWrap", label: "Wrap" },

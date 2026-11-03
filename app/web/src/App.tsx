@@ -325,17 +325,11 @@ import {
   DocumentNavigationMarker,
   useDocumentNavigationRegistration,
 } from "./components/DocumentNavigationShell.tsx";
-import {
-  DockAction,
-  DockSegmentGroup,
-  type DockPeek,
-} from "./components/shell/ObjectDock.tsx";
-import {
-  WORKTREE_VIEWS,
-  openedFromOutsideWorktree,
-} from "./components/worktree/worktreeViews.tsx";
+import { DockAction, type DockPeek } from "./components/shell/ObjectDock.tsx";
+import { openedFromOutsideWorktree } from "./components/worktree/worktreeViews.tsx";
 import { DocumentZoomSection } from "./components/DocumentZoom.tsx";
 import { documentDockPeek } from "./components/DocumentDockRow.tsx";
+import { WorktreeActionsHostProvider } from "./components/worktree/WorktreeActionsHost.tsx";
 import {
   primarySlotShowsReview,
   PublishRouteSecondaryActions,
@@ -915,6 +909,33 @@ function PullRequestIndexPlaceholder({
   );
 }
 
+const DiffPoolKeepAlive = lazy(
+  () => import("./components/diff/DiffPoolKeepAlive.tsx"),
+);
+
+/**
+ * Start the diff highlighter once the app is idle, so the first diff or file
+ * shows its text at once and the colours follow (`DiffPoolKeepAlive`).
+ */
+function IdleDiffPool() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (typeof window.requestIdleCallback === "function") {
+      const handle = window.requestIdleCallback(() => setReady(true), {
+        timeout: 5_000,
+      });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const handle = window.setTimeout(() => setReady(true), 2_000);
+    return () => window.clearTimeout(handle);
+  }, []);
+  return ready ? (
+    <Suspense fallback={null}>
+      <DiffPoolKeepAlive />
+    </Suspense>
+  ) : null;
+}
+
 export default function App() {
   const preferences = usePrefs();
   return (
@@ -922,6 +943,7 @@ export default function App() {
       <CommentActuationProvider>
         <AppContent {...preferences} />
       </CommentActuationProvider>
+      <IdleDiffPool />
     </LayoutProvider>
   );
 }
@@ -2903,7 +2925,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   const worktreeRouteFrom = route.name === "worktrees" ? route.from : undefined;
   const selectedWorktreeFile = useMemo(
     () =>
-      worktreeRoutePath && worktreeRouteView && worktreeRouteView !== "overview"
+      worktreeRoutePath && worktreeRouteView
         ? {
             view: worktreeRouteView,
             path: worktreeRoutePath,
@@ -6639,34 +6661,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           ) : null}
         </>
       ) : null;
-    // A worktree page switches its views from here — no tab row on a phone —
-    // and leaves Add comment to its header, beside the actions menu.
+    // A worktree page leaves Add comment to its header, beside the actions
+    // menu; its row carries Submit review or the primary action.
     const worktreeRouteId = route.name === "worktrees" ? route.id : undefined;
-    // The views lead, beside Back: where you are, before what you can do.
-    const worktreeViews = worktreeRouteId ? (
-      <DockSegmentGroup
-        label="Worktree view"
-        items={WORKTREE_VIEWS.map((view) => ({
-          id: view.id,
-          icon: view.icon(18),
-          label: view.label,
-          pressed: (route.view ?? "overview") === view.id,
-          onRun: () =>
-            navigate(
-              worktreePath(
-                worktreeRouteId,
-                view.id,
-                view.id === "changes" && route.name === "worktrees"
-                  ? {
-                      ...(route.from ? { from: route.from } : {}),
-                      ...(route.to ? { to: route.to } : {}),
-                    }
-                  : {},
-              ),
-            ),
-        }))}
-      />
-    ) : null;
     const rowActions = worktreeRouteId ? (
       submitInSlot ? (
         <DockAction
@@ -6690,22 +6687,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       // `DocumentDockRow` owns the order — Back, Forward, Close, then the
       // source's and the object's actions, and no zoom controls at all.
       const peek = documentDockPeek(documentNavigation, rowActions);
-      if (!worktreeViews) return peek;
+      if (!worktreeRouteId || openedFromOutsideWorktree(worktreeRouteId))
+        return peek;
       // A worktree file opened from its own sidebar has nowhere to close to:
       // Close only returns to where it came from outside the worktree.
-      const { trailing, ...rest } = peek;
-      return {
-        ...rest,
-        ...(worktreeRouteId && openedFromOutsideWorktree(worktreeRouteId)
-          ? { trailing }
-          : {}),
-        back: (
-          <>
-            {peek.back}
-            {worktreeViews}
-          </>
-        ),
-      };
+      const { trailing: _close, ...withoutClose } = peek;
+      return withoutClose;
     }
     // A session screen's row IS the resting composer, bookended two controls a side
     // around the field (`SessionDockActions` owns that arrangement). It always
@@ -6794,14 +6781,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       };
     }
     return {
-      back: worktreeViews ? (
-        <>
-          {back}
-          {worktreeViews}
-        </>
-      ) : (
-        back
-      ),
+      back,
       actions: rowActions ?? undefined,
     };
   }, [
@@ -7257,104 +7237,118 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // Small Screens), and on desktop the panel stays open beside it.
   const sidebarContent = (
     <Suspense fallback={<LazySurfaceFallback label="Opening sidebar…" />}>
-      <Sidebar
-        sessions={state.sessions}
-        archivedSessionCount={state.archivedSessionCount}
-        archivedSessionsLoaded={state.archivedSessionsLoaded}
-        currentId={displayCurrentId}
-        readCurrentId={readCurrentSessionId}
-        onSelect={openSession}
-        onNavAction={runNavAction}
-        onOpenBackgroundTasks={openBackgroundTasks}
-        assistantUnread={assistantUnread}
-        assistantLabel={
-          state.settings.permanentAssistant.name || "Personal Assistant"
-        }
-        onArchive={archiveSession}
-        onSettleSession={settleSession}
-        onDismissSessionFailure={dismissSessionFailure}
-        onRenameSession={promptRenameSession}
-        onDeleteSession={confirmDeleteSession}
-        onLoadArchivedSessions={actions.loadArchivedSessions}
-        focusToken={sidebarFocusToken}
-        section={sidebarSection}
-        onSectionChange={handleSidebarSectionChange}
-        mobile={mobileLayout}
-        onStartSessionForProject={startSessionForProject}
-        tasksFresh={state.taskListFresh}
-        projectsFresh={state.projectListFresh}
-        worktreesFresh={state.worktreesFresh}
-        domainListsSubscribed={activeTopics.some(
-          (topic) =>
-            topic === "tasks" || topic === "projects" || topic === "worktrees",
-        )}
-        selectedTaskId={selectedTaskId}
-        onLoadBacklog={loadBacklog}
-        onOpenTask={openTaskById}
-        onOpenSessionForTask={openSession}
-        onStartSessionForTask={startSessionForTask}
-        onNavigate={openBacklogRowLink}
-        onCycleTaskStatus={cycleTaskStatus}
-        onReorderTasks={reorderBacklog}
-        projects={projects}
-        projectsLoaded={projectsLoaded}
-        projectMutations={state.projectMutations}
-        selectedProjectId={selectedProjectId}
-        onLoadProjects={loadProjects}
-        onReorderProjects={reorderProjects}
-        onOpenProject={openProject}
-        initiatives={state.initiatives}
-        initiativeDetails={state.initiativeDetails}
-        initiativesFresh={state.initiativesFresh}
-        initiativesRefreshing={state.initiativesRefreshing}
-        initiativeListError={state.initiativeListError}
-        onRetryInitiatives={actions.retryInitiatives}
-        selectedInitiativeId={selectedInitiativeId}
+      {/* The sidebar's worktree rows open the same action list as the
+          worktree page's menu, with its dialogs. */}
+      <WorktreeActionsHostProvider
         worktrees={state.worktrees}
-        worktreeStatuses={state.worktreeStatuses}
-        lastKnownWorktreeStatuses={state.cachedWorktreeStatuses}
-        worktreeHosting={worktreeHosting.hosting}
-        dirtyWorktrees={dirtyWorktrees}
-        workflowIndicators={workflowIndicators}
-        workflowRuns={state.workflowRuns}
-        workflowCards={state.workflowCards}
-        onOpenWorkflowRun={openWorkflowRun}
-        onSettleWorkflowRun={settleWorkflowRun}
-        onSetInboxPositions={setInboxPositions}
-        pullRequestInventory={pullRequestInventory.state}
-        onReloadPullRequests={pullRequestInventory.reload}
-        pullRequestsFetchedAt={pullRequestInventory.fetchedAt}
-        pullRequestsRefreshing={pullRequestInventory.refreshing}
-        onRefreshPullRequests={refreshPullRequests}
-        idleWorktrees={idleWorktreesProps}
-        selectedPullRequest={pullRequestTarget}
-        onOpenPullRequest={openPullRequest}
-        selectedWorktreeId={selectedWorktreeId}
-        selectedWorktreeFile={selectedWorktreeFile}
-        knowledgeView={
-          route.name === "knowledge" ? (route.view ?? "files") : null
-        }
-        knowledgeEnabled={knowledgeEnabled}
-        knowledgeUncommitted={knowledgeUncommittedCount(
-          state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
-        )}
-        onOpenKnowledge={openKnowledge}
-        knowledgeFilePath={route.name === "knowledge" ? route.path : null}
-        knowledgeRefreshToken={
-          state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]?.updatedAt ?? 0
-        }
-        onOpenKnowledgeFile={openKnowledgeFile}
-        onLoadWorktrees={actions.listWorktrees}
-        onOpenWorktree={openWorktree}
-        onStartSessionInWorktree={startSessionInWorktree}
-        onRemoveWorktree={requestRemoveWorktree}
-        activeSection={activeSettingsSection}
-        onOpenSection={openSettingsSection}
-        state={backlogState}
-        actions={actions}
-        prefs={prefs}
-        onUpdatePrefs={update}
-      />
+        statuses={state.worktreeStatuses}
+        sessions={state.sessions}
+        sessionsFresh={state.sessionListFresh}
+        onStartSession={startSessionInWorktree}
+        onMerge={requestMergeWorktree}
+        onRemove={requestRemoveWorktree}
+      >
+        <Sidebar
+          sessions={state.sessions}
+          archivedSessionCount={state.archivedSessionCount}
+          archivedSessionsLoaded={state.archivedSessionsLoaded}
+          currentId={displayCurrentId}
+          readCurrentId={readCurrentSessionId}
+          onSelect={openSession}
+          onNavAction={runNavAction}
+          onOpenBackgroundTasks={openBackgroundTasks}
+          assistantUnread={assistantUnread}
+          assistantLabel={
+            state.settings.permanentAssistant.name || "Personal Assistant"
+          }
+          onArchive={archiveSession}
+          onSettleSession={settleSession}
+          onDismissSessionFailure={dismissSessionFailure}
+          onRenameSession={promptRenameSession}
+          onDeleteSession={confirmDeleteSession}
+          onLoadArchivedSessions={actions.loadArchivedSessions}
+          focusToken={sidebarFocusToken}
+          section={sidebarSection}
+          onSectionChange={handleSidebarSectionChange}
+          mobile={mobileLayout}
+          onStartSessionForProject={startSessionForProject}
+          tasksFresh={state.taskListFresh}
+          projectsFresh={state.projectListFresh}
+          worktreesFresh={state.worktreesFresh}
+          domainListsSubscribed={activeTopics.some(
+            (topic) =>
+              topic === "tasks" ||
+              topic === "projects" ||
+              topic === "worktrees",
+          )}
+          selectedTaskId={selectedTaskId}
+          onLoadBacklog={loadBacklog}
+          onOpenTask={openTaskById}
+          onOpenSessionForTask={openSession}
+          onStartSessionForTask={startSessionForTask}
+          onNavigate={openBacklogRowLink}
+          onCycleTaskStatus={cycleTaskStatus}
+          onReorderTasks={reorderBacklog}
+          projects={projects}
+          projectsLoaded={projectsLoaded}
+          projectMutations={state.projectMutations}
+          selectedProjectId={selectedProjectId}
+          onLoadProjects={loadProjects}
+          onReorderProjects={reorderProjects}
+          onOpenProject={openProject}
+          initiatives={state.initiatives}
+          initiativeDetails={state.initiativeDetails}
+          initiativesFresh={state.initiativesFresh}
+          initiativesRefreshing={state.initiativesRefreshing}
+          initiativeListError={state.initiativeListError}
+          onRetryInitiatives={actions.retryInitiatives}
+          selectedInitiativeId={selectedInitiativeId}
+          worktrees={state.worktrees}
+          worktreeStatuses={state.worktreeStatuses}
+          lastKnownWorktreeStatuses={state.cachedWorktreeStatuses}
+          worktreeHosting={worktreeHosting.hosting}
+          dirtyWorktrees={dirtyWorktrees}
+          workflowIndicators={workflowIndicators}
+          workflowRuns={state.workflowRuns}
+          workflowCards={state.workflowCards}
+          onOpenWorkflowRun={openWorkflowRun}
+          onSettleWorkflowRun={settleWorkflowRun}
+          onSetInboxPositions={setInboxPositions}
+          pullRequestInventory={pullRequestInventory.state}
+          onReloadPullRequests={pullRequestInventory.reload}
+          pullRequestsFetchedAt={pullRequestInventory.fetchedAt}
+          pullRequestsRefreshing={pullRequestInventory.refreshing}
+          onRefreshPullRequests={refreshPullRequests}
+          idleWorktrees={idleWorktreesProps}
+          selectedPullRequest={pullRequestTarget}
+          onOpenPullRequest={openPullRequest}
+          selectedWorktreeId={selectedWorktreeId}
+          selectedWorktreeFile={selectedWorktreeFile}
+          knowledgeView={
+            route.name === "knowledge" ? (route.view ?? "files") : null
+          }
+          knowledgeEnabled={knowledgeEnabled}
+          knowledgeUncommitted={knowledgeUncommittedCount(
+            state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
+          )}
+          onOpenKnowledge={openKnowledge}
+          knowledgeFilePath={route.name === "knowledge" ? route.path : null}
+          knowledgeRefreshToken={
+            state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]?.updatedAt ?? 0
+          }
+          onOpenKnowledgeFile={openKnowledgeFile}
+          onLoadWorktrees={actions.listWorktrees}
+          onOpenWorktree={openWorktree}
+          onStartSessionInWorktree={startSessionInWorktree}
+          onRemoveWorktree={requestRemoveWorktree}
+          activeSection={activeSettingsSection}
+          onOpenSection={openSettingsSection}
+          state={backlogState}
+          actions={actions}
+          prefs={prefs}
+          onUpdatePrefs={update}
+        />
+      </WorktreeActionsHostProvider>
     </Suspense>
   );
 
@@ -8253,7 +8247,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             worktree={worktree}
                             status={state.worktreeStatuses[worktree.id]}
                             narrow={mobileLayout}
-                            view={route.view ?? "overview"}
+                            view={route.view ?? "changes"}
                             // The sidebar's Projects tree browses its files
                             // and change sets.
                             sidebarNavigation
@@ -8262,9 +8256,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             onRemoveWorktree={requestRemoveWorktree}
                             onMergeWorktree={requestMergeWorktree}
                             onStartSessionInWorktree={startSessionInWorktree}
-                            project={projects.find(
-                              (item) => item.id === worktree.projectId,
-                            )}
                             filePath={route.path}
                             from={route.from}
                             to={route.to}

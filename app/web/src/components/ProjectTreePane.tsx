@@ -38,7 +38,10 @@ import { samePlacements, type Task } from "../lib/backlogTree.ts";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { SessionRowContent } from "./SessionRow.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
-import { ListRowActions } from "./common/ListRowActions.tsx";
+import {
+  ListRowActions,
+  type ListRowAction,
+} from "./common/ListRowActions.tsx";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import {
   INITIAL_SESSION_LIMIT,
@@ -60,6 +63,7 @@ import {
   type ChangeSetKind,
   type WorktreeSectionKind,
 } from "./WorktreeSections.tsx";
+import { useWorktreeActionsHost } from "./worktree/WorktreeActionsHost.tsx";
 
 const INDENT_WIDTH = 12;
 const COLLAPSE_STORAGE_KEY = "assistant.sidebarProjects.collapsed.v1";
@@ -107,7 +111,6 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onReorder,
   onOpenProject,
   onOpenSession,
-  onOpenWorktree,
   onStartSession,
   onStartSessionInWorktree,
   onVisibleWorktreeIdsChange,
@@ -573,7 +576,6 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                     relationIndex.sessionsByWorktree.get(data.worktree.id)
                       ?.length ?? 0
                   }
-                  onOpen={onOpenWorktree}
                   iconColor={projectIconColor(data.worktree.projectId)}
                   onStartSession={onStartSessionInWorktree}
                   onRemove={onRemoveWorktree}
@@ -724,12 +726,58 @@ function ProjectWorktreeRow({
 }: ComponentProps<typeof WorktreeRow> & {
   onRemove: ((id: string) => void) | undefined;
 }) {
-  const menuActions = useWorktreeRowActions(
+  const fallback = useWorktreeRowActions(
     props.worktree,
     props.status,
     onRemove,
   );
-  return <WorktreeRow {...props} menuActions={menuActions} />;
+  const host = useWorktreeActionsHost();
+  const worktreeId = props.worktree.id;
+  const hostActions = host?.actionsFor(worktreeId);
+  const prepare = host?.prepare;
+  const onMenuIntent = useMemo(
+    () => (prepare ? () => prepare(worktreeId) : undefined),
+    [prepare, worktreeId],
+  );
+  // The state the row's marks show asks for one act: a delivered branch is
+  // retired, an abandoned pull request's worktree removed.
+  const { worktree, status } = props;
+  const prStatus = worktree.pullRequest?.status;
+  const delivered =
+    !worktree.isMain &&
+    (prStatus === "merged" || Boolean(status?.merged && status.ahead > 0));
+  const abandoned = !worktree.isMain && !delivered && prStatus === "closed";
+  const menuActions = useMemo<ListRowAction[]>(
+    () =>
+      hostActions
+        ? hostActions.map((action) => ({
+            id: action.key,
+            label: action.label,
+            icon: action.icon,
+            onSelect: action.onRun,
+            disabled: Boolean(action.disabled || action.busy),
+            ...(action.disabled && action.disabledReason
+              ? { accessibleLabel: action.disabledReason }
+              : {}),
+            ...(action.key === "remove" || action.key === "retire"
+              ? { variant: "destructive" as const }
+              : {}),
+            highlighted:
+              (delivered && action.key === "retire") ||
+              (abandoned && action.key === "remove"),
+          }))
+        : fallback,
+    [hostActions, fallback, delivered, abandoned],
+  );
+  return (
+    <WorktreeRow
+      {...props}
+      // The host's list leads with Start session itself.
+      {...(hostActions ? { onStartSession: undefined } : {})}
+      menuActions={menuActions}
+      onMenuIntent={onMenuIntent}
+    />
+  );
 }
 
 /** A worktree section's heading row: a standard one-line row; a tap folds it. */
