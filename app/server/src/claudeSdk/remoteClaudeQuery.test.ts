@@ -27,6 +27,8 @@ const dataDir = mkdtempSync(join(tmpdir(), "claude-hosted-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 const SENTINEL = "hosted-credential-sentinel";
+// Synthetic fixture value; not a real credential.
+const CLAUDE_ACCESS = "fake-claude-access";
 const savedApiKey = process.env.ANTHROPIC_API_KEY;
 process.env.ANTHROPIC_API_KEY = SENTINEL;
 afterAll(() => {
@@ -53,6 +55,8 @@ const { buildClaudeSdkQueryOptions, claudeQueryOpenSpec } =
   await import("./options.ts");
 const { registerClaudeHostedSession } = await import("./claudeEngineHosted.ts");
 const { openHostedClaudeQuery } = await import("./remoteClaudeQuery.ts");
+const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
+type LeaseRecord = import("../gateway/leases.ts").LeaseRecord;
 type ClaudeSessionToolServer =
   import("./toolServer.ts").ClaudeSessionToolServer;
 type AppToolExecutor = import("../mcp/tool.ts").AppToolExecutor;
@@ -826,6 +830,117 @@ test("a signal aborted before the open answered aborts the hosted query", async 
   } finally {
     observed?.output.close();
     release();
+  }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+});
+
+test("with a gateway link, a profiled session's turns, its account switch and a standalone /compact each hold a lease the session owns", async () => {
+  const gateway = await startGatewayLinkForTests();
+  const live = () =>
+    gateway.engineLeases().filter((record) => record.revoked === undefined);
+  const lease = (leaseId: string) =>
+    gateway.engineLeases().find((record) => record.leaseId === leaseId);
+  const a = claudeProfile("Leased A");
+  const b = claudeProfile("Leased B");
+  for (const id of [a, b])
+    writeFileSync(
+      join(profiles.claudeConfigDir(id), ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: `${CLAUDE_ACCESS}` } }),
+    );
+  /** The live engine leases when each query started, in the Worker. */
+  const atQuery: LeaseRecord[][] = [];
+  const queries: FakeQuery[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      atQuery.push(live());
+      const query = new FakeQuery(params);
+      queries.push(query);
+      return query;
+    },
+  };
+  const { session } = makeSession({ credentialProfileId: a, seam });
+  try {
+    const adapter = session.createRuntimeAdapter();
+    const first = adapter.prompt("first");
+    await until(() => queries.length === 1);
+    assert.equal(atQuery[0]!.length, 1);
+    const [turn] = atQuery[0]!;
+    assert.equal(turn!.profileId, a);
+    assert.deepEqual(turn!.owner, { workerId: "local", sessionId: session.id });
+    queries[0]!.output.emit(result("leased-first"));
+    await first;
+    await until(() => lease(turn!.leaseId)?.revoked === "session-ended");
+
+    // The switch: the next turn's engine holds B's lease; A's has ended.
+    const project = join(profiles.claudeConfigDir(a), "projects", "leased");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "provider-hosted.jsonl"), "{}\n");
+    await session.switchAccount(b, () => {});
+    const second = adapter.prompt("second");
+    await until(() => queries.length === 2);
+    assert.equal(atQuery[1]!.length, 1);
+    const [switched] = atQuery[1]!;
+    assert.equal(switched!.profileId, b);
+    assert.deepEqual(switched!.owner, {
+      workerId: "local",
+      sessionId: session.id,
+    });
+    assert.equal(lease(turn!.leaseId)?.revoked, "session-ended");
+    queries[1]!.output.emit(result("leased-second"));
+    await second;
+    await until(() => lease(switched!.leaseId)?.revoked === "session-ended");
+  } finally {
+    session.dispose();
+  }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+
+  // A standalone /compact holds a lease for the session's profile.
+  serial += 1;
+  const compacting = new ClaudeSdkSession(`claude-leased-compact-${serial}`, {
+    seam: async () => ({
+      query() {
+        atQuery.push(live());
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield result("compacted");
+          },
+        };
+      },
+    }),
+    providerSessionId: "provider-hosted",
+    title: "Leased compact",
+    agentType: "workshop",
+    credentialProfileId: a,
+  });
+  try {
+    await compacting.compactContext();
+    assert.equal(atQuery[2]!.length, 1);
+    const [compact] = atQuery[2]!;
+    assert.equal(compact!.profileId, a);
+    assert.deepEqual(compact!.owner, {
+      workerId: "local",
+      sessionId: compacting.id,
+    });
+    await until(() => lease(compact!.leaseId)?.revoked === "session-ended");
+  } finally {
+    compacting.dispose();
+  }
+  await until(() => inProcessWorkerEnginesForTests() === 0);
+
+  // A session without a profile grants nothing.
+  const granted = gateway.engineLeases().length;
+  const plain = makeSession();
+  try {
+    const turn = plain.session.createRuntimeAdapter().prompt("unleased");
+    await until(() => plain.queries.length === 1);
+    plain.queries[0]!.output.emit(result("unleased"));
+    await turn;
+    assert.equal(gateway.engineLeases().length, granted);
+  } finally {
+    plain.session.dispose();
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+    await gateway.close();
   }
   await until(() => inProcessWorkerEnginesForTests() === 0);
 });

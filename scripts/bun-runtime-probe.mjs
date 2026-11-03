@@ -9,8 +9,10 @@
  * a checkout watch through the Worker with a git-derived ignore set, lost
  * with its connection and made again on the next, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
- * children but never the server's own fetch, pi's OAuth flows, and an
- * Initiative map laid out by elkjs in the bundled layout worker. First of all,
+ * children but never the server's own fetch, pi's OAuth flows, an
+ * Initiative map laid out by elkjs in the bundled layout worker, and the
+ * credential gateway the server links to under `ASSISTANT_GATEWAY=1`, granting
+ * and forwarding with the seeded ChatGPT credential. First of all,
  * that a child's managed stdio never closes a descriptor number something
  * else reused (Bun 1.3.13 did, at GC), and that `maxBuffer` bounds each
  * stream's length on overflow as Node does.
@@ -51,7 +53,12 @@ import {
   writeSync,
 } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
-import { createServer, get as httpGet } from "node:http";
+import {
+  createServer,
+  get as httpGet,
+  request as httpRequest,
+} from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
@@ -118,6 +125,13 @@ import {
 import { checkoutWatchOn } from "../app/server/src/checkoutWatchAccess.ts";
 import { checkoutLifecycleOn } from "../app/server/src/checkoutLifecycle.ts";
 import { errorText } from "../app/server/src/errors.ts";
+import { startGateway } from "../app/server/src/gateway/gateway.ts";
+import { GATEWAY_REFUSAL_MARKER } from "../app/server/src/gateway/refusals.ts";
+import { startGatewayLink } from "../app/server/src/gatewayLink.ts";
+import {
+  issueLeafCertificate,
+  loadOrCreateCa,
+} from "../app/server/src/packageProxy/certificateAuthority.ts";
 import {
   removeManagedTree,
   restoreOwnerAccess,
@@ -131,7 +145,11 @@ import {
 import { childProcessEnv } from "../app/server/src/subprocessEnv.ts";
 import { createTask, updateTask } from "../app/server/src/tasks.ts";
 import { MAX_FRAME_PAYLOAD_BYTES } from "../app/server/src/workerProtocol/codec.ts";
-import { WorkerMethodError } from "../app/server/src/workerProtocol/connection.ts";
+import {
+  WorkerConnection,
+  WorkerMethodError,
+} from "../app/server/src/workerProtocol/connection.ts";
+import { createInProcessTransport } from "../app/server/src/workerProtocol/inProcessTransport.ts";
 import { isWorkerFailure } from "../app/server/src/workers/fileClient.ts";
 import {
   answerNextInProcessWorkerCallForTests,
@@ -4452,6 +4470,163 @@ async function checkInitiativeLayout() {
   stopInitiativeLayoutWorker();
 }
 
+/**
+ * The server's gateway link, as `ASSISTANT_GATEWAY=1` starts it, under Bun:
+ * it says hello, syncs the seeded profile `default` and reconciles; its
+ * control endpoint refuses a worker-protocol dialer; a granted engine lease
+ * forwards a Codex request to a fake ChatGPT upstream with the seeded
+ * credential; `leases.json` is private and holds no token; and a restarted
+ * gateway with no control forwards the same lease and refuses a revoked one.
+ */
+// The credential test-bun-server-bundle.mjs seeds; synthetic, not a real one.
+const SEEDED_CODEX_ACCESS = "bun-probe-access";
+
+async function checkGatewayLink() {
+  const ca = await loadOrCreateCa();
+  const leaf = issueLeafCertificate(ca, "chatgpt.com");
+  const seen = [];
+  const upstream = createHttpsServer(
+    { key: leaf.keyPem, cert: leaf.certPem },
+    (req, res) => {
+      req.resume();
+      req.on("end", () => {
+        seen.push({
+          url: req.url,
+          authorization: req.headers.authorization,
+          account: req.headers["chatgpt-account-id"],
+        });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"ok":true}');
+      });
+    },
+  );
+  await new Promise((resolve) =>
+    upstream.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const upstreams = {
+    "openai-codex": {
+      connect: { host: "127.0.0.1", port: upstream.address().port },
+      ca: ca.certPem,
+    },
+  };
+  // Loopback through node:http, which reads no proxy from the environment.
+  const codex = (gateway, token) =>
+    new Promise((resolve, reject) => {
+      const req = httpRequest(
+        `${gateway.url}/chatgpt/backend-api/codex/responses`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+        },
+        (res) => {
+          let text = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => (text += chunk));
+          res.on("end", () => resolve({ status: res.statusCode, text }));
+        },
+      );
+      req.on("error", reject);
+      req.end("{}");
+    });
+  const stateDir = join(DATA_DIR, "gateway-probe", "gateway");
+  const lines = [];
+  const link = startGatewayLink({
+    stateDir,
+    port: 0,
+    log: (line) => lines.push(line),
+    upstreams,
+  });
+  let restarted;
+  try {
+    assert(
+      (await link.ready) === true,
+      `The gateway link did not become ready:\n${lines.join("\n")}`,
+    );
+    const gateway = link.gateway;
+    const [dialEnd, gatewayEnd] = createInProcessTransport();
+    gateway.attachControl(gatewayEnd);
+    const worker = new WorkerConnection(dialEnd, {
+      handshake: { role: "worker", workerId: "bun-probe" },
+    });
+    const refusal = await worker.ended;
+    assert(
+      refusal.includes("gateway-control/1.0"),
+      `A worker-protocol dialer was not refused by gateway control: ${refusal}`,
+    );
+    const hello = gateway.lastHello();
+    assert(
+      hello?.pid === process.pid && typeof hello.startTime === "string",
+      `The recorded hello does not name this process: ${JSON.stringify(hello)}`,
+    );
+
+    const lease = await link.grantEngineLease({
+      workerId: "local",
+      sessionId: "bun-probe",
+      profileId: "default",
+    });
+    const forwarded = await codex(gateway, lease.token);
+    assert(
+      forwarded.status === 200,
+      `The lease did not forward: ${forwarded.status} ${forwarded.text}`,
+    );
+    const received = seen.at(-1);
+    assert(
+      received?.url === "/backend-api/codex/responses" &&
+        received.authorization === `Bearer ${SEEDED_CODEX_ACCESS}` &&
+        received.account === "bun-probe-account",
+      `The upstream did not get the seeded credential: ${JSON.stringify(received)}`,
+    );
+    const mode = (path) => statSync(path).mode & 0o777;
+    assert(
+      mode(stateDir) === 0o700 && mode(join(stateDir, "leases.json")) === 0o600,
+      `The gateway state is not private: ${mode(stateDir).toString(8)}, ${mode(join(stateDir, "leases.json")).toString(8)}`,
+    );
+    const saved = readFileSync(join(stateDir, "leases.json"), "utf8");
+    assert(
+      saved.includes(lease.leaseId) &&
+        !saved.includes(lease.token) &&
+        !saved.includes(lease.token.split(".").at(-1)) &&
+        !saved.includes(SEEDED_CODEX_ACCESS),
+      "leases.json holds a token, its secret or the credential.",
+    );
+    const revoked = await link.grantEngineLease({
+      workerId: "local",
+      sessionId: "bun-probe-revoked",
+      profileId: "default",
+    });
+    await link.revokeLease(revoked.leaseId, "session-ended");
+    await link.close();
+
+    // The gateway alone, as after a restart with the server down.
+    restarted = await startGateway({
+      stateDir,
+      port: 0,
+      log: (line) => lines.push(line),
+      upstreams,
+    });
+    const before = seen.length;
+    const again = await codex(restarted, lease.token);
+    assert(
+      again.status === 200 && seen.length === before + 1,
+      `A restarted gateway did not forward the lease: ${again.status} ${again.text}`,
+    );
+    const refused = await codex(restarted, revoked.token);
+    assert(
+      refused.status === 401 &&
+        refused.text.includes(GATEWAY_REFUSAL_MARKER) &&
+        seen.length === before + 1,
+      `A revoked lease was not refused locally: ${refused.status} ${refused.text}`,
+    );
+  } finally {
+    await link.close();
+    await restarted?.close();
+    await new Promise((resolve) => upstream.close(() => resolve()));
+  }
+}
+
 checkMigrationGuard();
 await checkManagedStdioFdReuse();
 await checkGit();
@@ -4463,6 +4638,7 @@ if (mode === "broker") {
   checkSyncSpawnEnvironment();
   await checkPiOAuthFlows();
   await checkInitiativeLayout();
+  await checkGatewayLink();
 }
 console.log(`Bun runtime probe (${mode}) passed.`);
 process.exit(0);

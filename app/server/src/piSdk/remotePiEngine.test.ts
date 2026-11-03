@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
@@ -8,6 +8,7 @@ import {
   createAssistantMessageEventStream,
   type AssistantMessage,
 } from "@earendil-works/pi-ai";
+import type { LeaseRecord } from "../gateway/leases.ts";
 import type { PiEngineHandle } from "./piEngine.ts";
 
 /**
@@ -41,11 +42,15 @@ const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { ensureRuntimeSessionWithRuntime } =
   await import("../session/runtimePrompt.ts");
 const inProcess = await import("../workers/inProcessWorker.ts");
+const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
 await import("../hub.ts");
 
 /** The Worker-side local handle of every engine piStore opened. */
 const locals: PiEngineHandle[] = [];
+/** Runs as the Worker's factory receives `engine.open`. */
+let atOpen: (() => void) | undefined;
 inProcess.registerInProcessEngineFactory("pi", async (spec, host) => {
+  atOpen?.();
   const engine = await piHostedEngineFactory(spec, host);
   locals.push(hostedPiEngine(host.engineId)!);
   return engine;
@@ -311,4 +316,91 @@ test("PiStore.onEngineLost connection end", async () => {
           JSON.stringify(entry.message.content).includes("Before the end"),
       ),
   );
+});
+
+test("with a gateway link, piStore's new, fork and reopen each hold a lease their session owns", async () => {
+  const gateway = await startGatewayLinkForTests();
+  const live = () =>
+    gateway.engineLeases().filter((record) => record.revoked === undefined);
+  /** The owners `leases.json` holds, by lease id. */
+  const persisted = () =>
+    new Map(
+      (
+        JSON.parse(
+          readFileSync(join(gateway.stateDir, "leases.json"), "utf8"),
+        ) as { leases: LeaseRecord[] }
+      ).leases.map((record) => [record.leaseId, record.owner]),
+    );
+  let atFactory: LeaseRecord[] = [];
+  atOpen = () => (atFactory = live());
+  try {
+    // New: the Worker mints the id, so the lease is bound once it answers.
+    const { pi, profile, native } = await freshSession("Leased");
+    assert.equal(atFactory.length, 1);
+    const [opened] = atFactory;
+    assert.equal(opened!.profileId, profile);
+    assert.deepEqual(opened!.owner, { workerId: "local" });
+    assert.deepEqual(persisted().get(opened!.leaseId), {
+      workerId: "local",
+      sessionId: pi.id,
+    });
+
+    // Fork: a second lease, owned by the fork, not the parent.
+    scriptTurns(native);
+    ensureRuntimeSessionWithRuntime(sessionRuntime, pi);
+    await sessionRuntime.prompt(pi.id, "Fork from here");
+    await vi.waitFor(() =>
+      assert.equal(sessionRuntime.isRunning(pi.id), false),
+    );
+    const nativeUser = native.sessionManager
+      .getBranch()
+      .find(
+        (entry) => entry.type === "message" && entry.message.role === "user",
+      );
+    const appUser = sessionRuntime
+      .get(pi.id)!
+      .clientTimeline()
+      .find((entry) => entry.type === "message" && entry.role === "user");
+    assert.ok(nativeUser && appUser && pi.engine.sessionFile);
+    const child = await piStore.forkSession(
+      "assistant",
+      pi.engine.sessionFile,
+      nativeUser.id,
+      "at",
+      appUser.id,
+    );
+    created.push(child.id);
+    assert.notEqual(child.id, pi.id);
+    const forked = atFactory.find((r) => r.leaseId !== opened!.leaseId);
+    assert.ok(forked);
+    assert.equal(forked.profileId, profile);
+    assert.deepEqual(persisted().get(forked.leaseId), {
+      workerId: "local",
+      sessionId: child.id,
+    });
+
+    // Connection end revokes both; the reopen's grant names its session.
+    const quiescent = inProcess.inProcessWorkerQuiescentForTests();
+    inProcess.writeAsInProcessWorkerForTests(new Uint8Array(8));
+    await quiescent;
+    await vi.waitFor(() => assert.equal(piStore.get(pi.id), undefined));
+    await vi.waitFor(() => assert.equal(live().length, 0));
+    const reopened = await piStore.acquireByRecordId(pi.id, "assistant");
+    assert.ok(reopened);
+    assert.equal(atFactory.length, 1);
+    assert.deepEqual(atFactory[0]!.owner, {
+      workerId: "local",
+      sessionId: pi.id,
+    });
+    assert.ok(
+      !gateway.lines.some((line) =>
+        line.startsWith(
+          `control leases.bindSession (lease ${atFactory[0]!.leaseId})`,
+        ),
+      ),
+    );
+  } finally {
+    atOpen = undefined;
+    await gateway.close();
+  }
 });

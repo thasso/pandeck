@@ -10,14 +10,15 @@
  * start and saved on every change (`state.ts`), so a restarted gateway
  * forwards before any control connects. Without one they live in memory.
  *
- * It runs in the process that starts it. Nothing in the server starts it yet:
- * the server's wiring comes with a later slice, so today only tests do,
- * against fake upstreams.
+ * It runs in the process that starts it: the server's, through
+ * `gatewayLink.ts` under `ASSISTANT_GATEWAY=1`, and tests', against fake
+ * upstreams.
  */
 import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
 import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
+import type { ControlHello } from "./controlMethods.ts";
 import {
   createForwarder,
   type GatewayStats,
@@ -47,6 +48,8 @@ export interface RunningGateway {
   readonly stats: Readonly<GatewayStats>;
   /** Serves gateway control 1.0 on `endpoint`, as the listener. */
   attachControl(endpoint: ByteEndpoint): void;
+  /** The last `control.hello` a control connection said, as recorded. */
+  lastHello(): ControlHello | undefined;
   /** Stops listening, ends control connections and destroys open sockets. */
   close(): Promise<void>;
 }
@@ -113,6 +116,7 @@ export async function startGateway(
     leases,
     stats,
     attachControl: control.attach,
+    lastHello: control.hello,
     async close() {
       control.close();
       const closed = new Promise<void>((resolve) =>

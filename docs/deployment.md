@@ -304,26 +304,32 @@ way production did — every subscription model — if that registration is lost
 The check itself exercises each adapter behavior above directly. It also
 compiles and runs a Photon probe so the WASM path is covered inside a compiled
 Bun executable. The probe lays out a small Initiative map through the packaged
-layout worker, which covers elkjs under Bun (below). From an unrelated cwd and a
-clean environment, it also runs the packaged browser MCP CLI's version command
-and an MCP initialize plus `tools/list`, covering the patched local imports
-without a workspace `node_modules`. When Chrome or Chromium is available, the
-check also launches it and navigates a page. The Nix sandbox has neither
-browser, so that last probe reports an explicit skip there; the same
-clean-environment probe with the pinned Bun 1.4.2 passes launch and navigation
-on a host with Chrome, run outside the sandbox against the built package. The
-server itself keeps its deterministic bundle beside the executable because Bun's
-standalone compiler randomizes its embedded module-table encryption; the package
-wrapper invokes that module explicitly, while `/proc/<pid>/exe` remains the
-packaged Bun executable. Bun's ordinary bundler also emits scheduler-dependent
-module order and identifier names, even when pinned to one CPU and given a
-lexically recreated source tree. The builder therefore uses pinned esbuild for
-the server module and its two bundled helpers; Bun remains the packaged runtime.
-The flake closure check rejects Node, tsx, `node_modules`, and source
-derivations, then confirms pinned git and OpenSSH remain present. The install
-check also scans every runtime file for the Nix source path and build directory.
-CI builds the package and its closure check on every change (`docs/ci-cd.md`),
-and a deployment of that commit builds the same derivation.
+layout worker, which covers elkjs under Bun (below). In broker mode it starts
+the server's credential gateway link as `ASSISTANT_GATEWAY=1` does: its control
+endpoint must refuse a worker-protocol dialer, a granted engine lease must reach
+a loopback fake ChatGPT upstream with the seeded credential, `leases.json` must
+be 0600 in a 0700 directory without the token, and a gateway restarted without
+control must still forward that lease and refuse a revoked one. From an
+unrelated cwd and a clean environment, it also runs the packaged browser MCP
+CLI's version command and an MCP initialize plus `tools/list`, covering the
+patched local imports without a workspace `node_modules`. When Chrome or
+Chromium is available, the check also launches it and navigates a page. The Nix
+sandbox has neither browser, so that last probe reports an explicit skip there;
+the same clean-environment probe with the pinned Bun 1.4.2 passes launch and
+navigation on a host with Chrome, run outside the sandbox against the built
+package. The server itself keeps its deterministic bundle beside the executable
+because Bun's standalone compiler randomizes its embedded module-table
+encryption; the package wrapper invokes that module explicitly, while
+`/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary bundler
+also emits scheduler-dependent module order and identifier names, even when
+pinned to one CPU and given a lexically recreated source tree. The builder
+therefore uses pinned esbuild for the server module and its two bundled helpers;
+Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
+`node_modules`, and source derivations, then confirms pinned git and OpenSSH
+remain present. The install check also scans every runtime file for the Nix
+source path and build directory. CI builds the package and its closure check on
+every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
+derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses

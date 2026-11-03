@@ -406,13 +406,15 @@ test("only the in-process Worker starts the Worker side", () => {
 });
 
 test("the Worker's endpoint and children's environment come from the isolation boundary", () => {
-  // Only the boundary makes a stream pair; `workerProtocol/` names its type.
+  // Only the boundary makes a Worker's stream pair; `workerProtocol/` names
+  // its type. The gateway link makes the control pair, which stays on the
+  // server's side of the isolation boundary until the gateway's own socket.
   assert.deepEqual(
     importersOf(
       (target) => target === "workerProtocol/inProcessTransport.ts",
       "valueImports",
     ).filter((module) => !module.startsWith("workerProtocol/")),
-    ["workers/isolationBoundary.ts"],
+    ["gatewayLink.ts", "workers/isolationBoundary.ts"],
   );
   // Neither the in-process Worker nor the Worker side reads the overlay.
   assert.deepEqual(
@@ -490,13 +492,14 @@ test("the gateway reaches no server state", () => {
   assert.deepEqual([...reached].sort(), [...GATEWAY_ALLOWED].sort());
 });
 
-test("only the error classifier imports the gateway", () => {
-  // It reads the local-refusal marker. Nothing starts the gateway yet.
+test("only the server link and the error classifier import the gateway", () => {
+  // The link starts it and speaks control; engine modules reach it only
+  // through the link. The classifier reads the local-refusal marker.
   assert.deepEqual(
     importersOf((target) => target.startsWith("gateway/")).filter(
       (module) => !module.startsWith("gateway/"),
     ),
-    ["providerErrors.ts"],
+    ["gatewayLink.ts", "providerErrors.ts"],
   );
 });
 
