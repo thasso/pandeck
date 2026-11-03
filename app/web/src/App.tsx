@@ -2611,7 +2611,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     (path: string) => {
       const sessionId = sessionIdFromPathname(path);
       if (sessionId) actions.warmSessionTimeline(sessionId);
-      navigate(path);
+      // The sidebar browses: a file opened here has nothing to Close back to.
+      navigate(path, { asPage: true });
     },
     [actions, navigate],
   );
