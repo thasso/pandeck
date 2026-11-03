@@ -22,7 +22,7 @@ export type RevokeReason =
   "profile-removed" | "account-switch" | "session-ended";
 
 const REVOKE_WORDING: Record<RevokeReason, string> = {
-  "profile-removed": "the account was removed or disabled",
+  "profile-removed": "the account was removed",
   "account-switch": "the session moved to another account",
   "session-ended": "the session ended",
 };

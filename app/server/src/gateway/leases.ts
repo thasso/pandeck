@@ -1,5 +1,6 @@
 /**
- * The gateway's lease table, in memory (`docs/workers.md` "Credentials").
+ * The gateway's lease table (`docs/workers.md` "Credentials"), in memory and,
+ * when the gateway has a state directory, saved through `persist`.
  *
  * A lease token is JWT-shaped, `base64url(header).base64url(payload).
  * base64url(secret)`, because pi's `openai-codex` provider only accepts a JWT
@@ -22,12 +23,28 @@ export interface LeaseBinding {
   tokenFile: string;
 }
 
-export interface LeaseRecord extends LeaseBinding {
-  leaseId: string;
-  /** Hex SHA-256 of the token's secret bytes. */
-  secretHash: string;
-  revoked?: RevokeReason;
-}
+/** Who holds a lease: its kind names the routes it serves later slices. */
+export type LeaseOwnership =
+  /** An engine's: its Worker, and its session once the open names it. */
+  | { kind: "engine"; owner: { workerId: string; sessionId?: string } }
+  /** The server's own requests, for one server boot. */
+  | { kind: "server"; owner: { serverBootId: string } };
+
+export type LeaseRecord = LeaseBinding &
+  LeaseOwnership & {
+    leaseId: string;
+    /** Hex SHA-256 of the token's secret bytes. */
+    secretHash: string;
+    /** Epoch milliseconds. */
+    grantedAt: number;
+    revoked?: RevokeReason;
+    /** Epoch milliseconds; set with `revoked`. */
+    revokedAt?: number;
+  };
+
+/** What `bindSession` did; see there. */
+export type BindOutcome =
+  "bound" | "unchanged" | "unknown" | "server" | "conflict";
 
 export type LeaseCheck =
   | { ok: true; leaseId: string; binding: LeaseBinding }
@@ -39,6 +56,12 @@ const MAX_BEARER_BYTES = 4096;
 const SECRET_BYTES = 32;
 const SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 const LEASE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** How long a revoked lease is still named in its refusal. */
+const REVOKED_KEPT_MS = 24 * 60 * 60 * 1000;
+
+export function isLeaseId(value: unknown): value is string {
+  return typeof value === "string" && LEASE_ID_RE.test(value);
+}
 
 function base64url(text: string): string {
   return Buffer.from(text, "utf8").toString("base64url");
@@ -64,24 +87,63 @@ function tokenLeaseId(payloadSegment: string): string | undefined {
       : undefined;
   if (typeof pandeck !== "object" || pandeck === null) return undefined;
   const { v, lease } = pandeck as { v?: unknown; lease?: unknown };
-  return v === 1 && typeof lease === "string" && LEASE_ID_RE.test(lease)
-    ? lease
-    : undefined;
+  return v === 1 && isLeaseId(lease) ? lease : undefined;
 }
 
-export class LeaseTable {
-  private readonly leases = new Map<
-    string,
-    { binding: LeaseBinding; secretHash: Buffer; revoked?: RevokeReason }
-  >();
+interface Lease {
+  binding: LeaseBinding;
+  ownership: LeaseOwnership;
+  secretHash: Buffer;
+  grantedAt: number;
+  revoked?: RevokeReason;
+  revokedAt?: number;
+}
 
-  grant(binding: LeaseBinding): { leaseId: string; token: string } {
+export interface LeaseTableOptions {
+  /** Epoch milliseconds; the clock tests inject. */
+  now?: (() => number) | undefined;
+  /**
+   * Saves every record after a change, throwing when it cannot. Without it the
+   * table lives in memory only.
+   */
+  persist?: ((records: LeaseRecord[]) => void) | undefined;
+}
+
+/**
+ * The leases, keyed by id. With `persist`, a grant or a session bind is saved
+ * before it returns and undone in memory when saving throws; a revocation
+ * takes effect in memory first and stays in force when saving throws. Revoked
+ * leases are pruned 24 h after their revocation, on restore and before each
+ * save, so their tokens then get the unknown-lease refusal.
+ */
+export class LeaseTable {
+  private readonly leases = new Map<string, Lease>();
+  private readonly now: () => number;
+  private readonly persist: ((records: LeaseRecord[]) => void) | undefined;
+
+  constructor(options: LeaseTableOptions = {}) {
+    this.now = options.now ?? Date.now;
+    this.persist = options.persist;
+  }
+
+  grant(
+    binding: LeaseBinding,
+    ownership: LeaseOwnership,
+  ): { leaseId: string; token: string } {
     const leaseId = randomBytes(16).toString("base64url");
     const secret = randomBytes(SECRET_BYTES);
     this.leases.set(leaseId, {
       binding: { ...binding },
+      ownership: copyOwnership(ownership),
       secretHash: sha256(secret),
+      grantedAt: this.now(),
     });
+    try {
+      this.save();
+    } catch (err) {
+      this.leases.delete(leaseId);
+      throw err;
+    }
     const payload = base64url(
       JSON.stringify({
         "https://api.openai.com/auth": {
@@ -97,23 +159,89 @@ export class LeaseTable {
   }
 
   /**
-   * Ends a lease. The id is remembered with its reason so the refusal can name
-   * it. Returns false for an id the table never granted.
+   * Completes an engine lease's owner with the session its open named. The
+   * same session again changes nothing; another one is a conflict. A revoked
+   * lease is unknown here.
    */
-  revoke(leaseId: string, reason: RevokeReason): boolean {
+  bindSession(leaseId: string, sessionId: string): BindOutcome {
     const lease = this.leases.get(leaseId);
-    if (!lease) return false;
-    lease.revoked = reason;
-    return true;
+    if (!lease || lease.revoked) return "unknown";
+    const { ownership } = lease;
+    if (ownership.kind === "server") return "server";
+    if (ownership.owner.sessionId !== undefined)
+      return ownership.owner.sessionId === sessionId ? "unchanged" : "conflict";
+    ownership.owner.sessionId = sessionId;
+    try {
+      this.save();
+    } catch (err) {
+      delete ownership.owner.sessionId;
+      throw err;
+    }
+    return "bound";
   }
 
-  records(): readonly Readonly<LeaseRecord>[] {
-    return [...this.leases].map(([leaseId, lease]) => ({
-      leaseId,
-      secretHash: lease.secretHash.toString("hex"),
-      ...lease.binding,
-      ...(lease.revoked ? { revoked: lease.revoked } : {}),
-    }));
+  /**
+   * Ends a lease. The id is remembered with its reason so the refusal can name
+   * it. Returns whether this call revoked it: false for an id the table does
+   * not hold or a lease already revoked, whose first reason stands.
+   */
+  revoke(leaseId: string, reason: RevokeReason): boolean {
+    return (
+      this.revokeWhere((record) => record.leaseId === leaseId, reason).length >
+      0
+    );
+  }
+
+  /** Revokes every live lease `match` selects; answers their ids. */
+  revokeWhere(
+    match: (record: Readonly<LeaseRecord>) => boolean,
+    reason: RevokeReason,
+  ): string[] {
+    const revokedAt = this.now();
+    const revoked: string[] = [];
+    for (const [leaseId, lease] of this.leases)
+      if (!lease.revoked && match(recordOf(leaseId, lease))) {
+        lease.revoked = reason;
+        lease.revokedAt = revokedAt;
+        revoked.push(leaseId);
+      }
+    if (revoked.length > 0) this.save();
+    return revoked;
+  }
+
+  /** Loads saved records into an empty table, without saving. */
+  restore(records: readonly LeaseRecord[]): void {
+    for (const record of records) {
+      const { leaseId, secretHash, grantedAt, revoked, revokedAt } = record;
+      this.leases.set(leaseId, {
+        binding: {
+          profileId: record.profileId,
+          provider: record.provider,
+          tokenFile: record.tokenFile,
+        },
+        ownership: copyOwnership(record),
+        secretHash: Buffer.from(secretHash, "hex"),
+        grantedAt,
+        ...(revoked ? { revoked, revokedAt } : {}),
+      });
+    }
+    this.prune();
+  }
+
+  records(): LeaseRecord[] {
+    return [...this.leases].map(([leaseId, lease]) => recordOf(leaseId, lease));
+  }
+
+  private prune(): void {
+    const cutoff = this.now() - REVOKED_KEPT_MS;
+    for (const [leaseId, lease] of this.leases)
+      if (lease.revokedAt !== undefined && lease.revokedAt <= cutoff)
+        this.leases.delete(leaseId);
+  }
+
+  private save(): void {
+    this.prune();
+    this.persist?.(this.records());
   }
 
   /**
@@ -138,4 +266,23 @@ export class LeaseTable {
       return { ok: false, refusal: "revoked", leaseId, reason: lease.revoked };
     return { ok: true, leaseId, binding: { ...lease.binding } };
   }
+}
+
+function copyOwnership(ownership: LeaseOwnership): LeaseOwnership {
+  return ownership.kind === "engine"
+    ? { kind: "engine", owner: { ...ownership.owner } }
+    : { kind: "server", owner: { ...ownership.owner } };
+}
+
+function recordOf(leaseId: string, lease: Lease): LeaseRecord {
+  return {
+    leaseId,
+    secretHash: lease.secretHash.toString("hex"),
+    ...lease.binding,
+    ...copyOwnership(lease.ownership),
+    grantedAt: lease.grantedAt,
+    ...(lease.revoked
+      ? { revoked: lease.revoked, revokedAt: lease.revokedAt }
+      : {}),
+  };
 }

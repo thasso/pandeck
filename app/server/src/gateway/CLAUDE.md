@@ -2,10 +2,14 @@
 
 Contract: `docs/workers.md` "Credentials" and ADR-0004.
 
-- `gateway/` imports only `node:` modules, itself and `errors.ts`, never a
-  package or other server module (`workerBoundary.test.ts`). Only
-  `providerErrors.ts` imports it, for the refusal marker; new wiring updates
-  that pin.
+- `gateway/` imports only `node:` modules, itself and `GATEWAY_ALLOWED` in
+  `workerBoundary.test.ts`, never a package or other server module; that list
+  stays closed. Only `providerErrors.ts` imports it, for the refusal marker; new
+  wiring updates that pin.
+- Only a control connection grants a lease, and a grant binds provider and token
+  file from the registry, never from the request.
+- State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes
+  and paths: a lease's secret only as its hash, never a token or lease token.
 - Token files are only read here, never written, renamed or chmodded, until a
   later slice owns renewal.
 - Forward bodies with `pipe` in both directions, never `on("data")` writes that

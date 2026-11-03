@@ -440,10 +440,20 @@ test("the Worker side reaches no server state", () => {
 
 /**
  * What `gateway/` (the credential gateway) may import besides `node:` and
- * itself: `errors.ts`, which imports nothing. No package either, so the
- * closure ends here and it can run as its own process (ADR-0004).
+ * itself: the private atomic writer for its state, the worker protocol's codec
+ * and connection for its control channel (gateway control 1.0), and what those
+ * import. No package either, and each of these imports only `node:` or this
+ * list, so the closure ends here and the gateway can run as its own process
+ * (ADR-0004).
  */
-const GATEWAY_ALLOWED = new Set(["errors.ts"]);
+const GATEWAY_ALLOWED = new Set([
+  "errors.ts",
+  "privateJsonFile.ts",
+  "workerProtocol/codec.ts",
+  "workerProtocol/connection.ts",
+  "workerProtocol/inProcessTransport.ts",
+  "workerProtocol/version.ts",
+]);
 
 test("the gateway reaches no server state", () => {
   const modules = [...scans].filter(([module]) =>
@@ -458,6 +468,26 @@ test("the gateway reaches no server state", () => {
           GATEWAY_ALLOWED.has(target),
         `${module} imports ${target}`,
       );
+  // The allowlist is closed: what it names reaches nothing outside it.
+  for (const module of GATEWAY_ALLOWED) {
+    const scan = scans.get(module);
+    assert.ok(scan, `the scan found ${module}`);
+    for (const target of scan.imports)
+      assert.ok(
+        target.startsWith("node:") || GATEWAY_ALLOWED.has(target),
+        `${module}, which the gateway may import, imports ${target}`,
+      );
+  }
+  // And exact: the gateway's closure reaches every entry.
+  const reached = new Set<string>();
+  const pending = modules.flatMap(([, scan]) => [...scan.imports]);
+  for (let target = pending.pop(); target; target = pending.pop()) {
+    if (target.startsWith("node:") || target.startsWith("gateway/")) continue;
+    if (reached.has(target)) continue;
+    reached.add(target);
+    pending.push(...(scans.get(target)?.imports ?? []));
+  }
+  assert.deepEqual([...reached].sort(), [...GATEWAY_ALLOWED].sort());
 });
 
 test("only the error classifier imports the gateway", () => {
