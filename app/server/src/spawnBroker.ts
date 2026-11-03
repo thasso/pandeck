@@ -276,10 +276,11 @@ try {
     fs.writeFileSync("/proc/self/oom_score_adj", "0");
 } catch (_) {}
 // Bun 1.4.2 does not collect the broker's garbage on its own, mostly buffers
-// its children's output was read into: 30 hours of git reads left 15 GB
-// resident. One full collection BROKER_COLLECT_DELAY_MS after a reply, never
-// more than one pending, returns it; the live heap is a few megabytes, so each
-// costs milliseconds. Node collects it unprompted (docs/deployment.md).
+// its children's output was read into: 30 hours of git reads left 11.9 GB
+// resident and 3.8 GB swapped. One full collection BROKER_COLLECT_DELAY_MS
+// after a reply, never more than one pending, returns it; the live heap is a
+// few megabytes, so each costs milliseconds. Node collects it unprompted
+// (docs/deployment.md).
 let collection;
 function collectSoon() {
   if (typeof Bun === "undefined" || collection) return;
