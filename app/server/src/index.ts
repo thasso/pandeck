@@ -77,6 +77,7 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
+  compatProviderFeed,
   notifyCompatProviderChanged,
   startOpenAiProfileLogin,
   syncConfiguredModelProviders,
@@ -1858,7 +1859,7 @@ if (GATEWAY_ENABLED)
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
-    compat: settingsCompatSource,
+    compat: settingsCompatSource(compatProviderFeed),
   });
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.

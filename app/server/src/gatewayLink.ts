@@ -71,7 +71,6 @@ import {
 } from "./workerProtocol/connection.ts";
 import { createInProcessTransport } from "./workerProtocol/inProcessTransport.ts";
 import { getOpenAiCompatibleProviderConfigForRegistry } from "./openAiCompatibleSettings.ts";
-import { compatProviderFeed } from "./piSdk/compatProviderFeed.ts";
 
 /** U7's text for an engine open that got no lease. */
 export const GATEWAY_UNAVAILABLE_TEXT =
@@ -196,16 +195,21 @@ export function installedGatewayLink(): GatewayLink | undefined {
 }
 
 /**
- * The settings' endpoint and key, notified with the engines' feed: the one
- * reader of the key on the engine path (`index.ts` passes it).
+ * The settings' endpoint and key, notified by `changes`, the engines' feed
+ * (`index.ts` passes it through `harnesses/`): the one reader of the key on
+ * the engine path.
  */
-export const settingsCompatSource: GatewayCompatSource = {
-  current() {
-    const config = getOpenAiCompatibleProviderConfigForRegistry();
-    return config && { baseUrl: config.baseUrl, apiKey: config.apiKey };
-  },
-  subscribe: compatProviderFeed.subscribe,
-};
+export function settingsCompatSource(
+  changes: Pick<GatewayCompatSource, "subscribe">,
+): GatewayCompatSource {
+  return {
+    current() {
+      const config = getOpenAiCompatibleProviderConfigForRegistry();
+      return config && { baseUrl: config.baseUrl, apiKey: config.apiKey };
+    },
+    subscribe: (listener) => changes.subscribe(listener),
+  };
+}
 
 /** A request failure as a log line may name it: its code, or the error's text. */
 function failure(err: unknown): string {

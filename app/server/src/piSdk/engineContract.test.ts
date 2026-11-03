@@ -268,7 +268,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     });
     const gateway = await startGatewayLinkForTests({
       upstreams: upstream.overrides,
-      compat: settingsCompatSource,
+      compat: settingsCompatSource(compatProviderFeed),
     });
     const gatewayTarget = new URL(gateway.link.gateway!.url).host;
     const compatA = await fixtures.startFakeCompatEndpoint(
