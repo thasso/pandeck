@@ -3,7 +3,7 @@
  * every engine package `verifiedEngines.json` names is pinned in the
  * workspace catalog at exactly the version its contract test and the
  * operator's live smoke verified. A bump that skips them fails here. The
- * lock names only the Claude SDK until G3b adds the pi pins.
+ * Claude SDK names its bundled CLI too; pi has none.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -47,32 +47,47 @@ function lockMismatches(text: string): string[] {
   });
 }
 
+const ENGINES = [
+  "@anthropic-ai/claude-agent-sdk",
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-coding-agent",
+];
+
 test("every locked engine package is pinned at exactly its verified version", () => {
-  assert.deepEqual(Object.keys(lock), ["@anthropic-ai/claude-agent-sdk"]);
+  assert.deepEqual(Object.keys(lock), ENGINES);
   assert.match(
     lock["@anthropic-ai/claude-agent-sdk"]!.cli ?? "",
     /^\d+\.\d+\.\d+$/,
   );
+  for (const name of ENGINES.slice(1))
+    assert.equal(lock[name]!.cli, undefined, `${name} has no CLI pin`);
   assert.deepEqual(lockMismatches(workspace), []);
 });
 
 test("a bumped or missing pin is a mismatch", () => {
-  const sdk = "@anthropic-ai/claude-agent-sdk";
-  const { version } = lock[sdk]!;
-  const line = `  "${sdk}": "${version}"`;
-  assert.ok(workspace.includes(line), "the catalog names the SDK as expected");
-  assert.deepEqual(
-    lockMismatches(workspace.replace(line, `  "${sdk}": "0.3.317"`)),
-    [`${sdk} is pinned at 0.3.317, verified at ${version}`],
-  );
-  assert.deepEqual(lockMismatches(workspace.replace(`${line}\n`, "")), [
-    `${sdk} is not in the catalog`,
-  ]);
+  for (const name of ENGINES) {
+    const { version } = lock[name]!;
+    const line = `  "${name}": "${version}"`;
+    assert.ok(
+      workspace.includes(line),
+      `the catalog names ${name} as expected`,
+    );
+    assert.deepEqual(
+      lockMismatches(workspace.replace(line, `  "${name}": "99.0.0"`)),
+      [`${name} is pinned at 99.0.0, verified at ${version}`],
+    );
+    assert.deepEqual(lockMismatches(workspace.replace(`${line}\n`, "")), [
+      `${name} is not in the catalog`,
+    ]);
+  }
   // Only the default catalog counts, not a named one.
+  const named = ENGINES.map(
+    (name) => `    "${name}": "${lock[name]!.version}"\n`,
+  ).join("");
   assert.deepEqual(
     lockMismatches(
-      `catalog:\n  other: "1.0.0"\ncatalogs:\n  codemods:\n    "${sdk}": "${version}"\n`,
+      `catalog:\n  other: "1.0.0"\ncatalogs:\n  codemods:\n${named}`,
     ),
-    [`${sdk} is not in the catalog`],
+    ENGINES.map((name) => `${name} is not in the catalog`),
   );
 });

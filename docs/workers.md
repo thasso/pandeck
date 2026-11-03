@@ -810,7 +810,8 @@ it.
     other than `http://127.0.0.1:<port>`, a lease token that is not three
     base64url segments or is longer than 1024 characters, and any other key. It
     hands the field to the factory as `host.gateway`. The field belongs to no
-    harness, and pi's factory ignores it until G3b.
+    harness; the Claude and pi factories each route their engine through it (see
+    "Credentials").
   - `engine.command { engineId, commandId, command, args }` runs one
     harness-defined command. It answers `{ seq, result }`, or, when the engine's
     command failed, `{ seq, failed, code? }` with the message as text; only a
@@ -1332,15 +1333,39 @@ until the gateway runs as its own process.
   (`claudeChildEnvironment.ts`). So a profile-less session changes only on a
   service whose environment sets one of them; a service-level
   `CLAUDE_CONFIG_DIR` no longer applies to it, and the CLI then writes its
-  transcripts in `~/.claude`, where the store already reads them. pi engines
-  authenticate as before until G3b.
+  transcripts in `~/.claude`, where the store already reads them.
+- **pi engines use the lease.** With `host.gateway`, the pi factory
+  (`createPiHostedEngineFactory({ models, compat })`) gives the engine its own
+  model port (`gatewayPiModelPort.ts`) instead of the server's: one in-memory pi
+  runtime per open whose only `openai-codex` key is the lease, with no
+  `auth.json`, `models.json` or `models-store.json` and no catalog fetch. It is
+  released when the engine is disposed or its open fails. Without
+  `host.gateway`, the server's port runs the engine as before.
+  - Every Codex model the port answers is rebased onto the gateway's
+    `/chatgpt/backend-api`: the profile's server-catalog model when it has the
+    id, else pi's built-in. The gateway adds the profile's token and account id
+    from its `auth.json`.
+  - A reopened or forked transcript restores its model through the port, passed
+    to pi explicitly, which adds no entry. When the port has no such model, pi's
+    own restore and fallback run, and an agent still refuses the fallback.
+  - Turns use SSE (`agent.transport = "sse"`): the gateway refuses WebSocket
+    upgrades. Summaries keep pi's default and fall back to SSE on that refusal.
+  - The runtime's `getAuth` is guarded per request: a credential goes only with
+    a model at the `baseUrl` it was registered for. Any other object, such as a
+    Codex model still at `chatgpt.com`, or an OpenAI-compatible model from an
+    endpoint the settings have since replaced, gets no auth, and pi refuses it
+    ("Provider is not configured") before it connects.
+  - The OpenAI-compatible provider goes direct with its configured key; G3b-2
+    moves it to the gateway. The port registers it from the server's settings
+    and follows each change through `compatProviderFeed.ts`, which the settings
+    sync notifies after re-registering the server's own runtimes.
 
 ### Engine-version guard
 
 The engines' CLIs are pinned, and a pin moves only with evidence that the new
 CLI still talks only to the gateway.
 
-- **The contract (C17.1).** `claudeSdk/engineContract.test.ts` drives the
+- **The Claude contract (C17.1).** `claudeSdk/engineContract.test.ts` drives the
   installed SDK and its bundled CLI through the hosted engine and an in-process
   gateway against a fake upstream. Its four cases are: a turn on a named
   profile; a profile-less turn as `claude-default`; an upstream 401; and a lease
@@ -1353,22 +1378,45 @@ CLI still talks only to the gateway.
   - the CLI's version equals the lock's;
   - a 401 is a dead login as today;
   - a refusal carries the marker and is not a dead login.
+- **The pi contract (C17.1).** `piSdk/engineContract.test.ts` drives the
+  installed pi SDK through the hosted engine, opened as `piStore` opens it, and
+  an in-process gateway, against a fake Codex upstream and two fake
+  OpenAI-compatible endpoints on their own loopback origins. Its cases are: a
+  turn on a named profile and on the default one; an upstream 401; a revoked
+  lease; a server-catalog Codex id opened, reopened and forked; Codex, then the
+  compatible provider, then Codex on one engine; a key rotation, a cleared key
+  and a disable on an open engine beside a switch-off one; and an endpoint
+  change under an open named and default engine. They assert:
+  - one `POST /backend-api/codex/responses` per turn reaches the upstream, with
+    the profile's token and account id and never the lease, and no upgrade;
+  - the compatible provider reaches its endpoint directly with the current key,
+    and the gateway sees nothing for it;
+  - an open engine follows the settings as a switch-off engine does, and after
+    an endpoint change refuses its old model without contacting either endpoint
+    until reselected;
+  - a 401 and a refusal are not dead logins, and a refusal carries the marker;
+  - an egress observer on undici's and `node:http`'s diagnostics channels sees
+    no attempt beyond the gateway, the fakes and loopback, and a canary fetch to
+    pi.dev shows it is not blind;
+  - no engine writes `auth.json`, `models.json` or `models-store.json`, changes
+    a fixture's login or catalog file, or stores a lease, and no log line holds
+    a token.
 - **Isolation.** Only `pnpm run test:engine-contract`
-  (`scripts/run-engine-contract.mjs`) runs it. That command starts it in a user,
-  network and PID namespace with loopback alone, and with a temp HOME, DATA_DIR
-  and fake credentials. The outer namespace maps root to bring loopback up.
-  Vitest and the CLI then run in a nested user namespace as the invoking uid,
-  because the CLI refuses the sessions' `bypassPermissions` as root. The
-  production options are unchanged. Anywhere else the file is skipped, and none
-  of its setup runs. Where no namespace can be made, the command prints
+  (`scripts/run-engine-contract.mjs`) runs both files. That command starts them
+  in a user, network and PID namespace with loopback alone, and with a temp
+  HOME, DATA_DIR and fake credentials. The outer namespace maps root to bring
+  loopback up. Vitest and the CLI then run in a nested user namespace as the
+  invoking uid, because the CLI refuses the sessions' `bypassPermissions` as
+  root. The production options are unchanged. Anywhere else the file is skipped,
+  and none of its setup runs. Where no namespace can be made, the command prints
   `engine-contract: SKIP: no network namespace: …` and exits 0 locally. Under
   `CI=true` it fails. Once a run starts, a failure, an unrun test or zero tests
   fail it. CI's `engine-contract` job is the evidence where a contributor's
   machine skips.
 - **The pin lock (C17.2).** `gateway/verifiedEngines.json` names the verified
   versions, and `verifiedEngines.test.ts` fails when the `pnpm-workspace.yaml`
-  catalog differs. It covers only the Claude SDK and its CLI until G3b adds the
-  pi pins.
+  catalog differs. It pins the Claude SDK with its bundled CLI, and
+  `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`.
 - **The bump rule.** A bump updates `verifiedEngines.json` only with the
   contract test green and one operator live smoke per engine, of the live-smoke
   script's shape. Agents never run the smoke.
@@ -1385,6 +1433,17 @@ CLI still talks only to the gateway.
   - Agent Bash children inherit the lease and the base URL.
   - A native tool that calls another Anthropic endpoint is refused with the
     marker until a later slice allows it with contract evidence.
+  - C2: a pi open, like a Claude one, awaits the link's readiness without a
+    bound (G5, G7a).
+  - With the switch on, pi engines send OpenAI-compatible requests directly with
+    the configured key. G3b-2 moves them to the gateway and must land before G5.
+  - After an OpenAI-compatible endpoint change, an open pi engine on the old
+    model fails with pi's `Provider is not configured` until the user reselects
+    the model or reopens the session.
+  - A pi summary request may try one refused upgrade before SSE.
+  - pi providers other than Codex and OpenAI-compatible, through an ambient
+    environment key, behave as today. Model listing, catalog refresh and model
+    discovery stay in the server.
 
 ## When the server is down
 
@@ -1577,10 +1636,11 @@ The credential gateway (`app/server/src/gateway/`) has landed with its
 forwarding core, its control channel and persisted leases, and the server's link
 to it behind `ASSISTANT_GATEWAY=1`, off by default. With the switch on, every
 Claude engine sends its model requests through the gateway with its lease, a
-profile-less session as `claude-default`, under the engine-version guard; pi
-engines still hold a lease but authenticate as before until G3b. One-shots and
-usage queries do not use the gateway yet. It reads token files and never writes
-or refreshes them. The writer lane and login holds have landed, unused until the
+profile-less session as `claude-default`, and every pi engine sends its Codex
+requests through it with its lease, both under the engine-version guard; pi's
+OpenAI-compatible provider still goes direct (G3b-2). One-shots and usage
+queries do not use the gateway yet. It reads token files and never writes or
+refreshes them. The writer lane and login holds have landed, unused until the
 login flows hold their profile (G5): no hold is created and no lane item runs
 yet. Renewal, engine routing and its own service unit come in later slices.
 

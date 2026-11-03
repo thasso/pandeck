@@ -160,6 +160,11 @@ interface PiEngineOpenInfo {
  * credential crosses the wire; it is the phase-3 credential gateway's seam.
  */
 export interface PiModelPort {
+  /**
+   * `"gateway"` when every model must come from this port, as a leased
+   * engine's does (`gatewayPiModelPort.ts`); absent for the server's own.
+   */
+  readonly routing?: "gateway";
   runtime(profileId: string): Promise<ModelRuntime>;
   findForProfile(
     profileId: string,
@@ -454,6 +459,22 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
         `Agent "${agent.name}" runs on ${provider}/${modelId}, which its account no longer offers; it does not run on another model.`,
       );
     startThinkingLevel ??= selected.thinkingLevel ?? agent.effort;
+  } else if (
+    ctx.models.routing === "gateway" &&
+    startModel === undefined &&
+    sm.buildSessionContext().messages.length > 0
+  ) {
+    // pi would restore from its own runtime, which knows only the built-in
+    // models: the port resolves the branch's selection, catalog ids
+    // included. An explicit model adds no entry; without one, pi's restore
+    // and its fallback run as before.
+    const { provider, modelId } = branchRuntime(sm);
+    if (provider && modelId)
+      startModel = await ctx.models.findForProfile(
+        credentialProfileId,
+        provider,
+        modelId,
+      );
   }
   const opts = await buildPiEngineOptions({
     kind,
@@ -604,6 +625,9 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
           ? `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`
           : `Cannot switch accounts: ${modelFallbackMessage}. The session must keep its model.`,
       );
+    // The gateway refuses WebSocket upgrades: turns go straight to SSE
+    // rather than trying one first. The user's pi settings stay as they are.
+    if (ctx.models.routing === "gateway") session.agent.transport = "sse";
     // Before any prompt: the controller must observe every settings rebuild.
     installCompactionWindow(session, spec.compactionWindow);
     installToolPayloadProbe(session);

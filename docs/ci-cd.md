@@ -29,10 +29,10 @@ in the test suites on two vCPUs:
   them by count, so the split is stable until a test file is added, removed or
   renamed. Measured shards stay within about 30% of each other, and their sum
   matches the unsharded suite, so a shard costs only its ~25s of setup.
-- `engine-contract` — `pnpm run test:engine-contract`: the real Claude CLI
-  against fakes in a user, network and PID namespace with loopback alone
-  (`docs/workers.md` "Engine-version guard"). Ubuntu's AppArmor restricts
-  unprivileged user namespaces, so the job first sets
+- `engine-contract` — `pnpm run test:engine-contract`: the real Claude CLI and
+  the installed pi SDK against fakes in a user, network and PID namespace with
+  loopback alone (`docs/workers.md` "Engine-version guard"). Ubuntu's AppArmor
+  restricts unprivileged user namespaces, so the job first sets
   `kernel.apparmor_restrict_unprivileged_userns=0` when that sysctl exists; the
   runner is a fresh single-job VM, so nothing else sees it. `CI=true` makes a
   missing namespace fail the job instead of skipping it.

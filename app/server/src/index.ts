@@ -77,6 +77,7 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
+  notifyCompatProviderChanged,
   startOpenAiProfileLogin,
   syncConfiguredModelProviders,
   warmCredentialProfileModelRuntimes,
@@ -1874,8 +1875,12 @@ verifyRequiredHostTools();
 linkPiToolBinaries();
 
 // Before any request can write settings: an OpenAI-compatible write must
-// re-register the configured providers with the engine.
-setModelProviderSync(syncConfiguredModelProviders);
+// re-register the configured providers with the engine, and with every leased
+// pi engine's own runtime.
+setModelProviderSync(() => {
+  syncConfiguredModelProviders();
+  notifyCompatProviderChanged();
+});
 
 // Discover the optional streaming runtime once, without loading any weights.
 await probeStreamingRecognizer();

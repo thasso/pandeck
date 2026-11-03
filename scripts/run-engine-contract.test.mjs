@@ -76,3 +76,41 @@ test("no namespace under CI=true fails", () => {
   );
   assertNoRun(result.calls);
 });
+
+test("a run passes every contract file to vitest", () => {
+  // `unshare` and `ip` stand-ins that succeed: the probe passes, and the run
+  // records its arguments, writes no report, and so fails.
+  const dir = mkdtempSync(join(tmpdir(), "pa-engine-contract-"));
+  tempDirs.push(dir);
+  const calls = join(dir, "calls");
+  for (const name of ["unshare", "ip"]) {
+    writeFileSync(
+      join(dir, name),
+      `#!/bin/sh\necho "$*" >> "${calls}"\nexit 0\n`,
+    );
+    chmodSync(join(dir, name), 0o755);
+  }
+  const env = {
+    ...process.env,
+    PANDECK_UNSHARE: join(dir, "unshare"),
+    PATH: `${dir}:${process.env.PATH ?? ""}`,
+  };
+  delete env.CI;
+  const result = spawnSync(process.execPath, [SCRIPT], {
+    env,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /^engine-contract: FAIL: no readable report/m);
+  const runs = readFileSync(calls, "utf8")
+    .trim()
+    .split("\n")
+    .filter((args) => args.includes("--reporter"));
+  assert.equal(runs.length, 1, runs.join("\n"));
+  for (const file of [
+    "src/claudeSdk/engineContract.test.ts",
+    "src/piSdk/engineContract.test.ts",
+  ])
+    assert.ok(runs[0].includes(file), runs[0]);
+});
