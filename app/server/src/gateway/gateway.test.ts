@@ -196,11 +196,10 @@ function grant(
   provider: LeaseProvider,
   tokenFile: string,
 ): { leaseId: string; token: string } {
-  return gw.leases.grant({
-    profileId: `${provider}-work`,
-    provider,
-    tokenFile,
-  });
+  return gw.leases.grant(
+    { profileId: `${provider}-work`, provider, tokenFile },
+    { kind: "engine", owner: { workerId: "local", sessionId: "s1" } },
+  );
 }
 
 interface SendOptions {

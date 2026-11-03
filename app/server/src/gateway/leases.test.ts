@@ -8,15 +8,17 @@ const BINDING = {
   provider: "claude",
   tokenFile: "/tmp/fixture/.credentials.json",
 } as const;
+const OWNER = { kind: "engine", owner: { workerId: "w" } } as const;
+const GRANTED_AT = 1_800_000_000_000;
 
 function decode(segment: string): Buffer {
   return Buffer.from(segment, "base64url");
 }
 
 test("a lease token is JWT-shaped and its secret is stored only as a hash", () => {
-  const leases = new LeaseTable();
-  const first = leases.grant(BINDING);
-  const second = leases.grant(BINDING);
+  const leases = new LeaseTable({ now: () => GRANTED_AT });
+  const first = leases.grant(BINDING, OWNER);
+  const second = leases.grant(BINDING, OWNER);
   assert.notEqual(first.token, second.token);
   assert.notEqual(first.leaseId, second.leaseId);
 
@@ -45,12 +47,14 @@ test("a lease token is JWT-shaped and its secret is stored only as a hash", () =
     leaseId: first.leaseId,
     secretHash: createHash("sha256").update(decode(secret)).digest("hex"),
     ...BINDING,
+    ...OWNER,
+    grantedAt: GRANTED_AT,
   });
 });
 
 test("verify answers with the lease's own binding, and a revoked lease names its reason", () => {
   const leases = new LeaseTable();
-  const { leaseId, token } = leases.grant(BINDING);
+  const { leaseId, token } = leases.grant(BINDING, OWNER);
   assert.deepEqual(leases.verify(token), {
     ok: true,
     leaseId,
@@ -72,7 +76,7 @@ test("verify answers with the lease's own binding, and a revoked lease names its
 
 test("a revoked lease with the wrong secret is unknown, not revoked", () => {
   const leases = new LeaseTable();
-  const { leaseId, token } = leases.grant(BINDING);
+  const { leaseId, token } = leases.grant(BINDING, OWNER);
   leases.revoke(leaseId, "session-ended");
   const [header, payload, secret] = token.split(".") as [
     string,

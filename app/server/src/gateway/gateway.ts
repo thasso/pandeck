@@ -1,22 +1,32 @@
 /**
  * The credential gateway composition (ADR-0004, `docs/workers.md`
  * "Credentials"): a loopback HTTP model listener that checks lease tokens
- * against its in-memory lease table and forwards Claude Messages and Codex
- * responses requests with the bound profile's real credential.
+ * against its lease table and forwards Claude Messages and Codex responses
+ * requests with the bound profile's real credential, plus the control
+ * endpoint (`control.ts`) through which the server syncs profiles and grants
+ * and revokes leases.
+ *
+ * With a state directory, the leases and the profile registry are loaded at
+ * start and saved on every change (`state.ts`), so a restarted gateway
+ * forwards before any control connects. Without one they live in memory.
  *
  * It runs in the process that starts it. Nothing in the server starts it yet:
- * the control channel and its wiring come with a later slice, so today only
- * tests do, against fake upstreams.
+ * the server's wiring comes with a later slice, so today only tests do,
+ * against fake upstreams.
  */
 import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
+import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 import {
   createForwarder,
   type GatewayStats,
   type UpstreamOverrides,
 } from "./forward.ts";
+import { createControlEndpoint } from "./control.ts";
 import { LeaseTable } from "./leases.ts";
+import { ProfileRegistry } from "./profiles.ts";
+import { openGatewayState } from "./state.ts";
 
 export interface GatewayOptions {
   /** 0 picks a free port. The host is always `127.0.0.1`. */
@@ -24,6 +34,10 @@ export interface GatewayOptions {
   log?: (line: string) => void;
   /** Per-provider connect address and CA; TLS name and `Host` stay logical. */
   upstreams?: UpstreamOverrides;
+  /** Where leases and profiles persist; without it they live in memory. */
+  stateDir?: string;
+  /** Epoch milliseconds; the clock tests inject. */
+  now?: () => number;
 }
 
 export interface RunningGateway {
@@ -31,7 +45,9 @@ export interface RunningGateway {
   readonly port: number;
   readonly leases: LeaseTable;
   readonly stats: Readonly<GatewayStats>;
-  /** Stops listening and destroys open sockets. */
+  /** Serves gateway control 1.0 on `endpoint`, as the listener. */
+  attachControl(endpoint: ByteEndpoint): void;
+  /** Stops listening, ends control connections and destroys open sockets. */
   close(): Promise<void>;
 }
 
@@ -40,7 +56,19 @@ export async function startGateway(
 ): Promise<RunningGateway> {
   const log =
     options.log ?? ((line: string) => console.log(`[gateway] ${line}`));
-  const leases = new LeaseTable();
+  const state = options.stateDir
+    ? openGatewayState(options.stateDir, log)
+    : undefined;
+  const leases = new LeaseTable({
+    now: options.now,
+    persist: state?.persistLeases,
+  });
+  const profiles = new ProfileRegistry(state?.persistProfiles);
+  if (state) {
+    leases.restore(state.leases);
+    profiles.restore(state.profiles);
+  }
+  const control = createControlEndpoint({ leases, profiles, log });
   const stats: GatewayStats = {
     forwarded: 0,
     refused: 0,
@@ -84,7 +112,9 @@ export async function startGateway(
     port,
     leases,
     stats,
+    attachControl: control.attach,
     async close() {
+      control.close();
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),
       );

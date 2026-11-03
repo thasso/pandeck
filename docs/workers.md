@@ -788,8 +788,8 @@ which imports no server state) and `workers/` (the server's side and placement);
     state rides the existing `state` item and snapshot.
   - Known limits: the engine still holds the catalog's tool objects for their
     static fields (JSON tool descriptors are phase-2 packaging); the model port
-    is in-process wiring until the phase-3 gateway; the tool state is rebuilt
-    for every `state` item.
+    is in-process wiring until the credential gateway's pi route (phase 2); the
+    tool state is rebuilt for every `state` item.
 
 - **pi engine host (W9b-2).** An interactive pi engine runs on the session's
   Worker, and the server drives it through protocol `1.8`
@@ -1171,6 +1171,48 @@ ships in phase 2, on the server's host. Its same-host form:
   counts until the gateway reports login state itself.
 - Remote Workers reach it over TLS from phase 4.
 
+The server drives the gateway over its control channel, **gateway control 1.0**:
+the worker protocol's codec and connection framing under a version of its own,
+`gateway-control/1.0`, so a Worker and a control peer refuse each other. Only a
+control connection grants a lease, and the gateway binds each lease to a profile
+from its own registry, never from the request. Every method is answered once its
+effect is applied and saved, and each connection starts with
+`control.hello {serverBootId, pid, startTime}`; anything before it is refused.
+The server then syncs every profile (`profiles.sync`, later `profiles.upsert`
+and `profiles.remove`). A newer connection's hello ends the older one.
+
+- A lease has a kind and an owner. An engine lease belongs to
+  `{workerId, sessionId}`. It is granted before the engine opens; an open that
+  mints its session id (a new or forked pi session) completes the owner with
+  `leases.bindSession` once the open answers, and a different id later is a
+  conflict. A server lease, for the server's own requests, belongs to one
+  `serverBootId`.
+- The boot rule: a hello revokes every server lease of another boot and leaves
+  engine leases alone. A previous boot's engine lease keeps forwarding until
+  `leases.reconcileWorker {workerId, live}` revokes that Worker's engine leases
+  not in `live`; it never touches another Worker's or a server lease.
+- The registry records each profile's provider, name, `enabled` flag and token
+  file path. `enabled` is metadata only: disabling an account takes effect at
+  the server's next turn, so the gateway never ends a running turn for it.
+  Deleting a profile, by `profiles.remove` or a sync that omits it, is the only
+  registry change that revokes, and its leases' requests are refused with "the
+  account was removed". The other reasons are "the session moved to another
+  account" and "the session ended".
+- The state lives in the gateway's state directory (0700), in `leases.json`
+  (lease id, secret hash, kind, owner, profile, provider, token file path, grant
+  and revocation times) and `profiles.json`, each written whole to a 0600 temp
+  file and renamed. Neither holds a token, a lease token or its secret. A grant
+  or session bind is saved before it is answered and undone when saving fails; a
+  revocation takes effect at once and stays in force even then. After a failed
+  save, repeating a revocation or profile removal saves again even though it
+  changes nothing, so it fails again or succeeds with the earlier change saved;
+  a repeated revocation keeps its first reason and time. Both files load at
+  start, so a gateway restarted with the server down still forwards. An
+  unreadable `leases.json` starts empty, refusing every old token; an unreadable
+  `profiles.json` starts an empty registry, so grants wait for a sync while
+  restored leases keep forwarding on their own binding. A revoked lease is
+  forgotten 24 hours after its revocation.
+
 ## When the server is down
 
 A running turn keeps going. Native tools never need the server, and model
@@ -1285,10 +1327,8 @@ such as external MCP launch configurations, helper paths and integration
 origins, lives in the secret store or is sealed with a key held there. The rule
 that a secret travels only to its stored destination covers the rest.
 
-If the gateway spike fails, desktop mode accepts the exclusive-lease fallback:
-the Worker holds the live model token and agents can read it, while integration
-secrets stay protected. On one machine with one Worker exclusive leases are the
-natural shape anyway.
+The gateway spike succeeded (ADR-0004), so desktop mode, too, keeps model tokens
+in the gateway, and exclusive leases are not used.
 
 ## Phases
 

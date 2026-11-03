@@ -80,8 +80,26 @@ type Handshake =
   /** This side is the server; `admit` answers a refusal reason, or nothing. */
   | { role: "server"; admit: (hello: Hello) => string | undefined };
 
+/** The version a connection's handshake speaks, and which peers it accepts. */
+export interface ConnectionProtocol {
+  version: string;
+  compatible(version: string): boolean;
+}
+
+/** The worker protocol, every connection's default. */
+const WORKER_PROTOCOL: ConnectionProtocol = {
+  version: WORKER_PROTOCOL_VERSION,
+  compatible: compatibleProtocolVersion,
+};
+
 interface ConnectionOptions {
   handshake: Handshake;
+  /**
+   * The protocol of the handshake, the worker protocol unless given. The
+   * dialer sends its version and checks the welcome against it; the listener
+   * answers with its version and leaves the check to `admit`.
+   */
+  protocol?: ConnectionProtocol;
   handlers?: MethodHandlers;
   /**
    * Resolves once nothing the peer started for this side's requests still
@@ -116,12 +134,14 @@ export class WorkerConnection {
   private readonly serving = new Map<number, AbortController>();
   private readonly inflight = new Set<Promise<void>>();
   private readonly handshakeTimer: ReturnType<typeof setTimeout>;
+  private readonly protocol: ConnectionProtocol;
 
   constructor(
     private readonly transport: ByteEndpoint,
     private readonly options: ConnectionOptions,
   ) {
     this.handlers = options.handlers ?? {};
+    this.protocol = options.protocol ?? WORKER_PROTOCOL;
     this.ended = new Promise((resolve) => {
       this.resolveEnded = resolve;
     });
@@ -144,7 +164,7 @@ export class WorkerConnection {
         encodeControlFrame({
           type: "hello",
           workerId: options.handshake.workerId,
-          version: WORKER_PROTOCOL_VERSION,
+          version: this.protocol.version,
         }),
       );
   }
@@ -309,7 +329,7 @@ export class WorkerConnection {
         this.transport.write(
           encodeControlFrame({
             type: "refused",
-            version: WORKER_PROTOCOL_VERSION,
+            version: this.protocol.version,
             reason: refusal,
           }),
         );
@@ -319,7 +339,7 @@ export class WorkerConnection {
       this.transport.write(
         encodeControlFrame({
           type: "welcome",
-          version: WORKER_PROTOCOL_VERSION,
+          version: this.protocol.version,
         }),
       );
     } else {
@@ -329,7 +349,7 @@ export class WorkerConnection {
       }
       if (frame.type !== "welcome")
         throw new WorkerProtocolError(`Expected welcome, got ${frame.type}.`);
-      if (!compatibleProtocolVersion(frame.version)) {
+      if (!this.protocol.compatible(frame.version)) {
         this.end(`the server speaks protocol ${frame.version}`);
         return;
       }
