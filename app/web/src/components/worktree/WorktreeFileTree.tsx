@@ -22,7 +22,6 @@ import {
   buildLoadedTreeNavigatorEntries,
   pruneVanishedTreeDirs,
   type WorktreeNavigatorEntry,
-  type WorktreeNavigatorViewMode,
 } from "./WorktreeFileNavigator.tsx";
 
 export function splitWorktreePath(path: string): { dir: string; name: string } {
@@ -66,9 +65,6 @@ export function useWorktreeFileTree({
       saveExpandedTreeDirs(worktreeId, dirs);
     },
     [worktreeId],
-  );
-  const [listDirectory, setListDirectory] = useState(() =>
-    filePath ? splitWorktreePath(filePath).dir : "",
   );
   // Shared by every tree of this worktree (`lib/worktreeIgnoredFiles.ts`).
   const [includeIgnored, setIncludeIgnored] = useIgnoredFilesShown(worktreeId);
@@ -139,7 +135,6 @@ export function useWorktreeFileTree({
     inFlightDirs.current.clear();
     setEntriesByDir({});
     setLoadingDirs([]);
-    setListDirectory("");
     setTreeError(null);
     setExpandedDirs(loadExpandedTreeDirs(worktreeIdRef.current));
     loadDirectory("", true);
@@ -187,8 +182,7 @@ export function useWorktreeFileTree({
   // A watcher push invalidates the tree IN PLACE (R2): every directory already
   // loaded is refetched and swapped in when it answers, so the rows, the
   // expansion and the folder you are standing in all survive. Clearing the
-  // cache first dropped `rootLoaded` to skeleton rows and threw list mode back
-  // to the repo root on every scan.
+  // cache first dropped `rootLoaded` to skeleton rows.
   const refreshTree = useCallback(() => {
     const dirs = loadedDirsRef.current;
     for (const dir of dirs.length > 0 ? dirs : [""]) loadDirectory(dir, true);
@@ -198,7 +192,6 @@ export function useWorktreeFileTree({
   useEffect(() => {
     if (!filePath) return;
     const ancestors = ancestorDirectoryPaths(filePath);
-    setListDirectory(splitWorktreePath(filePath).dir);
     setExpandedDirs((current) =>
       [...new Set([...current, ...ancestors])].sort(),
     );
@@ -219,8 +212,6 @@ export function useWorktreeFileTree({
     rootLoaded: entriesByDir[""] !== undefined,
     expandedDirs,
     setExpandedDirs: setExpandedDirsRemembered,
-    listDirectory,
-    setListDirectory,
     includeIgnored,
     setIncludeIgnored,
     treeError,
@@ -352,7 +343,6 @@ export function WorktreeFileTree({
   tree,
   selectedPath,
   onSelectFile,
-  viewMode = "tree",
   ariaLabel,
   compact,
   changes,
@@ -362,7 +352,6 @@ export function WorktreeFileTree({
   changes?: readonly WorktreeChangeFile[] | undefined;
   selectedPath?: string | undefined;
   onSelectFile: (entry: WorktreeNavigatorEntry) => void;
-  viewMode?: WorktreeNavigatorViewMode;
   ariaLabel: string;
   compact?: boolean;
 }) {
@@ -409,16 +398,9 @@ export function WorktreeFileTree({
           loadedDirectoryPaths={loadedDirectoryPaths}
           loadingDirectoryPaths={tree.loadingDirs}
           onLoadDirectory={tree.loadDirectory}
-          listDirectoryPath={
-            viewMode === "list" ? tree.listDirectory : undefined
-          }
-          onListDirectoryPathChange={
-            viewMode === "list" ? tree.setListDirectory : undefined
-          }
           onSelectFile={onSelectFile}
           emptyLabel="No files."
           ariaLabel={ariaLabel}
-          viewMode={viewMode}
           {...(compact !== undefined ? { compact } : {})}
         />
       ) : null}

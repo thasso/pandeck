@@ -157,7 +157,6 @@ export function WorktreeChangeList({
       emptyLabel="No changes."
       showChangeStats
       ariaLabel="Changed files"
-      viewMode="tree"
     />
   );
 }

@@ -20,7 +20,6 @@ export interface WorktreeDetailStoryProps {
   scenario: "clean" | "dirty" | "with-pr";
   view: WorktreeView;
   filePath?: string;
-  layout: "by-file" | "changeset";
   narrow: boolean;
 }
 
@@ -60,7 +59,6 @@ export function WorktreeDetailStory({
   scenario,
   view,
   filePath,
-  layout,
   narrow,
 }: WorktreeDetailStoryProps) {
   const status = scenario === "clean" ? cleanStatus : dirtyStatus;
@@ -73,10 +71,7 @@ export function WorktreeDetailStory({
   useEffect(() => restore, [restore]);
 
   const [route, setRoute] = useState<Route>({ view, filePath });
-  const [prefs, setPrefs] = useState<Prefs>({
-    ...storyPrefs,
-    worktreeReviewMode: layout,
-  });
+  const [prefs, setPrefs] = useState<Prefs>(storyPrefs);
   const updatePrefs = useCallback(
     (patch: Partial<Prefs>) =>
       setPrefs((current) => ({ ...current, ...patch })),
@@ -148,7 +143,6 @@ const meta = {
     frameHeight: 720,
     scenario: "dirty",
     view: "changes",
-    layout: "by-file",
     narrow: false,
   },
   argTypes: {
@@ -158,7 +152,6 @@ const meta = {
       options: ["clean", "dirty", "with-pr"],
     },
     view: { control: "inline-radio", options: ["changes", "files"] },
-    layout: { control: "inline-radio", options: ["by-file", "changeset"] },
   },
 } satisfies Meta<typeof WorktreeDetailStory>;
 
@@ -167,16 +160,14 @@ type Story = StoryObj<typeof meta>;
 
 export const Clean: Story = { args: { scenario: "clean" } };
 
-export const DirtyByFile: Story = {
+export const DirtyAtFile: Story = {
   args: { filePath: "src/lib/retry.ts" },
 };
 
-export const DirtyByFileDark: Story = {
+export const DirtyAtFileDark: Story = {
   args: { filePath: "src/lib/retry.ts" },
   globals: { theme: "dark" },
 };
-
-export const ChangesetList: Story = { args: { layout: "changeset" } };
 
 export const WithPullRequest: Story = {
   args: { scenario: "with-pr", frameWidth: 760, filePath: "docs/retries.md" },
@@ -196,6 +187,6 @@ export const FileMarkdownDark: Story = {
 };
 
 export const Phone: Story = {
-  args: { frameWidth: 390, narrow: true, layout: "changeset" },
+  args: { frameWidth: 390, narrow: true },
   globals: { viewport: { value: "paPhone", isRotated: false } },
 };

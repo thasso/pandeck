@@ -9,7 +9,6 @@ import {
 describe("normalizeStoredPrefs", () => {
   test("preserves every active optional preference", () => {
     const optional = {
-      worktreeReviewMode: "by-file",
       lastModelKey: "provider:model",
       lastThinkingLevel: "high",
       workflowRoleRuntimes: {
@@ -35,7 +34,7 @@ describe("normalizeStoredPrefs", () => {
     } as unknown as Parameters<typeof normalizeStoredPrefs>[0]);
     expect(prefs.theme).toBe("light");
     expect(prefs.lastModelKey).toBe("provider:model");
-    expect(prefs.worktreeReviewMode).toBe("by-file");
+    expect("worktreeReviewMode" in prefs).toBe(false);
     expect(prefs.navSlots).not.toContain("calendar");
     expect(Object.keys(prefs).some((key) => key.startsWith("calendar"))).toBe(
       false,

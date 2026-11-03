@@ -15,6 +15,7 @@ import {
   knowledgeCommentDocument,
 } from "../../lib/knowledgeCheckout.ts";
 import { IconButton } from "../common/IconButton.tsx";
+import { EdgeSheetContainer } from "../common/EdgeSheet.tsx";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
 import { RoutePrimaryActionProvider } from "./RoutePrimaryAction.tsx";
 
@@ -39,7 +40,7 @@ const noop = () => {};
  * @useWhen Rendering the right panel's Knowledge tab (`RightPanelTabs`).
  * @avoidWhen Rendering the `/knowledge` route; that is the same page in the
  * main pane, which this panel links to rather than replaces.
- * @intent The SAME worktree file page the route draws for the checkout
+ * @intent The SAME worktree page the Worktree panel draws, for the checkout
  * `knowledge`, in its own navigation scope: links inside the KB move the
  * panel, never the address bar, and anything else goes to the main pane.
  */
@@ -88,47 +89,50 @@ export function KnowledgePanel({
     // comment tray speak for the file shown HERE, not the main pane's object.
     <CommentActuationProvider>
       <RoutePrimaryActionProvider action={null}>
-        <WorktreeDetailPage
-          worktree={worktree}
-          status={status}
-          title="Knowledge Base"
-          lineComments={false}
-          markdownPreviewFirst
-          documentComments={knowledgeCommentDocument}
-          narrow
-          embedded
-          headerActions={
-            <IconButton
-              label="Open in Knowledge"
-              size="icon"
-              onClick={() =>
-                onNavigate(
-                  location.path || location.view !== "files"
-                    ? worktreePath(worktree.id, location.view, {
-                        ...(location.path ? { path: location.path } : {}),
-                        ...(location.from ? { from: location.from } : {}),
-                        ...(location.to ? { to: location.to } : {}),
-                      })
-                    : knowledgePath(),
-                )
-              }
-            >
-              <SquareArrowOutUpRight />
-            </IconButton>
-          }
-          view={location.view}
-          filePath={location.path}
-          from={location.from}
-          to={location.to}
-          navigate={navigate}
-          prefs={prefs}
-          onUpdatePrefs={onUpdatePrefs}
-          comments={NO_COMMENTS}
-          onLoadComments={noop}
-          onUnloadComments={noop}
-          commentActions={NO_COMMENT_ACTIONS}
-          onSubmitReview={noop}
-        />
+        {/* The page's browse and jump sheets open over this panel. */}
+        <EdgeSheetContainer className="flex h-full min-h-0 flex-col overflow-hidden">
+          <WorktreeDetailPage
+            worktree={worktree}
+            status={status}
+            title="Knowledge Base"
+            lineComments={false}
+            markdownPreviewFirst
+            documentComments={knowledgeCommentDocument}
+            narrow
+            embedded
+            headerActions={
+              <IconButton
+                label="Open in Knowledge"
+                size="icon"
+                onClick={() =>
+                  onNavigate(
+                    location.path || location.view !== "files"
+                      ? worktreePath(worktree.id, location.view, {
+                          ...(location.path ? { path: location.path } : {}),
+                          ...(location.from ? { from: location.from } : {}),
+                          ...(location.to ? { to: location.to } : {}),
+                        })
+                      : knowledgePath(),
+                  )
+                }
+              >
+                <SquareArrowOutUpRight />
+              </IconButton>
+            }
+            view={location.view}
+            filePath={location.path}
+            from={location.from}
+            to={location.to}
+            navigate={navigate}
+            prefs={prefs}
+            onUpdatePrefs={onUpdatePrefs}
+            comments={NO_COMMENTS}
+            onLoadComments={noop}
+            onUnloadComments={noop}
+            commentActions={NO_COMMENT_ACTIONS}
+            onSubmitReview={noop}
+          />
+        </EdgeSheetContainer>
       </RoutePrimaryActionProvider>
     </CommentActuationProvider>
   );

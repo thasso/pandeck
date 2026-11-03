@@ -112,10 +112,6 @@ const status: WorktreeGitStatus = {
 };
 
 const prefs = {
-  worktreeChangesRailWidth: 300,
-  worktreeChangesRailCollapsed: false,
-  worktreeNavigatorViewMode: "tree",
-  worktreeReviewMode: "changeset",
   diffStyle: "unified",
   theme: "dark",
 } as Prefs;

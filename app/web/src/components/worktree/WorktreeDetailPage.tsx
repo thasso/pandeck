@@ -20,7 +20,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -37,23 +36,17 @@ import {
   UnfoldVertical,
   WholeWord,
   WrapText,
-  ChevronLeft,
   Download,
   Ellipsis,
   ExternalLink,
   Eye,
   File,
   FileText,
-  FolderTree,
   GitBranch,
   GitCompareArrows,
   History,
-  List,
   MessageSquareQuote,
   SendHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
-  SlidersHorizontal,
 } from "lucide-react";
 import {
   documentTargetHref,
@@ -93,16 +86,10 @@ import { useWorktreeDelivery } from "./WorktreeDelivery.tsx";
 import { useWorktreeRetire } from "./useWorktreeRetire.tsx";
 import { worktreeInspectorActions } from "../objectInspectors.tsx";
 import { useIgnoredFilesShown } from "../../lib/worktreeIgnoredFiles.ts";
-import { Field, FieldLabel } from "../ui/field.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Separator } from "../ui/separator.tsx";
-import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
-import {
-  DIFF_VIEW_SWITCHES,
-  DiffModeToolbar,
-} from "../diff/DiffModeToolbar.tsx";
+import { DIFF_VIEW_SWITCHES } from "../diff/DiffModeToolbar.tsx";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
 import { DiffWorkerProvider } from "../diff/DiffWorkerProvider.tsx";
 import { FileSurface } from "../diff/FileSurface.tsx";
@@ -160,14 +147,9 @@ import {
 } from "../../hooks/useSessionRouting.ts";
 import { copyWithToast } from "../../lib/clipboard.ts";
 import {
-  ResizableSeparator,
-  useResizeDrag,
-} from "../common/ResizableSeparator.tsx";
-import {
   WorktreeFileNavigator,
   buildChangeNavigatorEntries,
   directoryPathsFromNavigatorEntries,
-  type WorktreeNavigatorViewMode,
 } from "./WorktreeFileNavigator.tsx";
 import {
   WorktreeFileTree,
@@ -249,11 +231,6 @@ export interface WorktreeDetailPageProps {
    * selected in. Keep the function's identity stable.
    */
   documentComments?: ((path: string) => CommentDocument) | undefined;
-  /**
-   * The sidebar's Projects tree browses this worktree's files and change sets,
-   * so the page draws no rail of its own and Review is one scroll.
-   */
-  sidebarNavigation?: boolean;
   /** For the Overview's sessions working here. */
   sessions?: readonly SessionListItem[] | undefined;
   /** `sessions` answered in this socket episode: Retire may count them. */
@@ -288,254 +265,7 @@ function isUnchangedPathError(error: string | undefined): boolean {
   return error !== undefined && error.includes("not changed in this scope");
 }
 
-const WORKTREE_RAIL_MIN_WIDTH = 220;
-const WORKTREE_RAIL_MAX_WIDTH = 460;
-
-function clampWorktreeRailWidth(width: number): number {
-  return Math.min(
-    WORKTREE_RAIL_MAX_WIDTH,
-    Math.max(WORKTREE_RAIL_MIN_WIDTH, Math.round(width)),
-  );
-}
-
-// Keep list mode wired while the product exposes one navigator shape. Flipping
-// this restores the existing preference and control without rebuilding the
-// browser behavior.
-const NAVIGATOR_VIEW_SWITCH_ENABLED = false;
-
-function navigatorViewMode(prefs: Prefs): WorktreeNavigatorViewMode {
-  return NAVIGATOR_VIEW_SWITCH_ENABLED
-    ? prefs.worktreeNavigatorViewMode
-    : "tree";
-}
-
-function NavigatorViewToggle({
-  mode,
-  onChange,
-}: {
-  mode: WorktreeNavigatorViewMode;
-  onChange: (mode: WorktreeNavigatorViewMode) => void;
-}) {
-  return (
-    <ToggleGroup
-      variant="outline"
-      size="sm"
-      spacing={0}
-      aria-label="Navigator view"
-      value={[mode]}
-      onValueChange={(next) => {
-        if (next[0]) onChange(next[0] as WorktreeNavigatorViewMode);
-      }}
-    >
-      <ToggleGroupItem value="list" aria-label="Folder list">
-        <List />
-      </ToggleGroupItem>
-      <ToggleGroupItem value="tree" aria-label="Tree">
-        <FolderTree />
-      </ToggleGroupItem>
-    </ToggleGroup>
-  );
-}
-
-function NavigatorVisibilityToggle({
-  collapsed,
-  onChange,
-}: {
-  collapsed: boolean;
-  onChange: (collapsed: boolean) => void;
-}) {
-  return (
-    <IconButton
-      label={collapsed ? "Show navigator" : "Collapse navigator"}
-      onClick={() => onChange(!collapsed)}
-    >
-      {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-    </IconButton>
-  );
-}
-
-function WorktreeRailLayout({
-  title,
-  subtitle,
-  collapsedSummary,
-  detailControls,
-  prefs,
-  onUpdatePrefs,
-  children,
-  rail,
-  narrow,
-  narrowListHeader = true,
-  narrowDetailBar = true,
-  railHidden = false,
-  detailActive = false,
-  onBack,
-}: {
-  title: string;
-  subtitle?: ReactNode;
-  collapsedSummary?: ReactNode;
-  /** Narrow-layout detail-only controls sharing the compact back/title row. */
-  detailControls?: ReactNode;
-  prefs: Prefs;
-  onUpdatePrefs: (patch: Partial<Prefs>) => void;
-  children: ReactNode;
-  rail: ReactNode;
-  narrow: boolean;
-  /** Narrow list screen: render the navigator's own title/controls header. */
-  narrowListHeader?: boolean;
-  /** Narrow detail screen: draw the back/title/controls bar above it. */
-  narrowDetailBar?: boolean;
-  /** Desktop: no rail at all, as if collapsed (another tree browses this). */
-  railHidden?: boolean;
-  /** Narrow: a detail is selected, so the content pane replaces the list. */
-  detailActive?: boolean;
-  /** Narrow: return from the detail pane to the list. */
-  onBack?: () => void;
-}) {
-  const railCollapsed = railHidden || prefs.worktreeChangesRailCollapsed;
-  const railWidth = clampWorktreeRailWidth(prefs.worktreeChangesRailWidth);
-  const paneRef = useRef<HTMLDivElement>(null);
-  const railResize = useResizeDrag({
-    onResize: useCallback(
-      (clientX: number) => {
-        const left = paneRef.current?.getBoundingClientRect().left ?? 0;
-        onUpdatePrefs({
-          worktreeChangesRailWidth: clampWorktreeRailWidth(clientX - left),
-        });
-      },
-      [onUpdatePrefs],
-    ),
-  });
-
-  const resizeRailWithKeyboard = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      const step = event.shiftKey ? 40 : 16;
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        onUpdatePrefs({
-          worktreeChangesRailWidth: clampWorktreeRailWidth(railWidth - step),
-        });
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        onUpdatePrefs({
-          worktreeChangesRailWidth: clampWorktreeRailWidth(railWidth + step),
-        });
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        onUpdatePrefs({ worktreeChangesRailWidth: WORKTREE_RAIL_MIN_WIDTH });
-      } else if (event.key === "End") {
-        event.preventDefault();
-        onUpdatePrefs({ worktreeChangesRailWidth: WORKTREE_RAIL_MAX_WIDTH });
-      }
-    },
-    [onUpdatePrefs, railWidth],
-  );
-
-  const railHeading = (
-    <div className="min-w-0 border-b border-border px-2 py-1.5">
-      <div className="truncate text-sm font-medium text-muted-foreground">
-        {title}
-      </div>
-      {subtitle ? (
-        <div className="truncate font-mono text-xs text-muted-foreground">
-          {subtitle}
-        </div>
-      ) : null}
-    </div>
-  );
-
-  // Mobile is list→detail: the navigator IS the screen until a detail is
-  // selected, then the content pane replaces it behind a back bar. The rail
-  // collapse/width prefs are desktop concepts and don't apply.
-  if (narrow) {
-    if (!detailActive) {
-      return (
-        <div className="flex min-h-0 flex-1 flex-col bg-background/40">
-          {narrowListHeader ? railHeading : null}
-          <div
-            data-dock-scroll
-            className="min-h-0 flex-1 overflow-y-auto p-1.5"
-          >
-            {rail}
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-        {narrowDetailBar ? (
-          <div className="flex items-center gap-2 border-b border-border bg-background/40 py-1.5 pl-1 pr-3 text-sm text-muted-foreground">
-            {onBack ? (
-              <IconButton
-                label={`Back to ${title.toLowerCase()}`}
-                size="icon"
-                onClick={onBack}
-              >
-                <ChevronLeft />
-              </IconButton>
-            ) : null}
-            {collapsedSummary ?? (
-              <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-                {title}
-              </span>
-            )}
-            {detailControls ? (
-              <div className="shrink-0">{detailControls}</div>
-            ) : null}
-          </div>
-        ) : null}
-        {children}
-      </div>
-    );
-  }
-
-  return (
-    <div ref={paneRef} className="flex min-h-0 flex-1">
-      {!railCollapsed ? (
-        <div
-          className="relative flex shrink-0 flex-col border-r border-border bg-background/40"
-          style={{ width: railWidth }}
-        >
-          {railHeading}
-          <div
-            data-dock-scroll
-            className="min-h-0 flex-1 overflow-y-auto p-1.5"
-          >
-            {rail}
-          </div>
-          <ResizableSeparator
-            edge="right"
-            label="worktree navigator"
-            min={WORKTREE_RAIL_MIN_WIDTH}
-            max={WORKTREE_RAIL_MAX_WIDTH}
-            value={railWidth}
-            resizing={railResize.resizing}
-            onPointerDown={railResize.onPointerDown}
-            onKeyDown={resizeRailWithKeyboard}
-          />
-        </div>
-      ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-        {railCollapsed && collapsedSummary ? (
-          // The phone's file bar on a wide screen: the name and folder, the
-          // detail's controls at the end.
-          <div
-            className={`flex items-center gap-2 border-b border-border bg-background/40 px-3 text-sm text-muted-foreground ${detailControls ? "py-1.5" : "py-2"}`}
-          >
-            {collapsedSummary}
-            {detailControls ? (
-              <div className="ml-auto shrink-0">{detailControls}</div>
-            ) : null}
-          </div>
-        ) : null}
-        {children}
-      </div>
-    </div>
-  );
-}
-
 /* --------------------------------- changes --------------------------------- */
-
-type ReviewMode = "by-file" | "changeset";
 
 /** One identity for "no changed files yet" (see `changeFiles` below). */
 const NO_CHANGE_FILES: WorktreeChangeFile[] = [];
@@ -546,20 +276,13 @@ function ChangesView({
   filePath,
   from,
   to,
-  anchor,
-  navigate,
   prefs,
-  onUpdatePrefs,
   refreshToken,
-  navigationControls,
-  viewOptionsControl,
   commentsConfigFor,
-  sidebarNavigation = false,
   jumpOpen,
   onJumpOpenChange,
 }: {
-  sidebarNavigation?: boolean;
-  /** Jump to file, opened from the page header (the phone's sheet). */
+  /** Jump to file, opened from the page header (the narrow layout's sheet). */
   jumpOpen: boolean;
   onJumpOpenChange: (open: boolean) => void;
   worktree: WorktreeRecord;
@@ -567,13 +290,8 @@ function ChangesView({
   filePath?: string | undefined;
   from?: string | undefined;
   to?: string | undefined;
-  anchor?: DocumentLineAnchor | undefined;
-  navigate: (path: string) => void;
   prefs: Prefs;
-  onUpdatePrefs: (patch: Partial<Prefs>) => void;
   refreshToken: number;
-  navigationControls: ReactNode;
-  viewOptionsControl: ReactNode;
   /** Comment config for a file; `current` = the shown new side is working-tree content, else `refOid` names its commit. */
   commentsConfigFor: (
     path: string,
@@ -582,18 +300,12 @@ function ChangesView({
   ) => LineCommentsConfig | undefined;
 }) {
   const scope = useMemo(() => scopeFromRoute(from, to), [from, to]);
-  // With the sidebar listing the changed files, Review is the one scroll they
-  // jump into.
-  const reviewMode: ReviewMode = sidebarNavigation
-    ? "changeset"
-    : (prefs.worktreeReviewMode ?? (narrow ? "changeset" : "by-file"));
   const [expandedChangeDirs, setExpandedChangeDirs] = useState<string[]>([]);
 
   // The worktree AND the scope are the fetch key, which is what makes trusting
   // `changes` structural (R3): a switch of either drops the previous answer
   // during render, so nothing can select or diff a file off a list that belongs
-  // to another scope (which used to request a path this scope has no diff for —
-  // a spurious 400).
+  // to another scope.
   const changesKey = `${worktree.id}:${scopeCacheKey(scope)}`;
   const loadChanges = useCallback(
     () => fetchWorktreeChanges(worktree.id, scope),
@@ -608,7 +320,6 @@ function ChangesView({
   useReloadOnToken(changesKey, refreshToken, changesFetch.reload);
   const changes = dataOf(changesFetch.state);
   const changesError = errorOf(changesFetch.state);
-  const changesReady = changes !== undefined;
   // A SHARED empty array while the list is unanswered: a fresh `[]` per render
   // re-derives the navigator entries, whose effect then rewrites the expanded
   // directories, which renders again — a render loop that spun for as long as
@@ -618,65 +329,12 @@ function ChangesView({
     () => buildChangeNavigatorEntries(changeFiles),
     [changeFiles],
   );
-  // A wide pane auto-shows the first changed file next to the list; a narrow
-  // one shows the list alone until the user picks a file (list→detail).
-  const selectedPath = filePath ?? (narrow ? undefined : changeFiles[0]?.path);
-  const selectedFileKnown = Boolean(
-    selectedPath &&
-    changeFiles.some(
-      (file) => file.path === selectedPath || file.oldPath === selectedPath,
-    ),
-  );
-  // The selected FILE is part of the key too, so switching files shows the new
-  // path's placeholder instead of the previous file's diff (R3); a null key
-  // parks the fetch while the list is still arriving or the file is unknown to
-  // this scope.
-  const fileDiffKey =
-    reviewMode === "by-file" &&
-    selectedPath &&
-    changesReady &&
-    selectedFileKnown
-      ? `${worktree.id}:${selectedPath}:${scopeCacheKey(scope)}`
-      : null;
-  const loadFileDiff = useCallback(
-    () =>
-      selectedPath
-        ? fetchWorktreeFileDiff(worktree.id, selectedPath, scope)
-        : Promise.reject(new Error("No file selected.")),
-    [worktree.id, selectedPath, scope],
-  );
-  const fileDiffFetch = useFetchState<WorktreeFileDiffResponse>(
-    fileDiffKey,
-    loadFileDiff,
-  );
-  useReloadOnToken(fileDiffKey, refreshToken, fileDiffFetch.reload);
-  const fileDiff = dataOf(fileDiffFetch.state);
-  const fileDiffError = errorOf(fileDiffFetch.state);
 
   useEffect(() => {
     setExpandedChangeDirs(directoryPathsFromNavigatorEntries(changeEntries));
   }, [changeEntries]);
 
-  // Diff-derived cache key, memoized on the patch CONTENT rather than on the
-  // payload object: a refetch that answers with the same bytes hands pierre the
-  // same key, so an unchanged diff is never rehashed or remounted.
-  const fileDiffPath = fileDiff?.path;
-  const fileDiffText = fileDiff?.diff;
-  const diffCacheKey = useMemo(
-    () =>
-      fileDiffPath !== undefined && fileDiffText !== undefined
-        ? `${worktree.id}:${fileDiffPath}:${hashContent(fileDiffText)}`
-        : "",
-    [worktree.id, fileDiffPath, fileDiffText],
-  );
-  const navigatorMode = navigatorViewMode(prefs);
-  const setNavigatorMode = useCallback(
-    (mode: WorktreeNavigatorViewMode) =>
-      onUpdatePrefs({ worktreeNavigatorViewMode: mode }),
-    [onUpdatePrefs],
-  );
-
-  // Changeset mode: viewed tracking + jump-to-file section registry.
+  // Viewed tracking + jump-to-file section registry.
   const { viewedPaths, toggleViewed } = useViewedFiles(
     worktree.id,
     scopeCacheKey(scope),
@@ -694,8 +352,6 @@ function ChangesView({
       .get(path)
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
-  const jumpSheetOpen = jumpOpen;
-  const setJumpSheetOpen = onJumpOpenChange;
   // A file picked in the sidebar arrives as the route's path: scroll the
   // changeset to it, retrying while its lazily mounted section appears. Then
   // HOLD it there for a moment: the jump brings its neighbours near the
@@ -704,7 +360,7 @@ function ChangesView({
   // ends the hold.
   const changesLoaded = changes !== undefined;
   useEffect(() => {
-    if (reviewMode !== "changeset" || !filePath || !changesLoaded) return;
+    if (!filePath || !changesLoaded) return;
     let frame = 0;
     let tries = 0;
     let held = 0;
@@ -739,11 +395,9 @@ function ChangesView({
       for (const type of userInput)
         window.removeEventListener(type, release, { capture: true });
     };
-  }, [reviewMode, filePath, changesLoaded]);
-  // The changeset stacks every file in one scroller, so a narrow layout needs a
-  // way to jump. WHERE that list opens is a phone question, not a width one: a
-  // viewport-wide sheet over the whole app is wrong from a side panel, which is
-  // beside the thing the reader is comparing against.
+  }, [filePath, changesLoaded]);
+  // The changeset stacks every file in one scroller; a wide page lists them in
+  // the sidebar, a phone or a side panel jumps through the header's sheet.
   const phone = useMobileLayout();
 
   // Nothing to keep yet: a first load draws the placeholder, and only a first
@@ -759,138 +413,17 @@ function ChangesView({
       />
     );
 
-  const selectedParts = selectedPath ? splitWorktreePath(selectedPath) : null;
-  const totalsSummary = (
-    <>
-      {changes.totals.files} file
-      {changes.totals.files === 1 ? "" : "s"} ·{" "}
-      <span className="text-success">+{changes.totals.additions}</span>{" "}
-      <span className="text-destructive">−{changes.totals.deletions}</span>
-      {changesFetch.state.status === "refreshing" ? (
-        <RefreshIndicator className="ml-1.5" label="Refreshing changed files" />
-      ) : null}
-    </>
-  );
-  // R2: a refresh that failed keeps the changed files it already has and says so
-  // above them.
-  const changesRefreshNote =
-    changesError === undefined ? null : (
-      <ErrorNote
-        className="mx-3 mt-2 shrink-0"
-        message={`Could not refresh the changes: ${changesError}`}
-        onRetry={changesFetch.reload}
-      />
-    );
-
-  /** The changeset's jump list, in whichever surface this layout opens it in. */
-  const jumpNavigator = (close: () => void) => (
-    <WorktreeFileNavigator
-      entries={changeEntries}
-      expandedDirectoryPaths={expandedChangeDirs}
-      onExpandedDirectoryPathsChange={setExpandedChangeDirs}
-      onSelectFile={(entry) => {
-        close();
-        // Let the surface unmount first, then scroll the section into view.
-        requestAnimationFrame(() => jumpToFile(entry.path));
-      }}
-      emptyLabel="No changes in this scope."
-      showChangeStats
-      ariaLabel="Changed files"
-      viewMode={navigatorMode}
-    />
-  );
-
-  // With the sidebar navigating, the scope lives in the page header's second
-  // line and Review has no toolbar row at all.
-  const toolbar = sidebarNavigation ? null : (
-    // Two kinds of thing only: WHERE you are (the tabs) and WHAT you are looking at
-    // (the scope). How it is rendered lives in the view-options popover, which is
-    // why this row survives a 390px viewport with words instead of six glyphs.
-    <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1.5">
-      {navigationControls ? (
-        <>
-          {navigationControls}
-          <Separator orientation="vertical" className="mx-1 h-4" />
-        </>
-      ) : null}
-      <WorktreeScopePicker
-        worktree={worktree}
-        narrow={narrow}
-        refreshToken={refreshToken}
-        from={from}
-        to={to}
-        onPick={(pickedFrom, pickedTo) =>
-          navigate(
-            worktreePath(worktree.id, "changes", {
-              ...(pickedFrom ? { from: pickedFrom } : {}),
-              ...(pickedTo ? { to: pickedTo } : {}),
-              ...(filePath ? { path: filePath } : {}),
-            }),
-          )
-        }
-      />
-      <div className="ml-auto flex shrink-0 items-center gap-1 pl-1">
-        {/* R2: the shown diff is being refetched — on a watcher push, and above
-            all on a Retry, where the error note disappears and this is the only
-            sign that something is running. The rail's subtitle marks the FILE
-            LIST's own refresh, which is a different request. */}
-        {fileDiffFetch.state.status === "refreshing" ? (
-          <RefreshIndicator label="Refreshing this diff" />
-        ) : null}
-        {narrow &&
-        !sidebarNavigation &&
-        reviewMode === "changeset" &&
-        changeFiles.length > 0 ? (
-          phone ? (
-            <IconButton
-              label="Jump to file"
-              onClick={() => setJumpSheetOpen(true)}
-            >
-              <FolderTree />
-            </IconButton>
-          ) : (
-            <Popover open={jumpSheetOpen} onOpenChange={setJumpSheetOpen}>
-              <PopoverTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Jump to file"
-                  />
-                }
-              >
-                <FolderTree />
-              </PopoverTrigger>
-              <PopoverContent
-                align="end"
-                className="max-h-96 w-80 overflow-y-auto"
-              >
-                {jumpNavigator(() => setJumpSheetOpen(false))}
-              </PopoverContent>
-            </Popover>
-          )
-        ) : null}
-        {NAVIGATOR_VIEW_SWITCH_ENABLED && !sidebarNavigation ? (
-          <NavigatorViewToggle
-            mode={navigatorMode}
-            onChange={setNavigatorMode}
-          />
-        ) : null}
-        {!narrow && !sidebarNavigation ? (
-          <NavigatorVisibilityToggle
-            collapsed={prefs.worktreeChangesRailCollapsed}
-            onChange={(collapsed) =>
-              onUpdatePrefs({ worktreeChangesRailCollapsed: collapsed })
-            }
-          />
-        ) : null}
-        {viewOptionsControl}
-      </div>
-    </div>
-  );
-
-  if (reviewMode === "changeset") {
-    const changesetContent = (
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* R2: a refresh that failed keeps the changed files it already has and
+        says so above them. */}
+      {changesError === undefined ? null : (
+        <ErrorNote
+          className="mx-3 mt-2 shrink-0"
+          message={`Could not refresh the changes: ${changesError}`}
+          onRetry={changesFetch.reload}
+        />
+      )}
       <div data-dock-scroll className="min-h-0 min-w-0 flex-1 overflow-auto">
         <WorktreeChangesetList
           worktreeId={worktree.id}
@@ -904,181 +437,27 @@ function ChangesView({
           registerSection={registerSection}
         />
       </div>
-    );
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        {toolbar}
-        {changesRefreshNote}
-        {narrow || sidebarNavigation ? (
-          changesetContent
-        ) : (
-          <WorktreeRailLayout
-            title="Changed files"
-            subtitle={totalsSummary}
-            collapsedSummary={
-              <span className="font-medium text-foreground">All files</span>
-            }
-            prefs={prefs}
-            onUpdatePrefs={onUpdatePrefs}
-            narrow={false}
-            rail={
-              <WorktreeFileNavigator
-                entries={changeEntries}
-                expandedDirectoryPaths={expandedChangeDirs}
-                onExpandedDirectoryPathsChange={setExpandedChangeDirs}
-                onSelectFile={(entry) => jumpToFile(entry.path)}
-                emptyLabel="No changes in this scope."
-                showChangeStats
-                ariaLabel="Changed files"
-                viewMode={navigatorMode}
-              />
-            }
-          >
-            {changesetContent}
-          </WorktreeRailLayout>
-        )}
-        {phone || (sidebarNavigation && narrow) ? (
-          <EdgeSheet
-            open={jumpSheetOpen}
-            title="Jump to file"
-            onClose={() => setJumpSheetOpen(false)}
-          >
-            {jumpNavigator(() => setJumpSheetOpen(false))}
-          </EdgeSheet>
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {toolbar}
-      {changesRefreshNote}
-      <WorktreeRailLayout
-        title="Changed files"
-        subtitle={totalsSummary}
-        collapsedSummary={
-          selectedParts ? (
-            <>
-              <span className="font-medium text-foreground">
-                {selectedParts.name}
-              </span>
-              {selectedParts.dir ? (
-                <span className="min-w-0 truncate font-mono text-sm text-muted-foreground">
-                  {selectedParts.dir}
-                </span>
-              ) : null}
-              <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                {totalsSummary}
-              </span>
-            </>
-          ) : undefined
-        }
-        prefs={prefs}
-        onUpdatePrefs={onUpdatePrefs}
-        narrow={narrow}
-        detailActive={Boolean(filePath)}
-        {...(!filePath
-          ? { onBack: () => navigate(worktreePath(worktree.id, "changes")) }
-          : {})}
-        rail={
+      {phone || narrow ? (
+        <EdgeSheet
+          open={jumpOpen}
+          title="Jump to file"
+          onClose={() => onJumpOpenChange(false)}
+        >
           <WorktreeFileNavigator
             entries={changeEntries}
-            selectedPath={selectedPath}
             expandedDirectoryPaths={expandedChangeDirs}
             onExpandedDirectoryPathsChange={setExpandedChangeDirs}
-            onSelectFile={(entry) =>
-              navigate(
-                worktreePath(worktree.id, "changes", {
-                  path: entry.path,
-                  ...(from !== undefined ? { from } : {}),
-                  ...(to !== undefined ? { to } : {}),
-                }),
-              )
-            }
+            onSelectFile={(entry) => {
+              onJumpOpenChange(false);
+              // Let the sheet unmount first, then scroll the section into view.
+              requestAnimationFrame(() => jumpToFile(entry.path));
+            }}
             emptyLabel="No changes in this scope."
             showChangeStats
             ariaLabel="Changed files"
-            viewMode={navigatorMode}
           />
-        }
-      >
-        <div
-          data-document-scroll={
-            filePath
-              ? documentTargetHref({
-                  kind: "worktreeFile",
-                  worktreeId: worktree.id,
-                  path: filePath,
-                  view: "diff",
-                  ...(anchor ? { anchor } : {}),
-                })
-              : undefined
-          }
-          data-dock-scroll
-          className="min-h-0 min-w-0 flex-1 overflow-auto"
-        >
-          {fileDiff ? (
-            fileDiff.binary ? (
-              <div className="p-6 text-sm text-muted-foreground">
-                Binary files cannot be diffed.
-              </div>
-            ) : (
-              // The frame is UNCONDITIONAL: making it appear with the note would
-              // change the element type at the surface's position and remount
-              // the diff — losing the scroll position and any open draft at
-              // exactly the moment R2 exists to protect them.
-              <div className="flex flex-col">
-                {fileDiffError !== undefined &&
-                !isUnchangedPathError(fileDiffError) ? (
-                  <ErrorNote
-                    className="m-3"
-                    message={`Could not refresh this diff: ${fileDiffError}`}
-                    onRetry={fileDiffFetch.reload}
-                  />
-                ) : null}
-                <DiffSurface
-                  prefs={prefs}
-                  patch={fileDiff.diff}
-                  oldFile={{
-                    name: fileDiff.oldPath ?? fileDiff.path,
-                    contents: fileDiff.oldContent,
-                  }}
-                  newFile={{
-                    name: fileDiff.path,
-                    contents: fileDiff.newContent,
-                  }}
-                  cacheKey={diffCacheKey}
-                  lineAnchor={anchor}
-                  comments={commentsConfigFor(
-                    fileDiff.path,
-                    scope.kind === "workingTree" ? true : !scope.to,
-                    fileDiff.newOid,
-                  )}
-                />
-              </div>
-            )
-          ) : isInitialLoad(fileDiffFetch.state) ? (
-            <PaneLoading label="Loading diff…" />
-          ) : fileDiffError !== undefined ? (
-            isUnchangedPathError(fileDiffError) ? (
-              <div className="p-6 text-sm text-muted-foreground">
-                This file is no longer changed in this scope.
-              </div>
-            ) : (
-              <ErrorNote
-                className="m-4"
-                message={`Could not load this diff: ${fileDiffError}`}
-                onRetry={fileDiffFetch.reload}
-              />
-            )
-          ) : (
-            <div className="p-6 text-sm text-muted-foreground">
-              No changed file selected.
-            </div>
-          )}
-        </div>
-      </WorktreeRailLayout>
+        </EdgeSheet>
+      ) : null}
     </div>
   );
 }
@@ -1283,30 +662,22 @@ function FilesView({
   filePath,
   navigate,
   prefs,
-  onUpdatePrefs,
   refreshToken,
   anchor,
-  navigationControls,
-  viewOptionsControl,
   pivot,
   onPivotChange,
   markdownPreviewFirst,
   browseAsDocuments,
   documentComments,
   commentsConfigFor,
-  sidebarNavigation = false,
 }: {
-  sidebarNavigation?: boolean;
   worktree: WorktreeRecord;
   narrow: boolean;
   filePath?: string | undefined;
   navigate: (path: string) => void;
   prefs: Prefs;
-  onUpdatePrefs: (patch: Partial<Prefs>) => void;
   refreshToken: number;
   anchor?: DocumentLineAnchor | undefined;
-  navigationControls: ReactNode;
-  viewOptionsControl: ReactNode;
   pivot: FilePivot;
   onPivotChange: (pivot: FilePivot) => void;
   markdownPreviewFirst: boolean;
@@ -1318,13 +689,6 @@ function FilesView({
     refOid?: string,
   ) => LineCommentsConfig | undefined;
 }) {
-  const tree = useWorktreeFileTree({
-    worktreeId: worktree.id,
-    filePath,
-    refreshToken,
-  });
-  const fileChanges = useWorktreeFileChanges(worktree, refreshToken);
-
   // The file's own path is the fetch key, so opening another file shows ITS
   // placeholder instead of the previous file's source under the new path (R3);
   // a watcher push reloads the same key and keeps the source readable (R2).
@@ -1423,12 +787,6 @@ function FilesView({
     [worktree.id, filePathForKey, fileContent],
   );
   const selectedParts = filePath ? splitWorktreePath(filePath) : null;
-  const navigatorMode = navigatorViewMode(prefs);
-  const setNavigatorMode = useCallback(
-    (mode: WorktreeNavigatorViewMode) =>
-      onUpdatePrefs({ worktreeNavigatorViewMode: mode }),
-    [onUpdatePrefs],
-  );
   // What the pane on screen is refetching, if anything (R2): the source, or the
   // "Changes vs base" diff that replaces it. One marker either way — only one of
   // the two is being looked at.
@@ -1446,7 +804,7 @@ function FilesView({
     pivots.length > 1 ? (
       <ToggleGroup
         // In the file bar beside the name: quiet icons, the bar's own weight.
-        variant={sidebarNavigation ? "default" : "outline"}
+        variant={browseAsDocuments ? "outline" : "default"}
         size="sm"
         spacing={0}
         aria-label="File view"
@@ -1457,7 +815,7 @@ function FilesView({
       >
         {pivots.map(({ id, label, icon }) => (
           <ToggleGroupItem key={id} value={id} aria-label={label} title={label}>
-            {narrow || sidebarNavigation ? icon : label}
+            {browseAsDocuments && !narrow ? label : icon}
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
@@ -1465,50 +823,27 @@ function FilesView({
 
   return (
     <>
-      {browseAsDocuments ? (
-        // Only the file's own pivots (Preview / File / History) remain; with
-        // no file open there is nothing to switch, so no toolbar at all. A
-        // phone has none either: the page header's `…` holds the pivots.
-        filePath && !narrow && (pivotControls || shownRefresh !== null) ? (
-          <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
-            {shownRefresh !== null ? (
-              <RefreshIndicator label={shownRefresh} />
-            ) : null}
-            <div className="ml-auto flex shrink-0 items-center gap-1">
-              {pivotControls}
-            </div>
-          </div>
-        ) : null
-      ) : // With the sidebar navigating, a phone's toolbar would be empty: the
-      // pivots sit in the file bar and the options in the header's menu.
-      sidebarNavigation ? null : (
+      {/* A document folder's wide page: only the file's own pivots (Preview /
+        File / History) in a toolbar; with no file open there is nothing to
+        switch. A phone has none: the page header's `…` holds the pivots. */}
+      {browseAsDocuments &&
+      filePath &&
+      !narrow &&
+      (pivotControls || shownRefresh !== null) ? (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
-          {navigationControls}
+          {shownRefresh !== null ? (
+            <RefreshIndicator label={shownRefresh} />
+          ) : null}
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            {!narrow ? pivotControls : null}
-            {NAVIGATOR_VIEW_SWITCH_ENABLED && !sidebarNavigation ? (
-              <NavigatorViewToggle
-                mode={navigatorMode}
-                onChange={setNavigatorMode}
-              />
-            ) : null}
-            {!narrow && !sidebarNavigation ? (
-              <NavigatorVisibilityToggle
-                collapsed={prefs.worktreeChangesRailCollapsed}
-                onChange={(collapsed) =>
-                  onUpdatePrefs({ worktreeChangesRailCollapsed: collapsed })
-                }
-              />
-            ) : null}
-            {filePath ? viewOptionsControl : null}
+            {pivotControls}
           </div>
         </div>
-      )}
-      <WorktreeRailLayout
-        title="Files"
-        subtitle={worktree.branch}
-        collapsedSummary={
-          selectedParts && !(browseAsDocuments && !narrow) ? (
+      ) : null}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-card">
+        {/* A worktree's file bar: the name and folder, the pivots at the end
+          (a document folder's header already names the file). */}
+        {selectedParts && !browseAsDocuments ? (
+          <div className="flex items-center gap-2 border-b border-border bg-background/40 px-3 py-1.5 text-sm text-muted-foreground">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <span className="min-w-0 max-w-1/2 truncate font-medium text-foreground">
                 {selectedParts.name}
@@ -1524,41 +859,15 @@ function FilesView({
                   <span dir="ltr">{selectedParts.dir}</span>
                 </span>
               ) : null}
-              {/* The narrow detail bar and the rail-collapsed bar are the only
-                chrome those layouts have, so R2's marker belongs here too. */}
               {shownRefresh !== null ? (
                 <RefreshIndicator className="shrink-0" label={shownRefresh} />
               ) : null}
             </div>
-          ) : undefined
-        }
-        detailControls={narrow || sidebarNavigation ? pivotControls : undefined}
-        prefs={prefs}
-        onUpdatePrefs={onUpdatePrefs}
-        narrow={narrow}
-        narrowListHeader={false}
-        // The document header already names the file and holds its pivots.
-        narrowDetailBar={
-          !browseAsDocuments && !(sidebarNavigation && !filePath)
-        }
-        railHidden={browseAsDocuments || sidebarNavigation}
-        detailActive={Boolean(filePath) || sidebarNavigation}
-        {...(!filePath
-          ? { onBack: () => navigate(worktreePath(worktree.id, "files")) }
-          : {})}
-        rail={
-          <WorktreeFileTree
-            tree={tree}
-            changes={fileChanges}
-            selectedPath={filePath}
-            onSelectFile={(entry) =>
-              navigate(worktreePath(worktree.id, "files", { path: entry.path }))
-            }
-            ariaLabel="Worktree file tree"
-            viewMode={navigatorMode}
-          />
-        }
-      >
+            {pivotControls ? (
+              <div className="ml-auto shrink-0">{pivotControls}</div>
+            ) : null}
+          </div>
+        ) : null}
         {filePath ? (
           <>
             {narrow && browseAsDocuments && shownRefresh !== null ? (
@@ -1567,16 +876,6 @@ function FilesView({
                 className="absolute right-3 top-2 z-10"
                 label={shownRefresh}
               />
-            ) : null}
-            {!narrow && !browseAsDocuments && !sidebarNavigation ? (
-              <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
-                  {filePath}
-                </span>
-                {shownRefresh !== null ? (
-                  <RefreshIndicator label={shownRefresh} />
-                ) : null}
-              </div>
             ) : null}
             <div
               data-document-scroll={
@@ -1733,26 +1032,20 @@ function FilesView({
           </>
         ) : (
           <div className="p-6 text-sm text-muted-foreground">
-            {sidebarNavigation
-              ? narrow
+            {browseAsDocuments
+              ? "Pick a file in the sidebar to read it."
+              : narrow
                 ? "No README here. Browse the files to open one."
-                : "No README here. Pick a file in the sidebar to open it."
-              : browseAsDocuments && !narrow
-                ? "Pick a file in the sidebar to read it."
-                : "Select a file to view it."}
+                : "No README here. Pick a file in the sidebar to open it."}
           </div>
         )}
-      </WorktreeRailLayout>
+      </div>
     </>
   );
 }
 
 /* ---------------------------------- page ----------------------------------- */
 
-const VIEW_TABS: Array<{ id: WorktreeView; label: string }> = [
-  { id: "changes", label: "Review" },
-  { id: "files", label: "Files" },
-];
 function SheetGroupLabel({ children }: { children: ReactNode }) {
   return (
     // The rows' own inset, so a label lines up with the icons under it.
@@ -2162,7 +1455,6 @@ export default function WorktreeDetailPage({
   markdownPreviewFirst = false,
   browseAsDocuments = false,
   documentComments,
-  sidebarNavigation = false,
   sessions,
   sessionsFresh = false,
   onRemoveWorktree,
@@ -2222,19 +1514,14 @@ export default function WorktreeDetailPage({
   const [ignoredShown, setIgnoredShown] = useIgnoredFilesShown(worktree.id);
   const [jumpOpen, setJumpOpen] = useState(false);
   const [browseOpen, setBrowseOpen] = useState(false);
-  // With the sidebar browsing, the Files view opens on the README: the page
+  // The sidebar browses, so the Files view opens on the README: the page
   // shows the folder's own account of itself rather than a second tree.
   const readmePath = useWorktreeReadme(
     worktree.id,
-    sidebarNavigation && view === "files" && !routeFilePath,
+    view === "files" && !routeFilePath,
   );
   const filePath = routeFilePath ?? readmePath;
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
-  // Same default rule ChangesView applies, so the view-options segment and the
-  // comment-following below both know what the pane is actually doing.
-  const reviewLayout = sidebarNavigation
-    ? "changeset"
-    : (prefs.worktreeReviewMode ?? (narrow ? "changeset" : "by-file"));
 
   // Split diffs are unusable in a column this narrow: it always renders
   // unified, and the remembered split pref applies in a wide pane only (its
@@ -2302,23 +1589,12 @@ export default function WorktreeDetailPage({
   const followComment = useCallback(
     (commentId: string, path: string) => {
       setFocusComment({ commentId, path, nonce: Date.now() });
-      // By-file layouts need the file open; the changeset stacks every file already,
-      // and its lazily mounted section catches up while the scroll retries.
-      if (reviewLayout === "by-file" || view === "files") {
-        navigate(
-          worktreePath(worktree.id, view, {
-            ...(view === "changes"
-              ? {
-                  ...(from !== undefined ? { from } : {}),
-                  ...(to !== undefined ? { to } : {}),
-                }
-              : {}),
-            path,
-          }),
-        );
-      }
+      // Files needs the file open; Review stacks every file already, and its
+      // lazily mounted section catches up while the scroll retries.
+      if (view === "files")
+        navigate(worktreePath(worktree.id, "files", { path }));
     },
-    [from, navigate, reviewLayout, to, view, worktree.id],
+    [navigate, view, worktree.id],
   );
 
   // The panel's roster hands over a comment id; resolving WHICH file it currently
@@ -2369,84 +1645,6 @@ export default function WorktreeDetailPage({
               }
             : undefined,
     [comments, commentActions, focusComment, focusRequest, lineComments],
-  );
-
-  // The full page switches views from its header (wide) or the dock row (a
-  // phone), the session panel's Worktree tab from its own header: no tab row.
-  const navigationControls = sidebarNavigation ? null : (
-    <Tabs
-      value={view}
-      onValueChange={(next: WorktreeView) =>
-        navigate(
-          worktreePath(
-            worktree.id,
-            next,
-            next === "changes"
-              ? {
-                  ...(from !== undefined ? { from } : {}),
-                  ...(to !== undefined ? { to } : {}),
-                }
-              : {},
-          ),
-        )
-      }
-    >
-      <TabsList variant="line">
-        {VIEW_TABS.map((tab) => (
-          <TabsTrigger key={tab.id} value={tab.id}>
-            {tab.label}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-    </Tabs>
-  );
-  const viewOptionsControl = (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Diff view options"
-          />
-        }
-      >
-        <SlidersHorizontal />
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-auto">
-        {/* By-file vs changeset is a RENDERING choice like unified vs split, so
-            it belongs in here rather than as a second segmented control in the
-            toolbar competing with the tabs and the scope. */}
-        {view === "changes" && !filePath && !sidebarNavigation ? (
-          <Field>
-            <FieldLabel>Review layout</FieldLabel>
-            <ToggleGroup
-              variant="outline"
-              size="sm"
-              spacing={0}
-              className="w-full"
-              value={[reviewLayout]}
-              onValueChange={(next) => {
-                if (next[0])
-                  onUpdatePrefs({ worktreeReviewMode: next[0] as ReviewMode });
-              }}
-            >
-              <ToggleGroupItem value="by-file" className="flex-1">
-                By file
-              </ToggleGroupItem>
-              <ToggleGroupItem value="changeset" className="flex-1">
-                All files
-              </ToggleGroupItem>
-            </ToggleGroup>
-          </Field>
-        ) : null}
-        <DiffModeToolbar
-          prefs={effectivePrefs}
-          onUpdate={onUpdatePrefs}
-          showStyleToggle={!narrow}
-        />
-      </PopoverContent>
-    </Popover>
   );
 
   // The open file's folder in a document folder's header ("Knowledge Base" at
@@ -2532,7 +1730,7 @@ export default function WorktreeDetailPage({
             // The worktree screen runs UNDER the phone's resting dock, as the
             // list screens run under the nav card: the page takes back the
             // space the shell reserved, and each scroller pads its end by it.
-            sidebarNavigation && !embedded
+            !embedded
               ? "flex h-[calc(100%+var(--app-bottom-chrome-inset,0px))] min-h-0 shrink-0 flex-col [&_[data-dock-scroll]]:pb-[var(--app-bottom-chrome-inset,0px)] [&_[data-dock-scroll]]:overscroll-none"
               : "flex h-full min-h-0 flex-col"
           }
@@ -2558,19 +1756,39 @@ export default function WorktreeDetailPage({
                     {filePath && view === "files"
                       ? splitWorktreePath(filePath).name
                       : view === "changes"
-                        ? "Uncommitted changes"
+                        ? "Changes"
                         : (title ?? worktree.branch)}
                   </h2>
-                  {/* The folder, cut from the LEFT: its tail (the nearest
-                    folders) is what tells two files apart, not the shared
-                    root. */}
-                  <p
-                    className="truncate text-left text-xs text-muted-foreground"
-                    dir="rtl"
-                    title={documentFolder}
-                  >
-                    <span dir="ltr">{documentFolder}</span>
-                  </p>
+                  {view === "changes" ? (
+                    // What Review is showing, and the way to change it.
+                    <WorktreeScopePicker
+                      trigger="subtitle"
+                      worktree={worktree}
+                      narrow={narrow}
+                      refreshToken={refreshToken}
+                      from={from}
+                      to={to}
+                      onPick={(pickedFrom, pickedTo) =>
+                        navigate(
+                          worktreePath(worktree.id, "changes", {
+                            ...(pickedFrom ? { from: pickedFrom } : {}),
+                            ...(pickedTo ? { to: pickedTo } : {}),
+                          }),
+                        )
+                      }
+                    />
+                  ) : (
+                    // The folder, cut from the LEFT: its tail (the nearest
+                    // folders) is what tells two files apart, not the shared
+                    // root.
+                    <p
+                      className="truncate text-left text-xs text-muted-foreground"
+                      dir="rtl"
+                      title={documentFolder}
+                    >
+                      <span dir="ltr">{documentFolder}</span>
+                    </p>
+                  )}
                 </div>
               }
               actions={
@@ -2644,22 +1862,17 @@ export default function WorktreeDetailPage({
                   actions={menuActions}
                   // A wide header draws Add comment itself.
                   showComment={narrow && !embedded}
-                  zoomInMenu={sidebarNavigation && !narrow}
+                  zoomInMenu={!narrow}
                   // The sidebar lists the files on a wide screen; a phone
                   // jumps through the header.
-                  onBrowseFiles={
-                    sidebarNavigation && narrow
-                      ? () => setBrowseOpen(true)
-                      : undefined
-                  }
+                  onBrowseFiles={narrow ? () => setBrowseOpen(true) : undefined}
                   onJumpToFile={
-                    sidebarNavigation && narrow && view === "changes"
+                    narrow && view === "changes"
                       ? () => setJumpOpen(true)
                       : undefined
                   }
                   diffView={
-                    sidebarNavigation &&
-                    (view === "changes" || (view === "files" && filePath))
+                    view === "changes" || (view === "files" && filePath)
                       ? {
                           prefs: effectivePrefs,
                           onUpdate: onUpdatePrefs,
@@ -2667,11 +1880,10 @@ export default function WorktreeDetailPage({
                         }
                       : undefined
                   }
-                  ignoredFiles={
-                    browseAsDocuments
-                      ? undefined
-                      : { shown: ignoredShown, onChange: setIgnoredShown }
-                  }
+                  ignoredFiles={{
+                    shown: ignoredShown,
+                    onChange: setIgnoredShown,
+                  }}
                 />
               }
               title={
@@ -2683,7 +1895,7 @@ export default function WorktreeDetailPage({
                   </span>
                   {/* What Review is showing, under the branch: the header's
                     small second line, and the way to change it. */}
-                  {sidebarNavigation && view === "changes" ? (
+                  {view === "changes" ? (
                     <WorktreeScopePicker
                       trigger="subtitle"
                       worktree={worktree}
@@ -2714,16 +1926,15 @@ export default function WorktreeDetailPage({
                         className="hidden desktop:flex"
                         // Zoom lives in the `…` menu: the row has the views
                         // and comment to fit beside the branch.
-                        showZoom={!sidebarNavigation}
+                        showZoom={false}
                         // The browser's own Back and Forward serve here, and
                         // Close only when the file came from outside the
                         // worktree (a chat): from the sidebar there is
                         // nothing to return to.
-                        showHistory={!sidebarNavigation}
+                        showHistory={false}
                         showClose={
-                          !sidebarNavigation ||
-                          (Boolean(routeFilePath) &&
-                            openedFromOutsideWorktree(worktree.id))
+                          Boolean(routeFilePath) &&
+                          openedFromOutsideWorktree(worktree.id)
                         }
                       />
                     ) : null}
@@ -2734,17 +1945,13 @@ export default function WorktreeDetailPage({
           )}
           {view === "files" ? (
             <FilesView
-              sidebarNavigation={sidebarNavigation}
               worktree={worktree}
               narrow={narrow}
               filePath={filePath}
               navigate={navigate}
               prefs={effectivePrefs}
-              onUpdatePrefs={onUpdatePrefs}
               refreshToken={refreshToken}
               anchor={anchor}
-              navigationControls={navigationControls}
-              viewOptionsControl={sidebarNavigation ? null : viewOptionsControl}
               pivot={filePivot}
               onPivotChange={setFilePivot}
               markdownPreviewFirst={
@@ -2756,25 +1963,19 @@ export default function WorktreeDetailPage({
             />
           ) : (
             <ChangesView
-              sidebarNavigation={sidebarNavigation}
               worktree={worktree}
               narrow={narrow}
               filePath={filePath}
               from={from}
               to={to}
-              anchor={anchor}
-              navigate={navigate}
               prefs={effectivePrefs}
-              onUpdatePrefs={onUpdatePrefs}
               refreshToken={refreshToken}
-              navigationControls={navigationControls}
-              viewOptionsControl={sidebarNavigation ? null : viewOptionsControl}
               commentsConfigFor={commentsConfigFor}
               jumpOpen={jumpOpen}
               onJumpOpenChange={setJumpOpen}
             />
           )}
-          {sidebarNavigation && narrow ? (
+          {narrow ? (
             <WorktreeBrowseSheet
               worktree={worktree}
               open={browseOpen}

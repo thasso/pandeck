@@ -2232,9 +2232,8 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   query, so its refresh is per DIRECTORY: a token bump re-reads every directory
   already loaded and swaps each in when it answers (`pruneVanishedTreeDirs` then
   drops a folder's cached children once its parent's fresh listing no longer has
-  it), leaving the rows, the expansion and the list-mode folder you are standing
-  in alone. Dropping the cache first — which is what it used to do — blanked the
-  rail to skeletons and threw list mode back to the repo root on a bump that
+  it), leaving the rows and the expansion alone. Dropping the cache first —
+  which is what it used to do — blanked the tree to skeletons on a bump that
   `computeWorktreeStatus` stamps on every scan, i.e. shortly after every open.
   Reads are deduplicated per directory and stamped with a tree GENERATION, so a
   run of pushes cannot pile duplicate git reads and a read still out for the
@@ -2273,8 +2272,8 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `followComment`, which remembers `{ commentId, path, nonce }`, feeds it to
   that file's `LineCommentsConfig.focus`, and the surface scrolls to the
   annotation and rings it (`diff/CLAUDE.md`). It navigates first only where the
-  layout needs it (by-file, or the Files view); the changeset already stacks
-  every file, and the focus retry covers its lazily mounted section.
+  layout needs it (the Files view); the changeset already stacks every file, and
+  the focus retry covers its lazily mounted section.
   `worktree/worktreeReview.tsx` owns this domain's adapter
   (`worktreeReviewThreads`), its pending-review helpers and
   `WorktreeReviewSubmitSheet`, and must stay free of `diff/` imports: both
@@ -2303,74 +2302,71 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   or shift-click compares two (`from` = the older commit, exclusive). It
   replaced three separate triggers — two preset buttons plus a "Commit…" picker
   — whose combined state you had to infer from which one looked active, and
-  which degraded to unlabelled glyphs on a phone. The by-file/changeset choice
-  moved INTO the view-options popover as its "Review layout" segment: it is a
-  rendering choice like unified-vs-split, and as a second segmented control in
-  the toolbar it competed with the tabs. Because the trigger says the scope out
-  loud, the object panel's old read-only "Viewing" section
-  (View/Scope/Range/File) is gone — it restated the page's own toolbar. Review
-  has two modes via `prefs.worktreeReviewMode` (unset = changeset on mobile,
-  by-file on desktop): by-file (the Phase-1 rail/detail behavior) and changeset
-  — `WorktreeChangesetList.tsx` stacks every file's diff in one scroll with
-  sticky per-file headers, lazy IntersectionObserver mounting (latched;
-  rootMargin 600px), large (>600 changed lines)/binary/viewed files starting
-  collapsed, and per-file "viewed" checkmarks persisted browser-locally per
-  worktree+scope by `useViewedFiles.ts` (marking viewed collapses the section).
-  Jump-to-file: desktop rail clicks and the mobile "Files…" `Sheet` scroll to
-  registered section elements instead of navigating. Review comments work on
-  committed range diffs too: the file-diff response's resolved `newOid` flows
-  into the comments config as `refOid` (threads render at immutable creation
-  anchors for exactly that commit; new comments anchor with
-  `NewWorktreeCommentAnchor.ref`). Files previews (Task 124): raster images
-  render directly in the File pivot via the token-carrying `worktreeFileRawUrl`;
-  svg/markdown/html add a "Preview" pivot — markdown through a lazily imported
-  `Markdown.tsx` (relative link/image URLs resolved to `file-raw` via
-  `onResolveUrl`, `..` escapes left untouched), html in a scriptless
-  `sandbox=""` iframe. File detail no longer offers the redundant Last commit
-  pivot; on mobile its back/path summary and any remaining File/Preview/vs-base
-  pivots share one compact row, with icon-only accessible pivot controls and no
-  separate full-path toolbar. **Delivery lives in the object PANEL, not the
-  toolbar** (`worktree/WorktreeDelivery.tsx`, imported statically by
-  `objectInspectors.tsx`: it was lazy for WEIGHT while it owned a section of its
-  own, but its dialogs are in the main bundle anyway through this importer, and
-  a hook cannot be lazy — the main chunk measures 455 kB, inside the 500 kB
-  budget): one `Delivery` section holding where the work stands — working tree
-  (files, +/−), remote (`↑ahead ↓behind` or "not published"), HEAD, CI (linked,
-  coloured by state) and PR (linked) — while `useWorktreeDelivery` hands the
-  ACTS on that state to the panel as ordinary `InspectorAction`s: auto commit
-  and commit-with-message while dirty, Push (only when there is something to
-  push, with the commit count or "new branch" as its right-aligned hint), Force
-  push (only when the remote has diverged), Pull from origin (inert without an
-  upstream — there is nothing to pull from until the branch is published),
-  spawned-worktree **Pull from `<base>`** (hint `rebase onto remote <base>`,
-  since the remote's base branch is the target and only the SERVER resolves
-  which remote carries it), create-PR, merge-PR and Clean worktree (`HEAD`
-  reset + ordinary untracked removal; commits/ignored files preserved, and it
-  confirms in a dialog). Every delivery act whose answer is a DIALOG (auto
-  commit, whose outcome can be a blocker dialog, commit-with-message, merge-PR,
-  create-PR, Clean worktree) is `keepOpen`: the dock sheet's collapse-on-act
-  unmounts the body that holds the hook AND its dialogs, so collapsing would
-  destroy the dialog the tap just opened — invisible on a desktop panel, silent
-  on a phone (`WorktreeDelivery.dockAct.test.tsx`). A panel has ONE Actions
-  section: delivery's own list used to be a second one under its facts, so the
-  worktree panel now orders start-session, delivery, merge back/remove, submit
-  review, reveal in that single list, and the dialogs travel with the hook. The
-  section absorbed the panel's old read-only "Working tree" section, and it
-  replaced the toolbar's status cluster and its twelve-item `⋯` menu — delivery
-  state used to be spread across header chips, the sidebar's counter, toolbar
-  glyphs and panel facts while its actions hid in a menu wedged between
-  navigation and rendering controls. The page therefore passes NO
-  lifecycle/overflow actions any more (`App.tsx` dropped that render prop).
-  Auto-commit reuses the server `/commit` safety/message workflow without
-  guessing a session and shows blockers before any force override. The hook owns
-  its own status REFETCH after a mutation (newest of watcher-push vs refetch
-  wins, the same rule the page uses) so state updates immediately instead of
-  waiting for the watcher, and hosting polls every 60s only while CI is pending,
-  refetching when HEAD moves. `MergePullRequestDialog` offers only the merge
-  methods the hosting payload's `capabilities` report — none, with the reason
-  said in place and Merge disabled, while they are unknown — for the same reason
-  the card's picker does. Repository actions use HTTP POST (`lib/worktrees.ts`),
-  not the WebSocket.
+  which degraded to unlabelled glyphs on a phone. Because the trigger says the
+  scope out loud, the object panel's old read-only "Viewing" section
+  (View/Scope/Range/File) is gone — it restated the page's own toolbar. The
+  Review tabs, the navigator rail, by-file review and the navigator's flat list
+  mode are gone too: the page has one layout (`app/web/docs/ui-shell.md`), and
+  Changes is always the changeset — `WorktreeChangesetList.tsx` stacks every
+  file's diff in one scroll with sticky per-file headers, lazy
+  IntersectionObserver mounting (latched; rootMargin 600px), large (>600 changed
+  lines)/binary/viewed files starting collapsed, and per-file "viewed"
+  checkmarks persisted browser-locally per worktree+scope by `useViewedFiles.ts`
+  (marking viewed collapses the section). Jump-to-file: the sidebar's changed
+  files and the narrow "Jump to file" sheet scroll to registered section
+  elements instead of navigating. Review comments work on committed range diffs
+  too: the file-diff response's resolved `newOid` flows into the comments config
+  as `refOid` (threads render at immutable creation anchors for exactly that
+  commit; new comments anchor with `NewWorktreeCommentAnchor.ref`). Files
+  previews (Task 124): raster images render directly in the File pivot via the
+  token-carrying `worktreeFileRawUrl`; svg/markdown/html add a "Preview" pivot —
+  markdown through a lazily imported `Markdown.tsx` (relative link/image URLs
+  resolved to `file-raw` via `onResolveUrl`, `..` escapes left untouched), html
+  in a scriptless `sandbox=""` iframe. File detail no longer offers the
+  redundant Last commit pivot; on mobile its back/path summary and any remaining
+  File/Preview/vs-base pivots share one compact row, with icon-only accessible
+  pivot controls and no separate full-path toolbar. **Delivery lives in the
+  object PANEL, not the toolbar** (`worktree/WorktreeDelivery.tsx`, imported
+  statically by `objectInspectors.tsx`: it was lazy for WEIGHT while it owned a
+  section of its own, but its dialogs are in the main bundle anyway through this
+  importer, and a hook cannot be lazy — the main chunk measures 455 kB, inside
+  the 500 kB budget): one `Delivery` section holding where the work stands —
+  working tree (files, +/−), remote (`↑ahead ↓behind` or "not published"), HEAD,
+  CI (linked, coloured by state) and PR (linked) — while `useWorktreeDelivery`
+  hands the ACTS on that state to the panel as ordinary `InspectorAction`s: auto
+  commit and commit-with-message while dirty, Push (only when there is something
+  to push, with the commit count or "new branch" as its right-aligned hint),
+  Force push (only when the remote has diverged), Pull from origin (inert
+  without an upstream — there is nothing to pull from until the branch is
+  published), spawned-worktree **Pull from `<base>`** (hint
+  `rebase onto remote <base>`, since the remote's base branch is the target and
+  only the SERVER resolves which remote carries it), create-PR, merge-PR and
+  Clean worktree (`HEAD` reset + ordinary untracked removal; commits/ignored
+  files preserved, and it confirms in a dialog). Every delivery act whose answer
+  is a DIALOG (auto commit, whose outcome can be a blocker dialog,
+  commit-with-message, merge-PR, create-PR, Clean worktree) is `keepOpen`: the
+  dock sheet's collapse-on-act unmounts the body that holds the hook AND its
+  dialogs, so collapsing would destroy the dialog the tap just opened —
+  invisible on a desktop panel, silent on a phone
+  (`WorktreeDelivery.dockAct.test.tsx`). A panel has ONE Actions section:
+  delivery's own list used to be a second one under its facts, so the worktree
+  panel now orders start-session, delivery, merge back/remove, submit review,
+  reveal in that single list, and the dialogs travel with the hook. The section
+  absorbed the panel's old read-only "Working tree" section, and it replaced the
+  toolbar's status cluster and its twelve-item `⋯` menu — delivery state used to
+  be spread across header chips, the sidebar's counter, toolbar glyphs and panel
+  facts while its actions hid in a menu wedged between navigation and rendering
+  controls. The page therefore passes NO lifecycle/overflow actions any more
+  (`App.tsx` dropped that render prop). Auto-commit reuses the server `/commit`
+  safety/message workflow without guessing a session and shows blockers before
+  any force override. The hook owns its own status REFETCH after a mutation
+  (newest of watcher-push vs refetch wins, the same rule the page uses) so state
+  updates immediately instead of waiting for the watcher, and hosting polls
+  every 60s only while CI is pending, refetching when HEAD moves.
+  `MergePullRequestDialog` offers only the merge methods the hosting payload's
+  `capabilities` report — none, with the reason said in place and Merge
+  disabled, while they are unknown — for the same reason the card's picker does.
+  Repository actions use HTTP POST (`lib/worktrees.ts`), not the WebSocket.
 - `AppStatus.tsx` is the app status slot: the one surface allowed to announce
   anything globally, and only app-wide lifecycle state the user cannot act on
   that ends by itself — a queued or running server restart, and a dropped

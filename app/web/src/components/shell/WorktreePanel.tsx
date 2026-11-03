@@ -193,9 +193,6 @@ export function WorktreePanel({
             // instead of the rail, and unified diffs.
             narrow
             embedded
-            // The main page's shape: Review in one scroll, its scope under the
-            // branch, files from the header's browser.
-            sidebarNavigation
             headerActions={
               <>
                 {choices.length > 1 && onSelectWorktree ? (

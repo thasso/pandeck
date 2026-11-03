@@ -163,17 +163,6 @@ export interface Prefs {
   projectShowArchived: boolean;
   /** Projects browser: which worktrees are listed. */
   projectWorktreeFilter: ProjectWorktreeFilter;
-  /** Worktree detail views: width of the local navigator rail. */
-  worktreeChangesRailWidth: number;
-  /** Worktree detail views: whether the local navigator rail is collapsed. */
-  worktreeChangesRailCollapsed: boolean;
-  /** Worktree detail views: flat list vs folder tree for file/change navigators. */
-  worktreeNavigatorViewMode: "list" | "tree";
-  /**
-   * Worktree Review tab mode: one file at a time vs the whole changeset in one
-   * scroll. Unset = device default (changeset on mobile, by-file on desktop).
-   */
-  worktreeReviewMode?: "by-file" | "changeset";
   /** Diff rendering: unified vs side-by-side. */
   diffStyle: "unified" | "split";
   /** Diff rendering: intra-line word-level highlighting. */
@@ -218,7 +207,6 @@ type OptionalPrefKey = {
 // Adding an optional preference must also add it to the persisted-key inventory.
 const OPTIONAL_PREF_KEYS = {
   attentionFilters: true,
-  worktreeReviewMode: true,
   lastModelKey: true,
   lastThinkingLevel: true,
   workflowRoleRuntimes: true,
@@ -263,9 +251,6 @@ const defaults: Prefs = {
   projectFilterId: null,
   projectShowArchived: false,
   projectWorktreeFilter: "all",
-  worktreeChangesRailWidth: 300,
-  worktreeChangesRailCollapsed: false,
-  worktreeNavigatorViewMode: "tree",
   diffStyle: "unified",
   diffWordLevel: true,
   diffIgnoreWhitespace: true,

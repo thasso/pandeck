@@ -107,10 +107,6 @@ const worktree: WorktreeRecord = {
 };
 
 const prefs = {
-  worktreeChangesRailWidth: 300,
-  worktreeChangesRailCollapsed: false,
-  worktreeNavigatorViewMode: "list",
-  worktreeReviewMode: "by-file",
   diffStyle: "unified",
   theme: "dark",
 } as Prefs;

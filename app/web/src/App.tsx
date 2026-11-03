@@ -8334,9 +8334,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                             status={state.worktreeStatuses[worktree.id]}
                             narrow={mobileLayout}
                             view={route.view ?? "changes"}
-                            // The sidebar's Projects tree browses its files
-                            // and change sets.
-                            sidebarNavigation
                             sessions={state.sessions}
                             sessionsFresh={state.sessionListFresh}
                             onRemoveWorktree={requestRemoveWorktree}
