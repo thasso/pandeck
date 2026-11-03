@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet.tsx";
 import { BOTTOM_SHEET_BOTTOM_PADDING_CLASS } from "./bottomSheet.ts";
@@ -16,6 +16,30 @@ import { BOTTOM_SHEET_BOTTOM_PADDING_CLASS } from "./bottomSheet.ts";
  * or `top`, which drops out of a header — pass that header's bottom edge as
  * `offsetTop` so the sheet hangs off it instead of covering it.
  */
+const EdgeSheetContainerContext = createContext<HTMLElement | null>(null);
+
+/**
+ * Binds every EdgeSheet inside it to this box instead of the viewport: a
+ * phone layout drawn in a desktop side panel (the session's Worktree tab)
+ * opens its sheets over that panel, not over the whole window.
+ */
+export function EdgeSheetContainer({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  return (
+    <div ref={setElement} className={`relative ${className ?? ""}`}>
+      <EdgeSheetContainerContext.Provider value={element}>
+        {children}
+      </EdgeSheetContainerContext.Provider>
+    </div>
+  );
+}
+
 export function EdgeSheet({
   open,
   title,
@@ -39,17 +63,19 @@ export function EdgeSheet({
   children: ReactNode;
 }) {
   const top = side === "top";
+  const container = useContext(EdgeSheetContainerContext);
   return (
     <Sheet open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
       <SheetContent
         side={side}
+        container={container ?? undefined}
         // A top sheet opens over a blurred backdrop, so it is a card of its
         // own — inset from the edges and the header it hangs off, rounded on
         // every corner — not a drawer glued to the title bar.
         className={
           top
             ? "gap-0 overflow-hidden rounded-xl border"
-            : `max-h-[85vh] gap-0 rounded-t-xl ${BOTTOM_SHEET_BOTTOM_PADDING_CLASS}`
+            : `${container ? "max-h-[85%]" : "max-h-[85vh]"} gap-0 rounded-t-xl ${BOTTOM_SHEET_BOTTOM_PADDING_CLASS}`
         }
         style={
           top

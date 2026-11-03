@@ -25,6 +25,7 @@ import type { CommentActions } from "../diff/comments.tsx";
 import type { CommentWatch } from "../../hooks/useCommentWatch.ts";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
 import { IconButton } from "../common/IconButton.tsx";
+import { EdgeSheetContainer } from "../common/EdgeSheet.tsx";
 import { EmptyBox, PaneLoading } from "../common/load.tsx";
 import type { Prefs } from "../../hooks/usePrefs.ts";
 import {
@@ -184,102 +185,106 @@ export function WorktreePanel({
     // there, so neither ends up wearing the other's controls.
     <RoutePrimaryActionProvider action={null}>
       <CommentActuationProvider>
-        <WorktreeDetailPage
-          // R3: the page addresses one worktree, so following the session to
-          // another one mounts that worktree's own loading states rather than
-          // leaving this one's diffs under a new branch name.
-          key={worktree.id}
-          worktree={worktree}
-          status={status}
-          // A right panel is a column of a phone's order of width: list→detail
-          // instead of the rail, and unified diffs.
-          narrow
-          embedded
-          // The main page's shape: Review in one scroll, its scope under the
-          // branch, files from the header's browser.
-          sidebarNavigation
-          headerActions={
-            <>
-              {choices.length > 1 && onSelectWorktree ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label="Switch worktree"
-                        title="Switch worktree"
-                      />
-                    }
-                  >
-                    <ChevronsUpDown />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="end"
-                    className="w-max max-w-[min(22rem,calc(100vw-2rem))]"
-                  >
-                    <DropdownMenuRadioGroup
-                      value={worktree.id}
-                      onValueChange={(id) => onSelectWorktree(id as string)}
+        {/* The page's phone sheets (browse, jump to file) open over this
+          panel, not the whole window. */}
+        <EdgeSheetContainer className="flex h-full min-h-0 flex-col overflow-hidden">
+          <WorktreeDetailPage
+            // R3: the page addresses one worktree, so following the session to
+            // another one mounts that worktree's own loading states rather than
+            // leaving this one's diffs under a new branch name.
+            key={worktree.id}
+            worktree={worktree}
+            status={status}
+            // A right panel is a column of a phone's order of width: list→detail
+            // instead of the rail, and unified diffs.
+            narrow
+            embedded
+            // The main page's shape: Review in one scroll, its scope under the
+            // branch, files from the header's browser.
+            sidebarNavigation
+            headerActions={
+              <>
+                {choices.length > 1 && onSelectWorktree ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Switch worktree"
+                          title="Switch worktree"
+                        />
+                      }
                     >
-                      {choices.map((choice) => (
-                        <DropdownMenuRadioItem
-                          key={choice.id}
-                          value={choice.id}
-                          className="whitespace-nowrap"
-                        >
-                          <GitBranch />
-                          <span className="min-w-0 truncate font-mono text-xs">
-                            {choice.branch}
-                          </span>
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
-              {location.view === "files" ? (
+                      <ChevronsUpDown />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="end"
+                      className="w-max max-w-[min(22rem,calc(100vw-2rem))]"
+                    >
+                      <DropdownMenuRadioGroup
+                        value={worktree.id}
+                        onValueChange={(id) => onSelectWorktree(id as string)}
+                      >
+                        {choices.map((choice) => (
+                          <DropdownMenuRadioItem
+                            key={choice.id}
+                            value={choice.id}
+                            className="whitespace-nowrap"
+                          >
+                            <GitBranch />
+                            <span className="min-w-0 truncate font-mono text-xs">
+                              {choice.branch}
+                            </span>
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+                {location.view === "files" ? (
+                  <IconButton
+                    label="Review changes"
+                    size="icon"
+                    onClick={() => setLocation(PANEL_HOME)}
+                  >
+                    <GitCompareArrows />
+                  </IconButton>
+                ) : null}
                 <IconButton
-                  label="Review changes"
+                  label="Open in Worktrees"
                   size="icon"
-                  onClick={() => setLocation(PANEL_HOME)}
+                  onClick={() =>
+                    onNavigate(
+                      worktreePath(worktree.id, location.view, {
+                        ...(location.path ? { path: location.path } : {}),
+                        ...(location.from ? { from: location.from } : {}),
+                        ...(location.to ? { to: location.to } : {}),
+                      }),
+                    )
+                  }
                 >
-                  <GitCompareArrows />
+                  <SquareArrowOutUpRight />
                 </IconButton>
-              ) : null}
-              <IconButton
-                label="Open in Worktrees"
-                size="icon"
-                onClick={() =>
-                  onNavigate(
-                    worktreePath(worktree.id, location.view, {
-                      ...(location.path ? { path: location.path } : {}),
-                      ...(location.from ? { from: location.from } : {}),
-                      ...(location.to ? { to: location.to } : {}),
-                    }),
-                  )
-                }
-              >
-                <SquareArrowOutUpRight />
-              </IconButton>
-            </>
-          }
-          {...worktreeActions}
-          view={location.view}
-          filePath={location.path}
-          from={location.from}
-          to={location.to}
-          navigate={navigate}
-          prefs={prefs}
-          onUpdatePrefs={onUpdatePrefs}
-          comments={commentsByWorktreeId[worktree.id] ?? NO_COMMENTS}
-          onLoadComments={() => commentWatch.list(worktree.id)}
-          onUnloadComments={() => commentWatch.unwatch(worktree.id)}
-          commentActions={commentActionsFor(worktree.id)}
-          onSubmitReview={(commentIds) =>
-            onSubmitReview(worktree.id, commentIds)
-          }
-        />
+              </>
+            }
+            {...worktreeActions}
+            view={location.view}
+            filePath={location.path}
+            from={location.from}
+            to={location.to}
+            navigate={navigate}
+            prefs={prefs}
+            onUpdatePrefs={onUpdatePrefs}
+            comments={commentsByWorktreeId[worktree.id] ?? NO_COMMENTS}
+            onLoadComments={() => commentWatch.list(worktree.id)}
+            onUnloadComments={() => commentWatch.unwatch(worktree.id)}
+            commentActions={commentActionsFor(worktree.id)}
+            onSubmitReview={(commentIds) =>
+              onSubmitReview(worktree.id, commentIds)
+            }
+          />
+        </EdgeSheetContainer>
       </CommentActuationProvider>
     </RoutePrimaryActionProvider>
   );
