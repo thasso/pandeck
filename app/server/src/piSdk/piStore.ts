@@ -62,6 +62,7 @@ import type {
   PiEngineStartRecords,
 } from "./piEngineHost.ts";
 import { freezePiEngineStart, resolvePiEngineStart } from "./piEngineStart.ts";
+import { compatProviderFeed } from "./compatProviderFeed.ts";
 import { createPiHostedEngineFactory } from "./piEngineHosted.ts";
 import { serverPiModelPort } from "./piModelPort.ts";
 import { openRemotePiEngine } from "./remotePiEngine.ts";
@@ -935,8 +936,11 @@ class PiSessionStore {
 export const piStore = new PiSessionStore();
 
 // The composition root's injection: the in-process Worker hosts pi engines,
-// on the server's own model runtimes.
+// on the server's own model runtimes, or a leased engine on its gateway port.
 registerInProcessEngineFactory(
   "pi",
-  createPiHostedEngineFactory({ models: serverPiModelPort }),
+  createPiHostedEngineFactory({
+    models: serverPiModelPort,
+    compat: compatProviderFeed,
+  }),
 );

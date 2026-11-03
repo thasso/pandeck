@@ -32,8 +32,10 @@ const { nativePiSessionForTests, piToolActivationForTests } =
 const { hostedPiEngine, createPiHostedEngineFactory } =
   await import("./piEngineHosted.ts");
 const { serverPiModelPort } = await import("./piModelPort.ts");
+const { compatProviderFeed } = await import("./compatProviderFeed.ts");
 const piHostedEngineFactory = createPiHostedEngineFactory({
   models: serverPiModelPort,
+  compat: compatProviderFeed,
 });
 const { UNUSED_TOOL_PRUNE_IDLE_MS } = await import("./toolActivation.ts");
 const { piModelForAccount } = await import("../harnesses/models.ts");

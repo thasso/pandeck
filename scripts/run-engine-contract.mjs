@@ -23,7 +23,10 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SERVER_DIR = fileURLToPath(new URL("../app/server/", import.meta.url));
-const CONTRACT_FILES = ["src/claudeSdk/engineContract.test.ts"];
+const CONTRACT_FILES = [
+  "src/claudeSdk/engineContract.test.ts",
+  "src/piSdk/engineContract.test.ts",
+];
 const PROBE_TIMEOUT_MS = 10_000;
 // The outer namespace maps root so it can bring loopback up; the run then
 // enters a nested user namespace as the invoking uid and gid, keeping the

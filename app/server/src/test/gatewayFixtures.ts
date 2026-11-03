@@ -1,15 +1,17 @@
 /**
  * Fixtures for the credential gateway's control and state tests and the
  * engine contract tests: fake TLS upstreams for `api.anthropic.com` and
- * `chatgpt.com` (a minimal Anthropic stream among their answers), an egress
- * recorder that refuses everything sent through it as a proxy, token files
- * under the test's temp `DATA_DIR`, a control dialer on an in-process pair, a
- * model request, and the processes a login hold names: a fake probe, or idle
- * children of this test. Every value is fake. It imports nothing from
- * `gateway/`, whose only importer outside itself is pinned
- * (`workerBoundary.test.ts`).
+ * `chatgpt.com` (minimal Anthropic and Codex streams among their answers), a
+ * fake OpenAI-compatible endpoint, an egress recorder that refuses everything
+ * sent through it as a proxy, an egress observer that sees every connection
+ * attempt in this process, token files under the test's temp `DATA_DIR`, a
+ * control dialer on an in-process pair, a model request, and the processes a
+ * login hold names: a fake probe, or idle children of this test. Every value
+ * is fake. It imports nothing from `gateway/`, whose only importer outside
+ * itself is pinned (`workerBoundary.test.ts`).
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import diagnostics from "node:diagnostics_channel";
 import { once } from "node:events";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import http from "node:http";
@@ -32,6 +34,12 @@ import type { ByteEndpoint } from "../workerProtocol/inProcessTransport.ts";
 export const CLAUDE_ACCESS = "fake-claude-access";
 export const CODEX_ACCESS = "fake-codex-access";
 export const CODEX_ACCOUNT = "acct-test";
+/** The default profile's own, so a test can tell which file was read. */
+export const CODEX_DEFAULT_ACCESS = "fake-codex-default-access";
+export const CODEX_DEFAULT_ACCOUNT = "acct-default-test";
+/** Two OpenAI-compatible endpoints' keys. */
+export const COMPAT_KEY_A = "fake-compat-key-a";
+export const COMPAT_KEY_B = "fake-compat-key-b";
 
 export const CLAUDE_PATH = "/anthropic/v1/messages";
 export const CODEX_PATH = "/chatgpt/backend-api/codex/responses";
@@ -40,6 +48,8 @@ interface Seen {
   method: string;
   url: string;
   headers: http.IncomingHttpHeaders;
+  /** The body as received, still encoded. */
+  body: Buffer;
 }
 
 /** Answers one upstream request, once its body was read. */
@@ -107,6 +117,65 @@ export function fakeClaudeStream(text: string): UpstreamResponder {
   };
 }
 
+/**
+ * A 200 Codex responses stream whose one output message is `text`: the
+ * events pi reads, as the measured upstream sends them.
+ */
+export function fakeCodexStream(text: string): UpstreamResponder {
+  const item = {
+    type: "message",
+    id: "msg_fake",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+  const response = (status: string, output: unknown[]) => ({
+    id: "resp_fake",
+    object: "response",
+    status,
+    model: "fake",
+    output,
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      total_tokens: 2,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    },
+  });
+  const events: ({ type: string } & Record<string, unknown>)[] = [
+    { type: "response.created", response: response("in_progress", []) },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...item, status: "in_progress", content: [] },
+    },
+    {
+      type: "response.content_part.added",
+      output_index: 0,
+      item_id: item.id,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    {
+      type: "response.output_text.delta",
+      output_index: 0,
+      item_id: item.id,
+      content_index: 0,
+      delta: text,
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: response("completed", [item]) },
+  ];
+  const body = events
+    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
+  return (_seen, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(body);
+  };
+}
+
 export interface FakeUpstreams {
   /** Requests each upstream received: "no upstream request" is empty. */
   readonly anthropic: Seen[];
@@ -122,7 +191,7 @@ export interface FakeUpstreams {
 
 /** The fake upstreams; each answers 200 `{"ok":true}` unless given a responder. */
 export async function startFakeUpstreams(
-  respond: { claude?: UpstreamResponder } = {},
+  respond: { claude?: UpstreamResponder; codex?: UpstreamResponder } = {},
 ): Promise<FakeUpstreams> {
   const ca = await loadOrCreateCa();
   const servers: https.Server[] = [];
@@ -135,12 +204,14 @@ export async function startFakeUpstreams(
     const server = https.createServer(
       { key: leaf.keyPem, cert: leaf.certPem },
       (req, res) => {
-        req.resume();
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
         req.on("end", () => {
           const request = {
             method: req.method ?? "",
             url: req.url ?? "",
             headers: req.headers,
+            body: Buffer.concat(chunks),
           };
           seen.push(request);
           responder(request, res);
@@ -162,7 +233,11 @@ export async function startFakeUpstreams(
       anthropic,
       respond.claude ?? answerOk,
     ),
-    "openai-codex": await start("chatgpt.com", chatgpt, answerOk),
+    "openai-codex": await start(
+      "chatgpt.com",
+      chatgpt,
+      respond.codex ?? answerOk,
+    ),
   };
   return {
     anthropic,
@@ -178,6 +253,194 @@ export async function startFakeUpstreams(
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
+    },
+  };
+}
+
+/** A request a fake OpenAI-compatible endpoint received. */
+interface CompatSeen {
+  method: string;
+  url: string;
+  authorization: string | undefined;
+}
+
+export interface FakeCompatEndpoint {
+  /** Its base URL, as the settings name it: `http://127.0.0.1:<port>/v1`. */
+  readonly baseUrl: string;
+  readonly seen: CompatSeen[];
+  close(): Promise<void>;
+}
+
+/**
+ * A plain-HTTP OpenAI-compatible endpoint on loopback: `GET /v1/models` lists
+ * `models`, and `POST /v1/chat/completions` streams `reply` as one chunk.
+ * Every request is recorded with the authorization it carried.
+ */
+export async function startFakeCompatEndpoint(
+  models: string[],
+  reply: string,
+): Promise<FakeCompatEndpoint> {
+  const seen: CompatSeen[] = [];
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      seen.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        authorization: req.headers.authorization,
+      });
+      if (req.method === "GET" && req.url === "/v1/models") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            object: "list",
+            data: models.map((id) => ({ id, object: "model" })),
+          }),
+        );
+        return;
+      }
+      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+        res.writeHead(404).end();
+        return;
+      }
+      const chunk = (delta: unknown, finish: string | null) =>
+        `data: ${JSON.stringify({
+          id: "chatcmpl-fake",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "fake",
+          choices: [{ index: 0, delta, finish_reason: finish }],
+        })}\n\n`;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        chunk({ role: "assistant", content: reply }, null) +
+          chunk({}, "stop") +
+          "data: [DONE]\n\n",
+      );
+    });
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const { port } = server.address() as net.AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    seen,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+export interface EgressAttempt {
+  /** The diagnostics channel that saw it. */
+  via: string;
+  /** `host:port`, the port spelled out. */
+  target: string;
+}
+
+export interface EgressObserver {
+  /** Every connection or request attempt seen, in order. */
+  readonly attempts: EgressAttempt[];
+  /** The attempts whose target is not `allowed`. */
+  unauthorized(): EgressAttempt[];
+  /** Permits one more `host:port`. */
+  allow(target: string): void;
+  close(): void;
+}
+
+const DEFAULT_PORTS: Record<string, string> = {
+  "http:": "80",
+  "https:": "443",
+  "ws:": "80",
+  "wss:": "443",
+};
+
+/** A loopback `node:http` request whose port the observer cannot see. */
+const LOOPBACK_UNKNOWN_PORT = "127.0.0.1:?";
+
+function targetOf(host: string, port: string, protocol: string): string {
+  return `${host}:${port || DEFAULT_PORTS[protocol] || "?"}`;
+}
+
+function originTarget(origin: unknown, protocol?: unknown): string {
+  try {
+    const url = new URL(
+      typeof protocol === "string"
+        ? `${protocol}//${String(origin)}`
+        : String(origin),
+    );
+    return targetOf(url.hostname, url.port, url.protocol);
+  } catch {
+    return `unparsed:${String(origin)}`;
+  }
+}
+
+/**
+ * Observes every outgoing attempt this process makes, before it connects:
+ * undici's request creation and its pre-connect (so `fetch`, which pi uses),
+ * and `node:http`'s client requests. A socket's own channel is not used: it
+ * names no destination. Anything not `allowed` is unauthorized, except a
+ * loopback `node:http` request whose port is unknown.
+ */
+export function startEgressObserver(allowed: Iterable<string>): EgressObserver {
+  const permitted = new Set(allowed);
+  const attempts: EgressAttempt[] = [];
+  const channels: Record<string, (message: unknown) => void> = {
+    "undici:request:create": (message) => {
+      const { request } = message as { request?: { origin?: unknown } };
+      attempts.push({
+        via: "undici:request:create",
+        target: originTarget(request?.origin),
+      });
+    },
+    "undici:client:beforeConnect": (message) => {
+      const { connectParams } = message as {
+        connectParams?: { hostname?: string; port?: string; protocol?: string };
+      };
+      attempts.push({
+        via: "undici:client:beforeConnect",
+        target: targetOf(
+          connectParams?.hostname ?? "?",
+          connectParams?.port ?? "",
+          connectParams?.protocol ?? "",
+        ),
+      });
+    },
+    "http.client.request.start": (message) => {
+      const { request } = message as {
+        request?: http.ClientRequest & { protocol?: string };
+      };
+      // The host it connects to; the port only when the Host header names
+      // that host. The gateway's own upstream request connects to loopback
+      // under its logical host's name, so its port is unknown here.
+      const host = request?.host ?? "?";
+      const header = String(request?.getHeader("host") ?? "");
+      const port =
+        header === host
+          ? ""
+          : header.startsWith(`${host}:`)
+            ? header.slice(host.length + 1)
+            : "?";
+      attempts.push({
+        via: "http.client.request.start",
+        target: targetOf(host, port, request?.protocol ?? "http:"),
+      });
+    },
+  };
+  for (const [name, listener] of Object.entries(channels))
+    diagnostics.subscribe(name, listener);
+  return {
+    attempts,
+    unauthorized: () =>
+      attempts.filter(
+        (a) => !permitted.has(a.target) && a.target !== LOOPBACK_UNKNOWN_PORT,
+      ),
+    allow: (target) => permitted.add(target),
+    close() {
+      for (const [name, listener] of Object.entries(channels))
+        diagnostics.unsubscribe(name, listener);
     },
   };
 }

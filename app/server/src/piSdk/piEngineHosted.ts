@@ -35,6 +35,10 @@ import {
   type PiTranscriptView,
 } from "./piEngine.ts";
 import {
+  gatewayPiModelPort,
+  type CompatProviderFeed,
+} from "./gatewayPiModelPort.ts";
+import {
   openPiEngine,
   type PiEngineOpenSpec,
   type PiModelPort,
@@ -116,12 +120,17 @@ const hosted = new Map<
 
 /**
  * Serve `local` as a hosted engine. `findModel` resolves a `setModel`'s
- * model; `engineId` registers it for the test seams until it is disposed.
+ * model; `engineId` registers it for the test seams until it is disposed;
+ * `onDispose` runs once the engine is torn down.
  */
 export function hostPiEngine(
   local: PiEngineHandle,
   info: unknown,
-  options: { findModel: PiModelPort["find"]; engineId?: number },
+  options: {
+    findModel: PiModelPort["find"];
+    engineId?: number;
+    onDispose?: () => void;
+  },
 ): HostedEngine {
   const { engineId } = options;
   let listener: ((item: HostedEngineItem) => void) | undefined;
@@ -343,39 +352,61 @@ export function hostPiEngine(
       listener = undefined;
       if (engineId !== undefined && hosted.get(engineId)?.local === local)
         hosted.delete(engineId);
-      await (discard ? local.discard(discard) : local.dispose());
+      try {
+        await (discard ? local.discard(discard) : local.dispose());
+      } finally {
+        options.onDispose?.();
+      }
     },
   };
 }
 
 /**
  * The `"pi"` factory a Worker hosts, reaching pi's model runtime through
- * `models`; the composition root injects the server's (`piStore.ts`).
+ * `models`; the composition root injects the server's (`piStore.ts`). A
+ * leased open runs on its own gateway port instead, which takes its catalog
+ * from `models` and the OpenAI-compatible configuration from `compat`
+ * (`gatewayPiModelPort.ts`).
  */
 export function createPiHostedEngineFactory({
   models,
+  compat,
 }: {
   models: PiModelPort;
+  compat: CompatProviderFeed;
 }): HostedEngineFactory {
   return async (spec, host) => {
-    const { engine, info } = await openPiEngine(spec as PiEngineOpenSpec, {
-      childEnv: host.childEnv,
-      appToolExecutor: (sessionId) => (tool, args, ctx) =>
-        host.callAppTool(
-          { sessionId, tool, toolCallId: ctx.toolCallId, args },
-          {
-            ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-            ...(ctx.progress !== undefined ? { onProgress: ctx.progress } : {}),
-          },
-        ),
-      models,
-      persistOutput: (request) => host.persistOutput(request),
-      materializeSkills: (names) => host.materializeSkills(names),
-      backgroundWork: host.backgroundWork,
-    });
-    return hostPiEngine(engine, info, {
-      findModel: models.find,
+    const gateway = host.gateway
+      ? gatewayPiModelPort(host.gateway, { server: models, compat })
+      : undefined;
+    const engineModels = gateway ?? models;
+    let opened: Awaited<ReturnType<typeof openPiEngine>>;
+    try {
+      opened = await openPiEngine(spec as PiEngineOpenSpec, {
+        childEnv: host.childEnv,
+        appToolExecutor: (sessionId) => (tool, args, ctx) =>
+          host.callAppTool(
+            { sessionId, tool, toolCallId: ctx.toolCallId, args },
+            {
+              ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+              ...(ctx.progress !== undefined
+                ? { onProgress: ctx.progress }
+                : {}),
+            },
+          ),
+        models: engineModels,
+        persistOutput: (request) => host.persistOutput(request),
+        materializeSkills: (names) => host.materializeSkills(names),
+        backgroundWork: host.backgroundWork,
+      });
+    } catch (err) {
+      gateway?.dispose();
+      throw err;
+    }
+    return hostPiEngine(opened.engine, opened.info, {
+      findModel: engineModels.find,
       engineId: host.engineId,
+      ...(gateway ? { onDispose: () => gateway.dispose() } : {}),
     });
   };
 }

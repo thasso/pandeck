@@ -28,8 +28,10 @@ import { afterAll, beforeAll, describe, test } from "vitest";
 const ENABLED = process.env.PANDECK_ENGINE_CONTRACT === "1";
 const SDK = "@anthropic-ai/claude-agent-sdk";
 const CASE_MS = 60_000;
-// Synthetic fixture values; none is a real credential.
+// Synthetic fixture values; none is a real credential. The default profile
+// has its own, so the upstream shows which file the gateway read.
 const CLAUDE_ACCESS = "fake-claude-access";
+const CLAUDE_DEFAULT_ACCESS = "fake-claude-default-access";
 const FAKE_REFRESH = "fake-claude-refresh";
 const REPLY = "contract reply";
 
@@ -51,13 +53,13 @@ function identity(file: string): FileIdentity {
   };
 }
 
-function writeCredential(file: string): void {
+function writeCredential(file: string, accessToken: string): void {
   mkdirSync(resolve(file, ".."), { recursive: true });
   writeFileSync(
     file,
     JSON.stringify({
       claudeAiOauth: {
-        accessToken: CLAUDE_ACCESS,
+        accessToken,
         refreshToken: FAKE_REFRESH,
         expiresAt: Date.now() + 3_600_000,
         scopes: ["user:inference"],
@@ -163,8 +165,8 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       ".credentials.json",
     );
     const defaultFile = join(home, ".claude", ".credentials.json");
-    writeCredential(namedFile);
-    writeCredential(defaultFile);
+    writeCredential(namedFile, CLAUDE_ACCESS);
+    writeCredential(defaultFile, CLAUDE_DEFAULT_ACCESS);
 
     // 7. Every proxy-honouring attempt to leave lands here.
     const egress = await fixtures.startEgressRecorder();
@@ -361,7 +363,12 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
   /** No line of the link or its gateway holds a token. */
   function assertNoTokenLogged(tokens: string[]): void {
     for (const line of env.gateway.lines)
-      for (const token of [CLAUDE_ACCESS, FAKE_REFRESH, ...tokens])
+      for (const token of [
+        CLAUDE_ACCESS,
+        CLAUDE_DEFAULT_ACCESS,
+        FAKE_REFRESH,
+        ...tokens,
+      ])
         assert.ok(!line.includes(token), `a log line holds a token: ${line}`);
   }
 
@@ -374,11 +381,15 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     return leases[0]!;
   };
 
-  /** A 200 turn as the profile runs it: AC10 and, profile-less, AC11. */
+  /**
+   * A 200 turn as the profile runs it: AC10 and, profile-less, AC11. The
+   * upstream sees `access`, the token in that profile's own file.
+   */
   async function assertCleanTurn(
     credentialProfileId: string | undefined,
     profileId: string,
     file: string,
+    access: string,
   ): Promise<void> {
     env.upstream.reset();
     env.setResponder(env.fakeClaudeStream(REPLY));
@@ -400,7 +411,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     for (const seen of env.upstream.anthropic) {
       assert.equal(seen.method, "POST");
       assert.equal(seen.url.split("?")[0], "/v1/messages");
-      assert.equal(seen.headers.authorization, `Bearer ${CLAUDE_ACCESS}`);
+      assert.equal(seen.headers.authorization, `Bearer ${access}`);
       assert.equal(seen.headers["x-api-key"], undefined);
     }
     const lines = requestLines(from);
@@ -424,7 +435,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
   test(
     "a profiled turn sends only its lease, only on the allowlist, and leaves its credential as it was",
     async () => {
-      await assertCleanTurn(env.named, env.named, env.namedFile);
+      await assertCleanTurn(env.named, env.named, env.namedFile, CLAUDE_ACCESS);
     },
     CASE_MS * 2,
   );
@@ -436,6 +447,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
         undefined,
         env.profiles.DEFAULT_CLAUDE_PROFILE_ID,
         env.defaultFile,
+        CLAUDE_DEFAULT_ACCESS,
       );
     },
     CASE_MS * 2,
