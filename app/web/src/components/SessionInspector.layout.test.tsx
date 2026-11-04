@@ -10,6 +10,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
+  ProjectRecord,
   SessionListItem,
   TaskSummary,
   WorktreeRecord,
@@ -385,6 +386,8 @@ describe("SessionInspector spawn-tree worktrees", () => {
     createdAt: 0,
     updatedAt: 0,
   };
+  // The rows are the sidebar's tree, which finds a worktree under its project.
+  const projects: ProjectRecord[] = [{ id: "p1", name: "Project", key: "P1" }];
 
   it("reserves the group while the list is unanswered, for a session with a peer", () => {
     const html = render({ ...base, sessions: [peer], worktrees: null });
@@ -412,6 +415,7 @@ describe("SessionInspector spawn-tree worktrees", () => {
     const html = render({
       ...base,
       sessions: [peer],
+      projects,
       worktrees: [handed],
       worktreesFresh: false,
     });
@@ -431,6 +435,7 @@ describe("SessionInspector spawn-tree worktrees", () => {
     const html = render({
       ...base,
       sessions: [peer],
+      projects,
       worktrees: [handed],
       worktreesError: "socket closed",
       onReloadWorktrees: () => {},

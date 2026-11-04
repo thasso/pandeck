@@ -45,6 +45,7 @@ vi.mock("@pierre/diffs/react", () => ({
 vi.mock("./DiffWorkerProvider.tsx", () => ({
   DiffWorkerProvider: ({ children }: { children: ReactNode }) => children,
   useDiffWorkerCompletionVersion: () => 0,
+  useDiffWorkerReady: () => true,
 }));
 
 vi.mock("./useDiffScrollRestoration.ts", () => ({

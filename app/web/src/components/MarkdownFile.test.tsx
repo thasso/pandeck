@@ -1,10 +1,27 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { MarkdownFile } from "./MarkdownFile.tsx";
 
+/** Opens a frontmatter section the way a reader's earlier toggle would. */
+function remembersOpen(id: string) {
+  window.localStorage.setItem(`inspector-section:document:${id}`, "open");
+}
+
 describe("MarkdownFile", () => {
+  afterEach(() => window.localStorage.clear());
+
+  it("starts the metadata section collapsed", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownFile text={"---\ntitle: Release notes\n---\n# Heading\n"} />,
+    );
+    expect(html).toMatch(/aria-expanded="false"[^]*>Metadata</);
+    expect(html).not.toContain("Release notes");
+    expect(html).toContain("Heading</h1>");
+  });
+
   it("draws frontmatter as a header instead of Markdown", () => {
+    remembersOpen("markdown-metadata");
     const html = renderToStaticMarkup(
       <MarkdownFile
         text={
@@ -41,9 +58,15 @@ describe("MarkdownFile", () => {
     const html = renderToStaticMarkup(
       <MarkdownFile text={"---\nsummary: |\n  multi\n---\nBody\n"} />,
     );
-    expect(html).toMatch(/aria-expanded="false"[^>]*>Frontmatter</);
-    expect(html).toContain("summary: |");
+    expect(html).toMatch(/aria-expanded="false"[^]*>Frontmatter</);
+    expect(html).not.toContain("summary: |");
     expect(html).toContain("Body");
+    remembersOpen("frontmatter");
+    expect(
+      renderToStaticMarkup(
+        <MarkdownFile text={"---\nsummary: |\n  multi\n---\nBody\n"} />,
+      ),
+    ).toContain("summary: |");
   });
 
   it("renders a file without frontmatter like plain Markdown", () => {

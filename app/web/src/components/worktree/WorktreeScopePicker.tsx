@@ -37,6 +37,7 @@ import {
 import type { WorktreeCommitLogEntry, WorktreeRecord } from "@assistant/shared";
 import { fetchWorktreeLog } from "../../lib/worktrees.ts";
 import { Button } from "../ui/button.tsx";
+import { Item } from "../ui/item.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
@@ -151,15 +152,17 @@ export function WorktreeScopePicker({
   const label = worktreeScopeLabel(worktree, from, to, dataOf(log.state));
   const trigger =
     triggerStyle === "subtitle" ? (
-      <button
-        type="button"
-        className="flex min-w-0 max-w-full items-center gap-0.5 rounded-sm text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      // Quiet as the subtitle it stands in: text, not a button face.
+      <Button
+        variant="ghost"
+        size="xs"
+        className="h-auto min-w-0 max-w-full shrink justify-start gap-0.5 rounded-sm border-0 px-0 text-left font-normal text-muted-foreground hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent dark:hover:bg-transparent"
         title={`Reviewing: ${label}`}
         aria-label={`Reviewing: ${label}. Change what to review`}
       >
         <span className="truncate">{label}</span>
         <ChevronDown className="size-3 shrink-0" aria-hidden />
-      </button>
+      </Button>
     ) : (
       <Button
         variant="secondary"
@@ -204,12 +207,13 @@ export function WorktreeScopePicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={trigger} />
-      {/* ONE scroll: the popover's own, so the bands pin against it. */}
+      {/* ONE scroll, the body's, so the bands pin against it; the popover
+          only keeps it inside the room the viewport leaves. */}
       <PopoverContent
         align="start"
-        className="max-h-[min(32rem,var(--available-height))] w-96 overflow-y-auto p-0"
+        className="max-h-(--available-height) w-96 overflow-hidden p-0"
       >
-        {body}
+        <div className="max-h-128 min-h-0 overflow-y-auto">{body}</div>
       </PopoverContent>
     </Popover>
   );
@@ -244,17 +248,17 @@ function OptionRow({
   onSelect: () => void;
 }) {
   return (
-    <button
-      type="button"
-      role="menuitemradio"
-      aria-checked={checked}
+    <Item
+      size="xs"
+      render={<button type="button" />}
+      aria-current={checked || undefined}
       onClick={onSelect}
-      className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent [&_svg]:size-4 [&_svg]:shrink-0"
+      className="min-w-0 flex-nowrap rounded-md border-0 px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:ring-0 [&_svg]:size-4 [&_svg]:shrink-0"
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {checked ? <Check aria-hidden /> : null}
-    </button>
+    </Item>
   );
 }
 
@@ -283,7 +287,11 @@ function ScopePanel({
   const [commitsOpen, setCommitsOpen] = useState(current === "commits");
   return (
     <div className="flex flex-col">
-      <div role="menu" className="flex flex-col gap-0.5 p-1">
+      <div
+        role="group"
+        aria-label="What to review"
+        className="flex flex-col gap-0.5 p-1"
+      >
         <OptionRow
           icon={<FileDiff />}
           label="Uncommitted changes"
@@ -416,14 +424,14 @@ function CommitPicker({
       : `Review ${count} commits`;
 
   const row = (entry: WorktreeCommitLogEntry) => (
-    <button
+    <Item
       key={entry.oid}
-      type="button"
-      role="menuitemcheckbox"
-      aria-checked={picked.has(entry.oid)}
+      size="xs"
+      render={<button type="button" />}
+      aria-pressed={picked.has(entry.oid)}
       data-picked={picked.has(entry.oid) || undefined}
       onClick={() => tap(entry.oid)}
-      className={`flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent ${entry.onBase && !picked.has(entry.oid) ? "opacity-60" : ""}`}
+      className={`min-w-0 flex-nowrap rounded-md border-0 px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:ring-0 ${entry.onBase && !picked.has(entry.oid) ? "opacity-60" : ""}`}
     >
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm">{entry.subject}</span>
@@ -437,7 +445,7 @@ function CommitPicker({
       ) : (
         <span className="size-4 shrink-0" />
       )}
-    </button>
+    </Item>
   );
 
   const branchCommits = entries?.filter((entry) => !entry.onBase) ?? [];
@@ -458,7 +466,11 @@ function CommitPicker({
         defaultOpen={defaultOpen}
         containsSelected={rows.some((entry) => picked.has(entry.oid))}
       >
-        <div role="menu" className="flex flex-col gap-0.5 p-1">
+        <div
+          role="group"
+          aria-label={title}
+          className="flex flex-col gap-0.5 p-1"
+        >
           {rows.map(row)}
         </div>
       </ListGroupSection>

@@ -46,6 +46,7 @@ function pending<T>(list: Array<Pending<T>>, key: string): Promise<T> {
 }
 
 vi.mock("../../lib/worktrees.ts", () => ({
+  fetchWorktreeHosting: () => new Promise<never>(() => {}),
   fetchWorktreeStatus: () => new Promise<never>(() => {}),
   fetchWorktreeChanges: (id: string) =>
     pending(changesRequests, `changes:${id}`),
@@ -226,6 +227,33 @@ async function clickPivot(label: string): Promise<void> {
   });
 }
 
+/** Opens a header's `…` and returns its rows. */
+async function openMenu(label: string): Promise<HTMLElement[]> {
+  const more = container!.querySelector<HTMLButtonElement>(
+    `button[aria-label="${label}"]`,
+  );
+  expect(more, `expected the ${label} menu`).not.toBeNull();
+  // A checkbox row keeps its menu open; pressing the trigger then would close it.
+  if (!document.querySelector('[role="menu"]'))
+    await act(async () => {
+      more!.click();
+      await Promise.resolve();
+    });
+  return [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')];
+}
+
+/** Flips the `…`'s Preview: the open file rendered, or its source. */
+async function togglePreview(menu = "Worktree actions"): Promise<void> {
+  const preview = (await openMenu(menu)).find(
+    (item) => item.textContent === "Preview",
+  );
+  expect(preview, "expected the Preview toggle").toBeDefined();
+  await act(async () => {
+    preview!.click();
+    await Promise.resolve();
+  });
+}
+
 /** The zoom the open document's scroller is actually wired for. */
 function scrollerMode(): string | null {
   const scroller = container!.querySelector<HTMLElement>(
@@ -240,7 +268,7 @@ function zoom(): NonNullable<DocumentNavigationRegistration["zoom"]> {
   return current!;
 }
 
-it("keeps Markdown in text mode across File, Preview and Changes", async () => {
+it("keeps Markdown in text mode across its source, Preview and Changes", async () => {
   await show({ view: "files", filePath: "notes.md" });
   await answer(fileRequests, fileContent("notes.md", "# Title\n\nBody text."));
   expect(scrollerMode()).toBe("text");
@@ -248,7 +276,7 @@ it("keeps Markdown in text mode across File, Preview and Changes", async () => {
 
   // Preview renders the document, which is still text: same variables, same
   // bounds — the controls have to move type, not a transform.
-  await clickPivot("Preview");
+  await togglePreview();
   expect(container!.textContent).toContain("Title");
   expect(scrollerMode()).toBe("text");
   expect(zoom().mode).toBe("text");
@@ -265,7 +293,7 @@ it("previews an SVG and an HTML document as pictures", async () => {
   await show({ view: "files", filePath: "logo.svg" });
   await answer(fileRequests, fileContent("logo.svg", "<svg />"));
   expect(scrollerMode()).toBe("text");
-  await clickPivot("Preview");
+  await togglePreview();
   expect(scrollerMode()).toBe("visual");
   expect(zoom().mode).toBe("visual");
 
@@ -273,14 +301,14 @@ it("previews an SVG and an HTML document as pictures", async () => {
   root = createRoot(container!);
   await show({ view: "files", filePath: "page.html" });
   await answer(fileRequests, fileContent("page.html", "<p>hi</p>"));
-  await clickPivot("Preview");
+  await togglePreview();
   expect(scrollerMode()).toBe("visual");
 });
 
 it("clamps a scaled SVG preview when the same file returns to its source", async () => {
   await show({ view: "files", filePath: "logo.svg" });
   await answer(fileRequests, fileContent("logo.svg", "<svg />"));
-  await clickPivot("Preview");
+  await togglePreview();
   await act(async () => {
     zoom().setScale(3);
   });
@@ -294,7 +322,7 @@ it("clamps a scaled SVG preview when the same file returns to its source", async
 
   // …text does not. The SAME document changes renderer, so the scale it
   // inherited is clamped to the text ceiling rather than left unreachable.
-  await clickPivot("File");
+  await togglePreview();
   expect(zoom().mode).toBe("text");
   expect(zoom().scale).toBe(2);
   expect(
@@ -307,7 +335,7 @@ it("clamps a scaled SVG preview when the same file returns to its source", async
 it("moves the same text variables the source pane uses", async () => {
   await show({ view: "files", filePath: "notes.md" });
   await answer(fileRequests, fileContent("notes.md", "# Title"));
-  await clickPivot("Preview");
+  await togglePreview();
   await act(async () => {
     zoom().setScale(1.5);
   });
@@ -318,12 +346,19 @@ it("moves the same text variables the source pane uses", async () => {
   expect(scroller.style.getPropertyValue("--document-zoom")).toBe("1.5");
 });
 
-it("scales an image on its File pivot, which is the only pivot it has", async () => {
+it("scales an image as itself, with no Preview to turn on", async () => {
   await show({ view: "files", filePath: "shot.png" });
 
-  // No Preview pivot exists for an image: File already renders the picture,
+  // No Preview exists for an image: the file already renders the picture,
   // inside the element the visual zoom rule scales.
-  expect(container!.querySelector('[aria-label="Preview"]')).toBeNull();
+  expect(
+    (await openMenu("Worktree actions")).map((item) => item.textContent),
+  ).not.toContain("Preview");
+  await act(async () => {
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
   const picture = container!.querySelector(".document-visual-content");
   expect(picture?.querySelector("img")?.getAttribute("src")).toBe(
     "raw:wt-1/shot.png",
@@ -365,34 +400,24 @@ it("puts a phone's document pivots behind the header's one `…`", async () => {
   await answer(fileRequests, fileContent("notes.md", "# Title\n\nBody text."));
 
   // One header row: no pivot toolbar under it, and no bar repeating the name.
-  expect(container!.querySelector('[aria-label="Preview"]')).toBeNull();
+  expect(container!.querySelector('[aria-label="File view"]')).toBeNull();
   expect(
     [...container!.querySelectorAll("span, h2")].filter(
       (node) => node.textContent === "notes.md",
     ),
   ).toHaveLength(1);
-
-  const more = container!.querySelector<HTMLButtonElement>(
-    'button[aria-label="File view"]',
-  );
-  expect(more, "expected the header overflow").not.toBeNull();
-  await act(async () => {
-    more!.click();
-    await Promise.resolve();
-  });
-  const choices = [
-    ...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
-  ];
-  expect(choices.map((item) => item.textContent)).toEqual([
-    "File",
-    "Preview",
+  const rows = await openMenu("Document actions");
+  expect(rows.map((item) => item.textContent)).toEqual([
     "Changes vs base",
     "History",
+    "Preview",
   ]);
-  expect(choices[0]!.getAttribute("aria-checked")).toBe("true");
+  expect(
+    rows.every((item) => item.getAttribute("aria-checked") === "false"),
+  ).toBe(true);
 
   await act(async () => {
-    choices[1]!.click();
+    rows[2]!.click();
     await Promise.resolve();
   });
   expect(container!.querySelector("h1")?.textContent).toBe("Title");

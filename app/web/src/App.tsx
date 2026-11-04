@@ -921,6 +921,8 @@ const DiffPoolKeepAlive = lazy(
 function IdleDiffPool() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
+    // Absent only where there are no workers to start (jsdom).
+    if (typeof window.Worker !== "function") return;
     if (typeof window.requestIdleCallback === "function") {
       const handle = window.requestIdleCallback(() => setReady(true), {
         timeout: 5_000,
@@ -6817,7 +6819,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     receiveTranscript,
     routePrimaryAction,
     initiativeTaskPrimaryAction,
-    navigate,
   ]);
 
   // Navigating from inside the object panel changes the main pane — which on a

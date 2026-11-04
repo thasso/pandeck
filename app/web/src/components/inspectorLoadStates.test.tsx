@@ -129,12 +129,8 @@ async function showWorktreeInspector(
         worktree={worktree}
         projects={[]}
         sessions={[]}
-        sessionsFresh
         comments={comments}
         openers={openers}
-        onStartSession={() => {}}
-        onMerge={() => {}}
-        onRemove={() => {}}
       />,
     );
   });

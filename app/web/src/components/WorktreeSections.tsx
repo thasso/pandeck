@@ -43,7 +43,7 @@ export type WorktreeSectionKind =
 
 export type ChangeSetKind = "uncommitted" | "changes";
 
-export function changeSetScope(
+function changeSetScope(
   worktree: WorktreeRecord,
   kind: ChangeSetKind,
 ): WorktreeDiffScope {
@@ -310,7 +310,7 @@ export function useWorktreeRowActions(
           : {}),
         icon: <Trash2 />,
         variant: "destructive",
-        disabled: busy || worktree.isMain,
+        disabled: busy || worktree.isMain === true,
         onSelect: () => onRemove(worktree.id),
       });
     return actions;

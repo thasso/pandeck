@@ -7,8 +7,10 @@
  * as it can draw, and highlights in the background from there.
  */
 
+// `plain-surface` (index.css) takes Pierre's own type size, so the swap
+// to the drawn surface does not move a line.
 const SHELL =
-  "overflow-x-auto bg-card py-1 font-mono text-[13px] leading-5 text-foreground/90";
+  "plain-surface overflow-x-auto bg-card py-1 font-mono text-foreground/90";
 
 /** A file's lines, numbered. */
 export function PlainFile({ contents }: { contents: string }) {

@@ -174,14 +174,20 @@ range:
 
 The session inspector's Compaction window section shows:
 
-- the stored value, or "Provider default", with the effective value when a model
-  clamps it;
-- the range;
+- the stored value, or "Provider default", as a property trigger; an "Effective"
+  row follows when a model clamps it;
+- the range only when none is known (its reason); a known range sits at the
+  editor slider's ends;
 - the persisted creation-time note, when present;
-- when the value applies: "Applied", "Applies when the next turn starts", or
-  "Applies when this process restarts";
+- a Status row only while the value is not applied: "Applies on the next turn",
+  "Applies once the session is idle", "Unknown after a failed change", or that
+  compaction is turned off;
 - a failed apply (pi only);
-- "Compacts at about N tokens".
+- "Compacts at about N tokens", N in short form (967k).
+
+The trigger opens a popover editor: a slider over the range, Apply to save the
+value it rests on, and Provider default to clear a set value. Each opening
+starts from the stored value; an unapplied drag is dropped.
 
 It sets and clears the value through
 `setCompactionWindow { sessionId, tokens, requestId }`. An out-of-range value is
@@ -199,22 +205,14 @@ release timer; timeout says "The server did not answer. Try again." An
 authoritative state update is not a receipt.
 
 Genuine connected loss releases busy with a local unknown marker, silently.
-Repeated failed connection attempts leave queued-unsent Save/Clear receipts and
+Repeated failed connection attempts leave queued-unsent set/clear receipts and
 their original deadlines intact. Reconnect's normal session authority decides
 what landed; recovery adds no read, replay or rollback. Teardown abandons these
 correlations and timers.
 
-A valid numeric Save still clears the input immediately while connected. The
-section retains one raw attempt, correlated by the locally returned request id,
-session and interaction generation. Only that exact current attempt's unknown
-receipt restores its raw text, even if Requested/Answered were batched without a
-busy render. Known success/refusal does not restore it. Every manual
-resubmission re-arms protection. Typing, Clear, a newer submission, another
-request, session change or unmount invalidates it; returning to a session cannot
-revive it. Untracked callbacks cannot infer unknown. Clear leaves current input
-alone and creates no numeric restoration. This local unknown is not the
-provider's `applied: unknown` state, and stored/applied values never reconstruct
-a draft.
+The slider cannot leave the range, so the inspector keeps no draft across a
+send: an unknown receipt releases busy and the next opening reads the stored
+value. This local unknown is not the provider's `applied: unknown` state.
 
 ## Evidence
 

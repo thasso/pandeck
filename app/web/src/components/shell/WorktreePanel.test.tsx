@@ -9,6 +9,7 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import type { Prefs } from "../../hooks/usePrefs.ts";
+import { worktreePath } from "../../hooks/useSessionRouting.ts";
 import type { CommentActions } from "../diff/comments.tsx";
 
 /**
@@ -43,8 +44,10 @@ vi.mock("../../lib/worktrees.ts", () => ({
   fetchWorktreeChanges: () => Promise.resolve(changes),
   fetchWorktreeFile: () => new Promise<never>(() => {}),
   fetchWorktreeFileDiff: () => new Promise<never>(() => {}),
-  fetchWorktreeTree: () => Promise.resolve([]),
+  fetchWorktreeTree: () =>
+    Promise.resolve([{ name: "app.ts", path: "app.ts", kind: "file" }]),
   fetchWorktreeLog: () => new Promise<never>(() => {}),
+  fetchWorktreeHosting: () => new Promise<never>(() => {}),
   hashContent: (value: string) => `hash:${value.length}`,
   worktreeFileRawUrl: (id: string, path: string) => `raw:${id}/${path}`,
 }));
@@ -183,10 +186,13 @@ function button(label: string): HTMLButtonElement | undefined {
   );
 }
 
-function tab(label: string): HTMLButtonElement | undefined {
-  return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (element) => element.textContent?.trim() === label,
-  );
+/** Opens a file the way the page does: from its header's Browse files sheet. */
+async function browseTo(name: string): Promise<void> {
+  await act(async () => button("Browse files")!.click());
+  const row = [...document.querySelectorAll<HTMLElement>("[role=treeitem]")]
+    .reverse()
+    .find((element) => element.textContent?.includes(name));
+  await act(async () => row!.click());
 }
 
 it("draws the session's worktree and holds its comments while it is up", async () => {
@@ -200,17 +206,19 @@ it("draws the session's worktree and holds its comments while it is up", async (
 
 it("keeps its own navigation inside the panel", async () => {
   await show();
-  await act(async () => tab("Files")!.click());
+  await browseTo("app.ts");
   // The view moved in the panel, and nothing was handed to the main pane.
   expect(navigated).toEqual([]);
-  expect(tab("Files")!.getAttribute("aria-selected")).toBe("true");
+  expect(button("Review changes")).toBeDefined();
 });
 
 it("hands the worktree to the main pane with the view it is on", async () => {
   await show();
-  await act(async () => tab("Files")!.click());
+  await browseTo("app.ts");
   await act(async () => button("Open in Worktrees")!.click());
-  expect(navigated).toEqual(["/worktrees/wt-1/files"]);
+  expect(navigated).toEqual([
+    worktreePath("wt-1", "files", { path: "app.ts" }),
+  ]);
 });
 
 it("says what is missing rather than drawing an empty page", async () => {

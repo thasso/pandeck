@@ -126,10 +126,13 @@ function modalTarget(): HTMLElement {
   return document.body.querySelector<HTMLElement>("[data-testid='modal']")!;
 }
 
-/** The shell frame: the layer that travels under the finger. */
+/**
+ * The shell frame: the layer that travels under the finger. The screen sits in
+ * the main column inside the main pane's sheet container.
+ */
 function shellFrame(): HTMLElement {
   return document.body.querySelector<HTMLElement>("[data-testid='screen']")!
-    .parentElement!.parentElement!.parentElement!;
+    .parentElement!.parentElement!.parentElement!.parentElement!;
 }
 
 /**

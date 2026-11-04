@@ -131,21 +131,30 @@ async function save(tokens: number | null = 200_000, sessionId = "s1") {
   expect(id).toBeTypeOf("string");
   return id;
 }
-function type(raw: string) {
-  const input = container.querySelector("input")!;
-  const setter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
-    "value",
-  )!.set!;
-  setter.call(input, raw);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+/** Applies one slider step up from the stored value through the real editor. */
+async function applyStep() {
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label^="Compaction window:"]',
+      )!
+      .click(),
+  );
+  const thumb = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Compaction window"]',
+  )!;
+  await act(async () => {
+    thumb.focus();
+    thumb.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+  });
+  await act(async () =>
+    [...document.querySelectorAll("button")]
+      .find((button) => button.textContent === "Apply")!
+      .click(),
+  );
 }
-function submit() {
-  container
-    .querySelector("form")!
-    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-}
-const input = () => container.querySelector("input")!;
 const writes = (socket: ScenarioSocket) =>
   socket.sent.filter((msg) => msg.type === "setCompactionWindow");
 async function nextAttempt(socket: ScenarioSocket) {
@@ -358,7 +367,6 @@ it.each([200_000, null])(
       busy: false,
       unknown: true,
     });
-    expect(input().value).toBe(""); // Programmatic Save/Clear is not this input's attempt.
   },
 );
 
@@ -429,50 +437,25 @@ it("failed attempts do not reset an offline receipt deadline", async () => {
   });
 });
 
-it.each([false, true])(
-  "real input restores exact raw text after socket loss, batched=%s",
-  async (batched) => {
-    const socket = await boot();
-    await act(async () => {
-      type(" 200_000 ");
-    });
-    await act(async () => {
-      submit();
-      if (batched) socket.close();
-    });
-    if (!batched) {
-      expect(input().value).toBe("");
-      expect(input().disabled).toBe(true);
-      await act(async () => socket.close());
-    }
-    expect(input().value).toBe(" 200_000 ");
-    expect(input().disabled).toBe(false);
-    expect(state.compactionWindowEdits.s1?.requestId).toBe(
-      writes(socket)[0]?.requestId,
-    );
-    expect(state.compactionWindowEdits.s1?.unknown).toBe(true);
-  },
-);
-
-it("real input re-arms after refusal and manual resubmission", async () => {
+it("the editor's Apply sends through the real hook and loss releases it as unknown", async () => {
   const socket = await boot();
-  await act(async () => type("200000"));
-  await act(async () => submit());
+  await applyStep();
+  expect(writes(socket)).toEqual([
+    {
+      type: "setCompactionWindow",
+      sessionId: "s1",
+      tokens: 175_000,
+      requestId: expect.any(String),
+    },
+  ]);
   const id = writes(socket)[0]!.requestId;
-  await act(async () =>
-    socket.receive({
-      type: "error",
-      requestId: id!,
-      message: "refused",
-      target: { type: "session", id: "s1" },
-    }),
-  );
-  expect(input().value).toBe("");
-  await act(async () => type("250,000"));
-  await act(async () => submit());
+  expect(state.compactionWindowEdits.s1).toEqual({ requestId: id, busy: true });
   await act(async () => socket.close());
-  expect(input().value).toBe("250,000");
-  expect(container.textContent).not.toContain("refused");
+  expect(state.compactionWindowEdits.s1).toEqual({
+    requestId: id,
+    busy: false,
+    unknown: true,
+  });
 });
 
 it("unmount abandons correlations/timers and a remounted hook is usable", async () => {

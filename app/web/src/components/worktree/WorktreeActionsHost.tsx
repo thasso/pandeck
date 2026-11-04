@@ -14,7 +14,7 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import type { InspectorAction } from "../shell/Inspector.tsx";
-import { worktreeInspectorActions } from "../objectInspectors.tsx";
+import { worktreeInspectorActions } from "./worktreeInspectorActions.tsx";
 import { useWorktreeDelivery } from "./WorktreeDelivery.tsx";
 import { useWorktreeRetire } from "./useWorktreeRetire.tsx";
 

@@ -119,9 +119,7 @@ function primeKeyboard() {
   const input = document.createElement("input");
   input.setAttribute("aria-hidden", "true");
   input.tabIndex = -1;
-  // 16px: iOS zooms the page into any smaller focused field.
-  input.style.cssText =
-    "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;pointer-events:none";
+  input.className = "keyboard-primer";
   document.body.appendChild(input);
   input.focus({ preventScroll: true });
   keyboardPrimer = input;

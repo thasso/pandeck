@@ -23,6 +23,7 @@ vi.mock("../../lib/worktrees.ts", () => ({
     return Promise.resolve([]);
   },
   fetchWorktreeLog: () => new Promise<never>(() => {}),
+  fetchWorktreeHosting: () => new Promise<never>(() => {}),
   fetchWorktreeFileLog: () => new Promise<never>(() => {}),
   hashContent: (value: string) => `hash:${value.length}`,
   worktreeFileRawUrl: (id: string, path: string) => `raw:${id}/${path}`,

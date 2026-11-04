@@ -22,7 +22,7 @@ import {
 } from "../ui/item.tsx";
 
 /** One commit as a clickable row: subject, a byline, the short oid. */
-export function CommitItem({
+function CommitItem({
   subject,
   shortOid,
   children,

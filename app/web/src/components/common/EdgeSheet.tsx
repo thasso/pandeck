@@ -78,7 +78,7 @@ export function EdgeSheet({
         className={
           top
             ? "gap-0 overflow-hidden rounded-xl border"
-            : `${container ? "max-h-[85%]" : "max-h-[85vh]"} gap-0 rounded-t-xl ${BOTTOM_SHEET_BOTTOM_PADDING_CLASS}`
+            : `${container ? "max-h-17/20" : "max-h-[85vh]"} gap-0 rounded-t-xl ${BOTTOM_SHEET_BOTTOM_PADDING_CLASS}`
         }
         style={
           top

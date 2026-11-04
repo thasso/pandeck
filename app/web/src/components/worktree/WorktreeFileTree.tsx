@@ -6,7 +6,8 @@ import type {
   WorktreeTreeEntry,
 } from "@assistant/shared";
 import { ErrorNote } from "../common/load.tsx";
-import { useReloadOnToken } from "../../hooks/useFetchState.ts";
+import { useFetchState, useReloadOnToken } from "../../hooks/useFetchState.ts";
+import { dataOf } from "../../lib/loadState.ts";
 import {
   fetchWorktreeChanges,
   fetchWorktreeTree,
@@ -230,26 +231,18 @@ export function useWorktreeFileChanges(
   worktree: WorktreeRecord,
   refreshToken: number,
 ): readonly WorktreeChangeFile[] | undefined {
-  const [files, setFiles] = useState<WorktreeChangeFile[]>();
-  useEffect(() => {
-    let cancelled = false;
+  const key = `${worktree.id}\n${worktree.isMain ? "head" : worktree.baseCommit}`;
+  const { state, reload } = useFetchState(key, () =>
     fetchWorktreeChanges(
       worktree.id,
       worktree.isMain
         ? { kind: "workingTree" }
         : { kind: "range", from: worktree.baseCommit },
-    ).then(
-      (response) => {
-        if (!cancelled) setFiles(response.files);
-      },
-      // Marks are a nicety over the tree: a failed read leaves it unmarked.
-      () => undefined,
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [worktree.id, worktree.isMain, worktree.baseCommit, refreshToken]);
-  return files;
+    ).then((response) => response.files),
+  );
+  useReloadOnToken(key, refreshToken, reload);
+  // Marks are a nicety over the tree: a failed read leaves it unmarked.
+  return dataOf(state);
 }
 
 /**

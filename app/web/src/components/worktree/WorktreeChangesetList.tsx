@@ -10,7 +10,7 @@
  * viewport AND expanded; large/binary/viewed files start collapsed. Sections
  * register their elements with the parent for jump-to-file navigation.
  */
-import { useEffect, useRef, useState } from "react";
+import { createElement, useEffect, useRef, useState } from "react";
 import type {
   WorktreeChangeFile,
   WorktreeDiffScope,
@@ -160,7 +160,6 @@ function ChangesetFileSection({
   };
 
   const parts = splitPath(file.path);
-  const FileIcon = fileIconFor(file.path);
   const current = scope.kind === "workingTree" || !scope.to;
   const cacheKey = diff
     ? `${worktreeId}:${diff.path}:${hashContent(diff.diff)}`
@@ -172,9 +171,12 @@ function ChangesetFileSection({
         id={`changeset-file:${file.path}`}
         open={!collapsed}
         onOpenChange={(open) => setCollapsed(!open)}
-        icon={
-          <FileIcon size={14} aria-hidden className="shrink-0 opacity-70" />
-        }
+        // `createElement`: the glyph is looked up, not a component of ours.
+        icon={createElement(fileIconFor(file.path), {
+          size: 14,
+          "aria-hidden": true,
+          className: "shrink-0 opacity-70",
+        })}
         title={parts.name}
         detail={
           parts.dir ? (

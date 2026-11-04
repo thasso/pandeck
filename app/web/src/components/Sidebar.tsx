@@ -682,22 +682,26 @@ function SidebarImpl({
   const shownProjects = projectListView.showArchived
     ? projects
     : activeProjects;
+  // The one place in this file the remembered statuses are read: a tree row
+  // falls back to what git last said until its own watch answers, so a cold
+  // Projects tab does not grow row by row (`lib/worktreeRowStatuses.ts`).
+  const remembered = lastKnownWorktreeStatuses;
+  const projectRowStatus = useCallback(
+    (id: string) => rowWorktreeStatus(worktreeStatuses, remembered, id),
+    [worktreeStatuses, remembered],
+  );
   // Every worktree's facts, not only the rows on screen: a filter decides
-  // which rows those are. Git's last word stands in until a watch answers.
+  // which Projects rows those are, from the same row status.
   const projectWorktreeFacts = useCallback(
     (worktree: WorktreeRecord): ProjectWorktreeFacts => {
-      const status = rowWorktreeStatus(
-        worktreeStatuses,
-        lastKnownWorktreeStatuses,
-        worktree.id,
-      );
+      const status = projectRowStatus(worktree.id);
       return {
         changed: Boolean(status && (status.dirty || status.ahead > 0)),
         pullRequest: worktreeHosting[worktree.id]?.pr?.state === "open",
         changedAt: status?.changedAt,
       };
     },
-    [worktreeStatuses, lastKnownWorktreeStatuses, worktreeHosting],
+    [projectRowStatus, worktreeHosting],
   );
   const [visibleProjectWorktreeIds, setVisibleProjectWorktreeIds] = useState<
     string[]
@@ -756,11 +760,6 @@ function SidebarImpl({
     key: string;
     value: Record<string, WorktreeGitStatus>;
   }>({ key: "", value: {} });
-  // The one place in this file the remembered statuses are read: a tree row
-  // falls back to what git last said until its own watch answers, so a cold
-  // Projects tab does not grow row by row (`lib/worktreeRowStatuses.ts`).
-  const projectRowStatus = (id: string) =>
-    rowWorktreeStatus(worktreeStatuses, lastKnownWorktreeStatuses, id);
   const projectStatusKey = (worktrees ?? [])
     .filter((worktree) => visibleBrowserWorktreeSet.has(worktree.id))
     .map((worktree) => [worktree.id, projectRowStatus(worktree.id)] as const)

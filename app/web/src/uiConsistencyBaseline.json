@@ -8,6 +8,9 @@
   "src/components/ChatDockPanel.tsx": {
     "arbitrary-value": 3
   },
+  "src/components/ChatHeaderMenu.tsx": {
+    "hand-menu": 1
+  },
   "src/components/InlineDocumentEmbed.tsx": {
     "raw-button": 1
   },

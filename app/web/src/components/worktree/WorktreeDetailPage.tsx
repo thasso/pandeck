@@ -76,7 +76,7 @@ import { Badge } from "../ui/badge.tsx";
 import { useCommentActuation } from "../review/CommentActuation.tsx";
 import { useWorktreeDelivery } from "./WorktreeDelivery.tsx";
 import { useWorktreeRetire } from "./useWorktreeRetire.tsx";
-import { worktreeInspectorActions } from "../objectInspectors.tsx";
+import { worktreeInspectorActions } from "./worktreeInspectorActions.tsx";
 import { useIgnoredFilesShown } from "../../lib/worktreeIgnoredFiles.ts";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
 import { zoomMenuGroup } from "../DocumentZoom.tsx";
@@ -85,7 +85,7 @@ import {
   type HeaderMenuGroup,
 } from "../common/HeaderMenu.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
-import { DIFF_VIEW_SWITCHES } from "../diff/DiffModeToolbar.tsx";
+import { DIFF_VIEW_SWITCHES } from "../diff/diffViewSwitches.ts";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
 import { DiffWorkerProvider } from "../diff/DiffWorkerProvider.tsx";
 import { FileSurface } from "../diff/FileSurface.tsx";
@@ -278,6 +278,7 @@ function ChangesView({
   commentsConfigFor,
   jumpOpen,
   onJumpOpenChange,
+  documentScroll,
 }: {
   /** Jump to file, opened from the page header (the narrow layout's sheet). */
   jumpOpen: boolean;
@@ -295,6 +296,8 @@ function ChangesView({
     current: boolean,
     refOid?: string,
   ) => LineCommentsConfig | undefined;
+  /** The open document's id, which zoom and scroll restoration find it by. */
+  documentScroll?: string | undefined;
 }) {
   const scope = useMemo(() => scopeFromRoute(from, to), [from, to]);
   const [expandedChangeDirs, setExpandedChangeDirs] = useState<string[]>([]);
@@ -421,7 +424,11 @@ function ChangesView({
           onRetry={changesFetch.reload}
         />
       )}
-      <div data-dock-scroll className="min-h-0 min-w-0 flex-1 overflow-auto">
+      <div
+        data-dock-scroll
+        data-document-scroll={documentScroll}
+        className="min-h-0 min-w-0 flex-1 overflow-auto"
+      >
         <WorktreeChangesetList
           worktreeId={worktree.id}
           scope={scope}
@@ -575,33 +582,23 @@ function useWorktreeReadme(
   worktreeId: string,
   enabled: boolean,
 ): string | undefined {
-  const [readme, setReadme] = useState<{ id: string; path: string | null }>();
-  useEffect(() => {
-    if (!enabled || readme?.id === worktreeId) return;
-    let cancelled = false;
-    fetchWorktreeTree(worktreeId, "", false).then(
-      (entries) => {
-        if (cancelled) return;
-        const byName = new Map(
-          entries
-            .filter((entry) => entry.kind === "file")
-            .map((entry) => [entry.name.toLowerCase(), entry.path]),
-        );
-        const path =
-          README_NAMES.map((name) => byName.get(name)).find(Boolean) ?? null;
-        setReadme({ id: worktreeId, path });
-      },
-      () => {
-        if (!cancelled) setReadme({ id: worktreeId, path: null });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled, worktreeId, readme?.id]);
-  return enabled && readme?.id === worktreeId
-    ? (readme.path ?? undefined)
-    : undefined;
+  const { state } = useFetchState(
+    worktreeId,
+    () =>
+      fetchWorktreeTree(worktreeId, "", false).then(
+        (entries) => {
+          const byName = new Map(
+            entries
+              .filter((entry) => entry.kind === "file")
+              .map((entry) => [entry.name.toLowerCase(), entry.path]),
+          );
+          return README_NAMES.map((name) => byName.get(name)).find(Boolean);
+        },
+        () => undefined,
+      ),
+    { enabled },
+  );
+  return dataOf(state);
 }
 
 /**
@@ -1724,10 +1721,9 @@ export default function WorktreeDetailPage({
         <div
           className={
             // The worktree screen runs UNDER the phone's resting dock, as the
-            // list screens run under the nav card: the page takes back the
-            // space the shell reserved, and each scroller pads its end by it.
+            // list screens run under the nav card (`under-dock`, index.css).
             !embedded
-              ? "flex h-[calc(100%+var(--app-bottom-chrome-inset,0px))] min-h-0 shrink-0 flex-col [&_[data-dock-scroll]]:pb-[var(--app-bottom-chrome-inset,0px)] [&_[data-dock-scroll]]:overscroll-none"
+              ? "under-dock flex min-h-0 shrink-0 flex-col"
               : "flex h-full min-h-0 flex-col"
           }
         >
@@ -1979,6 +1975,9 @@ export default function WorktreeDetailPage({
               commentsConfigFor={commentsConfigFor}
               jumpOpen={jumpOpen}
               onJumpOpenChange={setJumpOpen}
+              documentScroll={
+                documentTarget ? documentTargetHref(documentTarget) : undefined
+              }
             />
           )}
           {narrow ? (

@@ -25,7 +25,6 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { Tree, type TreeNode } from "./common/Tree.tsx";
-import { Badge } from "./ui/badge.tsx";
 import { Item } from "./ui/item.tsx";
 import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
@@ -656,9 +655,6 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                   project={data.project}
                   selected={state.selected}
                   density={density}
-                  expanded={state.expanded}
-                  hasContents={false}
-                  onToggle={onToggleProject}
                   onOpen={onOpenProject}
                   onStartSession={onStartSession}
                 />
@@ -929,18 +925,12 @@ const ProjectRowContent = memo(function ProjectRowContent({
   project,
   selected,
   density,
-  expanded,
-  hasContents,
-  onToggle,
   onOpen,
   onStartSession,
 }: {
   project: ProjectRecord;
   selected: boolean;
   density: RowDensity;
-  expanded: boolean;
-  hasContents: boolean;
-  onToggle: (id: string) => void;
   onOpen?: ((id: string) => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
 }) {
@@ -962,30 +952,6 @@ const ProjectRowContent = memo(function ProjectRowContent({
             {project.key}
           </span>
         </>
-      }
-      signals={
-        hasContents ? (
-          <Badge
-            variant="ghost"
-            render={<button type="button" />}
-            aria-expanded={expanded}
-            aria-label={`${expanded ? "Hide" : "Show"} contents of ${project.name}`}
-            onPointerDown={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle(project.id);
-            }}
-            className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-          >
-            <ChevronRight
-              size={12}
-              className={expanded ? "rotate-90" : ""}
-              aria-hidden
-            />
-            Contents
-          </Badge>
-        ) : undefined
       }
       actions={
         onStartSession || onOpen ? (

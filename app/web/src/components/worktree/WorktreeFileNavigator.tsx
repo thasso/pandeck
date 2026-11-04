@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { createElement, useCallback, useMemo, type ReactNode } from "react";
 import {
   File,
   FileArchive,
@@ -592,16 +592,17 @@ function EntryParts({
   children: ReactNode;
 }) {
   const isDir = data.kind === "dir";
-  const Icon = isDir ? Folder : fileIconFor(data.path);
+  const icon = isDir ? Folder : fileIconFor(data.path);
   // A change list colours its status letter: the glyph stays grey beside it.
-  const color = showChangeStats ? undefined : ICON_COLOR.get(Icon);
+  const color = showChangeStats ? undefined : ICON_COLOR.get(icon);
   return (
     <>
-      <Icon
-        size={13}
-        className="shrink-0 text-muted-foreground"
-        style={color ? { color } : undefined}
-      />
+      {/* `createElement`: the glyph is looked up, not a component of ours. */}
+      {createElement(icon, {
+        size: 13,
+        className: "shrink-0 text-muted-foreground",
+        style: color ? { color } : undefined,
+      })}
       {showChangeStats && !isDir ? (
         <span
           className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}

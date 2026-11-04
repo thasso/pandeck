@@ -126,9 +126,9 @@ describe("ProjectTreePane first load", () => {
       expect(seen.at(-1)).toEqual([worktree.id]);
       expect(container.textContent).toContain("live-one");
       expect(container.textContent).toContain("backup/live-one");
-      // The Project row's own disclosure, shared with the Initiative rows.
+      // The Project row's tree disclosure, the same chevron every row has.
       const collapse = container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Hide contents of Project"]',
+        '[data-list-row-id="project"] button[aria-label="Collapse"]',
       );
       expect(collapse).not.toBeNull();
       await act(async () => collapse!.click());

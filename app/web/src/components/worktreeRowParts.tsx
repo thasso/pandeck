@@ -375,7 +375,7 @@ function AxesSummary({
             >
               <CloudOff
                 size={12}
-                className="inline-block align-[-2px]"
+                className="inline-block align-text-bottom"
                 aria-hidden
               />
               <span className="sr-only">unpublished</span>

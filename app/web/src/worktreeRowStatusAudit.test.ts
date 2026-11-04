@@ -62,7 +62,7 @@ const SANCTIONED: readonly string[] = [
   "App.tsx: lastKnownWorktreeStatuses={state.cachedWorktreeStatuses}",
   "components/Sidebar.tsx: lastKnownWorktreeStatuses?: Record<string, WorktreeGitStatus>;",
   "components/Sidebar.tsx: lastKnownWorktreeStatuses = NO_WORKTREE_STATUSES,",
-  "components/Sidebar.tsx: rowWorktreeStatus(worktreeStatuses, lastKnownWorktreeStatuses, id);",
+  "components/Sidebar.tsx: const remembered = lastKnownWorktreeStatuses;",
 ];
 
 function shouldScan(path: string): boolean {
@@ -152,6 +152,12 @@ const SANCTIONED_SINKS: readonly string[] = [
   "App.tsx: KnowledgePanel.status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}",
   "App.tsx: KnowledgeInspector.status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}",
   "components/Sidebar.tsx: SessionInbox.worktreeStatuses={worktreeStatuses}",
+  // A session's or Task's related-worktree tree, handed the live map above.
+  "components/objectInspectors.tsx: ProjectTreePane.worktreeStatuses={tree.worktreeStatuses ?? NO_WORKTREE_STATUSES}",
+  // The worktree actions (commit, push, merge, remove) and the session's
+  // worktree panel act on and state the checkout as it is now.
+  "App.tsx: WorktreeActionsHostProvider.statuses={state.worktreeStatuses}",
+  "App.tsx: WorktreePanel.status={panelWorktreeId ? state.worktreeStatuses[panelWorktreeId] : undefined}",
   "components/worktree/WorktreeOverlays.tsx: MergeWorktreeDialog.status={state.worktreeStatuses[worktree.id]}",
   "components/worktree/WorktreeOverlays.tsx: RemoveWorktreeDialog.status={state.worktreeStatuses[worktree.id]}",
 ];

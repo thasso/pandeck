@@ -11,6 +11,7 @@ import type {
   WorktreeTreeEntry,
 } from "@assistant/shared";
 import type { Prefs } from "../../hooks/usePrefs.ts";
+import { useIgnoredFilesShown } from "../../lib/worktreeIgnoredFiles.ts";
 
 /**
  * How the worktree detail surfaces draw the five states
@@ -45,6 +46,7 @@ function pending<T>(list: Array<Pending<T>>, key: string): Promise<T> {
 }
 
 vi.mock("../../lib/worktrees.ts", () => ({
+  fetchWorktreeHosting: () => new Promise<never>(() => {}),
   fetchWorktreeStatus: () => new Promise<never>(() => {}),
   fetchWorktreeChanges: (id: string) =>
     pending(changesRequests, `changes:${id}`),
@@ -76,6 +78,13 @@ vi.mock("../diff/FileSurface.tsx", () => ({
 }));
 
 const WorktreeDetailPage = (await import("./WorktreeDetailPage.tsx")).default;
+
+/** The `…` menu's "Show ignored files", through the store it sets. */
+let setIgnoredShown: (next: boolean) => void = () => {};
+function IgnoredFilesSwitch() {
+  setIgnoredShown = useIgnoredFilesShown("wt-1")[1];
+  return null;
+}
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -192,6 +201,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The switch is app-wide state: the next test starts with it off.
+  act(() => setIgnoredShown(false));
   act(() => root?.unmount());
   root = null;
   container?.remove();
@@ -202,40 +213,46 @@ async function show(props: {
   view: "changes" | "files";
   filePath?: string;
   statusUpdatedAt?: number;
+  /** A phone's page: its tree is the header's Browse files sheet. */
+  narrow?: boolean;
 }): Promise<void> {
   await act(async () => {
     root!.render(
-      <WorktreeDetailPage
-        worktree={worktree}
-        narrow={false}
-        view={props.view}
-        {...(props.filePath ? { filePath: props.filePath } : {})}
-        {...(props.statusUpdatedAt === undefined
-          ? {}
-          : { status: status(props.statusUpdatedAt) })}
-        navigate={() => {}}
-        prefs={prefs}
-        onUpdatePrefs={() => {}}
-        comments={[]}
-        onLoadComments={() => {}}
-        onUnloadComments={() => {}}
-        onSubmitReview={() => {}}
-        commentActions={{
-          onAddComment: () => {},
-          onResolveComment: () => {},
-          onDeleteComment: () => {},
-        }}
-      />,
+      <>
+        <IgnoredFilesSwitch />
+        <WorktreeDetailPage
+          worktree={worktree}
+          narrow={props.narrow ?? false}
+          view={props.view}
+          {...(props.filePath ? { filePath: props.filePath } : {})}
+          {...(props.statusUpdatedAt === undefined
+            ? {}
+            : { status: status(props.statusUpdatedAt) })}
+          navigate={() => {}}
+          prefs={prefs}
+          onUpdatePrefs={() => {}}
+          comments={[]}
+          onLoadComments={() => {}}
+          onUnloadComments={() => {}}
+          onSubmitReview={() => {}}
+          commentActions={{
+            onAddComment: () => {},
+            onResolveComment: () => {},
+            onDeleteComment: () => {},
+          }}
+        />
+      </>,
     );
   });
 }
 
+// The Browse files sheet portals out of the container: read the document.
 function text(): string {
-  return container!.textContent ?? "";
+  return document.body.textContent ?? "";
 }
 
 function alerts(): string[] {
-  return [...container!.querySelectorAll("[role='alert']")].map(
+  return [...document.querySelectorAll("[role='alert']")].map(
     (element) => element.textContent ?? "",
   );
 }
@@ -263,44 +280,59 @@ async function answerKey<T>(
 }
 
 function click(selector: string): Promise<void> {
-  const element = container!.querySelector<HTMLElement>(selector);
+  const element = document.querySelector<HTMLElement>(selector);
   expect(element, `expected ${selector}`).not.toBeNull();
   return act(async () => {
     element!.click();
   });
 }
 
-it("shows the newly selected file's placeholder, not the previous diff", async () => {
-  await show({ view: "changes", filePath: "alpha.ts" });
-  expect(text()).toContain("Loading changes…");
+/** The worktree's tree, which lives in the header's Browse files sheet. */
+function browseFiles(): Promise<void> {
+  return click("[aria-label='Browse files']");
+}
 
-  await answer(changesRequests, changes(["alpha.ts", "beta.ts"]));
+/** Opens a file's "Changes vs base" pivot and answers its diff. */
+async function openBaseDiff(
+  path: string,
+  patch: string,
+  statusUpdatedAt = 1,
+): Promise<void> {
+  await show({ view: "files", filePath: path, statusUpdatedAt });
+  await click("[aria-label='Changes vs base']");
   expect(text()).toContain("Loading diff…");
-  await answer(diffRequests, fileDiff("alpha.ts", "alpha patch"));
-  expect(text()).toContain("alpha patch");
+  await answer(diffRequests, fileDiff(path, patch));
+  expect(text()).toContain(patch);
+}
+
+it("shows the newly selected file's placeholder, not the previous diff", async () => {
+  await openBaseDiff("alpha.ts", "alpha patch");
 
   // R3: beta.ts is a different object, so alpha's patch may not survive a frame
-  // under the new path.
-  await show({ view: "changes", filePath: "beta.ts" });
+  // under the new path — neither on beta's source, which a new file opens on,
+  // nor once beta's own pivot is asked for.
+  await show({ view: "files", filePath: "beta.ts" });
+  expect(text()).not.toContain("alpha patch");
+  expect(text()).toContain("Loading file…");
+  await click("[aria-label='Changes vs base']");
   expect(text()).not.toContain("alpha patch");
   expect(text()).toContain("Loading diff…");
 
   await answer(diffRequests, fileDiff("beta.ts", "beta patch"));
   expect(text()).toContain("beta patch");
-  expect(diffRequests.map((request) => request.key)).toEqual([
-    "diff:wt-1:alpha.ts",
-    "diff:wt-1:beta.ts",
-  ]);
+  // Alpha's diff was read once; everything after it is beta's (the frame
+  // before beta falls back to its source may start, and drop, one of them).
+  const [first, ...rest] = diffRequests.map((request) => request.key);
+  expect(first).toBe("diff:wt-1:alpha.ts");
+  expect(new Set(rest)).toEqual(new Set(["diff:wt-1:beta.ts"]));
 });
 
 it("keeps the diff on screen while a watcher push refreshes the same file", async () => {
-  await show({ view: "changes", filePath: "alpha.ts", statusUpdatedAt: 1 });
-  await answer(changesRequests, changes(["alpha.ts"]));
-  await answer(diffRequests, fileDiff("alpha.ts", "alpha patch"));
+  await openBaseDiff("alpha.ts", "alpha patch");
 
   // A bumped status is an invalidation of the SAME path (R2): it refetches
   // without blanking, and a failure adds a note over the readable diff.
-  await show({ view: "changes", filePath: "alpha.ts", statusUpdatedAt: 2 });
+  await show({ view: "files", filePath: "alpha.ts", statusUpdatedAt: 2 });
   expect(text()).toContain("alpha patch");
   expect(diffRequests).toHaveLength(2);
 
@@ -330,10 +362,6 @@ it("reports a failed changes load in the danger tone, with a retry", async () =>
 
 it("keeps a file's diff out of the next file's source pane", async () => {
   await show({ view: "files", filePath: "alpha.ts" });
-  await answer(treeRequests, [
-    { name: "alpha.ts", path: "alpha.ts", kind: "file" },
-    { name: "beta.ts", path: "beta.ts", kind: "file" },
-  ]);
   expect(text()).toContain("Loading file…");
 
   await answer(fileRequests, fileContent("alpha.ts", "alpha source"));
@@ -350,9 +378,6 @@ it("keeps a file's diff out of the next file's source pane", async () => {
 
 it("offers a retry when a file cannot be read, and keeps a read one", async () => {
   await show({ view: "files", filePath: "alpha.ts", statusUpdatedAt: 1 });
-  await answer(treeRequests, [
-    { name: "alpha.ts", path: "alpha.ts", kind: "file" },
-  ]);
   await act(async () => {
     fileRequests.at(-1)!.reject(new Error("no such file"));
   });
@@ -376,12 +401,13 @@ it("offers a retry when a file cannot be read, and keeps a read one", async () =
 });
 
 it("waits for the tree's answer before claiming a worktree has no files", async () => {
-  await show({ view: "files" });
-  // R1: the root directory has not answered yet, so the rail is loading — it
+  await show({ view: "files", narrow: true });
+  await browseFiles();
+  // R1: the root directory has not answered yet, so the tree is loading — it
   // must not say "No files." about a worktree it has not read.
   expect(text()).not.toContain("No files.");
   expect(
-    container!.querySelector("[role='status'][aria-label='Loading files']"),
+    document.querySelector("[role='status'][aria-label='Loading files']"),
   ).not.toBeNull();
 
   await answer(treeRequests, []);
@@ -389,7 +415,8 @@ it("waits for the tree's answer before claiming a worktree has no files", async 
 });
 
 it("reloads every expanded directory in place when ignored files are shown", async () => {
-  await show({ view: "files" });
+  await show({ view: "files", narrow: true });
+  await browseFiles();
   await answerKey(treeRequests, "tree:wt-1:", [
     { name: "sub", path: "sub", kind: "dir" },
     { name: "alpha.ts", path: "alpha.ts", kind: "file" },
@@ -399,7 +426,7 @@ it("reloads every expanded directory in place when ignored files are shown", asy
     { name: "beta.ts", path: "sub/beta.ts", kind: "file" },
   ]);
 
-  await click("[aria-label='Show ignored and hidden files']");
+  await act(async () => setIgnoredShown(true));
   expect(
     treeRequests
       .slice(-2)
@@ -426,14 +453,15 @@ it("reloads every expanded directory in place when ignored files are shown", asy
 });
 
 it("restarts an expanded directory whose first listing is in flight", async () => {
-  await show({ view: "files" });
+  await show({ view: "files", narrow: true });
+  await browseFiles();
   await answerKey(treeRequests, "tree:wt-1:", [
     { name: "pending", path: "pending", kind: "dir" },
   ]);
   await click("[title='pending']");
   expect(treeRequests.at(-1)?.key).toBe("tree:wt-1:pending");
 
-  await click("[aria-label='Show ignored and hidden files']");
+  await act(async () => setIgnoredShown(true));
   expect(treeRequests.map((request) => request.key)).toContain(
     "tree:wt-1:pending:ignored",
   );
@@ -450,8 +478,9 @@ it("restarts an expanded directory whose first listing is in flight", async () =
   expect(text()).not.toContain("Loading…");
 });
 
-it("refreshes the file tree in place instead of blanking the rail", async () => {
-  await show({ view: "files", statusUpdatedAt: 1 });
+it("refreshes the file tree in place instead of blanking it", async () => {
+  await show({ view: "files", statusUpdatedAt: 1, narrow: true });
+  await browseFiles();
   await answerKey(treeRequests, "tree:wt-1:", [
     { name: "sub", path: "sub", kind: "dir" },
     { name: "alpha.ts", path: "alpha.ts", kind: "file" },
@@ -467,18 +496,19 @@ it("refreshes the file tree in place instead of blanking the rail", async () => 
   expect(text()).toContain("alpha.ts");
 
   // R2: the token bump refetches every loaded directory and swaps each in when
-  // it answers. The rail keeps its rows and expanded folder, with no skeletons.
-  // This used to clear the cache and blank the rail shortly after every open.
-  await show({ view: "files", statusUpdatedAt: 2 });
-  expect(
-    treeRequests.filter((request) => request.key === "tree:wt-1:").length,
-  ).toBe(2);
+  // it answers. The tree keeps its rows and expanded folder, with no skeletons.
+  // This used to clear the cache and blank the tree shortly after every open.
+  const rootReads = () =>
+    treeRequests.filter((request) => request.key === "tree:wt-1:").length;
+  const before = rootReads();
+  await show({ view: "files", statusUpdatedAt: 2, narrow: true });
+  expect(rootReads()).toBeGreaterThan(before);
   expect(
     treeRequests.filter((request) => request.key === "tree:wt-1:sub").length,
   ).toBe(2);
   expect(text()).toContain("beta.ts");
   expect(
-    container!.querySelector("[role='status'][aria-label='Loading files']"),
+    document.querySelector("[role='status'][aria-label='Loading files']"),
   ).toBeNull();
 
   await answerKey(treeRequests, "tree:wt-1:sub", [
@@ -489,7 +519,8 @@ it("refreshes the file tree in place instead of blanking the rail", async () => 
 });
 
 it("drops a directory's children once its parent stops listing it", async () => {
-  await show({ view: "files", statusUpdatedAt: 1 });
+  await show({ view: "files", statusUpdatedAt: 1, narrow: true });
+  await browseFiles();
   await answerKey(treeRequests, "tree:wt-1:", [
     { name: "sub", path: "sub", kind: "dir" },
   ]);
@@ -501,7 +532,7 @@ it("drops a directory's children once its parent stops listing it", async () => 
 
   // The folder was deleted upstream: refreshing in place must not leave its
   // cached children hanging under a parent that no longer has it.
-  await show({ view: "files", statusUpdatedAt: 2 });
+  await show({ view: "files", statusUpdatedAt: 2, narrow: true });
   await answerKey(treeRequests, "tree:wt-1:", [
     { name: "alpha.ts", path: "alpha.ts", kind: "file" },
   ]);
@@ -509,13 +540,11 @@ it("drops a directory's children once its parent stops listing it", async () => 
 });
 
 it("marks a same-key diff refetch, including the one a retry starts", async () => {
-  await show({ view: "changes", filePath: "alpha.ts", statusUpdatedAt: 1 });
-  await answer(changesRequests, changes(["alpha.ts"]));
-  await answer(diffRequests, fileDiff("alpha.ts", "alpha patch"));
+  await openBaseDiff("alpha.ts", "alpha patch");
   expect(text()).not.toContain("Refreshing this diff");
 
   // A watcher push: the diff stays and says a fetch is running (R2).
-  await show({ view: "changes", filePath: "alpha.ts", statusUpdatedAt: 2 });
+  await show({ view: "files", filePath: "alpha.ts", statusUpdatedAt: 2 });
   expect(text()).toContain("Refreshing this diff");
   await act(async () => {
     diffRequests.at(-1)!.reject(new Error("git exploded"));
@@ -534,9 +563,6 @@ it("marks a same-key diff refetch, including the one a retry starts", async () =
 
 it("marks a refetch of the Files view's vs-base pivot", async () => {
   await show({ view: "files", filePath: "alpha.ts", statusUpdatedAt: 1 });
-  await answerKey(treeRequests, "tree:wt-1:", [
-    { name: "alpha.ts", path: "alpha.ts", kind: "file" },
-  ]);
   await answer(fileRequests, fileContent("alpha.ts", "alpha source"));
 
   await click("[aria-label='Changes vs base']");

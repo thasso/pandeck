@@ -100,6 +100,7 @@ function MarkdownFrontmatterHeader({
       <header aria-label="Document metadata" className={frame}>
         <InspectorSection
           id="frontmatter"
+          storageScope="document"
           title="Frontmatter"
           defaultOpen={false}
         >

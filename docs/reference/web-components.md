@@ -2252,14 +2252,14 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   param swaps in the full-screen file/diff view behind a back bar; Review does
   NOT auto-select the first file there), split diffs are forced to unified via
   page-level override prefs (the pref itself is untouched, desktop-only), the
-  tabs row owns a "view options" `Popover` (`DiffModeToolbar`, with style hidden
-  on mobile, on Review; a regular Folder list/Tree radio menu on the mobile
-  Files navigator, switching back to diff options in file detail), the mobile
-  Files navigator has no separate title/branch/segmented-toggle row, and its
-  Folder list is a one-directory-at-a-time drill-down (folders enter, a
-  path/back row returns upward) rather than a misleading accumulation of every
-  lazily loaded entry, and App passes the worktree actions as a `⋯` overflow
-  `Popover` on mobile. The page no longer renders any comment roster itself —
+  diff display options are groups of the header `…` (`diffViewMenuGroups`, style
+  hidden on mobile; a regular Folder list/Tree radio menu on the mobile Files
+  navigator, switching back to diff options in file detail), the mobile Files
+  navigator has no separate title/branch/segmented-toggle row, and its Folder
+  list is a one-directory-at-a-time drill-down (folders enter, a path/back row
+  returns upward) rather than a misleading accumulation of every lazily loaded
+  entry, and App passes the worktree actions as a `⋯` overflow `Popover` on
+  mobile. The page no longer renders any comment roster itself —
   `WorktreeCommentsPanel.tsx` is gone, and reviewing a diff and reviewing a
   Knowledge entry are the same shape at every width: the object PANEL's Comments
   section (`objectInspectors.tsx`'s `WorktreeReviewSection`, over the same
