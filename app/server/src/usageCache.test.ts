@@ -26,6 +26,7 @@ const {
   TURN_END_DEBOUNCE_MS,
   forgetUsageProfile,
   markUsageProfileDirty,
+  peekUsageSnapshot,
   readUsageSnapshot,
   resetUsageCacheForTests,
   revalidateUsage,
@@ -343,6 +344,28 @@ describe("persistence", () => {
     expect(existsSync(join(CACHE_DIR, "openai.json"))).toBe(false);
     expect(usageIndicators()[0]?.fetchedAt).toBeNull();
   });
+
+  test.each([
+    ["claude", "claude"],
+    ["openai", "openai-codex"],
+  ] as const)(
+    "a %s read that finishes after its account was deleted writes nothing back",
+    async (id, provider) => {
+      install([profile(id, provider)]);
+      const claude = deferred<ClaudeUsageSnapshot>();
+      const openAi = deferred<OpenAiUsageSnapshot>();
+      claudeResult = () => claude.promise;
+      openAiResult = () => openAi.promise;
+      const read = readUsageSnapshot(id, provider, { force: true });
+      await flush();
+      forgetUsageProfile(id);
+      if (provider === "claude") claude.resolve(claudeSnapshot());
+      else openAi.resolve(openAiSnapshot());
+      await read;
+      expect(existsSync(join(CACHE_DIR, `${id}.json`))).toBe(false);
+      expect(peekUsageSnapshot(id, provider)).toBeNull();
+    },
+  );
 });
 
 describe("triggers", () => {

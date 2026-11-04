@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatUsageReset, resetCreditExpiryLevel } from "./usage.ts";
+import {
+  formatUsageReset,
+  resetCreditExpiryLevel,
+  usageWindowPct,
+} from "./usage.ts";
 
 const NOW = Date.parse("2026-08-06T12:00:00Z");
 const MINUTE = 60_000;
@@ -92,4 +96,19 @@ describe("resetCreditExpiryLevel", () => {
     expect(resetCreditExpiryLevel(null, NOW, LEAD)).toBe("unknown");
     expect(resetCreditExpiryLevel("not a date", NOW, LEAD)).toBe("unknown");
   });
+});
+
+describe("the reset formats Claude's usage endpoint sends (MU-1363-02)", () => {
+  const BEFORE = Date.parse("2026-11-04T15:00:00Z");
+  it.each(["2026-11-11T01:00:00.154760+00:00", "2026-11-11T01:00:00+00:00"])(
+    "parses %s",
+    (resetsAt) => {
+      expect(formatUsageReset(resetsAt, BEFORE)).toBe("6d 10h");
+      expect(usageWindowPct({ usedPct: 1, resetsAt }, BEFORE)).toBe(1);
+      // Past the reset the percent is known-wrong, so the parse is real.
+      expect(
+        usageWindowPct({ usedPct: 1, resetsAt }, Date.parse(resetsAt) + 1),
+      ).toBeNull();
+    },
+  );
 });

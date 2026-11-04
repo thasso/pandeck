@@ -15,15 +15,16 @@ accounts and approved peer runtimes remain pinned.
 
 ## Sources
 
-| Provider       | Source                                              | Windows                                                                   | "No data" case                                        | Fetch cost                 |
-| -------------- | --------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------- |
-| `claude`       | Claude Agent SDK experimental usage control request | 5-hour, weekly, per-model weekly, generic `limits[]`, extra-usage credits | `rateLimitsAvailable: false` (API key/Bedrock/Vertex) | CLI subprocess, seconds    |
-| `openai-codex` | ChatGPT backend `GET /backend-api/wham/usage`       | 5-hour, weekly, named model caps, spend control, reset credits            | `available: false` (missing/expired token)            | one HTTPS call, sub-second |
+| Provider       | Source                                                                                                             | Windows                                                                   | "No data" case                                        | Fetch cost                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
+| `claude`       | Claude Agent SDK experimental usage control request; under the gateway, `GET /api/oauth/usage` through the gateway | 5-hour, weekly, per-model weekly, generic `limits[]`, extra-usage credits | `rateLimitsAvailable: false` (API key/Bedrock/Vertex) | CLI subprocess, seconds; under the gateway, one HTTPS call |
+| `openai-codex` | ChatGPT backend `GET /backend-api/wham/usage`                                                                      | 5-hour, weekly, named model caps, spend control, reset credits            | `available: false` (missing/expired token)            | one HTTPS call, sub-second                                 |
 
 Those are the only two `CredentialProfileSummary.provider` values, so both card
-types show real data. Fetchers live in `claudeSdk/usageQuery.ts` and
-`piSdk/openaiUsageQuery.ts`; both read credentials that never leave the server,
-keyed by credential-profile id (accounts are isolated per profile directory).
+types show real data. Fetchers live in `claudeSdk/usageQuery.ts`,
+`claudeSdk/usageViaGateway.ts` and `piSdk/openaiUsageQuery.ts`; the direct ones
+read credentials that never leave the server, keyed by credential-profile id
+(accounts are isolated per profile directory).
 
 Under the credential gateway (`ASSISTANT_GATEWAY=1`, `workers.md`
 "Credentials"), the OpenAI usage, reset-credit and consume requests go to the
@@ -32,8 +33,17 @@ adds the token and account id. The server then reads only whether `auth.json`
 holds a Codex login and when it expires, so `not-signed-in` and `expired` behave
 as before. A refusal the gateway answers itself ("Pandeck gateway: …") is a
 temporary failure: it is thrown as its text, keeps the last snapshot and backs
-off like any error, and is never `rejected`, `forbidden` or "Reconnect". Claude
-usage stays direct (G4b).
+off like any error, and is never `rejected`, `forbidden` or "Reconnect".
+
+Claude usage under the gateway sends `GET /api/oauth/usage` to its `/anthropic`
+prefix with the profile's server lease, and the gateway adds the access token.
+The server reads `.credentials.json` only for `claudeAiOauth.subscriptionType`,
+the plan label; no CLI child runs and nothing refreshes the token. A marked
+refusal throws its own text, an upstream 401 throws "Claude did not accept the
+usage request.", and any other non-2xx throws "Claude usage request failed (HTTP
+<status>)."; each keeps the last snapshot, backs off, and sets no health state.
+A 200 whose body has no recognisable 5-hour or weekly window shows as
+unavailable usage (`rateLimitsAvailable: false`), never as a credential state.
 
 Usage fetch outcomes also feed account health, owned by `accountHealth.ts`.
 OpenAI's `unavailableCode` distinguishes missing credentials and rejected 401

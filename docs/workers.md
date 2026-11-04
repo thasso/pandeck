@@ -1160,8 +1160,9 @@ ships in phase 2, on the server's host. Its same-host form:
   completions. A prefix allows only the exact method and path its engine sends,
   with no path normalisation; `/compat` allows only
   `POST <base path>/chat/completions`, under the base path the server pushed. A
-  server lease also reaches `/chatgpt`'s usage routes, which no engine lease
-  does: `GET /backend-api/wham/usage`,
+  server lease also reaches `/anthropic`'s `GET /api/oauth/usage` and
+  `/chatgpt`'s usage routes, which no engine lease does:
+  `GET /backend-api/wham/usage`,
   `GET /backend-api/wham/rate-limit-reset-credits` and the irreversible
   `POST /backend-api/wham/rate-limit-reset-credits/consume`.
 - A lease token is JWT-shaped,
@@ -1400,7 +1401,9 @@ until the gateway runs as its own process.
     when it expires; the token and account id are added by the gateway alone. A
     marked refusal is thrown as its text, never mapped to a rejected or
     forbidden login.
-  - Claude usage and compatible model discovery stay direct (G4b).
+  - Claude usage sends the lease to `/anthropic`'s usage route; the server reads
+    only `subscriptionType`, and nothing refreshes. Compatible model discovery
+    stays direct (G5).
 - **The server's runtimes pair the compatible key with its origin.** Every pi
   runtime `models.ts` creates for sessions, the default profile's and each
   OpenAI profile's, is guarded per request whatever the switch
@@ -1496,8 +1499,9 @@ CLI still talks only to the gateway.
     can too), as before.
   - With the switch on, engines no longer refresh their tokens, and no renewal
     exists before G5. An expired token gives upstream 401s, classified as today,
-    until a login, a direct CLI child (Claude usage, a switch-off one-shot) or
-    the user's terminal refreshes the file.
+    until a login, a direct CLI child (a switch-off one-shot) or the user's
+    terminal refreshes the file. Named Claude profiles are not renewed with the
+    switch on; an expired token fails engines and usage until re-login (G5).
   - A missing or unreadable credential (for example `claude-default` never
     logged in) gets the gateway's 503. The CLI retries it for more than 22
     seconds instead of failing at once as not logged in (RD-G3a-3; G5 owns it).
@@ -1730,12 +1734,12 @@ Claude engine sends its model requests through the gateway with its lease, a
 profile-less session as `claude-default`, and every pi engine sends its Codex
 requests and its OpenAI-compatible requests through it with its lease, both
 under the engine-version guard; the server pushes the compatible endpoint and
-key, held in the gateway's memory only. Claude and pi one-shots and Codex usage,
-reset credits and consume go through it on a server lease per profile; Claude
-usage does not yet (G4b). It reads token files and never writes or refreshes
-them. The writer lane and login holds have landed, unused until the login flows
-hold their profile (G5): no hold is created and no lane item runs yet. Renewal,
-engine routing and its own service unit come in later slices.
+key, held in the gateway's memory only. Claude and pi one-shots, Claude usage,
+and Codex usage, reset credits and consume go through it on a server lease per
+profile. It reads token files and never writes or refreshes them. The writer
+lane and login holds have landed, unused until the login flows hold their
+profile (G5): no hold is created and no lane item runs yet. Renewal, engine
+routing and its own service unit come in later slices.
 
 ## Open questions
 

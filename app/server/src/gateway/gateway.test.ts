@@ -1017,6 +1017,45 @@ test("AC1: only a server lease reaches the wham usage, credits and consume route
   }
 });
 
+test("AC1 (G4b): only a server lease reaches Claude's usage route, its headers passed on and the token put on", async () => {
+  const gw = await gateway();
+  const files = await tokenFiles();
+  const server = grantServer(gw, "claude", files.claudeFile).token;
+  const engine = grant(gw, "claude", files.claudeFile).token;
+  const client = {
+    "anthropic-beta": "oauth-2025-04-20",
+    accept: "application/json",
+    "user-agent": "personal-assistant",
+  };
+
+  const refused = await send(gw.port, {
+    method: "GET",
+    path: "/anthropic/api/oauth/usage",
+    headers: { ...client, ...bearer(engine) },
+  });
+  assert.equal(refused.status, 403);
+  assert.equal(
+    refusalMessage(refused, "claude", "permission_error"),
+    refusalText({ case: "forbidden" }),
+  );
+  assert.equal(upstreamRequests(), 0, "an engine lease reaches no usage");
+
+  const reply = await send(gw.port, {
+    method: "GET",
+    path: "/anthropic/api/oauth/usage",
+    headers: { ...client, ...bearer(server) },
+  });
+  assert.equal(reply.status, 200);
+  assert.deepEqual(
+    anthropic.seen.map((seen) => [seen.method, seen.url]),
+    [["GET", "/api/oauth/usage"]],
+  );
+  const seen = anthropic.seen[0]!;
+  assert.equal(seen.headers.authorization, `Bearer ${CLAUDE_ACCESS}`);
+  for (const [name, value] of Object.entries(client))
+    assert.equal(seen.headers[name], value, name);
+});
+
 test("AC2: a server lease's extra routes match exactly and only its provider's", async () => {
   const gw = await gateway();
   const files = await tokenFiles();
@@ -1047,6 +1086,12 @@ test("AC2: a server lease's extra routes match exactly and only its provider's",
       "codex",
     ],
     ["GET", "/anthropic/backend-api/wham/usage", claude, "claude"],
+    ["GET", "/anthropic/api/oauth/usage/x", claude, "claude"],
+    ["GET", "/anthropic/api/oauth/usageX", claude, "claude"],
+    ["POST", "/anthropic/api/oauth/usage", claude, "claude"],
+    ["GET", "/anthropic/api/oauth/profile", claude, "claude"],
+    ["GET", "/anthropic/v1/oauth/token", claude, "claude"],
+    ["GET", "/anthropic/api/oauth/usage", codex, "claude"],
   ] as const) {
     const reply = await send(gw.port, {
       method,

@@ -1,26 +1,39 @@
 /**
  * Codex usage, reset credits and the irreversible consume under the credential
- * gateway (G4a): the server's requests carry only its lease, the gateway adds
- * the profile's token and account id, and a gateway refusal is a temporary
- * failure that never benches the account. Every upstream is a fake; nothing
+ * gateway (G4a), and Claude usage (G4b): the server's requests carry only its
+ * lease, the gateway adds the profile's token and account id, and a gateway
+ * refusal is a temporary failure that never benches the account. Claude usage
+ * runs no CLI child and refreshes nothing. Every upstream is a fake; nothing
  * here may consume a real credit.
  */
 import assert from "node:assert/strict";
-import type { OpenAiUsageSnapshot } from "@assistant/shared/usage";
-import { writeFileSync } from "node:fs";
+import type {
+  ClaudeUsageSnapshot,
+  OpenAiUsageSnapshot,
+} from "@assistant/shared/usage";
+import type { CredentialProfileSummary } from "@assistant/shared";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import {
   initializeAccountHealth,
+  readAccountBench,
   readAccountHealth,
+  reportAccountUsageFailure,
   withAccountHealthProfiles,
 } from "../accountHealth.ts";
+import { setClaudeSdkUsageSeam } from "../claudeSdk/usageQuery.ts";
 import {
+  claudeConfigDir,
   createCredentialProfile,
+  deleteCredentialProfile,
   listCredentialProfiles,
   piAgentDir,
 } from "../credentialProfiles.ts";
 import { GATEWAY_REFUSAL_MARKER, refusalText } from "../gateway/refusals.ts";
+import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
+import { DRIFTED_USAGE, MEASURED_USAGE } from "../test/claudeUsageFixtures.ts";
 import {
   startEgressObserver,
   startFakeUpstreams,
@@ -33,11 +46,16 @@ import {
   type TestGatewayLink,
 } from "../test/gatewayLink.ts";
 import {
+  cachedUsageIndicator,
   peekUsageSnapshot,
   readUsageSnapshot,
   resetUsageCacheForTests,
 } from "../usageCache.ts";
-import { fetchOpenAiAccountUsage, redeemOpenAiResetCredit } from "./usage.ts";
+import {
+  fetchClaudeAccountUsage,
+  fetchOpenAiAccountUsage,
+  redeemOpenAiResetCredit,
+} from "./usage.ts";
 
 /** A cache read of a Codex account: always an OpenAI snapshot. */
 async function readCodexUsage(id: string): Promise<OpenAiUsageSnapshot> {
@@ -50,6 +68,8 @@ async function readCodexUsage(id: string): Promise<OpenAiUsageSnapshot> {
 const FAKE_ACCESS = "fake-codex-access";
 const FAKE_ACCOUNT = "fake-account";
 const CREDIT = "RateLimitResetCredit_fixture";
+const FAKE_CLAUDE_ACCESS = "fake-claude-access";
+const FAKE_CLAUDE_REFRESH = "fake-claude-refresh";
 
 const USAGE = {
   plan_type: "plus",
@@ -92,28 +112,56 @@ interface Sent {
   body: string;
 }
 
+/** How the fake api.anthropic.com answers `GET /api/oauth/usage`. */
+let claudeAnswer: Answer;
+
+const anthropicUsage: UpstreamResponder = (seen, res) => {
+  const answer =
+    seen.method === "GET" && seen.url === "/api/oauth/usage"
+      ? claudeAnswer
+      : { status: 404, body: { error: "not found" } };
+  if (answer === "reset") {
+    res.socket?.destroy();
+    return;
+  }
+  res.writeHead(answer.status, { "content-type": "application/json" });
+  res.end(
+    typeof answer.body === "string" ? answer.body : JSON.stringify(answer.body),
+  );
+};
+
+/** Any CLI usage child under the switch: none may start. */
+const cliUsageChild = vi.fn(() =>
+  Promise.reject(new Error("no CLI usage child under the gateway")),
+);
+
 let upstreams: FakeUpstreams;
 let gateway: TestGatewayLink;
 let egress: EgressObserver;
 /** What the server sent the gateway's listener, through a wrapped `fetch`. */
 let sent: Sent[];
 
+/** The health store's view of the registry, as the server syncs it. */
+function healthProfiles(): CredentialProfileSummary[] {
+  return withAccountHealthProfiles(() =>
+    listCredentialProfiles().map((profile) => ({
+      ...profile,
+      health: readAccountHealth(profile.id, true),
+    })),
+  );
+}
+
 beforeAll(async () => {
   initializeAccountHealth({
-    profiles: () =>
-      withAccountHealthProfiles(() =>
-        listCredentialProfiles().map((profile) => ({
-          ...profile,
-          health: readAccountHealth(profile.id, true),
-        })),
-      ),
+    profiles: healthProfiles,
     hasCredential: () => true,
     push: async () => {},
     broadcast: () => {},
     subscribeChanges: () => () => {},
     subscribeDeleted: () => () => {},
   });
-  upstreams = await startFakeUpstreams({ codex: wham });
+  setClaudeSdkUsageSeam(cliUsageChild);
+  upstreams = await startFakeUpstreams({ codex: wham, claude: anthropicUsage });
   gateway = await startGatewayLinkForTests({ upstreams: upstreams.overrides });
   egress = startEgressObserver([`127.0.0.1:${gateway.link.gateway!.port}`]);
 });
@@ -123,6 +171,7 @@ afterEach(() => {
   resetUsageCacheForTests();
   upstreams.reset();
   assert.deepEqual(egress.unauthorized(), [], "nothing left for elsewhere");
+  assert.equal(cliUsageChild.mock.calls.length, 0, "no CLI usage child");
 });
 
 afterAll(async () => {
@@ -137,6 +186,8 @@ afterAll(async () => {
       ...leases.map((token) => token.split(".").at(-1)!),
       FAKE_ACCESS,
       FAKE_ACCOUNT,
+      FAKE_CLAUDE_ACCESS,
+      FAKE_CLAUDE_REFRESH,
       CREDIT,
       "redeem_request_id",
       "?",
@@ -171,6 +222,14 @@ async function leased(name: string): Promise<{ id: string; lease: string }> {
     "rate-limit-reset-credits": { status: 200, body: CREDITS },
     "rate-limit-reset-credits/consume": { status: 200, body: CONSUMED },
   };
+  recordSent();
+  const lease = (await gateway.link.serverAccess(id)).leaseToken;
+  leases.push(lease);
+  return { id, lease };
+}
+
+/** Records into `sent` what the server sends, through a wrapped `fetch`. */
+function recordSent(): void {
   sent = [];
   const realFetch = globalThis.fetch;
   vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
@@ -182,9 +241,6 @@ async function leased(name: string): Promise<{ id: string; lease: string }> {
     });
     return realFetch(url, init);
   });
-  const lease = (await gateway.link.serverAccess(id)).leaseToken;
-  leases.push(lease);
-  return { id, lease };
 }
 
 function serverLeaseId(profileId: string): string {
@@ -380,4 +436,266 @@ test("AC17d: an engine lease never reaches the consume", async () => {
     refusalText({ case: "forbidden" }),
   );
   assert.equal(upstreams.chatgpt.length, 0);
+});
+
+// --- Claude usage (G4b) ---
+
+function claudeCredentialFile(id: string): string {
+  return join(claudeConfigDir(id), ".credentials.json");
+}
+
+function writeClaudeCredential(id: string, expiresAt: number): void {
+  writeFileSync(
+    claudeCredentialFile(id),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: FAKE_CLAUDE_ACCESS,
+        refreshToken: FAKE_CLAUDE_REFRESH,
+        expiresAt,
+        subscriptionType: "max",
+      },
+    }),
+  );
+}
+
+/** A signed-in Claude profile answering the measured body, and its lease. */
+async function claudeLeased(
+  name: string,
+  expiresAt = Date.now() + 86_400_000,
+): Promise<{ id: string; lease: string }> {
+  const id = createCredentialProfile({ name, provider: "claude" }).id;
+  writeClaudeCredential(id, expiresAt);
+  // The server's registry feed, which this file's health host leaves out.
+  healthProfiles();
+  claudeAnswer = { status: 200, body: MEASURED_USAGE };
+  recordSent();
+  const lease = (await gateway.link.serverAccess(id)).leaseToken;
+  leases.push(lease);
+  return { id, lease };
+}
+
+async function readClaudeUsage(id: string): Promise<ClaudeUsageSnapshot> {
+  return (await readUsageSnapshot(id, "claude", {
+    force: true,
+  })) as ClaudeUsageSnapshot;
+}
+
+const usageRequests = (): number =>
+  upstreams.anthropic.filter((seen) => seen.url === "/api/oauth/usage").length;
+
+/** AC10: what the server sent carried only the lease, never a Claude token. */
+function assertOnlyLeaseSent(lease: string): void {
+  assert.ok(sent.length > 0, "the server sent a request");
+  for (const request of sent) {
+    assert.equal(request.headers.Authorization, `Bearer ${lease}`);
+    const text = JSON.stringify(request);
+    assert.ok(!text.includes(FAKE_CLAUDE_ACCESS), "no access token sent");
+    assert.ok(!text.includes(FAKE_CLAUDE_REFRESH), "no refresh token sent");
+  }
+}
+
+function isLoginDeathText(text: string): boolean {
+  return runFailureFacts(analyzeProviderError(text)).loginDeath === true;
+}
+
+test("AC5/AC10: the measured body gives ok, the weekly indicator and no bench, on the lease alone", async () => {
+  const { id, lease } = await claudeLeased("Claude usage measured");
+  const snapshot = await readClaudeUsage(id);
+  assert.equal(snapshot.rateLimitsAvailable, true);
+  assert.equal(snapshot.subscriptionType, "max");
+  assert.equal(readAccountHealth(id, true).state, "ok");
+  assert.deepEqual(
+    cachedUsageIndicator({ id, provider: "claude" }).short,
+    null,
+  );
+  assert.deepEqual(cachedUsageIndicator({ id, provider: "claude" }).long, {
+    usedPct: 1,
+    resetsAt: "2026-11-11T01:00:00.154760+00:00",
+  });
+  assert.equal(readAccountBench(id, "claude-fable"), undefined);
+  assert.equal(usageRequests(), 1);
+  const [seen] = upstreams.anthropic;
+  assert.equal(seen!.headers.authorization, `Bearer ${FAKE_CLAUDE_ACCESS}`);
+  assertOnlyLeaseSent(lease);
+});
+
+test.each(DRIFTED_USAGE)(
+  "AC5: drift (%s) is unavailable usage, and never a health verdict",
+  async (_name, body) => {
+    const { id } = await claudeLeased("Claude usage drift");
+    await readClaudeUsage(id);
+    assert.equal(readAccountHealth(id, true).state, "ok");
+    claudeAnswer = { status: 200, body };
+    const drifted = await readClaudeUsage(id);
+    assert.equal(drifted.rateLimitsAvailable, false);
+    assert.equal(drifted.subscriptionType, "max");
+    assert.equal(readAccountHealth(id, true).state, "ok");
+
+    reportAccountUsageFailure(id, "401 Unauthorized");
+    assert.equal(readAccountHealth(id, true).state, "needs-login");
+    const again = await readClaudeUsage(id);
+    assert.equal(again.rateLimitsAvailable, false);
+    assert.equal(readAccountHealth(id, true).state, "needs-login");
+  },
+);
+
+const unreachable = new RegExp(
+  `^${escape(GATEWAY_REFUSAL_MARKER)} Anthropic could not be reached: [A-Z_]+\\.$`,
+);
+
+/** U-G4b-1's cases: how each is caused, and the text it must throw. */
+const CLAUDE_FAILURES: [
+  string,
+  (id: string) => Promise<void>,
+  string | RegExp,
+][] = [
+  [
+    "a revoked server lease (marked 401)",
+    (id) => gateway.link.revokeLease(serverLeaseId(id), "account-switch"),
+    refusalText({ case: "revoked-lease", reason: "account-switch" }),
+  ],
+  [
+    "a malformed credential file (marked 503)",
+    async (id) => writeFileSync(claudeCredentialFile(id), "{not json"),
+    refusalText({ case: "credential", problem: "malformed" }),
+  ],
+  [
+    "an upstream reset before headers (marked 502)",
+    async () => {
+      claudeAnswer = "reset";
+    },
+    unreachable,
+  ],
+  [
+    "an upstream 401",
+    async () => {
+      claudeAnswer = {
+        status: 401,
+        body: {
+          type: "error",
+          error: {
+            type: "authentication_error",
+            message: "OAuth token has expired",
+          },
+        },
+      };
+    },
+    "Claude did not accept the usage request.",
+  ],
+  ...[403, 429, 503].map(
+    (status): [string, (id: string) => Promise<void>, string] => [
+      `an upstream ${status}`,
+      async () => {
+        claudeAnswer = {
+          status,
+          body: { type: "error", error: { type: "x", message: "upstream" } },
+        };
+      },
+      `Claude usage request failed (HTTP ${status}).`,
+    ],
+  ),
+];
+
+test.each(CLAUDE_FAILURES)(
+  "AC6: %s throws its text, keeps the snapshot, backs off and sets no health",
+  async (_name, cause, text) => {
+    const { id } = await claudeLeased("Claude usage failure");
+    const good = await readClaudeUsage(id);
+    assert.equal(readAccountHealth(id, true).state, "ok");
+
+    await cause(id);
+    let thrown = "";
+    await assert.rejects(readClaudeUsage(id), (err: Error) => {
+      thrown = err.message;
+      return true;
+    });
+    if (typeof text === "string") assert.equal(thrown, text);
+    else assert.match(thrown, text);
+    assert.ok(!thrown.includes("OAuth token has expired"), "no upstream prose");
+    assert.equal(isLoginDeathText(thrown), false);
+    assert.equal(readAccountHealth(id, true).state, "ok");
+    assert.equal(peekUsageSnapshot(id, "claude")?.snapshot, good);
+
+    // Backed off: an unforced read serves the kept snapshot, asking nothing.
+    const before = upstreams.anthropic.length;
+    assert.equal(await readUsageSnapshot(id, "claude"), good);
+    assert.equal(upstreams.anthropic.length, before);
+  },
+);
+
+function fileIdentity(path: string): unknown {
+  const stat = statSync(path);
+  return {
+    sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ino: stat.ino,
+  };
+}
+
+test.each([
+  ["401", { status: 401, body: { type: "error", error: { type: "x" } } }],
+  ["200", { status: 200, body: MEASURED_USAGE }],
+] as const)(
+  "AC7: an expired credential answered %s is sent once and never refreshed",
+  async (_name, answer) => {
+    const { id, lease } = await claudeLeased(
+      "Claude usage expired",
+      Date.now() - 3_600_000,
+    );
+    const file = claudeCredentialFile(id);
+    const before = fileIdentity(file);
+    claudeAnswer = answer;
+    await readClaudeUsage(id).catch(() => {});
+    assert.deepEqual(fileIdentity(file), before, "the file is untouched");
+    assert.equal(usageRequests(), 1, "one request, no retry");
+    assert.deepEqual(egress.unauthorized(), [], "no refresh endpoint");
+    assert.equal(cliUsageChild.mock.calls.length, 0, "no CLI usage child");
+    assertOnlyLeaseSent(lease);
+  },
+);
+
+async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !check(); i += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(check(), "condition reached");
+}
+
+test("AC11(b): a deleted profile's lease reaches no usage, and no later read reuses it", async () => {
+  const { id, lease } = await claudeLeased("Claude usage deleted");
+  await readClaudeUsage(id);
+  assert.equal(sent[0]?.headers.Authorization, `Bearer ${lease}`);
+  const leaseId = serverLeaseId(id);
+
+  deleteCredentialProfile(id);
+  await until(() =>
+    gateway.link
+      .gateway!.leases.records()
+      .some((r) => r.leaseId === leaseId && r.revoked === "profile-removed"),
+  );
+  const before = upstreams.anthropic.length;
+  vi.unstubAllGlobals();
+  const res = await fetch(
+    `${gateway.link.gateway!.url}/anthropic/api/oauth/usage`,
+    { headers: { Authorization: `Bearer ${lease}` } },
+  );
+  assert.equal(res.status, 401);
+  const message = ((await res.json()) as { error: { message: string } }).error
+    .message;
+  assert.equal(
+    message,
+    refusalText({ case: "revoked-lease", reason: "profile-removed" }),
+  );
+  assert.equal(isLoginDeathText(message), false);
+  assert.equal(upstreams.anthropic.length, before);
+
+  recordSent();
+  await fetchClaudeAccountUsage(id, 20_000).catch(() => {});
+  assert.ok(
+    sent.every(
+      (request) => request.headers.Authorization !== `Bearer ${lease}`,
+    ),
+    "the old lease is not reused",
+  );
+  assert.equal(upstreams.anthropic.length, before);
 });
