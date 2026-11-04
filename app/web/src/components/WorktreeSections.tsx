@@ -67,23 +67,27 @@ export function useWorktreeChangeSets(
 ): Record<string, ChangeSetEntry> {
   const [sets, setSets] = useState<Record<string, ChangeSetEntry>>({});
   const requested = useRef(new Set<string>());
+  // The newest request per list: an older one answering late (or failing)
+  // would otherwise roll the list back over a newer answer, for good.
+  const latest = useRef(new Map<string, string>());
   useEffect(() => {
     for (const { worktree, kind } of wanted) {
       const id = `${worktree.id}:${kind}`;
       const key = `${id}:${statuses[worktree.id]?.updatedAt ?? 0}`;
       if (requested.current.has(key)) continue;
       requested.current.add(key);
+      latest.current.set(id, key);
+      const settle = (entry: ChangeSetEntry) => {
+        if (latest.current.get(id) !== key) return;
+        setSets((current) => ({ ...current, [id]: entry }));
+      };
       fetchWorktreeChanges(worktree.id, changeSetScope(worktree, kind)).then(
-        (response) =>
-          setSets((current) => ({ ...current, [id]: { key, response } })),
+        (response) => settle({ key, response }),
         (error: unknown) =>
-          setSets((current) => ({
-            ...current,
-            [id]: {
-              key,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          })),
+          settle({
+            key,
+            error: error instanceof Error ? error.message : String(error),
+          }),
       );
     }
   }, [wanted, statuses]);

@@ -279,6 +279,8 @@ function ChangesView({
   jumpOpen,
   onJumpOpenChange,
   documentScroll,
+  anchor,
+  reveal,
 }: {
   /** Jump to file, opened from the page header (the narrow layout's sheet). */
   jumpOpen: boolean;
@@ -298,6 +300,10 @@ function ChangesView({
   ) => LineCommentsConfig | undefined;
   /** The open document's id, which zoom and scroll restoration find it by. */
   documentScroll?: string | undefined;
+  /** The routed file's addressed lines. */
+  anchor?: DocumentLineAnchor | undefined;
+  /** A file to open and bring into view (a followed comment). */
+  reveal?: { path: string; nonce: number } | undefined;
 }) {
   const scope = useMemo(() => scopeFromRoute(from, to), [from, to]);
   const [expandedChangeDirs, setExpandedChangeDirs] = useState<string[]>([]);
@@ -359,8 +365,11 @@ function ChangesView({
   // with the file pushed out of view again. Any scroll of the reader's own
   // ends the hold.
   const changesLoaded = changes !== undefined;
+  // An addressed line is the diff's to reveal (`DiffSurface`); holding the
+  // file's header at the top would fight it.
+  const hasAnchor = anchor !== undefined;
   useEffect(() => {
-    if (!filePath || !changesLoaded) return;
+    if (!filePath || !changesLoaded || hasAnchor) return;
     let frame = 0;
     let tries = 0;
     let held = 0;
@@ -395,7 +404,7 @@ function ChangesView({
       for (const type of userInput)
         window.removeEventListener(type, release, { capture: true });
     };
-  }, [filePath, changesLoaded]);
+  }, [filePath, changesLoaded, hasAnchor]);
   // The changeset stacks every file in one scroller; a wide page lists them in
   // the sidebar, a phone or a side panel jumps through the header's sheet.
   const phone = useMobileLayout();
@@ -439,6 +448,10 @@ function ChangesView({
           viewedPaths={viewedPaths}
           onToggleViewed={toggleViewed}
           registerSection={registerSection}
+          lineAnchor={
+            filePath && anchor ? { path: filePath, anchor } : undefined
+          }
+          reveal={reveal}
         />
       </div>
       {phone || narrow ? (
@@ -1579,11 +1592,19 @@ export default function WorktreeDetailPage({
         : null,
     [focusComment],
   );
+  // The Changes view's half of a follow: the file to open, keyed by the nonce.
+  const revealRequest = useMemo(
+    () =>
+      focusComment
+        ? { path: focusComment.path, nonce: focusComment.nonce }
+        : undefined,
+    [focusComment],
+  );
   const followComment = useCallback(
     (commentId: string, path: string) => {
       setFocusComment({ commentId, path, nonce: Date.now() });
-      // Files needs the file open; Review stacks every file already, and its
-      // lazily mounted section catches up while the scroll retries.
+      // Files needs the file open; Changes stacks every file already, and
+      // opens and loads the file's section however far down or folded it is.
       if (view === "files")
         navigate(worktreePath(worktree.id, "files", { path }));
     },
@@ -1978,6 +1999,8 @@ export default function WorktreeDetailPage({
               documentScroll={
                 documentTarget ? documentTargetHref(documentTarget) : undefined
               }
+              anchor={anchor}
+              reveal={revealRequest}
             />
           )}
           {narrow ? (

@@ -108,7 +108,7 @@ it.each([
 
 it("shows the stored value and when it applies", () => {
   render(claude);
-  expect(text()).toContain("150k tokens");
+  expect(text()).toContain("150,000 tokens");
   expect(text()).toContain("Applies on the next turn");
   expect(text()).not.toContain("summaries");
 });
@@ -173,4 +173,20 @@ it("pi shows the summary-cost note beside the control", () => {
   // Status shows only while a value is not yet applied.
   expect(text()).not.toContain("Applied");
   expect(text()).toContain("compaction summaries");
+});
+
+it("still clears a saved window when the model offers no range", () => {
+  const saved: Array<number | null> = [];
+  render(
+    {
+      applied: "confirmed",
+      tokens: 150_000,
+      unavailable: "This model's context window is unknown.",
+    },
+    { saved },
+  );
+  expect(text()).toContain("150,000 tokens");
+  expect(text()).toContain("This model's context window is unknown.");
+  click("Use provider default");
+  expect(saved).toEqual([null]);
 });

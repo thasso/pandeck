@@ -87,6 +87,19 @@ export function CompactionWindowSection({
             busy={edit?.busy === true}
             onSave={save}
           />
+        ) : onSave && window.tokens !== undefined ? (
+          // No range to pick within, but a saved window can still be cleared.
+          <div className="flex min-w-0 items-center gap-2">
+            <PropertyText>{format(window.tokens)} tokens</PropertyText>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={edit?.busy === true}
+              onClick={() => save(null)}
+            >
+              Use provider default
+            </Button>
+          </div>
         ) : (
           <PropertyText>
             {window.tokens === undefined

@@ -19,6 +19,7 @@ import type {
 import type { Prefs } from "../../hooks/usePrefs.ts";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
 import type { LineCommentsConfig } from "../diff/comments.tsx";
+import type { DocumentLineAnchor } from "@assistant/shared/documentTargets";
 import { fetchWorktreeFileDiff, hashContent } from "../../lib/worktrees.ts";
 import { useNearViewport } from "../common/useNearViewport.ts";
 import { Spinner } from "../common/load.tsx";
@@ -45,6 +46,11 @@ export interface WorktreeChangesetListProps {
   onToggleViewed: (path: string) => void;
   /** Section element registry for jump-to-file scrolling (null unregisters). */
   registerSection: (path: string, el: HTMLElement | null) => void;
+  /** The addressed file's lines (a document link's `#L…`). */
+  lineAnchor?: { path: string; anchor: DocumentLineAnchor } | undefined;
+  /** A file to open and bring into view however far down or folded it is (a
+   * followed comment); a new nonce asks again. */
+  reveal?: { path: string; nonce: number } | undefined;
 }
 
 export function WorktreeChangesetList({
@@ -57,6 +63,8 @@ export function WorktreeChangesetList({
   viewedPaths,
   onToggleViewed,
   registerSection,
+  lineAnchor,
+  reveal,
 }: WorktreeChangesetListProps) {
   if (files.length === 0) {
     return (
@@ -79,6 +87,10 @@ export function WorktreeChangesetList({
           viewed={viewedPaths.has(file.path)}
           onToggleViewed={() => onToggleViewed(file.path)}
           registerSection={registerSection}
+          lineAnchor={
+            lineAnchor?.path === file.path ? lineAnchor.anchor : undefined
+          }
+          revealNonce={reveal?.path === file.path ? reveal.nonce : undefined}
         />
       ))}
     </div>
@@ -101,6 +113,8 @@ function ChangesetFileSection({
   viewed,
   onToggleViewed,
   registerSection,
+  lineAnchor,
+  revealNonce,
 }: {
   worktreeId: string;
   scope: WorktreeDiffScope;
@@ -115,6 +129,8 @@ function ChangesetFileSection({
   viewed: boolean;
   onToggleViewed: () => void;
   registerSection: (path: string, el: HTMLElement | null) => void;
+  lineAnchor: DocumentLineAnchor | undefined;
+  revealNonce: number | undefined;
 }) {
   const large = file.additions + file.deletions > LARGE_DIFF_LINES;
   const [collapsed, setCollapsed] = useState(viewed || large || file.binary);
@@ -131,7 +147,20 @@ function ChangesetFileSection({
     return () => registerSection(file.path, null);
   }, [file.path, registerSection]);
 
-  const shouldLoad = nearViewport && !collapsed && !file.binary;
+  // An addressed line or a followed comment opens the file wherever it is:
+  // folded, or far below the lazily loaded range. The diff then scrolls to the
+  // line or the thread itself.
+  const addressed = lineAnchor !== undefined || revealNonce !== undefined;
+  // Keyed on the lines, not the anchor object a render may rebuild.
+  const anchorStart = lineAnchor?.start;
+  const anchorEnd = lineAnchor?.end;
+  useEffect(() => {
+    if (anchorStart === undefined && revealNonce === undefined) return;
+    setCollapsed(false);
+    sectionRef.current?.scrollIntoView({ block: "start" });
+  }, [anchorStart, anchorEnd, revealNonce]);
+
+  const shouldLoad = (nearViewport || addressed) && !collapsed && !file.binary;
   useEffect(() => {
     if (!shouldLoad) return;
     let cancelled = false;
@@ -232,6 +261,7 @@ function ChangesetFileSection({
             newFile={{ name: diff.path, contents: diff.newContent }}
             cacheKey={cacheKey}
             comments={commentsConfigFor(diff.path, current, diff.newOid)}
+            lineAnchor={lineAnchor}
           />
         )}
       </ListGroupSection>

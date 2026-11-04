@@ -910,6 +910,29 @@ function PullRequestIndexPlaceholder({
   );
 }
 
+/**
+ * The Worktree tab's own git-status watch, mounted with the tab's body. The
+ * tab can show a checkout other than the session's (its picker, a file opened
+ * from the inspector), and its page refreshes on that checkout's status pushes,
+ * which nothing else is asking for.
+ */
+function WorktreePanelWatch({
+  worktreeId,
+  connected,
+  actions,
+}: {
+  worktreeId: string | undefined;
+  connected: boolean;
+  actions: AssistantActions;
+}) {
+  const ids = useMemo(
+    () => (worktreeId ? [worktreeId] : NO_WORKTREE_IDS),
+    [worktreeId],
+  );
+  useWorktreeWatches({ ids, connected, actions });
+  return null;
+}
+
 const DiffPoolKeepAlive = lazy(
   () => import("./components/diff/DiffPoolKeepAlive.tsx"),
 );
@@ -7975,6 +7998,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         }
         worktree={
           <Suspense fallback={<PaneLoading label="Opening worktree…" />}>
+            <WorktreePanelWatch
+              worktreeId={panelWorktreeId}
+              connected={state.connected}
+              actions={actions}
+            />
             <WorktreePanel
               worktree={
                 panelWorktreeId
