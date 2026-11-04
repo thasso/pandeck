@@ -130,7 +130,20 @@ range:
   - during a turn, or while background work keeps the process open, it applies
     when that process restarts.
 
-  Restart and resume start from the row.
+  An idle retained process closes immediately when a stored start-time setting
+  needs a restart, including a window changed during its empty-host grace. It
+  never closes for this reason during a turn, compaction, a pending Stop, or
+  active background work. Last-task completion, turn completion, compaction
+  completion and Stop acknowledgement reconsider the close. With no pending
+  restart, including a value reverted to the epoch's effective start value, the
+  frozen `claudeEmptyHostGraceMs` still applies. A missing provider task alone
+  keeps that grace for terminal-notification reconciliation.
+
+  The restart decision belongs to the shared start-time-setting path in
+  quiet-close scheduling, not a window-specific close path. Restart and resume
+  start from the row. Once the old process starts closing, the inspector says
+  "Applies on the next turn"; that turn starts a fresh process with the stored
+  value.
 
 - Applied state is per query epoch. It is `confirmed` while the value the epoch
   started with equals the stored one (clamped). Otherwise it is `pending` with

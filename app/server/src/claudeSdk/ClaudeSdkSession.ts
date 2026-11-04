@@ -1373,7 +1373,23 @@ export class ClaudeSdkSession implements LiveSession {
   async applyCompactionWindow(
     tokens: number | null,
   ): Promise<CompactionWindowApplyResult> {
+    this.startTimeSettingsChanged();
     return this.compactionWindow.apply(tokens);
+  }
+
+  /** Reconsider an idle retained process after any stored start-time change. */
+  private startTimeSettingsChanged(): void {
+    if (this.retainedEpochKey)
+      this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
+  }
+
+  /** Add other process-start settings here, using their current epoch state. */
+  private startTimeSettingsNeedRestart(): boolean {
+    return (
+      this.compactionWindow.apply(
+        sessionStore.get(this.id)?.compactionWindow ?? null,
+      ).pendingReason === "process-restart"
+    );
   }
 
   /**
@@ -1412,11 +1428,13 @@ export class ClaudeSdkSession implements LiveSession {
         return { ok: false, message: COMPACTION_STATE_UNREAD };
       this.compactionWindow.usageReported(epochKey, usage);
     }
-    return this.compactionWindow.lower(
+    const result = this.compactionWindow.lower(
       tokens,
       sessionStore.get(this.id)?.compactionWindow,
       persist,
     );
+    if (result.ok) this.startTimeSettingsChanged();
+    return result;
   }
 
   /** The current query epoch, running a turn or retained; never `/compact`. */
@@ -2577,13 +2595,15 @@ export class ClaudeSdkSession implements LiveSession {
       if (denied.includes("peer prompt")) void drainRecipient(this.id);
       return false;
     }
+    // Admission awaits checkout/skills before `running` becomes true. Keep
+    // that interval protected from a setting change's immediate quiet close.
+    this.providerTurnEpochKey = epochKey;
     try {
       this.cancelQuietClose();
       this.providerTurnRelease = await beginRuntimeProviderTurn(
         this as RuntimePromptDriver,
         { kind: "system", source: `claude-background:${itemId}` },
       );
-      this.providerTurnEpochKey = epochKey;
     } catch (error) {
       this.markProviderResultForDiscard();
       console.warn(
@@ -2591,6 +2611,8 @@ export class ClaudeSdkSession implements LiveSession {
         error instanceof Error ? error.message.slice(0, 500) : String(error),
       );
       await this.activeQuery?.interrupt?.().catch(() => undefined);
+      this.providerTurnEpochKey = undefined;
+      this.scheduleQuietCloseIfEmpty(epochKey);
       return false;
     }
     this.openProviderTurn(epochKey);
@@ -2879,19 +2901,40 @@ export class ClaudeSdkSession implements LiveSession {
     }
   }
 
+  private canQuietClose(epochKey: string): boolean {
+    return (
+      this.retainedEpochKey === epochKey &&
+      this.queryEpochKey === epochKey &&
+      !this.processClosing &&
+      !this.running &&
+      !this.compactOperationEpochKey &&
+      !this.providerTurnEpochKey &&
+      !this.stopInterrupt &&
+      !this.stoppingEpochKey
+    );
+  }
+
   private scheduleQuietCloseIfEmpty(epochKey: string): void {
-    if (
-      this.retainedEpochKey !== epochKey ||
-      this.running ||
-      this.compactOperation ||
-      (claudeBackgroundWorkBackend.activeItemCount(this.id, epochKey) > 0 &&
-        !this.allActiveProviderTasksMissing(epochKey))
-    )
-      return;
+    if (!this.canQuietClose(epochKey)) return;
+    const active = claudeBackgroundWorkBackend.activeItemCount(
+      this.id,
+      epochKey,
+    );
+    if (active > 0 && !this.allActiveProviderTasksMissing(epochKey)) return;
     this.cancelQuietClose();
+    // Missing provider tasks still need their normal reconciliation grace.
+    // Only an actually empty host may skip it for a start-time setting.
+    if (active === 0 && this.startTimeSettingsNeedRestart()) {
+      void backgroundWorkSupervisor.closeIdleHost(
+        this.id,
+        epochKey,
+        "a stored start-time setting needs the idle Claude process to restart",
+      );
+      return;
+    }
     this.quietCloseTimer = setTimeout(() => {
       this.quietCloseTimer = undefined;
-      if (this.running || this.compactOperation) return;
+      if (!this.canQuietClose(epochKey)) return;
       this.reconcileMissingProviderTasks(epochKey);
       if (claudeBackgroundWorkBackend.activeItemCount(this.id, epochKey) > 0)
         return;
@@ -3185,7 +3228,9 @@ export class ClaudeSdkSession implements LiveSession {
       // new may enter this query: the interrupt would land on that turn instead.
       this.stopInterrupt = interrupted;
       void interrupted.then(() => {
-        if (this.stopInterrupt === interrupted) this.stopInterrupt = undefined;
+        if (this.stopInterrupt !== interrupted) return;
+        this.stopInterrupt = undefined;
+        this.startTimeSettingsChanged();
       });
       this.compactOperation?.completion.reject(
         new Error("Compaction was stopped."),
@@ -3207,7 +3252,9 @@ export class ClaudeSdkSession implements LiveSession {
       const killed = withdrawn.then(kill, kill);
       this.stopInterrupt = killed;
       void killed.then(() => {
-        if (this.stopInterrupt === killed) this.stopInterrupt = undefined;
+        if (this.stopInterrupt !== killed) return;
+        this.stopInterrupt = undefined;
+        this.startTimeSettingsChanged();
       });
     }
     // A host-driven turn owns its own rendered teardown.
@@ -3605,7 +3652,7 @@ export class ClaudeSdkSession implements LiveSession {
    * running under that host would lose its home.
    */
   async clearContext(): Promise<HostClearOutcome> {
-    if (this.compactOperation)
+    if (this.compactOperationEpochKey)
       throw new Error("Claude compaction is running; clear after it finishes.");
     if (!this.providerSessionId)
       return {
@@ -3645,7 +3692,7 @@ export class ClaudeSdkSession implements LiveSession {
         kind: "skipped",
         reason: "The retained Claude host is unavailable.",
       };
-    if (this.compactOperation)
+    if (this.compactOperationEpochKey)
       throw new Error("Claude compaction is already running.");
     if (this.skillSubmission)
       throw new Error(
@@ -3662,26 +3709,30 @@ export class ClaudeSdkSession implements LiveSession {
         reason: "The retained Claude host has no owning query epoch.",
       };
     this.cancelQuietClose();
-    await this.stopInterruptSent();
-    if (this.skillSubmission)
-      throw new Error(
-        "A skill command is being sent to Claude; compact after it starts.",
-      );
-    const operation: CompactOperation = { completion: deferred<void>() };
-    this.compactOperation = operation;
+    // Reserve compaction before waiting for Stop: its acknowledgement may
+    // otherwise close this now-empty epoch for a pending start-time setting.
     this.compactOperationEpochKey = epochKey;
-    this.inputQueue.push(
-      sdkUserMessage(
-        `/compact${customInstructions ? ` ${customInstructions}` : ""}`,
-        [],
-      ),
-    );
+    let operation: CompactOperation | undefined;
     try {
+      await this.stopInterruptSent();
+      if (this.skillSubmission)
+        throw new Error(
+          "A skill command is being sent to Claude; compact after it starts.",
+        );
+      operation = { completion: deferred<void>() };
+      this.compactOperation = operation;
+      this.inputQueue.push(
+        sdkUserMessage(
+          `/compact${customInstructions ? ` ${customInstructions}` : ""}`,
+          [],
+        ),
+      );
       await operation.completion.promise;
     } finally {
       if (this.compactOperation === operation) {
         this.compactOperation = undefined;
         this.compactOperationEpochKey = undefined;
+        this.scheduleQuietCloseIfEmpty(epochKey);
       }
     }
     const boundary = operation.boundary;

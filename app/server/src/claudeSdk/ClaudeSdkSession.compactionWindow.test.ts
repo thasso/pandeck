@@ -26,11 +26,13 @@ process.env.ASSISTANT_CWD = dataDir;
 const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { CLAUDE_AUTO_COMPACT_WINDOW_ENV } = await import("./options.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
+const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { updateSettings } = await import("../settings.ts");
 const { sessionSkills } = await import("../sessionSkills.ts");
 
 const ENV_BEFORE = process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
 afterEach(() => {
+  vi.useRealTimers();
   if (ENV_BEFORE === undefined)
     delete process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
   else process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV] = ENV_BEFORE;
@@ -81,6 +83,7 @@ class FakeQuery implements ClaudeQuery {
   readonly flagCalls: Record<string, unknown>[] = [];
   readonly usageReads: string[] = [];
   enabled = true;
+  closeCalls = 0;
   summary?: (usage: Usage) => Promise<Usage>;
 
   constructor(readonly params: ClaudeQueryParams) {
@@ -92,6 +95,7 @@ class FakeQuery implements ClaudeQuery {
   }
 
   close(): void {
+    this.closeCalls += 1;
     this.output.close();
   }
 
@@ -248,6 +252,46 @@ async function startBackgroundShell(query: FakeQuery): Promise<void> {
   } as unknown as ClaudeSdkMessage);
 }
 
+function completeBackgroundShell(query: FakeQuery): void {
+  query.output.emit({
+    type: "system",
+    subtype: "task_notification",
+    task_id: "vendor-1",
+    tool_use_id: "tool-bg-1",
+    status: "completed",
+    output_file: "",
+    summary: "done",
+    uuid: "completed-1",
+    session_id: "provider-window",
+  } as unknown as ClaudeSdkMessage);
+}
+
+async function retainedWindow(stored?: number) {
+  enableBackgroundWork();
+  const harness = await midTurn(stored);
+  await startBackgroundShell(harness.query);
+  harness.query.output.emit(result("retained-first"));
+  await harness.turn;
+  return harness;
+}
+
+async function disposeRetained(
+  harness: Awaited<ReturnType<typeof retainedWindow>>,
+) {
+  vi.useRealTimers();
+  if (harness.query.closeCalls > 0)
+    await until(() => !backgroundWorkStore.hostForOwner(harness.id));
+  harness.session.dispose();
+}
+
+async function storeWindow(
+  harness: ReturnType<typeof makeHarness>,
+  tokens: number | null,
+) {
+  sessionStore.setCompactionWindow(harness.id, tokens);
+  return harness.session.applyCompactionWindow(tokens);
+}
+
 function enableBackgroundWork(): void {
   updateSettings({
     backgroundWork: {
@@ -361,6 +405,229 @@ test("a background-retained process keeps its window across turns; a restart app
   queries[1]!.output.emit(result("r3"));
   await third;
   restarted.dispose();
+});
+
+test("a pending start-time setting closes immediately after the last task and the next turn starts fresh", async () => {
+  const h = await retainedWindow();
+  try {
+    assert.deepEqual(await storeWindow(h, 100_000), {
+      pendingReason: "process-restart",
+    });
+    assert.equal(
+      h.query.closeCalls,
+      0,
+      "active background work keeps its host",
+    );
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+    assert.equal(window(h.session)?.pendingReason, "next-turn");
+    const next = h.adapter.prompt("use the stored window");
+    await until(() => h.queries.length === 2);
+    assert.equal(startWindow(h.queries[1]!), 100_000);
+    assert.equal(window(h.session)?.applied, "confirmed");
+    h.queries[1]!.output.emit(result("fresh-window"));
+    await next;
+    assert.equal(h.query.closeCalls, 1, "reentrant turn-end checks close once");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("last-task completion during a turn waits for that turn's boundary", async () => {
+  const h = await retainedWindow();
+  try {
+    const next = h.adapter.prompt("still running");
+    await until(() => h.query.inputs.length === 2);
+    await storeWindow(h, 100_000);
+    completeBackgroundShell(h.query);
+    await until(
+      () =>
+        backgroundWorkStore.listItems({ ownerSessionId: h.id })[0]?.state ===
+        "completed",
+    );
+    assert.equal(h.query.closeCalls, 0, "the open turn keeps the empty host");
+    h.query.output.emit(result("running-finished"));
+    await next;
+    assert.equal(h.query.closeCalls, 1);
+    assert.equal(window(h.session)?.pendingReason, "next-turn");
+    assert.equal(h.queries.length, 1);
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("a setting changed during empty-host grace cancels the timer and closes now", async () => {
+  const h = await retainedWindow();
+  try {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    completeBackgroundShell(h.query);
+    await vi.advanceTimersByTimeAsync(5_000);
+    assert.equal(h.query.closeCalls, 0);
+    assert.deepEqual(await storeWindow(h, 100_000), {
+      pendingReason: "next-turn",
+    });
+    assert.equal(h.query.closeCalls, 1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    assert.equal(h.query.closeCalls, 1, "the old grace cannot close it twice");
+    assert.equal(window(h.session)?.pendingReason, "next-turn");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+for (const revert of [false, true]) {
+  test(`an empty host keeps frozen grace with ${revert ? "a setting reverted to its epoch value" : "no pending setting"}`, async () => {
+    const h = await retainedWindow(200_000);
+    try {
+      if (revert) {
+        await storeWindow(h, 100_000);
+        assert.deepEqual(await storeWindow(h, 200_000), {});
+      }
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      completeBackgroundShell(h.query);
+      await vi.advanceTimersByTimeAsync(29_999);
+      assert.equal(h.query.closeCalls, 0);
+      assert.equal(window(h.session)?.applied, "confirmed");
+      await vi.advanceTimersByTimeAsync(1);
+      assert.equal(h.query.closeCalls, 1);
+    } finally {
+      await disposeRetained(h);
+    }
+  });
+}
+
+test("a restart does not skip missing-task reconciliation grace", async () => {
+  const h = await retainedWindow();
+  try {
+    await storeWindow(h, 100_000);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    h.query.output.emit({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [],
+      uuid: "missing-task",
+      session_id: "provider-window",
+    } as unknown as ClaudeSdkMessage);
+    await vi.advanceTimersByTimeAsync(29_999);
+    assert.equal(h.query.closeCalls, 0, "absence is not terminal evidence yet");
+    await vi.advanceTimersByTimeAsync(1);
+    assert.equal(h.query.closeCalls, 1);
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("a start-time change waits for retained compaction to finish", async () => {
+  const h = await retainedWindow();
+  try {
+    completeBackgroundShell(h.query);
+    const compact = h.session.compactContext();
+    await until(() => h.query.inputs.length === 2);
+    await storeWindow(h, 100_000);
+    assert.equal(h.query.closeCalls, 0, "compaction keeps the process open");
+    h.query.output.emit(result("compact-finished"));
+    await compact;
+    assert.equal(h.query.closeCalls, 1);
+    assert.equal(window(h.session)?.pendingReason, "next-turn");
+  } finally {
+    await disposeRetained(h);
+  }
+});
+
+test("a start-time change waits for a delayed Stop interrupt and closes when it settles", async () => {
+  const h = await retainedWindow();
+  const interrupted = deferred<void>();
+  try {
+    const next = h.adapter.prompt("stop this turn");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => interrupted.promise;
+    h.session.abort();
+    await next;
+    completeBackgroundShell(h.query);
+    await storeWindow(h, 100_000);
+    // Let the terminal task notification run while Stop is still pending.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await vi.advanceTimersByTimeAsync(30_000);
+    assert.equal(h.query.closeCalls, 0, "Stop owns the process until its ack");
+    interrupted.resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(h.query.closeCalls, 1);
+    assert.equal(window(h.session)?.pendingReason, "next-turn");
+  } finally {
+    interrupted.resolve(undefined);
+    await disposeRetained(h);
+  }
+});
+
+test("a start-time change cannot close a provider turn awaiting admission", async () => {
+  const runtimePrompt = await import("../session/runtimePrompt.ts");
+  const admitted = deferred<() => void>();
+  const admit = vi
+    .spyOn(runtimePrompt, "beginRuntimeProviderTurn")
+    .mockImplementation(() => admitted.promise);
+  const h = await retainedWindow();
+  try {
+    completeBackgroundShell(h.query);
+    h.query.output.emit({
+      type: "system",
+      subtype: "session_state_changed",
+      state: "running",
+      uuid: "provider-turn-start",
+      session_id: "provider-window",
+    } as unknown as ClaudeSdkMessage);
+    await until(() => admit.mock.calls.length === 1);
+    await storeWindow(h, 100_000);
+    assert.equal(
+      h.query.closeCalls,
+      0,
+      "admission owns the epoch before running",
+    );
+    admitted.resolve(() => {});
+    await until(() => h.session.isRunning);
+    h.query.output.emit(result("provider-turn-finished"));
+    await until(() => h.query.closeCalls === 1);
+  } finally {
+    admitted.resolve(() => {});
+    admit.mockRestore();
+    await disposeRetained(h);
+  }
+});
+
+test("compaction awaiting Stop owns the epoch when Stop acknowledges", async () => {
+  const h = await retainedWindow();
+  const interrupted = deferred<void>();
+  try {
+    const next = h.adapter.prompt("stop before compacting");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => interrupted.promise;
+    h.session.abort();
+    await next;
+    // Retire the aborted result before requesting manual compaction.
+    h.query.output.emit(result("stopped-before-compact"));
+    completeBackgroundShell(h.query);
+    await until(
+      () =>
+        backgroundWorkStore.listItems({ ownerSessionId: h.id })[0]?.state ===
+        "completed",
+    );
+    await storeWindow(h, 100_000);
+    const compact = h.session.compactContext();
+    await assert.rejects(h.session.compactContext(), /already running/);
+    await assert.rejects(h.session.clearContext(), /compaction is running/);
+    interrupted.resolve(undefined);
+    await until(() => h.query.inputs.length === 3);
+    assert.equal(
+      h.query.closeCalls,
+      0,
+      "compaction's Stop wait kept the epoch",
+    );
+    h.query.output.emit(result("compact-after-stop"));
+    await compact;
+    assert.equal(h.query.closeCalls, 1);
+  } finally {
+    interrupted.resolve(undefined);
+    await disposeRetained(h);
+  }
 });
 
 test("an unbound start keeps the inherited variable without a stored window and drops it with one", async () => {
