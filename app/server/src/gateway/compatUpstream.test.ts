@@ -466,7 +466,7 @@ test("AC6: only POST <base path>/chat/completions is forwarded; a WebSocket upgr
   assert.equal(endpoint.seen.length, 0);
 });
 
-test("AC7: only an engine lease of an openai-codex profile spends the key, a Codex login or not", async () => {
+test("AC7: only an engine or server lease of an openai-codex profile spends the key, a Codex login or not", async () => {
   const endpoint = await fakeEndpoint();
   const gw = await gateway();
   const ctl = await control(gw);
@@ -483,21 +483,39 @@ test("AC7: only an engine lease of an openai-codex profile spends the key, a Cod
     case: "revoked-lease",
     reason: "session-ended",
   });
+  // A Claude lease of either kind, never (RD-G3b2-1).
   const claude = await ctl.grant(engineLease(profiles.claude.id));
   assertRefused(await send(gw, { token: claude }), 403, { case: "forbidden" });
+  const claudeServer = await ctl.grant({
+    kind: "server",
+    profileId: profiles.claude.id,
+  });
+  assertRefused(await send(gw, { token: claudeServer }), 403, {
+    case: "forbidden",
+  });
+  assert.equal(endpoint.seen.length, 0, "no refusal reached the endpoint");
+
+  // The server's one-shots spend the key as an engine does (G4).
   const server = await ctl.grant({
     kind: "server",
     profileId: profiles.codex.id,
   });
-  assertRefused(await send(gw, { token: server }), 403, { case: "forbidden" });
-  assert.equal(endpoint.seen.length, 0, "no refusal reached the endpoint");
-
+  assert.equal((await send(gw, { token: server })).status, 200);
   // No readCredential: a pi profile without a Codex login still works.
   const noLogin = await ctl.grant(engineLease(profiles.codexNoLogin.id));
   assert.equal((await send(gw, { token: noLogin })).status, 200);
+  const noLoginServer = await ctl.grant({
+    kind: "server",
+    profileId: profiles.codexNoLogin.id,
+  });
+  assert.equal((await send(gw, { token: noLoginServer })).status, 200);
   assert.deepEqual(
     endpoint.seen.map((s) => s.headers.authorization),
-    [`Bearer ${COMPAT_KEY_A}`],
+    [
+      `Bearer ${COMPAT_KEY_A}`,
+      `Bearer ${COMPAT_KEY_A}`,
+      `Bearer ${COMPAT_KEY_A}`,
+    ],
   );
 });
 

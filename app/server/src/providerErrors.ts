@@ -56,6 +56,24 @@ const LOGIN_DEATH_RE =
 const REJECTED_CREDENTIAL_RE =
   /\b(?:oauth[ _])?(?:access[ _]|refresh[ _])?(?:token|credential)s? (?:has (?:been )?|is |was )?(?:revoked|expired|rejected)\b/i;
 
+/**
+ * The text of a provider-shaped error body (`{ error: { message } }`) when the
+ * credential gateway refused the request itself, else undefined.
+ */
+export function gatewayRefusalText(body: unknown): string | undefined {
+  const error =
+    body && typeof body === "object"
+      ? (body as { error?: unknown }).error
+      : undefined;
+  const message =
+    error && typeof error === "object"
+      ? (error as { message?: unknown }).message
+      : undefined;
+  return typeof message === "string" && isGatewayRefusal(message)
+    ? message
+    : undefined;
+}
+
 export function isLoginDeath(
   message: string | undefined,
   context: ProviderErrorContext = {},

@@ -2,7 +2,8 @@
  * Fixtures for the credential gateway's control and state tests and the
  * engine contract tests: fake TLS upstreams for `api.anthropic.com` and
  * `chatgpt.com` (minimal Anthropic and Codex streams among their answers), a
- * fake OpenAI-compatible endpoint, an egress recorder that refuses everything
+ * fake OpenAI-compatible endpoint, a recording pass-through in front of the
+ * gateway's listener, an egress recorder that refuses everything
  * sent through it as a proxy, an egress observer that sees every connection
  * attempt in this process, token files under the test's temp `DATA_DIR`, a
  * control dialer on an in-process pair, a model request, and the processes a
@@ -472,6 +473,72 @@ export async function startEgressRecorder(): Promise<EgressRecorder> {
     seen.push({ method: "CONNECT", target: req.url ?? "" });
     socket.on("error", () => socket.destroy());
     socket.end("HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n");
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const { port } = server.address() as net.AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    seen,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+/** A request a {@link startPassThrough} forwarded, as the server sent it. */
+interface PassedThrough {
+  method: string;
+  url: string;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}
+
+export interface PassThrough {
+  /** Its URL: what the server is told the gateway's listener is. */
+  readonly url: string;
+  readonly seen: PassedThrough[];
+  close(): Promise<void>;
+}
+
+/**
+ * A loopback pass-through in front of `target` (the gateway's listener) that
+ * records every request the server sends it, headers and body, and forwards
+ * it unchanged: what left the server toward the gateway.
+ */
+export async function startPassThrough(target: string): Promise<PassThrough> {
+  const seen: PassedThrough[] = [];
+  const to = new URL(target);
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      seen.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: body.toString("utf8"),
+      });
+      const forwarded = http.request(
+        {
+          host: to.hostname,
+          port: to.port,
+          method: req.method,
+          path: req.url,
+          headers: { ...req.headers, host: to.host },
+          agent: false,
+        },
+        (answer) => {
+          res.writeHead(answer.statusCode ?? 502, answer.headers);
+          answer.pipe(res);
+        },
+      );
+      forwarded.on("error", () => res.destroy());
+      forwarded.end(body);
+    });
   });
   await new Promise<void>((resolve) =>
     server.listen(0, "127.0.0.1", () => resolve()),

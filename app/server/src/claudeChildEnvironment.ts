@@ -6,6 +6,7 @@
  * so `credentialProfiles.ts` composes from it without reaching an engine
  * folder (`harnessBoundary.test.ts`).
  */
+import type { EngineGatewayAccess } from "./workerProtocol/engineMethods.ts";
 
 /** What a Claude credential profile changes in the CLI's environment. */
 export interface ClaudeProfileRuntime {
@@ -38,4 +39,21 @@ export function claudeChildEnvironment(
   return profile?.configDir !== undefined
     ? { ...env, CLAUDE_CONFIG_DIR: profile.configDir }
     : env;
+}
+
+/**
+ * `env` with the lease as the child's only credential, set last: the
+ * gateway's Anthropic prefix and the lease as the OAuth token. `env` must be a
+ * profile's, scrubbed of inherited credentials.
+ */
+export function claudeGatewayEnvironment(
+  env: Record<string, string>,
+  gateway: EngineGatewayAccess,
+): Record<string, string> {
+  return {
+    ...env,
+    ANTHROPIC_BASE_URL: `${gateway.baseUrl}/anthropic`,
+    CLAUDE_CODE_OAUTH_TOKEN: gateway.leaseToken,
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  };
 }

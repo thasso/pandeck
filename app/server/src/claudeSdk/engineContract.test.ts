@@ -122,6 +122,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     const { claudeQueryOpenSpec } = await import("./options.ts");
     const { openHostedClaudeQuery } = await import("./remoteClaudeQuery.ts");
     const { buildRealClaudeSdkSeam } = await import("./sdkSeam.ts");
+    const { runClaudeSdkOneShot } = await import("./oneShot.ts");
     const fixtures = await import("../test/gatewayFixtures.ts");
     const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
 
@@ -184,6 +185,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       claudeQueryOpenSpec,
       openHostedClaudeQuery,
       buildRealClaudeSdkSeam,
+      runClaudeSdkOneShot,
       upstream,
       gateway,
       named,
@@ -507,6 +509,116 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       assert.equal(env.isLoginDeath(text), false, text);
       assert.deepEqual(identity(env.namedFile), before);
       assert.deepEqual(env.egress.seen, []);
+      assertNoTokenLogged([ran.leaseToken]);
+    },
+    CASE_MS * 2,
+  );
+  /** The server lease the link holds for `profileId`, live or not. */
+  const serverLeaseFor = (profileId: string) => {
+    const leases = env.gateway.link
+      .gateway!.leases.records()
+      .filter(
+        (lease) => lease.kind === "server" && lease.profileId === profileId,
+      );
+    assert.equal(leases.length, 1, "one server lease per profile");
+    return leases[0]!;
+  };
+
+  /**
+   * A one-shot on the profile's server lease, as `runOneShot` starts it: no
+   * tools, one turn, no setting sources. Its child inherits the egress proxy
+   * from the server's environment, as a session's engine is given it.
+   */
+  async function oneShot(profileId: string) {
+    const gateway = await env.gateway.link.serverAccess(profileId);
+    const proxied = {
+      HTTPS_PROXY: env.egress.url,
+      HTTP_PROXY: env.egress.url,
+      ALL_PROXY: env.egress.url,
+      https_proxy: env.egress.url,
+      http_proxy: env.egress.url,
+      all_proxy: env.egress.url,
+      NO_PROXY: "127.0.0.1,localhost",
+      no_proxy: "127.0.0.1,localhost",
+    };
+    Object.assign(process.env, proxied);
+    try {
+      const result = await env.runClaudeSdkOneShot({
+        modelId: "sonnet",
+        thinkingLevel: "off",
+        systemPrompt: "You answer in one word.",
+        prompt: "Say hello.",
+        credentialProfileId: profileId,
+        gateway,
+        timeoutMs: CASE_MS,
+      });
+      return { leaseToken: gateway.leaseToken, result, thrown: undefined };
+    } catch (err) {
+      return {
+        leaseToken: gateway.leaseToken,
+        result: undefined,
+        thrown: (err as Error).message,
+      };
+    } finally {
+      for (const key of Object.keys(proxied)) delete process.env[key];
+    }
+  }
+
+  test(
+    "AC9: a one-shot on a server lease sends only its lease, only on the allowlist",
+    async () => {
+      env.upstream.reset();
+      env.setResponder(env.fakeClaudeStream(REPLY));
+      const before = identity(env.namedFile);
+      const from = env.gateway.lines.length;
+      const ran = await oneShot(env.named);
+      assert.equal(ran.thrown, undefined, ran.thrown);
+      assert.equal(ran.result?.failure, undefined, ran.result?.failure);
+      assert.equal(ran.result?.text, REPLY);
+
+      const lease = serverLeaseFor(env.named);
+      assert.ok(env.upstream.anthropic.length >= 1, "the upstream was reached");
+      for (const seen of env.upstream.anthropic) {
+        assert.equal(seen.method, "POST");
+        assert.equal(seen.url.split("?")[0], "/v1/messages");
+        assert.equal(seen.headers.authorization, `Bearer ${CLAUDE_ACCESS}`);
+        assert.equal(seen.headers["x-api-key"], undefined);
+      }
+      const lines = requestLines(from);
+      assert.equal(
+        lines.length,
+        env.upstream.anthropic.length,
+        lines.join("\n"),
+      );
+      for (const line of lines) {
+        assert.match(line, /^claude POST "\/v1\/messages"/);
+        assert.ok(line.includes(` lease=${lease.leaseId} 200 `), line);
+      }
+      assert.deepEqual(env.egress.seen, []);
+      assert.deepEqual(identity(env.namedFile), before);
+      assertNoTokenLogged([ran.leaseToken]);
+    },
+    CASE_MS * 2,
+  );
+
+  test(
+    "AC9: a one-shot on a revoked server lease fails with the marker and is not a dead login",
+    async () => {
+      env.upstream.reset();
+      env.setResponder(env.fakeClaudeStream(REPLY));
+      await env.gateway.link.serverAccess(env.named);
+      await env.gateway.link.revokeLease(
+        serverLeaseFor(env.named).leaseId,
+        "account-switch",
+      );
+      const before = identity(env.namedFile);
+      const ran = await oneShot(env.named);
+      const text = ran.thrown ?? ran.result?.failure ?? "";
+      assert.ok(text.includes("Pandeck gateway:"), text);
+      assert.equal(env.isLoginDeath(text), false, text);
+      assert.equal(env.upstream.anthropic.length, 0);
+      assert.deepEqual(env.egress.seen, []);
+      assert.deepEqual(identity(env.namedFile), before);
       assertNoTokenLogged([ran.leaseToken]);
     },
     CASE_MS * 2,

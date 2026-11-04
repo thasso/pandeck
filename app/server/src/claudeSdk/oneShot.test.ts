@@ -448,3 +448,68 @@ test("a reply cut off at the output limit is reported as a failure", async () =>
   assert.equal(cut.text, "**Half a card");
   assert.equal(cut.failure, OUTPUT_LIMIT_FAILURE);
 });
+
+test("AC8: with a server lease the child's only credential is the lease at the gateway; without one the env is the profile's", async () => {
+  const {
+    DEFAULT_CLAUDE_PROFILE_ID,
+    claudeConfigDir,
+    claudeProfileEnvironment,
+    ensureDefaultPiProfile,
+  } = await import("../credentialProfiles.ts");
+  ensureDefaultPiProfile();
+  const gateway = {
+    baseUrl: "http://127.0.0.1:9",
+    leaseToken: "fake-server-lease",
+  };
+  const inherited = {
+    ANTHROPIC_API_KEY: "fake-inherited-api-key",
+    CLAUDE_CODE_OAUTH_TOKEN: "fake-inherited-oauth",
+  };
+  const saved = Object.fromEntries(
+    Object.keys(inherited).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, inherited);
+  const envOf = async (
+    input: Partial<RunClaudeSdkOneShotInput>,
+  ): Promise<Record<string, string | undefined>> => {
+    let captured: ClaudeQueryParams | undefined;
+    setClaudeSdkOneShotSeam(() =>
+      Promise.resolve(fakeSeam(successScript(), (p) => (captured = p))),
+    );
+    await runClaudeSdkOneShotOnAccount({
+      modelId: "sonnet",
+      thinkingLevel: "off",
+      systemPrompt: "SYS",
+      prompt: "P",
+      ...input,
+    });
+    return captured!.options!.env as Record<string, string | undefined>;
+  };
+  try {
+    for (const profileId of [account.id, DEFAULT_CLAUDE_PROFILE_ID]) {
+      const env = await envOf({ credentialProfileId: profileId, gateway });
+      assert.equal(env.ANTHROPIC_BASE_URL, "http://127.0.0.1:9/anthropic");
+      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "fake-server-lease");
+      assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
+      assert.equal(env.ANTHROPIC_API_KEY, undefined);
+      assert.equal(
+        env.CLAUDE_CONFIG_DIR,
+        profileId === DEFAULT_CLAUDE_PROFILE_ID
+          ? undefined
+          : claudeConfigDir(profileId),
+      );
+      for (const value of Object.values(inherited))
+        assert.ok(!Object.values(env).includes(value), profileId);
+
+      // The switch off: exactly the profile's environment, as before.
+      assert.deepEqual(
+        await envOf({ credentialProfileId: profileId }),
+        claudeProfileEnvironment(profileId),
+      );
+    }
+  } finally {
+    for (const [key, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+});

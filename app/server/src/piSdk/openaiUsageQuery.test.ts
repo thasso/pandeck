@@ -5,12 +5,25 @@
  *   pnpm --filter @assistant/server test src/piSdk/openaiUsageQuery.test.ts
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, test, vi } from "vitest";
+import { createCredentialProfile, piAgentDir } from "../credentialProfiles.ts";
+import {
+  refusalResponse,
+  refusalText,
+  type Refusal,
+} from "../gateway/refusals.ts";
 import {
   fetchOpenAiUsage,
+  fetchOpenAiUsageForProfile,
+  fetchOpenAiUsageViaGateway,
   mapOpenAiUsageResponse,
   mapResetCredits,
+  readPiCodexMeta,
   redeemOpenAiResetCredit,
+  redeemOpenAiResetCreditForProfile,
+  redeemOpenAiResetCreditViaGateway,
 } from "./openaiUsageQuery.ts";
 
 /** Real observed `/wham/usage` shape (values scrubbed): primary window is WEEKLY here. */
@@ -91,7 +104,13 @@ const RESET_CREDITS_BODY = {
   ],
 };
 
-const AUTH = { access: "tok", accountId: "acct", expires: 1_800_000_000_000 };
+/** A direct backend expiring at `expires`; the fakes below never send it. */
+const backend = (expires: number | null) => ({
+  expires,
+  base: "https://chatgpt.com/backend-api/wham",
+  headers: {},
+});
+const AUTH = backend(1_800_000_000_000);
 const NOW = 1_700_000_000_000;
 
 test("maps the raw wham/usage response and classifies windows by duration", () => {
@@ -176,11 +195,7 @@ test("degrades to available:false on an expired token without hitting the networ
   let fetched = false;
   const snap = await fetchOpenAiUsage({
     now: () => NOW,
-    readAuth: async () => ({
-      access: "tok",
-      accountId: "acct",
-      expires: NOW - 1,
-    }),
+    readAuth: async () => backend(NOW - 1),
     fetchUsage: async () => {
       fetched = true;
       return { status: 200, body: {} };
@@ -199,11 +214,7 @@ test("degrades to available:false on an expired token without hitting the networ
 test("degrades to available:false on a 401 from the endpoint", async () => {
   const snap = await fetchOpenAiUsage({
     now: () => NOW,
-    readAuth: async () => ({
-      access: "tok",
-      accountId: "acct",
-      expires: NOW + 60_000,
-    }),
+    readAuth: async () => backend(NOW + 60_000),
     fetchUsage: async () => ({ status: 401, body: { error: "unauthorized" } }),
   });
   assert.equal(snap.available, false);
@@ -226,11 +237,7 @@ test("throws on an unexpected HTTP status so the route can 502", async () => {
     () =>
       fetchOpenAiUsage({
         now: () => NOW,
-        readAuth: async () => ({
-          access: "tok",
-          accountId: "acct",
-          expires: NOW + 60_000,
-        }),
+        readAuth: async () => backend(NOW + 60_000),
         fetchUsage: async () => ({ status: 500, body: "boom" }),
       }),
     /HTTP 500/,
@@ -317,3 +324,235 @@ test("redeem POSTs and reports the result when a reset is applicable", async () 
   assert.equal(result.windowsReset, 1);
   assert.equal(result.code, "reset");
 });
+
+// Synthetic fixture values; none is a real credential.
+const FAKE_ACCESS = "fake-codex-access";
+const FAKE_ACCOUNT = "fake-account";
+const GATEWAY = { baseUrl: "http://127.0.0.1:9", leaseToken: "lease-token" };
+
+/** A Codex profile whose `auth.json` holds `entry`, or no Codex login at all. */
+function codexProfile(entry: Record<string, unknown> | undefined): string {
+  const id = createCredentialProfile({
+    name: "Usage query fixture",
+    provider: "openai-codex",
+  }).id;
+  writeFileSync(
+    join(piAgentDir(id), "auth.json"),
+    JSON.stringify(entry ? { "openai-codex": entry } : {}),
+  );
+  return id;
+}
+
+function signedIn(expires: number): string {
+  return codexProfile({
+    type: "oauth",
+    access: FAKE_ACCESS,
+    refresh: "fake-refresh",
+    expires,
+    accountId: FAKE_ACCOUNT,
+  });
+}
+
+interface Sent {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string | undefined;
+}
+
+/** `fetch` replaced: records each request and answers by its path's last segment. */
+function stubFetch(answers: Record<string, unknown>): Sent[] {
+  const sent: Sent[] = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    sent.push({
+      method: init.method ?? "GET",
+      url,
+      headers: init.headers as Record<string, string>,
+      body: init.body as string | undefined,
+    });
+    const answer = answers[url.slice(url.lastIndexOf("/") + 1)];
+    return new Response(JSON.stringify(answer ?? null), {
+      status: answer === undefined ? 404 : 200,
+    });
+  });
+  return sent;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+const ANSWERS = {
+  usage: RAW_RESPONSE,
+  "rate-limit-reset-credits": RESET_CREDITS_BODY,
+  consume: { code: "reset", windows_reset: 1 },
+};
+
+test("AC14: through the gateway, usage, credits and consume carry the lease and no account id", async () => {
+  const profile = signedIn(Date.now() + 3_600_000);
+  const sent = stubFetch(ANSWERS);
+  const snap = await fetchOpenAiUsageViaGateway(profile, GATEWAY);
+  assert.equal(snap.available, true);
+  const redeemed = await redeemOpenAiResetCreditViaGateway(
+    profile,
+    GATEWAY,
+    "RateLimitResetCredit_soon",
+    { requireApplicable: false, redeemRequestId: "redeem-1" },
+  );
+  assert.equal(redeemed.ok, true);
+
+  const wham = `${GATEWAY.baseUrl}/chatgpt/backend-api/wham`;
+  assert.deepEqual(
+    sent.map(({ method, url }) => [method, url]),
+    [
+      ["GET", `${wham}/usage`],
+      ["GET", `${wham}/rate-limit-reset-credits`],
+      ["POST", `${wham}/rate-limit-reset-credits/consume`],
+    ],
+  );
+  const browser = {
+    Origin: "https://chatgpt.com",
+    Referer: "https://chatgpt.com/",
+    "User-Agent": "Mozilla/5.0",
+  };
+  const leased = {
+    Authorization: `Bearer ${GATEWAY.leaseToken}`,
+    Accept: "application/json",
+    ...browser,
+  };
+  assert.deepEqual(
+    sent.map(({ headers }) => headers),
+    [leased, leased, { ...leased, "Content-Type": "application/json" }],
+  );
+  assert.deepEqual(JSON.parse(sent[2]!.body!), {
+    credit_id: "RateLimitResetCredit_soon",
+    redeem_request_id: "redeem-1",
+  });
+  for (const request of sent) {
+    const text = JSON.stringify(request);
+    assert.ok(!text.includes(FAKE_ACCESS), "no Codex token from the server");
+    assert.ok(!text.includes(FAKE_ACCOUNT), "no account id from the server");
+  }
+});
+
+test("AC14: the server's Codex read is presence and expiry only", async () => {
+  const expires = Date.now() + 3_600_000;
+  assert.deepEqual(await readPiCodexMeta(signedIn(expires)), { expires });
+  assert.equal(await readPiCodexMeta(codexProfile(undefined)), null);
+});
+
+test("AC14: an expired or missing Codex login sends nothing to the gateway", async () => {
+  const sent = stubFetch(ANSWERS);
+  const expired = await fetchOpenAiUsageViaGateway(
+    signedIn(Date.now() - 1_000),
+    GATEWAY,
+  );
+  assert.equal(expired.unavailableCode, "expired");
+  const missing = await fetchOpenAiUsageViaGateway(
+    codexProfile(undefined),
+    GATEWAY,
+  );
+  assert.equal(missing.unavailableCode, "not-signed-in");
+  assert.deepEqual(sent, []);
+});
+
+test("AC14: with the switch off, the direct requests carry today's headers", async () => {
+  const profile = signedIn(Date.now() + 3_600_000);
+  const sent = stubFetch(ANSWERS);
+  await fetchOpenAiUsageForProfile(profile);
+  await redeemOpenAiResetCreditForProfile(
+    profile,
+    "RateLimitResetCredit_soon",
+    {
+      requireApplicable: false,
+      redeemRequestId: "redeem-1",
+    },
+  );
+  const wham = "https://chatgpt.com/backend-api/wham";
+  const today = {
+    Authorization: `Bearer ${FAKE_ACCESS}`,
+    Accept: "application/json",
+    "ChatGPT-Account-Id": FAKE_ACCOUNT,
+    Origin: "https://chatgpt.com",
+    Referer: "https://chatgpt.com/",
+    "User-Agent": "Mozilla/5.0",
+  };
+  assert.deepEqual(sent, [
+    { method: "GET", url: `${wham}/usage`, headers: today, body: undefined },
+    {
+      method: "GET",
+      url: `${wham}/rate-limit-reset-credits`,
+      headers: today,
+      body: undefined,
+    },
+    {
+      method: "POST",
+      url: `${wham}/rate-limit-reset-credits/consume`,
+      headers: { ...today, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        credit_id: "RateLimitResetCredit_soon",
+        redeem_request_id: "redeem-1",
+      }),
+    },
+  ]);
+});
+
+/** The gateway's own refusals a server lease can meet, as the gateway sends them. */
+const REFUSALS: [string, Refusal][] = [
+  ["401 revoked lease", { case: "revoked-lease", reason: "profile-removed" }],
+  ["403 forbidden", { case: "forbidden" }],
+  ["503 credential missing", { case: "credential", problem: "missing" }],
+  [
+    "502 unreachable",
+    { case: "unreachable", upstream: "ChatGPT", reason: "ECONNREFUSED" },
+  ],
+];
+
+function refused(refusal: Refusal): { status: number; body: unknown } {
+  const { status, body } = refusalResponse(refusal, "codex");
+  return { status, body: JSON.parse(body) };
+}
+
+test.each(REFUSALS)(
+  "AC16: a gateway %s on usage throws its text, never rejected or forbidden",
+  async (_name, refusal) => {
+    await assert.rejects(
+      fetchOpenAiUsage({
+        now: () => NOW,
+        readAuth: async () => AUTH,
+        fetchUsage: async () => refused(refusal),
+      }),
+      { message: refusalText(refusal) },
+    );
+  },
+);
+
+test.each(REFUSALS)(
+  "AC16: a gateway %s on the redeem's re-check or consume throws its text",
+  async (_name, refusal) => {
+    let consumed = 0;
+    await assert.rejects(
+      redeemOpenAiResetCredit("RateLimitResetCredit_soon", {
+        readAuth: async () => AUTH,
+        fetchUsage: async () => refused(refusal),
+        postConsume: async () => {
+          consumed += 1;
+          return { status: 200, body: {} };
+        },
+      }),
+      { message: refusalText(refusal) },
+    );
+    assert.equal(consumed, 0, "a refused re-check consumes nothing");
+    await assert.rejects(
+      redeemOpenAiResetCredit(
+        "RateLimitResetCredit_soon",
+        {
+          readAuth: async () => AUTH,
+          postConsume: async () => refused(refusal),
+        },
+        { requireApplicable: false },
+      ),
+      { message: refusalText(refusal) },
+    );
+  },
+);

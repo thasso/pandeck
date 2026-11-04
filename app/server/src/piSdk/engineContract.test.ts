@@ -222,6 +222,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     const { syncConfiguredModelProviders } = models;
     const { resolvePiEngineStart } = await import("./piEngineStart.ts");
     const { openRemotePiEngine } = await import("./remotePiEngine.ts");
+    const { runPiOneShot } = await import("./oneShot.ts");
     const settings = await import("../settingsService.ts");
     const { childProcessEnv } = await import("../subprocessEnv.ts");
     const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
@@ -333,6 +334,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       models,
       resolvePiEngineStart,
       openRemotePiEngine,
+      runPiOneShot,
       settings,
       childProcessEnv,
       upstream,
@@ -667,6 +669,73 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
         env.fixtures.CODEX_DEFAULT_ACCESS,
         env.fixtures.CODEX_DEFAULT_ACCOUNT,
       );
+    },
+    CASE_MS,
+  );
+
+  test(
+    "AC11: a Codex one-shot on the server lease reaches the upstream with the profile's login, through the gateway",
+    async () => {
+      env.setResponder(env.fixtures.fakeCodexStream(REPLY));
+      // The model as `runOneShot` finds it: the server's catalog, at chatgpt.com.
+      const model = await env.serverPiModelPort.findForProfile(
+        env.named,
+        "openai-codex",
+        BUILTIN_ID,
+      );
+      assert.ok(model, "the server's catalog has the model");
+      const gateway = await env.gateway.link.serverAccess(env.named);
+      env.leases.push(gateway.leaseToken);
+      const lease = env.gateway.link
+        .gateway!.leases.records()
+        .find(
+          (record) =>
+            record.kind === "server" && record.profileId === env.named,
+        );
+      assert.ok(lease, "the profile has a server lease");
+      const from = env.gateway.lines.length;
+      const upstreamFrom = env.upstream.chatgpt.length;
+      const result = await env.runPiOneShot({
+        model: model as never,
+        credentialProfileId: env.named,
+        thinkingLevel: "off",
+        systemPrompt: "You answer in one word.",
+        prompt: "Say hello.",
+        timeoutMs: CASE_MS / 2,
+        timeoutMessage: "The one-shot timed out.",
+        gateway,
+      });
+      assert.equal(result.stopReason, undefined, result.errorMessage);
+      assert.equal(result.text, REPLY);
+
+      const seen = env.upstream.chatgpt.slice(upstreamFrom);
+      assert.equal(seen.length, 1, "exactly one upstream request");
+      const request = seen[0]!;
+      assert.equal(request.method, "POST");
+      assert.equal(request.url.split("?")[0], "/backend-api/codex/responses");
+      assert.equal(
+        request.headers.authorization,
+        `Bearer ${env.fixtures.CODEX_ACCESS}`,
+      );
+      assert.equal(
+        request.headers["chatgpt-account-id"],
+        env.fixtures.CODEX_ACCOUNT,
+      );
+      assert.equal(request.headers.upgrade, undefined);
+      for (const value of Object.values(request.headers))
+        assert.ok(
+          !String(value).includes(gateway.leaseToken),
+          "the lease never reaches the upstream",
+        );
+      assert.equal(decodedBody(request).model, BUILTIN_ID);
+      const lines = requestLines(from);
+      assert.equal(lines.length, 1, lines.join("\n"));
+      assert.match(lines[0]!, /^openai-codex POST "[^"]*\/codex\/responses"/);
+      assert.ok(lines[0]!.includes(` lease=${lease.leaseId} 200 `), lines[0]);
+      for (const [file, before] of env.fixtureFiles)
+        assert.deepEqual(identity(file), before, file);
+      assertNoEgress();
+      assertNoTokenLogged();
     },
     CASE_MS,
   );

@@ -15,6 +15,8 @@ import type { AgentUsage } from "@assistant/shared/session";
 import { CWD } from "../config.ts";
 import { piAgentDir } from "../credentialProfiles.ts";
 import type { AgentTool } from "../mcp/tool.ts";
+import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
+import type { GatewayPiModelPort } from "./gatewayPiModelPort.ts";
 import type { findModel } from "./models.ts";
 
 // pi's SDK, the model registry and the tool adapter load on the first run:
@@ -35,6 +37,33 @@ async function loadPi() {
     modelRuntimeForProfile,
     toPiToolDefinitions,
   };
+}
+
+/**
+ * The gateway port as a leased one-shot needs it, loaded on its first run as
+ * the SDK is: the port imports pi statically.
+ */
+async function loadGatewayPort(
+  access: EngineGatewayAccess,
+): Promise<GatewayPiModelPort> {
+  const { gatewayPiModelPort } = await import("./gatewayPiModelPort.ts");
+  const { serverPiModelPort } = await import("./piModelPort.ts");
+  const { compatProviderFeed } = await import("./compatProviderFeed.ts");
+  return gatewayPiModelPort(access, {
+    server: serverPiModelPort,
+    compat: compatProviderFeed,
+  });
+}
+
+/**
+ * The gateway port serves no such model for the one-shot's profile. It has no
+ * text of its own: `runOneShot` answers with its no-model message.
+ */
+export class PiGatewayModelUnavailableError extends Error {
+  constructor() {
+    super();
+    this.name = "PiGatewayModelUnavailableError";
+  }
 }
 
 /** Model handle as returned by pi's model registry (`findModel`/`getAvailable`). */
@@ -99,6 +128,11 @@ export interface PiOneShotOptions {
   timeoutMessage: string;
   /** Explicit app-tool allowlist. Built-in file/shell tools remain disabled. */
   tools?: AgentTool[];
+  /**
+   * The profile's server lease: the run's only credential when set, through
+   * an in-memory runtime whose models all go to the gateway.
+   */
+  gateway?: EngineGatewayAccess;
 }
 
 export interface PiOneShotResult {
@@ -134,18 +168,42 @@ export function piIncompleteStop(
 /**
  * Run a single pi prompt and return the assistant text + usage. By default the
  * run has no tools; callers may provide an explicit app-tool allowlist.
- * Throws on timeout or prompt failure; always disposes the session.
+ * Throws on timeout or prompt failure; always disposes the session. With
+ * `gateway` the model is the gateway port's, over SSE (the gateway refuses
+ * WebSocket upgrades), and a model the port does not serve throws
+ * {@link PiGatewayModelUnavailableError} before any session exists.
  */
 export async function runPiOneShot(
   opts: PiOneShotOptions,
 ): Promise<PiOneShotResult> {
-  const {
+  const pi = await loadPi();
+  const port = opts.gateway && (await loadGatewayPort(opts.gateway));
+  try {
+    return await runPiSession(opts, port, pi);
+  } finally {
+    port?.dispose();
+  }
+}
+
+async function runPiSession(
+  opts: PiOneShotOptions,
+  port: GatewayPiModelPort | undefined,
+  {
     DefaultResourceLoader,
     SessionManager,
     createAgentSession,
     modelRuntimeForProfile,
     toPiToolDefinitions,
-  } = await loadPi();
+  }: Awaited<ReturnType<typeof loadPi>>,
+): Promise<PiOneShotResult> {
+  const model = port
+    ? await port.findForProfile(
+        opts.credentialProfileId,
+        opts.model.provider,
+        opts.model.id,
+      )
+    : opts.model;
+  if (!model) throw new PiGatewayModelUnavailableError();
   const loader = new DefaultResourceLoader({
     cwd: CWD,
     // PA-owned, profile-private agent directory — never a global `~/.pi`.
@@ -178,8 +236,10 @@ export async function runPiOneShot(
 
   const { session } = await createAgentSession({
     cwd: CWD,
-    modelRuntime: await modelRuntimeForProfile(opts.credentialProfileId),
-    model: opts.model,
+    modelRuntime: port
+      ? await port.runtime(opts.credentialProfileId)
+      : await modelRuntimeForProfile(opts.credentialProfileId),
+    model,
     thinkingLevel: opts.thinkingLevel,
     sessionManager,
     resourceLoader: loader,
@@ -187,6 +247,7 @@ export async function runPiOneShot(
       ? { noTools: "builtin" as const, customTools }
       : { noTools: "all" as const }),
   });
+  if (port) session.agent.transport = "sse";
 
   let text = "";
   const unsubscribe = session.subscribe((event) => {

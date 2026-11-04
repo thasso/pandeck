@@ -31,6 +31,7 @@ const {
   GATEWAY_UNAVAILABLE_TEXT,
   LoginHeldError,
   installedGatewayLink,
+  serverGatewayAccess,
   startGatewayLink,
 } = await import("./gatewayLink.ts");
 const { startGatewayLinkForTests } = await import("./test/gatewayLink.ts");
@@ -814,4 +815,230 @@ test("AC14: a push the gateway refuses is logged by its code alone and leaves th
   for (const line of lines)
     for (const value of [COMPAT_KEY_A, refusedUrl, "compat.test"])
       assert.ok(!line.includes(value), `a log line leaks: ${line}`);
+});
+
+/** The gateway's server leases, oldest first. */
+function serverLeases(running: GatewayLink) {
+  return running
+    .gateway!.leases.records()
+    .filter((record) => record.kind === "server")
+    .sort((a, b) => a.grantedAt - b.grantedAt);
+}
+
+/** A usage read through the link's gateway, as the server sends it. */
+async function usageRequest(
+  gateway: { url: string },
+  token: string,
+): Promise<{ status: number; text: string }> {
+  const response = await fetch(
+    `${gateway.url}/chatgpt/backend-api/wham/usage`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  return { status: response.status, text: await response.text() };
+}
+
+test("AC4: a server lease is granted once per profile per boot, and never without a link", async () => {
+  const a = codexProfile("Server A");
+  const b = codexProfile("Server B");
+  try {
+    assert.equal(installedGatewayLink(), undefined);
+    assert.equal(await serverGatewayAccess(a), undefined);
+
+    const booted = link();
+    assert.equal(await booted.ready, true);
+    const [first, second] = await Promise.all([
+      serverGatewayAccess(a),
+      booted.serverAccess(a),
+    ]);
+    const later = await booted.serverAccess(a);
+    assert.ok(first);
+    assert.deepEqual(second, first);
+    assert.deepEqual(later, first);
+    assert.equal(first.baseUrl, booted.gateway!.url);
+    const other = await booted.serverAccess(b);
+    assert.notEqual(other.leaseToken, first.leaseToken);
+
+    const records = serverLeases(booted);
+    assert.deepEqual(
+      records.map((record) => record.profileId),
+      [a, b],
+    );
+    const boot = booted.gateway!.lastHello()!.serverBootId;
+    for (const record of records) {
+      assert.equal(record.kind, "server");
+      assert.deepEqual(record.owner, { serverBootId: boot });
+      assert.equal(record.revoked, undefined);
+    }
+    assert.equal(
+      (await usageRequest(booted.gateway!, first.leaseToken)).status,
+      200,
+    );
+    assert.deepEqual(seen.at(-1), {
+      authorization: `Bearer ${FAKE_ACCESS}`,
+      account: FAKE_ACCOUNT,
+    });
+
+    await booted.close();
+    links.pop();
+    assert.equal(await serverGatewayAccess(a), undefined);
+  } finally {
+    profiles.deleteCredentialProfile(a);
+    profiles.deleteCredentialProfile(b);
+  }
+});
+
+test("AC5: deleting a profile drops its server lease, even one granted while it went; a disable keeps it", async () => {
+  const id = codexProfile("Server removed");
+  const dir = stateDir();
+  const booted = link({ stateDir: dir });
+  assert.equal(await booted.ready, true);
+  const access = await booted.serverAccess(id);
+
+  profiles.setCredentialProfileEnabled(id, false);
+  await until(() =>
+    (registry(dir) as { id: string; enabled: boolean }[]).some(
+      (p) => p.id === id && !p.enabled,
+    ),
+  );
+  assert.deepEqual(await booted.serverAccess(id), access);
+  assert.equal(
+    (await usageRequest(booted.gateway!, access.leaseToken)).status,
+    200,
+  );
+
+  profiles.deleteCredentialProfile(id);
+  await until(() =>
+    (registry(dir) as { id: string }[]).every((p) => p.id !== id),
+  );
+  const before = seen.length;
+  const refused = await usageRequest(booted.gateway!, access.leaseToken);
+  assert.equal(refused.status, 401);
+  assert.ok(
+    refused.text.includes(
+      refusalText({ case: "revoked-lease", reason: "profile-removed" }),
+    ),
+    refused.text,
+  );
+  assert.ok(refused.text.includes("(the account was removed)"));
+  assert.equal(seen.length, before, "no upstream request");
+  // Not the old token: a new grant, which the gateway refuses now.
+  await assert.rejects(booted.serverAccess(id), {
+    message: GATEWAY_UNAVAILABLE_TEXT,
+  });
+
+  // Deleted while the gateway grants: the removal follows the grant on the
+  // queue, revokes it, and the link keeps nothing.
+  const racing = codexProfile("Server racing");
+  await until(() =>
+    (registry(dir) as { id: string }[]).some((p) => p.id === racing),
+  );
+  let deleted = false;
+  const original = lines.push.bind(lines);
+  lines.push = (...items: string[]) => {
+    if (
+      !deleted &&
+      items.some((line) =>
+        line.startsWith(`control ${CONTROL_METHODS.grant} (profile ${racing},`),
+      )
+    ) {
+      deleted = true;
+      profiles.deleteCredentialProfile(racing);
+    }
+    return original(...items);
+  };
+  let inFlight;
+  try {
+    inFlight = await booted.serverAccess(racing);
+  } finally {
+    lines.push = original;
+  }
+  assert.ok(deleted, "the profile went while its grant was answered");
+  await booted.revokeLease("0".repeat(22), "session-ended");
+  const revoked = await usageRequest(booted.gateway!, inFlight.leaseToken);
+  assert.equal(revoked.status, 401);
+  assert.ok(revoked.text.includes("(the account was removed)"));
+  await assert.rejects(booted.serverAccess(racing), {
+    message: GATEWAY_UNAVAILABLE_TEXT,
+  });
+});
+
+test("AC6: a new boot on the same state revokes the earlier boot's server leases and grants its own", async () => {
+  const id = codexProfile("Server restart");
+  const dir = stateDir();
+  try {
+    const first = link({ stateDir: dir });
+    assert.equal(await first.ready, true);
+    const old = await first.serverAccess(id);
+    await first.close();
+    links.pop();
+
+    const second = link({ stateDir: dir });
+    assert.equal(await second.ready, true);
+    const refused = await usageRequest(second.gateway!, old.leaseToken);
+    assert.equal(refused.status, 401);
+    assert.ok(
+      refused.text.includes(
+        refusalText({ case: "revoked-lease", reason: "session-ended" }),
+      ),
+      refused.text,
+    );
+    assert.ok(
+      lines.some((line) =>
+        /ready: \d+ profiles; revoked 1 server and 0 engine leases/.test(line),
+      ),
+      lines.join("\n"),
+    );
+    const fresh = await second.serverAccess(id);
+    assert.notEqual(fresh.leaseToken, old.leaseToken);
+    assert.equal(
+      (await usageRequest(second.gateway!, fresh.leaseToken)).status,
+      200,
+    );
+  } finally {
+    profiles.deleteCredentialProfile(id);
+  }
+});
+
+test("AC7 (link): an unavailable link fails a server lease with U7's text, and the next call tries again", async () => {
+  const taken = net.createServer();
+  await new Promise<void>((resolve) =>
+    taken.listen(0, "127.0.0.1", () => resolve()),
+  );
+  try {
+    const failed = link({ port: (taken.address() as net.AddressInfo).port });
+    assert.equal(await failed.ready, false);
+    for (let i = 0; i < 2; i += 1)
+      await assert.rejects(
+        serverGatewayAccess(profiles.DEFAULT_OPENAI_PROFILE_ID),
+        { message: GATEWAY_UNAVAILABLE_TEXT },
+      );
+    assert.equal(
+      lines.filter((line) =>
+        line.startsWith(`${CONTROL_METHODS.grant} (server, profile `),
+      ).length,
+      2,
+      "each call tried again",
+    );
+  } finally {
+    await new Promise<void>((resolve) => taken.close(() => resolve()));
+  }
+});
+
+test("AC18 (link): no link or gateway log line of a server lease holds a token, access token or account id", async () => {
+  const id = codexProfile("Server logged");
+  const dir = stateDir();
+  const booted = link({ stateDir: dir });
+  assert.equal(await booted.ready, true);
+  const access = await booted.serverAccess(id);
+  await usageRequest(booted.gateway!, access.leaseToken);
+  profiles.deleteCredentialProfile(id);
+  await until(() =>
+    (registry(dir) as { id: string }[]).every((p) => p.id !== id),
+  );
+  await usageRequest(booted.gateway!, access.leaseToken);
+  const secret = access.leaseToken.split(".").at(-1)!;
+  assert.ok(lines.length > 0);
+  for (const line of lines)
+    for (const value of [access.leaseToken, secret, FAKE_ACCESS, FAKE_ACCOUNT])
+      assert.ok(!line.includes(value), `a log line holds ${value}: ${line}`);
 });

@@ -18,6 +18,7 @@ import {
   claudeProfileEnvironment,
   DEFAULT_CLAUDE_PROFILE_ID,
 } from "../credentialProfiles.ts";
+import { claudeGatewayEnvironment } from "../claudeChildEnvironment.ts";
 import { MCP_SERVER_NAME } from "../mcp/names.ts";
 import {
   createSessionToolServer,
@@ -43,6 +44,7 @@ import {
   type ClaudeSdkSeam,
   type ClaudeSdkUserMessage,
 } from "./sdkSeam.ts";
+import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
 import type { ThinkingLevel } from "@assistant/shared";
 
 /** All native Claude tools explicitly disallowed for every helper run. */
@@ -75,6 +77,8 @@ export interface RunClaudeSdkOneShotInput {
   prompt: string;
   /** Isolated Claude credential profile; defaults to PA's protected profile. */
   credentialProfileId?: string;
+  /** The profile's server lease: the child's only credential when set. */
+  gateway?: EngineGatewayAccess;
   /** Abort the query after this many ms. Defaults to 60s. */
   timeoutMs?: number;
   /** Error thrown on timeout. */
@@ -109,6 +113,15 @@ export function setClaudeSdkOneShotSeam(
   seamFactory = factory;
 }
 
+function oneShotEnvironment(
+  input: RunClaudeSdkOneShotInput,
+): Record<string, string> {
+  const env = claudeProfileEnvironment(
+    input.credentialProfileId ?? DEFAULT_CLAUDE_PROFILE_ID,
+  );
+  return input.gateway ? claudeGatewayEnvironment(env, input.gateway) : env;
+}
+
 function buildOneShotOptions(
   input: RunClaudeSdkOneShotInput,
   abortController: AbortController,
@@ -118,9 +131,7 @@ function buildOneShotOptions(
     cwd: CWD,
     abortController,
     ...packagedClaudeSdkOptions(),
-    env: claudeProfileEnvironment(
-      input.credentialProfileId ?? DEFAULT_CLAUDE_PROFILE_ID,
-    ),
+    env: oneShotEnvironment(input),
     model: claudeSdkModelId(input.modelId),
     systemPrompt: input.systemPrompt,
     // Native tools and inherited settings stay disabled. A caller-supplied

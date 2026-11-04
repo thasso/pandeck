@@ -24,6 +24,11 @@
  * save failed holds in the gateway's memory until a later save or the next
  * boot's reconcile.
  *
+ * The server's own model and usage requests (one-shots, Codex usage) spend a
+ * server lease: one per profile for this boot, granted on first use and kept
+ * in memory only. The gateway ends it with the boot (the next hello) or the
+ * profile (its removal); the server never revokes one itself.
+ *
  * The login hold calls are G5's to wire into the login flows; nothing calls
  * them yet. A hold waiting for its profile's writer lane is ordered after the
  * queue but never holds it up. The link records each profile's latest
@@ -65,6 +70,7 @@ import { processStartTime } from "./gateway/processIdentity.ts";
 import { parseProfile, type GatewayProfile } from "./gateway/profiles.ts";
 import type { RevokeReason } from "./gateway/refusals.ts";
 import type { Payload } from "./workerProtocol/codec.ts";
+import type { EngineGatewayAccess } from "./workerProtocol/engineMethods.ts";
 import {
   WorkerConnection,
   WorkerRequestError,
@@ -164,6 +170,13 @@ export interface GatewayLink {
    * {@link GatewayUnavailableError} when no lease could be had.
    */
   grantEngineLease(grant: EngineLeaseGrant): Promise<LeaseGranted>;
+  /**
+   * The profile's server lease for this boot and where to spend it, granted
+   * once and shared by every caller until the profile is removed. Rejects with
+   * a {@link GatewayUnavailableError} when no lease could be had; the next call
+   * tries again.
+   */
+  serverAccess(profileId: string): Promise<EngineGatewayAccess>;
   /** Best-effort: a failure is logged, never thrown. */
   bindLeaseSession(leaseId: string, sessionId: string): Promise<void>;
   /** Best-effort: a failure is logged, never thrown. */
@@ -192,6 +205,18 @@ let installed: GatewayLink | undefined;
 /** The process's link while one runs; without it no open grants a lease. */
 export function installedGatewayLink(): GatewayLink | undefined {
   return installed;
+}
+
+/**
+ * The profile's server lease while a link runs, else undefined: the server's
+ * own requests read the switch only here.
+ */
+export function serverGatewayAccess(
+  profileId: string,
+): Promise<EngineGatewayAccess | undefined> {
+  return installed
+    ? installed.serverAccess(profileId)
+    : Promise.resolve(undefined);
 }
 
 /**
@@ -254,6 +279,12 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   let connection: WorkerConnection | undefined;
   let closing: Promise<void> | undefined;
   const loginStatuses = new Map<string, LoginStatus>();
+  /**
+   * This boot's server leases by profile, from the first call on. A removal
+   * drops its entry, so a grant still in flight then is never kept: the
+   * removal, queued after it, revokes it.
+   */
+  const serverLeases = new Map<string, Promise<EngineGatewayAccess>>();
 
   /** Sends the compatible endpoint as the source has it now; logs a failure. */
   const pushCompat = async (
@@ -372,6 +403,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
     const method = profile
       ? CONTROL_METHODS.upsertProfile
       : CONTROL_METHODS.removeProfile;
+    if (!profile) serverLeases.delete(id);
     request(
       method,
       encodeControlRequest(profile ? { profile } : { profileId: id }),
@@ -389,6 +421,33 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   const unsubscribeCompat = options.compat?.subscribe(
     () => void pushCompat(request),
   );
+
+  const grantServerLease = async (
+    profileId: string,
+  ): Promise<EngineGatewayAccess> => {
+    // Ready implies a started gateway, the lease's only destination.
+    const baseUrl = (await readyWithin(READY_TIMEOUT_MS))
+      ? gateway?.url
+      : undefined;
+    if (baseUrl === undefined) {
+      log(`${CONTROL_METHODS.grant} (server, profile ${profileId}): not ready`);
+      throw new GatewayUnavailableError();
+    }
+    try {
+      const granted = decodeLeaseGranted(
+        await request(
+          CONTROL_METHODS.grant,
+          encodeControlRequest({ kind: "server", profileId }),
+        ),
+      );
+      return { baseUrl, leaseToken: granted.token };
+    } catch (err) {
+      log(
+        `${CONTROL_METHODS.grant} (server, profile ${profileId}): ${failure(err)}`,
+      );
+      throw new GatewayUnavailableError();
+    }
+  };
 
   const link: GatewayLink = {
     ready: boot,
@@ -416,6 +475,18 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         log(`${CONTROL_METHODS.grant} (profile ${profileId}): ${failure(err)}`);
         throw new GatewayUnavailableError();
       }
+    },
+    serverAccess(profileId) {
+      const known = serverLeases.get(profileId);
+      if (known) return known;
+      const granting = grantServerLease(profileId);
+      serverLeases.set(profileId, granting);
+      // A failed grant is forgotten, so the next call tries again.
+      granting.catch(() => {
+        if (serverLeases.get(profileId) === granting)
+          serverLeases.delete(profileId);
+      });
+      return granting;
     },
     async bindLeaseSession(leaseId, sessionId) {
       try {

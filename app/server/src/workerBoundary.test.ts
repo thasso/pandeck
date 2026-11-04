@@ -503,6 +503,17 @@ test("only the server link and the error classifier import the gateway", () => {
   );
 });
 
+test("no pi module reaches the gateway link", () => {
+  // A leased pi run takes its access as an argument: `harnesses/` asks the
+  // link, so the engine half stays free of server state.
+  assert.deepEqual(
+    importersOf((target) => target === "gatewayLink.ts").filter((module) =>
+      module.startsWith("piSdk/"),
+    ),
+    [],
+  );
+});
+
 test("the session-hook protocol runs no server module", () => {
   // The Worker side imports it, and the direct rule above stops at
   // `workerProtocol/`: a server module it ran would reach the Worker unseen.
