@@ -25,6 +25,16 @@ types show real data. Fetchers live in `claudeSdk/usageQuery.ts` and
 `piSdk/openaiUsageQuery.ts`; both read credentials that never leave the server,
 keyed by credential-profile id (accounts are isolated per profile directory).
 
+Under the credential gateway (`ASSISTANT_GATEWAY=1`, `workers.md`
+"Credentials"), the OpenAI usage, reset-credit and consume requests go to the
+gateway's `/chatgpt` prefix with the profile's server lease, and the gateway
+adds the token and account id. The server then reads only whether `auth.json`
+holds a Codex login and when it expires, so `not-signed-in` and `expired` behave
+as before. A refusal the gateway answers itself ("Pandeck gateway: …") is a
+temporary failure: it is thrown as its text, keeps the last snapshot and backs
+off like any error, and is never `rejected`, `forbidden` or "Reconnect". Claude
+usage stays direct (G4b).
+
 Usage fetch outcomes also feed account health, owned by `accountHealth.ts`.
 OpenAI's `unavailableCode` distinguishes missing credentials and rejected 401
 logins from an expired read-only access token or a forbidden 403 usage endpoint.

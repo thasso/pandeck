@@ -221,9 +221,11 @@ export function createForwarder(deps: ForwarderDeps): {
     const { leaseId, binding } = lease;
     const { upstream } = route;
     if (upstream.kind === "compat") {
-      // Any engine lease of a pi engine; no Claude or server lease (RD-G3b2-1).
+      // An engine or server lease of an `openai-codex` profile, never a
+      // Claude lease of either kind (RD-G3b2-1; G4 adds server leases).
+      const kind = leases.kindOf(leaseId);
       if (
-        leases.kindOf(leaseId) !== "engine" ||
+        (kind !== "engine" && kind !== "server") ||
         binding.provider !== "openai-codex"
       )
         return refuse(res, shape, { case: "forbidden" }, done, leaseId);
@@ -242,7 +244,10 @@ export function createForwarder(deps: ForwarderDeps): {
         leaseId,
       );
     }
-    if (binding.provider !== upstream.provider || !isAllowed(route, req.method))
+    if (
+      binding.provider !== upstream.provider ||
+      !isAllowed(route, req.method, leases.kindOf(leaseId))
+    )
       return refuse(res, shape, { case: "forbidden" }, done, leaseId);
     const credential = await readCredential(
       binding.provider,

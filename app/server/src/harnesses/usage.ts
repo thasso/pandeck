@@ -3,6 +3,11 @@
  * profile, read by the engine that signs that kind of account in. Each kind
  * reports its own snapshot shape, so the port keeps one entry per kind rather
  * than flattening them.
+ *
+ * Under the credential gateway OpenAI usage, credits and redemption go through
+ * it on the account's server lease (`gatewayLink.ts`); a gateway that cannot
+ * grant one fails the read, never falling back to the account's own token.
+ * Claude usage does not use the gateway yet.
  */
 import type { Harness } from "@assistant/shared";
 import {
@@ -15,9 +20,12 @@ import type {
   OpenAiUsageSnapshot,
 } from "@assistant/shared/usage";
 import { fetchClaudeSdkUsage } from "../claudeSdk/usageQuery.ts";
+import { serverGatewayAccess } from "../gatewayLink.ts";
 import {
   fetchOpenAiUsageForProfile,
+  fetchOpenAiUsageViaGateway,
   redeemOpenAiResetCreditForProfile,
+  redeemOpenAiResetCreditViaGateway,
   type RedeemResetOptions,
 } from "../piSdk/openaiUsageQuery.ts";
 
@@ -43,17 +51,23 @@ export function fetchClaudeAccountUsage(
 }
 
 /** Plan usage of an OpenAI account. */
-export function fetchOpenAiAccountUsage(
+export async function fetchOpenAiAccountUsage(
   profileId: string,
 ): Promise<OpenAiUsageSnapshot> {
-  return fetchOpenAiUsageForProfile(profileId);
+  const gateway = await serverGatewayAccess(profileId);
+  return gateway
+    ? fetchOpenAiUsageViaGateway(profileId, gateway)
+    : fetchOpenAiUsageForProfile(profileId);
 }
 
 /** Redeem one of an OpenAI account's reset credits. */
-export function redeemOpenAiResetCredit(
+export async function redeemOpenAiResetCredit(
   profileId: string,
   creditId: string,
   options?: RedeemResetOptions,
 ): Promise<OpenAiResetRedeemResult> {
-  return redeemOpenAiResetCreditForProfile(profileId, creditId, options);
+  const gateway = await serverGatewayAccess(profileId);
+  return gateway
+    ? redeemOpenAiResetCreditViaGateway(profileId, gateway, creditId, options)
+    : redeemOpenAiResetCreditForProfile(profileId, creditId, options);
 }

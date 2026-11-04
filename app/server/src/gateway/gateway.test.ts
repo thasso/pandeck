@@ -958,3 +958,129 @@ test("no log line holds a credential, lease token, query or body", async () => {
     ),
   );
 });
+
+/** A server lease of this boot, as the link grants one for one-shots and usage. */
+function grantServer(
+  gw: RunningGateway,
+  provider: LeaseProvider,
+  tokenFile: string,
+): { leaseId: string; token: string } {
+  return gw.leases.grant(
+    { profileId: `${provider}-work`, provider, tokenFile },
+    { kind: "server", owner: { serverBootId: "boot-fixture" } },
+  );
+}
+
+const WHAM_ROUTES = [
+  ["GET", "/backend-api/wham/usage"],
+  ["GET", "/backend-api/wham/rate-limit-reset-credits"],
+  ["POST", "/backend-api/wham/rate-limit-reset-credits/consume"],
+] as const;
+
+test("AC1: only a server lease reaches the wham usage, credits and consume routes", async () => {
+  const gw = await gateway();
+  const files = await tokenFiles();
+  const server = grantServer(gw, "openai-codex", files.codexFile).token;
+  const engine = grant(gw, "openai-codex", files.codexFile).token;
+
+  for (const [method, pathname] of WHAM_ROUTES) {
+    const reply = await send(gw.port, {
+      method,
+      path: `/chatgpt${pathname}`,
+      headers: { ...bearer(engine), "chatgpt-account-id": "forged" },
+      ...(method === "POST" ? { body: "{}" } : {}),
+    });
+    assert.equal(reply.status, 403, `${method} ${pathname}`);
+    assert.equal(
+      refusalMessage(reply, "codex", "permission_error"),
+      refusalText({ case: "forbidden" }),
+    );
+  }
+  assert.equal(upstreamRequests(), 0, "an engine lease reaches no wham route");
+
+  for (const [method, pathname] of WHAM_ROUTES) {
+    const reply = await send(gw.port, {
+      method,
+      path: `/chatgpt${pathname}`,
+      headers: { ...bearer(server), "chatgpt-account-id": "forged" },
+      ...(method === "POST" ? { body: '{"credit_id":"c1"}' } : {}),
+    });
+    assert.equal(reply.status, 200, `${method} ${pathname}`);
+  }
+  assert.deepEqual(
+    chatgpt.seen.map((seen) => [seen.method, seen.url]),
+    WHAM_ROUTES.map(([method, pathname]) => [method, pathname]),
+  );
+  for (const seen of chatgpt.seen) {
+    assert.equal(seen.headers.authorization, `Bearer ${CODEX_ACCESS}`);
+    assert.equal(seen.headers["chatgpt-account-id"], CODEX_ACCOUNT);
+  }
+});
+
+test("AC2: a server lease's extra routes match exactly and only its provider's", async () => {
+  const gw = await gateway();
+  const files = await tokenFiles();
+  const codex = grantServer(gw, "openai-codex", files.codexFile).token;
+  const claude = grantServer(gw, "claude", files.claudeFile).token;
+  const forbidden = refusalText({ case: "forbidden" });
+  for (const [method, path, token, shape] of [
+    ["GET", "/chatgpt/backend-api/wham/usage/../x", codex, "codex"],
+    ["GET", "/chatgpt/backend-api/wham/usageX", codex, "codex"],
+    ["POST", "/chatgpt/backend-api/wham/usage", codex, "codex"],
+    [
+      "GET",
+      "/chatgpt/backend-api/wham/rate-limit-reset-credits/consume",
+      codex,
+      "codex",
+    ],
+    [
+      "PUT",
+      "/chatgpt/backend-api/wham/rate-limit-reset-credits/consume",
+      codex,
+      "codex",
+    ],
+    ["GET", "/chatgpt/backend-api/wham/usage", claude, "codex"],
+    [
+      "POST",
+      "/chatgpt/backend-api/wham/rate-limit-reset-credits/consume",
+      claude,
+      "codex",
+    ],
+    ["GET", "/anthropic/backend-api/wham/usage", claude, "claude"],
+  ] as const) {
+    const reply = await send(gw.port, {
+      method,
+      path,
+      headers: bearer(token),
+      ...(method === "POST" || method === "PUT" ? { body: "{}" } : {}),
+    });
+    assert.equal(reply.status, 403, `${method} ${path}`);
+    assert.equal(
+      refusalMessage(reply, shape, "permission_error"),
+      forbidden,
+      `${method} ${path}`,
+    );
+  }
+  assert.equal(upstreamRequests(), 0);
+
+  // The model routes stay open to a server lease, as to an engine's.
+  const codexModel = await send(gw.port, {
+    path: CODEX_PATH,
+    headers: bearer(codex),
+    body: "{}",
+  });
+  assert.equal(codexModel.status, 200);
+  const claudeModel = await send(gw.port, {
+    path: CLAUDE_PATH,
+    headers: bearer(claude),
+    body: "{}",
+  });
+  assert.equal(claudeModel.status, 200);
+  assert.deepEqual(
+    [...chatgpt.seen, ...anthropic.seen].map((seen) => [seen.method, seen.url]),
+    [
+      ["POST", "/backend-api/codex/responses"],
+      ["POST", "/v1/messages"],
+    ],
+  );
+});

@@ -1159,7 +1159,11 @@ ships in phase 2, on the server's host. Its same-host form:
   Codex responses, `/compat` for the OpenAI-compatible endpoint's chat
   completions. A prefix allows only the exact method and path its engine sends,
   with no path normalisation; `/compat` allows only
-  `POST <base path>/chat/completions`, under the base path the server pushed.
+  `POST <base path>/chat/completions`, under the base path the server pushed. A
+  server lease also reaches `/chatgpt`'s usage routes, which no engine lease
+  does: `GET /backend-api/wham/usage`,
+  `GET /backend-api/wham/rate-limit-reset-credits` and the irreversible
+  `POST /backend-api/wham/rate-limit-reset-credits/consume`.
 - A lease token is JWT-shaped,
   `base64url(header).base64url(payload).base64url(secret)`, because pi's
   `openai-codex` provider accepts only a JWT that carries a ChatGPT account id.
@@ -1174,9 +1178,10 @@ ships in phase 2, on the server's host. Its same-host form:
   compatible endpoint's `Authorization` (`Bearer` and the pushed key), and
   strips `Set-Cookie` on the way back. pi talks SSE; the gateway refuses
   WebSocket upgrades.
-- `/compat` serves any live engine lease on an `openai-codex` profile, since
-  every pi engine under the switch holds one. It forwards over http or https as
-  the pushed base URL says, with the pushed key and never a token file.
+- `/compat` serves any live engine or server lease on an `openai-codex` profile,
+  since every pi engine and pi one-shot under the switch holds one. It forwards
+  over http or https as the pushed base URL says, with the pushed key and never
+  a token file.
 - A refusal the gateway answers itself (an unknown or revoked lease, a route the
   lease does not cover, an unreadable credential, an unreachable upstream, a
   `/compat` request before the server pushed its endpoint, which gets a 503) has
@@ -1380,15 +1385,31 @@ until the gateway runs as its own process.
     own runtimes. A change that keeps the base path keeps the registration, so
     an open engine follows a new endpoint and key; a new base path re-registers,
     and the old model is then refused.
+- **One-shots and Codex usage use a server lease** (G4a). The link grants one
+  server lease per profile per boot on first use (`serverAccess`), held in
+  memory and shared by every caller; a failed grant is forgotten and a removed
+  profile's entry is dropped, so the next call grants anew. A grant waits at
+  most 10 seconds for the link and fails with the engine open's text above.
+  - A Claude one-shot sets the engines' three variables over the profile's
+    scrub, with the server lease as `CLAUDE_CODE_OAUTH_TOKEN`.
+  - A pi one-shot runs on its own gateway port, as an engine does, over SSE,
+    disposed when it ends. A model the port does not serve for the profile fails
+    with the helper's no-model text before any session.
+  - Codex usage, reset credits and consume send the lease to `/chatgpt`'s usage
+    routes. The server reads only whether `auth.json` holds a Codex login and
+    when it expires; the token and account id are added by the gateway alone. A
+    marked refusal is thrown as its text, never mapped to a rejected or
+    forbidden login.
+  - Claude usage and compatible model discovery stay direct (G4b).
 - **The server's runtimes pair the compatible key with its origin.** Every pi
   runtime `models.ts` creates for sessions, the default profile's and each
   OpenAI profile's, is guarded per request whatever the switch
   (`serverCredentialPairing.ts`, over the same `credentialPairing.ts` guard).
-  Switch-off engines and one-shots under either switch run on them. An
-  OpenAI-compatible model gets the key only while the registered endpoint is on
-  the model's own origin, so a model held across a change to another origin is
-  refused with pi's `Provider is not configured` before it connects: the new key
-  never reaches the old endpoint, nor the old key the new one.
+  Switch-off engines and switch-off one-shots run on them. An OpenAI-compatible
+  model gets the key only while the registered endpoint is on the model's own
+  origin, so a model held across a change to another origin is refused with pi's
+  `Provider is not configured` before it connects: the new key never reaches the
+  old endpoint, nor the old key the new one.
   - A key rotation or a cleared key at the same endpoint, a path change on the
     same origin, and a disable behave as before. A key-less endpoint (the `none`
     placeholder) pairs no credential and is never refused.
@@ -1475,8 +1496,8 @@ CLI still talks only to the gateway.
     can too), as before.
   - With the switch on, engines no longer refresh their tokens, and no renewal
     exists before G5. An expired token gives upstream 401s, classified as today,
-    until a login, a direct CLI child (usage, one-shot) or the user's terminal
-    refreshes the file.
+    until a login, a direct CLI child (Claude usage, a switch-off one-shot) or
+    the user's terminal refreshes the file.
   - A missing or unreadable credential (for example `claude-default` never
     logged in) gets the gateway's 503. The CLI retries it for more than 22
     seconds instead of failing at once as not logged in (RD-G3a-3; G5 owns it).
@@ -1488,8 +1509,8 @@ CLI still talks only to the gateway.
   - After an OpenAI-compatible endpoint change to another origin, an open
     switch-off pi session on the old model fails with pi's
     `Provider is not configured` until the user reselects the model or reopens
-    the session (RD-1357-1). A one-shot running across such a change fails the
-    same way, with the switch on or off.
+    the session (RD-1357-1). A switch-off one-shot running across such a change
+    fails the same way.
   - With the switch off, a session on a non-default OpenAI profile reaches the
     new endpoint after a reselect only once that profile's runtime has the new
     settings: any model listing for the account, or a new session on it. Until
@@ -1507,9 +1528,9 @@ CLI still talks only to the gateway.
     settings change or restart; the link does not retry (G5).
   - In-process, the hosted engine shares the server's process: the key-less feed
     bounds the engine's dependencies, not its memory. The server's own runtimes
-    keep the key for compatible discovery, one-shots and usage, which stay
-    direct (G4) and carry the origin guard above. An endpoint reachable only
-    through a proxy in the server's environment is not measured.
+    keep the key for compatible discovery and switch-off one-shots, which stay
+    direct and carry the origin guard above. An endpoint reachable only through
+    a proxy in the server's environment is not measured.
   - A pi summary request may try one refused upgrade before SSE.
   - pi providers other than Codex and OpenAI-compatible, through an ambient
     environment key, behave as today. Model listing, catalog refresh and model
@@ -1709,11 +1730,12 @@ Claude engine sends its model requests through the gateway with its lease, a
 profile-less session as `claude-default`, and every pi engine sends its Codex
 requests and its OpenAI-compatible requests through it with its lease, both
 under the engine-version guard; the server pushes the compatible endpoint and
-key, held in the gateway's memory only. One-shots and usage queries do not use
-the gateway yet. It reads token files and never writes or refreshes them. The
-writer lane and login holds have landed, unused until the login flows hold their
-profile (G5): no hold is created and no lane item runs yet. Renewal, engine
-routing and its own service unit come in later slices.
+key, held in the gateway's memory only. Claude and pi one-shots and Codex usage,
+reset credits and consume go through it on a server lease per profile; Claude
+usage does not yet (G4b). It reads token files and never writes or refreshes
+them. The writer lane and login holds have landed, unused until the login flows
+hold their profile (G5): no hold is created and no lane item runs yet. Renewal,
+engine routing and its own service unit come in later slices.
 
 ## Open questions
 

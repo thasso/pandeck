@@ -12,6 +12,10 @@
  * Automatic account failures caused by limits or a dead login retry once on a
  * different account. Each measured attempt is recorded separately; returned
  * usage sums consumption, including any discarded first-attempt output.
+ *
+ * Under the credential gateway each attempt spends its account's server lease
+ * (`gatewayLink.ts`); a gateway that cannot grant one fails the attempt, never
+ * falling back to the account's own credential.
  */
 import {
   CLAUDE_SDK_PROVIDER,
@@ -27,10 +31,12 @@ import type { ClaudeUsage } from "../claudeSdk/messageMapper.ts";
 import type { AgentTool } from "../mcp/tool.ts";
 import {
   findPiModelExact,
+  PiGatewayModelUnavailableError,
   runPiOneShot,
   selectPiModelWithFallback,
   type PiRegistryModel,
 } from "../piSdk/oneShot.ts";
+import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import {
   observeAccountHealth,
@@ -292,6 +298,7 @@ async function runAttempt(
 async function runOnClaude(
   request: ResolvedOneShotRequest,
 ): Promise<EngineRun> {
+  const gateway = await serverGatewayAccess(request.credentialProfileId);
   const result = await runClaudeSdkOneShot({
     modelId: request.model.modelId,
     thinkingLevel: request.thinkingLevel,
@@ -303,6 +310,7 @@ async function runOnClaude(
     ...(request.tools ? { tools: request.tools } : {}),
     ...(request.maxTurns !== undefined ? { maxTurns: request.maxTurns } : {}),
     ...(request.documents ? { documents: request.documents } : {}),
+    ...(gateway ? { gateway } : {}),
   });
   return {
     harness: "claude-sdk",
@@ -325,21 +333,28 @@ async function runOnPi(
     throw new Error("Document input needs a Claude model.");
   const model = await piModelFor(request);
   assertCurrentEnterpriseAccount(request);
-  if (!model)
-    throw new NoHelperModelError(
-      request.noModelMessage ?? "No model is available for this helper run.",
-    );
+  if (!model) throw noHelperModel(request);
   onModel(model.provider, model.id);
-  const result = await runPiOneShot({
-    model,
-    credentialProfileId: request.credentialProfileId,
-    thinkingLevel: request.thinkingLevel,
-    systemPrompt: request.systemPrompt,
-    prompt: request.prompt,
-    timeoutMs: request.timeoutMs,
-    timeoutMessage: request.timeoutMessage,
-    ...(request.tools ? { tools: request.tools } : {}),
-  });
+  const gateway = await serverGatewayAccess(request.credentialProfileId);
+  let result;
+  try {
+    result = await runPiOneShot({
+      model,
+      credentialProfileId: request.credentialProfileId,
+      thinkingLevel: request.thinkingLevel,
+      systemPrompt: request.systemPrompt,
+      prompt: request.prompt,
+      timeoutMs: request.timeoutMs,
+      timeoutMessage: request.timeoutMessage,
+      ...(request.tools ? { tools: request.tools } : {}),
+      ...(gateway ? { gateway } : {}),
+    });
+  } catch (err) {
+    // The gateway serves the account no such model: as if it had none.
+    if (err instanceof PiGatewayModelUnavailableError)
+      throw noHelperModel(request);
+    throw err;
+  }
   return {
     harness: "pi",
     recordedProvider: "pi",
@@ -356,6 +371,23 @@ async function runOnPi(
         }
       : {}),
   };
+}
+
+/**
+ * The attempt's server lease under the gateway, else undefined. The link loads
+ * on the first run: its static reach includes pi's SDK.
+ */
+async function serverGatewayAccess(
+  profileId: string,
+): Promise<EngineGatewayAccess | undefined> {
+  const { serverGatewayAccess } = await import("../gatewayLink.ts");
+  return serverGatewayAccess(profileId);
+}
+
+function noHelperModel(request: ResolvedOneShotRequest): NoHelperModelError {
+  return new NoHelperModelError(
+    request.noModelMessage ?? "No model is available for this helper run.",
+  );
 }
 
 function assertCurrentEnterpriseAccount(request: ResolvedOneShotRequest): void {

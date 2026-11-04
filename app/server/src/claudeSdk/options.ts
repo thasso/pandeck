@@ -41,6 +41,7 @@ import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
 import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
 import {
   claudeChildEnvironment,
+  claudeGatewayEnvironment,
   type ClaudeProfileRuntime,
 } from "../claudeChildEnvironment.ts";
 import {
@@ -469,14 +470,7 @@ export function claudeQueryEnvironment(
     { ...claudeChildEnvironment(base, spec.profile), ...spec.set },
     spec.dropAutoCompactWindow === true,
   );
-  return gateway
-    ? {
-        ...env,
-        ANTHROPIC_BASE_URL: `${gateway.baseUrl}/anthropic`,
-        CLAUDE_CODE_OAUTH_TOKEN: gateway.leaseToken,
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-      }
-    : env;
+  return gateway ? claudeGatewayEnvironment(env, gateway) : env;
 }
 
 function boundedQueryEnvironment(

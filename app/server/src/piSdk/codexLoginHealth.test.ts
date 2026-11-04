@@ -276,9 +276,9 @@ test("a connected client's failed Codex run revalidates usage and publishes its 
       fetchOpenAiUsage({
         now: Date.now,
         readAuth: async () => ({
-          access: token,
-          accountId: "test-account",
           expires: null,
+          base: "https://chatgpt.com/backend-api/wham",
+          headers: { Authorization: `Bearer ${token}` },
         }),
         fetchUsage: async () => ({ status: 401, body: {} }),
       }),

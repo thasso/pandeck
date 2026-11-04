@@ -8,10 +8,18 @@
  * `/status` uses. READ-ONLY: we never refresh the token. A missing/expired
  * token degrades to `available: false` with a hint to re-run pi, rather than an
  * error, so the UI can show a friendly state.
+ *
+ * Under the credential gateway the same requests go to its `/chatgpt` prefix
+ * with the server's lease as the bearer; the gateway adds the token and
+ * account id. The server then reads only whether `auth.json` holds a Codex
+ * login and when it expires. A gateway refusal (its marker) is a temporary
+ * failure, never a rejected login.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { piAgentDir } from "../credentialProfiles.ts";
+import { gatewayRefusalText } from "../providerErrors.ts";
+import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
 import { randomUUID } from "node:crypto";
 import type {
   OpenAiResetCredit,
@@ -22,9 +30,6 @@ import type {
 } from "@assistant/shared/usage";
 
 const BACKEND_BASE = "https://chatgpt.com/backend-api/wham";
-const USAGE_URL = `${BACKEND_BASE}/usage`;
-const RESET_CREDITS_URL = `${BACKEND_BASE}/rate-limit-reset-credits`;
-const CONSUME_URL = `${BACKEND_BASE}/rate-limit-reset-credits/consume`;
 
 /** The `openai-codex` OAuth entry we read out of pi's auth store. */
 interface PiCodexAuth {
@@ -34,17 +39,26 @@ interface PiCodexAuth {
   expires: number | null;
 }
 
+/** Where a profile's wham requests go and what they carry. */
+interface CodexBackend {
+  /** Epoch ms of access-token expiry, when pi recorded it. */
+  expires: number | null;
+  /** The wham base: chatgpt.com's, or the gateway's. */
+  base: string;
+  headers: Record<string, string>;
+}
+
 type HttpResult = { status: number; body: unknown };
 
 /** Injectable dependencies so tests never touch the real filesystem or network. */
 export interface OpenAiUsageDeps {
-  readAuth: () => Promise<PiCodexAuth | null>;
-  fetchUsage: (auth: PiCodexAuth) => Promise<HttpResult>;
+  readAuth: () => Promise<CodexBackend | null>;
+  fetchUsage: (backend: CodexBackend) => Promise<HttpResult>;
   /** Best-effort per-credit inventory (expiries); a failure degrades to counts-only. */
-  fetchResetCredits: (auth: PiCodexAuth) => Promise<HttpResult>;
+  fetchResetCredits: (backend: CodexBackend) => Promise<HttpResult>;
   /** IRREVERSIBLE redeem POST; only called from `redeemOpenAiResetCredit`. */
   postConsume: (
-    auth: PiCodexAuth,
+    backend: CodexBackend,
     creditId: string,
     redeemRequestId: string,
   ) => Promise<HttpResult>;
@@ -57,9 +71,8 @@ function piAuthPath(profileId = "default"): string {
   return join(piAgentDir(profileId), "auth.json");
 }
 
-async function readPiCodexAuth(
-  profileId = "default",
-): Promise<PiCodexAuth | null> {
+/** The profile's Codex login, or null without one. */
+async function readCodexLogin(profileId: string): Promise<PiCodexAuth | null> {
   let raw: string;
   try {
     raw = await readFile(piAuthPath(profileId), "utf8");
@@ -86,15 +99,59 @@ async function readPiCodexAuth(
 }
 
 /** The ChatGPT web backend expects a browser-ish origin alongside the bearer token. */
-function backendHeaders(auth: PiCodexAuth): Record<string, string> {
-  return {
-    Authorization: `Bearer ${auth.access}`,
-    Accept: "application/json",
-    "ChatGPT-Account-Id": auth.accountId,
-    Origin: "https://chatgpt.com",
-    Referer: "https://chatgpt.com/",
-    "User-Agent": "Mozilla/5.0",
-  };
+const BROWSER_HEADERS = {
+  Origin: "https://chatgpt.com",
+  Referer: "https://chatgpt.com/",
+  "User-Agent": "Mozilla/5.0",
+};
+
+/** chatgpt.com directly, with the profile's own token and account id. */
+async function readPiCodexAuth(
+  profileId = "default",
+): Promise<CodexBackend | null> {
+  const auth = await readCodexLogin(profileId);
+  return (
+    auth && {
+      expires: auth.expires,
+      base: BACKEND_BASE,
+      headers: {
+        Authorization: `Bearer ${auth.access}`,
+        Accept: "application/json",
+        "ChatGPT-Account-Id": auth.accountId,
+        ...BROWSER_HEADERS,
+      },
+    }
+  );
+}
+
+/**
+ * Whether the profile holds a Codex login, and its expiry: never the token
+ * or account id, which only the gateway reads (RD-G4-3).
+ */
+export async function readPiCodexMeta(
+  profileId: string,
+): Promise<{ expires: number | null } | null> {
+  const auth = await readCodexLogin(profileId);
+  return auth && { expires: auth.expires };
+}
+
+/** The gateway's `/chatgpt`, with the server lease: the gateway adds the rest. */
+async function readGatewayBackend(
+  profileId: string,
+  access: EngineGatewayAccess,
+): Promise<CodexBackend | null> {
+  const meta = await readPiCodexMeta(profileId);
+  return (
+    meta && {
+      expires: meta.expires,
+      base: `${access.baseUrl}/chatgpt/backend-api/wham`,
+      headers: {
+        Authorization: `Bearer ${access.leaseToken}`,
+        Accept: "application/json",
+        ...BROWSER_HEADERS,
+      },
+    }
+  );
 }
 
 async function readHttpResult(res: Response): Promise<HttpResult> {
@@ -108,32 +165,35 @@ async function readHttpResult(res: Response): Promise<HttpResult> {
   return { status: res.status, body };
 }
 
-async function fetchUsageOverHttp(auth: PiCodexAuth): Promise<HttpResult> {
+async function fetchUsageOverHttp(backend: CodexBackend): Promise<HttpResult> {
   return readHttpResult(
-    await fetch(USAGE_URL, { method: "GET", headers: backendHeaders(auth) }),
+    await fetch(`${backend.base}/usage`, {
+      method: "GET",
+      headers: backend.headers,
+    }),
   );
 }
 
 async function fetchResetCreditsOverHttp(
-  auth: PiCodexAuth,
+  backend: CodexBackend,
 ): Promise<HttpResult> {
   return readHttpResult(
-    await fetch(RESET_CREDITS_URL, {
+    await fetch(`${backend.base}/rate-limit-reset-credits`, {
       method: "GET",
-      headers: backendHeaders(auth),
+      headers: backend.headers,
     }),
   );
 }
 
 async function postConsumeOverHttp(
-  auth: PiCodexAuth,
+  backend: CodexBackend,
   creditId: string,
   redeemRequestId: string,
 ): Promise<HttpResult> {
   return readHttpResult(
-    await fetch(CONSUME_URL, {
+    await fetch(`${backend.base}/rate-limit-reset-credits/consume`, {
       method: "POST",
-      headers: { ...backendHeaders(auth), "Content-Type": "application/json" },
+      headers: { ...backend.headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         credit_id: creditId,
         redeem_request_id: redeemRequestId,
@@ -403,6 +463,7 @@ export async function fetchOpenAiUsage(
   }
 
   const { status, body } = await fetchUsage(auth);
+  throwGatewayRefusal(body);
   if (status === 401) {
     return unavailable(
       "OpenAI rejected this profile login token (expired or invalid). Reconnect it in Settings.",
@@ -451,6 +512,25 @@ export async function fetchOpenAiUsageForProfile(
   return fetchOpenAiUsage({ readAuth: () => readPiCodexAuth(profileId) });
 }
 
+/** {@link fetchOpenAiUsageForProfile} through the gateway, on the server lease. */
+export async function fetchOpenAiUsageViaGateway(
+  profileId: string,
+  access: EngineGatewayAccess,
+): Promise<OpenAiUsageSnapshot> {
+  return fetchOpenAiUsage({
+    readAuth: () => readGatewayBackend(profileId, access),
+  });
+}
+
+/**
+ * A gateway's own refusal throws its text: it says nothing about the login,
+ * so it never maps to `rejected`, `forbidden` or "Reconnect" (RD-G4-1).
+ */
+function throwGatewayRefusal(body: unknown): void {
+  const refusal = gatewayRefusalText(body);
+  if (refusal !== undefined) throw new Error(refusal);
+}
+
 /** How a redemption treats OpenAI's "nothing to reset right now" signal. */
 export interface RedeemResetOptions {
   /**
@@ -478,6 +558,20 @@ export async function redeemOpenAiResetCreditForProfile(
   return redeemOpenAiResetCredit(
     creditId,
     { readAuth: () => readPiCodexAuth(profileId) },
+    options,
+  );
+}
+
+/** {@link redeemOpenAiResetCreditForProfile} through the gateway, on the server lease. */
+export async function redeemOpenAiResetCreditViaGateway(
+  profileId: string,
+  access: EngineGatewayAccess,
+  creditId: string,
+  options: RedeemResetOptions = {},
+): Promise<OpenAiResetRedeemResult> {
+  return redeemOpenAiResetCredit(
+    creditId,
+    { readAuth: () => readGatewayBackend(profileId, access) },
     options,
   );
 }
@@ -513,6 +607,7 @@ export async function redeemOpenAiResetCredit(
 
   if (options.requireApplicable ?? true) {
     const usage = await fetchUsage(auth);
+    throwGatewayRefusal(usage.body);
     if (usage.status === 401 || usage.status === 403) {
       throw new Error(
         "OpenAI rejected this profile login token. Reconnect it in Settings.",
@@ -533,6 +628,7 @@ export async function redeemOpenAiResetCredit(
     trimmed,
     options.redeemRequestId ?? newRequestId(),
   );
+  throwGatewayRefusal(body);
   if (status === 401 || status === 403) {
     throw new Error(
       "OpenAI rejected this profile login token. Reconnect it in Settings.",

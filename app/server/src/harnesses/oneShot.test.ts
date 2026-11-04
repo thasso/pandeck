@@ -20,9 +20,15 @@ import {
 } from "../accountHealth.ts";
 import {
   findPiModelExact,
+  PiGatewayModelUnavailableError,
   runPiOneShot,
   selectPiModelWithFallback,
 } from "../piSdk/oneShot.ts";
+import {
+  GATEWAY_UNAVAILABLE_TEXT,
+  serverGatewayAccess,
+} from "../gatewayLink.ts";
+import { isLoginDeath } from "../providerErrors.ts";
 import {
   NoHelperModelError,
   OneShotError,
@@ -38,6 +44,7 @@ vi.mock("../piSdk/oneShot.ts", () => ({
   findPiModelExact: vi.fn(),
   runPiOneShot: vi.fn(),
   selectPiModelWithFallback: vi.fn(),
+  PiGatewayModelUnavailableError: class PiGatewayModelUnavailableError extends Error {},
 }));
 vi.mock("../accountHealth.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../accountHealth.ts")>()),
@@ -54,6 +61,11 @@ vi.mock("../credentialProfiles.ts", async (importOriginal) => ({
   credentialProfileById: vi.fn(),
 }));
 vi.mock("../accountRouter.ts", () => ({ pickAccount: vi.fn() }));
+// Reset to undefined before each test: the switch off, unless a test says.
+vi.mock("../gatewayLink.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gatewayLink.ts")>()),
+  serverGatewayAccess: vi.fn(),
+}));
 vi.mock("../db/sessionStore.ts", () => ({
   sessionStore: {
     createInternalUsageSession: vi.fn(),
@@ -1193,3 +1205,171 @@ test("the missing-model message defaults when the caller gives none", async () =
       err.message === "No model is available for this helper run.",
   );
 });
+
+test.each(["failed", "not ready"] as const)(
+  "AC7: a %s gateway link fails either engine's one-shot with U7's text, never on the account's own credential",
+  async (state) => {
+    const actual =
+      await vi.importActual<typeof import("../gatewayLink.ts")>(
+        "../gatewayLink.ts",
+      );
+    vi.mocked(serverGatewayAccess).mockImplementation(
+      actual.serverGatewayAccess,
+    );
+    if (state === "not ready")
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const lines: string[] = [];
+    let endStart = (): void => {};
+    const dir = mkdtempSync(join(tmpdir(), "one-shot-link-"));
+    directories.push(dir);
+    const link = actual.startGatewayLink({
+      stateDir: join(dir, "state"),
+      port: 0,
+      log: (line) => lines.push(line),
+      start: () =>
+        state === "failed"
+          ? Promise.reject(new Error("the fixture's gateway did not start"))
+          : new Promise((_resolve, reject) => {
+              endStart = () => reject(new Error("the test ends the start"));
+            }),
+    });
+    try {
+      for (const provider of ["claude-sdk", "openai-codex"]) {
+        vi.mocked(reportAccountRunFailure).mockClear();
+        const run = runOneShot(
+          request({
+            credentialProfileId: undefined,
+            model: { provider, modelId: "model-1" },
+          }),
+        );
+        let outcome: { err: unknown } | undefined;
+        void run.then(
+          () => (outcome = { err: undefined }),
+          (err: unknown) => (outcome = { err }),
+        );
+        // The link loads on the run's first need: wait for its 10 s timer.
+        while (!outcome) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          if (state === "not ready") await vi.advanceTimersByTimeAsync(1_000);
+        }
+        const { err } = outcome;
+        assert.ok(err instanceof Error, provider);
+        assert.equal(err.message, GATEWAY_UNAVAILABLE_TEXT);
+        assert.equal(isLoginDeath(err.message, { provider }), false);
+        const failure = vi.mocked(reportAccountRunFailure).mock.calls[0]?.[1];
+        assert.equal(failure?.loginDeath, undefined, provider);
+        assert.ok(
+          failure?.kind !== "quota" && failure?.kind !== "rate_limit",
+          provider,
+        );
+      }
+      assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+      assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
+      assert.equal(vi.mocked(runPiOneShot).mock.calls.length, 0);
+    } finally {
+      vi.useRealTimers();
+      endStart();
+      await link.close();
+    }
+  },
+);
+
+test("AC13: with the switch off the engines get exactly today's inputs", async () => {
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  vi.mocked(runPiOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  await runOneShot(
+    request({ model: { provider: "claude-sdk", modelId: "s" } }),
+  );
+  await runOneShot(request());
+  assert.deepEqual(vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0], {
+    modelId: "s",
+    thinkingLevel: "low",
+    credentialProfileId: "profile-1",
+    systemPrompt: "system",
+    prompt: "prompt",
+    timeoutMs: 1_000,
+    timeoutMessage: "Timed out.",
+  });
+  assert.deepEqual(vi.mocked(runPiOneShot).mock.calls[0]?.[0], {
+    model: piModel,
+    credentialProfileId: "profile-1",
+    thinkingLevel: "low",
+    systemPrompt: "system",
+    prompt: "prompt",
+    timeoutMs: 1_000,
+    timeoutMessage: "Timed out.",
+  });
+});
+
+test.each(["claude-sdk", "openai-codex"])(
+  "AC13: under the switch each %s attempt spends its own account's server lease, the retry too",
+  async (provider) => {
+    vi.mocked(serverGatewayAccess).mockImplementation(async (profileId) => ({
+      baseUrl: "http://127.0.0.1:9",
+      leaseToken: `lease-of-${profileId}`,
+    }));
+    const quota = { text: "", usage: {}, failure: "quota exceeded" };
+    vi.mocked(runClaudeSdkOneShot)
+      .mockResolvedValueOnce(quota)
+      .mockResolvedValueOnce({ text: "ok", usage: {} });
+    vi.mocked(runPiOneShot)
+      .mockResolvedValueOnce({
+        text: "",
+        usage: {},
+        stopReason: "error",
+        errorMessage: "quota exceeded",
+      })
+      .mockResolvedValueOnce({ text: "ok", usage: {} });
+    const result = await runOneShot(
+      request({
+        credentialProfileId: undefined,
+        model: { provider, modelId: "model-1" },
+      }),
+    );
+    assert.equal(result.text, "ok");
+    const calls = (
+      provider === "claude-sdk"
+        ? vi.mocked(runClaudeSdkOneShot).mock.calls
+        : vi.mocked(runPiOneShot).mock.calls
+    ).map(([input]) => [input.credentialProfileId, input.gateway]);
+    assert.deepEqual(calls, [
+      [
+        "automatic-1",
+        { baseUrl: "http://127.0.0.1:9", leaseToken: "lease-of-automatic-1" },
+      ],
+      [
+        "automatic-2",
+        { baseUrl: "http://127.0.0.1:9", leaseToken: "lease-of-automatic-2" },
+      ],
+    ]);
+    assert.deepEqual(vi.mocked(serverGatewayAccess).mock.calls, [
+      ["automatic-1"],
+      ["automatic-2"],
+    ]);
+  },
+);
+
+test.each([
+  ["No model for this helper.", "No model for this helper."],
+  [undefined, "No model is available for this helper run."],
+])(
+  "AC13: a model the gateway does not serve is the helper's no-model refusal (%s)",
+  async (noModelMessage, expected) => {
+    vi.mocked(serverGatewayAccess).mockResolvedValue({
+      baseUrl: "http://127.0.0.1:9",
+      leaseToken: "lease",
+    });
+    vi.mocked(runPiOneShot).mockRejectedValue(
+      new PiGatewayModelUnavailableError(),
+    );
+    const { noModelMessage: _omitted, ...rest } = request();
+    await assert.rejects(
+      () =>
+        runOneShot(
+          noModelMessage === undefined ? rest : { ...rest, noModelMessage },
+        ),
+      (err: unknown) =>
+        err instanceof NoHelperModelError && err.message === expected,
+    );
+  },
+);
