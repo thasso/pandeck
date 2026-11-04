@@ -98,10 +98,13 @@ it("keeps the newer change list when an older request answers last", async () =>
     entry && "response" in entry ? entry.response.files[0]?.path : null,
   ).toBe("new.ts");
 
-  // A late failure of the older one does not replace it either.
+  // A late failure of a superseded, still-pending request does not replace
+  // the newer answer either.
   await act(async () => root.render(<Probe statuses={status(3)} />));
-  await act(async () => requests[2]!.resolve(changes("newest.ts")));
-  await act(async () => requests[1]!.reject(new Error("stale")));
+  await act(async () => root.render(<Probe statuses={status(4)} />));
+  expect(requests).toHaveLength(4);
+  await act(async () => requests[3]!.resolve(changes("newest.ts")));
+  await act(async () => requests[2]!.reject(new Error("stale")));
   const after = sets["wt-1:uncommitted"];
   expect(
     after && "response" in after ? after.response.files[0]?.path : null,
