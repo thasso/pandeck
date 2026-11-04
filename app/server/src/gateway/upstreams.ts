@@ -6,7 +6,8 @@
  * no normalisation, so `/v1/messages/../x` and `/v1/messagesX` never match. A
  * later slice widens an allowlist only with engine contract-test evidence.
  * A server lease also gets its upstream's `serverAllowed`: v06's usage routes,
- * which an engine lease never reaches.
+ * `/anthropic`'s `GET /api/oauth/usage` and `/chatgpt`'s wham routes, which an
+ * engine lease never reaches.
  *
  * `/compat` is the OpenAI-compatible endpoint the server pushed: its origin
  * and base path come from the push (`compatUpstream.ts`), and it allows only
@@ -45,7 +46,8 @@ const UPSTREAMS: readonly Upstream[] = [
     host: "api.anthropic.com",
     label: "Anthropic",
     allowed: [{ method: "POST", pathname: "/v1/messages" }],
-    serverAllowed: [],
+    // The server's Claude usage read (G4b); never refreshed.
+    serverAllowed: [{ method: "GET", pathname: "/api/oauth/usage" }],
   },
   {
     kind: "provider",

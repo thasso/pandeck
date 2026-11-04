@@ -313,7 +313,9 @@ async function runFetch(entry: CacheEntry): Promise<UsageSnapshot> {
       entry.nextAttemptAt = entry.fetchedAt + policy.minIntervalMs;
       entry.lastError = null;
       entry.dirty = false;
-      writePersisted(entry);
+      // A profile deleted during the read keeps only this detached entry: its
+      // numbers must not come back from disk.
+      if (entries.get(entry.profileId) === entry) writePersisted(entry);
       return snapshot;
     })
     .catch((err: unknown) => {

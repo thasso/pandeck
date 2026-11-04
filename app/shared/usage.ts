@@ -3,7 +3,8 @@
  *
  * - Claude (`ClaudeUsageSnapshot`): the Claude Agent SDK's experimental
  *   `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET` control request
- *   (the data behind the CLI's `/usage` command).
+ *   (the data behind the CLI's `/usage` command); under the credential gateway,
+ *   the server's own `GET /api/oauth/usage` through it, translated the same way.
  * - OpenAI (`OpenAiUsageSnapshot`): the ChatGPT backend `/backend-api/wham/usage`
  *   endpoint, authed with the OAuth token the user logged pi in with.
  *

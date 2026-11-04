@@ -260,6 +260,10 @@ SDK option construction, stream/message mapping, persistence, and tests.
   starts and can answer the control request without ever running a model turn
   (no tokens spent). It passes `skipBehaviors: true`, so the CLI does not scan
   local transcripts for the `behaviors` section, which nothing reads.
+- `usageViaGateway.ts` is that fetch under the credential gateway
+  (`fetchClaudeUsageViaGateway`): one `GET /anthropic/api/oauth/usage` on the
+  profile's server lease, with no CLI child, translated from the raw body as the
+  control request does (`mapClaudeUsageBody`, reusing `mapClaudeUsageResponse`).
   `mapClaudeUsageResponse` defensively projects the loosely-typed raw response
   into the stable `@assistant/shared/usage` `ClaudeUsageSnapshot` shape.
   Test-seam override mirrors `oneShot.ts`'s pattern (`setClaudeSdkUsageSeam`).

@@ -46,6 +46,9 @@ const ALL_NATIVE_TOOLS = [
   "NotebookEdit",
 ];
 
+/** A Claude usage read that outlived its timeout, by either path. */
+export const CLAUDE_USAGE_TIMEOUT_TEXT = "Fetching Claude usage timed out.";
+
 /** Test seam override; defaults to the real installed SDK. */
 let seamFactory: () => Promise<ClaudeSdkSeam> = buildRealClaudeSdkSeam;
 
@@ -224,7 +227,7 @@ export async function fetchClaudeSdkUsage(
       });
     return mapClaudeUsageResponse(raw);
   } catch (err) {
-    if (timedOut) throw new Error("Fetching Claude usage timed out.");
+    if (timedOut) throw new Error(CLAUDE_USAGE_TIMEOUT_TEXT);
     throw err instanceof Error ? err : new Error(String(err));
   } finally {
     clearTimeout(timer);

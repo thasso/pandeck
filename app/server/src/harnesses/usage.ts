@@ -4,10 +4,10 @@
  * reports its own snapshot shape, so the port keeps one entry per kind rather
  * than flattening them.
  *
- * Under the credential gateway OpenAI usage, credits and redemption go through
- * it on the account's server lease (`gatewayLink.ts`); a gateway that cannot
- * grant one fails the read, never falling back to the account's own token.
- * Claude usage does not use the gateway yet.
+ * Under the credential gateway Claude usage, and OpenAI usage, credits and
+ * redemption, go through it on the account's server lease (`gatewayLink.ts`),
+ * Claude's with no CLI child; a gateway that cannot grant one fails the read,
+ * never falling back to the account's own token or the CLI.
  */
 import type { Harness } from "@assistant/shared";
 import {
@@ -20,6 +20,7 @@ import type {
   OpenAiUsageSnapshot,
 } from "@assistant/shared/usage";
 import { fetchClaudeSdkUsage } from "../claudeSdk/usageQuery.ts";
+import { fetchClaudeUsageViaGateway } from "../claudeSdk/usageViaGateway.ts";
 import { serverGatewayAccess } from "../gatewayLink.ts";
 import {
   fetchOpenAiUsageForProfile,
@@ -43,11 +44,14 @@ export function usageProfileForSession(
 }
 
 /** Plan usage of a Claude account. */
-export function fetchClaudeAccountUsage(
+export async function fetchClaudeAccountUsage(
   profileId: string,
   timeoutMs: number,
 ): Promise<ClaudeUsageSnapshot> {
-  return fetchClaudeSdkUsage(timeoutMs, profileId);
+  const gateway = await serverGatewayAccess(profileId);
+  return gateway
+    ? fetchClaudeUsageViaGateway(profileId, gateway, timeoutMs)
+    : fetchClaudeSdkUsage(timeoutMs, profileId);
 }
 
 /** Plan usage of an OpenAI account. */

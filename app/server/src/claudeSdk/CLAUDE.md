@@ -1,10 +1,12 @@
-<!-- instruction-budget: bytes=4096 reason="Eighteen bullets, each a distinct silent-failure mode. The newest: a resumed CLI's startup result ended the turn before its prompt ran, and every resume re-billed the restored cost-state. canUseTool: org-managed settings downgrade bypass and every pa tool call is denied with no prompt. Append-only timeline; steer follow-ups." task=peer-message-trigger date=2026-10-13 -->
+<!-- instruction-budget: bytes=4096 reason="Eighteen bullets, each a distinct silent-failure mode: resume results, cost-state re-billing, canUseTool under managed settings, the append-only timeline, steers, the G4b usage exception." task=peer-message-trigger date=2026-10-13 -->
 
 # Claude SDK harness
 
 - The official Claude CLI provisions profiles. PA never owns OAuth, calls
-  undocumented auth controls, or exposes credentials. `claudeProfileEnvironment`
-  scrubs inherited credential variables.
+  undocumented auth controls, or exposes credentials; the one exception is the
+  usage read `GET /api/oauth/usage` through the gateway on a server lease, which
+  never refreshes (G4b). `claudeProfileEnvironment` scrubs inherited credential
+  variables.
 - Do not double-count output: live deltas build visible text; committed
   assistant messages carry metadata and tool openings. A synthetic assistant
   `error` is never streamed, so its text (a provider failure's only wording)
