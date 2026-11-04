@@ -1039,19 +1039,21 @@ one scroll, Files is the open file (or the README), and the file tree lives in
 the left sidebar on the route. The page has no tabs, rail or by-file review. A
 narrow column — the panel, a phone — has no sidebar beside it, so its header
 adds **Browse files** and, on Changes, **Jump to file**, each opening a sheet
-over the page, and its diffs are unified. In a panel those sheets are bound to
-the panel (`EdgeSheetContainer`) rather than dropped over the whole app, since
-this panel exists to sit beside what the reader is comparing against. Moving
-inside it (a view, a file, a diff scope) is panel state and never touches the
-address bar, which keeps naming the main pane's object. Like the tabs, that
-place is kept in `sessionStorage` (per worktree here, so a session brought back
-reopens its worktree where it was) and survives a reload; its one action hands
-the worktree, at the view it is on, to the main pane. A session with no
-worktree, and one whose worktree is gone, each say so rather than drawing an
-empty page. The tab bar is panel chrome, not a second object-title row. On small
-layouts none of this tab state exists: the right panel remains the direct
-flip-up Inspector dock, and a Knowledge card there offers its route alone. Top
-to bottom, for the current main-pane object:
+over the page, and its diffs are unified. A sheet is bound to the pane that
+opened it (`EdgeSheetContainer`) rather than dropped over the whole app: in a
+panel it covers the panel, which exists to sit beside what the reader is
+comparing against, and on a wide layout the main pane's sheets (a file's History
+included) cover the main pane and leave the sidebars visible. Only a phone's
+sheets cover the screen. Moving inside it (a view, a file, a diff scope) is
+panel state and never touches the address bar, which keeps naming the main
+pane's object. Like the tabs, that place is kept in `sessionStorage` (per
+worktree here, so a session brought back reopens its worktree where it was) and
+survives a reload; its one action hands the worktree, at the view it is on, to
+the main pane. A session with no worktree, and one whose worktree is gone, each
+say so rather than drawing an empty page. The tab bar is panel chrome, not a
+second object-title row. On small layouts none of this tab state exists: the
+right panel remains the direct flip-up Inspector dock, and a Knowledge card
+there offers its route alone. Top to bottom, for the current main-pane object:
 
 1. **Summary** — type, title, key status.
 2. **Related objects** — the object's references resolved and rendered as links

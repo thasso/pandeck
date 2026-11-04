@@ -2211,29 +2211,31 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   against a spurious cross-scope 400 is gone with it), the Review diff and the
   Files source/`vs base` pivot key on the PATH as well, so opening another file
   draws its own placeholder instead of the previous file's diff or source. The
-  Files view's History pivot (`worktree/FileHistoryList.tsx`) lists the commits
-  that touched the file and opens one as a Changes range (`parentOid..oid` on
-  the file's path at that commit), so a commit's change reuses the Review diff
-  surface rather than a second one. The worktree status `updatedAt` is an
-  invalidation TOKEN, not part of the key (`useReloadOnToken`): a watcher push
-  refreshes what is on screen and marks it with a `RefreshIndicator`, and a
-  failed refresh keeps the diff/source readable under an `ErrorNote` whose frame
-  is rendered unconditionally (a wrapper appearing with the note would remount
-  the pierre surface — see the Knowledge entry above for the same rule). Each
-  pane marks the request that belongs to IT: the rail subtitle covers the
-  changed-file LIST, the Review toolbar the shown diff, the Files header/detail
-  bar the source or the `vs base` diff, whichever is on screen. Retry counts as
-  such a refresh, and is the case that most needs the marker — the note
-  disappears on the click. The `ErrorNote`'s danger tone is reserved for actual
-  failures: "Binary file.", "No changed file selected." and the server's "not
-  changed in this scope" (an empty answer dressed as a failure, and the everyday
-  case for the `vs base` pivot) are facts about the content and stay muted
-  notes. The file TREE is a lazily filled cache of directories rather than one
-  query, so its refresh is per DIRECTORY: a token bump re-reads every directory
-  already loaded and swaps each in when it answers (`pruneVanishedTreeDirs` then
-  drops a folder's cached children once its parent's fresh listing no longer has
-  it), leaving the rows and the expansion alone. Dropping the cache first —
-  which is what it used to do — blanked the tree to skeletons on a bump that
+  Files view's History button opens a sheet (`FileHistorySheet`, the browse
+  sheet's twin) listing the commits that touched the file
+  (`worktree/FileHistoryList.tsx`) under a Current version row; picking one
+  shows that commit's change in place (`parentOid..oid` on the file's path at
+  that commit, keyed like the `vs base` pivot) under a commit bar, on the same
+  diff surface. The worktree status `updatedAt` is an invalidation TOKEN, not
+  part of the key (`useReloadOnToken`): a watcher push refreshes what is on
+  screen and marks it with a `RefreshIndicator`, and a failed refresh keeps the
+  diff/source readable under an `ErrorNote` whose frame is rendered
+  unconditionally (a wrapper appearing with the note would remount the pierre
+  surface — see the Knowledge entry above for the same rule). Each pane marks
+  the request that belongs to IT: the rail subtitle covers the changed-file
+  LIST, the Review toolbar the shown diff, the Files header/detail bar the
+  source or the `vs base` diff, whichever is on screen. Retry counts as such a
+  refresh, and is the case that most needs the marker — the note disappears on
+  the click. The `ErrorNote`'s danger tone is reserved for actual failures:
+  "Binary file.", "No changed file selected." and the server's "not changed in
+  this scope" (an empty answer dressed as a failure, and the everyday case for
+  the `vs base` pivot) are facts about the content and stay muted notes. The
+  file TREE is a lazily filled cache of directories rather than one query, so
+  its refresh is per DIRECTORY: a token bump re-reads every directory already
+  loaded and swaps each in when it answers (`pruneVanishedTreeDirs` then drops a
+  folder's cached children once its parent's fresh listing no longer has it),
+  leaving the rows and the expansion alone. Dropping the cache first — which is
+  what it used to do — blanked the tree to skeletons on a bump that
   `computeWorktreeStatus` stamps on every scan, i.e. shortly after every open.
   Reads are deduplicated per directory and stamped with a tree GENERATION, so a
   run of pushes cannot pile duplicate git reads and a read still out for the

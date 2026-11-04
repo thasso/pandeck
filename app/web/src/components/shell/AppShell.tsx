@@ -27,6 +27,7 @@ import {
 } from "./panelSizing.ts";
 import { usesOverlayTitlebar } from "../../lib/nativeShell.ts";
 import { edgeSwipeParallax } from "./edgeSwipe.ts";
+import { EdgeSheetContainer } from "../common/EdgeSheet.tsx";
 import {
   EDGE_SWIPE_COMMIT_MS,
   EDGE_SWIPE_SETTLE_MS,
@@ -484,7 +485,14 @@ export function AppShell({
                 rightDock === "expanded")
             }
           >
-            {children}
+            {/* A sheet opened in the main pane covers the main pane, as a side
+              panel's covers its panel; a phone's covers the screen. */}
+            <EdgeSheetContainer
+              bound={!mobile}
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+            >
+              {children}
+            </EdgeSheetContainer>
           </div>
 
           {right && rightIsDock && (

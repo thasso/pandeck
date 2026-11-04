@@ -20,20 +20,23 @@ const EdgeSheetContainerContext = createContext<HTMLElement | null>(null);
 
 /**
  * Binds every EdgeSheet inside it to this box instead of the viewport: a
- * phone layout drawn in a desktop side panel (the session's Worktree tab)
- * opens its sheets over that panel, not over the whole window.
+ * sheet opened in a desktop pane (the main pane, a side panel) covers that
+ * pane, not the whole window. `bound={false}` keeps the box but lets its
+ * sheets cover the viewport (a phone), without remounting what it holds.
  */
 export function EdgeSheetContainer({
   className,
+  bound = true,
   children,
 }: {
   className?: string;
+  bound?: boolean;
   children: ReactNode;
 }) {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   return (
     <div ref={setElement} className={`relative ${className ?? ""}`}>
-      <EdgeSheetContainerContext.Provider value={element}>
+      <EdgeSheetContainerContext.Provider value={bound ? element : null}>
         {children}
       </EdgeSheetContainerContext.Provider>
     </div>

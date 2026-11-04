@@ -43,6 +43,9 @@ import {
   MessageSquareQuote,
   SendHorizontal,
   BookOpenText,
+  GitCommitHorizontal,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import {
   documentTargetHref,
@@ -54,6 +57,7 @@ import type {
   WorktreeComment,
   WorktreeDiffScope,
   WorktreeFileDiffResponse,
+  WorktreeFileLogEntry,
   WorktreeFileResponse,
   WorktreeGitStatus,
   WorktreeRecord,
@@ -109,6 +113,14 @@ import {
   runExternalDocumentAction,
 } from "../../lib/documentActions.ts";
 import { FileHistoryList } from "./FileHistoryList.tsx";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "../ui/item.tsx";
+import { relativeTime } from "../../lib/sessionRows.ts";
 import { DocumentCommentLayer } from "../DocumentComments.tsx";
 import { DocumentTextBody } from "../DocumentTextBody.tsx";
 import type { CommentDocument } from "../../lib/chatCommentPrompt.ts";
@@ -119,6 +131,7 @@ import {
   fetchWorktreeChanges,
   fetchWorktreeFile,
   fetchWorktreeFileDiff,
+  fetchWorktreeFileLog,
   fetchWorktreeStatus,
   fetchWorktreeTree,
   hashContent,
@@ -628,6 +641,135 @@ function WorktreeBrowseSheet({
   );
 }
 
+/**
+ * The History button's sheet, the browse sheet's twin: the file's commits,
+ * newest first, under a "Current version" row. Picking a commit shows its
+ * change to the file in place; Current version returns to the file.
+ */
+function FileHistorySheet({
+  worktreeId,
+  path,
+  open,
+  onClose,
+  refreshToken,
+  selectedOid,
+  onPick,
+}: {
+  worktreeId: string;
+  path: string;
+  open: boolean;
+  onClose: () => void;
+  refreshToken: number;
+  /** The commit on screen; none while the file itself shows. */
+  selectedOid: string | undefined;
+  onPick: (entry: WorktreeFileLogEntry | null) => void;
+}) {
+  return (
+    <EdgeSheet open={open} title="History" onClose={onClose}>
+      {open ? (
+        <>
+          {/* The list's own inset, so this row lines up with its commits. */}
+          <div className="px-2 pt-2">
+            <Item
+              size="xs"
+              variant={selectedOid === undefined ? "muted" : "default"}
+              render={<button type="button" />}
+              className="w-full flex-nowrap text-left"
+              onClick={() => onPick(null)}
+            >
+              <ItemMedia variant="icon">
+                <FileText />
+              </ItemMedia>
+              <ItemContent className="min-w-0">
+                <ItemTitle>Current version</ItemTitle>
+                <ItemDescription className="truncate">
+                  As the worktree has it now
+                </ItemDescription>
+              </ItemContent>
+            </Item>
+          </div>
+          <FileHistoryList
+            worktreeId={worktreeId}
+            path={path}
+            refreshToken={refreshToken}
+            selectedOid={selectedOid}
+            onOpenCommit={onPick}
+          />
+        </>
+      ) : null}
+    </EdgeSheet>
+  );
+}
+
+/**
+ * Which commit the History view shows, above that commit's diff, with steps
+ * through the file's history: Older, and Newer, which past the newest commit
+ * returns to the current version.
+ */
+function HistoryCommitBar({
+  worktreeId,
+  path,
+  refreshToken,
+  entry,
+  onPick,
+}: {
+  worktreeId: string;
+  /** The file's path now (the log's key), not the name it had then. */
+  path: string;
+  refreshToken: number;
+  entry: WorktreeFileLogEntry;
+  onPick: (entry: WorktreeFileLogEntry | null) => void;
+}) {
+  const key = `${worktreeId}\n${path}`;
+  const { state, reload } = useFetchState(
+    key,
+    useCallback(
+      () => fetchWorktreeFileLog(worktreeId, path),
+      [worktreeId, path],
+    ),
+  );
+  useReloadOnToken(key, refreshToken, reload);
+  const entries = dataOf(state)?.entries ?? [];
+  const index = entries.findIndex((candidate) => candidate.oid === entry.oid);
+  const older = index >= 0 ? entries[index + 1] : undefined;
+  return (
+    // Sticky left: a wide diff scrolls sideways under it. In a narrow column
+    // the subject and byline give way (truncate); the oid and steps stay.
+    <div className="sticky left-0 flex items-center gap-2 border-b border-border bg-background/40 px-3 py-1.5 text-sm text-muted-foreground">
+      <GitCommitHorizontal className="size-4 shrink-0" />
+      <span className="min-w-0 truncate font-medium text-foreground">
+        {entry.subject}
+      </span>
+      <span className="min-w-0 truncate">
+        {entry.author} · {relativeTime(entry.authoredAt)}
+      </span>
+      <span className="ml-auto shrink-0 font-mono text-xs">
+        {entry.shortOid}
+      </span>
+      <div className="flex shrink-0 items-center">
+        <IconButton
+          label="Older commit"
+          size="icon-xs"
+          disabled={!older}
+          onClick={() => (older ? onPick(older) : undefined)}
+        >
+          <ChevronLeft />
+        </IconButton>
+        <IconButton
+          label={index === 0 ? "Current version" : "Newer commit"}
+          size="icon-xs"
+          disabled={index < 0}
+          onClick={() =>
+            onPick(index > 0 ? (entries[index - 1] ?? null) : null)
+          }
+        >
+          <ChevronRight />
+        </IconButton>
+      </div>
+    </div>
+  );
+}
+
 function WorktreeBrowseTree({
   worktree,
   selectedPath,
@@ -660,13 +802,14 @@ function FilesView({
   worktree,
   narrow,
   filePath,
-  navigate,
   prefs,
   refreshToken,
   anchor,
   pivot,
   onPivotChange,
   onPreviewChange,
+  historyCommit,
+  onHistoryPick,
   markdownPreviewFirst,
   browseAsDocuments,
   documentComments,
@@ -675,7 +818,6 @@ function FilesView({
   worktree: WorktreeRecord;
   narrow: boolean;
   filePath?: string | undefined;
-  navigate: (path: string) => void;
   prefs: Prefs;
   refreshToken: number;
   anchor?: DocumentLineAnchor | undefined;
@@ -683,6 +825,10 @@ function FilesView({
   onPivotChange: (pivot: FilePivot) => void;
   /** Turns Preview on or off, and shows the file's face. */
   onPreviewChange: (on: boolean) => void;
+  /** The commit the History pivot shows (picked in its sheet). */
+  historyCommit: WorktreeFileLogEntry | null;
+  /** Shows a commit of the file's history, or (null) the file itself. */
+  onHistoryPick: (entry: WorktreeFileLogEntry | null) => void;
   markdownPreviewFirst: boolean;
   browseAsDocuments: boolean;
   documentComments: ((path: string) => CommentDocument) | undefined;
@@ -735,19 +881,31 @@ function FilesView({
     [documentComments, filePath],
   );
 
-  const pivotKey =
-    filePath && pivot === "vs-base"
+  // The diff a pivot shows: the file against the base, or one commit's change
+  // to it (under the name it had then).
+  const shownCommit = pivot === "history" ? historyCommit : null;
+  const pivotKey = !filePath
+    ? null
+    : pivot === "vs-base"
       ? `${worktree.id}:${filePath}:base:${worktree.baseCommit}`
-      : null;
+      : shownCommit
+        ? `${worktree.id}:${shownCommit.path}:${shownCommit.parentOid}..${shownCommit.oid}`
+        : null;
   const loadPivotDiff = useCallback(
     () =>
-      filePath
-        ? fetchWorktreeFileDiff(worktree.id, filePath, {
-            kind: "range",
-            from: worktree.baseCommit,
-          } satisfies WorktreeDiffScope)
-        : Promise.reject(new Error("No file selected.")),
-    [worktree.id, filePath, worktree.baseCommit],
+      !filePath
+        ? Promise.reject(new Error("No file selected."))
+        : shownCommit
+          ? fetchWorktreeFileDiff(worktree.id, shownCommit.path, {
+              kind: "range",
+              from: shownCommit.parentOid,
+              to: shownCommit.oid,
+            } satisfies WorktreeDiffScope)
+          : fetchWorktreeFileDiff(worktree.id, filePath, {
+              kind: "range",
+              from: worktree.baseCommit,
+            } satisfies WorktreeDiffScope),
+    [worktree.id, filePath, worktree.baseCommit, shownCommit],
   );
   const pivotFetch = useFetchState<WorktreeFileDiffResponse>(
     pivotKey,
@@ -792,15 +950,13 @@ function FilesView({
   // "Changes vs base" diff that replaces it. One marker either way — only one of
   // the two is being looked at.
   const shownRefresh =
-    pivot === "history"
-      ? null // the history list marks its own refresh
-      : pivot === "vs-base"
-        ? pivotFetch.state.status === "refreshing"
-          ? "Refreshing this diff"
-          : null
-        : fileFetch.state.status === "refreshing"
-          ? "Refreshing this file"
-          : null;
+    pivot === "vs-base" || pivot === "history"
+      ? pivotFetch.state.status === "refreshing"
+        ? "Refreshing this diff"
+        : null
+      : fileFetch.state.status === "refreshing"
+        ? "Refreshing this file"
+        : null;
   const pivotControls =
     pivots.length > 0 ? (
       <ToggleGroup
@@ -894,62 +1050,60 @@ function FilesView({
                       : {})}
                   />
                 )
-              ) : pivot === "history" ? (
-                <FileHistoryList
-                  worktreeId={worktree.id}
-                  path={filePath}
-                  refreshToken={refreshToken}
-                  onOpenCommit={(entry) =>
-                    navigate(
-                      worktreePath(worktree.id, "changes", {
-                        path: entry.path,
-                        from: entry.parentOid,
-                        to: entry.oid,
-                      }),
-                    )
-                  }
-                />
               ) : pivot !== "file" ? (
-                pivotDiff ? (
-                  // Unconditional frame: see ChangesView — a note that appears
-                  // above the surface must not remount it.
-                  <div className="flex flex-col">
-                    {pivotError !== undefined &&
-                    !isUnchangedPathError(pivotError) ? (
-                      <ErrorNote
-                        className="m-3"
-                        message={`Could not refresh this diff: ${pivotError}`}
-                        onRetry={pivotFetch.reload}
-                      />
-                    ) : null}
-                    <DiffSurface
-                      prefs={prefs}
-                      patch={pivotDiff.diff}
-                      oldFile={{
-                        name: pivotDiff.oldPath ?? pivotDiff.path,
-                        contents: pivotDiff.oldContent,
-                      }}
-                      newFile={{
-                        name: pivotDiff.path,
-                        contents: pivotDiff.newContent,
-                      }}
-                      cacheKey={pivotCacheKey}
+                <>
+                  {/* Outside the diff's own states, so stepping through the
+                    history keeps the bar (and its buttons) in place. */}
+                  {shownCommit && filePath ? (
+                    <HistoryCommitBar
+                      worktreeId={worktree.id}
+                      path={filePath}
+                      refreshToken={refreshToken}
+                      entry={shownCommit}
+                      onPick={onHistoryPick}
                     />
-                  </div>
-                ) : isInitialLoad(pivotFetch.state) ? (
-                  <PaneLoading label="Loading diff…" />
-                ) : pivotError !== undefined &&
-                  !isUnchangedPathError(pivotError) ? (
-                  <ErrorNote
-                    className="m-4"
-                    message={`Could not load this diff: ${pivotError}`}
-                    onRetry={pivotFetch.reload}
-                  />
-                ) : (
-                  <div className="p-6 text-sm text-muted-foreground">
-                    No changes to this file in that range.
-                  </div>
-                )
+                  ) : null}
+                  {pivotDiff ? (
+                    // Unconditional frame: see ChangesView — a note that appears
+                    // above the surface must not remount it.
+                    <div className="flex flex-col">
+                      {pivotError !== undefined &&
+                      !isUnchangedPathError(pivotError) ? (
+                        <ErrorNote
+                          className="m-3"
+                          message={`Could not refresh this diff: ${pivotError}`}
+                          onRetry={pivotFetch.reload}
+                        />
+                      ) : null}
+                      <DiffSurface
+                        prefs={prefs}
+                        patch={pivotDiff.diff}
+                        oldFile={{
+                          name: pivotDiff.oldPath ?? pivotDiff.path,
+                          contents: pivotDiff.oldContent,
+                        }}
+                        newFile={{
+                          name: pivotDiff.path,
+                          contents: pivotDiff.newContent,
+                        }}
+                        cacheKey={pivotCacheKey}
+                      />
+                    </div>
+                  ) : isInitialLoad(pivotFetch.state) ? (
+                    <PaneLoading label="Loading diff…" />
+                  ) : pivotError !== undefined &&
+                    !isUnchangedPathError(pivotError) ? (
+                    <ErrorNote
+                      className="m-4"
+                      message={`Could not load this diff: ${pivotError}`}
+                      onRetry={pivotFetch.reload}
+                    />
+                  ) : (
+                    <div className="p-6 text-sm text-muted-foreground">
+                      No changes to this file in that range.
+                    </div>
+                  )}
+                </>
               ) : previewKind === "raster" ? (
                 <FilePreview
                   kind="raster"
@@ -1323,16 +1477,34 @@ export default function WorktreeDetailPage({
   const filePath = routeFilePath ?? readmePath;
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
   // Preview is a mode of the file's own view, not a pivot: on, the file shows
-  // rendered whenever no pivot (History, Changes vs base) is toggled on. Each file opens on its context's default
-  // (a document folder's Markdown previewed, a worktree's source).
+  // rendered whenever no pivot (History, Changes vs base) is on. Each file
+  // opens on its context's default (a document folder's Markdown previewed, a
+  // worktree's source).
   const [previewOn, setPreviewOn] = useState(false);
+  // History is a commit picked in its sheet: its button opens the sheet, lit
+  // or not, and the sheet's Current version row returns to the file.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyCommit, setHistoryCommit] =
+    useState<WorktreeFileLogEntry | null>(null);
   const selectFilePivot = useCallback(
-    (pivot: FilePivot) =>
-      setFilePivot(pivot === "file" && previewOn ? "preview" : pivot),
+    (pivot: FilePivot) => {
+      if (pivot === "history" || (pivot === "file" && filePivot === "history"))
+        setHistoryOpen(true);
+      else setFilePivot(pivot === "file" && previewOn ? "preview" : pivot);
+    },
+    [previewOn, filePivot],
+  );
+  const pickHistory = useCallback(
+    (entry: WorktreeFileLogEntry | null) => {
+      setHistoryOpen(false);
+      setHistoryCommit(entry);
+      setFilePivot(entry ? "history" : previewOn ? "preview" : "file");
+    },
     [previewOn],
   );
   const showPreview = useCallback((on: boolean) => {
     setPreviewOn(on);
+    setHistoryCommit(null);
     setFilePivot(on ? "preview" : "file");
   }, []);
   const previewItems =
@@ -1780,13 +1952,14 @@ export default function WorktreeDetailPage({
               worktree={worktree}
               narrow={narrow}
               filePath={filePath}
-              navigate={navigate}
               prefs={effectivePrefs}
               refreshToken={refreshToken}
               anchor={anchor}
               pivot={filePivot}
               onPivotChange={selectFilePivot}
               onPreviewChange={showPreview}
+              historyCommit={historyCommit}
+              onHistoryPick={pickHistory}
               markdownPreviewFirst={
                 markdownPreviewFirst || (!routeFilePath && Boolean(readmePath))
               }
@@ -1816,6 +1989,19 @@ export default function WorktreeDetailPage({
               selectedPath={routeFilePath}
               refreshToken={refreshToken}
               navigate={navigate}
+            />
+          ) : null}
+          {view === "files" && filePath ? (
+            <FileHistorySheet
+              worktreeId={worktree.id}
+              path={filePath}
+              open={historyOpen}
+              onClose={() => setHistoryOpen(false)}
+              refreshToken={refreshToken}
+              selectedOid={
+                filePivot === "history" ? historyCommit?.oid : undefined
+              }
+              onPick={pickHistory}
             />
           ) : null}
           {delivery.dialogs}
