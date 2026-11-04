@@ -168,6 +168,8 @@ beforeEach(() => {
   diffRequests.length = 0;
   registration = null;
   resetHistoryNavForTests();
+  // jsdom has none, and the page's anchor frames can run before teardown.
+  Element.prototype.scrollIntoView = () => {};
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
