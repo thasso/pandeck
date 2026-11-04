@@ -919,8 +919,10 @@ function SidebarImpl({
         // which run edge to
         // edge: their
         // rows are divided by hairlines, which a side inset would leave
-        // hanging in empty space.
-        className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
+        // hanging in empty space. `isolate` keeps the rows' z-indexes inside this
+        // box, which holds them under its scrollbar in WebKit: there a row or
+        // sticky band stacked outside the box can paint over an overlay one.
+        className={`isolate min-h-0 flex-1 overflow-y-auto pb-2 ${
           section === "sessions" || section === "settings"
             ? ""
             : section === "pull-requests" ||

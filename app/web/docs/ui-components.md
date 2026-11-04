@@ -357,9 +357,10 @@ server that bounds such a field must not cut it mid-sentence at a small limit.
   approval. A UI styling request alone is not permission to expand the palette.
 - Colors are theme tokens only: `background`, `foreground`, `card`, `popover`,
   `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`, `input`,
-  `ring`, plus the app's `success` and `warning` (with `-soft` fills). No
-  Tailwind palette colors (`text-emerald-500`, `bg-black/40`) and no arbitrary
-  values (`bg-[#…]`, `w-[13rem]`) in feature code.
+  `ring`, plus the app's `success` and `warning` (with `-soft` fills) and
+  `scrollbar` (the opaque scrollbar thumb). No Tailwind palette colors
+  (`text-emerald-500`, `bg-black/40`) and no arbitrary values (`bg-[#…]`,
+  `w-[13rem]`) in feature code.
 - The left browser and right panel roots carry `surface-sidebar`, which paints
   the `--sidebar` surface and repoints `background`, `card`, `muted`, `accent`,
   `secondary` and `border` at the `--sidebar*` set for that subtree. Content

@@ -98,6 +98,7 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
+  --scrollbar: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -252,6 +253,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
+  --scrollbar: oklch(0.4 0 0);
   --ring: oklch(0.556 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -458,17 +460,18 @@ body {
   transition-property: color, background-color, border-color, box-shadow;
 }
 
-/* Slim, unobtrusive scrollbars */
+/* Slim, unobtrusive scrollbars. The thumb is opaque: an overlay scrollbar runs
+   over the rows, and a translucent one lets their borders show through. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--input) transparent;
+  scrollbar-color: var(--scrollbar) transparent;
 }
 *::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--input);
+  background: var(--scrollbar);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: content-box;
