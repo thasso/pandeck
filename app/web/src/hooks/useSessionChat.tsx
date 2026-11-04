@@ -42,8 +42,10 @@ import {
   pendingApprovalsKey,
 } from "../lib/approvalCards.ts";
 import { acceptStatusSuggestionSave } from "../lib/backlogTree.ts";
+import { skillSummariesKey } from "../lib/transcriptKeys.ts";
 import { commentDocumentLabel } from "../lib/chatCommentPrompt.ts";
 import { createClientId } from "../lib/clientId.ts";
+import { dataOf } from "../lib/loadState.ts";
 import { failureOnViewedSession } from "../lib/messageAnnounce.ts";
 import { visibleSessionDraft } from "../lib/newSessionRuntime.ts";
 import { applyPeerPromptCardOverridesToMessages } from "../lib/peerPromptCardOverrides.ts";
@@ -106,7 +108,6 @@ export interface SessionChatHost {
   view: TranscriptViewPrefs;
   accountModels: NonNullable<MessageListProps["accountModels"]>;
   taskLiveSource: ComponentProps<typeof TaskLiveSourceProvider>["source"];
-  skillSummaries: EntrySummary[] | undefined;
   credentialProfiles: readonly { id: string; name: string }[];
   describeSession: (session: SessionListItem) => SpawnedSessionDetails;
   onNavigate: (path: string) => void;
@@ -117,6 +118,11 @@ export interface SessionChatHost {
   onDismissSessionFailure: ComponentProps<
     typeof SpawnedSessionsLedge
   >["onDismissSessionFailure"];
+  /**
+   * Fork on the MAIN connection, which is what opens the fork in the main pane.
+   * Run on a panel's it would move that panel off the session it was asked for.
+   */
+  onForkSession: AssistantActions["forkSession"];
   /** The session a panel chat renders failures for, while it is on screen. */
   onPanelSessionChange: (sessionId: string | null) => void;
 }
@@ -152,6 +158,14 @@ export interface SessionChatInput {
   stagedDraft?: ComposerProps["draft"];
   /** The failure is already on screen in the transcript's place. */
   failureShownElsewhere?: boolean;
+  /** Where a fork runs. Absent, on this connection. */
+  onForkSession?: AssistantActions["forkSession"];
+  /**
+   * False for a chat pinned to one session: a new draft is created on this
+   * connection, because it inherits the viewed session's runtime, and takes the
+   * connection with it.
+   */
+  canCreateDrafts?: boolean;
   /** `/review`: only a host that can start the review session offers it. */
   onReviewCommand?: (rawArgs: string) => string | null;
 }
@@ -229,6 +243,8 @@ export function useSessionChat({
   stagedLedges,
   stagedDraft,
   failureShownElsewhere = false,
+  onForkSession = actions.forkSession,
+  canCreateDrafts = true,
   onReviewCommand,
 }: SessionChatInput) {
   const {
@@ -309,9 +325,9 @@ export function useSessionChat({
   const forkMessage = useCallback(
     (entryId: string, position: "before" | "at") => {
       if (!forkSourceSessionId) return;
-      actions.forkSession(forkSourceSessionId, entryId, position);
+      onForkSession(forkSourceSessionId, entryId, position);
     },
-    [actions, forkSourceSessionId],
+    [onForkSession, forkSourceSessionId],
   );
 
   // Resend a prompt into the SAME session: it lands in the composer for the user
@@ -938,6 +954,21 @@ export function useSessionChat({
     ],
   );
 
+  // The composer's `/<skill>` rows read the library scan, which every
+  // subscribe and rescan answers afresh: hand it a new array only when what
+  // the rows show changed.
+  const skillSummariesCache = useRef<{
+    key: string;
+    value: EntrySummary[] | undefined;
+  }>({ key: "", value: undefined });
+  const skillEntries = dataOf(state.skillLibrary)?.entries;
+  const skillEntriesKey = skillEntries ? skillSummariesKey(skillEntries) : "";
+  if (skillSummariesCache.current.key !== skillEntriesKey)
+    skillSummariesCache.current = {
+      key: skillEntriesKey,
+      value: skillEntries,
+    };
+
   const worktreeMissing = Boolean(session?.worktreeMissing);
   const sendToSession = useCallback(
     (text: string, attachments: PromptAttachment[] = []) => {
@@ -1015,7 +1046,7 @@ export function useSessionChat({
       models,
       slashCommands: state.slashCommands,
       onClientSlashCommand: runClientSlashCommand,
-      skillSummaries: host.skillSummaries,
+      skillSummaries: skillSummariesCache.current.value,
       actions,
       draftStorageKey,
       chatComments,
@@ -1047,7 +1078,9 @@ export function useSessionChat({
       view: host.view,
       models,
       onAcceptCommitDryRun: actions.acceptCommitDryRun,
-      onCreateDraftSession: actions.createDraftSession,
+      ...(canCreateDrafts
+        ? { onCreateDraftSession: actions.createDraftSession }
+        : {}),
       defaultModel: session?.model,
       defaultThinkingLevel: session?.thinkingLevel,
       onForkMessage: forkMessage,

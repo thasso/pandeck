@@ -50,6 +50,7 @@ export const PersonalAssistantPanel = memo(function PersonalAssistantPanel({
         </span>
       }
       onOpenInMain={() => host.onNavigate(PERMANENT_ASSISTANT_PATH)}
+      pinned
     />
   );
 });

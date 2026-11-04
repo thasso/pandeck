@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => ({
     connected: true,
     session: null as { sessionId: string } | null,
     unopenableSessions: {} as Record<string, string>,
+    forkDraft: null as { sessionId: string; token: number } | null,
   },
   actions: { loadSession: vi.fn(), releaseSessionView: vi.fn() },
 }));
@@ -31,6 +32,7 @@ const HOST = {
 let container: HTMLDivElement;
 let root: Root;
 
+const onSelectSession = vi.fn();
 const render = (sessionId: string | null, visible = true) =>
   act(async () =>
     root.render(
@@ -38,7 +40,7 @@ const render = (sessionId: string | null, visible = true) =>
         host={HOST}
         sessionId={sessionId}
         visible={visible}
-        onSelectSession={() => {}}
+        onSelectSession={(id) => onSelectSession(id)}
       />,
     ),
   );
@@ -47,6 +49,8 @@ beforeEach(() => {
   fixture.state.connected = true;
   fixture.state.session = null;
   fixture.state.unopenableSessions = {};
+  fixture.state.forkDraft = null;
+  onSelectSession.mockClear();
   fixture.actions.loadSession.mockClear();
   fixture.actions.releaseSessionView.mockClear();
   container = document.createElement("div");
@@ -108,4 +112,14 @@ it("says why a session cannot be opened", async () => {
   await render("s1");
   expect(container.textContent).toContain("It is gone.");
   expect(container.textContent).not.toContain("Opening session");
+});
+
+it("goes with a new draft its connection moved to", async () => {
+  fixture.state.session = { sessionId: "s1" };
+  await render("s1");
+  expect(onSelectSession).not.toHaveBeenCalled();
+  fixture.state.session = { sessionId: "draft" };
+  fixture.state.forkDraft = { sessionId: "draft", token: 1 };
+  await render("s1");
+  expect(onSelectSession).toHaveBeenCalledWith("draft");
 });

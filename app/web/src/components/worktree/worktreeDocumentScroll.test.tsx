@@ -161,6 +161,9 @@ function NavigationProbe() {
 }
 
 beforeEach(() => {
+  // jsdom has no `scrollIntoView`, and the page's file jump calls it from an
+  // animation frame, so a frame landing before unmount crashed the whole run.
+  Element.prototype.scrollIntoView = () => {};
   window.localStorage.clear();
   window.sessionStorage.clear();
   changesRequests.length = 0;

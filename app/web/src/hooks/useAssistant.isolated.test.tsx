@@ -123,6 +123,17 @@ it("loads a session the address bar does not name, from a cold cache", async () 
   ]);
 });
 
+it("drops a load still reading its cache when the view is released", async () => {
+  const socket = EchoSocket.instances[0]!;
+  await act(async () => socket.open());
+  act(() => {
+    latest!.actions.loadSession("panel");
+    latest!.actions.releaseSessionView("panel");
+  });
+  await settle();
+  expect(socket.sent.filter((m) => m.type === "loadSession")).toEqual([]);
+});
+
 it("asks for only the delta when it reopens the session it retained", async () => {
   const socket = EchoSocket.instances[0]!;
   await act(async () => socket.open());

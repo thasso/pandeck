@@ -64,6 +64,7 @@ export function PanelSessionChat({
   draftStorageKey,
   title,
   onOpenInMain,
+  pinned = false,
 }: {
   state: UIState;
   actions: AssistantActions;
@@ -73,6 +74,8 @@ export function PanelSessionChat({
   draftStorageKey: string;
   title: ReactNode;
   onOpenInMain: () => void;
+  /** This panel shows one session, so nothing may take its connection away. */
+  pinned?: boolean;
 }) {
   const { sessionId } = session;
   const { onNavigate, onPanelSessionChange, credentialProfiles } = host;
@@ -114,13 +117,19 @@ export function PanelSessionChat({
     dictation: useComposerDictation(state),
     focus,
     transcriptPin,
+    onForkSession: host.onForkSession,
+    canCreateDrafts: !pinned,
   });
 
-  // The ledge's rows are the registry topic's, held on this connection only
-  // while it is expanded.
+  // This connection holds what only its chat reads: the ledge's rows while it is
+  // expanded, and the library the composer's `/<skill>` rows describe.
+  const readsSkills = (session.activeSkills?.length ?? 0) > 0;
   useEffect(() => {
-    actions.setTopics(backgroundLedgeOpen ? ["background"] : []);
-  }, [actions, backgroundLedgeOpen]);
+    actions.setTopics([
+      ...(backgroundLedgeOpen ? (["background"] as const) : []),
+      ...(readsSkills ? (["skills"] as const) : []),
+    ]);
+  }, [actions, backgroundLedgeOpen, readsSkills]);
 
   // An unselected tab draws its note where nobody can read it, so only the
   // panel on screen is a home for this session's failures.

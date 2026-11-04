@@ -63,6 +63,7 @@ function fixtureState(): UIState {
     sessionFailures: {},
     backgroundWorkItems: [],
     liveStreams: [],
+    skillLibrary: { status: "idle" },
     backgroundStopPending: [],
     backgroundStopAllPending: [],
   } as unknown as UIState;
@@ -70,6 +71,8 @@ function fixtureState(): UIState {
 
 const actions = {
   prompt: vi.fn(),
+  forkSession: vi.fn(),
+  createDraftSession: vi.fn(),
   setTopics: vi.fn(),
   resolveApproval: vi.fn(),
   respondToQuestion: vi.fn(),
@@ -78,6 +81,7 @@ const actions = {
 
 const onPanelSessionChange = vi.fn();
 const onNavigate = vi.fn();
+const onForkSession = vi.fn();
 const host = {
   sessions: [],
   view: {},
@@ -89,20 +93,22 @@ const host = {
   onOpenBackgroundWork: vi.fn(),
   onOpenWorktree: vi.fn(),
   onPanelSessionChange,
+  onForkSession,
 } as unknown as SessionChatHost;
 
 let container: HTMLDivElement;
 let root: Root;
 
-const render = (visible = true, state = fixtureState()) =>
+const render = (visible = true, state = fixtureState(), pinned = false) =>
   act(async () => {
     root.render(
       <PanelSessionChat
         state={state}
         actions={actions}
-        session={SESSION}
+        session={state.session ?? SESSION}
         host={host}
         visible={visible}
+        pinned={pinned}
         draftStorageKey="test.panel-draft"
         title="Title"
         onOpenInMain={() => {}}
@@ -201,4 +207,33 @@ it("lands a reveal of its own session here and sends any other to the main pane"
     messageReveal: { token: 8, sessionId: "s2", entryId: "e2" },
   } as UIState);
   expect(onNavigate).toHaveBeenCalledWith("/sessions/s2#m-e2");
+});
+
+it("forks on the main connection, so this panel stays on its session", async () => {
+  await render();
+  seen.transcript?.onForkMessage?.("e1", "at");
+  expect(onForkSession).toHaveBeenCalledWith("s1", "e1", "at");
+  expect(actions.forkSession).not.toHaveBeenCalled();
+});
+
+it("creates a draft on its own connection, unless pinned to its session", async () => {
+  await render();
+  expect(seen.transcript?.onCreateDraftSession).toBe(
+    actions.createDraftSession,
+  );
+  await render(true, fixtureState(), true);
+  expect(seen.transcript?.onCreateDraftSession).toBeUndefined();
+});
+
+it("subscribes the skills its composer describes, on its own connection", async () => {
+  await render();
+  expect(actions.setTopics).toHaveBeenLastCalledWith([]);
+  const entries = [{ name: "deploy" }];
+  await render(true, {
+    ...fixtureState(),
+    session: { ...SESSION, activeSkills: ["deploy"] },
+    skillLibrary: { status: "ready", data: { entries } },
+  } as unknown as UIState);
+  expect(actions.setTopics).toHaveBeenLastCalledWith(["skills"]);
+  expect(seen.composer?.skillSummaries).toEqual(entries);
 });

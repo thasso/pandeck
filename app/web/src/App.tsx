@@ -27,7 +27,6 @@ import {
   type AgentType,
   clampThinkingLevelForModel,
   claudeSdkModelOption,
-  type EntrySummary,
   type Harness,
   harnessForAccountProvider,
   type InboxPositionEntry,
@@ -66,10 +65,7 @@ import {
   type PaObjectLinkResolution,
   type PaObjectType,
 } from "@assistant/shared/objectLinks";
-import {
-  paObjectReferenceKey,
-  skillSummariesKey,
-} from "./lib/transcriptKeys.ts";
+import { paObjectReferenceKey } from "./lib/transcriptKeys.ts";
 import { approvalCardsOf, approvalStatusDetail } from "./lib/approvalCards.ts";
 import { mentionedPaUris } from "./lib/transcriptMentions.ts";
 import { backlogSessionsKey } from "./lib/sessionRows.ts";
@@ -2946,22 +2942,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [referenceKey],
   );
 
-  // The composer's `/<skill>` rows read the library scan, which every
-  // subscribe and rescan answers afresh: hand it a new array only when what
-  // the rows show changed.
-  const skillSummariesCache = useRef<{
-    key: string;
-    value: EntrySummary[] | undefined;
-  }>({ key: "", value: undefined });
-  const skillEntries = dataOf(state.skillLibrary)?.entries;
-  const skillEntriesKey = skillEntries ? skillSummariesKey(skillEntries) : "";
-  if (skillSummariesCache.current.key !== skillEntriesKey)
-    skillSummariesCache.current = {
-      key: skillEntriesKey,
-      value: skillEntries,
-    };
-  const composerSkillSummaries = skillSummariesCache.current.value;
-
   const selectedProjectWorktreeCache = useRef<{
     key: string;
     value: WorktreeRecord[];
@@ -5467,7 +5447,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       view: transcriptView,
       accountModels: settingsAccountModels,
       taskLiveSource,
-      skillSummaries: composerSkillSummaries,
       credentialProfiles,
       describeSession: describeSpawnedSession,
       onNavigate: navigate,
@@ -5476,6 +5455,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       onOpenBackgroundWork: openBackgroundWork,
       onOpenWorktree: openWorktree,
       onDismissSessionFailure: dismissSessionFailure,
+      onForkSession: actions.forkSession,
       onPanelSessionChange: setPanelChatOnScreen,
     }),
     [
@@ -5485,7 +5465,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       transcriptView,
       settingsAccountModels,
       taskLiveSource,
-      composerSkillSummaries,
       credentialProfiles,
       describeSpawnedSession,
       navigate,
@@ -5494,6 +5473,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       openBackgroundWork,
       openWorktree,
       dismissSessionFailure,
+      actions.forkSession,
     ],
   );
   const backgroundStrip = useMemo(

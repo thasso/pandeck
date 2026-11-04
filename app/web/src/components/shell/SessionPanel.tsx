@@ -72,6 +72,15 @@ export const SessionPanel = memo(function SessionPanel({
       actions.releaseSessionView(sessionId);
   }, [visible, state.connected, sessionId, actions]);
 
+  // A new draft is created on this connection, which is now viewing it, so the
+  // panel goes with it. Only that: a draft staged in place names this session.
+  const draftSessionId = state.forkDraft?.sessionId;
+  const draftToken = state.forkDraft?.token;
+  useEffect(() => {
+    if (draftToken !== undefined && draftSessionId)
+      onSelectSession(draftSessionId);
+  }, [draftToken, draftSessionId, onSelectSession]);
+
   const items = useMemo(
     () =>
       host.sessions

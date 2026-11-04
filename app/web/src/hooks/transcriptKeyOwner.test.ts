@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claimScrollKeys, ownsScrollKey } from "./transcriptKeyOwner.ts";
+import {
+  claimScrollKeys,
+  ownsScrollKey,
+  trackTranscript,
+} from "./transcriptKeyOwner.ts";
+
+const untrack: (() => void)[] = [];
 
 function transcript(): HTMLElement {
   const element = document.createElement("div");
+  untrack.push(trackTranscript(element));
   element.append(document.createElement("p"));
   document.body.append(element);
   vi.spyOn(element, "getClientRects").mockReturnValue([
@@ -13,6 +20,7 @@ function transcript(): HTMLElement {
 }
 
 afterEach(() => {
+  for (const release of untrack.splice(0)) release();
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
@@ -34,6 +42,18 @@ describe("scroll key ownership between two transcripts", () => {
       true,
     );
     expect(ownsScrollKey(panel, document.body)).toBe(false);
+  });
+
+  it("answers one key the same whichever transcript's listener runs first", () => {
+    const center = transcript();
+    const panel = transcript();
+    const inPanel = panel.firstElementChild as HTMLElement;
+    claimScrollKeys(center);
+    expect(ownsScrollKey(center, inPanel)).toBe(false);
+    expect(ownsScrollKey(panel, inPanel)).toBe(true);
+    claimScrollKeys(center);
+    expect(ownsScrollKey(panel, inPanel)).toBe(true);
+    expect(ownsScrollKey(center, inPanel)).toBe(false);
   });
 
   it("does not leave the keys with a transcript that left the screen", () => {

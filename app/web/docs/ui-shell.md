@@ -1032,12 +1032,15 @@ transcript, composer, ledges, approvals, questions and comments, on a connection
 of their own because the server binds one viewed session per connection. That
 connection opens on no session of the route's, reads the session list and the
 other app-wide lists from the main connection, and opens everything a transcript
-links to in the main pane. Viewing is what marks a session read, so a chat panel
-keeps its transcript but releases its view while it is not on screen, and asks
-for the delta when shown again. **Knowledge** is the fourth (offered only while
-the Knowledge Base is on in Settings, as is the sidebar section): the Knowledge
-Base folder on the SAME worktree page the Worktree panel below draws — Files
-with File/Preview/History, and Changes — in a narrow column. Moving inside it is
+links to in the main pane, a fork included; a new draft inherits the viewed
+session's runtime, so it is created on the panel's connection and the Session
+panel goes with it, while the Personal Assistant panel, pinned to its session,
+offers none. Viewing is what marks a session read, so a chat panel keeps its
+transcript but releases its view while it is not on screen, and asks for the
+delta when shown again. **Knowledge** is the fourth (offered only while the
+Knowledge Base is on in Settings, as is the sidebar section): the Knowledge Base
+folder on the SAME worktree page the Worktree panel below draws — Files with
+File/Preview/History, and Changes — in a narrow column. Moving inside it is
 panel state, like the Worktree panel's, and its one action hands the file or
 view it is on to the main pane. A panel surface is opened from elsewhere by
 request: `kb_show`'s transcript card opens its file here. **Worktree** is the

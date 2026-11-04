@@ -8615,8 +8615,14 @@ export function useAssistant({
           send({ type: "openPermanentAssistant", timelineCache: descriptor });
         else send({ type: "openPermanentAssistant" });
       },
-      releaseSessionView: (sessionId) =>
-        send({ type: "releaseSessionView", sessionId }),
+      releaseSessionView: (sessionId) => {
+        // A panel's load can still be waiting on its cache read. Sent after this
+        // it would reach the server as a new view, unreleased. The main
+        // connection's release is about a session it left, and must not cancel
+        // the load of the one it is going to.
+        if (isolated) sessionLoadGenerationRef.current += 1;
+        send({ type: "releaseSessionView", sessionId });
+      },
       loadArchivedSessions: () => dispatch({ kind: "archivedReadRequested" }),
       deleteSession: (id) => {
         timelineCacheRef.current.delete(id);
