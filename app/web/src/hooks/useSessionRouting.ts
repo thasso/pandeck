@@ -231,6 +231,13 @@ export function backgroundTasksPath(taskId?: string): string {
     : BACKGROUND_TASKS_PATH;
 }
 
+/** The Review scope a worktree href carries, for navigation to compare. */
+function reviewScopeOf(href: string): string {
+  const query = href.split("#")[0]!.split("?")[1] ?? "";
+  const params = new URLSearchParams(query);
+  return `${params.get("from") ?? ""}\u0000${params.get("to") ?? ""}`;
+}
+
 export function worktreePath(
   id: string,
   view?: WorktreeView,
@@ -590,7 +597,7 @@ export function useSessionRouting({
   openPermanentAssistant,
 }: Args): {
   route: Route;
-  navigate: (path: string) => void;
+  navigate: (path: string, options?: { asPage?: boolean }) => void;
   notifyStagedFirstSend: () => void;
 } {
   const [route, setRoute] = useState<Route>(() =>
@@ -798,46 +805,58 @@ export function useSessionRouting({
     viewedIdentity,
   ]);
 
-  const navigate = useCallback((path: string) => {
-    // Any explicit navigation cancels a still-armed staged advance. Callers that
-    // navigate to the staging route AND immediately send (e.g. inspector "start
-    // chat") re-arm via notifyStagedFirstSend right after this call.
-    stagedFirstSend.current = false;
-    stagedKnownIdsAtArm.current = null;
-    const currentHref = location.pathname + location.search + location.hash;
-    let routePath = path;
-    if (currentHref !== path) {
-      const nextDocument = resolveInternalDocumentTarget(path);
-      const currentDocument = resolveInternalDocumentTarget(currentHref);
-      const sameDocument =
-        nextDocument !== null &&
-        currentDocument !== null &&
-        sameDocumentIdentity(nextDocument, currentDocument);
-      // Valid line anchors are part of document navigation even when the source
-      // identity is unchanged. Unrelated fragments such as transcript `#m-*`
-      // parse with no document anchor and must not manufacture an entry.
-      const hashIndex = path.indexOf("#");
-      const unrelatedFragment =
-        hashIndex >= 0 &&
-        parseDocumentLineAnchor(path.slice(hashIndex + 1)) === undefined;
-      const changedLineAnchor =
-        sameDocument &&
-        !unrelatedFragment &&
-        nextDocument !== null &&
-        currentDocument !== null &&
-        documentTargetHref(nextDocument) !==
-          documentTargetHref(currentDocument);
-      if (!sameDocument || changedLineAnchor) {
-        if (nextDocument) pushDocumentEntry(path);
-        else pushEntry(path);
-      } else {
-        routePath = currentHref;
+  /**
+   * `asPage`: open even a document as an ordinary page, with no origin to
+   * Close back to — the sidebar's browsing, where the reader is already where
+   * the file lives. A chat's link keeps the origin, and its Close.
+   */
+  const navigate = useCallback(
+    (path: string, options?: { asPage?: boolean }) => {
+      // Any explicit navigation cancels a still-armed staged advance. Callers that
+      // navigate to the staging route AND immediately send (e.g. inspector "start
+      // chat") re-arm via notifyStagedFirstSend right after this call.
+      stagedFirstSend.current = false;
+      stagedKnownIdsAtArm.current = null;
+      const currentHref = location.pathname + location.search + location.hash;
+      let routePath = path;
+      if (currentHref !== path) {
+        const nextDocument = resolveInternalDocumentTarget(path);
+        const currentDocument = resolveInternalDocumentTarget(currentHref);
+        // A worktree file's Review scope (`from`/`to`) is not part of its
+        // document identity, but it IS a different page: switching scope with
+        // a file open must navigate, not be folded into "same document".
+        const sameDocument =
+          nextDocument !== null &&
+          currentDocument !== null &&
+          sameDocumentIdentity(nextDocument, currentDocument) &&
+          reviewScopeOf(path) === reviewScopeOf(currentHref);
+        // Valid line anchors are part of document navigation even when the source
+        // identity is unchanged. Unrelated fragments such as transcript `#m-*`
+        // parse with no document anchor and must not manufacture an entry.
+        const hashIndex = path.indexOf("#");
+        const unrelatedFragment =
+          hashIndex >= 0 &&
+          parseDocumentLineAnchor(path.slice(hashIndex + 1)) === undefined;
+        const changedLineAnchor =
+          sameDocument &&
+          !unrelatedFragment &&
+          nextDocument !== null &&
+          currentDocument !== null &&
+          documentTargetHref(nextDocument) !==
+            documentTargetHref(currentDocument);
+        if (!sameDocument || changedLineAnchor) {
+          if (nextDocument && !options?.asPage) pushDocumentEntry(path);
+          else pushEntry(path);
+        } else {
+          routePath = currentHref;
+        }
       }
-    }
-    // Re-parse even for same-path clicks so a sidebar item can recover from a
-    // stale/pending route state without requiring a separate navigation first.
-    setRoute(parseRoute(routePath));
-  }, []);
+      // Re-parse even for same-path clicks so a sidebar item can recover from a
+      // stale/pending route state without requiring a separate navigation first.
+      setRoute(parseRoute(routePath));
+    },
+    [],
+  );
 
   // App calls this when the user sends the first prompt from a staging route,
   // for BOTH harnesses (pi mints the id server-side; claude-sdk keeps the staged

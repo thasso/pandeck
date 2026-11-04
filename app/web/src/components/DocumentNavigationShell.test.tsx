@@ -15,7 +15,7 @@ import {
   pushDocumentEntryAndAnnounce,
   resetHistoryNavForTests,
 } from "../lib/historyNav.ts";
-import { DocumentZoomSection } from "./DocumentZoom.tsx";
+import { DocumentZoomSection, zoomMenuGroup } from "./DocumentZoom.tsx";
 import {
   CommentActuationProvider,
   usePublishCommentActuation,
@@ -266,6 +266,32 @@ it("does not publish disposable zoom controls from route-only markers", () => {
   expect(
     (registration as DocumentNavigationRegistration | null)?.zoom,
   ).toBeUndefined();
+});
+
+it("puts the wide header's zoom in its `…`, open between steps", () => {
+  const increase = vi.fn();
+  const group = zoomMenuGroup({
+    mode: "text",
+    scale: 1.25,
+    canDecrease: true,
+    canIncrease: false,
+    decrease: vi.fn(),
+    reset: vi.fn(),
+    increase,
+    setScale: vi.fn(),
+  });
+  expect(group.items.map((item) => item.label)).toEqual([
+    "Zoom in",
+    "Zoom out",
+    "Reset zoom",
+  ]);
+  expect(group.items.every((item) => item.keepOpen)).toBe(true);
+  expect(group.items.map((item) => item.disabled)).toEqual([
+    true,
+    false,
+    false,
+  ]);
+  expect(group.items[2]!.hint).toBe("125%");
 });
 
 it("renders accessible zoom controls in the expanded sheet's own section", () => {
@@ -536,15 +562,13 @@ it("leads the wide header with Back and Forward and ends it with Close", () => {
     );
   });
   // The same order as the phone's dock row: the navigation pair leads, the
-  // source's actions and the zoom controls sit between, Close is last.
+  // source's actions sit between, then the `…` that holds zoom; Close is last.
   expect(headerLabels()).toEqual([
     "Back",
     "Forward",
     "Reload from disk",
     "Download this file",
-    "Zoom out",
-    "Reset zoom (100%)",
-    "Zoom in",
+    "Document actions",
     "Close document",
   ]);
 });
@@ -604,12 +628,6 @@ it("uses that order for a page that brings its own header too", () => {
       </>,
     );
   });
-  expect(headerLabels()).toEqual([
-    "Back",
-    "Forward",
-    "Zoom out",
-    "Reset zoom (100%)",
-    "Zoom in",
-    "Close document",
-  ]);
+  // Zoom is that page's own `…`, not this pair's.
+  expect(headerLabels()).toEqual(["Back", "Forward", "Close document"]);
 });

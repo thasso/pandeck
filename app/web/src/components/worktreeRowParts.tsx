@@ -4,13 +4,22 @@
  * relation surfaces also share line deltas, the Integrated badge, linked-session
  * paging and expansion memory. The hosts still own their density and hierarchy.
  */
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Ban,
   ChevronRight,
+  CloudOff,
   GitBranch,
   House,
   MessageSquarePlus,
+  SquareArrowOutUpRight,
 } from "lucide-react";
 import type {
   SessionPullRequestSummary,
@@ -27,7 +36,10 @@ import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Item } from "./ui/item.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
-import { ListRowActions } from "./common/ListRowActions.tsx";
+import {
+  ListRowActions,
+  type ListRowAction,
+} from "./common/ListRowActions.tsx";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import { Tree, type TreeNode } from "./common/Tree.tsx";
 import { taskPath } from "../hooks/useSessionRouting.ts";
@@ -64,6 +76,10 @@ function WorktreeRowSummary({
   sessionCount = 0,
   expanded = false,
   onToggleSessions,
+  iconColor,
+  menuActions,
+  onOpen,
+  onMenuIntent,
   onStartSession,
   tasks,
   tasksExpanded = false,
@@ -94,43 +110,43 @@ function WorktreeRowSummary({
     <SessionDeliveryMark session={{ pullRequest }} variant="reference" />
   ) : null;
   const integrated = Boolean(status?.merged && status.ahead > 0);
-  const showContext = Boolean(pullRequest || status?.dirty || integrated);
+  // Two lines, never three: the PR and Integrated marks close the branch's
+  // line, and the uncommitted delta opens the git line.
+  const marks =
+    pullRequest || integrated ? (
+      <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+        {prMark ? (
+          hosting?.pr?.url ? (
+            <a
+              href={hosting.pr.url}
+              target="_blank"
+              rel="noreferrer"
+              draggable={false}
+              aria-label={`Open PR #${hosting.pr.number}`}
+              className="inline-flex shrink-0 hover:underline"
+              onClick={(event) =>
+                followRowLink(event, event.currentTarget.href)
+              }
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              {prMark}
+            </a>
+          ) : (
+            <span className="inline-flex shrink-0">{prMark}</span>
+          )
+        ) : null}
+        {integrated ? <IntegratedBadge /> : null}
+      </span>
+    ) : null;
   return (
     <ListRowContent
       density={density}
       actionSpan="all"
-      context={
-        showContext ? (
-          <>
-            {prMark ? (
-              hosting?.pr?.url ? (
-                <a
-                  href={hosting.pr.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  draggable={false}
-                  aria-label={`Open PR #${hosting.pr.number}`}
-                  className="inline-flex shrink-0 hover:underline"
-                  onClick={(event) =>
-                    followRowLink(event, event.currentTarget.href)
-                  }
-                  onKeyDown={(event) => event.stopPropagation()}
-                >
-                  {prMark}
-                </a>
-              ) : (
-                <span className="inline-flex shrink-0">{prMark}</span>
-              )
-            ) : null}
-            {integrated ? <IntegratedBadge /> : null}
-            <WorktreeLineDelta status={status} />
-          </>
-        ) : undefined
-      }
       identity={
         <>
           <span
             className={`flex size-4 shrink-0 items-center justify-center ${selected ? "text-foreground" : "text-muted-foreground"}`}
+            style={iconColor ? { color: iconColor } : undefined}
             aria-hidden
           >
             {worktree.isMain ? <House size={16} /> : <GitBranch size={16} />}
@@ -138,6 +154,7 @@ function WorktreeRowSummary({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {branch}
           </span>
+          {marks}
         </>
       }
       details={
@@ -190,6 +207,7 @@ function WorktreeRowSummary({
               Sessions <span>{sessionCount}</span>
             </Badge>
           ) : null}
+          <WorktreeLineDelta status={status} />
           <span className="flex min-w-0 flex-1 basis-0">
             {hasAxes(axes) ? (
               <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
@@ -202,16 +220,35 @@ function WorktreeRowSummary({
         </>
       }
       actions={
-        onStartSession ? (
+        onStartSession || onOpen || menuActions?.length ? (
           <ListRowActions
             alwaysVisible={selected}
+            menuOnly
+            onMenuIntent={onMenuIntent}
             actions={[
-              {
-                id: "start-session",
-                label: `Start session in worktree: ${branch}`,
-                icon: <MessageSquarePlus />,
-                onSelect: () => onStartSession(worktree.id),
-              },
+              ...(onOpen
+                ? [
+                    {
+                      id: "open",
+                      label: "Open worktree",
+                      accessibleLabel: `Open worktree: ${branch}`,
+                      icon: <SquareArrowOutUpRight />,
+                      onSelect: () => onOpen(worktree.id),
+                    },
+                  ]
+                : []),
+              ...(onStartSession
+                ? [
+                    {
+                      id: "start-session",
+                      label: "Start session",
+                      accessibleLabel: `Start session in worktree: ${branch}`,
+                      icon: <MessageSquarePlus />,
+                      onSelect: () => onStartSession(worktree.id),
+                    },
+                  ]
+                : []),
+              ...(menuActions ?? []),
             ]}
           />
         ) : undefined
@@ -250,19 +287,27 @@ function hasAxes(axes: WorktreeAxes): boolean {
 
 /**
  * The second line when no axis has anything to say: before git has answered,
- * that it is being checked; after, that there is nothing to do — level with the
- * base for a branch, current with its remote for the main checkout.
+ * that it is being checked; after, the axis it is level on drawn like any
+ * other but with grey zeros — the base for a branch, the remote for the main
+ * checkout.
  */
 function calmLine(
   worktree: WorktreeRecord,
   status: WorktreeGitStatus | undefined,
-): string {
+): ReactNode {
   if (!status) return "checking…";
-  if (worktree.isMain)
-    return status.upstream?.name
-      ? `up to date with ${status.upstream.name}`
-      : "up to date";
-  return `level with ${worktree.baseBranch || "base"}`;
+  const label = worktree.isMain
+    ? (status.upstream?.name ?? "upstream")
+    : worktree.baseBranch || "base";
+  return (
+    <span
+      title={
+        worktree.isMain ? `Up to date with ${label}` : `Level with ${label}`
+      }
+    >
+      {label} ↑0↓0
+    </span>
+  );
 }
 
 function AxesSummary({
@@ -328,7 +373,12 @@ function AxesSummary({
               className="mr-2 last:mr-0"
               title="This branch has never been pushed"
             >
-              unpublished
+              <CloudOff
+                size={12}
+                className="inline-block align-text-bottom"
+                aria-hidden
+              />
+              <span className="sr-only">unpublished</span>
             </span>
           )}
         </>
@@ -353,7 +403,7 @@ function Axis({
 }) {
   return (
     <span data-worktree-axis={id} className="mr-2 last:mr-0" title={title}>
-      {label}{" "}
+      {label} {ahead === 0 && behind === 0 ? "↑0↓0" : null}
       {ahead > 0 ? <span className="text-success">↑{ahead}</span> : null}
       {behind > 0 ? <span className="text-warning">↓{behind}</span> : null}
     </span>
@@ -361,6 +411,7 @@ function Axis({
 }
 
 function axisDivergence(ahead: number, behind: number, label: string): string {
+  if (ahead === 0 && behind === 0) return `level with ${label}`;
   return [
     ahead > 0 ? `${ahead} ahead of ${label}` : undefined,
     behind > 0 ? `${behind} behind ${label}` : undefined,
@@ -382,10 +433,13 @@ export const INITIAL_SESSION_LIMIT = 5;
 export const SESSION_LIMIT_STEP = 5;
 const EXPANDED_WORKTREES_STORAGE_KEY = "assistant.worktreeBrowser.expanded.v1";
 
-export function loadExpandedWorktreeIds(): Set<string> {
+/** A `scope` keeps a tree's folding apart from the sidebar's. */
+export function loadExpandedWorktreeIds(scope?: string): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = persistentStore().getItem(EXPANDED_WORKTREES_STORAGE_KEY);
+    const raw = persistentStore().getItem(
+      scopedKey(EXPANDED_WORKTREES_STORAGE_KEY, scope),
+    );
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(
       Array.isArray(parsed)
@@ -397,15 +451,19 @@ export function loadExpandedWorktreeIds(): Set<string> {
   }
 }
 
-export function persistExpandedWorktreeIds(ids: Set<string>) {
+export function persistExpandedWorktreeIds(ids: Set<string>, scope?: string) {
   try {
     persistentStore().setItem(
-      EXPANDED_WORKTREES_STORAGE_KEY,
+      scopedKey(EXPANDED_WORKTREES_STORAGE_KEY, scope),
       JSON.stringify([...ids]),
     );
   } catch {
     // Best-effort only; the in-memory state still applies for this render.
   }
+}
+
+export function scopedKey(key: string, scope: string | undefined): string {
+  return scope ? `${key}:${scope}` : key;
 }
 
 type WorktreeContextTask = TaskBackRef & { blocked?: boolean };
@@ -452,6 +510,14 @@ interface WorktreeRowProps {
   sessionCount?: number;
   expanded?: boolean;
   onToggleSessions?: (id: string) => void;
+  /** The icon in this colour (its project's), not the muted grey. */
+  iconColor?: string | undefined;
+  /** More actions after Open and Start session, in the row's menu. */
+  menuActions?: ListRowAction[] | undefined;
+  /** Opens the worktree page, where tapping the row only expands it. */
+  onOpen?: ((id: string) => void) | undefined;
+  /** The row's menu is about to open: its host can build the items. */
+  onMenuIntent?: (() => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
   /** In-progress, unarchived Tasks, scoped by the host. */
   tasks?: readonly WorktreeContextTask[] | undefined;
@@ -494,6 +560,10 @@ export const WorktreeRow = memo(
     previous.sessionCount === next.sessionCount &&
     previous.expanded === next.expanded &&
     previous.onToggleSessions === next.onToggleSessions &&
+    previous.onOpen === next.onOpen &&
+    previous.iconColor === next.iconColor &&
+    previous.menuActions === next.menuActions &&
+    previous.onMenuIntent === next.onMenuIntent &&
     previous.onStartSession === next.onStartSession &&
     previous.tasks === next.tasks &&
     previous.tasksExpanded === next.tasksExpanded &&

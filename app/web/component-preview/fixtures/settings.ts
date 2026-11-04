@@ -240,9 +240,6 @@ export const settingsPrefs: Prefs = {
   backlogView: "backlog",
   backlogViewMode: "normal",
   backlogProjectFilter: ALL_PROJECT_FILTER,
-  worktreeChangesRailWidth: 300,
-  worktreeChangesRailCollapsed: false,
-  worktreeNavigatorViewMode: "tree",
   diffStyle: "unified",
   diffWordLevel: true,
   diffIgnoreWhitespace: true,
@@ -252,6 +249,10 @@ export const settingsPrefs: Prefs = {
   pullRequestProjectFilter: null,
   pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
   pullRequestHideDrafts: false,
+  projectGroupBy: "hierarchy",
+  projectFilterId: null,
+  projectShowArchived: false,
+  projectWorktreeFilter: "all",
 };
 export const settingsMemory: UseMemory = {
   list: ready({ cards: [], total: 0, hasMore: false }),

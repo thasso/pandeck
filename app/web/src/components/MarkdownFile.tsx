@@ -8,7 +8,6 @@ import {
   type MarkdownFrontmatter,
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
-import { useStoredOpen } from "../hooks/useStoredOpen.ts";
 import { useMentionedPaObjectReferences } from "./PaObjectLinks.tsx";
 import { FrontmatterValue, isVocabularyField } from "./frontmatterValues.tsx";
 import {
@@ -19,7 +18,7 @@ import {
 } from "./common/PropertyList.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
-import { Card, CardContent, CardHeader } from "./ui/card.tsx";
+import { InspectorSection } from "./shell/Inspector.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -93,29 +92,23 @@ function MarkdownFrontmatterHeader({
 }) {
   const { title, tags, fields, hiddenFields, source, parsed, raw } =
     frontmatter;
-  const [open, toggleOpen] = useStoredOpen("markdown-metadata", true);
+  // A section as the inspector draws one (chevron, title, its rows), not a
+  // card: ruled off from the body under it rather than boxed.
+  const frame = `border-b border-border pb-3 ${className ?? ""}`;
   if (!parsed) {
     return (
-      <Collapsible className={className}>
-        <Card size="sm">
-          <CardHeader>
-            <CollapsibleTrigger
-              render={
-                <Button variant="ghost" size="sm" className="justify-start" />
-              }
-            >
-              Frontmatter
-            </CollapsibleTrigger>
-          </CardHeader>
-          <CollapsibleContent keepMounted>
-            <CardContent>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">
-                {raw}
-              </pre>
-            </CardContent>
-          </CollapsibleContent>
-        </Card>
-      </Collapsible>
+      <header aria-label="Document metadata" className={frame}>
+        <InspectorSection
+          id="frontmatter"
+          storageScope="document"
+          title="Frontmatter"
+          defaultOpen={false}
+        >
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">
+            {raw}
+          </pre>
+        </InspectorSection>
+      </header>
     );
   }
   const rows: Array<{ label: string; node: ReactNode }> = [
@@ -197,71 +190,54 @@ function MarkdownFrontmatterHeader({
   )
     return null;
   return (
-    <header aria-label="Document metadata" className={className}>
-      <Collapsible open={open} onOpenChange={toggleOpen}>
-        <Card size="sm">
-          {/* A generic name, so the card reads the same on every file; the
-            document's own title is one of its rows. Folded or not is
-            remembered across files. */}
-          <CardHeader>
+    <header aria-label="Document metadata" className={frame}>
+      {/* A generic name, so the section reads the same on every file; the
+        document's own title is one of its rows. Folded until opened; open or
+        not is then remembered across files. */}
+      <InspectorSection
+        id="markdown-metadata"
+        storageScope="document"
+        title="Metadata"
+        defaultOpen={false}
+      >
+        <PropertyList align="start">
+          {rows.map((row) => (
+            <Fragment key={row.label}>{row.node}</Fragment>
+          ))}
+        </PropertyList>
+        {hiddenFields.length > 0 ? (
+          // Bookkeeping a reader rarely needs (the schema, the entry's id):
+          // folded away under the rest, one click from view.
+          <Collapsible className="mt-1">
             <CollapsibleTrigger
               render={
                 <Button
                   variant="ghost"
-                  size="sm"
-                  className="-mx-2 w-fit justify-start font-medium"
+                  size="xs"
+                  className="text-muted-foreground"
                 />
               }
             >
               <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
-              Metadata
+              {hiddenFields.length} more
             </CollapsibleTrigger>
-          </CardHeader>
-          <CollapsibleContent>
-            <CardContent>
-              <PropertyList align="start">
-                {rows.map((row) => (
-                  <Fragment key={row.label}>{row.node}</Fragment>
-                ))}
+            <CollapsibleContent>
+              <PropertyList align="start" className="mt-1">
+                {[...hiddenFields]
+                  .sort((a, b) => compareFrontmatterLabels(a.label, b.label))
+                  .map((field) => (
+                    <FieldRow
+                      key={field.key}
+                      field={field}
+                      paObjectReferences={paObjectReferences}
+                      onOpenPaObject={onOpenPaObject}
+                    />
+                  ))}
               </PropertyList>
-              {hiddenFields.length > 0 ? (
-                // Bookkeeping a reader rarely needs (the schema, the entry's id):
-                // folded away under the rest, one click from view.
-                <Collapsible className="mt-1">
-                  <CollapsibleTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        className="text-muted-foreground"
-                      />
-                    }
-                  >
-                    <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
-                    {hiddenFields.length} more
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <PropertyList align="start" className="mt-1">
-                      {[...hiddenFields]
-                        .sort((a, b) =>
-                          compareFrontmatterLabels(a.label, b.label),
-                        )
-                        .map((field) => (
-                          <FieldRow
-                            key={field.key}
-                            field={field}
-                            paObjectReferences={paObjectReferences}
-                            onOpenPaObject={onOpenPaObject}
-                          />
-                        ))}
-                    </PropertyList>
-                  </CollapsibleContent>
-                </Collapsible>
-              ) : null}
-            </CardContent>
-          </CollapsibleContent>
-        </Card>
-      </Collapsible>
+            </CollapsibleContent>
+          </Collapsible>
+        ) : null}
+      </InspectorSection>
     </header>
   );
 }

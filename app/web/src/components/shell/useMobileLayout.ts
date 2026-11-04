@@ -16,11 +16,12 @@ export function useMobileLayout(): boolean {
     () =>
       provided ??
       (typeof window !== "undefined" &&
-        window.matchMedia(MOBILE_LAYOUT_QUERY).matches),
+        (window.matchMedia?.(MOBILE_LAYOUT_QUERY).matches ?? false)),
   );
 
   useEffect(() => {
-    if (provided !== null) return;
+    // Absent only where there is no layout to follow (jsdom): desktop.
+    if (provided !== null || !window.matchMedia) return;
     const media = window.matchMedia(MOBILE_LAYOUT_QUERY);
     const update = () => setMobile(media.matches);
     update();

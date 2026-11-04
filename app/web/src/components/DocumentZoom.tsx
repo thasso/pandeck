@@ -5,7 +5,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Minus, Plus, RotateCcw, Search } from "lucide-react";
+import { Minus, Plus, RotateCcw, Search, ZoomIn, ZoomOut } from "lucide-react";
 import {
   DOCUMENT_ZOOM_BOUNDS,
   DOCUMENT_ZOOM_DEFAULT,
@@ -14,6 +14,7 @@ import {
   type DocumentZoomMode,
 } from "../lib/documentZoom.ts";
 import { IconButton } from "./common/IconButton.tsx";
+import type { HeaderMenuGroup } from "./common/HeaderMenu.tsx";
 import { Button } from "./ui/button.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 
@@ -63,36 +64,43 @@ export function useDocumentZoomRegistration(
   }, [mode, scale, setScale]);
 }
 
-export function DocumentZoomActions({
-  zoom,
-}: {
-  zoom: DocumentZoomRegistration;
-}) {
-  return (
-    <>
-      <IconButton
-        label="Zoom out"
-        onClick={zoom.decrease}
-        disabled={!zoom.canDecrease}
-      >
-        <Minus />
-      </IconButton>
-      <IconButton
-        label={`Reset zoom (${Math.round(zoom.scale * 100)}%)`}
-        onClick={zoom.reset}
-        disabled={zoom.scale === DOCUMENT_ZOOM_DEFAULT}
-      >
-        <RotateCcw />
-      </IconButton>
-      <IconButton
-        label="Zoom in"
-        onClick={zoom.increase}
-        disabled={!zoom.canIncrease}
-      >
-        <Plus />
-      </IconButton>
-    </>
-  );
+/**
+ * The open document's zoom as a header `…` group (`HeaderMenu`): every wide
+ * page draws it there, never as a row of header buttons. The menu stays open
+ * between steps.
+ */
+export function zoomMenuGroup(zoom: DocumentZoomRegistration): HeaderMenuGroup {
+  return {
+    key: "zoom",
+    label: "Zoom",
+    items: [
+      {
+        key: "zoom-in",
+        icon: <ZoomIn />,
+        label: "Zoom in",
+        keepOpen: true,
+        disabled: !zoom.canIncrease,
+        onSelect: zoom.increase,
+      },
+      {
+        key: "zoom-out",
+        icon: <ZoomOut />,
+        label: "Zoom out",
+        keepOpen: true,
+        disabled: !zoom.canDecrease,
+        onSelect: zoom.decrease,
+      },
+      {
+        key: "zoom-reset",
+        icon: <RotateCcw />,
+        label: "Reset zoom",
+        keepOpen: true,
+        disabled: zoom.scale === DOCUMENT_ZOOM_DEFAULT,
+        hint: `${Math.round(zoom.scale * 100)}%`,
+        onSelect: zoom.reset,
+      },
+    ],
+  };
 }
 
 /**

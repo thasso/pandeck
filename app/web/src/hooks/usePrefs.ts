@@ -4,6 +4,11 @@ import {
   type PullRequestGroupBy,
   type PullRequestGroupId,
 } from "../lib/pullRequestInbox.ts";
+import {
+  normalizeProjectGroupBy,
+  type ProjectGroupBy,
+  type ProjectWorktreeFilter,
+} from "../lib/projectListView.ts";
 import { applyPatch } from "@assistant/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -150,17 +155,14 @@ export interface Prefs {
   pullRequestReasonFilter: PullRequestGroupId[];
   /** Pull Requests list: leave drafts out. */
   pullRequestHideDrafts: boolean;
-  /** Worktree detail views: width of the local navigator rail. */
-  worktreeChangesRailWidth: number;
-  /** Worktree detail views: whether the local navigator rail is collapsed. */
-  worktreeChangesRailCollapsed: boolean;
-  /** Worktree detail views: flat list vs folder tree for file/change navigators. */
-  worktreeNavigatorViewMode: "list" | "tree";
-  /**
-   * Worktree Review tab mode: one file at a time vs the whole changeset in one
-   * scroll. Unset = device default (changeset on mobile, by-file on desktop).
-   */
-  worktreeReviewMode?: "by-file" | "changeset";
+  /** Projects browser: how projects are grouped. */
+  projectGroupBy: ProjectGroupBy;
+  /** Projects browser: leave out projects with no worktree and no session. */
+  projectFilterId: string | null;
+  /** Projects browser: list archived projects too. */
+  projectShowArchived: boolean;
+  /** Projects browser: which worktrees are listed. */
+  projectWorktreeFilter: ProjectWorktreeFilter;
   /** Diff rendering: unified vs side-by-side. */
   diffStyle: "unified" | "split";
   /** Diff rendering: intra-line word-level highlighting. */
@@ -205,7 +207,6 @@ type OptionalPrefKey = {
 // Adding an optional preference must also add it to the persisted-key inventory.
 const OPTIONAL_PREF_KEYS = {
   attentionFilters: true,
-  worktreeReviewMode: true,
   lastModelKey: true,
   lastThinkingLevel: true,
   workflowRoleRuntimes: true,
@@ -246,9 +247,10 @@ const defaults: Prefs = {
   pullRequestProjectFilter: null,
   pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
   pullRequestHideDrafts: false,
-  worktreeChangesRailWidth: 300,
-  worktreeChangesRailCollapsed: false,
-  worktreeNavigatorViewMode: "tree",
+  projectGroupBy: "hierarchy",
+  projectFilterId: null,
+  projectShowArchived: false,
+  projectWorktreeFilter: "all",
   diffStyle: "unified",
   diffWordLevel: true,
   diffIgnoreWhitespace: true,
@@ -275,6 +277,7 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
     backlogView: normalizeBacklogView(known.backlogView),
     attentionFilters: normalizeAttentionFilters(known.attentionFilters),
     pullRequestGroupBy: normalizePullRequestGroupBy(known.pullRequestGroupBy),
+    projectGroupBy: normalizeProjectGroupBy(known.projectGroupBy),
     ...(workflowRoleRuntimes !== undefined ? { workflowRoleRuntimes } : {}),
   };
 }

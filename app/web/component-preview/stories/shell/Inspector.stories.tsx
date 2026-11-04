@@ -103,11 +103,7 @@ function ObjectInspectorStory({ object }: { object: InspectedObject }) {
           status={fixture.worktreeStatuses[worktree.id]}
           projects={fixture.projects}
           sessions={fixture.sessions}
-          sessionsFresh
           openers={openers}
-          onStartSession={noop}
-          onMerge={noop}
-          onRemove={noop}
         />
       )}
     </Panel>

@@ -398,75 +398,86 @@ export function useWorktreeDelivery({
     }
   };
 
-  // Only what the state allows: no "Push" on a branch with nothing to push, and
-  // no force-push unless the remote has actually diverged. A row's own detail —
-  // how many commits, which PR — is its `hint`, so the label stays the act.
+  // Every act is always listed, so the menu reads the same from one worktree
+  // to the next; one the state does not allow is disabled and says why. A
+  // row's own detail — how many commits, which PR — is its `hint`, so the label
+  // stays the act.
+  const busySyncing = syncing !== null;
+  const unless = (reason: string | false | undefined) =>
+    reason ? { disabled: true, disabledReason: reason } : {};
+  const noPrReason = worktree?.isMain
+    ? "Not for the main checkout"
+    : !hostingForThis?.provider
+      ? "No hosting provider"
+      : undefined;
   const actions: InspectorAction[] = !worktree
     ? []
     : [
-        ...(status?.dirty
-          ? [
-              {
-                key: "auto-commit",
-                icon: (
-                  <span className="relative">
-                    <GitCommitHorizontal size={14} />
-                    <Sparkles size={6} className="absolute -right-1 -top-1" />
-                  </span>
-                ),
-                label: "Auto commit",
-                busy: autoCommitting,
-                disabled: syncing !== null,
-                // Its OUTCOME can be a dialog (blockers, or a failure), and
-                // that dialog is mounted from this hook — see "commit" below.
-                keepOpen: true,
-                onRun: () => void doAutoCommit(),
-              },
-              {
-                key: "commit",
-                icon: <Pencil size={14} />,
-                label: "Commit with message…",
-                disabled: committing || syncing !== null,
-                // Opens a DIALOG, and the dialog — like this hook's state —
-                // lives in the dock sheet's body, which a collapse unmounts.
-                // Collapsing on act would destroy the very dialog the act just
-                // opened (`keepOpen` on every dialog-opening row here).
-                keepOpen: true,
-                onRun: () => {
-                  setCommitError(null);
-                  setCommitOpen(true);
-                },
-              },
-            ]
-          : []),
-        ...(pushable
-          ? [
-              {
-                key: "push",
-                icon: <UploadCloud size={14} />,
-                label: "Push",
+        {
+          key: "auto-commit",
+          icon: (
+            <span className="relative">
+              <GitCommitHorizontal size={14} />
+              <Sparkles size={6} className="absolute -right-1 -top-1" />
+            </span>
+          ),
+          label: "Auto commit",
+          busy: autoCommitting,
+          disabled: busySyncing,
+          ...unless(!status?.dirty && "Nothing to commit"),
+          // Its OUTCOME can be a dialog (blockers, or a failure), and
+          // that dialog is mounted from this hook — see "commit" below.
+          keepOpen: true,
+          onRun: () => void doAutoCommit(),
+        },
+        {
+          key: "commit",
+          icon: <Pencil size={14} />,
+          label: "Commit with message…",
+          disabled: committing || busySyncing,
+          ...unless(!status?.dirty && "Nothing to commit"),
+          // Opens a DIALOG, and the dialog — like this hook's state — lives in
+          // the dock sheet's body, which a collapse unmounts. Collapsing on act
+          // would destroy the very dialog the act just opened (`keepOpen` on
+          // every dialog-opening row here).
+          keepOpen: true,
+          onRun: () => {
+            setCommitError(null);
+            setCommitOpen(true);
+          },
+        },
+        {
+          key: "push",
+          icon: <UploadCloud size={14} />,
+          label: "Push",
+          ...(pushable
+            ? {
                 hint: status?.upstream
                   ? `${status.upstream.ahead} commit${status.upstream.ahead === 1 ? "" : "s"}`
                   : "new branch",
-                busy: pushing,
-                disabled: syncing !== null,
-                onRun: () => void doPush(),
-              },
-            ]
-          : []),
-        ...(status?.upstream &&
-        (status.upstream.ahead > 0 || status.upstream.behind > 0)
-          ? [
-              {
-                key: "force-push",
-                icon: <UploadCloud size={14} />,
-                label: "Force push",
-                hint: "with lease",
-                disabled: pushing || syncing !== null,
-                onRun: () => void doPush(true),
-              },
-            ]
-          : []),
+              }
+            : {}),
+          busy: pushing,
+          disabled: busySyncing,
+          ...unless(!pushable && "Nothing to push"),
+          onRun: () => void doPush(),
+        },
+        {
+          // No force-push unless the remote has actually diverged.
+          key: "force-push",
+          icon: <UploadCloud size={14} />,
+          label: "Force push",
+          hint: "with lease",
+          disabled: pushing || busySyncing,
+          ...unless(
+            !status?.upstream
+              ? "Push the branch first"
+              : status.upstream.ahead === 0 &&
+                  status.upstream.behind === 0 &&
+                  "Level with the remote",
+          ),
+          onRun: () => void doPush(true),
+        },
         {
           key: "pull",
           icon: <Download size={14} />,
@@ -474,81 +485,77 @@ export function useWorktreeDelivery({
           busy: syncing === "pull-rebase",
           // Nothing to pull FROM until the branch is published: pulling would only
           // report a missing upstream.
-          disabled: syncing !== null || !status?.upstream,
-          ...(status?.upstream
-            ? {}
-            : { disabledReason: "Push the branch first" }),
+          disabled: busySyncing,
+          ...unless(!status?.upstream && "Push the branch first"),
           onRun: () => void doSync("pull-rebase"),
         },
-        ...(worktree.isMain
-          ? []
-          : [
-              {
-                key: "rebase-main",
-                icon: <RefreshCw size={14} />,
-                // What it does, and onto WHICH base: the remote's, fetched
-                // first. Rebasing onto whatever this machine's main checkout
-                // happened to be at was the ambiguity, not the rebase. And
-                // there is no fast-forward-main row: landing the branch on main
-                // is "Merge back…", which says so and offers the strategy.
-                label: `Pull from ${worktree.baseBranch}`,
-                // Which REMOTE carries the base branch is the server's
-                // resolution (a configured `branch.<base>.remote`, else
-                // `origin`, else a sole remote), so the hint says "the
-                // remote's" rather than naming one this client cannot know.
-                hint: `rebase onto remote ${worktree.baseBranch}`,
-                busy: syncing === "rebase-main",
-                disabled: syncing !== null,
-                onRun: () => void doSync("rebase-main"),
-              },
-            ]),
-        ...(mergeablePr
-          ? [
-              {
-                key: "merge-pr",
-                icon: <GitMerge size={14} />,
-                label: "Merge pull request…",
-                hint: `#${mergeablePr.number}`,
-                keepOpen: true,
-                busy: mergingPr,
-                disabled: syncing !== null,
-                onRun: () => {
-                  setMergePrError(null);
-                  setMergePrOpen(true);
-                },
-              },
-            ]
-          : []),
-        ...(canCreatePr
-          ? [
-              {
-                key: "create-pr",
-                icon: <GitPullRequest size={14} />,
-                label: "Create pull request…",
-                keepOpen: true,
-                onRun: () => {
-                  setPrError(null);
-                  setPrOpen(true);
-                },
-              },
-            ]
-          : []),
-        ...(status?.dirty
-          ? [
-              {
-                key: "clean",
-                icon: <Eraser size={14} />,
-                label: "Clean worktree…",
-                busy: cleaning,
-                keepOpen: true,
-                disabled: syncing !== null,
-                onRun: () => {
-                  setCleanError(null);
-                  setCleanOpen(true);
-                },
-              },
-            ]
-          : []),
+        {
+          key: "rebase-main",
+          icon: <RefreshCw size={14} />,
+          // What it does, and onto WHICH base: the remote's, fetched first.
+          // Rebasing onto whatever this machine's main checkout happened to be
+          // at was the ambiguity, not the rebase. And there is no
+          // fast-forward-main row: landing the branch on main is "Merge back…",
+          // which says so and offers the strategy.
+          label: worktree.isMain
+            ? "Pull from base"
+            : `Pull from ${worktree.baseBranch}`,
+          // Which REMOTE carries the base branch is the server's resolution (a
+          // configured `branch.<base>.remote`, else `origin`, else a sole
+          // remote), so the hint says "the remote's" rather than naming one
+          // this client cannot know.
+          ...(worktree.isMain
+            ? {}
+            : { hint: `rebase onto remote ${worktree.baseBranch}` }),
+          busy: syncing === "rebase-main",
+          disabled: busySyncing,
+          ...unless(worktree.isMain && "Not for the main checkout"),
+          onRun: () => void doSync("rebase-main"),
+        },
+        {
+          key: "merge-pr",
+          icon: <GitMerge size={14} />,
+          label: "Merge pull request…",
+          ...(mergeablePr ? { hint: `#${mergeablePr.number}` } : {}),
+          keepOpen: true,
+          busy: mergingPr,
+          disabled: busySyncing,
+          ...unless(!mergeablePr && (noPrReason ?? "No open pull request")),
+          onRun: () => {
+            setMergePrError(null);
+            setMergePrOpen(true);
+          },
+        },
+        {
+          key: "create-pr",
+          icon: <GitPullRequest size={14} />,
+          label: "Create pull request…",
+          keepOpen: true,
+          ...unless(
+            !canCreatePr &&
+              (noPrReason ??
+                (hostingForThis?.pr
+                  ? `Pull request #${hostingForThis.pr.number} exists`
+                  : "Push the branch first")),
+          ),
+          onRun: () => {
+            setPrError(null);
+            setPrOpen(true);
+          },
+        },
+        {
+          key: "clean",
+          icon: <Eraser size={14} />,
+          label: "Clean worktree…",
+          busy: cleaning,
+          keepOpen: true,
+          disabled: busySyncing,
+          ...unless(!status?.dirty && "Nothing to clean"),
+          onRun: () => {
+            setCleanError(null);
+            setCleanOpen(true);
+          },
+        },
       ];
 
   const dialogs = !worktree ? null : (

@@ -18,7 +18,11 @@ import {
 import { IconButton } from "./common/IconButton.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { OverflowActionItems, OverflowMenu } from "./common/OverflowMenu.tsx";
+import {
+  actionMenuItems,
+  HeaderMenu,
+  type HeaderMenuGroup,
+} from "./common/HeaderMenu.tsx";
 
 /**
  * @component PageHeader
@@ -97,7 +101,14 @@ interface PageHeaderProps {
    * control (the phone's dock row ends the same way).
    */
   close?: ReactNode;
-  /** Chat supplies its own combined `…` menu; other pages use the shared one. */
+  /**
+   * The page's own `…` rows. The header draws ONE `…` (`HeaderMenu`): these
+   * groups, then the object's published secondary actions, after the object's
+   * comment and primary controls, so it is the header's rightmost control
+   * (only Close follows).
+   */
+  menu?: { label: string; groups: readonly HeaderMenuGroup[] } | undefined;
+  /** False where the page's object actions are not this header's to draw. */
   objectOverflow?: boolean;
   safeAreaTop?: boolean;
   transparent?: boolean;
@@ -116,6 +127,7 @@ export function PageHeader({
   subtitle,
   actions,
   close,
+  menu,
   objectOverflow = true,
   safeAreaTop = false,
   transparent = false,
@@ -172,7 +184,8 @@ export function PageHeader({
         ) : null}
       </div>
       {actions}
-      <PageHeaderObjectActions showOverflow={objectOverflow} />
+      <PageHeaderObjectActions />
+      <PageHeaderMenu menu={menu} objectActions={objectOverflow} />
       {close}
     </header>
   );
@@ -187,23 +200,16 @@ export function PageHeader({
  * Screens). The primary slot swaps to Submit review while comments are waiting;
  * the object panel lists the primary again whenever this is not showing it.
  */
-function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
+function PageHeaderObjectActions() {
   const actuation = useCommentActuation();
   const primary = useRoutePrimaryAction();
-  const secondary = useRouteSecondaryActions();
   const pendingCount = Math.max(0, actuation?.pendingCount ?? 0);
   const showComment = Boolean(actuation?.onComment);
   const submit =
     actuation?.onSubmitReview && primarySlotShowsReview(pendingCount)
       ? actuation.onSubmitReview
       : undefined;
-  if (
-    !showComment &&
-    !submit &&
-    !primary &&
-    (!showOverflow || secondary.length === 0)
-  )
-    return null;
+  if (!showComment && !submit && !primary) return null;
 
   const canComment = actuation?.canComment === true;
   const commentLabel = canComment
@@ -245,16 +251,43 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
           {primary.icon}
         </IconButton>
       ) : null}
-      {showOverflow && secondary.length > 0 ? (
-        <OverflowMenu
-          label="Inspector actions"
-          size="icon"
-          contentClassName="min-w-48"
-        >
-          <OverflowActionItems actions={secondary} />
-        </OverflowMenu>
-      ) : null}
     </div>
+  );
+}
+
+/**
+ * The header's one `…`: the page's own groups, then the object's secondary
+ * actions the inspector publishes (only on a wide layout; a phone's dock keeps
+ * them). An action the page already lists is not listed twice.
+ */
+function PageHeaderMenu({
+  menu,
+  objectActions,
+}: {
+  menu: PageHeaderProps["menu"];
+  objectActions: boolean;
+}) {
+  const secondary = useRouteSecondaryActions();
+  const listed = new Set(
+    menu?.groups.flatMap((group) => group.items.map((item) => item.key)),
+  );
+  const extra = objectActions
+    ? secondary.filter((action) => !listed.has(action.key))
+    : [];
+  const groups: HeaderMenuGroup[] = [
+    ...(menu?.groups ?? []),
+    ...(extra.length > 0
+      ? [
+          {
+            key: "object-actions",
+            ...(menu ? { label: "Actions" } : {}),
+            items: actionMenuItems(extra),
+          },
+        ]
+      : []),
+  ];
+  return (
+    <HeaderMenu label={menu?.label ?? "Inspector actions"} groups={groups} />
   );
 }
 

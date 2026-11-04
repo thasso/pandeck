@@ -13,9 +13,9 @@ import {
   pullRequestRelationGroups,
   sessionRelationGroups,
   taskRelationGroups,
-  worktreeInspectorActions,
   worktreeRelationGroups,
 } from "./objectInspectors.tsx";
+import { worktreeInspectorActions } from "./worktree/worktreeInspectorActions.tsx";
 
 function task(
   partial: Partial<TaskSummary> & { id: string; title: string },
@@ -487,7 +487,7 @@ describe("worktreeInspectorActions", () => {
     ]);
   });
 
-  it("hides the lifecycle actions for the main checkout", () => {
+  it("lists the lifecycle actions disabled, with why, on the main checkout", () => {
     const main: WorktreeRecord = {
       ...base,
       id: "main:p1",
@@ -495,9 +495,18 @@ describe("worktreeInspectorActions", () => {
       path: "/repo",
       branch: "main",
     };
-    expect(worktreeInspectorActions(main, handlers).map((a) => a.key)).toEqual([
+    const actions = worktreeInspectorActions(main, handlers);
+    expect(actions.map((a) => a.key)).toEqual([
       "start-session",
+      "merge",
+      "remove",
+      "retire",
     ]);
+    expect(actions[0]!.disabled).toBeUndefined();
+    for (const action of actions.slice(1)) {
+      expect(action.disabled).toBe(true);
+      expect(action.disabledReason).toBe("Not for the main checkout");
+    }
   });
 });
 

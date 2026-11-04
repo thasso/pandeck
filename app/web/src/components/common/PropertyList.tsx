@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
+import { ChevronDownIcon } from "lucide-react";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
@@ -185,6 +186,7 @@ export function TextProperty({
           >
             {value || placeholder}
           </span>
+          <ChevronDownIcon className="pointer-events-none ml-auto size-4" />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72 gap-2">
           <Input

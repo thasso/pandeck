@@ -3,7 +3,6 @@ import { useMemo, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
-  ArchiveX,
   BookOpen,
   Check,
   CheckCircle2,
@@ -23,7 +22,6 @@ import {
   Pencil,
   RotateCcw,
   SearchCheck,
-  SendHorizontal,
   SlidersHorizontal,
   Trash2,
   Undo2,
@@ -56,7 +54,6 @@ import {
   type WorktreeReviewSet,
 } from "@assistant/shared";
 import { ownedBySessionTree } from "@assistant/shared/sessionTreeWorktrees";
-import { useCommentActuation } from "./review/CommentActuation.tsx";
 import type { Task } from "../lib/backlogTree.ts";
 import { taskWorktreeIds } from "../lib/taskActivity.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -79,6 +76,7 @@ import {
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { Button } from "./ui/button.tsx";
+import { ProjectTreePane } from "./ProjectTreePane.tsx";
 import {
   PROPERTY_TRIGGER,
   PropertyLabel,
@@ -117,7 +115,6 @@ import {
   WorktreeDeliverySection,
   useWorktreeDelivery,
 } from "./worktree/WorktreeDelivery.tsx";
-import { useWorktreeRetire } from "./worktree/useWorktreeRetire.tsx";
 import { usePullRequestActions } from "./pullRequest/PullRequestActions.tsx";
 import {
   hostingProviderLabel,
@@ -709,6 +706,54 @@ export function sessionTreeWorktreeRecords(
 }
 
 const TREE_WORKTREES_LABEL = "Worktrees from this session";
+const NO_WORKTREE_STATUSES: Record<string, WorktreeGitStatus> = {};
+
+/**
+ * The tree group as the sidebar draws worktrees: each row unfolds into its
+ * uncommitted changes, its branch against the base, its files and its
+ * sessions, and a file picked there opens on the worktree page.
+ */
+function withTreeWorktreesTree(
+  groups: InspectorRelationGroup[],
+  tree: {
+    worktreeIds: string[];
+    projects: ProjectRecord[];
+    sessions: SessionListItem[];
+    worktrees: readonly WorktreeRecord[] | null | undefined;
+    worktreeStatuses: Record<string, WorktreeGitStatus> | undefined;
+    openers: ObjectOpeners;
+    onNavigate: ((path: string) => void) | undefined;
+    onStartSessionInWorktree: ((id: string) => void) | undefined;
+    onRemoveWorktree: ((id: string) => void) | undefined;
+  },
+): InspectorRelationGroup[] {
+  if (tree.worktreeIds.length === 0 || !tree.worktrees) return groups;
+  // Out to the panel's edges like the session rows beside it, with their
+  // hairlines and hover, and the chevrons on their line.
+  const content = (
+    <div className="-mx-3 [--tree-row-inset:7px] [&_[role=tree]>li:last-child_.border-b]:border-b-0 [&_.tree-row-indent]:border-border dark:[&_.tree-row-indent:hover]:bg-muted/50">
+      <ProjectTreePane
+        rootWorktreeIds={tree.worktreeIds}
+        storageScope="session-inspector"
+        projects={tree.projects}
+        loading={false}
+        sessions={tree.sessions}
+        worktrees={tree.worktrees as WorktreeRecord[]}
+        worktreeStatuses={tree.worktreeStatuses ?? NO_WORKTREE_STATUSES}
+        onOpenSession={tree.openers.onOpenSession}
+        onNavigate={tree.onNavigate}
+        onStartSessionInWorktree={tree.onStartSessionInWorktree}
+        onRemoveWorktree={tree.onRemoveWorktree}
+        flush
+      />
+    </div>
+  );
+  return groups.map((group) =>
+    group.id === "tree-worktrees"
+      ? { ...group, alwaysShown: true, content }
+      : group,
+  );
+}
 
 /**
  * The tree group's load states (`docs/loading-states.md`). The group is drawn
@@ -1487,6 +1532,9 @@ export function SessionInspector({
   peerPromptPeers,
   stagedRefs = [],
   openers,
+  onNavigate,
+  onStartSessionInWorktree,
+  onRemoveWorktree,
   view,
   children,
 }: {
@@ -1534,6 +1582,11 @@ export function SessionInspector({
   /** Draft-session staged context (task/project/worktree refs before the first send). */
   stagedRefs?: ObjectRef[];
   openers: ObjectOpeners;
+  /** Opens a file picked in a tree worktree's sections. */
+  onNavigate?: ((path: string) => void) | undefined;
+  /** A tree worktree row's `…` actions, as the sidebar's rows offer them. */
+  onStartSessionInWorktree?: ((id: string) => void) | undefined;
+  onRemoveWorktree?: ((id: string) => void) | undefined;
   /**
    * Transcript view toggles, rendered as a **View** section. Passed only where
    * this inspector is the session's control centre (the mobile object dock);
@@ -1608,7 +1661,22 @@ export function SessionInspector({
           ),
         },
         ...withTreeWorktreesLoadState(
-          toInspectorGroups(groups, openers, sessions, worktreeHosting),
+          withTreeWorktreesTree(
+            toInspectorGroups(groups, openers, sessions, worktreeHosting),
+            {
+              worktreeIds: sessionTreeWorktreeRecords(sessionId, worktrees).map(
+                (item) => item.id,
+              ),
+              projects,
+              sessions,
+              worktrees,
+              worktreeStatuses,
+              openers,
+              onNavigate,
+              onStartSessionInWorktree,
+              onRemoveWorktree,
+            },
+          ),
           {
             awaited:
               sessionId !== undefined &&
@@ -1793,7 +1861,7 @@ function SessionDetails({
       ) : null}
       {onSetPeerTurnCap ? (
         <>
-          <PropertyLabel>Peer turns at once</PropertyLabel>
+          <PropertyLabel>Peer turns</PropertyLabel>
           <Select
             value={peerTurnCap?.toString() ?? "default"}
             onValueChange={(value) => {
@@ -1801,12 +1869,23 @@ function SessionDetails({
                 onSetPeerTurnCap(value === "default" ? null : Number(value));
             }}
           >
-            <SelectTrigger size="sm" aria-label="Peer turns at once">
+            <SelectTrigger
+              size="sm"
+              aria-label="Peer turns at once"
+              className={PROPERTY_TRIGGER}
+            >
               <SelectValue>
-                {peerTurnCap ?? `Default (${DEFAULT_SESSION_PEER_TURN_CAP})`}
+                {peerTurnCap === undefined ? (
+                  <>
+                    {DEFAULT_SESSION_PEER_TURN_CAP} at once
+                    <span className="text-muted-foreground"> · default</span>
+                  </>
+                ) : (
+                  `${peerTurnCap} at once`
+                )}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent align="start">
               <SelectItem value="default">
                 Default ({DEFAULT_SESSION_PEER_TURN_CAP})
               </SelectItem>
@@ -2124,89 +2203,6 @@ export function worktreeRelationGroups(
 }
 
 /**
- * Inspector actions for a worktree. The main checkout (`isMain`) is read +
- * session only — it omits the destructive Merge-back and Remove actions.
- *
- * Ordering is the panel's, not each caller's: what you do to the WORK
- * (delivery: commit, push, sync, PR) sits between starting a session and the
- * irreversible lifecycle acts, because delivery no longer owns an actions list
- * of its own.
- */
-export function worktreeInspectorActions(
-  worktree: WorktreeRecord,
-  handlers: {
-    onStartSession: (id: string) => void;
-    onMerge: (id: string) => void;
-    onRemove: (id: string) => void;
-    onRetire: () => void;
-    /** A retirement is running; only its own action busies (R5). */
-    retireBusy?: boolean;
-    onSubmitReview?: () => void;
-    pendingReviewCount?: number;
-    /** The delivery actions from `useWorktreeDelivery`, already state-filtered. */
-    deliveryActions?: InspectorAction[];
-  },
-): InspectorAction[] {
-  const pendingReviewCount = Math.max(0, handlers.pendingReviewCount ?? 0);
-  return [
-    {
-      key: "start-session",
-      primary: true,
-      icon: <MessageSquarePlus size={14} />,
-      // The object the panel is about is the worktree: the label says the ACT,
-      // not where it lands.
-      label: "Start session",
-      onRun: () => handlers.onStartSession(worktree.id),
-    },
-    ...(handlers.deliveryActions ?? []),
-    ...(worktree.isMain
-      ? []
-      : [
-          {
-            key: "merge",
-            icon: <GitMerge size={14} />,
-            label: "Merge back…",
-            onRun: () => handlers.onMerge(worktree.id),
-          },
-          {
-            key: "remove",
-            icon: <Trash2 size={14} />,
-            label: "Remove worktree…",
-            onRun: () => handlers.onRemove(worktree.id),
-          },
-          {
-            // Retire is the END of a branch's life, and a different act from
-            // Remove: it refreshes the merge target, VERIFIES this branch is
-            // delivered into it, settles the sessions working here and only
-            // then deletes the checkout and the branch. Remove does none of
-            // that verification — it never fetches — so the two are not one
-            // action with a flag, and neither replaces the other.
-            key: "retire",
-            icon: <ArchiveX size={14} />,
-            label: "Retire worktree…",
-            busy: handlers.retireBusy ?? false,
-            onRun: () => handlers.onRetire(),
-          },
-        ]),
-    // Only while there is something unsent: the batch is DERIVED from the
-    // comments no session has been handed, so with nothing pending this action
-    // would send nothing at all.
-    ...(handlers.onSubmitReview && pendingReviewCount > 0
-      ? [
-          {
-            key: "submit-review",
-            icon: <SendHorizontal size={14} />,
-            label: "Submit review",
-            onRun: handlers.onSubmitReview,
-            hint: `${pendingReviewCount} comment${pendingReviewCount === 1 ? "" : "s"}`,
-            commentActuation: true,
-          },
-        ]
-      : []),
-  ];
-}
-
-/**
  * The worktree's review roster, as an INDEX — the same section a Knowledge
  * entry's panel carries, over the same list component in the same link mode. It
  * is the ONE place a worktree's comments are listed: a diff comment is read and
@@ -2282,11 +2278,7 @@ export function WorktreeInspector({
   status,
   projects,
   sessions,
-  sessionsFresh,
   openers,
-  onStartSession,
-  onMerge,
-  onRemove,
   comments = [],
   reviewSets = [],
   onOpenComment,
@@ -2295,54 +2287,17 @@ export function WorktreeInspector({
   status?: WorktreeGitStatus | undefined;
   projects: ProjectRecord[];
   sessions: SessionListItem[];
-  /**
-   * That list answered in the CURRENT socket episode. Retire states a session
-   * COUNT in its consent text, and a count off a stale list is a promise the
-   * run contradicts (`worktree/useWorktreeRetire.tsx`).
-   */
-  sessionsFresh: boolean;
   openers: ObjectOpeners;
-  onStartSession: (worktreeId: string) => void;
-  onMerge: (worktreeId: string) => void;
-  onRemove: (worktreeId: string) => void;
   /** This worktree's review comments (server-synced, loaded by the page). */
   comments?: WorktreeComment[];
   reviewSets?: WorktreeReviewSet[];
   /** Cross-pane: land on a comment's thread in the diff the main pane shows. */
   onOpenComment?: (commentId: string) => void;
 }) {
-  const commentActuation = useCommentActuation();
   const delivery = useWorktreeDelivery({
     worktree,
     ...(status !== undefined ? { status } : {}),
   });
-  // Retire lives WITH the worktree it ends, beside Remove. Its `merged` fact is
-  // read from this panel's own hosting answer rather than from the app-wide
-  // projection: absent stays unknown there, and an unknown must not be allowed
-  // to read as "delivered".
-  const retire = useWorktreeRetire({
-    worktree,
-    ...(delivery.status !== undefined ? { status: delivery.status } : {}),
-    sessions,
-    sessionsFresh,
-    merged: delivery.hosting?.pr?.state === "merged",
-  });
-  const actions: InspectorAction[] = worktree
-    ? worktreeInspectorActions(worktree, {
-        onStartSession,
-        onMerge,
-        onRemove,
-        onRetire: retire.open,
-        retireBusy: retire.busy,
-        ...(commentActuation?.onSubmitReview !== undefined
-          ? { onSubmitReview: commentActuation?.onSubmitReview }
-          : {}),
-        ...(commentActuation?.pendingCount !== undefined
-          ? { pendingReviewCount: commentActuation?.pendingCount }
-          : {}),
-        deliveryActions: delivery.actions,
-      })
-    : [];
   const liveBranch = status?.branch ?? worktree?.branch;
   return (
     <Inspector
@@ -2356,7 +2311,12 @@ export function WorktreeInspector({
             )
           : []
       }
-      actions={actions}
+      // The worktree page's header menu holds every action, on every layout:
+      // this panel keeps the facts and the links.
+      actions={[]}
+      ownsHeaderActions={false}
+      // The worktree page's header draws Add comment beside its menu.
+      commentActuationInHeader
       sectionStorageScope={`worktree:${worktree?.id ?? "loading"}`}
     >
       {worktree ? (
@@ -2417,7 +2377,6 @@ export function WorktreeInspector({
             onOpenComment={onOpenComment}
           />
           {delivery.dialogs}
-          {retire.dialog}
         </div>
       ) : null}
     </Inspector>

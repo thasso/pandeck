@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Ellipsis } from "lucide-react";
+import { Ellipsis, EllipsisVertical } from "lucide-react";
 import { Button } from "../ui/button.tsx";
 import {
   DropdownMenu,
@@ -33,6 +33,7 @@ export function OverflowMenu({
   side,
   align = "end",
   contentClassName = "w-56",
+  vertical = false,
   children,
 }: {
   label: string;
@@ -43,6 +44,8 @@ export function OverflowMenu({
   /** The menu's edge against the trigger; `start` where the group is left-aligned. */
   align?: "start" | "end";
   contentClassName?: string;
+  /** A vertical ⋮, for a row whose every action lives in the menu. */
+  vertical?: boolean;
   /** `DropdownMenuItem`s (and groups or separators). */
   children: ReactNode;
 }) {
@@ -59,7 +62,7 @@ export function OverflowMenu({
           />
         }
       >
-        <Ellipsis />
+        {vertical ? <EllipsisVertical /> : <Ellipsis />}
       </DropdownMenuTrigger>
       <DropdownMenuContent
         side={side}

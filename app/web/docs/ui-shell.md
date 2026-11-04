@@ -103,16 +103,16 @@ target, with “Select text to comment” naming the enabling gesture.
 
 A chat session is the first surface on the unified model, on EVERY layout: its
 header carries exactly two actions — **Add comment** on the transcript
-selection, then **⋯** (`ChatHeaderMenu`: transcript view options and the
-session's actions, a top sheet on a phone). The session header publishes those
-actions itself (`sessionInspectorActions`), because on a phone the inspector
-only mounts while its sheet is open; the inspector panel therefore lists no
-Actions and no View section on any layout — it holds the session's relations and
-sections. Neither the composer nor the dock row offers Comment any more, and the
-session header has no separate worktree button: in a worktree its title block
-(title, branch, uncommitted counts) is the link to the worktree's changes.
-Documents and worktree changes still follow the split above until they move to
-the same model.
+selection, then **⋯** (the shared `HeaderMenu`: `chatViewMenuGroups`' transcript
+view options and the session's actions, a top sheet on a phone). The session
+header publishes those actions itself (`sessionInspectorActions`), because on a
+phone the inspector only mounts while its sheet is open; the inspector panel
+therefore lists no Actions and no View section on any layout — it holds the
+session's relations and sections. Neither the composer nor the dock row offers
+Comment any more, and the session header has no separate worktree button: in a
+worktree its title block (title, branch, uncommitted counts) is the link to the
+worktree's changes. Documents and worktree changes still follow the split above
+until they move to the same model.
 
 Until every bottom-edge surface has migrated into shell furniture, the shell
 keeps `--app-bottom-chrome-inset` equal to the resting bottom card plus the safe
@@ -1024,23 +1024,31 @@ panel open on a centered list of available panels; **Personal Assistant** is the
 second panel and opens an independent view of the server-owned permanent
 conversation, so it can remain beside the routed main-session chat.
 **Knowledge** is the third (offered only while the Knowledge Base is on in
-Settings, as is the sidebar section): the Knowledge Base folder as the SAME
-Files and Review page the `/knowledge` route draws — file tree,
-File/Preview/History, uncommitted changes — in a narrow column. Moving inside it
-is panel state, like the Worktree panel below, and its one action hands the file
-or view it is on to the main pane. A panel surface is opened from elsewhere by
-request: `kb_show`'s transcript card opens its file here. **Worktree** is the
-fourth, and it is the only panel that addresses no object of its own: it follows
-the OPEN SESSION to the worktree that session executes in, drawing the same
-Review and Files page the `/worktrees/:id` route draws — diffs, file tree,
-commenting and review submission included — so the changes can be read beside
-the chat producing them. It is a narrow column, so it takes the list→detail
-layout and the unified diffs a phone takes — but only the LAYOUT: its scope
-picker and jump list open as anchored popovers, since a viewport-wide sheet
-dropped over the app is a phone affordance, and this panel exists to sit beside
-what the reader is comparing against. Moving inside it (a view, a file, a diff
-scope) is panel state and never touches the address bar, which keeps naming the
-main pane's object; its one action hands the worktree, at the view it is on, to
+Settings, as is the sidebar section): the Knowledge Base folder on the SAME
+worktree page the Worktree panel below draws — Files with File/Preview/History,
+and Changes — in a narrow column. Moving inside it is panel state, like the
+Worktree panel's, and its one action hands the file or view it is on to the main
+pane. A panel surface is opened from elsewhere by request: `kb_show`'s
+transcript card opens its file here. **Worktree** is the fourth, and it is the
+only panel that addresses no object of its own: it follows the OPEN SESSION to
+the worktree that session executes in, drawing the same Changes and Files page
+the `/worktrees/:id` route draws — diffs, files, commenting and review
+submission included — so the changes can be read beside the chat producing them.
+There is one layout for that page everywhere: Changes is the whole changeset in
+one scroll, Files is the open file (or the README), and the file tree lives in
+the left sidebar on the route. The page has no tabs, rail or by-file review. A
+narrow column — the panel, a phone — has no sidebar beside it, so its header
+adds **Browse files** and, on Changes, **Jump to file**, each opening a sheet
+over the page, and its diffs are unified. A sheet is bound to the pane that
+opened it (`EdgeSheetContainer`) rather than dropped over the whole app: in a
+panel it covers the panel, which exists to sit beside what the reader is
+comparing against, and on a wide layout the main pane's sheets (a file's History
+included) cover the main pane and leave the sidebars visible. Only a phone's
+sheets cover the screen. Moving inside it (a view, a file, a diff scope) is
+panel state and never touches the address bar, which keeps naming the main
+pane's object. Like the tabs, that place is kept in `sessionStorage` (per
+worktree here, so a session brought back reopens its worktree where it was) and
+survives a reload; its one action hands the worktree, at the view it is on, to
 the main pane. A session with no worktree, and one whose worktree is gone, each
 say so rather than drawing an empty page. The tab bar is panel chrome, not a
 second object-title row. On small layouts none of this tab state exists: the
@@ -1102,9 +1110,22 @@ user's one write, Settle, belongs to its inbox card.
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action
 remains visible in that header beside the comment controls. The inspector does
-not repeat an **Actions** section there. On small layouts the header `…` holds
-no object action (at most a document's view pivots, see Small Screens), so the
-object dock's inspector retains the full **Actions** section.
+not repeat an **Actions** section there. Every header has exactly ONE `…`, and
+it is always the header's rightmost control (only a Close follows it):
+`PageHeader` draws it from the page's own `menu` groups merged with those
+published object actions, through `common/HeaderMenu`, so it is the same
+dropdown on every wide page and the same sheet dropping from under the header on
+a phone — chat, worktree, Knowledge Base and document viewers alike. A page
+never builds its own menu or trigger. Zoom is a group in that menu, never a row
+of header buttons. A Knowledge Base page's view pivots (History, and Changes vs
+base in a worktree) sit before it as toggle icons: none on shows the file
+itself, so no second toolbar sits under the header. Preview is not a pivot but a
+toggle in the `…` (worktree and Knowledge Base alike): on, the file itself shows
+rendered. Each opened file starts on its context's default — a Knowledge Base
+previews Markdown, a worktree shows source (its README landing excepted), and a
+line anchor always shows source. On small layouts the header `…` holds no object
+action (at most a document's view pivots, see Small Screens), so the object
+dock's inspector retains the full **Actions** section.
 
 There is no embedded agent panel. The **Start a new session** action navigates
 to the new-session page (`/sessions/create`) with the inspected object (and any
@@ -1230,10 +1251,10 @@ still be moved.
 - Navigation on a phone is therefore: the nav bar on the browser screen, back
   and the object's actions in the dock's row on an object screen. Nothing lives
   in a top corner, which is what let the header go. The one exception is a
-  Knowledge Base file's view pivots (File / Preview / History): they choose how
-  the screen presents the file rather than act on it, so they sit behind a `…`
-  at the end of the document's single header row, and no second toolbar or
-  repeated name/path bar sits under it.
+  Knowledge Base file's view pivots (History, and the Preview toggle): they
+  choose how the screen presents the file rather than act on it, so they sit
+  behind a `…` at the end of the document's single header row, and no second
+  toolbar or repeated name/path bar sits under it.
 - The right object panel becomes the **object dock** at the bottom edge: ONE
   card in two positions, resting with only its **header** showing (non-modal —
   the page scrolls and clicks through behind it) and sliding up into a **sheet**

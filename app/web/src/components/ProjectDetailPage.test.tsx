@@ -123,7 +123,7 @@ function renderWorktrees(
   );
 }
 
-/** Shared worktree slots: optional badge/change context, branch, then git signals. */
+/** Shared worktree slots: the branch (with badges), then changes and git signals. */
 function worktreeLines(root: ParentNode, id: string) {
   const row = root.querySelector(`[data-list-row-id="worktree:${id}"]`);
   const content = row?.querySelector("[data-list-row-lines]");
@@ -221,7 +221,7 @@ describe("ProjectDetailPage load states", () => {
 });
 
 describe("ProjectDetailPage worktree rows", () => {
-  it("groups dirty changes in left context above the branch and git signals", () => {
+  it("leads the steady git line with dirty changes, below the branch", () => {
     const row = worktree({ id: "one" });
     const html = renderWorktrees([row], {
       one: git("one", {
@@ -235,15 +235,18 @@ describe("ProjectDetailPage worktree rows", () => {
     });
     const document = new DOMParser().parseFromString(html, "text/html");
     const { context, primary, second } = worktreeLines(document, "one");
-    expect(context?.textContent).toContain("+14−3");
-    expect(context?.firstElementChild?.className).toContain("flex-1");
+    // Always two lines: no context line above the branch.
+    expect(context).toBeNull();
     expect(primary?.textContent).toContain("live/one");
     expect(primary?.textContent).not.toContain("+14−3");
+    const signals = second?.textContent ?? "";
+    expect(signals).toContain("+14−3");
     expect(second?.querySelector("[data-worktree-axes]")).not.toBeNull();
-    expect(second?.textContent).toContain("main ↑2");
+    expect(signals).toContain("main ↑2");
+    expect(signals.indexOf("+14−3")).toBeLessThan(signals.indexOf("main ↑2"));
   });
 
-  it("states the calm fact on the second line when every axis is in sync", () => {
+  it("keeps the git line when every axis is in sync", () => {
     const row = worktree({ id: "calm" });
     const html = renderWorktrees([row], {
       calm: git("calm", {
@@ -256,8 +259,12 @@ describe("ProjectDetailPage worktree rows", () => {
     expect(primary?.textContent).toContain("live/calm");
     // No empty context line when neither badges nor changes exist.
     expect(lines.context).toBeNull();
-    expect(lines.row?.querySelector("[data-worktree-axes]")).toBeNull();
-    expect(second?.textContent).toBe("level with main");
+    // The same line as any other row, so rows do not change height.
+    expect(
+      second
+        ?.querySelector('[data-worktree-axis="base"]')
+        ?.getAttribute("title"),
+    ).toBe("This branch is level with main");
   });
 
   it("renders the live branch rather than the recorded branch", () => {
@@ -322,8 +329,9 @@ describe("ProjectDetailPage worktree rows", () => {
       }),
     });
     const document = new DOMParser().parseFromString(html, "text/html");
-    const { context } = worktreeLines(document, "merged");
-    const badge = context?.querySelector('[data-slot="badge"]');
+    // Badges ride the branch line.
+    const { primary } = worktreeLines(document, "merged");
+    const badge = primary?.querySelector('[data-slot="badge"]');
     expect(badge?.textContent).toBe("Integrated");
     expect(badge?.getAttribute("data-variant")).toBe("warning");
     expect(badge?.getAttribute("title")).toBe(

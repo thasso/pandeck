@@ -44,6 +44,7 @@ function pending<T>(list: Array<Pending<T>>, key: string): Promise<T> {
 }
 
 vi.mock("../../lib/worktrees.ts", () => ({
+  fetchWorktreeHosting: () => new Promise<never>(() => {}),
   fetchWorktreeStatus: () => new Promise<never>(() => {}),
   fetchWorktreeChanges: (id: string) =>
     pending(changesRequests, `changes:${id}`),
@@ -115,10 +116,6 @@ const worktree: WorktreeRecord = {
 };
 
 const prefs = {
-  worktreeChangesRailWidth: 300,
-  worktreeChangesRailCollapsed: false,
-  worktreeNavigatorViewMode: "list",
-  worktreeReviewMode: "by-file",
   diffStyle: "unified",
   theme: "dark",
 } as Prefs;
@@ -302,9 +299,18 @@ it.each(["diagram.svg", "page.html"])(
     await answer(fileRequests, fileContent(path, "source"));
     expect(registration?.zoom?.mode).toBe("text");
 
-    act(() => {
+    // Preview is a toggle in the header's `…`.
+    await act(async () => {
       container!
-        .querySelector<HTMLButtonElement>('[aria-label="Preview"]')!
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Worktree actions"]',
+        )!
+        .click();
+      await Promise.resolve();
+    });
+    act(() => {
+      [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
+        .find((item) => item.textContent === "Preview")!
         .click();
     });
     expect(registration?.zoom?.mode).toBe("visual");

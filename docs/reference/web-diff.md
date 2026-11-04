@@ -39,11 +39,10 @@ diff and code-file view in the app, with remembered display modes.
 - `useDiffScrollRestoration.ts` owns scroll continuity across Pierre host and
   shadow-column replacement: it remembers the surrounding viewport's axes and
   each shadow-root code pane's horizontal offset without causing React renders.
-- `DiffModeToolbar.tsx` owns the display-mode controls (unified/split,
-  word-level, ignore-whitespace, wrap, context). Its `stacked` popover layout
-  keeps unified/split segmented and presents Words/Ignore
-  whitespace/Wrap/Context as a regular vertical checkbox menu; `showStyleToggle`
-  hides the style control where unified mode is forced.
+- `diffViewSwitches.ts` lists the remembered display switches (word-level,
+  ignore-whitespace, wrap, context) that the worktree header's `…` shows as
+  checkbox rows beside its unified/split choice (`diffViewMenuGroups`); the
+  style choice is left out where unified is forced.
 - `diffOptions.ts` owns the pure prefs → pierre options mapping (Catppuccin
   Latte/Mocha themes, matching `common/highlighter.ts`). Word-level maps to
   Pierre's `word-alt` (joins adjacent changed spans — its own default — not

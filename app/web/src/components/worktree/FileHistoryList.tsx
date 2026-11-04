@@ -22,7 +22,7 @@ import {
 } from "../ui/item.tsx";
 
 /** One commit as a clickable row: subject, a byline, the short oid. */
-export function CommitItem({
+function CommitItem({
   subject,
   shortOid,
   children,
@@ -66,21 +66,24 @@ export function CommitItem({
 
 /**
  * @component FileHistoryList
- * @purpose A worktree file's History pivot: the commits reachable from HEAD
- * that touched it, newest first and across renames. Each row opens that
- * commit's own change to the file in Changes (`parentOid..oid`).
- * @useWhen The worktree file view's History pivot is on screen.
+ * @purpose A worktree file's history: the commits reachable from HEAD that
+ * touched it, newest first and across renames. Each row picks that commit's
+ * own change to the file (`parentOid..oid`).
+ * @useWhen The worktree file view's History sheet is open.
  */
 export function FileHistoryList({
   worktreeId,
   path,
   refreshToken,
+  selectedOid,
   onOpenCommit,
 }: {
   worktreeId: string;
   path: string;
   /** Bumps when the worktree changed, so a new commit appears. */
   refreshToken: number;
+  /** The commit on screen, marked in the list. */
+  selectedOid?: string | undefined;
   onOpenCommit: (entry: WorktreeFileLogEntry) => void;
 }) {
   const key = `${worktreeId}\n${path}`;
@@ -130,6 +133,7 @@ export function FileHistoryList({
             key={entry.oid}
             subject={entry.subject}
             shortOid={entry.shortOid}
+            selected={entry.oid === selectedOid}
             onClick={() => onOpenCommit(entry)}
           >
             {entry.author} · {relativeTime(entry.authoredAt)}

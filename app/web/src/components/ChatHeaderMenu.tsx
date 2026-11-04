@@ -1,10 +1,8 @@
-import { useRef, useState, type ReactNode } from "react";
 import {
   Brain,
   Check,
   ChevronsDownUp,
   ChevronsUpDown,
-  Ellipsis,
   Terminal,
   WrapText,
 } from "lucide-react";
@@ -15,24 +13,11 @@ import {
   ItemMedia,
   ItemTitle,
 } from "./ui/item.tsx";
-import { Separator } from "./ui/separator.tsx";
-import { IconButton } from "./common/IconButton.tsx";
-import {
-  DropdownMenuCheckboxItem,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-} from "./ui/dropdown-menu.tsx";
-import { EdgeSheet } from "./common/EdgeSheet.tsx";
-import { OverflowMenu } from "./common/OverflowMenu.tsx";
+import type { HeaderMenuGroup } from "./common/HeaderMenu.tsx";
 import type { TranscriptViewPrefs } from "./transcriptView.ts";
-import { useRouteSecondaryActions } from "./shell/RoutePrimaryAction.tsx";
 
 export type ChatViewPrefs = TranscriptViewPrefs;
 interface Props {
-  mobile: boolean;
   view?:
     | (ChatViewPrefs & { onChange: (patch: Partial<ChatViewPrefs>) => void })
     | undefined;
@@ -85,14 +70,6 @@ function viewRows(view: NonNullable<Props["view"]>) {
     },
   ];
 }
-function GroupLabel({ children }: { children: ReactNode }) {
-  return (
-    // The rows' own inset, so a label lines up with the icons under it.
-    <div className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
-      {children}
-    </div>
-  );
-}
 // The object dock uses these same choices outside a Menu root. Item keeps their
 // labels and check state without requiring a second menu keyboard controller.
 export function TranscriptViewRows({
@@ -126,124 +103,24 @@ export function TranscriptViewRows({
     </>
   );
 }
-/** Transcript preferences stay open for consecutive toggles. Session actions close. */
-export function ChatHeaderMenu({ mobile, view }: Props) {
-  const secondary = useRouteSecondaryActions();
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [sheetTop, setSheetTop] = useState(0);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  if (!view && secondary.length === 0) return null;
-  if (mobile)
-    return (
-      <>
-        <IconButton
-          ref={triggerRef}
-          label="Chat options"
-          aria-haspopup="dialog"
-          onClick={() => {
-            const anchor =
-              triggerRef.current?.closest("header") ?? triggerRef.current;
-            setSheetTop(anchor?.getBoundingClientRect().bottom ?? 0);
-            setSheetOpen(true);
-          }}
-        >
-          <Ellipsis />
-        </IconButton>
-        <EdgeSheet
-          open={sheetOpen}
-          side="top"
-          offsetTop={sheetTop}
-          title="Chat options"
-          onClose={() => setSheetOpen(false)}
-        >
-          <div role="menu">
-            {view ? (
-              <>
-                <GroupLabel>Transcript</GroupLabel>
-                <TranscriptViewRows view={view} />
-              </>
-            ) : null}
-            {view && secondary.length > 0 ? <Separator /> : null}
-            {secondary.length > 0 ? (
-              <>
-                <GroupLabel>Actions</GroupLabel>
-                {secondary.map((action) => (
-                  <Item
-                    key={action.key}
-                    size="sm"
-                    render={
-                      <button
-                        type="button"
-                        disabled={action.busy || action.disabled}
-                      />
-                    }
-                    role="menuitem"
-                    title={action.disabledReason}
-                    onClick={() => {
-                      setSheetOpen(false);
-                      action.onRun();
-                    }}
-                  >
-                    {action.icon ? (
-                      <ItemMedia variant="icon">{action.icon}</ItemMedia>
-                    ) : null}
-                    <ItemContent>
-                      <ItemTitle>
-                        <span className="truncate">{action.label}</span>
-                      </ItemTitle>
-                    </ItemContent>
-                    {action.hint ? (
-                      <ItemActions>{action.hint}</ItemActions>
-                    ) : null}
-                  </Item>
-                ))}
-              </>
-            ) : null}
-          </div>
-        </EdgeSheet>
-      </>
-    );
-  return (
-    <OverflowMenu label="Chat options">
-      {view ? (
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Transcript</DropdownMenuLabel>
-          {viewRows(view).map((row) => (
-            <DropdownMenuCheckboxItem
-              key={row.label}
-              checked={row.checked}
-              disabled={row.disabled ?? false}
-              closeOnClick={false}
-              title={row.hint}
-              className={row.child ? "pl-7" : undefined}
-              onCheckedChange={() => view.onChange(row.patch)}
-            >
-              {row.icon}
-              {row.label}
-            </DropdownMenuCheckboxItem>
-          ))}
-        </DropdownMenuGroup>
-      ) : null}
-      {view && secondary.length > 0 ? <DropdownMenuSeparator /> : null}
-      {secondary.length > 0 ? (
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Actions</DropdownMenuLabel>
-          {secondary.map((action) => (
-            <DropdownMenuItem
-              key={action.key}
-              disabled={action.busy || action.disabled}
-              title={action.disabledReason}
-              onClick={action.onRun}
-            >
-              {action.icon}
-              {action.label}
-              {action.hint ? (
-                <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
-              ) : null}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuGroup>
-      ) : null}
-    </OverflowMenu>
-  );
+/** The transcript options as the chat header's `…` group (`HeaderMenu`). */
+export function chatViewMenuGroups(
+  view: NonNullable<Props["view"]>,
+): HeaderMenuGroup[] {
+  return [
+    {
+      key: "transcript",
+      label: "Transcript",
+      items: viewRows(view).map((row) => ({
+        key: row.label,
+        icon: row.icon,
+        label: row.label,
+        checked: row.checked,
+        ...(row.disabled !== undefined ? { disabled: row.disabled } : {}),
+        ...(row.hint !== undefined ? { title: row.hint } : {}),
+        ...(row.child ? { child: true } : {}),
+        onSelect: () => view.onChange(row.patch),
+      })),
+    },
+  ];
 }

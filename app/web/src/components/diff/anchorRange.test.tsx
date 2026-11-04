@@ -26,6 +26,14 @@ vi.mock("@pierre/diffs/worker/worker.js?worker", () => ({
   },
 }));
 
+// A stand-in worker never initializes the pool, which would leave the
+// surfaces on their raw stand-in (`PlainSurface`) for good; these assertions
+// are about what Pierre draws once it can.
+vi.mock("./DiffWorkerProvider.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./DiffWorkerProvider.tsx")>()),
+  useDiffWorkerReady: () => true,
+}));
+
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;

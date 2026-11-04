@@ -14,6 +14,8 @@ export type ListRowAction = {
   disabled?: boolean;
   /** Only destructive actions may depart from the shared neutral style. */
   variant?: "destructive";
+  /** What the row's state asks for (a merged branch's Retire): marked out. */
+  highlighted?: boolean;
 };
 
 /** At most two quick actions and an overflow menu, shared by all layouts. */
@@ -21,14 +23,21 @@ export function ListRowActions({
   actions,
   label = "More actions",
   alwaysVisible = false,
+  menuOnly = false,
+  onMenuIntent,
 }: {
   actions: ListRowAction[];
   label?: string;
   alwaysVisible?: boolean;
+  /** Every action in the menu behind one vertical ⋮, none direct. */
+  menuOnly?: boolean;
+  /** The menu is about to open (hover, focus or press): build its items now. */
+  onMenuIntent?: (() => void) | undefined;
 }) {
   if (actions.length === 0) return null;
-  const direct =
-    actions.length <= 2
+  const direct = menuOnly
+    ? []
+    : actions.length <= 2
       ? actions
       : actions.filter((action) => action.primary).slice(0, 2);
   const overflow = actions.filter((action) => !direct.includes(action));
@@ -38,7 +47,12 @@ export function ListRowActions({
       role="group"
       aria-label="Item actions"
       data-always-visible={alwaysVisible || undefined}
-      onPointerDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        onMenuIntent?.();
+      }}
+      onPointerEnter={onMenuIntent}
+      onFocus={onMenuIntent}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >
@@ -59,13 +73,14 @@ export function ListRowActions({
         <OverflowMenu
           label={label}
           size="icon-list-overflow"
+          vertical={menuOnly}
           contentClassName="w-64 touch-ui:[&_[role=menuitem]]:min-h-11"
         >
           {overflow.map((action) => (
             <DropdownMenuItem
               key={action.id}
               disabled={action.disabled}
-              className="cursor-pointer"
+              className={`cursor-pointer ${action.highlighted ? "bg-primary/10 font-medium text-primary [&_svg]:text-primary" : ""}`}
               variant={
                 action.variant === "destructive" ? "destructive" : "default"
               }
@@ -74,6 +89,12 @@ export function ListRowActions({
             >
               {action.icon}
               {action.label}
+              {action.highlighted ? (
+                <span
+                  aria-hidden
+                  className="ml-auto size-1.5 shrink-0 rounded-full bg-primary"
+                />
+              ) : null}
             </DropdownMenuItem>
           ))}
         </OverflowMenu>

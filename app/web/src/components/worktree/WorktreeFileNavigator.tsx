@@ -1,5 +1,21 @@
-import { useCallback, useMemo, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FileCode2, Folder } from "lucide-react";
+import { createElement, useCallback, useMemo, type ReactNode } from "react";
+import {
+  File,
+  FileArchive,
+  FileAudio,
+  FileCode2,
+  FileCog,
+  FileImage,
+  FileJson,
+  FileKey,
+  FileLock,
+  FileSpreadsheet,
+  FileTerminal,
+  FileText,
+  FileVideo,
+  Folder,
+  type LucideIcon,
+} from "lucide-react";
 import type {
   WorktreeChangeFile,
   WorktreeChangeStatus,
@@ -7,7 +23,7 @@ import type {
 } from "@assistant/shared";
 import { Tree, type TreeNode, type TreeNodeState } from "../common/Tree.tsx";
 import { Skeleton, Spinner } from "../common/load.tsx";
-import { Item, ItemContent, ItemDescription, ItemTitle } from "../ui/item.tsx";
+import { formatFileSize } from "../../lib/servedFiles.ts";
 
 /**
  * @component WorktreeFileNavigator
@@ -23,7 +39,6 @@ import { Item, ItemContent, ItemDescription, ItemTitle } from "../ui/item.tsx";
  */
 
 type WorktreeNavigatorEntryKind = "file" | "dir";
-export type WorktreeNavigatorViewMode = "list" | "tree";
 
 export interface WorktreeNavigatorEntry {
   kind: WorktreeNavigatorEntryKind;
@@ -32,6 +47,8 @@ export interface WorktreeNavigatorEntry {
   status?: WorktreeChangeStatus;
   additions?: number;
   deletions?: number;
+  /** A folder's changed files, where its own listing is not loaded. */
+  files?: number;
   binary?: boolean;
   size?: number;
   oldPath?: string;
@@ -77,15 +94,6 @@ export interface WorktreeFileNavigatorProps {
   showChangeStats?: boolean;
   className?: string;
   ariaLabel?: string;
-  /** List by default; tree mode preserves an expandable folder hierarchy. */
-  viewMode?: WorktreeNavigatorViewMode;
-  /**
-   * When defined in list mode, show only this directory's immediate children.
-   * Pair with onListDirectoryPathChange for drill-down/back navigation. Omit to
-   * retain the flat all-entries list used by changed-file navigators.
-   */
-  listDirectoryPath?: string | undefined;
-  onListDirectoryPathChange?: ((path: string) => void) | undefined;
 }
 
 const ROOT_DIR = "";
@@ -126,33 +134,6 @@ function entryFromData(data: NavigatorNodeData): WorktreeNavigatorEntry {
     ...(data.oldPath !== undefined ? { oldPath: data.oldPath } : {}),
     ...(data.deferred !== undefined ? { deferred: data.deferred } : {}),
   };
-}
-
-function dataFromEntry(entry: WorktreeNavigatorEntry): NavigatorNodeData {
-  return {
-    kind: entry.kind,
-    path: entry.path,
-    name: entry.name ?? entryName(entry.path),
-    ...(entry.status !== undefined ? { status: entry.status } : {}),
-    additions: entry.additions ?? 0,
-    deletions: entry.deletions ?? 0,
-    files: entry.kind === "file" ? 1 : 0,
-    ...(entry.binary !== undefined ? { binary: entry.binary } : {}),
-    ...(entry.size !== undefined ? { size: entry.size } : {}),
-    ...(entry.oldPath !== undefined ? { oldPath: entry.oldPath } : {}),
-    ...(entry.deferred !== undefined ? { deferred: entry.deferred } : {}),
-  };
-}
-
-function uniqueSortedEntries(
-  entries: WorktreeNavigatorEntry[],
-): WorktreeNavigatorEntry[] {
-  const byPath = new Map<string, WorktreeNavigatorEntry>();
-  for (const entry of entries) byPath.set(`${entry.kind}:${entry.path}`, entry);
-  return [...byPath.values()].sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
-    return a.path.localeCompare(b.path);
-  });
 }
 
 function newDirNode(
@@ -197,7 +178,22 @@ function aggregate(node: TreeNode<NavigatorNodeData>): {
     return {
       additions: node.data.additions,
       deletions: node.data.deletions,
-      files: 1,
+      files: node.data.status ? 1 : 0,
+      statuses,
+    };
+  }
+  // A folder whose listing is not loaded carries its own totals (a browser
+  // reads them off the change set); there are no children to sum.
+  if (
+    !(node.children ?? []).some((child) => child.data.kind !== "placeholder")
+  ) {
+    const statuses = new Set<WorktreeChangeStatus>();
+    if (node.data.status && node.data.status !== "mixed")
+      statuses.add(node.data.status);
+    return {
+      additions: node.data.additions,
+      deletions: node.data.deletions,
+      files: node.data.files,
       statuses,
     };
   }
@@ -264,6 +260,15 @@ function buildNodes(
         ...node.data,
         name: entry.name ?? entryName(entry.path),
         ...(entry.size !== undefined ? { size: entry.size } : {}),
+        // A folder's own change totals: what it shows until it is loaded.
+        ...(entry.status !== undefined ? { status: entry.status } : {}),
+        ...(entry.additions !== undefined
+          ? { additions: entry.additions }
+          : {}),
+        ...(entry.deletions !== undefined
+          ? { deletions: entry.deletions }
+          : {}),
+        ...(entry.files !== undefined ? { files: entry.files } : {}),
         deferred: entry.deferred ?? !loaded,
       };
       continue;
@@ -438,16 +443,10 @@ const SKELETON_ROW_WIDTHS = [
  * layout while a directory answers (R4). The region announces; the blocks are
  * decorative.
  */
-function NavigatorSkeletonRows({
-  label,
-  rows = SKELETON_ROW_WIDTHS.length,
-}: {
-  label: string;
-  rows?: number;
-}) {
+function NavigatorSkeletonRows({ label }: { label: string }) {
   return (
     <div role="status" aria-label={label} className="flex flex-col gap-0.5 p-1">
-      {SKELETON_ROW_WIDTHS.slice(0, rows).map((width, index) => (
+      {SKELETON_ROW_WIDTHS.map((width, index) => (
         <div key={index} className="flex items-center gap-2 px-2 py-1.5">
           <Skeleton className="size-3.5 shrink-0" />
           <Skeleton className={`h-3 ${width}`} />
@@ -477,28 +476,133 @@ function ChangeStats({
   );
 }
 
+const ICON_BY_EXTENSION: Record<string, LucideIcon> = {};
+const iconGroups: Array<[LucideIcon, string[]]> = [
+  [
+    FileCode2,
+    [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "mjs",
+      "cjs",
+      "py",
+      "rs",
+      "go",
+      "java",
+      "kt",
+      "swift",
+      "c",
+      "h",
+      "cc",
+      "cpp",
+      "hpp",
+      "cs",
+      "rb",
+      "php",
+      "lua",
+      "nix",
+      "css",
+      "scss",
+      "html",
+      "htm",
+      "vue",
+      "svelte",
+      "sql",
+      "graphql",
+    ],
+  ],
+  [FileJson, ["json", "jsonc", "json5"]],
+  [FileText, ["md", "mdx", "markdown", "txt", "rst", "adoc", "pdf"]],
+  [
+    FileImage,
+    ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "avif", "bmp"],
+  ],
+  [FileTerminal, ["sh", "bash", "zsh", "fish", "ps1", "bat", "cmd"]],
+  [FileCog, ["yaml", "yml", "toml", "ini", "conf", "cfg", "xml", "plist"]],
+  [FileSpreadsheet, ["csv", "tsv", "xlsx", "xls", "ods"]],
+  [FileArchive, ["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar"]],
+  [FileVideo, ["mp4", "mov", "webm", "mkv", "avi"]],
+  [FileAudio, ["mp3", "wav", "ogg", "flac", "m4a", "aac"]],
+  [FileKey, ["pem", "key", "crt", "cer", "pub"]],
+];
+for (const [icon, extensions] of iconGroups)
+  for (const extension of extensions) ICON_BY_EXTENSION[extension] = icon;
+
+/** Whole names that say more than their extension (or have none). */
+const ICON_BY_NAME: Record<string, LucideIcon> = {
+  dockerfile: FileCog,
+  makefile: FileTerminal,
+  ".gitignore": FileCog,
+  ".gitattributes": FileCog,
+  ".editorconfig": FileCog,
+  ".npmrc": FileCog,
+  ".env": FileKey,
+  license: FileText,
+};
+
 /**
- * One entry's row content, shared by the tree and the list: icon and status
- * glyph, then the name (`children`), then loading, drill-down and stats.
+ * The types worth noticing take a colour from the theme's terminal palette
+ * (`--ansi-*`, tuned per light and dark); prose, archives and plain files stay
+ * grey so the list does not turn to confetti.
+ */
+const ICON_COLOR = new Map<LucideIcon, string>([
+  [FileCode2, "var(--ansi-blue)"],
+  [FileJson, "var(--ansi-yellow)"],
+  [FileCog, "var(--ansi-yellow)"],
+  [FileTerminal, "var(--ansi-green)"],
+  [FileImage, "var(--ansi-magenta)"],
+  [FileVideo, "var(--ansi-magenta)"],
+  [FileAudio, "var(--ansi-magenta)"],
+  [FileSpreadsheet, "var(--ansi-cyan)"],
+  [FileKey, "var(--ansi-red)"],
+  [FileLock, "var(--ansi-red)"],
+]);
+
+/** A file's glyph by its name: its type at a glance, in the same muted grey. */
+export function fileIconFor(path: string): LucideIcon {
+  const name = (path.split("/").pop() ?? path).toLowerCase();
+  const byName = ICON_BY_NAME[name];
+  if (byName) return byName;
+  if (name.startsWith(".env")) return FileKey;
+  if (
+    name.endsWith(".lock") ||
+    name.endsWith("-lock.json") ||
+    name.endsWith("-lock.yaml")
+  )
+    return FileLock;
+  const dot = name.lastIndexOf(".");
+  return (dot > 0 ? ICON_BY_EXTENSION[name.slice(dot + 1)] : undefined) ?? File;
+}
+
+/**
+ * One entry's row content: icon and status glyph, then the name (`children`),
+ * then loading and stats.
  */
 function EntryParts({
   data,
   showChangeStats,
   loading,
-  drillDown = false,
   children,
 }: {
   data: NavigatorNodeData;
   showChangeStats: boolean;
   loading: boolean;
-  drillDown?: boolean;
   children: ReactNode;
 }) {
   const isDir = data.kind === "dir";
-  const Icon = isDir ? Folder : FileCode2;
+  const icon = isDir ? Folder : fileIconFor(data.path);
+  // A change list colours its status letter: the glyph stays grey beside it.
+  const color = showChangeStats ? undefined : ICON_COLOR.get(icon);
   return (
     <>
-      <Icon size={13} className="shrink-0 text-muted-foreground" />
+      {/* `createElement`: the glyph is looked up, not a component of ours. */}
+      {createElement(icon, {
+        size: 13,
+        className: "shrink-0 text-muted-foreground",
+        style: color ? { color } : undefined,
+      })}
       {showChangeStats && !isDir ? (
         <span
           className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}
@@ -508,15 +612,14 @@ function EntryParts({
       ) : null}
       {children}
       {loading ? <Spinner size="sm" className="text-muted-foreground" /> : null}
-      {isDir && drillDown && !loading ? (
-        <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
-      ) : null}
-      {showChangeStats &&
-      (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
+      {(isDir ? data.files > 0 : data.status !== undefined) ? (
         <ChangeStats data={data} isDir={isDir} />
       ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {data.size.toLocaleString()}
+        <span
+          className="shrink-0 font-mono text-xs text-muted-foreground"
+          title={`${data.size.toLocaleString()} bytes`}
+        >
+          {formatFileSize(data.size)}
         </span>
       ) : null}
     </>
@@ -558,59 +661,13 @@ function NavigatorRow({
         showChangeStats={showChangeStats}
         loading={loading}
       >
-        <span className="min-w-0 flex-1 truncate">{data.name}</span>
+        <span
+          className={`min-w-0 flex-1 truncate ${data.status ? statusClass(data.status) : ""}`}
+        >
+          {data.name}
+        </span>
       </EntryParts>
     </span>
-  );
-}
-
-function NavigatorListRow({
-  entry,
-  selected,
-  showChangeStats,
-  showParentPath,
-  directoryDrillDown,
-  loading,
-  onSelect,
-}: {
-  entry: WorktreeNavigatorEntry;
-  selected: boolean;
-  showChangeStats: boolean;
-  showParentPath: boolean;
-  directoryDrillDown: boolean;
-  loading: boolean;
-  onSelect: () => void;
-}) {
-  const data = dataFromEntry(entry);
-  const dir = parentPath(data.path);
-  return (
-    <Item
-      size="xs"
-      variant={selected ? "muted" : "default"}
-      render={<button type="button" />}
-      onClick={onSelect}
-      title={data.path || "/"}
-      aria-current={selected ? "true" : undefined}
-      className="flex-nowrap text-left"
-    >
-      <EntryParts
-        data={data}
-        showChangeStats={showChangeStats}
-        loading={loading}
-        drillDown={directoryDrillDown}
-      >
-        <ItemContent className="min-w-0">
-          <ItemTitle className="w-full">
-            <span className="truncate">{data.name}</span>
-          </ItemTitle>
-          {showParentPath && dir ? (
-            <ItemDescription className="truncate font-mono">
-              {dir}
-            </ItemDescription>
-          ) : null}
-        </ItemContent>
-      </EntryParts>
-    </Item>
   );
 }
 
@@ -630,9 +687,6 @@ export function WorktreeFileNavigator({
   showChangeStats = false,
   className,
   ariaLabel = "Worktree files",
-  viewMode = "list",
-  listDirectoryPath,
-  onListDirectoryPathChange,
 }: WorktreeFileNavigatorProps) {
   const loadedSet = useMemo(
     () => (loadedDirectoryPaths ? new Set(loadedDirectoryPaths) : null),
@@ -650,15 +704,6 @@ export function WorktreeFileNavigator({
     () => expandedDirectoryPaths.map(dirId),
     [expandedDirectoryPaths],
   );
-  const listNavigatesDirectories =
-    listDirectoryPath !== undefined && onListDirectoryPathChange !== undefined;
-  const listEntries = useMemo(() => {
-    const sorted = uniqueSortedEntries(entries);
-    return listDirectoryPath === undefined
-      ? sorted
-      : sorted.filter((entry) => parentPath(entry.path) === listDirectoryPath);
-  }, [entries, listDirectoryPath]);
-
   const expandDirectory = useCallback(
     (path: string, next: boolean) => {
       const set = new Set(expandedDirectoryPaths);
@@ -735,37 +780,6 @@ export function WorktreeFileNavigator({
     ],
   );
 
-  const handleListSelect = useCallback(
-    (entry: WorktreeNavigatorEntry) => {
-      if (entry.kind === "dir") {
-        const set = new Set(expandedDirectoryPaths);
-        set.add(entry.path);
-        onExpandedDirectoryPathsChange([...set].sort());
-        if (
-          onLoadDirectory &&
-          loadedSet !== null &&
-          !loadedSet.has(entry.path) &&
-          !loadingSet.has(entry.path)
-        )
-          onLoadDirectory(entry.path);
-        onListDirectoryPathChange?.(entry.path);
-        onSelectDirectory?.(entry);
-        return;
-      }
-      onSelectFile(entry);
-    },
-    [
-      expandedDirectoryPaths,
-      loadedSet,
-      loadingSet,
-      onExpandedDirectoryPathsChange,
-      onListDirectoryPathChange,
-      onLoadDirectory,
-      onSelectDirectory,
-      onSelectFile,
-    ],
-  );
-
   if (loading) return <NavigatorSkeletonRows label="Loading files" />;
   if (entries.length === 0 || items.length === 0)
     return (
@@ -773,54 +787,6 @@ export function WorktreeFileNavigator({
         {emptyLabel}
       </div>
     );
-
-  if (viewMode === "list") {
-    const currentDirectoryLoading =
-      listNavigatesDirectories && loadingSet.has(listDirectoryPath);
-    return (
-      <div role="list" aria-label={ariaLabel} className={className}>
-        {listNavigatesDirectories && listDirectoryPath ? (
-          <Item
-            size="xs"
-            variant="outline"
-            render={<button type="button" />}
-            aria-label={`Back to ${parentPath(listDirectoryPath) || "root"}`}
-            onClick={() =>
-              onListDirectoryPathChange(parentPath(listDirectoryPath))
-            }
-            className="mb-1 flex-nowrap text-left"
-          >
-            <ChevronLeft size={14} className="shrink-0" />
-            <ItemContent className="min-w-0">
-              <ItemTitle className="w-full font-mono">
-                <span className="truncate">{listDirectoryPath}</span>
-              </ItemTitle>
-            </ItemContent>
-          </Item>
-        ) : null}
-        {currentDirectoryLoading && listEntries.length === 0 ? (
-          <NavigatorSkeletonRows label="Loading folder" rows={4} />
-        ) : listEntries.length === 0 ? (
-          <div className="px-2 py-4 text-sm text-muted-foreground">
-            {emptyLabel}
-          </div>
-        ) : (
-          listEntries.map((entry) => (
-            <NavigatorListRow
-              key={`${entry.kind}:${entry.path}`}
-              entry={entry}
-              selected={entry.path === selectedPath}
-              showChangeStats={showChangeStats}
-              showParentPath={!listNavigatesDirectories}
-              directoryDrillDown={listNavigatesDirectories}
-              loading={entry.kind === "dir" && loadingSet.has(entry.path)}
-              onSelect={() => handleListSelect(entry)}
-            />
-          ))
-        )}
-      </div>
-    );
-  }
 
   return (
     <Tree<NavigatorNodeData>

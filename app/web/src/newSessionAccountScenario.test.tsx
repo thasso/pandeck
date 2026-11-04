@@ -138,18 +138,6 @@ vi.mock("./components/objectInspectors.tsx", async (importOriginal) => {
         Start in project
       </button>
     ),
-    WorktreeInspector: ({
-      onStartSession,
-    }: {
-      onStartSession: (id: string) => void;
-    }) => (
-      <button
-        data-testid="fresh-worktree"
-        onClick={() => onStartSession("wt-reset")}
-      >
-        Start in worktree
-      </button>
-    ),
     PullRequestInspector: () => (
       <button
         data-testid="fresh-pr-review"
@@ -1230,8 +1218,18 @@ describe("new-session account choice", () => {
         window.dispatchEvent(new PopStateEvent("popstate"));
       });
       await settle();
+      // A worktree starts its session from the route's own primary action.
       await click(
-        container!.querySelector<HTMLElement>(`[data-testid="fresh-${entry}"]`),
+        entry === "worktree"
+          ? [...container!.querySelectorAll<HTMLElement>("button")].find(
+              (button) =>
+                button.textContent === "Start session in this worktree" ||
+                button.getAttribute("aria-label") ===
+                  "Start session in this worktree",
+            )
+          : container!.querySelector<HTMLElement>(
+              `[data-testid="fresh-${entry}"]`,
+            ),
       );
       expect(accountCard("Automatic")?.getAttribute("aria-selected")).toBe(
         "true",

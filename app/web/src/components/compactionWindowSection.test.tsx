@@ -7,8 +7,8 @@ import type { CompactionWindowEdit } from "../hooks/useAssistant.ts";
 import { CompactionWindowSection } from "./CompactionWindowSection.tsx";
 
 /**
- * The inspector's compaction window: what is stored, the range, when it
- * applies, and a save that refuses an out-of-range value before sending.
+ * The inspector's compaction window: what is stored, when it applies, and an
+ * editor whose slider stays inside the model's range.
  */
 
 (
@@ -70,20 +70,27 @@ function text(): string {
   return container!.textContent ?? "";
 }
 
-function type(value: string) {
-  const input = container!.querySelector("input")!;
-  const setter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
-    "value",
-  )!.set!;
+/** Opens the Window editor; its popover portals into the document. */
+function openEditor() {
+  const trigger = container!.querySelector<HTMLButtonElement>(
+    'button[aria-label^="Compaction window:"]',
+  )!;
+  act(() => trigger.click());
+}
+
+/** Steps the open editor's slider with the keyboard, as a user would. */
+function step(key: "ArrowRight" | "ArrowLeft") {
+  const thumb = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Compaction window"]',
+  )!;
   act(() => {
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    thumb.focus();
+    thumb.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   });
 }
 
 function click(label: string) {
-  const button = [...container!.querySelectorAll("button")].find(
+  const button = [...document.querySelectorAll("button")].find(
     (candidate) => candidate.textContent === label,
   )!;
   act(() => button.click());
@@ -99,11 +106,10 @@ it.each([
   expect(text()).not.toContain(note);
 });
 
-it("shows the stored value, the range and when it applies", () => {
+it("shows the stored value and when it applies", () => {
   render(claude);
   expect(text()).toContain("150,000 tokens");
-  expect(text()).toContain("100,000 – 1,000,000 tokens");
-  expect(text()).toContain("Applies when the next turn starts");
+  expect(text()).toContain("Applies on the next turn");
   expect(text()).not.toContain("summaries");
 });
 
@@ -113,28 +119,36 @@ it("says a running process keeps its window, and where it compacts", () => {
     pendingReason: "process-restart",
     providerTrigger: 967_000,
   });
-  expect(text()).toContain("Applies when this process restarts");
-  expect(text()).toContain("about 967,000 tokens");
+  expect(text()).toContain("Applies once the session is idle");
+  expect(text()).toContain("at about 967k tokens");
 });
 
-it("Save sends an integer and Clear sends null", () => {
+it("Apply sends the slider's value and Provider default sends null", () => {
   const saved: Array<number | null> = [];
   render(claude, { saved });
-  type("200,000");
-  click("Save");
-  click("Clear");
-  expect(saved).toEqual([200_000, null]);
+  openEditor();
+  step("ArrowRight");
+  expect(document.body.textContent).toContain("175k tokens");
+  click("Apply");
+  openEditor();
+  click("Provider default");
+  expect(saved).toEqual([175_000, null]);
 });
 
-it("refuses an out-of-range value in place without sending", () => {
+it("reopens on the stored value, not an unapplied drag", () => {
   const saved: Array<number | null> = [];
   render(claude, { saved });
-  type("50000");
-  click("Save");
+  openEditor();
+  step("ArrowLeft");
+  act(() => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
+  openEditor();
+  expect(document.body.textContent).toContain("150k tokens");
+  click("Apply");
   expect(saved).toEqual([]);
-  expect(text()).toContain(
-    "The compaction window must be between 100,000 and 1,000,000 tokens.",
-  );
 });
 
 it("shows the server's refusal and a failed apply in place", () => {
@@ -144,86 +158,6 @@ it("shows the server's refusal and a failed apply in place", () => {
   );
   expect(text()).toContain("Saving failed: disk");
   expect(text()).toContain("pi did not take it");
-});
-
-const inputValue = () => container!.querySelector("input")!.value;
-
-it.each([true, false])(
-  "restores exact raw input for its unknown receipt, rendered busy=%s",
-  (renderBusy) => {
-    render(claude, { requestId: "a" });
-    type(" 200_000 ");
-    click("Save");
-    expect(inputValue()).toBe("");
-    if (renderBusy) render(claude, { edit: { requestId: "a", busy: true } });
-    render(claude, { edit: { requestId: "a", busy: false, unknown: true } });
-    expect(inputValue()).toBe(" 200_000 ");
-    expect(container!.querySelector("input")!.disabled).toBe(false);
-  },
-);
-
-it.each([undefined, "Refused"])(
-  "does not restore a known result %s and re-arms manual resubmission",
-  (error) => {
-    render(claude, { requestId: "a" });
-    type("200000");
-    click("Save");
-    render(claude, {
-      requestId: "b",
-      edit: { requestId: "a", busy: false, ...(error ? { error } : {}) },
-    });
-    expect(inputValue()).toBe("");
-    type("250,000");
-    click("Save");
-    render(claude, { edit: { requestId: "b", busy: false, unknown: true } });
-    expect(inputValue()).toBe("250,000");
-  },
-);
-
-it.each([
-  "typing",
-  "clear",
-  "different request",
-  "session",
-  "unmount",
-  "untracked",
-])("does not revive a draft after %s", (interaction) => {
-  render(claude, interaction === "untracked" ? {} : { requestId: "a" });
-  type("200000");
-  click("Save");
-  if (interaction === "typing") type("300000");
-  if (interaction === "clear") {
-    type("300000");
-    click("Clear");
-  }
-  if (interaction === "different request")
-    render(claude, { edit: { requestId: "other", busy: true } });
-  if (interaction === "session") {
-    render(claude, { sessionId: "s2" });
-    render(claude, { sessionId: "s1" });
-  }
-  if (interaction === "unmount") {
-    act(() => root!.unmount());
-    root = createRoot(container!);
-  }
-  render(claude, { edit: { requestId: "a", busy: false, unknown: true } });
-  expect(inputValue()).toBe(
-    interaction === "typing" || interaction === "clear" ? "300000" : "",
-  );
-});
-
-it("a newer submission owns recovery and Clear leaves existing input alone", () => {
-  render(claude, { requestId: "a" });
-  type("200000");
-  click("Save");
-  render(claude, { requestId: "b" });
-  type("300_000");
-  click("Save");
-  render(claude, { edit: { requestId: "b", busy: false, unknown: true } });
-  expect(inputValue()).toBe("300_000");
-  click("Clear");
-  render(claude, { edit: { requestId: "clear", busy: false, unknown: true } });
-  expect(inputValue()).toBe("300_000");
 });
 
 it("pi shows the summary-cost note beside the control", () => {
@@ -236,6 +170,23 @@ it("pi shows the summary-cost note beside the control", () => {
     { harness: "pi" },
   );
   expect(text()).toContain("Provider default");
-  expect(text()).toContain("Applied");
+  // Status shows only while a value is not yet applied.
+  expect(text()).not.toContain("Applied");
   expect(text()).toContain("compaction summaries");
+});
+
+it("still clears a saved window when the model offers no range", () => {
+  const saved: Array<number | null> = [];
+  render(
+    {
+      applied: "confirmed",
+      tokens: 150_000,
+      unavailable: "This model's context window is unknown.",
+    },
+    { saved },
+  );
+  expect(text()).toContain("150,000 tokens");
+  expect(text()).toContain("This model's context window is unknown.");
+  click("Use provider default");
+  expect(saved).toEqual([null]);
 });

@@ -29,8 +29,8 @@ import {
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
 import type { DocumentZoomMode } from "../lib/documentZoom.ts";
 import {
-  DocumentZoomActions,
   useDocumentZoomBehavior,
+  zoomMenuGroup,
   useDocumentZoomRegistration,
   type DocumentZoomRegistration,
 } from "./DocumentZoom.tsx";
@@ -119,8 +119,11 @@ export function useDocumentNavigationRegistration(): DocumentNavigationRegistrat
 export function DocumentNavigationActions({
   className = "",
   showClose = true,
+  showHistory = true,
 }: {
   className?: string;
+  /** False where the browser's own Back and Forward are the page's (desktop worktree). */
+  showHistory?: boolean;
   /**
    * False where the page IS the place the document lives (a Knowledge file):
    * there is nothing to close back to, so Close would only navigate away.
@@ -129,33 +132,32 @@ export function DocumentNavigationActions({
 }) {
   const navigation = useDocumentNavigationRegistration();
   if (!navigation) return null;
-  // Back and Forward are the leading pair, everything else follows, and Close
-  // is last — the same order the phone's dock row uses.
+  if (!showHistory && !showClose) return null;
+  // Back and Forward are the leading pair and Close is last — the same order
+  // the phone's dock row uses. Zoom is the page's `…` (`zoomMenuGroup`).
   return (
     <div className={`items-center gap-1 ${className}`}>
-      <IconButton
-        label="Back"
-        onClick={() => void navigation.back()}
-        disabled={!navigation.canBack}
-      >
-        <ArrowLeft />
-      </IconButton>
-      <IconButton
-        label="Forward"
-        onClick={navigation.forward}
-        disabled={!navigation.canForward}
-      >
-        <ArrowRight />
-      </IconButton>
-      {navigation.zoom ? (
+      {showHistory ? (
         <>
-          <GroupSeparator />
-          <DocumentZoomActions zoom={navigation.zoom} />
+          <IconButton
+            label="Back"
+            onClick={() => void navigation.back()}
+            disabled={!navigation.canBack}
+          >
+            <ArrowLeft />
+          </IconButton>
+          <IconButton
+            label="Forward"
+            onClick={navigation.forward}
+            disabled={!navigation.canForward}
+          >
+            <ArrowRight />
+          </IconButton>
         </>
       ) : null}
       {showClose ? (
         <>
-          <GroupSeparator />
+          {showHistory ? <GroupSeparator /> : null}
           <IconButton label="Close document" onClick={navigation.close}>
             <X />
           </IconButton>
@@ -165,7 +167,7 @@ export function DocumentNavigationActions({
   );
 }
 
-/** Between the header's action groups: history, zoom, close. */
+/** Between the header's action groups: history, close. */
 function GroupSeparator() {
   return (
     <Separator
@@ -498,12 +500,16 @@ export function DocumentNavigationShell({
                     {action.icon}
                   </IconButton>
                 ))}
-                {registration.zoom ? (
-                  <DocumentZoomActions zoom={registration.zoom} />
-                ) : null}
               </div>
             )
           }
+          menu={{
+            label: "Document actions",
+            groups:
+              registration.zoom && !mobile
+                ? [zoomMenuGroup(registration.zoom)]
+                : [],
+          }}
           // Close is the last control in the header, after the document's own
           // comment controls, as it is the last control in the phone's dock row.
           close={

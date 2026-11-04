@@ -1,38 +1,42 @@
-import { useCallback, useEffect, useState } from "react";
-import { SquareArrowOutUpRight } from "lucide-react";
+import { useCallback, useEffect } from "react";
+import {
+  ChevronsUpDown,
+  GitBranch,
+  GitCompareArrows,
+  SquareArrowOutUpRight,
+} from "lucide-react";
+import { Button } from "../ui/button.tsx";
+import { SearchPicker } from "../common/SearchPicker.tsx";
 import type {
   WorktreeComment,
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import WorktreeDetailPage from "../worktree/WorktreeDetailPage.tsx";
+import WorktreeDetailPage, {
+  type WorktreeDetailPageProps,
+} from "../worktree/WorktreeDetailPage.tsx";
 import type { CommentActions } from "../diff/comments.tsx";
 import type { CommentWatch } from "../../hooks/useCommentWatch.ts";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
 import { IconButton } from "../common/IconButton.tsx";
+import { EdgeSheetContainer } from "../common/EdgeSheet.tsx";
 import { EmptyBox, PaneLoading } from "../common/load.tsx";
 import type { Prefs } from "../../hooks/usePrefs.ts";
+import { parseRoute, worktreePath } from "../../hooks/useSessionRouting.ts";
+import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
 import {
-  parseRoute,
-  worktreePath,
-  type WorktreeView,
-} from "../../hooks/useSessionRouting.ts";
+  decodeStoredPanelLocations,
+  withPanelLocation,
+  type PanelLocation,
+  type PanelLocations,
+} from "../../lib/panelLocation.ts";
 import { RoutePrimaryActionProvider } from "./RoutePrimaryAction.tsx";
 
-/**
- * Where inside the worktree the panel is looking. The same four coordinates the
- * `/worktrees/:id` route carries in its URL, held as panel state instead: the
- * panel reads a worktree BESIDE whatever the main pane is on, so the URL keeps
- * naming the main pane's object.
- */
-interface PanelLocation {
-  view: WorktreeView;
-  path?: string | undefined;
-  from?: string | undefined;
-  to?: string | undefined;
-}
-
 const PANEL_HOME: PanelLocation = { view: "changes" };
+// Per worktree and tab-scoped like the panel's tab itself: a reload, or coming
+// back to a session, reopens each worktree where it was.
+const LOCATIONS_STORAGE_KEY = "assistant.worktree-panel.locations.v1";
+const NO_LOCATIONS: PanelLocations = {};
 
 const NO_COMMENTS: WorktreeComment[] = [];
 
@@ -62,6 +66,10 @@ export function WorktreePanel({
   commentActionsFor,
   onSubmitReview,
   onNavigate,
+  openRequest,
+  choices = [],
+  onSelectWorktree,
+  worktreeActions,
 }: {
   /** The session's worktree, once the registry has it. */
   worktree?: WorktreeRecord | undefined;
@@ -81,11 +89,58 @@ export function WorktreePanel({
   onSubmitReview: (worktreeId: string, commentIds: string[]) => void;
   /** Take a destination the panel does not own to the main pane. */
   onNavigate: (path: string) => void;
+  /**
+   * A file to show, picked elsewhere (the inspector's worktree tree), as its
+   * worktree route; each new request moves the panel there once.
+   */
+  openRequest?: { path: string; nonce: number } | undefined;
+  /** The worktrees the tab may show, for its picker (shown past one). */
+  choices?: readonly WorktreeRecord[];
+  onSelectWorktree?: ((worktreeId: string) => void) | undefined;
+  /** What the header's `…` menu acts with: the route's own handlers. */
+  worktreeActions?: Pick<
+    WorktreeDetailPageProps,
+    | "sessions"
+    | "sessionsFresh"
+    | "onRemoveWorktree"
+    | "onMergeWorktree"
+    | "onStartSessionInWorktree"
+  >;
 }) {
-  const [location, setLocation] = useState<PanelLocation>(PANEL_HOME);
+  const [locations, setLocations] = useSessionStorageState(
+    LOCATIONS_STORAGE_KEY,
+    NO_LOCATIONS,
+    decodeStoredPanelLocations,
+  );
   // A different worktree is a different set of coordinates: a file path or a
-  // commit range from the last one addresses nothing here.
-  useEffect(() => setLocation(PANEL_HOME), [worktreeId]);
+  // commit range from the last one addresses nothing here, so each keeps its own.
+  const location = (worktreeId && locations[worktreeId]) || PANEL_HOME;
+  const moveTo = useCallback(
+    (id: string, next: PanelLocation) =>
+      setLocations((current) => withPanelLocation(current, id, next)),
+    [setLocations],
+  );
+  const setLocation = useCallback(
+    (next: PanelLocation) => {
+      if (worktreeId) moveTo(worktreeId, next);
+    },
+    [moveTo, worktreeId],
+  );
+  // Addressed to the request's own worktree, so one that also changes the
+  // worktree lands there.
+  useEffect(() => {
+    if (!openRequest) return;
+    const route = parseRoute(openRequest.path);
+    // A bare worktree route only points the panel there (App switches it), so
+    // that worktree keeps its remembered place.
+    if (route.name !== "worktrees" || !route.id || !route.view) return;
+    moveTo(route.id, {
+      view: route.view,
+      path: route.path,
+      from: route.from,
+      to: route.to,
+    });
+  }, [moveTo, openRequest]);
 
   /**
    * The page navigates by route path (`worktreePath`), which is how it moves
@@ -108,7 +163,7 @@ export function WorktreePanel({
         to: route.to,
       });
     },
-    [onNavigate, worktreeId],
+    [onNavigate, setLocation, worktreeId],
   );
 
   if (!worktreeId)
@@ -136,49 +191,95 @@ export function WorktreePanel({
     // there, so neither ends up wearing the other's controls.
     <RoutePrimaryActionProvider action={null}>
       <CommentActuationProvider>
-        <WorktreeDetailPage
-          // R3: the page addresses one worktree, so following the session to
-          // another one mounts that worktree's own loading states rather than
-          // leaving this one's diffs under a new branch name.
-          key={worktree.id}
-          worktree={worktree}
-          status={status}
-          // A right panel is a column of a phone's order of width: list→detail
-          // instead of the rail, and unified diffs.
-          narrow
-          embedded
-          headerActions={
-            <IconButton
-              label="Open in Worktrees"
-              size="icon"
-              onClick={() =>
-                onNavigate(
-                  worktreePath(worktree.id, location.view, {
-                    ...(location.path ? { path: location.path } : {}),
-                    ...(location.from ? { from: location.from } : {}),
-                    ...(location.to ? { to: location.to } : {}),
-                  }),
-                )
-              }
-            >
-              <SquareArrowOutUpRight />
-            </IconButton>
-          }
-          view={location.view}
-          filePath={location.path}
-          from={location.from}
-          to={location.to}
-          navigate={navigate}
-          prefs={prefs}
-          onUpdatePrefs={onUpdatePrefs}
-          comments={commentsByWorktreeId[worktree.id] ?? NO_COMMENTS}
-          onLoadComments={() => commentWatch.list(worktree.id)}
-          onUnloadComments={() => commentWatch.unwatch(worktree.id)}
-          commentActions={commentActionsFor(worktree.id)}
-          onSubmitReview={(commentIds) =>
-            onSubmitReview(worktree.id, commentIds)
-          }
-        />
+        {/* The page's phone sheets (browse, jump to file) open over this
+          panel, not the whole window. */}
+        <EdgeSheetContainer className="flex h-full min-h-0 flex-col overflow-hidden">
+          <WorktreeDetailPage
+            // R3: the page addresses one worktree, so following the session to
+            // another one mounts that worktree's own loading states rather than
+            // leaving this one's diffs under a new branch name.
+            key={worktree.id}
+            worktree={worktree}
+            status={status}
+            // A right panel is a column of a phone's order of width: list→detail
+            // instead of the rail, and unified diffs.
+            narrow
+            embedded
+            headerActions={
+              <>
+                {choices.length > 1 && onSelectWorktree ? (
+                  <SearchPicker
+                    trigger={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Switch worktree"
+                        title="Switch worktree"
+                      />
+                    }
+                    groups={[
+                      choices.map((choice) => ({
+                        id: choice.id,
+                        search: `${choice.branch} ${choice.id}`,
+                        icon: <GitBranch aria-hidden="true" />,
+                        label: (
+                          <span className="font-mono text-xs">
+                            {choice.branch}
+                          </span>
+                        ),
+                        current: choice.id === worktree.id,
+                      })),
+                    ]}
+                    placeholder="Filter worktrees…"
+                    align="end"
+                    onSelect={onSelectWorktree}
+                  >
+                    <ChevronsUpDown />
+                  </SearchPicker>
+                ) : null}
+                {location.view === "files" ? (
+                  <IconButton
+                    label="Review changes"
+                    size="icon"
+                    onClick={() => setLocation(PANEL_HOME)}
+                  >
+                    <GitCompareArrows />
+                  </IconButton>
+                ) : null}
+                <IconButton
+                  label="Open in Worktrees"
+                  size="icon"
+                  onClick={() =>
+                    onNavigate(
+                      worktreePath(worktree.id, location.view, {
+                        ...(location.path ? { path: location.path } : {}),
+                        ...(location.from ? { from: location.from } : {}),
+                        ...(location.to ? { to: location.to } : {}),
+                      }),
+                    )
+                  }
+                >
+                  <SquareArrowOutUpRight />
+                </IconButton>
+              </>
+            }
+            {...worktreeActions}
+            view={location.view}
+            filePath={location.path}
+            from={location.from}
+            to={location.to}
+            navigate={navigate}
+            prefs={prefs}
+            onUpdatePrefs={onUpdatePrefs}
+            comments={commentsByWorktreeId[worktree.id] ?? NO_COMMENTS}
+            onLoadComments={() => commentWatch.list(worktree.id)}
+            onUnloadComments={() => commentWatch.unwatch(worktree.id)}
+            commentActions={commentActionsFor(worktree.id)}
+            onSubmitReview={(commentIds) =>
+              onSubmitReview(worktree.id, commentIds)
+            }
+          />
+        </EdgeSheetContainer>
       </CommentActuationProvider>
     </RoutePrimaryActionProvider>
   );

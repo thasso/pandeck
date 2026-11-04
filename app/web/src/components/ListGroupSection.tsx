@@ -29,6 +29,7 @@ import {
 export function ListGroupSection({
   id,
   title,
+  detail,
   count,
   icon,
   defaultOpen = true,
@@ -45,6 +46,8 @@ export function ListGroupSection({
   /** Stable per group: keys the remembered open state and the heading id. */
   id: string;
   title: string;
+  /** Muted text after the title, truncated with it (a file's folder). */
+  detail?: ReactNode;
   /** Rows under the band; absent where a count means nothing (a comment). */
   count?: number | undefined;
   icon: ReactNode;
@@ -112,7 +115,10 @@ export function ListGroupSection({
             className={`shrink-0 opacity-70 transition-transform ${open ? "rotate-90" : ""}`}
           />
           {icon}
-          <span className="min-w-0 flex-1 truncate">{title}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {title}
+            {detail}
+          </span>
           {count !== undefined ? (
             <span className="shrink-0 font-normal opacity-70 tabular-nums">
               {count}
