@@ -22,6 +22,8 @@ const OPENAI_COMPATIBLE_CONFIG_PATH = join(
   "openai-compatible.json",
 );
 const DEFAULT_NAME = "OpenAI-compatible";
+/** The key registered for an endpoint that has none: it pairs no credential. */
+export const OPENAI_COMPATIBLE_KEYLESS = "none";
 
 interface OpenAiCompatibleConfigFile {
   enabled?: boolean;
@@ -244,7 +246,7 @@ export function getOpenAiCompatibleProviderConfigForRegistry():
     baseUrl: config.baseUrl,
     // Pi only offers a provider that has a key. A local server commonly takes
     // none and ignores the header, so an unset key sends a placeholder.
-    apiKey: config.apiKey ?? "none",
+    apiKey: config.apiKey ?? OPENAI_COMPATIBLE_KEYLESS,
     api: "openai-completions",
     compat,
     models: config.models.map((model) => ({
