@@ -144,13 +144,23 @@ range:
   a newer acknowledgement cannot clear an older unanswered request. If one times
   out, the process is quarantined, not reused. Background work stays alive and
   its lifecycle evidence continues to drain, but prompts, provider turns and
-  compaction cannot run on that process. A late acknowledgement does not lift
-  quarantine. Once fully idle, the host retires through the supervisor, after
-  normal frozen grace with no pending setting or immediately when a setting
-  awaits restart. Only a fresh query after the old one terminates may accept the
-  next prompt. After stream termination, retirement also releases the Worker
-  engine without waiting forever for abandoned control answers. This is
-  failed-Stop recovery, not a quiet close during an active Stop.
+  compaction cannot run on that process. All new native and MCP tool actions are
+  refused by app-side admission, including ordinary file/shell tools and
+  background launches. Native hooks check the calling epoch before admission and
+  again after any asynchronous launch reservation. A refused, unexecuted
+  reservation is released without stopping existing jobs. MCP calls carry their
+  query epoch and recheck on the server immediately before the app tool
+  executes, even if an earlier native hook allowed the call. Each query mounts
+  its own MCP endpoint, so an old CLI connection cannot take a successor's
+  executor. Read hooks also recheck after awaiting file metadata. Stale or
+  closing epochs and tools racing an active Stop are refused too. A late
+  acknowledgement does not lift quarantine. Once fully idle, the host retires
+  through the supervisor, after normal frozen grace with no pending setting or
+  immediately when a setting awaits restart. Only a fresh query after the old
+  one terminates may accept the next prompt. After stream termination,
+  retirement also releases the Worker engine without waiting forever for
+  abandoned control answers. This is failed-Stop recovery, not a quiet close
+  during an active Stop.
 
   Compaction waiting for Stop owns a reservation. Another Stop cancels it; after
   the wait it rechecks that exact reservation and query epoch before queuing

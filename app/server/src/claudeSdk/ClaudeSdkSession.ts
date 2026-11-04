@@ -2134,14 +2134,23 @@ export class ClaudeSdkSession implements LiveSession {
         ownsTurn,
         skill,
       );
-    if (!this.toolServer) this.toolServer = createClaudeSessionToolServer(this);
+    // Each query mounts its own MCP endpoint. An old CLI connection must never
+    // reach a successor engine's executor slot after its epoch has ended.
+    const previousToolServer = this.toolServer;
+    this.toolServer = createClaudeSessionToolServer(this);
+    if (previousToolServer)
+      void previousToolServer
+        .close()
+        .catch((error) =>
+          console.warn("[claude] closing the old tool server failed:", error),
+        );
     this.unregisterSessionHooks ??= registerSessionHooks(
       this.id,
       claudeSessionHookBinding({
         agentType: this.agentType,
         agent: sessionAgent(this.id),
         mode: () => this.mode,
-        admit: (epoch, input) => this.admitNativeBackgroundTool(epoch, input),
+        admit: (epoch, input) => this.admitQueryTool(epoch, input),
         stop: (epoch, tasks) => this.reconcileStopTasks(epoch, tasks),
         postCompact: (epoch, summary) => {
           if (this.compactOperation && this.compactOperationEpochKey === epoch)
@@ -2722,7 +2731,31 @@ export class ClaudeSdkSession implements LiveSession {
     this.broadcastState();
   }
 
-  private async admitNativeBackgroundTool(
+  /** Fence every new tool action without interrupting existing background work. */
+  private toolAdmissionRefusal(
+    epochKey: string | undefined,
+  ): string | undefined {
+    if (
+      !epochKey ||
+      this.queryEpochKey !== epochKey ||
+      this.disposed ||
+      this.processClosing
+    )
+      return "This Claude process no longer accepts tool calls.";
+    if (this.failedStopEpochKey === epochKey)
+      return "Claude did not acknowledge Stop. This process cannot execute new tools; existing background work may still finish.";
+    if (this.stopInterrupt?.epochKey === epochKey)
+      return "Claude is acknowledging Stop. New tool calls are refused until it settles.";
+    return undefined;
+  }
+
+  /** App tools recheck on the server immediately before execution, not at MCP dispatch. */
+  assertToolAdmission(epochKey: string | undefined): void {
+    const refusal = this.toolAdmissionRefusal(epochKey);
+    if (refusal) throw new Error(refusal);
+  }
+
+  private async admitQueryTool(
     epochKey: string,
     input: {
       toolName: string;
@@ -2732,6 +2765,8 @@ export class ClaudeSdkSession implements LiveSession {
   ): Promise<
     { allowed: true; context?: string } | { allowed: false; reason: string }
   > {
+    const refusal = this.toolAdmissionRefusal(epochKey);
+    if (refusal) return { allowed: false, reason: refusal };
     const isBackgroundBash =
       input.toolName === "Bash" && input.toolInput.run_in_background === true;
     const isMonitor = input.toolName === "Monitor";
@@ -2785,6 +2820,27 @@ export class ClaudeSdkSession implements LiveSession {
           allowed: false,
           reason: "the retained Claude host could not reserve this launch",
         };
+      }
+      // Launch only reserves the native action; the CLI cannot run it until
+      // this hook allows. A Stop or epoch change during that await revokes it.
+      const refusal = this.toolAdmissionRefusal(epochKey);
+      if (refusal) {
+        // Do not terminalize an already-running job on a repeated hook call.
+        if (admission.item.state === "pending-launch") {
+          claudeBackgroundWorkBackend.completeItem(
+            this.id,
+            epochKey,
+            admission.item.id,
+          );
+          backgroundWorkSupervisor.completed({
+            itemId: admission.item.id,
+            eventId: `admission-refused:${admission.item.id}`,
+            state: "failed",
+            outcomeSummary: refusal,
+          });
+          this.scheduleQuietCloseIfEmpty(epochKey);
+        }
+        return { allowed: false, reason: refusal };
       }
       this.retainedEpochKey = epochKey;
       this.retainedEmptyGraceMs = admission.frozen.claudeEmptyHostGraceMs ?? 0;

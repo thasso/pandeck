@@ -582,9 +582,13 @@ test("a hosted query's hook and app-tool calls reach the server after every item
       return { content: [{ type: "text", text: "probed" }] };
     },
   });
+  let admittedEpoch: string | undefined;
   const untool = registerAppToolSession(sessionId, {
     resolve: () => probe,
     session: () => ({}) as never,
+    onExecute: (_name, epoch) => {
+      admittedEpoch = epoch;
+    },
   });
   try {
     // The consumer takes the first message, then nothing until the calls.
@@ -599,6 +603,11 @@ test("a hosted query's hook and app-tool calls reach the server after every item
     ]);
     assert.deepEqual(await atVerdict, ["a1", "a2", "a3"]);
     assert.deepEqual(await atTool, ["b1", "b2"]);
+    assert.equal(
+      admittedEpoch,
+      "epoch-ordered",
+      "the server can fence the calling query, not a newer session epoch",
+    );
     done.open();
     assert.equal((await iterator.next()).done, true);
   } finally {

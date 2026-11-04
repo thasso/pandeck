@@ -59,6 +59,39 @@ function routed(sessionId: string): {
 const servedCounts = () =>
   Object.values(SESSION_HOOK_METHODS).map(sessionHookCallsServedForTests);
 
+test("Read preparation cannot reuse admission revoked during its async window", async () => {
+  let checks = 0;
+  const hooks = claudeOutputPolicyHooks(
+    calls({
+      preToolUse: async () =>
+        ++checks === 1
+          ? { allowed: true }
+          : { allowed: false, reason: "Claude did not acknowledge Stop." },
+    }),
+  );
+  const verdict = await hooks.PreToolUse![0]!.hooks[0]!(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-1",
+      transcript_path: "/tmp/transcript",
+      cwd: "/tmp",
+      tool_name: "Read",
+      tool_input: { file_path: "ordinary-source.ts" },
+      tool_use_id: "racing-read",
+    },
+    "racing-read",
+    { signal: new AbortController().signal },
+  );
+  assert.ok("hookSpecificOutput" in verdict);
+  assert.equal(verdict.hookSpecificOutput?.hookEventName, "PreToolUse");
+  assert.ok(
+    verdict.hookSpecificOutput &&
+      "permissionDecision" in verdict.hookSpecificOutput,
+  );
+  assert.equal(verdict.hookSpecificOutput.permissionDecision, "deny");
+  assert.equal(checks, 2);
+});
+
 test("Claude hooks bound the real FileReadOutput shape without silent pagination", async () => {
   // This fixture is the FileReadOutput text variant from the installed
   // @anthropic-ai/claude-agent-sdk sdk-tools.d.ts. updatedToolOutput must retain
@@ -95,8 +128,8 @@ test("Claude hooks bound the real FileReadOutput shape without silent pagination
     );
     assert.equal(
       sessionHookCallsServedForTests(SESSION_HOOK_METHODS.preToolUse),
-      preServed + 1,
-      "the PreToolUse decision crossed to the server once",
+      preServed + 2,
+      "Read checks admission before and after asynchronous metadata preparation",
     );
 
     const response = {

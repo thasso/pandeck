@@ -153,10 +153,17 @@ function hostedSessionHooks(
 function hostedToolExecutor(
   sessionId: string,
   host: HostedEngineHost,
+  queryEpoch: string | undefined,
 ): AppToolExecutor {
   return (tool, args, ctx) =>
     host.callAppTool(
-      { sessionId, tool, toolCallId: ctx.toolCallId, args },
+      {
+        sessionId,
+        ...(queryEpoch !== undefined ? { queryEpoch } : {}),
+        tool,
+        toolCallId: ctx.toolCallId,
+        args,
+      },
       {
         ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
         ...(ctx.progress !== undefined ? { onProgress: ctx.progress } : {}),
@@ -279,7 +286,11 @@ function hostClaudeQuery(
               // discarded unstarted never takes the slot.
               if (toolServer)
                 releaseExecutor = toolServer.bindExecutor(
-                  hostedToolExecutor(spec.sessionId, host),
+                  hostedToolExecutor(
+                    spec.sessionId,
+                    host,
+                    spec.sessionHooksEpoch,
+                  ),
                 );
               void pull();
             }

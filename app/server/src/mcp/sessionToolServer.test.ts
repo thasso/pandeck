@@ -492,7 +492,25 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
   assert.equal(session.kind, "workshop");
 
   const createdTaskIds: string[] = [];
-  const server = createClaudeSessionToolServer(session);
+  // This test mounts the tool server without a query; live engines supply
+  // their epoch to the session's admission fence in the hosted-query tests.
+  const server = createClaudeSessionToolServer({
+    id: session.id,
+    agentType: session.agentType,
+    get sessionMode() {
+      return session.sessionMode;
+    },
+    get sessionFile() {
+      return session.sessionFile;
+    },
+    get title() {
+      return session.title;
+    },
+    cwd: session.cwd,
+    timelineEntries: () => session.timelineEntries(),
+    broadcastState: () => session.broadcastState(),
+    assertToolAdmission() {},
+  });
   // No engine mounts it here: bind the session's Worker path, as one would.
   server.bindExecutor(appToolExecutorFor(ID));
   const client = await connect(server);

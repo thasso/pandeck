@@ -11,6 +11,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type {
   ClaudeQuery,
   ClaudeQueryParams,
@@ -103,6 +105,29 @@ class FakeQuery implements ClaudeQuery {
 
   async interrupt(): Promise<void> {}
   async stopTask(): Promise<void> {}
+
+  async mcp(): Promise<Client> {
+    const pa = (
+      this.params.options?.mcpServers as
+        | Record<
+            string,
+            {
+              instance: {
+                connect(transport: InMemoryTransport): Promise<void>;
+              };
+            }
+          >
+        | undefined
+    )?.pa;
+    assert.ok(pa);
+    const client = new Client({ name: "fake-cli", version: "0.0.0" });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      pa.instance.connect(serverSide),
+      client.connect(clientSide),
+    ]);
+    return client;
+  }
 
   async applyFlagSettings(settings: Record<string, unknown>): Promise<void> {
     this.flagCalls.push(settings);
@@ -226,7 +251,10 @@ async function midTurn(stored?: number) {
 }
 
 /** Starts a background shell in the running turn, so its process is kept. */
-async function startBackgroundShell(query: FakeQuery): Promise<void> {
+async function startBackgroundShell(
+  query: FakeQuery,
+  toolUseId = "tool-bg-1",
+): Promise<void> {
   const pre = query.params.options?.hooks?.PreToolUse?.[0]?.hooks[0];
   assert.ok(pre);
   await pre(
@@ -237,16 +265,16 @@ async function startBackgroundShell(query: FakeQuery): Promise<void> {
       cwd: dataDir,
       tool_name: "Bash",
       tool_input: { command: "sleep 300", run_in_background: true },
-      tool_use_id: "tool-bg-1",
+      tool_use_id: toolUseId,
     },
-    "tool-bg-1",
+    toolUseId,
     { signal: new AbortController().signal },
   );
   query.output.emit({
     type: "system",
     subtype: "task_started",
     task_id: "vendor-1",
-    tool_use_id: "tool-bg-1",
+    tool_use_id: toolUseId,
     description: "sleep",
     task_type: "shell",
     uuid: "started-1",
@@ -254,12 +282,15 @@ async function startBackgroundShell(query: FakeQuery): Promise<void> {
   } as unknown as ClaudeSdkMessage);
 }
 
-function completeBackgroundShell(query: FakeQuery): void {
+function completeBackgroundShell(
+  query: FakeQuery,
+  toolUseId = "tool-bg-1",
+): void {
   query.output.emit({
     type: "system",
     subtype: "task_notification",
     task_id: "vendor-1",
-    tool_use_id: "tool-bg-1",
+    tool_use_id: toolUseId,
     status: "completed",
     output_file: "",
     summary: "done",
@@ -681,6 +712,377 @@ test("a failed Stop keeps active work but refuses all new input on the quarantin
       "provider work cannot reopen a quarantined turn",
     );
     assert.equal(window(h.session)?.pendingReason, "next-turn");
+  } finally {
+    interrupted.resolve(undefined);
+    await disposeRetained(h);
+  }
+});
+
+async function toolAdmission(
+  query: FakeQuery,
+  name: string,
+  input: Record<string, unknown>,
+  id: string,
+) {
+  const pre = query.params.options?.hooks?.PreToolUse?.[0]?.hooks[0];
+  assert.ok(pre);
+  const output = await pre(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-window",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: name,
+      tool_input: input,
+      tool_use_id: id,
+    },
+    id,
+    { signal: new AbortController().signal },
+  );
+  const specific =
+    "hookSpecificOutput" in output ? output.hookSpecificOutput : undefined;
+  return {
+    hookSpecificOutput: {
+      permissionDecision:
+        specific && "permissionDecision" in specific
+          ? specific.permissionDecision
+          : undefined,
+    },
+  };
+}
+
+for (const pending of [false, true]) {
+  test(`quarantine fences native and MCP tools while existing work drains ${pending ? "for an immediate restart" : "with ordinary grace"}`, async () => {
+    const { appToolCallsServedForTests } =
+      await import("../workers/appToolHost.ts");
+    const h = await retainedWindow();
+    const interrupted = deferred<void>();
+    const client = await h.query.mcp();
+    try {
+      assert.notEqual(
+        (await client.callTool({ name: "current_time", arguments: {} }))
+          .isError,
+        true,
+      );
+      const next = h.adapter.prompt("Stop before further tools");
+      await until(() => h.query.inputs.length === 2);
+      h.query.interrupt = () => interrupted.promise;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      h.session.abort();
+      await next;
+      h.query.output.emit(result("stopped-tool-admission"));
+      if (pending) await storeWindow(h, 100_000);
+      await vi.advanceTimersByTimeAsync(4_000);
+      vi.useRealTimers();
+      const before = backgroundWorkStore.listItems({ ownerSessionId: h.id });
+      h.query.output.emit({
+        type: "system",
+        subtype: "session_state_changed",
+        state: "running",
+        uuid: "unwanted-provider-turn",
+        session_id: "provider-window",
+      } as unknown as ClaudeSdkMessage);
+      for (const [name, input] of [
+        ["Bash", { command: "sleep 600", run_in_background: true }],
+        ["Monitor", { command: "tail -f /tmp/no", timeout_ms: 60_000 }],
+        ["Bash", { command: "touch /tmp/must-not-run" }],
+        ["Write", { file_path: "/tmp/must-not-write", content: "no" }],
+        [
+          "Edit",
+          { file_path: "/tmp/must-not-edit", old_string: "a", new_string: "b" },
+        ],
+        ["mcp__pa__task_manage", { operations: [] }],
+      ] as const) {
+        const verdict = await toolAdmission(
+          h.query,
+          name,
+          input,
+          `denied-${name}`,
+        );
+        assert.equal(
+          verdict.hookSpecificOutput?.permissionDecision,
+          "deny",
+          name,
+        );
+      }
+      assert.deepEqual(
+        backgroundWorkStore.listItems({ ownerSessionId: h.id }),
+        before,
+        "refused tools create no background rows or reservations",
+      );
+      const served = appToolCallsServedForTests();
+      const mutating = await client.callTool({
+        name: "task_manage",
+        arguments: {
+          operations: [{ operation: "create", title: "must not be created" }],
+        },
+      });
+      assert.equal(
+        mutating.isError,
+        true,
+        "MCP cannot bypass the native hook fence",
+      );
+      assert.match(JSON.stringify(mutating.content), /Stop/);
+      assert.equal(
+        appToolCallsServedForTests(),
+        served,
+        "no app tool executes",
+      );
+      interrupted.resolve(undefined);
+      assert.equal(
+        (await toolAdmission(h.query, "Write", {}, "late-ack-write"))
+          .hookSpecificOutput?.permissionDecision,
+        "deny",
+        "late acknowledgement cannot unquarantine tools",
+      );
+      assert.equal(h.query.closeCalls, 0, "existing shell stays alive");
+      assert.equal(h.session.isRunning, false);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      completeBackgroundShell(h.query);
+      await vi.advanceTimersByTimeAsync(0);
+      if (!pending) {
+        assert.equal(h.query.closeCalls, 0);
+        await vi.advanceTimersByTimeAsync(29_999);
+        assert.equal(h.query.closeCalls, 0);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      assert.equal(h.query.closeCalls, 1);
+      assert.equal(
+        backgroundWorkStore.listItems({ ownerSessionId: h.id })[0]?.state,
+        "completed",
+        "existing-job terminal evidence survives quarantine",
+      );
+    } finally {
+      interrupted.resolve(undefined);
+      await client.close();
+      await disposeRetained(h);
+    }
+  });
+}
+
+test("MCP app execution refuses quarantine even without a PreToolUse call", async () => {
+  const { appToolCallsServedForTests } =
+    await import("../workers/appToolHost.ts");
+  const h = await retainedWindow();
+  const interrupted = deferred<void>();
+  const client = await h.query.mcp();
+  try {
+    const next = h.adapter.prompt("Stop before MCP execution");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => interrupted.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    h.session.abort();
+    await next;
+    h.query.output.emit(result("stopped-before-mcp"));
+    await vi.advanceTimersByTimeAsync(4_000);
+    vi.useRealTimers();
+    const served = appToolCallsServedForTests();
+    const called = await client.callTool({
+      name: "task_manage",
+      arguments: {
+        operations: [{ operation: "create", title: "must not be created" }],
+      },
+    });
+    assert.equal(called.isError, true);
+    assert.match(JSON.stringify(called.content), /Stop/);
+    assert.equal(appToolCallsServedForTests(), served);
+  } finally {
+    interrupted.resolve(undefined);
+    await client.close();
+    await disposeRetained(h);
+  }
+});
+
+test("late app-tool calls carry their own epoch and cannot execute against a successor", async () => {
+  const { WorkerRegistry } = await import("../workers/workerRegistry.ts");
+  const { startWorker } = await import("../worker/worker.ts");
+  const { appToolHandlers } = await import("../workers/appToolHost.ts");
+  const { createInProcessTransport } =
+    await import("../workerProtocol/inProcessTransport.ts");
+  const { DEFAULT_WORKER_ID } = await import("../workers/placement.ts");
+  const h = await retainedWindow();
+  const oldEpoch = backgroundWorkStore.hostForOwner(h.id)!.epochKey;
+  const oldClient = await h.query.mcp();
+  const registry = new WorkerRegistry();
+  const [serverEnd, workerEnd] = createInProcessTransport();
+  const connection = registry.accept(serverEnd, {
+    quiescence: () => Promise.resolve(),
+    handlers: appToolHandlers(() => {
+      const workerId = registry.admittedAs(connection);
+      return workerId === undefined ? undefined : { connection, workerId };
+    }),
+  });
+  const worker = startWorker({
+    workerId: DEFAULT_WORKER_ID,
+    transport: workerEnd,
+    childEnv: () => process.env,
+  });
+  const call = (queryEpoch?: string) =>
+    worker.callAppTool(
+      {
+        sessionId: h.id,
+        ...(queryEpoch ? { queryEpoch } : {}),
+        tool: "current_time",
+        toolCallId: "late-app",
+        args: {},
+      },
+      {},
+    );
+  try {
+    await call(oldEpoch);
+    await assert.rejects(call(), /no longer accepts tool calls/);
+    await storeWindow(h, 100_000);
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+    const fresh = h.adapter.prompt("fresh epoch for app tools");
+    await until(() => h.queries.length === 2);
+    await startBackgroundShell(h.queries[1]!, "fresh-background");
+    const freshEpoch = backgroundWorkStore.hostForOwner(h.id)!.epochKey;
+    assert.notEqual(freshEpoch, oldEpoch);
+    await assert.rejects(call(oldEpoch), /no longer accepts tool calls/);
+    await call(freshEpoch);
+    await assert.rejects(
+      oldClient.callTool({ name: "current_time", arguments: {} }),
+      /closed|not connected/i,
+      "the old MCP connection cannot take a successor executor",
+    );
+    const freshClient = await h.queries[1]!.mcp();
+    assert.notEqual(
+      (await freshClient.callTool({ name: "current_time", arguments: {} }))
+        .isError,
+      true,
+    );
+    await freshClient.close();
+    h.queries[1]!.output.emit(result("fresh-app-tools"));
+    await fresh;
+    completeBackgroundShell(h.queries[1]!, "fresh-background");
+    await storeWindow(h, 200_000);
+    await until(() => h.queries[1]!.closeCalls === 1);
+  } finally {
+    connection.end("test done");
+    await oldClient.close();
+    h.session.dispose();
+  }
+});
+
+test("tool admission rechecks quarantine after asynchronous background reservation", async () => {
+  const { backgroundWorkSupervisor } =
+    await import("../backgroundWork/supervisor.ts");
+  const h = await retainedWindow();
+  const interrupted = deferred<void>();
+  const launched = deferred<void>();
+  const release = deferred<void>();
+  const originalLaunch = backgroundWorkSupervisor.launch.bind(
+    backgroundWorkSupervisor,
+  );
+  const spy = vi
+    .spyOn(backgroundWorkSupervisor, "launch")
+    .mockImplementation(async (admission) => {
+      const item = await originalLaunch(admission);
+      launched.resolve(undefined);
+      await release.promise;
+      return item;
+    });
+  try {
+    const next = h.adapter.prompt("a tool races Stop");
+    await until(() => h.query.inputs.length === 2);
+    const verdict = toolAdmission(
+      h.query,
+      "Bash",
+      { command: "sleep 600", run_in_background: true },
+      "racing-background",
+    );
+    await launched.promise;
+    h.query.interrupt = () => interrupted.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    h.session.abort();
+    await next;
+    h.query.output.emit(result("stopped-racing-tool"));
+    await vi.advanceTimersByTimeAsync(4_000);
+    release.resolve(undefined);
+    assert.equal(
+      (await verdict).hookSpecificOutput?.permissionDecision,
+      "deny",
+    );
+    const rows = backgroundWorkStore.listItems({ ownerSessionId: h.id });
+    assert.equal(
+      rows.find((row) => row.sourceRequestId === "racing-background")?.state,
+      "failed",
+      "an unexecuted reservation cannot retain a phantom job",
+    );
+    assert.equal(
+      rows.find((row) => row.sourceRequestId === "tool-bg-1")?.state,
+      "running",
+    );
+    await storeWindow(h, 100_000);
+    completeBackgroundShell(h.query);
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(
+      h.query.closeCalls,
+      1,
+      "the refused reservation does not pin the host",
+    );
+  } finally {
+    release.resolve(undefined);
+    interrupted.resolve(undefined);
+    spy.mockRestore();
+    await disposeRetained(h);
+  }
+});
+
+test("a timely Stop only fences tools until acknowledgement; ended epochs stay fenced", async () => {
+  const h = await retainedWindow();
+  const interrupted = deferred<void>();
+  try {
+    const next = h.adapter.prompt("a normal Stop");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => interrupted.promise;
+    h.session.abort();
+    await next;
+    h.query.output.emit(result("timely-stop"));
+    assert.equal(
+      (await toolAdmission(h.query, "Write", {}, "pending-stop-write"))
+        .hookSpecificOutput?.permissionDecision,
+      "deny",
+    );
+    interrupted.resolve(undefined);
+    const resumed = h.adapter.prompt("a normal next turn");
+    await until(() => h.query.inputs.length === 3);
+    assert.notEqual(
+      (await toolAdmission(h.query, "Write", {}, "resumed-write"))
+        .hookSpecificOutput?.permissionDecision,
+      "deny",
+    );
+    h.query.output.emit(result("resumed-tools"));
+    await resumed;
+    await storeWindow(h, 100_000);
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+    const fresh = h.adapter.prompt("fresh epoch");
+    await until(() => h.queries.length === 2);
+    assert.equal(
+      (
+        await toolAdmission(
+          h.query,
+          "Bash",
+          { command: "sleep 600", run_in_background: true },
+          "stale-background",
+        )
+      ).hookSpecificOutput?.permissionDecision,
+      "deny",
+    );
+    assert.equal(
+      (await toolAdmission(h.query, "Write", {}, "stale-write"))
+        .hookSpecificOutput?.permissionDecision,
+      "deny",
+    );
+    assert.notEqual(
+      (await toolAdmission(h.queries[1]!, "Write", {}, "fresh-write"))
+        .hookSpecificOutput?.permissionDecision,
+      "deny",
+    );
+    h.queries[1]!.output.emit(result("fresh-tools"));
+    await fresh;
   } finally {
     interrupted.resolve(undefined);
     await disposeRetained(h);
