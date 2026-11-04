@@ -303,7 +303,12 @@ test("without gateway access the server's port runs the engine as before: its ru
       native.modelRuntime,
       await serverPiModelPort.runtime("default"),
     );
-    assert.equal(native.modelRuntime.getAuth, ModelRuntime.prototype.getAuth);
+    // The server's runtime keeps its own origin guard
+    // (`serverCredentialPairing.ts`), whatever the switch; no lease guard.
+    assert.notEqual(
+      native.modelRuntime.getAuth,
+      ModelRuntime.prototype.getAuth,
+    );
     assert.equal(native.agent.transport, "auto");
     await hosted.command(
       "setModel",

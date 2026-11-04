@@ -33,6 +33,10 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
       return new FakeModelRuntime(options);
     }
 
+    // The server's credential guard wraps it (`serverCredentialPairing.ts`).
+    async getAuth() {
+      return undefined;
+    }
     async refresh() {}
     getError() {
       return undefined;

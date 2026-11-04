@@ -10,28 +10,29 @@
  * out is rebased onto the gateway's `/chatgpt`, and the OpenAI-compatible
  * provider is registered at the gateway's `/compat<base path>` with the lease
  * as its key: the gateway adds the endpoint's own key. The runtime's
- * `getAuth` is guarded per request: a credential is paired only with the
- * `baseUrl` of the configuration it belongs to. Any other object, such as a
- * catalog model still at `chatgpt.com`, or an OpenAI-compatible model from a
- * base path the settings have since replaced, gets no auth, and pi refuses it
- * before it connects ("Provider is not configured"). A change of origin under
- * the same base path keeps the registration: the gateway follows the push.
+ * `getAuth` is guarded per request (`credentialPairing.ts`): a credential is
+ * paired only with the exact `baseUrl` of the configuration it belongs to.
+ * Any other object, such as a catalog model still at `chatgpt.com`, or an
+ * OpenAI-compatible model from a base path the settings have since replaced,
+ * gets no auth, and pi refuses it before it connects ("Provider is not
+ * configured"). A change of origin under the same base path keeps the
+ * registration: the gateway follows the push.
  *
  * The OpenAI-compatible configuration arrives key-less through an injected
  * {@link CompatProviderFeed}; the catalog through the server's own port. This
  * module imports neither.
  */
-import {
-  ModelRegistry,
-  ModelRuntime,
-  type ModelRuntimeAuthOverrides,
-} from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   InMemoryCredentialStore,
   InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@assistant/shared";
 import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
+import {
+  guardCredentialPairing,
+  type CredentialPairing,
+} from "./credentialPairing.ts";
 import type { PiEngineModel } from "./piEngine.ts";
 import type { PiModelPort } from "./piEngineHost.ts";
 
@@ -118,36 +119,24 @@ export function gatewayPiModelPort(
     compatGeneration += 1;
   };
 
-  /** Auth only for a model at the base its credential was configured for. */
-  const guard = (runtime: ModelRuntime): void => {
-    const getAuth = runtime.getAuth.bind(runtime) as (
-      providerOrModel: string | PiEngineModel,
-      overrides?: ModelRuntimeAuthOverrides,
-    ) => ReturnType<ModelRuntime["getAuth"]>;
-    runtime.getAuth = (async (
-      providerOrModel: string | PiEngineModel,
-      overrides?: ModelRuntimeAuthOverrides,
-    ) => {
-      if (typeof providerOrModel === "string")
-        return getAuth(providerOrModel, overrides);
-      const { provider, baseUrl } = providerOrModel;
-      const generation = compatGeneration;
-      const expected =
-        provider === CODEX_PROVIDER_ID
-          ? codexBase
-          : provider === OPENAI_COMPATIBLE_PROVIDER_ID
-            ? compatBase
-            : null;
-      // Any other provider resolves as pi resolves it today.
-      if (expected === null) return getAuth(providerOrModel, overrides);
-      if (expected === undefined || baseUrl !== expected) return undefined;
-      const resolution = await getAuth(providerOrModel, overrides);
-      // The registration may have changed while the key was resolved.
-      if (generation !== compatGeneration) return undefined;
-      const authBase = resolution?.auth.baseUrl;
-      if (authBase && authBase !== expected) return undefined;
-      return resolution;
-    }) as ModelRuntime["getAuth"];
+  /**
+   * Auth only for a model at the base its credential was configured for, and
+   * only if the registration did not change while the key was resolved.
+   */
+  const pairingFor = (
+    provider: string,
+  ): CredentialPairing | undefined | null => {
+    const expected =
+      provider === CODEX_PROVIDER_ID
+        ? codexBase
+        : provider === OPENAI_COMPATIBLE_PROVIDER_ID
+          ? compatBase
+          : null;
+    if (expected === null || expected === undefined) return expected;
+    return {
+      admits: (baseUrl) => baseUrl === expected,
+      stamp: compatGeneration,
+    };
   };
 
   const created = (async () => {
@@ -159,7 +148,7 @@ export function gatewayPiModelPort(
       modelsPath: null,
       refreshOnCreate: false,
     });
-    guard(runtime);
+    guardCredentialPairing(runtime, pairingFor);
     const into = new ModelRegistry(runtime);
     into.registerProvider(CODEX_PROVIDER_ID, {
       baseUrl: codexBase,

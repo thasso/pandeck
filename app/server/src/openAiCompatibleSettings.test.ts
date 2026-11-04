@@ -5,6 +5,7 @@ import { toModelOption } from "./piSdk/models.ts";
 import {
   getOpenAiCompatibleProviderConfigForRegistry,
   getOpenAiCompatibleSettings,
+  OPENAI_COMPATIBLE_KEYLESS,
   testOpenAiCompatibleSettings,
   updateOpenAiCompatibleSettings,
 } from "./openAiCompatibleSettings.ts";
@@ -157,6 +158,8 @@ test("a keyless endpoint is discovered without Authorization and registered", as
   assert.equal(status.ok, true);
   assert.equal(calls[0]?.init?.headers, undefined);
   assert.equal(getOpenAiCompatibleProviderConfigForRegistry()?.apiKey, "none");
+  // The value the server runtimes' guard reads as "no credential paired".
+  assert.equal(OPENAI_COMPATIBLE_KEYLESS, "none");
 });
 
 test("reports a missing base URL instead of calling out", async () => {

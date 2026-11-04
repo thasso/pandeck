@@ -218,7 +218,8 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     const { serverPiModelPort } = await import("./piModelPort.ts");
     const { compatProviderFeed, notifyCompatProviderChanged } =
       await import("./compatProviderFeed.ts");
-    const { syncConfiguredModelProviders } = await import("./models.ts");
+    const models = await import("./models.ts");
+    const { syncConfiguredModelProviders } = models;
     const { resolvePiEngineStart } = await import("./piEngineStart.ts");
     const { openRemotePiEngine } = await import("./remotePiEngine.ts");
     const settings = await import("../settingsService.ts");
@@ -328,6 +329,8 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       decodeEngineOpen,
       factory,
       hostedPiEngine,
+      serverPiModelPort,
+      models,
       resolvePiEngineStart,
       openRemotePiEngine,
       settings,
@@ -420,8 +423,10 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
   }
 
   /** The same engine with the switch off: the server's port, no lease. */
-  async function openSwitchOff(model: { provider: string; id: string }) {
-    const profileId = env.profiles.DEFAULT_OPENAI_PROFILE_ID;
+  async function openSwitchOff(
+    model: { provider: string; id: string },
+    profileId = env.profiles.DEFAULT_OPENAI_PROFILE_ID,
+  ) {
     const started = await env.resolvePiEngineStart({
       kind: "assistant",
       credentialProfileId: profileId,
@@ -1062,6 +1067,223 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       } finally {
         for (const { engine } of engines) await engine.dispose();
       }
+    },
+    CASE_MS,
+  );
+
+  /** The keys an endpoint's chat requests carried since `from`. */
+  const keysSeen = (endpoint: typeof env.compatA, from: number) =>
+    chats(endpoint, from).map((seen) => seen.authorization);
+
+  /** Endpoint B and its key saved one after the other, then discovered. */
+  async function moveCompatToB() {
+    await env.settings.saveSettings({
+      openAiCompatible: { baseUrl: env.compatB.baseUrl },
+    });
+    await env.settings.saveSettings({
+      openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_B },
+    });
+    const tested = await env.settings.testSettingsSection("openai-compatible");
+    assert.equal(tested.ok, true, JSON.stringify(tested));
+  }
+
+  /** pi refused the request before it connected: neither A nor B saw it. */
+  function assertRefusedUnsent(
+    reply: { stopReason: string; errorMessage?: string },
+    fromA: number,
+    fromB: number,
+  ): void {
+    assert.deepEqual(keysSeen(env.compatA, fromA), [], "A records nothing");
+    assert.deepEqual(keysSeen(env.compatB, fromB), [], "B records nothing");
+    assert.equal(reply.stopReason, "error");
+    assert.match(
+      reply.errorMessage ?? "",
+      /Provider is not configured: openai-compatible/,
+    );
+  }
+
+  /** A turn on a switch-off engine that pi must refuse. */
+  async function assertTurnRefused(engine: PiEngineHandle): Promise<void> {
+    const fromA = env.compatA.seen.length;
+    const fromB = env.compatB.seen.length;
+    assertRefusedUnsent(await turn(engine, "Say hello."), fromA, fromB);
+  }
+
+  /**
+   * A switch-off engine's reselect, resolved as the hosted `setModel`
+   * command resolves it: in the server's default registry.
+   */
+  async function selectOff(
+    engine: PiEngineHandle,
+    provider: string,
+    id: string,
+  ) {
+    const model = env.serverPiModelPort.find(provider, id);
+    assert.ok(model, `${provider}/${id} is listed`);
+    await engine.setModel(model);
+  }
+
+  /** A turn that reaches `endpoint` alone, with `key`. */
+  async function assertTurnReaches(
+    engine: PiEngineHandle,
+    endpoint: typeof env.compatA,
+    key: string,
+  ): Promise<void> {
+    const from = endpoint.seen.length;
+    const reply = await turn(engine, "Say hello.");
+    assert.equal(reply.stopReason, "stop", reply.errorMessage);
+    assert.deepEqual(keysSeen(endpoint, from), [`Bearer ${key}`]);
+  }
+
+  test(
+    "a switch-off engine refuses its old model after an endpoint change to another origin, so B's key never reaches A, until reselected",
+    async () => {
+      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
+      const off = await openSwitchOff(compatible);
+      try {
+        await assertTurnReaches(
+          off.engine,
+          env.compatA,
+          env.fixtures.COMPAT_KEY_A,
+        );
+        const changedA = env.compatA.seen.length;
+        await moveCompatToB();
+        await assertTurnRefused(off.engine);
+
+        await selectOff(off.engine, compatible.provider, compatible.id);
+        await assertTurnReaches(
+          off.engine,
+          env.compatB,
+          env.fixtures.COMPAT_KEY_B,
+        );
+        assert.equal(
+          env.compatA.seen.length,
+          changedA,
+          "A records nothing after the change",
+        );
+        assertNoEgress();
+        assertNoTokenLogged();
+      } finally {
+        await off.dispose();
+      }
+    },
+    CASE_MS,
+  );
+
+  test(
+    "a named-profile switch-off engine refuses its old model once an account listing re-syncs its runtime to another origin",
+    async () => {
+      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
+      const off = await openSwitchOff(compatible, env.named);
+      try {
+        await assertTurnReaches(
+          off.engine,
+          env.compatA,
+          env.fixtures.COMPAT_KEY_A,
+        );
+        await moveCompatToB();
+        // What an account listing does: the named runtime takes B and its key.
+        assert.ok(
+          await env.serverPiModelPort.findForProfile(
+            env.named,
+            compatible.provider,
+            compatible.id,
+          ),
+        );
+        await assertTurnRefused(off.engine);
+        assertNoEgress();
+        assertNoTokenLogged();
+      } finally {
+        await off.dispose();
+      }
+    },
+    CASE_MS,
+  );
+
+  test(
+    "a named-profile switch-off engine reselected onto another origin before its runtime re-syncs is refused, so A's key never reaches B",
+    async () => {
+      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
+      const off = await openSwitchOff(compatible, env.named);
+      try {
+        await assertTurnReaches(
+          off.engine,
+          env.compatA,
+          env.fixtures.COMPAT_KEY_A,
+        );
+        await moveCompatToB();
+        // The reselect resolves in the default registry, already at B; the
+        // named runtime still holds A and its key.
+        await selectOff(off.engine, compatible.provider, compatible.id);
+        assert.equal(off.engine.model?.baseUrl, env.compatB.baseUrl);
+        await assertTurnRefused(off.engine);
+
+        assert.ok(
+          await env.serverPiModelPort.findForProfile(
+            env.named,
+            compatible.provider,
+            compatible.id,
+          ),
+        );
+        await assertTurnReaches(
+          off.engine,
+          env.compatB,
+          env.fixtures.COMPAT_KEY_B,
+        );
+        assertNoEgress();
+        assertNoTokenLogged();
+      } finally {
+        await off.dispose();
+      }
+    },
+    CASE_MS,
+  );
+
+  test(
+    "a one-shot's model held across an endpoint change to another origin is refused on the profile's runtime, so B's key never reaches A",
+    async () => {
+      const profileId = env.profiles.DEFAULT_OPENAI_PROFILE_ID;
+      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
+      // The model a one-shot holds (`findPiModelExact`), and the runtime it
+      // runs on (`runPiOneShot`).
+      const held = (await env.models.modelRegistryForProfile(profileId)).find(
+        compatible.provider,
+        compatible.id,
+      );
+      assert.ok(held);
+      const runtime = await env.models.modelRuntimeForProfile(profileId);
+      const request = (model: typeof held) =>
+        runtime.complete(model, {
+          messages: [
+            { role: "user", content: "Say hello.", timestamp: Date.now() },
+          ],
+        });
+
+      const fromA = env.compatA.seen.length;
+      const first = await request(held);
+      assert.equal(first.stopReason, "stop", first.errorMessage);
+      assert.deepEqual(keysSeen(env.compatA, fromA), [
+        `Bearer ${env.fixtures.COMPAT_KEY_A}`,
+      ]);
+
+      await moveCompatToB();
+      const changedA = env.compatA.seen.length;
+      const changedB = env.compatB.seen.length;
+      assertRefusedUnsent(await request(held), changedA, changedB);
+
+      const fresh = (await env.models.modelRegistryForProfile(profileId)).find(
+        compatible.provider,
+        compatible.id,
+      );
+      assert.ok(fresh);
+      const reply = await request(fresh);
+      assert.equal(reply.stopReason, "stop", reply.errorMessage);
+      assert.deepEqual(keysSeen(env.compatA, changedA), []);
+      assert.deepEqual(keysSeen(env.compatB, changedB), [
+        `Bearer ${env.fixtures.COMPAT_KEY_B}`,
+      ]);
+      assertNoEgress();
+      assertNoTokenLogged();
     },
     CASE_MS,
   );

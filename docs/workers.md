@@ -1366,11 +1366,13 @@ until the gateway runs as its own process.
     own restore and fallback run, and an agent still refuses the fallback.
   - Turns use SSE (`agent.transport = "sse"`): the gateway refuses WebSocket
     upgrades. Summaries keep pi's default and fall back to SSE on that refusal.
-  - The runtime's `getAuth` is guarded per request: a credential goes only with
-    a model at the `baseUrl` it was registered for. Any other object, such as a
-    Codex model still at `chatgpt.com`, or an OpenAI-compatible model from an
-    endpoint the settings have since replaced, gets no auth, and pi refuses it
-    ("Provider is not configured") before it connects.
+  - The runtime's `getAuth` is guarded per request (`credentialPairing.ts`): a
+    credential goes only with a model at the exact `baseUrl` it was registered
+    for, and a resolution during which the registration changed gets none. Any
+    other object, such as a Codex model still at `chatgpt.com`, or an
+    OpenAI-compatible model from an endpoint the settings have since replaced,
+    gets no auth, and pi refuses it ("Provider is not configured") before it
+    connects.
   - The OpenAI-compatible provider goes through the gateway's
     `/compat<base path>` with the lease as its key. The port registers it from
     `compatProviderFeed.ts`, which projects the server's settings without the
@@ -1378,6 +1380,24 @@ until the gateway runs as its own process.
     own runtimes. A change that keeps the base path keeps the registration, so
     an open engine follows a new endpoint and key; a new base path re-registers,
     and the old model is then refused.
+- **The server's runtimes pair the compatible key with its origin.** Every pi
+  runtime `models.ts` creates for sessions, the default profile's and each
+  OpenAI profile's, is guarded per request whatever the switch
+  (`serverCredentialPairing.ts`, over the same `credentialPairing.ts` guard).
+  Switch-off engines and one-shots under either switch run on them. An
+  OpenAI-compatible model gets the key only while the registered endpoint is on
+  the model's own origin, so a model held across a change to another origin is
+  refused with pi's `Provider is not configured` before it connects: the new key
+  never reaches the old endpoint, nor the old key the new one.
+  - A key rotation or a cleared key at the same endpoint, a path change on the
+    same origin, and a disable behave as before. A key-less endpoint (the `none`
+    placeholder) pairs no credential and is never refused.
+  - A request already resolving its key keeps the registration it started on. pi
+    takes the provider and its key in the same step that the guard reads the
+    pairing, so a change landing meanwhile neither refuses it nor pairs the new
+    key with the old origin.
+  - The guard compares origins, where the leased port compares exact bases;
+    Codex and other providers resolve as before.
 
 ### Engine-version guard
 
@@ -1406,7 +1426,11 @@ CLI still talks only to the gateway.
   compatible provider, then Codex on one engine; a key rotation, a cleared key
   and a disable on an open engine beside a switch-off one; an endpoint change at
   the same base path and then at another under an open named and default engine;
-  and, last, a new control hello clearing the pushed endpoint. They assert:
+  an endpoint change to another origin under a switch-off engine on the default
+  profile, and on a named one whose runtime is re-synced or which is reselected
+  first; a one-shot's held model on its profile's runtime across the same
+  change; and, last, a new control hello clearing the pushed endpoint. They
+  assert:
   - one `POST /backend-api/codex/responses` per turn reaches the upstream, with
     the profile's token and account id and never the lease, and no upgrade;
   - the compatible provider reaches its endpoint through the gateway, one
@@ -1414,6 +1438,10 @@ CLI still talks only to the gateway.
   - an open engine follows the settings as a switch-off engine does, follows an
     endpoint change at the same base path, and after a base-path change refuses
     its old model without contacting any endpoint until reselected;
+  - a switch-off engine or a one-shot holding a model from an endpoint on
+    another origin is refused without contacting either endpoint, and reaches
+    the new endpoint with its own key once reselected (after the profile's
+    runtime has the new settings) or found anew;
   - without a pushed endpoint a compatible turn ends in the marked 503 after
     pi's retries and sends nothing;
   - a 401 and a refusal are not dead logins, and a refusal carries the marker;
@@ -1457,11 +1485,21 @@ CLI still talks only to the gateway.
     marker until a later slice allows it with contract evidence.
   - C2: a pi open, like a Claude one, awaits the link's readiness without a
     bound (G5, G7a).
-  - Task-1357 (open): with the switch off, an open pi engine can send a new
-    OpenAI-compatible key to the old endpoint after an endpoint change.
+  - After an OpenAI-compatible endpoint change to another origin, an open
+    switch-off pi session on the old model fails with pi's
+    `Provider is not configured` until the user reselects the model or reopens
+    the session (RD-1357-1). A one-shot running across such a change fails the
+    same way, with the switch on or off.
+  - With the switch off, a session on a non-default OpenAI profile reaches the
+    new endpoint after a reselect only once that profile's runtime has the new
+    settings: any model listing for the account, or a new session on it. Until
+    then the reselected model is refused, not sent with the old key.
+  - A stored `openai-compatible` credential in a profile's pi `auth.json` would
+    take precedence over the settings key. The server never writes one.
   - After an OpenAI-compatible endpoint change that changes the base path, an
-    open pi engine on the old model fails with pi's `Provider is not configured`
-    until the user reselects the model or reopens the session.
+    open leased pi engine on the old model fails with pi's
+    `Provider is not configured` until the user reselects the model or reopens
+    the session.
   - pi retries a gateway 503 or 502 on `/compat` 3 times, about 14 seconds,
     before the turn fails.
   - A request racing a push goes to the previous endpoint with its own key, or
@@ -1470,8 +1508,8 @@ CLI still talks only to the gateway.
   - In-process, the hosted engine shares the server's process: the key-less feed
     bounds the engine's dependencies, not its memory. The server's own runtimes
     keep the key for compatible discovery, one-shots and usage, which stay
-    direct (G4). An endpoint reachable only through a proxy in the server's
-    environment is not measured.
+    direct (G4) and carry the origin guard above. An endpoint reachable only
+    through a proxy in the server's environment is not measured.
   - A pi summary request may try one refused upgrade before SSE.
   - pi providers other than Codex and OpenAI-compatible, through an ambient
     environment key, behave as today. Model listing, catalog refresh and model

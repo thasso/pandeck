@@ -19,6 +19,7 @@ import {
   getOpenAiCompatibleProviderConfigForRegistry,
 } from "../openAiCompatibleSettings.ts";
 import { errorText } from "../errors.ts";
+import { guardServerRuntime } from "./serverCredentialPairing.ts";
 import {
   clearCredentialProfileLoginState,
   completeCredentialProfileLogin,
@@ -60,7 +61,11 @@ function runtimeOptions(agentDir: string) {
   };
 }
 
-const modelRuntime = await ModelRuntime.create(runtimeOptions(defaultAgentDir));
+// Every runtime that runs sessions or one-shots pairs the compatible key with
+// its origin before anyone holds it, whatever the gateway switch.
+const modelRuntime = guardServerRuntime(
+  await ModelRuntime.create(runtimeOptions(defaultAgentDir)),
+);
 const profileRuntimes = new Map<string, Promise<ModelRuntime>>([
   [defaultPiProfile.id, Promise.resolve(modelRuntime)],
 ]);
@@ -84,7 +89,9 @@ export function modelRuntimeForProfile(
     throw new Error("That credential profile cannot run pi models.");
   let runtime = profileRuntimes.get(profileId);
   if (!runtime) {
-    runtime = ModelRuntime.create(runtimeOptions(piAgentDir(profileId)));
+    runtime = ModelRuntime.create(runtimeOptions(piAgentDir(profileId))).then(
+      guardServerRuntime,
+    );
     profileRuntimes.set(profileId, runtime);
   }
   return runtime;

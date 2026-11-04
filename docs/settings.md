@@ -267,7 +267,11 @@ have the next call or connection test send a secret they cannot read to a host
 they choose. A path change on the same origin keeps the credential. This holds
 for the Settings page too, whose URL fields say so; its forms send the URL and a
 re-entered token in one save. An integration added later with a configurable URL
-and a stored credential must do the same in its store.
+and a stored credential must do the same in its store. A pi session or one-shot
+already holding an OpenAI-compatible model from an endpoint on another origin is
+refused (pi's `Provider is not configured`) until the model is reselected or the
+session reopened, so the key never follows the URL to another origin
+(`docs/workers.md`).
 
 The Google and Tempo token refreshes, which every tool and test go through,
 store a refreshed token only while the stored refresh token is still the one the
