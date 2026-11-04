@@ -14,7 +14,8 @@
  * - `close()` asks the query to close and keeps the stream: iteration ends
  *   with the query's own terminal item, and the engine is disposed once that
  *   item arrived and every command sent before has its answer. `discard()`
- *   is for a handle never iterated: a forced dispose.
+ *   forces disposal for an unstarted handle or, after stream termination, an
+ *   epoch whose failed Stop left control acknowledgements abandoned.
  */
 import {
   DEFAULT_CLAUDE_PROFILE_ID,
@@ -42,7 +43,7 @@ import type {
 
 /** A hosted query, as the session drives it. */
 export type RemoteClaudeQuery = ClaudeQuery & {
-  /** Dispose a handle the session abandons before iterating it. */
+  /** Dispose an unstarted handle, or an ended epoch's abandoned controls. */
   discard(): Promise<void>;
 };
 

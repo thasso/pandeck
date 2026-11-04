@@ -260,6 +260,8 @@ import {
 const DEFAULT_TITLE = "New Claude SDK";
 /** How long a Stop waits for the CLI to confirm it dropped queued steers. */
 const STEER_CANCEL_TIMEOUT_MS = 2_000;
+/** Drop answers plus the retained Stop's interrupt acknowledgement. */
+const STOP_INTERRUPT_TIMEOUT_MS = 2 * STEER_CANCEL_TIMEOUT_MS;
 const COMPACTION_STATE_UNREAD =
   "Could not read this session's compaction state; nothing changed.";
 
@@ -450,6 +452,11 @@ interface PendingSteer {
   attachments: PromptAttachment[];
   onAccepted: ((delivery: PromptDelivery) => void) | undefined;
   outcome: Deferred<SteerOutcome>;
+}
+
+interface PendingStopInterrupt {
+  epochKey: string | undefined;
+  completion: Promise<void>;
 }
 
 interface CompactOperation {
@@ -675,8 +682,10 @@ export class ClaudeSdkSession implements LiveSession {
    * provably not that prompt's.
    */
   private lifecycleFramesEpochKey: string | undefined;
-  /** A Stop's interrupt (or kill) still waiting on the CLI's drop answers. */
-  private stopInterrupt: Promise<void> | undefined;
+  /** Bounded Stop acknowledgements, including any earlier Stop on this epoch. */
+  private stopInterrupt: PendingStopInterrupt | undefined;
+  /** An unanswered Stop fences this epoch until it can retire without work. */
+  private failedStopEpochKey: string | undefined;
   /**
    * The skill submission now between its first statement and the push of its
    * context + command pair: an identity owned by ONE `sendPromptToProcess`
@@ -746,6 +755,7 @@ export class ClaudeSdkSession implements LiveSession {
   private providerTurnInterrupted = false;
   private compactOperation: CompactOperation | undefined;
   private compactOperationEpochKey: string | undefined;
+  private compactOperationReservation: object | undefined;
   private abortingTurn = false;
   /**
    * In-process session tool server exposing this session's custom tools,
@@ -1776,6 +1786,7 @@ export class ClaudeSdkSession implements LiveSession {
       !this.inputQueue ||
       this.processClosing ||
       this.stopInterrupt ||
+      this.failedStopEpochKey === epochKey ||
       this.compactOperation ||
       // A skill submission's command must be the next input the CLI reads.
       this.skillSubmission ||
@@ -1824,13 +1835,58 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   /**
-   * Wait until a Stop's delayed interrupt has reached the retained query, so
-   * the next input cannot be the turn it interrupts. Bounded like the drops it
-   * waits behind: a CLI that never answers must not wedge the session.
+   * Keep every Stop on an epoch protected until acknowledged or its bounded
+   * failure. A later Stop's answer cannot clear an earlier unanswered one.
+   */
+  private trackStopInterrupt(
+    interrupted: Promise<void>,
+    epochKey: string | undefined,
+  ): void {
+    const previous =
+      this.stopInterrupt?.epochKey === epochKey
+        ? this.stopInterrupt
+        : undefined;
+    const stop: PendingStopInterrupt = {
+      epochKey,
+      completion: Promise.all([
+        previous?.completion,
+        settlesWithin(interrupted, STOP_INTERRUPT_TIMEOUT_MS).then(
+          (settled) => {
+            if (
+              !settled &&
+              epochKey !== undefined &&
+              this.queryEpochKey === epochKey &&
+              !this.processClosing
+            )
+              this.failedStopEpochKey = epochKey;
+          },
+        ),
+      ]).then(() => {
+        if (this.stopInterrupt !== stop) return;
+        this.stopInterrupt = undefined;
+        this.startTimeSettingsChanged();
+      }),
+    };
+    this.stopInterrupt = stop;
+  }
+
+  /**
+   * No new input may race an active Stop or reuse a quarantined epoch. After
+   * an unanswered Stop, background lifecycle evidence still drains, but only
+   * a fresh query after the empty host retires may accept another turn.
    */
   private async stopInterruptSent(): Promise<void> {
-    if (this.stopInterrupt)
-      await settlesWithin(this.stopInterrupt, 2 * STEER_CANCEL_TIMEOUT_MS);
+    const epochKey = this.queryEpochKey;
+    while (this.stopInterrupt && this.stopInterrupt.epochKey === epochKey)
+      await this.stopInterrupt.completion;
+    if (
+      epochKey !== undefined &&
+      this.failedStopEpochKey === epochKey &&
+      !this.processClosing
+    )
+      throw new Error(
+        "Claude did not acknowledge Stop. This process cannot accept more input; retry after background work finishes and the idle host retires.",
+      );
   }
 
   /**
@@ -2288,7 +2344,7 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   private async consumeQuery(
-    query: ClaudeQuery,
+    query: RemoteClaudeQuery,
     epochKey: string,
   ): Promise<void> {
     let fatalError: string | undefined;
@@ -2427,6 +2483,7 @@ export class ClaudeSdkSession implements LiveSession {
       if (!this.processClosing && !this.abortingTurn)
         fatalError = error instanceof Error ? error.message : String(error);
     } finally {
+      const failedStop = this.failedStopEpochKey === epochKey;
       const retained = this.retainedEpochKey === epochKey;
       if (retained && !this.processClosing && !fatalError)
         fatalError = "the retained Claude process exited unexpectedly";
@@ -2463,7 +2520,12 @@ export class ClaudeSdkSession implements LiveSession {
         );
         this.compactOperation = undefined;
         this.compactOperationEpochKey = undefined;
+        this.compactOperationReservation = undefined;
       }
+      if (this.stopInterrupt?.epochKey === epochKey)
+        this.stopInterrupt = undefined;
+      if (this.failedStopEpochKey === epochKey)
+        this.failedStopEpochKey = undefined;
       if (this.providerTurnEpochKey === epochKey) {
         this.providerTurnRelease?.();
         this.providerTurnRelease = undefined;
@@ -2498,6 +2560,9 @@ export class ClaudeSdkSession implements LiveSession {
         this.compactionWindow.queryEnded(epochKey);
         this.broadcastState();
       }
+      // Its stream has ended. Do not retain this Worker engine forever for
+      // an interrupt control whose acknowledgement was already abandoned.
+      if (failedStop) await query.discard();
     }
   }
 
@@ -2575,6 +2640,15 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   private async beginProviderInitiatedTurn(epochKey: string): Promise<boolean> {
+    if (
+      this.failedStopEpochKey === epochKey ||
+      this.stopInterrupt?.epochKey === epochKey
+    ) {
+      // The outstanding interrupt already owns this query. Sending another
+      // control request could block its stream and hide background completion.
+      this.markProviderResultForDiscard();
+      return false;
+    }
     const itemId = claudeBackgroundWorkBackend.firstActiveItemId(
       this.id,
       epochKey,
@@ -3205,6 +3279,7 @@ export class ClaudeSdkSession implements LiveSession {
       // the same query epoch in the meantime.
       this.markProviderResultForDiscard(this.turnCounter);
       const query = this.activeQuery;
+      const epochKey = this.retainedEpochKey;
       const reportsStarts =
         this.lifecycleFramesEpochKey !== undefined &&
         this.lifecycleFramesEpochKey === this.queryEpochKey;
@@ -3213,6 +3288,12 @@ export class ClaudeSdkSession implements LiveSession {
         waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : false,
       ])
         .then(([, dropped]) => {
+          if (
+            this.queryEpochKey !== epochKey ||
+            this.processClosing ||
+            this.failedStopEpochKey === epochKey
+          )
+            return;
           // A CLI that reports command starts retires the discard at the next
           // prompt's start, so an interrupted run it was busy with is still
           // discarded. One that does not would leave the next turn's whole
@@ -3226,17 +3307,13 @@ export class ClaudeSdkSession implements LiveSession {
         );
       // The run ends below, before this interrupt is sent. Until it is, nothing
       // new may enter this query: the interrupt would land on that turn instead.
-      this.stopInterrupt = interrupted;
-      void interrupted.then(() => {
-        if (this.stopInterrupt !== interrupted) return;
-        this.stopInterrupt = undefined;
-        this.startTimeSettingsChanged();
-      });
+      this.trackStopInterrupt(interrupted, epochKey);
       this.compactOperation?.completion.reject(
         new Error("Compaction was stopped."),
       );
       this.compactOperation = undefined;
       this.compactOperationEpochKey = undefined;
+      this.compactOperationReservation = undefined;
     } else if (!hadSteers) {
       this.abortController?.abort();
       void this.closeProcess("the active Claude turn was stopped");
@@ -3250,12 +3327,7 @@ export class ClaudeSdkSession implements LiveSession {
       // and nothing new may be written to the process being killed.
       this.stoppingEpochKey = this.queryEpochKey;
       const killed = withdrawn.then(kill, kill);
-      this.stopInterrupt = killed;
-      void killed.then(() => {
-        if (this.stopInterrupt !== killed) return;
-        this.stopInterrupt = undefined;
-        this.startTimeSettingsChanged();
-      });
+      this.trackStopInterrupt(killed, this.queryEpochKey);
     }
     // A host-driven turn owns its own rendered teardown.
     if (this.syntheticTurn) return;
@@ -3711,10 +3783,20 @@ export class ClaudeSdkSession implements LiveSession {
     this.cancelQuietClose();
     // Reserve compaction before waiting for Stop: its acknowledgement may
     // otherwise close this now-empty epoch for a pending start-time setting.
+    const reservation = {};
+    this.compactOperationReservation = reservation;
     this.compactOperationEpochKey = epochKey;
     let operation: CompactOperation | undefined;
     try {
       await this.stopInterruptSent();
+      if (
+        this.compactOperationReservation !== reservation ||
+        this.compactOperationEpochKey !== epochKey ||
+        this.queryEpochKey !== epochKey ||
+        this.processClosing ||
+        !this.inputQueue
+      )
+        throw new Error("Compaction was stopped.");
       if (this.skillSubmission)
         throw new Error(
           "A skill command is being sent to Claude; compact after it starts.",
@@ -3729,9 +3811,10 @@ export class ClaudeSdkSession implements LiveSession {
       );
       await operation.completion.promise;
     } finally {
-      if (this.compactOperation === operation) {
+      if (this.compactOperationReservation === reservation) {
         this.compactOperation = undefined;
         this.compactOperationEpochKey = undefined;
+        this.compactOperationReservation = undefined;
         this.scheduleQuietCloseIfEmpty(epochKey);
       }
     }

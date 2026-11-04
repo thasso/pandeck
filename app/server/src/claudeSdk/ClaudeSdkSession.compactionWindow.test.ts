@@ -29,6 +29,8 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { updateSettings } = await import("../settings.ts");
 const { sessionSkills } = await import("../sessionSkills.ts");
+const { inProcessWorkerEnginesForTests } =
+  await import("../workers/inProcessWorker.ts");
 
 const ENV_BEFORE = process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
 afterEach(() => {
@@ -541,13 +543,13 @@ test("a start-time change waits for a delayed Stop interrupt and closes when it 
     const next = h.adapter.prompt("stop this turn");
     await until(() => h.query.inputs.length === 2);
     h.query.interrupt = () => interrupted.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     h.session.abort();
     await next;
     completeBackgroundShell(h.query);
     await storeWindow(h, 100_000);
-    // Let the terminal task notification run while Stop is still pending.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    await vi.advanceTimersByTimeAsync(30_000);
+    // A timely acknowledgement arrives before the active Stop's four-second bound.
+    await vi.advanceTimersByTimeAsync(3_999);
     assert.equal(h.query.closeCalls, 0, "Stop owns the process until its ack");
     interrupted.resolve(undefined);
     await vi.advanceTimersByTimeAsync(0);
@@ -555,6 +557,304 @@ test("a start-time change waits for a delayed Stop interrupt and closes when it 
     assert.equal(window(h.session)?.pendingReason, "next-turn");
   } finally {
     interrupted.resolve(undefined);
+    await disposeRetained(h);
+  }
+});
+
+for (const pending of [false, true]) {
+  test(`an unanswered Stop quarantines its empty host and retires it ${pending ? "for the pending restart" : "after ordinary grace"}`, async () => {
+    await until(() => inProcessWorkerEnginesForTests() === 0);
+    const h = await retainedWindow();
+    const interrupted = deferred<void>();
+    try {
+      const next = h.adapter.prompt("Stop will not answer");
+      await until(() => h.query.inputs.length === 2);
+      h.query.interrupt = () => interrupted.promise;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      h.session.abort();
+      await next;
+      h.query.output.emit(result("stopped-without-ack"));
+      completeBackgroundShell(h.query);
+      if (pending) await storeWindow(h, 100_000);
+      await vi.advanceTimersByTimeAsync(3_999);
+      assert.equal(h.query.closeCalls, 0, "an active Stop still owns the host");
+      await vi.advanceTimersByTimeAsync(1);
+      assert.equal(h.query.closeCalls, pending ? 1 : 0);
+      if (!pending) {
+        await vi.advanceTimersByTimeAsync(29_999);
+        assert.equal(
+          h.query.closeCalls,
+          0,
+          "failed Stop still keeps normal grace",
+        );
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      assert.equal(
+        h.query.closeCalls,
+        1,
+        "unconfirmed Stop cannot retain an empty host forever",
+      );
+      assert.equal(window(h.session)?.pendingReason, "next-turn");
+      await vi.advanceTimersByTimeAsync(0);
+      assert.equal(
+        inProcessWorkerEnginesForTests(),
+        0,
+        "retirement releases the abandoned control's Worker engine",
+      );
+      vi.useRealTimers();
+      const fresh = h.adapter.prompt("only a fresh process may take this");
+      await until(() => h.queries.length === 2);
+      assert.equal(startWindow(h.queries[1]!), pending ? 100_000 : undefined);
+      interrupted.resolve(undefined);
+      await Promise.resolve();
+      assert.equal(
+        h.queries[1]!.closeCalls,
+        0,
+        "old acknowledgement cannot close the fresh epoch",
+      );
+      h.queries[1]!.output.emit(result("fresh-after-unconfirmed-stop"));
+      await fresh;
+    } finally {
+      interrupted.resolve(undefined);
+      await disposeRetained(h);
+    }
+  });
+}
+
+test("a failed Stop keeps active work but refuses all new input on the quarantined epoch", async () => {
+  const { runCompactForHost } = await import("../hostSlashCommands.ts");
+  const h = await retainedWindow();
+  const interrupted = deferred<void>();
+  try {
+    const next = h.adapter.prompt("Stop with active background work");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => interrupted.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    h.session.abort();
+    await next;
+    h.query.output.emit(result("stopped-with-active-work"));
+    await storeWindow(h, 100_000);
+    await vi.advanceTimersByTimeAsync(999);
+    const refused = h.adapter.prompt("must not reach the unconfirmed process");
+    await vi.advanceTimersByTimeAsync(3_001);
+    assert.equal(
+      h.query.closeCalls,
+      0,
+      "background work outlives an unanswered Stop",
+    );
+    assert.equal(
+      h.query.inputs.length,
+      2,
+      "no prompt reaches the quarantined CLI",
+    );
+    await refused;
+    assert.equal(h.session.isRunning, false);
+    vi.useRealTimers();
+    await runCompactForHost(h.session, "");
+    assert.equal(
+      h.session.isRunning,
+      false,
+      "refused compaction settles its synthetic turn",
+    );
+    assert.equal(
+      h.query.inputs.length,
+      2,
+      "no /compact reaches the quarantined CLI",
+    );
+    // A late acknowledgement must not revive this process even before it closes.
+    interrupted.resolve(undefined);
+    await h.adapter.prompt("late acknowledgement still cannot permit reuse");
+    assert.equal(h.query.inputs.length, 2);
+    h.query.output.emit({
+      type: "system",
+      subtype: "session_state_changed",
+      state: "running",
+      uuid: "quarantined-provider-turn",
+      session_id: "provider-window",
+    } as unknown as ClaudeSdkMessage);
+    // A terminal frame after the attempted provider wake proves it was consumed.
+    completeBackgroundShell(h.query);
+    await until(() => h.query.closeCalls === 1);
+    assert.equal(
+      h.session.isRunning,
+      false,
+      "provider work cannot reopen a quarantined turn",
+    );
+    assert.equal(window(h.session)?.pendingReason, "next-turn");
+  } finally {
+    interrupted.resolve(undefined);
+    await disposeRetained(h);
+  }
+});
+
+test("an old quarantined Stop's late acknowledgement cannot clear a fresh epoch's Stop", async () => {
+  const h = await retainedWindow();
+  const oldStop = deferred<void>();
+  const freshStop = deferred<void>();
+  try {
+    const stopped = h.adapter.prompt("old Stop");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => oldStop.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    h.session.abort();
+    await stopped;
+    h.query.output.emit(result("old-quarantined-stop"));
+    completeBackgroundShell(h.query);
+    await storeWindow(h, 100_000);
+    await vi.advanceTimersByTimeAsync(4_000);
+    assert.equal(h.query.closeCalls, 1);
+    vi.useRealTimers();
+    const fresh = h.adapter.prompt("fresh background work");
+    await until(() => h.queries.length === 2);
+    const query = h.queries[1]!;
+    await startBackgroundShell(query);
+    query.output.emit(result("fresh-background-work"));
+    await fresh;
+    const freshTurn = h.adapter.prompt("fresh Stop");
+    await until(() => query.inputs.length === 2);
+    query.interrupt = () => freshStop.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    h.session.abort();
+    await freshTurn;
+    completeBackgroundShell(query);
+    await storeWindow(h, 200_000);
+    oldStop.resolve(undefined);
+    await vi.advanceTimersByTimeAsync(3_999);
+    assert.equal(query.closeCalls, 0, "the fresh Stop still owns its epoch");
+    freshStop.resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(query.closeCalls, 1);
+  } finally {
+    oldStop.resolve(undefined);
+    freshStop.resolve(undefined);
+    await disposeRetained(h);
+  }
+});
+
+for (const firstAcknowledgesFirst of [false, true]) {
+  test(`superseded Stops protect an epoch until both acknowledge, ${firstAcknowledgesFirst ? "first" : "last"} Stop acknowledges first`, async () => {
+    const h = await retainedWindow();
+    const first = deferred<void>();
+    const second = deferred<void>();
+    try {
+      const next = h.adapter.prompt("first Stop");
+      await until(() => h.query.inputs.length === 2);
+      h.query.interrupt = () => first.promise;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      h.session.abort();
+      await next;
+      await vi.advanceTimersByTimeAsync(0);
+      const { toolId } = h.session.beginSyntheticTool("/compact", {
+        command: "/compact",
+      });
+      h.query.interrupt = () => second.promise;
+      h.session.abort();
+      h.session.finishSyntheticTool(toolId, "stopped", true);
+      await vi.advanceTimersByTimeAsync(0);
+      completeBackgroundShell(h.query);
+      await storeWindow(h, 100_000);
+      (firstAcknowledgesFirst ? first : second).resolve(undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      assert.equal(
+        h.query.closeCalls,
+        0,
+        "one acknowledgement cannot clear the other Stop",
+      );
+      (firstAcknowledgesFirst ? second : first).resolve(undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      assert.equal(h.query.closeCalls, 1);
+    } finally {
+      first.resolve(undefined);
+      second.resolve(undefined);
+      await disposeRetained(h);
+    }
+  });
+}
+
+test("a second Stop during synthetic compaction's Stop wait settles without dispatching /compact", async () => {
+  const { runCompactForHost } = await import("../hostSlashCommands.ts");
+  const h = await retainedWindow();
+  const first = deferred<void>();
+  let compact: Promise<void> | undefined;
+  const entered = vi.spyOn(h.session, "compactContext");
+  try {
+    const next = h.adapter.prompt("Stop before synthetic compaction");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => first.promise;
+    h.session.abort();
+    await next;
+    h.query.output.emit(result("stopped-before-synthetic-compact"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    let settled = false;
+    compact = runCompactForHost(h.session, "").then(() => {
+      settled = true;
+    });
+    await until(() => entered.mock.calls.length === 1);
+    h.query.interrupt = async () => {};
+    h.session.abort();
+    first.resolve(undefined);
+    await until(() => settled);
+    assert.equal(
+      h.session.isRunning,
+      false,
+      "the canceled synthetic turn settles",
+    );
+    assert.equal(
+      h.query.inputs.length,
+      2,
+      "canceled compaction never enters the queue",
+    );
+  } finally {
+    first.resolve(undefined);
+    h.session.abort();
+    await compact;
+    entered.mockRestore();
+    await disposeRetained(h);
+  }
+});
+
+test("an aborted compaction wait cannot clear its successor's reservation", async () => {
+  const h = await retainedWindow();
+  const interrupted = deferred<void>();
+  let oldCompact: Promise<unknown> | undefined;
+  let newCompact: Promise<unknown> | undefined;
+  try {
+    const next = h.adapter.prompt("Stop before competing compactions");
+    await until(() => h.query.inputs.length === 2);
+    h.query.interrupt = () => interrupted.promise;
+    h.session.abort();
+    await next;
+    h.query.output.emit(result("stopped-before-competing-compacts"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const { toolId } = h.session.beginSyntheticTool("/compact", {
+      command: "/compact",
+    });
+    oldCompact = h.session.compactContext().then(
+      () => "completed",
+      (error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+    );
+    h.query.interrupt = async () => {};
+    h.session.abort();
+    h.query.output.emit(result("second-stop-before-successor"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    newCompact = h.session.compactContext().then(
+      (outcome) => outcome,
+      (error: unknown) => error,
+    );
+    interrupted.resolve(undefined);
+    assert.equal(await oldCompact, "Compaction was stopped.");
+    await until(() => h.query.inputs.length === 3);
+    await assert.rejects(h.session.compactContext(), /already running/);
+    h.query.output.emit(result("successor-compact-result"));
+    assert.equal(((await newCompact) as { kind?: string }).kind, "skipped");
+    h.session.finishSyntheticTool(toolId, "settled", false);
+    assert.equal(h.session.isRunning, false);
+  } finally {
+    interrupted.resolve(undefined);
+    h.session.abort();
+    await oldCompact;
+    await newCompact?.catch(() => undefined);
     await disposeRetained(h);
   }
 });

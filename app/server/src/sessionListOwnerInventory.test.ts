@@ -371,7 +371,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "stopInterruptSent withdrawPendingSteers sendPromptToProcess sendPromptOnce pushSkillSubmission bindSkillCommandStart",
+        "trackStopInterrupt stopInterruptSent withdrawPendingSteers sendPromptToProcess sendPromptOnce pushSkillSubmission bindSkillCommandStart",
         "Process/input/skill queue bookkeeping; accepted entries are written through appendTimelineEntry, running state through the listed turn methods.",
       ),
       group(

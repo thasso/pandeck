@@ -139,6 +139,23 @@ range:
   frozen `claudeEmptyHostGraceMs` still applies. A missing provider task alone
   keeps that grace for terminal-notification reconciliation.
 
+  A retained turn's Stop acknowledgement is bounded at four seconds, including
+  queued-message drop answers. Every outstanding Stop on that epoch must settle;
+  a newer acknowledgement cannot clear an older unanswered request. If one times
+  out, the process is quarantined, not reused. Background work stays alive and
+  its lifecycle evidence continues to drain, but prompts, provider turns and
+  compaction cannot run on that process. A late acknowledgement does not lift
+  quarantine. Once fully idle, the host retires through the supervisor, after
+  normal frozen grace with no pending setting or immediately when a setting
+  awaits restart. Only a fresh query after the old one terminates may accept the
+  next prompt. After stream termination, retirement also releases the Worker
+  engine without waiting forever for abandoned control answers. This is
+  failed-Stop recovery, not a quiet close during an active Stop.
+
+  Compaction waiting for Stop owns a reservation. Another Stop cancels it; after
+  the wait it rechecks that exact reservation and query epoch before queuing
+  `/compact`. Its cleanup cannot clear a successor's reservation.
+
   The restart decision belongs to the shared start-time-setting path in
   quiet-close scheduling, not a window-specific close path. Restart and resume
   start from the row. Once the old process starts closing, the inspector says
