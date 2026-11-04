@@ -36,13 +36,13 @@ import {
   Download,
   ExternalLink,
   Eye,
-  File,
   FileText,
   GitBranch,
   GitCompareArrows,
   History,
   MessageSquareQuote,
   SendHorizontal,
+  BookOpenText,
 } from "lucide-react";
 import {
   documentTargetHref,
@@ -512,16 +512,32 @@ type FilePivotOption = { id: FilePivot; label: string; icon: ReactNode };
 
 // A raster image has no "Preview" (its File already is the image), and the
 // main checkout has no fork point, so the "vs base" pivot is dropped.
-function filePivotsFor(
-  filePath: string | undefined,
-  isMain: boolean | undefined,
-): FilePivotOption[] {
+/** Whether a file renders beyond its source: the `…`'s Preview toggle. An image
+ * has none, its File pivot already IS the picture. */
+function hasPreview(filePath: string | undefined): boolean {
   const previewKind = filePath ? previewKindForPath(filePath) : undefined;
+  return previewKind !== undefined && previewKind !== "raster";
+}
+
+/** The pivot button lit for `pivot`: none while the file itself shows. */
+function pivotValue(pivot: FilePivot): FilePivot[] {
+  return pivot === "file" || pivot === "preview" ? [] : [pivot];
+}
+
+/** The `…` row that turns the open file's Preview on and off. */
+function previewMenuItem(on: boolean, onChange: (on: boolean) => void) {
+  return {
+    key: "preview",
+    icon: <BookOpenText />,
+    label: "Preview",
+    checked: on,
+    onSelect: () => onChange(!on),
+  };
+}
+
+/** The views away from the file itself, each a toggle: off shows the file. */
+function filePivotsFor(isMain: boolean | undefined): FilePivotOption[] {
   return [
-    { id: "file", label: "File", icon: <File /> },
-    ...(previewKind && previewKind !== "raster"
-      ? [{ id: "preview", label: "Preview", icon: <Eye /> } as const]
-      : []),
     ...(isMain
       ? []
       : [
@@ -650,6 +666,7 @@ function FilesView({
   anchor,
   pivot,
   onPivotChange,
+  onPreviewChange,
   markdownPreviewFirst,
   browseAsDocuments,
   documentComments,
@@ -664,6 +681,8 @@ function FilesView({
   anchor?: DocumentLineAnchor | undefined;
   pivot: FilePivot;
   onPivotChange: (pivot: FilePivot) => void;
+  /** Turns Preview on or off, and shows the file's face. */
+  onPreviewChange: (on: boolean) => void;
   markdownPreviewFirst: boolean;
   browseAsDocuments: boolean;
   documentComments: ((path: string) => CommentDocument) | undefined;
@@ -694,15 +713,13 @@ function FilesView({
   // background push must not throw you back from "Changes vs base" to source.
   const hasAnchor = anchor !== undefined;
   useEffect(() => {
-    onPivotChange(
+    onPreviewChange(
       markdownPreviewFirst &&
         !hasAnchor &&
-        filePath &&
-        previewKindForPath(filePath) === "markdown"
-        ? "preview"
-        : "file",
+        filePath !== undefined &&
+        previewKindForPath(filePath) === "markdown",
     );
-  }, [filePath, onPivotChange, worktree.id, markdownPreviewFirst, hasAnchor]);
+  }, [filePath, onPreviewChange, worktree.id, markdownPreviewFirst, hasAnchor]);
 
   // With document comments on, the rendered text a passage is selected in:
   // the Markdown preview, or the file's text body. Anything else (an image, a
@@ -750,7 +767,7 @@ function FilesView({
       : pivot === "file" && previewKind !== "raster" && file && !file.binary
         ? "code"
         : undefined;
-  const pivots = filePivotsFor(filePath, worktree.isMain);
+  const pivots = filePivotsFor(worktree.isMain);
   // Content/diff-derived, memoized pierre cache keys (see ChangesView).
   const pivotDiffPath = pivotDiff?.path;
   const pivotDiffText = pivotDiff?.diff;
@@ -785,15 +802,15 @@ function FilesView({
           ? "Refreshing this file"
           : null;
   const pivotControls =
-    pivots.length > 1 ? (
+    pivots.length > 0 ? (
       <ToggleGroup
         // In the file bar beside the name: quiet icons, the bar's own weight.
         size="sm"
         spacing={0}
         aria-label="File view"
-        value={[pivot]}
+        value={pivotValue(pivot)}
         onValueChange={(next) => {
-          if (next[0]) onPivotChange(next[0] as FilePivot);
+          onPivotChange((next[0] as FilePivot | undefined) ?? "file");
         }}
       >
         {pivots.map(({ id, label, icon }) => (
@@ -1071,7 +1088,7 @@ function diffViewMenuGroups(diffView: DiffViewMenu): HeaderMenuGroup[] {
 
 /**
  * A document folder's page header (the `/knowledge` route): the open file's
- * pivots as icons, then Back and Forward. A phone has room for one header row,
+ * Back and Forward, then the file's pivots as toggle icons. A phone has room for one header row,
  * so there its pivots are rows of the header's `…` (`documentPivotMenuGroup`).
  */
 function DocumentPageActions({
@@ -1090,14 +1107,20 @@ function DocumentPageActions({
 }) {
   return (
     <>
-      {!narrow && pivots.length > 1 ? (
+      {showHistory ? (
+        <DocumentNavigationActions
+          className="hidden desktop:flex"
+          showClose={false}
+        />
+      ) : null}
+      {!narrow && pivots.length > 0 ? (
         <ToggleGroup
           size="sm"
           spacing={0}
           aria-label="File view"
-          value={[pivot]}
+          value={pivotValue(pivot)}
           onValueChange={(next) => {
-            if (next[0]) onPivotChange(next[0] as FilePivot);
+            onPivotChange((next[0] as FilePivot | undefined) ?? "file");
           }}
         >
           {pivots.map(({ id, label, icon }) => (
@@ -1112,12 +1135,6 @@ function DocumentPageActions({
           ))}
         </ToggleGroup>
       ) : null}
-      {showHistory ? (
-        <DocumentNavigationActions
-          className="hidden desktop:flex"
-          showClose={false}
-        />
-      ) : null}
     </>
   );
 }
@@ -1130,15 +1147,14 @@ function documentPivotMenuGroup(
   return {
     key: "file-view",
     label: "File view",
-    choice: true,
     items:
-      pivots.length > 1
+      pivots.length > 0
         ? pivots.map(({ id, label, icon }) => ({
             key: id,
             icon,
             label,
             checked: id === pivot,
-            onSelect: () => onPivotChange(id),
+            onSelect: () => onPivotChange(id === pivot ? "file" : id),
           }))
         : [],
   };
@@ -1306,11 +1322,26 @@ export default function WorktreeDetailPage({
   );
   const filePath = routeFilePath ?? readmePath;
   const [filePivot, setFilePivot] = useState<FilePivot>("file");
+  // Preview is a mode of the file's own view, not a pivot: on, the file shows
+  // rendered whenever no pivot (History, Changes vs base) is toggled on. Each file opens on its context's default
+  // (a document folder's Markdown previewed, a worktree's source).
+  const [previewOn, setPreviewOn] = useState(false);
+  const selectFilePivot = useCallback(
+    (pivot: FilePivot) =>
+      setFilePivot(pivot === "file" && previewOn ? "preview" : pivot),
+    [previewOn],
+  );
+  const showPreview = useCallback((on: boolean) => {
+    setPreviewOn(on);
+    setFilePivot(on ? "preview" : "file");
+  }, []);
+  const previewItems =
+    view === "files" && hasPreview(filePath)
+      ? [previewMenuItem(previewOn, showPreview)]
+      : [];
   // The open file's pivots, for a document folder's header.
   const documentPivots =
-    filePath && view === "files"
-      ? filePivotsFor(filePath, worktree.isMain)
-      : [];
+    filePath && view === "files" ? filePivotsFor(worktree.isMain) : [];
   // Zoom is a `…` group on a wide page; a phone's is the dock's, and a side
   // panel's page is not the document the shell zooms.
   const navigation = useDocumentNavigationRegistration();
@@ -1593,7 +1624,7 @@ export default function WorktreeDetailPage({
                       narrow={narrow}
                       pivots={documentPivots}
                       pivot={filePivot}
-                      onPivotChange={setFilePivot}
+                      onPivotChange={selectFilePivot}
                       showHistory={Boolean(filePath)}
                     />
                   )}
@@ -1607,10 +1638,11 @@ export default function WorktreeDetailPage({
                         documentPivotMenuGroup(
                           documentPivots,
                           filePivot,
-                          setFilePivot,
+                          selectFilePivot,
                         ),
                       ]
                     : []),
+                  { key: "view", items: previewItems },
                   ...(menuZoom ? [zoomMenuGroup(menuZoom)] : []),
                 ],
               }}
@@ -1661,6 +1693,7 @@ export default function WorktreeDetailPage({
                     key: "files",
                     label: "Files",
                     items: [
+                      ...previewItems,
                       {
                         key: "show-ignored",
                         icon: <Eye />,
@@ -1752,7 +1785,8 @@ export default function WorktreeDetailPage({
               refreshToken={refreshToken}
               anchor={anchor}
               pivot={filePivot}
-              onPivotChange={setFilePivot}
+              onPivotChange={selectFilePivot}
+              onPreviewChange={showPreview}
               markdownPreviewFirst={
                 markdownPreviewFirst || (!routeFilePath && Boolean(readmePath))
               }
