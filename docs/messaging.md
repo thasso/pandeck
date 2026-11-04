@@ -194,7 +194,10 @@ failed). Whether that object is in front of the user is something only the view
 layer knows, so the surfaces that render failures in place CLAIM them
 (`lib/messageArrival.ts`), and the arrival is checked against those claims. A
 right-panel chat claims its session like the main pane does, only while that
-panel is the one on screen (`FailureHomes.panelSessionId`).
+panel is the one on screen and only for what arrives on its own connection
+(`FailureHomes.panelSessionId`). A claim is per connection because each chat can
+render only its own: a panel's fork runs on the main connection, so its refusal
+is announced naming the session.
 
 The claim registry is deliberately not the whole answer, and the wire target
 deliberately is not either:

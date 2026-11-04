@@ -56,6 +56,17 @@ describe("scroll key ownership between two transcripts", () => {
     expect(ownsScrollKey(center, inPanel)).toBe(false);
   });
 
+  it("never gives a key to a hidden transcript, whichever listener runs first", () => {
+    const panel = transcript();
+    const center = transcript();
+    claimScrollKeys(panel);
+    vi.spyOn(panel, "getClientRects").mockReturnValue(
+      [] as unknown as DOMRectList,
+    );
+    expect(ownsScrollKey(panel, document.body)).toBe(false);
+    expect(ownsScrollKey(center, document.body)).toBe(true);
+  });
+
   it("does not leave the keys with a transcript that left the screen", () => {
     const center = transcript();
     const panel = transcript();

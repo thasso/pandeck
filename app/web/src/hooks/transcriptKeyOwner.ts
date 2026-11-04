@@ -36,6 +36,7 @@ export function ownsScrollKey(
   const holder =
     target && [...transcripts].find((item) => item.contains(target));
   if (holder) owner = holder;
-  else if (!isOnScreen(owner)) owner = element;
-  return owner === element;
+  // A retained panel stays mounted behind its tab, and its listener still runs.
+  else if (!isOnScreen(owner) && isOnScreen(element)) owner = element;
+  return owner === element && isOnScreen(element);
 }

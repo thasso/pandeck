@@ -238,7 +238,8 @@ export interface FailureHomes {
   viewedSessionId: string | null;
   /**
    * The session a right-panel chat renders above ITS composer, on the same
-   * terms: only while that panel is the one on screen.
+   * terms: only while that panel is the one on screen, and only for what
+   * arrives on the panel's own connection, which is all that chat can render.
    */
   panelSessionId?: string | null;
   /**
@@ -318,13 +319,14 @@ export function resetFailureHomes(): void {
  */
 export function arrivalHasHome(
   arrival: ArrivalMessage,
+  connection: "main" | "panel" = "main",
   current: FailureHomes = homes,
 ): boolean {
   if (arrival.severity !== "error") return false;
   if (isConditionCollection(arrival.target)) return true;
   const target = arrival.target;
   const session = target?.type === "session" ? target.id : undefined;
-  if (current.stagedSend) {
+  if (connection === "main" && current.stagedSend) {
     // The blockers this surface actually narrates are the server's PRE-creation
     // refusals — an unavailable model, a credential profile, a worktree that is
     // gone — and every one of them names nothing, because the session it would
@@ -337,7 +339,10 @@ export function arrivalHasHome(
   }
   if (session)
     return (
-      session === current.viewedSessionId || session === current.panelSessionId
+      session ===
+      (connection === "panel"
+        ? current.panelSessionId
+        : current.viewedSessionId)
     );
   // Keyed by object and compared by id: a claim for the open Task says nothing
   // about the twenty other rows in the list, whose failures still have to be

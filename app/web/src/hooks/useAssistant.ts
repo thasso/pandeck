@@ -4640,7 +4640,11 @@ function worktreeCommentsOf(thread: CommentThread): WorktreeComment[] {
  * announce a failure that was long over. From here there is no later: the
  * message is either said now or owned by something that renders it.
  */
-function announceArrival(msg: ServerMessage, state: UIState): void {
+function announceArrival(
+  msg: ServerMessage,
+  state: UIState,
+  connection: "main" | "panel",
+): void {
   const reveal = state.revealRequest;
   const arrival = arrivalMessage(msg, {
     viewedSessionId: state.session?.sessionId ?? null,
@@ -4652,7 +4656,7 @@ function announceArrival(msg: ServerMessage, state: UIState): void {
         : null,
     revealTargetKind: reveal?.target.kind ?? null,
   });
-  if (!arrival || arrivalHasHome(arrival)) return;
+  if (!arrival || arrivalHasHome(arrival, connection)) return;
   const resolvedName = targetTitle(arrival.target, state);
   const announcement = announceMessage({
     severity: arrival.severity,
@@ -7906,7 +7910,7 @@ export function useAssistant({
         // A compaction-window refusal belongs to the inspector control that
         // sent it, never to the viewed chat's generic error.
         if (mutation?.compactionSessionId !== undefined) {
-          announceArrival(msg, stateRef.current);
+          announceArrival(msg, stateRef.current, isolated ? "panel" : "main");
           return;
         }
         const key =
@@ -7933,7 +7937,7 @@ export function useAssistant({
           //
           // No `controlOwned` to set: the return below means this message never
           // reaches the reducer, so the object store never sees it either.
-          announceArrival(msg, stateRef.current);
+          announceArrival(msg, stateRef.current, isolated ? "panel" : "main");
           return;
         }
         if (mutation?.control?.domain === "projects" && mutation.control.key)
@@ -8032,7 +8036,7 @@ export function useAssistant({
       // state it ARRIVED into — never by the state it leaves behind.
       if (msg.type === "accountLoginAlerts")
         window.dispatchEvent(new Event("accountHealthChanged"));
-      announceArrival(msg, stateRef.current);
+      announceArrival(msg, stateRef.current, isolated ? "panel" : "main");
       dispatch({
         kind: "server",
         msg,
@@ -8159,7 +8163,7 @@ export function useAssistant({
       offStatus();
       socket.dispose();
     };
-  }, [replicaTransport, socket]);
+  }, [isolated, replicaTransport, socket]);
 
   const actions = useMemo<AssistantActions>(() => {
     const send = (msg: ClientMessage) => socketRef.current?.send(msg);
@@ -8315,6 +8319,7 @@ export function useAssistant({
                 target: { type: "task", id: taskId },
               },
               stateRef.current,
+              isolated ? "panel" : "main",
             );
         },
       });

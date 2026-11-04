@@ -3,7 +3,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ClientMessage, ServerMessage } from "@assistant/shared";
+import { resetFailureHomes, setFailureHomes } from "../lib/messageArrival.ts";
+import { showToast } from "../lib/toast.ts";
 import { useAssistant } from "./useAssistant.ts";
+
+vi.mock("../lib/toast.ts", async (original) => ({
+  ...(await original<typeof import("../lib/toast.ts")>()),
+  showToast: vi.fn(),
+}));
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -132,6 +139,33 @@ it("drops a load still reading its cache when the view is released", async () =>
   });
   await settle();
   expect(socket.sent.filter((m) => m.type === "loadSession")).toEqual([]);
+});
+
+it("leaves a failure to the panel chat claiming it, and only that one", async () => {
+  const socket = EchoSocket.instances[0]!;
+  await act(async () => socket.open());
+  const failure = (id: string) =>
+    ({
+      type: "error",
+      message: "No",
+      target: { type: "session", id },
+    }) as ServerMessage;
+  setFailureHomes({
+    viewedSessionId: "routed",
+    panelSessionId: "panel",
+    stagedSend: null,
+    openObjects: { project: [], task: [] },
+  });
+  try {
+    vi.mocked(showToast).mockClear();
+    await act(async () => socket.receive(failure("panel")));
+    expect(showToast).not.toHaveBeenCalled();
+    // The main pane renders what reaches ITS connection, never this one's.
+    await act(async () => socket.receive(failure("routed")));
+    expect(showToast).toHaveBeenCalledTimes(1);
+  } finally {
+    resetFailureHomes();
+  }
 });
 
 it("asks for only the delta when it reopens the session it retained", async () => {
