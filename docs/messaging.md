@@ -192,7 +192,9 @@ a message is about is the server's to say, and it says it (`MessageTarget`,
 including a target with no id, which names the COLLECTION when a list is what
 failed). Whether that object is in front of the user is something only the view
 layer knows, so the surfaces that render failures in place CLAIM them
-(`lib/messageArrival.ts`), and the arrival is checked against those claims.
+(`lib/messageArrival.ts`), and the arrival is checked against those claims. A
+right-panel chat claims its session like the main pane does, only while that
+panel is the one on screen (`FailureHomes.panelSessionId`).
 
 The claim registry is deliberately not the whole answer, and the wire target
 deliberately is not either:

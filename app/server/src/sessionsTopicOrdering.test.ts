@@ -169,7 +169,7 @@ test("permanentAssistantOpened follows the singleton's pending event", async () 
     assert.ok(row >= 0 && row < reply, "its event came first");
     assert.equal(client.row(id), undefined, "as a delete: never listed");
     await client.connection.handle({
-      type: "releasePermanentAssistant",
+      type: "releaseSessionView",
       sessionId: id,
     });
   } finally {

@@ -20,6 +20,7 @@ import {
   Bot,
   ClipboardList,
   GitBranch,
+  MessagesSquare,
   Plus,
   ScanSearch,
   X,
@@ -29,7 +30,9 @@ import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
 import { IconButton } from "../common/IconButton.tsx";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 import { PersonalAssistantPanel } from "./PersonalAssistantPanel.tsx";
+import { SessionPanel } from "./SessionPanel.tsx";
 import { UnreadIcon } from "../UnreadDot.tsx";
 
 /**
@@ -45,7 +48,12 @@ import { UnreadIcon } from "../UnreadDot.tsx";
  * sidebar.
  */
 export type PanelId =
-  "inspector" | "personal-assistant" | "knowledge" | "worktree" | "status";
+  | "inspector"
+  | "personal-assistant"
+  | "session"
+  | "knowledge"
+  | "worktree"
+  | "status";
 
 interface PanelDefinition {
   id: PanelId;
@@ -68,10 +76,12 @@ interface RightPanelTabState {
 }
 
 const TAB_STORAGE_KEY = "assistant.right-panel-tabs.v1";
+const noop = () => {};
 
 const PANEL_IDS: PanelId[] = [
   "inspector",
   "personal-assistant",
+  "session",
   "knowledge",
   "worktree",
   "status",
@@ -117,6 +127,7 @@ const PANEL_DEFINITIONS: PanelDefinition[] = [
     label: "Personal Assistant",
     icon: <Bot />,
   },
+  { id: "session", label: "Session", icon: <MessagesSquare /> },
   { id: "knowledge", label: "Knowledge", icon: <BookOpen /> },
   { id: "worktree", label: "Worktree", icon: <GitBranch /> },
   { id: "status", label: "Status", icon: <ClipboardList /> },
@@ -178,6 +189,9 @@ export function RightPanelTabs({
   knowledge,
   worktree,
   status,
+  chatHost,
+  sessionPanelId = null,
+  onSelectPanelSession = noop,
   visible = true,
   assistantUnread = false,
   openRequest,
@@ -189,6 +203,11 @@ export function RightPanelTabs({
   worktree: ReactNode;
   /** The open session's status card (`docs/session-status.md`). */
   status: ReactNode;
+  /** What the panels that show a chat read from the app and open in it. */
+  chatHost: SessionChatHost;
+  /** The session the Session tab shows, and picking another. */
+  sessionPanelId?: string | null;
+  onSelectPanelSession?: (sessionId: string) => void;
   /**
    * The right panel is open, so its active tab is actually on screen. The host
    * stays mounted while the panel is shut (the Inspector publishes from here),
@@ -303,13 +322,22 @@ export function RightPanelTabs({
     });
   };
   const showTabs = openTabs.length > 0;
-  // PA retains its connection and transcript, but releases its server view
-  // while hidden so unseen replies are not marked read.
+  // A chat panel retains its connection and transcript, but releases its server
+  // view while hidden so unseen replies are not marked read.
   const panelBodies: Record<PanelId, ReactNode> = {
     inspector,
     "personal-assistant": (
       <PersonalAssistantPanel
         visible={visible && activeTab === "personal-assistant"}
+        host={chatHost}
+      />
+    ),
+    session: (
+      <SessionPanel
+        visible={visible && activeTab === "session"}
+        host={chatHost}
+        sessionId={sessionPanelId}
+        onSelectSession={onSelectPanelSession}
       />
     ),
     knowledge,

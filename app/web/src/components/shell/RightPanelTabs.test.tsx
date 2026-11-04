@@ -2,7 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 import { RightPanelTabs } from "./RightPanelTabs.tsx";
+
+const CHAT_HOST = {} as SessionChatHost;
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -35,6 +38,7 @@ it("reports which panel is the visible one", async () => {
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}
@@ -54,6 +58,7 @@ it("uses the available-panel home after the final tab closes", async () => {
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}
@@ -73,6 +78,7 @@ it("keeps an open Inspector mounted while Personal Assistant is selected", async
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}
@@ -94,6 +100,7 @@ it("opens Personal Assistant from the panel home", async () => {
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}
@@ -115,6 +122,7 @@ it("opens the Knowledge panel on an outside request and keeps it mounted", async
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}
@@ -157,6 +165,7 @@ it("builds a tab's surface when it is first seen, not when it is merely open", a
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}
@@ -190,6 +199,7 @@ it("leaves an open tab behind another one unbuilt until it is selected", async (
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}
@@ -210,6 +220,7 @@ it("offers no Knowledge tab while the Knowledge Base is off, and keeps its place
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector body</div>}
+        chatHost={CHAT_HOST}
         {...(knowledge ? { knowledge: <div>Knowledge body</div> } : {})}
         worktree={<div>Worktree body</div>}
         status={<div>Status body</div>}

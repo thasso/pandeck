@@ -417,3 +417,26 @@ it("puts an error that names a project or Task onto that object", () => {
     }),
   ).toBeNull();
 });
+
+const panelFailure = {
+  severity: "error" as const,
+  message: "No",
+  target: { type: "session" as const, id: "panel" },
+};
+const mainPaneHomes = {
+  viewedSessionId: "main",
+  stagedSend: null,
+  openObjects: { project: [], task: [] },
+};
+
+it("takes a panel chat on screen as the home of its session's failure", () => {
+  expect(
+    arrivalHasHome(panelFailure, { ...mainPaneHomes, panelSessionId: "panel" }),
+  ).toBe(true);
+});
+
+it("announces that failure once the panel chat is not on screen", () => {
+  expect(
+    arrivalHasHome(panelFailure, { ...mainPaneHomes, panelSessionId: null }),
+  ).toBe(false);
+});

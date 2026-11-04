@@ -996,17 +996,11 @@ export class Connection implements Viewer {
         return this.onLoadSession(msg.id, msg.timelineCache);
       case "openPermanentAssistant":
         return this.onOpenPermanentAssistant(msg.timelineCache);
-      case "releasePermanentAssistant": {
-        const shown =
-          this.viewing?.sessionId === msg.sessionId &&
-          this.viewing.agentType === "personal-assistant";
-        const pending =
-          this.viewRequestTarget === msg.sessionId &&
-          sessionStore.get(msg.sessionId)?.agentType === "personal-assistant";
-        if (!shown && !pending) return;
+      // `leaveSessionView` already ignores an id this connection neither shows
+      // nor is opening, so a late release cannot detach a newer view.
+      case "releaseSessionView":
         this.leaveSessionView(msg.sessionId);
         return;
-      }
       case "loadArchivedSessions":
         return this.onLoadArchivedSessions(msg.requestId);
       case "ping":

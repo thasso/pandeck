@@ -237,6 +237,11 @@ export interface FailureHomes {
    */
   viewedSessionId: string | null;
   /**
+   * The session a right-panel chat renders above ITS composer, on the same
+   * terms: only while that panel is the one on screen.
+   */
+  panelSessionId?: string | null;
+  /**
    * A staged first send is on screen and narrates its own failure under the
    * prompt it kept, with the retry beside it. Claimed while the send is IN
    * FLIGHT, not once it has failed: the announcement is decided at arrival, so
@@ -330,7 +335,10 @@ export function arrivalHasHome(
     if (!target) return true;
     if (session && session === current.stagedSend.sessionId) return true;
   }
-  if (session) return session === current.viewedSessionId;
+  if (session)
+    return (
+      session === current.viewedSessionId || session === current.panelSessionId
+    );
   // Keyed by object and compared by id: a claim for the open Task says nothing
   // about the twenty other rows in the list, whose failures still have to be
   // announced to reach the user at all.

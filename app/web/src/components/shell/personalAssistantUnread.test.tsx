@@ -8,6 +8,7 @@ import { OverflowList } from "./SectionOverflow.tsx";
 import { PRIMARY_NAV_SLOTS } from "../primaryNavSections.tsx";
 import { UnreadIcon } from "../UnreadDot.tsx";
 import { useSessionRouting } from "../../hooks/useSessionRouting.ts";
+import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 
 const lifecycle = vi.hoisted(() => ({
   opens: 0,
@@ -123,6 +124,7 @@ it("hides the PA tab dot while visible and keeps its body mounted while hidden",
     root.render(
       <RightPanelTabs
         inspector={<div>Inspector</div>}
+        chatHost={{} as SessionChatHost}
         worktree={null}
         status={null}
         visible={visible}

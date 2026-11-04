@@ -293,9 +293,11 @@ export class AssistantSocket {
 
 export function defaultSocketUrl(
   timelineCache?: TimelineCacheDescriptor,
+  /** Open on the address bar's session. A side panel's connection never does. */
+  routed = true,
 ): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const route = initialSessionRouteQuery(timelineCache);
+  const route = routed ? initialSessionRouteQuery(timelineCache) : "";
   // In dev the page is served by Vite (e.g. :5173) and `/ws` is proxied to the
   // server. Connect straight to the server instead, so a Vite restart or crash
   // can't sever the live agent connection — the server keeps running and the

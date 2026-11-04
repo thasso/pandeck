@@ -6823,7 +6823,7 @@ export interface AssistantActions {
   /** View a session addressed by OUR id. */
   loadSession: (id: string) => void;
   openPermanentAssistant: () => void;
-  releasePermanentAssistant: (sessionId: string) => void;
+  releaseSessionView: (sessionId: string) => void;
   /** Fetch archived session rows after the archived sidebar section is expanded. */
   loadArchivedSessions: () => void;
   deleteSession: (id: string) => void;
@@ -7350,7 +7350,9 @@ export function useAssistant({
   // hydrating render instead of queueing it behind one.
   const bootTimelineReadRef = useRef<Promise<unknown> | null>(null);
   if (!bootTimelineReadRef.current) {
-    const bootSessionId = sessionIdFromPathname(location.pathname);
+    const bootSessionId = isolated
+      ? null
+      : sessionIdFromPathname(location.pathname);
     bootTimelineReadRef.current = bootSessionId
       ? readTimelineCache(bootSessionId)
       : Promise.resolve(undefined);
@@ -7361,6 +7363,9 @@ export function useAssistant({
   const socketRef = useRef<AssistantSocket | null>(null);
   if (!socketRef.current) {
     socketRef.current = new AssistantSocket(() => {
+      // The address bar names the MAIN pane's session. Opening on it here would
+      // view that session from this connection and arm its read dwell.
+      if (isolated) return defaultSocketUrl(undefined, false);
       const sessionId = sessionIdFromPathname(location.pathname);
       return defaultSocketUrl(
         sessionId
@@ -8158,6 +8163,24 @@ export function useAssistant({
 
   const actions = useMemo<AssistantActions>(() => {
     const send = (msg: ClientMessage) => socketRef.current?.send(msg);
+    // Reopening a retained view asks for the delta after its whole loaded range,
+    // not a fresh tail that would discard older history.
+    const retainTimelineForReopen = (sessionId: string) => {
+      const current = stateRef.current;
+      if (current.historySessionId !== sessionId) return undefined;
+      const descriptor = describeTimelineCache(
+        current.timeline,
+        current.timelineStart,
+      );
+      timelineCacheRef.current.set(sessionId, {
+        version: 2,
+        sessionId,
+        timeline: current.timeline,
+        descriptor,
+        savedAt: Date.now(),
+      });
+      return descriptor;
+    };
     /** Mint the id this mutation will be answered with, and hold its recovery. */
     const trackMutation = (
       mutation: PendingMutation,
@@ -8555,6 +8578,13 @@ export function useAssistant({
       loadSession: (id) => {
         const generation = ++sessionLoadGenerationRef.current;
         recordSessionLoadMark("request", id);
+        if (isolated) {
+          const descriptor = retainTimelineForReopen(id);
+          if (descriptor) {
+            send({ type: "loadSession", id, timelineCache: descriptor });
+            return;
+          }
+        }
         const cached = timelineCacheRef.current.get(id);
         if (cached) {
           send({ type: "loadSession", id, timelineCache: cached.descriptor });
@@ -8565,7 +8595,7 @@ export function useAssistant({
         void readTimelineCache(id).then((loaded) => {
           if (
             generation !== sessionLoadGenerationRef.current ||
-            sessionIdFromPathname(location.pathname) !== id
+            (!isolated && sessionIdFromPathname(location.pathname) !== id)
           )
             return;
           send({
@@ -8577,29 +8607,16 @@ export function useAssistant({
       },
       openPermanentAssistant: () => {
         const current = stateRef.current;
-        const sessionId =
+        const descriptor =
           current.session?.agentType === "personal-assistant"
-            ? current.session.sessionId
+            ? retainTimelineForReopen(current.session.sessionId)
             : undefined;
-        // Reopening a retained panel asks for the delta after its whole loaded
-        // range, not a fresh tail that would discard older history.
-        if (sessionId && current.historySessionId === sessionId) {
-          const descriptor = describeTimelineCache(
-            current.timeline,
-            current.timelineStart,
-          );
-          timelineCacheRef.current.set(sessionId, {
-            version: 2,
-            sessionId,
-            timeline: current.timeline,
-            descriptor,
-            savedAt: Date.now(),
-          });
+        if (descriptor)
           send({ type: "openPermanentAssistant", timelineCache: descriptor });
-        } else send({ type: "openPermanentAssistant" });
+        else send({ type: "openPermanentAssistant" });
       },
-      releasePermanentAssistant: (sessionId) =>
-        send({ type: "releasePermanentAssistant", sessionId }),
+      releaseSessionView: (sessionId) =>
+        send({ type: "releaseSessionView", sessionId }),
       loadArchivedSessions: () => dispatch({ kind: "archivedReadRequested" }),
       deleteSession: (id) => {
         timelineCacheRef.current.delete(id);
@@ -9554,7 +9571,12 @@ export function useAssistant({
         });
       },
     };
-  }, [readTimelineCache, replicaTransport, scheduleLiveBodySubscriptions]);
+  }, [
+    isolated,
+    readTimelineCache,
+    replicaTransport,
+    scheduleLiveBodySubscriptions,
+  ]);
 
   /**
    * Load a reveal's target INTO the window. The transcript is a windowed suffix,
