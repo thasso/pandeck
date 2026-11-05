@@ -2,7 +2,7 @@
  * The server's link to the credential gateway (`docs/workers.md`
  * "Credentials"), behind `ASSISTANT_GATEWAY=1`. It runs the gateway in this
  * process with its state in `DATA_DIR/gateway/` and speaks gateway control
- * 1.2 to it over an in-process pair, until the gateway gets its own process
+ * 1.3 to it over an in-process pair, until the gateway gets its own process
  * and socket.
  *
  * Before it is ready the link says hello as this server boot, syncs every
@@ -32,7 +32,10 @@
  * The login hold calls are G5's to wire into the login flows; nothing calls
  * them yet. A hold waiting for its profile's writer lane is ordered after the
  * queue but never holds it up. The link records each profile's latest
- * `profiles.status` for the login-stuck state.
+ * `profiles.status` for the login-stuck state, and its latest
+ * `profiles.credential` for the needs-login state the gateway's renewal
+ * found. The gateway renews Codex logins through `renewCodex`, pi's refresh
+ * that `index.ts` passes in from `harnesses/`.
  */
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -50,6 +53,7 @@ import {
   GATEWAY_CONTROL_PROTOCOL,
   type CompatConfig,
   decodeHoldReleased,
+  decodeCredentialStatus,
   decodeHoldStatus,
   decodeLeaseGranted,
   decodeLeaseRevoked,
@@ -142,6 +146,10 @@ export interface GatewayLinkOptions {
   start?: (options: GatewayOptions) => Promise<RunningGateway>;
   /** The OpenAI-compatible endpoint to push; without it `/compat` answers 503. */
   compat?: GatewayCompatSource;
+  /** pi's Codex refresh, passed to the gateway. */
+  renewCodex?: GatewayOptions["renewCodex"];
+  /** Test and probe seam, passed to the gateway; the server never sets it. */
+  claudeTokenEndpoint?: GatewayOptions["claudeTokenEndpoint"];
 }
 
 /** The OpenAI-compatible endpoint and key the link pushes, and their changes. */
@@ -196,6 +204,8 @@ export interface GatewayLink {
   forceReleaseLoginHold(holdId: string): Promise<void>;
   /** The profile's latest login status from the gateway, if any. */
   loginStatus(profileId: string): LoginStatus | undefined;
+  /** The profile's latest needs-login from the gateway's renewal, if any. */
+  credentialStatus(profileId: string): { needsLogin: boolean } | undefined;
   /** Uninstalls the link and closes its gateway (tests and the probe only); once. */
   close(): Promise<void>;
 }
@@ -279,6 +289,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   let connection: WorkerConnection | undefined;
   let closing: Promise<void> | undefined;
   const loginStatuses = new Map<string, LoginStatus>();
+  const credentialStatuses = new Map<string, boolean>();
   /**
    * This boot's server leases by profile, from the first call on. A removal
    * drops its entry, so a grant still in flight then is never kept: the
@@ -314,6 +325,10 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         port: options.port,
         ...(options.log ? { log: options.log } : {}),
         ...(options.upstreams ? { upstreams: options.upstreams } : {}),
+        ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
+        ...(options.claudeTokenEndpoint
+          ? { claudeTokenEndpoint: options.claudeTokenEndpoint }
+          : {}),
       });
       const [serverEnd, gatewayEnd] = createInProcessTransport();
       gateway.attachControl(gatewayEnd);
@@ -324,6 +339,11 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
           [CONTROL_METHODS.status]: (payload) => {
             const { profileId, ...status } = decodeHoldStatus(payload);
             loginStatuses.set(profileId, status);
+            return Promise.resolve(encodeControlDone());
+          },
+          [CONTROL_METHODS.credential]: (payload) => {
+            const { profileId, needsLogin } = decodeCredentialStatus(payload);
+            credentialStatuses.set(profileId, needsLogin);
             return Promise.resolve(encodeControlDone());
           },
         },
@@ -579,6 +599,10 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         );
         throw new GatewayLoginUnavailableError();
       }
+    },
+    credentialStatus(profileId) {
+      const needsLogin = credentialStatuses.get(profileId);
+      return needsLogin === undefined ? undefined : { needsLogin };
     },
     loginStatus(profileId) {
       const status = loginStatuses.get(profileId);

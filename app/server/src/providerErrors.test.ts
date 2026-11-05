@@ -229,6 +229,7 @@ describe("credential gateway refusals (C16)", () => {
     { case: "credential", problem: "missing" },
     { case: "credential", problem: "unreadable" },
     { case: "credential", problem: "malformed" },
+    { case: "needs-login", name: "Work Claude" },
     unreachable,
     { case: "unreachable", upstream: "ChatGPT", reason: "connection failed" },
   ];

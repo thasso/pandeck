@@ -2,7 +2,10 @@
  * The model listener's request handling (`docs/workers.md` "Credentials").
  *
  * Order: route by prefix, then the lease, then the route's allowlist and the
- * lease's provider, then the credential, then the upstream. `/compat` instead
+ * lease's provider, then the credential, then the upstream. The credential
+ * comes through renewal (`renewal.ts`): a token about to expire is renewed
+ * first, a dead or absent login gets U7's needs-login refusal, and an
+ * upstream 401 may force one renewal while it passes through. `/compat` instead
  * takes any live engine lease of an `openai-codex` profile, then one snapshot
  * of the pushed endpoint (503 without one), then its allowlist, and sends the
  * pushed key over http or https as the push says; it reads no token file.
@@ -20,14 +23,14 @@ import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
 import type { CompatTarget, CompatUpstream } from "./compatUpstream.ts";
-import { readCredential } from "./profileCredential.ts";
-import type { LeaseProvider, LeaseTable } from "./leases.ts";
+import type { LeaseCheck, LeaseProvider, LeaseTable } from "./leases.ts";
 import {
   refusalResponse,
   type Refusal,
   type RefusalShape,
   type UpstreamLabel,
 } from "./refusals.ts";
+import type { Renewal } from "./renewal.ts";
 import {
   isAllowed,
   isCompatAllowed,
@@ -61,6 +64,7 @@ interface ForwarderDeps {
   /** Test seam: the CA an https compatible endpoint is checked against. */
   compatCa: string | string[] | undefined;
   stats: GatewayStats;
+  renewal: Renewal;
 }
 
 /** Where a request goes once it is allowed, credential included. */
@@ -74,6 +78,8 @@ interface Destination {
   replaced: readonly string[];
   credentialHeaders: Record<string, string>;
   label: UpstreamLabel;
+  /** Called with the upstream's status once its headers arrive. */
+  onStatus?: (status: number) => void;
 }
 
 const HOP_BY_HOP = [
@@ -136,6 +142,8 @@ function refusalCase(refusal: Refusal): string {
       return `revoked-lease (${refusal.reason})`;
     case "credential":
       return `credential (${refusal.problem})`;
+    case "needs-login":
+      return "needs-login";
     case "unreachable":
       return `unreachable (${refusal.reason})`;
     default:
@@ -207,9 +215,8 @@ export function createForwarder(deps: ForwarderDeps): {
   ): Promise<void> {
     if (!route) return refuse(res, "claude", { case: "unknown-prefix" }, done);
     const shape = shapeOf(route);
-    const lease = leases.verify(bearerOf(req.headers.authorization));
-    if (!lease.ok)
-      return lease.refusal === "revoked"
+    const refuseLease = (lease: Extract<LeaseCheck, { ok: false }>): void =>
+      lease.refusal === "revoked"
         ? refuse(
             res,
             shape,
@@ -218,6 +225,8 @@ export function createForwarder(deps: ForwarderDeps): {
             lease.leaseId,
           )
         : refuse(res, shape, { case: "unknown-lease" }, done);
+    const lease = leases.verify(bearerOf(req.headers.authorization));
+    if (!lease.ok) return refuseLease(lease);
     const { leaseId, binding } = lease;
     const { upstream } = route;
     if (upstream.kind === "compat") {
@@ -249,18 +258,14 @@ export function createForwarder(deps: ForwarderDeps): {
       !isAllowed(route, req.method, leases.kindOf(leaseId))
     )
       return refuse(res, shape, { case: "forbidden" }, done, leaseId);
-    const credential = await readCredential(
-      binding.provider,
-      binding.tokenFile,
-    );
+    // A renewal may come first; a dead login is refused without upstream.
+    const credential = await deps.renewal.credentialFor(binding);
+    // A revocation that arrived while it waited takes effect now.
+    const still = leases.verify(bearerOf(req.headers.authorization));
+    if (!still.ok) return refuseLease(still);
     if (!credential.ok)
-      return refuse(
-        res,
-        shape,
-        { case: "credential", problem: credential.problem },
-        done,
-        leaseId,
-      );
+      return refuse(res, shape, credential.refusal, done, leaseId);
+    const { read } = credential;
     const override = deps.upstreams[upstream.provider];
     send(
       req,
@@ -278,8 +283,12 @@ export function createForwarder(deps: ForwarderDeps): {
         host: upstream.host,
         replaced:
           upstream.provider === "openai-codex" ? ["chatgpt-account-id"] : [],
-        credentialHeaders: credential.headers,
+        credentialHeaders: read.headers,
         label: upstream.label,
+        // The 401 passes through unchanged; renewal may force one (once).
+        onStatus: (status) => {
+          if (status === 401) deps.renewal.upstream401(binding, read.token);
+        },
       },
       shape,
       done,
@@ -379,6 +388,7 @@ export function createForwarder(deps: ForwarderDeps): {
       });
       const status = upstreamRes.statusCode ?? 502;
       stats.forwarded += 1;
+      destination.onStatus?.(status);
       res.writeHead(status, forwardable(upstreamRes.headers, ["set-cookie"]));
       res.on("finish", () => done(String(status)));
       upstreamRes.pipe(res);

@@ -323,10 +323,15 @@ const REFUSALS: [string, (id: string) => Promise<void>, RegExp][] = [
     ),
   ],
   [
-    "503 credential missing its account id",
+    "401 credential missing its account id",
     async (id) => writeAuth(id, { ...LOGIN, accountId: undefined }),
     new RegExp(
-      escape(refusalText({ case: "credential", problem: "malformed" })),
+      escape(
+        refusalText({
+          case: "needs-login",
+          name: "Usage refused: 401 credential missing its account id",
+        }),
+      ),
     ),
   ],
   [
@@ -555,9 +560,9 @@ const CLAUDE_FAILURES: [
     refusalText({ case: "revoked-lease", reason: "account-switch" }),
   ],
   [
-    "a malformed credential file (marked 503)",
+    "a malformed credential file (marked 401, needs login)",
     async (id) => writeFileSync(claudeCredentialFile(id), "{not json"),
-    refusalText({ case: "credential", problem: "malformed" }),
+    refusalText({ case: "needs-login", name: "Claude usage failure" }),
   ],
   [
     "an upstream reset before headers (marked 502)",
@@ -637,7 +642,7 @@ test.each([
   ["401", { status: 401, body: { type: "error", error: { type: "x" } } }],
   ["200", { status: 200, body: MEASURED_USAGE }],
 ] as const)(
-  "AC7: an expired credential answered %s is sent once and never refreshed",
+  "AC7: an expired credential whose renewal fails is sent once with the old token, answered %s",
   async (_name, answer) => {
     const { id, lease } = await claudeLeased(
       "Claude usage expired",

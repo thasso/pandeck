@@ -110,7 +110,8 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     assert.ok(under(userHomeDir(), tmpdir()), userHomeDir());
     assert.ok(under(DATA_DIR, tmpdir()), DATA_DIR);
     const profiles = await import("../credentialProfiles.ts");
-    const { isLoginDeath } = await import("../providerErrors.ts");
+    const { analyzeProviderError, isLoginDeath, runFailureFacts } =
+      await import("../providerErrors.ts");
     const {
       answerNextInProcessWorkerCallForTests,
       registerInProcessEngineFactory,
@@ -148,12 +149,19 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     );
 
     // 5. The fake upstream answers as the case says; the gateway links to it.
+    // Its renewals go to a fake token endpoint, refusing unless a case says.
     let respond = fixtures.fakeClaudeStream(REPLY);
+    const refuseRenewal: typeof respond = (_seen, res) => {
+      res.writeHead(503).end();
+    };
+    let renewal = refuseRenewal;
     const upstream = await fixtures.startFakeUpstreams({
       claude: (seen, res) => respond(seen, res),
+      claudeToken: (seen, res) => renewal(seen, res),
     });
     const gateway = await startGatewayLinkForTests({
       upstreams: upstream.overrides,
+      claudeTokenEndpoint: upstream.tokenEndpoint,
     });
 
     // 6. A named profile and the default one, each with a fake credential.
@@ -176,11 +184,14 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       work,
       lock: lock[SDK]!,
       profiles,
+      analyzeProviderError,
       isLoginDeath,
+      runFailureFacts,
       answerNextInProcessWorkerCallForTests,
       ENGINE_METHODS,
       decodeEngineOpen,
       fakeClaudeStream: fixtures.fakeClaudeStream,
+      rotatingClaudeTokens: fixtures.rotatingClaudeTokens,
       registerClaudeHostedSession,
       claudeQueryOpenSpec,
       openHostedClaudeQuery,
@@ -194,6 +205,9 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       egress,
       setResponder(next: typeof respond) {
         respond = next;
+      },
+      setRenewal(next: typeof respond | undefined) {
+        renewal = next ?? refuseRenewal;
       },
     };
   }
@@ -620,6 +634,97 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       assert.deepEqual(env.egress.seen, []);
       assert.deepEqual(identity(env.namedFile), before);
       assertNoTokenLogged([ran.leaseToken]);
+    },
+    CASE_MS * 2,
+  );
+
+  test(
+    "AC11: a profile without .credentials.json fails at once with the needs-login marker, not as a dead login",
+    async () => {
+      env.upstream.reset();
+      env.setResponder(env.fakeClaudeStream(REPLY));
+      const missing = env.profiles.createCredentialProfile({
+        name: "Contract missing",
+        provider: "claude",
+      }).id;
+      const ran = await turn({ credentialProfileId: missing });
+      assert.equal(ran.aborted, false, "the turn ended on its own");
+      assert.ok(ran.elapsedMs < 5_000, `ended after ${ran.elapsedMs} ms`);
+      const text = errorText(ran);
+      assert.ok(text.includes("Pandeck gateway:"), text);
+      assert.ok(
+        text.includes("the account Contract missing needs a new login"),
+        text,
+      );
+      const facts = env.runFailureFacts(
+        env.analyzeProviderError(text, {
+          provider: "anthropic",
+          statusCode: 401,
+        }),
+      );
+      assert.equal(facts.loginDeath, undefined, text);
+      assert.equal(env.isLoginDeath(text), false, text);
+      assert.equal(env.upstream.anthropic.length, 0);
+      assert.deepEqual(env.egress.seen, []);
+      assertNoTokenLogged([ran.leaseToken]);
+    },
+    CASE_MS * 2,
+  );
+
+  test(
+    "AC18: a turn while the gateway renews mid-session succeeds, and only the gateway's one rename changes the file",
+    async () => {
+      env.upstream.reset();
+      env.setResponder(env.fakeClaudeStream(REPLY));
+      env.setRenewal(env.rotatingClaudeTokens("fake-contract-renewed"));
+      const renewing = env.profiles.createCredentialProfile({
+        name: "Contract renewal",
+        provider: "claude",
+      }).id;
+      const file = join(
+        env.profiles.claudeConfigDir(renewing),
+        ".credentials.json",
+      );
+      writeCredential(file, CLAUDE_ACCESS);
+      // Inside the 10 min margin, outside a request's 60 s wait.
+      const stored = JSON.parse(readFileSync(file, "utf8"));
+      stored.claudeAiOauth.expiresAt = Date.now() + 5 * 60_000;
+      writeFileSync(file, JSON.stringify(stored));
+      const before = identity(file);
+      let renewed: FileIdentity | undefined;
+      try {
+        const ran = await turn({
+          credentialProfileId: renewing,
+          beforePrompt: async () => {
+            await env.gateway.link.gateway!.renewDue();
+            renewed = identity(file);
+          },
+        });
+        assert.equal(ran.aborted, false, "the turn ended on its own");
+        assert.equal(ran.thrown, undefined, ran.thrown);
+        assert.equal(replyText(ran.messages), REPLY);
+        assert.equal(env.upstream.platform.length, 1, "one renewal");
+        assert.ok(renewed);
+        assert.notEqual(renewed.ino, before.ino, "renewed by a rename");
+        assert.deepEqual(identity(file), renewed, "nothing wrote after it");
+        const after = JSON.parse(readFileSync(file, "utf8")).claudeAiOauth;
+        assert.equal(after.accessToken, "fake-contract-renewed-access-1");
+        assert.equal(after.refreshToken, "fake-contract-renewed-refresh-1");
+        assert.ok(env.upstream.anthropic.length >= 1);
+        for (const seen of env.upstream.anthropic)
+          assert.equal(
+            seen.headers.authorization,
+            "Bearer fake-contract-renewed-access-1",
+          );
+        assert.deepEqual(env.egress.seen, []);
+        assertNoTokenLogged([
+          ran.leaseToken,
+          "fake-contract-renewed-access-1",
+          "fake-contract-renewed-refresh-1",
+        ]);
+      } finally {
+        env.setRenewal(undefined);
+      }
     },
     CASE_MS * 2,
   );

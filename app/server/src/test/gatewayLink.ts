@@ -6,6 +6,9 @@
  *
  * A test that names its own `stateDir`, to start another link on it, owns
  * that directory: closing leaves it in place.
+ *
+ * Its gateway renews Claude tokens only at the test's fake token endpoint, or
+ * at a closed loopback port that refuses at once: never at the real one.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -32,9 +35,15 @@ export interface TestGatewayLink {
   close(): Promise<void>;
 }
 
+/** Loopback's discard port, where nothing listens: a renewal fails there. */
+const NO_TOKEN_ENDPOINT = { connect: { host: "127.0.0.1", port: 9 } };
+
 export async function startGatewayLinkForTests(
   options: Partial<
-    Pick<GatewayLinkOptions, "stateDir" | "start" | "upstreams" | "compat">
+    Pick<
+      GatewayLinkOptions,
+      "stateDir" | "start" | "upstreams" | "compat" | "claudeTokenEndpoint"
+    >
   > = {},
 ): Promise<TestGatewayLink> {
   /** The temp directory this helper made and removes, if it made one. */
@@ -51,6 +60,7 @@ export async function startGatewayLinkForTests(
     ...(options.start ? { start: options.start } : {}),
     ...(options.upstreams ? { upstreams: options.upstreams } : {}),
     ...(options.compat ? { compat: options.compat } : {}),
+    claudeTokenEndpoint: options.claudeTokenEndpoint ?? NO_TOKEN_ENDPOINT,
   });
   assert.equal(await link.ready, true, lines.join("\n"));
   return {

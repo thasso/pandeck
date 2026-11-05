@@ -13,7 +13,8 @@
  * hold. Without one they live in memory. The pushed endpoint and key live
  * only in memory either way (`compatUpstream.ts`): a restarted gateway
  * answers 503 on `/compat` until the next push. A timer rechecks the holds
- * once a minute (`holds.ts`).
+ * once a minute (`holds.ts`), and another renews the leased profiles' tokens
+ * (`renewal.ts`), from the saved leases even before a control connects.
  *
  * It runs in the process that starts it: the server's, through
  * `gatewayLink.ts` under `ASSISTANT_GATEWAY=1`, and tests', against fake
@@ -30,11 +31,18 @@ import {
   type UpstreamOverrides,
 } from "./forward.ts";
 import { createCompatUpstream } from "./compatUpstream.ts";
+import type { TokenEndpoint } from "./claudeRenewal.ts";
 import { createControlEndpoint } from "./control.ts";
 import { HoldTable, WriterLane, type HoldRecord } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
 import type { ProcessProbe } from "./processIdentity.ts";
 import { ProfileRegistry } from "./profiles.ts";
+import type { RefreshLockOptions } from "./refreshLock.ts";
+import {
+  createRenewal,
+  RENEW_TICK_MS,
+  type CodexRenewPort,
+} from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
 
 export interface GatewayOptions {
@@ -53,6 +61,14 @@ export interface GatewayOptions {
   holdCheckIntervalMs?: number;
   /** Test seam: how hold owners and writers are observed. */
   processProbe?: ProcessProbe;
+  /** pi's Codex refresh; without it a Codex renewal fails (`no_port`). */
+  renewCodex?: CodexRenewPort;
+  /** Test seam: where the Claude token endpoint is reached. */
+  claudeTokenEndpoint?: TokenEndpoint;
+  /** How often leased profiles are checked for renewal; 60 s. */
+  renewTickMs?: number;
+  /** Test seam: the Claude refresh lock's clock and retry sleeps. */
+  refreshLockOptions?: RefreshLockOptions;
 }
 
 export interface RunningGateway {
@@ -62,7 +78,7 @@ export interface RunningGateway {
   readonly stats: Readonly<GatewayStats>;
   /** The profiles' writer lane, for in-gateway writers (G4, G5). */
   readonly lane: Pick<WriterLane, "run">;
-  /** Serves gateway control 1.2 on `endpoint`, as the listener. */
+  /** Serves gateway control 1.3 on `endpoint`, as the listener. */
   attachControl(endpoint: ByteEndpoint): void;
   /** The last `control.hello` a control connection said, as recorded. */
   lastHello(): ControlHello | undefined;
@@ -70,6 +86,8 @@ export interface RunningGateway {
   holds(): HoldRecord[];
   /** Rechecks the holds now, as the timer does; tests and the probe. */
   checkHolds(): void;
+  /** Runs one renewal tick now, as the timer does; tests and the probe. */
+  renewDue(): Promise<void>;
   /** Stops listening, ends control connections and destroys open sockets. */
   close(): Promise<void>;
 }
@@ -103,6 +121,18 @@ export async function startGateway(
   }
   const lane = new WriterLane(holds, (id) => profiles.get(id)?.provider);
   const compat = createCompatUpstream();
+  const renewal = createRenewal({
+    profiles,
+    leases,
+    lane,
+    log,
+    now: options.now,
+    claudeEndpoint: options.claudeTokenEndpoint,
+    renewCodex: options.renewCodex,
+    lockOptions: options.refreshLockOptions,
+    report: (profileId, needsLogin) =>
+      control.reportCredential({ profileId, needsLogin }),
+  });
   const control = createControlEndpoint({
     leases,
     profiles,
@@ -110,6 +140,7 @@ export async function startGateway(
     lane,
     compat,
     log,
+    needsLogin: renewal.needsLogin,
   });
 
   const stats: GatewayStats = {
@@ -129,6 +160,7 @@ export async function startGateway(
     compat,
     compatCa: options.compatCa,
     stats,
+    renewal,
   });
   const sockets = new Set<net.Socket>();
 
@@ -158,6 +190,10 @@ export async function startGateway(
     options.holdCheckIntervalMs ?? 60_000,
   );
   holdCheck.unref();
+  const renewTick = setInterval(() => {
+    renewal.tick().catch(() => log("renewal tick failed"));
+  }, options.renewTickMs ?? RENEW_TICK_MS);
+  renewTick.unref();
 
   return {
     url: `http://127.0.0.1:${port}`,
@@ -169,8 +205,11 @@ export async function startGateway(
     lastHello: control.hello,
     holds: () => holds.records(),
     checkHolds: control.checkHolds,
+    renewDue: renewal.tick,
     async close() {
       clearInterval(holdCheck);
+      clearInterval(renewTick);
+      renewal.close();
       control.close();
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),

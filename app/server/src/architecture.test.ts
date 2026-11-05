@@ -635,3 +635,30 @@ test("server code resolves the home directory only through userHome.ts", () => {
     "resolve the home directory with userHomeDir() from userHome.ts",
   );
 });
+
+/**
+ * The Claude token endpoint override is a test seam (RD-G5a-4): production
+ * code only declares it and hands it down, from the link's options to the
+ * gateway's to its renewal. No env, config, settings or control path sets it,
+ * and the server's composition (`index.ts`) never passes it, so a refresh
+ * token goes only to `platform.claude.com`.
+ */
+test("only tests and the probe set the gateway's Claude token endpoint", () => {
+  const mentions: string[] = [];
+  for (const path of sourceFiles(SRC_ROOT)) {
+    const file = relative(SRC_ROOT, path);
+    if (file.startsWith("test/")) continue;
+    for (const line of readFileSync(path, "utf8").split("\n"))
+      if (/claude(Token)?Endpoint/.test(line))
+        mentions.push(`${file}: ${line.trim()}`);
+  }
+  assert.deepEqual(mentions.sort(), [
+    "gateway/gateway.ts: claudeEndpoint: options.claudeTokenEndpoint,",
+    "gateway/gateway.ts: claudeTokenEndpoint?: TokenEndpoint;",
+    "gateway/renewal.ts: claudeEndpoint?: TokenEndpoint | undefined;",
+    "gateway/renewal.ts: options.claudeEndpoint,",
+    "gatewayLink.ts: ...(options.claudeTokenEndpoint",
+    "gatewayLink.ts: ? { claudeTokenEndpoint: options.claudeTokenEndpoint }",
+    'gatewayLink.ts: claudeTokenEndpoint?: GatewayOptions["claudeTokenEndpoint"];',
+  ]);
+});

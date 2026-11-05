@@ -83,6 +83,7 @@ import {
   syncConfiguredModelProviders,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
+  renewCodexCredential,
 } from "./harnesses/boot.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import {
@@ -1854,12 +1855,14 @@ startInProcessWorker();
 // on a profile holds a lease first. A failed start is logged and only fails
 // those opens. Graceful shutdown leaves it running, as the package proxy, for
 // a draining turn; it dies with the process. The link pushes the
-// OpenAI-compatible endpoint and key, which only the gateway then holds.
+// OpenAI-compatible endpoint and key, which only the gateway then holds; the
+// gateway renews Codex logins through pi's refresh passed in here.
 if (GATEWAY_ENABLED)
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
     compat: settingsCompatSource(compatProviderFeed),
+    renewCodex: renewCodexCredential,
   });
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.

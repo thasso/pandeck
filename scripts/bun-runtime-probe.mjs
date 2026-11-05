@@ -12,7 +12,8 @@
  * children but never the server's own fetch, pi's OAuth flows, an
  * Initiative map laid out by elkjs in the bundled layout worker, and the
  * credential gateway the server links to under `ASSISTANT_GATEWAY=1`, granting
- * and forwarding with the seeded ChatGPT credential. First of all,
+ * and forwarding with the seeded ChatGPT credential, and renewing a Claude
+ * and a Codex login. First of all,
  * that a child's managed stdio never closes a descriptor number something
  * else reused (Bun 1.3.13 did, at GC), and that `maxBuffer` bounds each
  * stream's length on overflow as Node does.
@@ -113,6 +114,7 @@ import {
   stopPackageProxy,
 } from "../app/server/src/packageProxy/packageProxy.ts";
 import { modelRuntimeForProfile } from "../app/server/src/piSdk/models.ts";
+import { renewCodexCredential } from "../app/server/src/piSdk/codexRenewal.ts";
 import { PACKAGED_MIGRATIONS_DIR } from "../app/server/src/runtimeAssets.ts";
 import {
   brokerExecFile,
@@ -125,6 +127,11 @@ import {
 import { checkoutWatchOn } from "../app/server/src/checkoutWatchAccess.ts";
 import { checkoutLifecycleOn } from "../app/server/src/checkoutLifecycle.ts";
 import { errorText } from "../app/server/src/errors.ts";
+import {
+  CONTROL_METHODS,
+  GATEWAY_CONTROL_PROTOCOL,
+  encodeControlRequest,
+} from "../app/server/src/gateway/controlMethods.ts";
 import { startGateway } from "../app/server/src/gateway/gateway.ts";
 import {
   processStartTime,
@@ -4542,11 +4549,15 @@ async function checkGatewayLink() {
     });
   const stateDir = join(DATA_DIR, "gateway-probe", "gateway");
   const lines = [];
+  // Loopback's discard port: a renewal here fails at once, never reaching
+  // the real token endpoint.
+  const noTokenEndpoint = { connect: { host: "127.0.0.1", port: 9 } };
   const link = startGatewayLink({
     stateDir,
     port: 0,
     log: (line) => lines.push(line),
     upstreams,
+    claudeTokenEndpoint: noTokenEndpoint,
   });
   let restarted;
   try {
@@ -4562,7 +4573,7 @@ async function checkGatewayLink() {
     });
     const refusal = await worker.ended;
     assert(
-      refusal.includes("gateway-control/1.2"),
+      refusal.includes("gateway-control/1.3"),
       `A worker-protocol dialer was not refused by gateway control: ${refusal}`,
     );
     const hello = gateway.lastHello();
@@ -4615,6 +4626,7 @@ async function checkGatewayLink() {
       port: 0,
       log: (line) => lines.push(line),
       upstreams,
+      claudeTokenEndpoint: noTokenEndpoint,
     });
     const before = seen.length;
     const again = await codex(restarted, lease.token);
@@ -4633,6 +4645,203 @@ async function checkGatewayLink() {
     await link.close();
     await restarted?.close();
     await new Promise((resolve) => upstream.close(() => resolve()));
+  }
+  await checkGatewayRenewal(ca);
+}
+
+/**
+ * The gateway's renewal under Bun (`docs/workers.md` "Renewal"): (a) a Claude
+ * profile inside its margin renews by one POST to a fake TLS
+ * `platform.claude.com`; (b) the bundled pi refresher takes no lock and makes
+ * no request for a fresh Codex login; (c) it waits on a held pi lock, then
+ * acquires it, renews once and releases it, through the bundled
+ * `proper-lockfile`. `fetch` is stubbed; every token is synthetic.
+ */
+const PROBE_OLD_ACCESS = "bun-probe-old-access";
+const PROBE_RENEWED_ACCESS = "bun-probe-renewed-access";
+
+async function checkGatewayRenewal(ca) {
+  const root = join(DATA_DIR, "gateway-renewal-probe");
+  mkdirSync(join(root, "claude"), { recursive: true });
+  mkdirSync(join(root, "pi"), { recursive: true });
+
+  // (a) Claude.
+  const leaf = issueLeafCertificate(ca, "platform.claude.com");
+  const posts = [];
+  const platform = createHttpsServer(
+    { key: leaf.keyPem, cert: leaf.certPem },
+    (req, res) => {
+      req.resume();
+      req.on("end", () => {
+        posts.push({ url: req.url, host: req.headers.host });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            access_token: PROBE_RENEWED_ACCESS,
+            refresh_token: "bun-probe-renewed-refresh",
+            expires_in: 28_800,
+          }),
+        );
+      });
+    },
+  );
+  await new Promise((resolve) =>
+    platform.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const claudeFile = join(root, "claude", ".credentials.json");
+  writeFileSync(
+    claudeFile,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: PROBE_OLD_ACCESS,
+        refreshToken: "bun-probe-old-refresh",
+        expiresAt: Date.now() + 5 * 60_000,
+      },
+    }),
+  );
+  const lines = [];
+  const gateway = await startGateway({
+    port: 0,
+    log: (line) => lines.push(line),
+    claudeTokenEndpoint: {
+      connect: { host: "127.0.0.1", port: platform.address().port },
+      ca: ca.certPem,
+    },
+  });
+  try {
+    const [dialEnd, gatewayEnd] = createInProcessTransport();
+    gateway.attachControl(gatewayEnd);
+    const control = new WorkerConnection(dialEnd, {
+      handshake: { role: "worker", workerId: "pandeck-server" },
+      protocol: GATEWAY_CONTROL_PROTOCOL,
+      handlers: { [CONTROL_METHODS.credential]: async () => ({ json: {} }) },
+    });
+    await control.request(
+      CONTROL_METHODS.hello,
+      encodeControlRequest({
+        serverBootId: "bun-probe",
+        pid: process.pid,
+        startTime: processStartTime(process.pid),
+      }),
+    );
+    const profile = {
+      id: "probe-claude",
+      provider: "claude",
+      name: "Probe Claude",
+      enabled: true,
+      tokenFile: claudeFile,
+    };
+    await control.request(
+      CONTROL_METHODS.syncProfiles,
+      encodeControlRequest({ profiles: [profile] }),
+    );
+    await control.request(
+      CONTROL_METHODS.grant,
+      encodeControlRequest({ kind: "server", profileId: profile.id }),
+    );
+    await gateway.renewDue();
+    const renewed = JSON.parse(readFileSync(claudeFile, "utf8"));
+    assert(
+      posts.length === 1 &&
+        posts[0].url === "/v1/oauth/token" &&
+        posts[0].host === "platform.claude.com" &&
+        renewed.claudeAiOauth.accessToken === PROBE_RENEWED_ACCESS &&
+        renewed.claudeAiOauth.refreshToken === "bun-probe-renewed-refresh",
+      `The gateway did not renew the Claude profile once: ${JSON.stringify(posts)}\n${lines.join("\n")}`,
+    );
+  } finally {
+    await gateway.close();
+    await new Promise((resolve) => platform.close(() => resolve()));
+  }
+
+  // (b) and (c) Codex, through the bundled pi and proper-lockfile.
+  const part = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const access = `${part({ alg: "none" })}.${part({
+    "https://api.openai.com/auth": { chatgpt_account_id: "bun-probe-account" },
+  })}.sig`;
+  const fetches = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    fetches.push(String(input));
+    return globalThis.Response.json({
+      access_token: access,
+      refresh_token: "bun-probe-codex-renewed-refresh",
+      expires_in: 864_000,
+    });
+  };
+  const authFile = join(root, "pi", "auth.json");
+  const lockDir = `${authFile}.lock`;
+  const codexLogin = (expires) =>
+    writeFileSync(
+      authFile,
+      JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "bun-probe-codex-old-access",
+          refresh: "bun-probe-codex-old-refresh",
+          accountId: "bun-probe-account",
+          expires,
+        },
+      }),
+    );
+  try {
+    codexLogin(Date.now() + 10 * 86_400_000);
+    const before = readFileSync(authFile);
+    let locks = 0;
+    const fresh = await renewCodexCredential(
+      authFile,
+      30 * 60_000,
+      globalThis.AbortSignal.timeout(10_000),
+      {
+        lock: () => {
+          locks += 1;
+          throw new Error("a fresh login took a lock");
+        },
+      },
+    );
+    assert(
+      fresh.ok === true &&
+        fetches.length === 0 &&
+        locks === 0 &&
+        readFileSync(authFile).equals(before) &&
+        !existsSync(lockDir),
+      `A fresh Codex login was not left alone: ${JSON.stringify(fresh)}, ${fetches.length} fetches, ${locks} locks`,
+    );
+
+    codexLogin(Date.now() + 60_000);
+    const { ino } = statSync(authFile);
+    mkdirSync(lockDir);
+    let settled = false;
+    const renewing = renewCodexCredential(
+      authFile,
+      30 * 60_000,
+      globalThis.AbortSignal.timeout(20_000),
+    ).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
+    assert(
+      !settled && fetches.length === 0,
+      "The Codex refresher did not wait on a held pi lock.",
+    );
+    rmSync(lockDir, { recursive: true });
+    const started = Date.now();
+    const result = await renewing;
+    const after = JSON.parse(readFileSync(authFile, "utf8"))["openai-codex"];
+    assert(
+      result.ok === true &&
+        Date.now() - started < 5_000 &&
+        fetches.length === 1 &&
+        fetches[0] === "https://auth.openai.com/oauth/token" &&
+        statSync(authFile).ino !== ino &&
+        after.access === access &&
+        !existsSync(lockDir),
+      `The Codex refresher did not renew once under pi's lock: ${JSON.stringify(result)}, ${fetches.length} fetches`,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    rmSync(root, { recursive: true, force: true });
   }
 }
 

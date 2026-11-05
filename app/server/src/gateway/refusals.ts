@@ -6,8 +6,9 @@
  * the failed turn. The server's error classifier reads the marker: a local
  * refusal never classifies as a dead login (`providerErrors.ts`).
  *
- * No text holds a peer-supplied string: a path, User-Agent or bearer is never
- * echoed. This module imports nothing, because the classifier ships it.
+ * No text holds a string from a request or an upstream: a path, User-Agent or
+ * bearer is never echoed. A profile's name comes only from the registry the
+ * server syncs. This module imports nothing, because the classifier ships it.
  */
 
 export const GATEWAY_REFUSAL_MARKER = "Pandeck gateway:";
@@ -41,6 +42,8 @@ export type Refusal =
   | { case: "unknown-prefix" }
   | { case: "websocket" }
   | { case: "credential"; problem: CredentialProblem }
+  /** The profile's login is dead or absent; `name` is the registry's. */
+  | { case: "needs-login"; name: string }
   /** No OpenAI-compatible endpoint was pushed since the last hello or clear. */
   | { case: "compat-unset" }
   /** `reason` is an error code or "connection failed", never peer text. */
@@ -55,7 +58,8 @@ const STATUS: Record<Refusal["case"], number> = {
   forbidden: 403,
   "unknown-prefix": 404,
   websocket: 403,
-  credential: 503,
+  credential: 401,
+  "needs-login": 401,
   "compat-unset": 503,
   unreachable: 502,
 };
@@ -87,6 +91,8 @@ export function refusalText(refusal: Refusal): string {
       return `${GATEWAY_REFUSAL_MARKER} WebSocket transport is not supported; use SSE.`;
     case "credential":
       return `${GATEWAY_REFUSAL_MARKER} the credential for this session's account could not be read (${refusal.problem}).`;
+    case "needs-login":
+      return `${GATEWAY_REFUSAL_MARKER} the account ${refusal.name} needs a new login (Settings → Accounts).`;
     case "compat-unset":
       return `${GATEWAY_REFUSAL_MARKER} the OpenAI-compatible endpoint's settings have not reached the gateway yet. Try again shortly.`;
     case "unreachable":

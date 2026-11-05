@@ -239,6 +239,13 @@ export class LeaseTable {
     return [...this.leases].map(([leaseId, lease]) => recordOf(leaseId, lease));
   }
 
+  /** Whether a lease bound to the profile is still live (renewal's rule). */
+  hasLiveLease(profileId: string): boolean {
+    for (const lease of this.leases.values())
+      if (!lease.revoked && lease.binding.profileId === profileId) return true;
+    return false;
+  }
+
   /** Whose a held lease is: the routes beyond its provider's depend on it. */
   kindOf(leaseId: string): LeaseOwnership["kind"] | undefined {
     return this.leases.get(leaseId)?.ownership.kind;

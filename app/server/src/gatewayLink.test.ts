@@ -137,6 +137,8 @@ function link(options: Partial<GatewayLinkOptions> = {}): GatewayLink {
         ca,
       },
     },
+    // A closed loopback port: no renewal reaches the real token endpoint.
+    claudeTokenEndpoint: { connect: { host: "127.0.0.1", port: 9 } },
     ...options,
   });
   links.push(started);
@@ -1041,4 +1043,59 @@ test("AC18 (link): no link or gateway log line of a server lease holds a token, 
   for (const line of lines)
     for (const value of [access.leaseToken, secret, FAKE_ACCESS, FAKE_ACCOUNT])
       assert.ok(!line.includes(value), `a log line holds ${value}: ${line}`);
+});
+
+test("AC14 (link): the link hands the gateway its renewCodex port", async () => {
+  const renewCodex: NonNullable<GatewayOptions["renewCodex"]> = async () => ({
+    ok: true,
+  });
+  let handed: GatewayOptions["renewCodex"];
+  const booted = link({
+    renewCodex,
+    start: (options: GatewayOptions) => {
+      handed = options.renewCodex;
+      return startGateway(options);
+    },
+  });
+  assert.equal(await booted.ready, true);
+  assert.equal(handed, renewCodex);
+});
+
+test("AC9 (link): a rejected Codex renewal reaches credentialStatus, and a new login clears it", async () => {
+  const id = codexProfile("Renewal Codex");
+  const authFile = join(profiles.piAgentDir(id), "auth.json");
+  const login = JSON.parse(readFileSync(authFile, "utf8"));
+  login["openai-codex"].expires = Date.now() + 30_000;
+  writeFileSync(authFile, JSON.stringify(login));
+  let answer: Awaited<ReturnType<NonNullable<GatewayOptions["renewCodex"]>>> = {
+    ok: false,
+    kind: "rejected",
+    code: "400",
+  };
+  try {
+    const booted = link({ renewCodex: async () => answer });
+    assert.equal(await booted.ready, true);
+    assert.equal(booted.credentialStatus(id), undefined);
+    const access = await booted.serverAccess(id);
+    const refused = await codexRequest(booted.gateway!, access.leaseToken);
+    assert.equal(refused.status, 401);
+    const message = JSON.parse(refused.text).error.message;
+    assert.equal(
+      message,
+      refusalText({ case: "needs-login", name: "Renewal Codex" }),
+    );
+    assert.equal(isLoginDeath(message, { statusCode: 401 }), false);
+    await until(() => booted.credentialStatus(id)?.needsLogin === true);
+
+    answer = { ok: true };
+    login["openai-codex"].expires = Date.now() + 86_400_000;
+    writeFileSync(authFile, JSON.stringify(login));
+    assert.equal(
+      (await codexRequest(booted.gateway!, access.leaseToken)).status,
+      200,
+    );
+    await until(() => booted.credentialStatus(id)?.needsLogin === false);
+  } finally {
+    profiles.deleteCredentialProfile(id);
+  }
 });

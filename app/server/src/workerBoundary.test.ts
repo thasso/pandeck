@@ -514,6 +514,23 @@ test("no pi module reaches the gateway link", () => {
   );
 });
 
+test("the gateway's Codex refresher imports only node, pi and proper-lockfile", () => {
+  // It is injected into the gateway as a port; the gateway never imports it.
+  const scan = scans.get("piSdk/codexRenewal.ts");
+  assert.ok(scan, "the scan found the Codex refresher");
+  for (const target of scan.imports)
+    assert.ok(
+      target.startsWith("node:") ||
+        target.startsWith("@earendil-works/") ||
+        target === "proper-lockfile",
+      `piSdk/codexRenewal.ts imports ${target}`,
+    );
+  assert.deepEqual(
+    importersOf((target) => target === "piSdk/codexRenewal.ts"),
+    ["harnesses/boot.ts"],
+  );
+});
+
 test("the session-hook protocol runs no server module", () => {
   // The Worker side imports it, and the direct rule above stops at
   // `workerProtocol/`: a server module it ran would reach the Worker unseen.

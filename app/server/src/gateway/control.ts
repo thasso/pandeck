@@ -1,6 +1,6 @@
 /**
  * The gateway's control endpoint (`docs/workers.md` "Credentials"): the
- * listener side of gateway control 1.2. Only a control connection grants a
+ * listener side of gateway control 1.3. Only a control connection grants a
  * lease or takes, names or ends a login hold, and a grant binds the lease from
  * the registry, never from the request (C5).
  *
@@ -16,7 +16,8 @@
  * gateway's timer calls `checkHolds`. Each change, and after a hello every
  * login-stuck hold, is sent to the current connection as `profiles.status`
  * once the answer that caused it has gone out; a failure is logged, never
- * retried.
+ * retried. Renewal's needs-login changes go out as `profiles.credential` the
+ * same way, and each hello resends every profile that needs a login.
  *
  * Every hello also clears the pushed OpenAI-compatible endpoint: its key
  * belongs to the boot that pushed it, which the next push replaces. A
@@ -56,6 +57,7 @@ import {
   decodeProfileUpsert,
   decodeWorkerReconcile,
   encodeControlDone,
+  encodeCredentialStatus,
   encodeHoldReleased,
   encodeHoldStatus,
   encodeLeaseGranted,
@@ -63,6 +65,7 @@ import {
   encodeLeasesRevoked,
   encodeLoginHold,
   type ControlHello,
+  type CredentialStatus,
 } from "./controlMethods.ts";
 import type { CompatUpstream } from "./compatUpstream.ts";
 import type { HoldStatus, HoldTable, HoldUpdate, WriterLane } from "./holds.ts";
@@ -77,6 +80,8 @@ interface ControlContext {
   lane: WriterLane;
   compat: CompatUpstream;
   log: (line: string) => void;
+  /** The profiles that need a login now, resent on every hello. */
+  needsLogin?: () => string[];
 }
 
 /** What a method's log line names besides the method, and its outcome. */
@@ -116,6 +121,8 @@ export interface ControlEndpoint {
   hello(): ControlHello | undefined;
   /** Rechecks every hold whose owner is not the current connection's boot. */
   checkHolds(): void;
+  /** Sends a profile's needs-login change to the current connection. */
+  reportCredential(status: CredentialStatus): void;
   /** Ends every attached connection. */
   close(): void;
 }
@@ -127,6 +134,7 @@ export function createControlEndpoint({
   lane,
   compat,
   log,
+  needsLogin = () => [],
 }: ControlContext): ControlEndpoint {
   const connections = new Set<WorkerConnection>();
   /** The connection whose hello came last; an older one is ended. */
@@ -136,22 +144,26 @@ export function createControlEndpoint({
    * Statuses waiting for the answer that caused them to go out, each to the
    * connection that was current then: a newer hello resends what is stuck.
    */
-  let unsent: { status: HoldStatus; to: WorkerConnection | undefined }[] = [];
+  let unsent: {
+    method: string;
+    payload: Payload;
+    subject: Subject;
+    to: WorkerConnection | undefined;
+  }[] = [];
 
   const sendStatuses = (): void => {
     const statuses = unsent;
     unsent = [];
-    for (const { status, to } of statuses) {
-      const subject = { profileId: status.profileId, holdId: status.holdId };
+    for (const { method, payload, subject, to } of statuses) {
       if (!to) {
-        logOutcome(CONTROL_METHODS.status, subject, "not connected");
+        logOutcome(method, subject, "not connected");
         continue;
       }
-      to.request(CONTROL_METHODS.status, encodeHoldStatus(status)).then(
-        () => logOutcome(CONTROL_METHODS.status, subject, "ok"),
+      to.request(method, payload).then(
+        () => logOutcome(method, subject, "ok"),
         (err: unknown) =>
           logOutcome(
-            CONTROL_METHODS.status,
+            method,
             subject,
             err instanceof WorkerRequestError ? err.code : "failed",
           ),
@@ -159,12 +171,28 @@ export function createControlEndpoint({
     }
   };
 
+  const enqueue = (
+    method: string,
+    payload: Payload,
+    subject: Subject,
+  ): void => {
+    if (unsent.length === 0) setImmediate(sendStatuses);
+    unsent.push({ method, payload, subject, to: current });
+  };
+
   /** Sends `statuses` to the current connection after this turn's answers. */
   const report = (statuses: HoldStatus[]): void => {
-    if (statuses.length === 0) return;
-    if (unsent.length === 0) setImmediate(sendStatuses);
-    for (const status of statuses) unsent.push({ status, to: current });
+    for (const status of statuses)
+      enqueue(CONTROL_METHODS.status, encodeHoldStatus(status), {
+        profileId: status.profileId,
+        holdId: status.holdId,
+      });
   };
+
+  const reportCredential = (status: CredentialStatus): void =>
+    enqueue(CONTROL_METHODS.credential, encodeCredentialStatus(status), {
+      profileId: status.profileId,
+    });
 
   /** Reports a memory-first hold change; a failed save is only logged. */
   const settle = (update: HoldUpdate, context: string): void => {
@@ -440,6 +468,8 @@ export function createControlEndpoint({
         },
         "control.hello hold check",
       );
+      for (const profileId of needsLogin())
+        reportCredential({ profileId, needsLogin: true });
       return encodeLeasesRevoked(
         leases.revokeWhere(
           (record) =>
@@ -491,6 +521,7 @@ export function createControlEndpoint({
   return {
     attach,
     hello: () => lastHello,
+    reportCredential,
     checkHolds() {
       // `current` said the last hello: a newer one ends the older connection.
       settle(holds.check(current && lastHello?.serverBootId), "hold check");

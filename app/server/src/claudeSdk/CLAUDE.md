@@ -2,11 +2,10 @@
 
 # Claude SDK harness
 
-- The official Claude CLI provisions profiles. PA never owns OAuth, calls
-  undocumented auth controls, or exposes credentials; the one exception is the
-  usage read `GET /api/oauth/usage` through the gateway on a server lease, which
-  never refreshes (G4b). `claudeProfileEnvironment` scrubs inherited credential
-  variables.
+- The official Claude CLI provisions profiles. PA exposes no credentials and
+  owns OAuth only in `gateway/`: the CLI-mirroring token refresh (U8) and the
+  usage read `GET /api/oauth/usage` on a server lease.
+  `claudeProfileEnvironment` scrubs inherited credential variables.
 - Do not double-count output: live deltas build visible text; committed
   assistant messages carry metadata and tool openings. A synthetic assistant
   `error` is never streamed, so its text (a provider failure's only wording)
