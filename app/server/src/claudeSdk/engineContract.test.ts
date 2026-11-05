@@ -1100,7 +1100,12 @@ describe.runIf(ENABLED)("the Claude login CLI offline (AC13)", () => {
         false,
         "R1: a localhost callback URL was printed",
       );
-      // (d) Recorded in the annotation; R1 if it needed SIGKILL.
+      // (d) SIGTERM ends it; the annotation records how fast.
+      assert.equal(
+        typeof run.sigterm === "object",
+        true,
+        `R1: SIGTERM did not end the CLI (${JSON.stringify(run.sigterm)})`,
+      );
     },
     CASE_MS,
   );
