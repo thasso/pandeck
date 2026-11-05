@@ -35,6 +35,8 @@ import {
   isCodingAgentType,
   KNOWLEDGE_WORKTREE_ID,
   modelKey,
+  OPENAI_COMPATIBLE_PROVIDER_ID,
+  providerLabel,
   type ModelOption,
   type PromptAttachment,
   type PullRequestCheckoutOutcome,
@@ -198,6 +200,7 @@ import { visibleModels } from "./lib/models.ts";
 import {
   accountModelOptions,
   automaticModels,
+  pickerCredentialProfiles,
   previewAutomaticAccount,
   limitedAccountDescription,
 } from "./lib/credentialProfiles.ts";
@@ -4128,6 +4131,13 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       ),
   );
   const automaticPreviewName = (() => {
+    // The account only carries a compatible model: the endpoint runs it, on no
+    // plan of that account's.
+    if (automaticPreviewModel?.provider === OPENAI_COMPATIBLE_PROVIDER_ID)
+      return providerLabel(
+        automaticPreviewModel.provider,
+        automaticPreviewModel.providerName,
+      );
     const preview = dataOf(automaticPreviewFetch.state);
     const name = credentialProfiles.find(
       (profile) => profile.id === preview?.profileId,
@@ -6249,7 +6259,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-6">
           {showContextPicker ? (
             <NewSessionQuickStart
-              credentialProfiles={activeCredentialProfiles}
+              credentialProfiles={pickerCredentialProfiles(
+                activeCredentialProfiles,
+                credentialProfileModels,
+                credentialProfileId,
+              )}
               credentialProfilesLoaded={
                 credentialProfileProjection !== undefined
               }

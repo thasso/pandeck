@@ -219,24 +219,28 @@ const reviewFixture = {
 } as unknown as PullRequestInventoryItem;
 const { pullRequestPath } = await import("./hooks/useSessionRouting.ts");
 
-function projection(profiles: CredentialProfileSummary[]) {
+function projection(
+  profiles: CredentialProfileSummary[],
+  modelsByProfile?: Record<string, ModelOption[]>,
+) {
   return {
     profiles,
-    modelsByProfile: Object.fromEntries(
-      profiles.map((profile) => [profile.id, [sonnet]]),
-    ),
+    modelsByProfile:
+      modelsByProfile ??
+      Object.fromEntries(profiles.map((profile) => [profile.id, [sonnet]])),
   };
 }
 
 function readyMessage(
   settings: Partial<AppSettings> = {},
   agents: AgentInfo[] = [],
+  models: ModelOption[] = [sonnet],
 ): ServerMessage {
   return {
     type: "ready",
     serverBuild: { version: "0.0.0-test" },
     state: null,
-    models: [sonnet],
+    models,
     agents,
     settings,
     speechToText: {
@@ -301,6 +305,8 @@ async function openNewSession(
     path?: string;
     settings?: Partial<AppSettings>;
     agents?: AgentInfo[];
+    models?: ModelOption[];
+    modelsByProfile?: Record<string, ModelOption[]>;
   } = {},
 ): Promise<ScenarioSocket> {
   previews = [];
@@ -325,7 +331,7 @@ async function openNewSession(
       }
       if (String(url).endsWith("/api/pull-requests"))
         return json({ status: "ready", items: [], fetchedAt: 0 });
-      return json(projection(profiles));
+      return json(projection(profiles, initial.modelsByProfile));
     }),
   );
   window.history.replaceState(null, "", initial.path ?? "/sessions/create");
@@ -339,7 +345,9 @@ async function openNewSession(
   const socket = ScenarioSocket.instances[0]!;
   await act(async () => {
     socket.open();
-    socket.receive(readyMessage(initial.settings, initial.agents));
+    socket.receive(
+      readyMessage(initial.settings, initial.agents, initial.models),
+    );
   });
   await settle();
   return socket;
@@ -1140,6 +1148,45 @@ describe("new-session account choice", () => {
     expect(sent).toMatchObject({ modelId: sonnet.id });
     expect(sent && "credentialProfileId" in sent).toBe(false);
     expect(sent && "requiresEnterprise" in sent).toBe(false);
+  });
+
+  it("offers only the compatible endpoint when no account is connected", async () => {
+    const compatible: ModelOption = {
+      provider: "openai-compatible",
+      id: "qwen",
+      name: "qwen",
+      providerName: "Team LLM",
+      reasoning: false,
+      supportedThinkingLevels: ["off"],
+      contextWindow: 128_000,
+    };
+    const openAi = {
+      ...account("default", "Default OpenAI", false),
+      provider: "openai-codex",
+      status: "disconnected",
+    } as CredentialProfileSummary;
+    const claude = {
+      ...account("claude-default", "Default Claude", false),
+      status: "disconnected",
+    } as CredentialProfileSummary;
+    const socket = await openNewSession([claude, openAi], () => "default", {
+      models: [compatible],
+      modelsByProfile: { default: [compatible], "claude-default": [] },
+    });
+
+    expect(accountCard("Default OpenAI")).toBeUndefined();
+    expect(accountCard("Default Claude")).toBeUndefined();
+    expect(accountCard("Automatic")).toBeUndefined();
+    expect(accountCard("Team LLM")?.getAttribute("aria-selected")).toBe("true");
+    expect(accountCard("Team LLM")?.textContent).toContain("No plan limits");
+
+    await sendPrompt("hello");
+    const sent = firstSend(socket);
+    expect(sent).toMatchObject({
+      modelProvider: "openai-compatible",
+      modelId: "qwen",
+    });
+    expect(sent && "credentialProfileId" in sent).toBe(false);
   });
 
   it("shows the account the server's router would pick for Automatic", async () => {

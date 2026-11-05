@@ -122,6 +122,38 @@ function render(
   );
 }
 
+describe("compatible endpoint card", () => {
+  const compatible: ModelOption = {
+    ...model,
+    provider: "openai-compatible",
+    id: "qwen",
+    name: "qwen",
+    providerName: "Team LLM",
+  };
+
+  it("replaces Automatic, unmetered, when no account is a choice", () => {
+    const html = render([], { models: [compatible], profiles: [] });
+    expect(html).toContain("Team LLM");
+    expect(html).toContain("No plan limits");
+    expect(html).not.toContain("Automatic");
+  });
+
+  it("does not claim enterprise is unmet while the endpoint can run", () => {
+    const html = render([], {
+      models: [compatible],
+      profiles: [],
+      requiresEnterprise: true,
+    });
+    expect(html).toContain("Team LLM");
+    expect(html).not.toContain("cannot start");
+  });
+
+  it("stays Automatic when other models can run", () => {
+    const html = render([], { models: [compatible, model], profiles: [] });
+    expect(html).not.toContain("No plan limits");
+  });
+});
+
 describe("orderProjectsByActivity", () => {
   it("ranks by the newest session or Task activity and keeps inactive registry order", () => {
     const inactiveFirst = { ...project, id: "inactive-first" };

@@ -6,6 +6,8 @@ import {
   UserRoundCog,
 } from "lucide-react";
 import {
+  OPENAI_COMPATIBLE_PROVIDER_ID,
+  providerLabel,
   supportedThinkingLevelsForModel,
   type ModelOption,
   type ProjectRecord,
@@ -299,6 +301,14 @@ export function NewSessionQuickStart({
   const offeredCredentialProfiles = requiresEnterprise
     ? orderedCredentialProfiles.filter((profile) => profile.enterprise)
     : orderedCredentialProfiles;
+  // With no account to choose, the compatible endpoint is all a session can run
+  // on, so its card replaces Automatic. It has no plan to meter.
+  const endpointModel =
+    offeredCredentialProfiles.length === 0 &&
+    models.length > 0 &&
+    models.every((model) => model.provider === OPENAI_COMPATIBLE_PROVIDER_ID)
+      ? models[0]
+      : undefined;
 
   return (
     // One card around the whole configuration: what the session starts in
@@ -516,7 +526,7 @@ export function NewSessionQuickStart({
           </div>
         ) : (
           <>
-            {orderedCredentialProfiles.length > 0 ? (
+            {orderedCredentialProfiles.length > 0 || endpointModel ? (
               <div className="flex flex-col gap-2">
                 <ProviderAccountRow
                   accounts={offeredCredentialProfiles.map((profile) => ({
@@ -530,11 +540,20 @@ export function NewSessionQuickStart({
                   automatic={{
                     selected: selectedCredentialProfileId === null,
                     onSelect: () => onSelectCredentialProfile(null),
-                    detail: automaticAccountName
-                      ? `Now: ${automaticAccountName}`
-                      : requiresEnterprise
-                        ? "Best enterprise account with room"
-                        : "Best account with room",
+                    detail: endpointModel
+                      ? "No plan limits"
+                      : automaticAccountName
+                        ? `Now: ${automaticAccountName}`
+                        : requiresEnterprise
+                          ? "Best enterprise account with room"
+                          : "Best account with room",
+                    endpoint: endpointModel && {
+                      provider: endpointModel.provider,
+                      name: providerLabel(
+                        endpointModel.provider,
+                        endpointModel.providerName,
+                      ),
+                    },
                   }}
                 />
                 <div className="flex items-center justify-center gap-2 px-4">
@@ -552,7 +571,8 @@ export function NewSessionQuickStart({
                   </Label>
                 </div>
                 {requiresEnterprise &&
-                offeredCredentialProfiles.length === 0 ? (
+                offeredCredentialProfiles.length === 0 &&
+                !endpointModel ? (
                   <p className="px-4 text-center text-xs text-muted-foreground">
                     No enabled account is marked Enterprise, so this session
                     cannot start. Mark one under Settings → Claude SDK or
