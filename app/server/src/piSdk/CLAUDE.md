@@ -1,3 +1,5 @@
+<!-- instruction-budget: bytes=2560 reason="Nine contracts; the newest is the gateway's Codex refresher, whose lock-fenced commit keeps a lost lock or a stale snapshot from rotating a login away." task=1366 date=2026-11-04 -->
+
 # pi SDK harness
 
 - Hub behaviour arrives via `piStore.setHost`, never a static `hub.ts` import.
@@ -24,6 +26,9 @@
   admission. SDK `display: false` custom turns retain settlement, retry,
   compaction and queues; `Agent.continue` does not. Context edits retain
   physical history.
+- `codexRenewal.ts` is the gateway's Codex refresher: it never imports
+  `models.ts`, and commits only under pi's lock after an entry compare-and-swap,
+  by atomic rename.
 - Session-open/canonicalize paths encode pi footguns (empty-header id minting,
   pending-output retargeting); keep `sessionResolver.test.ts` green.
 - A session's cwd is its `in_worktree` edge, else the record `cwd`, threaded

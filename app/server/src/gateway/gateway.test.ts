@@ -518,9 +518,13 @@ async function localFailures(files: TokenFiles): Promise<string[]> {
       headers: bearer(token),
       body: BODY_SENTINEL,
     });
-    assert.equal(failed.status, 503, tokenFile);
+    assert.equal(failed.status, 401, tokenFile);
     assert.equal(
-      refusalMessage(failed, codex ? "codex" : "claude", "api_error"),
+      refusalMessage(
+        failed,
+        codex ? "codex" : "claude",
+        "authentication_error",
+      ),
       `Pandeck gateway: the credential for this session's account could not be read (${problem}).`,
     );
   }
@@ -869,7 +873,7 @@ test("a WebSocket upgrade is refused without contacting upstream", async () => {
   assert.equal(upstreamRequests(), 0);
 });
 
-test("an unreachable upstream or unreadable credential is a local 5xx", async () => {
+test("an unreachable upstream or unreadable credential is a local 502 or 401", async () => {
   await localFailures(await tokenFiles());
 });
 
@@ -941,8 +945,8 @@ test("no log line holds a credential, lease token, query or body", async () => {
     "refused revoked-lease (account-switch) 401",
     "refused revoked-lease (session-ended) 401",
     "refused unreachable (ECONNREFUSED) 502",
-    "refused credential (missing) 503",
-    "refused credential (malformed) 503",
+    "refused credential (missing) 401",
+    "refused credential (malformed) 401",
   ])
     assert.ok(
       logLines.some((line) => line.includes(refusal)),

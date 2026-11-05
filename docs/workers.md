@@ -1196,18 +1196,19 @@ ships in phase 2, on the server's host. Its same-host form:
   over http or https as the pushed base URL says, with the pushed key and never
   a token file.
 - A refusal the gateway answers itself (an unknown or revoked lease, a route the
-  lease does not cover, an unreadable credential, an unreachable upstream, a
-  `/compat` request before the server pushed its endpoint, which gets a 503) has
-  the provider's error shape, and its message starts with "Pandeck gateway:".
-  The server's error classifier never counts a marked message as a dead login
-  (`providerErrors.ts`). An upstream 401 passes through unchanged and still
-  counts until the gateway reports login state itself.
+  lease does not cover, a profile that needs a new login, an unreadable
+  credential, an unreachable upstream, a `/compat` request before the server
+  pushed its endpoint, which gets a 503) has the provider's error shape, and its
+  message starts with "Pandeck gateway:". The server's error classifier never
+  counts a marked message as a dead login (`providerErrors.ts`). An upstream 401
+  passes through unchanged and still counts as today until G5c reads the
+  gateway's login state ("Renewal" below).
 - Remote Workers reach it over TLS from phase 4.
 
-The server drives the gateway over its control channel, **gateway control 1.2**:
+The server drives the gateway over its control channel, **gateway control 1.3**:
 the worker protocol's codec and connection framing under a version of its own,
-`gateway-control/1.2`, so a Worker and a control peer refuse each other; 1.0 and
-1.1 dialers are still admitted, as is any 1.x. Only a control connection grants
+`gateway-control/1.3`, so a Worker and a control peer refuse each other; 1.0 to
+1.2 dialers are still admitted, as is any 1.x. Only a control connection grants
 a lease, and the gateway binds each lease to a profile from its own registry,
 never from the request. Every method is answered once its effect is applied and
 saved, and each connection starts with
@@ -1257,7 +1258,7 @@ and `profiles.remove`). A newer connection's hello ends the older one.
   forgotten 24 hours after its revocation.
 
 Each profile has one **writer lane**: one writer of its token file at a time. An
-item in the lane (a renewal or usage child, from later slices) or a login's
+item in the lane (a renewal, or a usage child from a later slice) or a login's
 hold, in arrival order, each waiting until the one before it has settled,
 whether it succeeded or failed. No item runs while the profile is held.
 
@@ -1414,8 +1415,8 @@ until the gateway runs as its own process.
     marked refusal is thrown as its text, never mapped to a rejected or
     forbidden login.
   - Claude usage sends the lease to `/anthropic`'s usage route; the server reads
-    only `subscriptionType`, and nothing refreshes. Compatible model discovery
-    stays direct (G5).
+    only `subscriptionType`, and only the gateway renews ("Renewal"). Compatible
+    model discovery stays direct (G5).
 - **The server's runtimes pair the compatible key with its origin.** Every pi
   runtime `models.ts` creates for sessions, the default profile's and each
   OpenAI profile's, is guarded per request whatever the switch
@@ -1434,6 +1435,84 @@ until the gateway runs as its own process.
     key with the old origin.
   - The guard compares origins, where the leased port compares exact bases;
     Codex and other providers resolve as before.
+
+### Renewal
+
+With the switch on, the gateway keeps every leased profile's upstream token
+valid by itself (`gateway/renewal.ts`, U8). Engines never refresh: the Claude
+CLI's environment token is never refreshed, and pi uses the lease as a key.
+
+- **Eligibility.** A profile is renewed while it is registered and holds a live
+  lease, whatever its `enabled` flag, so a disabled account's running and
+  background work keeps working. An idle profile renews at its first request.
+- **Cadence.** A 60 s tick renews a token inside its margin: 10 minutes for
+  Claude, 30 for Codex. A request whose token has at most 60 s left waits for
+  the renewal, at most 30 s, then goes on with whatever the file holds; one
+  inside the margin starts a renewal and goes on. Renewals are single-flight per
+  profile and run in its writer lane, so a login hold fences them.
+- **Claude** mirrors CLI 2.1.316: the same JSON refresh to
+  `platform.claude.com/v1/oauth/token`, no redirects, 30 s. It takes the CLI's
+  own locks (`<config dir>/.oauth_refresh.lock`, then `<config dir>.lock`; stale
+  after 60 s, kept alive every 5 s, 5 retries 1–2 s apart, then `lock_busy`) and
+  re-reads under them: a file another writer renewed is `fresh`, with no
+  request. The save is a compare-and-swap: it writes only while the file still
+  holds the refresh token it sent (or an empty one), else adopts the file as it
+  is (`adopted`). It writes a 0600 temp file beside the target, fsyncs it and
+  renames it over it, keeping every other key, and never creates a file or
+  directory, so a deleted profile stays deleted.
+- **Codex** goes through pi 1.5.0's own refresh (`getAuth` with
+  `minOAuthValidityMs`), injected into the gateway as a port
+  (`piSdk/codexRenewal.ts`). Its store takes pi's own `proper-lockfile` lock
+  with pi's options, so pi's engines, the server's runtimes and the gateway
+  serialise and re-check under one lock. It commits only while the lock was not
+  reported lost and the `openai-codex` entry is still the one the refresh
+  started from, keeps every other provider's entry, and replaces the file by an
+  atomic rename.
+- **Outcomes.** A failure (timeout, network, a 5xx, a malformed answer, a busy
+  or lost lock, a conflict) writes nothing, never marks the login dead and backs
+  off from 30 s, doubling to 10 minutes; success or a changed file ends the
+  backoff. A conflict whose re-read shows a new token counts as renewed.
+- **An upstream 401** passes through byte for byte. When the file still holds
+  the token it was sent with, it forces one renewal per profile at most every 5
+  minutes; it never marks a login dead.
+- **Needs login.** A rejected refresh (Claude's `invalid_grant`, Codex's 400
+  or 401) is retried once when the file changed meanwhile, else the profile
+  needs a login until its file changes: the token file is never touched,
+  requests get a 401 with "Pandeck gateway: the account <name> needs a new login
+  (Settings → Accounts)." in the provider's shape, and the gateway sends
+  `profiles.credential {profileId, needsLogin}` (1.3), a gateway → server
+  request answered `{}`, resent on every hello. A missing or malformed file
+  (including the CLI's blanked tokens) is read twice more, 50 ms apart, then
+  gets the same refusal and status until the first good read; an unreadable one
+  gets the credential refusal. The link records the latest status
+  (`credentialStatus`); health ignores it until G5c.
+- **U9.** `claude-default`'s `~/.claude` is renewed like any profile. The user's
+  terminal CLI uses the same locks and compare-and-swap, so the two serialise
+  and adopt each other's tokens.
+- **Interim writers** (until G5b and G5c): a login flow, guarded only by the
+  compare-and-swaps; the server's pi runtimes' catalog refresh, under pi's lock
+  with its re-check; and the user's terminal CLI (U9).
+- **Tests never reach a token host.** The Claude endpoint override is a test
+  seam that only tests and the Bun probe set (`architecture.test.ts` pins every
+  production mention); `startGatewayLinkForTests` points it at a closed loopback
+  port. The test setup refuses `platform.claude.com` and `auth.openai.com` at
+  the name lookup and in `fetch`, and fails the test that asked
+  (`test/tokenHostGuard.ts`).
+- **Known limits.**
+  - A rotation race outside the lock protocol, such as the user's CLI with
+    another `CLAUDE_CONFIG_DIR`, can still end in needs-login.
+  - pi's own in-place `auth.json` write remains for the server's pi runtimes
+    (until G5c), logins (G5b) and switch-off engines; a crash during one can
+    truncate the file, as today.
+  - A renewal whose request succeeded but whose commit is refused (a lost lock,
+    a changed entry, a deleted profile) loses that rotation; a provider that
+    invalidates the old refresh token may then need a login.
+  - pi's Codex token request follows redirects, as pi does today.
+  - pi requires a refreshed Codex token to outlive an explicit minimum, so a
+    forced renewal whose new token lives no longer than the old one's remainder
+    reports a failure; the gateway's re-read still counts it as renewed.
+  - The Claude refresh is an undocumented contract: C17 and the operator's smoke
+    guard it, and a CLI or pi pin bump re-measures it.
 
 ### Engine-version guard
 
@@ -1509,14 +1588,10 @@ CLI still talks only to the gateway.
 - **Known limits.**
   - C13: the CLI reads the profile's `.credentials.json` (and an agent's Bash
     can too), as before.
-  - With the switch on, engines no longer refresh their tokens, and no renewal
-    exists before G5. An expired token gives upstream 401s, classified as today,
-    until a login, a direct CLI child (a switch-off one-shot) or the user's
-    terminal refreshes the file. Named Claude profiles are not renewed with the
-    switch on; an expired token fails engines and usage until re-login (G5).
-  - A missing or unreadable credential (for example `claude-default` never
-    logged in) gets the gateway's 503. The CLI retries it for more than 22
-    seconds instead of failing at once as not logged in (RD-G3a-3; G5 owns it).
+  - With the switch on, engines no longer refresh their tokens; the gateway
+    renews them ("Renewal"), each only while it holds a live lease.
+  - A missing or malformed credential (for example `claude-default` never logged
+    in) gets a marked 401 with the needs-login text; the CLI fails at once.
   - Agent Bash children inherit the lease and the base URL.
   - A native tool that calls another Anthropic endpoint is refused with the
     marker until a later slice allows it with contract evidence.

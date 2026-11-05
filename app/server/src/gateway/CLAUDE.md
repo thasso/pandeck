@@ -11,8 +11,10 @@ Contract: `docs/workers.md` "Credentials" and ADR-0004.
 - State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes
   and paths: a lease's secret only as its hash, never a token, lease token or
   pushed key. The pushed compatible endpoint and key live in memory only.
-- Token files are only read here, never written, renamed or chmodded, until a
-  later slice owns renewal.
+- Only renewal writes token files, in the profile's writer lane: Claude's under
+  the CLI's locks with compare-and-swap and a same-directory rename that never
+  creates a directory, Codex's only through the injected pi port's lock-fenced
+  atomic store.
 - A login hold ends only on its owning boot's release, the observed exit of its
   owner and registered writer (`processState`; uncertain is alive), or the
   operator's force release; never on elapsed time, a lost connection, a restart
@@ -20,7 +22,8 @@ Contract: `docs/workers.md` "Credentials" and ADR-0004.
 - Forward bodies with `pipe` in both directions, never `on("data")` writes that
   ignore `write()`'s result: a paused client must hold the upstream back.
 - No log line or refusal holds a credential, lease token or secret, query or
-  body. Refusal texts hold no peer-supplied string.
+  body. Refusal texts hold no string from a request or upstream; a profile name
+  comes only from the registry.
 - Every local refusal carries `GATEWAY_REFUSAL_MARKER` in the provider's error
   shape, so the classifier never reads it as a dead login.
 - `verifiedEngines.json` changes only with that engine's contract test green and

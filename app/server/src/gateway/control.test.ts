@@ -43,6 +43,7 @@ import {
 } from "../workerProtocol/codec.ts";
 import {
   WorkerConnection,
+  WorkerMethodError,
   WorkerRequestError,
 } from "../workerProtocol/connection.ts";
 import { createInProcessTransport } from "../workerProtocol/inProcessTransport.ts";
@@ -51,12 +52,15 @@ import {
   CONTROL_METHODS,
   GATEWAY_CONTROL_PROTOCOL,
   GATEWAY_CONTROL_VERSION,
+  decodeCredentialStatus,
   decodeLeaseGranted,
   decodeHoldReleased,
   decodeLeaseRevoked,
   decodeLeasesRevoked,
   decodeLoginHeld,
   encodeControlRequest,
+  encodeCredentialStatus,
+  type CredentialStatus,
   type LeaseGrant,
 } from "./controlMethods.ts";
 import {
@@ -683,16 +687,17 @@ async function storedHolds(stateDir: string): Promise<StoredHolds> {
 const settled = () =>
   new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
 
-test("AC1: gateway control 1.2 welcomes 1.0 and 1.1 dialers too, and refuses 2.0", async () => {
-  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.2");
+test("AC1: gateway control 1.3 welcomes 1.0, 1.1 and 1.2 dialers too, and refuses 2.0", async () => {
+  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.3");
   const gw = await gateway();
   for (const version of [
+    "gateway-control/1.3",
     "gateway-control/1.2",
     "gateway-control/1.1",
     "gateway-control/1.0",
   ])
     assert.deepEqual(await rawHandshake(gw, version), [
-      { type: "welcome", version: "gateway-control/1.2" },
+      { type: "welcome", version: "gateway-control/1.3" },
     ]);
   const refused = await rawHandshake(gw, "gateway-control/2.0");
   assert.equal(refused.length, 1);
@@ -994,4 +999,82 @@ test("AC3: compat.set and compat.clear need hello; a malformed push is invalid_p
   } finally {
     await endpoint.close();
   }
+});
+
+test("AC15: profiles.credential decodes only a profile id and a boolean", () => {
+  assert.deepEqual(
+    decodeCredentialStatus(
+      encodeCredentialStatus({ profileId: profileA.id, needsLogin: true }),
+    ),
+    { profileId: profileA.id, needsLogin: true },
+  );
+  for (const json of [
+    { profileId: "a/b", needsLogin: true },
+    { profileId: "", needsLogin: false },
+    { profileId: profileA.id, needsLogin: "true" },
+    { profileId: profileA.id, needsLogin: 1 },
+    { profileId: profileA.id },
+    {},
+  ])
+    assert.throws(
+      () => decodeCredentialStatus({ json }),
+      (err) =>
+        err instanceof WorkerMethodError && err.code === "invalid_params",
+    );
+});
+
+test("AC15: gateway control 1.3 still welcomes a 1.2 dialer", async () => {
+  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.3");
+  const gw = await gateway();
+  assert.deepEqual(await rawHandshake(gw, "gateway-control/1.2"), [
+    { type: "welcome", version: "gateway-control/1.3" },
+  ]);
+});
+
+test("AC15: a needs-login is resent to the connection of a new hello", async () => {
+  const gw = await gateway();
+  const missing: GatewayProfile = {
+    ...profileA,
+    id: "claude-gone",
+    name: "Gone Claude",
+    tokenFile: join(
+      await mkdtemp(join(DATA_DIR, "gateway-gone-")),
+      ".credentials.json",
+    ),
+  };
+  const listen = async (bootId: string) => {
+    const credential: CredentialStatus[] = [];
+    const connection = dialControl(
+      createInProcessTransport(),
+      gw.attachControl,
+      GATEWAY_CONTROL_PROTOCOL,
+      {
+        [CONTROL_METHODS.credential]: (payload: Payload) => {
+          credential.push(decodeCredentialStatus(payload));
+          return Promise.resolve({ json: {} });
+        },
+      },
+    );
+    await hello(connection, bootId);
+    await sync(connection, [profileA, profileB, missing]);
+    return { connection, credential };
+  };
+  const first = await listen("boot-x");
+  const { token } = await grant(first.connection, engine(missing.id));
+  const reply = await forward(gw, missing, token);
+  assert.equal(reply.status, 401);
+  assert.equal(
+    JSON.parse(reply.text).error.message,
+    refusalText({ case: "needs-login", name: missing.name }),
+  );
+  await settled();
+  assert.deepEqual(first.credential, [
+    { profileId: missing.id, needsLogin: true },
+  ]);
+
+  const second = await listen("boot-y");
+  await settled();
+  assert.deepEqual(second.credential, [
+    { profileId: missing.id, needsLogin: true },
+  ]);
 });

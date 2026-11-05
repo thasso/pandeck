@@ -3,7 +3,8 @@
  * (`docs/agent-harnesses.md`): pi's bundled tool binaries, its model provider
  * sync and the notice leased engines and the gateway's compatible push follow
  * it by, each account's model
- * runtime, and the OpenAI account login flow.
+ * runtime, the OpenAI account login flow, and pi's Codex refresh the
+ * credential gateway renews with.
  */
 export {
   compatProviderFeed,
@@ -15,4 +16,5 @@ export {
   syncConfiguredModelProviders,
   warmCredentialProfileModelRuntimes,
 } from "../piSdk/models.ts";
+export { renewCodexCredential } from "../piSdk/codexRenewal.ts";
 export { linkPiToolBinaries } from "../piSdk/toolBinaries.ts";

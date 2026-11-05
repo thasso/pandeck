@@ -55,7 +55,10 @@ Model-provider credentials are separate. Named Claude and OpenAI profiles live
 under `DATA_DIR/credential-profiles/`, while a default Claude login may come
 from the service user's home directory. Moving the four integration secrets
 above does not isolate model credentials. Apply the credential-profile filters
-and preview rules independently.
+and preview rules independently. With the credential gateway on, the gateway
+renews these tokens in place, in the same profile files and formats; no new
+location holds them. The user's own terminal CLI shares `~/.claude` with the
+default profile (`docs/workers.md` "Renewal").
 
 ## Supplying the service environment
 

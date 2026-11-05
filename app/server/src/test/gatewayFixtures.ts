@@ -1,7 +1,8 @@
 /**
  * Fixtures for the credential gateway's control and state tests and the
  * engine contract tests: fake TLS upstreams for `api.anthropic.com` and
- * `chatgpt.com` (minimal Anthropic and Codex streams among their answers), a
+ * `chatgpt.com` (minimal Anthropic and Codex streams among their answers) and
+ * the Claude token endpoint `platform.claude.com`, a
  * fake OpenAI-compatible endpoint, a recording pass-through in front of the
  * gateway's listener, an egress recorder that refuses everything
  * sent through it as a proxy, an egress observer that sees every connection
@@ -178,22 +179,59 @@ export function fakeCodexStream(text: string): UpstreamResponder {
   };
 }
 
+/**
+ * A Claude token endpoint answer: 200 with fresh tokens named by the request
+ * count, so each renewal rotates both tokens. Values are fake.
+ */
+export function rotatingClaudeTokens(
+  prefix = "fake-claude-renewed",
+): UpstreamResponder {
+  let count = 0;
+  return (_seen, res) => {
+    count += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        access_token: `${prefix}-access-${count}`,
+        refresh_token: `${prefix}-refresh-${count}`,
+        expires_in: 28_800,
+        scope: "user:inference user:profile",
+        token_type: "Bearer",
+      }),
+    );
+  };
+}
+
 export interface FakeUpstreams {
   /** Requests each upstream received: "no upstream request" is empty. */
   readonly anthropic: Seen[];
   readonly chatgpt: Seen[];
+  /** Requests the fake `platform.claude.com` token endpoint received. */
+  readonly platform: Seen[];
   /** `startGateway`'s `upstreams` option. */
   readonly overrides: {
     claude: { connect: { host: string; port: number }; ca: string };
     "openai-codex": { connect: { host: string; port: number }; ca: string };
   };
+  /** `startGateway`'s `claudeTokenEndpoint` option. */
+  readonly tokenEndpoint: {
+    connect: { host: string; port: number };
+    ca: string;
+  };
   reset(): void;
   close(): Promise<void>;
 }
 
-/** The fake upstreams; each answers 200 `{"ok":true}` unless given a responder. */
+/**
+ * The fake upstreams; each answers 200 `{"ok":true}` unless given a responder,
+ * and the token endpoint rotating tokens unless given `claudeToken`.
+ */
 export async function startFakeUpstreams(
-  respond: { claude?: UpstreamResponder; codex?: UpstreamResponder } = {},
+  respond: {
+    claude?: UpstreamResponder;
+    codex?: UpstreamResponder;
+    claudeToken?: UpstreamResponder;
+  } = {},
 ): Promise<FakeUpstreams> {
   const ca = await loadOrCreateCa();
   const servers: https.Server[] = [];
@@ -229,6 +267,7 @@ export async function startFakeUpstreams(
   };
   const anthropic: Seen[] = [];
   const chatgpt: Seen[] = [];
+  const platform: Seen[] = [];
   const overrides = {
     claude: await start(
       "api.anthropic.com",
@@ -241,13 +280,21 @@ export async function startFakeUpstreams(
       respond.codex ?? answerOk,
     ),
   };
+  const tokenEndpoint = await start(
+    "platform.claude.com",
+    platform,
+    respond.claudeToken ?? rotatingClaudeTokens(),
+  );
   return {
     anthropic,
     chatgpt,
+    platform,
     overrides,
+    tokenEndpoint,
     reset() {
       anthropic.length = 0;
       chatgpt.length = 0;
+      platform.length = 0;
       for (const server of servers) server.closeAllConnections();
     },
     async close() {

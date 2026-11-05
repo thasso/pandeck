@@ -1,8 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { afterAll, afterEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, onTestFinished, vi } from "vitest";
 import { failOnStateTopicInvariantsForTests } from "../stateTopicKernel.ts";
+import {
+  installTokenHostGuard,
+  takeTokenHostAttempts,
+} from "./tokenHostGuard.ts";
 
 // Bun's os.homedir() keeps the HOME the run was launched with, whatever a test
 // sets later, and SDK code the tests reach resolves home through it. A Bun run
@@ -62,11 +66,22 @@ writeFileSync(
 );
 process.env.ASSISTANT_CONFIG = fixtureConfig;
 
+// No test reaches a real OAuth token host: the lookup is refused, and the test
+// whose renewal or refresh tried it fails (`tokenHostGuard.ts`).
+installTokenHostGuard();
+function failOnTokenHostAttempts(): void {
+  const hosts = takeTokenHostAttempts();
+  if (hosts.length)
+    throw new Error(`a real token host was asked for: ${hosts.join(", ")}`);
+}
+beforeEach(() => onTestFinished(failOnTokenHostAttempts));
+
 // A missed reporter fails the test that caused it, whatever catch converted
 // the throw on its way out: the violation was recorded where it was found, in
 // a ledger every kernel instance of this worker shares (`stateTopicKernel.ts`).
 afterEach(() => failOnStateTopicInvariantsForTests());
 
 afterAll(() => {
+  failOnTokenHostAttempts();
   rmSync(testCwd, { recursive: true, force: true });
 });

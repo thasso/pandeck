@@ -1,5 +1,5 @@
 /**
- * Gateway control 1.2: the methods the server and the credential gateway send
+ * Gateway control 1.3: the methods the server and the credential gateway send
  * each other over the worker protocol's codec and `WorkerConnection` framing,
  * under a version of its own (`docs/workers.md` "Credentials"). Its handshake
  * refuses a Worker, and a Worker refuses it; any 1.x peer is admitted.
@@ -32,7 +32,9 @@
  *   held pair. `compat.clear {}` drops it, and so does every hello.
  *
  * Gateway → server: `profiles.status {profileId, loginStuck, holdId}` reports
- * a hold that became login-stuck or a stuck one that ended, answered `{}`.
+ * a hold that became login-stuck or a stuck one that ended, and (1.3)
+ * `profiles.credential {profileId, needsLogin}` a profile whose login renewal
+ * found dead or absent, or alive again; each is answered `{}`.
  */
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -47,7 +49,7 @@ import { isProfileId, parseProfile, type GatewayProfile } from "./profiles.ts";
 import type { RevokeReason } from "./refusals.ts";
 import { isOwnerId } from "./state.ts";
 
-export const GATEWAY_CONTROL_VERSION = "gateway-control/1.2";
+export const GATEWAY_CONTROL_VERSION = "gateway-control/1.3";
 
 const CONTROL_VERSION_RE =
   /^gateway-control\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -75,6 +77,7 @@ export const CONTROL_METHODS = {
   compatClear: "compat.clear",
   /** Gateway → server. */
   status: "profiles.status",
+  credential: "profiles.credential",
 } as const;
 
 /** A method other than `control.hello` came before it. */
@@ -349,6 +352,26 @@ export function decodeHoldStatus(payload: Payload): HoldStatus {
   return { profileId, loginStuck, holdId };
 }
 
+/** A profile's needs-login, as renewal reports it (`renewal.ts`). */
+export interface CredentialStatus {
+  profileId: string;
+  needsLogin: boolean;
+}
+
+export function encodeCredentialStatus(status: CredentialStatus): Payload {
+  return {
+    json: { profileId: status.profileId, needsLogin: status.needsLogin },
+  };
+}
+
+/** The server side of `profiles.credential`. */
+export function decodeCredentialStatus(payload: Payload): CredentialStatus {
+  const { profileId, needsLogin } = json(payload);
+  if (!isProfileId(profileId)) invalid("profile id");
+  if (typeof needsLogin !== "boolean") invalid("needs-login flag");
+  return { profileId, needsLogin };
+}
+
 export function encodeLeasesRevoked(revoked: string[]): Payload {
   return { json: { revoked } };
 }
@@ -381,7 +404,10 @@ export function decodeLeaseRevoked(payload: Payload): boolean {
   return answer.revoked;
 }
 
-/** What `leases.bindSession`, `profiles.loginWriter` and `profiles.status` answer. */
+/**
+ * What `leases.bindSession`, `profiles.loginWriter`, `profiles.status` and
+ * `profiles.credential` answer.
+ */
 export function encodeControlDone(): Payload {
   return { json: {} };
 }

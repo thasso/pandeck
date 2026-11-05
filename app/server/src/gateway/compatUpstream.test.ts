@@ -657,6 +657,7 @@ test("AC12: no refusal text reads as a dead login or carries a retryable status 
     { case: "unknown-prefix" },
     { case: "websocket" },
     { case: "credential", problem: "missing" },
+    { case: "needs-login", name: "Work ChatGPT" },
     { case: "compat-unset" },
     {
       case: "unreachable",
