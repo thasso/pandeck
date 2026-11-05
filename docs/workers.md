@@ -1412,7 +1412,10 @@ until the gateway runs as its own process.
       could let a login complete without the pasted code: the flow pins
       `BROWSER=false`, but what the CLI's opener reads first is not determined.
       Renewal stays fenced by the hold; an owner that dies before naming its
-      writer leaves the hold stuck until Clear.
+      writer leaves the hold stuck until Clear. The Claude engine contract runs
+      the real login offline with no input: only `BROWSER`'s value gets the
+      login URL, no localhost callback is printed, a `browser` key in
+      `settings.json` or `.claude.json` changes neither, and SIGTERM ends it.
 - **Claude engines use the lease.** The grant answers the lease token, and the
   open sends it with the gateway's URL as `engine.open`'s `gateway`. A link with
   no running gateway refuses the open before any grant. The Claude factory

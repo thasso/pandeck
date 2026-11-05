@@ -11,16 +11,25 @@
  * (`scripts/run-engine-contract.mjs`). Anywhere else the describe is skipped:
  * its callback only declares hooks and tests, so nothing here runs, and this
  * module's top level holds only constants.
+ *
+ * The second describe is the login flow's offline evidence (AC13): the real
+ * `claude auth login`, never given input, with nscd masked.
  */
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
+import { connect } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { afterAll, beforeAll, describe, test } from "vitest";
@@ -727,5 +736,393 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       }
     },
     CASE_MS * 2,
+  );
+});
+
+/** How long a login run may take to print its prompt or open its URL. */
+const LOGIN_PROMPT_MS = 20_000;
+/** How long a login run is watched after it did, for anything printed later. */
+const LOGIN_SETTLE_MS = 1_500;
+/** The login flow's SIGKILL bound after SIGTERM (`claudeLoginTerminal.ts`). */
+const LOGIN_KILL_AFTER_MS = 5_000;
+/** A localhost callback, written out or URL-encoded. */
+const LOCAL_CALLBACK =
+  /(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/[^\s"'&]*)?callback/i;
+
+/** One opener invocation a stub recorded. */
+interface Opened {
+  opener: string;
+  argv: string[];
+}
+
+/** What one offline login run showed (AC13). */
+interface LoginRun {
+  label: string;
+  /** The child's executable once the wrappers exec'd into it. */
+  exe: string;
+  opened: Opened[];
+  output: string;
+  /** Printed a URL or invoked an opener before it ended. */
+  observable: boolean;
+  /** Exit timing after SIGTERM, or why there is none (case (d)). */
+  sigterm:
+    | { exitedWithinMs: number }
+    | "needed SIGKILL"
+    | "not observable: exited before the signal";
+  exit: { code: number | null; signal: NodeJS.Signals | null };
+}
+
+const decoded = (text: string) => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+};
+const hasLocalCallback = (text: string) =>
+  LOCAL_CALLBACK.test(text) || LOCAL_CALLBACK.test(decoded(text));
+
+/** A URL's origin, path and redirect target, without its one-time values. */
+function urlShape(text: string): string {
+  try {
+    const url = new URL(text);
+    const redirect = url.searchParams.get("redirect_uri");
+    return `${url.origin}${url.pathname}${redirect ? ` redirect_uri=${redirect}` : ""}`;
+  } catch {
+    return "(not a URL)";
+  }
+}
+
+/**
+ * What a run showed, with no one-time values and bounded: the test's
+ * annotation, which the reporter prints when it fails, and a line in
+ * `PANDECK_LOGIN_CONTRACT_EVIDENCE` when that names a file.
+ */
+function evidence(run: LoginRun): string {
+  const line = JSON.stringify({
+    label: run.label,
+    exe: run.exe ? "claude" : "(never seen)",
+    observable: run.observable,
+    opened: run.opened.map(({ opener, argv }) => ({
+      opener,
+      argv: argv.map(urlShape),
+      localCallback: argv.some(hasLocalCallback),
+    })),
+    printedUrls: [...run.output.matchAll(/https?:\/\/\S+/g)].map(([url]) =>
+      urlShape(url),
+    ),
+    printedLocalCallback: hasLocalCallback(run.output),
+    sigterm: run.sigterm,
+    exit: run.exit,
+    outputTail: run.output
+      .replace(/https?:\/\/\S+/g, (url) => urlShape(url))
+      .slice(-1_500),
+  });
+  const file = process.env.PANDECK_LOGIN_CONTRACT_EVIDENCE;
+  if (file) appendFileSync(file, `${line}\n`);
+  return line;
+}
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+
+/**
+ * AC13 (Task-1367, `docs/workers.md` "Login holds"): the login flow's real
+ * `claude auth login` with the flow's environment, offline and never given
+ * input. It records which opener receives the login URL, whether a localhost
+ * callback URL is printed, whether a `browser` key in the config directory
+ * reroutes the opener, and how the CLI takes SIGTERM. Offline evidence only:
+ * no run here proves a code exchange impossible.
+ */
+describe.runIf(ENABLED)("the Claude login CLI offline (AC13)", () => {
+  let login: Awaited<ReturnType<typeof setUpLogin>>;
+  const children = new Set<ChildProcess>();
+
+  async function setUpLogin() {
+    // 1. No route: loopback alone, no IPv4 route, IPv6 routes only on lo, and
+    // a connect to a documentation address fails at once.
+    assert.deepEqual(Object.keys(networkInterfaces()), ["lo"]);
+    assert.deepEqual(
+      readFileSync("/proc/net/route", "utf8").trim().split("\n").slice(1),
+      [],
+      "no IPv4 route",
+    );
+    for (const line of readFileSync("/proc/net/ipv6_route", "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean))
+      assert.match(line, /\slo$/, "IPv6 routes only on loopback");
+    const unreachable = await new Promise<string>((done) => {
+      const socket = connect({ host: "192.0.2.1", port: 9, timeout: 5_000 });
+      socket.once("connect", () => {
+        socket.destroy();
+        done("connected");
+      });
+      socket.once("timeout", () => {
+        socket.destroy();
+        done("timeout");
+      });
+      socket.once("error", (error: NodeJS.ErrnoException) =>
+        done(error.code ?? String(error)),
+      );
+    });
+    assert.equal(unreachable, "ENETUNREACH", "no route leaves the namespace");
+    assert.notEqual(process.getuid?.(), 0);
+
+    // 2. A throwaway home and data dir, and nothing that names a real one.
+    const root = mkdtempSync(join(tmpdir(), "login-contract-"));
+    const home = join(root, "home");
+    mkdirSync(home);
+    process.env.HOME = home;
+    process.env.DATA_DIR = join(root, "data");
+    for (const key of Object.keys(process.env))
+      if (
+        key.startsWith("XDG_") ||
+        key.startsWith("ANTHROPIC_") ||
+        /^(?:https?|no)_proxy$/i.test(key)
+      )
+        delete process.env[key];
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const { userHomeDir } = await import("../userHome.ts");
+    const { DATA_DIR } = await import("../config.ts");
+    assert.ok(under(userHomeDir(), tmpdir()), userHomeDir());
+    assert.ok(under(DATA_DIR, tmpdir()), DATA_DIR);
+    const profiles = await import("../credentialProfiles.ts");
+    const { CLAUDE_LOGIN_ARGS, claudeLoginEnvironment } =
+      await import("../claudeLoginTerminal.ts");
+
+    // 3. The repo-installed CLI the SDK bundles, at the locked version.
+    const sdkRequire = createRequire(
+      createRequire(import.meta.url).resolve(SDK),
+    );
+    const cli = join(
+      resolve(
+        sdkRequire.resolve(
+          `${SDK}-${process.platform}-${process.arch}/package.json`,
+        ),
+        "..",
+      ),
+      "claude",
+    );
+    const version = JSON.parse(
+      readFileSync(resolve(cli, "..", "package.json"), "utf8"),
+    ) as { version: string };
+    assert.equal(version.version, "0.3.316");
+
+    // 4. Recording stubs: `false` (the flow's BROWSER), `xdg-open`, and a
+    // third that only a config key could name. Each exits nonzero, as `false`.
+    const stubs = join(root, "stubs");
+    mkdirSync(stubs);
+    const record = join(root, "opened.tsv");
+    writeFileSync(record, "");
+    const stub = (name: string) => {
+      const path = join(stubs, name);
+      writeFileSync(
+        path,
+        `#!/bin/sh\n{ printf '%s' ${shellQuote(name)}; for a in "$@"; do printf '\\t%s' "$a"; done; printf '\\n'; } >> ${shellQuote(record)}\nexit 1\n`,
+      );
+      chmodSync(path, 0o755);
+      return path;
+    };
+    stub("false");
+    stub("xdg-open");
+    const configBrowser = stub("config-browser");
+
+    // 5. nscd answers lookups for any network namespace, so each run masks
+    // it in its own mount namespace, proves it gone, then drops to this uid.
+    const unshare = process.env.UNSHARE || "unshare";
+    const uid = process.getuid!();
+    const gid = process.getgid!();
+    const masked = [
+      "if [ -d /run/nscd ]; then mount -t tmpfs tmpfs /run/nscd || exit 97; fi",
+      "if [ -e /var/run/nscd/socket ]; then mount -t tmpfs tmpfs /var/run/nscd || exit 97; fi",
+      "if [ -e /run/nscd/socket ] || [ -e /var/run/nscd/socket ]; then exit 98; fi",
+      `exec ${shellQuote(unshare)} --user --map-user=${uid} --map-group=${gid} -- "$@"`,
+    ].join("\n");
+
+    return {
+      profiles,
+      cli,
+      record,
+      stubs,
+      configBrowser,
+      /** One login, as the flow starts it, observed and then sent SIGTERM. */
+      async run(
+        label: string,
+        configure?: (configDir: string) => void,
+      ): Promise<LoginRun> {
+        const profile = profiles.createCredentialProfile({
+          name: `Login contract ${label}`,
+          provider: "claude",
+        });
+        const configDir = profiles.claudeConfigDir(profile.id);
+        mkdirSync(configDir, { recursive: true });
+        configure?.(configDir);
+        const env = claudeLoginEnvironment(profile.id);
+        assert.equal(env.BROWSER, "false");
+        assert.equal(env.NO_COLOR, "1");
+        assert.equal(env.CLAUDE_CONFIG_DIR, configDir);
+        for (const key of ["HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"])
+          if (env[key])
+            assert.ok(
+              resolve(env[key]) === resolve(tmpdir()) ||
+                under(env[key], tmpdir()),
+              `${key} is a temp path`,
+            );
+        env.PATH = `${stubs}:${env.PATH ?? ""}`;
+        writeFileSync(record, "");
+
+        const child = spawn(
+          unshare,
+          [
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "--",
+            "sh",
+            "-c",
+            masked,
+            "sh",
+            cli,
+            ...CLAUDE_LOGIN_ARGS,
+          ],
+          { env, stdio: ["pipe", "pipe", "pipe"] },
+        );
+        children.add(child);
+        let output = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => (output += chunk));
+        child.stderr.on("data", (chunk: string) => (output += chunk));
+        const exited = new Promise<LoginRun["exit"]>((done) =>
+          child.once("exit", (code, signal) => done({ code, signal })),
+        );
+        let exit: LoginRun["exit"] | undefined;
+        void exited.then((value) => (exit = value));
+        const opened = (): Opened[] =>
+          readFileSync(record, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => {
+              const [opener = "", ...argv] = line.split("\t");
+              return { opener, argv };
+            });
+        const sleep = (ms: number) =>
+          new Promise((done) => setTimeout(done, ms));
+
+        // The wrappers exec, so the child's pid becomes the CLI's.
+        let exe = "";
+        const readExe = () => {
+          if (exe) return;
+          try {
+            const path = readlinkSync(`/proc/${child.pid}/exe`);
+            if (path.endsWith("/claude")) exe = path;
+          } catch {
+            // Not exec'd yet, or gone.
+          }
+        };
+        // Never any input: stdin stays open and unwritten, as in the flow.
+        const started = Date.now();
+        while (!exit && Date.now() - started < LOGIN_PROMPT_MS) {
+          readExe();
+          if (opened().length > 0 || /https:\/\//.test(output)) break;
+          await sleep(100);
+        }
+        readExe();
+        const observable = opened().length > 0 || /https:\/\//.test(output);
+        if (observable && !exit) await sleep(LOGIN_SETTLE_MS);
+
+        let sigterm: LoginRun["sigterm"];
+        if (exit) sigterm = "not observable: exited before the signal";
+        else {
+          const signalled = Date.now();
+          child.kill("SIGTERM");
+          const ended = await Promise.race([
+            exited.then(() => true),
+            sleep(LOGIN_KILL_AFTER_MS).then(() => false),
+          ]);
+          if (ended) sigterm = { exitedWithinMs: Date.now() - signalled };
+          else {
+            sigterm = "needed SIGKILL";
+            child.kill("SIGKILL");
+          }
+        }
+        const final = await exited;
+        child.stdin.destroy();
+        children.delete(child);
+        profiles.deleteCredentialProfile(profile.id);
+        return {
+          label,
+          exe,
+          opened: opened(),
+          output,
+          observable,
+          sigterm,
+          exit: final,
+        };
+      },
+    };
+  }
+
+  beforeAll(async () => {
+    login = await setUpLogin();
+  }, CASE_MS);
+
+  afterAll(() => {
+    for (const child of children) child.kill("SIGKILL");
+  });
+
+  /** Fails, naming what it saw, when the run ended before (a)-(c) could. */
+  function assertObservable(run: LoginRun): void {
+    assert.ok(
+      run.observable,
+      `AC13 not observable (${run.label}): the CLI exited ${JSON.stringify(run.exit)} before printing its prompt or invoking an opener: ${run.output.slice(-800)}`,
+    );
+  }
+
+  test(
+    "(a), (b), (d): only the flow's BROWSER opens the login, no callback URL is printed, SIGTERM recorded",
+    async ({ annotate }) => {
+      const run = await login.run("base");
+      await annotate(evidence(run), "AC13 base");
+      assertObservable(run);
+      assert.equal(run.exe.endsWith("/claude"), true, "the CLI itself ran");
+      // (a) Opener routing.
+      assert.deepEqual(
+        run.opened.filter(({ opener }) => opener !== "false"),
+        [],
+        "R1: an opener other than BROWSER's value was invoked",
+      );
+      // (b) The manual URL is printed; no localhost callback is.
+      assert.match(run.output, /https:\/\//, "the manual URL is printed");
+      assert.equal(
+        hasLocalCallback(run.output),
+        false,
+        "R1: a localhost callback URL was printed",
+      );
+      // (d) Recorded in the annotation; R1 if it needed SIGKILL.
+    },
+    CASE_MS,
+  );
+
+  test.for(["settings.json", ".claude.json"])(
+    "(c): a browser key in %s leaves the opener as the flow's BROWSER",
+    { timeout: CASE_MS },
+    async (file, { annotate }) => {
+      const run = await login.run(`config ${file}`, (configDir) =>
+        writeFileSync(
+          join(configDir, file),
+          JSON.stringify({ browser: login.configBrowser }),
+        ),
+      );
+      await annotate(evidence(run), `AC13 config ${file}`);
+      assertObservable(run);
+      assert.deepEqual(
+        run.opened.filter(({ opener }) => opener !== "false"),
+        [],
+        `R1: a browser key in ${file} rerouted the opener`,
+      );
+      assert.equal(hasLocalCallback(run.output), false);
+    },
   );
 });

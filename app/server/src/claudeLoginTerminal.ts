@@ -140,8 +140,13 @@ export function bundledClaudeCliPath(): string {
   }
 }
 
+/** The login child's arguments: the official CLI's subscription login. */
+export const CLAUDE_LOGIN_ARGS = ["auth", "login", "--claudeai"];
+
 /** Minimal child environment: login never needs the server's integration tokens or app secret. */
-function claudeLoginEnvironment(profileId: string): Record<string, string> {
+export function claudeLoginEnvironment(
+  profileId: string,
+): Record<string, string> {
   const source = claudeProfileEnvironment(profileId);
   const allowed = new Set([
     "PATH",
@@ -302,14 +307,10 @@ function begin(run: LoginRun, taken: LoginHoldTaken): void {
   }
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = spawnClaudeLogin(
-      bundledClaudeCliPath(),
-      ["auth", "login", "--claudeai"],
-      {
-        env: claudeLoginEnvironment(run.profileId),
-        windowsHide: true,
-      },
-    );
+    child = spawnClaudeLogin(bundledClaudeCliPath(), [...CLAUDE_LOGIN_ARGS], {
+      env: claudeLoginEnvironment(run.profileId),
+      windowsHide: true,
+    });
   } catch (error) {
     run.closed = true;
     run.hold?.release();
