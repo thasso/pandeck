@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  accountProviderForModelProvider,
+  accountKindForModelProvider,
   CLAUDE_SDK_PROVIDER,
 } from "@assistant/shared";
 
@@ -88,6 +88,23 @@ test("the slot registry covers every configured model slot in settings", () => {
       `slot ${ref.key} is fully described`,
     );
   }
+});
+
+test("an enterprise helper on an enterprise endpoint resolves without degradation", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Enterprise endpoint",
+    provider: "openai-compatible",
+  });
+  patchCredentialProfile(endpoint.id, { enterprise: true });
+  const slot = {
+    provider: endpoint.id,
+    modelId: "llama3",
+    thinkingLevel: "off" as const,
+    requiresEnterprise: true,
+  };
+  assert.deepEqual(await resolveSlotAccount(slot), { profileId: endpoint.id });
+  assert.equal(await accountForSlot(slot), endpoint.id);
+  assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
 });
 
 test("an unpinned slot delegates model and effort to the router", async () => {
@@ -278,7 +295,7 @@ test("existing slot pins survive reads and unrelated writes until saved as Autom
   const pinned = getSettings();
   for (const { slot } of listSettingsModelSlots(pinned))
     slot.credentialProfileId =
-      accountProviderForModelProvider(slot.provider) === "claude"
+      accountKindForModelProvider(slot.provider) === "claude"
         ? claude.id
         : openai.id;
   updateSettings(pinned);

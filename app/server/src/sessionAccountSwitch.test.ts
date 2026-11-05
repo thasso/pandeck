@@ -265,6 +265,29 @@ test("a pi run using an unrelated provider neither benches nor switches its boun
   assert.equal(health.readAccountBench(a, "gpt-5.5"), undefined);
 });
 
+test("an endpoint session never moves: no failover, and disabled refuses", async () => {
+  const endpoint = profiles.createCredentialProfile({
+    name: "Team LLM",
+    provider: "openai-compatible",
+  });
+  created.push(endpoint.id);
+  offers.set(endpoint.id, { provider: endpoint.id, id: "llama3" });
+  account("pi", "B");
+  const failing = setup("pi", endpoint.id, [{ kind: "quota" }]);
+  await failing.send().catch(() => {});
+  assert.deepEqual(failing.moves, []);
+  assert.equal(health.readAccountBench(endpoint.id, "llama3"), undefined);
+  const s = setup("pi", endpoint.id, [undefined]);
+  profiles.setCredentialProfileEnabled(endpoint.id, false);
+  await assert.rejects(
+    s.send(),
+    /Team LLM is disabled and no other eligible account is available\. Enable it to continue this session\./,
+  );
+  assert.deepEqual(s.moves, []);
+  assert.equal(s.calls.length, 0);
+  assert.equal(sessionStore.get(s.id)?.credentialProfileId, endpoint.id);
+});
+
 const engines = ["pi", "claude-sdk"] as const;
 for (const harness of engines) {
   test.each([false, true])(

@@ -27,13 +27,6 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "accountRouting.weeklyUsedThreshold",
   // claude-sdk
   "claudeSdk.enabled",
-  // openai-compatible
-  "openAiCompatible.enabled",
-  "openAiCompatible.name",
-  "openAiCompatible.baseUrl",
-  "openAiCompatible.thinkingFormat",
-  "openAiCompatible.apiKey",
-  "openAiCompatible.models",
   // personal-assistant
   "permanentAssistant.name",
   "permanentAssistant.provider",

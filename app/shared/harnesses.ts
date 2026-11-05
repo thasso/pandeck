@@ -1,8 +1,8 @@
 /**
  * The harness table (`docs/agent-harnesses.md`): for each engine that runs a
- * session, which account kind signs it in, which model-picker provider it
- * owns, and what it can do. Server and web read these instead of
- * repeating the mapping between the three names a harness goes by.
+ * session, which model-picker provider it owns and what it can do. Which
+ * account may run a model is decided per model (`accountKinds.ts`), not per
+ * harness.
  */
 import {
   compactionWindowRange,
@@ -11,10 +11,7 @@ import {
   type SpawnCompactionWindowRequest,
   type CompactionWindowEstimate,
 } from "./compactionWindow.ts";
-import type {
-  BackgroundWorkBackend,
-  CredentialProfileProvider,
-} from "./protocol.ts";
+import type { BackgroundWorkBackend } from "./protocol.ts";
 
 /**
  * Which engine actually runs a session. Persisted on the session row and fixed
@@ -27,13 +24,16 @@ export const CLAUDE_SDK_PROVIDER = "claude-sdk";
 
 export interface HarnessDescriptor {
   readonly id: Harness;
-  /** The credential-profile kind a session on this harness signs in with. */
-  readonly accountProvider: CredentialProfileProvider;
   /**
    * The one picker provider every model of this harness carries, when there is
    * one. pi models keep their upstream provider (`github-copilot`, …).
    */
   readonly modelProvider?: string;
+  /** Curated creation default; other harnesses use the configured helper model. */
+  readonly defaultModel?: {
+    readonly provider: string;
+    readonly modelId: string;
+  };
   /**
    * Which background-work backends a session on this harness may own, as a
    * capability rather than an engine name. Claude background work executes
@@ -58,7 +58,6 @@ export interface HarnessDescriptor {
 export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
   pi: {
     id: "pi",
-    accountProvider: "openai-codex",
     backgroundWorkBackends: ["host-process", "server-task"],
     compactionWindow: {
       mapping: "reserve",
@@ -68,8 +67,8 @@ export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
   },
   "claude-sdk": {
     id: "claude-sdk",
-    accountProvider: "claude",
     modelProvider: CLAUDE_SDK_PROVIDER,
+    defaultModel: { provider: CLAUDE_SDK_PROVIDER, modelId: "sonnet" },
     backgroundWorkBackends: ["claude-query", "server-task"],
     // The CLI's `autoCompactWindow` schema and env clamp.
     compactionWindow: { mapping: "window", min: 100_000, max: 1_000_000 },
@@ -117,22 +116,6 @@ export function isHarness(value: string): value is Harness {
 /** The harness that runs a model of this picker provider. */
 export function harnessForModelProvider(provider: string | undefined): Harness {
   return provider === CLAUDE_SDK_PROVIDER ? "claude-sdk" : "pi";
-}
-
-/** The harness a credential profile of this kind signs in to. */
-export function harnessForAccountProvider(
-  provider: CredentialProfileProvider,
-): Harness {
-  return provider === HARNESSES["claude-sdk"].accountProvider
-    ? "claude-sdk"
-    : "pi";
-}
-
-/** The credential-profile kind that can run a model of this picker provider. */
-export function accountProviderForModelProvider(
-  provider: string,
-): CredentialProfileProvider {
-  return HARNESSES[harnessForModelProvider(provider)].accountProvider;
 }
 
 export function backgroundWorkBackendsForHarness(

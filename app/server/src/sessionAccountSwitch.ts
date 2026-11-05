@@ -1,3 +1,4 @@
+import { isSubscriptionAccountKind } from "@assistant/shared";
 import { isSubscriptionAccountModel } from "@assistant/shared/accountHealth";
 import { pickAccount } from "./accountRouter.ts";
 import { formatLocalDateTime } from "./googleTime.ts";
@@ -91,6 +92,17 @@ export async function moveOffDisabledAccount(
     ? credentialProfileById(driver.credentialProfileId)
     : undefined;
   const selected = driver.modelSelection?.();
+  // An account that is no subscription login serves its models alone, so a
+  // turn on it while disabled has nowhere to move: it is refused.
+  if (
+    source &&
+    !source.enabled &&
+    !driver.isRunning &&
+    !isSubscriptionAccountKind(source.provider)
+  )
+    throw new Error(
+      `${source.name} is disabled and no other eligible account is available. Enable it to continue this session.`,
+    );
   if (
     !source ||
     source.enabled ||

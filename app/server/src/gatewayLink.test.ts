@@ -27,7 +27,9 @@ const profiles = await import("./credentialProfiles.ts");
 const config = await import("./config.ts");
 const { DEFAULT_WORKER_ID } = await import("./workers/placement.ts");
 const {
+  GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT,
   GATEWAY_LOGIN_UNAVAILABLE_TEXT,
+  GatewayAccountKindUnsupportedError,
   GATEWAY_UNAVAILABLE_TEXT,
   LoginHeldError,
   installedGatewayLink,
@@ -62,7 +64,7 @@ const { analyzeProviderError, isLoginDeath, runFailureFacts } =
 type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 type GatewayLinkOptions = import("./gatewayLink.ts").GatewayLinkOptions;
 type GatewayOptions = import("./gateway/gateway.ts").GatewayOptions;
-type GatewayCompatSource = import("./gatewayLink.ts").GatewayCompatSource;
+type GatewayCompatSource = NonNullable<GatewayLinkOptions["compat"]>;
 
 // Synthetic fixture values; none is a real credential.
 const FAKE_ACCESS = "fake-codex-access";
@@ -886,6 +888,69 @@ test("AC4: a server lease is granted once per profile per boot, and never withou
   } finally {
     profiles.deleteCredentialProfile(a);
     profiles.deleteCredentialProfile(b);
+  }
+});
+
+test("until the gateway serves compatible accounts, one is refused before any lease, never synced, and is no dead login", async () => {
+  const compatible = profiles.createCredentialProfile({
+    provider: "openai-compatible",
+    name: "Link compatible",
+  }).id;
+  profiles.patchOpenAiCompatibleEndpoint(compatible, {
+    baseUrl: "http://compat-link.test/v1",
+    apiKey: COMPAT_KEY_B,
+  });
+  const codex = codexProfile("Link beside");
+  const dir = stateDir();
+  try {
+    const booted = link({ stateDir: dir });
+    assert.equal(await booted.ready, true);
+    profiles.renameCredentialProfile(compatible, "Link compatible renamed");
+    // A request made after the rename is answered after it: one queue.
+    await booted.revokeLease("0".repeat(22), "session-ended");
+    const synced = (registry(dir) as { id: string }[]).map((p) => p.id);
+    assert.ok(synced.includes(codex));
+    assert.ok(!synced.includes(compatible), "the boot and the change skip it");
+    assert.ok(
+      !readFileSync(join(dir, "profiles.json"), "utf8").includes(COMPAT_KEY_B),
+    );
+
+    const leases = booted.gateway!.leases.records().length;
+    const logged = lines.length;
+    for (const refused of [
+      booted.grantEngineLease({
+        workerId: "local",
+        sessionId: "s-compatible",
+        profileId: compatible,
+      }),
+      serverGatewayAccess(compatible),
+    ])
+      await assert.rejects(refused, (err: unknown) => {
+        assert.ok(err instanceof GatewayAccountKindUnsupportedError);
+        assert.equal(err.message, GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT);
+        return true;
+      });
+    assert.equal(booted.gateway!.leases.records().length, leases, "no lease");
+    assert.deepEqual(lines.slice(logged), [], "no control request");
+
+    assert.equal(
+      isLoginDeath(GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT, {
+        provider: compatible,
+      }),
+      false,
+    );
+    assert.equal(
+      runFailureFacts(
+        analyzeProviderError(GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT, {
+          provider: compatible,
+        }),
+      ).loginDeath,
+      undefined,
+    );
+    assert.ok(lines.every((line) => !line.includes(COMPAT_KEY_B)));
+  } finally {
+    profiles.deleteCredentialProfile(compatible);
+    profiles.deleteCredentialProfile(codex);
   }
 });
 

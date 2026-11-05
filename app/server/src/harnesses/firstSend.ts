@@ -11,7 +11,6 @@
 import {
   harnessForModelProvider,
   type ClientMessage,
-  type CredentialProfileProvider,
   type Harness,
   type TaskSessionRef,
   type ThinkingLevel,
@@ -232,7 +231,6 @@ type AccountAdmission = { refusal: FirstSendRefusal } | { profileId: string };
 
 async function firstSendAccount(
   req: FirstSendRequest,
-  provider: CredentialProfileProvider,
 ): Promise<AccountAdmission> {
   try {
     // A named definition without a picked runtime fixes its default model and
@@ -252,7 +250,7 @@ async function firstSendAccount(
     if (harnessRefusal) return { refusal: harnessRefusal };
     return {
       profileId: await resolveSessionAccount(
-        provider,
+        req.harness,
         agent
           ? {
               ...req,
@@ -311,7 +309,7 @@ const engines: Record<Harness, FirstSendEngine> = {
     personaGate: "available",
     disabled: () => false,
     admitId: () => undefined,
-    account: (req) => firstSendAccount(req, "openai-codex"),
+    account: (req) => firstSendAccount(req),
     async prepare(req, profileId) {
       const started = await firstSendAgent(req, profileId);
       if ("refusal" in started) return started;
@@ -374,7 +372,7 @@ const engines: Record<Harness, FirstSendEngine> = {
     disabled: () => !getSettings().claudeSdk.enabled,
     // Before anything is written for the client-supplied id.
     admitId: (req) => claudeOwnershipRefusal(req.id),
-    account: (req) => firstSendAccount(req, "claude"),
+    account: (req) => firstSendAccount(req),
     async prepare(req, profileId) {
       const started = await firstSendAgent(req, profileId);
       if ("refusal" in started) return started;

@@ -28,7 +28,6 @@ import {
 import {
   BACKGROUND_WORK_SETTINGS_RANGES,
   MAX_WORKTREE_REMOTE_FETCH_MINUTES,
-  OPENAI_COMPATIBLE_THINKING_FORMATS,
   SPEECH_TO_TEXT_LIMITS,
   SPEECH_CONVERSATION_LIMITS,
 } from "./protocol.ts";
@@ -125,6 +124,8 @@ export const SETTINGS_OUTSIDE_REGISTRY: Partial<
     "Claude accounts are credential profiles: list and manage them with accounts_read and accounts_update, sign them in with accounts_sign_in.",
   openai:
     "OpenAI accounts are credential profiles: list and manage them with accounts_read and accounts_update, sign them in with accounts_sign_in.",
+  "openai-compatible":
+    "OpenAI-compatible accounts are credential profiles, each with its own endpoint; the user sets and tests an endpoint on its account, never in settings.",
   memory:
     "Memory cards themselves are managed with the memory tools, not settings.",
   agents:
@@ -333,35 +334,6 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     },
   ),
   setting("claudeSdk.enabled", "claude-sdk", "Claude SDK harness", BOOLEAN),
-  setting(
-    "openAiCompatible.enabled",
-    "openai-compatible",
-    "OpenAI-compatible provider",
-    BOOLEAN,
-  ),
-  setting(
-    "openAiCompatible.name",
-    "openai-compatible",
-    "Provider name",
-    STRING,
-  ),
-  setting("openAiCompatible.baseUrl", "openai-compatible", "Base URL", STRING, {
-    hint: "Moving to another host clears the saved API key.",
-  }),
-  setting(
-    "openAiCompatible.thinkingFormat",
-    "openai-compatible",
-    "Thinking format",
-    oneOf(OPENAI_COMPATIBLE_THINKING_FORMATS),
-  ),
-  secret(
-    "openAiCompatible.apiKey",
-    "openai-compatible",
-    "API key",
-    "openAiCompatible.apiKeyConfigured",
-    "clearApiKey",
-  ),
-  readonly("openAiCompatible.models", "openai-compatible", "Discovered models"),
 
   // Assistant behavior
   setting(
@@ -808,7 +780,6 @@ export const INTEGRATION_SETTINGS_SECTIONS: readonly string[] = [
   "tempo",
   "google",
   "slack",
-  "openAiCompatible",
   "brave",
   "context7",
   "github",

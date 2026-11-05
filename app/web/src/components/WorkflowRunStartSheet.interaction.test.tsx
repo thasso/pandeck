@@ -95,6 +95,7 @@ const mainWorktree: WorkflowBaseWorktree = {
 };
 
 function renderSheet(options?: {
+  models?: AccountModelOption[];
   storedRuntimes?: Prefs["workflowRoleRuntimes"];
   worktrees?: WorkflowBaseWorktree[];
   tasks?: Array<{ id: string; parentId?: string }>;
@@ -115,7 +116,7 @@ function renderSheet(options?: {
           projectId: "project-one",
         }}
         tasks={options?.tasks ?? [{ id: "42" }]}
-        models={models}
+        models={options?.models ?? models}
         worktrees={options?.worktrees ?? [mainWorktree]}
         storedRuntimes={options?.storedRuntimes}
         storedLimits={undefined}
@@ -143,6 +144,47 @@ function button(match: string): HTMLButtonElement {
 }
 
 describe("workflow role-set start interaction", () => {
+  it("renders distinct endpoint account cards for duplicate model ids and starts on the selected endpoint", () => {
+    const a = "openai-compatible-0123456789ab";
+    const b = "openai-compatible-abcdef012345";
+    const harness = renderSheet({
+      models: [
+        model({
+          provider: a,
+          id: "llama3",
+          name: "Llama",
+          credentialProfileId: a,
+          accountName: "Endpoint Alpha",
+        }),
+        model({
+          provider: b,
+          id: "llama3",
+          name: "Llama",
+          credentialProfileId: b,
+          accountName: "Endpoint Beta",
+        }),
+      ],
+    });
+    act(() => button("Reviewer configuration A").click());
+    expect(button("Endpoint Alpha")).toBeTruthy();
+    act(() => button("Endpoint Beta").click());
+    expect(button("Reviewer configuration A").textContent).toContain(
+      "Endpoint Beta",
+    );
+    expect(document.body.textContent).not.toContain("Default OpenAI");
+    act(() => button("Start run").click());
+    expect(harness.started[0]?.config.roles.reviewer[0]).toMatchObject({
+      provider: b,
+      modelId: "llama3",
+      credentialProfileId: b,
+    });
+    expect(harness.started[0]?.config.roles.implementer[0]).toMatchObject({
+      provider: a,
+      modelId: "llama3",
+      credentialProfileId: a,
+    });
+  });
+
   it("pins the phone sheet to the viewport so its body scrolls", () => {
     const desktopMatchMedia = window.matchMedia.bind(window);
     vi.stubGlobal("matchMedia", (query: string) => ({

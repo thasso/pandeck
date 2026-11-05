@@ -1,8 +1,61 @@
 # Account routing
 
-Credential profiles are accounts. Claude and OpenAI accounts never mix. This
+Credential profiles are accounts. Accounts of different kinds never mix. This
 contract covers health, login alerts, temporary limit benches, account selection
 at session/run start and live-session failover.
+
+## Account kinds
+
+`ACCOUNT_KINDS` (`app/shared/accountKinds.ts`) describes each kind; code reads
+the descriptor, never the kind id:
+
+| Kind                | Harness    | Credential | Subscription | Models        | Settings section    |
+| ------------------- | ---------- | ---------- | ------------ | ------------- | ------------------- |
+| `openai-codex`      | pi         | login      | yes          | pi's catalog  | `openai`            |
+| `claude`            | claude-sdk | login      | yes          | curated       | `claude-sdk`        |
+| `openai-compatible` | pi         | endpoint   | no           | its `/models` | `openai-compatible` |
+
+Only a subscription kind (`isSubscriptionAccountKind`) has limits, usage,
+benches, login alerts and failover. For any other kind, usage is never read, the
+health store tracks nothing (its summary health stays `unknown`), a run failure
+records no login death or bench, and the Usage page does not list it
+(`usagePage`).
+
+Which account may run a model is decided per model (`accountServesModel`, and
+`piAccountServesModel` where only the account id is known):
+
+- An OpenAI-compatible model runs on exactly one account, the one whose id is
+  its pi provider id: `openai-compatible` for the endpoint migrated from
+  settings, `openai-compatible-<12 hex>` for every later one. No other id is in
+  that grammar.
+- An OpenAI account runs every other pi provider, a Claude account only Claude
+  models. Nothing serves across.
+
+**Rule P.** Since a compatible model has one account, its identity fixes the
+account: every stored pin on such a model names that account
+(`accountPinForModel`), whatever was stored, and Automatic, health, usage or
+another account never decide it (`docs/settings.md` "OpenAI-compatible accounts"
+for the stored pins). Automatic on such a model is that account too, so the
+router is not consulted. The rule is applied wherever a stored binding becomes a
+run: settings slots, peer rows (Settings' unavailable reasons included), first
+sends, workflow role configs and their cards. A workflow run's config, accepted
+plan and step payloads are immutable: rule P is applied when they are read for
+execution or display, never written back.
+
+A spawn proposal whose compatible model has disappeared may choose another model
+from that same endpoint. It never substitutes another endpoint or a subscription
+account, even when those have usable models. Enterprise proposals keep their
+exact-model and effort refusal instead of falling back. An explicit usable model
+hint still resolves normally. D2 applies symmetrically: a dead non-compatible
+hint cannot inherit the proposer's compatible endpoint. It may recover through
+the existing non-compatible account policy; if none offers a model, the proposal
+refuses. Proposals without a bound account do not discover compatible endpoints.
+
+A native fork inherits its parent's account; nothing moves a compatible session
+to another account. A native fork is therefore no cross-account recovery path:
+it neither rolls a session back onto another account nor out of a disabled
+endpoint. A turn on a disabled endpoint account is refused, with "Enable it to
+continue this session", and the session stays bound to it.
 
 ## Health and login evidence
 
@@ -250,7 +303,7 @@ a requirement from a global setting. An unbound document-comment draft has no
 session requirement until a source or enterprise intent is declared; the
 existence of another enterprise session does not constrain its refinement.
 
-Automatic candidates must be enabled, belong to the model's account provider,
+Automatic candidates must be enabled, serve the model (`accountServesModel`),
 not need login, offer the exact model and requested effort, and not be benched.
 Claude shares its curated model list; pi availability comes from each account's
 isolated SDK runtime. Ranking is:
@@ -278,48 +331,54 @@ the fixed model and effort, before comparing usage. Provider and enterprise
 scope still apply. Mark the result `no-eligible-account`. Needs-login accounts
 are the last resort even when their cached usage looks better or every model
 snapshot failed. Background automation alone may finally use that provider's
-protected default, even disabled, marked `disabled-default`. Exclusions and
-enterprise constraints still apply to that fallback. Interactive creation with
-no enabled account fails clearly, including the no-enterprise-account case. The
-pick result carries the degradation; it never silently crosses provider or
-enterprise boundaries.
+protected default, even disabled, marked `disabled-default`; only the
+subscription kinds have one. Exclusions and enterprise constraints still apply
+to that fallback. Interactive creation with no enabled account fails clearly,
+including the no-enterprise-account case. The pick result carries the
+degradation; it never silently crosses provider or enterprise boundaries.
 
 New-session and settings-slot selectors default to Automatic. At creation,
 Automatic applies only when no account is already bound or explicitly selected.
 The server picks when the session or background run starts. A session keeps that
 binding until an own-subscription limit or dead login triggers live failover
-below. Bound drafts and forks keep the parent's current account, even if it is
-disabled or unhealthy, when it belongs to the child's provider; otherwise
-Automatic picks one within the same enterprise requirement. An
-enterprise-required child still refuses if that bound account is no longer
-tagged enterprise. Restoring an existing session keeps its native account
-affinity, not today's Automatic choice. Explicit session picks, pinned peer
-runtimes and workflow role accounts remain explicit. Existing peer rows keep
-their account until the user selects Automatic. An unpinned peer row stores no
-`credentialProfileId`, and an empty string also means Automatic. The roster
-reports its account policy as Automatic; spawn results name the actual account.
-Settings slots keep pins saved before Automatic existed until the user changes
-them in Settings. Slots with no pin resolve afresh on every run; an unusable pin
-degrades under the existing background-automation policy: missing, disabled or
-provider-mismatched pins. An enabled, provider-matching pin remains explicit
-despite login health or model/effort availability; failures alert on that
-account, not a different one. `automaticProfileIdFor` remains only a
-first-enabled hint for non-routing login/usage UI, not a routing function. When
-the saved model has no Automatic option, a Settings slot offers **Use
-Automatic** to clear its pin without changing the model or effort.
+below. Bound drafts and new sessions from a parent keep the parent's current
+account, even if it is disabled or unhealthy, only when that exact account
+serves the child's model; otherwise the child's model decides, by rule P or
+Automatic, within the same enterprise requirement. Rule P is not applied to the
+inherited pin itself: a parent on an OpenAI login starting an endpoint model
+gets that endpoint's account, never the login. An enterprise-required child
+still refuses if that bound account is no longer tagged enterprise. Restoring an
+existing session keeps its native account affinity, not today's Automatic
+choice. Explicit session picks, pinned peer runtimes and workflow role accounts
+remain explicit. Existing peer rows keep their account until the user selects
+Automatic. An unpinned peer row stores no `credentialProfileId`, and an empty
+string also means Automatic. The roster reports its account policy as Automatic;
+spawn results name the actual account. Settings slots keep pins saved before
+Automatic existed until the user changes them in Settings. Slots with no pin
+resolve afresh on every run; an unusable pin degrades under the existing
+background-automation policy: missing, disabled or pins on an account that does
+not serve the model. A compatible model's slot never degrades: its account is
+missing or disabled, and the run refuses. An enabled pin on an account serving
+the model remains explicit despite login health or model/effort availability;
+failures alert on that account, not a different one. `automaticProfileIdFor`
+remains only a first-enabled hint for non-routing login/usage UI, not a routing
+function. When the saved model has no Automatic option, a Settings slot offers
+**Use Automatic** to clear its pin without changing the model or effort.
 
-The new-session picker names only accounts with something of their own to run.
-The OpenAI-compatible endpoint registers on every OpenAI account, so an
-unconnected one still lists its models, and a Claude account offers none while
-the integration is off; `pickerCredentialProfiles` hides both unless staged.
-When that leaves no account and only endpoint models, the endpoint's card
-replaces Automatic, with no meters. It still stages no account: the router binds
-the session to an OpenAI account, which only carries the endpoint's key-based
-traffic. Automatic names the endpoint rather than that account for any staged
-endpoint model. With nothing runnable anywhere every account stays. This filter
-decides cards alone: agent definitions and the enterprise requirement keep
-reading every enabled account, and other account surfaces, such as the workflow
-start sheet, still list them all.
+The new-session picker names only accounts with something of their own to run
+(`pickerCredentialProfiles`): an unconnected OpenAI login, or a Claude account
+while the integration offers it no models, is hidden unless staged. Each
+endpoint is an account card of its own, with "No plan limits" in place of the
+usage meters, and Automatic stays beside them. With nothing runnable anywhere
+every account stays. This filter decides cards alone, never eligibility: agent
+definitions, the enterprise requirement and the server's router read every
+enabled account, and a hidden login stays a router candidate with its usual
+degraded answer. Other account surfaces, such as the workflow start sheet, list
+every account offering models.
+
+A started pi session changes model only within its bound account: the picker
+disables models that account does not serve (`startedModelDisabled`), and the
+host refuses them (`docs/agent-harnesses.md` "Account model gate").
 
 `POST /api/account-router/pick` accepts `AccountPickPreviewRequest` and returns
 `AccountPickPreviewResult`, so a selector can show Automatic's current account
@@ -432,23 +491,25 @@ or push notification projection.
 
 ## Live account switching
 
-A turn that starts on a disabled bound account moves first
+A turn that starts on a disabled bound subscription account moves first
 (`moveOffDisabledAccount`, called by `session/runtimePrompt.ts` after skill
-admission). It picks a non-degraded account for the session's model, effort and
-enterprise requirement and moves the idle session through the same
-`driver.switchAccount` as failover below. Every switch step rechecks the turn's
-Stop hold and recovery admission, the target's health and bench, and the model
-selection, and the facade repeats a target-bound check (binding, enabled,
-enterprise, health, bench, selection) after the move and right before the turn's
-final admission. A Claude session with no native id yet (new, or after `/clear`)
-has no history to copy and moves by rebinding alone; failover still refuses that
-case. The display-only marker `Switched from A to B — A is disabled.` is
-appended only once the turn is admitted. The session's next run that actually
-starts counts as moved for the encrypted-reasoning retry below, even if the turn
-that moved it was refused. With no eligible account the turn is refused before
-any append with a message naming the disabled account. A running turn, a steer
-into it, a steer-only message, a recovery continuation and a provider-initiated
-turn (`beginRuntimeProviderTurn`) are never moved this way. Disabling an account
+admission). An account of any other kind is the only one serving its models, so
+the turn is refused instead and the session stays where it is. It picks a
+non-degraded account for the session's model, effort and enterprise requirement
+and moves the idle session through the same `driver.switchAccount` as failover
+below. Every switch step rechecks the turn's Stop hold and recovery admission,
+the target's health and bench, and the model selection, and the facade repeats a
+target-bound check (binding, enabled, enterprise, health, bench, selection)
+after the move and right before the turn's final admission. A Claude session
+with no native id yet (new, or after `/clear`) has no history to copy and moves
+by rebinding alone; failover still refuses that case. The display-only marker
+`Switched from A to B — A is disabled.` is appended only once the turn is
+admitted. The session's next run that actually starts counts as moved for the
+encrypted-reasoning retry below, even if the turn that moved it was refused.
+With no eligible account the turn is refused before any append with a message
+naming the disabled account. A running turn, a steer into it, a steer-only
+message, a recovery continuation and a provider-initiated turn
+(`beginRuntimeProviderTurn`) are never moved this way. Disabling an account
 therefore takes effect on each bound session's next turn.
 
 An explicitly bound session can also move after its own subscription provider

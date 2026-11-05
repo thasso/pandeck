@@ -1431,6 +1431,15 @@ without inheriting a requirement from another session. No production caller
 starts a workflow from an agent session. Account selection never changes the
 plan or supplies usage to the coordinator.
 
+A role on an OpenAI-compatible model runs on that endpoint's own account, the
+only one serving it (rule P, `account-routing.md` "Account kinds"). Start
+validation refuses an account that does not serve the role's model. A run
+recorded before endpoints were accounts may name the OpenAI account that carried
+the endpoint: its config, accepted plan and step payloads stay byte-unchanged,
+and rule P is applied when the executor and the run card read them, so the role
+starts on the endpoint's account and the plan stays accepted. A missing or
+disabled endpoint account refuses the role rather than moving it.
+
 Moving a choice out of the plan is the point of the split, and the same argument
 governs all of them: a decision made before its evidence exists is a commitment
 the run must then honor against what it later learns. The pass count went first

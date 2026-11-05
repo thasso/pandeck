@@ -4,6 +4,7 @@ import type {
   ModelOption,
   ThinkingLevel,
 } from "@assistant/shared";
+import { ACCOUNT_KINDS, isSubscriptionAccountKind } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { Sparkles } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon.tsx";
@@ -33,11 +34,6 @@ export interface RuntimeAccount {
   name: string;
   provider: CredentialProfileProvider;
 }
-
-const PROVIDER_LABEL: Record<CredentialProfileProvider, string> = {
-  claude: "Claude",
-  "openai-codex": "OpenAI",
-};
 
 /**
  * The provider-account row: one card per account, each carrying the brand icon,
@@ -69,11 +65,6 @@ export function ProviderAccountRow({
     onSelect: () => void;
     /** One muted line under the name, in the usage meters' slot. */
     detail: string;
-    /**
-     * The card names this instead: no account is a choice, so Automatic can
-     * only ever run this endpoint.
-     */
-    endpoint?: { provider: string; name: string } | undefined;
   };
   /**
    * Subscription-usage indicators from the server cache (`docs/usage.md`), or
@@ -103,40 +94,21 @@ export function ProviderAccountRow({
         <QuickPill
           selected={automatic.selected}
           disabled={disabled}
-          title={
-            automatic.endpoint
-              ? `Use ${automatic.endpoint.name}`
-              : "Let Pandeck pick the account"
-          }
+          title="Let Pandeck pick the account"
           onClick={automatic.onSelect}
           className={`w-52 ${QUICK_CARD}`}
         >
           <span className="flex w-full min-w-0 items-center gap-1.5">
-            {automatic.endpoint ? (
-              <ProviderIcon
-                provider={automatic.endpoint.provider}
-                title={automatic.endpoint.name}
-                size={16}
-                className={
-                  automatic.selected
-                    ? "shrink-0 text-primary"
-                    : "shrink-0 text-muted-foreground"
-                }
-              />
-            ) : (
-              <Sparkles
-                size={16}
-                aria-hidden
-                className={
-                  automatic.selected
-                    ? "shrink-0 text-primary"
-                    : "shrink-0 text-muted-foreground"
-                }
-              />
-            )}
-            <span className="min-w-0 flex-1 truncate">
-              {automatic.endpoint?.name ?? "Automatic"}
-            </span>
+            <Sparkles
+              size={16}
+              aria-hidden
+              className={
+                automatic.selected
+                  ? "shrink-0 text-primary"
+                  : "shrink-0 text-muted-foreground"
+              }
+            />
+            <span className="min-w-0 flex-1 truncate">Automatic</span>
           </span>
           <span className="w-full text-xs whitespace-normal text-muted-foreground">
             {automatic.detail}
@@ -145,7 +117,7 @@ export function ProviderAccountRow({
       ) : null}
       {accounts.map((account) => {
         const selected = account.id === selectedId;
-        const providerLabel = PROVIDER_LABEL[account.provider];
+        const providerLabel = ACCOUNT_KINDS[account.provider].label;
         return (
           <QuickPill
             key={account.id}
@@ -168,10 +140,17 @@ export function ProviderAccountRow({
               />
               <span className="min-w-0 flex-1 truncate">{account.name}</span>
             </span>
-            <UsageCycleMeters
-              indicator={usageByProfileId.get(account.id)}
-              now={now}
-            />
+            {isSubscriptionAccountKind(account.provider) ? (
+              <UsageCycleMeters
+                indicator={usageByProfileId.get(account.id)}
+                now={now}
+              />
+            ) : (
+              // An endpoint has no plan, so nothing is metered for it.
+              <span className="w-full text-xs whitespace-normal text-muted-foreground">
+                No plan limits
+              </span>
+            )}
           </QuickPill>
         );
       })}

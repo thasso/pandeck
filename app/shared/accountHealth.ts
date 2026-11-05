@@ -1,18 +1,20 @@
-import { CLAUDE_SDK_PROVIDER } from "./protocol.ts";
+import { ACCOUNT_KINDS } from "./accountKinds.ts";
 import type {
   AccountLoginAlert,
   CredentialProfileSummary,
 } from "./protocol.ts";
 
-/** A profile directory can also hold unrelated pi provider keys. Those runs say nothing about its subscription login. */
+/**
+ * A profile directory can also hold unrelated pi provider keys. Those runs say
+ * nothing about its subscription login, and an account that is no
+ * subscription login (an OpenAI-compatible endpoint) has none to speak for.
+ */
 export function isSubscriptionAccountModel(
   provider: CredentialProfileSummary["provider"],
   modelProvider: string | undefined,
 ): boolean {
-  return (
-    modelProvider ===
-    (provider === "claude" ? CLAUDE_SDK_PROVIDER : "openai-codex")
-  );
+  const kind = ACCOUNT_KINDS[provider];
+  return kind.subscription && modelProvider === kind.subscriptionModelProvider;
 }
 
 /** Canonical words for a provider's named cap or model id. */
@@ -54,5 +56,5 @@ export function accountLoginAlerts(
 export function accountSettingsPath(
   provider: AccountLoginAlert["provider"],
 ): string {
-  return `/settings/${provider === "claude" ? "claude-sdk" : "openai"}`;
+  return `/settings/${ACCOUNT_KINDS[provider].settingsSection}`;
 }

@@ -25,6 +25,23 @@ interface SentMessage {
   message?: string;
 }
 
+test("creation defaults come from the harness descriptor and preserve pi helper and Claude sonnet", async () => {
+  const { DEFAULT_HELPER_MODEL } = await import("@assistant/shared");
+  const pick = vi
+    .spyOn(accountRouter, "pickAccount")
+    .mockResolvedValue({ profileId: "fixture" });
+  try {
+    await resolveSessionAccount("pi", {});
+    await resolveSessionAccount("claude-sdk", {});
+    assert.deepEqual(
+      pick.mock.calls.map(([request]) => request.model),
+      [DEFAULT_HELPER_MODEL, { provider: "claude-sdk", modelId: "sonnet" }],
+    );
+  } finally {
+    pick.mockRestore();
+  }
+});
+
 test("message-level draft sessions inherit and persist the source pi profile", async () => {
   const profile = createCredentialProfile({
     name: "Draft source",
@@ -144,18 +161,18 @@ test("bound enterprise drafts retain disabled accounts, refuse demotion, and can
   try {
     assert.equal(
       await resolveSessionAccount(
-        "openai-codex",
+        "pi",
         { credentialProfileId: profile.id, requiresEnterprise: true },
-        { allowDisabledPin: true },
+        { inheritedPin: true },
       ),
       profile.id,
     );
     patchCredentialProfile(profile.id, { enterprise: false });
     await assert.rejects(
       resolveSessionAccount(
-        "openai-codex",
+        "pi",
         { credentialProfileId: profile.id, requiresEnterprise: true },
-        { allowDisabledPin: true },
+        { inheritedPin: true },
       ),
       /requires an enterprise account/,
     );
@@ -327,6 +344,198 @@ for (const path of ["draft", "newSession"] as const) {
     }
   });
 }
+
+for (const path of ["draft", "newSession"] as const) {
+  for (const scenario of [
+    "same-disabled-endpoint",
+    "carrier-to-endpoint",
+    "endpoint-to-openai",
+  ] as const) {
+    test(`actual connection ${path} persists ${scenario} model binding`, async () => {
+      const endpoint = createCredentialProfile({
+        name: "Connection endpoint",
+        provider: "openai-compatible",
+      });
+      const { writeOpenAiCompatibleEndpoint } =
+        await import("./openAiCompatibleAccounts.ts");
+      writeOpenAiCompatibleEndpoint(endpoint.id, {
+        baseUrl: "http://127.0.0.1:9/v1",
+        thinkingFormat: "none",
+        models: [
+          {
+            id: "llama3",
+            name: "Llama",
+            input: ["text"],
+            reasoning: false,
+            contextWindow: 32000,
+            maxTokens: 4000,
+          },
+        ],
+      });
+      const subscription = createCredentialProfile({
+        name: "Connection OpenAI",
+        provider: "openai-codex",
+      });
+      const provider =
+        scenario === "endpoint-to-openai" ? "openai-codex" : endpoint.id;
+      const modelId = provider === endpoint.id ? "llama3" : "gpt-5.6-sol";
+      const parentAccount =
+        scenario === "carrier-to-endpoint" ? "default" : endpoint.id;
+      const target = provider === endpoint.id ? endpoint.id : subscription.id;
+      if (scenario === "same-disabled-endpoint")
+        setCredentialProfileEnabled(endpoint.id, false);
+      const parentId = `connection-parent-${path}-${endpoint.id}`;
+      const childId = `connection-child-${path}-${endpoint.id}`;
+      sessionStore.upsert({
+        id: parentId,
+        harness: "pi",
+        agentType: "assistant",
+        provider:
+          path === "newSession"
+            ? parentAccount === endpoint.id
+              ? endpoint.id
+              : "openai-codex"
+            : provider,
+        model:
+          path === "newSession"
+            ? parentAccount === endpoint.id
+              ? "llama3"
+              : "gpt-5.6-sol"
+            : modelId,
+        thinkingLevel: "off",
+        credentialProfileId: parentAccount,
+      });
+      const pick = vi
+        .spyOn(accountRouter, "pickAccount")
+        .mockResolvedValue({ profileId: target });
+      const acquire = vi.spyOn(piStore, "acquireNew").mockResolvedValue({
+        key: childId,
+        sessionId: childId,
+        nativeFacts: () => ({
+          kind: "assistant",
+          agentType: "assistant",
+          harness: "pi",
+          thinkingLevel: "off",
+        }),
+        contextInfo: () => ({}),
+      } as never);
+      const list = vi.spyOn(hub, "listSessions").mockReturnValue([]);
+      const sent: SentMessage[] = [];
+      const connection = new (
+        Connection as unknown as new (ws: unknown) => unknown
+      )({
+        OPEN: 1,
+        readyState: 1,
+        send: (payload: string) => sent.push(JSON.parse(payload)),
+      }) as {
+        viewing: { sessionId: string };
+        view: () => void;
+        onNewSession: (
+          type: string,
+          model?: { provider: string; id: string },
+        ) => Promise<void>;
+        onCreateDraftSession: (type: string, text: string) => Promise<void>;
+      };
+      connection.viewing = { sessionId: parentId };
+      connection.view = () => {};
+      try {
+        if (path === "draft")
+          await connection.onCreateDraftSession(
+            "assistant",
+            "Synthetic endpoint draft",
+          );
+        else
+          await connection.onNewSession("assistant", { provider, id: modelId });
+        assert.equal(acquire.mock.calls[0]?.[3]?.credentialProfileId, target);
+        assert.equal(sessionStore.get(childId)?.credentialProfileId, target);
+        assert.equal(
+          (acquire.mock.calls[0]?.[1] as { provider?: string })?.provider,
+          provider,
+        );
+        assert.equal(
+          sent.some((message) => message.type === "error"),
+          false,
+        );
+        assert.equal(
+          pick.mock.calls.length,
+          scenario === "same-disabled-endpoint" ? 0 : 1,
+        );
+        assert.equal(
+          sessionStore.get(parentId)?.credentialProfileId,
+          parentAccount,
+        );
+      } finally {
+        pick.mockRestore();
+        acquire.mockRestore();
+        list.mockRestore();
+      }
+    });
+  }
+}
+
+test("an inherited pin is kept only when that account serves the new model", async () => {
+  const a = createCredentialProfile({
+    name: "Endpoint A",
+    provider: "openai-compatible",
+  });
+  const b = createCredentialProfile({
+    name: "Endpoint B",
+    provider: "openai-compatible",
+  });
+  const login = createCredentialProfile({
+    name: "OpenAI login",
+    provider: "openai-codex",
+  });
+  const inherit = (credentialProfileId: string, modelProvider: string) =>
+    resolveSessionAccount(
+      "pi",
+      { credentialProfileId, modelProvider, modelId: "llama3" },
+      { inheritedPin: true },
+    );
+  const picker = vi
+    .spyOn(accountRouter, "pickAccount")
+    .mockImplementation(async (request) => ({
+      profileId:
+        request.model.provider === "openai-codex"
+          ? login.id
+          : request.model.provider,
+    }));
+  try {
+    // The parent's own endpoint serving the model: kept, even disabled.
+    assert.equal(await inherit(a.id, a.id), a.id);
+    setCredentialProfileEnabled(a.id, false);
+    assert.equal(await inherit(a.id, a.id), a.id);
+    assert.equal(picker.mock.calls.length, 0);
+    // Any other combination routes from the model.
+    assert.equal(await inherit("default", b.id), b.id);
+    assert.equal(await inherit(a.id, b.id), b.id);
+    assert.equal(await inherit(a.id, "openai-codex"), login.id);
+    assert.deepEqual(
+      picker.mock.calls.map(([request]) => request.model.provider),
+      [b.id, b.id, "openai-codex"],
+    );
+    // An explicit pin means the model's own endpoint (rule P), which must be
+    // enabled: a disabled one refuses rather than moving.
+    assert.equal(
+      await resolveSessionAccount("pi", {
+        credentialProfileId: "default",
+        modelProvider: b.id,
+        modelId: "llama3",
+      }),
+      b.id,
+    );
+    await assert.rejects(
+      resolveSessionAccount("pi", {
+        credentialProfileId: b.id,
+        modelProvider: a.id,
+        modelId: "llama3",
+      }),
+      /Select an enabled OpenAI-compatible credential profile/,
+    );
+  } finally {
+    picker.mockRestore();
+  }
+});
 
 afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });

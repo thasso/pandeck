@@ -84,6 +84,8 @@ export interface Viewer {
   wantsWorktree?(worktreeId: string): boolean;
   /** Settings were written (by any client or agent); send this viewer its fresh copy. */
   settingsChanged?(change: import("./settingsService.ts").SettingsChange): void;
+  /** The models some picker offers changed; send this viewer the fresh list. */
+  modelsChanged?(): void;
   /**
    * The session is being deleted: detach from it if it is on show, and let no
    * load of it still in flight attach. Called for every viewer BEFORE the

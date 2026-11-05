@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, test } from "vitest";
+import { afterAll, test, vi } from "vitest";
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-agent-model-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -87,42 +87,60 @@ function transcript(
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n",
   );
-  sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "openai-compatible",
+  });
   freezeSessionAgent(id, agent);
   return file;
 }
 
-test("a fork before the first prompt starts on the agent's model, not pi's default", async () => {
-  const parent = "agent-fork-parent";
-  const file = transcript(parent, "chosen", [
-    {
-      type: "message",
-      id: "first-user",
-      parentId: `${parent}-model`,
-      timestamp: new Date().toISOString(),
-      message: { role: "user", content: "start", timestamp: Date.now() },
-    },
-  ]);
+for (const disabled of [false, true])
+  test(`a native fork inherits its compatible account even disabled=${disabled}`, async () => {
+    const { setCredentialProfileEnabled } =
+      await import("../credentialProfiles.ts");
+    setCredentialProfileEnabled("openai-compatible", !disabled);
+    const parent = `agent-fork-parent-${disabled}`;
+    const file = transcript(parent, "chosen", [
+      {
+        type: "message",
+        id: "first-user",
+        parentId: `${parent}-model`,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "start", timestamp: Date.now() },
+      },
+    ]);
 
-  const child = await piStore.forkSession(
-    "developer",
-    file,
-    "first-user",
-    "before",
-    "app-entry-1",
-  );
-  try {
-    assert.equal(
-      nativePiSessionForTests(child.engine).messages.length,
-      0,
-      "an empty prefix",
+    const child = await piStore.forkSession(
+      "developer",
+      file,
+      "first-user",
+      "before",
+      "app-entry-1",
     );
-    assert.equal(nativePiSessionForTests(child.engine).model?.id, "chosen");
-    assert.equal(sessionAgent(child.sessionId)?.model, "chosen");
-  } finally {
-    child.dispose();
-  }
-});
+    try {
+      assert.equal(
+        nativePiSessionForTests(child.engine).messages.length,
+        0,
+        "an empty prefix",
+      );
+      assert.equal(nativePiSessionForTests(child.engine).model?.id, "chosen");
+      assert.equal(sessionAgent(child.sessionId)?.model, "chosen");
+      assert.equal(
+        sessionStore.get(child.sessionId)?.credentialProfileId,
+        "openai-compatible",
+      );
+      assert.equal(
+        nativePiSessionForTests(child.engine).model?.provider,
+        "openai-compatible",
+      );
+    } finally {
+      child.dispose();
+      setCredentialProfileEnabled("openai-compatible", true);
+    }
+  });
 
 test("an agent session whose model cannot be restored refuses to resume", async () => {
   const id = "agent-gone-model";
@@ -136,15 +154,22 @@ test("an agent session whose model cannot be restored refuses to resume", async 
     },
   ]);
 
-  await assert.rejects(
-    piStore.acquireExisting("developer", file, id),
-    /Agent "test-reviewer" cannot run: .*retired.* It does not run on another model/,
-  );
+  vi.stubEnv("OPENAI_API_KEY", "fixture-env-openai-key");
+  try {
+    await assert.rejects(
+      piStore.acquireExisting("developer", file, id),
+      // A compatible account's start model is the app's choice, so the refusal
+      // comes before pi restores anything, even with env-keyed built-ins.
+      /Agent "test-reviewer" runs on openai-compatible\/retired, which its account no longer offers; it does not run on another model/,
+    );
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 test("denied tools stay gone even when repository settings turn pi's own on", async () => {
   const chosen = await findModelForProfile(
-    "default",
+    "openai-compatible",
     "openai-compatible",
     "chosen",
   );
@@ -160,6 +185,7 @@ test("denied tools stay gone even when repository settings turn pi's own on", as
   const tools = async (denyTools: string[]) => {
     const live = await piStore.acquireNew("developer", chosen, "off", {
       cwd: repo,
+      credentialProfileId: "openai-compatible",
       agent: { ...agent, denyTools },
     });
     try {

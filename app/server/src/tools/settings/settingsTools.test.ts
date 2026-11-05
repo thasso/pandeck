@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test, vi } from "vitest";
 import { getSettings } from "../../settings.ts";
-import {
-  onSettingsChanged,
-  saveSettings,
-  type SettingsChange,
-} from "../../settingsService.ts";
+import { saveSettings } from "../../settingsService.ts";
 import { settingsTools } from "./settingsTools.ts";
+import { validateClientMessage } from "../../validateClientMessage.ts";
 
 const [settingsRead, settingsUpdate] = settingsTools;
 
@@ -33,6 +30,27 @@ type Entry = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+test("endpoint accounts have no legacy settings tool path, AppSettings field or WebSocket mutations", async () => {
+  assert.equal("openAiCompatible" in getSettings(), false);
+  await assert.rejects(
+    call(settingsRead, { paths: ["openAiCompatible.baseUrl"] }),
+    /Unknown setting path/,
+  );
+  for (const type of [
+    "updateOpenAiCompatibleSettings",
+    "saveAndTestOpenAiCompatibleSettings",
+    "testOpenAiCompatibleSettings",
+  ]) {
+    assert.equal(
+      validateClientMessage({
+        type,
+        patch: { baseUrl: "http://127.0.0.1:9/v1" },
+      }).ok,
+      false,
+    );
+  }
 });
 
 test("the PA working directory reads as UI-only and settings_update cannot write it", async () => {
@@ -294,9 +312,9 @@ describe("nothing secret reaches the agent", () => {
       // An unescaped `@` in the password: userinfo ends at the last one.
       "https://alice:URL_PASSWORD_1@URL_PASSWORD_TAIL@example.invalid/v1",
     ]) {
-      await saveSettings({ openAiCompatible: { baseUrl } });
+      await saveSettings({ forgejo: { baseUrl } });
       const result = await settingsRead!.execute(
-        { paths: ["openAiCompatible.baseUrl"] },
+        { paths: ["forgejo.baseUrl"] },
         {} as never,
       );
       const text = JSON.stringify(result);
@@ -392,86 +410,5 @@ describe("arguments are checked before anything changes", () => {
       ),
     );
     assert.equal(getSettings().sessionNaming.enabled, before);
-  });
-});
-
-describe("a cancelled or overtaken test changes nothing", () => {
-  /** A fetch that waits for `release`, and rejects like the real one on abort. */
-  function gatedFetch(body: unknown) {
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
-      await new Promise<void>((resolve, reject) => {
-        void gate.then(resolve);
-        init?.signal?.addEventListener("abort", () =>
-          reject(new Error("This operation was aborted")),
-        );
-      });
-      return new Response(JSON.stringify(body), { status: 200 });
-    });
-    return { fetch, release: () => release() };
-  }
-
-  test("cancelling discovery mid-request keeps a change saved after it", async () => {
-    await saveSettings({
-      openAiCompatible: {
-        enabled: true,
-        baseUrl: "http://models.invalid/v1",
-      },
-    });
-    const { fetch, release } = gatedFetch({ data: [{ id: "late-model" }] });
-    vi.stubGlobal("fetch", fetch);
-    const heard: SettingsChange[] = [];
-    const stopListening = onSettingsChanged((change) => heard.push(change));
-    const controller = new AbortController();
-    const pending = settingsUpdate!.execute({ test: ["openai-compatible"] }, {
-      signal: controller.signal,
-    } as never);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    controller.abort();
-    await assert.rejects(pending, /cancelled/);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    stopListening();
-    // Nothing was stored, so nothing was announced.
-    assert.deepEqual(heard, []);
-    await saveSettings({ openAiCompatible: { enabled: false } });
-    release();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const { openAiCompatible } = getSettings();
-    assert.equal(openAiCompatible.enabled, false);
-    assert.equal(
-      openAiCompatible.models.some((m) => m.id === "late-model"),
-      false,
-    );
-  });
-
-  test("discovery overtaken by a new endpoint stores nothing", async () => {
-    await saveSettings({
-      openAiCompatible: {
-        enabled: true,
-        baseUrl: "http://old-models.invalid/v1",
-      },
-    });
-    const { fetch, release } = gatedFetch({ data: [{ id: "stale-model" }] });
-    vi.stubGlobal("fetch", fetch);
-    const pending = settingsUpdate!.execute(
-      { test: ["openai-compatible"] },
-      {} as never,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    await saveSettings({
-      openAiCompatible: { baseUrl: "http://new-models.invalid/v1" },
-    });
-    release();
-    const { tests } = (await pending).details as {
-      tests: Array<{ ok: boolean }>;
-    };
-    assert.equal(tests[0]?.ok, false);
-    const { openAiCompatible } = getSettings();
-    assert.equal(openAiCompatible.baseUrl, "http://new-models.invalid/v1");
-    assert.equal(
-      openAiCompatible.models.some((m) => m.id === "stale-model"),
-      false,
-    );
   });
 });

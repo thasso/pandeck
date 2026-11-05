@@ -1,15 +1,12 @@
 /**
- * The harness table and the translations between the three names a harness
- * goes by: its id, its account kind and its model-picker provider.
+ * The harness table and the translation between a harness's id and its
+ * model-picker provider. Which account runs a model is `accountKinds.ts`.
  */
 import { expect, test } from "vitest";
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./protocol.ts";
 import {
-  accountProviderForModelProvider,
   backgroundWorkBackendsForHarness,
   CLAUDE_SDK_PROVIDER,
   HARNESSES,
-  harnessForAccountProvider,
   harnessForModelProvider,
   harnessSupportsBackgroundWorkBackend,
   type Harness,
@@ -26,20 +23,6 @@ test("a Claude SDK model runs on the Claude harness; any other on pi", () => {
   expect(harnessForModelProvider("github-copilot")).toBe("pi");
   expect(harnessForModelProvider("openai-codex")).toBe("pi");
   expect(harnessForModelProvider(undefined)).toBe("pi");
-});
-
-test("account kinds and model providers translate consistently", () => {
-  expect(accountProviderForModelProvider(CLAUDE_SDK_PROVIDER)).toBe("claude");
-  expect(accountProviderForModelProvider("github-copilot")).toBe(
-    "openai-codex",
-  );
-  expect(accountProviderForModelProvider(OPENAI_COMPATIBLE_PROVIDER_ID)).toBe(
-    "openai-codex",
-  );
-  expect(harnessForAccountProvider("claude")).toBe("claude-sdk");
-  expect(harnessForAccountProvider("openai-codex")).toBe("pi");
-  for (const id of HARNESS_IDS)
-    expect(harnessForAccountProvider(HARNESSES[id].accountProvider)).toBe(id);
 });
 
 test("only a harness with one picker provider names it", () => {

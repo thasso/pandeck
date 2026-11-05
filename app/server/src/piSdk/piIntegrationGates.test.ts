@@ -112,7 +112,7 @@ async function load(engine: PiEngineHandle, name = GATED): Promise<void> {
 
 async function chosen() {
   const model = await findModelForProfile(
-    "default",
+    "openai-compatible",
     "openai-compatible",
     "chosen",
   );
@@ -169,7 +169,12 @@ function transcript(id: string): string {
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n",
   );
-  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: "openai-compatible",
+  });
   return file;
 }
 
@@ -198,6 +203,7 @@ test("a settings flip changes a live session's active set and find_tools' usable
   setGithub(false);
   const live = await piStore.acquireNew("assistant", await chosen(), "off", {
     cwd: tmp,
+    credentialProfileId: "openai-compatible",
   });
   lives.push(live);
   const { engine } = live;
@@ -230,6 +236,7 @@ test("a flip that lands while a new, forked or reopened session is opening is ca
   let spec = flipWhileOpening();
   const created = await piStore.acquireNew("assistant", await chosen(), "off", {
     cwd: tmp,
+    credentialProfileId: "openai-compatible",
   });
   lives.push(created);
   opened.push(["new", spec(), created]);
@@ -295,7 +302,7 @@ test("a flip while an account reopen is staged reaches the replacement at its co
         dispose(): Promise<void>;
       }>;
     }
-  ).reopenForAccount("default");
+  ).reopenForAccount("openai-compatible");
   try {
     setGithub(true);
     await vi.waitFor(() => assert.equal(usable(resident), true));
@@ -326,6 +333,7 @@ test("the inspector and the native loading facts equal the engine's activation a
   setGithub(true);
   const live = await piStore.acquireNew("assistant", await chosen(), "off", {
     cwd: tmp,
+    credentialProfileId: "openai-compatible",
   });
   lives.push(live);
   const { engine } = live;
@@ -376,6 +384,7 @@ test("a normal Settings save of the raw browser MCP switch reaches a live develo
   await setRawMcp(false);
   const live = await piStore.acquireNew("developer", await chosen(), "off", {
     cwd: tmp,
+    credentialProfileId: "openai-compatible",
   });
   lives.push(live);
   const { engine } = live;

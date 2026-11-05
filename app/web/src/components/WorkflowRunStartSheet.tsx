@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   type AccountModelOption,
-  accountProviderForModelProvider,
+  accountKindForModelProvider,
   applyWorkflowRunLimits,
   clampThinkingLevelForModel,
   CLAUDE_SDK_PROVIDER,
@@ -318,7 +318,7 @@ function accountsOf(models: readonly AccountModelOption[]): RuntimeAccount[] {
     accounts.set(model.credentialProfileId, {
       id: model.credentialProfileId,
       name: model.accountName,
-      provider: accountProviderForModelProvider(model.provider),
+      provider: accountKindForModelProvider(model.provider),
     });
   }
   return [...accounts.values()];

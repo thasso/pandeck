@@ -203,6 +203,148 @@ async function propose(rows: Array<Record<string, unknown>>) {
 
 const bodyOf = (card: ApprovalCard) => card.body as SessionSpawnApprovalBody;
 
+for (const enterprise of [false, true]) {
+  test(`a retired compatible proposal model stays on its endpoint, enterprise=${enterprise}`, async () => {
+    const endpoint = createCredentialProfile({
+      name: "Endpoint A",
+      provider: "openai-compatible",
+    });
+    const other = createCredentialProfile({
+      name: "Endpoint B",
+      provider: "openai-compatible",
+    });
+    patchCredentialProfile(endpoint.id, { enterprise });
+    patchCredentialProfile(other.id, { enterprise: true });
+    const offer = (provider: string): ModelOption => ({
+      provider,
+      id: "llama3",
+      name: "Llama 3",
+      reasoning: false,
+      supportedThinkingLevels: ["off"],
+      contextWindow: 32_000,
+    });
+    vi.mocked(piModelApi.listModelsForProfile).mockImplementation(async (id) =>
+      id === endpoint.id || id === other.id ? [offer(id)] : piModels,
+    );
+    const sender = `compatible-proposer-${endpoint.id}`;
+    sessionStore.upsert({
+      id: sender,
+      harness: "pi",
+      agentType: "assistant",
+      credentialProfileId: endpoint.id,
+      provider: endpoint.id,
+      model: "retired-model",
+      thinkingLevel: "off",
+      requiresEnterprise: enterprise,
+    });
+    const explicit = await buildSpawnProposal({
+      senderSessionId: sender,
+      rows: [
+        row({ provider: endpoint.id, modelId: "llama3", thinkingLevel: "off" }),
+      ],
+    });
+    expect(explicit.items[0]).toMatchObject({
+      credentialProfileId: endpoint.id,
+      provider: endpoint.id,
+      modelId: "llama3",
+    });
+    const proposal = () =>
+      buildSpawnProposal({ senderSessionId: sender, rows: [row()] });
+    if (enterprise) {
+      await expect(proposal()).rejects.toThrow(
+        /No enabled enterprise account offers .*retired-model/,
+      );
+    } else {
+      expect((await proposal()).items[0]).toMatchObject({
+        credentialProfileId: endpoint.id,
+        provider: endpoint.id,
+        modelId: "llama3",
+      });
+      // A still-enabled B and subscription account must not rescue empty/disabled A.
+      vi.mocked(piModelApi.listModelsForProfile).mockImplementation(
+        async (id) =>
+          id === endpoint.id ? [] : id === other.id ? [offer(id)] : piModels,
+      );
+      await expect(proposal()).rejects.toThrow(
+        /No enabled provider account offers/,
+      );
+      setCredentialProfileEnabled(endpoint.id, false);
+      await expect(proposal()).rejects.toThrow(
+        /No enabled provider account offers/,
+      );
+    }
+  });
+}
+
+test("a dead non-compatible hint never inherits the proposer's compatible endpoint", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Reverse boundary endpoint",
+    provider: "openai-compatible",
+  });
+  const sender = `reverse-compatible-proposer-${endpoint.id}`;
+  sessionStore.upsert({
+    id: sender,
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: endpoint.id,
+    provider: endpoint.id,
+    model: "llama3",
+    thinkingLevel: "off",
+  });
+  vi.mocked(piModelApi.listModelsForProfile).mockImplementation(async (id) =>
+    id === endpoint.id
+      ? [
+          {
+            provider: endpoint.id,
+            id: "llama3",
+            name: "Llama",
+            reasoning: false,
+            supportedThinkingLevels: ["off"],
+            contextWindow: 32000,
+          },
+        ]
+      : piModels,
+  );
+  const proposal = () =>
+    buildSpawnProposal({
+      senderSessionId: sender,
+      rows: [
+        row({
+          provider: "openai-codex",
+          modelId: "retired-non-compatible",
+          thinkingLevel: "off",
+        }),
+      ],
+    });
+  const recovered = (await proposal()).items[0]!;
+  expect(recovered.provider).not.toMatch(/^openai-compatible/);
+  expect(recovered.modelWarning).toContain(
+    "openai-codex/retired-non-compatible",
+  );
+  const subscriptions = listCredentialProfiles().filter(
+    (profile) => profile.enabled && profile.provider !== "openai-compatible",
+  );
+  try {
+    for (const profile of subscriptions)
+      setCredentialProfileEnabled(profile.id, false);
+    await expect(proposal()).rejects.toThrow(
+      /No enabled provider account offers a model/,
+    );
+    // Missing provenance is enterprise-required; even an eligible endpoint is
+    // not discovered without an account selection.
+    patchCredentialProfile(endpoint.id, { enterprise: true });
+    await expect(
+      buildSpawnProposal({
+        senderSessionId: "missing-reverse-proposer",
+        rows: [row({ thinkingLevel: "off" })],
+      }),
+    ).rejects.toThrow(/No enabled enterprise account offers a runnable model/);
+  } finally {
+    for (const profile of subscriptions)
+      setCredentialProfileEnabled(profile.id, true);
+  }
+});
+
 /**
  * Survives `beforeEach`: every test mints unused ids, so no row an earlier test
  * froze or linked can answer for a new session.

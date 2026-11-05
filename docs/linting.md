@@ -154,7 +154,7 @@ The mechanical part is guarding a use site. The part that is not:
   known is a hazard — a spread of literals, including `...(c ? { a } : {})`,
   provably cannot supply some other key. Real clearing sites found this way
   include the credential-clearing paths in
-  `braveSettings`/`openAiCompatibleSettings`/ `context7Settings`,
+  `braveSettings`/`openAiCompatibleAccounts`/ `context7Settings`,
   `pullRequestActions`' `busyAction`, and the attachment payload stripped in
   `sessionPreviewStore`.
 - **Hoisting a value out of a guard.** Binding a computed value to a const must

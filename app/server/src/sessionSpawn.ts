@@ -20,7 +20,9 @@
  */
 import { randomUUID } from "node:crypto";
 import {
-  accountProviderForModelProvider,
+  accountPinForModel,
+  accountServesModel,
+  isOpenAiCompatibleModelProvider,
   estimateSpawnCompactionWindow,
   COMPACTION_WINDOW_AGENT_FLOOR,
   type SpawnCompactionWindow,
@@ -220,7 +222,24 @@ function runtimeOf(
 async function firstAvailableRuntime(
   level: ThinkingLevel,
   requiresEnterprise = false,
+  compatibleProvider?: string,
 ): Promise<ResolvedRuntime | undefined> {
+  // Endpoint identity is the account. A retired model may change within it,
+  // but discovery must never turn into a move to another endpoint or kind.
+  if (compatibleProvider) {
+    const profile = enabledCredentialProfileById(compatibleProvider);
+    if (!profile || (requiresEnterprise && !profile.enterprise))
+      return undefined;
+    const model = (await modelsForProfile(profile.id)).find(
+      (option) =>
+        option.provider === compatibleProvider &&
+        (!requiresEnterprise ||
+          supportedThinkingLevelsForModel(option).includes(level)),
+    );
+    return model
+      ? tryRuntime(model.provider, model.id, level, requiresEnterprise)
+      : undefined;
+  }
   const offers = await Promise.all(
     listCredentialProfiles()
       .filter(
@@ -274,8 +293,7 @@ async function tryRuntime(
         listCredentialProfiles()
           .filter(
             (profile) =>
-              profile.enabled &&
-              profile.provider === accountProviderForModelProvider(provider),
+              profile.enabled && accountServesModel(profile, provider),
           )
           .map((profile) => modelsForProfile(profile.id)),
       )
@@ -309,13 +327,11 @@ async function tryRuntime(
 /**
  * The runtime a row would actually run on, plus what was lost on the way there.
  *
- * A hint that does not resolve NEVER fails the proposal: the user is looking at
- * this card precisely so they can choose the model, and refusing a whole batch
- * because an agent guessed a model id that does not exist is a worse trade than
- * showing them a working default with a note saying so. The ladder down from a
- * dead hint is deliberate — the proposer's own runtime first, since inheriting
- * it is what an un-hinted row would have done anyway, and only then whatever
- * any enabled account can run.
+ * A dead hint may recover with a warning, but never across the compatible
+ * boundary: compatible selections stay on that endpoint; other selections try
+ * the proposer's non-compatible runtime, then enabled subscription accounts.
+ * Without an eligible model the proposal refuses. Enterprise selections retain
+ * their exact-model and effort requirement.
  */
 async function resolveRuntime(
   row: SpawnRequestRowFields,
@@ -357,8 +373,23 @@ async function resolveRuntime(
     if (exact) return exact;
   }
 
+  if (wantedProvider && isOpenAiCompatibleModelProvider(wantedProvider)) {
+    const available = await firstAvailableRuntime(level, false, wantedProvider);
+    if (!available)
+      throw new SpawnProposalError(
+        "No enabled provider account offers a model right now — enable an account in Settings first.",
+      );
+    return asked
+      ? {
+          ...available,
+          warning: `${asked} is not available on its account — this would run ${available.provider}/${available.modelId} instead.`,
+        }
+      : available;
+  }
+
   const inherited =
     fallback &&
+    !isOpenAiCompatibleModelProvider(fallback.provider) &&
     (fallback.provider !== wantedProvider || fallback.modelId !== wantedModelId)
       ? await tryRuntime(fallback.provider, fallback.modelId, level)
       : undefined;
@@ -791,7 +822,7 @@ async function settledItem(
     throw new Error(
       `The account for "${item.title}" is not marked as enterprise — pick an enterprise account, or skip that row.`,
     );
-  if (profile.provider !== accountProviderForModelProvider(item.provider))
+  if (!accountServesModel(profile, item.provider))
     throw new Error(
       `"${profile.name}" cannot run ${item.provider} models — pick a matching account for "${item.title}".`,
     );
@@ -1643,7 +1674,10 @@ export async function spawnApprovedPeers(input: {
               approved.modelId !== current.modelId ||
               approved.thinkingLevel !== current.thinkingLevel ||
               (approved.credentialProfileId &&
-                approved.credentialProfileId !== current.credentialProfileId)
+                accountPinForModel(
+                  approved.provider,
+                  approved.credentialProfileId,
+                ) !== current.credentialProfileId)
             )
               throw new Error(
                 "The approved peer runtime changed while starting; nothing was created. Spawn it again.",

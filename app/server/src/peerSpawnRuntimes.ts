@@ -25,6 +25,7 @@ import type {
   ThinkingLevel,
 } from "@assistant/shared";
 import {
+  accountPinForModel,
   DEFAULT_SESSION_PEER_TURN_CAP,
   isThinkingLevel,
   peerRuntimeDisplayName,
@@ -161,11 +162,11 @@ function rosterEntry(
   row: PeerSpawnRuntime,
   options: readonly AccountModelOption[],
 ): PeerRuntimeRosterEntry {
+  // Rule P: a compatible model's row runs on its own account, pinned or not.
+  const pin = accountPinForModel(row.provider, row.credentialProfileId);
   const model = options.find(
     (option) =>
-      (row.credentialProfileId
-        ? option.credentialProfileId === row.credentialProfileId
-        : !option.accountDisabled) &&
+      (pin ? option.credentialProfileId === pin : !option.accountDisabled) &&
       option.provider === row.provider &&
       option.id === row.modelId,
   );
@@ -180,7 +181,7 @@ function rosterEntry(
     modelId: row.modelId,
     ...(model?.name ? { modelName: model.name } : {}),
     thinkingLevel: row.thinkingLevel,
-    ...(!row.credentialProfileId
+    ...(!pin
       ? { accountName: "Automatic" }
       : model?.accountName
         ? { accountName: model.accountName }
@@ -247,7 +248,10 @@ export async function resolveApprovedPeerRuntime(
     throw new PeerRuntimeRefusedError(
       `Approved runtime "${peerRuntimeDisplayName(row)}" cannot run right now: ${reason}`,
     );
-  let credentialProfileId = row.credentialProfileId;
+  let credentialProfileId = accountPinForModel(
+    row.provider,
+    row.credentialProfileId,
+  );
   if (!credentialProfileId) {
     // The model/effort are authorization, not suggestions for the router.
     if (!isThinkingLevel(row.thinkingLevel))

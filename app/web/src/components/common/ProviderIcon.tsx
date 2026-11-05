@@ -1,7 +1,7 @@
 import { Boxes } from "lucide-react";
 import {
   CLAUDE_SDK_PROVIDER,
-  OPENAI_COMPATIBLE_PROVIDER_ID,
+  isOpenAiCompatibleModelProvider,
 } from "@assistant/shared";
 
 /** Brand families we render a monochrome mark for. */
@@ -22,13 +22,13 @@ const BRAND_PATHS: Record<Exclude<ProviderBrand, "generic">, string> = {
  * Map a (possibly granular) provider id onto one of the brand families we draw a
  * mark for. pi's provider ids are granular (e.g. `github-copilot`,
  * `openai-codex`); the two Claude-driven kinds (`claude`, `claude-sdk`) map to
- * Anthropic. Unknown providers, and the app's own OpenAI-compatible endpoint
+ * Anthropic. Unknown providers, and every OpenAI-compatible endpoint account
  * (whatever server it points at), fall back to a neutral generic icon.
  */
 function providerBrand(provider: string): ProviderBrand {
   const p = provider.toLowerCase();
   if (p === CLAUDE_SDK_PROVIDER) return "anthropic";
-  if (p === OPENAI_COMPATIBLE_PROVIDER_ID) return "generic";
+  if (isOpenAiCompatibleModelProvider(p)) return "generic";
   if (p.includes("anthropic") || p.includes("claude")) return "anthropic";
   if (p.includes("github") || p.includes("copilot")) return "github";
   if (p.includes("openai") || p.includes("codex") || p.includes("gpt"))

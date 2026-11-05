@@ -165,62 +165,59 @@ describe("new-session picker accounts", () => {
   const ids = (profiles: CredentialProfileSummary[]) =>
     profiles.map(({ id }) => id);
 
-  it("hides an unconnected OpenAI account carrying only the compatible endpoint and a Claude account with no models", () => {
-    const profiles = [
-      profile("default", "openai-codex"),
-      profile("c", "claude"),
-    ];
-    expect(
-      pickerCredentialProfiles(
-        profiles,
-        { default: [compatible], c: [] },
-        null,
-      ),
-    ).toEqual([]);
-  });
+  const second = "openai-compatible-0123456789ab";
 
-  it("hides a signed-in Claude account while the integration offers it no models", () => {
+  it("hides accounts with no models while an endpoint offers some", () => {
     expect(
       ids(
         pickerCredentialProfiles(
-          [profile("default", "openai-codex"), profile("c", "claude", "ready")],
-          { default: [compatible], c: [] },
+          [
+            profile("default", "openai-codex"),
+            profile("c", "claude", "ready"),
+            profile("openai-compatible", "openai-compatible", "ready"),
+          ],
+          { default: [], c: [], "openai-compatible": [compatible] },
           null,
         ),
       ),
-    ).toEqual([]);
+    ).toEqual(["openai-compatible"]);
   });
 
-  it("keeps accounts with something of their own to run", () => {
+  it("lists every endpoint as its own account beside connected logins", () => {
     expect(
       ids(
         pickerCredentialProfiles(
           [
             profile("connected", "openai-codex", "ready"),
-            profile("codex-listed", "openai-codex"),
             profile("claude-api-key", "claude"),
+            profile("openai-compatible", "openai-compatible", "ready"),
+            profile(second, "openai-compatible", "ready"),
           ],
           {
-            connected: [compatible],
-            "codex-listed": [codex, compatible],
+            connected: [codex],
             "claude-api-key": [sonnet],
+            "openai-compatible": [compatible],
+            [second]: [{ ...compatible, provider: second }],
           },
           null,
         ),
       ),
-    ).toEqual(["connected", "codex-listed", "claude-api-key"]);
+    ).toEqual(["connected", "claude-api-key", "openai-compatible", second]);
   });
 
   it("keeps the staged pick visible even with nothing of its own", () => {
     expect(
       ids(
         pickerCredentialProfiles(
-          [profile("default", "openai-codex")],
-          { default: [compatible] },
+          [
+            profile("default", "openai-codex"),
+            profile("openai-compatible", "openai-compatible", "ready"),
+          ],
+          { default: [], "openai-compatible": [compatible] },
           "default",
         ),
       ),
-    ).toEqual(["default"]);
+    ).toEqual(["default", "openai-compatible"]);
   });
 
   it("keeps every account when nothing can run anywhere", () => {

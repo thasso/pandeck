@@ -10,6 +10,7 @@ import {
 import {
   peerPromptHopRefusalMessage,
   type AgentQuestionResponse,
+  type CredentialProfileProvider,
   type EntrySummary,
   type ModelOption,
   type PromptAttachment,
@@ -108,7 +109,11 @@ export interface SessionChatHost {
   view: TranscriptViewPrefs;
   accountModels: NonNullable<MessageListProps["accountModels"]>;
   taskLiveSource: ComponentProps<typeof TaskLiveSourceProvider>["source"];
-  credentialProfiles: readonly { id: string; name: string }[];
+  credentialProfiles: readonly {
+    id: string;
+    name: string;
+    provider: CredentialProfileProvider;
+  }[];
   describeSession: (session: SessionListItem) => SpawnedSessionDetails;
   onNavigate: (path: string) => void;
   onOpenSession: (id: string) => void;

@@ -135,23 +135,6 @@ export const settingsFixture: AppSettings = {
     botTokenConfigured: true,
     connected: true,
   },
-  openAiCompatible: {
-    enabled: true,
-    name: "Local inference",
-    baseUrl: "https://models.example.com/v1",
-    apiKeyConfigured: false,
-    thinkingFormat: "qwen-chat-template",
-    models: [
-      {
-        id: "qwen3",
-        name: "Qwen 3",
-        input: ["text"],
-        reasoning: true,
-        contextWindow: 131_072,
-        maxTokens: 8192,
-      },
-    ],
-  },
   brave: { enabled: true, apiKeyConfigured: true },
   context7: { enabled: true, apiKeyConfigured: true },
   github: {

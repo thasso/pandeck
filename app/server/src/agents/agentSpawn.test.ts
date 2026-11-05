@@ -113,6 +113,50 @@ afterEach(() => {
   setAgentSpawnSourcesForTests(null);
 });
 
+test("a compatible default with health fallback allowed selects its endpoint without trying the next model", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Agent endpoint",
+    provider: "openai-compatible",
+  });
+  const { writeOpenAiCompatibleEndpoint } =
+    await import("../openAiCompatibleAccounts.ts");
+  writeOpenAiCompatibleEndpoint(endpoint.id, {
+    baseUrl: "http://127.0.0.1:9/v1",
+    thinkingFormat: "none",
+    models: [
+      {
+        id: "llama3",
+        name: "Llama",
+        input: ["text"],
+        reasoning: false,
+        contextWindow: 32000,
+        maxTokens: 4000,
+      },
+    ],
+  });
+  models = [model(endpoint.id, "llama3", ["off"]), model("claude-sdk", "opus")];
+  write(
+    "test-reviewer",
+    reviewer({ models: [`${endpoint.id}/llama3`, "opus"] }),
+  );
+  const { pickAccount } = await import("../accountRouter.ts");
+  const picks: string[] = [];
+  setAgentSpawnSourcesForTests({
+    library: () => new LibraryStore(agentKind, root),
+    accountFor: (request) => {
+      picks.push(request.model.provider);
+      return pickAccount(request);
+    },
+  });
+  const result = await resolveAgentSpawn("test-reviewer", undefined, {
+    allowModelFallback: true,
+  });
+  assert.equal(result.provider, endpoint.id);
+  assert.equal(result.modelId, "llama3");
+  assert.equal(result.credentialProfileId, endpoint.id);
+  assert.deepEqual(picks, [endpoint.id]);
+});
+
 test("a definition resolves to its model, account and the exact bytes it froze", async () => {
   write("test-reviewer", reviewer({ effort: "high" }));
   const runtime = await resolveAgentSpawn("test-reviewer");

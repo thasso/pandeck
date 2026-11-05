@@ -77,21 +77,15 @@ sections need:
 | `permanentAssistant`  | A changed name, provider, model, thinking level, instructions or working directory rotates the Personal Assistant to a fresh session |
 | `slack`               | Reconcile Socket Mode                                                                                                                |
 | `github`              | Reconcile the package proxy                                                                                                          |
-| `openAiCompatible`    | Sync the configured model providers                                                                                                  |
 | any other integration | `notifyIntegrationToolsChanged` (live `tools/list_changed`)                                                                          |
 | `knowledgeBase`       | `notifyIntegrationToolsChanged`: the setting gates the `kb_*` tool groups                                                            |
-
-The service imports no engine (`docs/agent-harnesses.md`): the model-provider
-sync is the engine's `syncConfiguredModelProviders`, installed at boot by
-`index.ts` through `setModelProviderSync`.
 
 Then every `onSettingsChanged` listener hears which sections were written. The
 hub forwards that to each connection's `settingsChanged`, which sends that
 client its own `settings` (OAuth redirect URIs depend on the connection's public
-URL), plus `models` after a `claudeSdk` or `openAiCompatible` write and
-`speechToTextStatus` after a `speechToText`, `speechConversation` or
-`speechSynthesis` write. The writer gets its echo the same way as everyone else,
-before the request's `mutationSettled`.
+URL), plus `models` after a `claudeSdk` write and `speechToTextStatus` after a
+`speechToText`, `speechConversation` or `speechSynthesis` write. The writer gets
+its echo the same way as everyone else, before the request's `mutationSettled`.
 
 Each effect and each listener runs on its own, so one failure never skips the
 rest or the announcement. A section counts as written once its writer has run,
@@ -104,8 +98,7 @@ touches `permanentAssistant`, so one unreadable integration file never blocks
 saving an unrelated section.
 
 `announceSettingsWritten(sections)` covers settings a module persists on its
-own: an OpenAI-compatible connection test stores the models it discovered, and
-the Google, Slack and Tempo OAuth callbacks store tokens. It runs the same
+own: the Google, Slack and Tempo OAuth callbacks store tokens. It runs the same
 effects and pushes the same per-connection update.
 
 `settingsPatchForWrites(writes)` turns path-addressed writes (`{ path, value }`)
@@ -253,24 +246,22 @@ harness enforces it before `execute`:
   deduplicated, each test has a deadline, and the call's cancellation signal
   reaches the HTTP requests of every test that makes them directly. The rest
   (Confluence, Google, Slack) only read, so an abandoned one ends at its own
-  request timeouts. OpenAI-compatible discovery checks cancellation right before
-  it stores models, and stores them only if the endpoint and key are still the
-  ones it asked, keeping any change saved meanwhile. Progress is streamed after
-  each test.
+  request timeouts. Progress is streamed after each test.
 
 A stored credential stays with the URL origin (scheme, host and port) it was
 entered or connected for (`app/server/src/urlOrigin.ts`). Saving a URL on
 another origin drops it in the same write, unless that write also carries a new
-one: the Forgejo token, the OpenAI-compatible API key, and the Tempo connection.
-Otherwise anyone who can change a URL, the Personal Assistant included, could
-have the next call or connection test send a secret they cannot read to a host
-they choose. A path change on the same origin keeps the credential. This holds
-for the Settings page too, whose URL fields say so; its forms send the URL and a
-re-entered token in one save. An integration added later with a configurable URL
-and a stored credential must do the same in its store. A pi session or one-shot
-already holding an OpenAI-compatible model from an endpoint on another origin is
-refused (pi's `Provider is not configured`) until the model is reselected or the
-session reopened, so the key never follows the URL to another origin
+one: the Forgejo token, an OpenAI-compatible account's API key ("Accounts"
+below), and the Tempo connection. Otherwise anyone who can change a URL, the
+Personal Assistant included, could have the next call or connection test send a
+secret they cannot read to a host they choose. A path change on the same origin
+keeps the credential. This holds for the Settings page too, whose URL fields say
+so; its forms send the URL and a re-entered token in one save. An integration
+added later with a configurable URL and a stored credential must do the same in
+its store. A pi session or one-shot already holding an OpenAI-compatible model
+from an endpoint on another origin is refused (pi's
+`Provider is not configured`) until the model is reselected or the session
+reopened, so the key never follows the URL to another origin
 (`docs/workers.md`).
 
 The Google and Tempo token refreshes, which every tool and test go through,
@@ -282,8 +273,8 @@ state is still stored, so a disconnect or API move saved meanwhile stands. A
 refresh is not cancelled mid-request: the provider may already have rotated the
 refresh token, and dropping the answer would lose the grant.
 
-The Brave, Confluence, Context7, Forgejo, GitHub, Google, Jira,
-OpenAI-compatible, Slack and Tempo stores use
+The Brave, Confluence, Context7, Forgejo, GitHub, Google, Jira, Slack and Tempo
+stores, and each OpenAI-compatible account's endpoint, use
 `app/server/src/privateJsonFile.ts` for private JSON persistence. The helper
 owns the path and error label, passes missing files to the caller's normalizer
 as `undefined`, and does not cache. Its write path is also shared by Web Push,
@@ -374,11 +365,11 @@ into the one-time legacy pi import, set `ASSISTANT_LEGACY_PI_AGENT_DIR` to the
 source directory before startup. Existing imports and their markers are
 preserved; an unconfigured import creates no marker and can be enabled later.
 
-The Claude and OpenAI accounts models run on are credential profiles
-(`app/server/src/credentialProfiles.ts`), kept outside the settings registry.
-The Personal Assistant reaches them through three tools in the same `settings`
-group, which call the functions the Settings page's `/api/credential-profiles`
-routes call:
+The accounts models run on (Claude and OpenAI logins, and OpenAI-compatible
+endpoints) are credential profiles (`app/server/src/credentialProfiles.ts`),
+kept outside the settings registry. The Personal Assistant reaches them through
+three tools in the same `settings` group, which call the functions the Settings
+page's `/api/credential-profiles` routes call:
 
 - `accounts_read`: each account's id, name, provider, enabled state and sign-in
   status, the settings that pin it, how many sessions are bound to it, and
@@ -386,7 +377,9 @@ routes call:
   its device code or link here.
 - `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
   default account or one a session is bound to, as the page does, and unpins the
-  account from every setting through `clearProfilePins`.
+  account from every setting through `clearProfilePins`. Only login kinds are
+  created here; an endpoint account is created and its endpoint edited only on
+  the Settings page, so no agent tool reads or writes a URL or key.
 - `accounts_sign_in`: raises a `settingsInput` card in `signIn` mode
   (`path: accounts.<id>`, `account: { id, provider }`) and ends the turn. In the
   browser an OpenAI account starts its device login and shows the link and code
@@ -401,10 +394,114 @@ routes call:
   left waiting. An account that is already signed in gets no card: the tool
   reports it, since a new login would satisfy a card with the old credential
   before the new one exists.
+- `accounts_sign_in` refuses an endpoint account
+  (`ACCOUNT_KINDS[kind] .credential` is `endpoint`), naming its Settings page
+  instead. Each account's Settings link comes from its kind's `settingsSection`.
 - An account's raw login error is the provider's text and can quote a device
   code, link or token, so the tools never return it: an account in `error`
   status carries a server-written note pointing at its Settings page, which
   shows the error to the user.
+
+### OpenAI-compatible accounts
+
+An OpenAI-compatible endpoint is an account of its own
+(`docs/account-routing.md` "Account kinds"), any number of them, never a
+settings section. The registry entry holds its name, enabled switch, enterprise
+flag and priority like any account; its endpoint (base URL, optional key,
+thinking format, discovered models) lives in
+`credential-profiles/<id>/endpoint.json`, 0600 in a 0700 directory, through
+`privateJsonFile.ts` (`openAiCompatibleAccounts.ts`). Every summary and wire
+payload carries `apiKeyConfigured`, never the key. A new account's id is
+`openai-compatible-<12 hex>`, also the pi provider id of its models.
+
+- `POST /api/credential-profiles` with `provider: "openai-compatible"` creates
+  one, disconnected until it has a base URL and models.
+- `PATCH /api/credential-profiles/<id>/endpoint` edits the endpoint and returns
+  the summary. A new base URL clears the discovered models, and a new origin
+  drops the key unless the same edit sets one.
+- `POST /api/credential-profiles/<id>/endpoint/test` discovers the models from
+  the endpoint's `/models` and stores them, returning the status and summary. It
+  is cancelled when the request closes, checks that right before storing, and
+  stores only while the account still exists with the endpoint and key it asked,
+  keeping any edit saved meanwhile. A failure is redacted
+  (`secretRedaction.ts`), since an endpoint's error body may echo the key.
+
+An edit, a discovery or a rename reaches the account's pi runtime before the
+call returns, including the runtime a running session or one-shot already holds:
+its next request sends the new key, sends none once the key is cleared, and a
+model it holds from a replaced origin is refused unsent. A key-less endpoint is
+the established exception: it pairs no credential, so nothing is at risk and
+nothing is refused, and a model held from the replaced origin still sends there,
+without a key (`serverCredentialPairing.ts`). A deleted account's runtime serves
+nothing. Disabling changes no runtime; the next turn's admission decides. The
+hub sends every connection a fresh `models` list for any compatible account
+change.
+
+**Migration of the former single endpoint.** Boot moves
+`settings/openai-compatible.json` to the account `openai-compatible`, the only
+id without a suffix, before any runtime exists
+(`migrateOpenAiCompatibleSettingsToAccount`, from `piSdk/models.ts`). It writes
+`endpoint.json`, checks its mode and reads it back, then adds the registry entry
+(enterprise copied from Default OpenAI) and reads that back: the registry entry
+is the commit point. Only then is the old file deleted. A crash at any step
+leaves the old file, and the next boot converges: with the entry already there,
+it deletes the old file only if `endpoint.json` still equals it and is 0600, and
+otherwise leaves both for manual review, since the user may have edited the
+account. An old file holding nothing is deleted; an unreadable one stays.
+Nothing it logs names the key or URL, and boot goes on either way. SQL migration
+0099 rebinds every session and held peer child on an `openai-compatible` model
+to that account.
+
+**Before deploying, and rolling back.** The migration keeps no backup: once it
+succeeds, the only copy of the key is
+`credential-profiles/openai-compatible/endpoint.json`. Take the usual copy of
+`DATA_DIR` before deploying, and make sure it includes
+`settings/openai-compatible.json`. A release from before the migration reads
+only that old file, so after a rollback it has no compatible endpoint. Either
+restore the file from the copy, or rebuild it (mode 0600) by hand:
+
+| Old `settings/openai-compatible.json` | Source after the migration                                                       |
+| ------------------------------------- | -------------------------------------------------------------------------------- |
+| `baseUrl`                             | `endpoint.json` `baseUrl`                                                        |
+| `apiKey`                              | `endpoint.json` `apiKey` (absent for a key-less endpoint)                        |
+| `thinkingFormat`                      | `endpoint.json` `thinkingFormat`                                                 |
+| `models`                              | `endpoint.json` `models`                                                         |
+| `enabled`                             | the `openai-compatible` entry's `enabled` in `credential-profiles/profiles.json` |
+| `name`                                | that entry's `name`                                                              |
+
+Or enter the endpoint again in that release's Settings. Copy the key without
+printing it. Only the migrated account maps back: an older release has one
+endpoint, so accounts added since have no place there. Other things to know on
+rollback:
+
+- An older release skips registry entries of a kind it does not know, and drops
+  them for good the next time it saves the registry. Keep the copy of
+  `credential-profiles/` to restore them on rolling forward.
+- SQL 0099 does not reverse. Sessions and peer children it rebound name the
+  account `openai-compatible`, which an older release does not have, so they
+  take its missing-account path: an explicit error, and a fork picks again.
+- Pins normalized by rule P also name `openai-compatible`, and an older release
+  treats them as pins to a missing account, falling back as its resolvers do.
+- Rolling forward again migrates a restored old file again. If the registry
+  entry survived and `endpoint.json` no longer equals the file (for example, the
+  endpoint was edited in the older release), both are left for manual review, as
+  after any mismatch.
+
+**On the Settings page.** Settings → OpenAI-compatible lists one account card
+per endpoint (`CredentialProfilesSection`), with the same name, enable,
+enterprise and priority controls as any account, plus the base URL, a write-only
+key field (the card shows only whether one is saved, with Remove key), the
+thinking control, **Test** and the discovered models. "Save and discover models"
+saves the endpoint and runs the same Test. "Add endpoint" creates one by name. A
+card shows "No plan limits" where a login shows its plan: an endpoint has no
+usage, health or Usage page entry.
+
+**Pins.** A compatible model runs on exactly one account, so every stored pin on
+such a model names it (rule P, `accountPinForModel`): a boot pass after the
+migration rewrites `app.json` only when a pin changes
+(`normalizeCompatibleSettingsPins`), model slots apply it on every write, and
+approved peer runtimes on every save. An unpinned (Automatic) entry stays
+unpinned.
 
 ## The Settings page and the registry
 

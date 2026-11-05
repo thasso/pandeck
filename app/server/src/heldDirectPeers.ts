@@ -21,6 +21,7 @@
  * deleted, is cancelled silently; that never needs a free slot.
  */
 import {
+  accountPinForModel,
   peerRuntimeUnavailableReason,
   type AccountModelOption,
   type ModelOption,
@@ -140,13 +141,16 @@ function heldStartVerdict(
     const row = getSettings().peerSpawnRuntimes.find((r) => r.id === profileId);
     if (!row) return "held_runtime_removed";
     if (!row.enabled) return "held_runtime_disabled";
+    // Rule P: a compatible model's row means its own account, pinned or not.
+    const rowPin = accountPinForModel(
+      row.provider,
+      row.credentialProfileId || undefined,
+    );
     if (
       row.provider !== child.provider ||
       row.modelId !== child.modelId ||
       row.thinkingLevel !== child.thinkingLevel ||
-      (row.credentialProfileId !== undefined &&
-        row.credentialProfileId !== "" &&
-        row.credentialProfileId !== child.credentialProfileId)
+      (rowPin !== undefined && rowPin !== child.credentialProfileId)
     )
       return "held_runtime_changed";
     // Discovery's account flags are from before its await; the account is

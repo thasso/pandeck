@@ -26,14 +26,18 @@ import type { findModel } from "./models.ts";
 async function loadPi() {
   const { DefaultResourceLoader, SessionManager, createAgentSession } =
     await import("@earendil-works/pi-coding-agent");
-  const { modelRegistryForProfile, modelRuntimeForProfile } =
-    await import("./models.ts");
+  const {
+    availableModelsForProfile,
+    findModelForProfile,
+    modelRuntimeForProfile,
+  } = await import("./models.ts");
   const { toPiToolDefinitions } = await import("./agentToolAdapter.ts");
   return {
     DefaultResourceLoader,
     SessionManager,
     createAgentSession,
-    modelRegistryForProfile,
+    availableModelsForProfile,
+    findModelForProfile,
     modelRuntimeForProfile,
     toPiToolDefinitions,
   };
@@ -73,8 +77,10 @@ export type PiRegistryModel = NonNullable<ReturnType<typeof findModel>>;
  * Resolve the model for a helper agent against the account it will actually run
  * on: the configured provider/model if that account offers it, otherwise the
  * recommended cheap fallback, then any available non-reasoning text model, then
- * any available model at all. Always scoped to one profile — a model handle
- * from another account's registry would not be usable here.
+ * any available model at all. Always scoped to one profile, through its
+ * account model gate — a model handle from another account's registry would
+ * not be usable here, and an OpenAI-compatible account falls back only within
+ * its own endpoint's models.
  *
  * The fallback follows {@link DEFAULT_HELPER_MODEL}. It used to be
  * `github-copilot/gpt-4.1`, the catalog's last non-reasoning Copilot model; pi
@@ -85,18 +91,22 @@ export async function selectPiModelWithFallback(
   settings: { provider: string; modelId: string },
   credentialProfileId: string,
 ): Promise<PiRegistryModel | undefined> {
-  const { modelRegistryForProfile } = await loadPi();
-  const registry = await modelRegistryForProfile(credentialProfileId);
-  const configured = registry.find(settings.provider, settings.modelId);
+  const { availableModelsForProfile, findModelForProfile } = await loadPi();
+  const configured = await findModelForProfile(
+    credentialProfileId,
+    settings.provider,
+    settings.modelId,
+  );
   if (configured) return configured;
 
-  const preferred = registry.find(
+  const preferred = await findModelForProfile(
+    credentialProfileId,
     DEFAULT_HELPER_MODEL.provider,
     DEFAULT_HELPER_MODEL.modelId,
   );
   if (preferred) return preferred;
 
-  const available = registry.getAvailable();
+  const available = await availableModelsForProfile(credentialProfileId);
   return (
     available.find((m) => !m.reasoning && m.input.includes("text")) ??
     available[0]
@@ -108,9 +118,12 @@ export async function findPiModelExact(
   settings: { provider: string; modelId: string },
   credentialProfileId: string,
 ): Promise<PiRegistryModel | undefined> {
-  const { modelRegistryForProfile } = await loadPi();
-  const registry = await modelRegistryForProfile(credentialProfileId);
-  return registry.find(settings.provider, settings.modelId);
+  const { findModelForProfile } = await loadPi();
+  return findModelForProfile(
+    credentialProfileId,
+    settings.provider,
+    settings.modelId,
+  );
 }
 
 export interface PiOneShotOptions {

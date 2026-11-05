@@ -11,7 +11,8 @@
  * router lazily so settings.ts can import them without an import cycle.
  */
 import {
-  accountProviderForModelProvider,
+  accountPinForModel,
+  accountServesModel,
   type AppSettings,
   type CredentialProfilePin,
   type CredentialProfileSlotUsage,
@@ -137,8 +138,11 @@ export interface SlotAccountResolution {
 export async function resolveSlotAccount(
   slot: SettingsModelSlot,
 ): Promise<SlotAccountResolution> {
-  const wanted = accountProviderForModelProvider(slot.provider);
-  const pinned = slot.credentialProfileId?.trim();
+  // Rule P: a compatible model's pin is its own account, whatever was stored.
+  const pinned = accountPinForModel(
+    slot.provider,
+    slot.credentialProfileId?.trim() || undefined,
+  );
   let degraded: SlotAccountDegradation | undefined;
   if (pinned) {
     const profile = credentialProfileById(pinned);
@@ -148,7 +152,7 @@ export async function resolveSlotAccount(
       );
     degraded = !profile
       ? "missing"
-      : profile.provider !== wanted
+      : !accountServesModel(profile, slot.provider)
         ? "provider-mismatch"
         : !profile.enabled
           ? "disabled"
@@ -196,8 +200,8 @@ export function pinnedSlotsForProfile(
 }
 
 /**
- * Drop pins that name an unknown account or an account of the wrong provider,
- * so nothing invalid is ever persisted. A pin to a currently DISABLED account
+ * Drop pins that name an unknown account or one that does not serve the slot's
+ * model, so nothing invalid is ever persisted. A pin to a currently DISABLED account
  * is kept: disabling is reversible and the resolver degrades it meanwhile.
  */
 function sanitizeSlotPin<
@@ -209,13 +213,12 @@ function sanitizeSlotPin<
     const { credentialProfileId: _dropped, ...rest } = value;
     return rest as T;
   }
-  const profile = credentialProfileById(pinned);
   const provider = typeof value.provider === "string" ? value.provider : "";
-  if (
-    profile &&
-    profile.provider === accountProviderForModelProvider(provider)
-  ) {
-    return { ...value, credentialProfileId: pinned };
+  // Rule P first: a compatible model's pin is its own account.
+  const pin = accountPinForModel(provider, pinned)!;
+  const profile = credentialProfileById(pin);
+  if (profile && accountServesModel(profile, provider)) {
+    return { ...value, credentialProfileId: pin };
   }
   const { credentialProfileId: _dropped, ...rest } = value;
   return rest as T;

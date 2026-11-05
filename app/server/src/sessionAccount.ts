@@ -1,15 +1,25 @@
 import {
-  accountProviderForModelProvider,
-  CLAUDE_SDK_PROVIDER,
+  ACCOUNT_KINDS,
+  accountKindForModelProvider,
+  accountPinForModel,
+  accountServesModel,
   DEFAULT_HELPER_MODEL,
+  HARNESSES,
+  harnessForModelProvider,
+  isSubscriptionAccountKind,
   type CredentialProfileProvider,
+  type Harness,
   type ThinkingLevel,
 } from "@assistant/shared";
 import { credentialProfileById } from "./credentialProfiles.ts";
 import { pickAccount } from "./accountRouter.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 
-/** Rechecked after each asynchronous move step, before changing the binding. */
+/**
+ * Rechecked after each asynchronous move step, before changing the binding.
+ * Only subscription logins ever switch: any other account alone serves its
+ * models.
+ */
 export function assertSessionAccountSwitch(
   sessionId: string,
   previous: string,
@@ -22,15 +32,26 @@ export function assertSessionAccountSwitch(
       "The session's bound account is no longer available for this switch.",
     );
   const profile = credentialProfileById(next);
-  if (next === previous || !profile?.enabled || profile.provider !== provider)
+  if (
+    next === previous ||
+    !isSubscriptionAccountKind(provider) ||
+    !profile?.enabled ||
+    profile.provider !== provider
+  )
     throw new Error("The replacement account is no longer available.");
   if (source.requiresEnterprise && !profile.enterprise)
     throw new Error("This session requires an enterprise account.");
 }
 
-/** Shared interactive creation policy; inherited pins alone may be disabled. */
+/**
+ * Shared interactive creation policy. The model decides which accounts may
+ * run it (`accountServesModel`). An explicit pin passes rule P, then must be
+ * enabled and serve the model. An inherited pin (the parent session's account,
+ * on a fork or draft) is kept, even disabled, only when that exact account
+ * serves the new model; otherwise Automatic picks.
+ */
 export async function resolveSessionAccount(
-  provider: CredentialProfileProvider,
+  harness: Harness,
   selection: {
     credentialProfileId?: string | undefined;
     modelProvider?: string | undefined;
@@ -38,30 +59,35 @@ export async function resolveSessionAccount(
     thinkingLevel?: ThinkingLevel | undefined;
     requiresEnterprise?: boolean | undefined;
   },
-  options: { allowDisabledPin?: boolean } = {},
+  options: { inheritedPin?: boolean } = {},
 ): Promise<string> {
-  const label = provider === "claude" ? "Claude" : "OpenAI";
+  // The harness supplies only the default model when the selection names none.
+  const defaultModel = HARNESSES[harness].defaultModel ?? DEFAULT_HELPER_MODEL;
   const model = {
-    provider:
-      selection.modelProvider ??
-      (provider === "claude"
-        ? CLAUDE_SDK_PROVIDER
-        : DEFAULT_HELPER_MODEL.provider),
-    modelId:
-      selection.modelId ??
-      (provider === "claude" ? "sonnet" : DEFAULT_HELPER_MODEL.modelId),
+    provider: selection.modelProvider ?? defaultModel.provider,
+    modelId: selection.modelId ?? defaultModel.modelId,
   };
-  if (accountProviderForModelProvider(model.provider) !== provider)
+  const label =
+    ACCOUNT_KINDS[accountKindForModelProvider(model.provider)].label;
+  if (harnessForModelProvider(model.provider) !== harness)
     throw new Error(`Select an enabled ${label} credential profile.`);
-  const pin = selection.credentialProfileId?.trim();
+  const stored = selection.credentialProfileId?.trim() || undefined;
+  if (stored && options.inheritedPin) {
+    const profile = credentialProfileById(stored);
+    if (profile && accountServesModel(profile, model.provider)) {
+      if (selection.requiresEnterprise && !profile.enterprise)
+        throw new Error("This session requires an enterprise account.");
+      return stored;
+    }
+  }
+  const pin = options.inheritedPin
+    ? undefined
+    : accountPinForModel(model.provider, stored);
   if (pin) {
     const profile = credentialProfileById(pin);
     if (!profile)
       throw new Error("The bound credential profile no longer exists.");
-    if (
-      profile.provider !== provider ||
-      (!profile.enabled && !options.allowDisabledPin)
-    )
+    if (!accountServesModel(profile, model.provider) || !profile.enabled)
       throw new Error(`Select an enabled ${label} credential profile.`);
     if (selection.requiresEnterprise && !profile.enterprise)
       throw new Error("This session requires an enterprise account.");

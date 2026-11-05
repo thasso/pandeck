@@ -211,6 +211,77 @@ test("handoff enterprise choice is passed to routing and durable creation; perso
   assert.equal(created.mock.calls[0]?.[0].requiresEnterprise, true);
 });
 
+test("an endpoint handoff resolves its model account and durably persists it, not the carrier pin", async () => {
+  await import("../hub.ts");
+  const { piStore } = await import("../piSdk/piStore.ts");
+  const { sessionStore } = await import("../db/sessionStore.ts");
+  const { writeOpenAiCompatibleEndpoint } =
+    await import("../openAiCompatibleAccounts.ts");
+  const { insertWorktree } = await import("../db/worktreeStore.ts");
+  const account = createCredentialProfile({
+    name: "Handoff endpoint",
+    provider: "openai-compatible",
+  });
+  patchCredentialProfile(account.id, { enterprise: true });
+  writeOpenAiCompatibleEndpoint(account.id, {
+    baseUrl: "http://127.0.0.1:9/v1",
+    thinkingFormat: "none",
+    models: [
+      {
+        id: "llama3",
+        name: "Llama",
+        input: ["text"],
+        reasoning: false,
+        contextWindow: 32000,
+        maxTokens: 4000,
+      },
+    ],
+  });
+  insertWorktree({
+    id: "wt-endpoint-handoff",
+    projectId: "fixture",
+    mainRepoRoot: tmp,
+    path: tmp,
+    branch: "fixture",
+    baseBranch: "main",
+    baseCommit: "base",
+    status: "active",
+    mergeStateJson: null,
+    createdAt: 0,
+    updatedAt: 0,
+    removedAt: null,
+  });
+  const id = "endpoint-handoff-created";
+  const acquire = vi.spyOn(piStore, "acquireNew").mockResolvedValue({
+    key: id,
+    sessionId: id,
+    nativeFacts: () => ({
+      kind: "developer",
+      agentType: "developer",
+      harness: "pi",
+      thinkingLevel: "off",
+    }),
+    rename() {},
+  } as never);
+  await handoffEngine("pi").create(
+    {
+      agentType: "developer",
+      credentialProfileId: "default",
+      modelProvider: account.id,
+      modelId: "llama3",
+      requiresEnterprise: true,
+    },
+    { id: "wt-endpoint-handoff", path: tmp },
+  );
+  assert.equal(acquire.mock.calls[0]?.[3]?.credentialProfileId, account.id);
+  assert.equal(
+    (acquire.mock.calls[0]?.[1] as { provider?: string })?.provider,
+    account.id,
+  );
+  assert.equal(sessionStore.get(id)?.credentialProfileId, account.id);
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+});
+
 test("a Claude handoff without a named account uses the account picker", async () => {
   claudeEnabled(true);
   const picked = createCredentialProfile({

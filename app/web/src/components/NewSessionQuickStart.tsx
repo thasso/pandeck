@@ -6,8 +6,6 @@ import {
   UserRoundCog,
 } from "lucide-react";
 import {
-  OPENAI_COMPATIBLE_PROVIDER_ID,
-  providerLabel,
   supportedThinkingLevelsForModel,
   type ModelOption,
   type ProjectRecord,
@@ -16,6 +14,7 @@ import {
   type TaskSummary,
   type ThinkingLevel,
   type WorktreeRecord,
+  type CredentialProfileProvider,
   type CredentialProfileSummary,
   agentRuntimeOf,
   type EntryLibraryList,
@@ -318,14 +317,6 @@ export function NewSessionQuickStart({
   const offeredCredentialProfiles = requiresEnterprise
     ? pickableCredentialProfiles.filter((profile) => profile.enterprise)
     : pickableCredentialProfiles;
-  // With no account to choose, the compatible endpoint is all a session can run
-  // on, so its card replaces Automatic. It has no plan to meter.
-  const endpointModel =
-    offeredCredentialProfiles.length === 0 &&
-    models.length > 0 &&
-    models.every((model) => model.provider === OPENAI_COMPATIBLE_PROVIDER_ID)
-      ? models[0]
-      : undefined;
 
   return (
     // One card around the whole configuration: what the session starts in
@@ -557,20 +548,11 @@ export function NewSessionQuickStart({
                   automatic={{
                     selected: selectedCredentialProfileId === null,
                     onSelect: () => onSelectCredentialProfile(null),
-                    detail: endpointModel
-                      ? "No plan limits"
-                      : automaticAccountName
-                        ? `Now: ${automaticAccountName}`
-                        : requiresEnterprise
-                          ? "Best enterprise account with room"
-                          : "Best account with room",
-                    endpoint: endpointModel && {
-                      provider: endpointModel.provider,
-                      name: providerLabel(
-                        endpointModel.provider,
-                        endpointModel.providerName,
-                      ),
-                    },
+                    detail: automaticAccountName
+                      ? `Now: ${automaticAccountName}`
+                      : requiresEnterprise
+                        ? "Best enterprise account with room"
+                        : "Best account with room",
                   }}
                 />
                 <div className="flex items-center justify-center gap-2 px-4">
@@ -588,12 +570,10 @@ export function NewSessionQuickStart({
                   </Label>
                 </div>
                 {requiresEnterprise &&
-                offeredCredentialProfiles.length === 0 &&
-                !endpointModel ? (
+                offeredCredentialProfiles.length === 0 ? (
                   <p className="px-4 text-center text-xs text-muted-foreground">
                     No enabled account is marked Enterprise, so this session
-                    cannot start. Mark one under Settings → Claude SDK or
-                    OpenAI, or turn this off.
+                    cannot start. Mark one in Settings, or turn this off.
                   </p>
                 ) : null}
               </div>
@@ -660,7 +640,9 @@ function AgentRow({
    * The enabled accounts, once known. A definition is staged on an account of
    * its pre-filled model's provider, so none is offered before they are read.
    */
-  accounts: ReadonlyArray<{ provider: string }> | undefined;
+  accounts:
+    | ReadonlyArray<{ id: string; provider: CredentialProfileProvider }>
+    | undefined;
   selectedAgent: string | null;
   onSelectAgent: (name: string | null) => void;
 }) {

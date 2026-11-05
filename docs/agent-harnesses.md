@@ -60,6 +60,36 @@ prompt/runtime path.
 [Account routing](account-routing.md#live-account-switching) owns the failover
 policy and replay limits.
 
+## Account model gate
+
+Every per-account model lookup (`listModelsForProfile`,
+`availableModelsForProfile`, `findModelForProfile` in `piSdk/models.ts`, and the
+hosted engine's `findForProfile`) answers only models the account serves
+(`docs/account-routing.md` "Account kinds"), whatever its pi runtime holds:
+every runtime carries pi's built-in providers. An OpenAI-compatible account's
+runtime is in memory and registers only its own endpoint, re-registered on every
+account change, including on a runtime a session or one-shot already holds; an
+OpenAI account's runtime registers none. A key-less global catalog of every
+compatible account serves display lookups (`findModel`, `listModels`) only.
+
+- **Start model.** A compatible pi session always opens on a model the app chose
+  and passes explicitly, so pi's restore and default selection never run there:
+  the branch's last selection on the account, else the account's first model
+  with a warning notice. An agent or account-switch open keeps its model or
+  refuses; an account with no models refuses with "Run Test on its card in
+  Settings, or start a new session."
+- **After start.** `openPiEngine` checks the model the session started on
+  against its account, whatever start function ran, and disposes and refuses a
+  mismatch.
+- **Switching model.** A live session's switch refuses a model its account does
+  not serve, naming the account and pointing at a new session; a hosted engine
+  resolves the switch through `findForProfile`. A native fork keeps the parent's
+  account, so it is no way across accounts. The web picker disables those models
+  up front (`startedModelDisabled`).
+- **One-shots.** The configured model, then the default helper, then the
+  account's first available non-reasoning text model, else its first, each
+  through the gate.
+
 ## Target
 
 ![Target harness architecture](agent-harnesses.svg)
@@ -240,13 +270,16 @@ Four layers, each depending only on the ones below it:
    harness rather than branching on one.
 
 `HARNESSES` in `app/shared/harnesses.ts` is the one table that maps a harness to
-its account provider, its model-picker provider (Claude only; pi models keep
-their upstream provider) and its capabilities: the background-work backends it
-may own, and how it maps a session's compaction window (`compactionWindow`, see
-`compaction-window.md`). `harnessForModelProvider`, `harnessForAccountProvider`
-and `accountProviderForModelProvider` translate between the three names; server
-and web call them instead of repeating the mapping. Further capabilities join
-the table when a later step needs them.
+its model-picker provider (Claude only; pi models keep their upstream provider)
+and its capabilities: the background-work backends it may own, and how it maps a
+session's compaction window (`compactionWindow`, see `compaction-window.md`).
+Its optional `defaultModel` supplies the creation default when no model was
+selected: Claude declares `claude-sdk/sonnet`; otherwise admission uses
+`DEFAULT_HELPER_MODEL`. Callers read this capability rather than branch on a
+harness id. `harnessForModelProvider` names a model's harness. Accounts are not
+a harness fact: an account kind names its harness in `ACCOUNT_KINDS`, and which
+account runs a model is `accountServesModel` (`docs/account-routing.md` "Account
+kinds"). Further capabilities join the table when a later step needs them.
 
 ## Rules
 

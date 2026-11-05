@@ -19,7 +19,10 @@ import {
   resetCreditExpiryLevel,
   usageLevel,
 } from "@assistant/shared/usage";
-import type { CredentialProfileSummary } from "@assistant/shared";
+import {
+  ACCOUNT_KINDS,
+  type CredentialProfileSummary,
+} from "@assistant/shared";
 import {
   fetchClaudeUsage,
   fetchOpenAiUsage,
@@ -283,9 +286,12 @@ export function UsagePage({
 /** The page's only fetch key: the enabled-account list itself. */
 const PROFILES_KEY = "credential-profiles";
 
+/** Enabled accounts of the kinds the page meters; endpoints have no plan. */
 function fetchEnabledProfiles(): Promise<CredentialProfileSummary[]> {
   return fetchCredentialProfiles().then((items) =>
-    items.filter((profile) => profile.enabled),
+    items.filter(
+      (profile) => profile.enabled && ACCOUNT_KINDS[profile.provider].usagePage,
+    ),
   );
 }
 

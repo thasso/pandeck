@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { isClaudeSdkModel, type ModelOption } from "@assistant/shared";
+import type { ModelOption } from "@assistant/shared";
 import type { AssistantActions, UIState } from "../../hooks/useAssistant.ts";
 import {
   useBackgroundStopPending,
@@ -18,7 +18,10 @@ import {
 } from "../../hooks/useSessionChat.tsx";
 import { useTranscriptFocus } from "../../hooks/useTranscriptFocus.ts";
 import { visibleModels } from "../../lib/models.ts";
-import { locksModelAfterStart } from "../../lib/sessionCapabilities.ts";
+import {
+  locksModelAfterStart,
+  startedModelDisabled,
+} from "../../lib/sessionCapabilities.ts";
 import { sessionPath } from "../../lib/sessionRoutes.ts";
 import { IconButton } from "../common/IconButton.tsx";
 import { SessionChat } from "../SessionChat.tsx";
@@ -175,11 +178,16 @@ export function PanelSessionChat({
 
   const started = state.messages.some((message) => message.role === "user");
   const modelLocked = locksModelAfterStart(session) && started;
-  const piStarted = session.harness === "pi" && started;
+  const account = credentialProfiles.find(
+    (profile) => profile.id === sessionRow?.credentialProfileId,
+  );
   const isModelDisabled = useCallback(
     (model: ModelOption) =>
-      modelLocked || (piStarted && isClaudeSdkModel(model)),
-    [modelLocked, piStarted],
+      startedModelDisabled(
+        { harness: session.harness, started, account },
+        model,
+      ),
+    [session.harness, started, account],
   );
   const commentSelection = chat.commentSelection;
   return (
@@ -214,9 +222,7 @@ export function PanelSessionChat({
           isModelDisabled,
           modelLocked,
           thinkingLocked: modelLocked,
-          accountName: credentialProfiles.find(
-            (profile) => profile.id === sessionRow?.credentialProfileId,
-          )?.name,
+          accountName: account?.name,
         }}
         transcript={{
           onOpenPaObject: openPaObject,

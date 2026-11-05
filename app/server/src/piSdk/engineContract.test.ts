@@ -1,13 +1,12 @@
 /**
  * The pi engine contract (C17.1, `docs/workers.md` "pi engines use the
  * lease"): the installed pi SDK, driven through the real hosted engine and
- * the in-process gateway, against a fake Codex upstream and three fake
- * OpenAI-compatible endpoints. A Codex request carries only the engine's
- * lease, to the gateway alone, which adds the profile's own token; a
- * compatible request carries the lease too, to the gateway's `/compat`, which
- * adds the key the server pushed, so the engine never holds it and no
- * endpoint sees another's key; nothing else is contacted, pi.dev included;
- * and no engine writes a credential or catalog file, nor the gateway a key.
+ * the in-process gateway, against a fake Codex upstream. A Codex request
+ * carries only the engine's lease, to the gateway alone, which adds the
+ * profile's own token; nothing else is contacted, pi.dev included; and no
+ * engine writes a credential or catalog file, nor the gateway a key. Until
+ * the gateway serves each OpenAI-compatible account (Task-1373's second PR),
+ * such an account is refused at the link before any lease.
  *
  * It runs only in `pnpm run test:engine-contract`, which starts it inside a
  * user, network and PID namespace with loopback alone
@@ -43,12 +42,11 @@ const PI_PACKAGES = [
 const CASE_MS = 60_000;
 const FAKE_REFRESH = "fake-codex-refresh";
 const REPLY = "contract reply";
-const COMPAT_REPLY = "compatible reply";
 /** A Codex model in pi's built-in data. */
 const BUILTIN_ID = "gpt-5.6-luna";
 /** A Codex id only the named profile's server catalog has. */
 const CATALOG_ID = "gpt-catalog-only";
-/** The one model every fake compatible endpoint lists. */
+/** The one model the compatible account lists. */
 const COMPAT_MODEL = "m";
 const CREDENTIAL_FILES = new Set([
   "auth.json",
@@ -177,6 +175,29 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       "auth.json",
     );
     const catalogSeed = join(profiles.piAgentDir(named), "models-store.json");
+    // A ready OpenAI-compatible account, whose endpoint is never contacted.
+    const compatibleAccount = profiles.createCredentialProfile({
+      name: "Contract LLM",
+      provider: "openai-compatible",
+    }).id;
+    const accounts = await import("../openAiCompatibleAccounts.ts");
+    accounts.writeOpenAiCompatibleEndpoint(compatibleAccount, {
+      baseUrl: "http://127.0.0.1:9/v1",
+      apiKey: fixtures.COMPAT_KEY_A,
+      thinkingFormat: "none",
+      models: [
+        {
+          id: COMPAT_MODEL,
+          name: COMPAT_MODEL,
+          input: ["text"],
+          contextWindow: 100_000,
+          maxTokens: 4_000,
+          reasoning: false,
+        },
+      ],
+    });
+    const compatibleEndpointFile =
+      accounts.openAiCompatibleEndpointPath(compatibleAccount);
     writeCodexAuth(namedAuth, fixtures.CODEX_ACCESS, fixtures.CODEX_ACCOUNT);
     writeCodexAuth(
       defaultAuth,
@@ -216,17 +237,15 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     const { createPiHostedEngineFactory, hostedPiEngine } =
       await import("./piEngineHosted.ts");
     const { serverPiModelPort } = await import("./piModelPort.ts");
-    const { compatProviderFeed, notifyCompatProviderChanged } =
-      await import("./compatProviderFeed.ts");
+    const { compatProviderFeed } = await import("./compatProviderFeed.ts");
     const models = await import("./models.ts");
-    const { syncConfiguredModelProviders } = models;
     const { resolvePiEngineStart } = await import("./piEngineStart.ts");
     const { openRemotePiEngine } = await import("./remotePiEngine.ts");
     const { runPiOneShot } = await import("./oneShot.ts");
-    const settings = await import("../settingsService.ts");
     const { childProcessEnv } = await import("../subprocessEnv.ts");
     const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
-    const { settingsCompatSource } = await import("../gatewayLink.ts");
+    const { GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT, serverGatewayAccess } =
+      await import("../gatewayLink.ts");
     const { createInProcessTransport } =
       await import("../workerProtocol/inProcessTransport.ts");
     const controlMethods = await import("../gateway/controlMethods.ts");
@@ -248,49 +267,25 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       assert.equal(installed.version, lock[name]?.version, name);
     }
 
-    // 6. The live pi engine factory and the settings sync, as the server
-    // wires them (`piStore.ts`, `index.ts`).
+    // 6. The live pi engine factory, as the server wires it (`piStore.ts`).
     const factory = createPiHostedEngineFactory({
       models: serverPiModelPort,
       compat: compatProviderFeed,
     });
     registerInProcessEngineFactory("pi", factory);
-    settings.setModelProviderSync(() => {
-      syncConfiguredModelProviders();
-      notifyCompatProviderChanged();
-    });
 
     // 7. The fake upstream answers as the case says; the gateway links to
-    // it, and the link pushes the compatible settings as the server does.
-    // Three compatible endpoints on their own loopback origins, C at another
-    // base path.
+    // it as the server does, with no compatible endpoint to push.
     let respond = fixtures.fakeCodexStream(REPLY);
     const upstream = await fixtures.startFakeUpstreams({
       codex: (seen, res) => respond(seen, res),
     });
     const gateway = await startGatewayLinkForTests({
       upstreams: upstream.overrides,
-      compat: settingsCompatSource(compatProviderFeed),
     });
     const gatewayTarget = new URL(gateway.link.gateway!.url).host;
-    const compatA = await fixtures.startFakeCompatEndpoint(
-      [COMPAT_MODEL],
-      COMPAT_REPLY,
-    );
-    const compatB = await fixtures.startFakeCompatEndpoint(
-      [COMPAT_MODEL],
-      COMPAT_REPLY,
-    );
-    const compatC = await fixtures.startFakeCompatEndpoint(
-      [COMPAT_MODEL],
-      COMPAT_REPLY,
-      { basePath: "/api/v1" },
-    );
     for (const target of [
       gatewayTarget,
-      new URL(compatA.baseUrl).host,
-      new URL(compatB.baseUrl).host,
-      new URL(compatC.baseUrl).host,
       ...Object.values(upstream.overrides).map(
         ({ connect }) => `${connect.host}:${connect.port}`,
       ),
@@ -335,14 +330,14 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       resolvePiEngineStart,
       openRemotePiEngine,
       runPiOneShot,
-      settings,
       childProcessEnv,
       upstream,
       gateway,
       gatewayTarget,
-      compatA,
-      compatB,
-      compatC,
+      compatibleAccount,
+      compatibleEndpointFile,
+      GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT,
+      serverGatewayAccess,
       createInProcessTransport,
       controlMethods,
       DATA_DIR,
@@ -367,16 +362,12 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     env.egress.close();
     await env.gateway.close();
     await env.upstream.close();
-    await env.compatA.close();
-    await env.compatB.close();
-    await env.compatC.close();
   });
 
   type Transcript = Parameters<typeof env.openRemotePiEngine>[0]["transcript"];
 
   /** Engines the remote handle reported lost. */
   const lost: string[] = [];
-  let offEngines = 0;
 
   /**
    * A pi engine opened as `piStore` opens one: through the in-process
@@ -424,42 +415,6 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     }
   }
 
-  /** The same engine with the switch off: the server's port, no lease. */
-  async function openSwitchOff(
-    model: { provider: string; id: string },
-    profileId = env.profiles.DEFAULT_OPENAI_PROFILE_ID,
-  ) {
-    const started = await env.resolvePiEngineStart({
-      kind: "assistant",
-      credentialProfileId: profileId,
-    });
-    offEngines += 1;
-    const engineId = 70_000 + offEngines;
-    const hosted = await env.factory(
-      {
-        kind: "assistant",
-        credentialProfileId: profileId,
-        transcript: { type: "new", cwd: env.work },
-        model,
-        ...started,
-        mode: "build",
-        canonicalize: true,
-      },
-      {
-        engineId,
-        childEnv: env.childProcessEnv,
-        callAppTool: () => Promise.reject(new Error("no app tools here")),
-        sessionHooks: {},
-        persistOutput: env.persistSessionOutput,
-        backgroundWork: env.inProcessBackgroundWorkForTests(),
-        materializeSkills: env.materializeSkillsThroughWorker,
-      } as unknown as Parameters<typeof env.factory>[1],
-    );
-    const engine = env.hostedPiEngine(engineId);
-    assert.ok(engine, "the switch-off engine is hosted");
-    return { engine, dispose: () => hosted.dispose() };
-  }
-
   interface Reply {
     stopReason: string;
     errorMessage?: string;
@@ -494,13 +449,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       .map((block) => block.text)
       .join("");
 
-  const select = (engine: PiEngineHandle, provider: string, id: string) =>
-    engine.setModel({ provider, id } as Parameters<
-      PiEngineHandle["setModel"]
-    >[0]);
-
   const codex = (id: string) => ({ provider: "openai-codex", id });
-  const compatible = { provider: "openai-compatible", id: COMPAT_MODEL };
 
   /** The gateway's per-request lines: provider, method, path, outcome. */
   const requestLines = (from: number) =>
@@ -526,8 +475,6 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       env.fixtures.CODEX_DEFAULT_ACCESS,
       FAKE_REFRESH,
       env.fixtures.COMPAT_KEY_A,
-      env.fixtures.COMPAT_KEY_B,
-      env.fixtures.COMPAT_KEY_C,
       ...env.leases,
     ];
     for (const line of env.gateway.lines)
@@ -635,19 +582,6 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       await engine.dispose();
     }
   }
-
-  /** The compatible provider on `baseUrl` with `apiKey`, discovered. */
-  async function configureCompat(baseUrl: string, apiKey: string) {
-    await env.settings.saveSettings({
-      openAiCompatible: { enabled: true, name: "Contract", baseUrl, apiKey },
-    });
-    const tested = await env.settings.testSettingsSection("openai-compatible");
-    assert.equal(tested.ok, true, JSON.stringify(tested));
-  }
-
-  /** The chat requests an endpoint received since `from`. */
-  const chats = (endpoint: typeof env.compatA, from: number) =>
-    endpoint.seen.slice(from).filter((seen) => seen.method === "POST");
 
   test(
     "a named-profile turn sends only its lease, to the gateway, which adds the profile's login",
@@ -890,467 +824,42 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     CASE_MS * 2,
   );
 
-  /**
-   * The compatible requests since `from` went through the gateway's `/compat`
-   * under the engine's lease, one line each, with `outcome`.
-   */
-  const compatLines = (from: number) =>
-    requestLines(from).filter((line) => line.startsWith("openai-compatible "));
-
   test(
-    "on one engine Codex and the compatible provider both go to the gateway, which adds the pushed key",
+    "AC10: with the switch on, a compatible account's engine and one-shot lease are refused at the link, before any lease, as no dead login",
     async () => {
-      env.setResponder(env.fixtures.fakeCodexStream(REPLY));
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      const { engine, leaseToken } = await open({
-        profileId: env.named,
-        model: codex(BUILTIN_ID),
+      const account = env.compatibleAccount;
+      const leasesBefore = env.gateway.engineLeases().length;
+      const from = env.gateway.lines.length;
+      const started = await env.resolvePiEngineStart({
+        kind: "assistant",
+        credentialProfileId: account,
       });
-      const viaCodex = async () => {
-        const from = env.gateway.lines.length;
-        const upstreamFrom = env.upstream.chatgpt.length;
-        const compatFrom = env.compatA.seen.length;
-        const reply = await turn(engine, "Say hello.");
-        assert.equal(reply.stopReason, "stop", reply.errorMessage);
-        assertCodexThroughGateway({
-          from,
-          upstreamFrom,
-          sessionId: engine.sessionId,
-          leaseToken,
-          access: env.fixtures.CODEX_ACCESS,
-          account: env.fixtures.CODEX_ACCOUNT,
-          model: BUILTIN_ID,
-        });
-        assert.equal(env.compatA.seen.length, compatFrom);
+      const refused = (err: Error) => {
+        assert.equal(err.message, env.GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT);
+        assert.equal(
+          env.isLoginDeath(err.message, { provider: account }),
+          false,
+        );
+        return true;
       };
-      try {
-        await viaCodex();
-
-        await select(engine, compatible.provider, compatible.id);
-        assert.equal(
-          engine.model?.baseUrl,
-          `${env.gateway.link.gateway!.url}/compat/v1`,
-        );
-        const from = env.gateway.lines.length;
-        const upstreamFrom = env.upstream.chatgpt.length;
-        const compatFrom = env.compatA.seen.length;
-        const reply = await turn(engine, "Say hello.");
-        assert.equal(reply.stopReason, "stop", reply.errorMessage);
-        assert.equal(textOf(reply), COMPAT_REPLY);
-        const sent = chats(env.compatA, compatFrom);
-        assert.equal(sent.length, 1);
-        assert.equal(sent[0]!.url, "/v1/chat/completions");
-        assert.equal(
-          sent[0]!.authorization,
-          `Bearer ${env.fixtures.COMPAT_KEY_A}`,
-        );
-        assert.ok(
-          !String(sent[0]!.authorization).includes(leaseToken),
-          "the lease never reaches the endpoint",
-        );
-        const lines = requestLines(from);
-        assert.equal(lines.length, 1, lines.join("\n"));
-        assert.match(
-          lines[0]!,
-          /^openai-compatible POST "\/v1\/chat\/completions"/,
-        );
-        assert.ok(
-          lines[0]!.includes(
-            ` lease=${leaseFor(engine.sessionId).leaseId} 200 `,
-          ),
-          lines[0],
-        );
-        assert.equal(env.upstream.chatgpt.length, upstreamFrom);
-
-        await select(engine, "openai-codex", BUILTIN_ID);
-        await viaCodex();
-        assertNoEgress();
-        assertNoTokenLogged();
-      } finally {
-        await engine.dispose();
-      }
-    },
-    CASE_MS,
-  );
-
-  test(
-    "an open engine follows a key rotation, a cleared key and a disable exactly as a switch-off engine",
-    async () => {
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      const leased = await open({
-        profileId: env.profiles.DEFAULT_OPENAI_PROFILE_ID,
-        model: compatible,
-      });
-      const off = await openSwitchOff(compatible);
-      /** Each engine's turn, and what the endpoint received for it. */
-      const outcome = async (engine: PiEngineHandle) => {
-        const from = env.compatA.seen.length;
-        const reply = await turn(engine, "Say hello.");
-        return {
-          stopReason: reply.stopReason,
-          errorMessage: reply.errorMessage,
-          sent: chats(env.compatA, from).map((seen) => seen.authorization),
-        };
-      };
-      /** Both turns; the leased one's went through the gateway, one line each. */
-      const both = async () => {
-        const from = env.gateway.lines.length;
-        const leasedOutcome = await outcome(leased.engine);
-        const viaGateway = compatLines(from);
-        assert.equal(
-          viaGateway.length,
-          leasedOutcome.sent.length,
-          viaGateway.join("\n"),
-        );
-        for (const line of viaGateway) assert.match(line, / 200 \d+ms$/);
-        const offOutcome = await outcome(off.engine);
-        assert.equal(
-          compatLines(from).length,
-          viaGateway.length,
-          "the switch-off engine goes direct",
-        );
-        return { leased: leasedOutcome, off: offOutcome };
-      };
-      try {
-        await env.settings.saveSettings({
-          openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_B },
-        });
-        const rotated = await both();
-        assert.deepEqual(rotated.leased, {
-          stopReason: "stop",
-          errorMessage: undefined,
-          sent: [`Bearer ${env.fixtures.COMPAT_KEY_B}`],
-        });
-        assert.deepEqual(rotated.off, rotated.leased);
-
-        await env.settings.saveSettings({
-          openAiCompatible: { clearApiKey: true },
-        });
-        // An unset key sends the settings' placeholder.
-        const cleared = await both();
-        assert.deepEqual(cleared.leased, {
-          stopReason: "stop",
-          errorMessage: undefined,
-          sent: ["Bearer none"],
-        });
-        assert.deepEqual(cleared.off, cleared.leased);
-
-        await env.settings.saveSettings({
-          openAiCompatible: { enabled: false },
-        });
-        const disabled = await both();
-        assert.deepEqual(disabled.leased, {
-          stopReason: "error",
-          errorMessage: "Unknown provider: openai-compatible",
-          sent: [],
-        });
-        assert.deepEqual(disabled.off, disabled.leased);
-        assertNoEgress();
-        assertNoTokenLogged();
-      } finally {
-        await leased.engine.dispose();
-        await off.dispose();
-      }
-    },
-    CASE_MS,
-  );
-
-  test(
-    "an open engine follows an endpoint change at the same base path to the new endpoint and key, and refuses its old model after a base-path change until reselected",
-    async () => {
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      const engines = [
-        await open({ profileId: env.named, model: compatible }),
-        await open({
-          profileId: env.profiles.DEFAULT_OPENAI_PROFILE_ID,
-          model: compatible,
-        }),
-      ];
-      try {
-        // Part 1: endpoint B at the same base path, then its key, then its
-        // discovery. No reselect: the engines follow (RD-G3b2-4).
-        const changedA = env.compatA.seen.length;
-        await env.settings.saveSettings({
-          openAiCompatible: { baseUrl: env.compatB.baseUrl },
-        });
-        await env.settings.saveSettings({
-          openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_B },
-        });
-        const testedB =
-          await env.settings.testSettingsSection("openai-compatible");
-        assert.equal(testedB.ok, true, JSON.stringify(testedB));
-        for (const { engine } of engines) {
-          const fromB = env.compatB.seen.length;
-          const reply = await turn(engine, "Say hello.");
-          assert.equal(reply.stopReason, "stop", reply.errorMessage);
-          assert.deepEqual(
-            chats(env.compatB, fromB).map((seen) => seen.authorization),
-            [`Bearer ${env.fixtures.COMPAT_KEY_B}`],
-          );
-        }
-        assert.equal(
-          env.compatA.seen.length,
-          changedA,
-          "A records nothing after the change",
-        );
-
-        // Part 2: endpoint C at another base path, its key, its discovery.
-        await env.settings.saveSettings({
-          openAiCompatible: { baseUrl: env.compatC.baseUrl },
-        });
-        await env.settings.saveSettings({
-          openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_C },
-        });
-        const testedC =
-          await env.settings.testSettingsSection("openai-compatible");
-        assert.equal(testedC.ok, true, JSON.stringify(testedC));
-        for (const { engine } of engines) {
-          const fromA = env.compatA.seen.length;
-          const fromB = env.compatB.seen.length;
-          const fromC = env.compatC.seen.length;
-          const refused = await turn(engine, "Say hello.");
-          assert.equal(refused.stopReason, "error");
-          assert.match(
-            refused.errorMessage ?? "",
-            /Provider is not configured: openai-compatible/,
-          );
-          assert.deepEqual(env.compatA.seen.slice(fromA), []);
-          assert.deepEqual(env.compatB.seen.slice(fromB), []);
-          assert.deepEqual(env.compatC.seen.slice(fromC), []);
-
-          await select(engine, compatible.provider, compatible.id);
-          const reply = await turn(engine, "Say hello.");
-          assert.equal(reply.stopReason, "stop", reply.errorMessage);
-          assert.deepEqual(env.compatA.seen.slice(fromA), []);
-          assert.deepEqual(env.compatB.seen.slice(fromB), []);
-          const sent = chats(env.compatC, fromC);
-          assert.equal(sent.length, 1);
-          assert.equal(sent[0]!.url, "/api/v1/chat/completions");
-          assert.equal(
-            sent[0]!.authorization,
-            `Bearer ${env.fixtures.COMPAT_KEY_C}`,
-          );
-        }
-        assertNoEgress();
-        assertNoTokenLogged();
-      } finally {
-        for (const { engine } of engines) await engine.dispose();
-      }
-    },
-    CASE_MS,
-  );
-
-  /** The keys an endpoint's chat requests carried since `from`. */
-  const keysSeen = (endpoint: typeof env.compatA, from: number) =>
-    chats(endpoint, from).map((seen) => seen.authorization);
-
-  /** Endpoint B and its key saved one after the other, then discovered. */
-  async function moveCompatToB() {
-    await env.settings.saveSettings({
-      openAiCompatible: { baseUrl: env.compatB.baseUrl },
-    });
-    await env.settings.saveSettings({
-      openAiCompatible: { apiKey: env.fixtures.COMPAT_KEY_B },
-    });
-    const tested = await env.settings.testSettingsSection("openai-compatible");
-    assert.equal(tested.ok, true, JSON.stringify(tested));
-  }
-
-  /** pi refused the request before it connected: neither A nor B saw it. */
-  function assertRefusedUnsent(
-    reply: { stopReason: string; errorMessage?: string },
-    fromA: number,
-    fromB: number,
-  ): void {
-    assert.deepEqual(keysSeen(env.compatA, fromA), [], "A records nothing");
-    assert.deepEqual(keysSeen(env.compatB, fromB), [], "B records nothing");
-    assert.equal(reply.stopReason, "error");
-    assert.match(
-      reply.errorMessage ?? "",
-      /Provider is not configured: openai-compatible/,
-    );
-  }
-
-  /** A turn on a switch-off engine that pi must refuse. */
-  async function assertTurnRefused(engine: PiEngineHandle): Promise<void> {
-    const fromA = env.compatA.seen.length;
-    const fromB = env.compatB.seen.length;
-    assertRefusedUnsent(await turn(engine, "Say hello."), fromA, fromB);
-  }
-
-  /**
-   * A switch-off engine's reselect, resolved as the hosted `setModel`
-   * command resolves it: in the server's default registry.
-   */
-  async function selectOff(
-    engine: PiEngineHandle,
-    provider: string,
-    id: string,
-  ) {
-    const model = env.serverPiModelPort.find(provider, id);
-    assert.ok(model, `${provider}/${id} is listed`);
-    await engine.setModel(model);
-  }
-
-  /** A turn that reaches `endpoint` alone, with `key`. */
-  async function assertTurnReaches(
-    engine: PiEngineHandle,
-    endpoint: typeof env.compatA,
-    key: string,
-  ): Promise<void> {
-    const from = endpoint.seen.length;
-    const reply = await turn(engine, "Say hello.");
-    assert.equal(reply.stopReason, "stop", reply.errorMessage);
-    assert.deepEqual(keysSeen(endpoint, from), [`Bearer ${key}`]);
-  }
-
-  test(
-    "a switch-off engine refuses its old model after an endpoint change to another origin, so B's key never reaches A, until reselected",
-    async () => {
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      const off = await openSwitchOff(compatible);
-      try {
-        await assertTurnReaches(
-          off.engine,
-          env.compatA,
-          env.fixtures.COMPAT_KEY_A,
-        );
-        const changedA = env.compatA.seen.length;
-        await moveCompatToB();
-        await assertTurnRefused(off.engine);
-
-        await selectOff(off.engine, compatible.provider, compatible.id);
-        await assertTurnReaches(
-          off.engine,
-          env.compatB,
-          env.fixtures.COMPAT_KEY_B,
-        );
-        assert.equal(
-          env.compatA.seen.length,
-          changedA,
-          "A records nothing after the change",
-        );
-        assertNoEgress();
-        assertNoTokenLogged();
-      } finally {
-        await off.dispose();
-      }
-    },
-    CASE_MS,
-  );
-
-  test(
-    "a named-profile switch-off engine refuses its old model once an account listing re-syncs its runtime to another origin",
-    async () => {
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      const off = await openSwitchOff(compatible, env.named);
-      try {
-        await assertTurnReaches(
-          off.engine,
-          env.compatA,
-          env.fixtures.COMPAT_KEY_A,
-        );
-        await moveCompatToB();
-        // What an account listing does: the named runtime takes B and its key.
-        assert.ok(
-          await env.serverPiModelPort.findForProfile(
-            env.named,
-            compatible.provider,
-            compatible.id,
-          ),
-        );
-        await assertTurnRefused(off.engine);
-        assertNoEgress();
-        assertNoTokenLogged();
-      } finally {
-        await off.dispose();
-      }
-    },
-    CASE_MS,
-  );
-
-  test(
-    "a named-profile switch-off engine reselected onto another origin before its runtime re-syncs is refused, so A's key never reaches B",
-    async () => {
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      const off = await openSwitchOff(compatible, env.named);
-      try {
-        await assertTurnReaches(
-          off.engine,
-          env.compatA,
-          env.fixtures.COMPAT_KEY_A,
-        );
-        await moveCompatToB();
-        // The reselect resolves in the default registry, already at B; the
-        // named runtime still holds A and its key.
-        await selectOff(off.engine, compatible.provider, compatible.id);
-        assert.equal(off.engine.model?.baseUrl, env.compatB.baseUrl);
-        await assertTurnRefused(off.engine);
-
-        assert.ok(
-          await env.serverPiModelPort.findForProfile(
-            env.named,
-            compatible.provider,
-            compatible.id,
-          ),
-        );
-        await assertTurnReaches(
-          off.engine,
-          env.compatB,
-          env.fixtures.COMPAT_KEY_B,
-        );
-        assertNoEgress();
-        assertNoTokenLogged();
-      } finally {
-        await off.dispose();
-      }
-    },
-    CASE_MS,
-  );
-
-  test(
-    "a one-shot's model held across an endpoint change to another origin is refused on the profile's runtime, so B's key never reaches A",
-    async () => {
-      const profileId = env.profiles.DEFAULT_OPENAI_PROFILE_ID;
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      // The model a one-shot holds (`findPiModelExact`), and the runtime it
-      // runs on (`runPiOneShot`).
-      const held = (await env.models.modelRegistryForProfile(profileId)).find(
-        compatible.provider,
-        compatible.id,
+      await assert.rejects(
+        env.openRemotePiEngine(
+          {
+            kind: "assistant",
+            credentialProfileId: account,
+            transcript: { type: "new", cwd: env.work },
+            model: { provider: account, id: COMPAT_MODEL },
+            ...started,
+            mode: "build",
+            canonicalize: true,
+          },
+          () => {},
+        ),
+        refused,
       );
-      assert.ok(held);
-      const runtime = await env.models.modelRuntimeForProfile(profileId);
-      const request = (model: typeof held) =>
-        runtime.complete(model, {
-          messages: [
-            { role: "user", content: "Say hello.", timestamp: Date.now() },
-          ],
-        });
-
-      const fromA = env.compatA.seen.length;
-      const first = await request(held);
-      assert.equal(first.stopReason, "stop", first.errorMessage);
-      assert.deepEqual(keysSeen(env.compatA, fromA), [
-        `Bearer ${env.fixtures.COMPAT_KEY_A}`,
-      ]);
-
-      await moveCompatToB();
-      const changedA = env.compatA.seen.length;
-      const changedB = env.compatB.seen.length;
-      assertRefusedUnsent(await request(held), changedA, changedB);
-
-      const fresh = (await env.models.modelRegistryForProfile(profileId)).find(
-        compatible.provider,
-        compatible.id,
-      );
-      assert.ok(fresh);
-      const reply = await request(fresh);
-      assert.equal(reply.stopReason, "stop", reply.errorMessage);
-      assert.deepEqual(keysSeen(env.compatA, changedA), []);
-      assert.deepEqual(keysSeen(env.compatB, changedB), [
-        `Bearer ${env.fixtures.COMPAT_KEY_B}`,
-      ]);
+      await assert.rejects(env.serverGatewayAccess(account), refused);
+      assert.equal(env.gateway.engineLeases().length, leasesBefore);
+      assert.deepEqual(requestLines(from), []);
       assertNoEgress();
       assertNoTokenLogged();
     },
@@ -1379,17 +888,8 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       env.fixtures.CODEX_DEFAULT_ACCESS,
       FAKE_REFRESH,
     ];
-    // The compatible keys stay in the settings file that stores them today.
-    const compatKeys = [
-      env.fixtures.COMPAT_KEY_A,
-      env.fixtures.COMPAT_KEY_B,
-      env.fixtures.COMPAT_KEY_C,
-    ];
-    const settingsFile = join(
-      env.DATA_DIR,
-      "settings",
-      "openai-compatible.json",
-    );
+    // The compatible key stays in its account's own endpoint file.
+    const compatKeys = [env.fixtures.COMPAT_KEY_A];
     for (const file of [...files, ...filesUnder(env.gateway.stateDir)]) {
       const text = readFileSync(file, "latin1");
       for (const lease of env.leases)
@@ -1397,7 +897,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       if (!env.fixtureFiles.has(file))
         for (const token of logins)
           assert.ok(!text.includes(token), `${file} holds a login token`);
-      if (resolve(file) !== resolve(settingsFile))
+      if (resolve(file) !== resolve(env.compatibleEndpointFile))
         for (const key of compatKeys)
           assert.ok(!text.includes(key), `${file} holds a compatible key`);
     }
@@ -1420,70 +920,6 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
           .unauthorized()
           .some((attempt) => attempt.target === "pi.dev:443"),
       );
-    },
-    CASE_MS,
-  );
-
-  // Last: its hello ends the link's control connection, so it follows even
-  // the egress canary.
-  test(
-    "a new control hello clears the pushed endpoint: a compatible turn ends in the marked 503 after pi's retries, sends nothing, and is no dead login",
-    async () => {
-      const egressFrom = env.egress.attempts.length;
-      await configureCompat(env.compatA.baseUrl, env.fixtures.COMPAT_KEY_A);
-      const { engine } = await open({
-        profileId: env.named,
-        model: compatible,
-      });
-      const methods = env.controlMethods;
-      const control = env.fixtures.dialControl(
-        env.createInProcessTransport(),
-        env.gateway.link.gateway!.attachControl,
-        methods.GATEWAY_CONTROL_PROTOCOL,
-      );
-      try {
-        await control.request(
-          methods.CONTROL_METHODS.hello,
-          methods.encodeControlRequest({
-            serverBootId: "contract-next-boot",
-            pid: process.pid,
-            startTime: null,
-          }),
-        );
-        const from = env.gateway.lines.length;
-        const fromA = env.compatA.seen.length;
-        const reply = await turn(engine, "Say hello.");
-        assert.equal(reply.stopReason, "error");
-        const message = reply.errorMessage ?? "";
-        assert.ok(message.includes("Pandeck gateway:"), message);
-        assert.equal(
-          env.isLoginDeath(message, { provider: "openai-compatible" }),
-          false,
-          message,
-        );
-        assert.deepEqual(env.compatA.seen.slice(fromA), []);
-        // pi's first try and its three retries (MC3), each refused.
-        const refused = compatLines(from);
-        assert.equal(refused.length, 4, refused.join("\n"));
-        for (const line of refused)
-          assert.match(
-            line,
-            /^openai-compatible POST "\/v1\/chat\/completions" lease=\S+ refused compat-unset 503 /,
-          );
-        // The canary before left pi.dev unauthorized; this case adds nothing.
-        assert.deepEqual(
-          env.egress
-            .unauthorized()
-            .filter(
-              (attempt) => env.egress.attempts.indexOf(attempt) >= egressFrom,
-            ),
-          [],
-        );
-        assertNoTokenLogged();
-      } finally {
-        control.end("the contract case ended");
-        await engine.dispose();
-      }
     },
     CASE_MS,
   );

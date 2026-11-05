@@ -125,7 +125,12 @@ function transcript(id: string): string {
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n",
   );
-  sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "openai-compatible",
+  });
   return file;
 }
 
@@ -160,7 +165,7 @@ function assertUndone(id: string): void {
 
 test("a new session whose start records cannot be frozen is discarded with its transcript", async () => {
   const chosen = await findModelForProfile(
-    "default",
+    "openai-compatible",
     "openai-compatible",
     "chosen",
   );
@@ -168,7 +173,10 @@ test("a new session whose start records cannot be frozen is discarded with its t
   const files = openedFiles();
 
   await assert.rejects(
-    piStore.acquireNew("developer", chosen, "off", { cwd: tmp }),
+    piStore.acquireNew("developer", chosen, "off", {
+      cwd: tmp,
+      credentialProfileId: "openai-compatible",
+    }),
     /the start records could not be stored/,
   );
 
