@@ -273,6 +273,10 @@ Four layers, each depending only on the ones below it:
 its model-picker provider (Claude only; pi models keep their upstream provider)
 and its capabilities: the background-work backends it may own, and how it maps a
 session's compaction window (`compactionWindow`, see `compaction-window.md`).
+Its optional `defaultModel` supplies the creation default when no model was
+selected: Claude declares `claude-sdk/sonnet`; otherwise admission uses
+`DEFAULT_HELPER_MODEL`. Callers read this capability rather than branch on a
+harness id.
 `harnessForModelProvider` names a model's harness. Accounts are not a harness
 fact: an account kind names its harness in `ACCOUNT_KINDS`, and which account
 runs a model is `accountServesModel` (`docs/account-routing.md` "Account

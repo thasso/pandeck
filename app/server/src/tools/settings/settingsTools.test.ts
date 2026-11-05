@@ -3,6 +3,7 @@ import { afterEach, describe, test, vi } from "vitest";
 import { getSettings } from "../../settings.ts";
 import { saveSettings } from "../../settingsService.ts";
 import { settingsTools } from "./settingsTools.ts";
+import { validateClientMessage } from "../../validateClientMessage.ts";
 
 const [settingsRead, settingsUpdate] = settingsTools;
 
@@ -29,6 +30,27 @@ type Entry = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+test("endpoint accounts have no legacy settings tool path, AppSettings field or WebSocket mutations", async () => {
+  assert.equal("openAiCompatible" in getSettings(), false);
+  await assert.rejects(
+    call(settingsRead, { paths: ["openAiCompatible.baseUrl"] }),
+    /Unknown setting path/,
+  );
+  for (const type of [
+    "updateOpenAiCompatibleSettings",
+    "saveAndTestOpenAiCompatibleSettings",
+    "testOpenAiCompatibleSettings",
+  ]) {
+    assert.equal(
+      validateClientMessage({
+        type,
+        patch: { baseUrl: "http://127.0.0.1:9/v1" },
+      }).ok,
+      false,
+    );
+  }
 });
 
 test("the PA working directory reads as UI-only and settings_update cannot write it", async () => {

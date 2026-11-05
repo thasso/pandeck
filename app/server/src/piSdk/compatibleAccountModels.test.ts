@@ -8,8 +8,9 @@
  * endpoint and normalizes stored pins before any runtime exists.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { DEFAULT_HELPER_MODEL } from "@assistant/shared";
 import { afterAll, beforeAll, test } from "vitest";
 import {
   APP_SETTINGS_PATH,
@@ -22,6 +23,7 @@ import {
   LEGACY_OPENAI_COMPATIBLE_SETTINGS_PATH,
   patchCredentialProfile,
   patchOpenAiCompatibleEndpoint,
+  piAgentDir,
 } from "../credentialProfiles.ts";
 import {
   readOpenAiCompatibleEndpoint,
@@ -93,6 +95,12 @@ afterAll(() => {
 
 test("loading the models migrates the endpoint and normalizes pins first", () => {
   assert.equal(credentialProfileById(MIGRATED)?.name, "Migrated LLM");
+  assert.equal(existsSync(LEGACY_OPENAI_COMPATIBLE_SETTINGS_PATH), false);
+  assert.ok(
+    models
+      .listModels()
+      .some((model) => model.provider === MIGRATED && model.id === "qwen3-32b"),
+  );
   const stored = readStoredAppSettings() as Record<string, unknown>;
   assert.deepEqual(stored.naming, {
     provider: MIGRATED,
@@ -127,6 +135,16 @@ test("a compatible account lists only its own models, even with a built-in avail
 test("a lookup answers only a model the account serves", async () => {
   const own = await models.findModelForProfile(MIGRATED, MIGRATED, "qwen3-32b");
   assert.equal(own?.baseUrl, "https://migrated.example.invalid/v1");
+  assert.equal(
+    await models.findModelForProfile(
+      MIGRATED,
+      DEFAULT_HELPER_MODEL.provider,
+      DEFAULT_HELPER_MODEL.modelId,
+    ),
+    undefined,
+  );
+  assert.equal("modelRegistryForProfile" in models, false);
+  assert.equal(existsSync(join(piAgentDir(MIGRATED), "auth.json")), false);
   // Never a built-in, another compatible account's model, or the reverse.
   assert.equal(
     await models.findModelForProfile(MIGRATED, "openai", "gpt-4o-mini"),
@@ -202,6 +220,19 @@ test("a one-shot's fallback stays on the account it runs on", async () => {
     const picked = await selectPiModelWithFallback(configured, second);
     assert.equal(`${picked?.provider}/${picked?.id}`, `${second}/llama-8b`);
   }
+  const empty = createCredentialProfile({
+    name: "Empty helper endpoint",
+    provider: "openai-compatible",
+  });
+  assert.equal(
+    await selectPiModelWithFallback(
+      { provider: empty.id, modelId: "retired" },
+      empty.id,
+    ),
+    undefined,
+  );
+  assert.equal(existsSync(join(piAgentDir(empty.id), "auth.json")), false);
+  deleteCredentialProfile(empty.id);
   // And an OpenAI account's fallback never reaches a compatible model.
   const fallback = await selectPiModelWithFallback(
     { provider: MIGRATED, modelId: "qwen3-32b" },

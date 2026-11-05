@@ -51,7 +51,7 @@ function applyMigrations(db: DatabaseSync, names: string[]): void {
 function insert(
   db: DatabaseSync,
   table: string,
-  values: Record<string, string | number>,
+  values: Record<string, string | number | null>,
 ): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
     name: string;
@@ -60,7 +60,7 @@ function insert(
     dflt_value: unknown;
     pk: number;
   }>;
-  const row: Record<string, string | number> = { ...values };
+  const row: Record<string, string | number | null> = { ...values };
   for (const column of columns) {
     if (column.name in row) continue;
     if (!column.notnull || column.dflt_value !== null) continue;
@@ -117,11 +117,27 @@ test("compatible rows bind to the migrated account; every other row keeps its ow
     });
   }
 
+  for (const table of TABLES)
+    insert(db, table, {
+      ...fixed[table](`${table}-default`),
+      provider: "openai-compatible",
+      credential_profile_id: "default",
+    });
+  // Held peer rows require a pin; only session_index admits a legacy null.
+  insert(db, "session_index", {
+    ...fixed.session_index("session-null"),
+    provider: "openai-compatible",
+    credential_profile_id: null,
+  });
   applyMigrations(db, [REBIND_MIGRATION]);
 
   for (const table of TABLES)
     assert.deepEqual(bindings(db, table), [
       ["openai-codex", "cp_fedcba9876543210"],
-      ["openai-compatible", "openai-compatible"],
+      ...Array.from({ length: table === "session_index" ? 3 : 2 }, () => [
+        "openai-compatible",
+        "openai-compatible",
+      ]),
     ]);
+  db.close();
 });

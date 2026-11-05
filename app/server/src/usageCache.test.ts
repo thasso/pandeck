@@ -180,6 +180,33 @@ beforeEach(() => {
   openAiResult = () => Promise.resolve(openAiSnapshot());
 });
 
+test("an enabled endpoint in the registry causes no usage fetch, timer or indicator", async () => {
+  const endpoint = profile(
+    "openai-compatible-0123456789ab",
+    "openai-compatible",
+  );
+  install([profile("default", "openai-codex"), endpoint]);
+  revalidateUsage();
+  await flush();
+  expect(harness.openAiCalls).toEqual(["default"]);
+  expect(harness.claudeCalls).toEqual([]);
+  expect(usageIndicators().map((indicator) => indicator.profileId)).toEqual([
+    "default",
+  ]);
+  markUsageProfileDirty(endpoint.id);
+  revalidateUsage({ force: true });
+  await flush();
+  expect(harness.openAiCalls.every((id) => id === "default")).toBe(true);
+  expect(
+    usageIndicators().some((indicator) => indicator.profileId === endpoint.id),
+  ).toBe(false);
+  expect(
+    harness.broadcasts.some((message) =>
+      JSON.stringify(message).includes(endpoint.id),
+    ),
+  ).toBe(false);
+});
+
 describe("readUsageSnapshot", () => {
   test("serves the cache while fresh and revalidates in the background once it is not", async () => {
     install([profile("claude-default", "claude")]);

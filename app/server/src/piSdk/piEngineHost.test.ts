@@ -62,6 +62,7 @@ const {
   createCredentialProfile,
   deleteCredentialProfile,
   patchOpenAiCompatibleEndpoint,
+  piAgentDir,
 } = await import("../credentialProfiles.ts");
 const { readOpenAiCompatibleEndpoint, writeOpenAiCompatibleEndpoint } =
   await import("../openAiCompatibleAccounts.ts");
@@ -96,7 +97,10 @@ const ctx = {
 };
 
 /** A persisted pi transcript on the fixture model: one user turn, one reply. */
-function transcript(id: string): string {
+function transcript(
+  id: string,
+  credentialProfileId = "openai-compatible",
+): string {
   const file = canonicalPiSessionPath(id);
   mkdirSync(dirname(file), { recursive: true });
   const at = new Date().toISOString();
@@ -148,7 +152,7 @@ function transcript(id: string): string {
     id,
     harness: "pi",
     agentType: "developer",
-    credentialProfileId: "openai-compatible",
+    credentialProfileId,
   });
   return file;
 }
@@ -618,6 +622,7 @@ test("a compatible open starts on the account's own model, never pi's pick among
 });
 
 test("a compatible session whose model the account dropped reopens on its first model, with a notice", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "fixture-env-openai-key");
   const id = "host-compatible-retired";
   const file = transcript(id);
   writeFileSync(
@@ -640,6 +645,7 @@ test("a compatible session whose model the account dropped reopens on its first 
   );
   try {
     assert.equal(engine.model?.id, "chosen");
+    assert.equal(engine.model?.provider, "openai-compatible");
     assert.deepEqual(info.notices, [
       {
         severity: "warning",
@@ -649,6 +655,125 @@ test("a compatible session whose model the account dropped reopens on its first 
     ]);
   } finally {
     await engine.discard({});
+    vi.unstubAllEnvs();
+  }
+});
+
+test("a fork with a historical built-in selection starts on its compatible account, with no SDK fallback", async () => {
+  const id = "host-historical-builtin";
+  const file = transcript(id);
+  writeFileSync(
+    file,
+    readFileSync(file, "utf8")
+      .replaceAll('"openai-compatible"', '"openai-codex"')
+      .replaceAll('"chosen"', '"gpt-5.6-sol"'),
+  );
+  vi.stubEnv("OPENAI_API_KEY", "fixture-env-openai-key");
+  try {
+    const { engine, info } = await openPiEngine(
+      {
+        ...(await newOpenSpec("openai-compatible")),
+        transcript: {
+          type: "fork",
+          file,
+          parentSessionId: id,
+          nativeEntryId: `${id}-reply`,
+          position: "at",
+          originEntryId: "fixture-app-entry",
+          cwd: tmp,
+        },
+      },
+      ctx,
+    );
+    try {
+      assert.equal(
+        nativePiSessionForTests(engine).model?.provider,
+        "openai-compatible",
+      );
+      assert.equal(engine.model?.id, "chosen");
+      assert.match(info.notices[0]?.message ?? "", /openai-codex\/gpt-5.6-sol/);
+    } finally {
+      await engine.discard({});
+    }
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+test("a stale compatible transcript with an empty catalog refuses before returning an engine", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Empty reopen",
+    provider: "openai-compatible",
+  });
+  const id = "host-stale-empty";
+  const file = transcript(id, endpoint.id);
+  writeFileSync(
+    file,
+    readFileSync(file, "utf8")
+      .replaceAll('"openai-compatible"', JSON.stringify(endpoint.id))
+      .replaceAll('"chosen"', '"retired"'),
+  );
+  vi.stubEnv("OPENAI_API_KEY", "fixture-env-openai-key");
+  try {
+    await assert.rejects(
+      openPiEngine(
+        {
+          ...(await newOpenSpec(endpoint.id)),
+          transcript: { type: "open", file, expectedId: id, cwd: tmp },
+        },
+        ctx,
+      ),
+      /offers no models\. Run Test/,
+    );
+  } finally {
+    vi.unstubAllEnvs();
+    sessionStore.remove(id);
+    deleteCredentialProfile(endpoint.id);
+  }
+});
+
+test("switch-off default account restores its stored Codex selection through the real SDK", async () => {
+  const id = "host-default-codex";
+  const file = transcript(id, "default");
+  writeFileSync(
+    file,
+    readFileSync(file, "utf8")
+      .replaceAll('"openai-compatible"', '"openai-codex"')
+      .replaceAll('"chosen"', '"gpt-5.6-sol"'),
+  );
+  const auth = join(piAgentDir("default"), "auth.json");
+  writeFileSync(
+    auth,
+    JSON.stringify({
+      "openai-codex": {
+        type: "oauth",
+        access: "fixture-codex-access",
+        refresh: "fixture-codex-refresh",
+        expires: Date.now() + 86_400_000,
+        accountId: "fixture-codex",
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const runtime = await serverPiModelPort.runtime("default");
+  await runtime.refresh({ allowNetwork: false });
+  const { engine, info } = await openPiEngine(
+    {
+      ...(await newOpenSpec("default")),
+      transcript: { type: "open", file, expectedId: id, cwd: tmp },
+    },
+    ctx,
+  );
+  try {
+    assert.equal(
+      nativePiSessionForTests(engine).model?.provider,
+      "openai-codex",
+    );
+    assert.equal(engine.model?.id, "gpt-5.6-sol");
+    assert.deepEqual(info.notices, []);
+  } finally {
+    await engine.discard({});
+    rmSync(auth, { force: true });
   }
 });
 

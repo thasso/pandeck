@@ -339,6 +339,87 @@ test("without gateway access the server's port runs the engine as before: its ac
   }
 });
 
+test("a hosted endpoint A rejects endpoint B and OpenAI even though global lookup finds both, and remains usable", async () => {
+  const { createCredentialProfile } = await import("../credentialProfiles.ts");
+  const { writeOpenAiCompatibleEndpoint } =
+    await import("../openAiCompatibleAccounts.ts");
+  const b = createCredentialProfile({
+    name: "Hosted B",
+    provider: "openai-compatible",
+  });
+  writeOpenAiCompatibleEndpoint(b.id, {
+    baseUrl: "http://127.0.0.1:9/v1",
+    thinkingFormat: "none",
+    models: [
+      {
+        id: "chosen",
+        name: "B chosen",
+        input: ["text"],
+        reasoning: false,
+        contextWindow: 100000,
+        maxTokens: 4000,
+      },
+    ],
+  });
+  const factory = createPiHostedEngineFactory({
+    models: serverPiModelPort,
+    compat: compatProviderFeed,
+  });
+  const { hosted, native } = await open(
+    factory,
+    spec(
+      { type: "new", cwd: tmp },
+      { account: COMPATIBLE, model: { provider: COMPATIBLE, id: "chosen" } },
+    ),
+    false,
+  );
+  sessionStore.upsert({
+    id: native.sessionId,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: COMPATIBLE,
+  });
+  try {
+    const original = native.model;
+    for (const foreign of [
+      { provider: b.id, id: "chosen" },
+      { provider: "openai-codex", id: "gpt-5.6-sol" },
+    ]) {
+      assert.ok(
+        findModel(foreign.provider, foreign.id),
+        "adversarial global lookup would find the foreign model",
+      );
+      assert.equal(
+        await serverPiModelPort.findForProfile(
+          COMPATIBLE,
+          foreign.provider,
+          foreign.id,
+        ),
+        undefined,
+      );
+      await assert.rejects(
+        hosted.command("setModel", [foreign], 1),
+        /not available on this session's account/,
+      );
+      assert.deepEqual(native.model, original);
+      assert.equal(
+        sessionStore.get(native.sessionId)?.credentialProfileId,
+        COMPATIBLE,
+      );
+      // A subsequent own-account command still executes on the same engine.
+      await hosted.command(
+        "setModel",
+        [{ provider: COMPATIBLE, id: "chosen" }],
+        2,
+      );
+      assert.equal(native.model?.provider, COMPATIBLE);
+      assert.equal(native.model?.id, "chosen");
+    }
+  } finally {
+    await hosted.dispose({});
+  }
+});
+
 test("a gateway engine reopens a catalog-id transcript on that model, rebased, with no new entry, pinned to SSE, and setModel resolves through its port", async () => {
   const feed = watchFeed();
   const server = recordingServerPort();

@@ -11,6 +11,7 @@ import { PanelSessionChat } from "./PanelSessionChat.tsx";
 const seen = vi.hoisted(() => ({
   transcript: null as ComponentProps<typeof MessageList> | null,
   composer: null as ComponentProps<typeof Composer> | null,
+  realComposer: false,
 }));
 vi.mock("../MessageList.tsx", () => ({
   MessageList: (props: ComponentProps<typeof MessageList>) => {
@@ -18,11 +19,25 @@ vi.mock("../MessageList.tsx", () => ({
     return <div data-testid="transcript" />;
   },
 }));
-vi.mock("../Composer.tsx", () => ({
-  Composer: (props: ComponentProps<typeof Composer>) => {
-    seen.composer = props;
-    return null;
-  },
+vi.mock("../Composer.tsx", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../Composer.tsx")>();
+  return {
+    Composer: (props: ComponentProps<typeof Composer>) => {
+      seen.composer = props;
+      return seen.realComposer ? <actual.Composer {...props} /> : null;
+    },
+  };
+});
+// Presentation-only seam: expose the runtime panel while retaining the actual
+// Panel -> SessionChat -> Composer -> ModelSelect wiring.
+vi.mock("../ChatDockPanel.tsx", () => ({
+  ChatDockPanel: ({
+    children,
+    title,
+  }: {
+    children: React.ReactNode;
+    title: string;
+  }) => (title === "Runtime" ? <div>{children}</div> : null),
 }));
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -123,11 +138,13 @@ beforeEach(() => {
     "ResizeObserver",
     class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
   seen.transcript = null;
   seen.composer = null;
+  seen.realComposer = false;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -137,6 +154,88 @@ afterEach(async () => {
   container.remove();
   vi.unstubAllGlobals();
 });
+
+for (const bound of ["openai-compatible-0123456789ab", "default"]) {
+  it(`actual panel Composer disables foreign model controls when started on ${bound}`, async () => {
+    seen.realComposer = true;
+    Element.prototype.scrollIntoView = vi.fn();
+    const endpoint = "openai-compatible-0123456789ab";
+    const options = [
+      {
+        provider: endpoint,
+        id: "llama3",
+        name: "Endpoint Llama",
+        reasoning: false,
+        contextWindow: 32000,
+      },
+      {
+        provider: "openai-codex",
+        id: "gpt",
+        name: "OpenAI GPT",
+        reasoning: false,
+        contextWindow: 32000,
+      },
+    ];
+    const state = {
+      ...fixtureState(),
+      models: options,
+      session: { ...SESSION, model: options[bound === endpoint ? 0 : 1] },
+      messages: [{ role: "user", content: "already started" }],
+    } as unknown as UIState;
+    const sessionHost = {
+      ...host,
+      sessions: [{ id: "s1", credentialProfileId: bound }],
+      credentialProfiles: [
+        {
+          id: endpoint,
+          name: "Endpoint account",
+          provider: "openai-compatible",
+          enabled: true,
+        },
+        {
+          id: "default",
+          name: "Default OpenAI",
+          provider: "openai-codex",
+          enabled: true,
+        },
+      ],
+    } as unknown as SessionChatHost;
+    await act(async () =>
+      root.render(
+        <PanelSessionChat
+          state={state}
+          actions={actions}
+          session={state.session!}
+          host={sessionHost}
+          visible
+          draftStorageKey={`picker-${bound}`}
+          title="Started"
+          onOpenInMain={() => {}}
+        />,
+      ),
+    );
+    const trigger = document.body.querySelector<HTMLButtonElement>(
+      'button[title="Model"]',
+    );
+    expect(trigger).toBeTruthy();
+    await act(async () => trigger!.click());
+    const items = [...document.body.querySelectorAll('[role="option"]')];
+    const endpointItem = items.find((item) =>
+      item.textContent?.includes("Endpoint Llama"),
+    );
+    const openaiItem = items.find((item) =>
+      item.textContent?.includes("OpenAI GPT"),
+    );
+    expect(endpointItem).toBeTruthy();
+    expect(openaiItem).toBeTruthy();
+    expect(endpointItem?.getAttribute("aria-disabled") === "true").toBe(
+      bound !== endpoint,
+    );
+    expect(openaiItem?.getAttribute("aria-disabled") === "true").toBe(
+      bound === endpoint,
+    );
+  });
+}
 
 it("lays the transcript in a flex column, the contract of its scroller", async () => {
   await render();

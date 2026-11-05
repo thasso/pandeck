@@ -893,6 +893,133 @@ test("compatible role configs run on their own account, read-only (rule P)", asy
   );
 });
 
+test("paused compatible workflow roles reload and resume through the engine without rewriting immutable inputs", async () => {
+  const compat = {
+    provider: "openai-compatible",
+    modelId: "llama3",
+    thinkingLevel: "off",
+    credentialProfileId: "default",
+    family: "unknown",
+  };
+  const { run } = createRun({ role: compat, useFixer: true, useVerdict: true });
+  const planBytes = () =>
+    getDb()
+      .prepare("SELECT config_json FROM workflow_runs WHERE id = ?")
+      .get(run.id);
+  const stepBytes = () =>
+    getDb()
+      .prepare(
+        "SELECT id, payload_json, result_payload_json FROM workflow_steps WHERE run_id = ? ORDER BY id",
+      )
+      .all(run.id);
+  const originalConfig = planBytes();
+  const acceptedPlan = stepBytes()[0];
+  const roles = [
+    {
+      role: "coordinator",
+      objective: "plan",
+      roles: {
+        implementer: [compat],
+        reviewer: [compat],
+        fixer: [compat],
+        verdict: [compat],
+      },
+      maxReviewPasses: 1,
+      resultContract: contracts.WORK_PLAN_CONTRACT_ID,
+    },
+    {
+      role: "implementer",
+      objective: "implement",
+      resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
+    },
+    {
+      role: "reviewer",
+      objective: "review",
+      reviewer: compat,
+      reviewPass: 1,
+      commitRange: { baseCommit: "base", headCommit: "head" },
+      resultContract: contracts.ASSESSMENT_CONTRACT_ID,
+    },
+    {
+      role: "implementer",
+      objective: "revise",
+      fixer: compat,
+      fixerLineage: "fixture-pass",
+      findings: [{ severity: "major", text: "fixture" }],
+      reviewedCommit: "head",
+      resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
+    },
+    {
+      role: "verdict",
+      objective: "verdict",
+      verdict: compat,
+      findings: [],
+      commitRange: { baseCommit: "head", headCommit: "fixed" },
+      resultContract: contracts.ASSESSMENT_CONTRACT_ID,
+    },
+  ];
+  const actualAccounts: string[] = [];
+  for (const payload of roles) {
+    const step = appendAgent(run.id, payload as WorkflowJsonValue);
+    engine.pauseRun(run.id, "fixture deploy pause", ACTOR);
+    const before = stepBytes();
+    closeDb();
+    engine.resetWorkflowEngineForTests();
+    executors.resetWorkflowExecutorsForTests();
+    assert.equal(
+      store.getRun(run.id)?.lifecycle,
+      "paused",
+      "reloaded from disk",
+    );
+    executors.registerWorkflowAgentExecutor(
+      agentExecutor.createWorkflowAgentExecutor({
+        ...deps(),
+        create: async (spec) => {
+          actualAccounts.push(spec.credentialProfileId);
+          assert.equal(spec.credentialProfileId, "openai-compatible");
+          return createSession(spec);
+        },
+      }),
+    );
+    await engine.resumeRun(run.id, ACTOR);
+    const started = store.getStep(step.id)!;
+    assert.equal(started.status, "running");
+    assert.equal(
+      sessionStore.get(started.executor!.id)?.credentialProfileId,
+      "openai-compatible",
+    );
+    assert.deepEqual(planBytes(), originalConfig);
+    assert.deepEqual(
+      stepBytes(),
+      before,
+      "resume changes executor/status, never payload/result bytes",
+    );
+    assert.ok(
+      recipe.acceptedWorkPlan(store.getRun(run.id)!, store.listSteps(run.id)),
+    );
+    // Complete only to seed the next paused role. These are intentional result
+    // writes, not migration writes; immutable evidence is checked before each.
+    complete(
+      step,
+      payload.resultContract,
+      payload.role === "coordinator"
+        ? {
+            complexity: "low",
+            implementer: compat,
+            reviewer: compat,
+            fixer: compat,
+            verdict: compat,
+            rationale: "fixture",
+          }
+        : payload.resultContract === contracts.ASSESSMENT_CONTRACT_ID
+          ? { verdict: "pass", headCommit: "head", findings: [] }
+          : {},
+    );
+  }
+  assert.deepEqual(actualAccounts, Array(5).fill("openai-compatible"));
+  assert.deepEqual(stepBytes()[0], acceptedPlan);
+});
+
 test("a vanished role session is replaced, with no cap to refuse it", async () => {
   const { run } = createRun();
   const executor = agentExecutor.createWorkflowAgentExecutor(deps());

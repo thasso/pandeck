@@ -25,6 +25,12 @@ const endpoint: CredentialProfileSummary = {
   health: { state: "unknown", since: null },
   createdAt: 0,
   updatedAt: 0,
+  usage: {
+    pinnedSlots: [
+      { key: "sessionNaming", label: "Session naming", section: "naming" },
+    ],
+    boundSessionCount: 0,
+  },
   endpoint: {
     baseUrl: "https://llm.example.invalid/v1",
     apiKeyConfigured: true,
@@ -43,6 +49,16 @@ const login: CredentialProfileSummary = {
 const calls = vi.hoisted(() => ({
   saved: [] as unknown[],
   tested: [] as string[],
+  confirmations: [] as Array<{ body?: string }>,
+}));
+vi.mock("./common/dialogs.tsx", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useDialogs: () => ({
+    confirm: async (options: { body?: string }) => {
+      calls.confirmations.push(options);
+      return false;
+    },
+  }),
 }));
 vi.mock("../lib/credentialProfiles.ts", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -123,6 +139,18 @@ it("lists each endpoint as an account card with its URL, key, models and Test", 
       ]),
     );
     expect(calls.tested).toEqual([endpoint.id, endpoint.id]);
+    await act(async () =>
+      root
+        .querySelector<HTMLButtonElement>('button[title="Delete profile"]')!
+        .click(),
+    );
+    expect(calls.confirmations[0]?.body).toContain("Session naming");
+    expect(calls.confirmations[0]?.body).toContain(
+      "cannot automatically move to another account",
+    );
+    expect(calls.confirmations[0]?.body).not.toContain(
+      "returns to the automatic",
+    );
   } finally {
     act(() => view.root.unmount());
   }

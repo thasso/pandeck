@@ -14,7 +14,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@assistant/shared";
 import {
@@ -33,6 +33,12 @@ import {
   readOpenAiCompatibleEndpoint,
   writeOpenAiCompatibleEndpoint,
 } from "./openAiCompatibleAccounts.ts";
+
+const settingsFile = await import("./appSettingsFile.ts");
+const { normalizeCompatibleSettingsPins } =
+  await import("./compatibleSettingsPins.ts");
+const { getSettings } = await import("./settings.ts");
+const { listSettingsModelSlots } = await import("./settingsModelSlots.ts");
 
 const ID = OPENAI_COMPATIBLE_PROVIDER_ID;
 /** Synthetic: only that it never reaches a log or summary is under test. */
@@ -209,6 +215,120 @@ test("an account edited since is left alone, and so is the old file", () => {
   assert.equal(readOpenAiCompatibleEndpoint(ID).thinkingFormat, "openai");
   assert.match(warnings.at(-1)!, /left for manual review/);
 });
+
+for (const failure of [
+  "endpoint-written",
+  "endpoint-verified",
+  "registry-committed",
+  "verify",
+  "verify-content",
+  "write",
+  "mismatch",
+] as const) {
+  test(`all eleven settings slots and peers converge independently of migration ${failure}`, () => {
+    const seed = structuredClone(getSettings());
+    const slots = listSettingsModelSlots(seed);
+    assert.equal(slots.length, 11);
+    for (const { slot } of slots)
+      Object.assign(slot, {
+        provider: ID,
+        modelId: "qwen3-32b",
+        credentialProfileId: "default",
+      });
+    seed.peerSpawnRuntimes = [
+      {
+        id: "legacy-peer",
+        provider: ID,
+        modelId: "qwen3-32b",
+        credentialProfileId: "cp_carrier",
+      },
+      {
+        id: "subscription-peer",
+        provider: "openai-codex",
+        modelId: "gpt",
+        credentialProfileId: "cp_exact",
+      },
+    ] as never;
+    const stored = {
+      ...seed,
+      unrelatedFixture: { keep: [1, "unchanged", { nested: true }] },
+      nonCompatibleFixture: {
+        provider: "openai-codex",
+        modelId: "gpt",
+        credentialProfileId: "cp_exact",
+      },
+    };
+    const expected = structuredClone(stored);
+    for (const { slot } of listSettingsModelSlots(expected))
+      slot.credentialProfileId = ID;
+    expected.peerSpawnRuntimes[0]!.credentialProfileId = ID;
+    settingsFile.writeStoredAppSettings(stored);
+    writeLegacy(LEGACY);
+    if (failure === "write")
+      mkdirSync(openAiCompatibleEndpointPath(ID), { recursive: true });
+    migrateOpenAiCompatibleSettingsToAccount({
+      afterStep: (step) => {
+        if (
+          step === failure ||
+          (failure === "mismatch" && step === "registry-committed")
+        )
+          throw new Error("fixture crash");
+        if (failure === "verify" && step === "endpoint-written")
+          chmodSync(openAiCompatibleEndpointPath(ID), 0o644);
+        if (failure === "verify-content" && step === "endpoint-written")
+          writeOpenAiCompatibleEndpoint(ID, {
+            ...readOpenAiCompatibleEndpoint(ID),
+            thinkingFormat: "openai",
+          });
+      },
+    });
+    // models.ts runs this even when migration fails. Rule P needs no account.
+    normalizeCompatibleSettingsPins();
+    assert.equal(legacyExists(), true);
+    assert.deepEqual(settingsFile.readStoredAppSettings(), expected);
+    if (failure === "write")
+      rmSync(openAiCompatibleEndpointPath(ID), { recursive: true });
+    if (failure === "mismatch")
+      writeOpenAiCompatibleEndpoint(ID, {
+        ...readOpenAiCompatibleEndpoint(ID),
+        thinkingFormat: "openai",
+      });
+    migrateOpenAiCompatibleSettingsToAccount();
+    normalizeCompatibleSettingsPins();
+    assert.deepEqual(settingsFile.readStoredAppSettings(), expected);
+    if (failure === "mismatch") {
+      assert.equal(legacyExists(), true);
+      assert.equal(readOpenAiCompatibleEndpoint(ID).thinkingFormat, "openai");
+    } else assertMigrated();
+    const bytes = readFileSync(settingsFile.APP_SETTINGS_PATH, "utf8");
+    const mtime = statSync(settingsFile.APP_SETTINGS_PATH).mtimeMs;
+    const stableFiles = [
+      settingsFile.APP_SETTINGS_PATH,
+      openAiCompatibleEndpointPath(ID),
+      join(dirname(dirname(openAiCompatibleEndpointPath(ID))), "profiles.json"),
+      LEGACY_OPENAI_COMPATIBLE_SETTINGS_PATH,
+    ].filter(existsSync);
+    const identities = () =>
+      stableFiles.map((path) => ({
+        path,
+        bytes: readFileSync(path, "utf8"),
+        ino: statSync(path).ino,
+        mtimeMs: statSync(path).mtimeMs,
+      }));
+    const before = identities();
+    const writes = vi.spyOn(settingsFile, "writeStoredAppSettings");
+    migrateOpenAiCompatibleSettingsToAccount();
+    normalizeCompatibleSettingsPins();
+    assert.equal(writes.mock.calls.length, 0);
+    assert.equal(readFileSync(settingsFile.APP_SETTINGS_PATH, "utf8"), bytes);
+    assert.equal(statSync(settingsFile.APP_SETTINGS_PATH).mtimeMs, mtime);
+    assert.deepEqual(
+      identities(),
+      before,
+      "second boot rewrites none of the settings, endpoint, registry or retained legacy files",
+    );
+  });
+}
 
 test("an unreadable old file is left for review without quoting it", () => {
   writeLegacy(`{"apiKey":"${FAKE_API_KEY}","baseUrl":"${BASE_URL}"`);

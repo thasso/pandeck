@@ -42,6 +42,15 @@ sends, workflow role configs and their cards. A workflow run's config, accepted
 plan and step payloads are immutable: rule P is applied when they are read for
 execution or display, never written back.
 
+A spawn proposal whose compatible model has disappeared may choose another model
+from that same endpoint. It never substitutes another endpoint or a subscription
+account, even when those have usable models. Enterprise proposals keep their
+exact-model and effort refusal instead of falling back. An explicit usable model
+hint still resolves normally. D2 applies symmetrically: a dead non-compatible
+hint cannot inherit the proposer's compatible endpoint. It may recover through
+the existing non-compatible account policy; if none offers a model, the proposal
+refuses. Proposals without a bound account do not discover compatible endpoints.
+
 A native fork inherits its parent's account; nothing moves a compatible session
 to another account. A native fork is therefore no cross-account recovery path:
 it neither rolls a session back onto another account nor out of a disabled

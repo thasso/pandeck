@@ -90,6 +90,23 @@ test("the slot registry covers every configured model slot in settings", () => {
   }
 });
 
+test("an enterprise helper on an enterprise endpoint resolves without degradation", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Enterprise endpoint",
+    provider: "openai-compatible",
+  });
+  patchCredentialProfile(endpoint.id, { enterprise: true });
+  const slot = {
+    provider: endpoint.id,
+    modelId: "llama3",
+    thinkingLevel: "off" as const,
+    requiresEnterprise: true,
+  };
+  assert.deepEqual(await resolveSlotAccount(slot), { profileId: endpoint.id });
+  assert.equal(await accountForSlot(slot), endpoint.id);
+  assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+});
+
 test("an unpinned slot delegates model and effort to the router", async () => {
   const openai = await accountForSlot({
     provider: "github-copilot",

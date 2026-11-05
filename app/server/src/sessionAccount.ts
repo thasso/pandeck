@@ -3,8 +3,8 @@ import {
   accountKindForModelProvider,
   accountPinForModel,
   accountServesModel,
-  CLAUDE_SDK_PROVIDER,
   DEFAULT_HELPER_MODEL,
+  HARNESSES,
   harnessForModelProvider,
   isSubscriptionAccountKind,
   type CredentialProfileProvider,
@@ -62,15 +62,10 @@ export async function resolveSessionAccount(
   options: { inheritedPin?: boolean } = {},
 ): Promise<string> {
   // The harness supplies only the default model when the selection names none.
+  const defaultModel = HARNESSES[harness].defaultModel ?? DEFAULT_HELPER_MODEL;
   const model = {
-    provider:
-      selection.modelProvider ??
-      (harness === "claude-sdk"
-        ? CLAUDE_SDK_PROVIDER
-        : DEFAULT_HELPER_MODEL.provider),
-    modelId:
-      selection.modelId ??
-      (harness === "claude-sdk" ? "sonnet" : DEFAULT_HELPER_MODEL.modelId),
+    provider: selection.modelProvider ?? defaultModel.provider,
+    modelId: selection.modelId ?? defaultModel.modelId,
   };
   const label =
     ACCOUNT_KINDS[accountKindForModelProvider(model.provider)].label;

@@ -72,6 +72,9 @@ test("a compatible model runs on its own account alone; no account serves across
   expect(served("openai-compatible-ffffffffffff")).toEqual([]);
   expect(served("openai-codex")).toEqual(["default"]);
   expect(served("openai")).toEqual(["default"]);
+  expect(served("github-copilot")).toEqual(["default"]);
+  expect(served("openai-compatible-x")).toEqual(["default"]);
+  expect(served("openai-compatible-0123456789AB")).toEqual(["default"]);
   expect(served(CLAUDE_SDK_PROVIDER)).toEqual(["claude-default"]);
 
   // The Worker's id-only form agrees for every pi account.
@@ -81,6 +84,9 @@ test("a compatible model runs on its own account alone; no account serves across
       NEW_COMPATIBLE,
       "openai-codex",
       "openai",
+      "github-copilot",
+      "openai-compatible-x",
+      "openai-compatible-0123456789AB",
       CLAUDE_SDK_PROVIDER,
     ])
       expect(piAccountServesModel(account.id, modelProvider)).toBe(

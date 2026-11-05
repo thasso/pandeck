@@ -1237,7 +1237,9 @@ function CredentialProfilesSection({
                 const confirmed = await dialogs.confirm({
                   title: `Delete credential profile “${profile.name}”?`,
                   body: pinned.length
-                    ? `${pinned.length} settings ${pinned.length === 1 ? "slot returns" : "slots return"} to the automatic account: ${pinned.map((slot) => slot.label).join(", ")}.`
+                    ? endpoints
+                      ? `${pinned.length} settings ${pinned.length === 1 ? "slot needs" : "slots need"} a new model after deletion: ${pinned.map((slot) => slot.label).join(", ")}. These models cannot automatically move to another account.`
+                      : `${pinned.length} settings ${pinned.length === 1 ? "slot returns" : "slots return"} to the automatic account: ${pinned.map((slot) => slot.label).join(", ")}.`
                     : undefined,
                   confirmLabel: "Delete",
                   danger: true,

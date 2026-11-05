@@ -29,6 +29,11 @@ export interface HarnessDescriptor {
    * one. pi models keep their upstream provider (`github-copilot`, …).
    */
   readonly modelProvider?: string;
+  /** Curated creation default; other harnesses use the configured helper model. */
+  readonly defaultModel?: {
+    readonly provider: string;
+    readonly modelId: string;
+  };
   /**
    * Which background-work backends a session on this harness may own, as a
    * capability rather than an engine name. Claude background work executes
@@ -63,6 +68,7 @@ export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
   "claude-sdk": {
     id: "claude-sdk",
     modelProvider: CLAUDE_SDK_PROVIDER,
+    defaultModel: { provider: CLAUDE_SDK_PROVIDER, modelId: "sonnet" },
     backgroundWorkBackends: ["claude-query", "server-task"],
     // The CLI's `autoCompactWindow` schema and env clamp.
     compactionWindow: { mapping: "window", min: 100_000, max: 1_000_000 },
