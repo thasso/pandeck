@@ -218,6 +218,7 @@ test("Claude: a denied app tool is neither listed nor callable", async () => {
   freezeSessionAgent("claude-tools", reviewer);
   const server = createClaudeSessionToolServer({
     id: "claude-tools",
+    assertToolAdmission() {},
     agentType: "developer",
     sessionMode: "build",
     cwd: tmp,

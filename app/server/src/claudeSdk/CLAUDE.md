@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4096 reason="Eighteen bullets, each a distinct silent-failure mode: resume results, cost-state re-billing, canUseTool under managed settings, the append-only timeline, steers, the G4b usage exception." task=peer-message-trigger date=2026-10-13 -->
+<!-- instruction-budget: bytes=4096 reason="Silent-failure rules for Claude lifecycle and tools." task=peer-message-trigger date=2026-10-13 -->
 
 # Claude SDK harness
 
@@ -19,9 +19,8 @@
   retained process must leave Plan unrestarted) or CLI `permissionMode: "plan"`;
   it keeps `Read`, `Bash`, `Monitor`, search, `ToolSearch`, `Skill`, read-only
   app tools and `task_manage`.
-- Persist the system-prompt suffix and apply it after the persona prompt once
-  per process epoch: each fresh/resumed query gets it; later turns on a retained
-  query reuse it.
+- Persist the system-prompt suffix. Apply it after the persona prompt once per
+  query epoch, including resume; retained turns reuse it.
 - Model reconciliation accepts only curated Claude model ids; a synthetic
   sentinel must never reach the configuration fallback or mutate the persisted
   selection.
@@ -37,11 +36,13 @@
   never settles it; without `msg_lifecycle_v1` only a model-less one.
 - A `result` is not proof of success: `is_error`, `api_error_status` or an
   `error*` subtype fails the turn and must reach the reader as its error.
-- A restored session must rehydrate `updatedAt` from the record, or each restart
-  back-dates it, corrupting list order and the unread check.
-- Background tool refusal uses `PreToolUse` `permissionDecision: "deny"` (or
-  top-level `decision: "block"`) with a bounded reason, NEVER `continue:false`:
-  that ends the hook only after the tool has run.
+- Restore `updatedAt` from the record: restarting must not back-date sessions,
+  corrupt list order or change the unread check.
+- Tool refusal uses `PreToolUse` `permissionDecision: "deny"` (or top-level
+  `decision: "block"`) with a bounded reason, NEVER `continue:false`: that ends
+  the hook only after the tool has run. Fence new native/MCP actions for stale,
+  closing, pending-Stop and quarantined epochs; keep existing jobs and lifecycle
+  reconciliation alive. MCP execution rechecks the calling epoch server-side.
 - `session_state_changed: idle` is the only authoritative turn-over signal;
   `running` is an optional early hint, never required.
 - A turn's fork anchor is its LAST native uuid; PA owns transcript retention.

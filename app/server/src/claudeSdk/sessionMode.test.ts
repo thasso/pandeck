@@ -47,14 +47,27 @@ function cleanup(): void {
   }
 }
 
-/** An empty-stream seam that records the options each turn was built with. */
+/** Records options and holds the Plan query live while its hooks are tested. */
 function capturingSeam(
   captured: ClaudeQueryParams["options"][],
+  plan: { started(): void; completion: Promise<void> },
 ): ClaudeSdkSeam {
   return {
     query(params: ClaudeQueryParams) {
-      captured.push(params.options);
-      return { async *[Symbol.asyncIterator]() {} };
+      const index = captured.push(params.options);
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            async next() {
+              if (index === 2) {
+                plan.started();
+                await plan.completion;
+              }
+              return { done: true as const, value: undefined };
+            },
+          };
+        },
+      };
     },
   };
 }
@@ -63,8 +76,22 @@ async function main(): Promise<void> {
   cleanup();
 
   const captured: ClaudeQueryParams["options"][] = [];
+  let releasePlan!: () => void;
+  let startedPlan!: () => void;
+  const planCompletion = new Promise<void>((resolve) => {
+    releasePlan = resolve;
+  });
+  const planStarted = new Promise<void>((resolve) => {
+    startedPlan = resolve;
+  });
   const session = new ClaudeSdkSession("mode-test", {
-    seam: () => Promise.resolve(capturingSeam(captured)),
+    seam: () =>
+      Promise.resolve(
+        capturingSeam(captured, {
+          started: startedPlan,
+          completion: planCompletion,
+        }),
+      ),
   });
   const adapter = session.createRuntimeAdapter();
 
@@ -88,7 +115,8 @@ async function main(): Promise<void> {
     "plan",
     "native facts report the new mode",
   );
-  await adapter.prompt("plan turn");
+  const planTurn = adapter.prompt("plan turn");
+  await planStarted;
   const planOptions = captured[1];
   const planTools = planOptions?.tools as string[];
   assert.ok(planTools, "the second turn built query options");
@@ -178,6 +206,8 @@ async function main(): Promise<void> {
     "deny",
     "switching back to Build lets the running query edit again",
   );
+  releasePlan();
+  await planTurn;
   await adapter.prompt("back to build");
   assert.ok(
     (captured[2]!.tools as string[]).includes("Edit"),

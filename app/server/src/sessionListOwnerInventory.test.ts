@@ -371,12 +371,12 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "nonprojected",
-        "stopInterruptSent withdrawPendingSteers sendPromptToProcess sendPromptOnce pushSkillSubmission bindSkillCommandStart",
+        "trackStopInterrupt stopInterruptSent withdrawPendingSteers sendPromptToProcess sendPromptOnce pushSkillSubmission bindSkillCommandStart",
         "Process/input/skill queue bookkeeping; accepted entries are written through appendTimelineEntry, running state through the listed turn methods.",
       ),
       group(
         "nonprojected",
-        "admitNativeBackgroundTool reconcileStopTasks observeProviderTask replaceProviderMembership allActiveProviderTasksMissing reconcileMissingProviderTasks scheduleQuietCloseIfEmpty cancelQuietClose",
+        "admitQueryTool reconcileStopTasks observeProviderTask replaceProviderMembership allActiveProviderTasksMissing reconcileMissingProviderTasks scheduleQuietCloseIfEmpty cancelQuietClose startTimeSettingsChanged",
         "Provider task membership/host policy delegates indexed work mutations to backgroundWorkStore's independently checked writers, not to listItem fields.",
       ),
       group(
@@ -402,7 +402,7 @@ const owners: Record<string, Owner> = {
       ),
       group(
         "read",
-        "assertNotDisposed liveMessages timelineEntries committedTimeline messageCount snapshot modelOption nativeFacts contextInfo currentTurnEstimate compactionWindowStatus runningEpochKey compactionWindowStart modelSelection assertSkillRegistered answersBeforePrompt answersOnlyContext isProviderTurnContent promptConditions frozenSkillNames committedToolCalls toolLoadingFacts turnOutcome savedProviderTotals blockKey listItem toRecord toRecordMeta",
+        "toolAdmissionRefusal assertToolAdmission assertNotDisposed liveMessages timelineEntries committedTimeline messageCount snapshot modelOption nativeFacts contextInfo currentTurnEstimate compactionWindowStatus runningEpochKey compactionWindowStart canQuietClose startTimeSettingsNeedRestart modelSelection assertSkillRegistered answersBeforePrompt answersOnlyContext isProviderTurnContent promptConditions frozenSkillNames committedToolCalls toolLoadingFacts turnOutcome savedProviderTotals blockKey listItem toRecord toRecordMeta",
         "Read or derive native/canonical/policy/public data without changing a list input.",
       ),
     ],

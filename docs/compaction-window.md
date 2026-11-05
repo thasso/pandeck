@@ -130,7 +130,47 @@ range:
   - during a turn, or while background work keeps the process open, it applies
     when that process restarts.
 
-  Restart and resume start from the row.
+  An idle retained process closes immediately when a stored start-time setting
+  needs a restart, including a window changed during its empty-host grace. It
+  never closes for this reason during a turn, compaction, a pending Stop, or
+  active background work. Last-task completion, turn completion, compaction
+  completion and Stop acknowledgement reconsider the close. With no pending
+  restart, including a value reverted to the epoch's effective start value, the
+  frozen `claudeEmptyHostGraceMs` still applies. A missing provider task alone
+  keeps that grace for terminal-notification reconciliation.
+
+  A retained turn's Stop acknowledgement is bounded at four seconds, including
+  queued-message drop answers. Every outstanding Stop on that epoch must settle;
+  a newer acknowledgement cannot clear an older unanswered request. If one times
+  out, the process is quarantined, not reused. Background work stays alive and
+  its lifecycle evidence continues to drain, but prompts, provider turns and
+  compaction cannot run on that process. All new native and MCP tool actions are
+  refused by app-side admission, including ordinary file/shell tools and
+  background launches. Native hooks check the calling epoch before admission and
+  again after any asynchronous launch reservation. A refused, unexecuted
+  reservation is released without stopping existing jobs. MCP calls carry their
+  query epoch and recheck on the server immediately before the app tool
+  executes, even if an earlier native hook allowed the call. Each query mounts
+  its own MCP endpoint, so an old CLI connection cannot take a successor's
+  executor. Read hooks also recheck after awaiting file metadata. Stale or
+  closing epochs and tools racing an active Stop are refused too. A late
+  acknowledgement does not lift quarantine. Once fully idle, the host retires
+  through the supervisor, after normal frozen grace with no pending setting or
+  immediately when a setting awaits restart. Only a fresh query after the old
+  one terminates may accept the next prompt. After stream termination,
+  retirement also releases the Worker engine without waiting forever for
+  abandoned control answers. This is failed-Stop recovery, not a quiet close
+  during an active Stop.
+
+  Compaction waiting for Stop owns a reservation. Another Stop cancels it; after
+  the wait it rechecks that exact reservation and query epoch before queuing
+  `/compact`. Its cleanup cannot clear a successor's reservation.
+
+  The restart decision belongs to the shared start-time-setting path in
+  quiet-close scheduling, not a window-specific close path. Restart and resume
+  start from the row. Once the old process starts closing, the inspector says
+  "Applies on the next turn"; that turn starts a fresh process with the stored
+  value.
 
 - Applied state is per query epoch. It is `confirmed` while the value the epoch
   started with equals the stored one (clamped). Otherwise it is `pending` with

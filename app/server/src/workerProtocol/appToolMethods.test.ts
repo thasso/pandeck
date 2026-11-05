@@ -74,6 +74,21 @@ test("appTools.call keeps lone surrogates in its ids, name and arguments", () =>
   assert.deepEqual(decodeAppToolCall(wire(encodeAppToolCall(call))), call);
 });
 
+test("appTools.call preserves the Claude query epoch and rejects malformed epochs", () => {
+  const call: AppToolCall = {
+    callId: 4,
+    sessionId: "claude-session",
+    queryEpoch: "claude-epoch",
+    tool: "task_manage",
+    toolCallId: "mutate",
+    args: {},
+    progress: false,
+  };
+  assert.deepEqual(decodeAppToolCall(wire(encodeAppToolCall(call))), call);
+  for (const queryEpoch of ["", 12, null])
+    assertInvalid(() => decodeAppToolCall({ json: { ...call, queryEpoch } }));
+});
+
 test("a result and a partial keep their text, details and terminate exactly", () => {
   const result: AppToolResult = {
     content: [

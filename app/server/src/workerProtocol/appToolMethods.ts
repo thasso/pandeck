@@ -42,6 +42,8 @@ export interface AppToolResult {
 export interface AppToolCall {
   callId: number;
   sessionId: string;
+  /** Claude's query epoch; required by its live session authority, absent for pi. */
+  queryEpoch?: string;
   tool: string;
   toolCallId: string;
   args: Record<string, unknown>;
@@ -94,6 +96,11 @@ export function decodeAppToolCall(payload: Payload): AppToolCall {
   if (!json || !isId(json.callId)) invalid("app-tool call id");
   if (typeof json.sessionId !== "string" || json.sessionId === "")
     invalid("session id");
+  if (
+    json.queryEpoch !== undefined &&
+    (typeof json.queryEpoch !== "string" || json.queryEpoch === "")
+  )
+    invalid("query epoch");
   if (typeof json.tool !== "string") invalid("tool name");
   if (typeof json.toolCallId !== "string") invalid("tool-call id");
   const args = record(json.args);
@@ -102,6 +109,9 @@ export function decodeAppToolCall(payload: Payload): AppToolCall {
   return {
     callId: json.callId,
     sessionId: json.sessionId,
+    ...(json.queryEpoch !== undefined
+      ? { queryEpoch: json.queryEpoch as string }
+      : {}),
     tool: json.tool,
     toolCallId: json.toolCallId,
     args,

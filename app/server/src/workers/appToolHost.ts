@@ -39,7 +39,7 @@ export interface AppToolBinding {
   /** The session's identity, read fresh per call. */
   session(): ToolSession;
   /** Called once a call is admitted, immediately before the tool executes. */
-  onExecute?(name: string): void;
+  onExecute?(name: string, queryEpoch?: string): void;
 }
 
 /** Each session's registrations, the newest last. */
@@ -97,7 +97,7 @@ export function appToolHandlers(
           `Session ${call.sessionId} has no live tool session.`,
         );
       const tool = binding.resolve(call.tool);
-      binding.onExecute?.(tool.name);
+      binding.onExecute?.(tool.name, call.queryEpoch);
       served += 1;
       const result = await tool.execute(call.args, {
         toolCallId: call.toolCallId,

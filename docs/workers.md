@@ -643,7 +643,12 @@ it.
     (`no_tool_session` without one), which applies that harness's own gate with
     its own text: Claude's unknown and inactive checks, pi's Plan denial (pi
     checks no active set at call time). The answer is the tool's result as JSON;
-    a tool's failure is the call's failure, its message as text.
+    a tool's failure is the call's failure, its message as text. Claude calls
+    also carry a nonempty `queryEpoch`, captured by the calling engine. Its live
+    session requires that epoch and refuses stale, closing, pending-Stop or
+    quarantined epochs synchronously before tool execution. pi omits the field.
+    This execution-time check also fences MCP calls that passed a native hook
+    before Stop but reached the server afterward.
   - `appTools.progress` goes from the server to the Worker with one partial,
     sent only when the engine asked for progress (pi's `onUpdate`, a Claude
     `progressToken`). The Worker hands it to the waiting call synchronously, so
@@ -673,9 +678,14 @@ it.
     and native refusals, "Tool X is not enabled for this session."). The engine
     keeps its own input on an allow.
   - `sessionHooks.preToolUse` answers Claude's `PreToolUse` decision: Plan's
-    refusal of a mutating native against the live mode first, then background
-    admission of `Bash` with `run_in_background` and of `Monitor`, with the
-    job's context on an admitted launch.
+    refusal of a mutating native against the live mode first, then the calling
+    query epoch's admission fence for every tool, then background admission of
+    `Bash` with `run_in_background` and of `Monitor`, with the job's context on
+    an admitted launch. Stale, closing, pending-Stop and quarantined epochs
+    cannot start tools. Background admission rechecks after its asynchronous
+    reservation and releases a refused, unexecuted launch. Stop/task lifecycle
+    reconciliation remains available so existing work can finish. Read hooks
+    recheck admission after their asynchronous file metadata preparation too.
   - `sessionHooks.stop` and `sessionHooks.postCompact` carry Claude's `Stop`
     tasks and compact summary; each answers `{}` only once the server has run
     the session's reconciliation or recorded the summary, and the hook waits for
@@ -932,8 +942,10 @@ it.
   - In phase 1 the factory resolves the session's SDK seam and tool server from
     an in-process binding the session registers by id; an open for a session
     with none fails, and never reaches the real SDK. The tool server stays
-    server-built; each engine binds it to its own `appTools.call` when it
-    starts, and the ending engine releases it.
+    server-built and query-local; each engine binds it to its own
+    `appTools.call` with the captured query epoch when it starts, and the ending
+    engine releases it. A successor query gets a fresh MCP endpoint, never the
+    old CLI's connection.
   - The server awaits the open before it writes any epoch state; a Stop or a
     racing turn that lands meanwhile discards the engine and its temp tree.
   - Commands: `start`, `input` and `inputEnd` (the prompt), `close`, `abort`,

@@ -33,6 +33,16 @@ function commandFrom(value: unknown): string {
   return typeof input.command === "string" ? input.command.trim() : "";
 }
 
+function deniedTool(reason: string) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse" as const,
+      permissionDecision: "deny" as const,
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
 function isConflictCommand(command: string): boolean {
   return /\bgit\s+(?:rebase|merge|cherry-pick)\b/.test(command);
 }
@@ -60,23 +70,18 @@ export function claudeOutputPolicyHooks(
             if (input.hook_event_name !== "PreToolUse")
               return { continue: true };
             const resolvedToolUseId = toolUseId ?? input.tool_use_id;
-            const admission = await hooks.preToolUse(
-              hooks.epoch,
-              {
-                toolName: input.tool_name,
-                toolInput: recordInput(input.tool_input),
-                toolUseId: resolvedToolUseId,
-              },
-              options?.signal,
-            );
-            if (!admission.allowed)
-              return {
-                hookSpecificOutput: {
-                  hookEventName: "PreToolUse" as const,
-                  permissionDecision: "deny" as const,
-                  permissionDecisionReason: admission.reason,
+            const admit = () =>
+              hooks.preToolUse(
+                hooks.epoch,
+                {
+                  toolName: input.tool_name,
+                  toolInput: recordInput(input.tool_input),
+                  toolUseId: resolvedToolUseId,
                 },
-              };
+                options?.signal,
+              );
+            const admission = await admit();
+            if (!admission.allowed) return deniedTool(admission.reason);
             if (admission.context)
               return {
                 continue: true,
@@ -90,6 +95,10 @@ export function claudeOutputPolicyHooks(
               recordInput(input.tool_input),
               input.cwd,
             );
+            // Read preparation awaits file metadata. Stop or an epoch change
+            // during that await must not turn an earlier allow into new work.
+            const latest = await admit();
+            if (!latest.allowed) return deniedTool(latest.reason);
             reads.set(resolvedToolUseId, decision);
             return {
               continue: true,

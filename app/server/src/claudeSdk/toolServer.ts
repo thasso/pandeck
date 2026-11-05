@@ -54,6 +54,8 @@ export interface ClaudeToolSessionSource {
   title?: string;
   timelineEntries(): ClientTimelineEntry[];
   broadcastState(): void;
+  /** Refuse stale, closing or stopped query epochs immediately before execution. */
+  assertToolAdmission(epoch: string | undefined): void;
 }
 
 function claudeToolSession(
@@ -145,6 +147,7 @@ export function createClaudeSessionToolServer(
   const unregister = registerAppToolSession(source.id, {
     resolve: (name) => resolveSessionTool(toolset, name),
     session,
+    onExecute: (_name, epoch) => source.assertToolAdmission(epoch),
   });
   let executor: AppToolExecutor | undefined;
   const server = createSessionToolServer({
