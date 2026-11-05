@@ -67,6 +67,8 @@ export interface SpawnedSessionDetails {
 export interface SessionRowDetailsSource {
   describe: (session: SessionListItem) => SpawnedSessionDetails;
   onOpenWorktree?: ((worktreeId: string) => void) | undefined;
+  /** Keep the session open beside the main pane (the Session panel). */
+  onOpenBeside?: ((sessionId: string) => void) | undefined;
 }
 
 export const SessionRowDetailsContext =
@@ -514,6 +516,21 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
                 None
               </PropertyText>
             )}
+          </>
+        ) : null}
+        {source?.onOpenBeside ? (
+          <>
+            <PropertyLabel>Panel</PropertyLabel>
+            <PropertyText>
+              <DetailLink
+                onClick={() => {
+                  source.onOpenBeside?.(session.id);
+                  onAct?.();
+                }}
+              >
+                Open beside
+              </DetailLink>
+            </PropertyText>
           </>
         ) : null}
       </PropertyList>

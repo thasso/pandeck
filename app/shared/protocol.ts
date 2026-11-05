@@ -7881,7 +7881,7 @@ export type ClientMessage =
   | { type: "loadSession"; id: string; timelineCache?: TimelineCacheDescriptor }
   | { type: "openPermanentAssistant"; timelineCache?: TimelineCacheDescriptor }
   /** Release a PA view when its route is no longer visible. */
-  | { type: "releasePermanentAssistant"; sessionId: string }
+  | { type: "releaseSessionView"; sessionId: string }
   /**
    * Read the archived session rows, when the archived sidebar section is shown
    * and on each freshness signal; answered by `archivedSessions` or `error`

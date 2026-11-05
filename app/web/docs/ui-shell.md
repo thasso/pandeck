@@ -1022,38 +1022,53 @@ directions: it publishes the page header's overflow actions rather than only
 drawing, so it is mounted whenever its tab is open. Closing every tab leaves the
 panel open on a centered list of available panels; **Personal Assistant** is the
 second panel and opens an independent view of the server-owned permanent
-conversation, so it can remain beside the routed main-session chat.
-**Knowledge** is the third (offered only while the Knowledge Base is on in
-Settings, as is the sidebar section): the Knowledge Base folder on the SAME
-worktree page the Worktree panel below draws — Files with File/Preview/History,
-and Changes — in a narrow column. Moving inside it is panel state, like the
-Worktree panel's, and its one action hands the file or view it is on to the main
-pane. A panel surface is opened from elsewhere by request: `kb_show`'s
-transcript card opens its file here. **Worktree** is the fourth, and it is the
-only panel that addresses no object of its own: it follows the OPEN SESSION to
-the worktree that session executes in, drawing the same Changes and Files page
-the `/worktrees/:id` route draws — diffs, files, commenting and review
-submission included — so the changes can be read beside the chat producing them.
-There is one layout for that page everywhere: Changes is the whole changeset in
-one scroll, Files is the open file (or the README), and the file tree lives in
-the left sidebar on the route. The page has no tabs, rail or by-file review. A
-narrow column — the panel, a phone — has no sidebar beside it, so its header
-adds **Browse files** and, on Changes, **Jump to file**, each opening a sheet
-over the page, and its diffs are unified. A sheet is bound to the pane that
-opened it (`EdgeSheetContainer`) rather than dropped over the whole app: in a
-panel it covers the panel, which exists to sit beside what the reader is
-comparing against, and on a wide layout the main pane's sheets (a file's History
-included) cover the main pane and leave the sidebars visible. Only a phone's
-sheets cover the screen. Moving inside it (a view, a file, a diff scope) is
-panel state and never touches the address bar, which keeps naming the main
-pane's object. Like the tabs, that place is kept in `sessionStorage` (per
-worktree here, so a session brought back reopens its worktree where it was) and
-survives a reload; its one action hands the worktree, at the view it is on, to
-the main pane. A session with no worktree, and one whose worktree is gone, each
-say so rather than drawing an empty page. The tab bar is panel chrome, not a
-second object-title row. On small layouts none of this tab state exists: the
-right panel remains the direct flip-up Inspector dock, and a Knowledge card
-there offers its route alone. Top to bottom, for the current main-pane object:
+conversation, so it can remain beside the routed main-session chat. **Session**
+is the third and shows ANY session the same way, chosen from the picker in its
+title row or asked for by a session row's **Open beside**; its one action hands
+the session to the main pane. Which session it shows is panel state, kept in
+`sessionStorage`, and never touches the address bar. Both are the center's chat
+(`SessionChat`, fed by `useSessionChat`), never a second chat surface: the same
+transcript, composer, ledges, approvals, questions and comments, on a connection
+of their own because the server binds one viewed session per connection. That
+connection opens on no session of the route's, reads the session list and the
+other app-wide lists from the main connection, and opens everything a transcript
+links to in the main pane, a fork included; a new draft inherits the viewed
+session's runtime, so it is created on the panel's connection and the Session
+panel goes with it, while the Personal Assistant panel, pinned to its session,
+offers none. Viewing is what marks a session read, so a chat panel keeps its
+transcript but releases its view while it is not on screen, and asks for the
+delta when shown again. **Knowledge** is the fourth (offered only while the
+Knowledge Base is on in Settings, as is the sidebar section): the Knowledge Base
+folder on the SAME worktree page the Worktree panel below draws — Files with
+File/Preview/History, and Changes — in a narrow column. Moving inside it is
+panel state, like the Worktree panel's, and its one action hands the file or
+view it is on to the main pane. A panel surface is opened from elsewhere by
+request: `kb_show`'s transcript card opens its file here. **Worktree** is the
+fifth, and it is the only panel that addresses no object of its own: it follows
+the OPEN SESSION to the worktree that session executes in, drawing the same
+Changes and Files page the `/worktrees/:id` route draws — diffs, files,
+commenting and review submission included — so the changes can be read beside
+the chat producing them. There is one layout for that page everywhere: Changes
+is the whole changeset in one scroll, Files is the open file (or the README),
+and the file tree lives in the left sidebar on the route. The page has no tabs,
+rail or by-file review. A narrow column — the panel, a phone — has no sidebar
+beside it, so its header adds **Browse files** and, on Changes, **Jump to
+file**, each opening a sheet over the page, and its diffs are unified. A sheet
+is bound to the pane that opened it (`EdgeSheetContainer`) rather than dropped
+over the whole app: in a panel it covers the panel, which exists to sit beside
+what the reader is comparing against, and on a wide layout the main pane's
+sheets (a file's History included) cover the main pane and leave the sidebars
+visible. Only a phone's sheets cover the screen. Moving inside it (a view, a
+file, a diff scope) is panel state and never touches the address bar, which
+keeps naming the main pane's object. Like the tabs, that place is kept in
+`sessionStorage` (per worktree here, so a session brought back reopens its
+worktree where it was) and survives a reload; its one action hands the worktree,
+at the view it is on, to the main pane. A session with no worktree, and one
+whose worktree is gone, each say so rather than drawing an empty page. The tab
+bar is panel chrome, not a second object-title row. On small layouts none of
+this tab state exists: the right panel remains the direct flip-up Inspector
+dock, and a Knowledge card there offers its route alone. Top to bottom, for the
+current main-pane object:
 
 1. **Summary** — type, title, key status.
 2. **Related objects** — the object's references resolved and rendered as links

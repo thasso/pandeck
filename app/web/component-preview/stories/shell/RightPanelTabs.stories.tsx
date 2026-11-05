@@ -1,3 +1,4 @@
+import type { SessionChatHost } from "../../../src/hooks/useSessionChat.tsx";
 import { useLayoutEffect, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { GitBranch, MessageSquare } from "lucide-react";
@@ -40,6 +41,7 @@ function RightPanelTabsStory({
     <div className="h-screen w-96">
       <RightPanelTabs
         key={`${openTabs.join()}:${activeTab}`}
+        chatHost={{} as SessionChatHost}
         assistantUnread={assistantUnread}
         inspector={
           <InspectorChromeProvider header={false} desktopTabs>

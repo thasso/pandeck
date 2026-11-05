@@ -203,10 +203,8 @@ describe("the permanent Assistant after a Stop", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     expect(
-      socket.sent.filter(
-        (message) => message.type === "releasePermanentAssistant",
-      ),
-    ).toEqual([{ type: "releasePermanentAssistant", sessionId: ASSISTANT }]);
+      socket.sent.filter((message) => message.type === "releaseSessionView"),
+    ).toEqual([{ type: "releaseSessionView", sessionId: ASSISTANT }]);
     const previousOpens = socket.sent.filter(
       (message) => message.type === "openPermanentAssistant",
     ).length;
@@ -233,9 +231,7 @@ describe("the permanent Assistant after a Stop", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     expect(
-      socket.sent.filter(
-        (message) => message.type === "releasePermanentAssistant",
-      ),
+      socket.sent.filter((message) => message.type === "releaseSessionView"),
     ).toEqual([]);
   });
 

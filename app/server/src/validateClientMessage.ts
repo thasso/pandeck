@@ -1068,7 +1068,7 @@ const REGISTRY = defineRegistry({
       ? validateTimelineCache(msg.timelineCache)
       : null,
   ),
-  releasePermanentAssistant: fields({ sessionId: STRING }),
+  releaseSessionView: fields({ sessionId: STRING }),
   loadArchivedSessions: fields({ requestId: STRING }),
   ping: fields({ id: STRING }),
   resolveObjectLinks: fields({ requestId: STRING, uris: STRING_ARRAY }),

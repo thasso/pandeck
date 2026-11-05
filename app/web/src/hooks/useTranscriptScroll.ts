@@ -19,6 +19,11 @@ import {
   type TranscriptScrollMode,
   type TranscriptScrollPosition,
 } from "../lib/transcriptScroll.ts";
+import {
+  claimScrollKeys,
+  ownsScrollKey,
+  trackTranscript,
+} from "./transcriptKeyOwner.ts";
 
 /** How often a restore looks again for a row the transcript has not delivered yet. */
 const RESTORE_RETRY_MS = 100;
@@ -1290,8 +1295,12 @@ export function useTranscriptScroll({
       if (target?.isContentEditable) return;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (!ownsScrollKey(element, target)) return;
       onReaderInput();
     };
+    const untrackTranscript = trackTranscript(element);
+    const claimKeys = () => claimScrollKeys(element);
+    element.addEventListener("pointerdown", claimKeys, { passive: true });
     document.addEventListener("keydown", onReaderKey, { passive: true });
 
     // Everything that changes height after the commit that caused it: lazily
@@ -1331,6 +1340,8 @@ export function useTranscriptScroll({
       element.removeEventListener("scroll", onScroll);
       for (const kind of inputEvents)
         element.removeEventListener(kind, onReaderInput);
+      element.removeEventListener("pointerdown", claimKeys);
+      untrackTranscript();
       document.removeEventListener("keydown", onReaderKey);
       observer.disconnect();
       window.removeEventListener("pagehide", flush);

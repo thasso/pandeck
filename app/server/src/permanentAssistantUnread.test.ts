@@ -129,7 +129,7 @@ test("release cancels a retained panel's pending reopen even before it attaches"
   try {
     const reopening = connection.handle({ type: "openPermanentAssistant" });
     await connection.handle({
-      type: "releasePermanentAssistant",
+      type: "releaseSessionView",
       sessionId: id,
     });
     resolve();
@@ -188,9 +188,39 @@ test("opening PA uses read dwell and publishes only its scalar unread state", as
         ),
     ).toBe(true);
     await connection.handle({
-      type: "releasePermanentAssistant",
+      type: "releaseSessionView",
       sessionId: id,
     });
+    expect(connection.viewingSessionId()).toBeUndefined();
+  } finally {
+    connection.dispose();
+  }
+});
+
+test("releasing a view detaches any session, and only the one it names", async () => {
+  const id = `ordinary-view-${counter++}`;
+  ids.push(id);
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    messageCount: 2,
+    updatedAt: 100,
+  });
+  const connection = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: () => undefined,
+  } as unknown as ConstructorParameters<typeof Connection>[0]);
+  try {
+    await connection.handle({ type: "loadSession", id });
+    expect(connection.viewingSessionId()).toBe(id);
+    await connection.handle({
+      type: "releaseSessionView",
+      sessionId: "another-session",
+    });
+    expect(connection.viewingSessionId()).toBe(id);
+    await connection.handle({ type: "releaseSessionView", sessionId: id });
     expect(connection.viewingSessionId()).toBeUndefined();
   } finally {
     connection.dispose();

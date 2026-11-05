@@ -1,6 +1,5 @@
 import {
   lazy,
-  Profiler,
   startTransition,
   Suspense,
   useCallback,
@@ -24,12 +23,10 @@ import {
 } from "lucide-react";
 import {
   accountProviderForModelProvider,
-  type AgentQuestionResponse,
   type AccountPickPreviewResult,
   type AgentType,
   clampThinkingLevelForModel,
   claudeSdkModelOption,
-  type EntrySummary,
   type Harness,
   harnessForAccountProvider,
   type InboxPositionEntry,
@@ -38,7 +35,6 @@ import {
   isCodingAgentType,
   KNOWLEDGE_WORKTREE_ID,
   modelKey,
-  peerPromptHopRefusalMessage,
   type ModelOption,
   type PromptAttachment,
   type PullRequestCheckoutOutcome,
@@ -48,7 +44,6 @@ import {
   type SessionMode,
   type SessionState,
   type TaskInitiativeRef,
-  type TaskStatus,
   taskSummaryOf,
   type ThinkingLevel,
   UNLABELED_SESSION_TITLE,
@@ -70,16 +65,8 @@ import {
   type PaObjectLinkResolution,
   type PaObjectType,
 } from "@assistant/shared/objectLinks";
-import {
-  paObjectReferenceKey,
-  skillSummariesKey,
-} from "./lib/transcriptKeys.ts";
-import {
-  approvalCardsOf,
-  approvalStatusDetail,
-  pendingApprovalCards,
-  pendingApprovalsKey,
-} from "./lib/approvalCards.ts";
+import { paObjectReferenceKey } from "./lib/transcriptKeys.ts";
+import { approvalCardsOf, approvalStatusDetail } from "./lib/approvalCards.ts";
 import { mentionedPaUris } from "./lib/transcriptMentions.ts";
 import { backlogSessionsKey } from "./lib/sessionRows.ts";
 import { chatRouteFailure, chatRoutePending } from "./lib/chatRouteStage.ts";
@@ -93,9 +80,8 @@ import {
   ownsScreenEdgeGestures,
 } from "./lib/nativeShell.ts";
 import { pathFromOpenTarget } from "./lib/openTarget.ts";
-import { FloatingComposerDock } from "./components/FloatingComposerDock.tsx";
 import { PerfHud } from "./components/PerfHud.tsx";
-import { recordRender, usePerfRenderCount } from "./lib/perfStats.ts";
+import { usePerfRenderCount } from "./lib/perfStats.ts";
 import {
   useAssistant,
   taskMutationKey,
@@ -107,15 +93,15 @@ import {
 import { useMemory } from "./hooks/useMemory.ts";
 import { useSessionReadDwell } from "./hooks/useSessionReadDwell.ts";
 import {
-  usePendingChatComments,
-  type NewPendingChatComment,
-} from "./hooks/usePendingChatComments.ts";
-import {
-  commentDocumentLabel,
-  isDocumentComment,
-  type PendingChatComment,
-} from "./lib/chatCommentPrompt.ts";
-import { documentTargetHref } from "@assistant/shared/documentTargets";
+  useBackgroundStopPending,
+  useComposerDictation,
+  useSessionChat,
+  useTranscriptPin,
+  type SessionChatHost,
+} from "./hooks/useSessionChat.tsx";
+import { useTranscriptFocus } from "./hooks/useTranscriptFocus.ts";
+import { loadMessageList, SessionChat } from "./components/SessionChat.tsx";
+import { useSessionPanelTarget } from "./components/shell/SessionPanel.tsx";
 import { fileSessionStart } from "./lib/fileSessionStart.ts";
 import {
   knowledgeCheckoutRecord,
@@ -124,7 +110,6 @@ import {
 } from "./lib/knowledgeCheckout.ts";
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
 import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
-import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
 import {
   StagedDocumentLedge,
   StagedTaskLedge,
@@ -133,22 +118,8 @@ import {
   PendingCommentsLedge,
   type CommentLedgeItem,
 } from "./components/PendingCommentsLedge.tsx";
-import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
-import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
-import {
-  PendingQuestionLedge,
-  pendingQuestionsLedgeKey,
-} from "./components/PendingQuestionLedge.tsx";
-import { pendingQuestionEntryId } from "./components/AgentQuestionToolCard.tsx";
-import {
-  SessionRowDetailsContext,
-  SpawnedSessionsLedge,
-} from "./components/SpawnedSessionsLedge.tsx";
-import {
-  sessionSettleCascade,
-  spawnedSessionsKey,
-  spawnedSessionsView,
-} from "./lib/sessionInbox.ts";
+import { SessionRowDetailsContext } from "./components/SpawnedSessionsLedge.tsx";
+import { sessionSettleCascade } from "./lib/sessionInbox.ts";
 import { SessionTitleText } from "./components/SessionTitleText.tsx";
 import {
   PendingSessionPanel,
@@ -195,7 +166,6 @@ import {
   type SessionPreview,
 } from "./lib/sessionPreviewStore.ts";
 import { resolveSessionDockContext } from "./lib/sessionDockContext.ts";
-import { applyPeerPromptCardOverridesToMessages } from "./lib/peerPromptCardOverrides.ts";
 import {
   carryOverRuntimeSelection,
   composerDraftStorageKey,
@@ -203,7 +173,6 @@ import {
   newSessionRuntimeDefaults,
   reviewHandoffSessionTarget,
   routeComposerSend,
-  visibleSessionDraft,
 } from "./lib/newSessionRuntime.ts";
 import { newSessionShell, stagedTranscript } from "./lib/newSessionShell.ts";
 import {
@@ -224,7 +193,6 @@ import {
 import { createClientId } from "./lib/clientId.ts";
 import { copyWithToast } from "./lib/clipboard.ts";
 import { showToast, TOAST_DWELL_MS } from "./lib/toast.ts";
-import { failureOnViewedSession } from "./lib/messageAnnounce.ts";
 import { setFailureHomes } from "./lib/messageArrival.ts";
 import { visibleModels } from "./lib/models.ts";
 import {
@@ -265,11 +233,7 @@ import { useWorktreeWatches } from "./hooks/useWorktreeWatches.ts";
 import { useApnsRegistration } from "./hooks/useApnsRegistration.ts";
 import { useStagedAgentReconcile } from "./hooks/useStagedAgentReconcile.ts";
 import { taskStartSession, taskWorktreeIds } from "./lib/taskActivity.ts";
-import {
-  acceptStatusSuggestionSave,
-  nextStatus,
-  type Task,
-} from "./lib/backlogTree.ts";
+import { nextStatus, type Task } from "./lib/backlogTree.ts";
 import type { ArchiveContext } from "./lib/taskArchive.ts";
 import { runTaskArchive } from "./lib/taskArchiveRun.ts";
 import { deleteConfirmation, deleteSet } from "./lib/taskDelete.ts";
@@ -359,10 +323,7 @@ import {
 } from "./components/KnowledgeOpenTargets.tsx";
 import { KnowledgeInspector } from "./components/KnowledgeInspector.tsx";
 import { PaObjectLinkSourceProvider } from "./components/PaObjectLinks.tsx";
-import {
-  TaskLiveSourceProvider,
-  useTaskLiveSourceValue,
-} from "./components/TaskLiveState.tsx";
+import { useTaskLiveSourceValue } from "./components/TaskLiveState.tsx";
 import { useWorktreeCommentWatch } from "./hooks/useCommentWatch.ts";
 import { useMobileLayout } from "./components/shell/useMobileLayout.ts";
 import { LayoutProvider } from "./components/shell/LayoutProvider.tsx";
@@ -370,8 +331,7 @@ import {
   decodeBoolean,
   useSessionStorageState,
 } from "./hooks/useSessionStorageState.ts";
-import { Composer, type BranchPanelInfo } from "./components/Composer.tsx";
-import { SessionWorktreeMissingBanner } from "./components/SessionWorktreeMissingBanner.tsx";
+import type { BranchPanelInfo } from "./components/Composer.tsx";
 import type { MarkdownPaObjectReference } from "./components/Markdown.tsx";
 import {
   NewSessionQuickStart,
@@ -394,12 +354,7 @@ import {
   useShortcuts,
   type ShortcutGroup,
 } from "./components/common/shortcuts.tsx";
-import {
-  EmptyBox,
-  ErrorNote,
-  PaneLoading,
-  Skeleton,
-} from "./components/common/load.tsx";
+import { EmptyBox, PaneLoading } from "./components/common/load.tsx";
 import { Button } from "@/components/ui/button";
 import { useDialogs } from "./components/common/dialogs.tsx";
 import { IconButton } from "./components/common/IconButton.tsx";
@@ -440,23 +395,6 @@ const NO_WORKTREE_COMMENTS: WorktreeComment[] = [];
 const noopKnowledgeComments = () => {};
 const NO_KNOWLEDGE_COMMENT_ACTIONS = {} as CommentActions;
 const NO_WORKTREE_REVIEW_SETS: WorktreeReviewSet[] = [];
-/** The ledge's queue when only peer prompts wait: nothing of the user's own. */
-const EMPTY_PROMPT_QUEUE: import("@assistant/shared").PromptQueueState = {
-  items: [],
-  paused: false,
-};
-const EMPTY_CONVERSATION_MESSAGES: import("@assistant/shared").DisplayMessage[] =
-  [];
-const EMPTY_UNHANDLED_BATCH: import("@assistant/shared").BackgroundHandlingRef[] =
-  [];
-/** The permanent Assistant's ledge after a Stop: its hold, and no drafts. */
-const HELD_ASSISTANT_QUEUE: import("@assistant/shared").PromptQueueState = {
-  items: [],
-  paused: true,
-  automaticTurnsHeld: true,
-};
-/** A held Assistant's ledge has no rows to send or remove. */
-const noop = () => {};
 const DEFAULT_WORKTREE_REVIEW_PROMPT =
   "Review the selected comments, apply the appropriate changes, and reply to or resolve each thread.";
 const REVIEW_SET_CLAIMS_PROMPT = `Findings are claims, not orders. Verify each against the code before acting.
@@ -481,20 +419,6 @@ function isReviewSetSelection(
     selected.every((comment) => comment.reviewSetId === selectedSetIds[0])
   );
 }
-/**
- * The cards whose conflicted rebase is with this session's agent. Each entry of
- * `state.pullRequestCards` is the one-block message `upsertPullRequestCard`
- * writes, so the card is read off the block rather than from a second store.
- */
-function rebaseHandedOffCardIds(cards: UIState["pullRequestCards"]): string[] {
-  const ids: string[] = [];
-  for (const message of cards)
-    for (const block of message.blocks)
-      if (block.kind === "pullRequest" && block.pullRequest.rebaseHandedOff)
-        ids.push(block.pullRequest.id);
-  return ids;
-}
-
 // The third review draft — /review's "an agent reviews this session's work" —
 // is lib/sessionHandoff.ts's buildSessionReviewPrompt, because it interpolates
 // the source session id.
@@ -544,17 +468,6 @@ type StagedFirstSend = {
   input: HarnessSendInput | null;
 };
 
-let messageListPreload: Promise<
-  typeof import("./components/MessageList.tsx")
-> | null = null;
-function loadMessageList() {
-  messageListPreload ??= import("./components/MessageList.tsx");
-  return messageListPreload;
-}
-
-const MessageList = lazy(() =>
-  loadMessageList().then((module) => ({ default: module.MessageList })),
-);
 const SettingsPage = lazy(() =>
   import("./components/SettingsPage.tsx").then((module) => ({
     default: module.SettingsPage,
@@ -828,36 +741,6 @@ function LazySurfaceFallback({ label = "Opening…" }: { label?: string }) {
 }
 
 /**
- * Inline transcript silhouette used only if a primary action beats its idle
- * preload. It occupies transcript geometry, so first send never swaps the hero
- * for a whole-pane chunk fallback or for an empty frame.
- */
-function recordTranscriptRender(
-  _id: string,
-  _phase: string,
-  actualDuration: number,
-): void {
-  recordRender("Transcript", actualDuration);
-}
-
-function TranscriptChunkFallback() {
-  return (
-    <div
-      role="status"
-      aria-label="Opening transcript"
-      className="min-h-0 flex-1 overflow-hidden bg-background"
-    >
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-end gap-3 px-4 py-6">
-        <div className="ml-auto w-2/3 rounded-2xl border border-border bg-card p-4">
-          <Skeleton className="h-3 w-full rounded-full" />
-          <Skeleton className="mt-2 h-3 w-3/4 rounded-full" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
  * Main-pane surface for a worktree id that no longer resolves. There is no
  * `/worktrees` index any more — a worktree is browsed on its Project page — so
  * this is the one case left. It still owns a real page header so the mobile
@@ -1115,6 +998,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // dock's compose control focuses it INSIDE its own tap, which is the only way
   // iOS raises the keyboard without a second one.
   const [composerVisible, setComposerVisible] = useState(false);
+  // The session a right-panel chat has on screen, for the failure claim below.
+  const [panelChatOnScreen, setPanelChatOnScreen] = useState<string | null>(
+    null,
+  );
   // The composer's background ledge, expanded: the one state that subscribes
   // this browser to the registry topic from the session screen itself.
   const [backgroundLedgeOpen, setBackgroundLedgeOpen] = useState(false);
@@ -1122,21 +1009,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     () => setBackgroundLedgeOpen((value) => !value),
     [],
   );
-  // The composer's spawned-session ledge, expanded. It subscribes nothing: the
-  // peers are rows of the session list this browser already holds.
-  const [spawnedLedgeOpen, setSpawnedLedgeOpen] = useState(false);
-  // The session whose ledge also lists its SETTLED peers. Keyed by session
-  // rather than a boolean so a chat switched to starts with live peers only,
-  // without an effect to reset it; closing the strip forgets it.
-  const [spawnedLedgeSettledFor, setSpawnedLedgeSettledFor] = useState<
-    string | null
-  >(null);
-  const toggleSpawnedLedge = useCallback(() => {
-    setSpawnedLedgeOpen((value) => {
-      if (value) setSpawnedLedgeSettledFor(null);
-      return !value;
-    });
-  }, []);
   // The draft as the dock's field shows it while the composer is closed. Only the
   // composer knows it, and it only reports it while hidden (see `Composer`).
   const [composerDraft, setComposerDraft] = useState("");
@@ -1155,16 +1027,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     spoken: string;
     token: number;
   } | null>(null);
-  // The row a jump landed on, held here rather than read from `state`: the
-  // transcript may still be loading back to it, and the reveal that named it is
-  // consumed once (like a fork switch).
-  const [messageFocus, setMessageFocus] = useState<{
-    sessionId: string;
-    entryId: string;
-    token: number;
-    /** Land the row near the top instead of centring it (a comment's passage). */
-    align?: "top";
-  } | null>(null);
   /** The `#m-` address already acted on, so staying at it does not re-ask. */
   const revealedHashRef = useRef<string | null>(null);
   /** Changes whenever the URL's fragment moves, which no route change reports. */
@@ -1178,15 +1040,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     loadBootSessionPreview(location.pathname),
   );
   const [previewInteracted, setPreviewInteracted] = useState(false);
-  // Submitting follows the answer: the transcript jumps to the end and stays
-  // there, wherever in the conversation the send was made from. This is a token
-  // rather than something the transcript could notice by itself — an
-  // attachments-only prompt echoes no optimistic row to notice.
-  const [transcriptPinToken, setTranscriptPinToken] = useState(0);
-  const pinTranscriptToBottom = useCallback(
-    () => setTranscriptPinToken((token) => token + 1),
-    [],
-  );
+  const transcriptPin = useTranscriptPin();
+  const pinTranscriptToBottom = transcriptPin.pinToBottom;
   // A single staged non-pi harness session: created optimistically on the client
   // and only realized server-side by its first prompt's harnessSend.
   const [pendingStart, setPendingStart] = useState<StagedSessionRecord | null>(
@@ -1460,7 +1315,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     (route.name === "session" && route.id === permanentAssistantSessionId);
   useEffect(() => {
     if (!routedAssistantVisible && permanentAssistantSessionId)
-      actions.releasePermanentAssistant(permanentAssistantSessionId);
+      actions.releaseSessionView(permanentAssistantSessionId);
   }, [routedAssistantVisible, permanentAssistantSessionId, actions]);
   const sidebarPanelOpen = mobileLayout ? browserScreen : sidebarOpen;
 
@@ -1469,21 +1324,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // is actually on screen. The rule lives there because getting the second half
   // wrong is invisible — everything still renders, the quiet surfaces just keep
   // paying for broadcasts they never show.
-  // Pending CONTROL state only: which Stop buttons this browser is waiting on.
-  // A Stop-all covers every item its owner holds, so those ids join the set too
-  // — and nothing in it changes what a row SAYS about the work.
-  const backgroundStopPending = useMemo(() => {
-    const pending = new Set(state.backgroundStopPending);
-    if (state.backgroundStopAllPending.length > 0)
-      for (const item of state.backgroundWorkItems)
-        if (state.backgroundStopAllPending.includes(item.ownerSessionId))
-          pending.add(item.id);
-    return pending;
-  }, [
-    state.backgroundStopPending,
-    state.backgroundStopAllPending,
-    state.backgroundWorkItems,
-  ]);
+  const backgroundStopPending = useBackgroundStopPending(state);
   // The session inspector is on screen for the routed session — the gate for
   // what its spawn-tree group reads (the worktree topic, the git watches).
   const routedSessionInspectorShown =
@@ -2292,16 +2133,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       : routeSessionPending
         ? null
         : state.contextInfo;
-  // Live peer-prompt card lifecycle patches (Task 90/89 in-place reconciliation)
-  // overlaid onto the rendered messages regardless of their source above.
-  const displayMessagesWithPeerPromptOverrides = useMemo(
-    () =>
-      applyPeerPromptCardOverridesToMessages(
-        displayMessages,
-        state.peerPromptCardOverrides,
-      ),
-    [displayMessages, state.peerPromptCardOverrides],
-  );
   const previewHasStreamingMessage =
     usePreview &&
     displayMessages.some(
@@ -2312,44 +2143,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // unmounts when another sidebar section is selected and on mobile object
   // screens, while the session itself stays open through both.
   const readCurrentSessionId = useSessionReadDwell(displayCurrentId);
-  // A fork draft is a one-session handoff. The reducer retains the last one, so
-  // never let a later composer remount stage it onto another session or the
-  // shared new-session draft slot.
-  const displayForkDraft = visibleSessionDraft(
-    state.forkDraft,
-    displayCurrentId,
-  );
-  // The composer took a staged draft. Only the fork draft lives in the reducer,
-  // so only its token matches; the review handoffs are this component's own
-  // state and are dropped where they are sent.
-  const retireStagedDraft = useCallback(
-    (token: number) => actions.retireSessionDraft(token),
-    [actions],
-  );
   const chatDraftStorageKey = composerDraftStorageKey(
     displayCurrentId,
     Boolean(shownOptimisticSession),
   );
-  const chatComments = usePendingChatComments(chatDraftStorageKey);
-  const [chatCommentDraft, setChatCommentDraft] = useState<Omit<
-    NewPendingChatComment,
-    "body"
-  > | null>(null);
-  const [chatCommentSelection, setChatCommentSelection] = useState<{
-    quote: string;
-    onComment: () => void;
-  } | null>(null);
-  const onChatCommentSelectionChange = useCallback(
-    (selection: { quote: string; onComment: () => void } | null) =>
-      setChatCommentSelection(selection),
-    [],
-  );
-  // A transcript can unmount between session routes; clear its anchor in the
-  // host as well as in MessageList so it cannot attach under the next session.
-  useEffect(() => {
-    setChatCommentDraft(null);
-    setChatCommentSelection(null);
-  }, [displayCurrentId]);
   const displayStreaming = shownOptimisticSession ? false : state.streaming;
   // The windowed transcript's two halves: what precedes the rendered rows (the
   // server-computed turn-stats seed) and whether anything precedes them at all.
@@ -3145,22 +2942,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [referenceKey],
   );
 
-  // The composer's `/<skill>` rows read the library scan, which every
-  // subscribe and rescan answers afresh: hand it a new array only when what
-  // the rows show changed.
-  const skillSummariesCache = useRef<{
-    key: string;
-    value: EntrySummary[] | undefined;
-  }>({ key: "", value: undefined });
-  const skillEntries = dataOf(state.skillLibrary)?.entries;
-  const skillEntriesKey = skillEntries ? skillSummariesKey(skillEntries) : "";
-  if (skillSummariesCache.current.key !== skillEntriesKey)
-    skillSummariesCache.current = {
-      key: skillEntriesKey,
-      value: skillEntries,
-    };
-  const composerSkillSummaries = skillSummariesCache.current.value;
-
   const selectedProjectWorktreeCache = useRef<{
     key: string;
     value: WorktreeRecord[];
@@ -3259,17 +3040,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       }),
     [actions],
   );
-  // Answering an agent's status suggestion from a transcript card: the SAME save
-  // the Backlog Focus row sends (`acceptStatusSuggestionSave`). It resumes no
-  // session, so answering here costs no provider call, and it carries no title,
-  // so a card recorded before a rename cannot undo it.
-  const applyTaskStatusSuggestion = useCallback(
-    (task: { id: string; status: TaskStatus }) =>
-      actions.saveTask(
-        acceptStatusSuggestionSave({ id: task.id, to: task.status }),
-      ),
-    [actions],
-  );
   const reorderBacklog = useCallback(
     (
       orderedIds: string[],
@@ -3283,28 +3053,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       placements: { id: string; parentId?: string | null }[],
     ) => actions.reorderProjects(orderedIds, placements),
     [actions],
-  );
-
-  // The id is the whole of what this reads, and it must stay referentially
-  // stable for the memoized transcript rows that carry it.
-  const forkSourceSessionId = state.session?.sessionId;
-  const forkMessage = useCallback(
-    (entryId: string, position: "before" | "at") => {
-      if (!forkSourceSessionId) return;
-      actions.forkSession(forkSourceSessionId, entryId, position);
-    },
-    [actions, forkSourceSessionId],
-  );
-
-  // Resend a prompt into the SAME session: it lands in the composer for the user
-  // to send, which is the only safe repeat when a turn may have failed after
-  // tool calls already ran.
-  const resendPrompt = useCallback(
-    (text: string) => {
-      if (!displayCurrentId) return;
-      actions.stageSessionDraft(displayCurrentId, text);
-    },
-    [actions, displayCurrentId],
   );
 
   // The transcript's display flags as ONE memoized object: every message row is
@@ -4116,21 +3864,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
    * from the main chat composer. One registry, one help list — only the
    * dispatch point differs from host commands.
    */
-  const runClientSlashCommand = useCallback(
-    (name: string, rawArgs: string): string | null => {
-      if (name === "review") return startReviewSessionForSession(rawArgs);
-      if (name === "rename") {
-        // Only "is there a session" is decided here: the loaded transcript is a
-        // window that may open mid-turn with no user row, so whether there is a
-        // conversation to name is the server's call, made from the whole log.
-        if (!displayCurrentId) return "/rename needs an existing session.";
-        actions.regenerateSessionTitle(displayCurrentId, rawArgs);
-        return null;
-      }
-      return `/${name} is not available here.`;
-    },
-    [actions, displayCurrentId, startReviewSessionForSession],
-  );
 
   /**
    * Threads the worktree dock's submit action hands over, once a target is
@@ -4276,82 +4009,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     ? state.sessions.find((s) => s.id === forkParentSessionId)?.title
     : undefined;
 
-  // A focus is only ever the viewed transcript's business, and it has to stay
-  // referentially stable while it says the same thing (see `src/CLAUDE.md`):
-  // the transcript re-runs its jump on a new object.
-  const focusedSessionId = messageFocus?.sessionId;
-  const focusedEntryId = messageFocus?.entryId;
-  const focusToken = messageFocus?.token;
-  const focusAlign = messageFocus?.align;
-  const viewedSessionId = displaySession?.sessionId;
-  const transcriptFocusEntry = useMemo(
-    () =>
-      focusedEntryId && focusToken && focusedSessionId === viewedSessionId
-        ? {
-            entryId: focusedEntryId,
-            token: focusToken,
-            ...(focusAlign ? { align: focusAlign } : {}),
-          }
-        : null,
-    [focusedEntryId, focusToken, focusAlign, focusedSessionId, viewedSessionId],
-  );
-  // A jump is spent once the transcript lands on it: keeping it would replay the
-  // jump the next time this session is opened, over the reader's own position —
-  // and `useAssistant` would walk that session's fresh tail back to the old
-  // anchor to make it possible. Both halves retire together.
-  const retireMessageFocus = useCallback(
-    (token: number) => {
-      setMessageFocus((current) => (current?.token === token ? null : current));
-      actions.retireMessageReveal(token);
-    },
-    [actions],
-  );
-  // A pending comment's row, reached from the composer's comment list: the same
-  // jump a deep link makes, minus the server round trip — the row it annotates
-  // is one this transcript has already rendered. `Math.max` keeps the token
-  // moving even for two clicks inside one millisecond.
-  // A document comment's row opens its document instead, at its lines when
-  // it has them.
-  const revealChatComment = useCallback(
-    (comment: PendingChatComment) => {
-      if (isDocumentComment(comment)) {
-        const document = comment.anchor.document;
-        navigate(
-          documentTargetHref({
-            ...(document.kind === "knowledgeFile"
-              ? {
-                  kind: "worktreeFile" as const,
-                  worktreeId: KNOWLEDGE_WORKTREE_ID,
-                  path: document.path,
-                  view: "file" as const,
-                }
-              : { kind: "hostFile" as const, path: document.path }),
-            ...(comment.lines
-              ? {
-                  anchor: {
-                    start: comment.lines.start,
-                    ...(comment.lines.end > comment.lines.start
-                      ? { end: comment.lines.end }
-                      : {}),
-                  },
-                }
-              : {}),
-          }),
-        );
-        return;
-      }
-      const { sessionId, entryId } = comment.anchor;
-      // Near the top, not centred: the floating composer (and its open
-      // comments strip) covers the lower part of the transcript.
-      setMessageFocus((current) => ({
-        sessionId,
-        entryId,
-        token: Math.max(Date.now(), (current?.token ?? 0) + 1),
-        align: "top",
-      }));
-    },
-    [navigate],
-  );
+  const transcriptFocus = useTranscriptFocus({
+    actions,
+    sessionId: displaySession?.sessionId,
+    onOpenDocument: navigate,
+  });
+  const { setMessageFocus } = transcriptFocus;
   const transcriptForkBoundary = useMemo(
     () =>
       forkParentSessionId
@@ -4547,9 +4210,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // refuses every run until the user acknowledges running in the app directory,
   // so the composer stays disabled behind the banner that offers exactly that.
   const worktreeMissing = Boolean(displaySession?.worktreeMissing);
-  const acknowledgeMissingWorktree = useCallback(() => {
-    if (displayCurrentId) actions.acknowledgeMissingWorktree(displayCurrentId);
-  }, [actions, displayCurrentId]);
   const credentialProfileSendBlockedReason =
     isNewChatRoute && !displayHasUserPrompt && !sendInFlight
       ? credentialProfileProjectionBlockReason(
@@ -5200,7 +4860,14 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     navigate(
       `${sessionPath(revealSessionId)}#m-${encodeURIComponent(revealEntryId)}`,
     );
-  }, [revealToken, revealSessionId, revealEntryId, actions, navigate]);
+  }, [
+    revealToken,
+    revealSessionId,
+    revealEntryId,
+    setMessageFocus,
+    actions,
+    navigate,
+  ]);
 
   // The other direction: a `#m-<entryId>` the browser arrived on — a reload, a
   // shared link, or the back/forward arrows walking onto one. Its row can be
@@ -5266,16 +4933,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   }, [setSidebarOpen]);
 
   /**
-   * A failure that names the session currently in view. It has a home on
-   * screen, so it is rendered there (above the composer) and NOT announced in
-   * passing — the doc's first question, applied to the object with the most
-   * failures by far.
-   */
-  const sessionFailure = routeSessionFailure
-    ? null // the unavailable panel already says it, in the transcript's place
-    : failureOnViewedSession(state.sessionFailures, displayCurrentId);
-
-  /**
    * What this shell renders failures IN PLACE for, stated to the announcer so
    * an arrival it owns is never also said in passing (`docs/messaging.md`).
    *
@@ -5304,6 +4961,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   useEffect(() => {
     setFailureHomes({
       viewedSessionId: displayCurrentId ?? null,
+      panelSessionId: panelChatOnScreen,
       // The id the staged send would be NAMED by, so the claim stays on its own
       // failure: a claude-sdk send supplies the session id the server uses, a pi
       // send does not (the server mints the durable one) and a review handoff
@@ -5322,6 +4980,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     });
   }, [
     displayCurrentId,
+    panelChatOnScreen,
     sessionShell.ownsFailure,
     stagedSendSessionId,
     selectedProjectId,
@@ -5540,56 +5199,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       sendPromptRef.current(text, attachments),
     [],
   );
-  const abortRun = useCallback(() => actions.abort(), [actions]);
-  const [conversationActive, setConversationActive] = useState(false);
-  // Display projection calls every transient response "live". Speech needs the
-  // runtime's unique stream id so successive turns never share a cursor.
-  const conversationStreamId = state.liveStreams.find(
-    (stream) => stream.kind === "message",
-  )?.streamId;
-  const conversationSourceMessages = useMemo(
-    () =>
-      displayMessages.map((message) =>
-        message.id === "live" && conversationStreamId
-          ? { ...message, id: `voice-live:${conversationStreamId}` }
-          : message,
-      ),
-    [displayMessages, conversationStreamId],
-  );
-  const conversationMessagesRef = useRef(conversationSourceMessages);
-  conversationMessagesRef.current = conversationSourceMessages;
-  const getConversationMessages = useCallback(
-    () => conversationMessagesRef.current,
-    [],
-  );
-  const conversationMessages = conversationActive
-    ? conversationSourceMessages
-    : EMPTY_CONVERSATION_MESSAGES;
-  const composerConversation = useMemo(
-    () => ({
-      settings: {
-        speechConversation: state.settings.speechConversation,
-        speechSynthesis: state.settings.speechSynthesis,
-      },
-      // Idle transcript traffic must not redraw the memoized composer.
-      messages: conversationMessages,
-      getMessages: getConversationMessages,
-      onActiveChange: setConversationActive,
-    }),
-    [
-      conversationMessages,
-      state.settings.speechConversation,
-      state.settings.speechSynthesis,
-      getConversationMessages,
-    ],
-  );
-  const composerDictation = useMemo(
-    () => ({
-      enabled: state.settings.speechToText.enabled,
-      status: state.speechToText,
-    }),
-    [state.settings.speechToText.enabled, state.speechToText],
-  );
+  const composerDictation = useComposerDictation(state);
 
   // A worktree can be open on its route and in the side panel at once, and
   // `unwatchComments` is not refcounted on the wire: the counting happens here
@@ -5704,45 +5314,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [],
   );
 
-  // Answering a question is a submit too, so the transcript follows it.
-  const respondToQuestion = useCallback(
-    (response: AgentQuestionResponse) => {
-      pinTranscriptToBottom();
-      actions.respondToQuestion(response);
-    },
-    [actions, pinTranscriptToBottom],
-  );
-
-  /**
-   * A conflicted "Update with main" is not answered on the card at all: it
-   * lands as a PROMPT in this session, seconds after the click, and the card
-   * only says so afterwards (`rebaseHandedOff`). That is a submit, so the
-   * transcript follows it — but not at click time, when there is nothing to
-   * follow yet and the rebase may still resolve deterministically, and not in
-   * a second viewer of the same session, which never asked for anything and
-   * keeps its reading position. Hence the intent is remembered HERE, per card,
-   * and spent when that card's handoff actually shows up.
-   */
-  const rebaseHandoffPending = useRef<Set<string>>(new Set());
-  const runPullRequestCardAction = useCallback<
-    AssistantActions["runPullRequestCardAction"]
-  >(
-    (cardId, action, options) => {
-      if (action === "update-with-main")
-        rebaseHandoffPending.current.add(cardId);
-      actions.runPullRequestCardAction(cardId, action, options);
-    },
-    [actions],
-  );
-  useEffect(() => {
-    const waiting = rebaseHandoffPending.current;
-    if (waiting.size === 0) return;
-    let handedOff = false;
-    for (const id of rebaseHandedOffCardIds(state.pullRequestCards))
-      if (waiting.delete(id)) handedOff = true;
-    if (handedOff) pinTranscriptToBottom();
-  }, [state.pullRequestCards, pinTranscriptToBottom]);
-
   // The app-level actions that share the nav bar with the sections. They just
   // navigate — the sidebar section stays where it is (navigation rule 2), and on
   // mobile the object screen they open is what replaces the browser.
@@ -5753,77 +5324,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   const openBackgroundWork = useCallback(
     (taskId: string) => navigate(backgroundTasksPath(taskId)),
     [navigate],
-  );
-  // The composer's background ledge: only on a session screen whose session
-  // owns active work or holds a retained host (that is when the projection is
-  // present), and memoized so the composer does not re-render for every
-  // unrelated App render. Its rows are the registry topic's, which the open
-  // flag subscribes (`activeTopics`).
-  // Only running work earns the strip: a retained provider host with nothing
-  // left in it is the runtime's bookkeeping, not the user's.
-  const backgroundLedgeActivity =
-    route.name === "session" &&
-    (displaySessionListItem?.backgroundActivity?.activeCount ?? 0) > 0
-      ? displaySessionListItem?.backgroundActivity
-      : undefined;
-  // The session both composer ledges speak for: the one on screen.
-  const ledgeSessionId = displaySessionListItem?.id;
-  const backgroundLedge = useMemo(
-    () =>
-      backgroundLedgeActivity && ledgeSessionId ? (
-        <BackgroundWorkLedge
-          sessionId={ledgeSessionId}
-          activity={backgroundLedgeActivity}
-          items={state.backgroundWorkItems}
-          open={backgroundLedgeOpen}
-          onToggle={toggleBackgroundLedge}
-          stopPending={backgroundStopPending}
-          onStop={actions.stopBackgroundWork}
-        />
-      ) : undefined,
-    [
-      backgroundLedgeActivity,
-      ledgeSessionId,
-      state.backgroundWorkItems,
-      backgroundLedgeOpen,
-      toggleBackgroundLedge,
-      backgroundStopPending,
-      actions.stopBackgroundWork,
-    ],
-  );
-  // The composer's spawned-session ledge: the peers THIS session started, shaped
-  // by the same projection the Sessions inbox uses. Derived from the session
-  // list alone — no subscription, no server call — and absent (so the strip is
-  // never mounted) for a session that spawned nothing, which is almost all of
-  // them.
-  const spawnedLedgeSettled =
-    ledgeSessionId !== undefined && spawnedLedgeSettledFor === ledgeSessionId;
-  const spawnedSessions = useMemo(
-    () =>
-      route.name === "session" && ledgeSessionId
-        ? spawnedSessionsView({
-            sessions: state.sessions,
-            coordinatorId: ledgeSessionId,
-            includeSettled: spawnedLedgeSettled,
-            workflowRuns: state.workflowRuns,
-            workflowCards: state.workflowCards,
-          })
-        : undefined,
-    [
-      route.name,
-      ledgeSessionId,
-      state.sessions,
-      spawnedLedgeSettled,
-      state.workflowRuns,
-      state.workflowCards,
-    ],
-  );
-  const toggleSpawnedSettled = useCallback(
-    () =>
-      setSpawnedLedgeSettledFor((current) =>
-        current === ledgeSessionId ? null : (ledgeSessionId ?? null),
-      ),
-    [ledgeSessionId],
   );
   // A spawned peer's account and branch, for its expanded row in the strip. The
   // branch comes from the worktree status cache first (held without the
@@ -5851,431 +5351,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       };
     },
     [credentialProfiles, state.worktreeStatuses, state.worktrees],
-  );
-  // Gated on what the strip DRAWS (`spawnedSessionsKey`), exactly as the
-  // Backlog's session slice is: the projection above is rebuilt on every
-  // rebroadcast, `Composer` is memoized, and a ledge node rebuilt with it would
-  // re-render the whole card several times a second for a line whose text did
-  // not change (`src/CLAUDE.md`). Whether the strip is OPEN is part of the key's
-  // question, because it decides whether the peer rows are on screen at all.
-  const spawnedLedgeKey = spawnedSessions
-    ? spawnedSessionsKey(spawnedSessions, spawnedLedgeOpen)
-    : "";
-  // oxlint-disable-next-line react/exhaustive-deps -- `spawnedLedgeKey` IS the strip's visible content of `spawnedSessions` (`lib/sessionInbox.ts` enumerates it); depending on the projection would rebuild the ledge on every rebroadcast, which is the whole point of the gate
-  const spawnedLedgeView = useMemo(() => spawnedSessions, [spawnedLedgeKey]);
-  const spawnedLedge = useMemo(
-    () =>
-      spawnedLedgeView &&
-      (spawnedLedgeView.counts.total > 0 ||
-        spawnedLedgeView.settled > 0 ||
-        spawnedLedgeView.stall) &&
-      ledgeSessionId ? (
-        <SpawnedSessionsLedge
-          sessionId={ledgeSessionId}
-          describeSession={describeSpawnedSession}
-          view={spawnedLedgeView}
-          open={spawnedLedgeOpen}
-          onToggle={toggleSpawnedLedge}
-          onOpenSession={openSession}
-          onToggleSettled={toggleSpawnedSettled}
-          onDismissSessionFailure={dismissSessionFailure}
-        />
-      ) : undefined,
-    [
-      spawnedLedgeView,
-      ledgeSessionId,
-      spawnedLedgeOpen,
-      toggleSpawnedLedge,
-      openSession,
-      toggleSpawnedSettled,
-      dismissSessionFailure,
-      describeSpawnedSession,
-    ],
-  );
-  // The composer's pending-approval strip: the cards the viewed session is
-  // waiting on, read from its own approval state. Gated on what the strip
-  // DRAWS, like the peers strip: `state.approvals` is rebuilt on every card
-  // update and snapshot, and `Composer` is memoized.
-  const pendingApprovals =
-    route.name === "session" &&
-    ledgeSessionId &&
-    state.session?.sessionId === ledgeSessionId
-      ? pendingApprovalCards(state.approvals)
-      : [];
-  const pendingApprovalsLedgeKey = pendingApprovalsKey(pendingApprovals);
-  const pendingApprovalsLedge = useMemo(
-    () =>
-      pendingApprovals.length > 0 ? (
-        <PendingApprovalsLedge
-          cards={pendingApprovals}
-          onRevealApproval={actions.revealApproval}
-        />
-      ) : undefined,
-    // oxlint-disable-next-line react/exhaustive-deps -- `pendingApprovalsLedgeKey` IS the strip's visible content of `pendingApprovals` (`lib/approvalCards.ts`); depending on the array would rebuild the strip on every snapshot
-    [pendingApprovalsLedgeKey, actions.revealApproval],
-  );
-  const pendingQuestions =
-    route.name === "session" ? displaySession?.pendingQuestions : undefined;
-  const pendingQuestionsKey = pendingQuestionsLedgeKey(pendingQuestions ?? []);
-  // The flow the user asked to see, while it is still pending: answering or
-  // cancelling it elsewhere ends the jump.
-  const [questionJump, setQuestionJump] = useState<string | null>(null);
-  const jumpQuestion = questionJump
-    ? pendingQuestions?.find((request) => request.requestId === questionJump)
-    : undefined;
-  const jumpQuestionSessionId = jumpQuestion?.sessionId;
-  const questionEntryId = jumpQuestion
-    ? pendingQuestionEntryId(
-        displayMessages,
-        pendingQuestions,
-        displaySession?.answeredQuestions,
-        jumpQuestion,
-      )
-    : undefined;
-  const revealPendingQuestion = useCallback((requestId: string) => {
-    setQuestionJump(requestId);
-  }, []);
-  useEffect(() => {
-    if (!questionJump) return;
-    if (!jumpQuestionSessionId) {
-      setQuestionJump(null);
-      return;
-    }
-    if (questionEntryId) {
-      setMessageFocus((current) => ({
-        sessionId: jumpQuestionSessionId,
-        entryId: questionEntryId,
-        token: Math.max(Date.now(), (current?.token ?? 0) + 1),
-        align: "top",
-      }));
-      setQuestionJump(null);
-    } else if (!hasOlderTimelineEntries) {
-      // The whole transcript is loaded and holds no form for it.
-      setQuestionJump(null);
-    } else if (state.timelineRangePending === null) {
-      actions.loadOlderTimeline();
-    }
-  }, [
-    questionJump,
-    jumpQuestionSessionId,
-    questionEntryId,
-    hasOlderTimelineEntries,
-    state.timelineStart,
-    state.timelineRangePending,
-    actions,
-  ]);
-  const pendingQuestionLedge = useMemo(
-    () =>
-      pendingQuestions?.length ? (
-        <PendingQuestionLedge
-          questions={pendingQuestions}
-          onRevealQuestion={revealPendingQuestion}
-        />
-      ) : undefined,
-    // oxlint-disable-next-line react/exhaustive-deps -- `pendingQuestionsKey` IS the strip's visible content of `pendingQuestions`; depending on the array would rebuild the strip on every state broadcast
-    [pendingQuestionsKey, revealPendingQuestion],
-  );
-  // The user's own queue (`promptQueue.ts`) belongs to an ordinary session on
-  // screen; the permanent Assistant queues its intake on its own.
-  const queueSessionId =
-    route.name === "session" ? displaySession?.sessionId : undefined;
-  const sendPromptQueue = actions.promptQueue;
-  const shownPromptQueue = queueSessionId
-    ? displaySession?.promptQueue
-    : undefined;
-  // Alt+Enter queues a message AND steers it in at once, so it is seen in the
-  // queue on its way. The server names the row, so the steer waits for the
-  // queue update that brings a new row with exactly this text.
-  const pendingSteerRef = useRef<{
-    sessionId: string;
-    text: string;
-    knownIds: ReadonlySet<string>;
-  } | null>(null);
-  const shownPromptQueueRef = useRef(shownPromptQueue);
-  shownPromptQueueRef.current = shownPromptQueue;
-  // A queued message shows in the strip the moment it is sent ("Queuing…"),
-  // not only once the server's queue update has made the round trip — which
-  // on a busy server took seconds with nothing on screen. Matched like the
-  // Alt+Enter steer: the first NEW row with exactly this text replaces it.
-  const [queuingLocally, setQueuingLocally] = useState<
-    {
-      key: string;
-      sessionId: string;
-      text: string;
-      knownIds: ReadonlySet<string>;
-      at: number;
-    }[]
-  >([]);
-  const queuePrompt = useMemo(
-    () =>
-      queueSessionId
-        ? (item: {
-            text: string;
-            attachments?: PromptAttachment[];
-            command?: { name: string; rawArgs: string };
-            steerNow?: boolean;
-          }) => {
-            const { steerNow, ...queued } = item;
-            const knownIds = new Set(
-              (shownPromptQueueRef.current?.items ?? []).map((row) => row.id),
-            );
-            if (steerNow && !queued.command)
-              pendingSteerRef.current = {
-                sessionId: queueSessionId,
-                text: queued.text,
-                knownIds,
-              };
-            setQueuingLocally((current) => [
-              ...current,
-              {
-                key: createClientId(),
-                sessionId: queueSessionId,
-                text: queued.text,
-                knownIds,
-                at: Date.now(),
-              },
-            ]);
-            sendPromptQueue({
-              type: "queuePrompt",
-              sessionId: queueSessionId,
-              ...queued,
-            });
-          }
-        : undefined,
-    [queueSessionId, sendPromptQueue],
-  );
-  // Retire an optimistic row once the server's queue carries it, and give up
-  // on one the server never confirmed after a while.
-  useEffect(() => {
-    setQueuingLocally((current) => {
-      if (current.length === 0) return current;
-      const items = shownPromptQueue?.items ?? [];
-      const now = Date.now();
-      const next = current.filter(
-        (local) =>
-          now - local.at < 20_000 &&
-          !items.some(
-            (item) => !local.knownIds.has(item.id) && item.text === local.text,
-          ),
-      );
-      return next.length === current.length ? current : next;
-    });
-  }, [shownPromptQueue]);
-  useEffect(() => {
-    if (queuingLocally.length === 0) return;
-    const timer = window.setTimeout(
-      () =>
-        setQueuingLocally((current) =>
-          current.filter((local) => Date.now() - local.at < 20_000),
-        ),
-      20_000,
-    );
-    return () => window.clearTimeout(timer);
-  }, [queuingLocally]);
-  const shownQueuingLocally = useMemo(
-    () =>
-      queuingLocally
-        .filter((local) => local.sessionId === queueSessionId)
-        .map(({ key, text }) => ({ key, text })),
-    [queuingLocally, queueSessionId],
-  );
-  useEffect(() => {
-    const pending = pendingSteerRef.current;
-    if (!pending || !shownPromptQueue) return;
-    if (pending.sessionId !== queueSessionId) {
-      pendingSteerRef.current = null;
-      return;
-    }
-    const row = shownPromptQueue.items.find(
-      (item) => !pending.knownIds.has(item.id) && item.text === pending.text,
-    );
-    if (!row) return;
-    pendingSteerRef.current = null;
-    sendPromptQueue({
-      type: "sendQueuedPromptNow",
-      sessionId: pending.sessionId,
-      id: row.id,
-    });
-  }, [shownPromptQueue, queueSessionId, sendPromptQueue]);
-  const shownQueuedPeers = queueSessionId
-    ? displaySession?.queuedPeerPrompts
-    : undefined;
-  const sessionCanSteer = Boolean(displaySession?.canSteer);
-  const shownBackgroundUpdates = displaySession?.queuedBackgroundUpdates ?? 0;
-  const shownUnhandledBackground =
-    displaySession?.unhandledBackgroundUpdates ?? 0;
-  // The exact updates Recover and Dismiss act on: what the user was shown.
-  const shownUnhandledBatch =
-    displaySession?.unhandledBackgroundBatch ?? EMPTY_UNHANDLED_BATCH;
-  const unhandledSessionId =
-    shownUnhandledBackground > 0 ? displaySession?.sessionId : undefined;
-  // The permanent Assistant queues its intake on its own and shows no drafts,
-  // but a Stop holds it like any session: it gets the hold's Resume alone, and
-  // the Recover of updates a turn did not finish.
-  const assistantHeld = Boolean(
-    displaySession?.promptQueue?.automaticTurnsHeld,
-  );
-  const heldAssistantSessionId =
-    route.name === "permanentAssistant" &&
-    (assistantHeld || shownUnhandledBackground > 0)
-      ? displaySession?.sessionId
-      : undefined;
-  const promptQueueLedge = useMemo(
-    () =>
-      heldAssistantSessionId ? (
-        <PromptQueueLedge
-          queue={assistantHeld ? HELD_ASSISTANT_QUEUE : EMPTY_PROMPT_QUEUE}
-          backgroundUpdates={shownBackgroundUpdates}
-          unhandledBackgroundUpdates={shownUnhandledBackground}
-          onRecoverBackground={() =>
-            sendPromptQueue({
-              type: "recoverBackgroundUpdates",
-              sessionId: heldAssistantSessionId,
-              items: shownUnhandledBatch,
-            })
-          }
-          onDismissBackground={() =>
-            sendPromptQueue({
-              type: "dismissBackgroundUpdates",
-              sessionId: heldAssistantSessionId,
-              items: shownUnhandledBatch,
-            })
-          }
-          running={displayStreaming}
-          canSteer={false}
-          onRemove={noop}
-          onSendNow={noop}
-          onResume={() =>
-            sendPromptQueue({
-              type: "resumePromptQueue",
-              sessionId: heldAssistantSessionId,
-            })
-          }
-        />
-      ) : (shownPromptQueue ||
-          shownQueuingLocally.length > 0 ||
-          (shownQueuedPeers?.length ?? 0) > 0 ||
-          unhandledSessionId) &&
-        queueSessionId ? (
-        <PromptQueueLedge
-          queue={shownPromptQueue ?? EMPTY_PROMPT_QUEUE}
-          queuing={shownQueuingLocally}
-          peers={shownQueuedPeers}
-          backgroundUpdates={shownBackgroundUpdates}
-          unhandledBackgroundUpdates={shownUnhandledBackground}
-          onRecoverBackground={() =>
-            sendPromptQueue({
-              type: "recoverBackgroundUpdates",
-              sessionId: queueSessionId,
-              items: shownUnhandledBatch,
-            })
-          }
-          onDismissBackground={() =>
-            sendPromptQueue({
-              type: "dismissBackgroundUpdates",
-              sessionId: queueSessionId,
-              items: shownUnhandledBatch,
-            })
-          }
-          running={displayStreaming}
-          canSteer={sessionCanSteer}
-          onRemove={(id) =>
-            sendPromptQueue({
-              type: "removeQueuedPrompt",
-              sessionId: queueSessionId,
-              id,
-            })
-          }
-          onSendNow={(id) =>
-            sendPromptQueue({
-              type: "sendQueuedPromptNow",
-              sessionId: queueSessionId,
-              id,
-            })
-          }
-          onResume={() =>
-            sendPromptQueue({
-              type: "resumePromptQueue",
-              sessionId: queueSessionId,
-            })
-          }
-          onSendPeerNow={(id) =>
-            sendPromptQueue({
-              type: "sendQueuedPeerPromptNow",
-              sessionId: queueSessionId,
-              id,
-            })
-          }
-          onWithdrawPeer={(id) =>
-            sendPromptQueue({
-              type: "withdrawQueuedPeerPrompt",
-              sessionId: queueSessionId,
-              id,
-            })
-          }
-          onOpenSession={openSession}
-        />
-      ) : undefined,
-    [
-      heldAssistantSessionId,
-      assistantHeld,
-      shownPromptQueue,
-      shownQueuingLocally,
-      shownQueuedPeers,
-      shownBackgroundUpdates,
-      shownUnhandledBackground,
-      shownUnhandledBatch,
-      unhandledSessionId,
-      openSession,
-      queueSessionId,
-      displayStreaming,
-      sessionCanSteer,
-      sendPromptQueue,
-    ],
-  );
-  // The comments riding with the next prompt, as a strip of their own.
-  const pendingComments = chatComments.comments;
-  const pendingCommentItems = useMemo<CommentLedgeItem[]>(
-    () =>
-      pendingComments.map((comment) => ({
-        id: comment.id,
-        body: comment.body,
-        source:
-          comment.anchor.kind === "document"
-            ? commentDocumentLabel(comment.anchor.document)
-            : undefined,
-        quote: comment.quote,
-        wholeDocument: comment.quote === undefined,
-      })),
-    [pendingComments],
-  );
-  const revealPendingComment = useCallback(
-    (id: string) => {
-      const comment = pendingComments.find((item) => item.id === id);
-      if (comment) revealChatComment(comment);
-    },
-    [pendingComments, revealChatComment],
-  );
-  const pendingCommentsLedge = useMemo(
-    () =>
-      pendingCommentItems.length > 0 ? (
-        <PendingCommentsLedge
-          items={pendingCommentItems}
-          activeCommentId={chatComments.activeCommentId}
-          onSelect={chatComments.select}
-          onRemove={chatComments.remove}
-          onClear={chatComments.clear}
-          onReveal={revealPendingComment}
-        />
-      ) : undefined,
-    [
-      pendingCommentItems,
-      chatComments.activeCommentId,
-      chatComments.select,
-      chatComments.remove,
-      chatComments.clear,
-      revealPendingComment,
-    ],
   );
   // A worktree review staged for a new session rides the same strip as chat
   // comments: its threads, by file and line, each removable from the handoff.
@@ -6353,45 +5428,89 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       stageTaskContext,
     ],
   );
-  // One shelf, up to five strips on it: what waits on the user on top, then
-  // the peers, background work, and on the edge nearest the field what the
-  // user wrote that is still to go — the queue, then the comments that ride
-  // with the next prompt.
-  const composerLedge = useMemo(
+  const stagedLedges = useMemo(
     () =>
-      pendingQuestionLedge ||
-      pendingApprovalsLedge ||
-      spawnedLedge ||
-      backgroundLedge ||
-      promptQueueLedge ||
-      stagedTaskLedge ||
-      stagedDocumentLedge ||
-      reviewCommentsLedge ||
-      pendingCommentsLedge ? (
+      stagedTaskLedge || stagedDocumentLedge || reviewCommentsLedge ? (
         <>
-          {pendingQuestionLedge}
-          {pendingApprovalsLedge}
-          {spawnedLedge}
-          {backgroundLedge}
-          {promptQueueLedge}
           {stagedTaskLedge}
           {stagedDocumentLedge}
           {reviewCommentsLedge}
-          {pendingCommentsLedge}
         </>
       ) : undefined,
+    [stagedTaskLedge, stagedDocumentLedge, reviewCommentsLedge],
+  );
+  const chatHost = useMemo<SessionChatHost>(
+    () => ({
+      sessions: state.sessions,
+      workflowRuns: state.workflowRuns,
+      workflowCards: state.workflowCards,
+      view: transcriptView,
+      accountModels: settingsAccountModels,
+      taskLiveSource,
+      credentialProfiles,
+      describeSession: describeSpawnedSession,
+      onNavigate: navigate,
+      onOpenSession: openSession,
+      onOpenTask: openTaskById,
+      onOpenBackgroundWork: openBackgroundWork,
+      onOpenWorktree: openWorktree,
+      onDismissSessionFailure: dismissSessionFailure,
+      onForkSession: actions.forkSession,
+      onPanelSessionChange: setPanelChatOnScreen,
+    }),
     [
-      pendingQuestionLedge,
-      pendingApprovalsLedge,
-      spawnedLedge,
-      backgroundLedge,
-      promptQueueLedge,
-      stagedTaskLedge,
-      stagedDocumentLedge,
-      reviewCommentsLedge,
-      pendingCommentsLedge,
+      state.sessions,
+      state.workflowRuns,
+      state.workflowCards,
+      transcriptView,
+      settingsAccountModels,
+      taskLiveSource,
+      credentialProfiles,
+      describeSpawnedSession,
+      navigate,
+      openSession,
+      openTaskById,
+      openBackgroundWork,
+      openWorktree,
+      dismissSessionFailure,
+      actions.forkSession,
     ],
   );
+  const backgroundStrip = useMemo(
+    () => ({ open: backgroundLedgeOpen, onToggle: toggleBackgroundLedge }),
+    [backgroundLedgeOpen, toggleBackgroundLedge],
+  );
+  const chat = useSessionChat({
+    state,
+    actions,
+    host: chatHost,
+    surface:
+      route.name === "session"
+        ? "session"
+        : route.name === "permanentAssistant"
+          ? "assistant"
+          : "staged",
+    session: displaySession,
+    sessionRow: displaySessionListItem,
+    messages: displayMessages,
+    streaming: displayStreaming,
+    hasOlderMessages: hasOlderTimelineEntries,
+    draftStorageKey: chatDraftStorageKey,
+    models: messageModels,
+    backgroundStrip,
+    backgroundStopPending,
+    dictation: composerDictation,
+    focus: transcriptFocus,
+    transcriptPin,
+    onSend: submitPrompt,
+    stagedLedges,
+    stagedDraft:
+      pendingWorktreeReview?.draft ?? sessionReviewDraft ?? undefined,
+    failureShownElsewhere: routeSessionFailure !== null,
+    onReviewCommand: startReviewSessionForSession,
+  });
+  const { queuePrompt, sessionCanSteer } = chat;
+  const chatCommentSelection = chat.commentSelection;
 
   const runNavAction = useCallback(
     (action: NavAction) => {
@@ -6932,6 +6051,20 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [displayCurrentId],
   );
 
+  // A session asked for beside the main pane: the Session tab shows it.
+  const [sessionPanelId, setSessionPanelId] = useSessionPanelTarget();
+  const openSessionBeside = useCallback(
+    (sessionId: string) => {
+      setSessionPanelId(sessionId);
+      setInspectorOpen(true);
+      setRightPanelOpenRequest((current) => ({
+        panel: "session",
+        nonce: (current?.nonce ?? 0) + 1,
+      }));
+    },
+    [setSessionPanelId, setInspectorOpen],
+  );
+
   // Session rows in the object panel resolve their account and worktree the
   // way the composer strip's do, and open the worktree as the panel opens
   // anything (`SessionRowDetailsContext`).
@@ -6939,8 +6072,15 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     () => ({
       describe: describeSpawnedSession,
       onOpenWorktree: (id: string) => navigateFromInspector(worktreePath(id)),
+      // A phone has no tabs to open it in.
+      ...(mobileLayout ? {} : { onOpenBeside: openSessionBeside }),
     }),
-    [describeSpawnedSession, navigateFromInspector],
+    [
+      describeSpawnedSession,
+      navigateFromInspector,
+      mobileLayout,
+      openSessionBeside,
+    ],
   );
 
   // Every hook the Project page needs is derived HERE, above the loading
@@ -7017,243 +6157,95 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   }
 
   // The chat surface includes the composer, transcript and pending/hero states.
-  const chatSurface = (() => {
-    const composerEl = (
-      <>
-        {worktreeMissing ? (
-          <SessionWorktreeMissingBanner
-            onAcknowledge={acknowledgeMissingWorktree}
-          />
-        ) : null}
-        {/* A failure that names THIS session belongs here rather than in
-            passing (`docs/messaging.md`): this is where the user acts on it,
-            and it survives unrelated traffic and other sessions' failures until
-            something retires it. Two things do, and both name this session: the
-            dismiss below, and the session's own next send (which dispatches
-            `clearSessionFailure` — the SEND does it, not its echo, because an
-            attachments-only prompt echoes nothing). */}
-        {displaySessionListItem?.peerPromptHopRefusal ? (
-          <div className="mx-auto w-full max-w-3xl px-4 pb-2">
-            <ErrorNote
-              message={peerPromptHopRefusalMessage(
-                displaySessionListItem.peerPromptHopRefusal,
-              )}
-            />
-          </div>
-        ) : null}
-        {sessionFailure ? (
-          <div className="mx-auto w-full max-w-3xl px-4 pb-2">
-            <ErrorNote
-              message={sessionFailure}
-              onRetry={() =>
-                displayCurrentId && actions.clearChatError(displayCurrentId)
-              }
-              retryLabel="Dismiss"
-            />
-          </div>
-        ) : null}
-        <Composer
-          onSend={submitPrompt}
-          {...(queuePrompt ? { onQueue: queuePrompt } : {})}
-          onAbort={abortRun}
-          streaming={displayStreaming}
-          // A dead worktree edge disables the whole composer, not just Send: the
-          // banner above it owns the one action that unblocks the session.
-          disabled={!state.connected || routeSessionPending || worktreeMissing}
-          contextInfo={currentContextInfo}
-          session={displaySession}
-          models={pickerModels}
-          slashCommands={state.slashCommands}
-          onClientSlashCommand={runClientSlashCommand}
-          skillSummaries={composerSkillSummaries}
-          actions={runtimeActions}
-          focusToken={composerFocusToken}
-          draftStorageKey={chatDraftStorageKey}
-          chatComments={chatComments}
-          commentDraft={chatCommentDraft}
-          onCommentDraftChange={setChatCommentDraft}
-          draft={
-            pendingWorktreeReview?.draft ??
-            sessionReviewDraft ??
-            displayForkDraft
-          }
-          onDraftConsumed={retireStagedDraft}
-          // Never on mobile: the screen rests on the dock's action row, so autofocus
-          // would open the keyboard over the quick-start rows before anything is picked.
-          draftAutoFocus={!mobileLayout}
-          branchInfo={branchInfo}
-          reserveHintSlot={showContextPicker}
-          sendBlockedReason={
-            newSessionNeedsWorktree
-              ? "Developer sessions run in a worktree — pick one to continue."
-              : credentialProfileSendBlockedReason
-          }
-          sendBlocked={credentialProfileSendBlocked}
-          mobile={mobileLayout}
-          // Mobile has no collapsed bar: the composer reports when it takes over the
-          // bottom edge (so the dock's row stands down) and when a draft is waiting in
-          // it (so the dock's field can show it), and hands back the three reaches the
-          // dock's row makes into it — the synchronous open the keyboard needs, the
-          // file picker, and Send.
-          onVisibilityChange={setComposerVisible}
-          onDraftPreviewChange={setComposerDraft}
-          attachRef={attachComposerRef}
-          openRef={openComposerRef}
-          submitRef={submitComposerRef}
-          // Mobile dictation belongs to the dock's row, so the toolbar mic hands over
-          // to it and the finished text comes back as data, inserted at the caret the
-          // composer remembered when it handed over.
-          onRequestDictation={mobileLayout ? requestDictation : undefined}
-          transcript={dictationTranscript}
-          isModelDisabled={isModelDisabled}
-          modelLocked={modelLocked}
-          thinkingLocked={thinkingLocked}
-          accountName={displayAccountName}
-          hideRuntimeControls={route.name === "permanentAssistant"}
-          ledge={composerLedge}
-          selectedAgentType={
-            showAgentTypePicker ? agentTypeForPicker : undefined
-          }
-          availableAgentTypes={
-            showAgentTypePicker ? availableAgentTypes : undefined
-          }
-          onAgentTypeChange={
-            showAgentTypePicker ? pickStagedAgentType : undefined
-          }
-          dictation={composerDictation}
-          conversation={composerConversation}
-        />
-      </>
-    );
-
-    // The bootstrap's one line, under the prompt it belongs to: the session the
-    // surface is already rendering does not exist yet.
-    const bootstrapNarrationEl = sessionShell.narration ? (
-      <SessionBootstrapNarration
-        narration={sessionShell.narration}
-        onRetry={onRetryFirstSend}
-      />
-    ) : null;
-
-    if (showPendingSessionPanel) {
-      return (
-        <>
-          {routeSessionFailure ? (
+  const chatSurface = (
+    <SessionChat
+      chat={chat}
+      showTranscript={displayHasMessages || transcriptOnlyHasOlderMessages}
+      pendingPanel={
+        showPendingSessionPanel ? (
+          routeSessionFailure ? (
             <UnavailableSessionPanel
               title={pendingSessionTitle}
               message={routeSessionFailure}
             />
           ) : (
             <PendingSessionPanel title={pendingSessionTitle} />
-          )}
-          <div
-            className="relative z-10 shrink-0 bg-transparent transition-transform duration-150 ease-out"
-            style={{
-              transform:
-                "translateY(calc(-1 * var(--app-keyboard-inset-bottom, 0px)))",
-            }}
-          >
-            {composerEl}
-          </div>
-        </>
-      );
-    }
-
-    if (displayHasMessages || transcriptOnlyHasOlderMessages) {
-      return (
-        <FloatingComposerDock
-          transcript={
-            // Commit DURATION of the transcript subtree, for the dev HUD: the
-            // render counts say how often it redraws, this says what one redraw
-            // costs (a no-op outside profiling builds).
-            <Profiler id="Transcript" onRender={recordTranscriptRender}>
-              <Suspense fallback={<TranscriptChunkFallback />}>
-                <TaskLiveSourceProvider source={taskLiveSource}>
-                  <MessageList
-                    sessionId={displayCurrentId}
-                    messages={displayMessagesWithPeerPromptOverrides}
-                    timeline={state.timeline}
-                    chatComments={chatComments}
-                    commentDraft={chatCommentDraft}
-                    onCommentDraftChange={setChatCommentDraft}
-                    onCommentSelectionChange={onChatCommentSelectionChange}
-                    sessionStreaming={displayStreaming}
-                    runProgress={
-                      shownOptimisticSession ? null : state.runProgress
-                    }
-                    queuedPeerCount={
-                      displaySession?.queuedPeerPrompts?.length ?? 0
-                    }
-                    queuedBackgroundCount={
-                      displaySession?.queuedBackgroundUpdates ?? 0
-                    }
-                    promptQueueStates={state.promptQueueStates}
-                    appearance={state.settings.appearance}
-                    sessionCanSteer={Boolean(displaySession?.canSteer)}
-                    sessions={state.sessions}
-                    changedFiles={workspaceChangedFiles}
-                    paObjectReferences={paObjectReferences}
-                    onOpenPaObject={openPaObject}
-                    view={transcriptView}
-                    onAcceptCommitDryRun={actions.acceptCommitDryRun}
-                    onCreateDraftSession={actions.createDraftSession}
-                    models={messageModels}
-                    defaultModel={displaySession?.model}
-                    defaultThinkingLevel={displaySession?.thinkingLevel}
-                    onForkMessage={forkMessage}
-                    onResendPrompt={resendPrompt}
-                    onOpenSession={openSession}
-                    onOpenChangedFile={openWorkspaceFile}
-                    onOpenTask={openTaskById}
-                    onOpenBackgroundWork={openBackgroundWork}
-                    onOpenWorktree={openWorktree}
-                    onRetryWorktreeProvision={onRetryWorktreeProvision}
-                    onApplyTaskStatusSuggestion={applyTaskStatusSuggestion}
-                    onResolveApproval={actions.resolveApproval}
-                    approvalGrants={approvalGrants}
-                    onRevokeApprovalGrant={actions.revokeApprovalGrant}
-                    accountModels={settingsAccountModels}
-                    onChoosePullRequestTask={actions.choosePullRequestTask}
-                    onPullRequestCardAction={runPullRequestCardAction}
-                    pendingQuestions={displaySession?.pendingQuestions}
-                    answeredQuestions={displaySession?.answeredQuestions}
-                    onRespondToQuestion={respondToQuestion}
-                    onLoadTimelineBlock={actions.loadTimelineBlock}
-                    onLiveBodyDemand={actions.setLiveBodyDemand}
-                    turnStatsSeed={transcriptTurnStatsSeed}
-                    hasOlderMessages={hasOlderTimelineEntries}
-                    loadingOlderMessages={state.timelineRangePending !== null}
-                    onLoadOlderMessages={actions.loadOlderTimeline}
-                    focusEntry={transcriptFocusEntry}
-                    onFocusEntryApplied={retireMessageFocus}
-                    forkBoundary={transcriptForkBoundary}
-                    pinToBottomToken={transcriptPinToken}
-                    onRegisterViewHold={registerTranscriptViewHold}
-                    loadingPreview={usePreview}
-                    onPreviewInteraction={markPreviewInteracted}
-                  />
-                </TaskLiveSourceProvider>
-              </Suspense>
-            </Profiler>
-          }
-          dock={
-            <>
-              {bootstrapNarrationEl}
-              {composerEl}
-            </>
-          }
-        />
-      );
-    }
-
-    // New session: composer anchored at the bottom (same as an active chat) so
-    // it uses the full width/height instead of floating in the middle. The
-    // quick-start rows fill the space above it (no hero line — a stable layout
-    // beats a greeting; the composer placeholder carries the same message).
-    // No horizontal padding here: the quick-start rows own their own inset so
-    // they can scroll edge-to-edge instead of being clipped by a page gutter.
-    return (
-      <>
+          )
+        ) : undefined
+      }
+      // The bootstrap's one line, under the prompt it belongs to: the session the
+      // surface is already rendering does not exist yet.
+      dockLead={
+        sessionShell.narration ? (
+          <SessionBootstrapNarration
+            narration={sessionShell.narration}
+            onRetry={onRetryFirstSend}
+          />
+        ) : null
+      }
+      composer={{
+        actions: runtimeActions,
+        disabled: !state.connected || routeSessionPending || worktreeMissing,
+        contextInfo: currentContextInfo,
+        models: pickerModels,
+        focusToken: composerFocusToken,
+        // Never on mobile: the screen rests on the dock's action row, so autofocus
+        // would open the keyboard over the quick-start rows before anything is picked.
+        draftAutoFocus: !mobileLayout,
+        branchInfo,
+        reserveHintSlot: showContextPicker,
+        sendBlockedReason: newSessionNeedsWorktree
+          ? "Developer sessions run in a worktree — pick one to continue."
+          : credentialProfileSendBlockedReason,
+        sendBlocked: credentialProfileSendBlocked,
+        mobile: mobileLayout,
+        // Mobile has no collapsed bar: the composer reports when it takes over the
+        // bottom edge (so the dock's row stands down) and when a draft is waiting in
+        // it (so the dock's field can show it), and hands back the three reaches the
+        // dock's row makes into it — the synchronous open the keyboard needs, the
+        // file picker, and Send.
+        onVisibilityChange: setComposerVisible,
+        onDraftPreviewChange: setComposerDraft,
+        attachRef: attachComposerRef,
+        openRef: openComposerRef,
+        submitRef: submitComposerRef,
+        // Mobile dictation belongs to the dock's row, so the toolbar mic hands over
+        // to it and the finished text comes back as data, inserted at the caret the
+        // composer remembered when it handed over.
+        onRequestDictation: mobileLayout ? requestDictation : undefined,
+        transcript: dictationTranscript,
+        isModelDisabled,
+        modelLocked,
+        thinkingLocked,
+        accountName: displayAccountName,
+        selectedAgentType: showAgentTypePicker ? agentTypeForPicker : undefined,
+        availableAgentTypes: showAgentTypePicker
+          ? availableAgentTypes
+          : undefined,
+        onAgentTypeChange: showAgentTypePicker
+          ? pickStagedAgentType
+          : undefined,
+      }}
+      transcript={{
+        runProgress: shownOptimisticSession ? null : state.runProgress,
+        changedFiles: workspaceChangedFiles,
+        paObjectReferences,
+        onOpenPaObject: openPaObject,
+        onOpenChangedFile: openWorkspaceFile,
+        onRetryWorktreeProvision,
+        turnStatsSeed: transcriptTurnStatsSeed,
+        forkBoundary: transcriptForkBoundary,
+        onRegisterViewHold: registerTranscriptViewHold,
+        loadingPreview: usePreview,
+        onPreviewInteraction: markPreviewInteracted,
+      }}
+      // New session: composer anchored at the bottom (same as an active chat) so
+      // it uses the full width/height instead of floating in the middle. The
+      // quick-start rows fill the space above it (no hero line — a stable layout
+      // beats a greeting; the composer placeholder carries the same message).
+      // No horizontal padding here: the quick-start rows own their own inset so
+      // they can scroll edge-to-edge instead of being clipped by a page gutter.
+      emptySurface={
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-6">
           {showContextPicker ? (
             <NewSessionQuickStart
@@ -7318,21 +6310,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             />
           ) : null}
         </div>
-        {/* A first send that echoes no prompt of its own (a review handoff) is
-            still a bootstrap: the surface says so rather than sitting empty. */}
-        {bootstrapNarrationEl}
-        <div
-          className="relative z-10 shrink-0 bg-transparent transition-transform duration-150 ease-out"
-          style={{
-            transform:
-              "translateY(calc(-1 * var(--app-keyboard-inset-bottom, 0px)))",
-          }}
-        >
-          {composerEl}
-        </div>
-      </>
-    );
-  })();
+      }
+    />
+  );
 
   // The left sidebar's navigation callbacks. Opening an object just navigates: on
   // mobile that object route IS what replaces the browser screen (ui-shell.md,
@@ -7978,6 +6958,9 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     <InspectorChromeProvider header={false} desktopTabs>
       <RightPanelTabs
         assistantUnread={assistantUnread}
+        chatHost={chatHost}
+        sessionPanelId={sessionPanelId}
+        onSelectPanelSession={setSessionPanelId}
         inspector={
           <SessionRowDetailsContext.Provider value={sessionRowDetails}>
             {rightPanelContent}

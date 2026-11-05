@@ -2,6 +2,7 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { SessionChatHost } from "../../hooks/useSessionChat.tsx";
 import { PersonalAssistantPanel } from "./PersonalAssistantPanel.tsx";
 
 const fixture = vi.hoisted(() => ({
@@ -22,13 +23,12 @@ const fixture = vi.hoisted(() => ({
   },
   actions: {
     openPermanentAssistant: vi.fn(),
-    releasePermanentAssistant: vi.fn(),
+    releaseSessionView: vi.fn(),
   },
 }));
 vi.mock("../../hooks/useAssistant.ts", () => ({ useAssistant: () => fixture }));
-vi.mock("../Composer.tsx", () => ({ Composer: () => null }));
-vi.mock("../MessageList.tsx", () => ({
-  MessageList: function RetainedTranscript() {
+vi.mock("./PanelSessionChat.tsx", () => ({
+  PanelSessionChat: function RetainedTranscript() {
     const [expanded, setExpanded] = useState(false);
     return (
       <button onClick={() => setExpanded(true)}>
@@ -46,7 +46,7 @@ beforeEach(() => {
   fixture.state.connected = true;
   fixture.state.session = null;
   fixture.actions.openPermanentAssistant.mockClear();
-  fixture.actions.releasePermanentAssistant.mockClear();
+  fixture.actions.releaseSessionView.mockClear();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -56,7 +56,9 @@ afterEach(async () => {
   container.remove();
 });
 const render = (visible: boolean) =>
-  root.render(<PersonalAssistantPanel visible={visible} />);
+  root.render(
+    <PersonalAssistantPanel visible={visible} host={{} as SessionChatHost} />,
+  );
 
 it("releases and reopens the server reader without remounting expanded transcript rows", async () => {
   await act(async () => render(true));
@@ -66,7 +68,7 @@ it("releases and reopens the server reader without remounting expanded transcrip
   const transcript = container.querySelector("button")!;
   await act(async () => transcript.click());
   await act(async () => render(false));
-  expect(fixture.actions.releasePermanentAssistant).toHaveBeenCalledWith("pa");
+  expect(fixture.actions.releaseSessionView).toHaveBeenCalledWith("pa");
   expect(container.textContent).toContain("Expanded history");
   await act(async () => render(true));
   expect(fixture.actions.openPermanentAssistant).toHaveBeenCalledTimes(2);
@@ -77,10 +79,10 @@ it("releases and reopens the server reader without remounting expanded transcrip
 it("releases a late open response that arrives after the panel is hidden", async () => {
   await act(async () => render(true));
   await act(async () => render(false));
-  expect(fixture.actions.releasePermanentAssistant).not.toHaveBeenCalled();
+  expect(fixture.actions.releaseSessionView).not.toHaveBeenCalled();
   fixture.state.session = { sessionId: "pa" };
   await act(async () => render(false));
-  expect(fixture.actions.releasePermanentAssistant).toHaveBeenCalledWith("pa");
+  expect(fixture.actions.releaseSessionView).toHaveBeenCalledWith("pa");
 });
 
 it("reopens on reconnect only while visible", async () => {
@@ -96,5 +98,5 @@ it("reopens on reconnect only while visible", async () => {
   fixture.state.connected = true;
   await act(async () => render(false));
   expect(fixture.actions.openPermanentAssistant).toHaveBeenCalledTimes(2);
-  expect(fixture.actions.releasePermanentAssistant).toHaveBeenCalledWith("pa");
+  expect(fixture.actions.releaseSessionView).toHaveBeenCalledWith("pa");
 });

@@ -4640,7 +4640,11 @@ function worktreeCommentsOf(thread: CommentThread): WorktreeComment[] {
  * announce a failure that was long over. From here there is no later: the
  * message is either said now or owned by something that renders it.
  */
-function announceArrival(msg: ServerMessage, state: UIState): void {
+function announceArrival(
+  msg: ServerMessage,
+  state: UIState,
+  connection: "main" | "panel",
+): void {
   const reveal = state.revealRequest;
   const arrival = arrivalMessage(msg, {
     viewedSessionId: state.session?.sessionId ?? null,
@@ -4652,7 +4656,7 @@ function announceArrival(msg: ServerMessage, state: UIState): void {
         : null,
     revealTargetKind: reveal?.target.kind ?? null,
   });
-  if (!arrival || arrivalHasHome(arrival)) return;
+  if (!arrival || arrivalHasHome(arrival, connection)) return;
   const resolvedName = targetTitle(arrival.target, state);
   const announcement = announceMessage({
     severity: arrival.severity,
@@ -6823,7 +6827,7 @@ export interface AssistantActions {
   /** View a session addressed by OUR id. */
   loadSession: (id: string) => void;
   openPermanentAssistant: () => void;
-  releasePermanentAssistant: (sessionId: string) => void;
+  releaseSessionView: (sessionId: string) => void;
   /** Fetch archived session rows after the archived sidebar section is expanded. */
   loadArchivedSessions: () => void;
   deleteSession: (id: string) => void;
@@ -7350,7 +7354,9 @@ export function useAssistant({
   // hydrating render instead of queueing it behind one.
   const bootTimelineReadRef = useRef<Promise<unknown> | null>(null);
   if (!bootTimelineReadRef.current) {
-    const bootSessionId = sessionIdFromPathname(location.pathname);
+    const bootSessionId = isolated
+      ? null
+      : sessionIdFromPathname(location.pathname);
     bootTimelineReadRef.current = bootSessionId
       ? readTimelineCache(bootSessionId)
       : Promise.resolve(undefined);
@@ -7361,6 +7367,9 @@ export function useAssistant({
   const socketRef = useRef<AssistantSocket | null>(null);
   if (!socketRef.current) {
     socketRef.current = new AssistantSocket(() => {
+      // The address bar names the MAIN pane's session. Opening on it here would
+      // view that session from this connection and arm its read dwell.
+      if (isolated) return defaultSocketUrl(undefined, false);
       const sessionId = sessionIdFromPathname(location.pathname);
       return defaultSocketUrl(
         sessionId
@@ -7901,7 +7910,7 @@ export function useAssistant({
         // A compaction-window refusal belongs to the inspector control that
         // sent it, never to the viewed chat's generic error.
         if (mutation?.compactionSessionId !== undefined) {
-          announceArrival(msg, stateRef.current);
+          announceArrival(msg, stateRef.current, isolated ? "panel" : "main");
           return;
         }
         const key =
@@ -7928,7 +7937,7 @@ export function useAssistant({
           //
           // No `controlOwned` to set: the return below means this message never
           // reaches the reducer, so the object store never sees it either.
-          announceArrival(msg, stateRef.current);
+          announceArrival(msg, stateRef.current, isolated ? "panel" : "main");
           return;
         }
         if (mutation?.control?.domain === "projects" && mutation.control.key)
@@ -8027,7 +8036,7 @@ export function useAssistant({
       // state it ARRIVED into — never by the state it leaves behind.
       if (msg.type === "accountLoginAlerts")
         window.dispatchEvent(new Event("accountHealthChanged"));
-      announceArrival(msg, stateRef.current);
+      announceArrival(msg, stateRef.current, isolated ? "panel" : "main");
       dispatch({
         kind: "server",
         msg,
@@ -8154,10 +8163,28 @@ export function useAssistant({
       offStatus();
       socket.dispose();
     };
-  }, [replicaTransport, socket]);
+  }, [isolated, replicaTransport, socket]);
 
   const actions = useMemo<AssistantActions>(() => {
     const send = (msg: ClientMessage) => socketRef.current?.send(msg);
+    // Reopening a retained view asks for the delta after its whole loaded range,
+    // not a fresh tail that would discard older history.
+    const retainTimelineForReopen = (sessionId: string) => {
+      const current = stateRef.current;
+      if (current.historySessionId !== sessionId) return undefined;
+      const descriptor = describeTimelineCache(
+        current.timeline,
+        current.timelineStart,
+      );
+      timelineCacheRef.current.set(sessionId, {
+        version: 2,
+        sessionId,
+        timeline: current.timeline,
+        descriptor,
+        savedAt: Date.now(),
+      });
+      return descriptor;
+    };
     /** Mint the id this mutation will be answered with, and hold its recovery. */
     const trackMutation = (
       mutation: PendingMutation,
@@ -8292,6 +8319,7 @@ export function useAssistant({
                 target: { type: "task", id: taskId },
               },
               stateRef.current,
+              isolated ? "panel" : "main",
             );
         },
       });
@@ -8555,6 +8583,13 @@ export function useAssistant({
       loadSession: (id) => {
         const generation = ++sessionLoadGenerationRef.current;
         recordSessionLoadMark("request", id);
+        if (isolated) {
+          const descriptor = retainTimelineForReopen(id);
+          if (descriptor) {
+            send({ type: "loadSession", id, timelineCache: descriptor });
+            return;
+          }
+        }
         const cached = timelineCacheRef.current.get(id);
         if (cached) {
           send({ type: "loadSession", id, timelineCache: cached.descriptor });
@@ -8565,7 +8600,7 @@ export function useAssistant({
         void readTimelineCache(id).then((loaded) => {
           if (
             generation !== sessionLoadGenerationRef.current ||
-            sessionIdFromPathname(location.pathname) !== id
+            (!isolated && sessionIdFromPathname(location.pathname) !== id)
           )
             return;
           send({
@@ -8577,29 +8612,22 @@ export function useAssistant({
       },
       openPermanentAssistant: () => {
         const current = stateRef.current;
-        const sessionId =
+        const descriptor =
           current.session?.agentType === "personal-assistant"
-            ? current.session.sessionId
+            ? retainTimelineForReopen(current.session.sessionId)
             : undefined;
-        // Reopening a retained panel asks for the delta after its whole loaded
-        // range, not a fresh tail that would discard older history.
-        if (sessionId && current.historySessionId === sessionId) {
-          const descriptor = describeTimelineCache(
-            current.timeline,
-            current.timelineStart,
-          );
-          timelineCacheRef.current.set(sessionId, {
-            version: 2,
-            sessionId,
-            timeline: current.timeline,
-            descriptor,
-            savedAt: Date.now(),
-          });
+        if (descriptor)
           send({ type: "openPermanentAssistant", timelineCache: descriptor });
-        } else send({ type: "openPermanentAssistant" });
+        else send({ type: "openPermanentAssistant" });
       },
-      releasePermanentAssistant: (sessionId) =>
-        send({ type: "releasePermanentAssistant", sessionId }),
+      releaseSessionView: (sessionId) => {
+        // A panel's load can still be waiting on its cache read. Sent after this
+        // it would reach the server as a new view, unreleased. The main
+        // connection's release is about a session it left, and must not cancel
+        // the load of the one it is going to.
+        if (isolated) sessionLoadGenerationRef.current += 1;
+        send({ type: "releaseSessionView", sessionId });
+      },
       loadArchivedSessions: () => dispatch({ kind: "archivedReadRequested" }),
       deleteSession: (id) => {
         timelineCacheRef.current.delete(id);
@@ -9554,7 +9582,12 @@ export function useAssistant({
         });
       },
     };
-  }, [readTimelineCache, replicaTransport, scheduleLiveBodySubscriptions]);
+  }, [
+    isolated,
+    readTimelineCache,
+    replicaTransport,
+    scheduleLiveBodySubscriptions,
+  ]);
 
   /**
    * Load a reveal's target INTO the window. The transcript is a windowed suffix,
