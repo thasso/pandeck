@@ -17,7 +17,9 @@
  * login-stuck hold, is sent to the current connection as `profiles.status`
  * once the answer that caused it has gone out; a failure is logged, never
  * retried. Renewal's needs-login changes go out as `profiles.credential` the
- * same way, and each hello resends every profile that needs a login.
+ * same way, and each hello resends every profile that needs a login. Every
+ * hold that ends, by release, force release or evidence, is passed to
+ * `holdsEnded` after its status, even when saving failed.
  *
  * Every hello also clears the pushed OpenAI-compatible endpoint: its key
  * belongs to the boot that pushed it, which the next push replaces. A
@@ -82,6 +84,8 @@ interface ControlContext {
   log: (line: string) => void;
   /** The profiles that need a login now, resent on every hello. */
   needsLogin?: () => string[];
+  /** The profiles whose login hold just ended; renewal re-reads them. */
+  holdsEnded?: (profileIds: string[]) => void;
 }
 
 /** What a method's log line names besides the method, and its outcome. */
@@ -135,6 +139,7 @@ export function createControlEndpoint({
   compat,
   log,
   needsLogin = () => [],
+  holdsEnded = () => {},
 }: ControlContext): ControlEndpoint {
   const connections = new Set<WorkerConnection>();
   /** The connection whose hello came last; an older one is ended. */
@@ -197,6 +202,7 @@ export function createControlEndpoint({
   /** Reports a memory-first hold change; a failed save is only logged. */
   const settle = (update: HoldUpdate, context: string): void => {
     report(update.statuses);
+    if (update.ended.length > 0) holdsEnded(update.ended);
     if (update.saveError !== undefined)
       log(`${context}: holds.json not saved; the change stands in memory`);
   };
@@ -375,6 +381,7 @@ export function createControlEndpoint({
         return encodeHoldReleased(false);
       }
       report(outcome.statuses);
+      holdsEnded(outcome.ended);
       if (outcome.saveError !== undefined) throw outcome.saveError;
       return encodeHoldReleased(true);
     },
@@ -386,6 +393,7 @@ export function createControlEndpoint({
       if (!update)
         fail(UNKNOWN_HOLD, "The gateway holds no login hold by this id.");
       report(update.statuses);
+      holdsEnded(update.ended);
       if (update.saveError !== undefined) throw update.saveError;
       return encodeHoldReleased(true);
     },

@@ -2,7 +2,8 @@
  * The server's link to the in-process credential gateway (`gatewayLink.ts`):
  * its boot order, profile changes reaching the gateway in order, an
  * unavailable gateway failing grants with U7's text, and the login hold calls
- * across link lifetimes. Fake profiles under the setup's temp `DATA_DIR` and a
+ * across link lifetimes, and a stuck hold's Clear through the login-hold seam
+ * (G5b AC9 (c), AC10). Fake profiles under the setup's temp `DATA_DIR` and a
  * temp `HOME`; a fake TLS upstream stands in for ChatGPT. Every hold's owner
  * is this process, so its holds are observed through a fake probe.
  */
@@ -44,7 +45,9 @@ const {
   fakeProcesses,
   spawnIdleChild,
   startFakeCompatEndpoint,
+  startFakeUpstreams,
 } = await import("./test/gatewayFixtures.ts");
+const loginHolds = await import("./loginHolds.ts");
 const { processStartTime } = await import("./gateway/processIdentity.ts");
 const { startGateway } = await import("./gateway/gateway.ts");
 const { refusalText } = await import("./gateway/refusals.ts");
@@ -70,6 +73,8 @@ type GatewayCompatSource = NonNullable<GatewayLinkOptions["compat"]>;
 const FAKE_ACCESS = "fake-codex-access";
 const FAKE_REFRESH = "fake-refresh";
 const FAKE_ACCOUNT = "acct-test";
+const FAKE_CLAUDE_ACCESS = "fake-link-claude-access";
+const FAKE_CLAUDE_REFRESH = "fake-link-claude-refresh";
 
 let upstream: https.Server;
 let upstreamPort = 0;
@@ -1162,5 +1167,90 @@ test("AC9 (link): a rejected Codex renewal reaches credentialStatus, and a new l
     await until(() => booted.credentialStatus(id)?.needsLogin === false);
   } finally {
     profiles.deleteCredentialProfile(id);
+  }
+});
+
+test("G5b AC9 (c), AC10 (link): a server gone before naming its writer leaves the hold held, stuck at the deadline; Clear force-releases it and renews, and an unknown hold counts as released", async () => {
+  const claude = profiles.createCredentialProfile({
+    provider: "claude",
+    name: "Link stuck Claude",
+  }).id;
+  const profile = { id: claude, provider: "claude" } as const;
+  writeFileSync(
+    join(profiles.claudeConfigDir(claude), ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: FAKE_CLAUDE_ACCESS,
+        refreshToken: FAKE_CLAUDE_REFRESH,
+        expiresAt: Date.now() + 30_000,
+      },
+    }),
+  );
+  const upstreams = await startFakeUpstreams();
+  const dir = stateDir();
+  let now = Date.now();
+  try {
+    const first = await startGatewayLinkForTests({
+      stateDir: dir,
+      start: observed("running", { now: () => now }),
+    });
+    let held: string;
+    try {
+      held = await first.link.acquireLoginHold(claude);
+    } finally {
+      await first.close();
+    }
+
+    // Its owner exited, but a Claude hold without a writer has no evidence.
+    const second = await startGatewayLinkForTests({
+      stateDir: dir,
+      start: observed("exited", { now: () => now }),
+      claudeTokenEndpoint: upstreams.tokenEndpoint,
+    });
+    try {
+      loginHolds.setLoginHoldLinkForTests(second.link);
+      const gw = second.link.gateway!;
+      await second.link.serverAccess(claude);
+      assert.deepEqual(
+        gw.holds().map((hold) => hold.holdId),
+        [held],
+      );
+      assert.deepEqual(await loginHolds.takeLoginHold(profile, () => {}), {
+        kind: "stuck",
+      });
+      assert.equal(loginHolds.loginStuckOf(profile), true);
+
+      now += 30 * 60 * 1000;
+      gw.checkHolds();
+      await until(() => second.link.loginStatus(claude)?.loginStuck === true);
+      await gw.renewDue();
+      assert.equal(gw.holds().length, 1, "elapsed time releases nothing");
+      assert.equal(upstreams.platform.length, 0);
+
+      await loginHolds.clearUnfinishedLogin(profile);
+      assert.deepEqual(gw.holds(), []);
+      await until(() => upstreams.platform.length === 1);
+      await until(() => second.link.loginStatus(claude)?.loginStuck === false);
+      assert.equal(loginHolds.loginStuckOf(profile), false);
+
+      // Another Clear of the same hold finds it gone: done, not a failure.
+      await second.link.forceReleaseLoginHold(held);
+      const next = await loginHolds.takeLoginHold(profile, () => {});
+      assert.equal(next.kind, "held");
+      if (next.kind === "held") next.hold.release();
+      await until(() => gw.holds().length === 0);
+      for (const line of second.lines)
+        for (const value of [FAKE_CLAUDE_ACCESS, FAKE_CLAUDE_REFRESH])
+          assert.ok(
+            !line.includes(value),
+            `a log line holds ${value}: ${line}`,
+          );
+    } finally {
+      loginHolds.setLoginHoldLinkForTests(null);
+      await second.close();
+    }
+  } finally {
+    await upstreams.close();
+    profiles.deleteCredentialProfile(claude);
   }
 });

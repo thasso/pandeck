@@ -3,6 +3,9 @@
  * that wait for one renewal (AC7, AC20), upstream 401s (AC8), a dead login
  * reported over control and refused with U7's text (AC9), missing and
  * malformed files (AC11), and a gateway restarted without its server (AC12).
+ * G5b: every end of a login hold re-reads the file at once (G5b AC1); a
+ * hold waits for a renewal in flight and fences every renewal (G5b AC2); and
+ * a restart, a lost connection or elapsed time never ends one (G5b AC9).
  * Control runs over an in-process pair; Claude renews at a fake TLS
  * `platform.claude.com`, Codex through a fake port. Every token is a fake.
  */
@@ -25,8 +28,10 @@ import {
   CLAUDE_PATH,
   CODEX_PATH,
   dialControl,
+  endChild,
   fakeProcesses,
   rotatingClaudeTokens,
+  spawnIdleChild,
   startFakeUpstreams,
   type FakeUpstreams,
   type UpstreamResponder,
@@ -38,6 +43,7 @@ import {
   CONTROL_METHODS,
   GATEWAY_CONTROL_PROTOCOL,
   decodeLeaseGranted,
+  decodeLoginHeld,
   encodeControlRequest,
   type CredentialStatus,
   type LeaseGrant,
@@ -47,6 +53,8 @@ import {
   type GatewayOptions,
   type RunningGateway,
 } from "./gateway.ts";
+import type { HoldStatus } from "./holds.ts";
+import { processStartTime, type ProcessProbe } from "./processIdentity.ts";
 import type { GatewayProfile } from "./profiles.ts";
 import type { CodexRenewPort } from "./renewal.ts";
 import { refusalText } from "./refusals.ts";
@@ -55,6 +63,7 @@ import { refusalText } from "./refusals.ts";
 const OLD_ACCESS = "fake-gwrenew-old-access";
 const OLD_REFRESH = "fake-gwrenew-old-refresh";
 const LOGIN_ACCESS = "fake-gwrenew-login-access";
+const LOGIN_REFRESH = "fake-gwrenew-login-refresh";
 const CODEX_RENEWED = "fake-gwrenew-codex-renewed";
 const ACCOUNT = "acct-gwrenew";
 const RENEWED = "fake-claude-renewed";
@@ -62,6 +71,7 @@ const SENTINELS = [
   OLD_ACCESS,
   OLD_REFRESH,
   LOGIN_ACCESS,
+  LOGIN_REFRESH,
   CODEX_RENEWED,
   RENEWED,
 ];
@@ -85,6 +95,8 @@ const running: RunningGateway[] = [];
 let lines: string[] = [];
 /** Every `profiles.credential` and other payload control sent the server. */
 let statuses: CredentialStatus[] = [];
+/** Every `profiles.status` control sent the server. */
+let holdStatuses: HoldStatus[] = [];
 let payloads: string[] = [];
 let refusals: string[] = [];
 
@@ -115,6 +127,7 @@ afterEach(async () => {
   upstreams.reset();
   lines = [];
   statuses = [];
+  holdStatuses = [];
   payloads = [];
   refusals = [];
 });
@@ -209,6 +222,17 @@ async function ready(
   gw: RunningGateway,
   profiles: GatewayProfile[],
 ): Promise<WorkerConnection> {
+  const connection = await connect(gw, "boot-x", 4242);
+  await sync(connection, profiles);
+  return connection;
+}
+
+/** A control connection after a hello as `serverBootId` with `pid`. */
+async function connect(
+  gw: RunningGateway,
+  serverBootId: string,
+  pid: number,
+): Promise<WorkerConnection> {
   const connection = dialControl(
     createInProcessTransport(),
     gw.attachControl,
@@ -221,19 +245,15 @@ async function ready(
       },
       [CONTROL_METHODS.status]: (payload: Payload) => {
         payloads.push(JSON.stringify(payload.json));
+        holdStatuses.push(payload.json as HoldStatus);
         return Promise.resolve({ json: {} });
       },
     },
   );
   await connection.request(
     CONTROL_METHODS.hello,
-    encodeControlRequest({
-      serverBootId: "boot-x",
-      pid: 4242,
-      startTime: "1234",
-    }),
+    encodeControlRequest({ serverBootId, pid, startTime: "1234" }),
   );
-  await sync(connection, profiles);
   return connection;
 }
 
@@ -714,5 +734,399 @@ test.each([
       0,
       "nothing reached the upstream",
     );
+  },
+);
+
+/** Takes hold `holdId` on `profileId`; it must be held. */
+async function hold(
+  connection: WorkerConnection,
+  profileId: string,
+  holdId: string,
+): Promise<void> {
+  assert.deepEqual(
+    decodeLoginHeld(
+      await connection.request(
+        CONTROL_METHODS.loginHold,
+        encodeControlRequest({ profileId, holdId }),
+      ),
+    ),
+    { held: true },
+  );
+}
+
+const endHold = (
+  connection: WorkerConnection,
+  holdId: string,
+  method: string = CONTROL_METHODS.loginRelease,
+): Promise<Payload> =>
+  connection.request(method, encodeControlRequest({ holdId }));
+
+/** Rejects `a`'s next refresh: a sticky needs-login, reported once. */
+async function rejectRefresh(
+  gw: RunningGateway,
+  a: GatewayProfile,
+  token: string,
+): Promise<void> {
+  tokenRespond = (_seen, res) => {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end('{"error":"invalid_grant","error_description":"fixture"}');
+  };
+  assert.equal((await forward(gw, a, token)).status, 401);
+  await vi.waitFor(() =>
+    assert.deepEqual(statuses, [{ profileId: a.id, needsLogin: true }]),
+  );
+  tokenRespond = rotatingClaudeTokens();
+}
+
+const accessIn = async (file: string): Promise<string> =>
+  JSON.parse(await readFile(file, "utf8")).claudeAiOauth.accessToken;
+
+test.each([
+  "release",
+  "force release",
+  "evidence at a hello",
+  "evidence at the hold check",
+] as const)(
+  "G5b AC1: a %s ends a hold over a sticky needs-login; one re-read clears it and kicks one renewal, with no request or tick",
+  async (how) => {
+    const processes = fakeProcesses();
+    const gw = await gateway({ processProbe: processes.probe });
+    const a = await claudeProfile("claude-a", Date.now() + 30_000);
+    const x = await ready(gw, [a]);
+    const token = await grant(x, engine(a.id));
+    await rejectRefresh(gw, a, token);
+    assert.equal(upstreams.platform.length, 1);
+
+    await hold(x, a.id, "h1");
+    if (how.startsWith("evidence"))
+      await x.request(
+        CONTROL_METHODS.loginWriter,
+        encodeControlRequest({ holdId: "h1", pid: 5151, startTime: null }),
+      );
+    // The login writes its file while the hold stands.
+    await writeClaude(
+      a.tokenFile,
+      Date.now() + 60 * MIN,
+      LOGIN_ACCESS,
+      LOGIN_REFRESH,
+    );
+    await settled();
+    assert.deepEqual(
+      statuses,
+      [{ profileId: a.id, needsLogin: true }],
+      "nothing re-reads while held",
+    );
+
+    if (how === "release") await endHold(x, "h1");
+    else if (how === "force release")
+      await endHold(x, "h1", CONTROL_METHODS.loginForceRelease);
+    else {
+      processes.set(4242, "exited");
+      processes.set(5151, "exited");
+      if (how === "evidence at a hello") await connect(gw, "boot-y", 4343);
+      else {
+        // The newer boot's hello saw the processes running; the timer's check
+        // is what observes their exit.
+        processes.set(4242, "running");
+        await connect(gw, "boot-y", 4343);
+        assert.equal(gw.holds().length, 1);
+        processes.set(4242, "exited");
+        gw.checkHolds();
+      }
+    }
+    assert.deepEqual(gw.holds(), []);
+    await vi.waitFor(() =>
+      assert.deepEqual(statuses.at(-1), { profileId: a.id, needsLogin: false }),
+    );
+    await vi.waitFor(() => assert.equal(upstreams.platform.length, 2));
+    await settled();
+    assert.equal(upstreams.platform.length, 2, "exactly one renewal");
+    assert.equal(upstreams.anthropic.length, 0, "no model request was sent");
+    assert.equal(await accessIn(a.tokenFile), `${RENEWED}-access-1`);
+  },
+);
+
+test("G5b AC1: at a release a due token is renewed and one not due is not; nothing renews while held", async () => {
+  const gw = await gateway();
+  const due = await claudeProfile("claude-d", Date.now() + 60 * MIN);
+  const fresh = await claudeProfile("claude-f", Date.now() + 60 * MIN);
+  const connection = await ready(gw, [due, fresh]);
+  await grant(connection, engine(due.id));
+  await grant(connection, engine(fresh.id));
+  await hold(connection, due.id, "hd");
+  await hold(connection, fresh.id, "hf");
+  await writeClaude(
+    due.tokenFile,
+    Date.now() + 5 * MIN,
+    LOGIN_ACCESS,
+    LOGIN_REFRESH,
+  );
+  await writeClaude(
+    fresh.tokenFile,
+    Date.now() + 60 * MIN,
+    LOGIN_ACCESS,
+    LOGIN_REFRESH,
+  );
+  const freshBytes = await readFile(fresh.tokenFile);
+  await gw.renewDue();
+  await settled();
+  assert.equal(upstreams.platform.length, 0, "a held lane renews nothing");
+
+  await endHold(connection, "hf");
+  await settled();
+  assert.equal(upstreams.platform.length, 0, "not due: no renewal");
+  assert.deepEqual(await readFile(fresh.tokenFile), freshBytes);
+
+  await endHold(connection, "hd");
+  await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
+  await settled();
+  assert.equal(upstreams.platform.length, 1);
+  assert.equal(await accessIn(due.tokenFile), `${RENEWED}-access-1`);
+  assert.deepEqual(statuses, []);
+});
+
+test("G5b AC1: a release whose save fails still re-reads and renews a due token", async () => {
+  await mkdir(DATA_DIR, { recursive: true });
+  const stateDir = await mkdtemp(join(DATA_DIR, "gwrenew-state-"));
+  const gw = await gateway({ stateDir });
+  const a = await claudeProfile("claude-a", Date.now() + 60 * MIN);
+  const connection = await ready(gw, [a]);
+  await grant(connection, engine(a.id));
+  await hold(connection, a.id, "h1");
+  await writeClaude(a.tokenFile, Date.now() + 5 * MIN);
+  // The writer's temp file cannot be opened while a directory holds its name.
+  await mkdir(join(stateDir, "holds.json.tmp"));
+  await assert.rejects(
+    endHold(connection, "h1"),
+    (err: { code?: unknown }) => err.code === "state_write_failed",
+  );
+  assert.deepEqual(gw.holds(), [], "the release stands in memory");
+  await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
+  await rm(join(stateDir, "holds.json.tmp"), { recursive: true });
+});
+
+test("G5b AC9 (a): a restarted gateway keeps the hold and renews nothing until its release, then re-reads and renews", async () => {
+  await mkdir(DATA_DIR, { recursive: true });
+  const stateDir = await mkdtemp(join(DATA_DIR, "gwrenew-state-"));
+  const first = await gateway({ stateDir });
+  const a = await claudeProfile("claude-a", Date.now() + 60 * MIN);
+  const before = await ready(first, [a]);
+  const token = await grant(before, engine(a.id));
+  await hold(before, a.id, "h1");
+  await first.close();
+  running.splice(running.indexOf(first), 1);
+
+  const second = await gateway({ stateDir });
+  await writeClaude(
+    a.tokenFile,
+    Date.now() + 30_000,
+    LOGIN_ACCESS,
+    LOGIN_REFRESH,
+  );
+  const bytes = await readFile(a.tokenFile);
+  assert.equal(second.holds().length, 1, "the hold survived the restart");
+  await second.renewDue();
+  assert.equal((await forward(second, a, token)).status, 200);
+  await settled();
+  assert.equal(upstreams.platform.length, 0, "no POST while held");
+  assert.deepEqual(await readFile(a.tokenFile), bytes);
+
+  const after = await connect(second, "boot-x", 4242);
+  await endHold(after, "h1");
+  await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
+  assert.equal(await accessIn(a.tokenFile), `${RENEWED}-access-1`);
+  assert.deepEqual(holdStatuses, []);
+});
+
+/** A token endpoint answer that waits for `open`, then rotates as usual. */
+function gatedTokens(): { open(): void } {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  const rotate = rotatingClaudeTokens();
+  tokenRespond = (seen, res) => void opened.then(() => rotate(seen, res));
+  return { open };
+}
+
+test("G5b AC2: an acquire during a renewal answers only after its save; while held no renewal, short-lived request or 401 posts, and a login's write stands byte for byte", async () => {
+  const gw = await gateway();
+  const a = await claudeProfile("claude-a", Date.now() + 30_000);
+  const x = await ready(gw, [a]);
+  const token = await grant(x, engine(a.id));
+  const gate = gatedTokens();
+  const renewing = gw.renewDue();
+  await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
+
+  let seenAtAnswer: string | undefined;
+  const held = hold(x, a.id, "h1").then(async () => {
+    seenAtAnswer = await accessIn(a.tokenFile);
+  });
+  await settled();
+  assert.equal(seenAtAnswer, undefined, "the acquire waits for the renewal");
+  gate.open();
+  await renewing;
+  await held;
+  assert.equal(seenAtAnswer, `${RENEWED}-access-1`, "answered after the save");
+
+  // The login writes a token about to expire; nothing may renew it now.
+  await writeClaude(
+    a.tokenFile,
+    Date.now() + 30_000,
+    LOGIN_ACCESS,
+    LOGIN_REFRESH,
+  );
+  const due = await readFile(a.tokenFile);
+  await gw.renewDue();
+  assert.equal((await forward(gw, a, token)).status, 200);
+  claudeRespond = (_seen, res) => {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(UPSTREAM_401);
+  };
+  assert.equal((await forward(gw, a, token)).status, 401);
+  await settled();
+  assert.equal(upstreams.platform.length, 1, "no POST while held");
+  assert.deepEqual(await readFile(a.tokenFile), due);
+
+  // Its final write is what the release finds.
+  claudeRespond = okResponder;
+  await writeClaude(
+    a.tokenFile,
+    Date.now() + 60 * MIN,
+    LOGIN_ACCESS,
+    LOGIN_REFRESH,
+  );
+  const login = await readFile(a.tokenFile);
+  await endHold(x, "h1");
+  await settled();
+  assert.deepEqual(await readFile(a.tokenFile), login);
+  assert.equal(upstreams.platform.length, 1);
+});
+
+test("G5b AC9 (b): after a server restart lost the release, a live writer keeps the hold and every renewal off; its exit releases it and renews", async () => {
+  const child = spawnIdleChild();
+  try {
+    const fake = fakeProcesses();
+    // The writer is this test's own child, observed for real; every other
+    // process through the fake.
+    const probe: ProcessProbe = {
+      kill: (pid, signal) =>
+        pid === child.pid
+          ? void process.kill(pid, signal)
+          : fake.probe.kill(pid, signal),
+      startTime: (pid) => (pid === child.pid ? processStartTime(pid) : null),
+    };
+    const gw = await gateway({ processProbe: probe });
+    const a = await claudeProfile("claude-a", Date.now() + 60 * MIN);
+    const x = await ready(gw, [a]);
+    await hold(x, a.id, "h1");
+    await x.request(
+      CONTROL_METHODS.loginWriter,
+      encodeControlRequest({
+        holdId: "h1",
+        pid: child.pid,
+        startTime: processStartTime(child.pid),
+      }),
+    );
+    await writeClaude(
+      a.tokenFile,
+      Date.now() + 30_000,
+      LOGIN_ACCESS,
+      LOGIN_REFRESH,
+    );
+
+    // The server restarts without releasing: its old process is gone.
+    x.end("the server restarted");
+    fake.set(4242, "exited");
+    const y = await connect(gw, "boot-y", 4343);
+    await sync(y, [a]);
+    const token = await grant(y, engine(a.id));
+    gw.checkHolds();
+    await gw.renewDue();
+    assert.equal((await forward(gw, a, token)).status, 200);
+    await settled();
+    assert.equal(gw.holds().length, 1, "the writer still runs");
+    assert.equal(upstreams.platform.length, 0, "no POST while it runs");
+
+    await endChild(child);
+    gw.checkHolds();
+    assert.deepEqual(gw.holds(), []);
+    await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
+    assert.equal(await accessIn(a.tokenFile), `${RENEWED}-access-1`);
+  } finally {
+    await endChild(child);
+  }
+});
+
+test("G5b AC9 (d): a lost control connection keeps the hold and the renewal fenced", async () => {
+  const gw = await gateway();
+  const a = await claudeProfile("claude-a", Date.now() + 60 * MIN);
+  const x = await ready(gw, [a]);
+  await grant(x, engine(a.id));
+  await hold(x, a.id, "h1");
+  await writeClaude(
+    a.tokenFile,
+    Date.now() + 30_000,
+    LOGIN_ACCESS,
+    LOGIN_REFRESH,
+  );
+  const bytes = await readFile(a.tokenFile);
+
+  x.end("the connection was lost");
+  await settled();
+  gw.checkHolds();
+  await gw.renewDue();
+  await settled();
+  assert.equal(gw.holds().length, 1);
+  assert.equal(upstreams.platform.length, 0);
+  assert.deepEqual(await readFile(a.tokenFile), bytes);
+});
+
+test.each(["the writer exits", "Clear force-releases it"] as const)(
+  "G5b AC9 (e): a writer past the deadline is login-stuck and renews nothing until %s",
+  async (how) => {
+    const processes = fakeProcesses();
+    let now = Date.now();
+    const gw = await gateway({ processProbe: processes.probe, now: () => now });
+    const a = await claudeProfile("claude-a", Date.now() + 60 * MIN);
+    const x = await ready(gw, [a]);
+    await grant(x, engine(a.id));
+    await hold(x, a.id, "h1");
+    await x.request(
+      CONTROL_METHODS.loginWriter,
+      encodeControlRequest({ holdId: "h1", pid: 5151, startTime: null }),
+    );
+    await writeClaude(
+      a.tokenFile,
+      Date.now() + 30_000,
+      LOGIN_ACCESS,
+      LOGIN_REFRESH,
+    );
+
+    now += 31 * MIN;
+    gw.checkHolds();
+    await vi.waitFor(() =>
+      assert.deepEqual(holdStatuses, [
+        { profileId: a.id, loginStuck: true, holdId: "h1" },
+      ]),
+    );
+    await gw.renewDue();
+    await settled();
+    assert.equal(gw.holds().length, 1, "elapsed time releases nothing");
+    assert.equal(upstreams.platform.length, 0);
+
+    if (how === "the writer exits") {
+      // The owner's boot is gone and its writer exited: evidence.
+      processes.set(4242, "exited");
+      processes.set(5151, "exited");
+      await connect(gw, "boot-y", 4343);
+    } else await endHold(x, "h1", CONTROL_METHODS.loginForceRelease);
+    assert.deepEqual(gw.holds(), []);
+    await vi.waitFor(() =>
+      assert.deepEqual(holdStatuses.at(-1), {
+        profileId: a.id,
+        loginStuck: false,
+        holdId: "h1",
+      }),
+    );
+    await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
   },
 );

@@ -31,10 +31,10 @@
  * in memory only. The gateway ends it with the boot (the next hello) or the
  * profile (its removal); the server never revokes one itself.
  *
- * The login hold calls are G5's to wire into the login flows; nothing calls
- * them yet. A hold waiting for its profile's writer lane is ordered after the
- * queue but never holds it up. The link records each profile's latest
- * `profiles.status` for the login-stuck state, and its latest
+ * The login flows take their holds through `loginHolds.ts`. A hold waiting
+ * for its profile's writer lane is ordered after the queue but never holds it
+ * up. The link records each profile's latest `profiles.status` for the
+ * login-stuck state, tells `onLoginStatus` listeners of it, and its latest
  * `profiles.credential` for the needs-login state the gateway's renewal
  * found. The gateway renews Codex logins through `renewCodex`, pi's refresh
  * that `index.ts` passes in from `harnesses/`.
@@ -53,6 +53,7 @@ import { errorText } from "./errors.ts";
 import {
   CONTROL_METHODS,
   GATEWAY_CONTROL_PROTOCOL,
+  UNKNOWN_HOLD,
   type CompatConfig,
   decodeHoldReleased,
   decodeCredentialStatus,
@@ -141,7 +142,7 @@ export class LoginHeldError extends Error {
 }
 
 /** A profile's latest `profiles.status`. */
-interface LoginStatus {
+export interface LoginStatus {
   loginStuck: boolean;
   holdId: string;
 }
@@ -225,10 +226,20 @@ export interface GatewayLink {
   registerLoginWriter(holdId: string, pid: number): Promise<void>;
   /** Best-effort: a failure is logged, never thrown. */
   releaseLoginHold(holdId: string): Promise<void>;
-  /** The operator's Clear; rejects with U7's login text on any failure. */
+  /**
+   * The operator's Clear. A hold the gateway no longer knows is already gone,
+   * so it resolves; any other failure rejects with U7's login text.
+   */
   forceReleaseLoginHold(holdId: string): Promise<void>;
   /** The profile's latest login status from the gateway, if any. */
   loginStatus(profileId: string): LoginStatus | undefined;
+  /**
+   * Calls `listener` after each `profiles.status` is recorded; answers the
+   * unsubscribe. A listener's failure is logged, never thrown.
+   */
+  onLoginStatus(
+    listener: (profileId: string, status: LoginStatus) => void,
+  ): () => void;
   /** The profile's latest needs-login from the gateway's renewal, if any. */
   credentialStatus(profileId: string): { needsLogin: boolean } | undefined;
   /** Uninstalls the link and closes its gateway (tests and the probe only); once. */
@@ -302,6 +313,9 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   let connection: WorkerConnection | undefined;
   let closing: Promise<void> | undefined;
   const loginStatuses = new Map<string, LoginStatus>();
+  const loginStatusListeners = new Set<
+    (profileId: string, status: LoginStatus) => void
+  >();
   const credentialStatuses = new Map<string, boolean>();
   /**
    * This boot's server leases by profile, from the first call on. A removal
@@ -352,6 +366,12 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
           [CONTROL_METHODS.status]: (payload) => {
             const { profileId, ...status } = decodeHoldStatus(payload);
             loginStatuses.set(profileId, status);
+            for (const listener of [...loginStatusListeners])
+              try {
+                listener(profileId, { ...status });
+              } catch (err) {
+                log(`${CONTROL_METHODS.status} listener: ${errorText(err)}`);
+              }
             return Promise.resolve(encodeControlDone());
           },
           [CONTROL_METHODS.credential]: (payload) => {
@@ -614,8 +634,16 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         log(
           `${CONTROL_METHODS.loginForceRelease} (hold ${holdId}): ${failure(err)}`,
         );
+        if (err instanceof WorkerRequestError && err.code === UNKNOWN_HOLD)
+          return;
         throw new GatewayLoginUnavailableError();
       }
+    },
+    onLoginStatus(listener) {
+      loginStatusListeners.add(listener);
+      return () => {
+        loginStatusListeners.delete(listener);
+      };
     },
     credentialStatus(profileId) {
       const needsLogin = credentialStatuses.get(profileId);

@@ -414,6 +414,12 @@ export interface CredentialProfileSummary {
   };
   /** An OpenAI-compatible account's endpoint; never its key. Absent for every other kind. */
   endpoint?: OpenAiCompatibleEndpointSummary;
+  /**
+   * An unfinished login holds this login account, so its token is not
+   * renewed until the login ends or is cleared. Never set on an endpoint
+   * account, nor while the credential gateway is off.
+   */
+  loginStuck?: true;
   /** Where this account is currently used. Only present when explicitly requested. */
   usage?: CredentialProfileUsage;
 }

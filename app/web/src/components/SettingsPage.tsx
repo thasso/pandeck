@@ -59,7 +59,9 @@ import {
   type OpenAiCompatibleEndpointSummary,
   type OpenAiCompatibleThinkingFormat,
   ACCOUNT_KINDS,
+  CLEAR_UNFINISHED_LOGIN_LABEL,
   isSubscriptionAccountKind,
+  loginStuckText,
   OPENAI_COMPATIBLE_THINKING_FORMATS,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
@@ -108,6 +110,7 @@ import { settingBounds } from "@assistant/shared/settingsRegistry";
 import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
 import { VoiceSettings } from "./VoiceSettings.tsx";
 import {
+  clearUnfinishedProfileLogin,
   createCredentialProfile,
   limitedAccountDescription,
   disableAccountImpact,
@@ -647,6 +650,8 @@ export function CredentialProfileCard({
   onToggleEnterprise,
   onPriority,
   onConnect,
+  onClearLogin,
+  loginClearError,
   onRename,
   onDelete,
   onOpenSection,
@@ -662,6 +667,10 @@ export function CredentialProfileCard({
   onToggleEnterprise: (enterprise: boolean) => void;
   onPriority: (priority: number) => void;
   onConnect: () => void;
+  /** U7's Clear, which takes Connect's place while the login is stuck. */
+  onClearLogin?: () => void;
+  /** Why the last Clear failed. */
+  loginClearError?: string | undefined;
   onRename?: () => void;
   onDelete?: () => void;
   /** Navigate to the settings section owning a pinned slot. */
@@ -669,6 +678,10 @@ export function CredentialProfileCard({
   /** What only this kind of account has, such as an endpoint's fields. */
   children?: React.ReactNode;
 }) {
+  const loginStuck =
+    profile.loginStuck === true &&
+    ACCOUNT_KINDS[profile.provider].credential === "login";
+  const clearsLogin = loginStuck && onClearLogin !== undefined;
   return (
     <SettingsCard>
       <div className="flex min-w-0 items-start justify-between gap-2">
@@ -707,6 +720,11 @@ export function CredentialProfileCard({
               {profile.health.reason ? ` · ${profile.health.reason}` : ""}
             </p>
           ) : null}
+          {loginStuck ? (
+            <p className="mt-1 text-xs text-destructive">
+              {loginStuckText(profile.name)}
+            </p>
+          ) : null}
         </div>
         {onRename || onDelete ? (
           <div className="flex shrink-0 items-center gap-0.5">
@@ -739,16 +757,18 @@ export function CredentialProfileCard({
         />
         <Button
           variant="outline"
-          disabled={connectionDisabled}
+          disabled={!clearsLogin && connectionDisabled}
           busy={connectionBusy === true}
-          onClick={onConnect}
+          onClick={clearsLogin ? onClearLogin : onConnect}
         >
           {connectionBusy ? null : profile.status === "connecting" ? (
             <Spinner size="sm" />
           ) : (
             <RefreshCw />
           )}
-          <span className="truncate">{connectionLabel}</span>
+          <span className="truncate">
+            {clearsLogin ? CLEAR_UNFINISHED_LOGIN_LABEL : connectionLabel}
+          </span>
         </Button>
       </div>
       <div className="mt-3">
@@ -812,6 +832,9 @@ export function CredentialProfileCard({
       ) : null}
       {profile.error ? (
         <ErrorNote className="mt-2" message={profile.error} />
+      ) : null}
+      {loginClearError ? (
+        <ErrorNote className="mt-2" message={loginClearError} />
       ) : null}
       <CredentialProfileUsageBlock
         profile={profile}
@@ -1073,6 +1096,9 @@ function CredentialProfilesSection({
     Record<string, OpenAiCompatibleConnectionStatus | null>
   >({});
   const [testing, setTesting] = useState<ReadonlySet<string>>(new Set());
+  // Login accounts: those clearing an unfinished login, and why a Clear failed.
+  const [clearing, setClearing] = useState<ReadonlySet<string>>(new Set());
+  const [clearErrors, setClearErrors] = useState<Record<string, string>>({});
   const refresh = async () => {
     try {
       setProfiles(await fetchCredentialProfiles({ includeUsage: true }));
@@ -1196,6 +1222,26 @@ function CredentialProfilesSection({
                     }),
                   );
               };
+              const clearLogin = () => {
+                const failClear = (err: unknown) =>
+                  setClearErrors((all) => ({
+                    ...all,
+                    [profile.id]:
+                      err instanceof Error ? err.message : String(err),
+                  }));
+                setClearErrors(({ [profile.id]: _, ...rest }) => rest);
+                setClearing((ids) => new Set(ids).add(profile.id));
+                void clearUnfinishedProfileLogin(profile.id)
+                  .then(refresh)
+                  .catch(failClear)
+                  .finally(() =>
+                    setClearing((ids) => {
+                      const next = new Set(ids);
+                      next.delete(profile.id);
+                      return next;
+                    }),
+                  );
+              };
               // Each asks first, then writes. The ask settles rather than
               // rejecting and every write ends in `.catch(fail)`, so the card's
               // `() => void` slots take them through a `void` call.
@@ -1256,7 +1302,9 @@ function CredentialProfilesSection({
                   providerLabel={providerLabel}
                   connectionLabel={connection.label}
                   connectionDisabled={connection.disabled}
-                  connectionBusy={testing.has(profile.id)}
+                  connectionBusy={
+                    testing.has(profile.id) || clearing.has(profile.id)
+                  }
                   onToggle={() => void toggle()}
                   onToggleEnterprise={(enterprise) =>
                     void setCredentialProfileEnterprise(profile.id, enterprise)
@@ -1269,6 +1317,8 @@ function CredentialProfilesSection({
                       .catch(fail)
                   }
                   onOpenSection={onOpenSection}
+                  onClearLogin={clearLogin}
+                  loginClearError={clearErrors[profile.id]}
                   onConnect={() => {
                     if (endpoints) test();
                     else if (provider === "claude")

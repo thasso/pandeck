@@ -18,7 +18,8 @@
  * else the profile needs a login until its file changes: requests are refused
  * with U7's text and `report` tells the server. A missing or malformed file
  * is a non-sticky needs-login, cleared by the first good read. A 401 never
- * marks a login dead.
+ * marks a login dead. When a login hold ends the file is re-read at once
+ * (`recheck`), and a due token is renewed.
  *
  * A log line names the profile, provider, outcome and a code, never a token,
  * body, scope or path.
@@ -117,6 +118,11 @@ export interface Renewal {
   upstream401(binding: LeaseBinding, sentToken: string): void;
   /** One tick: renews every renewable profile inside its margin. */
   tick(): Promise<void>;
+  /**
+   * A login hold on the profile ended: re-reads its file as a tick does, and
+   * renews it when due. Never rejects.
+   */
+  recheck(profileId: string): Promise<void>;
   /** Renews now; single-flight per profile. */
   renew(
     profileId: string,
@@ -513,10 +519,29 @@ export function createRenewal(options: RenewalOptions): Renewal {
     await Promise.all(due);
   };
 
+  const recheck = async (profileId: string): Promise<void> => {
+    const profile = profiles.get(profileId);
+    if (!profile) return;
+    const read = await readCredential(profile.provider, profile.tokenFile);
+    observe(profileId, read);
+    const state = stateOf(profileId);
+    if (
+      leases.hasLiveLease(profileId) &&
+      read.ok &&
+      read.expiresAt !== undefined &&
+      read.expiresAt - now() <= marginOf(profile) &&
+      !inBackoff(state) &&
+      !state.needsLogin &&
+      !state.inFlight
+    )
+      void renew(profileId);
+  };
+
   return {
     credentialFor,
     upstream401,
     tick,
+    recheck: (profileId) => recheck(profileId).catch(() => {}),
     renew,
     needsLogin: () =>
       [...states]

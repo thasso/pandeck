@@ -514,6 +514,19 @@ export async function startOpenAiProfileLogin(id: string): Promise<void> {
   );
 }
 
+/**
+ * Clears a login account's unfinished login. The server refuses while this
+ * account's login is still running and it cannot end it.
+ */
+export async function clearUnfinishedProfileLogin(id: string): Promise<void> {
+  await body<{ ok: true }>(
+    await fetch(
+      `${serverHttpOrigin()}/api/credential-profiles/${encodeURIComponent(id)}/login/clear`,
+      { method: "POST", headers: authHeaders() },
+    ),
+  );
+}
+
 export function openAiProfileConnectionAction(
   status: CredentialProfileStatus,
 ): { label: string; disabled: boolean } {

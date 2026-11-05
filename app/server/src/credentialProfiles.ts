@@ -90,6 +90,8 @@ export interface CredentialProfileSummary extends CredentialProfile {
   error?: string;
   /** An OpenAI-compatible account's endpoint, without its key. */
   endpoint?: OpenAiCompatibleEndpointSummary;
+  /** An unfinished login holds this login account (`loginHolds.ts`). */
+  loginStuck?: true;
 }
 
 export const DEFAULT_OPENAI_PROFILE_ID = "default";
@@ -113,6 +115,18 @@ export function setCredentialProfileDeletedHandler(
   handler: ((id: string) => void) | undefined,
 ): void {
   credentialProfileDeletedHandler = handler;
+}
+
+let loginStuckReader: ((profile: CredentialProfile) => boolean) | undefined;
+
+/**
+ * Who says whether a login account is login-stuck (`loginHolds.ts`, which
+ * imports this module and so cannot be imported by it).
+ */
+export function setCredentialProfileLoginStuckReader(
+  reader: ((profile: CredentialProfile) => boolean) | undefined,
+): void {
+  loginStuckReader = reader;
 }
 
 const credentialProfileChangeListeners = new Set<(id: string) => void>();
@@ -325,6 +339,9 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
       : pending?.status === "error"
         ? "error"
         : "disconnected";
+  const loginStuck = loginStuckReader?.(profile)
+    ? { loginStuck: true as const }
+    : {};
   if (profile.provider === "claude") {
     const path = claudeConfigDir(profile.id);
     return {
@@ -332,6 +349,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
       status,
       health: readAccountHealth(profile.id, configured),
       ...(pending?.error ? { error: pending.error } : {}),
+      ...loginStuck,
       ...(status !== "ready"
         ? {
             setup: {
@@ -354,6 +372,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
     status,
     health: readAccountHealth(profile.id, configured),
     ...(pending?.error ? { error: pending.error } : {}),
+    ...loginStuck,
     ...(status === "connecting"
       ? {
           setup: {

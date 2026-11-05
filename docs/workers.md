@@ -1299,6 +1299,11 @@ whether it succeeded or failed. No item runs while the profile is held.
   `profiles.status {profileId, loginStuck, holdId}`, a gateway → server request
   answered `{}`, once the answer that caused it has gone out; a new hello hears
   every stuck hold again. A lost status is only logged.
+- Every end of a hold (a release, a force release, or exit evidence at a hello
+  or the minute check) re-reads the profile's token file at once, even when
+  saving the end fails: a file the login rewrote ends a sticky needs-login, and
+  a profile with a live lease whose token is due renews once. A fence ends no
+  hold.
 - Holds are kept in `holds.json` beside the other files, with the same writer
   rules: an acquire or a writer registration is saved before its answer and
   undone when saving fails; a release, a stuck hold or a fence takes effect at
@@ -1336,21 +1341,82 @@ until the gateway runs as its own process.
 - Binding a session and revoking are best-effort and only logged. A revocation
   the gateway applied but could not save holds in its memory until a later save
   or the next boot's reconcile.
-- **Login holds** (unused until the login flows wire them). The link mints a
+- **Login holds.** With the switch on, both login flows hold their profile
+  through `loginHolds.ts`. Only an account whose kind holds a login
+  (`ACCOUNT_KINDS[kind].credential` is `login`) takes a hold or shows the
+  login-stuck state; an OpenAI-compatible account never does. The link mints a
   hold id and `acquireLoginHold` waits for ready (10 seconds) and for the lane;
   a hold waiting for the lane is ordered after the queue but holds up no grant,
   profile change or other request. `registerLoginWriter` sends the writer's pid
   and start time, `releaseLoginHold` is best-effort, and the link records each
-  profile's latest `profiles.status` for the login-stuck state. The login flows
-  map what these answer to existing texts only. `login_stuck` shows the
-  account's login-stuck state in Settings → Accounts with U7's text ("The last
-  login for `<name>` didn't finish, so Pandeck has paused renewing this
-  account's token. If no login is still running, choose Clear the unfinished
-  login.") and the Clear action, which force-releases the named hold.
-  `hold_exists` shows nothing new: each login flow is single-flight per profile,
-  so a second start attaches to the running login. A link that is not ready, has
-  ended or gets any other failure answers "Pandeck can't start this login while
-  the credential gateway is unreachable; try again shortly."
+  profile's latest `profiles.status` for the login-stuck state.
+  - **Order.** The Claude login (`claudeLoginTerminal.ts`) takes the hold before
+    it spawns `claude auth login`, and names the child as the hold's writer
+    right after the spawn. It forwards no input until the gateway acknowledged
+    the writer: earlier input is held in order, up to 64,000 characters (more is
+    dropped), and a stop discards it, so a late acknowledgement sends nothing. A
+    second viewer attaches to the running login. The pi login takes the hold
+    before it creates its runtime and starts the device-code login.
+  - **Release** comes only once the writer ended: the Claude child's `close`, or
+    pi's provider login settling, never pi's UI timeout.
+  - **Stopping a Claude login.** A timeout, cancel, server stop, failed writer
+    registration or input error sends SIGTERM, then SIGKILL after 5 seconds;
+    deleting the profile or Clear sends SIGKILL at once. The run ends, and
+    releases, on the child's `close`; a spawn without a pid releases at once.
+    When the server process exits, every unclosed child gets SIGKILL. The same
+    stop path runs with the switch off, without a hold: the texts are unchanged,
+    but a stopped login reports its end only on `close`.
+  - **Refusals** map to existing texts only. A `login_stuck` refusal naming its
+    hold marks the account login-stuck, and the login starts nothing.
+    `hold_exists`, a `login_stuck` refusal without a hold, and a link that is
+    not ready, has ended or gets any other failure answer "Pandeck can't start
+    this login while the credential gateway is unreachable; try again shortly."
+  - **Login stuck.** An account is login-stuck while the gateway's latest
+    `profiles.status` says so, or after a `login_stuck` refusal until a status
+    ends that hold, a Clear, a held acquire or the profile's deletion. Its
+    summary carries `loginStuck: true`, each change broadcasts
+    `accountHealthChanged` once, and Settings → Accounts shows U7's text ("The
+    last login for `<name>` didn't finish, so Pandeck has paused renewing this
+    account's token. If no login is still running, choose Clear the unfinished
+    login.") with "Clear the unfinished login" in place of Connect. A login
+    started on it leaves no login state on the account, so the account's text
+    ends with the flag; the Claude login dialog shows the text too.
+  - **Clear** (`POST /api/credential-profiles/<id>/login/clear`, answering
+    `{ok: true}` or a 400 `{error}`) is the operator's assertion that no login
+    runs. With no stuck hold, or with the switch off, it does nothing. A hold
+    whose login this server runs is never force-released: a Claude login is
+    stopped with SIGKILL and releases on `close`, and a pi login refuses with
+    its own "OpenAI device-code login timed out. The active login will finish
+    before another can start." Any other hold is force-released (`unknown_hold`
+    counts as done). A failure answers the unreachable text above.
+  - **Known limits.**
+    - A pi login whose provider never settles keeps its hold: Clear refuses it
+      while this server runs it, and a restart ends it.
+    - In development, a `claude` wrapper on `PATH` that does not `exec`
+      registers the wrapper's pid.
+    - A `login_stuck` refusal for another boot's hold that later ends by
+      evidence leaves the account login-stuck until Clear or another login.
+    - Deletion's SIGKILL precedes the removal of the profile's files without
+      waiting for `close`.
+    - With a failed in-process link, every login refuses with the unreachable
+      text until the server restarts.
+    - A login that ends a sticky needs-login is renewed once at once, though its
+      token is fresh.
+    - A failed Clear reuses the unreachable text.
+    - Input past the 64,000 characters held before the acknowledgement is
+      dropped.
+    - Whether the CLI's own login save takes the refresh lock is not
+      established; the save is atomic and 0600 without the compare-and-swap. The
+      hold keeps the gateway from racing it; a terminal CLI on the same
+      directory is U9.
+    - A `browser` setting in the CLI's own config, or another callback path,
+      could let a login complete without the pasted code: the flow pins
+      `BROWSER=false`, but what the CLI's opener reads first is not determined.
+      Renewal stays fenced by the hold; an owner that dies before naming its
+      writer leaves the hold stuck until Clear. The Claude engine contract runs
+      the real login offline with no input: only `BROWSER`'s value gets the
+      login URL, no localhost callback is printed, a `browser` key in
+      `settings.json` or `.claude.json` changes neither, and SIGTERM ends it.
 - **Claude engines use the lease.** The grant answers the lease token, and the
   open sends it with the gateway's URL as `engine.open`'s `gateway`. A link with
   no running gateway refuses the open before any grant. The Claude factory
@@ -1502,9 +1568,9 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
 - **U9.** `claude-default`'s `~/.claude` is renewed like any profile. The user's
   terminal CLI uses the same locks and compare-and-swap, so the two serialise
   and adopt each other's tokens.
-- **Interim writers** (until G5b and G5c): a login flow, guarded only by the
-  compare-and-swaps; the server's pi runtimes' catalog refresh, under pi's lock
-  with its re-check; and the user's terminal CLI (U9).
+- **Interim writers** (until G5c): the server's pi runtimes' catalog refresh,
+  under pi's lock with its re-check; and the user's terminal CLI (U9). A login
+  flow is none with the switch on: its hold fences renewal (Login holds).
 - **Tests never reach a token host.** The Claude endpoint override is a test
   seam that only tests and the Bun probe set (`architecture.test.ts` pins every
   production mention); `startGatewayLinkForTests` points it at a closed loopback
@@ -1515,8 +1581,8 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   - A rotation race outside the lock protocol, such as the user's CLI with
     another `CLAUDE_CONFIG_DIR`, can still end in needs-login.
   - pi's own in-place `auth.json` write remains for the server's pi runtimes
-    (until G5c), logins (G5b) and switch-off engines; a crash during one can
-    truncate the file, as today.
+    (until G5c), logins (under their hold) and switch-off engines; a crash
+    during one can truncate the file, as today.
   - A renewal whose request succeeded but whose commit is refused (a lost lock,
     a changed entry, a deleted profile) loses that rotation; a provider that
     invalidates the old refresh token may then need a login.
@@ -1813,10 +1879,10 @@ requests through it with its lease, both under the engine-version guard. An
 OpenAI-compatible account is refused under the switch until Task-1373 PR2;
 `/compat` and its push stay in the gateway, unused. Claude and pi one-shots,
 Claude usage, and Codex usage, reset credits and consume go through it on a
-server lease per profile. It reads token files and never writes or refreshes
-them. The writer lane and login holds have landed, unused until the login flows
-hold their profile (G5): no hold is created and no lane item runs yet. Renewal,
-engine routing and its own service unit come in later slices.
+server lease per profile. It renews tokens in each profile's writer lane
+(Renewal), and both login flows hold their profile while their writer may write
+its token file (Login holds); a stuck hold shows in Settings → Accounts with
+Clear. Engine routing and its own service unit come in later slices.
 
 ## Open questions
 

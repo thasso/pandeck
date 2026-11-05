@@ -455,6 +455,7 @@ export class AccountHealthStore {
 }
 
 let store: AccountHealthStore | undefined;
+let announceHealth: (() => void) | undefined;
 export function initializeAccountHealth(host: {
   broadcast: (message: ServerMessage) => void;
   push: HealthDeps["push"];
@@ -472,12 +473,18 @@ export function initializeAccountHealth(host: {
     push: host.push,
   });
   host.profiles();
-  store.subscribeHealth(() => host.broadcast({ type: "accountHealthChanged" }));
+  announceHealth = () => host.broadcast({ type: "accountHealthChanged" });
+  store.subscribeHealth(announceHealth);
   store.subscribe((accounts) =>
     host.broadcast({ type: "accountLoginAlerts", accounts }),
   );
   host.subscribeChanges(() => host.profiles());
   host.subscribeDeleted((id) => store!.forget(id));
+}
+
+/** Tells every browser an account's card changed, as a health change does. */
+export function announceAccountHealthChanged(): void {
+  announceHealth?.();
 }
 
 export function withAccountHealthProfiles(

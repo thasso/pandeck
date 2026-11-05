@@ -33,7 +33,11 @@ import {
   setAppNotificationBroadcaster,
   deliverAppNotification,
 } from "./webPush.ts";
-import { initializeAccountHealth } from "./accountHealth.ts";
+import {
+  announceAccountHealthChanged,
+  initializeAccountHealth,
+} from "./accountHealth.ts";
+import { setLoginHoldAnnouncer } from "./loginHolds.ts";
 import {
   listCredentialProfiles,
   credentialProfileHasCredential,
@@ -225,6 +229,7 @@ class SessionHub {
       subscribeChanges: subscribeCredentialProfileChanges,
       subscribeDeleted: subscribeCredentialProfileDeleted,
     });
+    setLoginHoldAnnouncer(announceAccountHealthChanged);
     // The usage cache never fetches headlessly, so it asks the hub whether any
     // browser is attached at all before doing background work.
     setUsageBroadcaster({

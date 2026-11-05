@@ -45,6 +45,10 @@ import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
+import {
+  clearUnfinishedProfileLogin,
+  followLoginHoldStatuses,
+} from "./loginHolds.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
 import { assertPromptAssets } from "./promptAssets.ts";
@@ -1008,6 +1012,30 @@ async function handleRequest(
     return;
   }
 
+  // Clear the unfinished login (U7): ok when nothing is stuck or the switch
+  // is off; a failure answers U7's login text, or pi's own while it runs.
+  if (
+    requestUrl.pathname.match(
+      /^\/api\/credential-profiles\/[A-Za-z0-9_-]+\/login\/clear$/,
+    )
+  ) {
+    if (req.method !== "POST") {
+      res.writeHead(405, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const profileId = requestUrl.pathname.split("/")[3] ?? "";
+    try {
+      await clearUnfinishedProfileLogin(profileId);
+      res.writeHead(200, corsJsonHeaders(req));
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: errorText(err) }));
+    }
+    return;
+  }
+
   if (requestUrl.pathname === "/api/usage/claude") {
     if (req.method !== "GET") {
       res.writeHead(405, corsJsonHeaders(req));
@@ -1895,12 +1923,15 @@ startInProcessWorker();
 // a draining turn; it dies with the process. OpenAI-compatible accounts do
 // not run with it yet, so no endpoint is pushed; the gateway renews Codex
 // logins through pi's refresh passed in here.
-if (GATEWAY_ENABLED)
+if (GATEWAY_ENABLED) {
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
     renewCodex: renewCodexCredential,
   });
+  // Settings hears of every login-stuck change from the link's start.
+  followLoginHoldStatuses();
+}
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.
 startChildOomScoreRelease();
