@@ -291,13 +291,13 @@ export function createRenewal(options: RenewalOptions): Renewal {
       : { kind: "failed", code: result.code };
   };
 
-  /** One renewal attempt in the lane, with what the file was at its start. */
+  /** One renewal attempt in the lane, from `began`, the file at its start. */
   const renewOnce = async (
     profile: GatewayProfile,
+    began: CredentialRead,
     force: boolean,
     rejectedToken: string | undefined,
   ): Promise<{ outcome: RenewalOutcome; began: CredentialRead }> => {
-    const began = await readCredential(profile.provider, profile.tokenFile);
     observe(profile.id, began);
     if (profile.provider === "openai-codex") {
       if (!began.ok && began.problem === "missing")
@@ -321,11 +321,16 @@ export function createRenewal(options: RenewalOptions): Renewal {
     };
   };
 
-  /** Applies an outcome to the profile's state. */
-  const settle = async (
+  /**
+   * Applies an outcome to the profile's state. A rejection or a backoff binds
+   * to `examined`, the file the attempt started from, never to one read after
+   * it: a login that lands meanwhile is a file the attempt never saw.
+   */
+  const settle = (
     profile: GatewayProfile,
     outcome: RenewalOutcome,
-  ): Promise<void> => {
+    examined: FileIdentity | undefined,
+  ): void => {
     const state = stateOf(profile.id);
     switch (outcome.kind) {
       case "renewed":
@@ -341,15 +346,12 @@ export function createRenewal(options: RenewalOptions): Renewal {
           BACKOFF_MAX_MS,
         );
         state.backoffUntil = now() + state.backoffMs;
-        const read = await readCredential(profile.provider, profile.tokenFile);
-        state.backoffIdentity = read.identity;
+        state.backoffIdentity = examined;
         break;
       }
-      case "rejected": {
-        const read = await readCredential(profile.provider, profile.tokenFile);
-        state.needsLogin = { identity: read.identity };
+      case "rejected":
+        state.needsLogin = { identity: examined };
         break;
-      }
       case "no-login":
         state.noLogin = true;
         break;
@@ -366,11 +368,15 @@ export function createRenewal(options: RenewalOptions): Renewal {
   ): Promise<RenewalOutcome> => {
     let profile: GatewayProfile | undefined;
     let outcome: RenewalOutcome;
+    // The file the attempt that decided `outcome` started from.
+    let examined: FileIdentity | undefined;
     try {
       outcome = await lane.run(profileId, async () => {
         profile = profiles.get(profileId);
         if (!profile) return { kind: "skipped" } as const;
-        const first = await renewOnce(profile, force, rejectedToken);
+        const began = await readCredential(profile.provider, profile.tokenFile);
+        examined = began.identity;
+        const first = await renewOnce(profile, began, force, rejectedToken);
         if (first.outcome.kind !== "rejected") return first.outcome;
         // A login or another refresher may have changed the file meanwhile.
         const after = await readCredential(profile.provider, profile.tokenFile);
@@ -380,14 +386,16 @@ export function createRenewal(options: RenewalOptions): Renewal {
             after.ok &&
             first.began.refreshToken !== after.refreshToken);
         if (!changed) return first.outcome;
-        return (await renewOnce(profile, force, rejectedToken)).outcome;
+        const again = await readCredential(profile.provider, profile.tokenFile);
+        examined = again.identity;
+        return (await renewOnce(profile, again, force, rejectedToken)).outcome;
       });
     } catch (err) {
       if (err instanceof LaneHeldError) return { kind: "held" };
       outcome = { kind: "failed", code: "error" };
     }
     if (!profile || outcome.kind === "skipped") return outcome;
-    await settle(profile, outcome);
+    settle(profile, outcome, examined);
     logOutcome(profile, outcome);
     return outcome;
   };

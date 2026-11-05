@@ -671,3 +671,48 @@ test("AC20: a profile disabled after its grants still renews for its engine and 
     `Bearer ${RENEWED}-access-2`,
   ]);
 });
+
+test.each([
+  ["openai-codex", "its profile is removed"],
+  ["claude", "an account switch revokes it"],
+] as const)(
+  "F001: a %s request waiting on a renewal is refused, not sent, when %s meanwhile",
+  async (provider, _how) => {
+    const gw = await gateway();
+    const p =
+      provider === "claude"
+        ? await claudeProfile("wait-a", Date.now() - MIN)
+        : await codexProfile("wait-b", Date.now() - MIN);
+    const connection = await ready(gw, [p]);
+    const token = await grant(connection, engine(p.id));
+    let entered!: () => void;
+    let resume!: () => void;
+    const renewing = new Promise<void>((resolve) => (entered = resolve));
+    const gate = new Promise<void>((resolve) => (resume = resolve));
+    const renewClaude = tokenRespond;
+    tokenRespond = (seen, res) => {
+      entered();
+      void gate.then(() => renewClaude(seen, res));
+    };
+    const renewCodex = portImpl;
+    portImpl = async (...args) => {
+      entered();
+      await gate;
+      return renewCodex(...args);
+    };
+    const waited = forward(gw, p, token);
+    await renewing;
+    if (provider === "claude")
+      gw.leases.revokeWhere(() => true, "account-switch");
+    else await sync(connection, []);
+    resume();
+    const reply = await waited;
+    assert.equal(reply.status, 401);
+    assert.deepEqual(reply, await forward(gw, p, token), "the revoked refusal");
+    assert.equal(
+      (provider === "claude" ? upstreams.anthropic : upstreams.chatgpt).length,
+      0,
+      "nothing reached the upstream",
+    );
+  },
+);

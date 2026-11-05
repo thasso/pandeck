@@ -23,7 +23,7 @@ import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
 import type { CompatTarget, CompatUpstream } from "./compatUpstream.ts";
-import type { LeaseProvider, LeaseTable } from "./leases.ts";
+import type { LeaseCheck, LeaseProvider, LeaseTable } from "./leases.ts";
 import {
   refusalResponse,
   type Refusal,
@@ -215,9 +215,8 @@ export function createForwarder(deps: ForwarderDeps): {
   ): Promise<void> {
     if (!route) return refuse(res, "claude", { case: "unknown-prefix" }, done);
     const shape = shapeOf(route);
-    const lease = leases.verify(bearerOf(req.headers.authorization));
-    if (!lease.ok)
-      return lease.refusal === "revoked"
+    const refuseLease = (lease: Extract<LeaseCheck, { ok: false }>): void =>
+      lease.refusal === "revoked"
         ? refuse(
             res,
             shape,
@@ -226,6 +225,8 @@ export function createForwarder(deps: ForwarderDeps): {
             lease.leaseId,
           )
         : refuse(res, shape, { case: "unknown-lease" }, done);
+    const lease = leases.verify(bearerOf(req.headers.authorization));
+    if (!lease.ok) return refuseLease(lease);
     const { leaseId, binding } = lease;
     const { upstream } = route;
     if (upstream.kind === "compat") {
@@ -259,6 +260,9 @@ export function createForwarder(deps: ForwarderDeps): {
       return refuse(res, shape, { case: "forbidden" }, done, leaseId);
     // A renewal may come first; a dead login is refused without upstream.
     const credential = await deps.renewal.credentialFor(binding);
+    // A revocation that arrived while it waited takes effect now.
+    const still = leases.verify(bearerOf(req.headers.authorization));
+    if (!still.ok) return refuseLease(still);
     if (!credential.ok)
       return refuse(res, shape, credential.refusal, done, leaseId);
     const { read } = credential;

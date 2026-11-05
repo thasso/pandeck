@@ -5,7 +5,14 @@
  * `platform.claude.com`; Codex to a fake port. Every token is a fake.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, test } from "vitest";
@@ -74,6 +81,8 @@ interface Rig {
     write?: () => Promise<void>;
   };
   lockSleep: { hook?: () => Promise<void> };
+  /** Runs as the writer lane is released, before the outcome settles. */
+  afterLane: { hook?: () => Promise<void> };
 }
 
 function rig(): Rig {
@@ -81,7 +90,15 @@ function rig(): Rig {
   const holds = new HoldTable({ now: () => clock.now });
   const profiles = new ProfileRegistry();
   const leases = new LeaseTable({ now: () => clock.now });
-  const lane = new WriterLane(holds, (id) => profiles.get(id)?.provider);
+  const writerLane = new WriterLane(holds, (id) => profiles.get(id)?.provider);
+  const afterLane: Rig["afterLane"] = {};
+  const lane: Pick<WriterLane, "run"> = {
+    run: async <T>(id: string, fn: () => Promise<T>): Promise<T> => {
+      const result = await writerLane.run(id, fn);
+      await afterLane.hook?.();
+      return result;
+    },
+  };
   const reports: [string, boolean][] = [];
   const lines: string[] = [];
   rigLines.push(lines);
@@ -118,6 +135,7 @@ function rig(): Rig {
     portCalls,
     port,
     lockSleep,
+    afterLane,
   };
 }
 
@@ -485,4 +503,112 @@ test("AC6: an unregistered profile is skipped, and renewals are single-flight", 
   );
   assert.deepEqual(all, Array(5).fill({ kind: "renewed" }));
   assert.equal(upstreams.platform.length, 1);
+});
+
+/** A login the way the CLI and pi land one: a new file renamed over the old. */
+async function landLogin(file: string, write: (temp: string) => Promise<void>) {
+  const temp = `${file}.login`;
+  await write(temp);
+  await rename(temp, file);
+}
+
+const REJECTED_400: UpstreamResponder = (_seen, res) => {
+  res.writeHead(400, { "content-type": "application/json" });
+  res.end('{"error":"invalid_grant"}');
+};
+
+test.each(["claude", "openai-codex"] as const)(
+  "F002: a %s login landing as a rejected renewal settles is not condemned by it",
+  async (provider) => {
+    const r = rig();
+    const file =
+      provider === "claude"
+        ? await claudeFile(START + MIN)
+        : await codexFile(START + MIN);
+    register(r, "p", provider, file);
+    if (provider === "claude") respond = REJECTED_400;
+    else r.port.next = { ok: false, kind: "rejected", code: "400" };
+    r.afterLane.hook = async () => {
+      delete r.afterLane.hook;
+      respond = rotatingClaudeTokens();
+      r.port.next = { ok: true };
+      await landLogin(file, (temp) =>
+        provider === "claude"
+          ? writeClaude(temp, START + 600 * MIN, "fake-renewal-login-access")
+          : writeCodex(temp, START + 600 * MIN, "fake-renewal-login-access"),
+      );
+    };
+    assert.deepEqual(await r.renewal.renew("p"), { kind: "rejected" });
+    const read = await r.renewal.credentialFor({
+      profileId: "p",
+      provider,
+      tokenFile: file,
+    });
+    assert.equal(read.ok, true, "the new login was never refreshed or refused");
+    await r.renewal.renew("p");
+    assert.deepEqual(r.renewal.needsLogin(), []);
+    assert.deepEqual(r.reports.at(-1), ["p", false]);
+  },
+);
+
+test("F002: a second rejected attempt binds its own file, and a later login clears it", async () => {
+  const r = rig();
+  const file = await claudeFile(START + MIN);
+  register(r, "p", "claude", file);
+  let calls = 0;
+  respond = (seen, res) => {
+    calls += 1;
+    if (calls > 1) return REJECTED_400(seen, res);
+    void landLogin(file, (temp) =>
+      writeClaude(
+        temp,
+        START + MIN,
+        "fake-claude-cli-access",
+        "fake-claude-cli-refresh",
+      ),
+    ).then(() => REJECTED_400(seen, res));
+  };
+  assert.deepEqual(await r.renewal.renew("p"), { kind: "rejected" });
+  assert.equal(calls, 2, "retried once for the changed file, not again");
+  const binding = {
+    profileId: "p",
+    provider: "claude",
+    tokenFile: file,
+  } as const;
+  const refused = await r.renewal.credentialFor(binding);
+  assert.deepEqual(
+    refused.ok ? undefined : refused.refusal,
+    { case: "needs-login", name: "Account p" },
+    "the second attempt's file stays refused",
+  );
+  await r.renewal.tick();
+  assert.equal(calls, 2, "sticky: the tick skips it");
+  respond = rotatingClaudeTokens();
+  await landLogin(file, (temp) =>
+    writeClaude(temp, START + 600 * MIN, "fake-renewal-login-access"),
+  );
+  assert.equal((await r.renewal.credentialFor(binding)).ok, true);
+  await r.renewal.renew("p");
+  assert.deepEqual(r.renewal.needsLogin(), []);
+});
+
+test("F002: a failed renewal's backoff binds the file it examined, so a login landing as it settles ends it", async () => {
+  const r = rig();
+  const file = await claudeFile(START + MIN);
+  register(r, "p", "claude", file);
+  respond = (_seen, res) => {
+    res.writeHead(503).end();
+  };
+  r.afterLane.hook = async () => {
+    delete r.afterLane.hook;
+    respond = rotatingClaudeTokens();
+    await landLogin(file, (temp) =>
+      writeClaude(temp, START + MIN, "fake-renewal-login-access"),
+    );
+  };
+  assert.deepEqual(await r.renewal.renew("p"), { kind: "failed", code: "503" });
+  await r.renewal.tick();
+  assert.equal(upstreams.platform.length, 2, "the new login is not in backoff");
+  assert.equal(await accessOf(file), "fake-claude-renewed-access-1");
+  assert.deepEqual(r.reports, []);
 });
