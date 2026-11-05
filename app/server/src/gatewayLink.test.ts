@@ -3,9 +3,12 @@
  * its boot order, profile changes reaching the gateway in order, an
  * unavailable gateway failing grants with U7's text, and the login hold calls
  * across link lifetimes, and a stuck hold's Clear through the login-hold seam
- * (G5b AC9 (c), AC10). Fake profiles under the setup's temp `DATA_DIR` and a
- * temp `HOME`; a fake TLS upstream stands in for ChatGPT. Every hold's owner
- * is this process, so its holds are observed through a fake probe.
+ * (G5b AC9 (c), AC10). Each OpenAI-compatible account's endpoint and key are
+ * pushed per account, in order with its profile changes (T1373 AC8, AC13,
+ * AC14, AC16). Fake profiles under the setup's temp `DATA_DIR` and a temp
+ * `HOME`; a fake TLS upstream stands in for ChatGPT and fake loopback
+ * endpoints for compatible servers. Every hold's owner is this process, so its
+ * holds are observed through a fake probe.
  */
 import assert from "node:assert/strict";
 import {
@@ -25,12 +28,12 @@ const home = mkdtempSync(join(tmpdir(), "gateway-link-home-"));
 process.env.HOME = home;
 
 const profiles = await import("./credentialProfiles.ts");
+const { readOpenAiCompatibleEndpoint } =
+  await import("./openAiCompatibleAccounts.ts");
 const config = await import("./config.ts");
 const { DEFAULT_WORKER_ID } = await import("./workers/placement.ts");
 const {
-  GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT,
   GATEWAY_LOGIN_UNAVAILABLE_TEXT,
-  GatewayAccountKindUnsupportedError,
   GATEWAY_UNAVAILABLE_TEXT,
   LoginHeldError,
   installedGatewayLink,
@@ -41,6 +44,7 @@ const { startGatewayLinkForTests } = await import("./test/gatewayLink.ts");
 const {
   COMPAT_KEY_A,
   COMPAT_KEY_B,
+  COMPAT_KEY_C,
   endChild,
   fakeProcesses,
   spawnIdleChild,
@@ -67,7 +71,8 @@ const { analyzeProviderError, isLoginDeath, runFailureFacts } =
 type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 type GatewayLinkOptions = import("./gatewayLink.ts").GatewayLinkOptions;
 type GatewayOptions = import("./gateway/gateway.ts").GatewayOptions;
-type GatewayCompatSource = NonNullable<GatewayLinkOptions["compat"]>;
+type FakeCompatEndpoint =
+  import("./test/gatewayFixtures.ts").FakeCompatEndpoint;
 
 // Synthetic fixture values; none is a real credential.
 const FAKE_ACCESS = "fake-codex-access";
@@ -691,36 +696,20 @@ test("AC22: every link lifetime is a new boot; an earlier boot's hold stays whil
   }
 });
 
-/** A compatible-settings source the test drives: `set` changes it and notifies. */
-function compatSource(initial: ReturnType<GatewayCompatSource["current"]>) {
-  let value = initial;
-  const listeners = new Set<() => void>();
-  return {
-    source: {
-      current: () => value,
-      subscribe(listener) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    } satisfies GatewayCompatSource,
-    listeners,
-    set(next: ReturnType<GatewayCompatSource["current"]>) {
-      value = next;
-      for (const listener of [...listeners]) listener();
-    },
-  };
-}
-
-/** A compatible chat request through the link's gateway. */
+/** A compatible chat request through the link's gateway, under `basePath`. */
 async function compatRequest(
   gateway: { url: string },
   token: string,
+  basePath = "/v1",
 ): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${gateway.url}/compat/v1/chat/completions`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}` },
-    body: "{}",
-  });
+  const response = await fetch(
+    `${gateway.url}/compat${basePath}/chat/completions`,
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: "{}",
+    },
+  );
   return { status: response.status, text: await response.text() };
 }
 
@@ -730,100 +719,374 @@ const controlOrder = () =>
     .filter((line) => line.startsWith("control "))
     .map((line) => line.split(/[ :]/)[1]);
 
-test("AC13: the boot pushes the compatible endpoint before ready; changes follow on the queue, after an earlier profile change, until close", async () => {
+/** The authorizations of the chat requests `endpoint` got; discovery is not one. */
+const forwarded = (endpoint: FakeCompatEndpoint) =>
+  endpoint.seen
+    .filter((seen) => seen.method === "POST")
+    .map((seen) => seen.authorization);
+
+/**
+ * A compatible account on `baseUrl`, with `apiKey` when given, its models
+ * discovered by the direct path (Settings' Test) so it is ready to run.
+ */
+async function compatibleAccount(
+  name: string,
+  baseUrl: string,
+  apiKey?: string,
+): Promise<string> {
+  const id = profiles.createCredentialProfile({
+    provider: "openai-compatible",
+    name,
+  }).id;
+  profiles.patchOpenAiCompatibleEndpoint(id, {
+    baseUrl,
+    ...(apiKey ? { apiKey } : {}),
+  });
+  const { status } = await profiles.testOpenAiCompatibleProfile(id);
+  assert.equal(status.ok, true, status.message);
+  return id;
+}
+
+/** `compat-unset`'s marked 503 in the OpenAI shape. */
+function assertUnset(reply: { status: number; text: string }): void {
+  assert.equal(reply.status, 503, reply.text);
+  const message = JSON.parse(reply.text).error.message;
+  assert.equal(message, refusalText({ case: "compat-unset" }));
+  assert.ok(message.startsWith("Pandeck gateway: "));
+}
+
+/** No log line holds a key, an endpoint's URL or its port. */
+function assertNoLeak(values: string[]): void {
+  for (const line of lines)
+    for (const value of values)
+      assert.ok(!line.includes(value), `a log line leaks: ${line}`);
+}
+
+test("AC8: the boot syncs compatible accounts tokenless and pushes each one's pair before ready; one not ready gets a clear", async () => {
   const endpoint = await startFakeCompatEndpoint(["m"], "compatible reply");
+  const ids: string[] = [];
   try {
-    const driven = compatSource({
+    const keyed = await compatibleAccount(
+      "Link keyed",
+      endpoint.baseUrl,
+      COMPAT_KEY_A,
+    );
+    ids.push(keyed);
+    const keyless = await compatibleAccount("Link keyless", endpoint.baseUrl);
+    ids.push(keyless);
+    // A URL but no models yet: not ready to run.
+    const unready = profiles.createCredentialProfile({
+      provider: "openai-compatible",
+      name: "Link unready",
+    }).id;
+    ids.push(unready);
+    profiles.patchOpenAiCompatibleEndpoint(unready, {
       baseUrl: endpoint.baseUrl,
-      apiKey: COMPAT_KEY_A,
     });
-    const booted = link({ compat: driven.source });
+
+    const dir = stateDir();
+    const booted = link({ stateDir: dir });
     assert.equal(await booted.ready, true, lines.join("\n"));
-    assert.deepEqual(controlOrder(), [
+    const order = controlOrder();
+    assert.deepEqual(order.slice(0, 3), [
       CONTROL_METHODS.hello,
       CONTROL_METHODS.syncProfiles,
       CONTROL_METHODS.reconcileWorker,
-      CONTROL_METHODS.compatSet,
     ]);
-    const pushed = lines.findIndex((line) =>
-      line.startsWith(`control ${CONTROL_METHODS.compatSet}: ok`),
-    );
-    const ready = lines.findIndex((line) => line.startsWith("ready: "));
-    assert.ok(pushed >= 0 && pushed < ready, lines.join("\n"));
-
-    const { token } = await booted.grantEngineLease({
-      workerId: undefined,
-      sessionId: "compat-session",
-      profileId: profiles.DEFAULT_OPENAI_PROFILE_ID,
-    });
-    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
-
-    // A profile change, then a rotation: queued in that order, and the
-    // rotation sends the value it had when it was notified.
-    const from = controlOrder().length;
-    codexProfile("Link compat");
-    driven.set({ baseUrl: endpoint.baseUrl, apiKey: COMPAT_KEY_B });
-    await until(() => controlOrder().length >= from + 2);
-    assert.deepEqual(controlOrder().slice(from), [
-      CONTROL_METHODS.upsertProfile,
-      CONTROL_METHODS.compatSet,
-    ]);
-    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
+    const pushes = lines.filter((line) => line.startsWith("control compat."));
     assert.deepEqual(
-      endpoint.seen.map((seen) => seen.authorization),
-      [`Bearer ${COMPAT_KEY_A}`, `Bearer ${COMPAT_KEY_B}`],
+      pushes.sort(),
+      [
+        `control ${CONTROL_METHODS.compatClear} (profile ${unready}): ok`,
+        `control ${CONTROL_METHODS.compatSet} (profile ${keyed}): ok`,
+        `control ${CONTROL_METHODS.compatSet} (profile ${keyless}): ok`,
+      ].sort(),
+    );
+    assert.equal(order.length, 6, order.join(","));
+    const lastPush = Math.max(...pushes.map((line) => lines.indexOf(line)));
+    const ready = lines.findIndex((line) => line.startsWith("ready: "));
+    assert.ok(lastPush < ready, lines.join("\n"));
+
+    for (const id of ids)
+      assert.deepEqual(
+        (registry(dir) as { id: string }[]).find((p) => p.id === id),
+        {
+          id,
+          provider: "openai-compatible",
+          name: profiles.credentialProfileById(id)!.name,
+          enabled: true,
+        },
+      );
+    assert.ok(
+      !readFileSync(join(dir, "profiles.json"), "utf8").includes(COMPAT_KEY_A),
     );
 
-    // None configured: a clear, and 503 again.
-    driven.set(undefined);
-    await until(() => controlOrder().at(-1) === CONTROL_METHODS.compatClear);
-    const unset = await compatRequest(booted.gateway!, token);
-    assert.equal(unset.status, 503);
+    const lease = async (profileId: string) =>
+      (
+        await booted.grantEngineLease({
+          workerId: undefined,
+          sessionId: `s-${profileId}`,
+          profileId,
+        })
+      ).token;
     assert.equal(
-      JSON.parse(unset.text).error.message,
-      refusalText({ case: "compat-unset" }),
+      (await compatRequest(booted.gateway!, await lease(keyed))).status,
+      200,
     );
-
-    await booted.close();
-    assert.equal(driven.listeners.size, 0, "close unsubscribes");
-
-    // A source with nothing configured at boot pushes a clear.
-    lines = [];
-    const empty = compatSource(undefined);
-    const cleared = link({ compat: empty.source });
-    assert.equal(await cleared.ready, true);
-    assert.equal(controlOrder().at(-1), CONTROL_METHODS.compatClear);
-    for (const line of lines)
-      for (const value of [COMPAT_KEY_A, COMPAT_KEY_B, endpoint.baseUrl])
-        assert.ok(!line.includes(value), `a log line leaks: ${line}`);
+    assert.equal(
+      (await compatRequest(booted.gateway!, await lease(keyless))).status,
+      200,
+    );
+    assert.deepEqual(forwarded(endpoint), [
+      `Bearer ${COMPAT_KEY_A}`,
+      // A keyless account forwards pi's placeholder, as the direct path does.
+      "Bearer none",
+    ]);
+    assertUnset(await compatRequest(booted.gateway!, await lease(unready)));
+    assert.equal(forwarded(endpoint).length, 2, "the unset pair sends nothing");
+    // AC14: the gateway reports no login state for a compatible account.
+    for (const id of ids) assert.equal(booted.credentialStatus(id), undefined);
+    assertNoLeak([COMPAT_KEY_A, endpoint.baseUrl]);
   } finally {
+    for (const id of ids) profiles.deleteCredentialProfile(id);
     await endpoint.close();
   }
 });
 
-test("AC14: a push the gateway refuses is logged by its code alone and leaves the link ready, Codex granted and /compat at 503", async () => {
-  const refusedUrl = "ftp://compat.test/v1";
-  const driven = compatSource({ baseUrl: refusedUrl, apiKey: COMPAT_KEY_A });
-  const booted = link({ compat: driven.source });
-  assert.equal(await booted.ready, true, lines.join("\n"));
-  assert.ok(
-    lines.includes(`${CONTROL_METHODS.compatSet}: invalid_params`),
-    lines.join("\n"),
+test("AC8: a rotation, URL edit or rename pushes upsert then set; disabling keeps the pair; deletion removes, revokes and pushes nothing", async () => {
+  const first = await startFakeCompatEndpoint(["m"], "first reply");
+  const second = await startFakeCompatEndpoint(["m"], "second reply");
+  const id = await compatibleAccount(
+    "Link edited",
+    first.baseUrl,
+    COMPAT_KEY_A,
   );
-  const { token } = await booted.grantEngineLease({
-    workerId: undefined,
-    sessionId: "compat-refused",
-    profileId: profiles.DEFAULT_OPENAI_PROFILE_ID,
+  try {
+    const booted = link();
+    assert.equal(await booted.ready, true, lines.join("\n"));
+    const { token } = await booted.grantEngineLease({
+      workerId: undefined,
+      sessionId: "s-edited",
+      profileId: id,
+    });
+    const server = await booted.serverAccess(id);
+    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
+
+    /** Runs `change`, then waits for `methods` to follow it, in order. */
+    const pushed = async (change: () => unknown, methods: string[]) => {
+      const from = controlOrder().length;
+      await change();
+      await until(() => controlOrder().length >= from + methods.length);
+      assert.deepEqual(controlOrder().slice(from), methods);
+    };
+    const upsertSet = [
+      CONTROL_METHODS.upsertProfile,
+      CONTROL_METHODS.compatSet,
+    ];
+
+    await pushed(
+      () =>
+        profiles.patchOpenAiCompatibleEndpoint(id, { apiKey: COMPAT_KEY_B }),
+      upsertSet,
+    );
+    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
+    assert.deepEqual(forwarded(first), [
+      `Bearer ${COMPAT_KEY_A}`,
+      `Bearer ${COMPAT_KEY_B}`,
+    ]);
+
+    // A new URL starts with no models: not ready, so its pair is cleared
+    // until Test rediscovers them. A new origin needs its key in the edit.
+    await pushed(
+      () =>
+        profiles.patchOpenAiCompatibleEndpoint(id, {
+          baseUrl: second.baseUrl,
+          apiKey: COMPAT_KEY_C,
+        }),
+      [CONTROL_METHODS.upsertProfile, CONTROL_METHODS.compatClear],
+    );
+    assertUnset(await compatRequest(booted.gateway!, token));
+    await pushed(() => profiles.testOpenAiCompatibleProfile(id), upsertSet);
+    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
+    assert.equal(
+      (await compatRequest(booted.gateway!, server.leaseToken)).status,
+      200,
+    );
+    assert.deepEqual(forwarded(second), [
+      `Bearer ${COMPAT_KEY_C}`,
+      `Bearer ${COMPAT_KEY_C}`,
+    ]);
+    assert.equal(forwarded(first).length, 2, "the old endpoint gets nothing");
+
+    await pushed(
+      () => profiles.renameCredentialProfile(id, "Link renamed"),
+      upsertSet,
+    );
+    // `enabled` is metadata: the pair and the leases stay.
+    await pushed(
+      () => profiles.setCredentialProfileEnabled(id, false),
+      upsertSet,
+    );
+    assert.equal((await compatRequest(booted.gateway!, token)).status, 200);
+    assert.equal(forwarded(second).length, 3);
+
+    await pushed(
+      () => profiles.deleteCredentialProfile(id),
+      [CONTROL_METHODS.removeProfile],
+    );
+    for (const lease of [token, server.leaseToken]) {
+      const refused = await compatRequest(booted.gateway!, lease);
+      assert.equal(refused.status, 401);
+      assert.equal(
+        JSON.parse(refused.text).error.message,
+        refusalText({ case: "revoked-lease", reason: "profile-removed" }),
+      );
+    }
+    assert.equal(forwarded(second).length, 3, "no upstream request");
+    assertNoLeak([
+      COMPAT_KEY_A,
+      COMPAT_KEY_B,
+      COMPAT_KEY_C,
+      first.baseUrl,
+      second.baseUrl,
+    ]);
+  } finally {
+    if (profiles.credentialProfileById(id))
+      profiles.deleteCredentialProfile(id);
+    await first.close();
+    await second.close();
+  }
+});
+
+test("AC8, AC16: a key or an overlength URL only control refuses is saved, logged by its code alone, not retried, and leaves the account at the marked 503 while B forwards", async () => {
+  const a = await startFakeCompatEndpoint(["m"], "a reply");
+  const b = await startFakeCompatEndpoint(["m"], "b reply");
+  // A valid URL whose long ASCII path takes it past control's 2048 bytes.
+  const longPath = `/v1/${"p".repeat(2100)}`;
+  const long = await startFakeCompatEndpoint(["m"], "long reply", {
+    basePath: longPath,
   });
-  const unset = await compatRequest(booted.gateway!, token);
-  assert.equal(unset.status, 503);
-  assert.equal(
-    JSON.parse(unset.text).error.message,
-    refusalText({ case: "compat-unset" }),
+  assert.ok(Buffer.byteLength(long.baseUrl) > 2048);
+  const overlongKey = COMPAT_KEY_C.padEnd(8193, "k");
+  const ids: string[] = [];
+  try {
+    const idA = await compatibleAccount("Link A", a.baseUrl, COMPAT_KEY_A);
+    ids.push(idA);
+    const idB = await compatibleAccount("Link B", b.baseUrl, COMPAT_KEY_B);
+    ids.push(idB);
+    const booted = link();
+    assert.equal(await booted.ready, true, lines.join("\n"));
+    const lease = async (profileId: string) =>
+      (
+        await booted.grantEngineLease({
+          workerId: undefined,
+          sessionId: `s-${profileId}`,
+          profileId,
+        })
+      ).token;
+    const tokenA = await lease(idA);
+    const tokenB = await lease(idB);
+    assert.equal((await compatRequest(booted.gateway!, tokenA)).status, 200);
+    assert.equal((await compatRequest(booted.gateway!, tokenB)).status, 200);
+
+    const refusedLine = `${CONTROL_METHODS.compatSet} (profile ${idA}): invalid_params`;
+    const refusedLines = () =>
+      lines.filter((line) => line.endsWith(refusedLine));
+    /** A's refused set: the gateway's control line and the link's own. */
+    const refused = async (change: () => unknown) => {
+      const before = refusedLines().length;
+      await change();
+      await until(() => refusedLines().length === before + 2);
+      assert.deepEqual(refusedLines().slice(before).sort(), [
+        refusedLine,
+        `control ${refusedLine}`,
+      ]);
+    };
+
+    // The key: Settings saves it as today; the gateway refuses it and
+    // clears the working pair.
+    await refused(() =>
+      profiles.patchOpenAiCompatibleEndpoint(idA, { apiKey: overlongKey }),
+    );
+    assert.equal(
+      readOpenAiCompatibleEndpoint(idA).apiKey,
+      overlongKey,
+      "saved",
+    );
+    assertUnset(await compatRequest(booted.gateway!, tokenA));
+    assert.equal(forwarded(a).length, 1, "the endpoint sees nothing");
+    assert.equal((await compatRequest(booted.gateway!, tokenB)).status, 200);
+    // Not retried: no later push for A until the account changes.
+    const pushesOfA = () =>
+      lines.filter((line) => line.includes(`(profile ${idA})`)).length;
+    const counted = pushesOfA();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    assert.equal(pushesOfA(), counted);
+
+    // The URL: an edit clears the models, and Test rediscovers them at the
+    // endpoint directly; only then is the pair pushed, and refused.
+    profiles.patchOpenAiCompatibleEndpoint(idA, {
+      baseUrl: long.baseUrl,
+      apiKey: COMPAT_KEY_A,
+    });
+    await refused(() => profiles.testOpenAiCompatibleProfile(idA));
+    assert.equal(readOpenAiCompatibleEndpoint(idA).baseUrl, long.baseUrl);
+    assert.deepEqual(
+      long.seen.map((seen) => seen.method),
+      ["GET"],
+      "only discovery reached it",
+    );
+    assertUnset(await compatRequest(booted.gateway!, tokenA, longPath));
+    assertUnset(await compatRequest(booted.gateway!, tokenA));
+    assert.deepEqual(forwarded(long), []);
+    assert.equal(forwarded(a).length, 1);
+    assert.equal((await compatRequest(booted.gateway!, tokenB)).status, 200);
+    assert.deepEqual(forwarded(b), Array(3).fill(`Bearer ${COMPAT_KEY_B}`));
+
+    // A's lines name the method, the account and the code, nothing more.
+    for (const line of lines.filter((l) => l.includes(`(profile ${idA})`)))
+      assert.match(
+        line,
+        /^(control )?(profiles\.upsert|compat\.set|compat\.clear) \(profile [\w-]+\): (ok|invalid_params)$/,
+      );
+    assertNoLeak([
+      COMPAT_KEY_A,
+      COMPAT_KEY_B,
+      COMPAT_KEY_C,
+      a.baseUrl,
+      b.baseUrl,
+      long.baseUrl,
+    ]);
+  } finally {
+    for (const id of ids) profiles.deleteCredentialProfile(id);
+    await a.close();
+    await b.close();
+    await long.close();
+  }
+});
+
+test("AC13: with the link running, Test reaches the endpoint's /models directly; the gateway forwards nothing", async () => {
+  const endpoint = await startFakeCompatEndpoint(["m"], "compatible reply");
+  const booted = link();
+  assert.equal(await booted.ready, true);
+  const before = { ...booted.gateway!.stats };
+  const id = await compatibleAccount(
+    "Link tested",
+    endpoint.baseUrl,
+    COMPAT_KEY_A,
   );
-  for (const line of lines)
-    for (const value of [COMPAT_KEY_A, refusedUrl, "compat.test"])
-      assert.ok(!line.includes(value), `a log line leaks: ${line}`);
+  try {
+    assert.deepEqual(
+      endpoint.seen.map(({ method, url }) => [method, url]),
+      [["GET", "/v1/models"]],
+    );
+    assert.equal(endpoint.seen[0]!.authorization, `Bearer ${COMPAT_KEY_A}`);
+    assert.deepEqual(booted.gateway!.stats, before);
+    assert.equal(booted.credentialStatus(id), undefined);
+  } finally {
+    profiles.deleteCredentialProfile(id);
+    await endpoint.close();
+  }
 });
 
 /** The gateway's server leases, oldest first. */
@@ -893,69 +1156,6 @@ test("AC4: a server lease is granted once per profile per boot, and never withou
   } finally {
     profiles.deleteCredentialProfile(a);
     profiles.deleteCredentialProfile(b);
-  }
-});
-
-test("until the gateway serves compatible accounts, one is refused before any lease, never synced, and is no dead login", async () => {
-  const compatible = profiles.createCredentialProfile({
-    provider: "openai-compatible",
-    name: "Link compatible",
-  }).id;
-  profiles.patchOpenAiCompatibleEndpoint(compatible, {
-    baseUrl: "http://compat-link.test/v1",
-    apiKey: COMPAT_KEY_B,
-  });
-  const codex = codexProfile("Link beside");
-  const dir = stateDir();
-  try {
-    const booted = link({ stateDir: dir });
-    assert.equal(await booted.ready, true);
-    profiles.renameCredentialProfile(compatible, "Link compatible renamed");
-    // A request made after the rename is answered after it: one queue.
-    await booted.revokeLease("0".repeat(22), "session-ended");
-    const synced = (registry(dir) as { id: string }[]).map((p) => p.id);
-    assert.ok(synced.includes(codex));
-    assert.ok(!synced.includes(compatible), "the boot and the change skip it");
-    assert.ok(
-      !readFileSync(join(dir, "profiles.json"), "utf8").includes(COMPAT_KEY_B),
-    );
-
-    const leases = booted.gateway!.leases.records().length;
-    const logged = lines.length;
-    for (const refused of [
-      booted.grantEngineLease({
-        workerId: "local",
-        sessionId: "s-compatible",
-        profileId: compatible,
-      }),
-      serverGatewayAccess(compatible),
-    ])
-      await assert.rejects(refused, (err: unknown) => {
-        assert.ok(err instanceof GatewayAccountKindUnsupportedError);
-        assert.equal(err.message, GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT);
-        return true;
-      });
-    assert.equal(booted.gateway!.leases.records().length, leases, "no lease");
-    assert.deepEqual(lines.slice(logged), [], "no control request");
-
-    assert.equal(
-      isLoginDeath(GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT, {
-        provider: compatible,
-      }),
-      false,
-    );
-    assert.equal(
-      runFailureFacts(
-        analyzeProviderError(GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT, {
-          provider: compatible,
-        }),
-      ).loginDeath,
-      undefined,
-    );
-    assert.ok(lines.every((line) => !line.includes(COMPAT_KEY_B)));
-  } finally {
-    profiles.deleteCredentialProfile(compatible);
-    profiles.deleteCredentialProfile(codex);
   }
 });
 

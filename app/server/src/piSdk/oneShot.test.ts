@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@assistant/shared";
 import {
   createCredentialProfile,
   deleteCredentialProfile,
+  patchOpenAiCompatibleEndpoint,
   piAgentDir,
+  testOpenAiCompatibleProfile,
 } from "../credentialProfiles.ts";
 import {
   COMPAT_KEY_A,
@@ -17,6 +18,7 @@ import {
   startFakeUpstreams,
   startPassThrough,
   type EgressObserver,
+  type FakeCompatEndpoint,
   type FakeUpstreams,
   type PassThrough,
   type UpstreamResponder,
@@ -41,6 +43,7 @@ const made = vi.hoisted(() => ({
   }[],
   ports: [] as { runtime: Promise<unknown>; disposed: number }[],
   compat: {
+    profileId: "",
     config: undefined as unknown,
     listeners: new Set<() => void>(),
   },
@@ -85,11 +88,13 @@ vi.mock("./gatewayPiModelPort.ts", async (importOriginal) => {
     },
   };
 });
-// The server's key-less settings feed, driven by the test.
+// The server's key-less per-account feed, driven by the test for one account.
 vi.mock("./compatProviderFeed.ts", () => ({
   compatProviderFeed: {
-    current: () => made.compat.config,
-    subscribe(listener: () => void) {
+    current: (id: string) =>
+      id === made.compat.profileId ? made.compat.config : undefined,
+    subscribe(id: string, listener: () => void) {
+      if (id !== made.compat.profileId) return () => {};
       made.compat.listeners.add(listener);
       return () => made.compat.listeners.delete(listener);
     },
@@ -115,10 +120,6 @@ const CODEX_MODEL_ID = "gpt-5.6-luna";
 
 let upstreams: FakeUpstreams;
 let respond: UpstreamResponder = fakeCodexStream("leased answer");
-let compatSource: {
-  value: { baseUrl: string; apiKey: string } | undefined;
-  listeners: Set<() => void>;
-};
 let gateway: TestGatewayLink;
 let front: PassThrough;
 let egress: EgressObserver;
@@ -128,16 +129,8 @@ beforeAll(async () => {
   upstreams = await startFakeUpstreams({
     codex: (seen, res) => respond(seen, res),
   });
-  compatSource = { value: undefined, listeners: new Set() };
   gateway = await startGatewayLinkForTests({
     upstreams: upstreams.overrides,
-    compat: {
-      current: () => compatSource.value,
-      subscribe(listener) {
-        compatSource.listeners.add(listener);
-        return () => compatSource.listeners.delete(listener);
-      },
-    },
   });
   front = await startPassThrough(gateway.link.gateway!.url);
   profileId = createCredentialProfile({
@@ -204,11 +197,12 @@ function catalogModel(provider: string, id: string): PiRegistryModel {
 async function leasedRun(
   model: PiRegistryModel,
   timeoutMs = 20_000,
+  credentialProfileId = profileId,
 ): Promise<Awaited<ReturnType<typeof runPiOneShot>>> {
-  const access = await gateway.link.serverAccess(profileId);
+  const access = await gateway.link.serverAccess(credentialProfileId);
   return runPiOneShot({
     model,
-    credentialProfileId: profileId,
+    credentialProfileId,
     thinkingLevel: "off",
     systemPrompt: "system",
     prompt: "prompt",
@@ -289,8 +283,18 @@ test("AC10: a provider the port does not serve fails before any session, and the
   assert.equal(front.seen.length, 0);
 });
 
-/** The settings change both halves see: the feed key-less, the push with its key. */
-function setCompat(baseUrl: string, apiKey: string): void {
+/**
+ * Points the account at `baseUrl` with `apiKey` and has Test rediscover its
+ * models there, directly: the link pushes the pair, and the key-less feed
+ * follows with the same endpoint.
+ */
+async function pointCompat(
+  id: string,
+  baseUrl: string,
+  apiKey: string,
+): Promise<void> {
+  patchOpenAiCompatibleEndpoint(id, { baseUrl, apiKey });
+  assert.equal((await testOpenAiCompatibleProfile(id)).status.ok, true);
   made.compat.config = {
     name: "Fixture",
     baseUrl,
@@ -308,49 +312,62 @@ function setCompat(baseUrl: string, apiKey: string): void {
     ],
   } satisfies EngineCompatConfig;
   for (const listener of [...made.compat.listeners]) listener();
-  compatSource.value = { baseUrl, apiKey };
-  for (const listener of [...compatSource.listeners]) listener();
+  await settled();
 }
 
-test("AC12: an OpenAI-compatible one-shot spends the pushed key at /compat, and follows a settings change", async () => {
+/** The chat requests an endpoint got, apart from Test's direct discovery. */
+const chats = (endpoint: FakeCompatEndpoint) =>
+  endpoint.seen
+    .filter((seen) => seen.method === "POST")
+    .map((seen) => [seen.url, seen.authorization]);
+
+test("AC12: a compatible account's one-shot spends its pushed key at /compat, and follows a settings change", async () => {
   const first = await startFakeCompatEndpoint(["m"], "first answer");
   const second = await startFakeCompatEndpoint(["m"], "second answer");
   egress.allow(`127.0.0.1:${new URL(first.baseUrl).port}`);
   egress.allow(`127.0.0.1:${new URL(second.baseUrl).port}`);
+  const compatId = createCredentialProfile({
+    provider: "openai-compatible",
+    name: "One-shot endpoint",
+  }).id;
+  made.compat.profileId = compatId;
   try {
-    const lease = (await gateway.link.serverAccess(profileId)).leaseToken;
+    const lease = (await gateway.link.serverAccess(compatId)).leaseToken;
     const model = {
-      ...catalogModel(OPENAI_COMPATIBLE_PROVIDER_ID, "m"),
+      ...catalogModel(compatId, "m"),
       api: "openai-completions",
       baseUrl: first.baseUrl,
     } as PiRegistryModel;
-    setCompat(first.baseUrl, COMPAT_KEY_A);
-    await settled();
-    assert.equal((await leasedRun(model)).text, "first answer");
-    assert.deepEqual(
-      first.seen.map((seen) => [seen.url, seen.authorization]),
-      [["/v1/chat/completions", `Bearer ${COMPAT_KEY_A}`]],
+    await pointCompat(compatId, first.baseUrl, COMPAT_KEY_A);
+    assert.equal(
+      (await leasedRun(model, 20_000, compatId)).text,
+      "first answer",
     );
+    assert.deepEqual(chats(first), [
+      ["/v1/chat/completions", `Bearer ${COMPAT_KEY_A}`],
+    ]);
     assert.deepEqual(
       front.seen.map((seen) => [seen.url, seen.headers.authorization]),
       [["/compat/v1/chat/completions", `Bearer ${lease}`]],
     );
 
     // Same base path, another origin and key: the next one-shot follows.
-    setCompat(second.baseUrl, COMPAT_KEY_B);
-    await settled();
-    assert.equal((await leasedRun(model)).text, "second answer");
-    assert.equal(first.seen.length, 1);
-    assert.deepEqual(
-      second.seen.map((seen) => [seen.url, seen.authorization]),
-      [["/v1/chat/completions", `Bearer ${COMPAT_KEY_B}`]],
+    await pointCompat(compatId, second.baseUrl, COMPAT_KEY_B);
+    assert.equal(
+      (await leasedRun(model, 20_000, compatId)).text,
+      "second answer",
     );
+    assert.equal(chats(first).length, 1);
+    assert.deepEqual(chats(second), [
+      ["/v1/chat/completions", `Bearer ${COMPAT_KEY_B}`],
+    ]);
     for (const endpoint of [first, second])
       for (const seen of endpoint.seen)
         assert.ok(!seen.authorization?.includes(lease));
   } finally {
     made.compat.config = undefined;
-    compatSource.value = undefined;
+    made.compat.profileId = "";
+    deleteCredentialProfile(compatId);
     await first.close();
     await second.close();
   }

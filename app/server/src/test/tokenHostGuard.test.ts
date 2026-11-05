@@ -73,7 +73,7 @@ test("a Claude renewal with no endpoint override is refused at the real host, an
   const renewal = createRenewal({
     profiles,
     leases,
-    lane: new WriterLane(new HoldTable(), (id) => profiles.get(id)?.provider),
+    lane: new WriterLane(new HoldTable(), () => "claude"),
     log: (line) => lines.push(line),
     report: () => {},
   });

@@ -49,11 +49,12 @@ async function loadPi() {
  */
 async function loadGatewayPort(
   access: EngineGatewayAccess,
+  credentialProfileId: string,
 ): Promise<GatewayPiModelPort> {
   const { gatewayPiModelPort } = await import("./gatewayPiModelPort.ts");
   const { serverPiModelPort } = await import("./piModelPort.ts");
   const { compatProviderFeed } = await import("./compatProviderFeed.ts");
-  return gatewayPiModelPort(access, {
+  return gatewayPiModelPort(access, credentialProfileId, {
     server: serverPiModelPort,
     compat: compatProviderFeed,
   });
@@ -190,7 +191,9 @@ export async function runPiOneShot(
   opts: PiOneShotOptions,
 ): Promise<PiOneShotResult> {
   const pi = await loadPi();
-  const port = opts.gateway && (await loadGatewayPort(opts.gateway));
+  const port =
+    opts.gateway &&
+    (await loadGatewayPort(opts.gateway, opts.credentialProfileId));
   try {
     return await runPiSession(opts, port, pi);
   } finally {

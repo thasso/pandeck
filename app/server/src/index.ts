@@ -1920,9 +1920,9 @@ startInProcessWorker();
 // Opt-in: the credential gateway runs in this process, and every engine open
 // on a profile holds a lease first. A failed start is logged and only fails
 // those opens. Graceful shutdown leaves it running, as the package proxy, for
-// a draining turn; it dies with the process. OpenAI-compatible accounts do
-// not run with it yet, so no endpoint is pushed; the gateway renews Codex
-// logins through pi's refresh passed in here.
+// a draining turn; it dies with the process. The link pushes each
+// OpenAI-compatible account's endpoint and key itself; the gateway renews
+// Codex logins through pi's refresh passed in here.
 if (GATEWAY_ENABLED) {
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),

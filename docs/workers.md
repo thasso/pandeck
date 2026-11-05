@@ -1168,13 +1168,13 @@ ships in phase 2, on the server's host. Its same-host form:
 
 - Engines reach it over loopback HTTP. One listener serves every upstream,
   selected by path prefix: `/anthropic` for Claude Messages, `/chatgpt` for
-  Codex responses, `/compat` for the OpenAI-compatible endpoint's chat
+  Codex responses, `/compat` for each OpenAI-compatible account's chat
   completions. A prefix allows only the exact method and path its engine sends,
   with no path normalisation; `/compat` allows only
-  `POST <base path>/chat/completions`, under the base path the server pushed. A
-  server lease also reaches `/anthropic`'s `GET /api/oauth/usage` and
-  `/chatgpt`'s usage routes, which no engine lease does:
-  `GET /backend-api/wham/usage`,
+  `POST <base path>/chat/completions`, under the base path the server pushed for
+  the lease's account. A server lease also reaches `/anthropic`'s
+  `GET /api/oauth/usage` and `/chatgpt`'s usage routes, which no engine lease
+  does: `GET /backend-api/wham/usage`,
   `GET /backend-api/wham/rate-limit-reset-credits` and the irreversible
   `POST /backend-api/wham/rate-limit-reset-credits/consume`.
 - A lease token is JWT-shaped,
@@ -1187,28 +1187,30 @@ ships in phase 2, on the server's host. Its same-host form:
 - Bytes pass through unchanged. The gateway never decodes a compressed body,
   streams SSE as it arrives and lets a client that stops reading hold the
   upstream back. It replaces only the credential headers, Claude's
-  `Authorization`, Codex's `Authorization` and `ChatGPT-Account-Id`, and the
-  compatible endpoint's `Authorization` (`Bearer` and the pushed key), and
-  strips `Set-Cookie` on the way back. pi talks SSE; the gateway refuses
-  WebSocket upgrades.
-- `/compat` serves any live engine or server lease on an `openai-codex` profile,
-  since every pi engine and pi one-shot under the switch holds one. It forwards
+  `Authorization`, Codex's `Authorization` and `ChatGPT-Account-Id`, and a
+  compatible account's `Authorization` (`Bearer` and its pushed key), and strips
+  `Set-Cookie` on the way back. pi talks SSE; the gateway refuses WebSocket
+  upgrades.
+- `/compat` serves only a live engine or server lease on an OpenAI-compatible
+  profile, with that profile's own pushed pair; it refuses a Claude or Codex
+  lease, and `/anthropic` and `/chatgpt` refuse a compatible one. It forwards
   over http or https as the pushed base URL says, with the pushed key and never
-  a token file.
+  a token file. Nothing renews a compatible profile: an upstream 401 on
+  `/compat` passes through unchanged.
 - A refusal the gateway answers itself (an unknown or revoked lease, a route the
   lease does not cover, a profile that needs a new login, an unreadable
-  credential, an unreachable upstream, a `/compat` request before the server
-  pushed its endpoint, which gets a 503) has the provider's error shape, and its
+  credential, an unreachable upstream, a `/compat` request while its account has
+  no pushed pair, which gets a 503) has the provider's error shape, and its
   message starts with "Pandeck gateway:". The server's error classifier never
   counts a marked message as a dead login (`providerErrors.ts`). An upstream 401
   passes through unchanged and still counts as today until G5c reads the
   gateway's login state ("Renewal" below).
 - Remote Workers reach it over TLS from phase 4.
 
-The server drives the gateway over its control channel, **gateway control 1.3**:
+The server drives the gateway over its control channel, **gateway control 1.4**:
 the worker protocol's codec and connection framing under a version of its own,
-`gateway-control/1.3`, so a Worker and a control peer refuse each other; 1.0 to
-1.2 dialers are still admitted, as is any 1.x. Only a control connection grants
+`gateway-control/1.4`, so a Worker and a control peer refuse each other; 1.0 to
+1.3 dialers are still admitted, as is any 1.x. Only a control connection grants
 a lease, and the gateway binds each lease to a profile from its own registry,
 never from the request. Every method is answered once its effect is applied and
 saved, and each connection starts with
@@ -1216,16 +1218,26 @@ saved, and each connection starts with
 The server then syncs every profile (`profiles.sync`, later `profiles.upsert`
 and `profiles.remove`). A newer connection's hello ends the older one.
 
-- `compat.set {baseUrl, apiKey}` and `compat.clear {}` (1.2) carry the
-  OpenAI-compatible endpoint. The server pushes one of them after its reconcile
-  and before the link is ready, then after every compatible-settings change, on
-  the same request queue. The gateway holds the pair in memory only, one
-  immutable pair per push, so a request keeps the pair it took. Every hello
-  clears it, as does a malformed `compat.set` (`invalid_params`), and `/compat`
-  then answers 503 until the next push. A failed push is logged by its error
-  code only; the link stays ready. Until the gateway serves OpenAI-compatible
-  accounts (Task-1373 PR2), the server pushes neither, so `/compat` answers 503
-  ("Compatible accounts under the switch" below).
+- `compat.set {profileId, baseUrl, apiKey}` and `compat.clear {profileId}` (1.4;
+  1.2 carried one unnamed pair) carry each OpenAI-compatible account's endpoint
+  and key. `compat.set` names a registered compatible profile: an unknown one is
+  `unknown_profile`, a login profile `invalid_params`; `compat.clear` of an
+  unknown one answers. At boot the server pushes one per compatible account
+  after its reconcile and before the link is ready; after each account change it
+  sends `profiles.upsert` and then that account's push, on the same request
+  queue, so a key rotation, URL edit, rename or disable is followed by its pair.
+  A ready account (a base URL and models) gets `compat.set`, a keyless one with
+  pi's placeholder key `none`; one that is not ready, such as after a URL edit
+  cleared its models, or whose settings cannot be read gets `compat.clear`.
+  Disabling keeps the pair: `enabled` is metadata. Deleting the account sends
+  only `profiles.remove`, which drops its pair, as a sync that omits it does,
+  even when saving fails.
+- The gateway holds each pair in memory only, one immutable pair per push, so a
+  request keeps the pair it took. Every hello clears them all; a malformed
+  `compat.set` (`invalid_params`) clears that account's pair alone, and its
+  `/compat` answers 503 until the next push. A failed push is logged by method,
+  profile id and error code only, is not retried until the account changes or
+  the server restarts, and leaves the link ready.
 - A lease has a kind and an owner. An engine lease belongs to
   `{workerId, sessionId}`. It is granted before the engine opens; an open that
   mints its session id (a new or forked pi session) completes the owner with
@@ -1236,25 +1248,26 @@ and `profiles.remove`). A newer connection's hello ends the older one.
   engine leases alone. A previous boot's engine lease keeps forwarding until
   `leases.reconcileWorker {workerId, live}` revokes that Worker's engine leases
   not in `live`; it never touches another Worker's or a server lease.
-- The registry records each profile's provider, name, `enabled` flag and token
-  file path. `enabled` is metadata only: disabling an account takes effect at
-  the server's next turn, so the gateway never ends a running turn for it.
-  Deleting a profile, by `profiles.remove` or a sync that omits it, is the only
-  registry change that revokes, and its leases' requests are refused with "the
-  account was removed". The other reasons are "the session moved to another
-  account" and "the session ended".
+- The registry records each profile's provider, name, `enabled` flag and, for a
+  Claude or Codex login, its token file path; an OpenAI-compatible profile names
+  none. `enabled` is metadata only: disabling an account takes effect at the
+  server's next turn, so the gateway never ends a running turn for it. Deleting
+  a profile, by `profiles.remove` or a sync that omits it, is the only registry
+  change that revokes, and its leases' requests are refused with "the account
+  was removed". The other reasons are "the session moved to another account" and
+  "the session ended".
 - The state lives in the gateway's state directory (0700), in `leases.json`
-  (lease id, secret hash, kind, owner, profile, provider, token file path, grant
-  and revocation times) and `profiles.json`, each written whole to a 0600 temp
-  file and renamed. Neither holds a token, a lease token or its secret, and no
-  file holds the pushed compatible key or endpoint. A grant or session bind is
-  saved before it is answered and undone when saving fails; a revocation takes
-  effect at once and stays in force even then. After a failed save, repeating a
-  revocation or profile removal saves again even though it changes nothing, so
-  it fails again or succeeds with the earlier change saved; a repeated
-  revocation keeps its first reason and time. Both files load at start, so a
-  gateway restarted with the server down still forwards. An unreadable
-  `leases.json` starts empty, refusing every old token; an unreadable
+  (lease id, secret hash, kind, owner, profile, provider, a login's token file
+  path, grant and revocation times) and `profiles.json`, each written whole to a
+  0600 temp file and renamed. Neither holds a token, a lease token or its
+  secret, and no file holds the pushed compatible key or endpoint. A grant or
+  session bind is saved before it is answered and undone when saving fails; a
+  revocation takes effect at once and stays in force even then. After a failed
+  save, repeating a revocation or profile removal saves again even though it
+  changes nothing, so it fails again or succeeds with the earlier change saved;
+  a repeated revocation keeps its first reason and time. Both files load at
+  start, so a gateway restarted with the server down still forwards. An
+  unreadable `leases.json` starts empty, refusing every old token; an unreadable
   `profiles.json` starts an empty registry, so grants wait for a sync while
   restored leases keep forwarding on their own binding. A revoked lease is
   forgotten 24 hours after its revocation.
@@ -1262,7 +1275,9 @@ and `profiles.remove`). A newer connection's hello ends the older one.
 Each profile has one **writer lane**: one writer of its token file at a time. An
 item in the lane (a renewal, or a usage child from a later slice) or a login's
 hold, in arrival order, each waiting until the one before it has settled,
-whether it succeeded or failed. No item runs while the profile is held.
+whether it succeeded or failed. No item runs while the profile is held. Only a
+Claude or Codex login profile has a lane: `profiles.loginHold` on a registered
+OpenAI-compatible profile answers `unknown_profile` before any lane.
 
 - `profiles.loginHold {profileId, holdId}` waits for the lane, saves the hold
   and only then answers `{held: true}`. A profile that is held already answers
@@ -1308,10 +1323,11 @@ whether it succeeded or failed. No item runs while the profile is held.
   rules: an acquire or a writer registration is saved before its answer and
   undone when saving fails; a release, a stuck hold or a fence takes effect at
   once and stays in force even then. A restarted gateway keeps every hold under
-  the same rules. An unreadable `holds.json` fences every profile: until the
-  registry is known every acquire answers `login_stuck` and every lane item is
-  refused; then each registered profile gets a stuck **fence hold**, owned by no
-  boot and cleared only by force release.
+  the same rules. An unreadable `holds.json` fences every login profile: until
+  the registry is known every acquire answers `login_stuck` and every lane item
+  is refused; then each registered login profile gets a stuck **fence hold**,
+  owned by no boot and cleared only by force release. A registry of compatible
+  profiles alone leaves the fence pending.
 
 The server's link to the gateway (`gatewayLink.ts`) is opt-in:
 `ASSISTANT_GATEWAY=1` starts the gateway inside the server process, its model
@@ -1440,10 +1456,13 @@ until the gateway runs as its own process.
 - **pi engines use the lease.** With `host.gateway`, the pi factory
   (`createPiHostedEngineFactory({ models, compat })`) gives the engine its own
   model port (`gatewayPiModelPort.ts`) instead of the server's: one in-memory pi
-  runtime per open whose only `openai-codex` key is the lease, with no
-  `auth.json`, `models.json` or `models-store.json` and no catalog fetch. It is
-  released when the engine is disposed or its open fails. Without
-  `host.gateway`, the server's port runs the engine as before.
+  runtime per open for the open's account alone, whose only key is the lease,
+  with no `auth.json`, `models.json` or `models-store.json` and no catalog
+  fetch. An OpenAI account's port registers only `openai-codex`; an
+  OpenAI-compatible account's registers only that account's provider. Neither
+  finds or offers a model of another account or kind. It is released when the
+  engine is disposed or its open fails. Without `host.gateway`, the server's
+  port runs the engine as before.
   - Every Codex model the port answers is rebased onto the gateway's
     `/chatgpt/backend-api`: the profile's server-catalog model when it has the
     id, else pi's built-in. The gateway adds the profile's token and account id
@@ -1461,14 +1480,18 @@ until the gateway runs as its own process.
     gets no auth, and pi refuses it ("Provider is not configured") before it
     connects.
   - **Compatible accounts under the switch.** OpenAI-compatible endpoints are
-    accounts of their own (`docs/account-routing.md` "Account kinds"), which the
-    gateway does not serve yet. `compatProviderFeed.ts` stays empty, so the port
-    registers no compatible provider, and the link never syncs a compatible
-    profile. A compatible account's engine open and one-shot are refused at the
-    link before any lease or control request
-    (`GatewayAccountKindUnsupportedError`: "OpenAI-compatible accounts do not
-    run with the credential gateway yet."), which is never a dead login. With
-    the switch off they run on the account's own runtime below.
+    accounts of their own (`docs/account-routing.md` "Account kinds"). The link
+    syncs each as a profile with no token file and pushes its pair ("gateway
+    control" above). Its port follows the account's key-less configuration from
+    `compatProviderFeed.ts` and registers its provider, under the account's id,
+    at the gateway's `/compat<base path>` with the lease as its key; the gateway
+    adds the account's own key. A change of origin under the same base path
+    keeps the registration; another base path re-registers. A base URL the
+    gateway refuses structurally (userinfo, query, fragment or a scheme other
+    than http or https) registers nothing, so the open fails with "offers no
+    models. Run Test on its card in Settings, or start a new session." With the
+    switch off they run on the account's own runtime below, and Settings' Test
+    always reaches the endpoint's `/models` directly.
 - **One-shots and Codex usage use a server lease** (G4a). The link grants one
   server lease per profile per boot on first use (`serverAccess`), held in
   memory and shared by every caller; a failed grant is forgotten and a removed
@@ -1521,9 +1544,12 @@ With the switch on, the gateway keeps every leased profile's upstream token
 valid by itself (`gateway/renewal.ts`, U8). Engines never refresh: the Claude
 CLI's environment token is never refreshed, and pi uses the lease as a key.
 
-- **Eligibility.** A profile is renewed while it is registered and holds a live
-  lease, whatever its `enabled` flag, so a disabled account's running and
-  background work keeps working. An idle profile renews at its first request.
+- **Eligibility.** A Claude or Codex login profile is renewed while it is
+  registered and holds a live lease, whatever its `enabled` flag, so a disabled
+  account's running and background work keeps working. An idle profile renews at
+  its first request. An OpenAI-compatible profile has no token file and is never
+  read or renewed: the tick, a request, a 401, `renew` (answered `skipped`) and
+  a hold's recheck all pass it by, so it never reports a login state.
 - **Cadence.** A 60 s tick renews a token inside its margin: 10 minutes for
   Claude, 30 for Codex. A request whose token has at most 60 s left waits for
   the renewal, at most 30 s, then goes on with whatever the file holds; one
@@ -1616,13 +1642,16 @@ CLI still talks only to the gateway.
   an in-process gateway, against a fake Codex upstream. Its cases are: a turn on
   a named profile and on the default one; a Codex one-shot on the server lease;
   an upstream 401; a revoked lease; a server-catalog Codex id opened, reopened
-  and forked; and a compatible account's engine and one-shot refused at the
-  link. The compatible-through-gateway cases return with Task-1373 PR2. They
-  assert:
+  and forked; and, for each of two OpenAI-compatible accounts on fake endpoints,
+  a turn, a one-shot on its server lease and a reopen, also once its model is
+  gone. They assert:
   - one `POST /backend-api/codex/responses` per turn reaches the upstream, with
     the profile's token and account id and never the lease, and no upgrade;
-  - a compatible account is refused before any lease, with no request to the
-    gateway or an endpoint;
+  - each compatible turn and one-shot sends one
+    `POST <base path>/chat/completions` to its own account's endpoint, with that
+    account's key and never the lease, and nothing to the other's; a reopen
+    restores its model through the port, or falls back to one its account
+    offers;
   - a 401 and a refusal are not dead logins, and a refusal carries the marker;
   - an egress observer on undici's and `node:http`'s diagnostics channels sees
     no attempt beyond the gateway, the fakes and loopback, and a canary fetch to
@@ -1671,9 +1700,20 @@ CLI still talks only to the gateway.
   - pi retries a gateway 503 or 502 on `/compat` 3 times, about 14 seconds,
     before the turn fails.
   - A request racing a push goes to the previous endpoint with its own key, or
-    gets the marked 403. A failed push leaves `/compat` at 503 until the next
-    settings change or restart; the link does not retry (G5).
-  - In-process, the hosted engine shares the server's process: the empty feed
+    gets the marked 403. A failed push leaves that account's `/compat` at 503
+    until its next settings change or a restart; the link does not retry (G5).
+  - `compat.set` holds a key of at most 8192 visible-ASCII characters (0x21 to
+    0x7e) and a base URL of at most 2048 bytes, its bounds since 1.2. Settings
+    saves a key or URL past them as before, and the outcome depends on what
+    refuses it. A key, or an otherwise valid URL over 2048 bytes, is refused by
+    control alone: the push answers `invalid_params`, the account's earlier pair
+    is cleared, its models are still offered, and its turns get the marked 503
+    with the `compat-unset` text. A URL with userinfo, a query, a fragment or a
+    scheme other than http or https is refused by the engine's port as well: the
+    account offers no model, and an open fails with "offers no models. Run Test
+    on its card in Settings, or start a new session." Neither message names the
+    cause; Task-1379 tracks telling the user.
+  - In-process, the hosted engine shares the server's process: the key-less feed
     bounds the engine's dependencies, not its memory. The server's own runtimes
     keep each compatible account's key for its discovery and switch-off runs,
     which stay direct and carry the origin guard above. An endpoint reachable
@@ -1875,11 +1915,11 @@ forwarding core, its control channel and persisted leases, and the server's link
 to it behind `ASSISTANT_GATEWAY=1`, off by default. With the switch on, every
 Claude engine sends its model requests through the gateway with its lease, a
 profile-less session as `claude-default`, and every pi engine sends its Codex
-requests through it with its lease, both under the engine-version guard. An
-OpenAI-compatible account is refused under the switch until Task-1373 PR2;
-`/compat` and its push stay in the gateway, unused. Claude and pi one-shots,
-Claude usage, and Codex usage, reset credits and consume go through it on a
-server lease per profile. It renews tokens in each profile's writer lane
+requests through it with its lease, both under the engine-version guard. Each
+OpenAI-compatible account's pi engines and one-shots send theirs to `/compat`
+with their lease, and the gateway adds that account's pushed key. Claude and pi
+one-shots, Claude usage, and Codex usage, reset credits and consume go through
+it on a server lease per profile. It renews tokens in each profile's writer lane
 (Renewal), and both login flows hold their profile while their writer may write
 its token file (Login holds); a stuck hold shows in Settings → Accounts with
 Clear. Engine routing and its own service unit come in later slices.

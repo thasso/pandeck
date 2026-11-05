@@ -1,19 +1,20 @@
 /**
- * The gateway's `/compat` upstream (`compatUpstream.ts`, `forward.ts`): the
- * OpenAI-compatible endpoint and key the server pushes over control, held in
- * memory only, forwarded over plain HTTP or TLS as the push says, to exactly
- * `POST <base path>/chat/completions`, for an engine lease of a pi profile
- * alone. Fake endpoints on loopback; every key and token is fake.
+ * The gateway's `/compat` upstream (`compatUpstream.ts`, `forward.ts`): each
+ * OpenAI-compatible profile's endpoint and key, pushed by the server over
+ * control and held in memory only, forwarded over plain HTTP or TLS as the
+ * push says, to exactly `POST <base path>/chat/completions`, for an engine or
+ * server lease of that profile alone. Fake endpoints and fake upstreams on
+ * loopback; every key and token is fake.
  */
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rmdir } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
 import { join } from "node:path";
 import type tls from "node:tls";
-import { afterEach, beforeAll, test } from "vitest";
+import { afterAll, afterEach, beforeAll, test } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import {
   issueLeafCertificate,
@@ -26,15 +27,21 @@ import {
   COMPAT_KEY_B,
   dialControl,
   fakeProcesses,
+  startFakeUpstreams,
   writeTokenFiles,
+  type FakeUpstreams,
 } from "../test/gatewayFixtures.ts";
-import type { WorkerConnection } from "../workerProtocol/connection.ts";
+import {
+  WorkerRequestError,
+  type WorkerConnection,
+} from "../workerProtocol/connection.ts";
 import { createInProcessTransport } from "../workerProtocol/inProcessTransport.ts";
 import { createCompatUpstream } from "./compatUpstream.ts";
 import {
   CONTROL_METHODS,
   GATEWAY_CONTROL_PROTOCOL,
   decodeLeaseGranted,
+  decodeLeasesRevoked,
   encodeControlRequest,
   type LeaseGrant,
 } from "./controlMethods.ts";
@@ -74,10 +81,12 @@ const answerSse = (_seen: Seen, res: http.ServerResponse): void => {
 };
 
 let ca: CertificatePair;
+let upstreams: FakeUpstreams;
 let profiles: {
   claude: GatewayProfile;
   codex: GatewayProfile;
-  codexNoLogin: GatewayProfile;
+  compatA: GatewayProfile;
+  compatB: GatewayProfile;
 };
 const endpoints: FakeEndpoint[] = [];
 const running: RunningGateway[] = [];
@@ -86,22 +95,30 @@ let lines: string[] = [];
 
 beforeAll(async () => {
   ca = await loadOrCreateCa();
+  upstreams = await startFakeUpstreams();
   const files = await writeTokenFiles();
   await mkdir(DATA_DIR, { recursive: true });
-  const missing = join(
-    await mkdtemp(join(DATA_DIR, "compat-no-login-")),
-    "auth.json",
-  );
-  const profile = (
+  const login = (
     id: string,
-    provider: GatewayProfile["provider"],
+    provider: "claude" | "openai-codex",
     tokenFile: string,
   ): GatewayProfile => ({ id, provider, name: id, enabled: true, tokenFile });
+  const endpoint = (id: string): GatewayProfile => ({
+    id,
+    provider: "openai-compatible",
+    name: id,
+    enabled: true,
+  });
   profiles = {
-    claude: profile("claude-a", "claude", files.claudeFile),
-    codex: profile("codex-b", "openai-codex", files.codexFile),
-    codexNoLogin: profile("codex-none", "openai-codex", missing),
+    claude: login("claude-a", "claude", files.claudeFile),
+    codex: login("codex-b", "openai-codex", files.codexFile),
+    compatA: endpoint("openai-compatible-aaaaaaaaaaaa"),
+    compatB: endpoint("openai-compatible-bbbbbbbbbbbb"),
   };
+});
+
+afterAll(async () => {
+  await upstreams.close();
 });
 
 afterEach(async () => {
@@ -116,6 +133,7 @@ afterEach(async () => {
       assert.ok(!line.includes(value), `a log line leaks: ${line}`);
   while (running.length) await running.pop()!.close();
   while (endpoints.length) await endpoints.pop()!.close();
+  upstreams.reset();
   lines = [];
 });
 
@@ -164,6 +182,7 @@ async function gateway(stateDir?: string): Promise<RunningGateway> {
     log: (line) => lines.push(line),
     compatCa: ca.certPem,
     processProbe: fakeProcesses().probe,
+    upstreams: upstreams.overrides,
     ...(stateDir ? { stateDir } : {}),
   });
   running.push(gw);
@@ -172,8 +191,9 @@ async function gateway(stateDir?: string): Promise<RunningGateway> {
 
 interface Control {
   connection: WorkerConnection;
-  set(baseUrl: string, apiKey: string): Promise<void>;
-  clear(): Promise<void>;
+  send(method: string, request: object): Promise<{ json?: unknown }>;
+  set(profileId: string, baseUrl: string, apiKey: string): Promise<void>;
+  clear(profileId: string): Promise<void>;
   grant(request: LeaseGrant): Promise<string>;
 }
 
@@ -204,11 +224,12 @@ async function control(
   });
   return {
     connection,
-    async set(baseUrl, apiKey) {
-      await send(CONTROL_METHODS.compatSet, { baseUrl, apiKey });
+    send,
+    async set(profileId, baseUrl, apiKey) {
+      await send(CONTROL_METHODS.compatSet, { profileId, baseUrl, apiKey });
     },
-    async clear() {
-      await send(CONTROL_METHODS.compatClear, {});
+    async clear(profileId) {
+      await send(CONTROL_METHODS.compatClear, { profileId });
     },
     async grant(request) {
       return decodeLeaseGranted(await send(CONTROL_METHODS.grant, request))
@@ -298,12 +319,25 @@ function assertRefused(reply: Reply, status: number, refusal: Refusal): void {
   assert.ok(body.error.message.startsWith("Pandeck gateway: "));
 }
 
+/** As {@link assertRefused}, for a route of either provider's error shape. */
+function assertRefusedAnyShape(
+  reply: Reply,
+  status: number,
+  refusal: Refusal,
+): void {
+  assert.equal(reply.status, status, reply.body.toString());
+  const body = JSON.parse(reply.body.toString("utf8"));
+  assert.equal(body.error.message, refusalText(refusal));
+}
+
 const sha256 = (bytes: Buffer | string) =>
   createHash("sha256").update(bytes).digest("hex");
 
-test("2a: a push becomes one frozen target: ports, TLS name, IPv6 and base path", () => {
+test("2a: a push becomes one frozen target per profile: ports, TLS name, IPv6 and base path", () => {
   const holder = createCompatUpstream();
-  assert.equal(holder.current(), undefined);
+  const A = profiles.compatA.id;
+  const B = profiles.compatB.id;
+  assert.equal(holder.current(A), undefined);
   const cases: [string, Record<string, unknown>][] = [
     [
       "http://compat.test/v1/",
@@ -351,43 +385,58 @@ test("2a: a push becomes one frozen target: ports, TLS name, IPv6 and base path"
     ],
   ];
   for (const [baseUrl, expected] of cases) {
-    assert.equal(holder.set(baseUrl, COMPAT_KEY_A), true, baseUrl);
-    const target = holder.current()!;
+    assert.equal(holder.set(A, baseUrl, COMPAT_KEY_A), true, baseUrl);
+    const target = holder.current(A)!;
     assert.deepEqual({ ...target }, { ...expected, apiKey: COMPAT_KEY_A });
     assert.ok(Object.isFrozen(target));
   }
-  const held = holder.current();
-  assert.equal(holder.set("ftp://compat.test/v1", COMPAT_KEY_B), false);
-  assert.equal(holder.current(), undefined);
+  assert.equal(holder.current(B), undefined, "A's push is A's alone");
+  holder.set(B, "http://compat-b.test/v1", COMPAT_KEY_B);
+  const held = holder.current(A);
+  assert.equal(holder.set(A, "ftp://compat.test/v1", COMPAT_KEY_B), false);
+  assert.equal(holder.current(A), undefined);
   assert.equal(held?.apiKey, COMPAT_KEY_A, "a taken target never changes");
-  holder.set("http://compat.test/v1", COMPAT_KEY_A);
-  holder.clear();
-  assert.equal(holder.current(), undefined);
+  assert.equal(holder.current(B)?.apiKey, COMPAT_KEY_B, "B keeps its pair");
+
+  holder.set(A, "http://compat.test/v1", COMPAT_KEY_A);
+  holder.clear(A);
+  assert.equal(holder.current(A), undefined);
+  assert.equal(holder.current(B)?.apiKey, COMPAT_KEY_B);
+
+  holder.set(A, "http://compat.test/v1", COMPAT_KEY_A);
+  holder.retain((id) => id !== B);
+  assert.equal(holder.current(B), undefined);
+  assert.equal(holder.current(A)?.apiKey, COMPAT_KEY_A);
+  holder.set(B, "http://compat-b.test/v1", COMPAT_KEY_B);
+  holder.clearAll();
+  assert.equal(holder.current(A), undefined);
+  assert.equal(holder.current(B), undefined);
 });
 
-test("AC4: /compat answers 503 in the OpenAI shape until a push and after a clear, contacting nothing", async () => {
+test("/compat answers 503 in the OpenAI shape until its profile's push and after its clear, contacting nothing", async () => {
   const endpoint = await fakeEndpoint();
   const gw = await gateway();
   const ctl = await control(gw);
-  const token = await ctl.grant(engineLease(profiles.codex.id));
+  const token = await ctl.grant(engineLease(profiles.compatA.id));
   assertRefused(await send(gw, { token }), 503, { case: "compat-unset" });
   assert.equal(endpoint.seen.length, 0);
 
-  await ctl.set(`${endpoint.origin}/v1`, COMPAT_KEY_A);
+  await ctl.set(profiles.compatA.id, `${endpoint.origin}/v1`, COMPAT_KEY_A);
   assert.equal((await send(gw, { token })).status, 200);
   assert.equal(endpoint.seen.length, 1);
 
-  await ctl.clear();
+  await ctl.clear(profiles.compatA.id);
   assertRefused(await send(gw, { token }), 503, { case: "compat-unset" });
   assert.equal(endpoint.seen.length, 1);
 });
 
-test("AC5: the pushed key replaces the lease, Host names the endpoint, and body and stream pass unchanged", async () => {
+test("the pushed key replaces the lease, Host names the endpoint, and body and stream pass unchanged", async () => {
   const endpoint = await fakeEndpoint();
   const gw = await gateway();
   const ctl = await control(gw);
-  const token = await ctl.grant(engineLease(profiles.codex.id));
-  await ctl.set(`${endpoint.origin}/v1`, COMPAT_KEY_A);
+  const A = profiles.compatA.id;
+  const token = await ctl.grant(engineLease(A));
+  await ctl.set(A, `${endpoint.origin}/v1`, COMPAT_KEY_A);
 
   const reply = await send(gw, {
     token,
@@ -409,13 +458,13 @@ test("AC5: the pushed key replaces the lease, Host names the endpoint, and body 
   assert.equal(sha256(seen.body), sha256(CHAT_BODY));
 
   // A deeper base path, and none (MC2).
-  await ctl.set(`${endpoint.origin}/api/openai/v1`, COMPAT_KEY_A);
+  await ctl.set(A, `${endpoint.origin}/api/openai/v1`, COMPAT_KEY_A);
   const deep = await send(gw, {
     token,
     path: "/compat/api/openai/v1/chat/completions",
   });
   assert.equal(deep.status, 200);
-  await ctl.set(endpoint.origin, COMPAT_KEY_A);
+  await ctl.set(A, endpoint.origin, COMPAT_KEY_A);
   const bare = await send(gw, { token, path: "/compat/chat/completions" });
   assert.equal(bare.status, 200);
   assert.deepEqual(
@@ -432,12 +481,12 @@ test("AC5: the pushed key replaces the lease, Host names the endpoint, and body 
   );
 });
 
-test("AC6: only POST <base path>/chat/completions is forwarded; a WebSocket upgrade is refused", async () => {
+test("only POST <base path>/chat/completions is forwarded; a WebSocket upgrade is refused", async () => {
   const endpoint = await fakeEndpoint();
   const gw = await gateway();
   const ctl = await control(gw);
-  const token = await ctl.grant(engineLease(profiles.codex.id));
-  await ctl.set(`${endpoint.origin}/v1`, COMPAT_KEY_A);
+  const token = await ctl.grant(engineLease(profiles.compatA.id));
+  await ctl.set(profiles.compatA.id, `${endpoint.origin}/v1`, COMPAT_KEY_A);
   const refused: SendOptions[] = [
     { method: "GET", path: "/compat/v1/models" },
     { path: "/compat/v1/completions" },
@@ -466,14 +515,87 @@ test("AC6: only POST <base path>/chat/completions is forwarded; a WebSocket upgr
   assert.equal(endpoint.seen.length, 0);
 });
 
-test("AC7: only an engine or server lease of an openai-codex profile spends the key, a Codex login or not", async () => {
+test("AC5: a lease reaches only its own profile's endpoint and key, engine or server, and never another's", async () => {
+  const a = await fakeEndpoint();
+  const b = await fakeEndpoint();
+  const gw = await gateway();
+  const ctl = await control(gw);
+  const A = profiles.compatA.id;
+  const B = profiles.compatB.id;
+  const engineA = await ctl.grant(engineLease(A));
+  const serverA = await ctl.grant({ kind: "server", profileId: A });
+  const engineB = await ctl.grant(engineLease(B));
+  const serverB = await ctl.grant({ kind: "server", profileId: B });
+
+  // Only B's pair is held: A's leases get the 503, and B's endpoint nothing.
+  await ctl.set(B, `${b.origin}/v1`, COMPAT_KEY_B);
+  for (const token of [engineA, serverA])
+    assertRefused(await send(gw, { token }), 503, { case: "compat-unset" });
+  assert.equal(b.seen.length, 0);
+  assert.equal(a.seen.length, 0);
+
+  await ctl.set(A, `${a.origin}/v1`, COMPAT_KEY_A);
+  for (const token of [engineA, serverA, engineB, serverB])
+    assert.equal((await send(gw, { token })).status, 200);
+  assert.deepEqual(
+    a.seen.map((s) => s.headers.authorization),
+    [`Bearer ${COMPAT_KEY_A}`, `Bearer ${COMPAT_KEY_A}`],
+  );
+  assert.deepEqual(
+    b.seen.map((s) => s.headers.authorization),
+    [`Bearer ${COMPAT_KEY_B}`, `Bearer ${COMPAT_KEY_B}`],
+  );
+  for (const seen of [...a.seen, ...b.seen])
+    for (const token of [engineA, serverA, engineB, serverB])
+      assert.ok(!JSON.stringify(seen.headers).includes(token));
+});
+
+test("AC6: compatible leases never reach /chatgpt or /anthropic, and login leases never reach /compat", async () => {
   const endpoint = await fakeEndpoint();
   const gw = await gateway();
   const ctl = await control(gw);
-  await ctl.set(`${endpoint.origin}/v1`, COMPAT_KEY_A);
+  const A = profiles.compatA.id;
+  await ctl.set(A, `${endpoint.origin}/v1`, COMPAT_KEY_A);
 
+  // A compatible lease of either kind, on every provider route, the server
+  // leases' usage routes included: refused before any credential or upstream.
+  const providerRoutes: SendOptions[] = [
+    { path: "/anthropic/v1/messages" },
+    { method: "GET", path: "/anthropic/api/oauth/usage", body: null },
+    { path: "/chatgpt/backend-api/codex/responses" },
+    { method: "GET", path: "/chatgpt/backend-api/wham/usage", body: null },
+    {
+      method: "GET",
+      path: "/chatgpt/backend-api/wham/rate-limit-reset-credits",
+      body: null,
+    },
+    {
+      path: "/chatgpt/backend-api/wham/rate-limit-reset-credits/consume",
+    },
+  ];
+  for (const token of [
+    await ctl.grant(engineLease(A)),
+    await ctl.grant({ kind: "server", profileId: A }),
+  ])
+    for (const options of providerRoutes)
+      assertRefusedAnyShape(await send(gw, { ...options, token }), 403, {
+        case: "forbidden",
+      });
+  assert.equal(upstreams.anthropic.length, 0);
+  assert.equal(upstreams.chatgpt.length, 0);
+
+  // A Codex or Claude lease of either kind, on `/compat`, never.
+  for (const profileId of [profiles.codex.id, profiles.claude.id])
+    for (const token of [
+      await ctl.grant(engineLease(profileId)),
+      await ctl.grant({ kind: "server", profileId }),
+    ])
+      assertRefused(await send(gw, { token }), 403, { case: "forbidden" });
+  assert.equal(endpoint.seen.length, 0, "no refusal reached the endpoint");
+
+  // Unknown and revoked leases keep their 401s.
   assertRefused(await send(gw, {}), 401, { case: "unknown-lease" });
-  const revoked = await ctl.grant(engineLease(profiles.codex.id));
+  const revoked = await ctl.grant(engineLease(A));
   const revokedId = gw.leases.records().at(-1)!.leaseId;
   await ctl.connection.request(
     CONTROL_METHODS.revoke,
@@ -483,48 +605,17 @@ test("AC7: only an engine or server lease of an openai-codex profile spends the 
     case: "revoked-lease",
     reason: "session-ended",
   });
-  // A Claude lease of either kind, never (RD-G3b2-1).
-  const claude = await ctl.grant(engineLease(profiles.claude.id));
-  assertRefused(await send(gw, { token: claude }), 403, { case: "forbidden" });
-  const claudeServer = await ctl.grant({
-    kind: "server",
-    profileId: profiles.claude.id,
-  });
-  assertRefused(await send(gw, { token: claudeServer }), 403, {
-    case: "forbidden",
-  });
-  assert.equal(endpoint.seen.length, 0, "no refusal reached the endpoint");
-
-  // The server's one-shots spend the key as an engine does (G4).
-  const server = await ctl.grant({
-    kind: "server",
-    profileId: profiles.codex.id,
-  });
-  assert.equal((await send(gw, { token: server })).status, 200);
-  // No readCredential: a pi profile without a Codex login still works.
-  const noLogin = await ctl.grant(engineLease(profiles.codexNoLogin.id));
-  assert.equal((await send(gw, { token: noLogin })).status, 200);
-  const noLoginServer = await ctl.grant({
-    kind: "server",
-    profileId: profiles.codexNoLogin.id,
-  });
-  assert.equal((await send(gw, { token: noLoginServer })).status, 200);
-  assert.deepEqual(
-    endpoint.seen.map((s) => s.headers.authorization),
-    [
-      `Bearer ${COMPAT_KEY_A}`,
-      `Bearer ${COMPAT_KEY_A}`,
-      `Bearer ${COMPAT_KEY_A}`,
-    ],
-  );
+  assert.equal(endpoint.seen.length, 0);
+  assert.equal(upstreams.anthropic.length + upstreams.chatgpt.length, 0);
 });
 
-test("AC8: an https push uses TLS with the endpoint's name; an http push never does", async () => {
+test("an https push uses TLS with the endpoint's name; an http push never does", async () => {
   const endpoint = await fakeEndpoint(true);
   const gw = await gateway();
   const ctl = await control(gw);
-  const token = await ctl.grant(engineLease(profiles.codex.id));
-  await ctl.set(`${endpoint.origin}/v1`, COMPAT_KEY_A);
+  const A = profiles.compatA.id;
+  const token = await ctl.grant(engineLease(A));
+  await ctl.set(A, `${endpoint.origin}/v1`, COMPAT_KEY_A);
   const reply = await send(gw, { token });
   assert.equal(reply.status, 200, reply.body.toString());
   const seen = endpoint.seen[0]!;
@@ -534,6 +625,7 @@ test("AC8: an https push uses TLS with the endpoint's name; an http push never d
 
   // The same TLS endpoint pushed as http: plain bytes, which it refuses.
   await ctl.set(
+    A,
     `${endpoint.origin.replace("https:", "http:")}/v1`,
     COMPAT_KEY_A,
   );
@@ -542,7 +634,7 @@ test("AC8: an https push uses TLS with the endpoint's name; an http push never d
   assert.equal(endpoint.seen.length, 1);
 });
 
-test("AC9: a request keeps its endpoint and key across a push; the next goes to the new pair", async () => {
+test("AC5: a request keeps its endpoint and key across a push; the next goes to the new pair", async () => {
   const a = await fakeEndpoint();
   const b = await fakeEndpoint();
   let release!: () => void;
@@ -555,11 +647,12 @@ test("AC9: a request keeps its endpoint and key across a push; the next goes to 
   };
   const gw = await gateway();
   const ctl = await control(gw);
-  const token = await ctl.grant(engineLease(profiles.codex.id));
-  await ctl.set(`${a.origin}/v1`, COMPAT_KEY_A);
+  const A = profiles.compatA.id;
+  const token = await ctl.grant(engineLease(A));
+  await ctl.set(A, `${a.origin}/v1`, COMPAT_KEY_A);
   const first = send(gw, { token });
   await atA;
-  await ctl.set(`${b.origin}/v1`, COMPAT_KEY_B);
+  await ctl.set(A, `${b.origin}/v1`, COMPAT_KEY_B);
   release();
   assert.equal((await first).status, 200);
   assert.deepEqual(
@@ -577,25 +670,121 @@ test("AC9: a request keeps its endpoint and key across a push; the next goes to 
   );
 });
 
-test("AC10: a new connection's hello clears the push; a connection that ends without one keeps it", async () => {
-  const endpoint = await fakeEndpoint();
+test("AC4: a new connection's hello clears every pair; a connection that ends without one keeps them", async () => {
+  const a = await fakeEndpoint();
+  const b = await fakeEndpoint();
   const gw = await gateway();
   const first = await control(gw);
-  const token = await first.grant(engineLease(profiles.codex.id));
-  await first.set(`${endpoint.origin}/v1`, COMPAT_KEY_A);
+  const A = profiles.compatA.id;
+  const B = profiles.compatB.id;
+  const tokenA = await first.grant(engineLease(A));
+  const tokenB = await first.grant(engineLease(B));
+  await first.set(A, `${a.origin}/v1`, COMPAT_KEY_A);
+  await first.set(B, `${b.origin}/v1`, COMPAT_KEY_B);
   first.connection.end("the server went away");
   await first.connection.ended;
-  assert.equal((await send(gw, { token })).status, 200);
+  assert.equal((await send(gw, { token: tokenA })).status, 200);
+  assert.equal((await send(gw, { token: tokenB })).status, 200);
 
   const second = await control(gw, "boot-y");
-  assertRefused(await send(gw, { token }), 503, { case: "compat-unset" });
-  await second.set(`${endpoint.origin}/v1`, COMPAT_KEY_B);
-  assert.equal((await send(gw, { token })).status, 200);
-  assert.deepEqual(
-    endpoint.seen.map((s) => s.headers.authorization),
-    [`Bearer ${COMPAT_KEY_A}`, `Bearer ${COMPAT_KEY_B}`],
-  );
+  for (const token of [tokenA, tokenB])
+    assertRefused(await send(gw, { token }), 503, { case: "compat-unset" });
+  await second.set(A, `${a.origin}/v1`, COMPAT_KEY_A);
+  assert.equal((await send(gw, { token: tokenA })).status, 200);
+  assertRefused(await send(gw, { token: tokenB }), 503, {
+    case: "compat-unset",
+  });
+  assert.equal(a.seen.length, 2);
+  assert.equal(b.seen.length, 1);
 });
+
+/** Rejects unless `answer` fails with `state_write_failed`. */
+const failsToWrite = (answer: Promise<unknown>) =>
+  assert.rejects(
+    answer,
+    (err) =>
+      err instanceof WorkerRequestError && err.code === "state_write_failed",
+  );
+
+const REMOVALS = [
+  {
+    name: "profiles.remove",
+    method: CONTROL_METHODS.removeProfile,
+    params: () => ({ profileId: profiles.compatA.id }),
+  },
+  {
+    name: "a sync that omits it",
+    method: CONTROL_METHODS.syncProfiles,
+    params: () => ({
+      profiles: Object.values(profiles).filter(
+        (profile) => profile.id !== profiles.compatA.id,
+      ),
+    }),
+  },
+];
+
+const SAVES = [
+  { name: "saves", blocked: undefined },
+  { name: "profiles.json cannot be saved", blocked: "profiles.json.tmp" },
+  { name: "leases.json cannot be saved", blocked: "leases.json.tmp" },
+];
+
+for (const removal of REMOVALS)
+  for (const save of SAVES)
+    test(`AC4: removing A by ${removal.name} drops its pair and revokes its leases while B forwards (${save.name})`, async () => {
+      const a = await fakeEndpoint();
+      const b = await fakeEndpoint();
+      const stateDir = join(
+        await mkdtemp(join(DATA_DIR, "compat-removal-")),
+        "gw",
+      );
+      const gw = await gateway(stateDir);
+      const ctl = await control(gw);
+      const A = profiles.compatA.id;
+      const B = profiles.compatB.id;
+      const tokenA = await ctl.grant(engineLease(A));
+      const tokenB = await ctl.grant({ kind: "server", profileId: B });
+      await ctl.set(A, `${a.origin}/v1`, COMPAT_KEY_A);
+      await ctl.set(B, `${b.origin}/v1`, COMPAT_KEY_B);
+      assert.equal((await send(gw, { token: tokenA })).status, 200);
+
+      const blocker = save.blocked && join(stateDir, save.blocked);
+      if (blocker) await mkdir(blocker);
+      const answer = ctl.send(removal.method, removal.params());
+      if (blocker) await failsToWrite(answer);
+      else await answer;
+      if (blocker) await rmdir(blocker);
+
+      assertRefused(await send(gw, { token: tokenA }), 401, {
+        case: "revoked-lease",
+        reason: "profile-removed",
+      });
+      assert.equal((await send(gw, { token: tokenB })).status, 200);
+
+      // Back by upsert, with a fresh lease and no push: nothing to spend.
+      decodeLeasesRevoked(
+        await ctl.send(CONTROL_METHODS.upsertProfile, {
+          profile: profiles.compatA,
+        }),
+      );
+      const fresh = await ctl.grant(engineLease(A));
+      assertRefused(await send(gw, { token: fresh }), 503, {
+        case: "compat-unset",
+      });
+      assert.equal(a.seen.length, 1, "endpoint A saw only the first request");
+      assert.equal(b.seen.length, 1);
+
+      for (const file of await filesUnder(stateDir)) {
+        const text = await readFile(file, "latin1");
+        for (const secret of [
+          COMPAT_KEY_A,
+          COMPAT_KEY_B,
+          new URL(a.origin).host,
+          new URL(b.origin).host,
+        ])
+          assert.ok(!text.includes(secret), `${file} holds ${secret}`);
+      }
+    });
 
 /** Every file under `root`, recursively. */
 async function filesUnder(root: string): Promise<string[]> {
@@ -605,16 +794,18 @@ async function filesUnder(root: string): Promise<string[]> {
     .map((entry) => join(entry.parentPath, entry.name));
 }
 
-test("AC11: a restarted gateway on the same state answers 503 until a push; no file or log line holds a key or endpoint", async () => {
+test("a restarted gateway on the same state answers 503 until a push; no file or log line holds a key or endpoint", async () => {
   const a = await fakeEndpoint();
   const b = await fakeEndpoint();
   const stateDir = join(await mkdtemp(join(DATA_DIR, "compat-state-")), "gw");
   const gw = await gateway(stateDir);
   const ctl = await control(gw);
-  const token = await ctl.grant(engineLease(profiles.codex.id));
-  await ctl.set(`${a.origin}/v1`, COMPAT_KEY_A);
+  const A = profiles.compatA.id;
+  const B = profiles.compatB.id;
+  const token = await ctl.grant(engineLease(A));
+  await ctl.set(A, `${a.origin}/v1`, COMPAT_KEY_A);
   assert.equal((await send(gw, { token })).status, 200);
-  await ctl.set(`${b.origin}/api/openai/v1`, COMPAT_KEY_B);
+  await ctl.set(B, `${b.origin}/api/openai/v1`, COMPAT_KEY_B);
   const files = (await readdir(stateDir)).sort();
   assert.ok(
     files.every((name) =>
@@ -625,12 +816,12 @@ test("AC11: a restarted gateway on the same state answers 503 until a push; no f
 
   await running.pop()!.close();
   const restarted = await gateway(stateDir);
-  // The lease survived the restart; the push did not.
+  // The lease and the tokenless profile survived the restart; the push did not.
   assertRefused(await send(restarted, { token }), 503, {
     case: "compat-unset",
   });
   const again = await control(restarted, "boot-y");
-  await again.set(`${a.origin}/v1`, COMPAT_KEY_A);
+  await again.set(A, `${a.origin}/v1`, COMPAT_KEY_A);
   assert.equal((await send(restarted, { token })).status, 200);
   assert.deepEqual((await readdir(stateDir)).sort(), files);
 
@@ -703,8 +894,9 @@ test("an unreachable compatible endpoint is a marked 502", async () => {
   await endpoints.pop()!.close();
   const gw = await gateway();
   const ctl = await control(gw);
-  const token = await ctl.grant(engineLease(profiles.codex.id));
-  await ctl.set(`${origin}/v1`, COMPAT_KEY_A);
+  const A = profiles.compatA.id;
+  const token = await ctl.grant(engineLease(A));
+  await ctl.set(A, `${origin}/v1`, COMPAT_KEY_A);
   assertRefused(await send(gw, { token }), 502, {
     case: "unreachable",
     upstream: "the OpenAI-compatible endpoint",

@@ -3,17 +3,18 @@
  * "Credentials"): a loopback HTTP model listener that checks lease tokens
  * against its lease table and forwards Claude Messages and Codex responses
  * requests with the bound profile's real credential, and OpenAI-compatible
- * chat completions with the key the server pushed, plus the control endpoint
- * (`control.ts`) through which the server syncs profiles, grants and revokes
- * leases, and pushes that endpoint and key.
+ * chat completions to the bound profile's endpoint with the key the server
+ * pushed for it, plus the control endpoint (`control.ts`) through which the
+ * server syncs profiles, grants and revokes leases, and pushes each
+ * compatible profile's endpoint and key.
  *
  * With a state directory, the leases, the profile registry and the login
  * holds are loaded at start and saved on every change (`state.ts`), so a
  * restarted gateway forwards before any control connects and keeps every
- * hold. Without one they live in memory. The pushed endpoint and key live
+ * hold. Without one they live in memory. The pushed endpoints and keys live
  * only in memory either way (`compatUpstream.ts`): a restarted gateway
  * answers 503 on `/compat` until the next push. A timer rechecks the holds
- * once a minute (`holds.ts`), and another renews the leased profiles' tokens
+ * once a minute (`holds.ts`), and another renews the leased login profiles' tokens
  * (`renewal.ts`), from the saved leases even before a control connects. Every
  * hold that ends has its profile's file re-read at once.
  *
@@ -37,7 +38,7 @@ import { createControlEndpoint } from "./control.ts";
 import { HoldTable, WriterLane, type HoldRecord } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
 import type { ProcessProbe } from "./processIdentity.ts";
-import { ProfileRegistry } from "./profiles.ts";
+import { isLoginProfile, ProfileRegistry } from "./profiles.ts";
 import type { RefreshLockOptions } from "./refreshLock.ts";
 import {
   createRenewal,
@@ -79,7 +80,7 @@ export interface RunningGateway {
   readonly stats: Readonly<GatewayStats>;
   /** The profiles' writer lane, for in-gateway writers (G4, G5). */
   readonly lane: Pick<WriterLane, "run">;
-  /** Serves gateway control 1.3 on `endpoint`, as the listener. */
+  /** Serves gateway control 1.4 on `endpoint`, as the listener. */
   attachControl(endpoint: ByteEndpoint): void;
   /** The last `control.hello` a control connection said, as recorded. */
   lastHello(): ControlHello | undefined;
@@ -117,10 +118,14 @@ export async function startGateway(
     profiles.restore(state.profiles);
     holds.restore(state.holds);
     // Fence holds are stuck: the next hello reports them.
-    if (holds.fence(profiles.ids()).saveError !== undefined)
+    if (holds.fence(profiles.loginIds()).saveError !== undefined)
       log("hold fence: holds.json not saved; the change stands in memory");
   }
-  const lane = new WriterLane(holds, (id) => profiles.get(id)?.provider);
+  // A profile without a login has no lane: `undefined` is unknown there.
+  const lane = new WriterLane(holds, (id) => {
+    const profile = profiles.get(id);
+    return profile && isLoginProfile(profile) ? profile.provider : undefined;
+  });
   const compat = createCompatUpstream();
   const renewal = createRenewal({
     profiles,

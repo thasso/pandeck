@@ -4,9 +4,9 @@
  * the in-process gateway, against a fake Codex upstream. A Codex request
  * carries only the engine's lease, to the gateway alone, which adds the
  * profile's own token; nothing else is contacted, pi.dev included; and no
- * engine writes a credential or catalog file, nor the gateway a key. Until
- * the gateway serves each OpenAI-compatible account (Task-1373's second PR),
- * such an account is refused at the link before any lease.
+ * engine writes a credential or catalog file, nor the gateway a key. Each of
+ * two OpenAI-compatible accounts, on its own fake endpoint, reaches only that
+ * endpoint with its own key, the gateway adding it at `/compat` (T1373 AC11).
  *
  * It runs only in `pnpm run test:engine-contract`, which starts it inside a
  * user, network and PID namespace with loopback alone
@@ -46,8 +46,10 @@ const REPLY = "contract reply";
 const BUILTIN_ID = "gpt-5.6-luna";
 /** A Codex id only the named profile's server catalog has. */
 const CATALOG_ID = "gpt-catalog-only";
-/** The one model the compatible account lists. */
+/** The one model each compatible account lists. */
 const COMPAT_MODEL = "m";
+/** The model a reopen falls back to once its own is gone. */
+const COMPAT_FALLBACK = "m2";
 const CREDENTIAL_FILES = new Set([
   "auth.json",
   "models.json",
@@ -175,29 +177,53 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       "auth.json",
     );
     const catalogSeed = join(profiles.piAgentDir(named), "models-store.json");
-    // A ready OpenAI-compatible account, whose endpoint is never contacted.
-    const compatibleAccount = profiles.createCredentialProfile({
-      name: "Contract LLM",
-      provider: "openai-compatible",
-    }).id;
+    // Two ready OpenAI-compatible accounts, each on its own fake endpoint
+    // with its own key; the link pushes both pairs at boot.
     const accounts = await import("../openAiCompatibleAccounts.ts");
-    accounts.writeOpenAiCompatibleEndpoint(compatibleAccount, {
-      baseUrl: "http://127.0.0.1:9/v1",
-      apiKey: fixtures.COMPAT_KEY_A,
-      thinkingFormat: "none",
-      models: [
-        {
-          id: COMPAT_MODEL,
-          name: COMPAT_MODEL,
-          input: ["text"],
-          contextWindow: 100_000,
-          maxTokens: 4_000,
-          reasoning: false,
-        },
-      ],
+    const compatModel = (id: string) => ({
+      id,
+      name: id,
+      input: ["text" as const],
+      contextWindow: 100_000,
+      maxTokens: 4_000,
+      reasoning: false,
     });
-    const compatibleEndpointFile =
-      accounts.openAiCompatibleEndpointPath(compatibleAccount);
+    const compatible = [];
+    for (const [name, key] of [
+      ["Contract LLM A", fixtures.COMPAT_KEY_A],
+      ["Contract LLM B", fixtures.COMPAT_KEY_B],
+    ] as const) {
+      const reply = `${name} reply`;
+      const endpoint = await fixtures.startFakeCompatEndpoint(
+        [COMPAT_MODEL],
+        reply,
+      );
+      egress.allow(new URL(endpoint.baseUrl).host);
+      const account = profiles.createCredentialProfile({
+        name,
+        provider: "openai-compatible",
+      }).id;
+      const endpointSettings = {
+        baseUrl: endpoint.baseUrl,
+        apiKey: key,
+        thinkingFormat: "none" as const,
+        models: [compatModel(COMPAT_MODEL)],
+      };
+      accounts.writeOpenAiCompatibleEndpoint(account, endpointSettings);
+      compatible.push({
+        account,
+        endpoint,
+        key,
+        reply,
+        file: accounts.openAiCompatibleEndpointPath(account),
+        /** Stores `models` as Test would; the next open's feed reads them. */
+        setModels: (ids: string[]) =>
+          accounts.writeOpenAiCompatibleEndpoint(account, {
+            ...endpointSettings,
+            models: ids.map(compatModel),
+          }),
+      });
+    }
     writeCodexAuth(namedAuth, fixtures.CODEX_ACCESS, fixtures.CODEX_ACCOUNT);
     writeCodexAuth(
       defaultAuth,
@@ -244,8 +270,6 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     const { runPiOneShot } = await import("./oneShot.ts");
     const { childProcessEnv } = await import("../subprocessEnv.ts");
     const { startGatewayLinkForTests } = await import("../test/gatewayLink.ts");
-    const { GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT, serverGatewayAccess } =
-      await import("../gatewayLink.ts");
     const { createInProcessTransport } =
       await import("../workerProtocol/inProcessTransport.ts");
     const controlMethods = await import("../gateway/controlMethods.ts");
@@ -275,7 +299,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     registerInProcessEngineFactory("pi", factory);
 
     // 7. The fake upstream answers as the case says; the gateway links to
-    // it as the server does, with no compatible endpoint to push.
+    // it as the server does, pushing each compatible account's pair.
     let respond = fixtures.fakeCodexStream(REPLY);
     const upstream = await fixtures.startFakeUpstreams({
       codex: (seen, res) => respond(seen, res),
@@ -334,10 +358,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       upstream,
       gateway,
       gatewayTarget,
-      compatibleAccount,
-      compatibleEndpointFile,
-      GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT,
-      serverGatewayAccess,
+      compatible,
       createInProcessTransport,
       controlMethods,
       DATA_DIR,
@@ -362,6 +383,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
     env.egress.close();
     await env.gateway.close();
     await env.upstream.close();
+    for (const { endpoint } of env.compatible) await endpoint.close();
   });
 
   type Transcript = Parameters<typeof env.openRemotePiEngine>[0]["transcript"];
@@ -475,6 +497,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       env.fixtures.CODEX_DEFAULT_ACCESS,
       FAKE_REFRESH,
       env.fixtures.COMPAT_KEY_A,
+      env.fixtures.COMPAT_KEY_B,
       ...env.leases,
     ];
     for (const line of env.gateway.lines)
@@ -825,45 +848,110 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
   );
 
   test(
-    "AC10: with the switch on, a compatible account's engine and one-shot lease are refused at the link, before any lease, as no dead login",
+    "AC11: each compatible account's turn, one-shot and reopen reach only its own endpoint with its own key, through the gateway, never with the lease",
     async () => {
-      const account = env.compatibleAccount;
-      const leasesBefore = env.gateway.engineLeases().length;
-      const from = env.gateway.lines.length;
-      const started = await env.resolvePiEngineStart({
-        kind: "assistant",
-        credentialProfileId: account,
-      });
-      const refused = (err: Error) => {
-        assert.equal(err.message, env.GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT);
-        assert.equal(
-          env.isLoginDeath(err.message, { provider: account }),
-          false,
+      /** The chat requests `endpoint` got since `from`: path and key. */
+      const chats = (
+        endpoint: (typeof env.compatible)[number]["endpoint"],
+        from = 0,
+      ) =>
+        endpoint.seen
+          .slice(from)
+          .filter((seen) => seen.method === "POST")
+          .map((seen) => [seen.url, seen.authorization]);
+      for (const own of env.compatible) {
+        const others = env.compatible.filter((c) => c !== own);
+        const othersFrom = others.map((c) => c.endpoint.seen.length);
+        const from = own.endpoint.seen.length;
+        const chat = ["/v1/chat/completions", `Bearer ${own.key}`];
+
+        // A turn on the account's engine.
+        const first = await open({
+          profileId: own.account,
+          model: { provider: own.account, id: COMPAT_MODEL },
+        });
+        const sessionId = first.engine.sessionId;
+        const file = first.engine.sessionFile;
+        assert.ok(file, "the transcript has a file");
+        try {
+          assert.equal(
+            first.engine.model?.baseUrl,
+            `${env.gateway.link.gateway!.url}/compat/v1`,
+          );
+          const reply = await turn(first.engine, "Say hello.");
+          assert.equal(reply.stopReason, "stop", reply.errorMessage);
+          assert.equal(textOf(reply), own.reply);
+          assert.equal(leaseFor(sessionId).profileId, own.account);
+        } finally {
+          await first.engine.dispose();
+        }
+        assert.deepEqual(chats(own.endpoint, from), [chat]);
+
+        // A one-shot on the account's server lease.
+        const gateway = await env.gateway.link.serverAccess(own.account);
+        env.leases.push(gateway.leaseToken);
+        const model = await env.serverPiModelPort.findForProfile(
+          own.account,
+          own.account,
+          COMPAT_MODEL,
         );
-        return true;
-      };
-      await assert.rejects(
-        env.openRemotePiEngine(
-          {
-            kind: "assistant",
-            credentialProfileId: account,
-            transcript: { type: "new", cwd: env.work },
-            model: { provider: account, id: COMPAT_MODEL },
-            ...started,
-            mode: "build",
-            canonicalize: true,
-          },
-          () => {},
-        ),
-        refused,
-      );
-      await assert.rejects(env.serverGatewayAccess(account), refused);
-      assert.equal(env.gateway.engineLeases().length, leasesBefore);
-      assert.deepEqual(requestLines(from), []);
+        assert.ok(model, "the server's runtime has the account's model");
+        const result = await env.runPiOneShot({
+          model: model as never,
+          credentialProfileId: own.account,
+          thinkingLevel: "off",
+          systemPrompt: "You answer in one word.",
+          prompt: "Say hello.",
+          timeoutMs: CASE_MS / 2,
+          timeoutMessage: "The one-shot timed out.",
+          gateway,
+        });
+        assert.equal(result.text, own.reply);
+        assert.deepEqual(chats(own.endpoint, from), [chat, chat]);
+
+        // An ordinary reopen restores the transcript's model; once the
+        // account no longer lists it, the reopen falls back to one it does.
+        const reopened = await open({
+          profileId: own.account,
+          transcript: { type: "open", file, expectedId: sessionId },
+        });
+        try {
+          assert.equal(reopened.engine.model?.id, COMPAT_MODEL);
+          assert.equal(reopened.engine.model?.provider, own.account);
+        } finally {
+          await reopened.engine.dispose();
+        }
+        own.setModels([COMPAT_FALLBACK]);
+        try {
+          const fallback = await open({
+            profileId: own.account,
+            transcript: { type: "open", file, expectedId: sessionId },
+          });
+          try {
+            assert.equal(fallback.engine.model?.id, COMPAT_FALLBACK);
+            assert.equal(fallback.engine.model?.provider, own.account);
+            const reply = await turn(fallback.engine, "Say hello again.");
+            assert.equal(reply.stopReason, "stop", reply.errorMessage);
+          } finally {
+            await fallback.engine.dispose();
+          }
+        } finally {
+          own.setModels([COMPAT_MODEL]);
+        }
+        assert.deepEqual(chats(own.endpoint, from), [chat, chat, chat]);
+
+        // Nothing reached another account's endpoint, nor any the lease.
+        others.forEach((other, i) =>
+          assert.equal(other.endpoint.seen.length, othersFrom[i]),
+        );
+        for (const seen of own.endpoint.seen)
+          for (const lease of env.leases)
+            assert.ok(!seen.authorization?.includes(lease));
+      }
       assertNoEgress();
       assertNoTokenLogged();
     },
-    CASE_MS,
+    CASE_MS * 2,
   );
 
   test("no engine wrote a credential or catalog file, rewrote a fixture, or stored a lease", () => {
@@ -888,8 +976,7 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       env.fixtures.CODEX_DEFAULT_ACCESS,
       FAKE_REFRESH,
     ];
-    // The compatible key stays in its account's own endpoint file.
-    const compatKeys = [env.fixtures.COMPAT_KEY_A];
+    // Each compatible key stays in its account's own endpoint file.
     for (const file of [...files, ...filesUnder(env.gateway.stateDir)]) {
       const text = readFileSync(file, "latin1");
       for (const lease of env.leases)
@@ -897,8 +984,8 @@ describe.runIf(ENABLED)("the pi engine through the gateway", () => {
       if (!env.fixtureFiles.has(file))
         for (const token of logins)
           assert.ok(!text.includes(token), `${file} holds a login token`);
-      if (resolve(file) !== resolve(env.compatibleEndpointFile))
-        for (const key of compatKeys)
+      for (const { key, file: own } of env.compatible)
+        if (resolve(file) !== resolve(own))
           assert.ok(!text.includes(key), `${file} holds a compatible key`);
     }
   });

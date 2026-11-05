@@ -1,3 +1,9 @@
+/**
+ * Gateway on, the server's actual callers lease an OpenAI-compatible account
+ * like any other (T1373 AC12): a one-shot runs through `/compat` on its
+ * server lease, and an engine open is granted an engine lease before the
+ * Worker answers. A fake loopback endpoint and fixture keys only.
+ */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,38 +12,32 @@ import { afterAll, test } from "vitest";
 
 const home = mkdtempSync(join(tmpdir(), "compatible-gateway-callers-"));
 process.env.HOME = home;
-const { createCredentialProfile } = await import("./credentialProfiles.ts");
-const { readOpenAiCompatibleEndpoint, writeOpenAiCompatibleEndpoint } =
-  await import("./openAiCompatibleAccounts.ts");
 const {
-  startGatewayLink,
-  GatewayAccountKindUnsupportedError,
-  GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT,
-} = await import("./gatewayLink.ts");
+  createCredentialProfile,
+  deleteCredentialProfile,
+  patchOpenAiCompatibleEndpoint,
+  testOpenAiCompatibleProfile,
+} = await import("./credentialProfiles.ts");
+const { startGatewayLink } = await import("./gatewayLink.ts");
 const { runOneShot } = await import("./harnesses/oneShot.ts");
 const { openEngineChannel } = await import("./workers/engineClient.ts");
+const { COMPAT_KEY_A, startFakeCompatEndpoint } =
+  await import("./test/gatewayFixtures.ts");
 
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 
-test("gateway-on actual helper and engine open refuse endpoint accounts before any lease, control request or Worker attachment", async () => {
+test("AC12: gateway on, a compatible account's one-shot and engine open are each granted a lease, and nothing refuses its kind", async () => {
+  const endpoint = await startFakeCompatEndpoint(["fixture"], "leased answer");
   const profile = createCredentialProfile({
     provider: "openai-compatible",
-    name: "Refused endpoint",
+    name: "Leased endpoint",
   });
-  writeOpenAiCompatibleEndpoint(profile.id, {
-    ...readOpenAiCompatibleEndpoint(profile.id),
-    baseUrl: "http://127.0.0.1:9/v1",
-    models: [
-      {
-        id: "fixture",
-        name: "Fixture",
-        input: ["text"],
-        reasoning: false,
-        contextWindow: 32000,
-        maxTokens: 4000,
-      },
-    ],
+  patchOpenAiCompatibleEndpoint(profile.id, {
+    baseUrl: endpoint.baseUrl,
+    apiKey: COMPAT_KEY_A,
   });
+  // Setup by the direct path: Test discovers the models at the endpoint.
+  assert.equal((await testOpenAiCompatibleProfile(profile.id)).status.ok, true);
   const lines: string[] = [];
   const link = startGatewayLink({
     stateDir: join(home, "gateway"),
@@ -47,44 +47,56 @@ test("gateway-on actual helper and engine open refuse endpoint accounts before a
     claudeTokenEndpoint: { connect: { host: "127.0.0.1", port: 9 } },
   });
   try {
-    assert.equal(await link.ready, true);
-    const controlRequests = lines.filter((line) =>
-      line.includes("control.request"),
-    ).length;
-    await assert.rejects(
-      runOneShot({
-        model: { provider: profile.id, modelId: "fixture" },
-        credentialProfileId: profile.id,
-        thinkingLevel: "off",
-        systemPrompt: "Fixture",
-        prompt: "Must refuse before execution",
-        timeoutMs: 1000,
-        timeoutMessage: "Unexpected execution",
-      }),
-      { message: GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT },
+    assert.equal(await link.ready, true, lines.join("\n"));
+    const result = await runOneShot({
+      model: { provider: profile.id, modelId: "fixture" },
+      credentialProfileId: profile.id,
+      thinkingLevel: "off",
+      systemPrompt: "Fixture",
+      prompt: "Fixture prompt",
+      timeoutMs: 20_000,
+      timeoutMessage: "The fixture timed out.",
+    });
+    assert.equal(result.text, "leased answer");
+    // Forwarded by the gateway with the pushed key; discovery is apart.
+    assert.deepEqual(
+      endpoint.seen
+        .filter((seen) => seen.method === "POST")
+        .map((seen) => [seen.url, seen.authorization]),
+      [["/v1/chat/completions", `Bearer ${COMPAT_KEY_A}`]],
     );
+    assert.equal(link.gateway!.stats.forwarded, 1);
+
     await assert.rejects(
       openEngineChannel(
-        {} as never,
+        {
+          request: () => Promise.reject(new Error("fixture: no Worker")),
+          ended: new Promise(() => {}),
+        } as never,
         "pi",
         {},
         () => {
-          throw new Error("Must refuse before attaching a Worker engine");
+          throw new Error("the fixture Worker never opens");
         },
-        { profileId: profile.id, sessionId: "refused-engine" },
+        { profileId: profile.id, sessionId: "leased-engine" },
       ),
-      GatewayAccountKindUnsupportedError,
+      { message: "fixture: no Worker" },
     );
-    assert.equal(link.gateway!.leases.records().length, 0);
-    assert.equal(
-      lines.filter((line) => line.includes("control.request")).length,
-      controlRequests,
-    );
-    assert.equal(
-      lines.some((line) => line.includes("lease.granted")),
-      false,
-    );
+    const records = link.gateway!.leases.records();
+    const server = records.find((record) => record.kind === "server");
+    assert.equal(server?.profileId, profile.id);
+    assert.equal(server?.provider, "openai-compatible");
+    assert.equal(server?.revoked, undefined);
+    const engine = records.find((record) => record.kind === "engine");
+    assert.equal(engine?.profileId, profile.id);
+    assert.equal(engine?.provider, "openai-compatible");
+    // The failed open ended its lease.
+    assert.equal(engine?.revoked, "session-ended");
+    for (const line of lines)
+      assert.ok(!line.includes(COMPAT_KEY_A), `a log line leaks: ${line}`);
   } finally {
     await link.close();
+    deleteCredentialProfile(profile.id);
+    await endpoint.close();
   }
 });

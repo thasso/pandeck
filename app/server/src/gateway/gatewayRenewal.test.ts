@@ -6,6 +6,7 @@
  * G5b: every end of a login hold re-reads the file at once (G5b AC1); a
  * hold waits for a renewal in flight and fences every renewal (G5b AC2); and
  * a restart, a lost connection or elapsed time never ends one (G5b AC9).
+ * An OpenAI-compatible profile is never read or renewed (T1373 AC2).
  * Control runs over an in-process pair; Claude renews at a fake TLS
  * `platform.claude.com`, Codex through a fake port. Every token is a fake.
  */
@@ -27,6 +28,7 @@ import { isLoginDeath } from "../providerErrors.ts";
 import {
   CLAUDE_PATH,
   CODEX_PATH,
+  COMPAT_KEY_A,
   dialControl,
   endChild,
   fakeProcesses,
@@ -55,9 +57,17 @@ import {
 } from "./gateway.ts";
 import type { HoldStatus } from "./holds.ts";
 import { processStartTime, type ProcessProbe } from "./processIdentity.ts";
-import type { GatewayProfile } from "./profiles.ts";
+import type { GatewayProfile, LoginProfile } from "./profiles.ts";
+import { readCredential } from "./profileCredential.ts";
 import type { CodexRenewPort } from "./renewal.ts";
 import { refusalText } from "./refusals.ts";
+
+// Passes through; AC2 counts the reads.
+vi.mock("./profileCredential.ts", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./profileCredential.ts")>();
+  return { ...actual, readCredential: vi.fn(actual.readCredential) };
+});
 
 // Synthetic fixture values; none is a real credential.
 const OLD_ACCESS = "fake-gwrenew-old-access";
@@ -196,7 +206,7 @@ async function claudeProfile(
   id: string,
   expiresAt: number,
   enabled = true,
-): Promise<GatewayProfile> {
+): Promise<LoginProfile> {
   const tokenFile = join(await profileDir(), ".credentials.json");
   await writeClaude(tokenFile, expiresAt);
   return { id, provider: "claude", name: `Account ${id}`, enabled, tokenFile };
@@ -205,7 +215,7 @@ async function claudeProfile(
 async function codexProfile(
   id: string,
   expires: number,
-): Promise<GatewayProfile> {
+): Promise<LoginProfile> {
   const tokenFile = join(await profileDir(), "auth.json");
   await writeCodex(tokenFile, expires);
   return {
@@ -764,7 +774,7 @@ const endHold = (
 /** Rejects `a`'s next refresh: a sticky needs-login, reported once. */
 async function rejectRefresh(
   gw: RunningGateway,
-  a: GatewayProfile,
+  a: LoginProfile,
   token: string,
 ): Promise<void> {
   tokenRespond = (_seen, res) => {
@@ -1130,3 +1140,66 @@ test.each(["the writer exits", "Clear force-releases it"] as const)(
     await vi.waitFor(() => assert.equal(upstreams.platform.length, 1));
   },
 );
+
+test("AC2: /compat 200s and an upstream 401 on a compatible profile read no file, renew nothing and pass the 401 through", async () => {
+  // The endpoint answers what `compatStatus` says, with a fixed body.
+  let compatStatus = 200;
+  const endpoint = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(compatStatus, { "content-type": "application/json" });
+      res.end(compatStatus === 200 ? '{"ok":true}' : UPSTREAM_401);
+    });
+  });
+  await new Promise<void>((resolve) =>
+    endpoint.listen(0, "127.0.0.1", resolve),
+  );
+  try {
+    const { port } = endpoint.address() as { port: number };
+    const gw = await gateway();
+    const compat: GatewayProfile = {
+      id: "openai-compatible-aaaaaaaaaaaa",
+      provider: "openai-compatible",
+      name: "Endpoint",
+      enabled: true,
+    };
+    const connection = await ready(gw, [compat]);
+    await connection.request(
+      CONTROL_METHODS.compatSet,
+      encodeControlRequest({
+        profileId: compat.id,
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: COMPAT_KEY_A,
+      }),
+    );
+    const token = await grant(connection, engine(compat.id));
+    const server = await grant(connection, {
+      kind: "server",
+      profileId: compat.id,
+    });
+    vi.mocked(readCredential).mockClear();
+    await gw.renewDue();
+    const path = "/compat/v1/chat/completions";
+    assert.equal((await request(gw.port, "POST", path, token)).status, 200);
+    assert.equal((await request(gw.port, "POST", path, server)).status, 200);
+    compatStatus = 401;
+    for (const lease of [token, server]) {
+      const reply = await request(gw.port, "POST", path, lease);
+      assert.equal(reply.status, 401);
+      assert.equal(reply.text, UPSTREAM_401, "the 401 passes through");
+    }
+    refusals = [];
+    await settled();
+    await gw.renewDue();
+    assert.equal(vi.mocked(readCredential).mock.calls.length, 0);
+    assert.deepEqual(
+      lines.filter((line) => line.startsWith("renewal")),
+      [],
+    );
+    assert.deepEqual(statuses, []);
+    assert.equal(upstreams.platform.length, 0);
+    assert.deepEqual(portCalls, []);
+  } finally {
+    await new Promise((resolve) => endpoint.close(resolve));
+  }
+});

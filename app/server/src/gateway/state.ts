@@ -3,14 +3,15 @@
  * `leases.json`, `profiles.json` and `holds.json`, each a `{ v: 1, … }`
  * document written whole through the private atomic writer (directory 0700,
  * file 0600, temp file plus rename). None holds a token, a lease token or its
- * secret: a lease is saved with its secret's hash, a profile with its token
- * file's path, a login hold with its processes' pids and start times.
+ * secret: a lease is saved with its secret's hash, a login profile with its
+ * token file's path, a login hold with its processes' pids and start times.
+ * No file holds an OpenAI-compatible endpoint or key.
  *
  * All load when the gateway starts, so it forwards with the server down. A
  * missing file is empty. An unreadable file, or one of another version, is
  * logged by name and loaded as empty, so an unreadable `leases.json` refuses
- * every old token; an unreadable `holds.json` instead fences every profile
- * (`holds.ts`). A record that does not validate is skipped and logged the
+ * every old token; an unreadable `holds.json` instead fences every login
+ * profile (`holds.ts`). A record that does not validate is skipped and logged the
  * same way. No log line holds file content. The next save replaces the file.
  */
 import { join } from "node:path";
@@ -21,7 +22,12 @@ import {
   type HoldProcess,
   type HoldRecord,
 } from "./holds.ts";
-import { isLeaseId, type LeaseOwnership, type LeaseRecord } from "./leases.ts";
+import {
+  isLeaseId,
+  type LeaseBinding,
+  type LeaseOwnership,
+  type LeaseRecord,
+} from "./leases.ts";
 import { isPid, isStartTime } from "./processIdentity.ts";
 import {
   isAbsolutePath,
@@ -98,17 +104,25 @@ function parseLeaseRecord(value: unknown): LeaseRecord | undefined {
     typeof r.secretHash !== "string" ||
     !SECRET_HASH_RE.test(r.secretHash) ||
     !isProfileId(r.profileId) ||
-    !isLeaseProvider(r.provider) ||
-    !isAbsolutePath(r.tokenFile) ||
     !isTime(r.grantedAt)
   )
     return undefined;
+  // A login's lease names its token file; an endpoint account's names none.
+  let binding: LeaseBinding;
+  if (r.provider === "openai-compatible") {
+    if (r.tokenFile !== undefined) return undefined;
+    binding = { profileId: r.profileId, provider: r.provider };
+  } else if (isLeaseProvider(r.provider) && isAbsolutePath(r.tokenFile))
+    binding = {
+      profileId: r.profileId,
+      provider: r.provider,
+      tokenFile: r.tokenFile,
+    };
+  else return undefined;
   const record: LeaseRecord = {
     leaseId: r.leaseId,
     secretHash: r.secretHash,
-    profileId: r.profileId,
-    provider: r.provider,
-    tokenFile: r.tokenFile,
+    ...binding,
     ...ownership,
     grantedAt: r.grantedAt,
   };

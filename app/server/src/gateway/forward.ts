@@ -5,12 +5,15 @@
  * lease's provider, then the credential, then the upstream. The credential
  * comes through renewal (`renewal.ts`): a token about to expire is renewed
  * first, a dead or absent login gets U7's needs-login refusal, and an
- * upstream 401 may force one renewal while it passes through. `/compat` instead
- * takes any live engine lease of an `openai-codex` profile, then one snapshot
- * of the pushed endpoint (503 without one), then its allowlist, and sends the
- * pushed key over http or https as the push says; it reads no token file.
- * A request keeps its snapshot, so a push meanwhile never mixes an origin
- * with another's key. Bytes pass through
+ * upstream 401 may force one renewal while it passes through. A provider route
+ * refuses a lease of an OpenAI-compatible profile. `/compat` instead takes
+ * only an engine or server lease of an OpenAI-compatible profile, then one
+ * snapshot of the endpoint pushed for that lease's own profile (503 without
+ * one), then its allowlist, and sends that profile's pushed key over http or
+ * https as the push says; it reads no token file. The profile comes from the
+ * lease alone, so a lease for one account never reaches another's key. A
+ * request keeps its snapshot, so a push meanwhile never mixes an origin with
+ * another's key. Bytes pass through
  * unchanged both ways: compressed bodies are never decoded, and SSE streams as
  * it arrives. Both directions use `pipe`, so a client that stops reading holds
  * the upstream back instead of growing this process's memory. Only the
@@ -230,15 +233,15 @@ export function createForwarder(deps: ForwarderDeps): {
     const { leaseId, binding } = lease;
     const { upstream } = route;
     if (upstream.kind === "compat") {
-      // An engine or server lease of an `openai-codex` profile, never a
-      // Claude lease of either kind (RD-G3b2-1; G4 adds server leases).
+      // An engine or server lease of an OpenAI-compatible profile, never a
+      // Codex or Claude lease of either kind.
       const kind = leases.kindOf(leaseId);
       if (
         (kind !== "engine" && kind !== "server") ||
-        binding.provider !== "openai-codex"
+        binding.provider !== "openai-compatible"
       )
         return refuse(res, shape, { case: "forbidden" }, done, leaseId);
-      const target = compat.current();
+      const target = compat.current(binding.profileId);
       if (!target)
         return refuse(res, shape, { case: "compat-unset" }, done, leaseId);
       if (!isCompatAllowed(route, req.method, target.basePath))
@@ -254,6 +257,7 @@ export function createForwarder(deps: ForwarderDeps): {
       );
     }
     if (
+      binding.provider === "openai-compatible" ||
       binding.provider !== upstream.provider ||
       !isAllowed(route, req.method, leases.kindOf(leaseId))
     )

@@ -56,15 +56,15 @@ import {
 import { LaneHeldError, type HoldStatus } from "./holds.ts";
 import { processStartTime } from "./processIdentity.ts";
 import { LeaseTable } from "./leases.ts";
-import type { GatewayProfile } from "./profiles.ts";
+import type { GatewayProfile, LoginProfile } from "./profiles.ts";
 import { refusalText, type Refusal, type RevokeReason } from "./refusals.ts";
 
 const HOUR = 60 * 60 * 1000;
 const T0 = 1_800_000_000_000;
 
 let upstreams: FakeUpstreams;
-let profileA: GatewayProfile;
-let profileB: GatewayProfile;
+let profileA: LoginProfile;
+let profileB: LoginProfile;
 const running: RunningGateway[] = [];
 let lines: string[] = [];
 let capabilities: string[] = [];
@@ -445,6 +445,81 @@ test("AC11: a lease record that does not validate is skipped and the rest load",
   );
   assert.equal(await claudeOutcome(second, kept.token), "forwarded");
   assert.equal(await claudeOutcome(second, broken.token), UNKNOWN);
+});
+
+test("AC1: a tokenless OpenAI-compatible profile and its lease survive a restart; one naming a token file, or a login without one, is skipped", async () => {
+  const compat: GatewayProfile = {
+    id: "openai-compatible-aaaaaaaaaaaa",
+    provider: "openai-compatible",
+    name: "Local A",
+    enabled: true,
+  };
+  const stateDir = await freshStateDir();
+  const first = await gateway(stateDir);
+  const connection = await ready(first);
+  await connection.request(
+    CONTROL_METHODS.upsertProfile,
+    encodeControlRequest({ profile: compat }),
+  );
+  const compatLease = await grant(connection, compat.id, "s1");
+  const loginLease = await grant(connection, profileA.id, "s2");
+  await close(first);
+
+  const profiles = JSON.parse(
+    await readFile(join(stateDir, "profiles.json"), "utf8"),
+  ) as { v: number; profiles: Record<string, unknown>[] };
+  const stored = await storedLeases(stateDir);
+  const savedCompat = stored.leases.find(
+    (record) => record.leaseId === compatLease.leaseId,
+  )!;
+  assert.equal(savedCompat.provider, "openai-compatible");
+  assert.equal("tokenFile" in savedCompat, false);
+  assert.deepEqual(
+    profiles.profiles.find((profile) => profile.id === compat.id),
+    compat,
+  );
+
+  // Malformed: a compatible profile or lease naming a token file, and a
+  // login profile or lease without one.
+  profiles.profiles.push(
+    {
+      ...compat,
+      id: "openai-compatible-bbbbbbbbbbbb",
+      tokenFile: profileA.tokenFile,
+    },
+    { id: "claude-z", provider: "claude", name: "Z", enabled: true },
+  );
+  await writeFile(join(stateDir, "profiles.json"), JSON.stringify(profiles));
+  const { tokenFile: _unused, ...tokenless } = stored.leases.find(
+    (record) => record.leaseId === loginLease.leaseId,
+  )! as Record<string, unknown>;
+  stored.leases = stored.leases.map((record) =>
+    record.leaseId === compatLease.leaseId
+      ? { ...record, tokenFile: profileA.tokenFile }
+      : record.leaseId === loginLease.leaseId
+        ? tokenless
+        : record,
+  ) as typeof stored.leases;
+  stored.leases.push({ ...savedCompat, leaseId: "kept-compat" });
+  await writeFile(join(stateDir, "leases.json"), JSON.stringify(stored));
+  lines = [];
+
+  const second = await gateway(stateDir);
+  assert.deepEqual(lines.filter((line) => line.includes("skipped")).sort(), [
+    "leases.json: skipped 2 unreadable record(s); loading the rest",
+    "profiles.json: skipped 2 unreadable record(s); loading the rest",
+  ]);
+  assert.deepEqual(
+    second.leases.records().map((record) => record.leaseId),
+    ["kept-compat"],
+  );
+  // The restored compatible profile is registered: a grant binds it.
+  const { connection: again } = await hello(second, "boot-y");
+  const granted = await grant(again, compat.id, "s3");
+  const record = second.leases
+    .records()
+    .find((r) => r.leaseId === granted.leaseId);
+  assert.equal(record?.provider, "openai-compatible");
 });
 
 test("AC21: a completed owner survives a restart", async () => {
