@@ -20,6 +20,7 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  accountPinForModel,
   accountServesModel,
   isOpenAiCompatibleModelProvider,
   estimateSpawnCompactionWindow,
@@ -1673,7 +1674,10 @@ export async function spawnApprovedPeers(input: {
               approved.modelId !== current.modelId ||
               approved.thinkingLevel !== current.thinkingLevel ||
               (approved.credentialProfileId &&
-                approved.credentialProfileId !== current.credentialProfileId)
+                accountPinForModel(
+                  approved.provider,
+                  approved.credentialProfileId,
+                ) !== current.credentialProfileId)
             )
               throw new Error(
                 "The approved peer runtime changed while starting; nothing was created. Spawn it again.",
