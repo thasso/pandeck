@@ -276,10 +276,9 @@ session's compaction window (`compactionWindow`, see `compaction-window.md`).
 Its optional `defaultModel` supplies the creation default when no model was
 selected: Claude declares `claude-sdk/sonnet`; otherwise admission uses
 `DEFAULT_HELPER_MODEL`. Callers read this capability rather than branch on a
-harness id.
-`harnessForModelProvider` names a model's harness. Accounts are not a harness
-fact: an account kind names its harness in `ACCOUNT_KINDS`, and which account
-runs a model is `accountServesModel` (`docs/account-routing.md` "Account
+harness id. `harnessForModelProvider` names a model's harness. Accounts are not
+a harness fact: an account kind names its harness in `ACCOUNT_KINDS`, and which
+account runs a model is `accountServesModel` (`docs/account-routing.md` "Account
 kinds"). Further capabilities join the table when a later step needs them.
 
 ## Rules
