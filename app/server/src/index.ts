@@ -45,7 +45,10 @@ import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
-import { followLoginHoldStatuses } from "./loginHolds.ts";
+import {
+  clearUnfinishedProfileLogin,
+  followLoginHoldStatuses,
+} from "./loginHolds.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
 import { assertPromptAssets } from "./promptAssets.ts";
@@ -1001,6 +1004,30 @@ async function handleRequest(
     try {
       startOpenAiProfileLogin(profileId);
       res.writeHead(202, corsJsonHeaders(req));
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: errorText(err) }));
+    }
+    return;
+  }
+
+  // Clear the unfinished login (U7): ok when nothing is stuck or the switch
+  // is off; a failure answers U7's login text, or pi's own while it runs.
+  if (
+    requestUrl.pathname.match(
+      /^\/api\/credential-profiles\/[A-Za-z0-9_-]+\/login\/clear$/,
+    )
+  ) {
+    if (req.method !== "POST") {
+      res.writeHead(405, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const profileId = requestUrl.pathname.split("/")[3] ?? "";
+    try {
+      await clearUnfinishedProfileLogin(profileId);
+      res.writeHead(200, corsJsonHeaders(req));
       res.end(JSON.stringify({ ok: true }));
     } catch (err) {
       res.writeHead(400, corsJsonHeaders(req));

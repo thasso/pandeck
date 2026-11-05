@@ -19,7 +19,11 @@ import {
   ACCOUNT_KINDS,
   type CredentialProfileProvider,
 } from "@assistant/shared";
-import { subscribeCredentialProfileDeleted } from "./credentialProfiles.ts";
+import {
+  credentialProfileById,
+  setCredentialProfileLoginStuckReader,
+  subscribeCredentialProfileDeleted,
+} from "./credentialProfiles.ts";
 import {
   installedGatewayLink,
   LoginHeldError,
@@ -111,6 +115,7 @@ function unmark(profileId: string): void {
 }
 
 subscribeCredentialProfileDeleted(unmark);
+setCredentialProfileLoginStuckReader(loginStuckOf);
 
 /** Follows the installed link's login statuses from its start (`index.ts`). */
 export function followLoginHoldStatuses(): void {
@@ -209,6 +214,15 @@ export async function clearUnfinishedLogin(profile: {
   await link.forceReleaseLoginHold(holdId);
   if (marks.get(profile.id) === holdId) marks.delete(profile.id);
   announce();
+}
+
+/** Clear for `POST /api/credential-profiles/:id/login/clear`. */
+export async function clearUnfinishedProfileLogin(
+  profileId: string,
+): Promise<void> {
+  const profile = credentialProfileById(profileId);
+  if (!profile) throw new Error("Credential profile not found.");
+  await clearUnfinishedLogin(profile);
 }
 
 /** Test seam: the link to use (undefined: none), or null for the installed one; resets the state. */

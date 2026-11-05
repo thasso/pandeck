@@ -227,3 +227,107 @@ test("HTTP endpoint accounts CRUD, metadata, Test and origin edit persist separa
     rmSync(tmp, { recursive: true, force: true });
   }
 }, 40_000);
+
+test("HTTP Clear the unfinished login: POST only, ok with the gateway off, refuses an unknown account, and no summary is login-stuck", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "login-clear-http-fixture-"));
+  const home = join(tmp, "home");
+  const data = join(tmp, "data");
+  mkdirSync(home);
+  writeFileSync(
+    join(home, ".gitconfig"),
+    "[user]\nname = Fixture\nemail = fixture@example.invalid\n",
+  );
+  writeFileSync(join(tmp, "app.json"), JSON.stringify({ dataDir: data }));
+  const token = "fixture-http-auth";
+  const reservation = createServer();
+  const port = await listen(reservation);
+  await new Promise<void>((done) => reservation.close(() => done()));
+  let child: ChildProcess | undefined;
+  let output = "";
+  try {
+    // No ASSISTANT_GATEWAY: the switch stays off, so no gateway starts.
+    child = spawn(
+      process.execPath,
+      ["--import", "tsx", resolve("src/index.ts")],
+      {
+        cwd: resolve("."),
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          PATH: process.env.PATH,
+          HOME: home,
+          LANG: "C.UTF-8",
+          NODE_ENV: "test",
+          ASSISTANT_CWD: tmp,
+          DATA_DIR: data,
+          ASSISTANT_CONFIG: join(tmp, "app.json"),
+          ASSISTANT_TOKEN: token,
+          ASSISTANT_HOST: "127.0.0.1",
+          ASSISTANT_PORT: String(port),
+          ASSISTANT_LEGACY_PI_AGENT_DIR: join(tmp, "no-legacy"),
+          ASSISTANT_BACKGROUND_FETCH: "0",
+          ASSISTANT_BACKGROUND_PR_SYNC: "0",
+        },
+      },
+    );
+    await new Promise<void>((done, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error(`Fixture app did not listen: ${output}`)),
+        25_000,
+      );
+      const capture = (chunk: Buffer) => {
+        output += chunk.toString();
+        if (output.includes("server listening on")) {
+          clearTimeout(timeout);
+          done();
+        }
+      };
+      child!.stdout!.on("data", capture);
+      child!.stderr!.on("data", capture);
+      child!.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child!.once("exit", (code) => {
+        clearTimeout(timeout);
+        reject(new Error(`Fixture app exited ${code}: ${output}`));
+      });
+    });
+    const request = async (path: string, method = "POST") => {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/credential-profiles${path}`,
+        {
+          method,
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(5000),
+        },
+      );
+      return { status: response.status, body: await response.json() };
+    };
+    assert.deepEqual(await request("/claude-default/login/clear"), {
+      status: 200,
+      body: { ok: true },
+    });
+    assert.deepEqual(await request("/default/login/clear"), {
+      status: 200,
+      body: { ok: true },
+    });
+    assert.deepEqual(await request("/claude-default/login/clear", "GET"), {
+      status: 405,
+      body: { error: "Method not allowed" },
+    });
+    assert.deepEqual(await request("/cp_missing/login/clear"), {
+      status: 400,
+      body: { error: "Credential profile not found." },
+    });
+    const listed = await request("", "GET");
+    assert.equal(listed.status, 200);
+    const summaries = (listed.body as { profiles: CredentialProfileSummary[] })
+      .profiles;
+    assert.ok(summaries.length > 0);
+    assert.ok(summaries.every((profile) => profile.loginStuck === undefined));
+  } finally {
+    if (child) await stop(child);
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}, 40_000);

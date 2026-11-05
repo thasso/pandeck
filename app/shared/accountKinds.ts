@@ -177,10 +177,13 @@ export function accountPinForModel(
   return isOpenAiCompatibleModelProvider(modelProvider) ? modelProvider : pin;
 }
 
+/** U7's action on a login-stuck account; it takes Connect's place. */
+export const CLEAR_UNFINISHED_LOGIN_LABEL = "Clear the unfinished login";
+
 /**
  * U7's login-stuck text for a login-credential account: the gateway holds its
  * unfinished login, so renewal is paused until the login ends or is cleared.
  */
 export function loginStuckText(name: string): string {
-  return `The last login for ${name} didn't finish, so Pandeck has paused renewing this account's token. If no login is still running, choose Clear the unfinished login.`;
+  return `The last login for ${name} didn't finish, so Pandeck has paused renewing this account's token. If no login is still running, choose ${CLEAR_UNFINISHED_LOGIN_LABEL}.`;
 }

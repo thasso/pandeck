@@ -454,6 +454,66 @@ test("health follows registry deletion, disabling and completed login without le
   assert.equal(readAccountHealth(profile.id, true).state, "unknown");
 });
 
+test("AC8/AC11: a login account's summary says loginStuck while the gateway holds an unfinished login; an endpoint account's and an unlinked one's never do", async () => {
+  const loginHolds = await import("./loginHolds.ts");
+  const { LoginHeldError } = await import("./gatewayLink.ts");
+  const { fakeLoginHoldLink } = await import("./test/fakeLoginHoldLink.ts");
+  const fake = fakeLoginHoldLink();
+  const claude = createCredentialProfile({
+    name: "Claude stuck",
+    provider: "claude",
+  });
+  const codex = createCredentialProfile({
+    name: "OpenAI stuck",
+    provider: "openai-codex",
+  });
+  const compatible = createCredentialProfile({
+    name: "Endpoint never stuck",
+    provider: "openai-compatible",
+  });
+  const stuck = (id: string) => credentialProfileSummaryById(id)?.loginStuck;
+  try {
+    loginHolds.setLoginHoldLinkForTests(fake.link);
+    loginHolds.followLoginHoldStatuses();
+    for (const { id } of [claude, codex, compatible])
+      assert.equal(stuck(id), undefined);
+
+    // From the gateway's status.
+    fake.status(claude.id, { loginStuck: true, holdId: "hold-7" });
+    fake.status(compatible.id, { loginStuck: true, holdId: "hold-8" });
+    assert.equal(stuck(claude.id), true);
+    assert.equal(stuck(compatible.id), undefined);
+    const listed = listCredentialProfiles();
+    assert.equal(listed.find((p) => p.id === claude.id)?.loginStuck, true);
+    assert.equal(
+      listed.find((p) => p.id === compatible.id)?.loginStuck,
+      undefined,
+    );
+    assert.doesNotMatch(JSON.stringify(listed), /hold-7|hold-8/);
+    fake.status(claude.id, { loginStuck: false, holdId: "hold-7" });
+    assert.equal(stuck(claude.id), undefined);
+
+    // From a login_stuck refusal, until Clear.
+    fake.acquire = () =>
+      Promise.reject(new LoginHeldError("login_stuck", "hold-9"));
+    assert.deepEqual(await loginHolds.takeLoginHold(codex, () => {}), {
+      kind: "stuck",
+    });
+    assert.equal(stuck(codex.id), true);
+    await loginHolds.clearUnfinishedLogin(codex);
+    assert.equal(stuck(codex.id), undefined);
+
+    // Switch off: no link, so nothing is ever stuck.
+    fake.status(claude.id, { loginStuck: true, holdId: "hold-7" });
+    loginHolds.setLoginHoldLinkForTests(undefined);
+    assert.equal(stuck(claude.id), undefined);
+  } finally {
+    loginHolds.setLoginHoldLinkForTests(null);
+    for (const { id } of [claude, codex, compatible])
+      deleteCredentialProfile(id);
+  }
+});
+
 afterAll(() => {
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;

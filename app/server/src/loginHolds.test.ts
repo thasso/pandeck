@@ -277,3 +277,69 @@ test("Clear without a stuck hold does nothing", async () => {
   await loginHolds.clearUnfinishedLogin(CLAUDE);
   assert.deepEqual(events, []);
 });
+
+test.each([
+  ["a login account", "claude", 1],
+  ["an endpoint account", "openai-compatible", 0],
+] as const)(
+  "AC10: Clear by account id (the route's call) resolves the account, then clears it like Clear (%s)",
+  async (_case, provider, forced) => {
+    const { events, fake } = linked();
+    const account = profiles.createCredentialProfile({
+      name: "Clear by id",
+      provider,
+    });
+    fake.status(account.id, { loginStuck: true, holdId: "hold-7" });
+
+    await loginHolds.clearUnfinishedProfileLogin(account.id);
+    assert.deepEqual(events, forced ? ["force hold-7"] : []);
+    profiles.deleteCredentialProfile(account.id);
+  },
+);
+
+test("AC10: Clear by id refuses an unknown account before any link call", async () => {
+  const { events } = linked();
+  await assert.rejects(loginHolds.clearUnfinishedProfileLogin("cp_missing"), {
+    message: "Credential profile not found.",
+  });
+  assert.deepEqual(events, []);
+});
+
+test("AC10: Clear by id rejects with U7's unavailable text (DQ3), or a live pi login's own refusal (DQ2)", async () => {
+  const { fake } = linked();
+  const claude = profiles.createCredentialProfile({
+    name: "Clear fails",
+    provider: "claude",
+  });
+  fake.status(claude.id, { loginStuck: true, holdId: "hold-7" });
+  fake.forceRelease = () =>
+    Promise.reject(new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT));
+  await assert.rejects(loginHolds.clearUnfinishedProfileLogin(claude.id), {
+    message: GATEWAY_LOGIN_UNAVAILABLE_TEXT,
+  });
+
+  const codex = profiles.createCredentialProfile({
+    name: "Clear refused",
+    provider: "openai-codex",
+  });
+  await take({ id: codex.id, provider: "openai-codex" }, () => {
+    throw new Error("pi's own refusal");
+  });
+  fake.status(codex.id, { loginStuck: true, holdId: "hold-1" });
+  await assert.rejects(loginHolds.clearUnfinishedProfileLogin(codex.id), {
+    message: "pi's own refusal",
+  });
+  profiles.deleteCredentialProfile(claude.id);
+  profiles.deleteCredentialProfile(codex.id);
+});
+
+test("AC8: without a link, Clear by id does nothing for an existing account", async () => {
+  loginHolds.setLoginHoldLinkForTests(undefined);
+  const claude = profiles.createCredentialProfile({
+    name: "Clear unlinked",
+    provider: "claude",
+  });
+  await loginHolds.clearUnfinishedProfileLogin(claude.id);
+  profiles.deleteCredentialProfile(claude.id);
+  assert.equal(announced, 0);
+});

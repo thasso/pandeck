@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
+  CLEAR_UNFINISHED_LOGIN_LABEL,
+  loginStuckText,
   modelKey,
   type AppSettings,
   type CredentialProfileSummary,
@@ -415,5 +417,167 @@ describe("model order settings", () => {
     expect(view.container.querySelector("[aria-live]")!.textContent).toBe(
       "Model A moved to position 2 of 3",
     );
+  });
+});
+
+/**
+ * U7's login-stuck state (Task-1367 AC12): only a login account the server
+ * marks `loginStuck` shows the text, and its Clear takes Connect's place.
+ */
+const button = (container: HTMLElement, label: string) =>
+  [...container.querySelectorAll("button")].find(
+    (node) => node.textContent === label,
+  );
+
+describe("login-stuck accounts", () => {
+  const stuck: CredentialProfileSummary = {
+    ...profile("ready"),
+    loginStuck: true,
+  };
+
+  function stuckCard(
+    value: CredentialProfileSummary,
+    connectionLabel: string,
+    handlers: { onConnect?: () => void; onClearLogin?: () => void } = {},
+  ) {
+    return mount(
+      <CredentialProfileCard
+        profile={value}
+        providerLabel="Claude"
+        connectionLabel={connectionLabel}
+        onToggle={() => {}}
+        onToggleEnterprise={() => {}}
+        onPriority={() => {}}
+        onConnect={handlers.onConnect ?? (() => {})}
+        onClearLogin={handlers.onClearLogin ?? (() => {})}
+      />,
+    );
+  }
+
+  it("shows exactly U7's text with the account's name, and the U7 action in place of Connect", () => {
+    const onConnect = vi.fn();
+    const onClearLogin = vi.fn();
+    const view = stuckCard(stuck, "Reconnect", { onConnect, onClearLogin });
+    const text = [...view.container.querySelectorAll("p")].find(
+      (node) => node.textContent === loginStuckText("Claude personal"),
+    );
+    expect(text?.className).toContain("text-xs text-destructive");
+    expect(button(view.container, "Reconnect")).toBeUndefined();
+    act(() => button(view.container, CLEAR_UNFINISHED_LOGIN_LABEL)!.click());
+    expect(onClearLogin).toHaveBeenCalledTimes(1);
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a login account that is not stuck", profile("ready"), "Reconnect"],
+    [
+      "an endpoint account, even marked",
+      {
+        ...profile("ready"),
+        id: "openai-compatible",
+        provider: "openai-compatible",
+        loginStuck: true,
+      } as CredentialProfileSummary,
+      "Test",
+    ],
+  ])("leaves %s unchanged", (_case, value, label) => {
+    const onConnect = vi.fn();
+    const view = stuckCard(value, label, { onConnect });
+    expect(view.container.textContent).not.toContain("didn't finish");
+    expect(view.container.textContent).not.toContain(
+      CLEAR_UNFINISHED_LOGIN_LABEL,
+    );
+    act(() => button(view.container, label)!.click());
+    expect(onConnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("login-stuck Clear in the accounts section", () => {
+  let stuckNow = true;
+  let clearAnswer: { status: number; body: unknown } = {
+    status: 200,
+    body: { ok: true },
+  };
+  let requests: string[] = [];
+
+  beforeEach(() => {
+    stuckNow = true;
+    clearAnswer = { status: 200, body: { ok: true } };
+    requests = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const path = new URL(url, "http://localhost").pathname;
+        requests.push(`${init?.method ?? "GET"} ${path}`);
+        if (path.endsWith("/login/clear")) {
+          if (clearAnswer.status === 200) stuckNow = false;
+          return Response.json(clearAnswer.body, {
+            status: clearAnswer.status,
+          });
+        }
+        if (path === "/api/credential-profiles")
+          return Response.json({
+            profiles: [
+              {
+                ...profile("ready"),
+                ...(stuckNow ? { loginStuck: true } : {}),
+              },
+            ],
+          });
+        return Response.json({});
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function section() {
+    const view = mount(
+      <SettingsPage
+        {...({
+          section: "claude-sdk",
+          models: [],
+          accountModels: [],
+          credentialProfiles: [],
+          projects: [],
+          settings: settingsFixture,
+          onUpdate: () => {},
+        } as unknown as Parameters<typeof SettingsPage>[0])}
+      />,
+    );
+    await act(async () => {});
+    return view;
+  }
+  it("calls the Clear helper, then refreshes the accounts", async () => {
+    const view = await section();
+    expect(view.container.textContent).toContain(
+      loginStuckText("Claude personal"),
+    );
+    requests = [];
+    await act(async () =>
+      button(view.container, CLEAR_UNFINISHED_LOGIN_LABEL)!.click(),
+    );
+    await act(async () => {});
+    expect(requests).toEqual([
+      "POST /api/credential-profiles/claude-default/login/clear",
+      "GET /api/credential-profiles",
+    ]);
+    expect(view.container.textContent).not.toContain("didn't finish");
+    expect(button(view.container, "Reconnect")).toBeDefined();
+  });
+
+  it("shows a failed Clear on the account's card and keeps the action", async () => {
+    clearAnswer = {
+      status: 400,
+      body: { error: "Clear refused for this account." },
+    };
+    const view = await section();
+    await act(async () =>
+      button(view.container, CLEAR_UNFINISHED_LOGIN_LABEL)!.click(),
+    );
+    await act(async () => {});
+    expect(view.container.textContent).toContain(
+      "Clear refused for this account.",
+    );
+    expect(button(view.container, CLEAR_UNFINISHED_LOGIN_LABEL)).toBeDefined();
   });
 });
