@@ -3140,6 +3140,9 @@ export class ClaudeSdkSession implements LiveSession {
     this.processClosing = true;
     this.processCloseReason = reason.slice(0, 500);
     this.cancelQuietClose();
+    // Publish after synchronous turn/abort bookkeeping, not after the CLI's
+    // terminal event. Closing already makes pending settings apply next turn.
+    queueMicrotask(() => this.broadcastState());
     this.inputQueue?.close();
     this.activeQuery?.close?.();
   }

@@ -11,6 +11,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
+import type { SessionState } from "@assistant/shared";
+import type { Viewer } from "../harness.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type {
@@ -439,6 +441,77 @@ test("a background-retained process keeps its window across turns; a restart app
   await third;
   restarted.dispose();
 });
+
+for (const boundary of ["last task", "turn"] as const) {
+  test(`the attached inspector receives next-turn at ${boundary} restart close before stream termination`, async () => {
+    const h = await retainedWindow();
+    const states: SessionState[] = [];
+    const viewer: Viewer = {
+      send(message) {
+        if (message.type === "state") states.push(message.state);
+      },
+    };
+    h.session.addViewer(viewer);
+    // A close request is not stream termination. Hold the latter until the
+    // viewer has received the authoritative closing projection.
+    h.query.close = () => {
+      h.query.closeCalls += 1;
+    };
+    try {
+      const turn =
+        boundary === "turn"
+          ? h.adapter.prompt("finish before restart")
+          : undefined;
+      if (turn) await until(() => h.query.inputs.length === 2);
+      await storeWindow(h, 100_000);
+      h.session.broadcastState();
+      assert.equal(
+        states.at(-1)?.compactionWindow?.pendingReason,
+        "process-restart",
+      );
+      completeBackgroundShell(h.query);
+      if (turn) {
+        // The background task is gone, but the live turn still owns the host.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(h.query.closeCalls, 0);
+        h.query.output.emit(result("viewer-turn-boundary"));
+        await turn;
+      }
+      await until(() => h.query.closeCalls === 1);
+      assert.equal(window(h.session)?.pendingReason, "next-turn");
+      assert.equal(
+        states.at(-1)?.compactionWindow?.pendingReason,
+        "next-turn",
+        "the attached inspector updates without waiting for the terminal event",
+      );
+      assert.equal(h.session.isRunning, false);
+
+      const next = h.adapter.prompt("wait for the closing epoch");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(
+        h.queries.length,
+        1,
+        "publication does not permit premature process reuse",
+      );
+      assert.equal(h.query.inputs.length, boundary === "turn" ? 2 : 1);
+      assert.equal(
+        h.query.closeCalls,
+        1,
+        "reentrant boundary scheduling does not close twice",
+      );
+      h.query.output.close();
+      await until(() => h.queries.length === 2);
+      const fresh = h.queries[1]!;
+      assert.equal(startWindow(fresh), 100_000);
+      fresh.output.emit(result("viewer-fresh-query"));
+      await next;
+    } finally {
+      h.session.removeViewer(viewer);
+      h.query.output.close();
+      await disposeRetained(h);
+    }
+  });
+}
 
 test("a pending start-time setting closes immediately after the last task and the next turn starts fresh", async () => {
   const h = await retainedWindow();
