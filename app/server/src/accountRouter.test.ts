@@ -450,3 +450,116 @@ test("real gather asks each account's model/effort snapshot and reads cache only
     vi.useRealTimers();
   }
 });
+
+test("an endpoint model routes only to its own account, never metered or across", async () => {
+  const second = "openai-compatible-0123456789ab";
+  const summary = (
+    id: string,
+    provider: "openai-codex" | "openai-compatible",
+    extra: { enabled?: boolean; enterprise?: boolean; status?: string } = {},
+  ) =>
+    ({
+      id,
+      name: id,
+      provider,
+      enabled: extra.enabled ?? true,
+      enterprise: extra.enterprise ?? false,
+      status: extra.status ?? "ready",
+      health: { state: "unknown", since: null },
+      createdAt: 0,
+      updatedAt: 0,
+    }) as ReturnType<typeof listCredentialProfiles>[number];
+  const llama = (provider: string) => ({
+    provider,
+    id: "llama3",
+    name: "llama3",
+    reasoning: false,
+    contextWindow: 1000,
+    supportedThinkingLevels: ["off" as const],
+  });
+  const login = summary("default", "openai-codex", { status: "disconnected" });
+  const endpoint = summary("openai-compatible", "openai-compatible");
+  const other = summary(second, "openai-compatible");
+  vi.mocked(modelsForAccount).mockImplementation(async (profile) =>
+    profile.provider === "openai-compatible" ? [llama(profile.id)] : [],
+  );
+  vi.mocked(cachedUsageIndicator).mockClear();
+  const pick = (provider: string, requiresEnterprise = false) =>
+    pickAccount({
+      model: { provider, modelId: "llama3" },
+      thinkingLevel: "off",
+      requiresEnterprise,
+    });
+
+  // (a) With only an unconnected OpenAI login beside it: its own account,
+  // not degraded, and no usage read for it.
+  vi.mocked(listCredentialProfiles).mockReturnValue([login, endpoint]);
+  assert.deepEqual(await pick("openai-compatible"), {
+    profileId: "openai-compatible",
+  });
+  assert.equal(vi.mocked(cachedUsageIndicator).mock.calls.length, 0);
+
+  // (b) Disabled: refused on that account, never an OpenAI one.
+  vi.mocked(listCredentialProfiles).mockReturnValue([
+    login,
+    { ...endpoint, enabled: false },
+  ]);
+  const disabled = await pick("openai-compatible");
+  assert.notEqual(disabled.profileId, "default");
+  assert.equal(disabled.degraded, "no-enabled-account");
+
+  // (c) A personal endpoint under the enterprise requirement.
+  vi.mocked(listCredentialProfiles).mockReturnValue([
+    { ...login, enterprise: true },
+    endpoint,
+  ]);
+  assert.deepEqual(await pick("openai-compatible", true), {
+    profileId: null,
+    degraded: "no-enterprise-account",
+  });
+
+  // (d) Two endpoints listing the same model id: each model is its own.
+  vi.mocked(listCredentialProfiles).mockReturnValue([login, endpoint, other]);
+  assert.deepEqual(await pick("openai-compatible"), {
+    profileId: "openai-compatible",
+  });
+  assert.deepEqual(await pick(second), { profileId: second });
+});
+
+test("an endpoint account never changes what an OpenAI model routes to", async () => {
+  const login = {
+    id: "default",
+    name: "Default OpenAI",
+    provider: "openai-codex",
+    enabled: true,
+    enterprise: false,
+    status: "disconnected",
+    health: { state: "unknown", since: null },
+    createdAt: 0,
+    updatedAt: 0,
+  } as ReturnType<typeof listCredentialProfiles>[number];
+  const endpoint = {
+    ...login,
+    id: "openai-compatible",
+    name: "Team LLM",
+    provider: "openai-compatible",
+    status: "ready",
+  } as ReturnType<typeof listCredentialProfiles>[number];
+  vi.mocked(modelsForAccount).mockResolvedValue([]);
+  vi.mocked(cachedUsageIndicator).mockImplementation(
+    (profile) =>
+      ({
+        profileId: profile.id,
+        provider: "openai-codex",
+        refreshing: false,
+        fetchedAt: null,
+      }) as unknown as UsageIndicator,
+  );
+  vi.mocked(listCredentialProfiles).mockReturnValue([login]);
+  const alone = await pickAccount(request);
+  // The web hides the unconnected login's card; it stays the router's
+  // candidate with the same degraded answer.
+  vi.mocked(listCredentialProfiles).mockReturnValue([login, endpoint]);
+  assert.deepEqual(await pickAccount(request), alone);
+  assert.equal(alone.profileId, "default");
+});

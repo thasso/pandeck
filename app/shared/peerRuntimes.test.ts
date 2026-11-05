@@ -207,3 +207,30 @@ test("a row without a name describes itself by model and thinking level", () => 
   expect(peerRuntimeDisplayName(row())).toBe("opus · medium thinking");
   expect(peerRuntimeDisplayName(row({ name: "Reviewer" }))).toBe("Reviewer");
 });
+
+test("an endpoint model's row reads its own account, whatever it stored (rule P)", () => {
+  const endpoint = option({
+    provider: "openai-compatible",
+    id: "llama3",
+    name: "Llama 3",
+    reasoning: false,
+    supportedThinkingLevels: ["off"],
+    credentialProfileId: "openai-compatible",
+    accountName: "Team LLM",
+  });
+  const stored = row({
+    credentialProfileId: "default",
+    provider: "openai-compatible",
+    modelId: "llama3",
+    thinkingLevel: "off",
+  });
+  expect(peerRuntimeUnavailableReason(stored, [endpoint])).toBeUndefined();
+  const { credentialProfileId: _pin, ...automatic } = stored;
+  expect(peerRuntimeUnavailableReason(automatic, [endpoint])).toBeUndefined();
+  // Never Automatic across endpoints: a disabled one is that row's fault.
+  expect(
+    peerRuntimeUnavailableReason(automatic, [
+      { ...endpoint, accountDisabled: true },
+    ]),
+  ).toBe("“Team LLM” is disabled.");
+});

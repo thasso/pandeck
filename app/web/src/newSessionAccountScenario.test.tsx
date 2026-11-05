@@ -1150,7 +1150,7 @@ describe("new-session account choice", () => {
     expect(sent && "requiresEnterprise" in sent).toBe(false);
   });
 
-  it("offers only the compatible endpoint when no account is connected", async () => {
+  it("offers each endpoint as an account of its own, with no meters", async () => {
     const compatible: ModelOption = {
       provider: "openai-compatible",
       id: "qwen",
@@ -1169,33 +1169,38 @@ describe("new-session account choice", () => {
       ...account("claude-default", "Default Claude", false),
       status: "disconnected",
     } as CredentialProfileSummary;
-    const socket = await openNewSession([claude, openAi], () => "default", {
-      models: [compatible],
-      modelsByProfile: { default: [compatible], "claude-default": [] },
-    });
+    const endpoint = {
+      ...account("openai-compatible", "Team LLM", false),
+      provider: "openai-compatible",
+      health: undefined,
+    } as unknown as CredentialProfileSummary;
+    const socket = await openNewSession(
+      [claude, openAi, endpoint],
+      () => "openai-compatible",
+      {
+        models: [compatible],
+        modelsByProfile: {
+          default: [],
+          "claude-default": [],
+          "openai-compatible": [compatible],
+        },
+      },
+    );
 
+    // Logins with nothing to run are no choice; the endpoint is one.
     expect(accountCard("Default OpenAI")).toBeUndefined();
     expect(accountCard("Default Claude")).toBeUndefined();
-    expect(accountCard("Automatic")).toBeUndefined();
-    expect(accountCard("Team LLM")?.getAttribute("aria-selected")).toBe("true");
+    expect(accountCard("Automatic")?.textContent).toContain("Now: Team LLM");
     expect(accountCard("Team LLM")?.textContent).toContain("No plan limits");
 
-    // No account is enterprise, so the requirement empties the models; its
-    // switch must stay, because turning it off is the way back.
-    await click(requiresEnterpriseSwitch());
-    expect(container!.textContent).toContain(
-      "No enabled account is marked Enterprise",
-    );
-    await click(requiresEnterpriseSwitch());
-    expect(accountCard("Team LLM")?.getAttribute("aria-selected")).toBe("true");
-
+    await click(accountCard("Team LLM"));
     await sendPrompt("hello");
     const sent = firstSend(socket);
     expect(sent).toMatchObject({
       modelProvider: "openai-compatible",
       modelId: "qwen",
+      credentialProfileId: "openai-compatible",
     });
-    expect(sent && "credentialProfileId" in sent).toBe(false);
   });
 
   it("shows the account the server's router would pick for Automatic", async () => {

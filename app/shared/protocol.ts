@@ -437,7 +437,8 @@ export interface CredentialProfileSlotUsage {
 
 /**
  * What depends on one provider account, so disabling or deleting it is an
- * informed decision. Settings pins move to automatic; bound sessions keep
+ * informed decision. Settings pins move to automatic, except a setting on an
+ * endpoint's own model, which stops with it (rule P); bound sessions keep
  * running on the account (including their forks, `/clear` and drafts).
  */
 export interface CredentialProfileUsage {
@@ -606,7 +607,10 @@ export interface AppearanceSettings {
  * the account router (`accountRouter.ts`) picks one on each run. A missing,
  * disabled or wrong-provider pin degrades to Automatic within the run's
  * enterprise scope; a run that requires an enterprise account refuses rather
- * than fall back to a personal one (`docs/account-routing.md`).
+ * than fall back to a personal one. An OpenAI-compatible model runs only on
+ * its own account, which is its pin whatever is stored, so it never degrades
+ * and refuses while that account is missing or disabled
+ * (`docs/account-routing.md`).
  */
 export interface CredentialProfilePin {
   credentialProfileId?: string;

@@ -1118,7 +1118,7 @@ export class PiLiveSession implements LiveSession {
           : undefined;
         if (account && !accountServesModel(account, model.provider))
           throw new Error(
-            `${account.name} does not serve ${model.provider}/${model.id}; fork or start a new session to use it.`,
+            `${account.name} does not serve ${model.provider}/${model.id}; start a new session to use it.`,
           );
         return findModel(model.provider, model.id);
       },

@@ -23,7 +23,8 @@
  * the checkout; the executors of later steps act within that authorization.
  */
 import {
-  accountProviderForModelProvider,
+  accountPinForModel,
+  accountServesModel,
   isTerminalWorkflowRunLifecycle,
   normalizeWorkflowRunLimits,
   supportedThinkingLevelsForModel,
@@ -402,8 +403,11 @@ async function resolveRoleConfig(
       `The ${role} prompt override is ${promptOverride.length} characters; the limit is ${WORKFLOW_PROMPT_OVERRIDE_MAX_CHARS}.`,
     );
 
-  const family = accountProviderForModelProvider(provider);
-  let profileId = config.credentialProfileId?.trim();
+  // Rule P: a compatible model's account is its provider id.
+  let profileId = accountPinForModel(
+    provider,
+    config.credentialProfileId?.trim() || undefined,
+  );
   if (!profileId) {
     const picked = await pickAccount({
       model: { provider, modelId },
@@ -420,9 +424,9 @@ async function resolveRoleConfig(
     throw new Error(
       `The ${role} account "${profileId}" is not an enabled credential profile.`,
     );
-  if (profile.provider !== family)
+  if (!accountServesModel(profile, provider))
     throw new Error(
-      `The ${role} account "${profile.name}" is a ${profile.provider} account; model ${provider}:${modelId} needs a ${family} account.`,
+      `The ${role} account "${profile.name}" does not serve ${provider}:${modelId}; pick an account that does.`,
     );
 
   // The same list the sheet's picker offers for that account, resolved fresh.

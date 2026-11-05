@@ -124,16 +124,23 @@ function render(
   );
 }
 
-describe("compatible endpoint card", () => {
+describe("endpoint accounts", () => {
+  const endpoint = {
+    id: "openai-compatible",
+    name: "Team LLM",
+    provider: "openai-compatible",
+    enabled: true,
+    enterprise: false,
+    status: "ready",
+  } as CredentialProfileSummary;
   const compatible: ModelOption = {
     ...model,
-    provider: "openai-compatible",
+    provider: endpoint.id,
     id: "qwen",
     name: "qwen",
-    providerName: "Team LLM",
+    providerName: endpoint.name,
   };
-
-  const carrier = {
+  const login = {
     id: "default",
     name: "Default OpenAI",
     provider: "openai-codex",
@@ -141,82 +148,83 @@ describe("compatible endpoint card", () => {
     enterprise: false,
     status: "disconnected",
   } as CredentialProfileSummary;
-  const profileModels = { default: [compatible] };
+  const profileModels = { "openai-compatible": [compatible], default: [] };
 
-  it("replaces Automatic, unmetered, when no account is a choice", () => {
+  it("is its own card beside Automatic, unmetered, with no carrier", () => {
     const html = render([], {
       models: [compatible],
-      profiles: [carrier],
+      profiles: [login, endpoint],
       profileModels,
     });
-    expect(html).toContain("Team LLM");
+    expect(html).toContain('title="Use Team LLM (OpenAI-compatible)"');
     expect(html).toContain("No plan limits");
-    expect(html).not.toContain("Automatic");
+    expect(html).toContain("Automatic");
+    // An OpenAI login with nothing of its own is no choice: no card.
     expect(html).not.toContain("Default OpenAI");
   });
 
-  it("does not claim enterprise is unmet while an enterprise carrier runs it", () => {
+  it("needs its own enterprise mark under the requirement", () => {
     const html = render([], {
-      models: [compatible],
-      profiles: [{ ...carrier, enterprise: true }],
-      profileModels,
-      requiresEnterprise: true,
-    });
-    expect(html).toContain("Team LLM");
-    expect(html).not.toContain("cannot start");
-  });
-
-  it("keeps the enterprise switch and its reason when no carrier qualifies", () => {
-    const html = render([], {
-      // What App stages under the requirement: nothing an enterprise account runs.
       models: [],
-      profiles: [carrier],
+      profiles: [login, endpoint],
       profileModels,
       requiresEnterprise: true,
     });
     expect(html).toContain("Requires enterprise");
     expect(html).toContain("cannot start");
+    expect(
+      render([], {
+        models: [compatible],
+        profiles: [login, { ...endpoint, enterprise: true }],
+        profileModels,
+        requiresEnterprise: true,
+      }),
+    ).not.toContain("cannot start");
   });
 
-  it("stays Automatic when other models can run", () => {
-    const html = render([], {
-      models: [compatible, model],
-      profiles: [carrier],
-      profileModels,
+  it("starts a definition on its model only through that endpoint's account", () => {
+    const agents = ready<EntryLibraryList>({
+      libraryPath: "/data/agents",
+      entries: [
+        {
+          name: "local-reviewer",
+          description: "Reviews locally.",
+          path: "local-reviewer/AGENT.md",
+        },
+      ],
+      diagnostics: [],
+      agentRuntimes: {
+        "local-reviewer": {
+          persona: "developer",
+          provider: compatible.provider,
+          modelId: compatible.id,
+          thinkingLevel: "off",
+          models: [],
+        },
+      },
     });
-    expect(html).not.toContain("No plan limits");
-  });
-
-  it("leaves a definition on the endpoint startable though its carrier has no card", () => {
+    const startable =
+      /<button(?![^>]*\sdisabled="")[^>]*title="Start as local-reviewer: Reviews locally\."/;
+    expect(
+      render([], {
+        models: [compatible],
+        profiles: [login, endpoint],
+        profileModels,
+        agents,
+      }),
+    ).toMatch(startable);
+    // An OpenAI login, or another endpoint, does not run this model.
     const html = render([], {
       models: [compatible],
-      profiles: [carrier],
+      profiles: [
+        login,
+        { ...endpoint, id: "openai-compatible-0123456789ab", name: "Other" },
+      ],
       profileModels,
-      agents: ready({
-        libraryPath: "/data/agents",
-        entries: [
-          {
-            name: "local-reviewer",
-            description: "Reviews locally.",
-            path: "local-reviewer/AGENT.md",
-          },
-        ],
-        diagnostics: [],
-        agentRuntimes: {
-          "local-reviewer": {
-            persona: "developer",
-            provider: compatible.provider,
-            modelId: compatible.id,
-            thinkingLevel: "off",
-            models: [],
-          },
-        },
-      }),
+      agents,
     });
-    expect(html).toMatch(
-      /<button(?![^>]*\sdisabled="")[^>]*title="Start as local-reviewer: Reviews locally\."/,
-    );
-    expect(html).not.toContain("no enabled account runs a model it lists");
+    expect(html).not.toMatch(startable);
+    expect(html).toContain("no enabled account runs a model it lists");
   });
 });
 

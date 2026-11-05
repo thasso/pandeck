@@ -1,4 +1,5 @@
 import {
+  accountPinForModel,
   compareReviewFindings,
   isTerminalWorkflowStepStatus,
   type ReviewFinding,
@@ -168,9 +169,14 @@ function projectedRoleConfig(
     family: config.family,
     ...(config.notes ? { notes: config.notes } : {}),
     // The account it runs under, by id: the card names it from the client's
-    // own account list, as session rows do.
+    // own account list, as session rows do. Rule P, as execution reads it.
     ...(config.credentialProfileId
-      ? { credentialProfileId: config.credentialProfileId }
+      ? {
+          credentialProfileId: accountPinForModel(
+            config.provider,
+            config.credentialProfileId,
+          )!,
+        }
       : {}),
   };
 }

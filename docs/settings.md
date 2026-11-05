@@ -365,11 +365,11 @@ into the one-time legacy pi import, set `ASSISTANT_LEGACY_PI_AGENT_DIR` to the
 source directory before startup. Existing imports and their markers are
 preserved; an unconfigured import creates no marker and can be enabled later.
 
-The Claude and OpenAI accounts models run on are credential profiles
-(`app/server/src/credentialProfiles.ts`), kept outside the settings registry.
-The Personal Assistant reaches them through three tools in the same `settings`
-group, which call the functions the Settings page's `/api/credential-profiles`
-routes call:
+The accounts models run on (Claude and OpenAI logins, and OpenAI-compatible
+endpoints) are credential profiles (`app/server/src/credentialProfiles.ts`),
+kept outside the settings registry. The Personal Assistant reaches them through
+three tools in the same `settings` group, which call the functions the Settings
+page's `/api/credential-profiles` routes call:
 
 - `accounts_read`: each account's id, name, provider, enabled state and sign-in
   status, the settings that pin it, how many sessions are bound to it, and
@@ -377,7 +377,9 @@ routes call:
   its device code or link here.
 - `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
   default account or one a session is bound to, as the page does, and unpins the
-  account from every setting through `clearProfilePins`.
+  account from every setting through `clearProfilePins`. Only login kinds are
+  created here; an endpoint account is created and its endpoint edited only on
+  the Settings page, so no agent tool reads or writes a URL or key.
 - `accounts_sign_in`: raises a `settingsInput` card in `signIn` mode
   (`path: accounts.<id>`, `account: { id, provider }`) and ends the turn. In the
   browser an OpenAI account starts its device login and shows the link and code
@@ -392,6 +394,9 @@ routes call:
   left waiting. An account that is already signed in gets no card: the tool
   reports it, since a new login would satisfy a card with the old credential
   before the new one exists.
+- `accounts_sign_in` refuses an endpoint account
+  (`ACCOUNT_KINDS[kind] .credential` is `endpoint`), naming its Settings page
+  instead. Each account's Settings link comes from its kind's `settingsSection`.
 - An account's raw login error is the provider's text and can quote a device
   code, link or token, so the tools never return it: an account in `error`
   status carries a server-written note pointing at its Settings page, which
@@ -424,10 +429,13 @@ payload carries `apiKeyConfigured`, never the key. A new account's id is
 An edit, a discovery or a rename reaches the account's pi runtime before the
 call returns, including the runtime a running session or one-shot already holds:
 its next request sends the new key, sends none once the key is cleared, and a
-model it holds from a replaced origin is refused unsent. A deleted account's
-runtime serves nothing. Disabling changes no runtime; the next turn's admission
-decides. The hub sends every connection a fresh `models` list for any compatible
-account change.
+model it holds from a replaced origin is refused unsent. A key-less endpoint is
+the established exception: it pairs no credential, so nothing is at risk and
+nothing is refused, and a model held from the replaced origin still sends there,
+without a key (`serverCredentialPairing.ts`). A deleted account's runtime serves
+nothing. Disabling changes no runtime; the next turn's admission decides. The
+hub sends every connection a fresh `models` list for any compatible account
+change.
 
 **Migration of the former single endpoint.** Boot moves
 `settings/openai-compatible.json` to the account `openai-compatible`, the only
@@ -478,6 +486,15 @@ rollback:
   entry survived and `endpoint.json` no longer equals the file (for example, the
   endpoint was edited in the older release), both are left for manual review, as
   after any mismatch.
+
+**On the Settings page.** Settings → OpenAI-compatible lists one account card
+per endpoint (`CredentialProfilesSection`), with the same name, enable,
+enterprise and priority controls as any account, plus the base URL, a write-only
+key field (the card shows only whether one is saved, with Remove key), the
+thinking control, **Test** and the discovered models. "Save and discover models"
+saves the endpoint and runs the same Test. "Add endpoint" creates one by name. A
+card shows "No plan limits" where a login shows its plan: an endpoint has no
+usage, health or Usage page entry.
 
 **Pins.** A compatible model runs on exactly one account, so every stored pin on
 such a model names it (rule P, `accountPinForModel`): a boot pass after the

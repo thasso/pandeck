@@ -12,7 +12,6 @@
  */
 import {
   accountPinForModel,
-  accountProviderForModelProvider,
   accountServesModel,
   type AppSettings,
   type CredentialProfilePin,
@@ -139,8 +138,11 @@ export interface SlotAccountResolution {
 export async function resolveSlotAccount(
   slot: SettingsModelSlot,
 ): Promise<SlotAccountResolution> {
-  const wanted = accountProviderForModelProvider(slot.provider);
-  const pinned = slot.credentialProfileId?.trim();
+  // Rule P: a compatible model's pin is its own account, whatever was stored.
+  const pinned = accountPinForModel(
+    slot.provider,
+    slot.credentialProfileId?.trim() || undefined,
+  );
   let degraded: SlotAccountDegradation | undefined;
   if (pinned) {
     const profile = credentialProfileById(pinned);
@@ -150,7 +152,7 @@ export async function resolveSlotAccount(
       );
     degraded = !profile
       ? "missing"
-      : profile.provider !== wanted
+      : !accountServesModel(profile, slot.provider)
         ? "provider-mismatch"
         : !profile.enabled
           ? "disabled"

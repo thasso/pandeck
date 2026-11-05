@@ -12,6 +12,7 @@
  * coordinator asked for cross-family review can pick from a fact rather than by
  * guessing at model names.
  */
+import { accountPinForModel } from "./accountKinds.ts";
 import type { AccountModelOption } from "./protocol.ts";
 import {
   isThinkingLevel,
@@ -149,7 +150,12 @@ export function peerRuntimeUnavailableReason(
   // a withdrawn model.
   if (!runtime.provider)
     return "This row records no provider — pick its account and model again.";
-  if (!runtime.credentialProfileId) {
+  // Rule P: a compatible model's row runs on its own account, pinned or not.
+  const credentialProfileId = accountPinForModel(
+    runtime.provider,
+    runtime.credentialProfileId,
+  );
+  if (!credentialProfileId) {
     const models = options.filter(
       (option) =>
         !option.accountDisabled &&
@@ -172,7 +178,7 @@ export function peerRuntimeUnavailableReason(
     return undefined;
   }
   const account = options.filter(
-    (option) => option.credentialProfileId === runtime.credentialProfileId,
+    (option) => option.credentialProfileId === credentialProfileId,
   );
   if (account.length === 0)
     return "Its account is disabled, removed, or currently offers no models.";

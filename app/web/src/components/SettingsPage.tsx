@@ -55,6 +55,12 @@ import {
   CLAUDE_SDK_PROVIDER,
   type CredentialProfileProvider,
   type CredentialProfileSummary,
+  type OpenAiCompatibleConnectionStatus,
+  type OpenAiCompatibleEndpointSummary,
+  type OpenAiCompatibleThinkingFormat,
+  ACCOUNT_KINDS,
+  isSubscriptionAccountKind,
+  OPENAI_COMPATIBLE_THINKING_FORMATS,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { visibleModels } from "../lib/models.ts";
@@ -112,8 +118,10 @@ import {
   setCredentialProfileEnabled,
   setCredentialProfileEnterprise,
   setCredentialProfilePriority,
+  saveCredentialProfileEndpoint,
   slotModelOptions,
   startOpenAiProfileLogin,
+  testCredentialProfileEndpoint,
   type SlotModelOption,
 } from "../lib/credentialProfiles.ts";
 import type { Prefs, TextScale } from "../hooks/usePrefs.ts";
@@ -532,6 +540,15 @@ export function SettingsPage({
                 />
               </>
             )}
+            {section === "openai-compatible" && (
+              <>
+                <OpenAiCompatibleSection />
+                <CredentialProfilesSection
+                  provider="openai-compatible"
+                  onOpenSection={onOpenSection}
+                />
+              </>
+            )}
             {/* What the section's own UI does not show, from the registry. */}
             {currentSection && (
               <RegistrySettingFields
@@ -598,6 +615,21 @@ function OpenAiSection() {
   );
 }
 
+function OpenAiCompatibleSection() {
+  return (
+    <div className="mx-auto max-w-2xl px-6 py-6">
+      <h2 className="text-sm font-semibold">OpenAI-compatible endpoints</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Run the models of any server that speaks the OpenAI chat completions
+        API, such as llama.cpp, vLLM, Ollama or a hosted gateway. Each endpoint
+        is its own account: its models run only on it, and it needs no OpenAI
+        login. Its API key stays on the server and is never sent back to the
+        browser.
+      </p>
+    </div>
+  );
+}
+
 export function credentialProfilesForProvider(
   profiles: CredentialProfileSummary[],
   provider: CredentialProfileProvider,
@@ -610,6 +642,7 @@ export function CredentialProfileCard({
   providerLabel,
   connectionLabel,
   connectionDisabled,
+  connectionBusy,
   onToggle,
   onToggleEnterprise,
   onPriority,
@@ -617,11 +650,14 @@ export function CredentialProfileCard({
   onRename,
   onDelete,
   onOpenSection,
+  children,
 }: {
   profile: CredentialProfileSummary;
   providerLabel: string;
   connectionLabel: string;
   connectionDisabled?: boolean;
+  /** The connection action this card started is running. */
+  connectionBusy?: boolean;
   onToggle: () => void;
   onToggleEnterprise: (enterprise: boolean) => void;
   onPriority: (priority: number) => void;
@@ -630,6 +666,8 @@ export function CredentialProfileCard({
   onDelete?: () => void;
   /** Navigate to the settings section owning a pinned slot. */
   onOpenSection?: ((section: SectionId) => void) | undefined;
+  /** What only this kind of account has, such as an endpoint's fields. */
+  children?: React.ReactNode;
 }) {
   return (
     <SettingsCard>
@@ -653,6 +691,9 @@ export function CredentialProfileCard({
           >
             {providerLabel} · {profile.enabled ? profile.status : "disabled"}
           </Badge>
+          {!isSubscriptionAccountKind(profile.provider) ? (
+            <p className="mt-1 text-xs text-muted-foreground">No plan limits</p>
+          ) : null}
           {profile.enabled &&
           profile.health.state === "limited" &&
           limitedAccountDescription(profile.health) ? (
@@ -699,9 +740,10 @@ export function CredentialProfileCard({
         <Button
           variant="outline"
           disabled={connectionDisabled}
+          busy={connectionBusy === true}
           onClick={onConnect}
         >
-          {profile.status === "connecting" ? (
+          {connectionBusy ? null : profile.status === "connecting" ? (
             <Spinner size="sm" />
           ) : (
             <RefreshCw />
@@ -740,6 +782,7 @@ export function CredentialProfileCard({
           </FieldDescription>
         </Field>
       </div>
+      {children}
       {profile.setup ? (
         <Item variant="muted" className="mt-2">
           <ItemContent>
@@ -802,8 +845,10 @@ function CredentialProfileUsageBlock({
         {boundSessionCount > 0 ? (
           <p className="mt-1">
             {boundSessionCount} bound{" "}
-            {boundSessionCount === 1 ? "session" : "sessions"} — they keep
-            running on it even when disabled
+            {boundSessionCount === 1 ? "session" : "sessions"}
+            {isSubscriptionAccountKind(profile.provider)
+              ? " — they keep running on it even when disabled"
+              : " — they stop while it is disabled"}
           </p>
         ) : null}
         {pinnedSlots.length > 0 ? (
@@ -823,6 +868,138 @@ function CredentialProfileUsageBlock({
         ) : null}
       </ItemContent>
     </Item>
+  );
+}
+
+/**
+ * An endpoint account's own fields: where it is, its write-only key, how it
+ * takes thinking control, and the models its last discovery found. Saving
+ * stores the endpoint and discovers its models in one step.
+ */
+function EndpointFields({
+  profile,
+  endpoint,
+  status,
+  onSaved,
+}: {
+  profile: CredentialProfileSummary;
+  endpoint: OpenAiCompatibleEndpointSummary;
+  status: OpenAiCompatibleConnectionStatus | null;
+  onSaved: (status: OpenAiCompatibleConnectionStatus) => void;
+}) {
+  const [baseUrl, setBaseUrl] = useState(endpoint.baseUrl);
+  const [thinkingFormat, setThinkingFormat] = useState(endpoint.thinkingFormat);
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setBaseUrl(endpoint.baseUrl);
+    setThinkingFormat(endpoint.thinkingFormat);
+  }, [endpoint.baseUrl, endpoint.thinkingFormat]);
+  const save = (patch: { apiKey?: string; clearApiKey?: boolean }) => {
+    setSaving(true);
+    setError(null);
+    void saveCredentialProfileEndpoint(profile.id, {
+      baseUrl,
+      thinkingFormat,
+      ...patch,
+    })
+      .then(() => testCredentialProfileEndpoint(profile.id))
+      .then(({ status: next }) => {
+        setApiKey("");
+        onSaved(next);
+      })
+      .catch((err: unknown) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+      .finally(() => setSaving(false));
+  };
+  const models = endpoint.models;
+  return (
+    <div className="mt-3 space-y-3">
+      <Field label="Base URL">
+        <Input
+          value={baseUrl}
+          aria-label={`Base URL: ${profile.name}`}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://llm.example.net/v1"
+        />
+        <FieldDescription>
+          Moving to another host clears the saved API key.
+        </FieldDescription>
+      </Field>
+      <SecretField
+        label="API key (optional)"
+        configured={endpoint.apiKeyConfigured}
+        value={apiKey}
+        onChange={setApiKey}
+      />
+      <Field label="Thinking control">
+        <NativeSelect
+          value={thinkingFormat}
+          aria-label={`Thinking control: ${profile.name}`}
+          onChange={(e) =>
+            setThinkingFormat(e.target.value as OpenAiCompatibleThinkingFormat)
+          }
+          className="w-full"
+        >
+          {OPENAI_COMPATIBLE_THINKING_FORMATS.map((format) => (
+            <option key={format} value={format}>
+              {format === "none" ? "None: models do not reason" : format}
+            </option>
+          ))}
+        </NativeSelect>
+        <FieldDescription>
+          How the server takes a thinking level. With one set, every model of
+          this endpoint offers thinking levels.
+        </FieldDescription>
+      </Field>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          busy={saving}
+          disabled={!baseUrl.trim()}
+          onClick={() => save(apiKey.trim() ? { apiKey: apiKey.trim() } : {})}
+        >
+          Save and discover models
+        </Button>
+        {endpoint.apiKeyConfigured ? (
+          <Button
+            variant="outline"
+            disabled={saving}
+            onClick={() => save({ clearApiKey: true })}
+          >
+            Remove key
+          </Button>
+        ) : null}
+      </div>
+      {error ? <ErrorNote message={error} /> : null}
+      <IntegrationStatusBanner status={status} />
+      <div>
+        <p className="text-sm font-medium text-foreground">Models</p>
+        {models.length > 0 ? (
+          <ul className="mt-1 space-y-1">
+            {models.map((model) => (
+              <li
+                key={model.id}
+                className="flex items-baseline justify-between gap-3 text-sm"
+              >
+                <span className="min-w-0 truncate text-foreground">
+                  {model.name}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {model.reasoning ? "reasoning, " : ""}
+                  {model.contextWindow.toLocaleString()} context
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-sm text-muted-foreground">
+            None yet. Save the endpoint, or run Test, to discover its models.
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -891,6 +1068,11 @@ function CredentialProfilesSection({
   const [error, setError] = useState<string | null>(null);
   const [claudeLoginProfile, setClaudeLoginProfile] =
     useState<CredentialProfileSummary | null>(null);
+  // Endpoint accounts: the last Test answer per account, and those testing.
+  const [endpointStatus, setEndpointStatus] = useState<
+    Record<string, OpenAiCompatibleConnectionStatus | null>
+  >({});
+  const [testing, setTesting] = useState<ReadonlySet<string>>(new Set());
   const refresh = async () => {
     try {
       setProfiles(await fetchCredentialProfiles({ includeUsage: true }));
@@ -930,25 +1112,29 @@ function CredentialProfilesSection({
       setError(err instanceof Error ? err.message : String(err));
     }
   };
-  const providerLabel = provider === "claude" ? "Claude" : "OpenAI";
+  const kind = ACCOUNT_KINDS[provider];
+  const providerLabel = kind.label;
+  const endpoints = kind.credential === "endpoint";
+  // A login account is a "profile" here; an endpoint account is an endpoint.
+  const noun = endpoints ? "endpoint" : `${providerLabel} profile`;
+  const title = endpoints ? "Endpoints" : `${providerLabel} profiles`;
   return (
     <>
       <div className="mx-auto max-w-2xl px-6 pb-6">
         <SettingsCard>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold">
-                {providerLabel} profiles
-              </h3>
+              <h3 className="text-sm font-semibold">{title}</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Profiles are isolated under PA data. Tokens never enter the
-                browser or app settings.
+                {endpoints
+                  ? "Each endpoint keeps its URL and key in its own private file under PA data."
+                  : "Profiles are isolated under PA data. Tokens never enter the browser or app settings."}
               </p>
             </div>
             <IconButton
-              label={`Refresh ${providerLabel} profiles`}
+              label={`Refresh ${title.toLowerCase()}`}
               onClick={() => void refresh()}
-              title={`Refresh ${providerLabel} profiles`}
+              title={`Refresh ${title.toLowerCase()}`}
             >
               <RefreshCw />
             </IconButton>
@@ -957,11 +1143,12 @@ function CredentialProfilesSection({
             <Input
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder={`${providerLabel} profile name`}
+              placeholder={endpoints ? "Endpoint name" : `${noun} name`}
+              aria-label={endpoints ? "Endpoint name" : `${noun} name`}
               className="flex-1"
             />
             <Button onClick={() => void add()} disabled={!name.trim()}>
-              Add {providerLabel} profile
+              Add {noun}
             </Button>
           </div>
           {error ? (
@@ -975,8 +1162,9 @@ function CredentialProfilesSection({
             {providerProfiles.map((profile) => {
               const protectedProfile =
                 profile.id === "default" || profile.id === "claude-default";
-              const connection =
-                provider === "openai-codex"
+              const connection = endpoints
+                ? { label: "Test", disabled: !profile.endpoint?.baseUrl }
+                : provider === "openai-codex"
                   ? openAiProfileConnectionAction(profile.status)
                   : {
                       label:
@@ -989,6 +1177,25 @@ function CredentialProfilesSection({
                     };
               const fail = (err: unknown) =>
                 setError(err instanceof Error ? err.message : String(err));
+              const test = () => {
+                setTesting((ids) => new Set(ids).add(profile.id));
+                void testCredentialProfileEndpoint(profile.id)
+                  .then(({ status }) =>
+                    setEndpointStatus((all) => ({
+                      ...all,
+                      [profile.id]: status,
+                    })),
+                  )
+                  .then(refresh)
+                  .catch(fail)
+                  .finally(() =>
+                    setTesting((ids) => {
+                      const next = new Set(ids);
+                      next.delete(profile.id);
+                      return next;
+                    }),
+                  );
+              };
               // Each asks first, then writes. The ask settles rather than
               // rejecting and every write ends in `.catch(fail)`, so the card's
               // `() => void` slots take them through a `void` call.
@@ -1047,6 +1254,7 @@ function CredentialProfilesSection({
                   providerLabel={providerLabel}
                   connectionLabel={connection.label}
                   connectionDisabled={connection.disabled}
+                  connectionBusy={testing.has(profile.id)}
                   onToggle={() => void toggle()}
                   onToggleEnterprise={(enterprise) =>
                     void setCredentialProfileEnterprise(profile.id, enterprise)
@@ -1060,7 +1268,9 @@ function CredentialProfilesSection({
                   }
                   onOpenSection={onOpenSection}
                   onConnect={() => {
-                    if (provider === "claude") setClaudeLoginProfile(profile);
+                    if (endpoints) test();
+                    else if (provider === "claude")
+                      setClaudeLoginProfile(profile);
                     else
                       void startOpenAiProfileLogin(profile.id)
                         .then(refresh)
@@ -1072,7 +1282,22 @@ function CredentialProfilesSection({
                         onDelete: () => void remove(),
                       }
                     : {})}
-                />
+                >
+                  {endpoints && profile.endpoint ? (
+                    <EndpointFields
+                      profile={profile}
+                      endpoint={profile.endpoint}
+                      status={endpointStatus[profile.id] ?? null}
+                      onSaved={(status) => {
+                        setEndpointStatus((all) => ({
+                          ...all,
+                          [profile.id]: status,
+                        }));
+                        void refresh();
+                      }}
+                    />
+                  ) : null}
+                </CredentialProfileCard>
               );
             })}
           </div>

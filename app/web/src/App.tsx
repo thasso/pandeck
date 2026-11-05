@@ -22,21 +22,18 @@ import {
   SendHorizontal,
 } from "lucide-react";
 import {
-  accountProviderForModelProvider,
+  ACCOUNT_KINDS,
   type AccountPickPreviewResult,
+  accountServesModel,
   type AgentType,
   clampThinkingLevelForModel,
   claudeSdkModelOption,
   type Harness,
-  harnessForAccountProvider,
   type InboxPositionEntry,
   harnessForModelProvider,
-  isClaudeSdkModel,
   isCodingAgentType,
   KNOWLEDGE_WORKTREE_ID,
   modelKey,
-  OPENAI_COMPATIBLE_PROVIDER_ID,
-  providerLabel,
   type ModelOption,
   type PromptAttachment,
   type PullRequestCheckoutOutcome,
@@ -191,6 +188,7 @@ import { UserTimeZoneContext } from "./hooks/useUserTimeZone.ts";
 import {
   isOptimisticHarness,
   locksModelAfterStart,
+  startedModelDisabled,
 } from "./lib/sessionCapabilities.ts";
 import { createClientId } from "./lib/clientId.ts";
 import { copyWithToast } from "./lib/clipboard.ts";
@@ -4130,13 +4128,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       ),
   );
   const automaticPreviewName = (() => {
-    // The account only carries a compatible model: the endpoint runs it, on no
-    // plan of that account's.
-    if (automaticPreviewModel?.provider === OPENAI_COMPATIBLE_PROVIDER_ID)
-      return providerLabel(
-        automaticPreviewModel.provider,
-        automaticPreviewModel.providerName,
-      );
     const preview = dataOf(automaticPreviewFetch.state);
     const name = credentialProfiles.find(
       (profile) => profile.id === preview?.profileId,
@@ -4513,11 +4504,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       ...actions,
       setModel: (provider, id) => {
         // Keep the new-session account aligned even when this was an existing
-        // session's model picker: an explicit account of another provider cannot
-        // run this model, so the staged choice goes back to Automatic. An
+        // session's model picker: an explicit account that does not serve this
+        // model cannot run it, so the staged choice goes back to Automatic. An
         // account picked in this same event was already set by its handler
         // (this closure may still hold the previous one).
-        const profileProvider = accountProviderForModelProvider(provider);
         const explicitProfileId = explicitProfileForNextModel.current;
         explicitProfileForNextModel.current = null;
         if (
@@ -4526,7 +4516,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           !activeCredentialProfiles.some(
             (profile) =>
               profile.id === credentialProfileId &&
-              profile.provider === profileProvider,
+              accountServesModel(profile, provider),
           )
         )
           setCredentialProfileId(null);
@@ -4759,7 +4749,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       runtimeActions.setModel(model.provider, model.id);
     } else if (profile && isNewChatRoute && !runtimeHasStarted) {
       startStagedSession({
-        harness: harnessForAccountProvider(profile.provider),
+        harness: ACCOUNT_KINDS[profile.provider].harness,
         agentType: agentTypeForPicker,
         thinkingLevel: "off",
         // Restage: switching WHO runs the session keeps its mode and role.
@@ -4768,13 +4758,19 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       });
     }
   };
-  // Claude SDK models belong only to Claude-driven sessions; disable them in a
-  // started pi session. Non-pi sessions are exempt from this restriction.
+  // A started session changes model only on its harness and bound account.
   const isModelDisabled = useCallback(
     (model: ModelOption) =>
       modelLocked ||
-      (displayHarness === "pi" && runtimeHasStarted && isClaudeSdkModel(model)),
-    [modelLocked, displayHarness, runtimeHasStarted],
+      startedModelDisabled(
+        {
+          harness: displayHarness,
+          started: runtimeHasStarted,
+          account: displayCredentialProfile,
+        },
+        model,
+      ),
+    [modelLocked, displayHarness, runtimeHasStarted, displayCredentialProfile],
   );
   const sessionTasks = displaySession?.tasks ?? [];
   const relatedGlobalTasks = displaySession?.relatedGlobalTasks ?? [];

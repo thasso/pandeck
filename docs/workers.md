@@ -1432,7 +1432,9 @@ until the gateway runs as its own process.
   while the registered endpoint is on the model's own origin, so a model held
   across a change to another origin is refused with pi's
   `Provider is not configured` before it connects: the new key never reaches the
-  old endpoint, nor the old key the new one.
+  old endpoint, nor the old key the new one. A key-less endpoint is the
+  established exception: with no key to pair, nothing is refused, and a held
+  model keeps sending to the origin it was opened on, without a key.
   - A held model's next request sends a rotated key, and the `none` placeholder
     once the key is cleared. A new base URL drops the discovered models, so a
     held model is refused until Test rediscovers; after that, one on the same
@@ -1594,10 +1596,10 @@ CLI still talks only to the gateway.
   - C2: a pi open, like a Claude one, awaits the link's readiness without a
     bound (G5, G7a).
   - After an OpenAI-compatible endpoint change to another origin, an open
-    switch-off pi session on the old model fails with pi's
-    `Provider is not configured` until the user reselects the model or reopens
-    the session (RD-1357-1). A switch-off one-shot running across such a change
-    fails the same way.
+    switch-off pi session on the old model (on an endpoint with a key) fails
+    with pi's `Provider is not configured` until the user reselects the model or
+    reopens the session (RD-1357-1). A switch-off one-shot running across such a
+    change fails the same way.
   - A stored compatible credential in a pi `auth.json` would take precedence
     over the account's key. The server never writes one.
   - pi retries a gateway 503 or 502 on `/compat` 3 times, about 14 seconds,

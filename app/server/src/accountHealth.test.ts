@@ -1060,6 +1060,24 @@ it("disabled accounts never alert; deletion forgets persisted health and ignores
   expect(f.restart().read("acct", true).state).toBe("unknown");
 });
 
+it("records nothing for an endpoint account: no login death, bench, alert or push", () => {
+  const f = fixture("ready", "openai-compatible");
+  f.store.runFailure("acct", authFailure(), "openai-compatible");
+  f.store.runFailure(
+    "acct",
+    runFailureFacts(analyzeProviderError("429 rate limit exceeded")),
+    "openai-compatible",
+  );
+  f.store.runWorking("acct", "openai-compatible", undefined, "llama3");
+  f.store.usageFailure("acct", "unauthorized");
+  f.deps.profiles();
+  expect(f.store.read("acct", true)).toEqual({ state: "unknown", since: null });
+  expect(f.store.bench("acct", "llama3")).toBeUndefined();
+  expect(f.store.alerts()).toEqual([]);
+  expect(f.push).not.toHaveBeenCalled();
+  expect(f.restart().read("acct", true).state).toBe("unknown");
+});
+
 it("tolerates corrupt files and rejects persisted provider wording", () => {
   const f = fixture();
   writeFileSync(f.deps.persistPath, "not json");

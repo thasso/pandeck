@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  AccountHealth,
-  AccountLoginAlert,
-  CredentialProfileSummary,
-  ServerMessage,
+import {
+  isSubscriptionAccountKind,
+  type AccountHealth,
+  type AccountLoginAlert,
+  type CredentialProfileSummary,
+  type ServerMessage,
 } from "@assistant/shared";
 import {
   accountLoginAlerts,
@@ -144,8 +145,13 @@ export class AccountHealthStore {
   ): CredentialProfileSummary[] {
     this.benches.expire();
     const profiles = read();
-    this.profiles = new Map(profiles.map((profile) => [profile.id, profile]));
-    for (const profile of profiles)
+    // Only subscription logins have health, benches and login alerts: an
+    // account of any other kind is unknown here, so no evidence reaches it.
+    const tracked = profiles.filter((profile) =>
+      isSubscriptionAccountKind(profile.provider),
+    );
+    this.profiles = new Map(tracked.map((profile) => [profile.id, profile]));
+    for (const profile of tracked)
       if (profile.health.reason !== DISCONNECTED.reason)
         this.rememberConnection(profile.id);
     for (const id of new Set([
@@ -171,7 +177,7 @@ export class AccountHealthStore {
       }
     }
     const accounts = accountLoginAlerts(
-      profiles.filter(
+      tracked.filter(
         (profile) =>
           this.wasConnected.has(profile.id) ||
           this.health.get(profile.id)?.state === "needs-login",

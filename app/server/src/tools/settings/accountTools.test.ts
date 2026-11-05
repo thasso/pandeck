@@ -7,6 +7,7 @@ import {
   claudeConfigDir,
   clearCredentialProfileLoginState,
   completeCredentialProfileLogin,
+  createCredentialProfile,
   credentialProfileSummaryById,
   setCredentialProfileLoginState,
 } from "../../credentialProfiles.ts";
@@ -166,6 +167,19 @@ describe("accounts_sign_in", () => {
       approvalForId(card.id)?.resultSummary,
       "New Claude: signed in.",
     );
+  });
+
+  test("refuses an endpoint account, whose endpoint only Settings sets", async () => {
+    const endpoint = createCredentialProfile({
+      name: "Team LLM",
+      provider: "openai-compatible",
+    });
+    await assert.rejects(
+      tool("accounts_sign_in").execute({ id: endpoint.id }, ctx("s-endpoint")),
+      /Team LLM has no sign-in: its endpoint is set on the Settings page \(\/settings\/openai-compatible\)/,
+    );
+    assert.deepEqual(approvalsForSession("s-endpoint"), []);
+    await assert.rejects(create("Another endpoint", "openai-compatible"));
   });
 
   test("refuses a disabled account", async () => {

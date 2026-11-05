@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  accountProviderForModelProvider,
+  accountKindForModelProvider,
   CLAUDE_SDK_PROVIDER,
 } from "@assistant/shared";
 
@@ -278,7 +278,7 @@ test("existing slot pins survive reads and unrelated writes until saved as Autom
   const pinned = getSettings();
   for (const { slot } of listSettingsModelSlots(pinned))
     slot.credentialProfileId =
-      accountProviderForModelProvider(slot.provider) === "claude"
+      accountKindForModelProvider(slot.provider) === "claude"
         ? claude.id
         : openai.id;
   updateSettings(pinned);

@@ -156,7 +156,6 @@ import {
 } from "./backgroundWorkHumanStop.ts";
 import { backgroundCompletionTurns } from "./backgroundWork/completionDelivery.ts";
 import { resolveSessionAccount } from "./sessionAccount.ts";
-import { credentialProfileById } from "./credentialProfiles.ts";
 import { revalidateUsage, usageIndicators } from "./usageCache.ts";
 import {
   broadcastWorkflowRuns,
@@ -4119,20 +4118,15 @@ export class Connection implements Viewer {
     // resolution included), never after one.
     const ticket = this.claimViewRequest();
     const credentialProfileId = await resolveSessionAccount(
-      "openai-codex",
+      "pi",
       {
         modelProvider: selection.model?.provider,
         modelId: selection.model?.id,
         thinkingLevel: selection.thinkingLevel,
         requiresEnterprise,
-        credentialProfileId:
-          parent?.credentialProfileId &&
-          credentialProfileById(parent.credentialProfileId)?.provider ===
-            "openai-codex"
-            ? parent.credentialProfileId
-            : undefined,
+        credentialProfileId: parent?.credentialProfileId,
       },
-      { allowDisabledPin: true },
+      { inheritedPin: true },
     );
     let model = selectedModel
       ? undefined
@@ -4631,20 +4625,15 @@ export class Connection implements Viewer {
       );
       const requiresEnterprise = parent?.requiresEnterprise;
       const credentialProfileId = await resolveSessionAccount(
-        "openai-codex",
+        "pi",
         {
           modelProvider: carried.model?.provider,
           modelId: carried.model?.id,
           thinkingLevel: carried.thinkingLevel,
           requiresEnterprise,
-          credentialProfileId:
-            parent?.credentialProfileId &&
-            credentialProfileById(parent.credentialProfileId)?.provider ===
-              "openai-codex"
-              ? parent.credentialProfileId
-              : undefined,
+          credentialProfileId: parent?.credentialProfileId,
         },
-        { allowDisabledPin: true },
+        { inheritedPin: true },
       );
       const model = await this.resolveViewedModel(carried, credentialProfileId);
       const live = await createSession({

@@ -708,7 +708,7 @@ test("a live compatible session refuses a model switch off its account, in words
       () => adapter.setModel({ provider: "openai-codex", id: "gpt-5.4" }),
       {
         message:
-          "Fixture does not serve openai-codex/gpt-5.4; fork or start a new session to use it.",
+          "Fixture does not serve openai-codex/gpt-5.4; start a new session to use it.",
       },
     );
     assert.equal(live.engine.model?.id, "chosen");

@@ -50,7 +50,7 @@ const engines: Record<Harness, HandoffEngine> = {
     async create(target, worktree) {
       if (!getSettings().claudeSdk.enabled)
         throw new Error("Claude SDK sessions are disabled.");
-      const profileId = await resolveSessionAccount("claude", target);
+      const profileId = await resolveSessionAccount("claude-sdk", target);
       return createSession({
         harness: "claude-sdk",
         agentType: target.agentType,
@@ -68,7 +68,7 @@ const engines: Record<Harness, HandoffEngine> = {
   pi: {
     guardsPersona: true,
     async create(target, worktree) {
-      const profileId = await resolveSessionAccount("openai-codex", target);
+      const profileId = await resolveSessionAccount("pi", target);
       let model: PiModel | undefined;
       if (target.modelProvider && target.modelId) {
         model =

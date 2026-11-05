@@ -20,7 +20,7 @@
  */
 import { randomUUID } from "node:crypto";
 import {
-  accountProviderForModelProvider,
+  accountServesModel,
   estimateSpawnCompactionWindow,
   COMPACTION_WINDOW_AGENT_FLOOR,
   type SpawnCompactionWindow,
@@ -274,8 +274,7 @@ async function tryRuntime(
         listCredentialProfiles()
           .filter(
             (profile) =>
-              profile.enabled &&
-              profile.provider === accountProviderForModelProvider(provider),
+              profile.enabled && accountServesModel(profile, provider),
           )
           .map((profile) => modelsForProfile(profile.id)),
       )
@@ -791,7 +790,7 @@ async function settledItem(
     throw new Error(
       `The account for "${item.title}" is not marked as enterprise — pick an enterprise account, or skip that row.`,
     );
-  if (profile.provider !== accountProviderForModelProvider(item.provider))
+  if (!accountServesModel(profile, item.provider))
     throw new Error(
       `"${profile.name}" cannot run ${item.provider} models — pick a matching account for "${item.title}".`,
     );

@@ -1,7 +1,8 @@
-import type {
-  AppSettings,
-  CredentialProfileSummary,
-  SettingsInputApprovalBody,
+import {
+  ACCOUNT_KINDS,
+  type AppSettings,
+  type CredentialProfileSummary,
+  type SettingsInputApprovalBody,
 } from "@assistant/shared";
 import {
   SETTINGS_OUTSIDE_REGISTRY,
@@ -447,9 +448,14 @@ const settingsRequestInputTool = defineAgentTool<SettingsRequestInputParams>({
 // sessions run on. They live outside the settings registry, in their own
 // store; these tools reach them through the same functions the Settings page's
 // account routes use. No device code or token ever appears here: an account
-// reports only its status, and signing in happens in a card.
+// reports only its status, and signing in happens in a card. Only login kinds
+// are created or signed in here; an endpoint account's URL, key and models are
+// edited in Settings alone.
 
-const PROVIDERS = ["claude", "openai-codex"] as const;
+const PROVIDERS = [
+  "claude",
+  "openai-codex",
+] as const satisfies readonly (keyof typeof ACCOUNT_KINDS)[];
 
 /** An account as an agent sees it. */
 function accountEntry(profile: CredentialProfileSummary) {
@@ -477,8 +483,10 @@ function accountEntry(profile: CredentialProfileSummary) {
   };
 }
 
-function accountSection(profile: { provider: string }): string {
-  return profile.provider === "claude" ? "claude-sdk" : "openai";
+function accountSection(profile: {
+  provider: CredentialProfileSummary["provider"];
+}): string {
+  return ACCOUNT_KINDS[profile.provider].settingsSection;
 }
 
 function accountOf(id: unknown): CredentialProfileSummary {
@@ -610,6 +618,10 @@ const accountsSignInTool = defineAgentTool<Record<string, unknown>>({
       if (!isRecord(raw)) throw new Error("Arguments must be an object.");
       rejectUnknownKeys(raw, ["id", "reason"], "accounts_sign_in");
       const account = accountOf(raw.id);
+      if (ACCOUNT_KINDS[account.provider].credential !== "login")
+        throw new Error(
+          `${account.name} has no sign-in: its endpoint is set on the Settings page (/settings/${accountSection(account)}).`,
+        );
       if (!account.enabled)
         throw new Error(
           `${account.name} is disabled; enable it with accounts_update first.`,
@@ -642,8 +654,7 @@ const accountsSignInTool = defineAgentTool<Record<string, unknown>>({
         sessionId: ctx.session.sessionId,
         kind: "settingsInput",
         title: `Sign in ${account.name}`,
-        summary:
-          account.provider === "claude" ? "Claude account" : "OpenAI account",
+        summary: `${ACCOUNT_KINDS[account.provider].label} account`,
         sourceToolCallId: ctx.toolCallId,
         body,
         supersedes: (earlier) =>

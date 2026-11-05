@@ -7,12 +7,16 @@ import type {
   CredentialProfileStatus,
   CredentialProfileSummary,
   ModelOption,
+  OpenAiCompatibleConnectionStatus,
+  OpenAiCompatibleThinkingFormat,
   ThinkingLevel,
 } from "@assistant/shared";
 import {
+  ACCOUNT_KINDS,
+  accountKindForModelProvider,
+  isOpenAiCompatibleModelProvider,
+  isSubscriptionAccountKind,
   supportedThinkingLevelsForModel,
-  accountProviderForModelProvider,
-  OPENAI_COMPATIBLE_PROVIDER_ID,
   THINKING_LEVELS,
 } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
@@ -82,12 +86,11 @@ export function automaticModels(
 }
 
 /**
- * The accounts the new-session picker names. The OpenAI-compatible endpoint
- * registers on every OpenAI account, so an unconnected one still lists its
- * models, and a Claude account offers nothing while the integration is off:
- * neither is a choice, though Automatic may still run the endpoint through the
- * first. The staged pick stays visible so it is never refused unseen. With
- * nothing to run anywhere every account stays, its card saying what is missing.
+ * The accounts the new-session picker names: those with something to run. An
+ * unconnected subscription login, or a Claude account while the integration is
+ * off, offers nothing and is no choice. The staged pick stays visible so it is
+ * never refused unseen. With nothing to run anywhere every account stays, its
+ * card saying what is missing. This decides cards alone, never eligibility.
  */
 export function pickerCredentialProfiles(
   profiles: CredentialProfileSummary[],
@@ -98,12 +101,7 @@ export function pickerCredentialProfiles(
     modelsByProfile[profile.id] ?? [];
   if (!profiles.some((profile) => offers(profile).length > 0)) return profiles;
   return profiles.filter(
-    (profile) =>
-      profile.id === selectedId ||
-      (profile.status === "ready" && offers(profile).length > 0) ||
-      offers(profile).some(
-        (model) => model.provider !== OPENAI_COMPATIBLE_PROVIDER_ID,
-      ),
+    (profile) => profile.id === selectedId || offers(profile).length > 0,
   );
 }
 
@@ -162,15 +160,21 @@ export function slotModelOptions(
  */
 export function accountPinWarning(
   profiles: CredentialProfileSummary[],
-  slot: { credentialProfileId?: string },
+  slot: { credentialProfileId?: string; provider?: string },
 ): string | undefined {
   const pinned = slot.credentialProfileId;
   if (!pinned) return undefined;
   const profile = profiles.find((item) => item.id === pinned);
+  // A compatible model has exactly one account; nothing else can run it.
+  const sole = isOpenAiCompatibleModelProvider(slot.provider);
   if (!profile)
-    return "The pinned account no longer exists — this runs on the automatic account.";
+    return sole
+      ? "The account serving this model no longer exists — this cannot run."
+      : "The pinned account no longer exists — this runs on the automatic account.";
   if (!profile.enabled)
-    return `“${profile.name}” is disabled — this runs on the automatic account.`;
+    return sole
+      ? `“${profile.name}” is disabled — this cannot run until it is enabled.`
+      : `“${profile.name}” is disabled — this runs on the automatic account.`;
   return undefined;
 }
 
@@ -186,16 +190,25 @@ export function disableAccountImpact(
 ): string[] {
   const usage = profile.usage;
   if (!usage) return [];
+  // Only subscription logins share their models with other accounts; any
+  // other account's work has nowhere to move, so it waits.
+  const moves = isSubscriptionAccountKind(profile.provider);
   const lines: string[] = [];
   if (usage.pinnedSlots.length > 0) {
     const one = usage.pinnedSlots.length === 1;
+    const slots = usage.pinnedSlots.map((slot) => slot.label).join(", ");
     lines.push(
-      `${usage.pinnedSlots.length} settings ${one ? "slot" : "slots"} pinned to it ${one ? "falls" : "fall"} back to the automatic account: ${usage.pinnedSlots.map((slot) => slot.label).join(", ")}.`,
+      moves
+        ? `${usage.pinnedSlots.length} settings ${one ? "slot" : "slots"} pinned to it ${one ? "falls" : "fall"} back to the automatic account: ${slots}.`
+        : `${usage.pinnedSlots.length} settings ${one ? "slot" : "slots"} using its models ${one ? "stops" : "stop"} until it is enabled again: ${slots}.`,
     );
   }
   if (usage.boundSessionCount > 0) {
+    const one = usage.boundSessionCount === 1;
     lines.push(
-      `${usage.boundSessionCount} existing ${usage.boundSessionCount === 1 ? "session moves to another eligible account on its" : "sessions move to another eligible account on their"} next turn, or stop there if none is left (including forks, /clear and drafts of those sessions).`,
+      moves
+        ? `${usage.boundSessionCount} existing ${one ? "session moves to another eligible account on its" : "sessions move to another eligible account on their"} next turn, or stop there if none is left (including forks, /clear and drafts of those sessions).`
+        : `${usage.boundSessionCount} existing ${one ? "session stops" : "sessions stop"} until it is enabled again (including forks, /clear and drafts of those sessions).`,
     );
   }
   return lines;
@@ -277,9 +290,7 @@ export function automaticPreviewHint(
   modelProvider: string,
 ): { text: string; warning: boolean } | undefined {
   const provider =
-    accountProviderForModelProvider(modelProvider) === "claude"
-      ? "Claude"
-      : "OpenAI";
+    ACCOUNT_KINDS[accountKindForModelProvider(modelProvider)].label;
   const name = profiles.find(
     (profile) => profile.id === preview.profileId,
   )?.name;
@@ -442,6 +453,56 @@ export async function deleteCredentialProfile(
   if (!res.ok)
     throw new Error(payload?.error || `Request failed (${res.status})`);
   return payload?.clearedSlots ?? [];
+}
+
+/**
+ * Saves an OpenAI-compatible account's endpoint. The key is write-only: the
+ * answer says only whether one is set. Moving to another origin drops a saved
+ * key unless this write sets one.
+ */
+export async function saveCredentialProfileEndpoint(
+  id: string,
+  patch: {
+    baseUrl?: string;
+    thinkingFormat?: OpenAiCompatibleThinkingFormat;
+    apiKey?: string;
+    clearApiKey?: boolean;
+  },
+): Promise<CredentialProfileSummary> {
+  const result = await body<{ profile: CredentialProfileSummary }>(
+    await fetch(
+      `${serverHttpOrigin()}/api/credential-profiles/${encodeURIComponent(id)}/endpoint`,
+      {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      },
+    ),
+  );
+  return result.profile;
+}
+
+/** Discovers the endpoint's models now and keeps them on the account. */
+export async function testCredentialProfileEndpoint(
+  id: string,
+  signal?: AbortSignal,
+): Promise<{
+  status: OpenAiCompatibleConnectionStatus;
+  profile: CredentialProfileSummary;
+}> {
+  return body<{
+    status: OpenAiCompatibleConnectionStatus;
+    profile: CredentialProfileSummary;
+  }>(
+    await fetch(
+      `${serverHttpOrigin()}/api/credential-profiles/${encodeURIComponent(id)}/endpoint/test`,
+      {
+        method: "POST",
+        headers: authHeaders(),
+        ...(signal ? { signal } : {}),
+      },
+    ),
+  );
 }
 
 export async function startOpenAiProfileLogin(id: string): Promise<void> {

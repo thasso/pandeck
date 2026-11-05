@@ -5,6 +5,7 @@
  */
 import { expect, test } from "vitest";
 import {
+  accountKindForModelProvider,
   accountPinForModel,
   accountServesModel,
   ACCOUNT_KINDS,
@@ -94,4 +95,22 @@ test("rule P: a compatible model's pin is its account, whatever was stored", () 
     "cp_0123456789abcdef",
   );
   expect(accountPinForModel("openai-codex", undefined)).toBeUndefined();
+});
+
+test("a model's account kind follows its provider, and runs on that kind's harness", () => {
+  expect(accountKindForModelProvider(CLAUDE_SDK_PROVIDER)).toBe("claude");
+  expect(accountKindForModelProvider("github-copilot")).toBe("openai-codex");
+  expect(accountKindForModelProvider("openai-codex")).toBe("openai-codex");
+  expect(accountKindForModelProvider("openai-compatible")).toBe(
+    "openai-compatible",
+  );
+  expect(accountKindForModelProvider(NEW_COMPATIBLE)).toBe("openai-compatible");
+  expect(accountKindForModelProvider("openai-compatible-0123456789AB")).toBe(
+    "openai-codex",
+  );
+  for (const provider of [CLAUDE_SDK_PROVIDER, "openai", NEW_COMPATIBLE])
+    expect(
+      HARNESSES[ACCOUNT_KINDS[accountKindForModelProvider(provider)].harness]
+        .id,
+    ).toBe(provider === CLAUDE_SDK_PROVIDER ? "claude-sdk" : "pi");
 });

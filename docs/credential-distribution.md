@@ -56,7 +56,10 @@ under `DATA_DIR/credential-profiles/`, while a default Claude login may come
 from the service user's home directory. An OpenAI-compatible account's endpoint
 key lives only in its `credential-profiles/<id>/endpoint.json` (0600); the
 former `settings/openai-compatible.json` is migrated there and deleted
-(`docs/settings.md` "OpenAI-compatible accounts"). Moving the four integration
+(`docs/settings.md` "OpenAI-compatible accounts"). It is write-only: Settings
+sends it in one `PATCH …/endpoint` and shows only `apiKeyConfigured`, no agent
+tool reads or writes it, and the opt-in credential gateway leases only OpenAI
+accounts, so it never receives an endpoint's key. Moving the four integration
 secrets above does not isolate model credentials. Apply the credential-profile
 filters and preview rules independently. With the credential gateway on, the
 gateway renews these tokens in place, in the same profile files and formats; no

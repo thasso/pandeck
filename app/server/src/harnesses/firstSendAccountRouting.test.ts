@@ -99,3 +99,40 @@ for (const harness of ["pi", "claude-sdk"] as Harness[]) {
     assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
   });
 }
+
+test("a pi first send of an endpoint model binds its own account", async () => {
+  const endpoint = createCredentialProfile({
+    name: "Team LLM",
+    provider: "openai-compatible",
+  });
+  const send = {
+    type: "harnessSend" as const,
+    harness: "pi" as const,
+    id: "start",
+    agentType: "assistant" as const,
+    text: "hello",
+    modelProvider: endpoint.id,
+    modelId: "llama3",
+    thinkingLevel: "off" as const,
+  };
+  // Only one account serves the model, so Automatic and an OpenAI pin both
+  // mean it (rule P), without asking the router.
+  assert.deepEqual(await firstSendEngine("pi").account(send), {
+    profileId: endpoint.id,
+  });
+  assert.deepEqual(
+    await firstSendEngine("pi").account({
+      ...send,
+      credentialProfileId: "default",
+    }),
+    { profileId: endpoint.id },
+  );
+  setCredentialProfileEnabled(endpoint.id, false);
+  const refused = await firstSendEngine("pi").account({
+    ...send,
+    credentialProfileId: endpoint.id,
+  });
+  assert.ok("refusal" in refused);
+  assert.ok("refusal" in (await firstSendEngine("pi").account(send)));
+  assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+});

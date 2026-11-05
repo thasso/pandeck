@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  accountPinForModel,
   CLAUDE_SDK_PROVIDER,
   compareReviewFindings,
   REVIEW_REPORT_CONVENTION,
@@ -787,7 +788,12 @@ function roleConfigOf(
   const value = payloadRecord(configForRole(run, step, role));
   const provider = stringValue(value.provider);
   const modelId = stringValue(value.modelId);
-  const credentialProfileId = stringValue(value.credentialProfileId);
+  // Rule P, on read for execution only: a compatible model runs on its own
+  // account whatever the immutable config recorded. The stored config, plan
+  // and step payloads are never rewritten.
+  const credentialProfileId = provider
+    ? accountPinForModel(provider, stringValue(value.credentialProfileId))
+    : undefined;
   const thinkingLevel = stringValue(value.thinkingLevel);
   if (
     !provider ||

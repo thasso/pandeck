@@ -551,7 +551,7 @@ test("an account of the wrong provider family is refused", async () => {
         ],
       },
     },
-    /is a openai-codex account; model claude-sdk:sonnet needs a claude account/,
+    /does not serve claude-sdk:sonnet; pick an account that does/,
   );
 });
 

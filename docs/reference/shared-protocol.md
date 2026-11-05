@@ -321,11 +321,12 @@ vocabulary, display projection, and normalized session model types.
   per-type validator registry stays untouched. `SpeechToTextSettings.modelId`
   names a catalogued model id, never a filesystem path.
 - `harnesses.ts` owns the `Harness` type, `CLAUDE_SDK_PROVIDER` and the
-  `HARNESSES` table (per harness: account provider, model-picker provider when
-  it owns one, background-work backends), the three translations between those
-  names (`harnessForModelProvider`, `harnessForAccountProvider`,
-  `accountProviderForModelProvider`) and the background-work backend predicates;
-  `protocol.ts` re-exports it (`docs/agent-harnesses.md`).
+  `HARNESSES` table (per harness: model-picker provider when it owns one,
+  background-work backends), `harnessForModelProvider` and the background-work
+  backend predicates; `protocol.ts` re-exports it (`docs/agent-harnesses.md`).
+- `accountKinds.ts` owns `ACCOUNT_KINDS` and the account predicates
+  (`accountServesModel`, `piAccountServesModel`, `accountPinForModel`,
+  `accountKindForModelProvider` for labels) (`docs/account-routing.md`).
 - `speechVocabulary.ts` owns `applySpeechVocabulary`, the post-decode
   `spoken → written` rewrite engine (whole-word, case-insensitive, literal
   replacement, ALL rules in ONE pass so no rule rewrites another's output),

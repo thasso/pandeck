@@ -82,8 +82,10 @@ compatible account serves display lookups (`findModel`, `listModels`) only.
   against its account, whatever start function ran, and disposes and refuses a
   mismatch.
 - **Switching model.** A live session's switch refuses a model its account does
-  not serve, naming the account and pointing at a fork or a new session; a
-  hosted engine resolves the switch through `findForProfile`.
+  not serve, naming the account and pointing at a new session; a hosted engine
+  resolves the switch through `findForProfile`. A native fork keeps the parent's
+  account, so it is no way across accounts. The web picker disables those models
+  up front (`startedModelDisabled`).
 - **One-shots.** The configured model, then the default helper, then the
   account's first available non-reasoning text model, else its first, each
   through the gate.
@@ -268,13 +270,13 @@ Four layers, each depending only on the ones below it:
    harness rather than branching on one.
 
 `HARNESSES` in `app/shared/harnesses.ts` is the one table that maps a harness to
-its account provider, its model-picker provider (Claude only; pi models keep
-their upstream provider) and its capabilities: the background-work backends it
-may own, and how it maps a session's compaction window (`compactionWindow`, see
-`compaction-window.md`). `harnessForModelProvider`, `harnessForAccountProvider`
-and `accountProviderForModelProvider` translate between the three names; server
-and web call them instead of repeating the mapping. Further capabilities join
-the table when a later step needs them.
+its model-picker provider (Claude only; pi models keep their upstream provider)
+and its capabilities: the background-work backends it may own, and how it maps a
+session's compaction window (`compactionWindow`, see `compaction-window.md`).
+`harnessForModelProvider` names a model's harness. Accounts are not a harness
+fact: an account kind names its harness in `ACCOUNT_KINDS`, and which account
+runs a model is `accountServesModel` (`docs/account-routing.md` "Account
+kinds"). Further capabilities join the table when a later step needs them.
 
 ## Rules
 

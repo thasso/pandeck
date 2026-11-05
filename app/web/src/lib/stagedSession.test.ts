@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { EntryLibraryList } from "@assistant/shared";
+import type {
+  CredentialProfileProvider,
+  EntryLibraryList,
+} from "@assistant/shared";
 import {
   agentAcrossPersonaSwitch,
   agentDraft,
@@ -215,7 +218,7 @@ describe("staging an agent definition", () => {
       stale: { problem: "No model." },
     },
   };
-  const accounts = [
+  const accounts: { id: string; provider: CredentialProfileProvider }[] = [
     { id: "openai-1", provider: "openai-codex" },
     { id: "claude-1", provider: "claude" },
     { id: "claude-2", provider: "claude" },

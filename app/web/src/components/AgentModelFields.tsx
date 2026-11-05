@@ -198,6 +198,7 @@ export function AgentModelFields({
     : undefined;
   const warning = accountFallback
     ? accountPinWarning(profiles, {
+        provider,
         ...(credentialProfileId !== undefined ? { credentialProfileId } : {}),
       })
     : undefined;

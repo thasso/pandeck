@@ -1,6 +1,7 @@
 /** Account selection at session/run start; usage reads never fetch. */
 import {
-  accountProviderForModelProvider,
+  accountKindForModelProvider,
+  accountServesModel,
   isSubscriptionAccountKind,
   supportedThinkingLevelsForModel,
   type AccountPickPreviewResult,
@@ -56,12 +57,11 @@ export function rankAccountCandidates(
   request: AccountPickRequest,
   thresholds: AccountRoutingThresholds,
   now: number,
-  defaultProfileId: string,
+  defaultProfileId: string | undefined,
 ): AccountPickResult {
-  const provider = accountProviderForModelProvider(request.model.provider);
   const scope = candidates.filter(
     ({ profile }) =>
-      profile.provider === provider &&
+      accountServesModel(profile, request.model.provider) &&
       (!request.requiresEnterprise || profile.enterprise) &&
       !request.excludeProfileIds?.includes(profile.id),
   );
@@ -88,7 +88,7 @@ export function rankAccountCandidates(
       ...(first.limited ? { limited: first.limited } : {}),
     };
   }
-  if (request.allowDisabledDefault) {
+  if (request.allowDisabledDefault && defaultProfileId !== undefined) {
     const fallback = scope.find(
       ({ profile }) => profile.id === defaultProfileId,
     );
@@ -164,10 +164,10 @@ function compareUsage(
 export async function pickAccount(
   request: AccountPickRequest,
 ): Promise<AccountPickResult> {
-  const provider = accountProviderForModelProvider(request.model.provider);
+  const kind = accountKindForModelProvider(request.model.provider);
   const profiles = listCredentialProfiles().filter(
     (profile) =>
-      profile.provider === provider &&
+      accountServesModel(profile, request.model.provider) &&
       (!request.requiresEnterprise || profile.enterprise) &&
       !request.excludeProfileIds?.includes(profile.id),
   );
@@ -181,17 +181,20 @@ export async function pickAccount(
           option.provider === request.model.provider &&
           option.id === request.model.modelId,
       );
+      // Usage and benches speak only for subscription logins; any other
+      // account ranks on its own state alone.
+      const kind = profile.provider;
+      const subscription = isSubscriptionAccountKind(kind);
       let usage: UsageIndicator | null = null;
       try {
-        if (profile.enabled && isSubscriptionAccountKind(profile.provider))
-          usage = cachedUsageIndicator({
-            id: profile.id,
-            provider: profile.provider,
-          });
+        if (profile.enabled && isSubscriptionAccountKind(kind))
+          usage = cachedUsageIndicator({ id: profile.id, provider: kind });
       } catch {
         // A malformed best-effort cache is missing usage, not a failed start.
       }
-      const bench = readAccountBench(profile.id, request.model.modelId);
+      const bench = subscription
+        ? readAccountBench(profile.id, request.model.modelId)
+        : undefined;
       return {
         profile,
         ...(bench
@@ -217,8 +220,11 @@ export async function pickAccount(
     request,
     getSettings().accountRouting,
     Date.now(),
-    provider === "claude"
+    // Only the subscription kinds have a protected default to fall back to.
+    kind === "claude"
       ? DEFAULT_CLAUDE_PROFILE_ID
-      : DEFAULT_OPENAI_PROFILE_ID,
+      : kind === "openai-codex"
+        ? DEFAULT_OPENAI_PROFILE_ID
+        : undefined,
   );
 }

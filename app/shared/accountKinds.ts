@@ -137,6 +137,20 @@ export function accountServesModel(
 }
 
 /**
+ * The kind of account that serves a model of `modelProvider`, for labels,
+ * Settings links and default-model choices only. Eligibility is
+ * {@link accountServesModel}: within the compatible kind only one account
+ * serves a given model.
+ */
+export function accountKindForModelProvider(
+  modelProvider: string,
+): CredentialProfileProvider {
+  if (isOpenAiCompatibleModelProvider(modelProvider))
+    return OPENAI_COMPATIBLE_PROVIDER_ID;
+  return modelProvider === CLAUDE_SDK_PROVIDER ? "claude" : "openai-codex";
+}
+
+/**
  * {@link accountServesModel} for a pi account known by its id alone, as the
  * Worker knows it: an id in the compatible grammar is that kind.
  */

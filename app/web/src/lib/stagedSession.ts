@@ -10,10 +10,11 @@
  * and every fresh start drop it without each caller having to remember.
  */
 import {
-  accountProviderForModelProvider,
+  accountServesModel,
   agentRuntimeOf,
   harnessForModelProvider,
   type AgentType,
+  type CredentialProfileProvider,
   type EntryLibraryList,
   type Harness,
   type SessionMode,
@@ -173,6 +174,9 @@ interface AgentPrefill {
   thinkingLevel: ThinkingLevel;
 }
 
+/** An account as staging reads it: which models it serves. */
+type StagingAccount = { id: string; provider: CredentialProfileProvider };
+
 /**
  * The runtime picking the definition `name` pre-fills: its first listed model
  * that resolves and that an enabled account can run, at its effort. The user
@@ -182,14 +186,12 @@ interface AgentPrefill {
 export function agentPrefill(
   list: EntryLibraryList | undefined,
   name: string,
-  accounts: ReadonlyArray<{ provider: string }>,
+  accounts: ReadonlyArray<StagingAccount>,
 ): AgentPrefill | undefined {
   const runtime = agentRuntimeOf(list, name);
   if (!runtime?.persona) return undefined;
-  const runnable = (provider: string) => {
-    const accountProvider = accountProviderForModelProvider(provider);
-    return accounts.some((account) => account.provider === accountProvider);
-  };
+  const runnable = (provider: string) =>
+    accounts.some((account) => accountServesModel(account, provider));
   const listed =
     runtime.problem === undefined
       ? [runtime, ...runtime.models.slice(1)]
@@ -215,7 +217,7 @@ export function agentPrefill(
 export function agentDraft(
   list: EntryLibraryList | undefined,
   name: string,
-  accounts: ReadonlyArray<{ id: string; provider: string }>,
+  accounts: ReadonlyArray<StagingAccount>,
   pickedAccountId: string | null | undefined,
 ):
   | (Omit<StagedSessionInput, "id" | "mode"> & {
@@ -225,13 +227,12 @@ export function agentDraft(
   | undefined {
   const prefill = agentPrefill(list, name, accounts);
   if (!prefill) return undefined;
-  const accountProvider = accountProviderForModelProvider(prefill.provider);
+  const serves = (candidate: StagingAccount) =>
+    accountServesModel(candidate, prefill.provider);
   const account =
     accounts.find(
-      (candidate) =>
-        candidate.id === pickedAccountId &&
-        candidate.provider === accountProvider,
-    ) ?? accounts.find((candidate) => candidate.provider === accountProvider);
+      (candidate) => candidate.id === pickedAccountId && serves(candidate),
+    ) ?? accounts.find(serves);
   if (!account) return undefined;
   return {
     harness: harnessForModelProvider(prefill.provider),
