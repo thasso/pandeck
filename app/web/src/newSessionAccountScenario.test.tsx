@@ -1180,6 +1180,15 @@ describe("new-session account choice", () => {
     expect(accountCard("Team LLM")?.getAttribute("aria-selected")).toBe("true");
     expect(accountCard("Team LLM")?.textContent).toContain("No plan limits");
 
+    // No account is enterprise, so the requirement empties the models; its
+    // switch must stay, because turning it off is the way back.
+    await click(requiresEnterpriseSwitch());
+    expect(container!.textContent).toContain(
+      "No enabled account is marked Enterprise",
+    );
+    await click(requiresEnterpriseSwitch());
+    expect(accountCard("Team LLM")?.getAttribute("aria-selected")).toBe("true");
+
     await sendPrompt("hello");
     const sent = firstSend(socket);
     expect(sent).toMatchObject({

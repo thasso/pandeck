@@ -316,8 +316,10 @@ When that leaves no account and only endpoint models, the endpoint's card
 replaces Automatic, with no meters. It still stages no account: the router binds
 the session to an OpenAI account, which only carries the endpoint's key-based
 traffic. Automatic names the endpoint rather than that account for any staged
-endpoint model. With nothing runnable anywhere every account stays. Other
-account surfaces, such as the workflow start sheet, still list every account.
+endpoint model. With nothing runnable anywhere every account stays. This filter
+decides cards alone: agent definitions and the enterprise requirement keep
+reading every enabled account, and other account surfaces, such as the workflow
+start sheet, still list them all.
 
 `POST /api/account-router/pick` accepts `AccountPickPreviewRequest` and returns
 `AccountPickPreviewResult`, so a selector can show Automatic's current account

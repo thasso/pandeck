@@ -22,7 +22,10 @@ import {
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { projectColor } from "../lib/projectDisplay.ts";
-import { orderCredentialProfilesByProvider } from "../lib/credentialProfiles.ts";
+import {
+  orderCredentialProfilesByProvider,
+  pickerCredentialProfiles,
+} from "../lib/credentialProfiles.ts";
 import { agentPrefill } from "../lib/stagedSession.ts";
 import {
   EmptyBox,
@@ -144,6 +147,8 @@ function WorktreeCard({
   );
 }
 
+const NO_PROFILE_MODELS: Record<string, ModelOption[]> = {};
+
 /**
  * @component NewSessionQuickStart
  * @purpose One-tap staging on the new-session landing: horizontally
@@ -162,6 +167,7 @@ function WorktreeCard({
  */
 export function NewSessionQuickStart({
   credentialProfiles = [],
+  credentialProfileModels = NO_PROFILE_MODELS,
   credentialProfilesLoaded = true,
   credentialProfilesError,
   onRetryCredentialProfiles,
@@ -194,6 +200,12 @@ export function NewSessionQuickStart({
   onSelectAgent = () => {},
 }: {
   credentialProfiles?: CredentialProfileSummary[];
+  /**
+   * What each account offers, which decides the cards alone: an account with no
+   * card can still run a session, so `credentialProfiles` stays the eligibility
+   * list for agents and the enterprise requirement.
+   */
+  credentialProfileModels?: Record<string, ModelOption[]>;
   /** Whether the account/model projection has data (including shell-cached data). */
   credentialProfilesLoaded?: boolean;
   /** A first-load or refresh failure; loaded rows stay mounted underneath it. */
@@ -298,9 +310,14 @@ export function NewSessionQuickStart({
   const thinkingLevels = supportedThinkingLevelsForModel(selectedModel);
   const orderedCredentialProfiles =
     orderCredentialProfilesByProvider(credentialProfiles);
+  const pickableCredentialProfiles = pickerCredentialProfiles(
+    orderedCredentialProfiles,
+    credentialProfileModels,
+    selectedCredentialProfileId,
+  );
   const offeredCredentialProfiles = requiresEnterprise
-    ? orderedCredentialProfiles.filter((profile) => profile.enterprise)
-    : orderedCredentialProfiles;
+    ? pickableCredentialProfiles.filter((profile) => profile.enterprise)
+    : pickableCredentialProfiles;
   // With no account to choose, the compatible endpoint is all a session can run
   // on, so its card replaces Automatic. It has no plan to meter.
   const endpointModel =
@@ -526,7 +543,7 @@ export function NewSessionQuickStart({
           </div>
         ) : (
           <>
-            {orderedCredentialProfiles.length > 0 || endpointModel ? (
+            {orderedCredentialProfiles.length > 0 ? (
               <div className="flex flex-col gap-2">
                 <ProviderAccountRow
                   accounts={offeredCredentialProfiles.map((profile) => ({

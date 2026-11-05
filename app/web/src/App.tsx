@@ -200,7 +200,6 @@ import { visibleModels } from "./lib/models.ts";
 import {
   accountModelOptions,
   automaticModels,
-  pickerCredentialProfiles,
   previewAutomaticAccount,
   limitedAccountDescription,
 } from "./lib/credentialProfiles.ts";
@@ -6259,11 +6258,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-6">
           {showContextPicker ? (
             <NewSessionQuickStart
-              credentialProfiles={pickerCredentialProfiles(
-                activeCredentialProfiles,
-                credentialProfileModels,
-                credentialProfileId,
-              )}
+              credentialProfiles={activeCredentialProfiles}
+              credentialProfileModels={credentialProfileModels}
               credentialProfilesLoaded={
                 credentialProfileProjection !== undefined
               }

@@ -80,6 +80,7 @@ function render(
     projectsLoaded?: boolean;
     selectedProjectId?: string | null;
     profiles?: CredentialProfileSummary[];
+    profileModels?: Record<string, ModelOption[]>;
     selectedProfileId?: string | null;
     requiresEnterprise?: boolean;
     usageIndicators?: UsageIndicator[] | null;
@@ -93,6 +94,7 @@ function render(
   return renderToStaticMarkup(
     <NewSessionQuickStart
       credentialProfiles={opts.profiles ?? []}
+      credentialProfileModels={opts.profileModels ?? {}}
       credentialProfilesLoaded={opts.profilesLoaded ?? true}
       usageIndicators={opts.usageIndicators ?? null}
       selectedCredentialProfileId={opts.selectedProfileId ?? null}
@@ -131,26 +133,90 @@ describe("compatible endpoint card", () => {
     providerName: "Team LLM",
   };
 
+  const carrier = {
+    id: "default",
+    name: "Default OpenAI",
+    provider: "openai-codex",
+    enabled: true,
+    enterprise: false,
+    status: "disconnected",
+  } as CredentialProfileSummary;
+  const profileModels = { default: [compatible] };
+
   it("replaces Automatic, unmetered, when no account is a choice", () => {
-    const html = render([], { models: [compatible], profiles: [] });
+    const html = render([], {
+      models: [compatible],
+      profiles: [carrier],
+      profileModels,
+    });
     expect(html).toContain("Team LLM");
     expect(html).toContain("No plan limits");
     expect(html).not.toContain("Automatic");
+    expect(html).not.toContain("Default OpenAI");
   });
 
-  it("does not claim enterprise is unmet while the endpoint can run", () => {
+  it("does not claim enterprise is unmet while an enterprise carrier runs it", () => {
     const html = render([], {
       models: [compatible],
-      profiles: [],
+      profiles: [{ ...carrier, enterprise: true }],
+      profileModels,
       requiresEnterprise: true,
     });
     expect(html).toContain("Team LLM");
     expect(html).not.toContain("cannot start");
   });
 
+  it("keeps the enterprise switch and its reason when no carrier qualifies", () => {
+    const html = render([], {
+      // What App stages under the requirement: nothing an enterprise account runs.
+      models: [],
+      profiles: [carrier],
+      profileModels,
+      requiresEnterprise: true,
+    });
+    expect(html).toContain("Requires enterprise");
+    expect(html).toContain("cannot start");
+  });
+
   it("stays Automatic when other models can run", () => {
-    const html = render([], { models: [compatible, model], profiles: [] });
+    const html = render([], {
+      models: [compatible, model],
+      profiles: [carrier],
+      profileModels,
+    });
     expect(html).not.toContain("No plan limits");
+  });
+
+  it("leaves a definition on the endpoint startable though its carrier has no card", () => {
+    const html = render([], {
+      models: [compatible],
+      profiles: [carrier],
+      profileModels,
+      agents: ready({
+        libraryPath: "/data/agents",
+        entries: [
+          {
+            name: "local-reviewer",
+            description: "Reviews locally.",
+            path: "local-reviewer/AGENT.md",
+          },
+        ],
+        diagnostics: [],
+        agentRuntimes: {
+          "local-reviewer": {
+            persona: "developer",
+            provider: compatible.provider,
+            modelId: compatible.id,
+            thinkingLevel: "off",
+            models: [],
+          },
+        },
+      }),
+    });
+    expect(html).toMatch(
+      /<button(?![^>]*\sdisabled="")[^>]*title="Start as local-reviewer: Reviews locally\."/,
+    );
+    expect(html).not.toContain("no enabled account runs a model it lists");
   });
 });
 
