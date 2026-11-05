@@ -1,5 +1,8 @@
 import type { BroadcastTopic, ServerMessage } from "@assistant/shared";
-import { isCodingAgentType } from "@assistant/shared";
+import {
+  isCodingAgentType,
+  isOpenAiCompatibleModelProvider,
+} from "@assistant/shared";
 import { archivedSessionCount, type SessionListOptions } from "./sessions.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
@@ -239,6 +242,20 @@ class SessionHub {
         }
       }
     });
+    // An OpenAI-compatible account's models are its endpoint's: an edit, a
+    // test or a removal changes what every picker offers.
+    const compatibleModelsChanged = (profileId: string) => {
+      if (!isOpenAiCompatibleModelProvider(profileId)) return;
+      for (const viewer of this.connections) {
+        try {
+          viewer.modelsChanged?.();
+        } catch (err) {
+          console.warn("[models] push to a client failed:", errorText(err));
+        }
+      }
+    };
+    subscribeCredentialProfileChanges(compatibleModelsChanged);
+    subscribeCredentialProfileDeleted(compatibleModelsChanged);
     subscribeHarnessOpened((sessionId) => this.sessionHarnessOpened(sessionId));
   }
 

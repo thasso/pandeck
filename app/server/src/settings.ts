@@ -1,6 +1,5 @@
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { userHomeDir } from "./userHome.ts";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   DEFAULT_ASSISTANT_WORKING_DIRECTORY,
   validateAssistantWorkingDirectory,
@@ -58,9 +57,12 @@ import {
   normalizeBackgroundWorkSettings,
 } from "@assistant/shared";
 import { OPENAI_RESET_AUTO_REDEEM_LEAD_HOURS } from "@assistant/shared/usage";
-import { APP_SETTINGS_PATH, readStoredAppSettings } from "./appSettingsFile.ts";
+import {
+  readStoredAppSettings,
+  writeStoredAppSettings,
+} from "./appSettingsFile.ts";
+import { applyAccountPinRuleDeep } from "./compatibleSettingsPins.ts";
 import { getBraveSettings } from "./braveSettings.ts";
-import { getOpenAiCompatibleSettings } from "./openAiCompatibleSettings.ts";
 import { getContext7Settings } from "./context7Settings.ts";
 import { getForgejoSettings } from "./forgejoSettings.ts";
 import { getGithubSettings } from "./githubSettings.ts";
@@ -673,7 +675,6 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
     tempo: getTempoSettings(publicBaseUrl),
     google: getGoogleSettings(publicBaseUrl),
     slack: getSlackSettings(),
-    openAiCompatible: getOpenAiCompatibleSettings(),
     brave: getBraveSettings(),
     context7: getContext7Settings(),
     github: getGithubSettings(),
@@ -844,23 +845,20 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   // account is part of what the human approved, not a pin that may degrade to
   // Automatic. A row whose pinned account is unusable must stay visible
   // with its reason rather than lose the field that explains it.
+  //
+  // Both still name the one account a compatible model can run on (rule P,
+  // `compatibleSettingsPins.ts`).
   const { peerSpawnRuntimes: _peerRows, ...slotted } = persisted;
-  const out = `${JSON.stringify(
-    {
-      ...sanitizeSlotPinsDeep(slotted),
-      ...(persisted.peerSpawnRuntimes
-        ? { peerSpawnRuntimes: persisted.peerSpawnRuntimes }
-        : {}),
-    },
-    null,
-    2,
-  )}\n`;
-  // Write to a sibling temp file then rename, so a crash mid-write can't leave
-  // a truncated file behind. The settings dir may not exist yet on first save.
-  mkdirSync(dirname(APP_SETTINGS_PATH), { recursive: true });
-  const tmp = `${APP_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, out, "utf8");
-  renameSync(tmp, APP_SETTINGS_PATH);
+  writeStoredAppSettings({
+    ...sanitizeSlotPinsDeep(slotted),
+    ...(persisted.peerSpawnRuntimes
+      ? {
+          peerSpawnRuntimes: applyAccountPinRuleDeep(
+            persisted.peerSpawnRuntimes,
+          ),
+        }
+      : {}),
+  });
   invalidateUserProfileCache();
   invalidateKnowledgeBaseSettingsCache();
   return getSettings();

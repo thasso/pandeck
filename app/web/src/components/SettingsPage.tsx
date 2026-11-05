@@ -29,9 +29,6 @@ import {
   type AppSettings,
   type BraveConnectionStatus,
   type BraveSettingsPatch,
-  type OpenAiCompatibleConnectionStatus,
-  type OpenAiCompatibleSettingsPatch,
-  type OpenAiCompatibleThinkingFormat,
   type Context7ConnectionStatus,
   type Context7SettingsPatch,
   type GithubConnectionStatus,
@@ -56,7 +53,6 @@ import {
   applySpeechVocabulary,
   modelKey,
   CLAUDE_SDK_PROVIDER,
-  OPENAI_COMPATIBLE_THINKING_FORMATS,
   type CredentialProfileProvider,
   type CredentialProfileSummary,
 } from "@assistant/shared";
@@ -211,9 +207,6 @@ interface Props {
   onSaveAndTestSlack: (patch: SlackSettingsPatch) => void;
   onTestSlack: () => void;
   slackStatus: SlackConnectionStatus | null;
-  onSaveAndTestOpenAiCompatible: (patch: OpenAiCompatibleSettingsPatch) => void;
-  onTestOpenAiCompatible: () => void;
-  openAiCompatibleStatus: OpenAiCompatibleConnectionStatus | null;
   onSaveAndTestBrave: (patch: BraveSettingsPatch) => void;
   onTestBrave: () => void;
   braveStatus: BraveConnectionStatus | null;
@@ -270,9 +263,6 @@ export function SettingsPage({
   onSaveAndTestSlack,
   onTestSlack,
   slackStatus,
-  onSaveAndTestOpenAiCompatible,
-  onTestOpenAiCompatible,
-  openAiCompatibleStatus,
   onSaveAndTestBrave,
   onTestBrave,
   braveStatus,
@@ -490,14 +480,6 @@ export function SettingsPage({
                 status={slackStatus}
                 onSaveAndTestSlack={onSaveAndTestSlack}
                 onTestSlack={onTestSlack}
-              />
-            )}
-            {section === "openai-compatible" && (
-              <OpenAiCompatibleSection
-                settings={settings}
-                status={openAiCompatibleStatus}
-                onSaveAndTestOpenAiCompatible={onSaveAndTestOpenAiCompatible}
-                onTestOpenAiCompatible={onTestOpenAiCompatible}
               />
             )}
             {section === "web-search" && (
@@ -3609,190 +3591,6 @@ function BraveSection({
         </div>
       </SettingsCard>
       <IntegrationStatusBanner status={status} />
-    </div>
-  );
-}
-
-function OpenAiCompatibleSection({
-  settings,
-  status,
-  onSaveAndTestOpenAiCompatible,
-  onTestOpenAiCompatible,
-}: {
-  settings: AppSettings;
-  status: OpenAiCompatibleConnectionStatus | null;
-  onSaveAndTestOpenAiCompatible: (patch: OpenAiCompatibleSettingsPatch) => void;
-  onTestOpenAiCompatible: () => void;
-}) {
-  const provider = settings.openAiCompatible;
-  const [enabled, setEnabled] = useState(provider.enabled);
-  const [name, setName] = useState(provider.name);
-  const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
-  const [thinkingFormat, setThinkingFormat] = useState(provider.thinkingFormat);
-  const [apiKey, setApiKey] = useState("");
-
-  useEffect(() => {
-    setEnabled(provider.enabled);
-    setName(provider.name);
-    setBaseUrl(provider.baseUrl);
-    setThinkingFormat(provider.thinkingFormat);
-  }, [
-    provider.enabled,
-    provider.name,
-    provider.baseUrl,
-    provider.thinkingFormat,
-  ]);
-
-  const patch = (): OpenAiCompatibleSettingsPatch => ({
-    enabled,
-    name,
-    baseUrl,
-    thinkingFormat,
-    ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-  });
-
-  const saveAndTest = () => {
-    onSaveAndTestOpenAiCompatible(patch());
-    setApiKey("");
-  };
-
-  // Back to a keyless endpoint: the settings response flips apiKeyConfigured
-  // to false, hiding this button, and discovery reruns without the header.
-  const removeKey = () => {
-    setApiKey("");
-    onSaveAndTestOpenAiCompatible({
-      enabled,
-      name,
-      baseUrl,
-      thinkingFormat,
-      clearApiKey: true,
-    });
-  };
-
-  const models = status?.models ?? provider.models;
-
-  return (
-    <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-sm font-semibold">OpenAI-compatible endpoint</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Add the models of any server that speaks the OpenAI chat completions API
-        — a self-hosted llama.cpp, vLLM or Ollama, or a hosted gateway. The
-        provider is registered directly with pi at runtime from{" "}
-        <span className="font-mono">
-          DATA_DIR/settings/openai-compatible.json
-        </span>
-        , so no
-        <span className="font-mono"> ~/.pi/agent/models.json</span> entry is
-        needed. The API key is stored server-side and is never sent back to the
-        browser.
-      </p>
-
-      <SettingsCard className="mt-6">
-        <PreferenceToggle
-          label="Enable these models in the model picker"
-          checked={enabled}
-          onChange={setEnabled}
-        />
-
-        <Field label="Name">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="OpenAI-compatible"
-          />
-        </Field>
-
-        <Field label="Base URL">
-          <Input
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://llm.example.net/v1"
-          />
-          <span className="mt-1 block text-sm text-muted-foreground">
-            Moving to another host clears the saved API key.
-          </span>
-        </Field>
-
-        <SecretField
-          label="API key (optional)"
-          configured={provider.apiKeyConfigured}
-          value={apiKey}
-          onChange={setApiKey}
-        />
-
-        <Field label="Thinking control">
-          <NativeSelect
-            value={thinkingFormat}
-            onChange={(e) =>
-              setThinkingFormat(
-                e.target.value as OpenAiCompatibleThinkingFormat,
-              )
-            }
-            className="w-full"
-          >
-            {OPENAI_COMPATIBLE_THINKING_FORMATS.map((format) => (
-              <option key={format} value={format}>
-                {format === "none" ? "None — models do not reason" : format}
-              </option>
-            ))}
-          </NativeSelect>
-        </Field>
-
-        <p className="text-sm text-muted-foreground">
-          Save and discover calls <span className="font-mono">/models</span>,
-          stores the discovered model metadata in app config, and refreshes the
-          live model registry. Thinking control is how the server takes a
-          thinking level: with one set, every model offers thinking levels; for
-          example <span className="font-mono">qwen-chat-template</span> sends{" "}
-          <span className="font-mono">
-            chat_template_kwargs.enable_thinking
-          </span>
-          , as Qwen models on llama.cpp and vLLM expect.
-        </p>
-
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button onClick={saveAndTest}>Save and discover models</Button>
-          <Button variant="outline" onClick={onTestOpenAiCompatible}>
-            Test saved provider
-          </Button>
-          {provider.apiKeyConfigured && (
-            <Button variant="outline" onClick={removeKey}>
-              Remove key
-            </Button>
-          )}
-        </div>
-      </SettingsCard>
-      <IntegrationStatusBanner status={status} />
-
-      {models.length > 0 && (
-        <SettingsCard className="mt-4">
-          <div className="mb-2 text-sm font-semibold text-foreground">
-            Discovered models
-          </div>
-          <ul className="space-y-2">
-            {models.map((model) => (
-              <Item key={model.id} render={<li />} variant="outline">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {model.name}
-                    </div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      {model.input.join("+")} ·{" "}
-                      {model.reasoning ? "reasoning" : "non-reasoning"}
-                      {model.status ? ` · ${model.status}` : ""}
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right text-xs text-muted-foreground">
-                    <div>{model.contextWindow.toLocaleString()} ctx</div>
-                    <div>{model.maxTokens.toLocaleString()} max out</div>
-                  </div>
-                </div>
-              </Item>
-            ))}
-          </ul>
-        </SettingsCard>
-      )}
     </div>
   );
 }

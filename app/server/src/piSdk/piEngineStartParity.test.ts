@@ -305,7 +305,12 @@ function transcript(id: string): string {
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n",
   );
-  sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "openai-compatible",
+  });
   return file;
 }
 
@@ -326,7 +331,7 @@ const reopenForAccount = (live: unknown, profileId: string) =>
 
 test("every open path builds from, and freezes, exactly the fixtures, and a settings change moves none of a fork's or reopen's", async () => {
   const chosen = await findModelForProfile(
-    "default",
+    "openai-compatible",
     "openai-compatible",
     "chosen",
   );
@@ -350,6 +355,7 @@ test("every open path builds from, and freezes, exactly the fixtures, and a sett
     let spec = captureNextOpen();
     const created = await piStore.acquireNew("developer", chosen, "off", {
       cwd: project,
+      credentialProfileId: "openai-compatible",
       promptEvidence: { hasAttachments: true },
     });
     lives.push(created);
@@ -365,6 +371,7 @@ test("every open path builds from, and freezes, exactly the fixtures, and a sett
       undefined,
       {
         cwd: project,
+        credentialProfileId: "openai-compatible",
         agent: AGENT,
       },
     );
@@ -416,7 +423,7 @@ test("every open path builds from, and freezes, exactly the fixtures, and a sett
       );
 
       spec = captureNextOpen();
-      const replacement = await reopenForAccount(cold, "default");
+      const replacement = await reopenForAccount(cold, "openai-compatible");
       staged.push(replacement);
       assertParity(
         `staged reopen ${pass}`,

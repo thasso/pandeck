@@ -1,6 +1,7 @@
 /** Account selection at session/run start; usage reads never fetch. */
 import {
   accountProviderForModelProvider,
+  isSubscriptionAccountKind,
   supportedThinkingLevelsForModel,
   type AccountPickPreviewResult,
   type AppSettings,
@@ -182,7 +183,11 @@ export async function pickAccount(
       );
       let usage: UsageIndicator | null = null;
       try {
-        if (profile.enabled) usage = cachedUsageIndicator(profile);
+        if (profile.enabled && isSubscriptionAccountKind(profile.provider))
+          usage = cachedUsageIndicator({
+            id: profile.id,
+            provider: profile.provider,
+          });
       } catch {
         // A malformed best-effort cache is missing usage, not a failed start.
       }

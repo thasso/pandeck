@@ -26,7 +26,6 @@ import {
   type GithubSettingsPatch,
   type GoogleSettingsPatch,
   type JiraSettingsPatch,
-  type OpenAiCompatibleSettingsPatch,
   type SlackSettingsPatch,
   type TempoSettingsPatch,
   type PromptQueueCommand,
@@ -78,18 +77,13 @@ import {
   isAgentSessionAvailable,
 } from "./agents.ts";
 import { testBraveSettings } from "./braveSettings.ts";
-import { testOpenAiCompatibleSettings } from "./openAiCompatibleSettings.ts";
 import { testContext7Settings } from "./context7Settings.ts";
 import { testForgejoSettings } from "./forgejoSettings.ts";
 import { testGithubSettings } from "./githubSettings.ts";
 import { testGoogleSettings } from "./googleSettings.ts";
 import { getSettings } from "./settings.ts";
 import { encodeServerFrame } from "./serverFrames.ts";
-import {
-  announceSettingsWritten,
-  saveSettings,
-  type SettingsChange,
-} from "./settingsService.ts";
+import { saveSettings, type SettingsChange } from "./settingsService.ts";
 import { describeSttAvailability } from "./speech/sttConfig.ts";
 import { describeConversationAvailability } from "./speech/streamingSttConfig.ts";
 import { describeTtsAvailability } from "./speech/ttsConfig.ts";
@@ -1084,12 +1078,6 @@ export class Connection implements Viewer {
         return this.onSaveAndTestSlackSettings(msg.patch);
       case "testSlackSettings":
         return this.onTestSlackSettings();
-      case "updateOpenAiCompatibleSettings":
-        return this.onUpdateOpenAiCompatibleSettings(msg.patch);
-      case "saveAndTestOpenAiCompatibleSettings":
-        return this.onSaveAndTestOpenAiCompatibleSettings(msg.patch);
-      case "testOpenAiCompatibleSettings":
-        return this.onTestOpenAiCompatibleSettings();
       case "updateBraveSettings":
         return this.onUpdateBraveSettings(msg.patch);
       case "saveAndTestBraveSettings":
@@ -3569,14 +3557,15 @@ export class Connection implements Viewer {
     }
   }
 
+  modelsChanged(): void {
+    this.send({ type: "models", models: pickerModels(this.settings()) });
+  }
+
   /** Any settings write, from any client or agent, lands here for every connection. */
   settingsChanged(change: SettingsChange): void {
     const settings = this.settings();
     this.send({ type: "settings", settings });
-    if (
-      change.sections.includes("claudeSdk") ||
-      change.sections.includes("openAiCompatible")
-    )
+    if (change.sections.includes("claudeSdk"))
       this.send({ type: "models", models: pickerModels(settings) });
     // Availability depends on the settings just saved (`modelId` selects among
     // installed models), so recompute it — otherwise the Settings health line
@@ -3823,60 +3812,6 @@ export class Connection implements Viewer {
       this.send({
         type: "error",
         message: `Failed to test Slack settings: ${errorText(err)}`,
-      });
-    }
-  }
-
-  private async onUpdateOpenAiCompatibleSettings(
-    patch: OpenAiCompatibleSettingsPatch,
-  ): Promise<void> {
-    try {
-      await saveSettings({ openAiCompatible: patch });
-    } catch (err) {
-      this.send({
-        type: "error",
-        message: `Failed to save OpenAI-compatible provider settings: ${errorText(err)}`,
-      });
-    }
-  }
-
-  private async onSaveAndTestOpenAiCompatibleSettings(
-    patch: OpenAiCompatibleSettingsPatch,
-  ): Promise<void> {
-    try {
-      await saveSettings({ openAiCompatible: patch });
-      const status = await testOpenAiCompatibleSettings();
-      // A test stores the models it discovered: every client hears about them.
-      await announceSettingsWritten(["openAiCompatible"]);
-      this.send({
-        type: "openAiCompatibleStatus",
-        status,
-        settings: getSettings(),
-        models: pickerModels(),
-      });
-    } catch (err) {
-      this.send({
-        type: "error",
-        message: `Failed to save/test OpenAI-compatible provider settings: ${errorText(err)}`,
-      });
-    }
-  }
-
-  private async onTestOpenAiCompatibleSettings(): Promise<void> {
-    try {
-      const status = await testOpenAiCompatibleSettings();
-      // A test stores the models it discovered: every client hears about them.
-      await announceSettingsWritten(["openAiCompatible"]);
-      this.send({
-        type: "openAiCompatibleStatus",
-        status,
-        settings: getSettings(),
-        models: pickerModels(),
-      });
-    } catch (err) {
-      this.send({
-        type: "error",
-        message: `Failed to test OpenAI-compatible provider settings: ${errorText(err)}`,
       });
     }
   }

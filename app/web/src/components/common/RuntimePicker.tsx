@@ -4,6 +4,7 @@ import type {
   ModelOption,
   ThinkingLevel,
 } from "@assistant/shared";
+import { ACCOUNT_KINDS } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { Sparkles } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon.tsx";
@@ -33,11 +34,6 @@ export interface RuntimeAccount {
   name: string;
   provider: CredentialProfileProvider;
 }
-
-const PROVIDER_LABEL: Record<CredentialProfileProvider, string> = {
-  claude: "Claude",
-  "openai-codex": "OpenAI",
-};
 
 /**
  * The provider-account row: one card per account, each carrying the brand icon,
@@ -145,7 +141,7 @@ export function ProviderAccountRow({
       ) : null}
       {accounts.map((account) => {
         const selected = account.id === selectedId;
-        const providerLabel = PROVIDER_LABEL[account.provider];
+        const providerLabel = ACCOUNT_KINDS[account.provider].label;
         return (
           <QuickPill
             key={account.id}

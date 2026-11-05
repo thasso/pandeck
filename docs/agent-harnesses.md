@@ -60,6 +60,34 @@ prompt/runtime path.
 [Account routing](account-routing.md#live-account-switching) owns the failover
 policy and replay limits.
 
+## Account model gate
+
+Every per-account model lookup (`listModelsForProfile`,
+`availableModelsForProfile`, `findModelForProfile` in `piSdk/models.ts`, and the
+hosted engine's `findForProfile`) answers only models the account serves
+(`docs/account-routing.md` "Account kinds"), whatever its pi runtime holds:
+every runtime carries pi's built-in providers. An OpenAI-compatible account's
+runtime is in memory and registers only its own endpoint, re-registered on the
+next lookup after an edit; an OpenAI account's runtime registers none. A
+key-less global catalog of every compatible account serves display lookups
+(`findModel`, `listModels`) only.
+
+- **Start model.** A compatible pi session always opens on a model the app chose
+  and passes explicitly, so pi's restore and default selection never run there:
+  the branch's last selection on the account, else the account's first model
+  with a warning notice. An agent or account-switch open keeps its model or
+  refuses; an account with no models refuses with "Run Test on its card in
+  Settings, or start a new session."
+- **After start.** `openPiEngine` checks the model the session started on
+  against its account, whatever start function ran, and disposes and refuses a
+  mismatch.
+- **Switching model.** A live session's switch refuses a model its account does
+  not serve, naming the account and pointing at a fork or a new session; a
+  hosted engine resolves the switch through `findForProfile`.
+- **One-shots.** The configured model, then the default helper, then the
+  account's first available non-reasoning text model, else its first, each
+  through the gate.
+
 ## Target
 
 ![Target harness architecture](agent-harnesses.svg)

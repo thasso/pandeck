@@ -131,7 +131,7 @@ function hosted(script = scriptedLocal(), engineId?: number) {
     script.local,
     { sessionId: "sid" },
     {
-      findModel: () => undefined,
+      findModel: async () => undefined,
       ...(engineId !== undefined ? { engineId } : {}),
     },
   );

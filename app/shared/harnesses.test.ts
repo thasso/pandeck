@@ -3,7 +3,7 @@
  * goes by: its id, its account kind and its model-picker provider.
  */
 import { expect, test } from "vitest";
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./protocol.ts";
+import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./accountKinds.ts";
 import {
   accountProviderForModelProvider,
   backgroundWorkBackendsForHarness,

@@ -1,8 +1,39 @@
 # Account routing
 
-Credential profiles are accounts. Claude and OpenAI accounts never mix. This
+Credential profiles are accounts. Accounts of different kinds never mix. This
 contract covers health, login alerts, temporary limit benches, account selection
 at session/run start and live-session failover.
+
+## Account kinds
+
+`ACCOUNT_KINDS` (`app/shared/accountKinds.ts`) describes each kind; code reads
+the descriptor, never the kind id:
+
+| Kind                | Harness    | Credential | Subscription | Models        | Settings section    |
+| ------------------- | ---------- | ---------- | ------------ | ------------- | ------------------- |
+| `openai-codex`      | pi         | login      | yes          | pi's catalog  | `openai`            |
+| `claude`            | claude-sdk | login      | yes          | curated       | `claude-sdk`        |
+| `openai-compatible` | pi         | endpoint   | no           | its `/models` | `openai-compatible` |
+
+Only a subscription kind (`isSubscriptionAccountKind`) has limits, usage,
+benches and failover; usage is never read for any other.
+
+Which account may run a model is decided per model (`accountServesModel`, and
+`piAccountServesModel` where only the account id is known):
+
+- An OpenAI-compatible model runs on exactly one account, the one whose id is
+  its pi provider id: `openai-compatible` for the endpoint migrated from
+  settings, `openai-compatible-<12 hex>` for every later one. No other id is in
+  that grammar.
+- An OpenAI account runs every other pi provider, a Claude account only Claude
+  models. Nothing serves across.
+
+**Rule P.** Since a compatible model has one account, its identity fixes the
+account: every stored pin on such a model names that account
+(`accountPinForModel`), whatever was stored, and Automatic, health, usage or
+another account never decide it (`docs/settings.md` "OpenAI-compatible accounts"
+for the stored pins). A native fork inherits its parent's account; nothing moves
+a compatible session to another account.
 
 ## Health and login evidence
 

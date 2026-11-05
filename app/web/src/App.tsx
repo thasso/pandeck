@@ -7497,13 +7497,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                         onSaveAndTestSlack={actions.saveAndTestSlackSettings}
                         onTestSlack={actions.testSlackSettings}
                         slackStatus={state.slackStatus}
-                        onSaveAndTestOpenAiCompatible={
-                          actions.saveAndTestOpenAiCompatibleSettings
-                        }
-                        onTestOpenAiCompatible={
-                          actions.testOpenAiCompatibleSettings
-                        }
-                        openAiCompatibleStatus={state.openAiCompatibleStatus}
                         onSaveAndTestBrave={actions.saveAndTestBraveSettings}
                         onTestBrave={actions.testBraveSettings}
                         braveStatus={state.braveStatus}

@@ -100,12 +100,7 @@ function serverPort(): PiModelPort & { calls: string[] } {
         ? catalogModel(id)
         : undefined;
     },
-    find: (provider, id) => {
-      calls.push(`find ${provider}/${id}`);
-      return provider === "openai-codex" && known.has(id)
-        ? catalogModel(id)
-        : undefined;
-    },
+    availableForProfile: async () => [],
   };
 }
 
@@ -197,7 +192,11 @@ test("every Codex model is on the gateway, catalog ids included; other providers
       const named = await port.findForProfile("named", "openai-codex", id);
       assert.equal(named?.id, id);
       assert.equal(named?.baseUrl, CODEX_BASE);
-      const byDefault = port.find("openai-codex", id);
+      const byDefault = await port.findForProfile(
+        "default",
+        "openai-codex",
+        id,
+      );
       assert.equal(byDefault?.id, id);
       assert.equal(byDefault?.baseUrl, CODEX_BASE);
     }
@@ -206,7 +205,6 @@ test("every Codex model is on the gateway, catalog ids included; other providers
       server.calls.includes(`findForProfile named openai-codex/${CATALOG_ID}`),
     );
     // An id the server does not know falls back to the gateway's built-in.
-    server.find = () => undefined;
     server.findForProfile = async () => undefined;
     const fallback = await port.findForProfile(
       "named",
@@ -214,7 +212,11 @@ test("every Codex model is on the gateway, catalog ids included; other providers
       "gpt-5.6-sol",
     );
     assert.equal(fallback?.baseUrl, CODEX_BASE);
-    assert.equal(port.find("openai-codex", "gpt-5.6-sol")?.baseUrl, CODEX_BASE);
+    assert.equal(
+      (await port.findForProfile("default", "openai-codex", "gpt-5.6-sol"))
+        ?.baseUrl,
+      CODEX_BASE,
+    );
     assert.equal(
       await port.findForProfile("named", "openai-codex", "no-such-model"),
       undefined,
@@ -223,7 +225,10 @@ test("every Codex model is on the gateway, catalog ids included; other providers
       await port.findForProfile("named", "anthropic", "claude-sonnet-4-5"),
       undefined,
     );
-    assert.equal(port.find("anthropic", "claude-sonnet-4-5"), undefined);
+    assert.equal(
+      await port.findForProfile("default", "anthropic", "claude-sonnet-4-5"),
+      undefined,
+    );
     assert.ok(
       !server.calls.includes("runtime"),
       "the server runtime is unused",
@@ -244,8 +249,8 @@ test("every Codex model the port returns authenticates with the lease, and creat
     const models = [
       await port.findForProfile("named", "openai-codex", CATALOG_ID),
       await port.findForProfile("named", "openai-codex", BUILTIN_ID),
-      port.find("openai-codex", CATALOG_ID),
-      port.find("openai-codex", "gpt-5.6-sol"),
+      await port.findForProfile("default", "openai-codex", CATALOG_ID),
+      await port.findForProfile("default", "openai-codex", "gpt-5.6-sol"),
     ];
     for (const model of models) {
       assert.ok(model);
@@ -275,7 +280,11 @@ test("the compatible provider is registered on the gateway's /compat with the le
   });
   try {
     const runtime = await port.runtime("default");
-    const model = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+    const model = (await port.findForProfile(
+      "default",
+      OPENAI_COMPATIBLE_PROVIDER_ID,
+      "m",
+    ))!;
     assert.equal(model.baseUrl, `${GATEWAY}/compat/v1`);
     assert.equal((await runtime.getAuth(model))?.auth.apiKey, FAKE_LEASE);
     const sent = await sendThrough(port, model);
@@ -307,7 +316,11 @@ test("the compatible registration follows the feed: unchanged and same-base-path
   const register = vi.spyOn(ModelRegistry.prototype, "registerProvider");
   const unregister = vi.spyOn(ModelRegistry.prototype, "unregisterProvider");
 
-  const held = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+  const held = (await port.findForProfile(
+    "default",
+    OPENAI_COMPATIBLE_PROVIDER_ID,
+    "m",
+  ))!;
   assert.equal((await runtime.getAuth(held))?.auth.apiKey, FAKE_LEASE);
 
   // A notification with the feed unchanged (a key rotation): nothing churns.
@@ -326,7 +339,11 @@ test("the compatible registration follows the feed: unchanged and same-base-path
   driven.set(compatConfig(COMPAT_OTHER_PATH));
   assert.equal(register.mock.calls.length, 1);
   assert.equal(await runtime.getAuth(held), undefined);
-  const moved = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+  const moved = (await port.findForProfile(
+    "default",
+    OPENAI_COMPATIBLE_PROVIDER_ID,
+    "m",
+  ))!;
   assert.equal(moved.baseUrl, `${GATEWAY}/compat/api/openai/v1`);
   assert.equal((await runtime.getAuth(moved))?.auth.apiKey, FAKE_LEASE);
 
@@ -341,11 +358,17 @@ test("the compatible registration follows the feed: unchanged and same-base-path
   ]) {
     driven.set(compatConfig(COMPAT_A));
     driven.set(compatConfig(invalid));
-    assert.equal(port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m"), undefined);
+    assert.equal(
+      await port.findForProfile("default", OPENAI_COMPATIBLE_PROVIDER_ID, "m"),
+      undefined,
+    );
     assert.equal(await runtime.getAuth(held), undefined, invalid);
   }
   driven.set(undefined);
-  assert.equal(port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m"), undefined);
+  assert.equal(
+    await port.findForProfile("default", OPENAI_COMPATIBLE_PROVIDER_ID, "m"),
+    undefined,
+  );
   assert.equal(await runtime.getAuth(moved), undefined);
   const unregistered = unregister.mock.calls.length;
   driven.set(undefined);
@@ -372,7 +395,11 @@ test("after a base-path change, a model held at the old one is refused before an
   });
   try {
     const runtime = await port.runtime("default");
-    const held = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+    const held = (await port.findForProfile(
+      "default",
+      OPENAI_COMPATIBLE_PROVIDER_ID,
+      "m",
+    ))!;
     driven.set(compatConfig(COMPAT_OTHER_PATH));
     assert.equal(await runtime.getAuth(held), undefined);
     const stale = await sendThrough(port, held);
@@ -381,7 +408,11 @@ test("after a base-path change, a model held at the old one is refused before an
       stale.errorMessage ?? "",
       /Provider is not configured: openai-compatible/,
     );
-    const moved = port.find(OPENAI_COMPATIBLE_PROVIDER_ID, "m")!;
+    const moved = (await port.findForProfile(
+      "default",
+      OPENAI_COMPATIBLE_PROVIDER_ID,
+      "m",
+    ))!;
     const fresh = await sendThrough(port, moved);
     assert.deepEqual(
       fresh.requests.map((r) => [r.url, r.authorization]),

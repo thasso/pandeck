@@ -25,7 +25,8 @@ import type {
   SessionNamingSettings,
   ThinkingLevel,
 } from "@assistant/shared";
-import { UNLABELED_SESSION_TITLE } from "@assistant/shared";
+import { accountServesModel, UNLABELED_SESSION_TITLE } from "@assistant/shared";
+import { credentialProfileById } from "../credentialProfiles.ts";
 import {
   piSkillCommandName,
   type SkillInvocationCommand,
@@ -1109,7 +1110,18 @@ export class PiLiveSession implements LiveSession {
       },
     };
     return createPiAdapter(this.id, driver, {
-      resolveModel: (model) => findModel(model.provider, model.id),
+      resolveModel: (model) => {
+        // The engine refuses it too, on its own account; this gives the
+        // refusal its words.
+        const account = this.profileId
+          ? credentialProfileById(this.profileId)
+          : undefined;
+        if (account && !accountServesModel(account, model.provider))
+          throw new Error(
+            `${account.name} does not serve ${model.provider}/${model.id}; fork or start a new session to use it.`,
+          );
+        return findModel(model.provider, model.id);
+      },
     });
   }
 

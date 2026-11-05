@@ -90,6 +90,7 @@ export * from "./thinkingLevels.ts";
 export * from "./peerRuntimes.ts";
 export * from "./approvalGrants.ts";
 export * from "./harnesses.ts";
+export * from "./accountKinds.ts";
 export * from "./compactionWindow.ts";
 export { SESSION_TIMELINE_PROJECTION_VERSION } from "./runtimeEvents.ts";
 export type { TimelineCacheDescriptor } from "./runtimeEvents.ts";
@@ -367,7 +368,8 @@ export function clampThinkingLevelForModel(
 }
 
 /** Safe projection of a PA-owned provider credential profile. Never contains a token. */
-export type CredentialProfileProvider = "openai-codex" | "claude";
+export type CredentialProfileProvider =
+  "openai-codex" | "claude" | "openai-compatible";
 export type CredentialProfileStatus =
   "disconnected" | "connecting" | "ready" | "error";
 export interface AccountHealth {
@@ -410,8 +412,18 @@ export interface CredentialProfileSummary {
     verificationUri?: string;
     userCode?: string;
   };
+  /** An OpenAI-compatible account's endpoint; never its key. Absent for every other kind. */
+  endpoint?: OpenAiCompatibleEndpointSummary;
   /** Where this account is currently used. Only present when explicitly requested. */
   usage?: CredentialProfileUsage;
+}
+
+/** The secret-free projection of an OpenAI-compatible account's endpoint. */
+export interface OpenAiCompatibleEndpointSummary {
+  baseUrl: string;
+  apiKeyConfigured: boolean;
+  thinkingFormat: OpenAiCompatibleThinkingFormat;
+  models: OpenAiCompatibleModelInfo[];
 }
 
 /** One configured model slot that names a provider account. */
@@ -924,9 +936,6 @@ export interface WorktreeSettings {
   remoteFetchMinutes: number;
 }
 
-/** Pi provider id the app registers the OpenAI-compatible endpoint under. */
-export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
-
 /**
  * How an OpenAI-compatible endpoint takes thinking control — pi's
  * `thinkingFormat` values that need no further configuration. "none" sends
@@ -958,27 +967,6 @@ export interface OpenAiCompatibleModelInfo {
   status?: string;
   parameterCount?: number;
   sizeBytes?: number;
-}
-
-/** Public OpenAI-compatible provider configuration shown in settings. */
-export interface OpenAiCompatibleSettings {
-  enabled: boolean;
-  /** Display name, shown as the provider in the model picker. */
-  name: string;
-  baseUrl: string;
-  apiKeyConfigured: boolean;
-  thinkingFormat: OpenAiCompatibleThinkingFormat;
-  models: OpenAiCompatibleModelInfo[];
-}
-
-/** Patch sent by the settings UI. Secret fields are write-only and never echoed back. */
-export interface OpenAiCompatibleSettingsPatch {
-  enabled?: boolean;
-  name?: string;
-  baseUrl?: string;
-  thinkingFormat?: OpenAiCompatibleThinkingFormat;
-  apiKey?: string;
-  clearApiKey?: boolean;
 }
 
 export interface OpenAiCompatibleConnectionStatus {
@@ -1569,7 +1557,6 @@ export interface AppSettings {
   tempo: TempoSettings;
   google: GoogleSettings;
   slack: SlackSettings;
-  openAiCompatible: OpenAiCompatibleSettings;
   brave: BraveSettings;
   context7: Context7Settings;
   github: GithubSettings;
@@ -8108,18 +8095,6 @@ export type ClientMessage =
   | { type: "saveAndTestSlackSettings"; patch: SlackSettingsPatch }
   /** Test saved Slack credentials without exposing secret values. */
   | { type: "testSlackSettings" }
-  /** Persist OpenAI-compatible provider settings. Secret fields are stored server-side and not echoed. */
-  | {
-      type: "updateOpenAiCompatibleSettings";
-      patch: OpenAiCompatibleSettingsPatch;
-    }
-  /** Persist OpenAI-compatible provider settings, then discover models and register them. */
-  | {
-      type: "saveAndTestOpenAiCompatibleSettings";
-      patch: OpenAiCompatibleSettingsPatch;
-    }
-  /** Test saved OpenAI-compatible settings and rediscover models without exposing secret values. */
-  | { type: "testOpenAiCompatibleSettings" }
   /** Persist web-search (Brave) settings. The API key is stored server-side and not echoed. */
   | { type: "updateBraveSettings"; patch: BraveSettingsPatch }
   /** Persist web-search (Brave) settings, then verify the API key. */
@@ -8695,12 +8670,6 @@ export type ServerMessage =
       type: "slackStatus";
       status: SlackConnectionStatus;
       settings: AppSettings;
-    }
-  | {
-      type: "openAiCompatibleStatus";
-      status: OpenAiCompatibleConnectionStatus;
-      settings: AppSettings;
-      models: ModelOption[];
     }
   | {
       type: "braveStatus";

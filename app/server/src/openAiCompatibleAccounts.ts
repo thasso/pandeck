@@ -1,66 +1,97 @@
+/**
+ * The endpoint half of an OpenAI-compatible account (`docs/settings.md`): its
+ * base URL, optional key, thinking format and discovered models, in the
+ * account's own private `credential-profiles/<id>/endpoint.json` (0600, its
+ * directory 0700). The registry (`credentialProfiles.ts`) holds the account's
+ * name, enabled switch, enterprise flag and priority, like any other.
+ *
+ * The key never leaves the server: summaries carry `apiKeyConfigured`, a
+ * discovery failure is redacted, and the key stays with the origin it was
+ * entered for (`urlOrigin.ts`).
+ */
 import {
   applyPatch,
   OPENAI_COMPATIBLE_THINKING_FORMATS,
+  type OpenAiCompatibleConnectionStatus,
+  type OpenAiCompatibleEndpointSummary,
+  type OpenAiCompatibleModelInfo,
+  type OpenAiCompatibleThinkingFormat,
 } from "@assistant/shared";
 import { join } from "node:path";
-import type {
-  OpenAiCompatibleConnectionStatus,
-  OpenAiCompatibleModelInfo,
-  OpenAiCompatibleSettings,
-  OpenAiCompatibleSettingsPatch,
-  OpenAiCompatibleThinkingFormat,
-} from "@assistant/shared";
-import { DATA_DIR } from "./config.ts";
+import { credentialProfileRoot } from "./credentialProfilePaths.ts";
 import { errorText } from "./errors.ts";
 import { createPrivateJsonFile } from "./privateJsonFile.ts";
 import { deadlineSignal } from "./httpRetry.ts";
 import { sameOrigin } from "./urlOrigin.ts";
 
-const OPENAI_COMPATIBLE_SETTINGS_DIR = join(DATA_DIR, "settings");
-const OPENAI_COMPATIBLE_CONFIG_PATH = join(
-  OPENAI_COMPATIBLE_SETTINGS_DIR,
-  "openai-compatible.json",
-);
-const DEFAULT_NAME = "OpenAI-compatible";
 /** The key registered for an endpoint that has none: it pairs no credential. */
 export const OPENAI_COMPATIBLE_KEYLESS = "none";
 
-interface OpenAiCompatibleConfigFile {
-  enabled?: boolean;
-  name?: string;
-  baseUrl?: string;
-  apiKey?: string;
-  thinkingFormat?: OpenAiCompatibleThinkingFormat;
-  models?: OpenAiCompatibleModelInfo[];
-}
-
-interface NormalizedConfig {
-  enabled: boolean;
-  name: string;
+/** An account's endpoint as the server holds it, key included. */
+export interface OpenAiCompatibleEndpoint {
   baseUrl: string;
   apiKey?: string;
   thinkingFormat: OpenAiCompatibleThinkingFormat;
   models: OpenAiCompatibleModelInfo[];
 }
 
-const privateFile = createPrivateJsonFile(
-  OPENAI_COMPATIBLE_CONFIG_PATH,
-  "OpenAI-compatible provider config",
-);
-const writeFile = privateFile.write;
+/** A validated endpoint edit. Secret fields are write-only. */
+export interface OpenAiCompatibleEndpointPatch {
+  baseUrl?: string;
+  thinkingFormat?: OpenAiCompatibleThinkingFormat;
+  apiKey?: string;
+  clearApiKey?: boolean;
+}
 
-function readFile(): OpenAiCompatibleConfigFile {
-  return privateFile.read(
-    (parsed: OpenAiCompatibleConfigFile | undefined) => parsed ?? {},
+/** The account's private endpoint file. */
+export function openAiCompatibleEndpointPath(profileId: string): string {
+  return join(credentialProfileRoot(profileId), "endpoint.json");
+}
+
+function endpointFile(profileId: string) {
+  return createPrivateJsonFile(
+    openAiCompatibleEndpointPath(profileId),
+    "OpenAI-compatible endpoint",
+    { privateDirectory: "enforce" },
   );
 }
 
-function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return (baseUrl ?? "").trim().replace(/\/+$/, "");
+/** The stored endpoint, normalized; an empty one when the file is absent. */
+export function readOpenAiCompatibleEndpoint(
+  profileId: string,
+): OpenAiCompatibleEndpoint {
+  return endpointFile(profileId).read((parsed: unknown) =>
+    normalizeOpenAiCompatibleEndpoint(parsed),
+  );
 }
 
-function normalizeName(name: string | undefined): string {
-  return (name ?? "").trim() || DEFAULT_NAME;
+export function writeOpenAiCompatibleEndpoint(
+  profileId: string,
+  endpoint: OpenAiCompatibleEndpoint,
+): void {
+  endpointFile(profileId).write(normalizeOpenAiCompatibleEndpoint(endpoint));
+}
+
+export function openAiCompatibleEndpointSummary(
+  endpoint: OpenAiCompatibleEndpoint,
+): OpenAiCompatibleEndpointSummary {
+  return {
+    baseUrl: endpoint.baseUrl,
+    apiKeyConfigured: Boolean(endpoint.apiKey),
+    thinkingFormat: endpoint.thinkingFormat,
+    models: endpoint.models,
+  };
+}
+
+/** Ready to run: it has somewhere to send requests and something to run there. */
+export function openAiCompatibleEndpointReady(
+  endpoint: OpenAiCompatibleEndpoint,
+): boolean {
+  return Boolean(endpoint.baseUrl) && endpoint.models.length > 0;
+}
+
+function normalizeBaseUrl(baseUrl: unknown): string {
+  return typeof baseUrl === "string" ? baseUrl.trim().replace(/\/+$/, "") : "";
 }
 
 function normalizeThinkingFormat(
@@ -119,19 +150,21 @@ function normalizeModel(
  * Whether a model reasons follows the endpoint's thinking format rather than a
  * guess from its id: with a format set, pi offers thinking levels and sends
  * them the way that format expects; with "none" it sends no thinking control.
- * So a stored `reasoning` is always recomputed on read.
+ * So a stored `reasoning` is always recomputed on read. Also reads the former
+ * settings file's fields (`migrateOpenAiCompatibleSettingsToAccount`).
  */
-function normalizeConfig(config: OpenAiCompatibleConfigFile): NormalizedConfig {
+export function normalizeOpenAiCompatibleEndpoint(
+  raw: unknown,
+): OpenAiCompatibleEndpoint {
+  const config = isRecord(raw) ? raw : {};
   const thinkingFormat = normalizeThinkingFormat(config.thinkingFormat);
   const reasoning = thinkingFormat !== "none";
   const models = Array.isArray(config.models)
-    ? config.models
+    ? (config.models as Array<Partial<OpenAiCompatibleModelInfo>>)
         .map((model) => normalizeModel(model, reasoning))
         .filter((model): model is OpenAiCompatibleModelInfo => Boolean(model))
     : [];
   return {
-    enabled: config.enabled === true,
-    name: normalizeName(config.name),
     baseUrl: normalizeBaseUrl(config.baseUrl),
     ...(typeof config.apiKey === "string" && config.apiKey
       ? { apiKey: config.apiKey }
@@ -141,40 +174,22 @@ function normalizeConfig(config: OpenAiCompatibleConfigFile): NormalizedConfig {
   };
 }
 
-export function getOpenAiCompatibleSettings(): OpenAiCompatibleSettings {
-  const config = normalizeConfig(readFile());
-  return {
-    enabled: config.enabled,
-    name: config.name,
-    baseUrl: config.baseUrl,
-    apiKeyConfigured: Boolean(config.apiKey),
-    thinkingFormat: config.thinkingFormat,
-    models: config.models,
-  };
-}
-
-/** Just the display name: one small read, for projections that need no models. */
-export function getOpenAiCompatibleName(): string {
-  return normalizeName(readFile().name);
-}
-
-export function updateOpenAiCompatibleSettings(
-  patch: OpenAiCompatibleSettingsPatch,
-): OpenAiCompatibleSettings {
-  const current = normalizeConfig(readFile());
+/**
+ * Apply an edit. Discovered ids belong to the server that listed them, so a
+ * new base URL starts with none; the stored key stays with the origin it was
+ * entered for, so a new origin drops it unless the same edit sets one.
+ */
+export function patchedOpenAiCompatibleEndpoint(
+  current: OpenAiCompatibleEndpoint,
+  patch: OpenAiCompatibleEndpointPatch,
+): OpenAiCompatibleEndpoint {
   const baseUrl =
     patch.baseUrl !== undefined ? normalizeBaseUrl(patch.baseUrl) : undefined;
-  // Discovered ids belong to the server that listed them. A new endpoint starts
-  // with none, so a failed discovery cannot leave the old ids registered
-  // against it.
   const endpointChanged = baseUrl !== undefined && baseUrl !== current.baseUrl;
-  // The stored key stays with the origin it was entered for (urlOrigin.ts).
   const originChanged =
     baseUrl !== undefined && !sameOrigin(current.baseUrl, baseUrl);
   // See braveSettings: `clearApiKey` must REMOVE the key, not blank it.
-  const next: OpenAiCompatibleConfigFile = applyPatch(current, {
-    ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-    ...(patch.name !== undefined ? { name: normalizeName(patch.name) } : {}),
+  const next = applyPatch(current, {
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(endpointChanged ? { models: [] } : {}),
     ...(patch.thinkingFormat !== undefined
@@ -185,8 +200,7 @@ export function updateOpenAiCompatibleSettings(
       ? { apiKey: patch.apiKey.trim() }
       : {}),
   });
-  writeFile(normalizeConfig(next));
-  return getOpenAiCompatibleSettings();
+  return normalizeOpenAiCompatibleEndpoint(next);
 }
 
 interface OpenAiCompatibleCompat {
@@ -235,21 +249,25 @@ function compatFor(
   };
 }
 
-export function getOpenAiCompatibleProviderConfigForRegistry():
-  OpenAiCompatibleProviderConfigForRegistry | undefined {
-  const config = normalizeConfig(readFile());
-  if (!config.enabled || !config.baseUrl || config.models.length === 0)
-    return undefined;
-  const compat = compatFor(config.thinkingFormat);
+/**
+ * The account's provider as pi's registry takes it, under the account's own
+ * id; undefined until it has a base URL and models.
+ */
+export function openAiCompatibleProviderConfig(
+  endpoint: OpenAiCompatibleEndpoint,
+  name: string,
+): OpenAiCompatibleProviderConfigForRegistry | undefined {
+  if (!openAiCompatibleEndpointReady(endpoint)) return undefined;
+  const compat = compatFor(endpoint.thinkingFormat);
   return {
-    name: config.name,
-    baseUrl: config.baseUrl,
+    name,
+    baseUrl: endpoint.baseUrl,
     // Pi only offers a provider that has a key. A local server commonly takes
     // none and ignores the header, so an unset key sends a placeholder.
-    apiKey: config.apiKey ?? OPENAI_COMPATIBLE_KEYLESS,
+    apiKey: endpoint.apiKey ?? OPENAI_COMPATIBLE_KEYLESS,
     api: "openai-completions",
     compat,
-    models: config.models.map((model) => ({
+    models: endpoint.models.map((model) => ({
       id: model.id,
       name: model.name,
       reasoning: model.reasoning,
@@ -265,80 +283,89 @@ export function getOpenAiCompatibleProviderConfigForRegistry():
   };
 }
 
-export async function testOpenAiCompatibleSettings(
-  signal?: AbortSignal,
+/**
+ * Discover the account's models from its endpoint's `/models` and store them.
+ * `stillExists` is asked before the write, so a discovery that outlives its
+ * account's deletion never recreates its directory.
+ */
+export async function testOpenAiCompatibleEndpoint(
+  profileId: string,
+  options: { signal?: AbortSignal; stillExists: () => boolean },
 ): Promise<OpenAiCompatibleConnectionStatus> {
-  const config = normalizeConfig(readFile());
+  const endpoint = readOpenAiCompatibleEndpoint(profileId);
   const checkedAt = Date.now();
-  if (!config.enabled) {
-    return {
-      ok: true,
-      checkedAt,
-      message: `${config.name} provider is disabled.`,
-      models: config.models,
-    };
-  }
-  if (!config.baseUrl) {
+  if (!endpoint.baseUrl) {
     return {
       ok: false,
       checkedAt,
       message: "A base URL is required.",
-      models: config.models,
+      models: endpoint.models,
     };
   }
 
   let discovered: OpenAiCompatibleModelInfo[];
   try {
-    discovered = await discoverModels(config.baseUrl, config.apiKey, signal);
+    discovered = await discoverModels(
+      endpoint.baseUrl,
+      endpoint.apiKey,
+      options.signal,
+    );
   } catch (err) {
-    // A status, not a throw: the caller still re-syncs the registry and sends
-    // fresh settings, which matters after an endpoint change cleared the models.
+    // A status, not a throw: the caller still answers with the account's
+    // current card, which matters after an endpoint change cleared the models.
     return {
       ok: false,
       checkedAt,
-      message: `Model discovery failed: ${redactCredentials(errorText(err), config)}`,
-      models: config.models,
+      message: `Model discovery failed: ${redactCredentials(errorText(err), endpoint)}`,
+      models: endpoint.models,
     };
   }
   // A cancelled test stores nothing, and discovery answers only for the
-  // endpoint it asked: the config is read again so a change saved while the
-  // request was out (disabled, another URL or key) is kept, not overwritten.
-  signal?.throwIfAborted();
-  const current = normalizeConfig(readFile());
-  if (current.baseUrl !== config.baseUrl || current.apiKey !== config.apiKey)
+  // endpoint it asked: the file is read again so a change saved while the
+  // request was out (another URL or key) is kept, not overwritten.
+  options.signal?.throwIfAborted();
+  if (!options.stillExists()) throw new Error("Credential profile not found.");
+  const current = readOpenAiCompatibleEndpoint(profileId);
+  if (
+    current.baseUrl !== endpoint.baseUrl ||
+    current.apiKey !== endpoint.apiKey
+  )
     return {
       ok: false,
       checkedAt,
       message:
-        "The provider settings changed during discovery. Test again to discover models for the new settings.",
+        "The endpoint changed during discovery. Test again to discover models for the new settings.",
       models: current.models,
     };
-  const next = normalizeConfig({ ...current, models: discovered });
-  writeFile(next);
+  const next = normalizeOpenAiCompatibleEndpoint({
+    ...current,
+    models: discovered,
+  });
+  writeOpenAiCompatibleEndpoint(profileId, next);
   return {
     ok: true,
     checkedAt,
     message:
       next.models.length === 1
-        ? `Discovered 1 ${config.name} model.`
-        : `Discovered ${next.models.length} ${config.name} models.`,
+        ? "Discovered 1 model."
+        : `Discovered ${next.models.length} models.`,
     models: next.models,
   };
 }
 
 /**
- * Settings status is secret-free, but a failure message carries text the
- * endpoint chose: an error body may echo the Authorization it received, and a
- * base URL may carry `user:password@`. Both are cut before it leaves the server.
+ * A status is secret-free, but a failure message carries text the endpoint
+ * chose: an error body may echo the Authorization it received, and a base URL
+ * may carry `user:password@`. Both are cut before it leaves the server.
  */
 function redactCredentials(
   message: string,
-  config: Pick<NormalizedConfig, "apiKey" | "baseUrl">,
+  endpoint: Pick<OpenAiCompatibleEndpoint, "apiKey" | "baseUrl">,
 ): string {
   let redacted = message;
-  const secrets = [config.apiKey];
+  const secrets = [endpoint.apiKey];
   try {
-    const url = new URL(config.baseUrl);
+    const url = new URL(endpoint.baseUrl);
     secrets.push(url.password, decodeURIComponent(url.password));
     secrets.push(url.username, decodeURIComponent(url.username));
   } catch {
@@ -407,7 +434,7 @@ function modelFromApi(raw: unknown): OpenAiCompatibleModelInfo | undefined {
     input,
     contextWindow,
     maxTokens: Math.min(contextWindow, 16_384),
-    // Recomputed from the thinking format by normalizeConfig.
+    // Recomputed from the thinking format on normalization.
     reasoning: false,
     ...(typeof raw.owned_by === "string" && raw.owned_by
       ? { ownedBy: raw.owned_by }

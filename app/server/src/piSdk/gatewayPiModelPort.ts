@@ -185,11 +185,11 @@ export function gatewayPiModelPort(
       await created;
       return registry?.find(provider, id);
     },
-    find(provider, id) {
-      if (provider === CODEX_PROVIDER_ID)
-        return rebased(deps.server.find(provider, id), id, registry);
-      if (provider !== OPENAI_COMPATIBLE_PROVIDER_ID) return undefined;
-      return registry?.find(provider, id);
+    // Only an OpenAI account is leased until compatible accounts reach the
+    // gateway (Task-1373 PR2), and a start model is chosen here only for a
+    // compatible one (`piEngineHost.ts`).
+    async availableForProfile() {
+      return [];
     },
     dispose() {
       disposed = true;

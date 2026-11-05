@@ -1,5 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import type { AppSettings } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { fileReadErrorText } from "./errors.ts";
@@ -29,4 +35,16 @@ export function readStoredAppSettings(): Partial<AppSettings> {
       `Failed to read app settings at ${APP_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
+}
+
+/**
+ * Replace the persisted settings with `settings` as given. Written to a
+ * sibling temp file then renamed, so a crash mid-write can't leave a truncated
+ * file behind. The settings dir may not exist yet on first save.
+ */
+export function writeStoredAppSettings(settings: unknown): void {
+  mkdirSync(dirname(APP_SETTINGS_PATH), { recursive: true });
+  const tmp = `${APP_SETTINGS_PATH}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  renameSync(tmp, APP_SETTINGS_PATH);
 }

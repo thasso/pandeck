@@ -17,10 +17,11 @@
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  CredentialProfileProvider,
-  CredentialProfileSummary,
-  ServerMessage,
+import {
+  isSubscriptionAccountKind,
+  type CredentialProfileSummary,
+  type ServerMessage,
+  type SubscriptionAccountKind,
 } from "@assistant/shared";
 import type {
   ClaudeUsageSnapshot,
@@ -74,7 +75,7 @@ interface UsagePolicy {
  * shared with the client in `@assistant/shared/usage`, because the browser
  * derives those from `fetchedAt` itself.
  */
-const USAGE_POLICY: Record<CredentialProfileProvider, UsagePolicy> = {
+const USAGE_POLICY: Record<SubscriptionAccountKind, UsagePolicy> = {
   claude: {
     freshMs: 5 * 60_000,
     minIntervalMs: 60_000,
@@ -102,7 +103,7 @@ const dirtyTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 interface CacheEntry {
   profileId: string;
-  provider: CredentialProfileProvider;
+  provider: SubscriptionAccountKind;
   snapshot: UsageSnapshot | null;
   /** Epoch ms of `snapshot`, or 0 when nothing has ever been fetched. */
   fetchedAt: number;
@@ -120,7 +121,7 @@ interface CacheEntry {
 interface PersistedEntry {
   version: number;
   profileId: string;
-  provider: CredentialProfileProvider;
+  provider: SubscriptionAccountKind;
   fetchedAt: number;
   snapshot: UsageSnapshot;
 }
@@ -187,7 +188,7 @@ class FetchGate {
   }
 }
 
-const gates: Record<CredentialProfileProvider, FetchGate> = {
+const gates: Record<SubscriptionAccountKind, FetchGate> = {
   claude: new FetchGate(USAGE_POLICY.claude.concurrency),
   "openai-codex": new FetchGate(USAGE_POLICY["openai-codex"].concurrency),
 };
@@ -239,7 +240,7 @@ function writePersisted(entry: CacheEntry): void {
 
 function entryFor(
   profileId: string,
-  provider: CredentialProfileProvider,
+  provider: SubscriptionAccountKind,
 ): CacheEntry {
   const existing = entries.get(profileId);
   if (existing) return existing;
@@ -268,8 +269,18 @@ function entryFor(
   return entry;
 }
 
-function enabledProfiles(): CredentialProfileSummary[] {
-  return deps.listProfiles().filter((profile) => profile.enabled);
+/** An account with usage to cache: only a subscription login has any. */
+type UsageProfile = CredentialProfileSummary & {
+  provider: SubscriptionAccountKind;
+};
+
+function enabledProfiles(): UsageProfile[] {
+  return deps
+    .listProfiles()
+    .filter(
+      (profile): profile is UsageProfile =>
+        profile.enabled && isSubscriptionAccountKind(profile.provider),
+    );
 }
 
 function ageOf(entry: CacheEntry, now: number): number {
@@ -404,7 +415,7 @@ export function markUsageProfileDirty(profileId: string): void {
  */
 export async function readUsageSnapshot(
   profileId: string,
-  provider: CredentialProfileProvider,
+  provider: SubscriptionAccountKind,
   options: { force?: boolean } = {},
 ): Promise<UsageSnapshot> {
   const entry = entryFor(profileId, provider);
@@ -439,7 +450,7 @@ export async function readUsageSnapshot(
  */
 export function peekUsageSnapshot(
   profileId: string,
-  provider: CredentialProfileProvider,
+  provider: SubscriptionAccountKind,
 ): { snapshot: UsageSnapshot; fetchedAt: number } | null {
   const entry = entryFor(profileId, provider);
   return entry.snapshot
@@ -516,9 +527,10 @@ function projectOpenAi(snapshot: OpenAiUsageSnapshot): ProviderProjection {
  * the shared thresholds, so a card degrades on its own clock even when nothing
  * pushes. Cached facts only: never revalidates or starts a provider request.
  */
-export function cachedUsageIndicator(
-  profile: Pick<CredentialProfileSummary, "id" | "provider">,
-): UsageIndicator {
+export function cachedUsageIndicator(profile: {
+  id: string;
+  provider: SubscriptionAccountKind;
+}): UsageIndicator {
   const entry = entryFor(profile.id, profile.provider);
   const projection = entry.snapshot
     ? entry.provider === "claude"

@@ -208,6 +208,7 @@ export function orderCredentialProfilesByProvider(
   const providerRank: Record<CredentialProfileSummary["provider"], number> = {
     claude: 0,
     "openai-codex": 1,
+    "openai-compatible": 2,
   };
   return [...profiles].sort(
     (a, b) => providerRank[a.provider] - providerRank[b.provider],

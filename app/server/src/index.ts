@@ -21,6 +21,7 @@ import type {
 } from "@assistant/shared";
 import {
   COMPRESSED_SERVER_FRAME_MIN_BYTES,
+  isAccountKind,
   isThinkingLevel,
   normalizeGithubIssueRefs,
 } from "@assistant/shared";
@@ -43,7 +44,7 @@ import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
-import { settingsCompatSource, startGatewayLink } from "./gatewayLink.ts";
+import { startGatewayLink } from "./gatewayLink.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
 import { assertPromptAssets } from "./promptAssets.ts";
@@ -65,6 +66,8 @@ import {
   deleteCredentialProfile,
   listCredentialProfiles,
   patchCredentialProfile,
+  patchOpenAiCompatibleEndpoint,
+  testOpenAiCompatibleProfile,
 } from "./credentialProfiles.ts";
 import {
   markUsageProfileDirty,
@@ -77,10 +80,7 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
-  compatProviderFeed,
-  notifyCompatProviderChanged,
   startOpenAiProfileLogin,
-  syncConfiguredModelProviders,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
   renewCodexCredential,
@@ -108,7 +108,6 @@ import { slackSocketMode } from "./slackSocketMode.ts";
 import {
   announceSettingsWritten,
   onSettingsChanged,
-  setModelProviderSync,
 } from "./settingsService.ts";
 import { watchSignInCards } from "./settingsInput.ts";
 import {
@@ -883,10 +882,7 @@ async function handleRequest(
         const body = await readJsonBody<{ name?: unknown; provider?: unknown }>(
           req,
         );
-        if (
-          typeof body.name !== "string" ||
-          (body.provider !== "openai-codex" && body.provider !== "claude")
-        )
+        if (typeof body.name !== "string" || !isAccountKind(body.provider))
           throw new Error("A name and supported provider are required.");
         const profile = createCredentialProfile({
           name: body.name,
@@ -941,6 +937,48 @@ async function handleRequest(
       }
       res.writeHead(405, corsJsonHeaders(req));
       res.end(JSON.stringify({ error: "Method not allowed" }));
+    } catch (err) {
+      res.writeHead(400, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: errorText(err) }));
+    }
+    return;
+  }
+
+  // An OpenAI-compatible account's endpoint: the key is accepted here and
+  // never answered; the summary says only whether one is set.
+  if (
+    requestUrl.pathname.match(
+      /^\/api\/credential-profiles\/[A-Za-z0-9_-]+\/endpoint(?:\/test)?$/,
+    )
+  ) {
+    const [, , , profileId = "", , action] = requestUrl.pathname.split("/");
+    const test = action === "test";
+    if (req.method !== (test ? "POST" : "PATCH")) {
+      res.writeHead(405, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    try {
+      if (test) {
+        // A closed request cancels the discovery it started.
+        const discovery = new AbortController();
+        res.on("close", () => {
+          if (!res.writableFinished) discovery.abort();
+        });
+        const result = await testOpenAiCompatibleProfile(
+          profileId,
+          discovery.signal,
+        );
+        res.writeHead(200, corsJsonHeaders(req));
+        res.end(JSON.stringify(result));
+        return;
+      }
+      const profile = patchOpenAiCompatibleEndpoint(
+        profileId,
+        await readJsonBody<Record<string, unknown>>(req),
+      );
+      res.writeHead(200, corsJsonHeaders(req));
+      res.end(JSON.stringify({ profile }));
     } catch (err) {
       res.writeHead(400, corsJsonHeaders(req));
       res.end(JSON.stringify({ error: errorText(err) }));
@@ -1854,14 +1892,13 @@ startInProcessWorker();
 // Opt-in: the credential gateway runs in this process, and every engine open
 // on a profile holds a lease first. A failed start is logged and only fails
 // those opens. Graceful shutdown leaves it running, as the package proxy, for
-// a draining turn; it dies with the process. The link pushes the
-// OpenAI-compatible endpoint and key, which only the gateway then holds; the
-// gateway renews Codex logins through pi's refresh passed in here.
+// a draining turn; it dies with the process. OpenAI-compatible accounts do
+// not run with it yet, so no endpoint is pushed; the gateway renews Codex
+// logins through pi's refresh passed in here.
 if (GATEWAY_ENABLED)
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
-    compat: settingsCompatSource(compatProviderFeed),
     renewCodex: renewCodexCredential,
   });
 // The unit keeps this process the OOM killer's last victim; hand every agent
@@ -1882,14 +1919,6 @@ verifyRequiredHostTools();
 // pi's grep/find resolve rg/fd on every call and fork this server to probe PATH
 // unless its bin dir already holds them; link the host's copies there once.
 linkPiToolBinaries();
-
-// Before any request can write settings: an OpenAI-compatible write must
-// re-register the configured providers with the engine, and with every leased
-// pi engine's own runtime.
-setModelProviderSync(() => {
-  syncConfiguredModelProviders();
-  notifyCompatProviderChanged();
-});
 
 // Discover the optional streaming runtime once, without loading any weights.
 await probeStreamingRecognizer();

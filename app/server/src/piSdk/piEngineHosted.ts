@@ -119,15 +119,21 @@ const hosted = new Map<
 >();
 
 /**
- * Serve `local` as a hosted engine. `findModel` resolves a `setModel`'s
- * model; `engineId` registers it for the test seams until it is disposed;
- * `onDispose` runs once the engine is torn down.
+ * Serve `local` as a hosted engine. `findModel` resolves a `setModel`'s model
+ * on the engine's own account, which is fixed for the engine's life (an
+ * account switch opens a replacement engine), so a model that account does
+ * not serve is refused here, whatever the server checked; `engineId`
+ * registers it for the test seams until it is disposed; `onDispose` runs once
+ * the engine is torn down.
  */
 export function hostPiEngine(
   local: PiEngineHandle,
   info: unknown,
   options: {
-    findModel: PiModelPort["find"];
+    findModel: (
+      provider: string,
+      id: string,
+    ) => Promise<PiEngineModel | undefined>;
     engineId?: number;
     onDispose?: () => void;
   },
@@ -257,10 +263,13 @@ export function hostPiEngine(
       }
       case "setModel": {
         const { provider, id } = args[0] as { provider: string; id: string };
-        const model = options.findModel(provider, id);
-        if (!model)
-          throw new Error(`Model ${provider}/${id} is not available.`);
-        return local.setModel(model);
+        return options.findModel(provider, id).then((model) => {
+          if (!model)
+            throw new Error(
+              `Model ${provider}/${id} is not available on this session's account.`,
+            );
+          return local.setModel(model);
+        });
       }
       case "appendCustomEntry":
         return local
@@ -403,8 +412,10 @@ export function createPiHostedEngineFactory({
       gateway?.dispose();
       throw err;
     }
+    const { credentialProfileId } = spec as PiEngineOpenSpec;
     return hostPiEngine(opened.engine, opened.info, {
-      findModel: engineModels.find,
+      findModel: (provider, id) =>
+        engineModels.findForProfile(credentialProfileId, provider, id),
       engineId: host.engineId,
       ...(gateway ? { onDispose: () => gateway.dispose() } : {}),
     });

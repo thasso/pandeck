@@ -87,7 +87,12 @@ function transcript(
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n",
   );
-  sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "openai-compatible",
+  });
   freezeSessionAgent(id, agent);
   return file;
 }
@@ -138,13 +143,15 @@ test("an agent session whose model cannot be restored refuses to resume", async 
 
   await assert.rejects(
     piStore.acquireExisting("developer", file, id),
-    /Agent "test-reviewer" cannot run: .*retired.* It does not run on another model/,
+    // A compatible account's start model is the app's choice, so the refusal
+    // comes before pi restores anything.
+    /Agent "test-reviewer" runs on openai-compatible\/retired, which its account no longer offers; it does not run on another model/,
   );
 });
 
 test("denied tools stay gone even when repository settings turn pi's own on", async () => {
   const chosen = await findModelForProfile(
-    "default",
+    "openai-compatible",
     "openai-compatible",
     "chosen",
   );
@@ -160,6 +167,7 @@ test("denied tools stay gone even when repository settings turn pi's own on", as
   const tools = async (denyTools: string[]) => {
     const live = await piStore.acquireNew("developer", chosen, "off", {
       cwd: repo,
+      credentialProfileId: "openai-compatible",
       agent: { ...agent, denyTools },
     });
     try {

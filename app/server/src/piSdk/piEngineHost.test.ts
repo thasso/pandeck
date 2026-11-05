@@ -58,6 +58,8 @@ const { nativePiSessionForTests, piToolActivationForTests } =
   await import("./piEngine.ts");
 const { readSessionHeaderId } = await import("./sessionOpen.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
+const { createCredentialProfile, deleteCredentialProfile } =
+  await import("../credentialProfiles.ts");
 const { findModelForProfile } = await import("./models.ts");
 const { serverPiModelPort } = await import("./piModelPort.ts");
 const { piPersonaOptions, resolvePiEngineStart } =
@@ -135,7 +137,12 @@ function transcript(id: string): string {
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n",
   );
-  sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "openai-compatible",
+  });
   return file;
 }
 
@@ -149,7 +156,7 @@ test("every open the store makes is a JSON spec, answered with JSON info naming 
     "openEngine",
   );
   const chosen = await findModelForProfile(
-    "default",
+    "openai-compatible",
     "openai-compatible",
     "chosen",
   );
@@ -157,6 +164,7 @@ test("every open the store makes is a JSON spec, answered with JSON info naming 
 
   const created = await piStore.acquireNew("developer", chosen, "off", {
     cwd: tmp,
+    credentialProfileId: "openai-compatible",
   });
   const file = transcript("host-open");
   const opened = await piStore.acquireExisting("developer", file, "host-open");
@@ -171,7 +179,7 @@ test("every open the store makes is a JSON spec, answered with JSON info naming 
     opened as unknown as {
       reopenForAccount(profileId: string): Promise<{ dispose(): unknown }>;
     }
-  ).reopenForAccount("default");
+  ).reopenForAccount("openai-compatible");
   try {
     const transcripts = [];
     for (const call of opens.mock.results) {
@@ -397,7 +405,7 @@ test("the opener builds from the spec's start records and writes none of them", 
   const { engine, info } = await openPiEngine(
     {
       kind: "developer",
-      credentialProfileId: "default",
+      credentialProfileId: "openai-compatible",
       transcript: { type: "new", cwd: tmp },
       start: { conditions, skillNames: ["host-skill"], agent },
       skillsDir: join(
@@ -457,7 +465,7 @@ test("the personal assistant's spec carries the profile suffix from settings at 
   });
   const started = await resolvePiEngineStart({
     kind: "personal-assistant",
-    credentialProfileId: "default",
+    credentialProfileId: "openai-compatible",
   });
   const suffix =
     '## Personal profile instructions\n\nYour name is "Host Fixture". Use this name when identifying yourself or when the user asks your name.\n\nAnswer in one line.';
@@ -466,7 +474,7 @@ test("the personal assistant's spec carries the profile suffix from settings at 
   const { engine } = await openPiEngine(
     {
       kind: "personal-assistant",
-      credentialProfileId: "default",
+      credentialProfileId: "openai-compatible",
       transcript: { type: "new", cwd: tmp },
       model: { provider: "openai-compatible", id: "chosen" },
       ...started,
@@ -505,11 +513,11 @@ test("an open spec's compaction window is installed with no session record behin
   const { engine } = await openPiEngine(
     {
       kind: "developer",
-      credentialProfileId: "default",
+      credentialProfileId: "openai-compatible",
       transcript: { type: "open", file, expectedId: id, cwd: tmp },
       ...(await resolvePiEngineStart({
         kind: "developer",
-        credentialProfileId: "default",
+        credentialProfileId: "openai-compatible",
         knownId: id,
       })),
       compactionWindow: 60_000,
@@ -531,12 +539,12 @@ test("a staged engine committed under Plan activates no edit or write, and its l
   const { engine } = await openPiEngine(
     {
       kind: "developer",
-      credentialProfileId: "default",
+      credentialProfileId: "openai-compatible",
       transcript: { type: "open", file, expectedId: id, cwd: tmp },
       model: { provider: "openai-compatible", id: "chosen" },
       ...(await resolvePiEngineStart({
         kind: "developer",
-        credentialProfileId: "default",
+        credentialProfileId: "openai-compatible",
         knownId: id,
       })),
       mode: "build",
@@ -565,5 +573,139 @@ test("a staged engine committed under Plan activates no edit or write, and its l
     );
   } finally {
     await engine.discard({});
+  }
+});
+
+/** A new developer open on `credentialProfileId`, with no model named. */
+async function newOpenSpec(credentialProfileId: string) {
+  return {
+    kind: "developer" as const,
+    credentialProfileId,
+    transcript: { type: "new" as const, cwd: tmp },
+    ...(await resolvePiEngineStart({ kind: "developer", credentialProfileId })),
+    mode: "build" as const,
+  };
+}
+
+test("a compatible open starts on the account's own model, never pi's pick among the built-ins", async () => {
+  const saved = process.env.OPENAI_API_KEY;
+  // Synthetic: makes pi's built-in `openai` provider available, which its own
+  // default selection would reach.
+  process.env.OPENAI_API_KEY = "fixture-env-openai-key";
+  try {
+    const { engine, info } = await openPiEngine(
+      await newOpenSpec("openai-compatible"),
+      ctx,
+    );
+    try {
+      assert.equal(engine.model?.provider, "openai-compatible");
+      assert.equal(engine.model?.id, "chosen");
+      assert.deepEqual(info.notices, []);
+    } finally {
+      await engine.discard({});
+    }
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = saved;
+  }
+});
+
+test("a compatible session whose model the account dropped reopens on its first model, with a notice", async () => {
+  const id = "host-compatible-retired";
+  const file = transcript(id);
+  writeFileSync(
+    file,
+    readFileSync(file, "utf8").replaceAll('"chosen"', '"retired"'),
+  );
+  const { engine, info } = await openPiEngine(
+    {
+      kind: "developer",
+      credentialProfileId: "openai-compatible",
+      transcript: { type: "open", file, expectedId: id, cwd: tmp },
+      ...(await resolvePiEngineStart({
+        kind: "developer",
+        credentialProfileId: "openai-compatible",
+        knownId: id,
+      })),
+      mode: "build",
+    },
+    ctx,
+  );
+  try {
+    assert.equal(engine.model?.id, "chosen");
+    assert.deepEqual(info.notices, [
+      {
+        severity: "warning",
+        message:
+          "Could not restore openai-compatible/retired on this session's account; using chosen.",
+      },
+    ]);
+  } finally {
+    await engine.discard({});
+  }
+});
+
+test("a compatible account with no models refuses the open, pointing at Test or a new session", async () => {
+  const { id } = createCredentialProfile({
+    name: "Empty",
+    provider: "openai-compatible",
+  });
+  try {
+    await assert.rejects(
+      openPiEngine(await newOpenSpec(id), ctx),
+      /offers no models\. Run Test on its card in Settings, or start a new session\./,
+    );
+  } finally {
+    deleteCredentialProfile(id);
+  }
+});
+
+test("whatever starts the session, the opener refuses a model its account does not serve", async () => {
+  for (const [account, provider, id] of [
+    ["openai-compatible", "openai", "gpt-4o-mini"],
+    ["default", "openai-compatible", "chosen"],
+  ] as const) {
+    let disposed = false;
+    // A stand-in start that ignores the gate and picks its own model.
+    const start = async () => ({
+      session: {
+        model: { provider, id },
+        dispose: () => {
+          disposed = true;
+        },
+      } as never,
+      notices: [],
+    });
+    await assert.rejects(
+      openPiEngine(await newOpenSpec(account), ctx, start),
+      new RegExp(`model ${provider}/${id} is not served by its account`),
+    );
+    assert.ok(disposed, `${account}: the refused session is disposed`);
+  }
+});
+
+test("a live compatible session refuses a model switch off its account, in words that say what to do", async () => {
+  const chosen = await findModelForProfile(
+    "openai-compatible",
+    "openai-compatible",
+    "chosen",
+  );
+  assert.ok(chosen);
+  const live = await piStore.acquireNew("developer", chosen, "off", {
+    cwd: tmp,
+    credentialProfileId: "openai-compatible",
+  });
+  try {
+    const adapter = live.createRuntimeAdapter();
+    assert.throws(
+      () => adapter.setModel({ provider: "openai-codex", id: "gpt-5.4" }),
+      {
+        message:
+          "Fixture does not serve openai-codex/gpt-5.4; fork or start a new session to use it.",
+      },
+    );
+    assert.equal(live.engine.model?.id, "chosen");
+  } finally {
+    live.dispose();
   }
 });

@@ -18,7 +18,7 @@ import {
   InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@assistant/shared";
-import { OPENAI_COMPATIBLE_KEYLESS } from "../openAiCompatibleSettings.ts";
+import { OPENAI_COMPATIBLE_KEYLESS } from "../openAiCompatibleAccounts.ts";
 import {
   COMPAT_KEY_A,
   COMPAT_KEY_B,

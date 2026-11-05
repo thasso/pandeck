@@ -61,8 +61,6 @@ import type {
   BraveConnectionStatus,
   BraveSettingsPatch,
   BroadcastTopic,
-  OpenAiCompatibleConnectionStatus,
-  OpenAiCompatibleSettingsPatch,
   Context7ConnectionStatus,
   Context7SettingsPatch,
   GithubConnectionStatus,
@@ -311,14 +309,6 @@ const defaultSettings: AppSettings = {
     botTokenConfigured: false,
     connected: false,
   },
-  openAiCompatible: {
-    enabled: false,
-    name: "OpenAI-compatible",
-    baseUrl: "",
-    apiKeyConfigured: false,
-    thinkingFormat: "none",
-    models: [],
-  },
   brave: {
     enabled: false,
     apiKeyConfigured: false,
@@ -534,7 +524,6 @@ export interface UIState {
   tempoStatus: TempoConnectionStatus | null;
   googleStatus: GoogleConnectionStatus | null;
   slackStatus: SlackConnectionStatus | null;
-  openAiCompatibleStatus: OpenAiCompatibleConnectionStatus | null;
   braveStatus: BraveConnectionStatus | null;
   context7Status: Context7ConnectionStatus | null;
   githubStatus: GithubConnectionStatus | null;
@@ -961,7 +950,6 @@ const emptyInitial: UIState = {
   tempoStatus: null,
   googleStatus: null,
   slackStatus: null,
-  openAiCompatibleStatus: null,
   braveStatus: null,
   context7Status: null,
   githubStatus: null,
@@ -6024,14 +6012,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         slackStatus: msg.status,
         error: null,
       };
-    case "openAiCompatibleStatus":
-      return {
-        ...state,
-        settings: msg.settings,
-        models: msg.models,
-        openAiCompatibleStatus: msg.status,
-        error: null,
-      };
     case "braveStatus":
       return {
         ...state,
@@ -6923,13 +6903,6 @@ export interface AssistantActions {
   updateSlackSettings: (patch: SlackSettingsPatch) => void;
   saveAndTestSlackSettings: (patch: SlackSettingsPatch) => void;
   testSlackSettings: () => void;
-  updateOpenAiCompatibleSettings: (
-    patch: OpenAiCompatibleSettingsPatch,
-  ) => void;
-  saveAndTestOpenAiCompatibleSettings: (
-    patch: OpenAiCompatibleSettingsPatch,
-  ) => void;
-  testOpenAiCompatibleSettings: () => void;
   updateBraveSettings: (patch: BraveSettingsPatch) => void;
   saveAndTestBraveSettings: (patch: BraveSettingsPatch) => void;
   testBraveSettings: () => void;
@@ -8912,12 +8885,6 @@ export function useAssistant({
       saveAndTestSlackSettings: (patch) =>
         send({ type: "saveAndTestSlackSettings", patch }),
       testSlackSettings: () => send({ type: "testSlackSettings" }),
-      updateOpenAiCompatibleSettings: (patch) =>
-        send({ type: "updateOpenAiCompatibleSettings", patch }),
-      saveAndTestOpenAiCompatibleSettings: (patch) =>
-        send({ type: "saveAndTestOpenAiCompatibleSettings", patch }),
-      testOpenAiCompatibleSettings: () =>
-        send({ type: "testOpenAiCompatibleSettings" }),
       updateBraveSettings: (patch) =>
         send({ type: "updateBraveSettings", patch }),
       saveAndTestBraveSettings: (patch) =>

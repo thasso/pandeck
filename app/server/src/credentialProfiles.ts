@@ -7,13 +7,32 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { userHomeDir } from "./userHome.ts";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { DATA_DIR } from "./config.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import {
+  CREDENTIAL_PROFILES_ROOT,
+  credentialProfileRoot,
+  isSafeCredentialProfileId,
+} from "./credentialProfilePaths.ts";
+import {
+  normalizeOpenAiCompatibleEndpoint,
+  openAiCompatibleEndpointPath,
+  openAiCompatibleEndpointReady,
+  openAiCompatibleEndpointSummary,
+  patchedOpenAiCompatibleEndpoint,
+  readOpenAiCompatibleEndpoint,
+  testOpenAiCompatibleEndpoint,
+  writeOpenAiCompatibleEndpoint,
+  type OpenAiCompatibleEndpointPatch,
+} from "./openAiCompatibleAccounts.ts";
 import { childProcessEnv } from "./subprocessEnv.ts";
 import {
   claudeChildEnvironment,
@@ -24,16 +43,26 @@ import {
   reportAccountLoginCompleted,
   withAccountHealthProfiles,
 } from "./accountHealth.ts";
-import type { AccountHealth } from "@assistant/shared";
+import {
+  ACCOUNT_KINDS,
+  isAccountKind,
+  OPENAI_COMPATIBLE_PROVIDER_ID,
+  OPENAI_COMPATIBLE_THINKING_FORMATS,
+  type AccountHealth,
+  type CredentialProfileProvider,
+  type CredentialProfileStatus,
+  type OpenAiCompatibleConnectionStatus,
+  type OpenAiCompatibleEndpointSummary,
+} from "@assistant/shared";
 
 /**
  * PA-owned account-profile registry. The JSON registry is deliberately limited
  * to non-secret labels and paths derived from the profile id; provider tokens
- * stay in pi's auth.json or Claude's own config directory.
+ * stay in pi's auth.json or Claude's own config directory, and an
+ * OpenAI-compatible account's endpoint and key in its own `endpoint.json`
+ * (`openAiCompatibleAccounts.ts`).
  */
-export type CredentialProfileProvider = "openai-codex" | "claude";
-export type CredentialProfileStatus =
-  "disconnected" | "connecting" | "ready" | "error";
+export type { CredentialProfileProvider };
 
 export interface CredentialProfile {
   id: string;
@@ -59,13 +88,16 @@ export interface CredentialProfileSummary extends CredentialProfile {
     userCode?: string;
   };
   error?: string;
+  /** An OpenAI-compatible account's endpoint, without its key. */
+  endpoint?: OpenAiCompatibleEndpointSummary;
 }
 
 export const DEFAULT_OPENAI_PROFILE_ID = "default";
 export const DEFAULT_CLAUDE_PROFILE_ID = "claude-default";
-const ROOT = join(DATA_DIR, "credential-profiles");
+const ROOT = CREDENTIAL_PROFILES_ROOT;
 const REGISTRY = join(ROOT, "profiles.json");
-const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+/** A health that says nothing: an account that is no subscription login has none. */
+const NO_HEALTH: AccountHealth = { state: "unknown", since: null };
 interface TransientCredentialProfileState {
   status: CredentialProfileStatus;
   error?: string;
@@ -149,9 +181,9 @@ function readRegistry(): CredentialProfile[] {
       const updatedAt = p.updatedAt;
       if (
         !p.id ||
-        !SAFE_ID.test(p.id) ||
+        !isSafeCredentialProfileId(p.id) ||
         !p.name ||
-        (p.provider !== "openai-codex" && p.provider !== "claude") ||
+        !isAccountKind(p.provider) ||
         !Number.isFinite(createdAt) ||
         !Number.isFinite(updatedAt)
       )
@@ -186,13 +218,7 @@ function writeRegistry(profiles: CredentialProfile[]): void {
   privateFile(REGISTRY);
 }
 
-function profileRoot(id: string): string {
-  if (!SAFE_ID.test(id)) throw new Error("Invalid credential profile id.");
-  const path = resolve(ROOT, id);
-  if (!path.startsWith(`${resolve(ROOT)}${"/"}`))
-    throw new Error("Invalid credential profile path.");
-  return path;
-}
+const profileRoot = credentialProfileRoot;
 
 /** The whole pi agent directory is PA-owned, including models/auth/settings. */
 export function piAgentDir(profileId = "default"): string {
@@ -257,15 +283,34 @@ export function claudeProfileHasCredential(id: string): boolean {
 /** File presence is independent of transient login/setup state. */
 export function credentialProfileHasCredential(id: string): boolean {
   const profile = credentialProfileById(id);
-  return (
-    !!profile &&
-    (profile.provider === "claude"
-      ? claudeProfileHasCredential(id)
-      : openAiProfileHasCredential(id))
-  );
+  if (!profile) return false;
+  switch (profile.provider) {
+    case "claude":
+      return claudeProfileHasCredential(id);
+    case "openai-codex":
+      return openAiProfileHasCredential(id);
+    case "openai-compatible":
+      return openAiCompatibleEndpointReady(readOpenAiCompatibleEndpoint(id));
+  }
+}
+
+/**
+ * An endpoint account has no login: it is ready once it has a base URL and
+ * models, and its health is constant (no subscription signal reaches it).
+ */
+function endpointSummary(profile: CredentialProfile): CredentialProfileSummary {
+  const endpoint = readOpenAiCompatibleEndpoint(profile.id);
+  return {
+    ...profile,
+    status: openAiCompatibleEndpointReady(endpoint) ? "ready" : "disconnected",
+    health: NO_HEALTH,
+    endpoint: openAiCompatibleEndpointSummary(endpoint),
+  };
 }
 
 function summary(profile: CredentialProfile): CredentialProfileSummary {
+  if (ACCOUNT_KINDS[profile.provider].credential === "endpoint")
+    return endpointSummary(profile);
   const pending = transient.get(profile.id);
   const configured =
     profile.provider === "openai-codex"
@@ -373,6 +418,137 @@ export function migrateLegacyDefaultPiProfile(legacyAgentDir?: string): void {
   privateFile(marker);
 }
 
+/** The single endpoint's former settings file, read only by the migration below. */
+export const LEGACY_OPENAI_COMPATIBLE_SETTINGS_PATH = join(
+  DATA_DIR,
+  "settings",
+  "openai-compatible.json",
+);
+
+/** The points a test may stop the migration at, as a crash would. */
+export type OpenAiCompatibleMigrationStep =
+  "endpoint-written" | "endpoint-verified" | "registry-committed";
+
+/**
+ * Move the former single endpoint (`settings/openai-compatible.json`) to the
+ * account `openai-compatible`, verify, then delete the old file
+ * (`docs/settings.md`). The registry entry is the commit point, and only this
+ * migration creates that id (every later compatible id has a hex suffix):
+ *
+ * 1. No old file: done. An old file with no base URL, key or models holds
+ *    nothing to keep and is deleted.
+ * 2. The registry has the account already (a crash after the commit, or a
+ *    failed delete): its `endpoint.json` must equal the old file's endpoint
+ *    and be 0600; then the old file goes. Otherwise both stay as they are:
+ *    the user may have edited the account since.
+ * 3. Otherwise write `endpoint.json`, check its mode and read it back, then
+ *    add the registry entry (enterprise copied from Default OpenAI) and read
+ *    that back. Only then is the old file deleted.
+ *
+ * Any failure leaves the old file for the next boot to retry, and is logged
+ * without the key or the URL. It never throws: boot goes on either way.
+ */
+export function migrateOpenAiCompatibleSettingsToAccount(
+  options: { afterStep?: (step: OpenAiCompatibleMigrationStep) => void } = {},
+): void {
+  const legacy = LEGACY_OPENAI_COMPATIBLE_SETTINGS_PATH;
+  const id = OPENAI_COMPATIBLE_PROVIDER_ID;
+  try {
+    if (!existsSync(legacy)) return;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(legacy, "utf8")) as unknown;
+    } catch {
+      // The parse error can quote the file, key included.
+      console.warn(
+        "[credential-profiles] settings/openai-compatible.json is unreadable; left for manual review.",
+      );
+      return;
+    }
+    const endpoint = normalizeOpenAiCompatibleEndpoint(raw);
+    if (!endpoint.baseUrl && !endpoint.apiKey && endpoint.models.length === 0) {
+      unlinkSync(legacy);
+      return;
+    }
+    const existing = readRegistry().find((profile) => profile.id === id);
+    if (existing) {
+      if (
+        existing.provider === "openai-compatible" &&
+        endpointStored(id, endpoint)
+      )
+        unlinkSync(legacy);
+      else
+        console.warn(
+          "[credential-profiles] The OpenAI-compatible account differs from settings/openai-compatible.json; the file is left for manual review.",
+        );
+      return;
+    }
+    writeOpenAiCompatibleEndpoint(id, endpoint);
+    options.afterStep?.("endpoint-written");
+    if (!endpointStored(id, endpoint))
+      throw new Error("The written endpoint did not read back unchanged.");
+    options.afterStep?.("endpoint-verified");
+    const settings = (raw ?? {}) as { enabled?: unknown; name?: unknown };
+    const now = Date.now();
+    const profiles = readRegistry();
+    profiles.push({
+      id,
+      name:
+        (typeof settings.name === "string" &&
+          settings.name.trim().replace(/\s+/g, " ").slice(0, 80)) ||
+        ACCOUNT_KINDS["openai-compatible"].label,
+      provider: "openai-compatible",
+      enabled: settings.enabled === true,
+      enterprise:
+        profiles.find((profile) => profile.id === DEFAULT_OPENAI_PROFILE_ID)
+          ?.enterprise === true,
+      priority: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    writeRegistry(profiles);
+    if (
+      readRegistry().find((profile) => profile.id === id)?.provider !==
+      "openai-compatible"
+    )
+      throw new Error("The registry did not read back the new account.");
+    options.afterStep?.("registry-committed");
+    unlinkSync(legacy);
+  } catch (err) {
+    console.warn(
+      `[credential-profiles] The OpenAI-compatible endpoint was not migrated; settings/openai-compatible.json stays for the next boot: ${migrationFailure(err)}`,
+    );
+  }
+}
+
+/**
+ * A failure as the log may name it: a filesystem code, or this migration's own
+ * text. Neither can carry the file's content.
+ */
+function migrationFailure(err: unknown): string {
+  if (!(err instanceof Error)) return "failed";
+  return (err as NodeJS.ErrnoException).code ?? err.message;
+}
+
+/** Whether the account's own file holds exactly `endpoint`, privately. */
+function endpointStored(
+  id: string,
+  endpoint: ReturnType<typeof normalizeOpenAiCompatibleEndpoint>,
+): boolean {
+  const path = openAiCompatibleEndpointPath(id);
+  try {
+    if ((statSync(path).mode & 0o777) !== 0o600) return false;
+    return isDeepStrictEqual(
+      normalizeOpenAiCompatibleEndpoint(
+        JSON.parse(readFileSync(path, "utf8")) as unknown,
+      ),
+      endpoint,
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Ensure PA has isolated default profiles for interactive and automatic work. */
 export function ensureDefaultPiProfile(): CredentialProfile {
   const profiles = readRegistry();
@@ -425,7 +601,7 @@ function ensureDefaultProfilesOnce(): void {
  * account-management hints), else the protected default. New sessions and
  * background work use accountRouter instead.
  */
-function automaticProfileIdFor(provider: CredentialProfileProvider): string {
+function automaticProfileIdFor(provider: "openai-codex" | "claude"): string {
   ensureDefaultProfilesOnce();
   const protectedId =
     provider === "claude"
@@ -470,7 +646,7 @@ export function createCredentialProfile(input: {
   const profiles = readRegistry();
   const now = Date.now();
   const profile: CredentialProfile = {
-    id: `cp_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    id: newProfileId(input.provider),
     name,
     provider: input.provider,
     enabled: true,
@@ -480,10 +656,104 @@ export function createCredentialProfile(input: {
   };
   profiles.push(profile);
   writeRegistry(profiles);
-  if (profile.provider === "openai-codex") piAgentDir(profile.id);
-  else claudeConfigDir(profile.id);
+  if (profile.provider === "claude") claudeConfigDir(profile.id);
+  else piAgentDir(profile.id);
   credentialProfileChanged(profile.id);
   return summary(profile);
+}
+
+/**
+ * A new account's id. Only an OpenAI-compatible account is ever given an id in
+ * the `openai-compatible-<12 hex>` grammar: it is also its models' pi provider
+ * id, and the Worker tells a pi account's kind from it (`accountKinds.ts`).
+ */
+function newProfileId(provider: CredentialProfileProvider): string {
+  const hex = randomUUID().replace(/-/g, "");
+  return provider === "openai-compatible"
+    ? `${OPENAI_COMPATIBLE_PROVIDER_ID}-${hex.slice(0, 12)}`
+    : `cp_${hex.slice(0, 16)}`;
+}
+
+function openAiCompatibleProfile(id: string): CredentialProfile {
+  const profile = credentialProfileById(id);
+  if (!profile) throw new Error("Credential profile not found.");
+  if (profile.provider !== "openai-compatible")
+    throw new Error("That account has no endpoint.");
+  return profile;
+}
+
+/** Validate an untrusted endpoint edit as a whole before one write. */
+function endpointPatch(input: {
+  baseUrl?: unknown;
+  apiKey?: unknown;
+  clearApiKey?: unknown;
+  thinkingFormat?: unknown;
+}): OpenAiCompatibleEndpointPatch {
+  const patch: OpenAiCompatibleEndpointPatch = {};
+  if (input.baseUrl !== undefined) {
+    if (typeof input.baseUrl !== "string")
+      throw new Error("A base URL must be a string.");
+    patch.baseUrl = input.baseUrl;
+  }
+  if (input.apiKey !== undefined) {
+    if (typeof input.apiKey !== "string")
+      throw new Error("An API key must be a string.");
+    patch.apiKey = input.apiKey;
+  }
+  if (input.clearApiKey !== undefined) {
+    if (typeof input.clearApiKey !== "boolean")
+      throw new Error("clearApiKey must be a boolean.");
+    patch.clearApiKey = input.clearApiKey;
+  }
+  if (input.thinkingFormat !== undefined) {
+    const format = OPENAI_COMPATIBLE_THINKING_FORMATS.find(
+      (known) => known === input.thinkingFormat,
+    );
+    if (!format) throw new Error("Unknown thinking format.");
+    patch.thinkingFormat = format;
+  }
+  if (!Object.keys(patch).length)
+    throw new Error(
+      "A base URL, API key, clearApiKey or thinking format is required.",
+    );
+  return patch;
+}
+
+/** Edit an OpenAI-compatible account's endpoint; the key is write-only. */
+export function patchOpenAiCompatibleEndpoint(
+  id: string,
+  input: {
+    baseUrl?: unknown;
+    apiKey?: unknown;
+    clearApiKey?: unknown;
+    thinkingFormat?: unknown;
+  },
+): CredentialProfileSummary {
+  const patch = endpointPatch(input);
+  const profile = openAiCompatibleProfile(id);
+  writeOpenAiCompatibleEndpoint(
+    id,
+    patchedOpenAiCompatibleEndpoint(readOpenAiCompatibleEndpoint(id), patch),
+  );
+  credentialProfileChanged(id);
+  return summary(profile);
+}
+
+/** Rediscover an OpenAI-compatible account's models from its endpoint. */
+export async function testOpenAiCompatibleProfile(
+  id: string,
+  signal?: AbortSignal,
+): Promise<{
+  status: OpenAiCompatibleConnectionStatus;
+  profile: CredentialProfileSummary;
+}> {
+  openAiCompatibleProfile(id);
+  const status = await testOpenAiCompatibleEndpoint(id, {
+    ...(signal ? { signal } : {}),
+    stillExists: () => credentialProfileById(id) !== undefined,
+  });
+  credentialProfileChanged(id);
+  return { status, profile: summary(openAiCompatibleProfile(id)) };
 }
 
 /** Validate the whole HTTP metadata patch before one write/publication. */
@@ -613,6 +883,13 @@ export function credentialProfileById(
   id: string,
 ): CredentialProfile | undefined {
   return readRegistry().find((profile) => profile.id === id);
+}
+
+/** Every account of one kind, enabled or not, without status or health. */
+export function credentialProfilesOfKind(
+  provider: CredentialProfileProvider,
+): CredentialProfile[] {
+  return readRegistry().filter((profile) => profile.provider === provider);
 }
 
 /** Resolve a profile only when it is eligible for new work. */

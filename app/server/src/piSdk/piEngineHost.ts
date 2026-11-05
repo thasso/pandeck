@@ -23,6 +23,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   hasNativeTools,
+  isOpenAiCompatibleModelProvider,
+  piAccountServesModel,
   type AgentType,
   type NoticeSeverity,
   type SessionMode,
@@ -166,13 +168,17 @@ export interface PiModelPort {
    */
   readonly routing?: "gateway";
   runtime(profileId: string): Promise<ModelRuntime>;
+  /**
+   * The account's model, through the account model gate: undefined for one
+   * it does not serve. Every open and model change resolves here.
+   */
   findForProfile(
     profileId: string,
     provider: string,
     id: string,
   ): Promise<PiEngineModel | undefined>;
-  /** The default registry's model, which a hosted `setModel` resolves in. */
-  find(provider: string, id: string): PiEngineModel | undefined;
+  /** The models the account serves and can run now, gated the same way. */
+  availableForProfile(profileId: string): Promise<PiEngineModel[]>;
 }
 
 /** Host wiring, never on the wire: each host supplies its own. */
@@ -406,6 +412,7 @@ export async function openPiEngine(
     ...(model ? { model } : {}),
   });
   try {
+    assertAccountServesStartedModel(spec.credentialProfileId, session);
     if (spec.canonicalize) canonicalizeCreatedPiSession(session);
   } catch (err) {
     tools?.activation.dispose();
@@ -421,6 +428,74 @@ export async function openPiEngine(
       cwd,
       notices,
     },
+  };
+}
+
+/**
+ * Whatever started the session, it runs only on a model its account serves:
+ * the backstop behind the start-model gate below and pi's own selection on an
+ * OpenAI account. Here rather than in {@link startPiSession}, so a substituted
+ * start is held to it too.
+ */
+function assertAccountServesStartedModel(
+  credentialProfileId: string,
+  session: AgentSession,
+): void {
+  const started = session.model as
+    { provider?: string; id?: string } | undefined;
+  if (
+    started?.provider &&
+    !piAccountServesModel(credentialProfileId, started.provider)
+  )
+    throw new Error(
+      `This session's model ${started.provider}/${started.id ?? ""} is not served by its account.`,
+    );
+}
+
+/**
+ * The start model of an OpenAI-compatible account, chosen by the app so that
+ * pi's restore and default selection never run there (they would reach the
+ * built-in providers every runtime holds): the branch's last selection on the
+ * account, else the account's first model with a warning for an ordinary
+ * open. An agent or account-switch open keeps its model or refuses, and an
+ * account with no models refuses.
+ */
+async function compatibleStartModel(
+  spec: PiEngineOpenSpec,
+  ctx: PiEngineHostContext,
+  sm: SessionManager,
+): Promise<{ model: PiEngineModel; notice?: string }> {
+  const { credentialProfileId } = spec;
+  const { agent } = spec.start;
+  const selected = branchRuntime(sm);
+  const provider = selected.provider ?? agent?.provider;
+  const modelId = selected.modelId ?? agent?.model;
+  const restored =
+    provider && modelId
+      ? await ctx.models.findForProfile(credentialProfileId, provider, modelId)
+      : undefined;
+  if (restored) return { model: restored };
+  const wanted = provider && modelId ? `${provider}/${modelId}` : undefined;
+  if (agent)
+    throw new Error(
+      `Agent "${agent.name}" runs on ${wanted ?? "no model"}, which its account no longer offers; it does not run on another model.`,
+    );
+  if (spec.staged)
+    throw new Error(
+      `Cannot switch accounts: the replacement account does not offer ${wanted ?? "this session's model"}. The session must keep its model.`,
+    );
+  const [fallback] = await ctx.models.availableForProfile(credentialProfileId);
+  if (!fallback)
+    throw new Error(
+      "This session's OpenAI-compatible account offers no models. Run Test on its card in Settings, or start a new session.",
+    );
+  return {
+    model: fallback,
+    ...(wanted
+      ? {
+          notice: `Could not restore ${wanted} on this session's account; using ${fallback.id}.`,
+        }
+      : {}),
   };
 }
 
@@ -441,6 +516,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
   // select: its branch's last selection, else the frozen one, or a refusal.
   let startModel = model;
   let startThinkingLevel = spec.thinkingLevel;
+  let startNotice: string | undefined;
   if (
     agent &&
     startModel === undefined &&
@@ -459,6 +535,14 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
         `Agent "${agent.name}" runs on ${provider}/${modelId}, which its account no longer offers; it does not run on another model.`,
       );
     startThinkingLevel ??= selected.thinkingLevel ?? agent.effort;
+  } else if (
+    startModel === undefined &&
+    isOpenAiCompatibleModelProvider(credentialProfileId)
+  ) {
+    // Every compatible open passes its model explicitly, so pi chooses none.
+    const chosen = await compatibleStartModel(spec, ctx, sm);
+    startModel = chosen.model;
+    startNotice = chosen.notice;
   } else if (
     ctx.models.routing === "gateway" &&
     startModel === undefined &&
@@ -646,6 +730,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
     throw err;
   }
   const notices: PiEngineOpenInfo["notices"] = [];
+  if (startNotice) notices.push({ severity: "warning", message: startNotice });
   if (modelFallbackMessage)
     notices.push({ severity: "warning", message: modelFallbackMessage });
   for (const err of extensionsResult.errors) {

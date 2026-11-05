@@ -4,39 +4,50 @@ import {
   ModelRegistry,
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import type { Credential } from "@earendil-works/pi-ai";
+import {
+  InMemoryCredentialStore,
+  InMemoryModelsStore,
+  type Credential,
+} from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { chmodSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import {
-  OPENAI_COMPATIBLE_PROVIDER_ID,
+  ACCOUNT_KINDS,
+  accountServesModel,
+  isOpenAiCompatibleModelProvider,
   THINKING_LEVELS,
   type ModelOption,
   type ThinkingLevel,
 } from "@assistant/shared";
 import {
-  getOpenAiCompatibleName,
-  getOpenAiCompatibleProviderConfigForRegistry,
-} from "../openAiCompatibleSettings.ts";
+  OPENAI_COMPATIBLE_KEYLESS,
+  openAiCompatibleProviderConfig,
+  readOpenAiCompatibleEndpoint,
+} from "../openAiCompatibleAccounts.ts";
+import { normalizeCompatibleSettingsPins } from "../compatibleSettingsPins.ts";
 import { errorText } from "../errors.ts";
 import { guardServerRuntime } from "./serverCredentialPairing.ts";
 import {
   clearCredentialProfileLoginState,
   completeCredentialProfileLogin,
   credentialProfileById,
+  credentialProfilesOfKind,
   ensureDefaultPiProfile,
   listCredentialProfiles,
+  migrateOpenAiCompatibleSettingsToAccount,
   openAiProfileHasCredential,
   piAgentDir,
   setCredentialProfileDeletedHandler,
   setCredentialProfileLoginState,
   subscribeCredentialProfileDeleted,
+  type CredentialProfile,
 } from "../credentialProfiles.ts";
 
 /**
  * PA never reads the user's global `~/.pi` installation or login. Its bundled
  * pi SDK gets an explicitly PA-owned agent directory for auth, models and model
- * catalog state. A profile-specific runtime can use the same factory later.
+ * catalog state, one per OpenAI account.
  *
  * `ModelRuntime` (pi ≥0.80.8) is the canonical async model/auth facade; the
  * synchronous `ModelRegistry` view over it serves the in-process reads
@@ -44,6 +55,12 @@ import {
  * performs the initial availability refresh (throttled catalog fetch persisted
  * in models-store.json), so the snapshot-backed sync reads are populated before
  * this module finishes loading.
+ *
+ * Every per-account read goes through the account model gate below: an
+ * account answers only models it serves (`accountServesModel`), whatever its
+ * runtime holds. pi loads its built-in providers into every runtime, and an
+ * environment key makes one of them available, so registration alone isolates
+ * nothing (`docs/agent-harnesses.md`).
  */
 // pi loads each provider's OAuth flow through a variable `import()` of a
 // sibling file, which the single-file Bun bundle does not have: every
@@ -51,6 +68,12 @@ import {
 // './openai-codex.js'". The statically imported flows resolve the same under
 // Node and the bundle (bun-runtime-probe.mjs checks it).
 registerBunOAuthFlows();
+// Before any runtime exists: the former single endpoint becomes the account
+// `openai-compatible`, and stored settings pins name the account a compatible
+// model runs on (`docs/settings.md`). The pin pass runs whatever the migration
+// did. Task-1374 must keep both calls.
+migrateOpenAiCompatibleSettingsToAccount();
+normalizeCompatibleSettingsPins();
 const defaultPiProfile = ensureDefaultPiProfile();
 const defaultAgentDir = piAgentDir(defaultPiProfile.id);
 function runtimeOptions(agentDir: string) {
@@ -61,7 +84,17 @@ function runtimeOptions(agentDir: string) {
   };
 }
 
-// Every runtime that runs sessions or one-shots pairs the compatible key with
+/** In memory only: no auth.json, models.json or models-store.json, and no catalog fetch. */
+function inMemoryRuntime(): Promise<ModelRuntime> {
+  return ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
+    modelsStore: new InMemoryModelsStore(),
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+}
+
+// Every runtime that runs sessions or one-shots pairs a compatible key with
 // its origin before anyone holds it, whatever the gateway switch.
 const modelRuntime = guardServerRuntime(
   await ModelRuntime.create(runtimeOptions(defaultAgentDir)),
@@ -69,6 +102,8 @@ const modelRuntime = guardServerRuntime(
 const profileRuntimes = new Map<string, Promise<ModelRuntime>>([
   [defaultPiProfile.id, Promise.resolve(modelRuntime)],
 ]);
+/** What each compatible account's runtime has registered, by account id. */
+const compatibleRegistrations = new Map<string, string>();
 interface ProfileLoginOperation {
   invalidated: boolean;
   agentDir: string;
@@ -76,25 +111,58 @@ interface ProfileLoginOperation {
 const profileLogins = new Map<string, ProfileLoginOperation>();
 setCredentialProfileDeletedHandler((id) => {
   profileRuntimes.delete(id);
+  compatibleRegistrations.delete(id);
   const operation = profileLogins.get(id);
   if (operation) operation.invalidated = true;
 });
 
-/** Returns the isolated pi runtime for one OpenAI credential profile. */
+/**
+ * Register the account's own provider, under its id, as its endpoint file has
+ * it now: with its key, or the key-less placeholder. Nothing else is ever
+ * registered on a compatible account's runtime.
+ */
+function syncCompatibleRegistration(
+  profile: CredentialProfile,
+  runtime: ModelRuntime,
+): void {
+  const config = openAiCompatibleProviderConfig(
+    readOpenAiCompatibleEndpoint(profile.id),
+    profile.name,
+  );
+  const signature = config ? JSON.stringify(config) : "none";
+  const registered = compatibleRegistrations.get(profile.id);
+  if (signature === registered) return;
+  if (config) runtime.registerProvider(profile.id, config);
+  else if (registered !== undefined && registered !== "none")
+    runtime.unregisterProvider(profile.id);
+  compatibleRegistrations.set(profile.id, signature);
+}
+
+/**
+ * The isolated pi runtime of one pi account. An OpenAI account's lives in its
+ * agent directory; an OpenAI-compatible account's is in memory and holds only
+ * its own provider, re-registered whenever its endpoint changed.
+ */
 export function modelRuntimeForProfile(
   profileId = defaultPiProfile.id,
 ): Promise<ModelRuntime> {
   const profile = credentialProfileById(profileId);
-  if (!profile || profile.provider !== "openai-codex")
+  if (!profile || ACCOUNT_KINDS[profile.provider].harness !== "pi")
     throw new Error("That credential profile cannot run pi models.");
   let runtime = profileRuntimes.get(profileId);
   if (!runtime) {
-    runtime = ModelRuntime.create(runtimeOptions(piAgentDir(profileId))).then(
-      guardServerRuntime,
-    );
+    runtime = (
+      profile.provider === "openai-compatible"
+        ? inMemoryRuntime()
+        : ModelRuntime.create(runtimeOptions(piAgentDir(profileId)))
+    ).then(guardServerRuntime);
     profileRuntimes.set(profileId, runtime);
   }
-  return runtime;
+  if (profile.provider !== "openai-compatible") return runtime;
+  return runtime.then((created) => {
+    syncCompatibleRegistration(profile, created);
+    return created;
+  });
 }
 
 /**
@@ -114,18 +182,38 @@ export async function warmCredentialProfileModelRuntimes(): Promise<void> {
 
 export const modelRegistry = new ModelRegistry(modelRuntime);
 
-let openAiCompatibleProviderSignature: string | undefined;
+/**
+ * Every compatible account's models for display and the global lookup
+ * ({@link listModels}, {@link findModel}). It holds no key and nothing runs
+ * on it: runs resolve on their own account's runtime.
+ */
+const compatibleCatalog = new ModelRegistry(await inMemoryRuntime());
+const compatibleCatalogRegistrations = new Map<string, string>();
 
-/** Apply app-owned provider settings to pi's registry without writing ~/.pi config. */
-export function syncConfiguredModelProviders(): void {
-  const config = getOpenAiCompatibleProviderConfigForRegistry();
-  const signature = config ? JSON.stringify(config) : "disabled";
-  if (signature === openAiCompatibleProviderSignature) return;
-  if (config)
-    modelRegistry.registerProvider(OPENAI_COMPATIBLE_PROVIDER_ID, config);
-  else if (openAiCompatibleProviderSignature !== undefined)
-    modelRegistry.unregisterProvider(OPENAI_COMPATIBLE_PROVIDER_ID);
-  openAiCompatibleProviderSignature = signature;
+function syncCompatibleCatalog(): void {
+  const wanted = new Map<
+    string,
+    NonNullable<ReturnType<typeof openAiCompatibleProviderConfig>>
+  >();
+  for (const profile of credentialProfilesOfKind("openai-compatible")) {
+    const config = openAiCompatibleProviderConfig(
+      readOpenAiCompatibleEndpoint(profile.id),
+      profile.name,
+    );
+    if (config)
+      wanted.set(profile.id, { ...config, apiKey: OPENAI_COMPATIBLE_KEYLESS });
+  }
+  for (const id of [...compatibleCatalogRegistrations.keys()])
+    if (!wanted.has(id)) {
+      compatibleCatalog.unregisterProvider(id);
+      compatibleCatalogRegistrations.delete(id);
+    }
+  for (const [id, config] of wanted) {
+    const signature = JSON.stringify(config);
+    if (compatibleCatalogRegistrations.get(id) === signature) continue;
+    compatibleCatalog.registerProvider(id, config);
+    compatibleCatalogRegistrations.set(id, signature);
+  }
 }
 
 /** Minimal structural view of a pi Model — avoids importing nested pi-ai types. */
@@ -149,14 +237,15 @@ function supportedThinkingLevels(model: PiModel): ThinkingLevel[] {
 }
 
 /**
- * `openAiCompatibleName` is the endpoint's display name; a projection of many
- * models reads it once and passes it in rather than re-reading per model.
+ * A compatible model's `providerName` is its account's name; a projection of
+ * many models reads the names once and passes the model's in.
  */
 export function toModelOption(
   model: PiModel,
-  openAiCompatibleName: string | undefined = model.provider ===
-  OPENAI_COMPATIBLE_PROVIDER_ID
-    ? getOpenAiCompatibleName()
+  accountName: string | undefined = isOpenAiCompatibleModelProvider(
+    model.provider,
+  )
+    ? credentialProfileById(model.provider)?.name
     : undefined,
 ): ModelOption {
   return {
@@ -166,23 +255,25 @@ export function toModelOption(
     reasoning: model.reasoning,
     supportedThinkingLevels: supportedThinkingLevels(model),
     contextWindow: model.contextWindow,
-    ...(model.provider === OPENAI_COMPATIBLE_PROVIDER_ID && openAiCompatibleName
-      ? { providerName: openAiCompatibleName }
+    ...(isOpenAiCompatibleModelProvider(model.provider) && accountName
+      ? { providerName: accountName }
       : {}),
   };
 }
 
+/**
+ * The available models `serves` admits, projected. `includePersistedOpenAi`
+ * adds the catalog's Codex models a logged-in account has not refreshed yet.
+ */
 function listRegistryModels(
   registry: ModelRegistry,
+  serves: (provider: string) => boolean,
   includePersistedOpenAi = false,
 ): ModelOption[] {
-  const models = [...registry.getAvailable()];
-  const openAiCompatibleName = models.some(
-    (model) => model.provider === OPENAI_COMPATIBLE_PROVIDER_ID,
-  )
-    ? getOpenAiCompatibleName()
-    : undefined;
-  if (includePersistedOpenAi) {
+  const models = registry
+    .getAvailable()
+    .filter((model) => serves(model.provider));
+  if (includePersistedOpenAi && serves("openai-codex")) {
     const seen = new Set(
       models.map((model) => `${model.provider}:${model.id}`),
     );
@@ -194,44 +285,79 @@ function listRegistryModels(
       }
     }
   }
+  const accountNames = models.some((model) =>
+    isOpenAiCompatibleModelProvider(model.provider),
+  )
+    ? new Map(
+        credentialProfilesOfKind("openai-compatible").map((profile) => [
+          profile.id,
+          profile.name,
+        ]),
+      )
+    : undefined;
   return models
-    .map((m) => toModelOption(m as unknown as PiModel, openAiCompatibleName))
+    .map((m) =>
+      toModelOption(m as unknown as PiModel, accountNames?.get(m.provider)),
+    )
     .sort(
       (a, b) =>
         a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name),
     );
 }
 
+/**
+ * Every model the pickers offer: the default OpenAI account's, and every
+ * enabled compatible account's. A display list only: no run resolves here.
+ */
 export function listModels(): ModelOption[] {
-  syncConfiguredModelProviders();
-  return listRegistryModels(
-    modelRegistry,
-    openAiProfileHasCredential(defaultPiProfile.id),
+  syncCompatibleCatalog();
+  const enabled = new Set(
+    credentialProfilesOfKind("openai-compatible")
+      .filter((profile) => profile.enabled)
+      .map((profile) => profile.id),
+  );
+  return [
+    ...listRegistryModels(
+      modelRegistry,
+      (provider) => !isOpenAiCompatibleModelProvider(provider),
+      openAiProfileHasCredential(defaultPiProfile.id),
+    ),
+    ...listRegistryModels(compatibleCatalog, (provider) =>
+      enabled.has(provider),
+    ),
+  ].sort(
+    (a, b) =>
+      a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name),
   );
 }
 
-export async function modelRegistryForProfile(
-  profileId: string,
-): Promise<ModelRegistry> {
-  const runtime = await modelRuntimeForProfile(profileId);
-  if (profileId === defaultPiProfile.id) {
-    syncConfiguredModelProviders();
-    return modelRegistry;
-  }
-  const registry = new ModelRegistry(runtime);
-  const config = getOpenAiCompatibleProviderConfigForRegistry();
-  if (config) registry.registerProvider(OPENAI_COMPATIBLE_PROVIDER_ID, config);
-  return registry;
+/**
+ * The account model gate: whether `profileId` may answer models of
+ * `provider`. An unknown account is left to its runtime, which refuses it.
+ */
+function gateAdmits(profileId: string, provider: string): boolean {
+  const profile = credentialProfileById(profileId);
+  return !profile || accountServesModel(profile, provider);
 }
 
-/** Project only the models available to one profile's isolated runtime. */
+/** Project only the models one account serves from its isolated runtime. */
 export async function listModelsForProfile(
   profileId: string,
 ): Promise<ModelOption[]> {
+  const registry = new ModelRegistry(await modelRuntimeForProfile(profileId));
   return listRegistryModels(
-    await modelRegistryForProfile(profileId),
+    registry,
+    (provider) => gateAdmits(profileId, provider),
     openAiProfileHasCredential(profileId),
   );
+}
+
+/** The models one account serves and can run now, as pi's model objects. */
+export async function availableModelsForProfile(profileId: string) {
+  const registry = new ModelRegistry(await modelRuntimeForProfile(profileId));
+  return registry
+    .getAvailable()
+    .filter((model) => gateAdmits(profileId, model.provider));
 }
 
 /**
@@ -255,7 +381,6 @@ export async function refreshModels(): Promise<{
   models: ModelOption[];
   error?: string;
 }> {
-  openAiCompatibleProviderSignature = undefined;
   // Canonical refresh (pi ≥0.80.8): reloads models.json + credentials and
   // recomputes availability — replaces authStorage.reload() + sync refresh().
   //
@@ -293,7 +418,6 @@ export async function refreshModels(): Promise<{
         }
       }),
   ]);
-  syncConfiguredModelProviders();
   const runtimeError = modelRuntime.getError();
   const errors = [
     ...(runtimeError ? [String(runtimeError)] : []),
@@ -537,16 +661,29 @@ export function startOpenAiProfileLogin(profileId: string): void {
     });
 }
 
-/** Resolve a model against the selected profile's isolated auth/runtime. */
+/**
+ * Resolve a model on the account's own runtime, through the account model
+ * gate: undefined for a model the account does not serve, before the runtime
+ * is asked.
+ */
 export async function findModelForProfile(
   profileId: string,
   provider: string,
   id: string,
 ) {
-  return (await modelRegistryForProfile(profileId)).find(provider, id);
+  if (!gateAdmits(profileId, provider)) return undefined;
+  const runtime = await modelRuntimeForProfile(profileId);
+  return new ModelRegistry(runtime).find(provider, id);
 }
 
+/**
+ * The global lookup for display: the default OpenAI account's model, or a
+ * compatible account's from the key-less catalog. No run, open or model
+ * change resolves through it.
+ */
 export function findModel(provider: string, id: string) {
-  syncConfiguredModelProviders();
-  return modelRegistry.find(provider, id);
+  if (!isOpenAiCompatibleModelProvider(provider))
+    return modelRegistry.find(provider, id);
+  syncCompatibleCatalog();
+  return compatibleCatalog.find(provider, id);
 }

@@ -56,12 +56,6 @@ const baseArgs = {
   onSaveAndTestSlack: noop,
   onTestSlack: noop,
   slackStatus: healthy,
-  onSaveAndTestOpenAiCompatible: noop,
-  onTestOpenAiCompatible: noop,
-  openAiCompatibleStatus: {
-    ...healthy,
-    models: settingsFixture.openAiCompatible.models,
-  },
   onSaveAndTestBrave: noop,
   onTestBrave: noop,
   braveStatus: healthy,
@@ -165,9 +159,6 @@ export const ModelsHidden: Story = {
 };
 export const Claude: Story = { args: { section: "claude-sdk" } };
 export const OpenAi: Story = { args: { section: "openai" } };
-export const OpenAiCompatible: Story = {
-  args: { section: "openai-compatible" },
-};
 export const PersonalAssistant: Story = {
   args: { section: "personal-assistant" },
 };

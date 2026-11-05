@@ -48,6 +48,7 @@ import {
   type TaskStatus,
   type TaskSummary,
   type ThinkingLevel,
+  type CredentialProfileProvider,
   type WorktreeComment,
   type WorktreeGitStatus,
   type WorktreeRecord,
@@ -1548,7 +1549,7 @@ export function SessionInspector({
   forkOrigin?: SessionForkOrigin | undefined;
   /** Current account binding; only a live account switch replaces it. */
   credentialProfile?:
-    { name: string; provider: "openai-codex" | "claude" } | undefined;
+    { name: string; provider: CredentialProfileProvider } | undefined;
   /** The model this session runs on (staged selection while it is still a draft). */
   model?: { id: string; name?: string; provider: string } | undefined;
   /** The session's thinking level, alongside the model it applies to. */

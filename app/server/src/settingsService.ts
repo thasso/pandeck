@@ -7,7 +7,6 @@ import type {
   GithubSettingsPatch,
   GoogleSettingsPatch,
   JiraSettingsPatch,
-  OpenAiCompatibleSettingsPatch,
   SlackSettingsPatch,
   TempoSettingsPatch,
 } from "@assistant/shared";
@@ -36,10 +35,6 @@ import { testGithubSettings, updateGithubSettings } from "./githubSettings.ts";
 import { testGoogleSettings, updateGoogleSettings } from "./googleSettings.ts";
 import { notifyIntegrationToolsChanged } from "./integrationToolChanges.ts";
 import { testJiraSettings, updateJiraSettings } from "./jiraSettings.ts";
-import {
-  testOpenAiCompatibleSettings,
-  updateOpenAiCompatibleSettings,
-} from "./openAiCompatibleSettings.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { testSlackSettings, updateSlackSettings } from "./slackSettings.ts";
 import { testTempoSettings, updateTempoSettings } from "./tempoSettings.ts";
@@ -59,7 +54,6 @@ interface IntegrationPatches {
   tempo: TempoSettingsPatch;
   google: GoogleSettingsPatch;
   slack: SlackSettingsPatch;
-  openAiCompatible: OpenAiCompatibleSettingsPatch;
   brave: BraveSettingsPatch;
   context7: Context7SettingsPatch;
   github: GithubSettingsPatch;
@@ -82,7 +76,6 @@ const INTEGRATION_WRITERS: {
   tempo: updateTempoSettings,
   google: updateGoogleSettings,
   slack: updateSlackSettings,
-  openAiCompatible: updateOpenAiCompatibleSettings,
   brave: updateBraveSettings,
   context7: updateContext7Settings,
   github: updateGithubSettings,
@@ -114,14 +107,6 @@ export const INTEGRATION_PATCH_FIELDS: {
     clearUserToken: true,
     clearBotToken: true,
   },
-  openAiCompatible: {
-    enabled: true,
-    name: true,
-    baseUrl: true,
-    thinkingFormat: true,
-    apiKey: true,
-    clearApiKey: true,
-  },
   brave: { enabled: true, apiKey: true, clearApiKey: true },
   context7: { enabled: true, apiKey: true, clearApiKey: true },
   github: {
@@ -142,18 +127,6 @@ export const INTEGRATION_PATCH_FIELDS: {
 
 function isIntegrationKey(key: string): key is IntegrationKey {
   return Object.hasOwn(INTEGRATION_WRITERS, key);
-}
-
-/**
- * Re-registers the configured model providers with the engine after an
- * OpenAI-compatible write. Installed at boot by `index.ts`, because only a
- * harness module may import an engine (`docs/agent-harnesses.md`); before
- * that, and in tests, there is no engine catalog to refresh.
- */
-let syncModelProviders: () => void = () => {};
-
-export function setModelProviderSync(sync: () => void): void {
-  syncModelProviders = sync;
 }
 
 export interface SettingsChange {
@@ -284,15 +257,12 @@ async function settingsWritten(
         await import("./packageProxy/packageProxy.ts");
       await reconcilePackageProxy();
     });
-  if (wrote("openAiCompatible"))
-    await effect("syncing model providers", () => syncModelProviders());
-  // OpenAI-compatible models reach sessions through the model list, not tools.
   // The Knowledge Base and browser tools are app sections, but they gate tool
   // groups too (`currentIntegrationToolGates`).
   if (
     sections.some(
       (key) =>
-        (isIntegrationKey(key) && key !== "openAiCompatible") ||
+        isIntegrationKey(key) ||
         key === "knowledgeBase" ||
         key === "browserTools",
     )
@@ -373,9 +343,7 @@ export interface SettingsSectionTest {
  * The Settings page sections with a connection test, and the test each runs.
  * Tests that make their HTTP calls directly stop them when `signal` aborts;
  * the rest (Confluence, Google, Slack) only read, so an abandoned one ends at
- * its own request timeouts and changes nothing. A test that stores what it
- * discovers (OpenAI-compatible models) checks `signal` before it stores and
- * announces what it stored.
+ * its own request timeouts and changes nothing.
  */
 const SECTION_TESTS: Partial<
   Record<
@@ -388,13 +356,6 @@ const SECTION_TESTS: Partial<
   tempo: testTempoSettings,
   google: () => testGoogleSettings(),
   slack: () => testSlackSettings(),
-  "openai-compatible": async (signal) => {
-    const status = await testOpenAiCompatibleSettings(signal);
-    // Models are stored only by a discovery that succeeded; a failed,
-    // cancelled or overtaken one stored nothing, so there is nothing to tell.
-    if (status.ok) await announceSettingsWritten(["openAiCompatible"]);
-    return status;
-  },
   "web-search": testBraveSettings,
   context7: testContext7Settings,
   github: testGithubSettings,

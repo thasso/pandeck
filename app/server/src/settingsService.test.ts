@@ -475,8 +475,8 @@ describe("saveSettings", () => {
   test("announcing a write made elsewhere reaches every listener", async () => {
     const heard: SettingsChange[] = [];
     cleanups.push(onSettingsChanged((change) => heard.push(change)));
-    await announceSettingsWritten(["openAiCompatible"]);
-    assert.deepEqual(heard, [{ sections: ["openAiCompatible"] }]);
+    await announceSettingsWritten(["brave"]);
+    assert.deepEqual(heard, [{ sections: ["brave"] }]);
   });
 
   test("persists, then tells every listener which sections changed", async () => {
@@ -520,12 +520,20 @@ test("a write reaches every connected viewer, not only the writer", async () => 
   ]);
 });
 
-test("models a connection test discovers reach every client", async () => {
+test("models an account's Test discovers reach every client", async () => {
   const { hub } = await import("./hub.ts");
   const { Connection } = await import("./connection.ts");
-  await saveSettings({
-    openAiCompatible: { enabled: true, baseUrl: "http://models.invalid/v1" },
+  const {
+    createCredentialProfile,
+    deleteCredentialProfile,
+    patchOpenAiCompatibleEndpoint,
+    testOpenAiCompatibleProfile,
+  } = await import("./credentialProfiles.ts");
+  const { id } = createCredentialProfile({
+    name: "Discovery",
+    provider: "openai-compatible",
   });
+  patchOpenAiCompatibleEndpoint(id, { baseUrl: "http://models.invalid/v1" });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = vi.fn(
     async () =>
@@ -544,31 +552,21 @@ test("models a connection test discovers reach every client", async () => {
     return connection;
   });
   try {
-    await connections[0]!.handle({ type: "testOpenAiCompatibleSettings" });
+    await testOpenAiCompatibleProfile(id);
   } finally {
     globalThis.fetch = originalFetch;
     for (const connection of connections) connection.dispose();
+    deleteCredentialProfile(id);
   }
-  const [tester = [], other = []] = sent;
-  const otherSettings = other.filter((m) => m.type === "settings").at(-1);
-  assert.ok(
-    otherSettings?.type === "settings",
-    "the other client got settings",
-  );
-  assert.deepEqual(
-    otherSettings.settings.openAiCompatible.models.map((m) => m.id),
-    ["new-model"],
-  );
-  assert.ok(
-    other.some((m) => m.type === "models"),
-    "and a fresh model list",
-  );
-  // The test result itself answers only the client that asked.
-  assert.ok(tester.some((m) => m.type === "openAiCompatibleStatus"));
-  assert.equal(
-    other.some((m) => m.type === "openAiCompatibleStatus"),
-    false,
-  );
+  for (const messages of sent) {
+    const models = messages.filter((m) => m.type === "models").at(-1);
+    assert.ok(models?.type === "models", "every client got a model list");
+    assert.ok(
+      models.models.some(
+        (model) => model.provider === id && model.id === "new-model",
+      ),
+    );
+  }
 });
 
 describe("the settings message checks come from the registry", () => {

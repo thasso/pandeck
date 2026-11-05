@@ -3,8 +3,8 @@
  * (`docs/workers.md` "pi engines use the lease"): without it, the server's
  * own port runs the engine exactly as before; with it, the engine's gateway
  * port resolves every model, a reopened transcript's included, turns are
- * pinned to SSE, the port's feed subscription ends with the engine, and
- * nothing the engine side reads from the feed holds the compatible key.
+ * pinned to SSE, and the port's feed subscription ends with the engine. A
+ * leased engine is an OpenAI account's, so it serves no compatible model.
  *
  * Real pi sessions; nothing here sends a prompt, so no request leaves the
  * process.
@@ -29,29 +29,28 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 mkdirSync(join(tmp, "data", "settings"), { recursive: true });
 
-/** The compatible settings as a settings write leaves them. */
-function writeCompatSettings(baseUrl: string, apiKey: string): void {
-  writeFileSync(
-    join(tmp, "data", "settings", "openai-compatible.json"),
-    JSON.stringify({
-      enabled: true,
-      name: "Fixture",
-      baseUrl,
-      apiKey,
-      models: [
-        {
-          id: "chosen",
-          name: "chosen",
-          input: ["text"],
-          contextWindow: 100_000,
-          maxTokens: 4_000,
-          reasoning: false,
-        },
-      ],
-    }),
-  );
-}
-writeCompatSettings("http://127.0.0.1:9/v1", "fixture");
+// The former single endpoint, which loading `models.ts` migrates to the
+// account `openai-compatible`.
+writeFileSync(
+  join(tmp, "data", "settings", "openai-compatible.json"),
+  JSON.stringify({
+    enabled: true,
+    name: "Fixture",
+    baseUrl: "http://127.0.0.1:9/v1",
+    apiKey: "fixture",
+    models: [
+      {
+        id: "chosen",
+        name: "chosen",
+        input: ["text"],
+        contextWindow: 100_000,
+        maxTokens: 4_000,
+        reasoning: false,
+      },
+    ],
+  }),
+);
+const COMPATIBLE = "openai-compatible";
 
 await import("../hub.ts");
 const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
@@ -60,11 +59,8 @@ const { createPiHostedEngineFactory, hostedPiEngine } =
   await import("./piEngineHosted.ts");
 const { nativePiSessionForTests } = await import("./piEngine.ts");
 const { serverPiModelPort } = await import("./piModelPort.ts");
-const { compatProviderFeed, notifyCompatProviderChanged } =
-  await import("./compatProviderFeed.ts");
-const { COMPAT_KEY_A, COMPAT_KEY_B, COMPAT_KEY_C } =
-  await import("../test/gatewayFixtures.ts");
-type CompatProviderFeed = import("./gatewayPiModelPort.ts").CompatProviderFeed;
+const { compatProviderFeed } = await import("./compatProviderFeed.ts");
+const { findModel } = await import("./models.ts");
 const { piPersonaOptions } = await import("./piEngineStart.ts");
 const { SKILLS_RUNTIME_DIR } = await import("../config.ts");
 const { skillSetHash } = await import("../skills/skillRuntimeMaterializer.ts");
@@ -92,7 +88,7 @@ const FAKE_LEASE = `${segment({ alg: "none", typ: "JWT" })}.${segment({
 const CATALOG_ID = "gpt-catalog-only";
 
 type ServerPort = typeof serverPiModelPort;
-type Model = NonNullable<ReturnType<ServerPort["find"]>>;
+type Model = NonNullable<ReturnType<typeof findModel>>;
 
 /**
  * The server's port, recording each call; its catalog also has
@@ -102,7 +98,7 @@ function recordingServerPort(): ServerPort & { calls: string[] } {
   const calls: string[] = [];
   const catalog = (provider: string, id: string): Model | undefined => {
     if (provider !== "openai-codex" || id !== CATALOG_ID) return undefined;
-    const builtin = serverPiModelPort.find("openai-codex", "gpt-5.6-luna");
+    const builtin = findModel("openai-codex", "gpt-5.6-luna");
     assert.ok(builtin, "pi's built-in Codex catalog has gpt-5.6-luna");
     return { ...builtin, id: CATALOG_ID, name: CATALOG_ID };
   };
@@ -119,9 +115,9 @@ function recordingServerPort(): ServerPort & { calls: string[] } {
         serverPiModelPort.findForProfile(profileId, provider, id)
       );
     },
-    find(provider, id) {
-      calls.push(`find ${provider}/${id}`);
-      return catalog(provider, id) ?? serverPiModelPort.find(provider, id);
+    availableForProfile(profileId) {
+      calls.push(`availableForProfile ${profileId}`);
+      return serverPiModelPort.availableForProfile(profileId);
     },
   };
 }
@@ -188,11 +184,15 @@ function agentOn(model: string) {
 
 function spec(
   transcript: Record<string, unknown>,
-  extra: { agent?: ReturnType<typeof agentOn>; model?: object } = {},
+  extra: {
+    agent?: ReturnType<typeof agentOn>;
+    model?: object;
+    account?: string;
+  } = {},
 ) {
   return {
     kind: "developer",
-    credentialProfileId: "default",
+    credentialProfileId: extra.account ?? "default",
     transcript,
     start: {
       conditions,
@@ -282,7 +282,7 @@ async function open(
   return { hosted, native: nativePiSessionForTests(local) };
 }
 
-test("without gateway access the server's port runs the engine as before: its runtime, its find, pi's transport, no feed", async () => {
+test("without gateway access the server's port runs the engine as before: its account's runtime, its find, pi's transport, no feed", async () => {
   const feed = watchFeed();
   const server = recordingServerPort();
   const factory = createPiHostedEngineFactory({
@@ -293,16 +293,23 @@ test("without gateway access the server's port runs the engine as before: its ru
     factory,
     spec(
       { type: "new", cwd: tmp },
-      { model: { provider: "openai-compatible", id: "chosen" } },
+      {
+        model: { provider: COMPATIBLE, id: "chosen" },
+        account: COMPATIBLE,
+      },
     ),
     false,
   );
   try {
-    assert.ok(server.calls.includes("runtime default"), server.calls.join());
+    assert.ok(
+      server.calls.includes(`runtime ${COMPATIBLE}`),
+      server.calls.join(),
+    );
     assert.equal(
       native.modelRuntime,
-      await serverPiModelPort.runtime("default"),
+      await serverPiModelPort.runtime(COMPATIBLE),
     );
+    assert.equal(native.model?.baseUrl, "http://127.0.0.1:9/v1");
     // The server's runtime keeps its own origin guard
     // (`serverCredentialPairing.ts`), whatever the switch; no lease guard.
     assert.notEqual(
@@ -312,10 +319,20 @@ test("without gateway access the server's port runs the engine as before: its ru
     assert.equal(native.agent.transport, "auto");
     await hosted.command(
       "setModel",
-      [{ provider: "openai-compatible", id: "chosen" }],
+      [{ provider: COMPATIBLE, id: "chosen" }],
       1,
     );
-    assert.ok(server.calls.includes("find openai-compatible/chosen"));
+    assert.ok(server.calls.includes(`findForProfile ${COMPATIBLE}/chosen`));
+    // Never a model of another account, whatever the engine's runtime holds.
+    await assert.rejects(
+      hosted.command(
+        "setModel",
+        [{ provider: "openai-codex", id: "gpt-5.6-sol" }],
+        2,
+      ),
+      /not available on this session's account/,
+    );
+    assert.equal(native.model?.provider, COMPATIBLE);
     assert.equal(feed.subscribed(), 0);
   } finally {
     await hosted.dispose({});
@@ -366,20 +383,15 @@ test("a gateway engine reopens a catalog-id transcript on that model, rebased, w
       [{ provider: "openai-codex", id: "gpt-5.6-sol" }],
       1,
     );
-    assert.ok(server.calls.includes("find openai-codex/gpt-5.6-sol"));
+    assert.ok(server.calls.includes("findForProfile openai-codex/gpt-5.6-sol"));
     assert.equal(native.model?.id, "gpt-5.6-sol");
     assert.equal(native.model?.baseUrl, CODEX_BASE);
-    await hosted.command(
-      "setModel",
-      [{ provider: "openai-compatible", id: "chosen" }],
-      2,
+    // A leased engine is an OpenAI account's: it serves no compatible model.
+    await assert.rejects(
+      hosted.command("setModel", [{ provider: COMPATIBLE, id: "chosen" }], 2),
+      /not available on this session's account/,
     );
-    // On the gateway's /compat, with the lease (G3b-2).
-    assert.equal(native.model?.baseUrl, `${GATEWAY}/compat/v1`);
-    assert.equal(
-      (await native.modelRuntime.getAuth(native.model!))?.auth.apiKey,
-      FAKE_LEASE,
-    );
+    assert.equal(native.model?.id, "gpt-5.6-sol");
     assert.equal(native.agent.transport, "sse");
   } finally {
     await hosted.dispose({});
@@ -442,49 +454,5 @@ test("when the port has no model for the restored id, pi's own restore runs: an 
       assert.equal(native.model.baseUrl, CODEX_BASE);
   } finally {
     await hosted.dispose({});
-  }
-});
-
-test("AC22: across a leased open, a key rotation and an endpoint change, nothing the factory or port reads from the feed holds the key", async () => {
-  writeCompatSettings("http://127.0.0.1:9/v1", COMPAT_KEY_A);
-  const read: unknown[] = [];
-  const recording: CompatProviderFeed = {
-    current() {
-      const value = compatProviderFeed.current();
-      read.push(value);
-      return value;
-    },
-    subscribe: (listener) => compatProviderFeed.subscribe(listener),
-  };
-  const factory = createPiHostedEngineFactory({
-    models: recordingServerPort(),
-    compat: recording,
-  });
-  const { hosted, native } = await open(
-    factory,
-    spec(
-      { type: "new", cwd: tmp },
-      { model: { provider: "openai-compatible", id: "chosen" } },
-    ),
-    true,
-  );
-  try {
-    assert.equal(native.model?.baseUrl, `${GATEWAY}/compat/v1`);
-    writeCompatSettings("http://127.0.0.1:9/v1", COMPAT_KEY_B);
-    notifyCompatProviderChanged();
-    // Same base path, new origin and key: the held model follows.
-    writeCompatSettings("http://127.0.0.2:9/v1", COMPAT_KEY_C);
-    notifyCompatProviderChanged();
-    assert.equal(
-      (await native.modelRuntime.getAuth(native.model!))?.auth.apiKey,
-      FAKE_LEASE,
-    );
-    assert.ok(read.length >= 3, `the feed was read ${read.length} times`);
-    const text = JSON.stringify(read);
-    for (const key of [COMPAT_KEY_A, COMPAT_KEY_B, COMPAT_KEY_C])
-      assert.ok(!text.includes(key), `the engine side read ${key}`);
-  } finally {
-    await hosted.dispose({});
-    writeCompatSettings("http://127.0.0.1:9/v1", "fixture");
   }
 });
