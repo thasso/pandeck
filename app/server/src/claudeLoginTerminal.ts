@@ -227,10 +227,12 @@ function retainFinished(run: LoginRun): void {
   run.retention.unref?.();
 }
 
+/** `errorOnAccount: false` shows an error to the dialog only, not on the account. */
 function finish(
   run: LoginRun,
   status: ClaudeLoginTerminalStatus,
   message?: string,
+  errorOnAccount = true,
 ): void {
   if (run.finished) return;
   run.finished = true;
@@ -238,12 +240,16 @@ function finish(
   if (message !== undefined) run.error = message;
   clearTimeout(run.timeout);
   if (status === "ready") completeCredentialProfileLogin(run.profileId);
-  else if (status === "error" && credentialProfileById(run.profileId)) {
+  else if (
+    status === "error" &&
+    errorOnAccount &&
+    credentialProfileById(run.profileId)
+  ) {
     setCredentialProfileLoginState(run.profileId, {
       status: "error",
       error: message?.slice(0, 180) ?? "Claude login failed.",
     });
-  } else if (status === "cancelled")
+  } else if (status === "cancelled" || !errorOnAccount)
     clearCredentialProfileLoginState(run.profileId);
   broadcast(run, {
     type: "status",
@@ -297,7 +303,9 @@ function begin(run: LoginRun, taken: LoginHoldTaken): void {
   }
   if (taken.kind === "stuck") {
     run.closed = true;
-    finish(run, "error", loginStuckText(run.name));
+    // The account shows U7's text from its login-stuck flag, which ends with
+    // the hold; as its error the text would outlive a Clear.
+    finish(run, "error", loginStuckText(run.name), false);
     return;
   }
   if (taken.kind === "unavailable") {

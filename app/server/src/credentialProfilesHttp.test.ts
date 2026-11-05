@@ -229,10 +229,22 @@ test("HTTP endpoint accounts CRUD, metadata, Test and origin edit persist separa
 }, 40_000);
 
 test("HTTP Clear the unfinished login: POST only, ok with the gateway off, refuses an unknown account, and no summary is login-stuck", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "login-clear-http-fixture-"));
-  const home = join(tmp, "home");
-  const data = join(tmp, "data");
-  mkdirSync(home);
+  // A short /tmp root holding every directory the app may write or read.
+  const tmp = mkdtempSync("/tmp/lc");
+  const home = join(tmp, "h");
+  const data = join(tmp, "d");
+  const isolated = {
+    HOME: home,
+    DATA_DIR: data,
+    TMPDIR: join(tmp, "t"),
+    CLAUDE_CONFIG_DIR: join(tmp, "c"),
+    PI_CODING_AGENT_DIR: join(tmp, "p"),
+  };
+  assert.match(tmp, /^\/tmp\/lc[A-Za-z0-9]{6}$/);
+  for (const dir of Object.values(isolated)) {
+    assert.ok(dir.startsWith(`${tmp}/`));
+    mkdirSync(dir);
+  }
   writeFileSync(
     join(home, ".gitconfig"),
     "[user]\nname = Fixture\nemail = fixture@example.invalid\n",
@@ -255,11 +267,11 @@ test("HTTP Clear the unfinished login: POST only, ok with the gateway off, refus
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           PATH: process.env.PATH,
-          HOME: home,
+          ...isolated,
+          PI_OFFLINE: "1",
           LANG: "C.UTF-8",
           NODE_ENV: "test",
           ASSISTANT_CWD: tmp,
-          DATA_DIR: data,
           ASSISTANT_CONFIG: join(tmp, "app.json"),
           ASSISTANT_TOKEN: token,
           ASSISTANT_HOST: "127.0.0.1",

@@ -1379,7 +1379,8 @@ until the gateway runs as its own process.
     last login for `<name>` didn't finish, so Pandeck has paused renewing this
     account's token. If no login is still running, choose Clear the unfinished
     login.") with "Clear the unfinished login" in place of Connect. A login
-    started on it shows that text.
+    started on it leaves no login state on the account, so the account's text
+    ends with the flag; the Claude login dialog shows the text too.
   - **Clear** (`POST /api/credential-profiles/<id>/login/clear`, answering
     `{ok: true}` or a 400 `{error}`) is the operator's assertion that no login
     runs. With no stuck hold, or with the switch off, it does nothing. A hold

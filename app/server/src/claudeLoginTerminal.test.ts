@@ -734,6 +734,44 @@ describe("G5b: the login hold", () => {
     },
   );
 
+  test.each(["a Clear", "a status ending the hold"] as const)(
+    "G5b AC11/AC12: a stuck refusal's text leaves the account with %s",
+    async (how) => {
+      const setup = holdSetup();
+      setup.fake.acquire = () =>
+        Promise.reject(new LoginHeldError("login_stuck", "hold-old"));
+      const socket = setup.attach();
+      await ticks();
+      assert.equal(lastStatus(socket)?.error, loginStuckText("Held Claude"));
+      const stuck = profiles.credentialProfileSummaryById(setup.profile.id);
+      assert.equal(stuck?.loginStuck, true);
+      assert.equal(stuck?.error, undefined, "the flag alone shows U7's text");
+      assert.notEqual(stuck?.status, "connecting");
+      if (how === "a Clear")
+        await loginHolds.clearUnfinishedProfileLogin(setup.profile.id);
+      else
+        setup.fake.status(setup.profile.id, {
+          loginStuck: false,
+          holdId: "hold-old",
+        });
+      const cleared = profiles.credentialProfileSummaryById(setup.profile.id);
+      assert.equal(cleared?.loginStuck, undefined);
+      assert.equal(cleared?.error, undefined);
+    },
+  );
+
+  test("G5b AC6: an unavailable refusal's text stays on the account until the next login", async () => {
+    const setup = holdSetup();
+    setup.fake.acquire = () =>
+      Promise.reject(new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT));
+    setup.attach();
+    await ticks();
+    const summary = profiles.credentialProfileSummaryById(setup.profile.id);
+    assert.equal(summary?.status, "error");
+    assert.equal(summary?.error, GATEWAY_LOGIN_UNAVAILABLE_TEXT);
+    assert.equal(summary?.loginStuck, undefined);
+  });
+
   test.each(["cancel", "timeout"] as const)(
     "G5b AC8: with the switch off a %s takes no hold and finishes on close, SIGKILL after 5 s, today's text",
     async (how) => {
