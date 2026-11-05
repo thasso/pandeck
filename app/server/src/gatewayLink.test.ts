@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -28,7 +29,7 @@ const home = mkdtempSync(join(tmpdir(), "gateway-link-home-"));
 process.env.HOME = home;
 
 const profiles = await import("./credentialProfiles.ts");
-const { readOpenAiCompatibleEndpoint } =
+const { openAiCompatibleEndpointPath, readOpenAiCompatibleEndpoint } =
   await import("./openAiCompatibleAccounts.ts");
 const config = await import("./config.ts");
 const { DEFAULT_WORKER_ID } = await import("./workers/placement.ts");
@@ -852,6 +853,92 @@ test("AC8: the boot syncs compatible accounts tokenless and pushes each one's pa
     await endpoint.close();
   }
 });
+
+for (const broken of [
+  {
+    name: "unreadable",
+    break: (file: string) => {
+      rmSync(file);
+      mkdirSync(file);
+    },
+  },
+  { name: "malformed", break: (file: string) => writeFileSync(file, "{") },
+])
+  test(`F001: an account whose endpoint is ${broken.name} at boot is synced tokenless and cleared; the link is ready and the healthy account forwards`, async () => {
+    const endpoint = await startFakeCompatEndpoint(["m"], "healthy reply");
+    const ids: string[] = [];
+    const file = () => openAiCompatibleEndpointPath(ids[0]!);
+    try {
+      ids.push(
+        await compatibleAccount("Link broken", endpoint.baseUrl, COMPAT_KEY_A),
+      );
+      ids.push(
+        await compatibleAccount("Link healthy", endpoint.baseUrl, COMPAT_KEY_B),
+      );
+      const [brokenId, healthy] = ids as [string, string];
+      broken.break(file());
+      assert.throws(() => readOpenAiCompatibleEndpoint(brokenId));
+
+      const dir = stateDir();
+      const booted = link({ stateDir: dir });
+      assert.equal(await booted.ready, true, lines.join("\n"));
+      for (const id of ids)
+        assert.deepEqual(
+          (registry(dir) as { id: string }[]).find((p) => p.id === id),
+          {
+            id,
+            provider: "openai-compatible",
+            name: profiles.credentialProfileById(id)!.name,
+            enabled: true,
+          },
+        );
+      // The read failure names the method and the id alone, then clears.
+      assert.ok(
+        lines.includes(
+          `${CONTROL_METHODS.compatSet} (profile ${brokenId}): failed`,
+        ),
+        lines.join("\n"),
+      );
+      assert.deepEqual(
+        lines.filter((line) => line.startsWith("control compat.")).sort(),
+        [
+          `control ${CONTROL_METHODS.compatClear} (profile ${brokenId}): ok`,
+          `control ${CONTROL_METHODS.compatSet} (profile ${healthy}): ok`,
+        ].sort(),
+      );
+
+      const engine = await booted.grantEngineLease({
+        workerId: undefined,
+        sessionId: "s-healthy",
+        profileId: healthy,
+      });
+      assert.equal(
+        (await compatRequest(booted.gateway!, engine.token)).status,
+        200,
+      );
+      const server = await booted.serverAccess(healthy);
+      assert.equal(
+        (await compatRequest(booted.gateway!, server.leaseToken)).status,
+        200,
+      );
+      assert.deepEqual(forwarded(endpoint), [
+        `Bearer ${COMPAT_KEY_B}`,
+        `Bearer ${COMPAT_KEY_B}`,
+      ]);
+      const unset = await booted.grantEngineLease({
+        workerId: undefined,
+        sessionId: "s-broken",
+        profileId: brokenId,
+      });
+      assertUnset(await compatRequest(booted.gateway!, unset.token));
+      assert.equal(forwarded(endpoint).length, 2);
+      assertNoLeak([COMPAT_KEY_A, COMPAT_KEY_B, endpoint.baseUrl]);
+    } finally {
+      if (ids[0]) rmSync(file(), { recursive: true, force: true });
+      for (const id of ids) profiles.deleteCredentialProfile(id);
+      await endpoint.close();
+    }
+  });
 
 test("AC8: a rotation, URL edit or rename pushes upsert then set; disabling keeps the pair; deletion removes, revokes and pushes nothing", async () => {
   const first = await startFakeCompatEndpoint(["m"], "first reply");

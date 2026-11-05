@@ -45,9 +45,14 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
+  ACCOUNT_KINDS,
+  type CredentialProfileProvider,
+} from "@assistant/shared";
+import {
   claudeConfigDir,
   credentialProfileById,
-  listCredentialProfiles,
+  credentialProfilesOfKind,
+  ensureDefaultPiProfile,
   piAgentDir,
   subscribeCredentialProfileChanges,
   type CredentialProfile,
@@ -275,6 +280,18 @@ function gatewayProfile(
 }
 
 /**
+ * Every account as the registry has it, oldest first, the defaults ensured.
+ * Not the summaries: they read each account's files, and one unreadable
+ * endpoint would fail the boot instead of only its own push.
+ */
+function registeredProfiles(): CredentialProfile[] {
+  ensureDefaultPiProfile();
+  return (Object.keys(ACCOUNT_KINDS) as CredentialProfileProvider[])
+    .flatMap((provider) => credentialProfilesOfKind(provider))
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
  * Start the gateway in this process, link to it and install the link. A start
  * or boot failure is logged and leaves the link unavailable; it never throws.
  */
@@ -380,7 +397,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       ).revoked;
       const profiles: GatewayProfile[] = [];
       const compatible: CredentialProfile[] = [];
-      for (const profile of listCredentialProfiles()) {
+      for (const profile of registeredProfiles()) {
         const known = gatewayProfile(profile);
         if (!known) {
           log(`profile ${profile.id} skipped: the gateway cannot hold it`);
