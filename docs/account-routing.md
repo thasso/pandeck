@@ -308,6 +308,19 @@ first-enabled hint for non-routing login/usage UI, not a routing function. When
 the saved model has no Automatic option, a Settings slot offers **Use
 Automatic** to clear its pin without changing the model or effort.
 
+The new-session picker names only accounts with something of their own to run.
+The OpenAI-compatible endpoint registers on every OpenAI account, so an
+unconnected one still lists its models, and a Claude account offers none while
+the integration is off; `pickerCredentialProfiles` hides both unless staged.
+When that leaves no account and only endpoint models, the endpoint's card
+replaces Automatic, with no meters. It still stages no account: the router binds
+the session to an OpenAI account, which only carries the endpoint's key-based
+traffic. Automatic names the endpoint rather than that account for any staged
+endpoint model. With nothing runnable anywhere every account stays. This filter
+decides cards alone: agent definitions and the enterprise requirement keep
+reading every enabled account, and other account surfaces, such as the workflow
+start sheet, still list them all.
+
 `POST /api/account-router/pick` accepts `AccountPickPreviewRequest` and returns
 `AccountPickPreviewResult`, so a selector can show Automatic's current account
 without duplicating ranking in the browser. It uses cached usage and model

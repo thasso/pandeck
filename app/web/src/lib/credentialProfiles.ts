@@ -12,6 +12,7 @@ import type {
 import {
   supportedThinkingLevelsForModel,
   accountProviderForModelProvider,
+  OPENAI_COMPATIBLE_PROVIDER_ID,
   THINKING_LEVELS,
 } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
@@ -77,6 +78,32 @@ export function automaticModels(
           (!options.requiresEnterprise || profile.enterprise),
       )
       .flatMap((profile) => modelsByProfile[profile.id] ?? []),
+  );
+}
+
+/**
+ * The accounts the new-session picker names. The OpenAI-compatible endpoint
+ * registers on every OpenAI account, so an unconnected one still lists its
+ * models, and a Claude account offers nothing while the integration is off:
+ * neither is a choice, though Automatic may still run the endpoint through the
+ * first. The staged pick stays visible so it is never refused unseen. With
+ * nothing to run anywhere every account stays, its card saying what is missing.
+ */
+export function pickerCredentialProfiles(
+  profiles: CredentialProfileSummary[],
+  modelsByProfile: Record<string, ModelOption[]>,
+  selectedId: string | null,
+): CredentialProfileSummary[] {
+  const offers = (profile: CredentialProfileSummary) =>
+    modelsByProfile[profile.id] ?? [];
+  if (!profiles.some((profile) => offers(profile).length > 0)) return profiles;
+  return profiles.filter(
+    (profile) =>
+      profile.id === selectedId ||
+      (profile.status === "ready" && offers(profile).length > 0) ||
+      offers(profile).some(
+        (model) => model.provider !== OPENAI_COMPATIBLE_PROVIDER_ID,
+      ),
   );
 }
 

@@ -69,6 +69,11 @@ export function ProviderAccountRow({
     onSelect: () => void;
     /** One muted line under the name, in the usage meters' slot. */
     detail: string;
+    /**
+     * The card names this instead: no account is a choice, so Automatic can
+     * only ever run this endpoint.
+     */
+    endpoint?: { provider: string; name: string } | undefined;
   };
   /**
    * Subscription-usage indicators from the server cache (`docs/usage.md`), or
@@ -98,21 +103,40 @@ export function ProviderAccountRow({
         <QuickPill
           selected={automatic.selected}
           disabled={disabled}
-          title="Let Pandeck pick the account"
+          title={
+            automatic.endpoint
+              ? `Use ${automatic.endpoint.name}`
+              : "Let Pandeck pick the account"
+          }
           onClick={automatic.onSelect}
           className={`w-52 ${QUICK_CARD}`}
         >
           <span className="flex w-full min-w-0 items-center gap-1.5">
-            <Sparkles
-              size={16}
-              aria-hidden
-              className={
-                automatic.selected
-                  ? "shrink-0 text-primary"
-                  : "shrink-0 text-muted-foreground"
-              }
-            />
-            <span className="min-w-0 flex-1 truncate">Automatic</span>
+            {automatic.endpoint ? (
+              <ProviderIcon
+                provider={automatic.endpoint.provider}
+                title={automatic.endpoint.name}
+                size={16}
+                className={
+                  automatic.selected
+                    ? "shrink-0 text-primary"
+                    : "shrink-0 text-muted-foreground"
+                }
+              />
+            ) : (
+              <Sparkles
+                size={16}
+                aria-hidden
+                className={
+                  automatic.selected
+                    ? "shrink-0 text-primary"
+                    : "shrink-0 text-muted-foreground"
+                }
+              />
+            )}
+            <span className="min-w-0 flex-1 truncate">
+              {automatic.endpoint?.name ?? "Automatic"}
+            </span>
           </span>
           <span className="w-full text-xs whitespace-normal text-muted-foreground">
             {automatic.detail}
