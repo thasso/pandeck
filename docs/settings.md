@@ -421,9 +421,13 @@ payload carries `apiKeyConfigured`, never the key. A new account's id is
   keeping any edit saved meanwhile. A failure is redacted
   (`secretRedaction.ts`), since an endpoint's error body may echo the key.
 
-A discovery or edit reaches the account's pi runtime on its next lookup, and the
-hub sends every connection a fresh `models` list for any compatible account
-change.
+An edit, a discovery or a rename reaches the account's pi runtime before the
+call returns, including the runtime a running session or one-shot already holds:
+its next request sends the new key, sends none once the key is cleared, and a
+model it holds from a replaced origin is refused unsent. A deleted account's
+runtime serves nothing. Disabling changes no runtime; the next turn's admission
+decides. The hub sends every connection a fresh `models` list for any compatible
+account change.
 
 **Migration of the former single endpoint.** Boot moves
 `settings/openai-compatible.json` to the account `openai-compatible`, the only
@@ -439,6 +443,41 @@ account. An old file holding nothing is deleted; an unreadable one stays.
 Nothing it logs names the key or URL, and boot goes on either way. SQL migration
 0099 rebinds every session and held peer child on an `openai-compatible` model
 to that account.
+
+**Before deploying, and rolling back.** The migration keeps no backup: once it
+succeeds, the only copy of the key is
+`credential-profiles/openai-compatible/endpoint.json`. Take the usual copy of
+`DATA_DIR` before deploying, and make sure it includes
+`settings/openai-compatible.json`. A release from before the migration reads
+only that old file, so after a rollback it has no compatible endpoint. Either
+restore the file from the copy, or rebuild it (mode 0600) by hand:
+
+| Old `settings/openai-compatible.json` | Source after the migration                                                       |
+| ------------------------------------- | -------------------------------------------------------------------------------- |
+| `baseUrl`                             | `endpoint.json` `baseUrl`                                                        |
+| `apiKey`                              | `endpoint.json` `apiKey` (absent for a key-less endpoint)                        |
+| `thinkingFormat`                      | `endpoint.json` `thinkingFormat`                                                 |
+| `models`                              | `endpoint.json` `models`                                                         |
+| `enabled`                             | the `openai-compatible` entry's `enabled` in `credential-profiles/profiles.json` |
+| `name`                                | that entry's `name`                                                              |
+
+Or enter the endpoint again in that release's Settings. Copy the key without
+printing it. Only the migrated account maps back: an older release has one
+endpoint, so accounts added since have no place there. Other things to know on
+rollback:
+
+- An older release skips registry entries of a kind it does not know, and drops
+  them for good the next time it saves the registry. Keep the copy of
+  `credential-profiles/` to restore them on rolling forward.
+- SQL 0099 does not reverse. Sessions and peer children it rebound name the
+  account `openai-compatible`, which an older release does not have, so they
+  take its missing-account path: an explicit error, and a fork picks again.
+- Pins normalized by rule P also name `openai-compatible`, and an older release
+  treats them as pins to a missing account, falling back as its resolvers do.
+- Rolling forward again migrates a restored old file again. If the registry
+  entry survived and `endpoint.json` no longer equals the file (for example, the
+  endpoint was edited in the older release), both are left for manual review, as
+  after any mismatch.
 
 **Pins.** A compatible model runs on exactly one account, so every stored pin on
 such a model names it (rule P, `accountPinForModel`): a boot pass after the

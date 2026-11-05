@@ -58,8 +58,15 @@ const { nativePiSessionForTests, piToolActivationForTests } =
   await import("./piEngine.ts");
 const { readSessionHeaderId } = await import("./sessionOpen.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
-const { createCredentialProfile, deleteCredentialProfile } =
-  await import("../credentialProfiles.ts");
+const {
+  createCredentialProfile,
+  deleteCredentialProfile,
+  patchOpenAiCompatibleEndpoint,
+} = await import("../credentialProfiles.ts");
+const { readOpenAiCompatibleEndpoint, writeOpenAiCompatibleEndpoint } =
+  await import("../openAiCompatibleAccounts.ts");
+const { COMPAT_KEY_A, COMPAT_KEY_B } =
+  await import("../test/gatewayFixtures.ts");
 const { findModelForProfile } = await import("./models.ts");
 const { serverPiModelPort } = await import("./piModelPort.ts");
 const { piPersonaOptions, resolvePiEngineStart } =
@@ -705,6 +712,54 @@ test("a live compatible session refuses a model switch off its account, in words
       },
     );
     assert.equal(live.engine.model?.id, "chosen");
+  } finally {
+    live.dispose();
+  }
+});
+
+test("a live compatible engine's own runtime takes an endpoint edit at once: a rotated key, a cleared one, a new origin", async () => {
+  const { id } = createCredentialProfile({
+    name: "Held",
+    provider: "openai-compatible",
+  });
+  patchOpenAiCompatibleEndpoint(id, {
+    baseUrl: "http://127.0.0.1:9/v1",
+    apiKey: COMPAT_KEY_A,
+  });
+  writeOpenAiCompatibleEndpoint(id, {
+    ...readOpenAiCompatibleEndpoint(id),
+    models: [
+      {
+        id: "chosen",
+        name: "chosen",
+        input: ["text"],
+        contextWindow: 100_000,
+        maxTokens: 4_000,
+        reasoning: false,
+      },
+    ],
+  });
+  const chosen = await findModelForProfile(id, id, "chosen");
+  assert.ok(chosen);
+  const live = await piStore.acquireNew("developer", chosen, "off", {
+    cwd: tmp,
+    credentialProfileId: id,
+  });
+  try {
+    // What the engine's next request resolves its key through.
+    const native = nativePiSessionForTests(live.engine);
+    const key = async () =>
+      (await native.modelRuntime.getAuth(native.model!))?.auth.apiKey;
+    assert.equal(await key(), COMPAT_KEY_A);
+    patchOpenAiCompatibleEndpoint(id, { apiKey: COMPAT_KEY_B });
+    assert.equal(await key(), COMPAT_KEY_B);
+    patchOpenAiCompatibleEndpoint(id, { clearApiKey: true });
+    assert.equal(await key(), "none");
+    patchOpenAiCompatibleEndpoint(id, {
+      baseUrl: "http://127.0.0.2:9/v1",
+      apiKey: COMPAT_KEY_B,
+    });
+    assert.equal(await key(), undefined);
   } finally {
     live.dispose();
   }

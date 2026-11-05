@@ -40,6 +40,7 @@ import {
   piAgentDir,
   setCredentialProfileDeletedHandler,
   setCredentialProfileLoginState,
+  subscribeCredentialProfileChanges,
   subscribeCredentialProfileDeleted,
   type CredentialProfile,
 } from "../credentialProfiles.ts";
@@ -104,6 +105,12 @@ const profileRuntimes = new Map<string, Promise<ModelRuntime>>([
 ]);
 /** What each compatible account's runtime has registered, by account id. */
 const compatibleRegistrations = new Map<string, string>();
+/**
+ * Each compatible account's created runtime. Sessions and one-shots hold it
+ * for their whole run, so an account change is applied to it at once, not at
+ * the next lookup.
+ */
+const compatibleRuntimes = new Map<string, ModelRuntime>();
 interface ProfileLoginOperation {
   invalidated: boolean;
   agentDir: string;
@@ -111,9 +118,21 @@ interface ProfileLoginOperation {
 const profileLogins = new Map<string, ProfileLoginOperation>();
 setCredentialProfileDeletedHandler((id) => {
   profileRuntimes.delete(id);
+  // A deleted account's held runtime serves nothing: its key goes nowhere.
+  const held = compatibleRuntimes.get(id);
+  if (held?.getRegisteredProviderConfig(id)) held.unregisterProvider(id);
+  compatibleRuntimes.delete(id);
   compatibleRegistrations.delete(id);
   const operation = profileLogins.get(id);
   if (operation) operation.invalidated = true;
+});
+// An endpoint edit, a discovery or a rename is announced synchronously, before
+// the write's caller hears back, so the next request on any held runtime uses
+// what the account holds now.
+subscribeCredentialProfileChanges((id) => {
+  const held = compatibleRuntimes.get(id);
+  const profile = credentialProfileById(id);
+  if (held && profile) syncCompatibleRegistration(profile, held);
 });
 
 /**
@@ -132,9 +151,12 @@ function syncCompatibleRegistration(
   const signature = config ? JSON.stringify(config) : "none";
   const registered = compatibleRegistrations.get(profile.id);
   if (signature === registered) return;
-  if (config) runtime.registerProvider(profile.id, config);
-  else if (registered !== undefined && registered !== "none")
+  // Fail closed: a registration that did not take leaves none, never the
+  // previous key and origin.
+  compatibleRegistrations.delete(profile.id);
+  if (runtime.getRegisteredProviderConfig(profile.id))
     runtime.unregisterProvider(profile.id);
+  if (config) runtime.registerProvider(profile.id, config);
   compatibleRegistrations.set(profile.id, signature);
 }
 
@@ -151,16 +173,32 @@ export function modelRuntimeForProfile(
     throw new Error("That credential profile cannot run pi models.");
   let runtime = profileRuntimes.get(profileId);
   if (!runtime) {
-    runtime = (
-      profile.provider === "openai-compatible"
-        ? inMemoryRuntime()
-        : ModelRuntime.create(runtimeOptions(piAgentDir(profileId)))
-    ).then(guardServerRuntime);
+    if (profile.provider === "openai-compatible") {
+      const creating: Promise<ModelRuntime> = inMemoryRuntime().then(
+        (created) => {
+          guardServerRuntime(created);
+          // Unless the account was deleted while it was made: then it holds
+          // nothing and hears nothing.
+          if (profileRuntimes.get(profileId) === creating)
+            compatibleRuntimes.set(profileId, created);
+          return created;
+        },
+      );
+      runtime = creating;
+    } else {
+      runtime = ModelRuntime.create(runtimeOptions(piAgentDir(profileId))).then(
+        guardServerRuntime,
+      );
+    }
     profileRuntimes.set(profileId, runtime);
   }
   if (profile.provider !== "openai-compatible") return runtime;
   return runtime.then((created) => {
-    syncCompatibleRegistration(profile, created);
+    // Registers what the account holds now, edits made meanwhile included.
+    if (compatibleRuntimes.get(profileId) === created) {
+      const current = credentialProfileById(profileId);
+      if (current) syncCompatibleRegistration(current, created);
+    }
     return created;
   });
 }

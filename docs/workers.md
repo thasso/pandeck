@@ -1425,16 +1425,21 @@ until the gateway runs as its own process.
   runtime `models.ts` creates for sessions is guarded per request whatever the
   switch (`serverCredentialPairing.ts`, over the same `credentialPairing.ts`
   guard). Switch-off engines and one-shots run on them. Only a compatible
-  account's runtime registers a compatible provider, its own, and re-registers
-  it on the next lookup after an endpoint edit (`docs/agent-harnesses.md`
-  "Account model gate"). Its model gets the key only while the registered
-  endpoint is on the model's own origin, so a model held across a change to
-  another origin is refused with pi's `Provider is not configured` before it
-  connects: the new key never reaches the old endpoint, nor the old key the new
-  one.
-  - A key rotation or a cleared key at the same endpoint, a path change on the
-    same origin, and a disable behave as before. A key-less endpoint (the `none`
-    placeholder) pairs no credential and is never refused.
+  account's runtime registers a compatible provider, its own. Every account
+  change re-registers it on the runtime already created, the one running
+  sessions and one-shots hold, before the change's caller returns
+  (`docs/agent-harnesses.md` "Account model gate"). Its model gets the key only
+  while the registered endpoint is on the model's own origin, so a model held
+  across a change to another origin is refused with pi's
+  `Provider is not configured` before it connects: the new key never reaches the
+  old endpoint, nor the old key the new one.
+  - A held model's next request sends a rotated key, and the `none` placeholder
+    once the key is cleared. A new base URL drops the discovered models, so a
+    held model is refused until Test rediscovers; after that, one on the same
+    origin runs again with the key. Deleting the account unregisters its
+    provider, so a one-shot still holding it is refused. A disable changes no
+    runtime. A key-less endpoint (the `none` placeholder) pairs no credential
+    and is never refused.
   - A request already resolving its key keeps the registration it started on. pi
     takes the provider and its key in the same step that the guard reads the
     pairing, so a change landing meanwhile neither refuses it nor pairs the new

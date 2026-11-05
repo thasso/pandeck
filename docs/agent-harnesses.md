@@ -67,10 +67,10 @@ Every per-account model lookup (`listModelsForProfile`,
 hosted engine's `findForProfile`) answers only models the account serves
 (`docs/account-routing.md` "Account kinds"), whatever its pi runtime holds:
 every runtime carries pi's built-in providers. An OpenAI-compatible account's
-runtime is in memory and registers only its own endpoint, re-registered on the
-next lookup after an edit; an OpenAI account's runtime registers none. A
-key-less global catalog of every compatible account serves display lookups
-(`findModel`, `listModels`) only.
+runtime is in memory and registers only its own endpoint, re-registered on every
+account change, including on a runtime a session or one-shot already holds; an
+OpenAI account's runtime registers none. A key-less global catalog of every
+compatible account serves display lookups (`findModel`, `listModels`) only.
 
 - **Start model.** A compatible pi session always opens on a model the app chose
   and passes explicitly, so pi's restore and default selection never run there:
