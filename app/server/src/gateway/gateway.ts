@@ -14,7 +14,8 @@
  * only in memory either way (`compatUpstream.ts`): a restarted gateway
  * answers 503 on `/compat` until the next push. A timer rechecks the holds
  * once a minute (`holds.ts`), and another renews the leased profiles' tokens
- * (`renewal.ts`), from the saved leases even before a control connects.
+ * (`renewal.ts`), from the saved leases even before a control connects. Every
+ * hold that ends has its profile's file re-read at once.
  *
  * It runs in the process that starts it: the server's, through
  * `gatewayLink.ts` under `ASSISTANT_GATEWAY=1`, and tests', against fake
@@ -141,6 +142,9 @@ export async function startGateway(
     compat,
     log,
     needsLogin: renewal.needsLogin,
+    holdsEnded: (profileIds) => {
+      for (const profileId of profileIds) void renewal.recheck(profileId);
+    },
   });
 
   const stats: GatewayStats = {

@@ -74,11 +74,12 @@ export interface HoldStatus {
 }
 
 /**
- * A memory-first change: the statuses it changed, and the save's failure
- * when the file is now behind memory.
+ * A memory-first change: the statuses it changed, the profiles whose hold it
+ * ended, and the save's failure when the file is now behind memory.
  */
 export interface HoldUpdate {
   statuses: HoldStatus[];
+  ended: string[];
   saveError?: Error;
 }
 
@@ -258,7 +259,8 @@ export class HoldTable {
    * `profileIds`; nothing while that is empty.
    */
   fence(profileIds: readonly string[]): HoldUpdate {
-    if (!this.fencePending || profileIds.length === 0) return { statuses: [] };
+    if (!this.fencePending || profileIds.length === 0)
+      return { statuses: [], ended: [] };
     this.fencePending = false;
     const now = this.now();
     const statuses: HoldStatus[] = [];
@@ -276,7 +278,7 @@ export class HoldTable {
       this.byProfile.set(profileId, hold);
       statuses.push(statusOf(hold, true));
     }
-    return this.saveKept(true, statuses);
+    return this.saveKept(true, statuses, []);
   }
 
   /**
@@ -287,11 +289,13 @@ export class HoldTable {
   check(currentBootId: string | undefined): HoldUpdate {
     const now = this.now();
     const statuses: HoldStatus[] = [];
+    const ended: string[] = [];
     let changed = false;
     for (const hold of [...this.byProfile.values()]) {
       if (hold.owner?.serverBootId === currentBootId || !this.exited(hold))
         continue;
       this.byProfile.delete(hold.profileId);
+      ended.push(hold.profileId);
       changed = true;
       if (hold.stuckAt !== undefined) statuses.push(statusOf(hold, false));
     }
@@ -301,7 +305,7 @@ export class HoldTable {
         changed = true;
         statuses.push(statusOf(hold, true));
       }
-    return this.saveKept(changed, statuses);
+    return this.saveKept(changed, statuses, ended);
   }
 
   /** Every login-stuck hold, as its status. */
@@ -332,18 +336,23 @@ export class HoldTable {
     return this.saveKept(
       true,
       hold.stuckAt !== undefined ? [statusOf(hold, false)] : [],
+      [hold.profileId],
     );
   }
 
   /** Saves a memory-first change, keeping it when saving throws. */
-  private saveKept(changed: boolean, statuses: HoldStatus[]): HoldUpdate {
-    if (!changed && !this.unsaved) return { statuses };
+  private saveKept(
+    changed: boolean,
+    statuses: HoldStatus[],
+    ended: string[],
+  ): HoldUpdate {
+    if (!changed && !this.unsaved) return { statuses, ended };
     try {
       this.save();
-      return { statuses };
+      return { statuses, ended };
     } catch (err) {
       const saveError = err instanceof Error ? err : new Error(String(err));
-      return { statuses, saveError };
+      return { statuses, ended, saveError };
     }
   }
 

@@ -45,6 +45,7 @@ import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
+import { followLoginHoldStatuses } from "./loginHolds.ts";
 import { startChildOomScoreRelease } from "./childOomScore.ts";
 import { memoryLogLine, startMemoryLog } from "./memoryLog.ts";
 import { assertPromptAssets } from "./promptAssets.ts";
@@ -1895,12 +1896,15 @@ startInProcessWorker();
 // a draining turn; it dies with the process. OpenAI-compatible accounts do
 // not run with it yet, so no endpoint is pushed; the gateway renews Codex
 // logins through pi's refresh passed in here.
-if (GATEWAY_ENABLED)
+if (GATEWAY_ENABLED) {
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
     renewCodex: renewCodexCredential,
   });
+  // Settings hears of every login-stuck change from the link's start.
+  followLoginHoldStatuses();
+}
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.
 startChildOomScoreRelease();

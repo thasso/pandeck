@@ -7,11 +7,30 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
+/**
+ * The official Claude CLI's login for a profile, viewed and driven from the
+ * browser (`docs/workers.md` "Credentials"). One run per profile; a second
+ * browser attaches to it.
+ *
+ * With the gateway switch on, the run takes the profile's login hold before
+ * it spawns `claude auth login`, names the child as the hold's writer right
+ * after, and forwards no input until the gateway acknowledged it: input that
+ * arrives earlier is held in order, and a stop discards it. With the switch
+ * off there is no hold and input goes through at once.
+ *
+ * Every way a run is stopped (timeout, cancel, server stop, a failed
+ * registration, a stdin error, the profile's deletion, Clear) signals the
+ * child and waits for its `close`: SIGTERM, then SIGKILL after 5 s; deletion
+ * and Clear send SIGKILL at once. Only `close` releases the hold and finishes
+ * the run, so no hold ends while its writer may still write. An exit hook
+ * sends SIGKILL to every child not closed yet.
+ */
 import { releaseChildOomScore } from "./childOomScore.ts";
-import type {
-  ClaudeLoginClientMessage,
-  ClaudeLoginServerMessage,
-  ClaudeLoginTerminalStatus,
+import {
+  loginStuckText,
+  type ClaudeLoginClientMessage,
+  type ClaudeLoginServerMessage,
+  type ClaudeLoginTerminalStatus,
 } from "@assistant/shared";
 import {
   claudeProfileEnvironment,
@@ -23,12 +42,25 @@ import {
   subscribeCredentialProfileDeleted,
 } from "./credentialProfiles.ts";
 import { errorText } from "./errors.ts";
+import { GATEWAY_LOGIN_UNAVAILABLE_TEXT } from "./gatewayLink.ts";
+import {
+  takeLoginHold,
+  type LoginHold,
+  type LoginHoldTaken,
+} from "./loginHolds.ts";
 import { packagedClaudeCliPath } from "./runtimeAssets.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
 const MAX_INPUT_CHARS = 8_192;
+/** Input held until the gateway acknowledged the writer (L8). */
+const MAX_PENDING_INPUT_CHARS = 64_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const FINISHED_RETENTION_MS = 2 * 60_000;
+/** How long a SIGTERM'd child has before SIGKILL. */
+const KILL_AFTER_MS = 5_000;
+const TIMED_OUT_TEXT =
+  "Claude login timed out after 10 minutes. Start it again to retry.";
+const CANCELLED_LINE = "\nClaude login cancelled.\n";
 
 type SpawnClaudeLogin = (
   executable: string,
@@ -43,15 +75,35 @@ let spawnClaudeLogin: SpawnClaudeLogin = (executable, args, options) =>
   });
 let loginTimeoutMs = DEFAULT_TIMEOUT_MS;
 
+/** How a stopped run finishes once its child closed. */
+interface LoginEnding {
+  status: "error" | "cancelled";
+  message?: string;
+  /** The output line the stop appends at once. */
+  line?: string;
+}
+
 interface LoginRun {
   profileId: string;
-  child: ChildProcessWithoutNullStreams;
+  name: string;
+  /** Absent until spawned. */
+  child?: ChildProcessWithoutNullStreams;
+  hold?: LoginHold;
   viewers: Set<WebSocket>;
   status: ClaudeLoginTerminalStatus;
   output: string;
   startedAt: number;
   error?: string;
   finished: boolean;
+  /** Input reaches the child: the gateway acknowledged it, or there is no hold. */
+  writerReady: boolean;
+  pendingInput: string[];
+  pendingChars: number;
+  /** The first stop's ending; the run finishes with it on `close`. */
+  ending?: LoginEnding;
+  killTimer?: ReturnType<typeof setTimeout>;
+  /** The child closed, or never ran. */
+  closed: boolean;
   timeout: ReturnType<typeof setTimeout>;
   retention?: ReturnType<typeof setTimeout>;
 }
@@ -201,76 +253,189 @@ function startRun(profileId: string): LoginRun {
   if (!profile || profile.provider !== "claude")
     throw new Error("That is not a Claude credential profile.");
   setCredentialProfileLoginState(profileId, { status: "connecting" });
-  const env = claudeLoginEnvironment(profileId);
+  const run: LoginRun = {
+    profileId,
+    name: profile.name,
+    viewers: new Set(),
+    status: "connecting",
+    output: "Starting the official Claude login…\n",
+    startedAt: Date.now(),
+    finished: false,
+    writerReady: false,
+    pendingInput: [],
+    pendingChars: 0,
+    closed: false,
+    timeout: setTimeout(
+      () => stop(run, { status: "error", message: TIMED_OUT_TEXT }, "SIGTERM"),
+      loginTimeoutMs,
+    ),
+  };
+  run.timeout.unref?.();
+  runs.set(profileId, run);
+  // Without a link the answer is not a promise: the child spawns right here.
+  const taking = takeLoginHold(profile, () =>
+    stop(run, { status: "cancelled", line: CANCELLED_LINE }, "SIGKILL"),
+  );
+  if (taking instanceof Promise) void taking.then((taken) => begin(run, taken));
+  else begin(run, taking);
+  return run;
+}
+
+/** Spawns the child once the hold is taken, unless the run stopped meanwhile. */
+function begin(run: LoginRun, taken: LoginHoldTaken): void {
+  if (taken.kind === "held") run.hold = taken.hold;
+  if (run.ending) {
+    run.closed = true;
+    run.hold?.release();
+    finish(run, run.ending.status, run.ending.message);
+    return;
+  }
+  if (taken.kind === "stuck") {
+    run.closed = true;
+    finish(run, "error", loginStuckText(run.name));
+    return;
+  }
+  if (taken.kind === "unavailable") {
+    run.closed = true;
+    finish(run, "error", GATEWAY_LOGIN_UNAVAILABLE_TEXT);
+    return;
+  }
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawnClaudeLogin(
       bundledClaudeCliPath(),
       ["auth", "login", "--claudeai"],
       {
-        env,
+        env: claudeLoginEnvironment(run.profileId),
         windowsHide: true,
       },
     );
   } catch (error) {
-    const message = `Could not start the official Claude CLI: ${errorText(error)}`;
-    setCredentialProfileLoginState(profileId, {
-      status: "error",
-      error: message.slice(0, 180),
-    });
-    throw new Error(message);
+    run.closed = true;
+    run.hold?.release();
+    finish(
+      run,
+      "error",
+      `Could not start the official Claude CLI: ${errorText(error)}`,
+    );
+    return;
   }
+  run.child = child;
   releaseChildOomScore(child.pid);
-  const run: LoginRun = {
-    profileId,
-    child,
-    viewers: new Set(),
-    status: "connecting",
-    output: "Starting the official Claude login…\n",
-    startedAt: Date.now(),
-    finished: false,
-    timeout: setTimeout(() => undefined, 1),
-  };
-  runs.set(profileId, run);
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => appendOutput(run, chunk));
   child.stderr.on("data", (chunk: string) => appendOutput(run, chunk));
   child.stdin.on("error", (error) =>
-    finish(run, "error", `Claude login input closed: ${errorText(error)}`),
+    stop(
+      run,
+      {
+        status: "error",
+        message: `Claude login input closed: ${errorText(error)}`,
+      },
+      "SIGTERM",
+    ),
   );
-  child.on("error", (error) =>
+  child.on("error", (error) => {
+    // Only a child that never ran has no pid; one that ran ends on `close`.
+    if (child.pid !== undefined) return;
+    run.closed = true;
+    run.hold?.release();
     finish(
       run,
       "error",
       `Could not start the official Claude CLI: ${errorText(error)}`,
-    ),
-  );
-  child.on("close", (code, signal) => {
-    if (run.finished) return;
-    if (code === 0 && claudeProfileHasCredential(profileId)) {
-      appendOutput(run, "\nClaude login completed.\n");
-      finish(run, "ready");
-      return;
-    }
-    const detail = signal
-      ? `Claude login stopped (${signal}).`
-      : `Claude login exited with code ${code ?? "unknown"}.`;
-    finish(run, "error", detail);
-  });
-  clearTimeout(run.timeout);
-  run.timeout = setTimeout(() => {
-    if (run.finished) return;
-    run.child.kill("SIGTERM");
-    finish(
-      run,
-      "error",
-      "Claude login timed out after 10 minutes. Start it again to retry.",
     );
-  }, loginTimeoutMs);
-  run.timeout.unref?.();
-  return run;
+  });
+  child.on("close", (code, signal) => closed(run, code, signal));
+  const { hold } = run;
+  if (!hold) {
+    run.writerReady = true;
+    return;
+  }
+  // A child that never ran cannot write: nothing is left to hold.
+  if (child.pid === undefined) {
+    hold.release();
+    return;
+  }
+  hold.registerWriter(child.pid).then(
+    () => {
+      if (!acceptsInput(run)) return;
+      run.writerReady = true;
+      for (const data of run.pendingInput) child.stdin.write(`${data}\n`);
+      run.pendingInput = [];
+      run.pendingChars = 0;
+    },
+    () =>
+      stop(
+        run,
+        { status: "error", message: GATEWAY_LOGIN_UNAVAILABLE_TEXT },
+        "SIGTERM",
+      ),
+  );
 }
+
+/** The child closed: the hold ends, then the run finishes. */
+function closed(
+  run: LoginRun,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): void {
+  run.closed = true;
+  clearTimeout(run.killTimer);
+  run.pendingInput = [];
+  run.pendingChars = 0;
+  run.hold?.release();
+  if (run.finished) return;
+  if (run.ending) {
+    finish(run, run.ending.status, run.ending.message);
+    return;
+  }
+  if (code === 0 && claudeProfileHasCredential(run.profileId)) {
+    appendOutput(run, "\nClaude login completed.\n");
+    finish(run, "ready");
+    return;
+  }
+  const detail = signal
+    ? `Claude login stopped (${signal}).`
+    : `Claude login exited with code ${code ?? "unknown"}.`;
+  finish(run, "error", detail);
+}
+
+/**
+ * Stops the run: the first ending wins, held input is dropped, and the child
+ * gets `signal` (SIGTERM escalates to SIGKILL after 5 s). The run finishes
+ * only on the child's `close`; before the spawn, `begin` sees the ending.
+ */
+function stop(
+  run: LoginRun,
+  ending: LoginEnding,
+  signal: "SIGTERM" | "SIGKILL",
+): void {
+  if (run.finished || run.closed) return;
+  if (run.ending) {
+    // A later SIGKILL stop still escalates.
+    if (signal !== "SIGKILL") return;
+  } else {
+    run.ending = ending;
+    run.pendingInput = [];
+    run.pendingChars = 0;
+    clearTimeout(run.timeout);
+    if (ending.line) appendOutput(run, ending.line);
+  }
+  const { child } = run;
+  if (!child) return;
+  child.kill(signal);
+  if (signal === "SIGTERM" && !run.closed && !run.killTimer) {
+    run.killTimer = setTimeout(() => {
+      if (!run.closed) child.kill("SIGKILL");
+    }, KILL_AFTER_MS);
+    run.killTimer.unref?.();
+  }
+}
+
+const acceptsInput = (run: LoginRun): boolean =>
+  !run.finished && !run.ending && !run.closed;
 
 function snapshot(run: LoginRun): ClaudeLoginServerMessage {
   return {
@@ -293,23 +458,25 @@ function handleClientMessage(run: LoginRun, raw: string): void {
   if (!parsed || typeof parsed !== "object") return;
   const message = parsed as Partial<ClaudeLoginClientMessage>;
   if (message.type === "cancel") {
-    if (!run.finished) {
-      run.child.kill("SIGTERM");
-      appendOutput(run, "\nClaude login cancelled.\n");
-      finish(run, "cancelled");
-    }
+    stop(run, { status: "cancelled", line: CANCELLED_LINE }, "SIGTERM");
     return;
   }
   if (
     message.type !== "input" ||
-    run.finished ||
+    !acceptsInput(run) ||
     typeof message.data !== "string"
   )
     return;
   const data = message.data.trim();
   if (!data || data.length > MAX_INPUT_CHARS) return;
   // Never append or log this value: it may be the short-lived OAuth authorization code.
-  run.child.stdin.write(`${data}\n`);
+  if (run.writerReady) {
+    run.child!.stdin.write(`${data}\n`);
+    return;
+  }
+  if (run.pendingChars + data.length > MAX_PENDING_INPUT_CHARS) return;
+  run.pendingInput.push(data);
+  run.pendingChars += data.length;
 }
 
 /** Attach one authenticated browser to a single-flight, reconnectable profile login. */
@@ -348,28 +515,11 @@ export function attachClaudeLoginSocket(
   viewer.on("error", detach);
 }
 
-function cancelClaudeLoginTerminal(
-  profileId: string,
-  reason = "Claude login cancelled.",
-  signal: NodeJS.Signals = "SIGTERM",
-): void {
-  const run = runs.get(profileId);
-  if (!run || run.finished) return;
-  run.child.kill(signal);
-  appendOutput(run, `\n${reason}\n`);
-  finish(run, "cancelled");
-}
-
 /** Login subprocesses are not agent turns and must never hold a deploy drain open. */
 export function stopClaudeLoginTerminals(): void {
-  for (const run of runs.values()) {
-    clearTimeout(run.timeout);
+  for (const run of [...runs.values()]) {
     if (run.retention) clearTimeout(run.retention);
-    if (!run.finished) {
-      run.child.kill("SIGTERM");
-      finish(run, "cancelled");
-      if (run.retention) clearTimeout(run.retention);
-    }
+    stop(run, { status: "cancelled" }, "SIGTERM");
     for (const viewer of run.viewers) {
       try {
         viewer.close(1012, "Server restarting");
@@ -377,17 +527,39 @@ export function stopClaudeLoginTerminals(): void {
         /* already closed */
       }
     }
+    // A child not closed yet stays, for its `close` and the exit hook.
+    if (run.closed) {
+      if (run.retention) clearTimeout(run.retention);
+      runs.delete(run.profileId);
+    }
   }
-  runs.clear();
 }
 
-subscribeCredentialProfileDeleted((profileId) =>
-  cancelClaudeLoginTerminal(
-    profileId,
-    "Profile deleted; Claude login cancelled.",
-    "SIGKILL",
-  ),
-);
+/** SIGKILL to every login child that has not closed; the process is exiting. */
+export function killUnclosedClaudeLoginChildren(): void {
+  for (const run of runs.values())
+    if (run.child && !run.closed)
+      try {
+        run.child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+}
+
+process.once("exit", killUnclosedClaudeLoginChildren);
+
+subscribeCredentialProfileDeleted((profileId) => {
+  const run = runs.get(profileId);
+  if (run)
+    stop(
+      run,
+      {
+        status: "cancelled",
+        line: "\nProfile deleted; Claude login cancelled.\n",
+      },
+      "SIGKILL",
+    );
+});
 
 /** Test seams; production callers never replace the official CLI spawn. */
 export function setClaudeLoginSpawnForTests(

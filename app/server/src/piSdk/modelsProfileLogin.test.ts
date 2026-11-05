@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterAll, afterEach, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, test, vi } from "vitest";
 import {
   existsSync,
   mkdirSync,
@@ -29,6 +29,13 @@ const {
   startOpenAiProfileLogin,
   modelRuntimeForProfile,
 } = await import("./models.ts");
+
+const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+const loginHolds = await import("../loginHolds.ts");
+const { GATEWAY_LOGIN_UNAVAILABLE_TEXT, LoginHeldError } =
+  await import("../gatewayLink.ts");
+const { deferred, fakeLoginHoldLink } =
+  await import("../test/fakeLoginHoldLink.ts");
 
 const health = await import("../accountHealth.ts");
 health.initializeAccountHealth({
@@ -664,6 +671,236 @@ test("deletion retires SDK files written by a snapshot refresh that outlives log
     release();
     refresh.mockRestore();
   }
+});
+
+// G5b: the pi login's hold (AC7, AC8, AC10's live pi hold, AC14). pi's
+// provider login is the hold's writer, in this process: the hold is taken
+// before it and ends only once it settled.
+describe("G5b: the pi login's hold", () => {
+  const TIMED_OUT =
+    "OpenAI device-code login timed out. The active login will finish before another can start.";
+  let logged: string[] = [];
+
+  /** An OpenAI profile, a fake link, and a provider login the test settles. */
+  function piSetup(name: string, options: { link?: boolean } = {}) {
+    const profile = createCredentialProfile({ name, provider: "openai-codex" });
+    const events: string[] = [];
+    const fake = fakeLoginHoldLink(events);
+    loginHolds.setLoginHoldLinkForTests(
+      options.link === false ? undefined : fake.link,
+    );
+    const authPath = join(piAgentDir(profile.id), "auth.json");
+    const create = vi.spyOn(ModelRuntime, "create");
+    const runtimes = () =>
+      create.mock.calls.filter(
+        ([opts]) => (opts as { authPath?: string })?.authPath === authPath,
+      ).length;
+    let settle = deferred<void>();
+    setOpenAiProfileLoginForTests(async () => {
+      events.push("login");
+      const current = settle;
+      await current.promise;
+      // A deletion removed the directory; the provider writes regardless.
+      mkdirSync(dirname(authPath), { recursive: true });
+      writeFileSync(authPath, '{"openai-codex":{}}', { mode: 0o600 });
+      events.push("settled");
+    });
+    return {
+      profile,
+      events,
+      fake,
+      runtimes,
+      /** The provider login's outcome; a fresh one for the next login. */
+      settle: () => settle,
+      next: () => {
+        settle = deferred<void>();
+      },
+      state: () => listCredentialProfiles().find((p) => p.id === profile.id),
+    };
+  }
+
+  beforeEach(() => {
+    logged = [];
+    for (const method of ["log", "info", "warn", "error"] as const)
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        logged.push(args.map(String).join(" "));
+      });
+  });
+
+  afterEach(() => {
+    // AC14: no hold id reaches a log line (pi's flow takes no pasted input).
+    for (const line of logged)
+      for (const value of ["hold-1", "hold-2"])
+        assert.ok(!line.includes(value), `a log line leaks: ${line}`);
+    vi.restoreAllMocks();
+    loginHolds.setLoginHoldLinkForTests(null);
+  });
+
+  test.each(["resolve", "reject"] as const)(
+    "AC7: the hold comes before the runtime and the login; a UI timeout keeps it; it ends after the provider settles (%s), and a restart then acquires",
+    async (outcome) => {
+      const setup = piSetup(`Held OpenAI ${outcome}`);
+      const acquired = deferred<string>();
+      setup.fake.acquire = () => acquired.promise;
+      setOpenAiProfileLoginTimeoutForTests(15);
+
+      startOpenAiProfileLogin(setup.profile.id);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.deepEqual(setup.events, [`acquire ${setup.profile.id}`]);
+      assert.equal(setup.runtimes(), 0, "no runtime before the hold");
+      assert.equal(setup.state()?.status, "connecting");
+
+      acquired.resolve("hold-1");
+      await waitFor(() =>
+        setup.state()?.status === "error" ? true : undefined,
+      );
+      assert.equal(setup.state()?.error, TIMED_OUT);
+      assert.equal(setup.runtimes(), 1);
+      assert.deepEqual(
+        setup.events,
+        [`acquire ${setup.profile.id}`, "login"],
+        "the UI timeout releases nothing",
+      );
+
+      if (outcome === "resolve") setup.settle().resolve();
+      else setup.settle().reject(new Error("The provider refused."));
+      await waitFor(() =>
+        setup.events.includes("release hold-1") ? true : undefined,
+      );
+      assert.deepEqual(setup.events.slice(2), [
+        ...(outcome === "resolve" ? ["settled"] : []),
+        "release hold-1",
+      ]);
+      await waitFor(() =>
+        setup.state()?.status === (outcome === "resolve" ? "ready" : "error")
+          ? true
+          : undefined,
+      );
+      if (outcome === "reject")
+        assert.equal(setup.state()?.error, "The provider refused.");
+
+      // The login has ended here, so a restart takes a new hold at once.
+      setup.next();
+      setup.fake.acquire = () => Promise.resolve("hold-2");
+      setOpenAiProfileLoginTimeoutForTests(null);
+      startOpenAiProfileLogin(setup.profile.id);
+      await waitFor(() =>
+        setup.events.filter((event) => event.startsWith("acquire")).length === 2
+          ? true
+          : undefined,
+      );
+      setup.settle().resolve();
+      await waitFor(() =>
+        setup.events.includes("release hold-2") ? true : undefined,
+      );
+    },
+  );
+
+  test("AC7: a stuck login starts no runtime and leaves no login state", async () => {
+    const setup = piSetup("Stuck OpenAI");
+    setup.fake.acquire = () =>
+      Promise.reject(new LoginHeldError("login_stuck", "hold-9"));
+
+    startOpenAiProfileLogin(setup.profile.id);
+    await waitFor(() =>
+      setup.state()?.status === "connecting" ? undefined : true,
+    );
+    assert.equal(setup.runtimes(), 0);
+    assert.deepEqual(setup.events, [`acquire ${setup.profile.id}`]);
+    assert.equal(setup.state()?.status, "disconnected");
+    assert.equal(setup.state()?.error, undefined);
+    assert.equal(loginHolds.loginStuckOf(setup.profile), true);
+  });
+
+  test.each([
+    ["the gateway is unreachable", () => new Error("unreachable")],
+    ["a hold exists", () => new LoginHeldError("hold_exists", "hold-9")],
+    [
+      "a stuck refusal names no hold",
+      () => new LoginHeldError("login_stuck", undefined),
+    ],
+  ])(
+    "AC7: when %s the login shows U7's unavailable text and starts nothing",
+    async (_case, refusal) => {
+      const setup = piSetup("Unavailable OpenAI");
+      setup.fake.acquire = () => Promise.reject(refusal());
+
+      startOpenAiProfileLogin(setup.profile.id);
+      await waitFor(() =>
+        setup.state()?.status === "error" ? true : undefined,
+      );
+      assert.equal(setup.state()?.error, GATEWAY_LOGIN_UNAVAILABLE_TEXT);
+      assert.equal(setup.runtimes(), 0);
+      assert.deepEqual(setup.events, [`acquire ${setup.profile.id}`]);
+      assert.equal(loginHolds.loginStuckOf(setup.profile), false);
+    },
+  );
+
+  test("AC7: a deletion during the login releases only after the provider settles", async () => {
+    const setup = piSetup("Deleted OpenAI");
+    // Read before the deletion: `piAgentDir` creates what it names.
+    const root = dirname(piAgentDir(setup.profile.id));
+    startOpenAiProfileLogin(setup.profile.id);
+    await waitFor(() => (setup.events.includes("login") ? true : undefined));
+
+    deleteCredentialProfile(setup.profile.id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(setup.events, [`acquire ${setup.profile.id}`, "login"]);
+
+    setup.settle().resolve();
+    await waitFor(() =>
+      setup.events.includes("release hold-1") ? true : undefined,
+    );
+    assert.deepEqual(setup.events.slice(2), ["settled", "release hold-1"]);
+    await waitFor(() => (existsSync(root) ? undefined : true));
+  });
+
+  test("AC7: a deletion while the hold is acquired starts nothing and releases it", async () => {
+    const setup = piSetup("Deleted while acquiring");
+    const acquired = deferred<string>();
+    setup.fake.acquire = () => acquired.promise;
+    startOpenAiProfileLogin(setup.profile.id);
+    deleteCredentialProfile(setup.profile.id);
+
+    acquired.resolve("hold-1");
+    await waitFor(() =>
+      setup.events.includes("release hold-1") ? true : undefined,
+    );
+    assert.deepEqual(setup.events, [
+      `acquire ${setup.profile.id}`,
+      "release hold-1",
+    ]);
+    assert.equal(setup.runtimes(), 0);
+  });
+
+  test("AC10: Clear on this boot's running pi login is refused with pi's text and keeps the hold (DQ2)", async () => {
+    const setup = piSetup("Cleared OpenAI");
+    startOpenAiProfileLogin(setup.profile.id);
+    await waitFor(() => (setup.events.includes("login") ? true : undefined));
+    setup.fake.status(setup.profile.id, { loginStuck: true, holdId: "hold-1" });
+
+    await assert.rejects(loginHolds.clearUnfinishedLogin(setup.profile), {
+      message: TIMED_OUT,
+    });
+    assert.deepEqual(setup.events, [`acquire ${setup.profile.id}`, "login"]);
+    assert.equal(setup.state()?.status, "connecting");
+
+    setup.settle().resolve();
+    await waitFor(() => (setup.state()?.status === "ready" ? true : undefined));
+    assert.deepEqual(setup.events.slice(2), ["settled", "release hold-1"]);
+  });
+
+  test("AC8: with the switch off the login runs without a hold, is never stuck, and Clear does nothing", async () => {
+    const setup = piSetup("Unheld OpenAI", { link: false });
+    startOpenAiProfileLogin(setup.profile.id);
+    await waitFor(() => (setup.events.includes("login") ? true : undefined));
+    setup.settle().resolve();
+    await waitFor(() => (setup.state()?.status === "ready" ? true : undefined));
+    assert.deepEqual(setup.events, ["login", "settled"]);
+    assert.equal(loginHolds.loginStuckOf(setup.profile), false);
+    await loginHolds.clearUnfinishedLogin(setup.profile);
+    assert.deepEqual(setup.events, ["login", "settled"]);
+  });
 });
 
 afterEach(() => {

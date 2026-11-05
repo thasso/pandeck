@@ -27,6 +27,11 @@ import {
 } from "../openAiCompatibleAccounts.ts";
 import { normalizeCompatibleSettingsPins } from "../compatibleSettingsPins.ts";
 import { errorText } from "../errors.ts";
+import {
+  GATEWAY_LOGIN_UNAVAILABLE_TEXT,
+  takeLoginHold,
+  type LoginHold,
+} from "../loginHolds.ts";
 import { guardServerRuntime } from "./serverCredentialPairing.ts";
 import {
   clearCredentialProfileLoginState,
@@ -546,7 +551,15 @@ export function setOpenAiProfileLoginTimeoutForTests(
   openAiProfileLoginTimeoutMs = timeoutMs ?? OPENAI_PROFILE_LOGIN_TIMEOUT_MS;
 }
 
-/** Start pi's provider-owned OpenAI device-code flow without exposing a token. */
+const OPENAI_LOGIN_TIMED_OUT_TEXT =
+  "OpenAI device-code login timed out. The active login will finish before another can start.";
+
+/**
+ * Start pi's provider-owned OpenAI device-code flow without exposing a token.
+ * With the gateway switch on, the profile's login hold is taken before the
+ * runtime, and released only once the provider's login has settled, never on
+ * the UI timeout. Clear refuses this login while it runs here (DQ2).
+ */
 export function startOpenAiProfileLogin(profileId: string): void {
   if (profileLogins.has(profileId)) return;
   const profile = credentialProfileById(profileId);
@@ -589,14 +602,32 @@ export function startOpenAiProfileLogin(profileId: string): void {
   profileLogins.set(profileId, operation);
   clearCredentialProfileLoginState(profileId);
   setCredentialProfileLoginState(profileId, { status: "connecting" });
+  let hold: LoginHold | undefined;
+  let providerLogin: Promise<unknown> | undefined;
   void (async () => {
+    const taken = await takeLoginHold(profile, () => {
+      throw new Error(OPENAI_LOGIN_TIMED_OUT_TEXT);
+    });
+    if (taken.kind === "held") hold = taken.hold;
+    if (!isCurrent()) return;
+    if (taken.kind === "stuck") {
+      clearCredentialProfileLoginState(profileId);
+      return;
+    }
+    if (taken.kind === "unavailable") {
+      setCredentialProfileLoginState(profileId, {
+        status: "error",
+        error: GATEWAY_LOGIN_UNAVAILABLE_TEXT,
+      });
+      return;
+    }
     // A login-only facade can attest its own OAuth result without changing a
     // live run's provider. The SDK still owns all credential serialization.
     const runtime = await ModelRuntime.create({
       ...runtimeOptions(agentDir),
       refreshOnCreate: false,
     });
-    const providerLogin = runOpenAiProfileLogin(
+    providerLogin = runOpenAiProfileLogin(
       runtime,
       {
         notify(event) {
@@ -623,18 +654,14 @@ export function startOpenAiProfileLogin(profileId: string): void {
       completeLogin,
       `${agentDir}/auth.json`,
     );
+    const login = providerLogin;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        providerLogin,
+        login,
         new Promise<never>((_, reject) => {
           timeout = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  "OpenAI device-code login timed out. The active login will finish before another can start.",
-                ),
-              ),
+            () => reject(new Error(OPENAI_LOGIN_TIMED_OUT_TEXT)),
             openAiProfileLoginTimeoutMs,
           );
         }),
@@ -644,7 +671,7 @@ export function startOpenAiProfileLogin(profileId: string): void {
       if (completed) {
         // Retain serialization until a hanging post-login refresh actually
         // settles, but never turn a committed login back into an error.
-        await providerLogin.catch(() => {});
+        await login.catch(() => {});
         return;
       }
       if (
@@ -660,7 +687,7 @@ export function startOpenAiProfileLogin(profileId: string): void {
         // Promise.race cannot abort the SDK login. Keep this operation in the
         // in-flight map until it truly settles, so a retry cannot race its auth
         // file; then surface its actual result.
-        await providerLogin;
+        await login;
         completeLogin();
         return;
       }
@@ -681,21 +708,26 @@ export function startOpenAiProfileLogin(profileId: string): void {
       }
     })
     .finally(() => {
-      if (operation.invalidated) {
-        // The provider API has no cancellation signal. Deletion invalidates all
-        // callbacks immediately; after the operation settles, remove anything it
-        // may have written through its now-stale runtime paths.
-        rmSync(dirname(operation.agentDir), { recursive: true, force: true });
-      } else {
-        // pi owns the token serialization; tighten the file after every login/refresh.
-        try {
-          chmodSync(`${agentDir}/auth.json`, 0o600);
-        } catch {
-          /* no credential was written */
+      // The writer is pi's provider login: the hold ends once it settled.
+      void Promise.allSettled([providerLogin]).then(() => {
+        hold?.release();
+        if (operation.invalidated) {
+          // The provider API has no cancellation signal. Deletion invalidates
+          // all callbacks immediately; after the operation settles, remove
+          // anything it may have written through its now-stale runtime paths.
+          rmSync(dirname(operation.agentDir), { recursive: true, force: true });
+        } else {
+          // pi owns the token serialization; tighten the file after every
+          // login/refresh.
+          try {
+            chmodSync(`${agentDir}/auth.json`, 0o600);
+          } catch {
+            /* no credential was written */
+          }
         }
-      }
-      if (profileLogins.get(profileId) === operation)
-        profileLogins.delete(profileId);
+        if (profileLogins.get(profileId) === operation)
+          profileLogins.delete(profileId);
+      });
     });
 }
 
