@@ -888,6 +888,27 @@ test("F001: a project directory replaced by a link after the plan makes its unit
   assert.equal(existsSync(join(fx.W, "staging")), false);
 });
 
+test("F001: the projects directory itself replaced by a look-alike link after the plan makes every unit unsupported", async () => {
+  const fx = fixture();
+  const foreign = foreignDir(fx, {
+    [`${K1}/${U1}.jsonl`]: "main",
+    [`${K1}/${U1}/subagents/agent-a.jsonl`]: "tree",
+    [`${K1}/${U2}.jsonl`]: "main",
+    [`${K2}/${U3}.jsonl`]: "main",
+  });
+  const result = await runChangingHome(fx, (step) => {
+    if (step !== "state-copy") return;
+    renameSync(fx.S, join(fx.home, "moved-projects"));
+    symlinkSync(foreign, fx.S);
+  });
+  assert.equal(result.outcome, "done");
+  assert.equal(result.outcome === "done" && result.counts.unsupported, 3);
+  assert.equal(result.outcome === "done" && result.counts.copied, 0);
+  assert.deepEqual(leaked(fx), []);
+  assert.deepEqual(manifest(fx).effective, {});
+  assert.equal(existsSync(join(fx.W, "staging")), false);
+});
+
 const STEPS: Array<[HomeTranscriptImportStep, string | undefined]> = [
   ["cleaned", undefined],
   ["manifest-repaired", undefined],

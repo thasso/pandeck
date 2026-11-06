@@ -97,10 +97,10 @@ backup.
   its `<key>/<id>/` tree, copied under the same `<key>`. Nothing else: no
   terminal-only transcript, named-account session, config or credential. A unit
   holding a link or other non-regular entry is skipped as unsupported, and so is
-  one whose project, `<id>/` or inner directory is no longer the same real
-  directory when it is copied or once its files are staged. That check sees a
-  directory replaced at either moment, not one replaced and restored between
-  them.
+  one whose `projects/`, project, `<id>/` or inner directory is no longer the
+  same real directory when it is copied or once its files are staged. That check
+  sees a directory replaced at either moment, not one replaced and restored
+  between them.
 - **Work files** in `credential-profiles/claude-default/home-import/`:
   `state.json` (phase `backup`, `copy`, then `done`, replaced atomically with
   fsync), `manifest.jsonl` (one fsynced line per unit: provider id, project key,

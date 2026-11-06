@@ -346,7 +346,7 @@ async function runImport(
     await rm(installedTree, { recursive: true, force: true });
     let files: ManifestFile[];
     try {
-      files = await stageUnit(source, staging, unit, () =>
+      files = await stageUnit(source, sourceStat, staging, unit, () =>
         afterStep("listed", unit.id),
       );
     } catch (err) {
@@ -499,7 +499,8 @@ async function regularTreeBytes(dir: string): Promise<number | undefined> {
  * once its entries are in. Files end 0600 and directories 0700.
  *
  * Paths are walked by name, so every source directory the copy goes through
- * (the project, the tree and each directory in it) must be a real directory,
+ * (`projects/` as step 4 saw it, the project, the tree and each directory in
+ * it; not home or `.claude` above them) must be a real directory,
  * not a link, both before it is used and after everything under it is
  * staged, with the same device and inode. A directory replaced since the plan
  * makes the unit unsupported and its staging is discarded, so nothing read
@@ -509,10 +510,12 @@ async function regularTreeBytes(dir: string): Promise<number | undefined> {
  */
 async function stageUnit(
   source: string,
+  sourceBefore: Stats,
   staging: string,
   unit: Unit,
   listed: () => void,
 ): Promise<ManifestFile[]> {
+  await assertSameDirectory(source, sourceBefore);
   const project = join(source, unit.key);
   const projectBefore = await sourceDirectory(project);
   const stagedKey = join(staging, unit.key);
@@ -534,6 +537,7 @@ async function stageUnit(
     )),
   });
   await assertSameDirectory(project, projectBefore);
+  await assertSameDirectory(source, sourceBefore);
   await fsyncDir(stagedKey);
   return files;
 }
