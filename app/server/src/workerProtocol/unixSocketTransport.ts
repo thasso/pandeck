@@ -8,7 +8,13 @@
  * (`gateway/process.ts`), and the server dials it.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, statSync, unlinkSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import net from "node:net";
 import { basename, dirname } from "node:path";
 import type { ByteEndpoint } from "./inProcessTransport.ts";
@@ -70,21 +76,21 @@ export function dialUnixSocket(
  * Listens on the Unix socket at `path` and hands each accepted connection to
  * `onEndpoint`. Refuses when another process answers on `path`; a stale file
  * no one answers on is removed first. The file gets mode 0600, and `close`
- * stops listening, ends open connections and removes the file. Linux only:
- * an abstract socket serializes ownership, including stale-file recovery.
- * The kernel releases that claim on crash, without a stale lock to recover.
+ * stops listening, ends open connections and removes the file. On Linux an
+ * abstract socket serializes ownership, including stale-file recovery. The
+ * kernel releases that claim on crash, without a stale lock to recover.
+ * Other development hosts retain probe/unlink without that serialization.
  */
 export async function listenUnixSocket(
   path: string,
   onEndpoint: (endpoint: ByteEndpoint) => void,
 ): Promise<{ close(): Promise<void> }> {
   if (process.platform !== "linux")
-    throw new Error("The standalone Unix socket listener requires Linux.");
-  // Directory identity, not its spelling: relative paths, symlinks and bind
-  // mounts naming the same socket must contend for the same kernel claim.
-  const directory = statSync(dirname(path));
+    return listenClaimedUnixSocket(path, onEndpoint);
+  // Derive ownership from the canonical socket path: previews and production
+  // never share a claim, while relative paths and symlinks still contend.
   const identity = createHash("sha256")
-    .update(`${directory.dev}:${directory.ino}:${basename(path)}`)
+    .update(`${realpathSync(dirname(path))}/${basename(path)}`)
     .digest("hex");
   const claim = net.createServer((socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
@@ -123,7 +129,7 @@ export async function listenUnixSocket(
   }
 }
 
-/** The caller holds the kernel claim until this listener has closed. */
+/** Linux callers hold the kernel claim until this listener has closed. */
 async function listenClaimedUnixSocket(
   path: string,
   onEndpoint: (endpoint: ByteEndpoint) => void,

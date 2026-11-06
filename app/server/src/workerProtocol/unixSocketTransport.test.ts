@@ -125,6 +125,42 @@ test("an unclaimed foreign live listener is refused without changing its path or
   await next.close();
 });
 
+test("distinct socket paths do not share ownership claims", async () => {
+  const firstPath = socketPath();
+  const secondPath = join(firstPath, "..", "preview.sock");
+  const first = await listenUnixSocket(firstPath, () => {});
+  const second = await listenUnixSocket(secondPath, () => {});
+  try {
+    (await dialUnixSocket(firstPath)).close();
+    (await dialUnixSocket(secondPath)).close();
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
+test("non-Linux development retains stale replacement, live refusal and close", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    const path = socketPath();
+    writeFileSync(path, "");
+    const first = await listenUnixSocket(path, () => {});
+    try {
+      (await dialUnixSocket(path)).close();
+      await assert.rejects(
+        listenUnixSocket(path, () => {}),
+        /Another process listens on/,
+      );
+    } finally {
+      await first.close();
+    }
+    assert.equal(existsSync(path), false);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+});
+
 test("a dial with no listener rejects", async () => {
   await assert.rejects(dialUnixSocket(socketPath()));
 });

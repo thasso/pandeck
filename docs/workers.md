@@ -1352,16 +1352,18 @@ here.
 
 The standalone entry (`gateway/main.ts`, packaged as `pandeck-gateway`) keeps
 the edge and vault in one process. It takes its control socket before opening
-state, refuses an answered socket, removes a stale one and sets mode 0600. The
-listener requires Linux. It holds an abstract Unix-socket ownership claim
-through shutdown, serializing overlapping starts before probing or removing a
-stale path. The claim uses the parent directory's filesystem identity and the
-socket basename, so path aliases contend too. A crash releases the claim in the
-kernel; a failed start releases it after closing its control listener. SIGTERM
-or SIGINT closes control and stops accepting model requests, lets active streams
-finish for up to two minutes, then destroys remaining sockets. The code ships
-without service units or a production switch. Switch-off rollback and the
-CLI-compatible credential locks stay until slice 5's encrypted store migration.
+state, refuses an answered socket, removes a stale one and sets mode 0600. On
+Linux it holds an abstract Unix-socket ownership claim through shutdown,
+serializing overlapping starts before probing or removing a stale path. The
+claim derives from the canonical socket path, so previews and production do not
+collide and symlink path aliases contend. A crash releases the claim in the
+kernel; a failed start releases it after closing its control listener. Known
+limit: non-Linux socket mode is development-only and retains probe/unlink
+without interprocess startup serialization. SIGTERM or SIGINT closes control and
+stops accepting model requests, lets active streams finish for up to two
+minutes, then destroys remaining sockets. The code ships without service units
+or a production switch. Switch-off rollback and the CLI-compatible credential
+locks stay until slice 5's encrypted store migration.
 
 - Before it is ready the link says hello as this server boot (16 random bytes,
   the pid and the process start time), syncs every credential profile with its
