@@ -29,8 +29,11 @@ const home = mkdtempSync(join(tmpdir(), "gateway-link-home-"));
 process.env.HOME = home;
 
 const profiles = await import("./credentialProfiles.ts");
-const { openAiCompatibleEndpointPath, readOpenAiCompatibleEndpoint } =
-  await import("./openAiCompatibleAccounts.ts");
+const {
+  openAiCompatibleEndpointPath,
+  readOpenAiCompatibleEndpoint,
+  writeOpenAiCompatibleEndpoint,
+} = await import("./openAiCompatibleAccounts.ts");
 const config = await import("./config.ts");
 const { DEFAULT_WORKER_ID } = await import("./workers/placement.ts");
 const {
@@ -1045,7 +1048,7 @@ test("AC8: a rotation, URL edit or rename pushes upsert then set; disabling keep
   }
 });
 
-test("AC8, AC16: a key or an overlength URL only control refuses is saved, logged by its code alone, not retried, and leaves the account at the marked 503 while B forwards", async () => {
+test("AC8, AC16: legacy invalid keys and URLs are control-refused, logged by code alone, not retried, and leave A at the marked 503 while B forwards", async () => {
   const a = await startFakeCompatEndpoint(["m"], "a reply");
   const b = await startFakeCompatEndpoint(["m"], "b reply");
   // A valid URL whose long ASCII path takes it past control's 2048 bytes.
@@ -1090,15 +1093,16 @@ test("AC8, AC16: a key or an overlength URL only control refuses is saved, logge
       ]);
     };
 
-    // The key: Settings saves it as today; the gateway refuses it and
-    // clears the working pair.
-    await refused(() =>
-      profiles.patchOpenAiCompatibleEndpoint(idA, { apiKey: overlongKey }),
-    );
+    // Seed a pre-existing legacy key through the endpoint fixture writer; new
+    // saves reject it. A metadata change republishes it without repairing it.
+    writeOpenAiCompatibleEndpoint(idA, {
+      ...readOpenAiCompatibleEndpoint(idA),
+      apiKey: overlongKey,
+    });
+    await refused(() => profiles.patchCredentialProfile(idA, { priority: 1 }));
     assert.equal(
-      readOpenAiCompatibleEndpoint(idA).apiKey,
-      overlongKey,
-      "saved",
+      readOpenAiCompatibleEndpoint(idA).apiKey === overlongKey,
+      true,
     );
     assertUnset(await compatRequest(booted.gateway!, tokenA));
     assert.equal(forwarded(a).length, 1, "the endpoint sees nothing");
@@ -1110,19 +1114,16 @@ test("AC8, AC16: a key or an overlength URL only control refuses is saved, logge
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     assert.equal(pushesOfA(), counted);
 
-    // The URL: an edit clears the models, and Test rediscovers them at the
-    // endpoint directly; only then is the pair pushed, and refused.
-    profiles.patchOpenAiCompatibleEndpoint(idA, {
+    // Seed a legacy overlength URL the same way. Metadata publication pushes
+    // it to the gateway; normal save validation remains unchanged.
+    writeOpenAiCompatibleEndpoint(idA, {
+      ...readOpenAiCompatibleEndpoint(idA),
       baseUrl: long.baseUrl,
       apiKey: COMPAT_KEY_A,
     });
-    await refused(() => profiles.testOpenAiCompatibleProfile(idA));
+    await refused(() => profiles.patchCredentialProfile(idA, { priority: 2 }));
     assert.equal(readOpenAiCompatibleEndpoint(idA).baseUrl, long.baseUrl);
-    assert.deepEqual(
-      long.seen.map((seen) => seen.method),
-      ["GET"],
-      "only discovery reached it",
-    );
+    assert.deepEqual(long.seen, [], "legacy URL was never discovered");
     assertUnset(await compatRequest(booted.gateway!, tokenA, longPath));
     assertUnset(await compatRequest(booted.gateway!, tokenA));
     assert.deepEqual(forwarded(long), []);

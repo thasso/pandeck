@@ -162,6 +162,27 @@ it("allows unchanged legacy URLs, including normalized form echoes", async () =>
   expect(calls.tested).toEqual([endpoint.id]);
 });
 
+it("submits an exact legacy key re-entry and omits blank keys", async () => {
+  const { container: root } = await mountSettings();
+  await vi.waitFor(() => expect(root.textContent).toContain("Team LLM"));
+  const keyInput = root.querySelector<HTMLInputElement>(
+    'input[type="password"]',
+  )!;
+  const syntheticLegacyKey = " legacy key value ";
+  await enter(keyInput, syntheticLegacyKey);
+  await act(async () => button(root, "Save and discover models")!.click());
+  await vi.waitFor(() => expect(calls.saved.length).toBe(1));
+  const submittedKey = (calls.saved[0] as { patch: { apiKey?: string } }).patch
+    .apiKey;
+  expect(submittedKey === syntheticLegacyKey).toBe(true);
+
+  await enter(keyInput, "   ");
+  await act(async () => button(root, "Save and discover models")!.click());
+  await vi.waitFor(() => expect(calls.saved.length).toBe(2));
+  const blankPatch = (calls.saved[1] as { patch: { apiKey?: string } }).patch;
+  expect(Object.hasOwn(blankPatch, "apiKey")).toBe(false);
+});
+
 it("shows key-safe server validation errors without discovery", async () => {
   calls.saveError =
     "API key must contain 1 to 8192 visible ASCII characters (0x21 to 0x7e), without spaces or control characters.";

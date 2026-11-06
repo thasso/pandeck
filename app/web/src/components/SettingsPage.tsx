@@ -995,7 +995,7 @@ function EndpointFields({
         <Button
           busy={saving}
           disabled={!baseUrl.trim()}
-          onClick={() => save(apiKey.trim() ? { apiKey: apiKey.trim() } : {})}
+          onClick={() => save(apiKey.trim() ? { apiKey } : {})}
         >
           Save and discover models
         </Button>
