@@ -263,9 +263,22 @@ async function runImport(
   const manifestPath = join(work, "manifest.jsonl");
   const staging = join(work, "staging");
 
-  // 1. Done: nothing under home is read. A `copy` on disk is the durable
-  // boundary of an earlier run, so startup is safe from here on.
+  // 1. Visibility is not durability: an earlier attempt may have failed
+  // after a rename or mkdir. Renew its barriers before trusting saved state,
+  // including a recovered set-aside. Done still never resolves or reads home.
   const state = await readState(statePath);
+  if (state !== undefined) {
+    step("renew the import state's durability");
+    const handle = await open(statePath, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fsyncDirectoryPath(work);
+    if ((await lstatOrUndefined(configDir)) !== undefined)
+      await fsyncDirectoryPath(configDir);
+  }
   if (state?.phase === "done") return { outcome: "already-done" };
   if (state?.phase === "copy") progress.startupSafe = true;
   const startedAt = now();
@@ -929,7 +942,11 @@ async function freshAsideName(configDir: string, at: number): Promise<string> {
 /** Create `dir` and any missing parents at 0700, each durably. */
 async function ensureDir(dir: string): Promise<void> {
   const stat = await lstatOrUndefined(dir);
-  if (stat?.isDirectory()) return;
+  if (stat?.isDirectory()) {
+    // mkdir may have succeeded before a previous parent's sync failed.
+    await fsyncDirectoryPath(dirname(dir));
+    return;
+  }
   if (stat !== undefined) throw new ImportAbort("a directory path is taken");
   await ensureDir(dirname(dir));
   try {
@@ -939,6 +956,16 @@ async function ensureDir(dir: string): Promise<void> {
   }
   await chmod(dir, 0o700);
   await fsyncDir(dirname(dir));
+}
+
+/** Renew namespace barriers through every ancestor, without creating or changing entries. */
+async function fsyncDirectoryPath(dir: string): Promise<void> {
+  for (;;) {
+    await fsyncDir(dir);
+    const parent = dirname(dir);
+    if (parent === dir) return;
+    dir = parent;
+  }
 }
 
 async function fsyncDir(dir: string): Promise<void> {

@@ -1655,6 +1655,225 @@ test.each([
   },
 );
 
+// F009: visible names after failed barriers are not proof of durability. ------
+
+for (const phase of ["copy", "done"] as const)
+  test.each(["state file", "work", "profile", "profiles", "data", "config"])(
+    `F009: visible ${phase} renews %s before release, and a repeated barrier failure still refuses`,
+    async (barrier) => {
+      const fx = fixture();
+      if (phase === "done") rmSync(fx.S, { recursive: true });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const first = await withFsFaults(
+        { sync: (path) => path === fx.W && phaseOnDisk(fx) === phase },
+        () => run(fx),
+      );
+      assert.equal(first.outcome, "refused");
+      assert.equal(phaseOnDisk(fx), phase);
+      const target = {
+        "state file": join(fx.W, "state.json"),
+        work: fx.W,
+        profile: fx.P,
+        profiles: dirname(fx.P),
+        data: dirname(dirname(fx.P)),
+        config: dirname(fx.D),
+      }[barrier];
+      let attempted = false;
+      const retry = await withFsFaults(
+        { sync: (path) => (path === target ? (attempted = true) : false) },
+        () =>
+          run(fx, {
+            providerSessionIds: () => {
+              throw eio("selection");
+            },
+          }),
+      );
+      assert.ok(
+        attempted,
+        "renew the barrier before treating visible state as safe",
+      );
+      assert.equal(retry.outcome, "refused");
+      assert.ok(await homeTranscriptImportStartupRefusal(async () => retry));
+      const renewed: string[] = [];
+      const released = await withFsFaults(
+        {
+          sync: (path) => {
+            renewed.push(path);
+            return false;
+          },
+        },
+        () =>
+          run(fx, {
+            providerSessionIds: () => {
+              throw eio("selection");
+            },
+          }),
+      );
+      assert.ok(renewed.includes(target!));
+      assert.equal(
+        released.outcome,
+        phase === "copy" ? "aborted" : "already-done",
+      );
+      assert.equal(
+        await homeTranscriptImportStartupRefusal(async () => released),
+        undefined,
+      );
+    },
+  );
+
+test.each(["present", "missing"])(
+  "F009: an existing set-aside renews its namespace before copy/done with source %s; repeated failure refuses",
+  async (source) => {
+    const fx = fixture();
+    seedOldDestination(fx);
+    const old = digest(fx.D);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fault = {
+      sync: (path: string) => path === dirname(fx.D) && existsSync(fx.A),
+    };
+    assert.equal((await withFsFaults(fault, () => run(fx))).outcome, "refused");
+    assert.equal(phaseOnDisk(fx), "backup");
+    if (source === "missing") rmSync(fx.S, { recursive: true });
+    const retry = await withFsFaults(fault, () => run(fx));
+    assert.equal(retry.outcome, "refused");
+    assert.equal(phaseOnDisk(fx), "backup");
+    const renewed: string[] = [];
+    const released = await withFsFaults(
+      {
+        sync: (path) => {
+          renewed.push(path);
+          return false;
+        },
+      },
+      () =>
+        run(fx, {
+          freeBytes: async () => {
+            throw eio("preflight");
+          },
+        }),
+    );
+    assert.ok(renewed.includes(dirname(fx.D)));
+    assert.equal(released.outcome, source === "present" ? "aborted" : "done");
+    assert.equal(
+      await homeTranscriptImportStartupRefusal(async () => released),
+      undefined,
+    );
+    assert.deepEqual(digest(fx.A), old);
+    assert.equal(
+      readdirSync(dirname(fx.D)).filter((name) =>
+        name.startsWith("projects.before-"),
+      ).length,
+      1,
+    );
+  },
+);
+
+test.each([
+  "data",
+  "profiles",
+  "profile",
+  "work",
+  "config",
+  "destination",
+  "key",
+])(
+  "F009: mkdir followed by failed parent fsync for %s is renewed on retry before release/install",
+  async (directory) => {
+    const fx = fixture();
+    rmSync(dirname(dirname(fx.P)), { recursive: true });
+    const created = {
+      data: dirname(dirname(fx.P)),
+      profiles: dirname(fx.P),
+      profile: fx.P,
+      work: fx.W,
+      config: dirname(fx.D),
+      destination: fx.D,
+      key: join(fx.D, K1),
+    }[directory]!;
+    const parent = dirname(created);
+    const fault = {
+      sync: (path: string) => path === parent && existsSync(created),
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = await withFsFaults(fault, () => run(fx));
+    const beforeCopy = ["data", "profiles", "profile", "work"].includes(
+      directory,
+    );
+    assert.equal(first.outcome, beforeCopy ? "refused" : "aborted");
+    assert.ok(existsSync(created));
+    let attempted = false;
+    const retry = await withFsFaults(
+      {
+        sync: (path) =>
+          path === parent && existsSync(created) ? (attempted = true) : false,
+      },
+      () => run(fx),
+    );
+    assert.ok(
+      attempted,
+      "an existing directory must not skip its failed parent barrier",
+    );
+    // Install descendants can fail after a renewed copy boundary; ancestors cannot.
+    assert.equal(retry.outcome, directory === "key" ? "aborted" : "refused");
+    assert.ok(!existsSync(join(fx.D, K1, `${U1}.jsonl`)));
+    const renewed: string[] = [];
+    const completed = await withFsFaults(
+      {
+        sync: (path) => {
+          renewed.push(path);
+          return false;
+        },
+      },
+      () =>
+        run(fx, {
+          afterStep: (step) => {
+            if (step === "installed-main") assert.ok(renewed.includes(parent));
+          },
+        }),
+    );
+    assert.equal(completed.outcome, "done");
+    assert.equal(manifest(fx).lines > 0, true);
+  },
+);
+
+test("F010 refuted: retry after manifest-name fsync failure renews W before install without needing done", async () => {
+  const fx = fixture();
+  const manifestPath = join(fx.W, "manifest.jsonl");
+  const first = await withFsFaults(
+    { sync: (path) => path === fx.W && existsSync(manifestPath) },
+    () => run(fx),
+  );
+  assert.equal(first.outcome, "aborted");
+  assert.ok(!existsSync(join(fx.D, K1, `${U1}.jsonl`)));
+  const renewed: string[] = [];
+  const retry = await withFsFaults(
+    {
+      sync: (path) => {
+        renewed.push(path);
+        return false;
+      },
+    },
+    () =>
+      run(fx, {
+        afterStep: (step) => {
+          if (step === "cleaned") renewed.length = 0;
+          if (step === "installed-main") {
+            assert.ok(
+              renewed.includes(fx.W),
+              "staging recreation renews W even without state renewal",
+            );
+            throw eio("after install, before done");
+          }
+        },
+      }),
+  );
+  assert.equal(retry.outcome, "aborted");
+  assert.equal(phaseOnDisk(fx), "copy");
+  assert.ok(existsSync(join(fx.D, K2, `${U3}.jsonl`)));
+  assert.ok(manifest(fx).lines > 0);
+});
+
 test("F004: the startup gate lets every outcome with a durable boundary through, and refuses the rest loudly", async () => {
   const counts = {
     selected: 0,
