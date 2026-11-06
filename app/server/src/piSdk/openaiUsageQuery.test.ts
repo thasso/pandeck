@@ -468,7 +468,7 @@ test("client mode: the gateway's account state stands in for the local login", a
   }
 });
 
-test("AC4: through the gateway an expired-looking login still asks, and a missing one sends nothing", async () =>
+test("AC4: through the gateway an expired-looking login still asks, and a missing one sends nothing", async () => {
   const sent = stubFetch(ANSWERS);
   // The gateway owns the expiry: it renews before it forwards.
   const expired = await fetchOpenAiUsageViaGateway(
