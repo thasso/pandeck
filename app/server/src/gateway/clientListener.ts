@@ -22,8 +22,7 @@ import { randomBytes } from "node:crypto";
 import https from "node:https";
 import type http from "node:http";
 import type net from "node:net";
-import { rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import tls from "node:tls";
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -47,12 +46,8 @@ import {
   type ClientAccount,
 } from "./clientMethods.ts";
 import { ClientRegistry, type GatewayClient } from "./clientRegistry.ts";
-import type { WriterLane } from "./holds.ts";
-import {
-  createLoginManager,
-  LoginRefusal,
-  type LoginDrivers,
-} from "./logins.ts";
+import { createLoginManager, LoginRefusal } from "./logins.ts";
+import type { VaultPort } from "./vaultPort.ts";
 import {
   INVALID_PARAMS,
   OWNER_CONFLICT,
@@ -110,12 +105,8 @@ interface ClientListenerDeps {
   };
   log: (line: string) => void;
   now?: () => number;
-  /** Logins (`logins.ts`); without drivers every start is refused. */
-  logins?: {
-    drivers: LoginDrivers;
-    lane: Pick<WriterLane, "run">;
-    recheck: (profileId: string) => void;
-  };
+  /** The vault's side of logins (`logins.ts`, `vaultLogins.ts`). */
+  vault: Pick<VaultPort, "login" | "newTokenFile" | "discardCredential">;
 }
 
 /** An account of a user, as logins and tests create it. */
@@ -289,16 +280,11 @@ export async function startClientListener(
   };
 
   const logins = createLoginManager({
-    stateDir: deps.stateDir,
-    drivers: deps.logins?.drivers ?? {},
+    vault: deps.vault,
     profiles,
-    lane: deps.logins?.lane ?? {
-      run: () => Promise.reject(new Error("no writer lane")),
-    },
     ownerOf: (profileId) => registry.ownerOf(profileId),
     putAccount,
     removeAccount,
-    recheck: (profileId) => deps.logins?.recheck(profileId),
     send: (clientId, loginId, accountId, event) => {
       for (const [connection, client] of connections)
         if (client.id === clientId)
@@ -445,10 +431,8 @@ export async function startClientListener(
       const profile = ownedAccount(client.userId, decodeAccountId(payload));
       logins.forget(profile.id);
       removeAccount(profile.id);
-      // Only a token file the gateway made for the account goes with it.
-      const ownDir = join(deps.stateDir, "accounts", profile.id);
-      if (dirname(profile.tokenFile) === ownDir)
-        rmSync(ownDir, { recursive: true, force: true });
+      // Only a token file the vault made for the account goes with it.
+      deps.vault.discardCredential(profile.id);
       return encodeControlDone();
     },
   };

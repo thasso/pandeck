@@ -512,6 +512,7 @@ const GATEWAY_VAULT = [
   "refreshLock",
   "renewal",
   "vault",
+  "vaultLogins",
 ];
 const GATEWAY_EDGE = [
   // The admin CLI and the client listener's enrollment, CA and protocol.
@@ -524,6 +525,7 @@ const GATEWAY_EDGE = [
   "controlMethods",
   "forward",
   "leases",
+  "logins",
   "upstreams",
   "x509",
 ];
@@ -632,7 +634,7 @@ test("the gateway's Codex refresher imports only node, pi and proper-lockfile", 
     );
   assert.deepEqual(
     importersOf((target) => target === "piSdk/codexRenewal.ts"),
-    ["harnesses/boot.ts"],
+    ["harnesses/gatewayPorts.ts"],
   );
 });
 

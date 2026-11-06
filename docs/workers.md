@@ -1650,7 +1650,8 @@ path above.
   `leases.revoke` and `leases.reconcileWorker`, all on the calling client's
   leases and its user's accounts only; `accounts.remove`; and the login API
   below.
-- **Logins** (`gateway/logins.ts`, Task-1385, M11):
+- **Logins** (Task-1385, M11; the edge's `gateway/logins.ts`, the vault's
+  `gateway/vaultLogins.ts` behind `VaultPort.login`):
   `logins.start {kind, accountId?, name?}` answers `{loginId, accountId}`; the
   gateway sends `logins.event` (output, URL, code, state) to the starting
   client, which may send `logins.input` and `logins.cancel`. Without `accountId`

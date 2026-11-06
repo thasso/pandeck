@@ -48,7 +48,7 @@ import {
 import { createControlEndpoint } from "./control.ts";
 import type { HoldRecord, WriterLane } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
-import type { LoginDrivers } from "./logins.ts";
+import type { LoginDrivers } from "./vaultPort.ts";
 import type { ProcessProbe } from "./processIdentity.ts";
 import { ProfileRegistry } from "./profiles.ts";
 import type { RefreshLockOptions } from "./refreshLock.ts";
@@ -154,6 +154,10 @@ export async function startGateway(
       renewCodex: options.renewCodex,
       lockOptions: options.refreshLockOptions,
     },
+    logins: {
+      stateDir: options.stateDir,
+      drivers: options.loginDrivers ?? {},
+    },
   });
   const compat = createCompatUpstream();
   const control = createControlEndpoint({
@@ -222,11 +226,7 @@ export async function startGateway(
         }),
         log,
         ...(options.now ? { now: options.now } : {}),
-        logins: {
-          drivers: options.loginDrivers ?? {},
-          lane,
-          recheck: (profileId) => void renewal.recheck(profileId),
-        },
+        vault,
       },
       options.clients,
     );

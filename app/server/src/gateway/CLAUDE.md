@@ -19,7 +19,7 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
 - Only renewal writes token files, in the profile's writer lane: Claude's under
   the CLI's locks with compare-and-swap and a same-directory rename that never
   creates a directory, Codex's only through the injected pi port's lock-fenced
-  atomic store. Exception: a login's ingest (`logins.ts`) renames a checked
+  atomic store. Exception: a login's ingest (`vaultLogins.ts`) renames a checked
   credential in, in the same lane; its driver writes only its own fresh
   directory.
 - A login hold ends only on its owning boot's release, the observed exit of its

@@ -19,6 +19,7 @@ import {
 } from "./holds.ts";
 import { isLoginProfile } from "./profiles.ts";
 import { createRenewal, type RenewalOptions } from "./renewal.ts";
+import { createVaultLogins, type VaultLoginOptions } from "./vaultLogins.ts";
 import type {
   VaultCredential,
   VaultHolds,
@@ -39,6 +40,8 @@ export interface VaultOptions {
     RenewalOptions,
     "profiles" | "leases" | "lane" | "log" | "now" | "report"
   >;
+  /** Clients' logins (`vaultLogins.ts`); without it none runs. */
+  logins?: VaultLoginOptions | undefined;
 }
 
 export interface Vault extends VaultPort {
@@ -114,6 +117,11 @@ export function createVault(options: VaultOptions): Vault {
       renewal.upstream401(binding, sentToken),
     needsLogin: () => renewal.needsLogin(),
     holds,
+    ...createVaultLogins(
+      options.logins ?? { stateDir: undefined, drivers: {} },
+      lane,
+      (profileId) => void renewal.recheck(profileId),
+    ),
     lane,
     holdRecords: () => table.records(),
     renewDue: () => renewal.tick(),

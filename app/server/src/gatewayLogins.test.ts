@@ -44,7 +44,7 @@ const {
   writeTokenFiles,
 } = await import("./test/gatewayFixtures.ts");
 type LoginDriver = NonNullable<
-  import("./gateway/logins.ts").LoginDrivers["claude"]
+  import("./gateway/vaultPort.ts").LoginDrivers["claude"]
 >;
 
 const open: { close(): unknown }[] = [];
