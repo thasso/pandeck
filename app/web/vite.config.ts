@@ -228,6 +228,9 @@ export default defineConfig(({ command }) => {
         "@assistant/shared/comments": fileURLToPath(
           new URL("../shared/comments.ts", import.meta.url),
         ),
+        "@assistant/shared/openAiCompatibleValidation": fileURLToPath(
+          new URL("../shared/openAiCompatibleValidation.ts", import.meta.url),
+        ),
         "@assistant/shared/accountHealth": fileURLToPath(
           new URL("../shared/accountHealth.ts", import.meta.url),
         ),

@@ -17,6 +17,11 @@ import {
   type OpenAiCompatibleModelInfo,
   type OpenAiCompatibleThinkingFormat,
 } from "@assistant/shared";
+import {
+  normalizeOpenAiCompatibleBaseUrl,
+  openAiCompatibleApiKeyError,
+  openAiCompatibleBaseUrlError,
+} from "@assistant/shared/openAiCompatibleValidation";
 import { join } from "node:path";
 import { credentialProfileRoot } from "./credentialProfilePaths.ts";
 import { errorText } from "./errors.ts";
@@ -91,7 +96,9 @@ export function openAiCompatibleEndpointReady(
 }
 
 function normalizeBaseUrl(baseUrl: unknown): string {
-  return typeof baseUrl === "string" ? baseUrl.trim().replace(/\/+$/, "") : "";
+  return typeof baseUrl === "string"
+    ? normalizeOpenAiCompatibleBaseUrl(baseUrl)
+    : "";
 }
 
 function normalizeThinkingFormat(
@@ -186,8 +193,20 @@ export function patchedOpenAiCompatibleEndpoint(
   const baseUrl =
     patch.baseUrl !== undefined ? normalizeBaseUrl(patch.baseUrl) : undefined;
   const endpointChanged = baseUrl !== undefined && baseUrl !== current.baseUrl;
+  // Compare the value that would be saved, not a form's trailing slash or
+  // whitespace. Unchanged legacy values are deliberately not revalidated.
+  if (endpointChanged) {
+    const error = openAiCompatibleBaseUrlError(baseUrl);
+    if (error) throw new Error(error);
+  }
+  const apiKey =
+    patch.apiKey === current.apiKey ? patch.apiKey : patch.apiKey?.trim();
+  if (apiKey && apiKey !== current.apiKey) {
+    const error = openAiCompatibleApiKeyError(apiKey);
+    if (error) throw new Error(error);
+  }
   const originChanged =
-    baseUrl !== undefined && !sameOrigin(current.baseUrl, baseUrl);
+    endpointChanged && !sameOrigin(current.baseUrl, baseUrl);
   // See braveSettings: `clearApiKey` must REMOVE the key, not blank it.
   const next = applyPatch(current, {
     ...(baseUrl !== undefined ? { baseUrl } : {}),
@@ -196,9 +215,7 @@ export function patchedOpenAiCompatibleEndpoint(
       ? { thinkingFormat: normalizeThinkingFormat(patch.thinkingFormat) }
       : {}),
     ...(patch.clearApiKey || originChanged ? { apiKey: undefined } : {}),
-    ...(patch.apiKey && patch.apiKey.trim()
-      ? { apiKey: patch.apiKey.trim() }
-      : {}),
+    ...(apiKey ? { apiKey } : {}),
   });
   return normalizeOpenAiCompatibleEndpoint(next);
 }

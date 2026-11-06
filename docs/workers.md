@@ -1704,15 +1704,18 @@ CLI still talks only to the gateway.
     until its next settings change or a restart; the link does not retry (G5).
   - `compat.set` holds a key of at most 8192 visible-ASCII characters (0x21 to
     0x7e) and a base URL of at most 2048 bytes, its bounds since 1.2. Settings
-    saves a key or URL past them as before, and the outcome depends on what
-    refuses it. A key, or an otherwise valid URL over 2048 bytes, is refused by
-    control alone: the push answers `invalid_params`, the account's earlier pair
-    is cleared, its models are still offered, and its turns get the marked 503
-    with the `compat-unset` text. A URL with userinfo, a query, a fragment or a
-    scheme other than http or https is refused by the engine's port as well: the
+    now refuses changed values outside these rules, using the shared endpoint
+    validator, but keeps unchanged legacy values saved before Task-1379. For
+    those legacy values, the outcome still depends on what refuses them. A key,
+    or an otherwise valid URL over 2048 bytes, is refused by control alone: the
+    push answers `invalid_params`, the account's earlier pair is cleared, its
+    models are still offered, and its turns get the marked 503 with the
+    `compat-unset` text. A URL with userinfo, a query, a fragment or a scheme
+    other than http or https is refused by the engine's port as well: the
     account offers no model, and an open fails with "offers no models. Run Test
     on its card in Settings, or start a new session." Neither message names the
-    cause; Task-1379 tracks telling the user.
+    cause. Renaming or editing another field of such a legacy account does not
+    repair or remove its URL or key.
   - In-process, the hosted engine shares the server's process: the key-less feed
     bounds the engine's dependencies, not its memory. The server's own runtimes
     keep each compatible account's key for its discovery and switch-off runs,

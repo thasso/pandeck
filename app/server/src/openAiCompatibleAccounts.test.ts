@@ -17,6 +17,7 @@ import {
   deleteCredentialProfile,
   listCredentialProfiles,
   patchOpenAiCompatibleEndpoint,
+  patchCredentialProfile,
   testOpenAiCompatibleProfile,
 } from "./credentialProfiles.ts";
 import {
@@ -24,12 +25,16 @@ import {
   openAiCompatibleEndpointPath,
   openAiCompatibleProviderConfig,
   readOpenAiCompatibleEndpoint,
+  writeOpenAiCompatibleEndpoint,
 } from "./openAiCompatibleAccounts.ts";
 import { toModelOption } from "./piSdk/models.ts";
 
 const originalFetch = globalThis.fetch;
 /** An obviously fake key: only its presence and redaction are under test. */
 const FAKE_API_KEY = "fake-api-key";
+// Synthetic boundary inputs, never credentials and never sent to an endpoint.
+const FAKE_KEY_AT_LIMIT = "a".repeat(8192);
+const FAKE_KEY_TOO_LONG = "a".repeat(8193);
 const created: string[] = [];
 
 /** Answer `/models` with two llama.cpp-style entries and record each request. */
@@ -143,6 +148,162 @@ test("an endpoint edit is validated as a whole before it is written", () => {
     () => patchOpenAiCompatibleEndpoint(login.id, { baseUrl: "https://x" }),
     /has no endpoint/,
   );
+});
+
+test("refuses invalid new and changed values before any endpoint write", () => {
+  const id = newAccount();
+  const empty = readOpenAiCompatibleEndpoint(id);
+  assert.throws(
+    () => patchOpenAiCompatibleEndpoint(id, { apiKey: "fake key" }),
+    /API key.*visible ASCII/,
+  );
+  assert.deepEqual(readOpenAiCompatibleEndpoint(id), empty);
+  for (const baseUrl of [
+    "https://user@llm.example.invalid/v1",
+    "https://llm.example.invalid/v1?q=x",
+    "https://llm.example.invalid/v1#fragment",
+    "ftp://llm.example.invalid/v1",
+    "https://llm.example.invalid/" + "a".repeat(2048),
+  ]) {
+    assert.throws(
+      () => patchOpenAiCompatibleEndpoint(id, { baseUrl }),
+      /Base URL/,
+    );
+    assert.deepEqual(readOpenAiCompatibleEndpoint(id), empty);
+  }
+  patchOpenAiCompatibleEndpoint(id, {
+    baseUrl: "https://llm.example.invalid/v1",
+    apiKey: FAKE_API_KEY,
+  });
+  const before = readFileSync(openAiCompatibleEndpointPath(id), "utf8");
+  for (const apiKey of [
+    "fake key",
+    "fake\r\nkey",
+    "fake-é-key",
+    FAKE_KEY_TOO_LONG,
+  ]) {
+    assert.throws(
+      () =>
+        patchOpenAiCompatibleEndpoint(id, {
+          baseUrl: "https://llm.example.invalid/v2",
+          thinkingFormat: "openai",
+          apiKey,
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /API key.*visible ASCII/);
+        assert.equal(error.message.includes(apiKey), false);
+        assert.equal(error.message.includes(FAKE_API_KEY), false);
+        return true;
+      },
+    );
+    assert.equal(
+      readFileSync(openAiCompatibleEndpointPath(id), "utf8"),
+      before,
+    );
+  }
+  assert.throws(
+    () => patchOpenAiCompatibleEndpoint(id, { baseUrl: "" }),
+    /Base URL/,
+  );
+});
+
+test("unchanged legacy values survive metadata, model and form edits", () => {
+  const id = newAccount();
+  for (const baseUrl of [
+    "https://user@llm.example.invalid/v1?legacy=1#fragment",
+    "file:///legacy/v1",
+    "not-a-url",
+    "https://llm.example.invalid/" + "a".repeat(2048),
+  ]) {
+    const apiKey = " fake key ";
+    writeOpenAiCompatibleEndpoint(id, {
+      baseUrl,
+      apiKey,
+      thinkingFormat: "none",
+      models: [
+        {
+          id: "legacy-model",
+          name: "Legacy",
+          input: ["text"],
+          contextWindow: 1024,
+          maxTokens: 128,
+          reasoning: false,
+        },
+      ],
+    });
+    const original = readOpenAiCompatibleEndpoint(id);
+    patchCredentialProfile(id, { name: "Renamed legacy account" });
+    assert.deepEqual(readOpenAiCompatibleEndpoint(id), original);
+    // Form echo and omitted write-only key must not invalidate or clear it.
+    patchOpenAiCompatibleEndpoint(id, {
+      baseUrl: ` ${baseUrl}/ `,
+      thinkingFormat: "openai",
+    });
+    let saved = readOpenAiCompatibleEndpoint(id);
+    assert.equal(saved.baseUrl, baseUrl);
+    assert.equal(saved.apiKey, apiKey);
+    assert.equal(saved.models[0]?.id, "legacy-model");
+    assert.equal(saved.models[0]?.reasoning, true);
+    // Even a re-entered identical legacy secret is not a changed value.
+    patchOpenAiCompatibleEndpoint(id, { apiKey });
+    assert.equal(readOpenAiCompatibleEndpoint(id).apiKey, apiKey);
+    patchOpenAiCompatibleEndpoint(id, { apiKey: "" });
+    assert.equal(readOpenAiCompatibleEndpoint(id).apiKey, apiKey);
+    assert.throws(
+      () => patchOpenAiCompatibleEndpoint(id, { baseUrl: baseUrl + "invalid" }),
+      /Base URL/,
+    );
+    assert.throws(
+      () => patchOpenAiCompatibleEndpoint(id, { apiKey: "bad fake" }),
+      /API key/,
+    );
+    patchOpenAiCompatibleEndpoint(id, { clearApiKey: true });
+    saved = readOpenAiCompatibleEndpoint(id);
+    assert.equal(saved.apiKey, undefined);
+    assert.equal(saved.baseUrl, baseUrl);
+  }
+});
+
+test("valid edits do not revalidate the account's other legacy value", () => {
+  const id = newAccount();
+  writeOpenAiCompatibleEndpoint(id, {
+    baseUrl: "https://llm.example.invalid/v1?legacy=1",
+    apiKey: "fake key",
+    thinkingFormat: "none",
+    models: [],
+  });
+  patchOpenAiCompatibleEndpoint(id, {
+    baseUrl: "https://llm.example.invalid/v1",
+  });
+  assert.equal(readOpenAiCompatibleEndpoint(id).apiKey, "fake key");
+  patchOpenAiCompatibleEndpoint(id, { apiKey: FAKE_API_KEY });
+  assert.equal(readOpenAiCompatibleEndpoint(id).apiKey, FAKE_API_KEY);
+  writeOpenAiCompatibleEndpoint(id, {
+    ...readOpenAiCompatibleEndpoint(id),
+    baseUrl: "https://llm.example.invalid/v1?legacy=1",
+  });
+  patchOpenAiCompatibleEndpoint(id, { apiKey: "fake-next" });
+  assert.equal(
+    readOpenAiCompatibleEndpoint(id).baseUrl,
+    "https://llm.example.invalid/v1?legacy=1",
+  );
+});
+
+test("normalizes edits before validation and keeps keyless behavior", () => {
+  const id = newAccount();
+  const prefix = "https://llm.example.invalid/";
+  const atLimit = prefix + "a".repeat(2048 - prefix.length);
+  patchOpenAiCompatibleEndpoint(id, {
+    baseUrl: ` ${atLimit}/// `,
+    apiKey: "   ",
+  });
+  assert.equal(readOpenAiCompatibleEndpoint(id).baseUrl, atLimit);
+  assert.equal(readOpenAiCompatibleEndpoint(id).apiKey, undefined);
+  patchOpenAiCompatibleEndpoint(id, { apiKey: " fake-key " });
+  assert.equal(readOpenAiCompatibleEndpoint(id).apiKey, "fake-key");
+  patchOpenAiCompatibleEndpoint(id, { apiKey: FAKE_KEY_AT_LIMIT });
+  assert.equal(readOpenAiCompatibleEndpoint(id).apiKey?.length, 8192);
 });
 
 test("Test discovers the account's models and makes it ready", async () => {
@@ -332,15 +493,18 @@ test("a discovery failure never echoes the key or URL credentials", async () => 
       }),
   ) as typeof fetch;
   const id = newAccount();
-  patchOpenAiCompatibleEndpoint(id, {
-    baseUrl: "https://fixture-user:fixture-password@llm.example.net/v1",
+  // A legacy endpoint can still be tested, even though new saves refuse it.
+  writeOpenAiCompatibleEndpoint(id, {
+    baseUrl: "https://fakeuser:fakepass@llm.example.invalid/v1",
     apiKey: FAKE_API_KEY,
+    thinkingFormat: "none",
+    models: [],
   });
   const { status } = await testOpenAiCompatibleProfile(id);
   assert.equal(status.ok, false);
   assert.match(status.message, /HTTP 401/);
   assert.match(status.message, /\[redacted\]/);
-  for (const secret of [FAKE_API_KEY, "fixture-user", "fixture-password"])
+  for (const secret of [FAKE_API_KEY, "fakeuser", "fakepass"])
     assert.equal(status.message.includes(secret), false, secret);
 });
 

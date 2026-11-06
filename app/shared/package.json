@@ -16,6 +16,7 @@
     "./comments": "./comments.ts",
     "./usage": "./usage.ts",
     "./accountHealth": "./accountHealth.ts",
+    "./openAiCompatibleValidation": "./openAiCompatibleValidation.ts",
     "./servedFiles": "./servedFiles.ts",
     "./documentTargets": "./documentTargets.ts",
     "./frontmatter": "./frontmatter.ts",
