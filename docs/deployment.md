@@ -108,14 +108,15 @@ boundary; live client logins remain on the separate development entry,
 `gatewayDevMain.ts` (`pnpm --filter @assistant/server gateway:dev`). Login child
 adapters are not included. SIGTERM stops it: it closes the control socket,
 refuses new model requests and lets open streams finish for up to two minutes.
-In development, `pnpm --filter ./app/server gateway` runs the same entry. No
-service units or production enablement are included yet. With
-`ASSISTANT_GATEWAY=1`, setting `ASSISTANT_GATEWAY_SOCKET` makes the server dial
-that process and reconnect with backoff; without it the in-process boot stays
-one-shot. Both modes remain off unless explicitly enabled. After 10 seconds
-without a ready socket connection the app shows "Credential gateway not
-running"; a refused or incompatible control handshake shows "Credential gateway
-incompatible". The server logs the existing explanations:
+In development, `pnpm --filter ./app/server gateway` runs the same entry. The
+NixOS module runs it as its own unit, on by default ("Credential gateway unit").
+With `ASSISTANT_GATEWAY=1`, setting `ASSISTANT_GATEWAY_SOCKET` makes the server
+dial that process and reconnect with backoff; without it the in-process boot
+stays one-shot. Outside the module both modes stay off unless explicitly
+enabled. After 10 seconds without a ready socket connection the app shows
+"Credential gateway not running"; a refused or incompatible control handshake
+shows "Credential gateway incompatible". The server logs the existing
+explanations:
 
 - "Pandeck's credential gateway isn't reachable, so this session can't start a
   model request. It restarts automatically; try again shortly."
@@ -929,6 +930,66 @@ is never a supported recovery: without the state the import sets the current
 copy no longer stops the service. The import logs the reason and continues on
 the next boot.
 
+## Credential gateway unit
+
+The NixOS module runs the credential gateway in its own unit,
+`personal-assistant-gateway`, on by default (option `gateway.enable`). The unit
+runs the packaged `pandeck-gateway` as the service user, with the production
+base environment and PATH and the same `DATA_DIR` (state in
+`DATA_DIR/gateway/`). Its model port is `127.0.0.1:<gateway.port>` (8788). Its
+control socket is `/run/personal-assistant-gateway/control.sock`, in a 0700
+runtime directory that survives the gateway's restarts. The server unit gets
+`ASSISTANT_GATEWAY=1`, the same port and the socket, and the production
+EnvironmentFile can override each of them. The server wants the gateway and
+starts after it, but does not require it or share its lifetime: the server boots
+without a gateway and shows its status, and restarting either one never restarts
+the other.
+
+**Only the operator restarts it.** The unit has `restartIfChanged = false`, so a
+deploy that changes the package leaves the running gateway alone. New gateway
+code takes effect at `sudo systemctl restart personal-assistant-gateway`. A
+server restart, deploy or stop never reaches it: its processes live in its own
+cgroup, outside the server's drain-then-sweep. Restart the gateway after a
+release that changes it, or when the app shows "Credential gateway
+incompatible". After a crash systemd restarts it after 2 seconds and gives up
+after five starts in five minutes; then run
+`sudo systemctl reset-failed personal-assistant-gateway` before starting it.
+
+**Stop and drain.** A stop signals only the gateway process (`KillMode=mixed`).
+It closes the control socket, refuses new model requests, lets open streams
+finish for up to two minutes and waits for a running Codex renewal child.
+systemd kills whatever remains at three minutes. A stream still open after the
+drain drops, and its engine retries. While the gateway is down, the server
+redials with backoff under the same server boot. Engine leases are kept in
+`DATA_DIR/gateway/` and work again after the reconnect. After 10 seconds without
+a gateway the app shows "Credential gateway not running", and opens and logins
+get the explanations under "Bun package". Check the unit with
+`systemctl status personal-assistant-gateway` and
+`journalctl -u personal-assistant-gateway`. The server logs
+`[gateway-link] unavailable: …` and `control connection ended: …` lines while it
+cannot reach the gateway.
+
+The unit sets no `PrivatePIDs`, `ProtectProc` or `PrivateTmp`, because login
+holds check the server's login processes. Any process running as the service
+user can connect to the control socket. That is no wider than its existing
+access to the token files.
+
+**Switching on.** Deploy while no agent turn or login is running. The switch
+restarts the server with the gateway on and starts the new gateway unit. From
+then on the gateway is the only refresher of Claude and Codex logins
+(`docs/credential-distribution.md` "Credential gateway service").
+
+**Rollback.** Set `gateway.enable = false` and deploy. The module drops both
+gateway units and sets `ASSISTANT_GATEWAY=0` on the server and on previews, so
+the engines refresh their own tokens again. Without a redeploy, put
+`ASSISTANT_GATEWAY=0` in the production EnvironmentFile, restart the server, and
+stop the gateway with `sudo systemctl stop personal-assistant-gateway`. A
+gateway started again later, at boot for example, stays idle while the server is
+switched off, because it renews a token only for a request made with one of its
+leases. Token files keep their format, so both directions read them. Switch-off
+rollback and the CLI-compatible credential locks remain until slice 5's
+encrypted store.
+
 ## Host tools
 
 The agents' toolchain is the HOST's, not vendored. The service PATH is exactly
@@ -1207,7 +1268,26 @@ anything that must be kept, then run `sudo pa-pr teardown <n>` and
 provision a clean instance. Do not add the marker by hand; that would relabel
 copied production state as isolated.
 
-NixOS activation never restarts an unchanged preview or a running
+With `gateway.enable` on, each preview runs its own credential gateway,
+`pa-pr-gateway@<n>`, beside `pa-pr@<n>`. The gateway unit has the same restart,
+stop and drain settings as production's ("Credential gateway unit"), the
+preview's HOME and the same state guard. `pa-pr deploy` writes its package, its
+port and its control socket, `stateDir/<n>/data/gateway/control.sock`, into the
+instance env file, which both units read. Deploy restarts the gateway and then
+the app, and teardown stops both. The deploy refuses a `stateDir` long enough to
+push that socket path past the 107-byte Unix socket limit. A preview's gateway
+holds only that preview's accounts. With `gateway.enable` off, previews get
+`ASSISTANT_GATEWAY=0` and no gateway unit.
+
+Ports come from disjoint ranges. Preview `<n>`'s app listens on `portBase + n`
+(default 8800), inside `[portBase, gatewayPortBase)`. Its gateway listens on
+`gatewayPortBase + n` (default 18800), at most 65535. Production's `port` and
+`gateway.port` must lie below `portBase`; the module asserts all of this at
+evaluation. `pa-pr` refuses a PR number whose ports fall outside these ranges or
+hit a production port. `pa-pr ports <n>` prints both ports, without touching
+HOME, git, systemd or Caddy.
+
+NixOS activation never restarts a preview, its gateway or a running
 `pa-pr-deploy@`/`pa-pr-teardown@` oneshot. All have `restartIfChanged = false`;
 `pa-pr` owns preview lifecycle, so a stale preview cannot block production
 deployment. Teardown is path-guarded to `stateDir/<n>`, removes that preview's

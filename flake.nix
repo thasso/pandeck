@@ -376,6 +376,17 @@
           # them must not build the app package they name.
           unitText = name: pkgs.writeText name (builtins.unsafeDiscardStringContext
             previewSystem.config.systemd.units.${name}.text);
+          # The same host with one more module, evaluated only.
+          variant = module: previewSystem.extendModules { modules = [ module ]; };
+          withPa = settings: variant { services.personal-assistant = settings; };
+          orchestratorOf = system: pkgs.lib.removeSuffix "/bin/pa-pr deploy %i"
+            system.config.systemd.services."pa-pr-deploy@".serviceConfig.ExecStart;
+          refusesPorts = system: builtins.any
+            (a: !a.assertion && pkgs.lib.hasPrefix "services.personal-assistant ports must be disjoint" a.message)
+            system.config.assertions;
+          gatewayOff = withPa { gateway.enable = false; };
+          gatewayUnit = previewSystem.config.systemd.services.personal-assistant-gateway;
+          previewGatewayUnit = previewSystem.config.systemd.services."pa-pr-gateway@";
         in pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           # The module's default package is this one, so production runs the
           # closure checked here.
@@ -414,9 +425,20 @@
             assert previewUnit.environment.HOME == "/var/lib/personal-assistant-previews/%i/home";
             assert previewUnit.environment.XDG_CONFIG_HOME == "/var/lib/personal-assistant-previews/%i/home/.config";
             assert previewGuardExec == "${previewGuard} /var/lib/personal-assistant-previews %i";
+            # The gateway switch reaches both units (default on).
+            assert productionUnit.environment.ASSISTANT_GATEWAY == "1";
+            assert productionUnit.environment.ASSISTANT_GATEWAY_PORT == "8788";
+            assert productionUnit.environment.ASSISTANT_GATEWAY_SOCKET
+              == "/run/personal-assistant-gateway/control.sock";
+            assert previewUnit.environment.ASSISTANT_GATEWAY == "1";
             pkgs.runCommand "personal-assistant-preview-isolation" { } ''
               script=${previewOrchestrator}/bin/pa-pr
               guard=${previewGuard}
+              # The preview's port and socket reach both preview units through
+              # the instance env file.
+              grep -Fq "printf 'ASSISTANT_GATEWAY_PORT=%s\\n' \"\$gport\"" "$script"
+              grep -Fq "printf 'ASSISTANT_GATEWAY_SOCKET=%s\\n' \"\$gsock\"" "$script"
+              grep -Fq 'gsock="$data/gateway/control.sock"' "$script"
               grep -Fq 'PREVIEW_STATE_VERSION=1' "$script"
               grep -Fq 'refusing to use it' "$script"
               grep -Fq 'systemctl stop "pa-pr@$num.service"' "$script"
@@ -442,6 +464,144 @@
                 exit 1
               fi
               test -f "$state/7/data/preserved"
+              mkdir "$out"
+            '';
+
+          # AC9's unit fields for the production gateway, its preview template
+          # and their ties to the app units.
+          personal-assistant-gateway-unit =
+            assert gatewayUnit.restartIfChanged == false;
+            assert gatewayUnit.wantedBy == [ "multi-user.target" ];
+            assert gatewayUnit.serviceConfig.User == "alice";
+            assert gatewayUnit.serviceConfig.ExecStart == "${package}/bin/pandeck-gateway";
+            assert gatewayUnit.environment.DATA_DIR == productionUnit.environment.DATA_DIR;
+            assert gatewayUnit.environment.HOME == productionUnit.environment.HOME;
+            assert gatewayUnit.environment.ASSISTANT_GATEWAY_PORT == "8788";
+            assert gatewayUnit.environment.ASSISTANT_GATEWAY_SOCKET
+              == productionUnit.environment.ASSISTANT_GATEWAY_SOCKET;
+            assert gatewayUnit.path == productionUnit.path;
+            assert !(gatewayUnit.environment ? PRODUCTION_SECRET_SENTINEL);
+            assert !(gatewayUnit.serviceConfig ? EnvironmentFile);
+            assert builtins.elem "personal-assistant-gateway.service" productionUnit.wants;
+            assert builtins.elem "personal-assistant-gateway.service" productionUnit.after;
+            assert previewGatewayUnit.restartIfChanged == false;
+            assert previewGatewayUnit.wantedBy == [ ];
+            assert previewGatewayUnit.serviceConfig.EnvironmentFile
+              == [ "/var/lib/personal-assistant-previews/%i/env" ];
+            assert previewGatewayUnit.serviceConfig.ExecStartPre == previewGuardExec;
+            assert previewGatewayUnit.environment.HOME == previewUnit.environment.HOME;
+            assert !(previewGatewayUnit.environment ? PRODUCTION_SECRET_SENTINEL);
+            assert builtins.elem "pa-pr-gateway@%i.service" previewUnit.wants;
+            assert builtins.elem "pa-pr-gateway@%i.service" previewUnit.after;
+            pkgs.runCommand "personal-assistant-gateway-unit" { } ''
+              expect() {
+                grep -qx "$2" "$1" || { echo "$1 lacks '$2'" >&2; exit 1; }
+              }
+              refuse() {
+                if grep -q "^$2=" "$1"; then echo "$1 sets $2" >&2; exit 1; fi
+              }
+              gateway=${unitText "personal-assistant-gateway.service"}
+              previewGateway=${unitText "pa-pr-gateway@.service"}
+              server=${unitText "personal-assistant.service"}
+              preview=${unitText "pa-pr@.service"}
+              for unit in "$gateway" "$previewGateway"; do
+                expect "$unit" 'X-RestartIfChanged=false'
+                expect "$unit" 'Restart=on-failure'
+                expect "$unit" 'RestartSec=2'
+                expect "$unit" 'StartLimitIntervalSec=300'
+                expect "$unit" 'StartLimitBurst=5'
+                expect "$unit" 'TimeoutStopSec=3min'
+                expect "$unit" 'KillMode=mixed'
+                # Login holds need the server's processes in view, and the
+                # gateway's lifetime is never tied to the server's.
+                for key in PrivatePIDs ProtectProc PrivateTmp PartOf BindsTo; do
+                  refuse "$unit" "$key"
+                done
+              done
+              expect "$gateway" 'RuntimeDirectory=personal-assistant-gateway'
+              expect "$gateway" 'RuntimeDirectoryMode=0700'
+              expect "$gateway" 'RuntimeDirectoryPreserve=yes'
+              refuse "$previewGateway" RuntimeDirectory
+              # The app units want their gateway but never tie their lifetime
+              # to it, nor it to them.
+              for unit in "$server" "$preview"; do
+                for key in Requires Requisite BindsTo PartOf; do
+                  refuse "$unit" "$key"
+                done
+              done
+              script=${previewOrchestrator}/bin/pa-pr
+              restartGateway=$(grep -n 'systemctl restart "pa-pr-gateway@$num.service"' "$script" | cut -d: -f1)
+              restartApp=$(grep -n 'systemctl restart "pa-pr@$num.service"' "$script" | cut -d: -f1)
+              [ -n "$restartGateway" ] && [ -n "$restartApp" ] \
+                && [ "$restartGateway" -lt "$restartApp" ] \
+                || { echo "pa-pr deploy must restart the gateway, then the app" >&2; exit 1; }
+              [ "$(grep -c 'systemctl stop "pa-pr-gateway@$num.service"' "$script")" = 2 ] \
+                || { echo "pa-pr must stop the gateway on teardown and on refused state" >&2; exit 1; }
+              grep -Fq "printf 'ASSISTANT_GATEWAY_PACKAGE=%s\\n' \"\$pkg/bin/pandeck-gateway\"" "$script"
+              grep -Eq '^ *GATEWAY_ENABLED=1$' "$script"
+              mkdir "$out"
+            '';
+
+          # The rollback: gateway.enable = false leaves no gateway unit and
+          # turns the switch off on both app units.
+          personal-assistant-gateway-off =
+            let
+              off = gatewayOff.config.systemd.services;
+            in
+            assert !(off ? personal-assistant-gateway);
+            assert !(off ? "pa-pr-gateway@");
+            assert off.personal-assistant.environment.ASSISTANT_GATEWAY == "0";
+            assert !(off.personal-assistant.environment ? ASSISTANT_GATEWAY_SOCKET);
+            assert off."pa-pr@".environment.ASSISTANT_GATEWAY == "0";
+            assert !(builtins.elem "personal-assistant-gateway.service" off.personal-assistant.wants);
+            assert !(builtins.elem "pa-pr-gateway@%i.service" off."pa-pr@".wants);
+            assert !(refusesPorts gatewayOff);
+            pkgs.runCommand "personal-assistant-gateway-off" { } ''
+              script=${orchestratorOf gatewayOff}/bin/pa-pr
+              grep -Eq '^ *GATEWAY_ENABLED=0$' "$script"
+              mkdir "$out"
+            '';
+
+          # Preview port arithmetic and the disjoint-range assertion. `pa-pr
+          # ports` runs here with an empty environment and no PATH, so it can
+          # only succeed without touching HOME, git or the filesystem.
+          personal-assistant-preview-ports =
+            let
+              highGateway = withPa { prDeployments.gatewayPortBase = 60000; };
+            in
+            assert !(refusesPorts previewSystem);
+            assert refusesPorts (withPa { gateway.port = 9200; });
+            assert refusesPorts (withPa { prDeployments.portBase = 18800; });
+            assert refusesPorts (withPa { port = 8800; });
+            pkgs.runCommand "personal-assistant-preview-ports" { } ''
+              script=${previewOrchestrator}/bin/pa-pr
+              high=${orchestratorOf highGateway}/bin/pa-pr
+              run() { env -i PATH=/nonexistent "$@"; }
+              expect() {
+                got=$(run "$script" ports "$1")
+                [ "$got" = "$2" ] || { echo "ports $1: got '$got', want '$2'" >&2; exit 1; }
+              }
+              refused() {
+                if run "$1" ports "$2" >/dev/null 2>&1; then
+                  echo "$1 ports $2 was accepted" >&2; exit 1
+                fi
+              }
+              expect 1 '8801 18801'
+              expect 400 '9200 19200'
+              expect 9999 '18799 28799'
+              refused "$script" 10000
+              refused "$script" 0
+              refused "$script" 012
+              refused "$script" x1
+              refused "$script" ""
+              refused "$script" 99999999999999999999
+              refused "$high" 5536
+              [ "$(run "$high" ports 5535)" = '14335 65535' ]
+              # Answered before the script sets HOME or touches git.
+              portsLine=$(grep -n '= ports ]' "$script" | cut -d: -f1)
+              homeLine=$(grep -n '^ *export HOME=' "$script" | cut -d: -f1)
+              [ -n "$portsLine" ] && [ -n "$homeLine" ] && [ "$portsLine" -lt "$homeLine" ] \
+                || { echo "pa-pr ports must run before HOME/git setup" >&2; exit 1; }
               mkdir "$out"
             '';
 
@@ -525,6 +685,31 @@
             ASSISTANT_HOST = cfg.host;
             ASSISTANT_CWD = cfg.workingDir;
             HOME = "/home/${cfg.user}";
+          };
+
+          # The production gateway's control socket, in its unit's
+          # RuntimeDirectory (0700, kept across its restarts). The server runs as
+          # the same user and dials it.
+          gatewaySocket = "/run/personal-assistant-gateway/control.sock";
+
+          # Unit fields both gateway units share (U6). A deploy never restarts a
+          # gateway; the operator does. Stop: SIGTERM to the gateway alone
+          # (`mixed`), which drains open streams for up to two minutes and reaps
+          # its Codex child, then SIGKILL at 3 min. No PrivatePIDs, ProtectProc
+          # or PrivateTmp: login holds rely on seeing the server's processes.
+          gatewayServiceConfig = {
+            User = cfg.user;
+            WorkingDirectory = cfg.workingDir;
+            Restart = "on-failure";
+            RestartSec = 2;
+            TimeoutStopSec = "3min";
+            KillMode = "mixed";
+          };
+          # A gateway that cannot start gives up after five tries in five
+          # minutes rather than looping; the server keeps redialling.
+          gatewayUnitConfig = {
+            StartLimitIntervalSec = 300;
+            StartLimitBurst = 5;
           };
 
           # The type only; rendering below does not use the host's pkgs.
@@ -684,6 +869,39 @@
           # and available for manual `sudo pa-pr {deploy,teardown} <n>`.
           paPr = pkgs.writeShellScriptBin "pa-pr" ''
             set -euo pipefail
+
+            # `pa-pr ports <n>` is pure arithmetic over build-time constants,
+            # answered before any HOME, git, filesystem, systemd or Caddy action.
+            PORT_BASE=${toString pr.portBase}
+            GATEWAY_PORT_BASE=${toString pr.gatewayPortBase}
+            PROD_PORT=${toString cfg.port}
+            PROD_GATEWAY_PORT=${toString cfg.gateway.port}
+            GATEWAY_ENABLED=${if cfg.gateway.enable then "1" else "0"}
+
+            # Prints "<app port> <gateway port>" for PR <n>, or refuses.
+            ports() {
+              case "$1" in
+                "" | *[!0-9]* | 0*) echo "pa-pr: PR number must be a positive number, got '$1'" >&2; return 1;;
+              esac
+              if [ "''${#1}" -gt 5 ]; then
+                echo "pa-pr: PR number $1 is out of range" >&2; return 1
+              fi
+              p_app=$((PORT_BASE + $1))
+              p_gw=$((GATEWAY_PORT_BASE + $1))
+              if [ "$p_app" -ge "$GATEWAY_PORT_BASE" ] || [ "$p_gw" -gt 65535 ] \
+                || [ "$p_app" -eq "$PROD_PORT" ] || [ "$p_app" -eq "$PROD_GATEWAY_PORT" ] \
+                || [ "$p_gw" -eq "$PROD_PORT" ] || [ "$p_gw" -eq "$PROD_GATEWAY_PORT" ]; then
+                echo "pa-pr: PR $1 has no preview ports: app $p_app must be in [$PORT_BASE, $GATEWAY_PORT_BASE) and gateway $p_gw in [$GATEWAY_PORT_BASE, 65535], neither $PROD_PORT nor $PROD_GATEWAY_PORT" >&2
+                return 1
+              fi
+              printf '%s %s\n' "$p_app" "$p_gw"
+            }
+
+            if [ "''${1:-}" = ports ]; then
+              ports "''${2:-}"
+              exit
+            fi
+
             # git/gawk/coreutils plus the Caddy coordination tools are
             # pinned; nix, systemctl and caddy reload come from the running system.
             export PATH=${lib.makeBinPath [ pkgs.git pkgs.gawk pkgs.coreutils pkgs.util-linux pkgs.openssl ]}:/run/current-system/sw/bin
@@ -694,7 +912,6 @@
             STATE_DIR=${lib.escapeShellArg pr.stateDir}
             CADDY_DIR=${lib.escapeShellArg pr.caddyImportDir}
             REPO_URL=${lib.escapeShellArg pr.repoUrl}
-            PORT_BASE=${toString pr.portBase}
             DOMAIN=${lib.escapeShellArg pr.domain}
             APP_USER=${lib.escapeShellArg cfg.user}
             APP_CWD=${lib.escapeShellArg cfg.workingDir}
@@ -711,7 +928,6 @@
             home="$inst/home"
             state_version="$inst/.preview-state-version"
             PREVIEW_STATE_VERSION=${lib.escapeShellArg previewStateVersion}
-            port=$((PORT_BASE + num))
             host="pr-$num.$DOMAIN"
             routes="$CADDY_DIR/routes"
             route="$routes/pr-$num.caddy"
@@ -723,8 +939,9 @@
               route_host="pr-$route_num.$DOMAIN"
               route_file="$routes/pr-$route_num.caddy"
               route_tmp="$route_file.tmp.$$"
+              route_ports=$(ports "$route_num")
               printf '@pr%s host %s\nhandle @pr%s {\n\treverse_proxy localhost:%s\n}\n' \
-                "$route_num" "$route_host" "$route_num" "$((PORT_BASE + route_num))" > "$route_tmp"
+                "$route_num" "$route_host" "$route_num" "''${route_ports% *}" > "$route_tmp"
               chmod 0644 "$route_tmp"
               mv -f "$route_tmp" "$route_file"
             }
@@ -789,11 +1006,21 @@
             }
 
             deploy() {
+              all_ports=$(ports "$num")
+              port="''${all_ports% *}"
+              gport="''${all_ports#* }"
+              gsock="$data/gateway/control.sock"
+              if [ "''${#gsock}" -gt 107 ]; then
+                echo "pa-pr: gateway socket path '$gsock' exceeds the 107-byte Unix socket limit; shorten stateDir" >&2
+                exit 1
+              fi
+
               if [ -e "$inst" ] && ! ${previewStateGuard} "$STATE_DIR" "$num"; then
                 systemctl stop "pa-pr@$num.service" 2>/dev/null || true
+                systemctl stop "pa-pr-gateway@$num.service" 2>/dev/null || true
                 cat >&2 <<EOF
 pa-pr: preview state already exists at $inst but predates isolated preview credentials; refusing to use it.
-The preview service was stopped. Its state was left untouched.
+The preview services were stopped. Its state was left untouched.
 Copy out anything you need, then run 'sudo pa-pr teardown $num' followed by 'sudo pa-pr deploy $num'.
 Teardown deletes that preview directory.
 EOF
@@ -827,9 +1054,19 @@ EOF
                 printf 'DATA_DIR=%s\n' "$data"
                 printf 'ASSISTANT_CWD=%s\n' "$APP_CWD"
                 printf 'ASSISTANT_ALLOWED_ORIGINS=%s\n' "https://$host"
+                printf 'ASSISTANT_GATEWAY_PORT=%s\n' "$gport"
+                if [ "$GATEWAY_ENABLED" = 1 ]; then
+                  printf 'ASSISTANT_GATEWAY_PACKAGE=%s\n' "$pkg/bin/pandeck-gateway"
+                  printf 'ASSISTANT_GATEWAY_SOCKET=%s\n' "$gsock"
+                fi
               } > "$inst/env"
               chown -R "$APP_USER":users "$inst"
 
+              # Gateway first, so the app's first dial finds the new gateway.
+              if [ "$GATEWAY_ENABLED" = 1 ]; then
+                echo "Starting pa-pr-gateway@$num on 127.0.0.1:$gport"
+                systemctl restart "pa-pr-gateway@$num.service"
+              fi
               echo "Starting pa-pr@$num on 127.0.0.1:$port"
               systemctl restart "pa-pr@$num.service"
 
@@ -840,6 +1077,7 @@ EOF
             teardown() {
               echo "Tearing down PR $num"
               systemctl stop "pa-pr@$num.service" 2>/dev/null || true
+              systemctl stop "pa-pr-gateway@$num.service" 2>/dev/null || true
               reload_caddy rm -f "$route"
               # Path-guarded delete: never outside stateDir/<n>.
               case "$inst" in
@@ -852,7 +1090,7 @@ EOF
             case "$cmd" in
               deploy) deploy;;
               teardown) teardown;;
-              *) echo "usage: pa-pr {deploy|teardown} <pr-number>" >&2; exit 1;;
+              *) echo "usage: pa-pr {deploy|teardown|ports} <pr-number>" >&2; exit 1;;
             esac
           '';
         in {
@@ -1011,6 +1249,26 @@ EOF
 
             memory = memoryOptions "the production unit";
 
+            gateway = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = ''
+                  Run the credential gateway (sets ASSISTANT_GATEWAY=1). Disable
+                  to roll back to the engines' own refreshers. When on, the
+                  gateway runs as its own unit, `personal-assistant-gateway`
+                  (each preview as `pa-pr-gateway@<n>`), and the server dials
+                  its control socket. A deploy never restarts that unit; the
+                  operator does (docs/deployment.md "Credential gateway unit").
+                '';
+              };
+              port = lib.mkOption {
+                type = lib.types.port;
+                default = 8788;
+                description = "The production gateway's loopback model port.";
+              };
+            };
+
             # Dictation is an OPTIONAL HOST CAPABILITY, not a dependency of this
             # module. The operator installs the recognizer
             # (`sherpa-onnx-offline-websocket-server` on the service PATH) and puts
@@ -1108,7 +1366,13 @@ EOF
               portBase = lib.mkOption {
                 type = lib.types.port;
                 default = 8800;
-                description = "PR instance <n> listens on portBase + n (loopback; Caddy fronts it).";
+                description = "PR instance <n> listens on portBase + n (loopback; Caddy fronts it). Preview app ports stay in [portBase, gatewayPortBase).";
+              };
+
+              gatewayPortBase = lib.mkOption {
+                type = lib.types.port;
+                default = 18800;
+                description = "PR instance <n>'s gateway model port is gatewayPortBase + n, in [gatewayPortBase, 65535]; above every preview app port.";
               };
 
               credentialEnvironmentFile = lib.mkOption {
@@ -1175,8 +1439,13 @@ EOF
                 description = "Pandeck server";
                 # Start at boot.
                 wantedBy = [ "multi-user.target" ];
-                after = [ "network-online.target" ];
-                wants = [ "network-online.target" ];
+                # The gateway is wanted, never required or bound: the server
+                # boots without it (the app status shows it) and restarting
+                # either never restarts the other.
+                after = [ "network-online.target" ]
+                  ++ lib.optional cfg.gateway.enable "personal-assistant-gateway.service";
+                wants = [ "network-online.target" ]
+                  ++ lib.optional cfg.gateway.enable "personal-assistant-gateway.service";
 
                 # HOST PATH ONLY: the user's Nix profile then the system profile,
                 # so spawned coding agents see the machine's toolbox without
@@ -1228,6 +1497,13 @@ EOF
                   # workspace-first lookup.
                   ASSISTANT_HOST_TOOLS =
                     "${cfg.package}/libexec/personal-assistant/config/host-tools.json";
+                  # The credential gateway switch. Off restores the engines' own
+                  # refreshers (the rollback); the EnvironmentFile may override.
+                  ASSISTANT_GATEWAY = if cfg.gateway.enable then "1" else "0";
+                  ASSISTANT_GATEWAY_PORT = toString cfg.gateway.port;
+                }
+                // lib.optionalAttrs cfg.gateway.enable {
+                  ASSISTANT_GATEWAY_SOCKET = gatewaySocket;
                 }
                 // settingsEnv
                 # Production-only, like the dictation env below: a preview must
@@ -1321,6 +1597,37 @@ EOF
               '';
             }
 
+            # The standalone credential gateway (docs/deployment.md "Credential
+            # gateway unit"). Its own unit and cgroup, so a server restart or its
+            # drain-then-sweep stop never reaches it.
+            (lib.mkIf cfg.gateway.enable {
+              systemd.services.personal-assistant-gateway = {
+                description = "Pandeck credential gateway";
+                wantedBy = [ "multi-user.target" ];
+                # Operator-only restart: new gateway code takes effect on
+                # `systemctl restart personal-assistant-gateway`, not on deploy.
+                restartIfChanged = false;
+                path = servicePath;
+                enableDefaultPath = false;
+                environment = baseEnv // {
+                  DATA_DIR = cfg.dataDir;
+                  ASSISTANT_GATEWAY_PORT = toString cfg.gateway.port;
+                  ASSISTANT_GATEWAY_SOCKET = gatewaySocket;
+                  LOCALE_ARCHIVE = "/run/current-system/sw/lib/locale/locale-archive";
+                  TZDIR = "/etc/zoneinfo";
+                };
+                unitConfig = gatewayUnitConfig;
+                serviceConfig = gatewayServiceConfig // {
+                  ExecStart = "${cfg.package}/bin/pandeck-gateway";
+                  RuntimeDirectory = "personal-assistant-gateway";
+                  RuntimeDirectoryMode = "0700";
+                  # The socket path survives a gateway restart; the gateway
+                  # removes a stale socket itself.
+                  RuntimeDirectoryPreserve = "yes";
+                };
+              };
+            })
+
             (lib.mkIf pr.enable {
               assertions = [
                 {
@@ -1333,6 +1640,16 @@ EOF
                     || cfg.tokenFile == null
                     || pr.credentialEnvironmentFile != cfg.tokenFile;
                   message = "Preview credentialEnvironmentFile must not reuse the production tokenFile";
+                }
+                {
+                  # Disjoint ranges: production below portBase, preview apps in
+                  # [portBase, gatewayPortBase), preview gateways from
+                  # gatewayPortBase. `pa-pr ports` refuses a number outside them.
+                  assertion = cfg.port < pr.portBase
+                    && cfg.gateway.port < pr.portBase
+                    && pr.portBase < pr.gatewayPortBase
+                    && pr.gatewayPortBase <= 65535;
+                  message = "services.personal-assistant ports must be disjoint: port (${toString cfg.port}) and gateway.port (${toString cfg.gateway.port}) below prDeployments.portBase (${toString pr.portBase}), which must be below prDeployments.gatewayPortBase (${toString pr.gatewayPortBase}) <= 65535";
                 }
               ];
 
@@ -1378,6 +1695,9 @@ EOF
                   # second guard after removing production env files and settings:
                   # Socket Mode load-balances real events across open connections.
                   ASSISTANT_SLACK_APP_DISABLED = "1";
+                  # The preview's own gateway (`pa-pr-gateway@<n>`); its port
+                  # and socket come from the instance env file.
+                  ASSISTANT_GATEWAY = if cfg.gateway.enable then "1" else "0";
                 } // settingsEnv;
                 serviceConfig = {
                   User = cfg.user;
@@ -1432,6 +1752,39 @@ EOF
                   }
                 });
               '';
+            })
+
+            # Each preview's own gateway. Like `pa-pr@`, started, restarted and
+            # stopped only by `pa-pr`: deploy restarts it before the app, and
+            # teardown stops both. Its package, DATA_DIR, port and control socket
+            # (under the preview DATA_DIR) come from the instance env file.
+            (lib.mkIf (pr.enable && cfg.gateway.enable) {
+              systemd.services."pa-pr-gateway@" = {
+                description = "Pandeck PR %i preview credential gateway";
+                restartIfChanged = false;
+                path = servicePath;
+                environment = {
+                  NODE_ENV = "production";
+                  ASSISTANT_HOST = cfg.host;
+                  HOME = "${pr.stateDir}/%i/home";
+                  XDG_CONFIG_HOME = "${pr.stateDir}/%i/home/.config";
+                  XDG_DATA_HOME = "${pr.stateDir}/%i/home/.local/share";
+                  XDG_STATE_HOME = "${pr.stateDir}/%i/home/.local/state";
+                  XDG_CACHE_HOME = "${pr.stateDir}/%i/home/.cache";
+                  LOCALE_ARCHIVE = "/run/current-system/sw/lib/locale/locale-archive";
+                  TZDIR = "/etc/zoneinfo";
+                };
+                unitConfig = gatewayUnitConfig;
+                serviceConfig = gatewayServiceConfig // {
+                  EnvironmentFile = [ "${pr.stateDir}/%i/env" ];
+                  ExecStartPre = "${previewStateGuard} ${lib.escapeShellArg pr.stateDir} %i";
+                  ExecStart = "${pkgs.bashInteractive}/bin/bash -c 'exec \"$ASSISTANT_GATEWAY_PACKAGE\"'";
+                };
+              };
+              systemd.services."pa-pr@" = {
+                wants = [ "pa-pr-gateway@%i.service" ];
+                after = [ "pa-pr-gateway@%i.service" ];
+              };
             })
           ]);
         };

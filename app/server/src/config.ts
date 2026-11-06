@@ -52,7 +52,8 @@ export const BACKGROUND_PR_SYNC_ENABLED =
 
 /**
  * Use the credential gateway (`gatewayLink.ts`), in process unless a control
- * socket is configured. Off by default until the separate units ship.
+ * socket is configured. Off by default; the NixOS module turns it on with its
+ * own gateway unit (docs/deployment.md "Credential gateway unit").
  */
 export const GATEWAY_ENABLED = process.env.ASSISTANT_GATEWAY === "1";
 
