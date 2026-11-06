@@ -14,7 +14,13 @@
  */
 import assert from "node:assert/strict";
 import { afterAll, test, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,7 +68,9 @@ const { ClaudeSdkSession, installClaudeStateBuilder } =
   await import("../test/claudeSdkSession.ts");
 const { claudeSdkStore } = await import("./claudeSdkStore.ts");
 installClaudeStateBuilder(claudeSdkStore);
-const { readClaudeSdkRecord } = await import("./claudeSdkRecords.ts");
+const { readClaudeSdkRecord, writeClaudeSdkRecord } =
+  await import("./claudeSdkRecords.ts");
+const { CLAUDE_SDK_STORE_DIR } = await import("../sessionStorage.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { claudeProfileSessionStore } = await import("./profileSessionStore.ts");
 const { DEFAULT_CLAUDE_PROFILE_ID, patchCredentialProfile } =
@@ -875,6 +883,136 @@ test("forking a named-profile session cuts inside THAT profile's root", async ()
     "and not to the protected default root, where that transcript is absent",
   );
 });
+
+test.each([
+  ["gateway off", false],
+  ["gateway on", true],
+] as const)(
+  "a fork of a stored parent with no account runs, prompts and compacts as the default's DATA_DIR account, and stays unbound (%s)",
+  async (label, gatewayOn) => {
+    const home = mkdtempSync(join(tmpdir(), "claude-fork-home-"));
+    const previousHome = process.env.HOME;
+    const previousKey = process.env.ANTHROPIC_API_KEY;
+    process.env.HOME = home;
+    process.env.ANTHROPIC_API_KEY = "ambient-api-key";
+    const defaultDir = join(
+      tmp,
+      "data",
+      "credential-profiles",
+      DEFAULT_CLAUDE_PROFILE_ID,
+      "claude",
+    );
+    mkdirSync(defaultDir, { recursive: true });
+    writeFileSync(
+      join(defaultDir, ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "test-token" } }),
+    );
+    const gateway = gatewayOn
+      ? await (
+          await import("../test/gatewayLink.ts")
+        ).startGatewayLinkForTests()
+      : undefined;
+    try {
+      // A legacy parent: its row and record name no account, and it is never
+      // acquired (acquiring would default it), only read from disk.
+      installSeam();
+      const parentId = `unbound-parent-${gatewayOn ? "on" : "off"}`;
+      sessionStore.upsert({
+        id: parentId,
+        scope: "user",
+        harness: "claude-sdk",
+        agentType: "workshop",
+      });
+      const parent = new ClaudeSdkSession(parentId, {
+        seam: async () => ({
+          query: () => ({
+            async *[Symbol.asyncIterator]() {
+              for (const message of turnMessages()) yield message;
+            },
+          }),
+        }),
+        agentType: "workshop",
+        modelId: "sonnet",
+        cwd: tmp,
+      });
+      sessionRuntime.createSession(parentId, parent.createRuntimeAdapter());
+      await sessionRuntime.prompt(parentId, "first");
+      writeClaudeSdkRecord(
+        CLAUDE_SDK_STORE_DIR,
+        parent.toRecordMeta(),
+        parent.committedTimeline(),
+        undefined,
+      );
+      parent.dispose();
+      assert.equal(parent.toRecordMeta().credentialProfileId, undefined);
+      assert.equal(sessionStore.get(parentId)?.credentialProfileId, undefined);
+      assert.equal(claudeSdkStore.get(parentId), undefined);
+
+      const firstAssistant = sessionRuntime
+        .get(parentId)!
+        .clientTimeline()
+        .find(
+          (entry) => entry.type === "message" && entry.role === "assistant",
+        )!;
+      const child = await claudeSdkStore.forkSession(parentId, {
+        anchor: "native-last",
+        keepThroughEntryId: firstAssistant.id,
+        forkOrigin: {
+          harness: "claude-sdk",
+          parentSessionId: parentId,
+          parentEntryId: firstAssistant.id,
+          position: "at",
+        },
+      });
+      assert.equal(
+        seamCalls.fork.at(-1)?.options.storeRoot,
+        defaultDir,
+        "the native cut runs in the default's DATA_DIR root",
+      );
+
+      sessionRuntime.createSession(child.id, child.createRuntimeAdapter());
+      await sessionRuntime.prompt(child.id, "continue");
+      const promptEnv = seamCalls.queries.at(-1)?.options?.env ?? {};
+      await child.compactContext();
+      const compactEnv = seamCalls.queries.at(-1)?.options?.env ?? {};
+      for (const [what, env] of [
+        ["prompt", promptEnv],
+        ["compact", compactEnv],
+      ] as const) {
+        assert.equal(env.CLAUDE_CONFIG_DIR, defaultDir, `${label} ${what}`);
+        assert.equal(env.ANTHROPIC_API_KEY, undefined, `${label} ${what}`);
+        assert.ok(
+          !Object.values(env).includes("ambient-api-key"),
+          `${label} ${what}`,
+        );
+        assert.equal(
+          env.ANTHROPIC_BASE_URL !== undefined,
+          gatewayOn,
+          `${label} ${what}: leased only with a link`,
+        );
+      }
+      if (gateway)
+        assert.ok(
+          gateway
+            .engineLeases()
+            .some(
+              (lease) =>
+                lease.profileId === DEFAULT_CLAUDE_PROFILE_ID &&
+                lease.owner.sessionId === child.id,
+            ),
+        );
+      assert.equal(child.toRecord().credentialProfileId, undefined);
+      assert.equal(sessionStore.get(child.id)?.credentialProfileId, undefined);
+      assert.equal(existsSync(join(home, ".claude")), false);
+    } finally {
+      await gateway?.close();
+      process.env.HOME = previousHome;
+      if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousKey;
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a Claude SDK fork refuses an enterprise-required parent bound to a personal account", async () => {
   await runtimeParent("fork-enterprise-personal", ["first"], {

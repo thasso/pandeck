@@ -12,7 +12,13 @@
  *     with the right text and no duplicated/empty text.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -22,6 +28,7 @@ import { claudeSdkModelId } from "./modelSettings.ts";
 import {
   claudeConfigDir,
   createCredentialProfile,
+  DEFAULT_CLAUDE_PROFILE_ID,
   deleteCredentialProfile,
 } from "../credentialProfiles.ts";
 import { setChildProcessEnvOverlay } from "../subprocessEnv.ts";
@@ -925,15 +932,21 @@ test("durable per-turn usage is the run's delta, not the session cumulative", as
 });
 
 /**
- * Run `body` with a default-profile Claude root (`~/.claude`) whose transcript
- * for the scripted provider session `sess-1` saved `scale` turns' totals.
+ * Run `body` with the default account's DATA_DIR Claude root holding a
+ * transcript for the scripted provider session `sess-1` that saved `scale`
+ * turns' totals. A session with no account reads it there, never from a
+ * fresh `HOME`, under which nothing may appear.
  */
 async function withSavedCostState<T>(
   scale: number,
   body: () => Promise<T>,
 ): Promise<T> {
   const home = mkdtempSync(join(tmpdir(), "claude-cost-state-"));
-  const project = join(home, ".claude", "projects", "-work-repo");
+  const project = join(
+    claudeConfigDir(DEFAULT_CLAUDE_PROFILE_ID),
+    "projects",
+    "-work-repo",
+  );
   mkdirSync(project, { recursive: true });
   writeFileSync(
     join(project, "sess-1.jsonl"),
@@ -960,10 +973,13 @@ async function withSavedCostState<T>(
   const previous = process.env.HOME;
   process.env.HOME = home;
   try {
-    return await body();
+    const out = await body();
+    assert.equal(existsSync(join(home, ".claude")), false);
+    return out;
   } finally {
     process.env.HOME = previous;
     rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
   }
 }
 

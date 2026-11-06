@@ -11,7 +11,6 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { userHomeDir } from "./userHome.ts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -314,10 +313,12 @@ export function piAgentDir(profileId = "default"): string {
   return dir;
 }
 
-/** Claude CLI state: the protected default follows the user's normal ~/.claude login; named profiles stay PA-isolated. */
+/**
+ * Claude CLI state: every Claude account, the protected default included, is
+ * PA-isolated under its own profile directory. Nothing reads the user's
+ * `~/.claude` (`docs/credential-distribution.md`).
+ */
 export function claudeConfigDir(profileId: string): string {
-  if (profileId === DEFAULT_CLAUDE_PROFILE_ID)
-    return join(userHomeDir(), ".claude");
   const dir = join(profileRoot(profileId), "claude");
   privateDir(dir);
   return dir;
@@ -332,9 +333,7 @@ export function claudeProfileRuntime(profileId: string): ClaudeProfileRuntime {
   const profile = credentialProfileById(profileId);
   if (!profile || profile.provider !== "claude")
     throw new Error("That credential profile cannot run Claude.");
-  return profileId === DEFAULT_CLAUDE_PROFILE_ID
-    ? {}
-    : { configDir: claudeConfigDir(profileId) };
+  return { configDir: claudeConfigDir(profileId) };
 }
 
 /** Scrub inherited Claude credentials and bind the SDK only to this profile. */
@@ -463,14 +462,9 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
         ? {
             setup: {
               path,
-              command:
-                profile.id === DEFAULT_CLAUDE_PROFILE_ID
-                  ? "claude"
-                  : `CLAUDE_CONFIG_DIR=${shellQuote(path)} claude`,
+              command: `CLAUDE_CONFIG_DIR=${shellQuote(path)} claude`,
               detail:
-                profile.id === DEFAULT_CLAUDE_PROFILE_ID
-                  ? "Use Connect to complete the official Claude CLI login in this browser, or run plain claude in a terminal. This profile uses normal ~/.claude."
-                  : "Use Connect to complete the official Claude CLI login in this browser. The command below remains available as a terminal fallback for this isolated profile.",
+                "Use Connect to complete the official Claude CLI login in this browser. The command below remains available as a terminal fallback for this isolated profile.",
             },
           }
         : {}),

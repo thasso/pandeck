@@ -193,6 +193,31 @@ test("streams the official profile-isolated CLI flow and never echoes the submit
   );
 });
 
+test("Default Claude's login runs the CLI in its DATA_DIR directory, never ~/.claude", () => {
+  const child = new FakeChild();
+  let env: NodeJS.ProcessEnv | undefined;
+  process.env.ANTHROPIC_API_KEY = "ambient-api-key";
+  terminal.setClaudeLoginSpawnForTests((_executable, _args, options) => {
+    env = options.env;
+    return childProcess(child);
+  });
+  terminal.attachClaudeLoginSocket(
+    new FakeSocket() as unknown as WebSocket,
+    request(profiles.DEFAULT_CLAUDE_PROFILE_ID),
+  );
+  assert.equal(
+    env?.CLAUDE_CONFIG_DIR,
+    join(
+      process.env.DATA_DIR!,
+      "credential-profiles",
+      "claude-default",
+      "claude",
+    ),
+  );
+  assert.equal(env?.ANTHROPIC_API_KEY, undefined);
+  assert.equal(existsSync(join(process.env.HOME!, ".claude")), false);
+});
+
 test("keeps one active process per profile across browser reconnects and supports cancellation", () => {
   const profile = profiles.createCredentialProfile({
     name: "Mobile Claude",

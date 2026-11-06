@@ -96,6 +96,7 @@ import {
   startOpenAiProfileLogin,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
+  importDefaultClaudeHomeTranscripts,
 } from "./harnesses/boot.ts";
 import {
   codexLoginDriver,
@@ -1945,6 +1946,18 @@ startSpawnBroker();
 // Checkout git crosses the worker protocol to this process's own Worker
 // (docs/workers.md); dial it now rather than on the first checkout call.
 startInProcessWorker();
+// Default Claude runs from DATA_DIR, not ~/.claude: copy Pandeck's own
+// transcripts from home once, before the gateway or any session can run as it
+// (docs/credential-distribution.md). It never throws; a failed run is logged
+// and resumes next boot.
+try {
+  await importDefaultClaudeHomeTranscripts();
+} catch (err) {
+  const code = (err as { code?: unknown } | null)?.code;
+  console.warn(
+    `[assistant] home transcript import failed (${typeof code === "string" ? code : "error"})`,
+  );
+}
 // Opt-in: the credential gateway runs in this process, and every engine open
 // on a profile holds a lease first. A failed start is logged and only fails
 // those opens. Graceful shutdown leaves it running, as the package proxy, for

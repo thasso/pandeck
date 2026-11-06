@@ -873,7 +873,7 @@ test("a query's environment applies the profile, then its variables, the output 
   assert.deepStrictEqual(
     claudeQueryEnvironment({ profile: {} }, base),
     withClaudeOutputBudgetEnvironment({ PATH: "/bin" }),
-    "the default profile scrubs credentials and keeps ~/.claude",
+    "a profile scrubs inherited credentials; with no config dir it names none",
   );
   assert.deepStrictEqual(
     claudeQueryEnvironment(
