@@ -45,7 +45,11 @@ import {
   encodeClientMessage,
   type ClientAccount,
 } from "./clientMethods.ts";
-import { ClientRegistry, type GatewayClient } from "./clientRegistry.ts";
+import {
+  ClientRegistry,
+  ClientRegistryLockedError,
+  type GatewayClient,
+} from "./clientRegistry.ts";
 import { createLoginManager, LoginRefusal } from "./logins.ts";
 import type { VaultPort } from "./vaultPort.ts";
 import {
@@ -200,7 +204,7 @@ export async function startClientListener(
     deps.stateDir,
     options.hosts ?? ["localhost", "127.0.0.1"],
   );
-  const registry = new ClientRegistry(deps.stateDir, now);
+  const registry = new ClientRegistry(deps.stateDir, now, log);
   const sockets = new Set<net.Socket>();
   const authenticated = new Map<net.Socket, GatewayClient>();
   const knownClients = new Set<string>();
@@ -546,9 +550,10 @@ export async function startClientListener(
             err instanceof StateWriteError
               ? new WorkerMethodError(STATE_WRITE_FAILED, err.message)
               : err;
-          log(
-            `client ${client.id} ${method}: ${failure instanceof WorkerMethodError ? failure.code : "failed"}`,
-          );
+          if (!(err instanceof ClientRegistryLockedError))
+            log(
+              `client ${client.id} ${method}: ${failure instanceof WorkerMethodError ? failure.code : "failed"}`,
+            );
           return Promise.reject(failure);
         }
       };
@@ -700,8 +705,9 @@ export async function startClientListener(
             caPem: edgeTls.caCertPem,
             ...ports,
           });
-        } catch {
-          log("enrollment failed: client registry unavailable");
+        } catch (err) {
+          if (!(err instanceof ClientRegistryLockedError))
+            log("enrollment failed: client registry unavailable");
           json(res, 503, { error: "client registry unavailable" });
         }
       });

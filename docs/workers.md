@@ -1695,8 +1695,11 @@ path above.
   Unknown, used or expired codes write nothing. The CLI and edge serialize
   read-modify-write with `clients.json.lock`, wait at most one second for a
   writer, and use unique owner-only temp files for atomic replacement. A crashed
-  writer leaves a lock containing its PID. Remove that lock only after verifying
-  its writer is no longer running; reads and unknown-code refusals still work.
+  writer leaves a lock containing its PID. Mutating admin commands exit non-zero
+  without reporting success; their error names the lock and asks the operator to
+  verify that its writer is no longer running before removing it. The gateway
+  logs that same error once per blocked-lock episode, not on every request.
+  Reads and unknown-code refusals still work.
   `gateway:relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file>`
   reads its code from stdin, or from `--code-file <0600 file>`. Never put the
   code in argv or a shell command. For example, redirect a protected code file

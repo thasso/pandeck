@@ -67,6 +67,7 @@ afterAll(() => upstreams.close());
 
 async function gatewayWithClients(
   loginDrivers?: LoginDrivers,
+  logs?: string[],
 ): Promise<RunningGateway> {
   const stateDir = await mkdtemp(join(DATA_DIR, "client-listener-"));
   const gateway = await startGateway({
@@ -74,7 +75,7 @@ async function gatewayWithClients(
     ...(loginDrivers ? { loginDrivers } : {}),
     upstreams: upstreams.overrides,
     now: () => clock,
-    log: () => {},
+    log: (line) => logs?.push(line),
     clients: {},
   });
   open.push(gateway);
@@ -392,7 +393,8 @@ test("enrollment limits attempts per source and sets listener connection and tim
 });
 
 test("registry read and write failures refuse the request without ending the gateway", async () => {
-  const gateway = await gatewayWithClients();
+  const logs: string[] = [];
+  const gateway = await gatewayWithClients(undefined, logs);
   const identity = await enroll(gateway);
   const connection = await dialClient(gateway, identity);
   const { token } = await grant(connection);
@@ -429,8 +431,19 @@ test("registry read and write failures refuse the request without ending the gat
   await writeFile(path, saved);
   const code = gateway.clients!.registry.createCode("u1", "busy");
   await writeFile(`${path}.lock`, "a writer holds the lock");
+  logs.length = 0;
   const body = { code, publicKeyPem: newKey().publicKeyPem };
   assert.equal((await postEnroll(gateway, body)).status, 503);
+  assert.equal((await postEnroll(gateway, body)).status, 503);
+  assert.equal(logs.filter((line) => line.includes(`${path}.lock`)).length, 1);
+  assert.match(
+    logs[0]!,
+    /Check that the writer PID.*no longer running before removing the lock/,
+  );
+  assert.equal(
+    logs.filter((line) => line.includes("enrollment failed")).length,
+    0,
+  );
   await unlink(`${path}.lock`);
   assert.equal((await postEnroll(gateway, body)).status, 200);
 });

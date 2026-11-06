@@ -107,6 +107,55 @@ test("separate processes preserve revocations and additions under concurrent wri
   for (let i = 0; i < 40; i++) assert.ok(registry.user(`u${i}`));
 }, 10_000);
 
+test("admin mutations fail loudly on a stale lock and never report success", async () => {
+  const { dir, registry, path } = fixture();
+  const code = registry.createCode("u", "seed");
+  registry.redeem(code, () => ({
+    id: "c0",
+    userId: "u",
+    label: "seed",
+    fingerprint: "fp0",
+    createdAt: 1,
+  }));
+  const lock = `${path}.lock`;
+  writeFileSync(lock, "2147483647\n");
+  const cli = new URL("./adminMain.ts", import.meta.url).pathname;
+  await Promise.all(
+    [
+      ["clients", "revoke", "c0"],
+      ["user", "add", "other"],
+      ["enroll-code", "--user", "u", "--label", "test"],
+    ].map((args) =>
+      assert.rejects(
+        run(process.execPath, [
+          "--import",
+          "tsx",
+          cli,
+          "--state-dir",
+          dir,
+          ...args,
+        ]),
+        (err: unknown) => {
+          const failure = err as Error & {
+            code: number;
+            stdout: string;
+            stderr: string;
+          };
+          assert.equal(failure.code, 1);
+          assert.equal(failure.stdout, "");
+          assert.ok(failure.stderr.includes(lock));
+          assert.match(
+            failure.stderr,
+            /Check that the writer PID.*no longer running before removing the lock/,
+          );
+          return true;
+        },
+      ),
+    ),
+  );
+  assert.ok(registry.active("c0", "fp0"));
+}, 10_000);
+
 test("failed writes release their lock and corrupt data is not overwritten", () => {
   const { registry, path } = fixture();
   writeFileSync(path, "broken JSON");

@@ -82,12 +82,25 @@ function hashOf(code: string): string {
   return createHash("sha256").update(code, "utf8").digest("hex");
 }
 
+export class ClientRegistryLockedError extends Error {
+  constructor(lock: string) {
+    super(
+      `Gateway client registry lock ${lock} did not clear within one second. Check that the writer PID recorded in this file is no longer running before removing the lock and retrying.`,
+    );
+  }
+}
+
 export class ClientRegistry {
   private readonly path: string;
   private readonly file: ReturnType<typeof createPrivateJsonFile>;
   private readonly now: () => number;
+  private lockReported = false;
 
-  constructor(stateDir: string, now: () => number = Date.now) {
+  constructor(
+    stateDir: string,
+    now: () => number = Date.now,
+    private readonly reportLock: (message: string) => void = () => {},
+  ) {
     this.path = join(stateDir, "clients.json");
     this.file = createPrivateJsonFile(this.path, "gateway clients", {
       privateDirectory: "enforce",
@@ -123,11 +136,18 @@ export class ClientRegistry {
     for (;;) {
       try {
         fd = openSync(lock, "wx", 0o600);
+        this.lockReported = false;
         break;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-        if (Date.now() >= deadline)
-          throw new Error("Gateway client registry is busy.");
+        if (Date.now() >= deadline) {
+          const error = new ClientRegistryLockedError(lock);
+          if (!this.lockReported) {
+            this.lockReported = true;
+            this.reportLock(error.message);
+          }
+          throw error;
+        }
         Atomics.wait(pause, 0, 0, 10);
       }
     }
