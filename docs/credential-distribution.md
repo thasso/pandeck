@@ -59,14 +59,14 @@ account's endpoint key lives only in its
 `settings/openai-compatible.json` is migrated there and deleted
 (`docs/settings.md` "OpenAI-compatible accounts"). It is write-only: Settings
 sends it in one `PATCH …/endpoint` and shows only `apiKeyConfigured`, no agent
-tool reads or writes it, and the opt-in credential gateway leases only OpenAI
-accounts, so it never receives an endpoint's key. Moving the four integration
-secrets above does not isolate model credentials. Apply the credential-profile
-filters and preview rules independently. With the embedded credential gateway
-on, the gateway renews these tokens in place, in the same profile files and
-formats; no new location holds them. A terminal CLI shares a profile's directory
-only when the user points it there with that profile's `CLAUDE_CONFIG_DIR`
-(`docs/workers.md` "Renewal").
+tool reads or writes it, and the credential gateway leases only OpenAI accounts,
+so it never receives an endpoint's key. Moving the four integration secrets
+above does not isolate model credentials. Apply the credential-profile filters
+and preview rules independently. With the credential gateway on (the NixOS
+module's default, "Credential gateway service" below), the gateway renews these
+tokens in place, in the same profile files and formats; no new location holds
+them. A terminal CLI shares a profile's directory only when the user points it
+there with that profile's `CLAUDE_CONFIG_DIR` (`docs/workers.md` "Renewal").
 
 ### Default Claude
 
@@ -151,14 +151,56 @@ fresh directory under the gateway's state directory, not Pandeck's transcript
 root or the user's home. Local transcript completion does not log an account in
 or change the existing account bindings and default fallback.
 
+## Credential gateway service
+
+The NixOS module turns the credential gateway on by default and runs it in its
+own unit, `personal-assistant-gateway`
+([deployment.md](deployment.md#credential-gateway-unit)). The server and each
+preview get `ASSISTANT_GATEWAY=1`; outside the module the code default stays
+off.
+
+**What switching on changes.** The gateway becomes the only refresher of Claude
+and Codex logins. It renews tokens in the same profile files and formats.
+OpenAI-compatible accounts keep calling their endpoints directly.
+
+**Switching on.** Deploy while no agent turn or login is running, so no refresh
+token has two live writers across the switch. Then check:
+
+- `systemctl status personal-assistant-gateway personal-assistant` shows both
+  active, and `/run/personal-assistant-gateway/control.sock` exists with mode
+  `srw-------`;
+- `systemctl show personal-assistant -p Environment` shows `ASSISTANT_GATEWAY=1`
+  and `ASSISTANT_GATEWAY_SOCKET=/run/personal-assistant-gateway/control.sock`;
+- the app shows no "Credential gateway" status 10 seconds after the start.
+
+A preview that was already running keeps the gateway off until
+`sudo pa-pr deploy <n>`.
+
+**Restarting.** Only the operator restarts the gateway
+(`sudo systemctl restart personal-assistant-gateway`); a deploy or a server
+restart leaves it running. Open streams get two minutes to finish.
+
+**Rollback.** Set `services.personal-assistant.gateway.enable = false`, deploy,
+and restart each running preview. That is the only supported rollback
+([deployment.md](deployment.md#credential-gateway-unit) has the commands and the
+reasons). Do not switch only the server off through its EnvironmentFile: the
+gateway unit would start again at the next server restart or boot and renew
+tokens for its persisted leases beside the engines. The engines' own refreshers
+return and read the same token files. Switch-off rollback and the CLI-compatible
+credential locks remain until slice 5's encrypted store. A re-login recovers any
+account that needs one.
+
 ## Supplying the service environment
 
 Use the deployment's existing systemd `EnvironmentFile` mechanism rather than
 putting secret values in Nix expressions, the repository, the package, or the
-Nix store. The file may define the four variables above alongside
-`ASSISTANT_TOKEN`. Keep it outside the repository, owned by the service user or
-root, and readable only by the account that needs it. Secret-manager templates
-such as sops-nix may render that file.
+Nix store. The file may define the four integration secrets under "Storage
+contract" alongside `ASSISTANT_TOKEN`. It reaches only the server, never the
+gateway unit, so it must not set `ASSISTANT_GATEWAY`, `ASSISTANT_GATEWAY_PORT`
+or `ASSISTANT_GATEWAY_SOCKET`; the NixOS module sets those from `gateway.enable`
+and `gateway.port`. Keep the file outside the repository, owned by the service
+user or root, and readable only by the account that needs it. Secret-manager
+templates such as sops-nix may render that file.
 
 Do not place these values in `extraEnvironment`. Nix-rendered environment values
 can become world-readable store content. Do not copy production values into a

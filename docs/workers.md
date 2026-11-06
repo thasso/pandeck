@@ -1333,11 +1333,13 @@ OpenAI-compatible profile answers `unknown_profile` before any lane.
   owned by no boot and cleared only by force release. A registry of compatible
   profiles alone leaves the fence pending.
 
-The server's link to the gateway (`gatewayLink.ts`) is opt-in and off by
-default. With `ASSISTANT_GATEWAY=1` and no socket configured it starts the
-gateway inside the server process, its model listener on
-`127.0.0.1:${ASSISTANT_GATEWAY_PORT}` (8788), its state in `DATA_DIR/gateway/`
-and control over an in-process pair. This boot remains one-shot.
+The server's link to the gateway (`gatewayLink.ts`) is off in code by default;
+the NixOS module turns it on, in socket mode against its own gateway unit
+([deployment.md](deployment.md) "Credential gateway unit"). With
+`ASSISTANT_GATEWAY=1` and no socket configured it starts the gateway inside the
+server process, its model listener on `127.0.0.1:${ASSISTANT_GATEWAY_PORT}`
+(8788), its state in `DATA_DIR/gateway/` and control over an in-process pair.
+This boot remains one-shot.
 
 With `ASSISTANT_GATEWAY_SOCKET` also set, the server dials that Unix control
 socket instead. It never starts or stops the standalone gateway. After a lost
@@ -1363,9 +1365,14 @@ kernel; a failed start releases it after closing its control listener. Known
 limit: non-Linux socket mode is development-only and retains probe/unlink
 without interprocess startup serialization. SIGTERM or SIGINT closes control and
 stops accepting model requests, lets active streams finish for up to two
-minutes, then destroys remaining sockets. The code ships without service units
-or a production switch. Switch-off rollback and the CLI-compatible credential
-locks stay until slice 5's encrypted store migration.
+minutes, then destroys remaining sockets. The NixOS module runs it as
+`personal-assistant-gateway` and each preview's as `pa-pr-gateway@<n>`; only the
+operator restarts them, never a deploy or the server. Switch-off rollback
+(`gateway.enable = false`, which sets `ASSISTANT_GATEWAY=0` and removes the
+gateway units) and the CLI-compatible credential locks stay until slice 5's
+encrypted store migration. Turning only the server's switch off is no rollback:
+the still-installed gateway renews the tokens its persisted server leases cover
+on its own ([deployment.md](deployment.md) "Credential gateway unit").
 
 - Before it is ready the link says hello as this server boot (16 random bytes,
   the pid and the process start time), syncs every credential profile with its
@@ -1928,6 +1935,11 @@ The development server and the test suite run an in-process Worker over the real
 protocol, so there is one code path and no mock transport. Each PR preview runs
 its own Worker beside its server and never shares production's.
 
+The credential gateway already has this shape: its own unit,
+`personal-assistant-gateway`, which a deploy never restarts, and a
+`pa-pr-gateway@<n>` beside each preview, restarted by the preview's deploy
+([deployment.md](deployment.md) "Credential gateway unit").
+
 ## What the user sees
 
 Each session shows its Worker. Settings has a Workers page: health, version,
@@ -2057,17 +2069,19 @@ the server's child-env overlay.
 
 The credential gateway (`app/server/src/gateway/`) has landed with its
 forwarding core, its control channel and persisted leases, and the server's link
-to it behind `ASSISTANT_GATEWAY=1`, off by default. With the switch on, every
-Claude engine sends its model requests through the gateway with its lease, a
-profile-less session as `claude-default`, and every pi engine sends its Codex
-requests through it with its lease, both under the engine-version guard. Each
-OpenAI-compatible account's pi engines and one-shots send theirs to `/compat`
-with their lease, and the gateway adds that account's pushed key. Claude and pi
-one-shots, Claude usage, and Codex usage, reset credits and consume go through
-it on a server lease per profile. It renews tokens in each profile's writer lane
-(Renewal), and both login flows hold their profile while their writer may write
-its token file (Login holds); a stuck hold shows in Settings → Accounts with
-Clear. Engine routing and its own service unit come in later slices.
+to it behind `ASSISTANT_GATEWAY=1`, off in code and on in the NixOS module. With
+the switch on, every Claude engine sends its model requests through the gateway
+with its lease, a profile-less session as `claude-default`, and every pi engine
+sends its Codex requests through it with its lease, both under the
+engine-version guard. Each OpenAI-compatible account's pi engines and one-shots
+send theirs to `/compat` with their lease, and the gateway adds that account's
+pushed key. Claude and pi one-shots, Claude usage, and Codex usage, reset
+credits and consume go through it on a server lease per profile. It renews
+tokens in each profile's writer lane (Renewal), and both login flows hold their
+profile while their writer may write its token file (Login holds); a stuck hold
+shows in Settings → Accounts with Clear. The gateway runs as its own process and
+unit, on by default in the NixOS module, and the server dials it over a Unix
+control socket. Engine routing comes in later slices.
 
 ## Open questions
 

@@ -150,22 +150,23 @@ merging with it:
 Every field is optional. The file must not contain secrets: secret-shaped field
 names are ignored, and the package check rejects them.
 
-| Variable                               | Purpose                                                                                   |
-| -------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `ASSISTANT_CONFIG`                     | Path to your config file (replaces `config/app.json`)                                     |
-| `DATA_DIR`                             | Data directory; overrides `dataDir`                                                       |
-| `ASSISTANT_CWD`                        | Directory the agent is rooted at                                                          |
-| `ASSISTANT_HOST`, `ASSISTANT_PORT`     | Bind address (`127.0.0.1` in production, `0.0.0.0` in dev) and port (`8787`)              |
-| `ASSISTANT_GATEWAY`                    | `1` runs the credential gateway in-process; development only until it becomes the default |
-| `ASSISTANT_GATEWAY_PORT`               | The credential gateway's loopback model port (`8788`)                                     |
-| `ASSISTANT_TOKEN`                      | Pin the browser/API token instead of the generated one                                    |
-| `ASSISTANT_PUBLIC_BASE_URL`            | Base URL for OAuth callbacks when forwarded headers are missing                           |
-| `ASSISTANT_ALLOWED_ORIGINS`            | Extra browser origins allowed to call the API                                             |
-| `ASSISTANT_GOOGLE_OAUTH_CLIENT_SECRET` | Google Workspace OAuth client secret                                                      |
-| `ASSISTANT_TEMPO_OAUTH_CLIENT_SECRET`  | Tempo OAuth client secret                                                                 |
-| `ASSISTANT_SLACK_CLIENT_SECRET`        | Slack OAuth client secret                                                                 |
-| `ASSISTANT_SLACK_APP_TOKEN`            | Slack Socket Mode app token                                                               |
-| `APNS_CREDENTIAL_FILE`                 | Apple Push key for the iOS app (`docs/notifications.md`)                                  |
+| Variable                               | Purpose                                                                                                                                  |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `ASSISTANT_CONFIG`                     | Path to your config file (replaces `config/app.json`)                                                                                    |
+| `DATA_DIR`                             | Data directory; overrides `dataDir`                                                                                                      |
+| `ASSISTANT_CWD`                        | Directory the agent is rooted at                                                                                                         |
+| `ASSISTANT_HOST`, `ASSISTANT_PORT`     | Bind address (`127.0.0.1` in production, `0.0.0.0` in dev) and port (`8787`)                                                             |
+| `ASSISTANT_GATEWAY`                    | `1` uses the credential gateway; `0` (the code default) leaves refreshing to the engines. The NixOS module sets it from `gateway.enable` |
+| `ASSISTANT_GATEWAY_PORT`               | The credential gateway's loopback model port (`8788`). The NixOS module sets it from `gateway.port`                                      |
+| `ASSISTANT_GATEWAY_SOCKET`             | A standalone gateway's control socket; unset runs the gateway in-process. The NixOS module fixes it                                      |
+| `ASSISTANT_TOKEN`                      | Pin the browser/API token instead of the generated one                                                                                   |
+| `ASSISTANT_PUBLIC_BASE_URL`            | Base URL for OAuth callbacks when forwarded headers are missing                                                                          |
+| `ASSISTANT_ALLOWED_ORIGINS`            | Extra browser origins allowed to call the API                                                                                            |
+| `ASSISTANT_GOOGLE_OAUTH_CLIENT_SECRET` | Google Workspace OAuth client secret                                                                                                     |
+| `ASSISTANT_TEMPO_OAUTH_CLIENT_SECRET`  | Tempo OAuth client secret                                                                                                                |
+| `ASSISTANT_SLACK_CLIENT_SECRET`        | Slack OAuth client secret                                                                                                                |
+| `ASSISTANT_SLACK_APP_TOKEN`            | Slack Socket Mode app token                                                                                                              |
+| `APNS_CREDENTIAL_FILE`                 | Apple Push key for the iOS app (`docs/notifications.md`)                                                                                 |
 
 The server reads the four integration secrets once at startup and removes them
 from its environment before any agent starts. Supply them through a private
@@ -243,7 +244,11 @@ your reverse proxy. `settings` is rendered into the world-readable Nix store, so
 the module refuses secret-shaped fields there; secrets go into `tokenFile`, a
 runtime path written by your secret manager (for example sops-nix). Other
 options cover the agent working directory, memory caps, dictation, APNs and
-per-PR preview instances. The option descriptions in `flake.nix` and
+per-PR preview instances. The credential gateway runs beside it as
+`personal-assistant-gateway` (option `gateway.enable`, on by default), which
+only you restart (`docs/deployment.md#credential-gateway-unit`). It does not
+read `tokenFile`, so configure it through the module options only, and roll it
+back with `gateway.enable = false`. The option descriptions in `flake.nix` and
 `docs/deployment.md` are the reference. The host provides the agents' toolchain
 (`docs/deployment.md#host-tools`).
 
@@ -318,6 +323,7 @@ service user's `~/.claude` login or transcripts.
 ```bash
 systemctl status personal-assistant          # state + process tree (CGroup)
 journalctl -fu personal-assistant            # follow app logs
+systemctl status personal-assistant-gateway  # the credential gateway
 journalctl -fu 'personal-assistant-release@*'  # a running deploy (project pipeline)
 ```
 

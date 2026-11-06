@@ -203,6 +203,9 @@ jobs:
             .#checks.x86_64-linux.personal-assistant-closure \
             .#checks.x86_64-linux.personal-assistant-preview-isolation \
             .#checks.x86_64-linux.personal-assistant-oom-policy \
+            .#checks.x86_64-linux.personal-assistant-gateway-unit \
+            .#checks.x86_64-linux.personal-assistant-gateway-off \
+            .#checks.x86_64-linux.personal-assistant-preview-ports \
             --print-build-logs
 
       - name: Record the package's NAR hash
