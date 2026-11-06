@@ -1171,10 +1171,10 @@ through a custom endpoint with a placeholder bearer (ADR-0004), so the gateway
 ships in phase 2, on the server's host. Its same-host form:
 
 - Engines reach it over loopback HTTP. One listener serves every upstream,
-  selected by path prefix: `/anthropic` for Claude Messages, `/chatgpt` for
-  Codex responses, `/compat` for each OpenAI-compatible account's chat
-  completions. A prefix allows only the exact method and path its engine sends,
-  with no path normalisation; `/compat` allows only
+  selected by path prefix: `/anthropic` for Claude Messages and token counts,
+  `/chatgpt` for Codex responses, `/compat` for each OpenAI-compatible account's
+  chat completions. A prefix allows only the exact method and path its engine
+  sends, with no path normalisation; `/compat` allows only
   `POST <base path>/chat/completions`, under the base path the server pushed for
   the lease's account. A server lease also reaches `/anthropic`'s
   `GET /api/oauth/usage` and `/chatgpt`'s usage routes, which no engine lease

@@ -12,12 +12,13 @@
  * Under the credential gateway the same requests go to its `/chatgpt` prefix
  * with the server's lease as the bearer; the gateway adds the token and
  * account id. The server then reads only whether `auth.json` holds a Codex
- * login and when it expires. A gateway refusal (its marker) is a temporary
+ * login and when it expires, or in client mode the mirrored account's state.
+ * A gateway refusal (its marker) is a temporary
  * failure, never a rejected login.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { piAgentDir } from "../credentialProfiles.ts";
+import { piAgentDir, remoteAccountReady } from "../credentialProfiles.ts";
 import { gatewayRefusalText } from "../providerErrors.ts";
 import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
 import { randomUUID } from "node:crypto";
@@ -126,11 +127,14 @@ async function readPiCodexAuth(
 
 /**
  * Whether the profile holds a Codex login, and its expiry: never the token
- * or account id, which only the gateway reads (RD-G4-3).
+ * or account id, which only the gateway reads (RD-G4-3). In client mode no
+ * file exists here: the gateway says whether the login works and renews it,
+ * so there is no expiry to read.
  */
 export async function readPiCodexMeta(
   profileId: string,
 ): Promise<{ expires: number | null } | null> {
+  if (remoteAccountReady(profileId)) return { expires: null };
   const auth = await readCodexLogin(profileId);
   return auth && { expires: auth.expires };
 }

@@ -253,7 +253,7 @@ export function mirrorRemoteCredentialProfiles(
 }
 
 /** A mirrored account the gateway holds a working login for; none keeps a file here. */
-function remoteAccountReady(id: string): boolean {
+export function remoteAccountReady(id: string): boolean {
   return (
     remoteProfiles?.some((profile) => profile.id === id) === true &&
     !remoteNeedsLogin.has(id)
