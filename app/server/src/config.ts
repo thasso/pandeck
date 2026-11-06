@@ -61,6 +61,21 @@ export const GATEWAY_ENABLED = process.env.ASSISTANT_GATEWAY === "1";
 export const GATEWAY_PORT = Number(process.env.ASSISTANT_GATEWAY_PORT ?? 8788);
 
 /**
+ * Client mode (`gatewayClientLink.ts`): `<socket path>,<loopback port>` of the
+ * relay to a remote gateway, which then owns the accounts. Takes precedence
+ * over `ASSISTANT_GATEWAY`.
+ */
+export const GATEWAY_RELAY = (():
+  { socketPath: string; port: number } | undefined => {
+  const value = process.env.ASSISTANT_GATEWAY_RELAY;
+  if (!value) return undefined;
+  const [socketPath, port] = value.split(",");
+  if (!socketPath || !port || !Number.isSafeInteger(Number(port)))
+    throw new Error("ASSISTANT_GATEWAY_RELAY is <socket path>,<port>.");
+  return { socketPath, port: Number(port) };
+})();
+
+/**
  * In development, bind to all interfaces so the Vite app can be opened from a
  * phone on the same network. Production keeps the safer localhost default unless
  * explicitly overridden.

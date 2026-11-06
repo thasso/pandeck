@@ -446,8 +446,8 @@ test("the Worker side reaches no server state", () => {
 /**
  * What `gateway/` (the credential gateway) may import besides `node:` and
  * itself: the private atomic writer for its state, the worker protocol's codec
- * and connection for its control channel (gateway control 1.0), and what those
- * import. No package either, and each of these imports only `node:` or this
+ * and connection for its control channel (gateway control 1.0), the socket
+ * transport for its client port (gateway client 1.0), and what those import. No package either, and each of these imports only `node:` or this
  * list, including the dependency-free shared endpoint rules, so the closure
  * ends here and the gateway can run as its own process (ADR-0005).
  */
@@ -458,6 +458,7 @@ const GATEWAY_ALLOWED = new Set([
   "workerProtocol/codec.ts",
   "workerProtocol/connection.ts",
   "workerProtocol/inProcessTransport.ts",
+  "workerProtocol/unixSocketTransport.ts",
   "workerProtocol/version.ts",
 ]);
 
@@ -513,12 +514,18 @@ const GATEWAY_VAULT = [
   "vault",
 ];
 const GATEWAY_EDGE = [
+  // The admin CLI and the client listener's enrollment, CA and protocol.
+  "adminMain",
+  "clientListener",
+  "clientMethods",
+  "clientRegistry",
   "compatUpstream",
   "control",
   "controlMethods",
   "forward",
   "leases",
   "upstreams",
+  "x509",
 ];
 const GATEWAY_SHARED = ["profiles", "refusals", "vaultPort"];
 const GATEWAY_ROOT = ["gateway", "state"];
@@ -566,14 +573,33 @@ test("the gateway's edge reaches the vault only through its port", () => {
   );
 });
 
-test("only the server link and the error classifier import the gateway", () => {
-  // The link starts it and speaks control; engine modules reach it only
-  // through the link. The classifier reads the local-refusal marker.
+test("only the server links and the error classifier import the gateway", () => {
+  // The link starts it and speaks control, the client-mode link speaks
+  // gateway client 1.0; engine modules reach it only through a link. The
+  // classifier reads the local-refusal marker.
   assert.deepEqual(
     importersOf((target) => target.startsWith("gateway/")).filter(
       (module) => !module.startsWith("gateway/"),
     ),
-    ["gatewayLink.ts", "providerErrors.ts"],
+    ["gatewayClientLink.ts", "gatewayLink.ts", "providerErrors.ts"],
+  );
+});
+
+test("the relay imports only node and itself, and nothing imports it", () => {
+  // It holds the client key in its own process (Task-1384, M14).
+  const modules = [...scans].filter(([module]) => module.startsWith("relay/"));
+  assert.ok(modules.length > 0, "the scan found the relay modules");
+  for (const [module, scan] of modules)
+    for (const target of scan.imports)
+      assert.ok(
+        target.startsWith("node:") || target.startsWith("relay/"),
+        `${module} imports ${target}`,
+      );
+  assert.deepEqual(
+    importersOf((target) => target.startsWith("relay/")).filter(
+      (module) => !module.startsWith("relay/"),
+    ),
+    [],
   );
 });
 

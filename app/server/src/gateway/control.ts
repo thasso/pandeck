@@ -330,6 +330,7 @@ export function createControlEndpoint({
         leases.revokeWhere(
           (record) =>
             record.kind === "engine" &&
+            record.owner.clientId === undefined &&
             record.owner.workerId === workerId &&
             !keep.has(record.leaseId),
           "session-ended",
@@ -496,6 +497,7 @@ export function createControlEndpoint({
         leases.revokeWhere(
           (record) =>
             record.kind === "server" &&
+            record.owner.clientId === undefined &&
             record.owner.serverBootId !== hello.serverBootId,
           "session-ended",
         ),

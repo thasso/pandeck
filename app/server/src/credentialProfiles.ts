@@ -183,7 +183,70 @@ function privateTree(path: string): void {
   }
 }
 
+/**
+ * Client mode (`gatewayClientLink.ts`): the gateway owns the accounts, and
+ * the registry is their mirror, metadata only. No token file, no write: an
+ * account is neither created, changed, deleted nor logged in from here.
+ * Undefined in the self-hosted (server-master) mode.
+ */
+let remoteProfiles: CredentialProfile[] | undefined;
+/** The mirrored accounts the gateway says need a login. */
+const remoteNeedsLogin = new Set<string>();
+
+/** A gateway account as gateway client 1.0 lists it. */
+export interface RemoteCredentialProfile {
+  id: string;
+  provider: "claude" | "openai-codex";
+  name: string;
+  enabled: boolean;
+  needsLogin: boolean;
+}
+
+/**
+ * Replaces the mirror with the gateway's accounts (client mode), or leaves
+ * client mode with `undefined`. Every account that came, went or changed is
+ * reported as a change.
+ */
+export function mirrorRemoteCredentialProfiles(
+  accounts: readonly RemoteCredentialProfile[] | undefined,
+): void {
+  const before = new Map((remoteProfiles ?? []).map((p) => [p.id, p]));
+  const neededBefore = new Set(remoteNeedsLogin);
+  const now = Date.now();
+  remoteNeedsLogin.clear();
+  remoteProfiles = accounts?.flatMap((account, index): CredentialProfile[] => {
+    if (!isSafeCredentialProfileId(account.id)) return [];
+    if (account.needsLogin) remoteNeedsLogin.add(account.id);
+    const known = before.get(account.id);
+    const createdAt = known?.createdAt ?? now + index;
+    const same =
+      known?.name === account.name.slice(0, 80) &&
+      known.enabled === account.enabled &&
+      known.provider === account.provider;
+    return [
+      {
+        id: account.id,
+        name: account.name.slice(0, 80),
+        provider: account.provider,
+        enabled: account.enabled,
+        enterprise: false,
+        priority: 0,
+        createdAt,
+        updatedAt: same ? known.updatedAt : now,
+      },
+    ];
+  });
+  const after = new Map((remoteProfiles ?? []).map((p) => [p.id, p]));
+  for (const id of new Set([...before.keys(), ...after.keys()]))
+    if (
+      before.get(id)?.updatedAt !== after.get(id)?.updatedAt ||
+      neededBefore.has(id) !== remoteNeedsLogin.has(id)
+    )
+      credentialProfileChanged(id);
+}
+
 function readRegistry(): CredentialProfile[] {
+  if (remoteProfiles) return remoteProfiles.map((profile) => ({ ...profile }));
   if (!existsSync(REGISTRY)) return [];
   try {
     const raw = JSON.parse(readFileSync(REGISTRY, "utf8")) as unknown;
@@ -221,6 +284,8 @@ function readRegistry(): CredentialProfile[] {
 }
 
 function writeRegistry(profiles: CredentialProfile[]): void {
+  if (remoteProfiles)
+    throw new Error("The gateway manages the accounts of this Pandeck.");
   privateDir(ROOT);
   const tmp = `${REGISTRY}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(profiles, null, 2)}\n`, {
@@ -325,6 +390,15 @@ function endpointSummary(profile: CredentialProfile): CredentialProfileSummary {
 function summary(profile: CredentialProfile): CredentialProfileSummary {
   if (ACCOUNT_KINDS[profile.provider].credential === "endpoint")
     return endpointSummary(profile);
+  if (remoteProfiles) {
+    // The gateway holds the credential: no file here says anything.
+    const ready = !remoteNeedsLogin.has(profile.id);
+    return {
+      ...profile,
+      status: ready ? "ready" : "disconnected",
+      health: readAccountHealth(profile.id, ready),
+    };
+  }
   const pending = transient.get(profile.id);
   const configured =
     profile.provider === "openai-codex"
@@ -572,6 +646,19 @@ function endpointStored(
 export function ensureDefaultPiProfile(): CredentialProfile {
   const profiles = readRegistry();
   const now = Date.now();
+  // Client mode creates no account: the gateway's are all there is.
+  if (remoteProfiles)
+    return (
+      profiles.find((profile) => profile.provider === "openai-codex") ?? {
+        id: DEFAULT_OPENAI_PROFILE_ID,
+        name: "Default OpenAI",
+        provider: "openai-codex",
+        enabled: false,
+        enterprise: false,
+        createdAt: now,
+        updatedAt: now,
+      }
+    );
   let changed = false;
   let openai = profiles.find(
     (profile) => profile.id === DEFAULT_OPENAI_PROFILE_ID,

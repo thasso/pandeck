@@ -33,6 +33,7 @@ import { formatBuildInfo } from "@assistant/shared/buildInfo";
 import {
   DATA_DIR,
   GATEWAY_ENABLED,
+  GATEWAY_RELAY,
   GATEWAY_PORT,
   HOST,
   IS_PROD,
@@ -44,6 +45,7 @@ import { scrubInstanceEnvironment } from "./instanceEnv.ts";
 import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
+import { startGatewayClientLink } from "./gatewayClientLink.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
 import {
   clearUnfinishedProfileLogin,
@@ -1923,7 +1925,13 @@ startInProcessWorker();
 // a draining turn; it dies with the process. The link pushes each
 // OpenAI-compatible account's endpoint and key itself; the gateway renews
 // Codex logins through pi's refresh passed in here.
-if (GATEWAY_ENABLED) {
+if (GATEWAY_RELAY) {
+  // Client mode: a remote gateway owns the accounts; logins wait for it.
+  startGatewayClientLink({
+    socketPath: GATEWAY_RELAY.socketPath,
+    relayPort: GATEWAY_RELAY.port,
+  });
+} else if (GATEWAY_ENABLED) {
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,

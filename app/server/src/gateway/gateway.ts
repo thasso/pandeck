@@ -39,6 +39,12 @@ import {
 } from "./forward.ts";
 import { createCompatUpstream } from "./compatUpstream.ts";
 import type { TokenEndpoint } from "./claudeRenewal.ts";
+import {
+  peerClientId,
+  startClientListener,
+  type ClientListenerOptions,
+  type RunningClientListener,
+} from "./clientListener.ts";
 import { createControlEndpoint } from "./control.ts";
 import type { HoldRecord, WriterLane } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
@@ -73,6 +79,11 @@ export interface GatewayOptions {
   renewTickMs?: number;
   /** Test seam: the Claude refresh lock's clock and retry sleeps. */
   refreshLockOptions?: RefreshLockOptions;
+  /**
+   * The edge's mutual-TLS listeners for enrolled clients (`clientListener.ts`);
+   * needs `stateDir`. Without it the gateway serves only the loopback port.
+   */
+  clients?: ClientListenerOptions;
 }
 
 export interface RunningGateway {
@@ -80,6 +91,8 @@ export interface RunningGateway {
   readonly port: number;
   readonly leases: LeaseTable;
   readonly stats: Readonly<GatewayStats>;
+  /** The client listener, when `clients` was given. */
+  readonly clients: RunningClientListener | undefined;
   /** The profiles' writer lane, for in-gateway writers (G4, G5). */
   readonly lane: Pick<WriterLane, "run">;
   /** Serves gateway control 1.4 on `endpoint`, as the listener. */
@@ -113,13 +126,17 @@ export async function startGateway(
     leases.restore(state.leases);
     profiles.restore(state.profiles);
   }
+  /** Set once the client listener runs; the vault's reports reach it. */
+  let clients: RunningClientListener | undefined;
   // The vault restores its holds and fences them from the restored registry.
   const vault = createVault({
     inputs: {
       profiles,
       hasLiveLease: (profileId) => leases.hasLiveLease(profileId),
-      report: (profileId, needsLogin) =>
-        control.reportCredential({ profileId, needsLogin }),
+      report: (profileId, needsLogin) => {
+        control.reportCredential({ profileId, needsLogin });
+        clients?.accountsChanged();
+      },
     },
     log,
     now: options.now,
@@ -152,7 +169,7 @@ export async function startGateway(
   };
   const agent = new https.Agent({ keepAlive: true });
   const httpAgent = new http.Agent({ keepAlive: true });
-  const forwarder = createForwarder({
+  const forwarderDeps = {
     leases,
     log,
     agent,
@@ -162,7 +179,8 @@ export async function startGateway(
     compatCa: options.compatCa,
     stats,
     vault,
-  });
+  };
+  const forwarder = createForwarder(forwarderDeps);
   const sockets = new Set<net.Socket>();
 
   const server = http.createServer(forwarder.handleRequest);
@@ -186,6 +204,25 @@ export async function startGateway(
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   log(`listening on 127.0.0.1:${port}`);
+  if (options.clients) {
+    if (!options.stateDir)
+      throw new Error("The client listener needs stateDir.");
+    clients = await startClientListener(
+      {
+        stateDir: options.stateDir,
+        leases,
+        profiles,
+        needsLogin: () => vault.needsLogin(),
+        forwarder: createForwarder({
+          ...forwarderDeps,
+          clientOf: peerClientId,
+        }),
+        log,
+        ...(options.now ? { now: options.now } : {}),
+      },
+      options.clients,
+    );
+  }
   const holdCheck = setInterval(
     control.checkHolds,
     options.holdCheckIntervalMs ?? 60_000,
@@ -201,6 +238,7 @@ export async function startGateway(
     port,
     leases,
     stats,
+    clients,
     lane: vault.lane,
     attachControl: control.attach,
     lastHello: control.hello,
@@ -212,6 +250,7 @@ export async function startGateway(
       clearInterval(renewTick);
       vault.close();
       control.close();
+      await clients?.close();
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),
       );

@@ -68,6 +68,12 @@ interface ForwarderDeps {
   compatCa: string | string[] | undefined;
   stats: GatewayStats;
   vault: Pick<VaultPort, "credentialFor" | "upstream401">;
+  /**
+   * The enrolled client a request came from, on the edge's mutual-TLS port;
+   * absent on the loopback listener. A lease is spent only by its own client,
+   * and a client's lease only on that port.
+   */
+  clientOf?: (req: http.IncomingMessage) => string | undefined;
 }
 
 /** Where a request goes once it is allowed, credential included. */
@@ -231,6 +237,8 @@ export function createForwarder(deps: ForwarderDeps): {
     const lease = leases.verify(bearerOf(req.headers.authorization));
     if (!lease.ok) return refuseLease(lease);
     const { leaseId, binding } = lease;
+    if (leases.clientOf(leaseId) !== deps.clientOf?.(req))
+      return refuse(res, shape, { case: "forbidden" }, done, leaseId);
     const { upstream } = route;
     if (upstream.kind === "compat") {
       // An engine or server lease of an OpenAI-compatible profile, never a

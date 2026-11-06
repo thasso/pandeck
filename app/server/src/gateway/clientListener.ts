@@ -1,0 +1,545 @@
+/**
+ * The edge's listeners for enrolled clients (plan Task-1384 §1-2, M13):
+ *
+ * - the enrollment port, HTTPS with the edge's server certificate and no
+ *   client certificate: `POST /enroll {code, publicKeyPem}` uses up a
+ *   one-time code and answers `{clientId, certificatePem, caPem, modelPort,
+ *   clientPort}`;
+ * - the model port, HTTPS with mutual TLS, the same routes as the loopback
+ *   listener through a forwarder that spends only the calling client's
+ *   leases;
+ * - the client port, TLS with mutual TLS, serving gateway client 1.0
+ *   (`clientMethods.ts`).
+ *
+ * The gateway's CA is the only trust root on both mutual-TLS ports. The
+ * client is the common name of its certificate, matched by fingerprint, and
+ * is checked on every connection and again on every request and method, so a
+ * revocation takes effect at once. The CA and the edge's server certificate
+ * live in `edge-tls.json`, the clients in `clients.json` (`clientRegistry.ts`),
+ * both under the state directory.
+ */
+import { randomBytes } from "node:crypto";
+import https from "node:https";
+import type http from "node:http";
+import type net from "node:net";
+import { join } from "node:path";
+import tls from "node:tls";
+import type { Payload } from "../workerProtocol/codec.ts";
+import {
+  WorkerConnection,
+  WorkerMethodError,
+  type MethodHandler,
+} from "../workerProtocol/connection.ts";
+import { createPrivateJsonFile } from "../privateJsonFile.ts";
+import {
+  CLIENT_METHODS,
+  CLIENT_REVOKED,
+  GATEWAY_CLIENT_PROTOCOL,
+  GATEWAY_CLIENT_VERSION,
+  UNKNOWN_ACCOUNT,
+  decodeAccountId,
+  decodeClientGrant,
+  encodeClientMessage,
+  type ClientAccount,
+} from "./clientMethods.ts";
+import { ClientRegistry, type GatewayClient } from "./clientRegistry.ts";
+import {
+  INVALID_PARAMS,
+  OWNER_CONFLICT,
+  STATE_WRITE_FAILED,
+  UNKNOWN_LEASE,
+  decodeLeaseRevoke,
+  decodeLeaseSessionBind,
+  decodeWorkerReconcile,
+  encodeControlDone,
+  encodeLeaseGranted,
+  encodeLeaseRevoked,
+  encodeLeasesRevoked,
+} from "./controlMethods.ts";
+import type { LeaseTable } from "./leases.ts";
+import {
+  isLoginProfile,
+  type LoginProfile,
+  type ProfileRegistry,
+} from "./profiles.ts";
+import { refusalResponse } from "./refusals.ts";
+import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
+import { StateWriteError } from "./state.ts";
+import {
+  clientPublicKey,
+  edgeTlsFor,
+  issueClientCertificate,
+  type EdgeTls,
+} from "./x509.ts";
+
+const MAX_ENROLL_BYTES = 16 * 1024;
+
+export interface ClientListenerOptions {
+  /** Where the three ports bind; `127.0.0.1` unless given. */
+  bindHost?: string;
+  /** DNS names and IPs in the edge's server certificate; the first is its CN. */
+  hosts?: string[];
+  /** 0 (the default) picks a free port. */
+  modelPort?: number;
+  clientPort?: number;
+  enrollPort?: number;
+}
+
+interface ClientListenerDeps {
+  stateDir: string;
+  leases: LeaseTable;
+  profiles: ProfileRegistry;
+  /** The profiles renewal found needing a login. */
+  needsLogin: () => string[];
+  /** The model forwarder built with `clientOf: peerClientId`. */
+  forwarder: {
+    handleRequest: (
+      req: http.IncomingMessage,
+      res: http.ServerResponse,
+    ) => void;
+  };
+  log: (line: string) => void;
+  now?: () => number;
+}
+
+/** An account of a user, as tests and (later) logins create it. */
+type ClientAccountRecord = LoginProfile & { userId: string };
+
+export interface RunningClientListener {
+  readonly modelPort: number;
+  readonly clientPort: number;
+  readonly enrollPort: number;
+  /** The gateway's CA, PEM: what a relay trusts the edge with. */
+  readonly caPem: string;
+  readonly registry: ClientRegistry;
+  /** Adds or replaces a user's account and tells its clients. */
+  putAccount(account: ClientAccountRecord): void;
+  /** Removes an account, revokes its leases and tells its clients. */
+  removeAccount(profileId: string): void;
+  /** Sends every connected client its user's accounts again. */
+  accountsChanged(): void;
+  close(): Promise<void>;
+}
+
+/** The peer's certificate identity on an authorized mutual-TLS socket. */
+function peerIdentity(
+  socket: net.Socket,
+): { clientId: string; fingerprint: string } | undefined {
+  const tlsSocket = socket as tls.TLSSocket;
+  if (!tlsSocket.authorized || !tlsSocket.getPeerCertificate) return undefined;
+  const cert = tlsSocket.getPeerCertificate();
+  const cn = cert?.subject?.CN;
+  const clientId = Array.isArray(cn) ? undefined : cn;
+  return clientId && cert.fingerprint256
+    ? { clientId, fingerprint: cert.fingerprint256 }
+    : undefined;
+}
+
+/** The client id the request's certificate names, for the forwarder. */
+export function peerClientId(req: http.IncomingMessage): string | undefined {
+  return peerIdentity(req.socket)?.clientId;
+}
+
+function loadEdgeTls(stateDir: string, hosts: string[]): EdgeTls {
+  const file = createPrivateJsonFile(
+    join(stateDir, "edge-tls.json"),
+    "gateway edge TLS",
+    { privateDirectory: "enforce" },
+  );
+  const existing = file.read<EdgeTls, EdgeTls | undefined>((value) => value);
+  const next = edgeTlsFor(hosts, existing);
+  if (next !== existing) file.write(next);
+  return next;
+}
+
+async function listen(
+  server: net.Server,
+  port: number,
+  host: string,
+): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  return typeof address === "object" && address ? address.port : 0;
+}
+
+function json(res: http.ServerResponse, status: number, value: unknown): void {
+  const body = JSON.stringify(value);
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+export async function startClientListener(
+  deps: ClientListenerDeps,
+  options: ClientListenerOptions = {},
+): Promise<RunningClientListener> {
+  const { leases, profiles, log } = deps;
+  const now = deps.now ?? Date.now;
+  const bindHost = options.bindHost ?? "127.0.0.1";
+  const edgeTls = loadEdgeTls(
+    deps.stateDir,
+    options.hosts ?? ["localhost", "127.0.0.1"],
+  );
+  const registry = new ClientRegistry(deps.stateDir, now);
+  const sockets = new Set<net.Socket>();
+  const track = (socket: net.Socket): void => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  };
+  const mutualTls = {
+    key: edgeTls.serverKeyPem,
+    cert: edgeTls.serverCertPem,
+    ca: edgeTls.caCertPem,
+    requestCert: true,
+    rejectUnauthorized: true,
+  };
+
+  /** The socket's client while it is enrolled with that certificate. */
+  const activeClient = (socket: net.Socket): GatewayClient | undefined => {
+    const identity = peerIdentity(socket);
+    return registry.active(identity?.clientId, identity?.fingerprint);
+  };
+
+  // --- accounts ---------------------------------------------------------
+
+  const accountsOf = (userId: string): ClientAccount[] => {
+    const needing = new Set(deps.needsLogin());
+    return registry.accountsOf(userId).flatMap((id): ClientAccount[] => {
+      const profile = profiles.get(id);
+      return profile && isLoginProfile(profile)
+        ? [
+            {
+              id,
+              provider: profile.provider,
+              name: profile.name,
+              enabled: profile.enabled,
+              needsLogin: needing.has(id),
+            },
+          ]
+        : [];
+    });
+  };
+
+  /** The user's login account by id, or the unknown-account failure. */
+  const ownedAccount = (userId: string, accountId: string): LoginProfile => {
+    const profile = profiles.get(accountId);
+    if (
+      !profile ||
+      !isLoginProfile(profile) ||
+      registry.ownerOf(accountId) !== userId
+    )
+      throw new WorkerMethodError(
+        UNKNOWN_ACCOUNT,
+        "The gateway holds no such account for this user.",
+      );
+    return profile;
+  };
+
+  const connections = new Map<WorkerConnection, GatewayClient>();
+
+  const accountsChanged = (): void => {
+    for (const [connection, client] of connections)
+      connection
+        .request(
+          CLIENT_METHODS.accountsChanged,
+          encodeClientMessage({ accounts: accountsOf(client.userId) }),
+        )
+        .catch(() => log(`client ${client.id} accounts.changed: failed`));
+  };
+
+  // --- gateway client 1.0 -----------------------------------------------
+
+  type ClientMethod = (payload: Payload, client: GatewayClient) => Payload;
+
+  const methods: Record<string, ClientMethod> = {
+    [CLIENT_METHODS.hello]: (_payload, client) =>
+      encodeClientMessage({ clientId: client.id, userId: client.userId }),
+    [CLIENT_METHODS.listAccounts]: (_payload, client) =>
+      encodeClientMessage({ accounts: accountsOf(client.userId) }),
+    [CLIENT_METHODS.grant]: (payload, client) => {
+      const grant = decodeClientGrant(payload);
+      const profile = ownedAccount(client.userId, grant.accountId);
+      return encodeLeaseGranted(
+        leases.grant(
+          {
+            profileId: profile.id,
+            provider: profile.provider,
+            tokenFile: profile.tokenFile,
+          },
+          {
+            kind: "engine",
+            owner: {
+              workerId: grant.workerId,
+              ...(grant.sessionId !== undefined
+                ? { sessionId: grant.sessionId }
+                : {}),
+              clientId: client.id,
+            },
+          },
+        ),
+      );
+    },
+    [CLIENT_METHODS.clientLease]: (payload, client) => {
+      const profile = ownedAccount(client.userId, decodeAccountId(payload));
+      // One per account and client: the client asks again after a restart.
+      leases.revokeWhere(
+        (record) =>
+          record.kind === "server" &&
+          record.owner.clientId === client.id &&
+          record.profileId === profile.id,
+        "session-ended",
+      );
+      return encodeLeaseGranted(
+        leases.grant(
+          {
+            profileId: profile.id,
+            provider: profile.provider,
+            tokenFile: profile.tokenFile,
+          },
+          {
+            kind: "server",
+            owner: { serverBootId: `client:${client.id}`, clientId: client.id },
+          },
+        ),
+      );
+    },
+    [CLIENT_METHODS.bindSession]: (payload, client) => {
+      const { leaseId, sessionId } = decodeLeaseSessionBind(payload);
+      const outcome =
+        leases.clientOf(leaseId) === client.id
+          ? leases.bindSession(leaseId, sessionId)
+          : "unknown";
+      if (outcome === "unknown")
+        throw new WorkerMethodError(
+          UNKNOWN_LEASE,
+          "The gateway holds no live lease by this id.",
+        );
+      if (outcome === "server")
+        throw new WorkerMethodError(
+          INVALID_PARAMS,
+          "A client lease has no session.",
+        );
+      if (outcome === "conflict")
+        throw new WorkerMethodError(
+          OWNER_CONFLICT,
+          "The lease is bound to another session.",
+        );
+      return encodeControlDone();
+    },
+    [CLIENT_METHODS.revoke]: (payload, client) => {
+      const { leaseId, reason } = decodeLeaseRevoke(payload);
+      return encodeLeaseRevoked(
+        leases.clientOf(leaseId) === client.id &&
+          leases.revoke(leaseId, reason),
+      );
+    },
+    [CLIENT_METHODS.reconcileWorker]: (payload, client) => {
+      const { workerId, live } = decodeWorkerReconcile(payload);
+      const keep = new Set(live);
+      return encodeLeasesRevoked(
+        leases.revokeWhere(
+          (record) =>
+            record.kind === "engine" &&
+            record.owner.clientId === client.id &&
+            record.owner.workerId === workerId &&
+            !keep.has(record.leaseId),
+          "session-ended",
+        ),
+      );
+    },
+  };
+
+  const attachClient = (socket: tls.TLSSocket, client: GatewayClient): void => {
+    const identity = peerIdentity(socket)!;
+    const handlers: Record<string, MethodHandler> = {};
+    for (const [method, body] of Object.entries(methods))
+      handlers[method] = (payload) => {
+        if (!registry.active(identity.clientId, identity.fingerprint)) {
+          log(`client ${client.id} ${method}: ${CLIENT_REVOKED}`);
+          setImmediate(() => connection.end("the client is revoked"));
+          return Promise.reject(
+            new WorkerMethodError(CLIENT_REVOKED, "The client is revoked."),
+          );
+        }
+        try {
+          const answer = body(payload, client);
+          log(`client ${client.id} ${method}: ok`);
+          return Promise.resolve(answer);
+        } catch (err) {
+          const failure =
+            err instanceof StateWriteError
+              ? new WorkerMethodError(STATE_WRITE_FAILED, err.message)
+              : err;
+          log(
+            `client ${client.id} ${method}: ${failure instanceof WorkerMethodError ? failure.code : "failed"}`,
+          );
+          return Promise.reject(failure);
+        }
+      };
+    const connection: WorkerConnection = new WorkerConnection(
+      socketEndpoint(socket),
+      {
+        protocol: GATEWAY_CLIENT_PROTOCOL,
+        handshake: {
+          role: "server",
+          admit: (hello) =>
+            GATEWAY_CLIENT_PROTOCOL.compatible(hello.version)
+              ? undefined
+              : `this endpoint speaks ${GATEWAY_CLIENT_VERSION} only`,
+        },
+        handlers,
+        onEnd: () => connections.delete(connection),
+      },
+    );
+    connections.set(connection, client);
+  };
+
+  // --- servers ----------------------------------------------------------
+
+  const refuseClient = (socket: net.Socket): void => {
+    log("client connection refused: unknown or revoked certificate");
+    socket.destroy();
+  };
+
+  const model = https.createServer(mutualTls, (req, res) => {
+    if (!activeClient(req.socket)) {
+      const { status, body } = refusalResponse({ case: "forbidden" }, "claude");
+      res.writeHead(status, {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        connection: "close",
+      });
+      res.end(body);
+      return;
+    }
+    deps.forwarder.handleRequest(req, res);
+  });
+  model.on("secureConnection", (socket: tls.TLSSocket) => {
+    track(socket);
+    if (!activeClient(socket)) refuseClient(socket);
+  });
+  model.on("tlsClientError", () => {});
+
+  const clientServer = tls.createServer(mutualTls, (socket) => {
+    track(socket);
+    const client = activeClient(socket);
+    if (!client) return refuseClient(socket);
+    attachClient(socket, client);
+  });
+  clientServer.on("tlsClientError", () => {});
+
+  let ports = { modelPort: 0, clientPort: 0 };
+  const enroll = https.createServer(
+    { key: edgeTls.serverKeyPem, cert: edgeTls.serverCertPem },
+    (req, res) => {
+      if (req.method !== "POST" || req.url !== "/enroll")
+        return json(res, 404, { error: "not found" });
+      const chunks: Buffer[] = [];
+      let size = 0;
+      req.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > MAX_ENROLL_BYTES) req.destroy();
+        else chunks.push(chunk);
+      });
+      req.on("end", () => {
+        let body: Record<string, unknown> | undefined;
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
+            string,
+            unknown
+          >;
+        } catch {
+          body = undefined;
+        }
+        const code = body?.code;
+        const publicKey =
+          typeof body?.publicKeyPem === "string"
+            ? clientPublicKey(body.publicKeyPem)
+            : undefined;
+        if (typeof code !== "string" || !publicKey)
+          return json(res, 400, { error: "code and an EC P-256 key needed" });
+        let certificatePem = "";
+        const client = registry.redeem(code, ({ userId, label }) => {
+          const id = randomBytes(12).toString("base64url");
+          const issued = issueClientCertificate(edgeTls, id, publicKey);
+          certificatePem = issued.certificatePem;
+          return {
+            id,
+            userId,
+            label,
+            fingerprint: issued.fingerprint,
+            createdAt: now(),
+          };
+        });
+        if (!client) {
+          log("enrollment refused: unknown, used or expired code");
+          return json(res, 403, { error: "unknown, used or expired code" });
+        }
+        log(`enrolled client ${client.id} for user ${client.userId}`);
+        json(res, 200, {
+          clientId: client.id,
+          certificatePem,
+          caPem: edgeTls.caCertPem,
+          ...ports,
+        });
+      });
+    },
+  );
+  for (const server of [model, enroll]) server.on("connection", track);
+
+  const modelPort = await listen(model, options.modelPort ?? 0, bindHost);
+  const clientPort = await listen(
+    clientServer,
+    options.clientPort ?? 0,
+    bindHost,
+  );
+  ports = { modelPort, clientPort };
+  const enrollPort = await listen(enroll, options.enrollPort ?? 0, bindHost);
+  log(
+    `client listener on ${bindHost}: model ${modelPort}, client ${clientPort}, enroll ${enrollPort}`,
+  );
+
+  return {
+    modelPort,
+    clientPort,
+    enrollPort,
+    caPem: edgeTls.caCertPem,
+    registry,
+    putAccount({ userId, ...profile }) {
+      profiles.upsert(profile);
+      registry.setAccountOwner(profile.id, userId);
+      accountsChanged();
+    },
+    removeAccount(profileId) {
+      profiles.remove(profileId);
+      leases.revokeWhere(
+        (record) => record.profileId === profileId,
+        "profile-removed",
+      );
+      registry.removeAccount(profileId);
+      accountsChanged();
+    },
+    accountsChanged,
+    async close() {
+      for (const connection of [...connections.keys()])
+        connection.end("the gateway closed");
+      const closed = Promise.all(
+        [model, clientServer, enroll].map(
+          (server) =>
+            new Promise<void>((resolve) => server.close(() => resolve())),
+        ),
+      );
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+      await closed;
+    },
+  };
+}

@@ -35,12 +35,19 @@ interface EndpointBinding {
 /** What a lease is bound to when granted. */
 export type LeaseBinding = LoginBinding | EndpointBinding;
 
-/** Who holds a lease: its kind names the routes it serves later slices. */
+/**
+ * Who holds a lease: its kind names the routes it serves later slices. A
+ * lease granted over gateway client 1.0 names its enrolled client
+ * (`clientId`); it is spent only through that client's mutual-TLS port.
+ */
 export type LeaseOwnership =
   /** An engine's: its Worker, and its session once the open names it. */
-  | { kind: "engine"; owner: { workerId: string; sessionId?: string } }
-  /** The server's own requests, for one server boot. */
-  | { kind: "server"; owner: { serverBootId: string } };
+  | {
+      kind: "engine";
+      owner: { workerId: string; sessionId?: string; clientId?: string };
+    }
+  /** The server's own requests, for one server boot or one client. */
+  | { kind: "server"; owner: { serverBootId: string; clientId?: string } };
 
 export type LeaseRecord = LeaseBinding &
   LeaseOwnership & {
@@ -264,6 +271,11 @@ export class LeaseTable {
   /** Whose a held lease is: the routes beyond its provider's depend on it. */
   kindOf(leaseId: string): LeaseOwnership["kind"] | undefined {
     return this.leases.get(leaseId)?.ownership.kind;
+  }
+
+  /** The enrolled client a held lease belongs to, if any. */
+  clientOf(leaseId: string): string | undefined {
+    return this.leases.get(leaseId)?.ownership.owner.clientId;
   }
 
   private prune(): void {
