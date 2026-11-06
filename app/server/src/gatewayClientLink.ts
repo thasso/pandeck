@@ -14,7 +14,6 @@
  * (`leases.client`), one per account for this boot. Logins are the gateway's
  * (slice 4): every login call refuses here.
  */
-import net from "node:net";
 import {
   mirrorRemoteCredentialProfiles,
   type RemoteCredentialProfile,
@@ -34,7 +33,6 @@ import {
   decodeLeasesRevoked,
   encodeControlDone,
 } from "./gateway/controlMethods.ts";
-import { socketEndpoint } from "./gateway/socketEndpoint.ts";
 import {
   GATEWAY_LOGIN_UNAVAILABLE_TEXT,
   GatewayUnavailableError,
@@ -47,6 +45,7 @@ import {
   WorkerRequestError,
 } from "./workerProtocol/connection.ts";
 import type { EngineGatewayAccess } from "./workerProtocol/engineMethods.ts";
+import { dialUnixSocket } from "./workerProtocol/unixSocketTransport.ts";
 
 const READY_TIMEOUT_MS = 10_000;
 /** The in-process Worker's id, as `gatewayLink.ts` names it. */
@@ -102,34 +101,26 @@ export function startGatewayClientLink(
     );
   };
 
-  const dial = (): Promise<WorkerConnection> =>
-    new Promise((resolve, reject) => {
-      const socket = net.createConnection(options.socketPath);
-      socket.once("error", reject);
-      socket.once("connect", () => {
-        socket.removeListener("error", reject);
-        const opened: WorkerConnection = new WorkerConnection(
-          socketEndpoint(socket),
-          {
-            handshake: { role: "worker", workerId: "pandeck-server" },
-            protocol: GATEWAY_CLIENT_PROTOCOL,
-            handlers: {
-              [CLIENT_METHODS.accountsChanged]: (payload) => {
-                mirror(decodeAccounts(payload));
-                return Promise.resolve(encodeControlDone());
-              },
-            },
-            onEnd: (reason) => {
-              if (connection === opened) connection = undefined;
-              if (closing) return;
-              log(`connection ended: ${reason}`);
-              schedule();
-            },
-          },
-        );
-        resolve(opened);
-      });
+  const dial = async (): Promise<WorkerConnection> => {
+    const endpoint = await dialUnixSocket(options.socketPath);
+    const opened: WorkerConnection = new WorkerConnection(endpoint, {
+      handshake: { role: "worker", workerId: "pandeck-server" },
+      protocol: GATEWAY_CLIENT_PROTOCOL,
+      handlers: {
+        [CLIENT_METHODS.accountsChanged]: (payload) => {
+          mirror(decodeAccounts(payload));
+          return Promise.resolve(encodeControlDone());
+        },
+      },
+      onEnd: (reason) => {
+        if (connection === opened) connection = undefined;
+        if (closing) return;
+        log(`connection ended: ${reason}`);
+        schedule();
+      },
     });
+    return opened;
+  };
 
   const connect = async (): Promise<void> => {
     redial = undefined;

@@ -446,8 +446,8 @@ test("the Worker side reaches no server state", () => {
 /**
  * What `gateway/` (the credential gateway) may import besides `node:` and
  * itself: the private atomic writer for its state, the worker protocol's codec
- * and connection for its control channel (gateway control 1.0), and what those
- * import. No package either, and each of these imports only `node:` or this
+ * and connection for its control channel (gateway control 1.0), the socket
+ * transport for its client port (gateway client 1.0), and what those import. No package either, and each of these imports only `node:` or this
  * list, including the dependency-free shared endpoint rules, so the closure
  * ends here and the gateway can run as its own process (ADR-0005).
  */
@@ -458,6 +458,7 @@ const GATEWAY_ALLOWED = new Set([
   "workerProtocol/codec.ts",
   "workerProtocol/connection.ts",
   "workerProtocol/inProcessTransport.ts",
+  "workerProtocol/unixSocketTransport.ts",
   "workerProtocol/version.ts",
 ]);
 

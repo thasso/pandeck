@@ -63,7 +63,7 @@ import {
   type ProfileRegistry,
 } from "./profiles.ts";
 import { refusalResponse } from "./refusals.ts";
-import { socketEndpoint } from "./socketEndpoint.ts";
+import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { StateWriteError } from "./state.ts";
 import {
   clientPublicKey,

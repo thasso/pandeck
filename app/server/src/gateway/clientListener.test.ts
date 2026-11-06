@@ -31,7 +31,7 @@ import {
 } from "./clientMethods.ts";
 import { decodeLeaseGranted, decodeLeaseRevoked } from "./controlMethods.ts";
 import { startGateway, type RunningGateway } from "./gateway.ts";
-import { socketEndpoint } from "./socketEndpoint.ts";
+import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { edgeTlsFor, issueClientCertificate } from "./x509.ts";
 
 interface Identity {
