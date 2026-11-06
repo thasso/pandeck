@@ -1352,10 +1352,15 @@ here.
 
 The standalone entry (`gateway/main.ts`, packaged as `pandeck-gateway`) keeps
 the edge and vault in one process. It takes its control socket before opening
-state, refuses an answered socket, removes a stale one and sets mode 0600.
-SIGTERM or SIGINT closes control and stops accepting model requests, lets active
-streams finish for up to two minutes, then destroys remaining sockets. The code
-ships without service units or a production switch. Switch-off rollback and the
+state, refuses an answered socket, removes a stale one and sets mode 0600. The
+listener requires Linux. It holds an abstract Unix-socket ownership claim
+through shutdown, serializing overlapping starts before probing or removing a
+stale path. The claim uses the parent directory's filesystem identity and the
+socket basename, so path aliases contend too. A crash releases the claim in the
+kernel; a failed start releases it after closing its control listener. SIGTERM
+or SIGINT closes control and stops accepting model requests, lets active streams
+finish for up to two minutes, then destroys remaining sockets. The code ships
+without service units or a production switch. Switch-off rollback and the
 CLI-compatible credential locks stay until slice 5's encrypted store migration.
 
 - Before it is ready the link says hello as this server boot (16 random bytes,
@@ -1390,7 +1395,10 @@ CLI-compatible credential locks stay until slice 5's encrypted store migration.
   profile change or other request. `registerLoginWriter` sends the writer's pid
   and start time, `releaseLoginHold` is best-effort and replayed before ready
   after a socket reconnect unless the hold is already absent, and the link
-  records each profile's latest `profiles.status` for the login-stuck state.
+  records each profile's latest `profiles.status` for the login-stuck state. An
+  acquisition whose answer fails also releases its minted id through that replay
+  path: the caller never received the hold, so no login writer started. This
+  does not release any successfully returned hold on disconnection.
   - **Order.** The Claude login (`claudeLoginTerminal.ts`) takes the hold before
     it spawns `claude auth login`, and names the child as the hold's writer
     right after the spawn. It forwards no input until the gateway acknowledged
@@ -1598,10 +1606,12 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   atomic rename. In the standalone gateway the port spawns one Codex renewal
   child per credential through `gateway/codexChild.ts`; pi loads only in that
   child (`codexRenewMain.ts`). The child reads `{authFile, minValidityMs}` on
-  stdin, writes one result line without credentials and exits 0. Every outcome
-  waits for its exit. Abort or deadline sends SIGTERM then SIGKILL after a
-  five-second grace, so no child writer outlives its lane item. In-process mode
-  still injects the direct refresher.
+  stdin, writes one result line without credentials and exits 0. The parent
+  accepts only fixed result codes, preserving the refresher's `400` and `401`
+  rejections as needs-login, never copying arbitrary upstream strings. Every
+  outcome waits for its exit. Abort or deadline sends SIGTERM then SIGKILL after
+  a five-second grace, so no child writer outlives its lane item. In-process
+  mode still injects the direct refresher.
 - **Outcomes.** A failure (timeout, network, a 5xx, a malformed answer, a busy
   or lost lock, a conflict) writes nothing, never marks the login dead and backs
   off from 30 s, doubling to 10 minutes; success or a changed file ends the

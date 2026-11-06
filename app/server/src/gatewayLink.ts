@@ -816,6 +816,11 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         log(
           `${CONTROL_METHODS.loginHold} (profile ${profileId}): ${failure(err)}`,
         );
+        // The hold may have been saved before its answer was lost. Its id
+        // never reached the caller, so no login writer can have started.
+        // Use the owning boot's ordinary release, replayed before ready if
+        // the connection is down, just like an already settled login.
+        await link.releaseLoginHold(holdId);
         throw new GatewayLoginUnavailableError();
       }
       if (!acquired.held)

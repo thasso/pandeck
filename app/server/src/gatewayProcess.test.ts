@@ -5,7 +5,13 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +31,8 @@ import {
 } from "./test/gatewayFixtures.ts";
 import { WorkerConnection } from "./workerProtocol/connection.ts";
 import { listenUnixSocket } from "./workerProtocol/unixSocketTransport.ts";
+import type { ByteEndpoint } from "./workerProtocol/inProcessTransport.ts";
+import { startGateway } from "./gateway/gateway.ts";
 
 const FAKE_ACCESS = "fake-process-codex-access";
 const FAKE_REFRESH = "fake-process-codex-refresh";
@@ -342,6 +350,126 @@ test("AC3/AC4: socket reconnect preserves live leases and boot, replays a settle
     await second.close();
   }
 }, 40_000);
+
+test("overlapping real process starts and crash recovery preserve control and model reachability", async () => {
+  const dir = directory();
+  const port = await freePort();
+  const socketPath = join(dir, "c.sock");
+  writeFileSync(socketPath, "");
+  const options = {
+    stateDir: join(dir, "state"),
+    socketPath,
+    port,
+    drainMs: 0,
+  };
+  const starts = await Promise.allSettled(
+    Array.from({ length: 4 }, () =>
+      fixture("./gateway/processFixture.ts", options),
+    ),
+  );
+  const running = starts.filter((start) => start.status === "fulfilled");
+  assert.equal(
+    running.length,
+    1,
+    "only the socket owner may start the gateway",
+  );
+  const winner = running[0]!;
+  assert.equal(winner.status, "fulfilled");
+  if (winner.status !== "fulfilled") return;
+  const control = link(dir, port);
+  assert.equal(
+    await control.ready,
+    true,
+    "the surviving control path accepts a full resync",
+  );
+  assert.equal(await request(port, "not-a-lease"), 401);
+  await control.close();
+  await stop(winner.value.child, "SIGKILL");
+  assert.equal(
+    existsSync(socketPath),
+    true,
+    "crash leaves the filesystem socket behind",
+  );
+  await gateway(dir, port);
+  const recovered = link(dir, port);
+  assert.equal(
+    await recovered.ready,
+    true,
+    "kernel ownership disappears on crash and stale socket is recovered",
+  );
+  assert.equal(await request(port, "not-a-lease"), 401);
+});
+
+test("a saved hold with a lost acquisition answer is released before reconnect becomes ready, without releasing an acquired hold", async () => {
+  for (const provider of ["claude", "openai-codex"] as const) {
+    const dir = directory();
+    const profileId = profiles.createCredentialProfile({
+      provider,
+      name: "Lost acquisition answer",
+    }).id;
+    const retainedId = profiles.createCredentialProfile({
+      provider,
+      name: "Retained acquired hold",
+    }).id;
+    ids.push(profileId, retainedId);
+    let active: ByteEndpoint;
+    let loseAnswer = false;
+    let drop = false;
+    let saved = false;
+    const gateway = await startGateway({
+      stateDir: join(dir, "state"),
+      port: 0,
+      log(line) {
+        if (
+          loseAnswer &&
+          line.startsWith("control profiles.loginHold") &&
+          line.endsWith(": ok")
+        ) {
+          saved = gateway.holds().some((hold) => hold.profileId === profileId);
+          loseAnswer = false;
+          drop = true;
+          active.close();
+        }
+      },
+    });
+    const listener = await listenUnixSocket(join(dir, "c.sock"), (endpoint) => {
+      active = endpoint;
+      drop = false;
+      gateway.attachControl({
+        ...endpoint,
+        write(bytes) {
+          if (!drop) endpoint.write(bytes);
+        },
+      });
+    });
+    const running = link(dir, gateway.port);
+    try {
+      assert.equal(await running.ready, true);
+      const retained = await running.acquireLoginHold(retainedId);
+      loseAnswer = true;
+      await assert.rejects(running.acquireLoginHold(profileId));
+      assert.equal(
+        saved,
+        true,
+        "the effect was persisted before the response was dropped",
+      );
+      await until(() => running.connectionState() === "connected");
+      assert.deepEqual(
+        gateway.holds().map((hold) => hold.holdId),
+        [retained],
+        "recovery releases only the failed acquisition, never a returned hold",
+      );
+      const retry = await running.acquireLoginHold(profileId);
+      await running.releaseLoginHold(retry);
+      await running.releaseLoginHold(retained);
+      assert.equal(gateway.holds().length, 0);
+    } finally {
+      await running.close();
+      await listener.close();
+      await gateway.close();
+    }
+  }
+});
 
 test("AC6: an absent socket becomes unreachable, a major mismatch incompatible, and a recovered gateway connected", async () => {
   const dir = directory();

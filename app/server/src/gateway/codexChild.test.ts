@@ -88,6 +88,64 @@ process.exit(0);`,
   });
 });
 
+test("the real refresher's numeric rejections and bounded failure codes survive the child boundary", async () => {
+  for (const [kind, codes] of [
+    ["rejected", ["400", "401"]],
+    [
+      "failed",
+      [
+        "gone",
+        "conflict",
+        "lock_lost",
+        "lock_busy",
+        "aborted",
+        "oauth",
+        "auth",
+        "error",
+        "no_credential",
+        "input",
+      ],
+    ],
+  ] as const) {
+    for (const code of codes) {
+      const expected = { ok: false, kind, code };
+      const port = codexChildPort(
+        child(
+          `result-${code}`,
+          `process.stdout.write(${JSON.stringify(JSON.stringify(expected) + "\n")}); process.exit(0);`,
+        ),
+      );
+      assert.deepEqual(await port("/x", 1, signal()), expected);
+    }
+  }
+});
+
+test("unknown, malformed or credential-bearing codes fail closed", async () => {
+  for (const code of [
+    "",
+    "402",
+    "503",
+    "400\nsecret",
+    "Bearer fake-secret",
+    "fake_credential",
+    "a".repeat(41),
+    400,
+    null,
+    {},
+  ]) {
+    const result = { ok: false, kind: "rejected", code };
+    assert.deepEqual(
+      await codexChildPort(
+        child(
+          `unsafe-${JSON.stringify(code).length}`,
+          `process.stdout.write(${JSON.stringify(JSON.stringify(result) + "\n")}); process.exit(0);`,
+        ),
+      )("/x", 1, signal()),
+      { ok: false, kind: "failed", code: "child" },
+    );
+  }
+});
+
 test("a malformed line, a missing line, a non-zero exit or a spawn error fails closed", async () => {
   const failed = { ok: false, kind: "failed", code: "child" };
   for (const body of [

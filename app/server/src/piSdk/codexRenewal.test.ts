@@ -4,6 +4,7 @@
  * request leaves the process, and every token is a fake.
  */
 import assert from "node:assert/strict";
+import { codexChildPort } from "../gateway/codexChild.ts";
 import { existsSync } from "node:fs";
 import {
   mkdir,
@@ -218,19 +219,33 @@ test("AC13: remaining + 1 forces a renewal of a fresh login", async () => {
   );
 });
 
-test("AC13: 400 invalid_grant is rejected; a network error and no credential are failed; nothing is written", async () => {
+test("AC13: 400/401 rejections survive the child boundary; network error and no credential are failed; nothing is written", async () => {
   const file = await authFile(Date.now() + MIN);
   const before = await readFile(file);
-  answer = () =>
-    Promise.resolve(
-      Response.json(
-        { error: "invalid_grant", detail: OLD_REFRESH },
-        { status: 400 },
-      ),
-    );
-  const rejected = await renewCodexCredential(file, 30 * MIN, signal());
-  assert.deepEqual(rejected, { ok: false, kind: "rejected", code: "400" });
-  noSentinel(rejected);
+  for (const status of [400, 401]) {
+    answer = () =>
+      Promise.resolve(
+        Response.json(
+          { error: "invalid_grant", detail: OLD_REFRESH },
+          { status },
+        ),
+      );
+    const rejected = await renewCodexCredential(file, 30 * MIN, signal());
+    assert.deepEqual(rejected, {
+      ok: false,
+      kind: "rejected",
+      code: String(status),
+    });
+    noSentinel(rejected);
+    const child = codexChildPort({
+      file: process.execPath,
+      args: [
+        "-e",
+        `process.stdin.once("data", () => { process.stdout.write(${JSON.stringify(JSON.stringify(rejected) + "\n")}); process.exit(0); });`,
+      ],
+    });
+    assert.deepEqual(await child(file, 30 * MIN, signal()), rejected);
+  }
   answer = () => Promise.reject(new TypeError("fetch failed"));
   const failed = await renewCodexCredential(file, 30 * MIN, signal());
   assert.equal(failed.ok, false);

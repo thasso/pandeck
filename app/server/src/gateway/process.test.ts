@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import net from "node:net";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import { dialUnixSocket } from "../workerProtocol/unixSocketTransport.ts";
@@ -56,6 +57,79 @@ test("the process serves control on its socket, refuses a second gateway on it a
     await running.stop();
   }
   assert.equal(existsSync(socketPath), false);
+});
+
+test("overlapping stale-socket starts leave exactly one model and control listener reachable", async () => {
+  const dir = tempDir();
+  const socketPath = join(dir, "c.sock");
+  writeFileSync(socketPath, "");
+  const reservation = net.createServer();
+  await new Promise<void>((resolve) =>
+    reservation.listen(0, "127.0.0.1", resolve),
+  );
+  const { port } = reservation.address() as net.AddressInfo;
+  await new Promise<void>((resolve) => reservation.close(() => resolve()));
+  const options = {
+    stateDir: join(dir, "state"),
+    port,
+    socketPath,
+    log() {},
+    drainMs: 0,
+  };
+  const starts = await Promise.allSettled([
+    runGatewayProcess(options),
+    runGatewayProcess(options),
+  ]);
+  try {
+    assert.equal(
+      starts.filter((start) => start.status === "fulfilled").length,
+      1,
+    );
+    assert.equal(
+      (
+        await fetch(`http://127.0.0.1:${port}/anthropic/v1/messages`, {
+          method: "POST",
+          body: "{}",
+        })
+      ).status,
+      401,
+    );
+    const endpoint = await dialUnixSocket(socketPath);
+    endpoint.close();
+  } finally {
+    for (const start of starts)
+      if (start.status === "fulfilled") await start.value.stop();
+  }
+  assert.equal(existsSync(socketPath), false);
+});
+
+test("a failed model-port bind releases control ownership for a later start", async () => {
+  const dir = tempDir();
+  const socketPath = join(dir, "c.sock");
+  const reservation = net.createServer();
+  await new Promise<void>((resolve) =>
+    reservation.listen(0, "127.0.0.1", resolve),
+  );
+  const { port } = reservation.address() as net.AddressInfo;
+  const options = {
+    stateDir: join(dir, "state"),
+    port,
+    socketPath,
+    log() {},
+    drainMs: 0,
+  };
+  try {
+    await assert.rejects(runGatewayProcess(options), /EADDRINUSE/);
+    assert.equal(existsSync(socketPath), false);
+  } finally {
+    await new Promise<void>((resolve) => reservation.close(() => resolve()));
+  }
+  const running = await runGatewayProcess(options);
+  try {
+    (await dialUnixSocket(socketPath)).close();
+  } finally {
+    await running.stop();
+  }
 });
 
 test("stop waits for an aborted Codex renewal to finish reaping its child", async () => {

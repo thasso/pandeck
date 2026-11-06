@@ -35,6 +35,22 @@ export interface CodexChildOptions {
 /** A longer line is not an answer. */
 const MAX_LINE_BYTES = 4096;
 
+// The real refresher's fixed result vocabulary, never upstream text. Keep
+// numeric OAuth rejection statuses intact so renewal reports needs-login.
+const REJECTED_CODES = new Set(["400", "401", "invalid_grant"]);
+const FAILED_CODES = new Set([
+  "gone",
+  "conflict",
+  "lock_lost",
+  "lock_busy",
+  "aborted",
+  "oauth",
+  "auth",
+  "error",
+  "no_credential",
+  "input",
+]);
+
 const CHILD_FAILED: CodexRenewResult = {
   ok: false,
   kind: "failed",
@@ -61,7 +77,9 @@ function parseAnswer(line: string): CodexRenewResult | undefined {
     answer.ok === false &&
     (answer.kind === "rejected" || answer.kind === "failed") &&
     typeof answer.code === "string" &&
-    /^[a-z_]{1,40}$/.test(answer.code)
+    (answer.kind === "rejected" ? REJECTED_CODES : FAILED_CODES).has(
+      answer.code,
+    )
   )
     return { ok: false, kind: answer.kind, code: answer.code };
   return undefined;

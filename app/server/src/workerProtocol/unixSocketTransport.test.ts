@@ -4,9 +4,11 @@ import {
   mkdtempSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import net from "node:net";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import { MAX_FRAME_PAYLOAD_BYTES } from "./codec.ts";
@@ -79,6 +81,48 @@ test("listening refuses a socket another process answers on and replaces a stale
   const dialed = await dialUnixSocket(path);
   dialed.close();
   await second.close();
+});
+
+test("overlapping stale recovery has one owner even through a path alias", async () => {
+  const path = socketPath();
+  writeFileSync(path, "");
+  const aliasDir = join(path, "..", "alias");
+  symlinkSync(join(path, ".."), aliasDir);
+  const alias = join(aliasDir, "s.sock");
+  const starts = await Promise.allSettled([
+    listenUnixSocket(path, () => {}),
+    listenUnixSocket(alias, () => {}),
+  ]);
+  try {
+    assert.equal(
+      starts.filter((start) => start.status === "fulfilled").length,
+      1,
+    );
+    (await dialUnixSocket(path)).close();
+  } finally {
+    for (const start of starts)
+      if (start.status === "fulfilled") await start.value.close();
+  }
+  const restarted = await listenUnixSocket(path, () => {});
+  await Promise.all([restarted.close(), restarted.close()]);
+  assert.equal(existsSync(path), false);
+});
+
+test("an unclaimed foreign live listener is refused without changing its path or retaining the ownership claim", async () => {
+  const path = socketPath();
+  const foreign = net.createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve) => foreign.listen(path, resolve));
+  try {
+    await assert.rejects(
+      listenUnixSocket(path, () => {}),
+      /Another process listens on/,
+    );
+    (await dialUnixSocket(path)).close();
+  } finally {
+    await new Promise<void>((resolve) => foreign.close(() => resolve()));
+  }
+  const next = await listenUnixSocket(path, () => {});
+  await next.close();
 });
 
 test("a dial with no listener rejects", async () => {
