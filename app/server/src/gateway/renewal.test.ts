@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
 import {
   rotatingClaudeTokens,
   startFakeUpstreams,
@@ -24,13 +24,21 @@ import {
 } from "../test/gatewayFixtures.ts";
 import { HoldTable, WriterLane } from "./holds.ts";
 import { LeaseTable, type LeaseProvider } from "./leases.ts";
-import { ProfileRegistry } from "./profiles.ts";
+import { readCredential } from "./profileCredential.ts";
+import { isLoginProfile, ProfileRegistry } from "./profiles.ts";
 import {
   CODEX_MARGIN_MS,
   createRenewal,
   type CodexRenewPort,
   type Renewal,
 } from "./renewal.ts";
+
+// Passes through; AC2 counts the reads.
+vi.mock("./profileCredential.ts", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./profileCredential.ts")>();
+  return { ...actual, readCredential: vi.fn(actual.readCredential) };
+});
 
 // Synthetic fixture values; none is a real credential.
 const OLD_ACCESS = "fake-renewal-old-access";
@@ -83,6 +91,8 @@ interface Rig {
   lockSleep: { hook?: () => Promise<void> };
   /** Runs as the writer lane is released, before the outcome settles. */
   afterLane: { hook?: () => Promise<void> };
+  /** Every profile id the writer lane ran for. */
+  laneRuns: string[];
 }
 
 function rig(): Rig {
@@ -90,10 +100,15 @@ function rig(): Rig {
   const holds = new HoldTable({ now: () => clock.now });
   const profiles = new ProfileRegistry();
   const leases = new LeaseTable({ now: () => clock.now });
-  const writerLane = new WriterLane(holds, (id) => profiles.get(id)?.provider);
+  const writerLane = new WriterLane(holds, (id) => {
+    const profile = profiles.get(id);
+    return profile && isLoginProfile(profile) ? profile.provider : undefined;
+  });
   const afterLane: Rig["afterLane"] = {};
+  const laneRuns: string[] = [];
   const lane: Pick<WriterLane, "run"> = {
     run: async <T>(id: string, fn: () => Promise<T>): Promise<T> => {
+      laneRuns.push(id);
       const result = await writerLane.run(id, fn);
       await afterLane.hook?.();
       return result;
@@ -136,6 +151,7 @@ function rig(): Rig {
     port,
     lockSleep,
     afterLane,
+    laneRuns,
   };
 }
 
@@ -611,4 +627,41 @@ test("F002: a failed renewal's backoff binds the file it examined, so a login la
   assert.equal(upstreams.platform.length, 2, "the new login is not in backoff");
   assert.equal(await accessOf(file), "fake-claude-renewed-access-1");
   assert.deepEqual(r.reports, []);
+});
+
+test("AC2: a compatible profile with live engine and server leases is never read, laned, logged or renewed", async () => {
+  const r = rig();
+  const id = "openai-compatible-aaaaaaaaaaaa";
+  r.profiles.upsert({
+    id,
+    provider: "openai-compatible",
+    name: "Endpoint",
+    enabled: true,
+  });
+  const binding = { profileId: id, provider: "openai-compatible" } as const;
+  r.leases.grant(binding, {
+    kind: "engine",
+    owner: { workerId: "local", sessionId: "s-compat" },
+  });
+  r.leases.grant(binding, {
+    kind: "server",
+    owner: { serverBootId: "boot-compat" },
+  });
+  assert.ok(r.leases.hasLiveLease(id));
+  vi.mocked(readCredential).mockClear();
+  await r.renewal.tick();
+  r.clock.now += 60 * MIN;
+  await r.renewal.tick();
+  await r.renewal.recheck(id);
+  assert.deepEqual(await r.renewal.renew(id), { kind: "skipped" });
+  assert.deepEqual(await r.renewal.renew(id, { force: true }), {
+    kind: "skipped",
+  });
+  assert.equal(vi.mocked(readCredential).mock.calls.length, 0);
+  assert.deepEqual(r.laneRuns, []);
+  assert.deepEqual(r.lines, []);
+  assert.deepEqual(r.reports, []);
+  assert.deepEqual(r.renewal.needsLogin(), []);
+  assert.equal(upstreams.platform.length, 0);
+  assert.deepEqual(r.portCalls, []);
 });

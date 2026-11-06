@@ -12,16 +12,28 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { RevokeReason } from "./refusals.ts";
 
-/** The upstream credential a lease spends. */
+/** The login providers: the upstream credentials with a token file. */
 export type LeaseProvider = "claude" | "openai-codex";
 
-/** What a lease is bound to when granted. */
-export interface LeaseBinding {
+/** A lease on a login: it spends the profile's token file. */
+export interface LoginBinding {
   profileId: string;
   provider: LeaseProvider;
   /** Absolute path of the profile's token file, resolved by the caller. */
   tokenFile: string;
 }
+
+/**
+ * A lease on an OpenAI-compatible account: it spends the endpoint and key the
+ * server pushed for this profile (`compatUpstream.ts`), never a token file.
+ */
+interface EndpointBinding {
+  profileId: string;
+  provider: "openai-compatible";
+}
+
+/** What a lease is bound to when granted. */
+export type LeaseBinding = LoginBinding | EndpointBinding;
 
 /** Who holds a lease: its kind names the routes it serves later slices. */
 export type LeaseOwnership =
@@ -221,11 +233,14 @@ export class LeaseTable {
     for (const record of records) {
       const { leaseId, secretHash, grantedAt, revoked, revokedAt } = record;
       this.leases.set(leaseId, {
-        binding: {
-          profileId: record.profileId,
-          provider: record.provider,
-          tokenFile: record.tokenFile,
-        },
+        binding:
+          record.provider === "openai-compatible"
+            ? { profileId: record.profileId, provider: record.provider }
+            : {
+                profileId: record.profileId,
+                provider: record.provider,
+                tokenFile: record.tokenFile,
+              },
         ownership: copyOwnership(record),
         secretHash: Buffer.from(secretHash, "hex"),
         grantedAt,

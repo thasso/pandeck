@@ -1,6 +1,6 @@
 /**
  * The gateway's control endpoint (`docs/workers.md` "Credentials"): the
- * listener side of gateway control 1.3. Only a control connection grants a
+ * listener side of gateway control 1.4. Only a control connection grants a
  * lease or takes, names or ends a login hold, and a grant binds the lease from
  * the registry, never from the request (C5).
  *
@@ -21,9 +21,12 @@
  * hold that ends, by release, force release or evidence, is passed to
  * `holdsEnded` after its status, even when saving failed.
  *
- * Every hello also clears the pushed OpenAI-compatible endpoint: its key
+ * Every hello also clears every pushed OpenAI-compatible endpoint: its key
  * belongs to the boot that pushed it, which the next push replaces. A
- * connection that ends without a new hello leaves it held.
+ * connection that ends without a new hello leaves them held. Removing a
+ * profile clears its pair before its leases are revoked, so a failed save
+ * leaves no pair behind. Only login profiles are fenced, held or renewed: an
+ * OpenAI-compatible profile has no login.
  */
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -46,7 +49,8 @@ import {
   UNKNOWN_LEASE,
   UNKNOWN_PROFILE,
   WRITER_CONFLICT,
-  decodeCompatSet,
+  decodeCompatPair,
+  decodeCompatProfile,
   decodeControlHello,
   decodeHoldId,
   decodeLeaseGrant,
@@ -71,8 +75,8 @@ import {
 } from "./controlMethods.ts";
 import type { CompatUpstream } from "./compatUpstream.ts";
 import type { HoldStatus, HoldTable, HoldUpdate, WriterLane } from "./holds.ts";
-import type { LeaseTable } from "./leases.ts";
-import type { ProfileRegistry } from "./profiles.ts";
+import type { LeaseBinding, LeaseTable } from "./leases.ts";
+import { isLoginProfile, type ProfileRegistry } from "./profiles.ts";
 import { StateWriteError } from "./state.ts";
 
 interface ControlContext {
@@ -215,7 +219,7 @@ export function createControlEndpoint({
 
   /** After a registry change: an unreadable `holds.json` fences what it names. */
   const fenceRegistry = (): void => {
-    if (holds.fencing) settle(holds.fence(profiles.ids()), "hold fence");
+    if (holds.fencing) settle(holds.fence(profiles.loginIds()), "hold fence");
   };
 
   /** Revokes every live lease of a profile `kept` does not hold. */
@@ -223,8 +227,10 @@ export function createControlEndpoint({
     leases.revokeWhere((record) => !kept(record.profileId), "profile-removed");
 
   /**
-   * Applies a registry change, then revokes for it. Both take effect in memory
-   * even when a save fails; the failure answers `state_write_failed`.
+   * Applies a registry change, then drops the removed profiles' pushed pairs
+   * and revokes their leases. All take effect in memory even when a save
+   * fails; the failure answers `state_write_failed`. The pairs go first: that
+   * cannot throw, so neither save's failure can leave one behind.
    */
   const changeProfiles = (
     change: () => void,
@@ -237,6 +243,7 @@ export function createControlEndpoint({
       if (!(err instanceof StateWriteError)) throw err;
       failed = err;
     }
+    compat.retain(kept);
     const revoked = revokeRemoved(kept);
     if (failed !== undefined) throw failed;
     return encodeLeasesRevoked(revoked);
@@ -280,11 +287,13 @@ export function createControlEndpoint({
       const profile = profiles.get(grant.profileId);
       if (!profile)
         fail(UNKNOWN_PROFILE, "The gateway does not know this profile.");
-      const binding = {
-        profileId: profile.id,
-        provider: profile.provider,
-        tokenFile: profile.tokenFile,
-      };
+      const binding: LeaseBinding = isLoginProfile(profile)
+        ? {
+            profileId: profile.id,
+            provider: profile.provider,
+            tokenFile: profile.tokenFile,
+          }
+        : { profileId: profile.id, provider: profile.provider };
       const granted =
         grant.kind === "server"
           ? leases.grant(binding, {
@@ -337,8 +346,12 @@ export function createControlEndpoint({
       const { profileId, holdId } = decodeLoginHold(payload);
       subject.profileId = profileId;
       subject.holdId = holdId;
+      // An OpenAI-compatible profile has no login to hold, fence or not.
+      const registered = profiles.get(profileId);
+      if (registered && !isLoginProfile(registered))
+        fail(UNKNOWN_PROFILE, "The gateway does not know this profile.");
       // A pending fence covers every profile, known or not (`holds.ts`).
-      if (!profiles.has(profileId) && !holds.fencing)
+      if (!registered && !holds.fencing)
         fail(UNKNOWN_PROFILE, "The gateway does not know this profile.");
       const { serverBootId, pid, startTime } = connection.hello!;
       return lane
@@ -397,21 +410,30 @@ export function createControlEndpoint({
       if (update.saveError !== undefined) throw update.saveError;
       return encodeHoldReleased(true);
     },
-    // The subject stays empty: no log line names the URL or the key.
-    [CONTROL_METHODS.compatSet]: (payload) => {
+    // The subject names the profile only: no log line names the URL or key.
+    [CONTROL_METHODS.compatSet]: (payload, _connection, subject) => {
+      const profileId = decodeCompatProfile(payload);
+      subject.profileId = profileId;
+      const profile = profiles.get(profileId);
+      if (!profile)
+        fail(UNKNOWN_PROFILE, "The gateway does not know this profile.");
+      if (isLoginProfile(profile))
+        fail(INVALID_PARAMS, "Only an OpenAI-compatible profile has a pair.");
       let pushed;
       try {
-        pushed = decodeCompatSet(payload);
+        pushed = decodeCompatPair(payload);
       } catch (err) {
-        // The held pair is no longer the server's: answer 503 until a push.
-        compat.clear();
+        // Its held pair is no longer the server's: 503 until a push.
+        compat.clear(profileId);
         throw err;
       }
-      compat.set(pushed.baseUrl, pushed.apiKey);
+      compat.set(profileId, pushed.baseUrl, pushed.apiKey);
       return encodeControlDone();
     },
-    [CONTROL_METHODS.compatClear]: () => {
-      compat.clear();
+    [CONTROL_METHODS.compatClear]: (payload, _connection, subject) => {
+      const profileId = decodeCompatProfile(payload);
+      subject.profileId = profileId;
+      compat.clear(profileId);
       return encodeControlDone();
     },
   };
@@ -458,7 +480,7 @@ export function createControlEndpoint({
       state.bootId = hello.serverBootId;
       state.hello = hello;
       lastHello = hello;
-      compat.clear();
+      compat.clearAll();
       if (current !== connection) {
         current?.end("a newer control connection said hello");
         current = connection;

@@ -1,9 +1,13 @@
 /**
- * A leased pi engine's model port (`gatewayPiModelPort.ts`): every Codex
- * model it hands out is on the gateway and authenticates with the lease, the
- * OpenAI-compatible provider follows the key-less settings feed onto the
- * gateway's `/compat` with the lease too, and the runtime's auth is guarded
- * per request, so the lease is never paired with another `baseUrl`. Nothing here leaves the process: every request pi would
+ * A leased pi engine's model port (`gatewayPiModelPort.ts`): it serves only
+ * the account its lease is for (T1373 AC10). An OpenAI account's port hands
+ * out Codex models on the gateway that authenticate with the lease, and never
+ * reads the compatible feed. An OpenAI-compatible account's port registers
+ * only that account's provider, following its key-less feed onto the
+ * gateway's `/compat` with the lease; a URL only control refuses still
+ * registers, a structurally refused one registers nothing (AC16). The
+ * runtime's auth is guarded per request, so the lease is never paired with
+ * another `baseUrl`. Nothing here leaves the process: every request pi would
  * send goes to a recording `fetch`, and the egress observer sees none.
  *
  * Run: pnpm --filter @assistant/server test src/piSdk/gatewayPiModelPort.test.ts
@@ -14,7 +18,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@assistant/shared";
 import {
   COMPAT_KEY_A,
   startEgressObserver,
@@ -44,6 +47,11 @@ const BUILTIN_ID = "gpt-5.6-luna";
 const COMPAT_A = "http://127.0.0.1:7/v1";
 const COMPAT_B = "http://127.0.0.1:8/v1";
 const COMPAT_OTHER_PATH = "http://127.0.0.1:8/api/openai/v1/";
+/** The OpenAI account a Codex port is for. */
+const OWN = "named";
+/** Two OpenAI-compatible accounts' ids, which are their providers'. */
+const COMPAT_ID_A = "openai-compatible-aaaaaaaaaaaa";
+const COMPAT_ID_B = "openai-compatible-bbbbbbbbbbbb";
 
 const root = mkdtempSync(join(tmpdir(), "gateway-port-"));
 const watched = ["home", "agent", "data"].map((dir) => join(root, dir));
@@ -124,13 +132,22 @@ function compatConfig(baseUrl: string): EngineCompatConfig {
   };
 }
 
-/** A feed the test drives: `set` changes the config and notifies. */
+/**
+ * Account A's feed, driven by the test: `set` changes its config and
+ * notifies. Every read and subscription is recorded by account.
+ */
 function fakeFeed(initial?: EngineCompatConfig) {
   let config = initial;
   const listeners = new Set<() => void>();
+  const calls: string[] = [];
   const feed: CompatProviderFeed = {
-    current: () => config,
-    subscribe(listener) {
+    current: (id) => {
+      calls.push(`current ${id}`);
+      return id === COMPAT_ID_A ? config : undefined;
+    },
+    subscribe(id, listener) {
+      calls.push(`subscribe ${id}`);
+      if (id !== COMPAT_ID_A) return () => {};
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
@@ -138,6 +155,7 @@ function fakeFeed(initial?: EngineCompatConfig) {
   return {
     feed,
     listeners,
+    calls,
     set(next: EngineCompatConfig | undefined) {
       config = next;
       for (const listener of [...listeners]) listener();
@@ -180,55 +198,70 @@ async function sendThrough(
   return { requests, errorMessage: result.errorMessage };
 }
 
-test("every Codex model is on the gateway, catalog ids included; other providers are not served", async () => {
-  const server = serverPort();
-  const port = gatewayPiModelPort(ACCESS, {
-    server,
-    compat: fakeFeed().feed,
+/** An OpenAI port for {@link OWN} on a fake server catalog and an untouched feed. */
+function codexPort(server = serverPort(), feed = fakeFeed()) {
+  return gatewayPiModelPort(ACCESS, OWN, { server, compat: feed.feed });
+}
+
+/** Account A's port, following `feed`. */
+const compatPort = (feed: ReturnType<typeof fakeFeed>) =>
+  gatewayPiModelPort(ACCESS, COMPAT_ID_A, {
+    server: serverPort(),
+    compat: feed.feed,
   });
+
+test("every Codex model of the port's own account is on the gateway, catalog ids included; other providers, accounts and kinds are not served", async () => {
+  const server = serverPort();
+  const feed = fakeFeed(compatConfig(COMPAT_A));
+  const register = vi.spyOn(ModelRegistry.prototype, "registerProvider");
+  const port = codexPort(server, feed);
   try {
     assert.equal(port.routing, "gateway");
     for (const id of [BUILTIN_ID, CATALOG_ID]) {
-      const named = await port.findForProfile("named", "openai-codex", id);
-      assert.equal(named?.id, id);
-      assert.equal(named?.baseUrl, CODEX_BASE);
-      const byDefault = await port.findForProfile(
-        "default",
-        "openai-codex",
-        id,
+      const model = await port.findForProfile(OWN, "openai-codex", id);
+      assert.equal(model?.id, id);
+      assert.equal(model?.baseUrl, CODEX_BASE);
+      // Another account's id, even for the same provider: not this port's.
+      assert.equal(
+        await port.findForProfile("default", "openai-codex", id),
+        undefined,
       );
-      assert.equal(byDefault?.id, id);
-      assert.equal(byDefault?.baseUrl, CODEX_BASE);
     }
     // The server's catalog decides; it was asked for the profile's.
     assert.ok(
-      server.calls.includes(`findForProfile named openai-codex/${CATALOG_ID}`),
+      server.calls.includes(`findForProfile ${OWN} openai-codex/${CATALOG_ID}`),
     );
     // An id the server does not know falls back to the gateway's built-in.
     server.findForProfile = async () => undefined;
     const fallback = await port.findForProfile(
-      "named",
+      OWN,
       "openai-codex",
       "gpt-5.6-sol",
     );
     assert.equal(fallback?.baseUrl, CODEX_BASE);
     assert.equal(
-      (await port.findForProfile("default", "openai-codex", "gpt-5.6-sol"))
-        ?.baseUrl,
-      CODEX_BASE,
-    );
-    assert.equal(
-      await port.findForProfile("named", "openai-codex", "no-such-model"),
+      await port.findForProfile(OWN, "openai-codex", "no-such-model"),
       undefined,
     );
     assert.equal(
-      await port.findForProfile("named", "anthropic", "claude-sonnet-4-5"),
+      await port.findForProfile(OWN, "anthropic", "claude-sonnet-4-5"),
       undefined,
     );
+    // No compatible provider: the feed is never read or subscribed.
+    for (const id of [COMPAT_ID_A, COMPAT_ID_B])
+      assert.equal(await port.findForProfile(OWN, id, "m"), undefined);
     assert.equal(
-      await port.findForProfile("default", "anthropic", "claude-sonnet-4-5"),
+      await port.findForProfile(COMPAT_ID_A, COMPAT_ID_A, "m"),
       undefined,
     );
+    assert.deepEqual(await port.availableForProfile(OWN), []);
+    assert.deepEqual(feed.calls, []);
+    assert.deepEqual(
+      register.mock.calls.map(([provider]) => provider),
+      ["openai-codex"],
+    );
+    const runtime = await port.runtime("default");
+    assert.equal(await runtime.getAuth(COMPAT_ID_A), undefined);
     assert.ok(
       !server.calls.includes("runtime"),
       "the server runtime is unused",
@@ -240,17 +273,13 @@ test("every Codex model is on the gateway, catalog ids included; other providers
 
 test("every Codex model the port returns authenticates with the lease, and creating the port writes no file", async () => {
   const before = filesUnderWatched();
-  const port = gatewayPiModelPort(ACCESS, {
-    server: serverPort(),
-    compat: fakeFeed().feed,
-  });
+  const port = codexPort();
   try {
     const runtime = await port.runtime("default");
     const models = [
-      await port.findForProfile("named", "openai-codex", CATALOG_ID),
-      await port.findForProfile("named", "openai-codex", BUILTIN_ID),
-      await port.findForProfile("default", "openai-codex", CATALOG_ID),
-      await port.findForProfile("default", "openai-codex", "gpt-5.6-sol"),
+      await port.findForProfile(OWN, "openai-codex", CATALOG_ID),
+      await port.findForProfile(OWN, "openai-codex", BUILTIN_ID),
+      await port.findForProfile(OWN, "openai-codex", "gpt-5.6-sol"),
     ];
     for (const model of models) {
       assert.ok(model);
@@ -272,19 +301,22 @@ test("every Codex model the port returns authenticates with the lease, and creat
   }
 });
 
-test("the compatible provider is registered on the gateway's /compat with the lease, and its key never reaches the port", async () => {
+test("a compatible account's port registers only its own provider on the gateway's /compat with the lease, and its key never reaches the port", async () => {
   const driven = fakeFeed(compatConfig(COMPAT_A));
-  const port = gatewayPiModelPort(ACCESS, {
-    server: serverPort(),
-    compat: driven.feed,
-  });
+  const register = vi.spyOn(ModelRegistry.prototype, "registerProvider");
+  const port = compatPort(driven);
   try {
     const runtime = await port.runtime("default");
-    const model = (await port.findForProfile(
-      "default",
-      OPENAI_COMPATIBLE_PROVIDER_ID,
-      "m",
-    ))!;
+    assert.deepEqual(
+      register.mock.calls.map(([provider]) => provider),
+      [COMPAT_ID_A],
+    );
+    assert.deepEqual(driven.calls, [
+      `current ${COMPAT_ID_A}`,
+      `subscribe ${COMPAT_ID_A}`,
+    ]);
+    const model = (await port.findForProfile(COMPAT_ID_A, COMPAT_ID_A, "m"))!;
+    assert.equal(model.provider, COMPAT_ID_A);
     assert.equal(model.baseUrl, `${GATEWAY}/compat/v1`);
     assert.equal((await runtime.getAuth(model))?.auth.apiKey, FAKE_LEASE);
     const sent = await sendThrough(port, model);
@@ -294,6 +326,31 @@ test("the compatible provider is registered on the gateway's /compat with the le
         authorization: `Bearer ${FAKE_LEASE}`,
       },
     ]);
+    assert.deepEqual(
+      (await port.availableForProfile(COMPAT_ID_A)).map((m) => [
+        m.provider,
+        m.id,
+      ]),
+      [[COMPAT_ID_A, "m"]],
+    );
+
+    // Nothing of another account or kind: not Codex, not a built-in, not B.
+    for (const [id, provider, modelId] of [
+      [COMPAT_ID_A, "openai-codex", BUILTIN_ID],
+      [COMPAT_ID_A, "anthropic", "claude-sonnet-4-5"],
+      [COMPAT_ID_A, COMPAT_ID_B, "m"],
+      [COMPAT_ID_B, COMPAT_ID_B, "m"],
+      [COMPAT_ID_B, COMPAT_ID_A, "m"],
+    ] as const)
+      assert.equal(
+        await port.findForProfile(id, provider, modelId),
+        undefined,
+        `${id} ${provider}/${modelId}`,
+      );
+    assert.deepEqual(await port.availableForProfile(COMPAT_ID_B), []);
+    assert.equal(await runtime.getAuth(catalogModel(BUILTIN_ID)), undefined);
+    assert.equal(await runtime.getAuth("openai-codex"), undefined);
+
     // The feed's type admits no key: the engine side cannot be handed one.
     const keyed: EngineCompatConfig = {
       ...compatConfig(COMPAT_A),
@@ -306,21 +363,58 @@ test("the compatible provider is registered on the gateway's /compat with the le
   }
 });
 
+test("AC16: a URL past control's 2048 bytes still registers and offers its models; a structurally refused one registers nothing", async () => {
+  const longPath = `/v1/${"p".repeat(2100)}`;
+  const long = fakeFeed(compatConfig(`http://127.0.0.1:7${longPath}`));
+  const longPort = compatPort(long);
+  try {
+    const model = (await longPort.findForProfile(
+      COMPAT_ID_A,
+      COMPAT_ID_A,
+      "m",
+    ))!;
+    assert.equal(model.baseUrl, `${GATEWAY}/compat${longPath}`);
+    assert.equal(
+      (await longPort.availableForProfile(COMPAT_ID_A)).length,
+      1,
+      "the failure is the gateway's 503, not a missing model",
+    );
+  } finally {
+    longPort.dispose();
+  }
+
+  for (const refused of [
+    "ftp://127.0.0.1:7/v1",
+    "http://user:pw@127.0.0.1:7/v1",
+    "http://127.0.0.1:7/v1?x=1",
+    "http://127.0.0.1:7/v1#f",
+  ]) {
+    const register = vi.spyOn(ModelRegistry.prototype, "registerProvider");
+    const port = compatPort(fakeFeed(compatConfig(refused)));
+    try {
+      await port.runtime("default");
+      assert.equal(register.mock.calls.length, 0, refused);
+      assert.equal(
+        await port.findForProfile(COMPAT_ID_A, COMPAT_ID_A, "m"),
+        undefined,
+      );
+      assert.deepEqual(await port.availableForProfile(COMPAT_ID_A), []);
+    } finally {
+      port.dispose();
+      register.mockRestore();
+    }
+  }
+});
+
 test("the compatible registration follows the feed: unchanged and same-base-path changes keep it, a base-path change re-registers, none or an invalid URL removes it, dispose unsubscribes", async () => {
   const driven = fakeFeed(compatConfig(COMPAT_A));
-  const port = gatewayPiModelPort(ACCESS, {
-    server: serverPort(),
-    compat: driven.feed,
-  });
+  const port = compatPort(driven);
   const runtime = await port.runtime("default");
   const register = vi.spyOn(ModelRegistry.prototype, "registerProvider");
   const unregister = vi.spyOn(ModelRegistry.prototype, "unregisterProvider");
+  const find = () => port.findForProfile(COMPAT_ID_A, COMPAT_ID_A, "m");
 
-  const held = (await port.findForProfile(
-    "default",
-    OPENAI_COMPATIBLE_PROVIDER_ID,
-    "m",
-  ))!;
+  const held = (await find())!;
   assert.equal((await runtime.getAuth(held))?.auth.apiKey, FAKE_LEASE);
 
   // A notification with the feed unchanged (a key rotation): nothing churns.
@@ -338,12 +432,9 @@ test("the compatible registration follows the feed: unchanged and same-base-path
   // one does.
   driven.set(compatConfig(COMPAT_OTHER_PATH));
   assert.equal(register.mock.calls.length, 1);
+  assert.equal(register.mock.calls[0]![0], COMPAT_ID_A);
   assert.equal(await runtime.getAuth(held), undefined);
-  const moved = (await port.findForProfile(
-    "default",
-    OPENAI_COMPATIBLE_PROVIDER_ID,
-    "m",
-  ))!;
+  const moved = (await find())!;
   assert.equal(moved.baseUrl, `${GATEWAY}/compat/api/openai/v1`);
   assert.equal((await runtime.getAuth(moved))?.auth.apiKey, FAKE_LEASE);
 
@@ -358,17 +449,11 @@ test("the compatible registration follows the feed: unchanged and same-base-path
   ]) {
     driven.set(compatConfig(COMPAT_A));
     driven.set(compatConfig(invalid));
-    assert.equal(
-      await port.findForProfile("default", OPENAI_COMPATIBLE_PROVIDER_ID, "m"),
-      undefined,
-    );
+    assert.equal(await find(), undefined);
     assert.equal(await runtime.getAuth(held), undefined, invalid);
   }
   driven.set(undefined);
-  assert.equal(
-    await port.findForProfile("default", OPENAI_COMPATIBLE_PROVIDER_ID, "m"),
-    undefined,
-  );
+  assert.equal(await find(), undefined);
   assert.equal(await runtime.getAuth(moved), undefined);
   const unregistered = unregister.mock.calls.length;
   driven.set(undefined);
@@ -389,30 +474,19 @@ test("the compatible registration follows the feed: unchanged and same-base-path
 
 test("after a base-path change, a model held at the old one is refused before any request, and the new one goes to the gateway", async () => {
   const driven = fakeFeed(compatConfig(COMPAT_A));
-  const port = gatewayPiModelPort(ACCESS, {
-    server: serverPort(),
-    compat: driven.feed,
-  });
+  const port = compatPort(driven);
   try {
     const runtime = await port.runtime("default");
-    const held = (await port.findForProfile(
-      "default",
-      OPENAI_COMPATIBLE_PROVIDER_ID,
-      "m",
-    ))!;
+    const held = (await port.findForProfile(COMPAT_ID_A, COMPAT_ID_A, "m"))!;
     driven.set(compatConfig(COMPAT_OTHER_PATH));
     assert.equal(await runtime.getAuth(held), undefined);
     const stale = await sendThrough(port, held);
     assert.deepEqual(stale.requests, []);
     assert.match(
       stale.errorMessage ?? "",
-      /Provider is not configured: openai-compatible/,
+      new RegExp(`Provider is not configured: ${COMPAT_ID_A}`),
     );
-    const moved = (await port.findForProfile(
-      "default",
-      OPENAI_COMPATIBLE_PROVIDER_ID,
-      "m",
-    ))!;
+    const moved = (await port.findForProfile(COMPAT_ID_A, COMPAT_ID_A, "m"))!;
     const fresh = await sendThrough(port, moved);
     assert.deepEqual(
       fresh.requests.map((r) => [r.url, r.authorization]),
@@ -429,10 +503,7 @@ test("after a base-path change, a model held at the old one is refused before an
 });
 
 test("a Codex model not on the gateway, such as a catalog object at chatgpt.com, gets no lease and sends nothing", async () => {
-  const port = gatewayPiModelPort(ACCESS, {
-    server: serverPort(),
-    compat: fakeFeed().feed,
-  });
+  const port = codexPort();
   try {
     const runtime = await port.runtime("default");
     for (const id of [BUILTIN_ID, CATALOG_ID]) {

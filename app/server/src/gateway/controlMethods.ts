@@ -1,5 +1,5 @@
 /**
- * Gateway control 1.3: the methods the server and the credential gateway send
+ * Gateway control 1.4: the methods the server and the credential gateway send
  * each other over the worker protocol's codec and `WorkerConnection` framing,
  * under a version of its own (`docs/workers.md` "Credentials"). Its handshake
  * refuses a Worker, and a Worker refuses it; any 1.x peer is admitted.
@@ -12,7 +12,8 @@
  *   answers the server leases of other boots it revoked.
  * - `profiles.sync {profiles}`, `profiles.upsert {profile}` and
  *   `profiles.remove {profileId}` change the registry and answer the leases
- *   the removal of a profile revoked. `enabled` is metadata only.
+ *   the removal of a profile revoked. `enabled` is metadata only. A login
+ *   profile names its token file; (1.4) an OpenAI-compatible one names none.
  * - `leases.grant` binds a lease to a registered profile and answers its id
  *   and token: the only place a token appears.
  * - `leases.bindSession {leaseId, sessionId}` completes an engine lease's
@@ -27,9 +28,12 @@
  *   writer, `profiles.loginRelease {holdId}` ends a hold of this boot and
  *   `profiles.loginForceRelease {holdId}` ends any hold (the operator's
  *   assertion).
- * - `compat.set {baseUrl, apiKey}` holds the OpenAI-compatible endpoint and
- *   its key in memory only (`compatUpstream.ts`); one it refuses clears the
- *   held pair. `compat.clear {}` drops it, and so does every hello.
+ * - (1.4) `compat.set {profileId, baseUrl, apiKey}` holds a registered
+ *   OpenAI-compatible profile's endpoint and key in memory only
+ *   (`compatUpstream.ts`); a URL or key it refuses clears that profile's
+ *   pair. `compat.clear {profileId}` drops one pair. Every hello drops them
+ *   all, and the removal of a profile, by `profiles.remove` or a sync that
+ *   omits it, drops its own.
  *
  * Gateway → server: `profiles.status {profileId, loginStuck, holdId}` reports
  * a hold that became login-stuck or a stuck one that ended, and (1.3)
@@ -49,7 +53,7 @@ import { isProfileId, parseProfile, type GatewayProfile } from "./profiles.ts";
 import type { RevokeReason } from "./refusals.ts";
 import { isOwnerId } from "./state.ts";
 
-export const GATEWAY_CONTROL_VERSION = "gateway-control/1.3";
+export const GATEWAY_CONTROL_VERSION = "gateway-control/1.4";
 
 const CONTROL_VERSION_RE =
   /^gateway-control\/(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
@@ -142,8 +146,9 @@ export interface LoginWriterRequest {
   startTime: string | null;
 }
 
-/** The OpenAI-compatible endpoint and key `compat.set` pushes. */
+/** An OpenAI-compatible profile's endpoint and key, as `compat.set` pushes them. */
 export interface CompatConfig {
+  profileId: string;
   baseUrl: string;
   apiKey: string;
 }
@@ -294,8 +299,20 @@ export function decodeHoldId(payload: Payload): string {
   return holdId;
 }
 
-/** No error message names the URL or key: a refusal holds no peer text. */
-export function decodeCompatSet(payload: Payload): CompatConfig {
+/** The profile `compat.set` and `compat.clear` name. */
+export function decodeCompatProfile(payload: Payload): string {
+  const { profileId } = json(payload);
+  if (!isProfileId(profileId)) invalid("profile id");
+  return profileId;
+}
+
+/**
+ * `compat.set`'s endpoint and key. No error message names the URL or key: a
+ * refusal holds no peer text.
+ */
+export function decodeCompatPair(
+  payload: Payload,
+): Omit<CompatConfig, "profileId"> {
   const { baseUrl, apiKey } = json(payload);
   if (
     typeof baseUrl !== "string" ||

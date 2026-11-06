@@ -42,7 +42,7 @@ export async function startGatewayLinkForTests(
   options: Partial<
     Pick<
       GatewayLinkOptions,
-      "stateDir" | "start" | "upstreams" | "compat" | "claudeTokenEndpoint"
+      "stateDir" | "start" | "upstreams" | "claudeTokenEndpoint"
     >
   > = {},
 ): Promise<TestGatewayLink> {
@@ -59,7 +59,6 @@ export async function startGatewayLinkForTests(
     log: (line) => lines.push(line),
     ...(options.start ? { start: options.start } : {}),
     ...(options.upstreams ? { upstreams: options.upstreams } : {}),
-    ...(options.compat ? { compat: options.compat } : {}),
     claudeTokenEndpoint: options.claudeTokenEndpoint ?? NO_TOKEN_ENDPOINT,
   });
   assert.equal(await link.ready, true, lines.join("\n"));

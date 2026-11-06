@@ -2,9 +2,11 @@
  * The pi factory with and without the open's gateway access
  * (`docs/workers.md` "pi engines use the lease"): without it, the server's
  * own port runs the engine exactly as before; with it, the engine's gateway
- * port resolves every model, a reopened transcript's included, turns are
- * pinned to SSE, and the port's feed subscription ends with the engine. A
- * leased engine is an OpenAI account's, so it serves no compatible model.
+ * port resolves every model, a reopened transcript's included, and turns are
+ * pinned to SSE. An OpenAI account's leased engine serves no compatible model
+ * and never follows the compatible feed; a compatible account's serves only
+ * its own provider at the gateway's `/compat`, and its feed subscription ends
+ * with the engine (T1373 AC10).
  *
  * Real pi sessions; nothing here sends a prompt, so no request leaves the
  * process.
@@ -127,15 +129,17 @@ function watchFeed(): { live: () => number; subscribed: () => number } {
   let live = 0;
   let subscribed = 0;
   const subscribe = compatProviderFeed.subscribe.bind(compatProviderFeed);
-  vi.spyOn(compatProviderFeed, "subscribe").mockImplementation((listener) => {
-    live += 1;
-    subscribed += 1;
-    const unsubscribe = subscribe(listener);
-    return () => {
-      live -= 1;
-      unsubscribe();
-    };
-  });
+  vi.spyOn(compatProviderFeed, "subscribe").mockImplementation(
+    (id, listener) => {
+      live += 1;
+      subscribed += 1;
+      const unsubscribe = subscribe(id, listener);
+      return () => {
+        live -= 1;
+        unsubscribe();
+      };
+    },
+  );
   return { live: () => live, subscribed: () => subscribed };
 }
 
@@ -457,7 +461,7 @@ test("a gateway engine reopens a catalog-id transcript on that model, rebased, w
       FAKE_LEASE,
     );
     assert.equal(native.agent.transport, "sse");
-    assert.equal(feed.live(), 1);
+    assert.equal(feed.subscribed(), 0, "an OpenAI account's port has no feed");
 
     await hosted.command(
       "setModel",
@@ -467,13 +471,53 @@ test("a gateway engine reopens a catalog-id transcript on that model, rebased, w
     assert.ok(server.calls.includes("findForProfile openai-codex/gpt-5.6-sol"));
     assert.equal(native.model?.id, "gpt-5.6-sol");
     assert.equal(native.model?.baseUrl, CODEX_BASE);
-    // A leased engine is an OpenAI account's: it serves no compatible model.
+    // An OpenAI account's leased engine serves no compatible model.
     await assert.rejects(
       hosted.command("setModel", [{ provider: COMPATIBLE, id: "chosen" }], 2),
       /not available on this session's account/,
     );
     assert.equal(native.model?.id, "gpt-5.6-sol");
     assert.equal(native.agent.transport, "sse");
+  } finally {
+    await hosted.dispose({});
+  }
+  assert.equal(feed.subscribed(), 0);
+});
+
+test("a compatible account's gateway engine reopens on its own provider at /compat with the lease, follows only its feed, and disposing ends that", async () => {
+  const feed = watchFeed();
+  const factory = createPiHostedEngineFactory({
+    models: recordingServerPort(),
+    compat: compatProviderFeed,
+  });
+  const file = transcript("gateway-compatible", COMPATIBLE, "chosen");
+  const { hosted, native } = await open(
+    factory,
+    spec(
+      { type: "open", file, expectedId: "gateway-compatible" },
+      { account: COMPATIBLE },
+    ),
+    true,
+  );
+  try {
+    assert.equal(native.model?.provider, COMPATIBLE);
+    assert.equal(native.model?.id, "chosen");
+    assert.equal(native.model?.baseUrl, `${GATEWAY}/compat/v1`);
+    assert.equal(
+      (await native.modelRuntime.getAuth(native.model!))?.auth.apiKey,
+      FAKE_LEASE,
+    );
+    assert.equal(native.agent.transport, "sse");
+    assert.equal(feed.live(), 1);
+    await assert.rejects(
+      hosted.command(
+        "setModel",
+        [{ provider: "openai-codex", id: CATALOG_ID }],
+        1,
+      ),
+      /not available on this session's account/,
+    );
+    assert.equal(native.model?.provider, COMPATIBLE);
   } finally {
     await hosted.dispose({});
   }
@@ -520,8 +564,7 @@ test("when the port has no model for the restored id, pi's own restore runs: an 
     ),
     /Agent "gateway-agent" cannot run: Could not restore model openai-codex\/gpt-gone/,
   );
-  assert.equal(feed.subscribed(), 1);
-  assert.equal(feed.live(), 0, "a failed open releases its port");
+  assert.equal(feed.subscribed(), 0, "an OpenAI account's port has no feed");
 
   // Without an agent, pi falls back as it does today, on the engine's runtime.
   const { hosted, native } = await open(

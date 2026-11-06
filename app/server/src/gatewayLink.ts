@@ -2,22 +2,25 @@
  * The server's link to the credential gateway (`docs/workers.md`
  * "Credentials"), behind `ASSISTANT_GATEWAY=1`. It runs the gateway in this
  * process with its state in `DATA_DIR/gateway/` and speaks gateway control
- * 1.3 to it over an in-process pair, until the gateway gets its own process
+ * 1.4 to it over an in-process pair, until the gateway gets its own process
  * and socket.
  *
  * Before it is ready the link says hello as this server boot, syncs every
- * credential profile, reconciles the in-process Worker with no live lease (an
- * engine of an earlier boot died with it) and pushes the OpenAI-compatible
- * endpoint and key when given a source. Profile and compatible changes
- * follow, in order: every request takes one queue.
+ * credential profile (an OpenAI-compatible account without a token file),
+ * reconciles the in-process Worker with no live lease (an engine of an
+ * earlier boot died with it) and pushes each OpenAI-compatible account's
+ * endpoint and key. Account changes follow, in order: every request takes one
+ * queue, and a compatible account's upsert is followed by its push.
  *
- * The push source is the only reader of that key on the engine path: engines
- * get a key-less configuration (`piSdk/compatProviderFeed.ts`) and spend
- * their lease at the gateway's `/compat`. A failed push is logged by its code
- * alone, never the URL or key, and leaves the link ready: `/compat` answers
- * 503 until a later push. Until the gateway serves each OpenAI-compatible
- * account, the server passes no source, those accounts are never synced, and
- * a lease for one is refused ({@link GatewayAccountKindUnsupportedError}).
+ * The link is the only reader of those keys on the engine path: engines get a
+ * key-less configuration (`piSdk/compatProviderFeed.ts`) and spend their
+ * lease at the gateway's `/compat`, which forwards to the lease's own
+ * account. An account that is not ready to run, or whose endpoint cannot be
+ * read, has its pair cleared. A failed push is logged by its method, profile
+ * and code alone, never the URL or key, and leaves the link ready: `/compat`
+ * answers 503 for that account until its next change or a restart, with no
+ * retry. Disabling an account keeps its pair; the server refuses it at the
+ * next turn.
  *
  * The engine seam (`workers/engineClient.ts`) grants an engine lease before
  * each profiled open and revokes it at the engine's end. A grant the link
@@ -42,14 +45,23 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
+  ACCOUNT_KINDS,
+  type CredentialProfileProvider,
+} from "@assistant/shared";
+import {
   claudeConfigDir,
   credentialProfileById,
-  listCredentialProfiles,
+  credentialProfilesOfKind,
+  ensureDefaultPiProfile,
   piAgentDir,
   subscribeCredentialProfileChanges,
   type CredentialProfile,
 } from "./credentialProfiles.ts";
 import { errorText } from "./errors.ts";
+import {
+  openAiCompatibleProviderConfig,
+  readOpenAiCompatibleEndpoint,
+} from "./openAiCompatibleAccounts.ts";
 import {
   CONTROL_METHODS,
   GATEWAY_CONTROL_PROTOCOL,
@@ -93,26 +105,6 @@ export class GatewayUnavailableError extends Error {
   constructor() {
     super(GATEWAY_UNAVAILABLE_TEXT);
   }
-}
-
-/**
- * An OpenAI-compatible account does not run with the switch on until the
- * gateway serves each such account's endpoint (`docs/workers.md`).
- */
-export const GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT =
-  "OpenAI-compatible accounts do not run with the credential gateway yet.";
-
-/** The account's kind does not run through the gateway: nothing is leased. */
-export class GatewayAccountKindUnsupportedError extends Error {
-  constructor() {
-    super(GATEWAY_ACCOUNT_KIND_UNSUPPORTED_TEXT);
-  }
-}
-
-/** Refuse, before any control request, an account the gateway cannot hold. */
-function refuseUnsupportedAccountKind(profileId: string): void {
-  if (credentialProfileById(profileId)?.provider === "openai-compatible")
-    throw new GatewayAccountKindUnsupportedError();
 }
 
 /** U7's text for a login the gateway cannot hold for. */
@@ -166,24 +158,10 @@ export interface GatewayLinkOptions {
   upstreams?: UpstreamOverrides;
   /** Test seam: what starts the gateway. */
   start?: (options: GatewayOptions) => Promise<RunningGateway>;
-  /** The OpenAI-compatible endpoint to push; without it `/compat` answers 503. */
-  compat?: GatewayCompatSource;
   /** pi's Codex refresh, passed to the gateway. */
   renewCodex?: GatewayOptions["renewCodex"];
   /** Test and probe seam, passed to the gateway; the server never sets it. */
   claudeTokenEndpoint?: GatewayOptions["claudeTokenEndpoint"];
-}
-
-/**
- * The OpenAI-compatible endpoint and key the link pushes, and their changes.
- * The server passes none until the gateway serves compatible accounts
- * (Task-1373 PR2); only tests drive it.
- */
-interface GatewayCompatSource {
-  /** What the settings hold now; undefined when nothing is configured. */
-  current(): CompatConfig | undefined;
-  /** Calls `listener` after every settings change; answers the unsubscribe. */
-  subscribe(listener: () => void): () => void;
 }
 
 interface EngineLeaseGrant {
@@ -261,7 +239,6 @@ export async function serverGatewayAccess(
   profileId: string,
 ): Promise<EngineGatewayAccess | undefined> {
   if (!installed) return undefined;
-  refuseUnsupportedAccountKind(profileId);
   return installed.serverAccess(profileId);
 }
 
@@ -277,13 +254,19 @@ function pushFailure(err: unknown): string {
 
 /**
  * The gateway's view of `profile`, or undefined when it cannot hold it. An
- * OpenAI-compatible account holds no login, and is never synced, leased or
- * renewed.
+ * OpenAI-compatible account holds no login and names no token file: its
+ * endpoint and key reach the gateway only by push.
  */
 function gatewayProfile(
   profile: CredentialProfile,
 ): GatewayProfile | undefined {
-  if (profile.provider === "openai-compatible") return undefined;
+  if (profile.provider === "openai-compatible")
+    return parseProfile({
+      id: profile.id,
+      provider: profile.provider,
+      name: profile.name,
+      enabled: profile.enabled,
+    });
   return parseProfile({
     id: profile.id,
     provider: profile.provider,
@@ -294,6 +277,18 @@ function gatewayProfile(
         ? join(claudeConfigDir(profile.id), ".credentials.json")
         : join(piAgentDir(profile.id), "auth.json"),
   });
+}
+
+/**
+ * Every account as the registry has it, oldest first, the defaults ensured.
+ * Not the summaries: they read each account's files, and one unreadable
+ * endpoint would fail the boot instead of only its own push.
+ */
+function registeredProfiles(): CredentialProfile[] {
+  ensureDefaultPiProfile();
+  return (Object.keys(ACCOUNT_KINDS) as CredentialProfileProvider[])
+    .flatMap((provider) => credentialProfilesOfKind(provider))
+    .sort((a, b) => a.createdAt - b.createdAt);
 }
 
 /**
@@ -324,24 +319,33 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
    */
   const serverLeases = new Map<string, Promise<EngineGatewayAccess>>();
 
-  /** Sends the compatible endpoint as the source has it now; logs a failure. */
+  /**
+   * Sends a compatible account's endpoint and key as its settings hold them
+   * now, or clears its pair when it is not ready to run or cannot be read: a
+   * pair the server cannot confirm is not kept. Logs a failure, never throws.
+   */
   const pushCompat = async (
     send: (method: string, payload: Payload) => Promise<Payload>,
+    profile: Pick<CredentialProfile, "id" | "name">,
   ): Promise<void> => {
-    if (!options.compat) return;
-    const config = options.compat.current();
-    const method = config
-      ? CONTROL_METHODS.compatSet
-      : CONTROL_METHODS.compatClear;
+    const profileId = profile.id;
+    let method: string = CONTROL_METHODS.compatClear;
     try {
-      await send(
-        method,
-        encodeControlRequest(
-          config ? { baseUrl: config.baseUrl, apiKey: config.apiKey } : {},
-        ),
-      );
+      let pair: CompatConfig | undefined;
+      try {
+        const config = openAiCompatibleProviderConfig(
+          readOpenAiCompatibleEndpoint(profileId),
+          profile.name,
+        );
+        if (config)
+          pair = { profileId, baseUrl: config.baseUrl, apiKey: config.apiKey };
+      } catch {
+        log(`${CONTROL_METHODS.compatSet} (profile ${profileId}): failed`);
+      }
+      method = pair ? CONTROL_METHODS.compatSet : CONTROL_METHODS.compatClear;
+      await send(method, encodeControlRequest(pair ?? { profileId }));
     } catch (err) {
-      log(`${method}: ${pushFailure(err)}`);
+      log(`${method} (profile ${profileId}): ${pushFailure(err)}`);
     }
   };
 
@@ -392,11 +396,15 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         ),
       ).revoked;
       const profiles: GatewayProfile[] = [];
-      for (const profile of listCredentialProfiles()) {
-        if (profile.provider === "openai-compatible") continue;
+      const compatible: CredentialProfile[] = [];
+      for (const profile of registeredProfiles()) {
         const known = gatewayProfile(profile);
-        if (known) profiles.push(known);
-        else log(`profile ${profile.id} skipped: the gateway cannot hold it`);
+        if (!known) {
+          log(`profile ${profile.id} skipped: the gateway cannot hold it`);
+          continue;
+        }
+        profiles.push(known);
+        if (known.provider === "openai-compatible") compatible.push(profile);
       }
       decodeLeasesRevoked(
         await control.request(
@@ -411,8 +419,13 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
           encodeControlRequest({ workerId: IN_PROCESS_WORKER_ID, live: [] }),
         ),
       ).revoked;
-      // Before ready, so no engine's first compatible request beats it.
-      await pushCompat((method, payload) => control.request(method, payload));
+      // Before ready, so no engine's first compatible request beats it; one
+      // account's failure does not stop the next.
+      for (const profile of compatible)
+        await pushCompat(
+          (method, payload) => control.request(method, payload),
+          profile,
+        );
       log(
         `ready: ${profiles.length} profiles; revoked ${ofOtherBoots.length} server and ${ofDeadEngines.length} engine leases of earlier boots`,
       );
@@ -453,8 +466,6 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   const unsubscribe = subscribeCredentialProfileChanges((id) => {
     // Read now, so quick changes are sent in the order they happened.
     const current = credentialProfileById(id);
-    // Never synced, so never removed either (`gatewayProfile`).
-    if (current?.provider === "openai-compatible") return;
     const profile = current && gatewayProfile(current);
     const method = profile
       ? CONTROL_METHODS.upsertProfile
@@ -471,12 +482,10 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       },
       (err: unknown) => log(`${method} (profile ${id}): ${failure(err)}`),
     );
+    // After its upsert, so the gateway knows the profile the pair is for.
+    if (profile?.provider === "openai-compatible" && current)
+      void pushCompat(request, current);
   });
-
-  // Read at callback time and queued, as profile changes are.
-  const unsubscribeCompat = options.compat?.subscribe(
-    () => void pushCompat(request),
-  );
 
   const grantServerLease = async (
     profileId: string,
@@ -511,7 +520,6 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       return gateway;
     },
     async grantEngineLease({ workerId, sessionId, profileId }) {
-      refuseUnsupportedAccountKind(profileId);
       if (!(await readyWithin(READY_TIMEOUT_MS))) {
         log(`${CONTROL_METHODS.grant} (profile ${profileId}): not ready`);
         throw new GatewayUnavailableError();
@@ -657,7 +665,6 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       closing ??= (async () => {
         if (installed === link) installed = undefined;
         unsubscribe();
-        unsubscribeCompat?.();
         await boot;
         connection?.end("the server link closed");
         await gateway?.close();

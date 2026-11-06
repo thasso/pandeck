@@ -70,6 +70,8 @@ const { COMPAT_KEY_A, COMPAT_KEY_B } =
   await import("../test/gatewayFixtures.ts");
 const { findModelForProfile } = await import("./models.ts");
 const { serverPiModelPort } = await import("./piModelPort.ts");
+const { gatewayPiModelPort } = await import("./gatewayPiModelPort.ts");
+const { compatProviderFeed } = await import("./compatProviderFeed.ts");
 const { piPersonaOptions, resolvePiEngineStart } =
   await import("./piEngineStart.ts");
 const { SKILLS_LIBRARY_DIR, SKILLS_RUNTIME_DIR } = await import("../config.ts");
@@ -788,6 +790,43 @@ test("a compatible account with no models refuses the open, pointing at Test or 
       /offers no models\. Run Test on its card in Settings, or start a new session\./,
     );
   } finally {
+    deleteCredentialProfile(id);
+  }
+});
+
+test("AC16: a leased compatible account whose URL the gateway refuses structurally registers nothing, so the open refuses with the same text", async () => {
+  const { id } = createCredentialProfile({
+    name: "Refused URL",
+    provider: "openai-compatible",
+  });
+  writeOpenAiCompatibleEndpoint(id, {
+    baseUrl: "http://127.0.0.1:9/v1?refused=1",
+    thinkingFormat: "none",
+    models: [
+      {
+        id: "chosen",
+        name: "chosen",
+        input: ["text"],
+        contextWindow: 100_000,
+        maxTokens: 4_000,
+        reasoning: false,
+      },
+    ],
+  });
+  const port = gatewayPiModelPort(
+    { baseUrl: "http://127.0.0.1:9", leaseToken: "fake-host-lease" },
+    id,
+    { server: serverPiModelPort, compat: compatProviderFeed },
+  );
+  try {
+    assert.ok(compatProviderFeed.current(id), "the account itself is ready");
+    assert.deepEqual(await port.availableForProfile(id), []);
+    await assert.rejects(
+      openPiEngine(await newOpenSpec(id), { ...ctx, models: port }),
+      /offers no models\. Run Test on its card in Settings, or start a new session\./,
+    );
+  } finally {
+    port.dispose();
     deleteCredentialProfile(id);
   }
 });

@@ -1,7 +1,9 @@
 /**
  * The gateway's profile registry (`docs/workers.md` "Credentials"): the
- * accounts the server syncs over control, each naming its provider and token
- * file. A grant binds its lease from here, never from the request (C5).
+ * accounts the server syncs over control, each naming its provider and, for a
+ * login, its token file. An OpenAI-compatible account has none: its endpoint
+ * and key arrive by `compat.set`, in memory only. A grant binds its lease
+ * from here, never from the request (C5).
  *
  * `enabled` and `name` are recorded and never enforced: disabling an account
  * takes effect at the server's next turn, so the gateway never ends a running
@@ -11,13 +13,30 @@
 import { isAbsolute } from "node:path";
 import type { LeaseProvider } from "./leases.ts";
 
-export interface GatewayProfile {
+/** A profile with a login: renewal, login holds and the fence apply. */
+export interface LoginProfile {
   id: string;
   provider: LeaseProvider;
   name: string;
   enabled: boolean;
   /** Absolute path of the profile's token file. */
   tokenFile: string;
+}
+
+/** An OpenAI-compatible account: no token file, no renewal, no login hold. */
+interface EndpointProfile {
+  id: string;
+  provider: "openai-compatible";
+  name: string;
+  enabled: boolean;
+}
+
+export type GatewayProfile = LoginProfile | EndpointProfile;
+
+export function isLoginProfile(
+  profile: GatewayProfile,
+): profile is LoginProfile {
+  return profile.provider !== "openai-compatible";
 }
 
 const PROFILE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -42,7 +61,11 @@ export function isAbsolutePath(value: unknown): value is string {
   );
 }
 
-/** A profile from the wire or the state file, or undefined when malformed. */
+/**
+ * A profile from the wire or the state file, or undefined when malformed: a
+ * login needs its token file, and an OpenAI-compatible account must not name
+ * one.
+ */
 export function parseProfile(value: unknown): GatewayProfile | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return undefined;
@@ -52,12 +75,16 @@ export function parseProfile(value: unknown): GatewayProfile | undefined {
   >;
   if (
     !isProfileId(id) ||
-    !isLeaseProvider(provider) ||
     typeof name !== "string" ||
     name.length > MAX_NAME_LENGTH ||
-    typeof enabled !== "boolean" ||
-    !isAbsolutePath(tokenFile)
+    typeof enabled !== "boolean"
   )
+    return undefined;
+  if (provider === "openai-compatible")
+    return tokenFile === undefined
+      ? { id, provider, name, enabled }
+      : undefined;
+  if (!isLeaseProvider(provider) || !isAbsolutePath(tokenFile))
     return undefined;
   return { id, provider, name, enabled, tokenFile };
 }
@@ -110,6 +137,13 @@ export class ProfileRegistry {
 
   ids(): string[] {
     return [...this.profiles.keys()];
+  }
+
+  /** The profiles with a login: the only ones a hold or renewal names. */
+  loginIds(): string[] {
+    return [...this.profiles.values()]
+      .filter(isLoginProfile)
+      .map((profile) => profile.id);
   }
 
   private save(): void {

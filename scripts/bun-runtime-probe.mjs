@@ -4573,7 +4573,7 @@ async function checkGatewayLink() {
     });
     const refusal = await worker.ended;
     assert(
-      refusal.includes("gateway-control/1.3"),
+      refusal.includes("gateway-control/1.4"),
       `A worker-protocol dialer was not refused by gateway control: ${refusal}`,
     );
     const hello = gateway.lastHello();

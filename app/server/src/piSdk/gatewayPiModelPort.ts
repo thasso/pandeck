@@ -1,22 +1,27 @@
 /**
  * A leased pi engine's model port (`docs/workers.md` "pi engines use the
  * lease"): one in-memory pi runtime per engine open, holding only the
- * engine's lease, so every `openai-codex` and OpenAI-compatible request goes
- * to the credential gateway and nothing is written to disk or fetched from a
- * catalog.
+ * engine's lease, so every request goes to the credential gateway and
+ * nothing is written to disk or fetched from a catalog.
  *
- * pi sends a request to the model object's own `baseUrl` and adds the key
- * its runtime holds for that provider. So every Codex model this port hands
- * out is rebased onto the gateway's `/chatgpt`, and the OpenAI-compatible
- * provider is registered at the gateway's `/compat<base path>` with the lease
- * as its key: the gateway adds the endpoint's own key. The runtime's
- * `getAuth` is guarded per request (`credentialPairing.ts`): a credential is
- * paired only with the exact `baseUrl` of the configuration it belongs to.
- * Any other object, such as a catalog model still at `chatgpt.com`, or an
+ * A port serves exactly one account, the one its lease is for, and its kind
+ * follows from the account's id. An OpenAI account's port registers only
+ * Codex, and every Codex model it hands out is rebased onto the gateway's
+ * `/chatgpt`. An OpenAI-compatible account's port registers only that
+ * account's own provider, under its id, at the gateway's `/compat<base path>`
+ * with the lease as its key: the gateway adds that account's own key. Neither
+ * finds or offers a model of another account or kind.
+ *
+ * pi sends a request to the model object's own `baseUrl` and adds the key its
+ * runtime holds for that provider. The runtime's `getAuth` is guarded per
+ * request (`credentialPairing.ts`): a credential is paired only with the
+ * exact `baseUrl` of the configuration it belongs to. Any other object, such
+ * as a catalog model still at `chatgpt.com`, a built-in model, or an
  * OpenAI-compatible model from a base path the settings have since replaced,
  * gets no auth, and pi refuses it before it connects ("Provider is not
  * configured"). A change of origin under the same base path keeps the
- * registration: the gateway follows the push.
+ * registration: the gateway follows the push. A base URL the gateway would
+ * refuse structurally registers nothing, so the account offers no model.
  *
  * The OpenAI-compatible configuration arrives key-less through an injected
  * {@link CompatProviderFeed}; the catalog through the server's own port. This
@@ -27,7 +32,10 @@ import {
   InMemoryCredentialStore,
   InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@assistant/shared";
+import {
+  isOpenAiCompatibleModelProvider,
+  piAccountServesModel,
+} from "@assistant/shared";
 import type { EngineGatewayAccess } from "../workerProtocol/engineMethods.ts";
 import {
   guardCredentialPairing,
@@ -51,12 +59,18 @@ export type EngineCompatConfig = Omit<CompatProviderConfig, "apiKey"> & {
   apiKey?: never;
 };
 
-/** The OpenAI-compatible configuration and its changes, as the server has them. */
+/** Each OpenAI-compatible account's configuration and its changes, as the server has them. */
 export interface CompatProviderFeed {
-  /** The configuration to register now; undefined when there is none. */
-  current(): EngineCompatConfig | undefined;
-  /** Calls `listener` after every settings change; answers the unsubscribe. */
-  subscribe(listener: () => void): () => void;
+  /**
+   * The account's configuration to register now; undefined for an account
+   * that is not OpenAI-compatible, not ready to run or cannot be read.
+   */
+  current(profileId: string): EngineCompatConfig | undefined;
+  /**
+   * Calls `listener` after every change of that account; answers the
+   * unsubscribe.
+   */
+  subscribe(profileId: string, listener: () => void): () => void;
 }
 
 /**
@@ -83,8 +97,11 @@ export type GatewayPiModelPort = PiModelPort & {
 
 export function gatewayPiModelPort(
   access: EngineGatewayAccess,
+  /** The account the lease is for: the only one this port serves. */
+  profileId: string,
   deps: { server: PiModelPort; compat: CompatProviderFeed },
 ): GatewayPiModelPort {
+  const compatible = isOpenAiCompatibleModelProvider(profileId);
   const codexBase = `${access.baseUrl}/chatgpt/backend-api`;
   /** The registered compatible `baseUrl`, and which registration it was. */
   let compatBase: string | undefined;
@@ -95,7 +112,7 @@ export function gatewayPiModelPort(
   let disposed = false;
 
   const syncCompat = (into: ModelRegistry): void => {
-    const config = deps.compat.current();
+    const config = deps.compat.current(profileId);
     const basePath = config && compatBasePath(config.baseUrl);
     // On the gateway: a new origin at the same base path keeps the signature.
     const registered =
@@ -105,14 +122,13 @@ export function gatewayPiModelPort(
     const signature = registered ? JSON.stringify(registered) : "disabled";
     if (signature === compatSignature) return;
     if (registered) {
-      into.registerProvider(OPENAI_COMPATIBLE_PROVIDER_ID, {
+      into.registerProvider(profileId, {
         ...registered,
         apiKey: access.leaseToken,
       });
       compatBase = registered.baseUrl;
     } else {
-      if (compatSignature !== undefined)
-        into.unregisterProvider(OPENAI_COMPATIBLE_PROVIDER_ID);
+      if (compatSignature !== undefined) into.unregisterProvider(profileId);
       compatBase = undefined;
     }
     compatSignature = signature;
@@ -120,17 +136,21 @@ export function gatewayPiModelPort(
   };
 
   /**
-   * Auth only for a model at the base its credential was configured for, and
-   * only if the registration did not change while the key was resolved.
+   * Auth only for a model of this port's own provider, at the base its
+   * credential was configured for, and only if the registration did not
+   * change while the key was resolved.
    */
   const pairingFor = (
     provider: string,
   ): CredentialPairing | undefined | null => {
-    const expected =
-      provider === CODEX_PROVIDER_ID
+    const expected = compatible
+      ? provider === profileId
+        ? compatBase
+        : undefined
+      : provider === CODEX_PROVIDER_ID
         ? codexBase
-        : provider === OPENAI_COMPATIBLE_PROVIDER_ID
-          ? compatBase
+        : isOpenAiCompatibleModelProvider(provider)
+          ? undefined
           : null;
     if (expected === null || expected === undefined) return expected;
     return {
@@ -150,12 +170,15 @@ export function gatewayPiModelPort(
     });
     guardCredentialPairing(runtime, pairingFor);
     const into = new ModelRegistry(runtime);
-    into.registerProvider(CODEX_PROVIDER_ID, {
-      baseUrl: codexBase,
-      apiKey: access.leaseToken,
-    });
-    syncCompat(into);
-    if (!disposed) unsubscribe = deps.compat.subscribe(() => syncCompat(into));
+    if (compatible) {
+      syncCompat(into);
+      if (!disposed)
+        unsubscribe = deps.compat.subscribe(profileId, () => syncCompat(into));
+    } else
+      into.registerProvider(CODEX_PROVIDER_ID, {
+        baseUrl: codexBase,
+        apiKey: access.leaseToken,
+      });
     registry = into;
     return runtime;
   })();
@@ -175,21 +198,27 @@ export function gatewayPiModelPort(
   return {
     routing: "gateway",
     runtime: () => created,
-    async findForProfile(profileId, provider, id) {
-      if (provider === CODEX_PROVIDER_ID) {
-        const model = await deps.server.findForProfile(profileId, provider, id);
+    async findForProfile(id, provider, modelId) {
+      // Only this port's own account, and only a model that account serves.
+      if (id !== profileId || !piAccountServesModel(profileId, provider))
+        return undefined;
+      if (compatible) {
         await created;
-        return rebased(model, id, registry);
+        return registry?.find(provider, modelId);
       }
-      if (provider !== OPENAI_COMPATIBLE_PROVIDER_ID) return undefined;
+      if (provider !== CODEX_PROVIDER_ID) return undefined;
+      const model = await deps.server.findForProfile(id, provider, modelId);
       await created;
-      return registry?.find(provider, id);
+      return rebased(model, modelId, registry);
     },
-    // Only an OpenAI account is leased until compatible accounts reach the
-    // gateway (Task-1373 PR2), and a start model is chosen here only for a
-    // compatible one (`piEngineHost.ts`).
-    async availableForProfile() {
-      return [];
+    // A start model is chosen here only for a compatible account
+    // (`piEngineHost.ts`): its own provider's models, nothing built in.
+    async availableForProfile(id) {
+      if (!compatible || id !== profileId) return [];
+      await created;
+      return (registry?.getAvailable() ?? []).filter(
+        (model) => model.provider === profileId,
+      );
     },
     dispose() {
       disposed = true;

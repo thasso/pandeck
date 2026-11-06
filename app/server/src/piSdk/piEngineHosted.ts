@@ -385,8 +385,13 @@ export function createPiHostedEngineFactory({
   compat: CompatProviderFeed;
 }): HostedEngineFactory {
   return async (spec, host) => {
+    const { credentialProfileId } = spec as PiEngineOpenSpec;
+    // The lease is for the open's account: the port serves that one alone.
     const gateway = host.gateway
-      ? gatewayPiModelPort(host.gateway, { server: models, compat })
+      ? gatewayPiModelPort(host.gateway, credentialProfileId, {
+          server: models,
+          compat,
+        })
       : undefined;
     const engineModels = gateway ?? models;
     let opened: Awaited<ReturnType<typeof openPiEngine>>;
@@ -412,7 +417,6 @@ export function createPiHostedEngineFactory({
       gateway?.dispose();
       throw err;
     }
-    const { credentialProfileId } = spec as PiEngineOpenSpec;
     return hostPiEngine(opened.engine, opened.info, {
       findModel: (provider, id) =>
         engineModels.findForProfile(credentialProfileId, provider, id),

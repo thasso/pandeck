@@ -1,9 +1,11 @@
 /**
  * The gateway's token renewal (U8, `docs/workers.md` "Renewal"): it keeps
- * every leased profile's upstream token valid, the only refresher with the
- * switch on.
+ * every leased login profile's upstream token valid, the only refresher with
+ * the switch on. An OpenAI-compatible profile has no token: every entry point
+ * skips it before any read, the tick, `renew` (`skipped`, the lane never
+ * entered) and `recheck`, and the request paths take only a login binding.
  *
- * A profile is renewable while it is registered and holds a live lease,
+ * A login profile is renewable while it is registered and holds a live lease,
  * whatever its `enabled` flag. A renewal runs in the profile's writer lane, so
  * a login hold fences it (`held`), and is single-flight per profile. Claude
  * renews by the CLI's own request, locks and compare-and-swap save
@@ -31,14 +33,18 @@ import {
   type TokenEndpoint,
 } from "./claudeRenewal.ts";
 import { LaneHeldError, type WriterLane } from "./holds.ts";
-import type { LeaseBinding, LeaseTable } from "./leases.ts";
+import type { LeaseTable, LoginBinding } from "./leases.ts";
 import {
   readCredential,
   sameIdentity,
   type CredentialRead,
   type FileIdentity,
 } from "./profileCredential.ts";
-import type { GatewayProfile, ProfileRegistry } from "./profiles.ts";
+import {
+  isLoginProfile,
+  type LoginProfile,
+  type ProfileRegistry,
+} from "./profiles.ts";
 import {
   withClaudeRefreshLock,
   type RefreshLockOptions,
@@ -113,9 +119,9 @@ type RequestCredential =
 
 export interface Renewal {
   /** The credential for one request, renewing first when it is nearly due. */
-  credentialFor(binding: LeaseBinding): Promise<RequestCredential>;
+  credentialFor(binding: LoginBinding): Promise<RequestCredential>;
   /** The upstream answered 401 to a request that sent `sentToken`. */
-  upstream401(binding: LeaseBinding, sentToken: string): void;
+  upstream401(binding: LoginBinding, sentToken: string): void;
   /** One tick: renews every renewable profile inside its margin. */
   tick(): Promise<void>;
   /**
@@ -155,7 +161,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
     return state;
   };
 
-  const marginOf = (profile: Pick<GatewayProfile, "provider">): number =>
+  const marginOf = (profile: Pick<LoginProfile, "provider">): number =>
     profile.provider === "claude" ? CLAUDE_MARGIN_MS : CODEX_MARGIN_MS;
 
   const sync = (profileId: string, state: ProfileState): void => {
@@ -199,10 +205,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
     if (kick && read.ok) void renew(profileId);
   };
 
-  const logOutcome = (
-    profile: GatewayProfile,
-    outcome: RenewalOutcome,
-  ): void => {
+  const logOutcome = (profile: LoginProfile, outcome: RenewalOutcome): void => {
     if (outcome.kind === "failed" && outcome.code === "no_port") {
       if (noPortLogged) return;
       noPortLogged = true;
@@ -214,7 +217,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
 
   /** One Claude renewal, from the first read to the save. */
   const renewClaude = async (
-    profile: GatewayProfile,
+    profile: LoginProfile,
     first: Extract<CredentialRead, { ok: true }>,
     force: boolean,
     rejectedToken: string | undefined,
@@ -263,7 +266,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
 
   /** One Codex renewal through the port; the file decides what happened. */
   const renewCodex = async (
-    profile: GatewayProfile,
+    profile: LoginProfile,
     first: Extract<CredentialRead, { ok: true }> | undefined,
     force: boolean,
   ): Promise<RenewalOutcome> => {
@@ -299,7 +302,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
 
   /** One renewal attempt in the lane, from `began`, the file at its start. */
   const renewOnce = async (
-    profile: GatewayProfile,
+    profile: LoginProfile,
     began: CredentialRead,
     force: boolean,
     rejectedToken: string | undefined,
@@ -333,7 +336,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
    * it: a login that lands meanwhile is a file the attempt never saw.
    */
   const settle = (
-    profile: GatewayProfile,
+    profile: LoginProfile,
     outcome: RenewalOutcome,
     examined: FileIdentity | undefined,
   ): void => {
@@ -372,14 +375,19 @@ export function createRenewal(options: RenewalOptions): Renewal {
     force: boolean,
     rejectedToken: string | undefined,
   ): Promise<RenewalOutcome> => {
-    let profile: GatewayProfile | undefined;
+    // No login, nothing to renew: the lane is never entered.
+    const registered = profiles.get(profileId);
+    if (registered && !isLoginProfile(registered)) return { kind: "skipped" };
+    let profile: LoginProfile | undefined;
     let outcome: RenewalOutcome;
     // The file the attempt that decided `outcome` started from.
     let examined: FileIdentity | undefined;
     try {
       outcome = await lane.run(profileId, async () => {
-        profile = profiles.get(profileId);
-        if (!profile) return { kind: "skipped" } as const;
+        const current = profiles.get(profileId);
+        if (!current || !isLoginProfile(current))
+          return { kind: "skipped" } as const;
+        profile = current;
         const began = await readCredential(profile.provider, profile.tokenFile);
         examined = began.identity;
         const first = await renewOnce(profile, began, force, rejectedToken);
@@ -431,7 +439,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
   };
 
   const credentialFor = async (
-    binding: LeaseBinding,
+    binding: LoginBinding,
   ): Promise<RequestCredential> => {
     let read = await readCredential(binding.provider, binding.tokenFile);
     observe(binding.profileId, read);
@@ -472,7 +480,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
     };
   };
 
-  const upstream401 = (binding: LeaseBinding, sentToken: string): void => {
+  const upstream401 = (binding: LoginBinding, sentToken: string): void => {
     const state = stateOf(binding.profileId);
     const at = now();
     if (
@@ -502,7 +510,12 @@ export function createRenewal(options: RenewalOptions): Renewal {
     const due: Promise<RenewalOutcome>[] = [];
     for (const profileId of profiles.ids()) {
       const profile = profiles.get(profileId);
-      if (!profile || !leases.hasLiveLease(profileId)) continue;
+      if (
+        !profile ||
+        !isLoginProfile(profile) ||
+        !leases.hasLiveLease(profileId)
+      )
+        continue;
       const state = stateOf(profileId);
       if (state.inFlight) continue;
       // Read first: a changed file ends a backoff or a sticky needs-login.
@@ -521,7 +534,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
 
   const recheck = async (profileId: string): Promise<void> => {
     const profile = profiles.get(profileId);
-    if (!profile) return;
+    if (!profile || !isLoginProfile(profile)) return;
     const read = await readCredential(profile.provider, profile.tokenFile);
     observe(profileId, read);
     const state = stateOf(profileId);

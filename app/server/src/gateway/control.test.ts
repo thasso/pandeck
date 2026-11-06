@@ -16,6 +16,7 @@ import {
   readdir,
   rmdir,
   stat,
+  writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
@@ -27,6 +28,7 @@ import {
   CODEX_ACCOUNT,
   CODEX_PATH,
   COMPAT_KEY_A,
+  COMPAT_KEY_B,
   dialControl,
   fakeProcesses,
   modelRequest,
@@ -69,12 +71,25 @@ import {
   type RunningGateway,
 } from "./gateway.ts";
 import type { HoldStatus } from "./holds.ts";
-import type { GatewayProfile } from "./profiles.ts";
+import type { GatewayProfile, LoginProfile } from "./profiles.ts";
 import { refusalText, type RevokeReason } from "./refusals.ts";
 
 let upstreams: FakeUpstreams;
-let profileA: GatewayProfile;
-let profileB: GatewayProfile;
+let profileA: LoginProfile;
+let profileB: LoginProfile;
+/** OpenAI-compatible accounts: no token file, no login. */
+const compatA: GatewayProfile = {
+  id: "openai-compatible-aaaaaaaaaaaa",
+  provider: "openai-compatible",
+  name: "Local A",
+  enabled: true,
+};
+const compatB: GatewayProfile = {
+  id: "openai-compatible-bbbbbbbbbbbb",
+  provider: "openai-compatible",
+  name: "Local B",
+  enabled: true,
+};
 /** A synthetic pushed key that would add a header if forwarded raw. */
 const HEADER_INJECTING_KEY = `${"key"}\r\nx-injected: 1`;
 
@@ -687,17 +702,18 @@ async function storedHolds(stateDir: string): Promise<StoredHolds> {
 const settled = () =>
   new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
 
-test("AC1: gateway control 1.3 welcomes 1.0, 1.1 and 1.2 dialers too, and refuses 2.0", async () => {
-  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.3");
+test("AC1: gateway control 1.4 welcomes 1.0 to 1.3 dialers too, and refuses 2.0", async () => {
+  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.4");
   const gw = await gateway();
   for (const version of [
+    "gateway-control/1.4",
     "gateway-control/1.3",
     "gateway-control/1.2",
     "gateway-control/1.1",
     "gateway-control/1.0",
   ])
     assert.deepEqual(await rawHandshake(gw, version), [
-      { type: "welcome", version: "gateway-control/1.3" },
+      { type: "welcome", version: "gateway-control/1.4" },
     ]);
   const refused = await rawHandshake(gw, "gateway-control/2.0");
   assert.equal(refused.length, 1);
@@ -919,61 +935,163 @@ test("the hold methods' malformed params are invalid_params", async () => {
   assert.deepEqual(gw.holds(), []);
 });
 
-test("AC3: compat.set and compat.clear need hello; a malformed push is invalid_params and clears the held endpoint", async () => {
-  const endpoint = await startFakeCompatEndpoint(["m"], "compatible reply");
-  // No log line may name the pushed key or the endpoint.
-  capabilities.push(
-    COMPAT_KEY_A,
-    endpoint.baseUrl,
-    new URL(endpoint.baseUrl).host,
+test("AC1: the registry takes a tokenless OpenAI-compatible profile; a compatible one with a token file, or a login without one, is invalid_params", async () => {
+  const gw = await gateway();
+  const connection = control(gw);
+  await hello(connection, "boot-x");
+  assert.deepEqual(await sync(connection, [profileA, profileB, compatA]), []);
+
+  // A grant binds no token file for it, even one the request names.
+  const smuggled = decodeLeaseGranted(
+    await connection.request(CONTROL_METHODS.grant, {
+      json: { ...engine(compatA.id), tokenFile: profileA.tokenFile },
+    }),
   );
+  capabilities.push(smuggled.token, smuggled.token.split(".")[2]!);
+  const record = gw.leases
+    .records()
+    .find((r) => r.leaseId === smuggled.leaseId)!;
+  assert.equal(record.provider, "openai-compatible");
+  assert.equal("tokenFile" in record, false);
+
+  const malformed = [
+    { ...compatA, tokenFile: profileA.tokenFile },
+    {
+      id: profileA.id,
+      provider: profileA.provider,
+      name: profileA.name,
+      enabled: true,
+    },
+  ];
+  for (const profile of malformed) {
+    await rejectsWith(
+      connection.request(CONTROL_METHODS.syncProfiles, {
+        json: { profiles: [profileA, profile] },
+      }),
+      "invalid_params",
+    );
+    await rejectsWith(
+      connection.request(CONTROL_METHODS.upsertProfile, {
+        json: { profile },
+      }),
+      "invalid_params",
+    );
+  }
+  // Nothing changed: the compatible lease is still live.
+  assert.equal(
+    gw.leases.records().find((r) => r.leaseId === smuggled.leaseId)?.revoked,
+    undefined,
+  );
+});
+
+test("AC3, AC16: compat.set and compat.clear name a registered compatible profile; a refused URL or key clears that profile's pair only", async () => {
+  const a = await startFakeCompatEndpoint(["m"], "reply a");
+  const b = await startFakeCompatEndpoint(["m"], "reply b");
+  // A real path, padded with slashes the gateway strips: exactly 2048 bytes.
+  const long = await startFakeCompatEndpoint(["m"], "reply long", {
+    basePath: `/${"p".repeat(2000)}`,
+  });
+  const LONG_KEY = COMPAT_KEY_A.padEnd(8192, "k");
+  // No log line may name a pushed key or an endpoint.
+  for (const endpoint of [a, b, long])
+    capabilities.push(endpoint.baseUrl, new URL(endpoint.baseUrl).host);
+  capabilities.push(COMPAT_KEY_A, COMPAT_KEY_B, LONG_KEY);
   try {
     const gw = await gateway();
-    const valid = { baseUrl: endpoint.baseUrl, apiKey: COMPAT_KEY_A };
+    const validA = {
+      profileId: compatA.id,
+      baseUrl: a.baseUrl,
+      apiKey: COMPAT_KEY_A,
+    };
+    const validB = {
+      profileId: compatB.id,
+      baseUrl: b.baseUrl,
+      apiKey: COMPAT_KEY_B,
+    };
     const early = control(gw);
     await rejectsWith(
-      early.request(CONTROL_METHODS.compatSet, { json: valid }),
+      early.request(CONTROL_METHODS.compatSet, { json: validA }),
       "hello_required",
     );
     await rejectsWith(
-      early.request(CONTROL_METHODS.compatClear, { json: {} }),
+      early.request(CONTROL_METHODS.compatClear, {
+        json: { profileId: compatA.id },
+      }),
       "hello_required",
     );
 
-    const connection = await ready(gw);
-    const { token } = await grant(connection, engine(profileB.id));
+    const connection = control(gw);
+    await hello(connection, "boot-x");
+    await sync(connection, [profileA, profileB, compatA, compatB]);
+    const tokenA = (await grant(connection, engine(compatA.id))).token;
+    const tokenB = (
+      await grant(connection, { kind: "server", profileId: compatB.id })
+    ).token;
     const set = (json: unknown) =>
       connection.request(CONTROL_METHODS.compatSet, { json });
-    const compatRequest = () =>
-      modelRequest(gw.port, "/compat/v1/chat/completions", token);
-    const assertUnset = async () => {
-      const reply = await compatRequest();
+    const clear = (json: unknown) =>
+      connection.request(CONTROL_METHODS.compatClear, { json });
+    const compatRequest = (token: string, basePath = "/v1") =>
+      modelRequest(gw.port, `/compat${basePath}/chat/completions`, token);
+    const assertUnset = async (token: string) => {
+      const reply = await compatRequest(token);
       assert.equal(reply.status, 503, reply.text);
       assert.equal(
         JSON.parse(reply.text).error.message,
         refusalText({ case: "compat-unset" }),
       );
     };
-
-    assert.deepEqual((await set(valid)).json, {});
-    assert.equal((await compatRequest()).status, 200);
-    const posts = () =>
+    const posts = (endpoint: typeof a) =>
       endpoint.seen.filter((seen) => seen.method === "POST").length;
-    assert.equal(posts(), 1);
+
+    assert.deepEqual((await set(validA)).json, {});
+    assert.deepEqual((await set(validB)).json, {});
+    assert.equal((await compatRequest(tokenA)).status, 200);
+    assert.equal((await compatRequest(tokenB)).status, 200);
+
+    // A profile the push cannot be for: refused, and no pair is cleared.
+    await rejectsWith(
+      set({ ...validA, profileId: "openai-compatible-cccccccccccc" }),
+      "unknown_profile",
+    );
+    await rejectsWith(
+      set({ ...validA, profileId: profileB.id }),
+      "invalid_params",
+    );
+    await rejectsWith(set({ ...validA, profileId: "a/b" }), "invalid_params");
+    await rejectsWith(
+      set({ baseUrl: a.baseUrl, apiKey: COMPAT_KEY_A }),
+      "invalid_params",
+    );
+    await rejectsWith(clear({}), "invalid_params");
+    await rejectsWith(clear({ profileId: "a/b" }), "invalid_params");
+    assert.equal((await compatRequest(tokenA)).status, 200);
+    assert.equal(posts(a), 2);
+
+    // AC16's bounds: an 8192-character key and a 2048-byte URL are held.
+    const longUrl = long.baseUrl.padEnd(2048, "/");
+    assert.equal(Buffer.byteLength(longUrl), 2048);
+    assert.deepEqual(
+      (await set({ ...validA, baseUrl: longUrl, apiKey: LONG_KEY })).json,
+      {},
+    );
+    const longPath = new URL(long.baseUrl).pathname;
+    assert.equal((await compatRequest(tokenA, longPath)).status, 200);
+    assert.equal(long.seen.at(-1)?.authorization, `Bearer ${LONG_KEY}`);
 
     const malformed: Record<string, unknown>[] = [
       { baseUrl: 7 },
       { baseUrl: undefined },
-      { baseUrl: `${endpoint.baseUrl}/${"x".repeat(2048)}` },
+      { baseUrl: `${longUrl}/` },
       { baseUrl: "not a url" },
       { baseUrl: "ftp://127.0.0.1/v1" },
       { baseUrl: "http://fixture:fixture@127.0.0.1/v1" },
-      { baseUrl: `${endpoint.baseUrl}?q=1` },
-      { baseUrl: `${endpoint.baseUrl}#f` },
+      { baseUrl: `${a.baseUrl}?q=1` },
+      { baseUrl: `${a.baseUrl}#f` },
       { apiKey: 5 },
       { apiKey: undefined },
       { apiKey: "" },
-      { apiKey: "k".repeat(8193) },
+      { apiKey: `${LONG_KEY}k` },
       { apiKey: HEADER_INJECTING_KEY },
       { apiKey: "key\nx" },
       { apiKey: "key\u0000x" },
@@ -982,23 +1100,79 @@ test("AC3: compat.set and compat.clear need hello; a malformed push is invalid_p
       { apiKey: "kéy" },
     ];
     for (const change of malformed) {
-      assert.deepEqual((await set(valid)).json, {});
-      await rejectsWith(set({ ...valid, ...change }), "invalid_params");
-      await assertUnset();
+      assert.deepEqual((await set(validA)).json, {});
+      await rejectsWith(set({ ...validA, ...change }), "invalid_params");
+      await assertUnset(tokenA);
+      assert.equal(
+        (await compatRequest(tokenB)).status,
+        200,
+        "B keeps its pair",
+      );
     }
-    assert.equal(posts(), 1, "no refused request reached the endpoint");
-
-    assert.deepEqual((await set(valid)).json, {});
-    assert.deepEqual(
-      (await connection.request(CONTROL_METHODS.compatClear, { json: {} }))
-        .json,
-      {},
+    assert.equal(posts(a), 2, "no refused request reached the endpoint");
+    assert.ok(
+      lines.includes(
+        `control compat.set (profile ${compatA.id}): invalid_params`,
+      ),
     );
-    await assertUnset();
-    assert.equal(posts(), 1);
+
+    assert.deepEqual((await set(validA)).json, {});
+    assert.deepEqual((await clear({ profileId: compatA.id })).json, {});
+    await assertUnset(tokenA);
+    assert.equal((await compatRequest(tokenB)).status, 200);
+    assert.equal(posts(a), 2);
   } finally {
-    await endpoint.close();
+    for (const endpoint of [a, b, long]) await endpoint.close();
   }
+});
+
+test("AC7: a compatible profile is never fenced or held: loginHold answers unknown_profile, a fence pending or not", async () => {
+  const gw = await gateway();
+  const connection = control(gw);
+  await hello(connection, "boot-x");
+  await sync(connection, [profileA, compatA]);
+  await rejectsWith(loginHold(connection, compatA.id, "h1"), "unknown_profile");
+  assert.deepEqual(gw.holds(), []);
+  running.splice(running.indexOf(gw), 1);
+  await gw.close();
+
+  // An unreadable holds.json fences only the login profiles it registers.
+  const stateDir = join(await mkdtemp(join(DATA_DIR, "gateway-state-")), "gw");
+  const first = await gateway(stateDir);
+  const x = control(first);
+  await hello(x, "boot-x");
+  await sync(x, [profileA, compatA]);
+  running.splice(running.indexOf(first), 1);
+  await first.close();
+  await writeFile(join(stateDir, "holds.json"), "{");
+  const fenced = await gateway(stateDir);
+  assert.deepEqual(
+    fenced.holds().map((hold) => hold.profileId),
+    [profileA.id],
+  );
+  const y = control(fenced);
+  await hello(y, "boot-y");
+  await rejectsWith(loginHold(y, compatA.id, "h1"), "unknown_profile");
+  assert.equal((await loginHold(y, profileA.id, "h2")).held, false);
+
+  // With no registry the fence waits for a login profile: a sync of only
+  // compatible ones leaves it pending, and they are still refused.
+  const emptyDir = join(await mkdtemp(join(DATA_DIR, "gateway-state-")), "gw");
+  await mkdir(emptyDir, { recursive: true, mode: 0o700 });
+  await writeFile(join(emptyDir, "holds.json"), "{", { mode: 0o600 });
+  const pending = await gateway(emptyDir);
+  const z = control(pending);
+  await hello(z, "boot-z");
+  await sync(z, [compatA, compatB]);
+  assert.deepEqual(pending.holds(), []);
+  for (const profile of [compatA, compatB])
+    await rejectsWith(loginHold(z, profile.id, "h3"), "unknown_profile");
+  for (const profileId of [profileA.id, "nobody"])
+    assert.deepEqual(await loginHold(z, profileId, "h4"), {
+      held: false,
+      refusal: "login_stuck",
+    });
+  assert.deepEqual(pending.holds(), []);
 });
 
 test("AC15: profiles.credential decodes only a profile id and a boolean", () => {
@@ -1023,11 +1197,11 @@ test("AC15: profiles.credential decodes only a profile id and a boolean", () => 
     );
 });
 
-test("AC15: gateway control 1.3 still welcomes a 1.2 dialer", async () => {
-  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.3");
+test("AC15: gateway control 1.4 still welcomes a 1.2 dialer", async () => {
+  assert.equal(GATEWAY_CONTROL_VERSION, "gateway-control/1.4");
   const gw = await gateway();
   assert.deepEqual(await rawHandshake(gw, "gateway-control/1.2"), [
-    { type: "welcome", version: "gateway-control/1.3" },
+    { type: "welcome", version: "gateway-control/1.4" },
   ]);
 });
 
