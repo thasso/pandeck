@@ -97,7 +97,9 @@ for (const staleTemp of [false, true]) {
       fs.readFileSync(path, "utf8"),
       '{\n  "token": "fake-secret"\n}\n',
     );
-    assert.equal(fs.existsSync(`${path}.tmp`), false);
+    // An unrelated old temp is neither reused nor removed by this writer.
+    assert.equal(fs.existsSync(`${path}.tmp`), staleTemp);
+    if (staleTemp) assert.equal(fs.readFileSync(`${path}.tmp`, "utf8"), "{}\n");
   });
 }
 
@@ -198,4 +200,28 @@ test("closes the temp file and preserves the destination after a failed write", 
   assert.equal(vi.mocked(fs.closeSync).mock.calls.length, 1);
   const fd = vi.mocked(fs.closeSync).mock.calls[0]![0];
   assert.throws(() => fs.fstatSync(fd), { code: "EBADF" });
+  assert.deepEqual(fs.readdirSync(join(directory, "settings")), [
+    "example.json",
+  ]);
+});
+
+test("overlapping writes use distinct temporary files", async () => {
+  const actual = await vi.importActual<typeof fs>("node:fs");
+  const file = createPrivateJsonFile(path, "Example settings");
+  vi.mocked(fs.writeFileSync).mockImplementationOnce(
+    (target, data, options) => {
+      actual.writeFileSync(target, data, options);
+      file.write({ writer: 2 });
+    },
+  );
+  file.write({ writer: 1 });
+  const sources = vi.mocked(fs.renameSync).mock.calls.map(([source]) => source);
+  assert.equal(new Set(sources).size, 2);
+  assert.deepEqual(
+    file.read((value) => value),
+    { writer: 1 },
+  );
+  assert.deepEqual(fs.readdirSync(join(directory, "settings")), [
+    "example.json",
+  ]);
 });

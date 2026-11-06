@@ -1677,13 +1677,30 @@ path above.
   two mutual-TLS ports with the gateway's own CA as the only trust root: the
   model port (the loopback listener's routes) and the client-protocol port. The
   client is its certificate's common name, matched by fingerprint, and is
-  checked on every connection, request and method, so a revocation is immediate.
-  A lease names its client and is spent only on that client's connection; the
-  loopback listener refuses client leases.
+  checked on every connection, request, method and push. Revocation closes all
+  that client's connections, cancels its running logins and revokes its leases.
+  A 250 ms check notices admin-CLI revocations even for a silent or disconnected
+  client; a finishing login rechecks before ingesting its credential. Registry
+  failures answer 503 or close the affected connection, never exit the process.
+  Each port allows 64 connections and a 10 s TLS handshake; enrollment also has
+  5 s header and 10 s request timeouts, and allows 30 attempts per source
+  address per minute. The source table holds at most 4,096 addresses and refuses
+  new sources until entries expire if full. A lease names its client and is
+  spent only on that client's connection; the loopback listener refuses client
+  leases.
 - **Enrollment.** `gateway/adminMain.ts` adds users, prints a one-time code (15
   minutes, kept hashed) and lists, revokes clients and prints the CA. The client
   sends the code and its EC P-256 public key to `POST /enroll` and gets a
   certificate (`gateway/x509.ts`, issued with `node:crypto`) and the ports.
+  Unknown, used or expired codes write nothing. The CLI and edge serialize
+  read-modify-write with `clients.json.lock`, wait at most one second for a
+  writer, and use unique owner-only temp files for atomic replacement. A crashed
+  writer leaves a lock containing its PID. Remove that lock only after verifying
+  its writer is no longer running; reads and unknown-code refusals still work.
+  `gateway:relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file>`
+  reads its code from stdin, or from `--code-file <0600 file>`. Never put the
+  code in argv or a shell command. For example, redirect a protected code file
+  into stdin rather than using `echo <code>`.
 - **`gateway-client/1.0`** (`gateway/clientMethods.ts`), on the worker
   protocol's framing: `client.hello`, `accounts.list` and the gateway's
   `accounts.changed`, `leases.grant`, `leases.client` (the server's own
@@ -1727,12 +1744,10 @@ path above.
   `gateway:relay` run the admin CLI and the relay. A second dev instance with
   its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN` and
   `ASSISTANT_GATEWAY_RELAY` is the client.
-- **Known gaps.** The admin CLI and the running gateway both write
-  `clients.json`; a simultaneous write can lose one change, a revocation
-  included (later: an admin socket on the gateway). No OpenAI-compatible
-  accounts and no lease TTL (leases live until revoked). In client mode, no
-  rename, enable toggle or Clear of an unfinished login, and the Codex driver
-  runs in the gateway's process rather than as a child.
+- **Known gaps.** No automatic recovery of a crashed registry writer's lock. No
+  OpenAI-compatible accounts and no lease TTL (leases live until revoked). In
+  client mode, no rename, enable toggle or Clear of an unfinished login, and the
+  Codex driver runs in the gateway's process rather than as a child.
 
 ### Engine-version guard
 
