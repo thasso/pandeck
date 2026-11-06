@@ -39,8 +39,12 @@
  * up. The link records each profile's latest `profiles.status` for the
  * login-stuck state, tells `onLoginStatus` listeners of it, and its latest
  * `profiles.credential` for the needs-login state the gateway's renewal
- * found. The gateway renews Codex logins through `renewCodex`, pi's refresh
- * that `index.ts` passes in from `harnesses/`.
+ * found, which `onCredentialStatus` listeners hear: account health takes
+ * needs-login only from them (`gatewayHealth.ts`). Each connection starts that
+ * record afresh, since the gateway's hello resends every needs-login it holds
+ * and a change sent while no connection was up is lost. The gateway renews
+ * Codex logins through `renewCodex`, pi's refresh that `index.ts` passes in
+ * from `harnesses/`.
  */
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -250,6 +254,22 @@ export interface GatewayLink {
   ): () => void;
   /** The profile's latest needs-login from the gateway's renewal, if any. */
   credentialStatus(profileId: string): { needsLogin: boolean } | undefined;
+  /**
+   * Whether `onCredentialStatus` hears the gateway's renewal: then health takes
+   * a served login's needs-login only from it. False in client mode, whose
+   * accounts keep the error classifier.
+   */
+  readonly reportsCredentialStatus: boolean;
+  /**
+   * Calls `listener` after each `profiles.credential` is recorded; answers the
+   * unsubscribe. A listener's failure is logged, never thrown. A profile's
+   * removal, or a new connection, drops its record with no call.
+   */
+  onCredentialStatus(
+    listener: (profileId: string, needsLogin: boolean) => void,
+  ): () => void;
+  /** The profiles whose latest record on this connection needs a login. */
+  needsLoginProfiles(): string[];
   /** Uninstalls the link and closes its gateway (tests and the probe only); once. */
   close(): Promise<void>;
 }
@@ -271,6 +291,22 @@ export function installGatewayLink(link: GatewayLink): () => void {
 /** The process's link while one runs; without it no open grants a lease. */
 export function installedGatewayLink(): GatewayLink | undefined {
   return installed;
+}
+
+/**
+ * Whether the gateway renews this account's login and reports when it needs a
+ * new one: a Claude or Codex login while a link that reports it is installed,
+ * whether or not it is ready. Health and the switch-on-failure rules then read
+ * only the gateway's needs-login, never a 401 (`providerErrors.ts`
+ * `loginEnded`).
+ */
+export function gatewayServesProfile(profile: {
+  provider: CredentialProfileProvider;
+}): boolean {
+  return (
+    installed?.reportsCredentialStatus === true &&
+    (profile.provider === "claude" || profile.provider === "openai-codex")
+  );
 }
 
 /**
@@ -368,6 +404,9 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
     (profileId: string, status: LoginStatus) => void
   >();
   const credentialStatuses = new Map<string, boolean>();
+  const credentialListeners = new Set<
+    (profileId: string, needsLogin: boolean) => void
+  >();
   let state: GatewayConnectionState = "connecting";
   const stateListeners = new Set<(state: GatewayConnectionState) => void>();
   const setState = (next: GatewayConnectionState): void => {
@@ -485,6 +524,9 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
           serverEnd.close();
           break;
         }
+        // This connection's hello resends every needs-login the gateway holds;
+        // a change sent while none was up never arrived.
+        credentialStatuses.clear();
         control = new WorkerConnection(serverEnd, {
           handshake: { role: "worker", workerId: "pandeck-server" },
           protocol: GATEWAY_CONTROL_PROTOCOL,
@@ -503,6 +545,14 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
             [CONTROL_METHODS.credential]: (payload) => {
               const { profileId, needsLogin } = decodeCredentialStatus(payload);
               credentialStatuses.set(profileId, needsLogin);
+              for (const listener of [...credentialListeners])
+                try {
+                  listener(profileId, needsLogin);
+                } catch (err) {
+                  log(
+                    `${CONTROL_METHODS.credential} listener: ${errorText(err)}`,
+                  );
+                }
               return Promise.resolve(encodeControlDone());
             },
           },
@@ -670,7 +720,10 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
     const method = profile
       ? CONTROL_METHODS.upsertProfile
       : CONTROL_METHODS.removeProfile;
-    if (!profile) serverLeases.delete(id);
+    if (!profile) {
+      serverLeases.delete(id);
+      credentialStatuses.delete(id);
+    }
     if (state !== "connected") return;
     request(
       method,
@@ -889,6 +942,18 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
     credentialStatus(profileId) {
       const needsLogin = credentialStatuses.get(profileId);
       return needsLogin === undefined ? undefined : { needsLogin };
+    },
+    reportsCredentialStatus: true,
+    onCredentialStatus(listener) {
+      credentialListeners.add(listener);
+      return () => {
+        credentialListeners.delete(listener);
+      };
+    },
+    needsLoginProfiles() {
+      return [...credentialStatuses]
+        .filter(([, needsLogin]) => needsLogin)
+        .map(([profileId]) => profileId);
     },
     loginStatus(profileId) {
       const status = loginStatuses.get(profileId);

@@ -121,8 +121,8 @@ range:
   nothing stored, settings and environment are exactly as before. No session
   inherits the server's variable: every Claude session, an unbound one included,
   runs as an account whose scrub drops every `CLAUDE_*` variable
-  (`docs/workers.md` U9). One-shot and usage queries never take a window, and
-  `idleCompaction` is never set.
+  (`docs/workers.md` "One refresher"). One-shot and usage queries never take a
+  window, and `idleCompaction` is never set.
 - **A running process keeps the window it started with.** The CLI fixes the
   window when a query starts. `applyFlagSettings({ autoCompactWindow })` is
   accepted on a running process, but it changes neither the reported threshold

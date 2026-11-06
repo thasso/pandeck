@@ -42,6 +42,7 @@ const {
   GATEWAY_LOGIN_UNAVAILABLE_TEXT,
   GATEWAY_UNAVAILABLE_TEXT,
   LoginHeldError,
+  gatewayServesProfile,
   installedGatewayLink,
   serverGatewayAccess,
   startGatewayLink,
@@ -1462,6 +1463,86 @@ test("AC9 (link): a rejected Codex renewal reaches credentialStatus, and a new l
     await until(() => booted.credentialStatus(id)?.needsLogin === false);
   } finally {
     profiles.deleteCredentialProfile(id);
+  }
+});
+
+test("1368 AC6: credential listeners hear the gateway's needs-login; removal and unsubscribe are silent", async () => {
+  const id = codexProfile("Listener Codex");
+  const compatible = profiles.createCredentialProfile({
+    provider: "openai-compatible",
+    name: "Listener compatible",
+  }).id;
+  const authFile = join(profiles.piAgentDir(id), "auth.json");
+  const login = JSON.parse(readFileSync(authFile, "utf8"));
+  login["openai-codex"].expires = Date.now() + 30_000;
+  writeFileSync(authFile, JSON.stringify(login));
+  let answer: Awaited<ReturnType<NonNullable<GatewayOptions["renewCodex"]>>> = {
+    ok: false,
+    kind: "rejected",
+    code: "400",
+  };
+  try {
+    assert.equal(gatewayServesProfile({ provider: "openai-codex" }), false);
+    const booted = link({ renewCodex: async () => answer });
+    // Served from the install on, ready or not; never a compatible account.
+    assert.equal(gatewayServesProfile({ provider: "openai-codex" }), true);
+    assert.equal(gatewayServesProfile({ provider: "claude" }), true);
+    assert.equal(
+      gatewayServesProfile({ provider: "openai-compatible" }),
+      false,
+    );
+    const heard: [string, boolean][] = [];
+    const late: [string, boolean][] = [];
+    booted.onCredentialStatus(() => {
+      throw new Error("a listener's own failure");
+    });
+    booted.onCredentialStatus((profileId, needsLogin) =>
+      heard.push([profileId, needsLogin]),
+    );
+    const unsubscribe = booted.onCredentialStatus((profileId, needsLogin) =>
+      late.push([profileId, needsLogin]),
+    );
+    assert.equal(await booted.ready, true);
+    assert.deepEqual(booted.needsLoginProfiles(), []);
+    const access = await booted.serverAccess(id);
+    assert.equal(
+      (await codexRequest(booted.gateway!, access.leaseToken)).status,
+      401,
+    );
+    await until(() => heard.length === 1);
+    assert.deepEqual(heard, [[id, true]]);
+    assert.deepEqual(late, [[id, true]]);
+    assert.deepEqual(booted.needsLoginProfiles(), [id]);
+    assert.ok(
+      lines.some((line) =>
+        line.includes(
+          `${CONTROL_METHODS.credential} listener: a listener's own failure`,
+        ),
+      ),
+    );
+    assert.equal(booted.credentialStatus(compatible), undefined);
+
+    unsubscribe();
+    answer = { ok: true };
+    login["openai-codex"].expires = Date.now() + 86_400_000;
+    writeFileSync(authFile, JSON.stringify(login));
+    assert.equal(
+      (await codexRequest(booted.gateway!, access.leaseToken)).status,
+      200,
+    );
+    await until(() => heard.length === 2);
+    assert.deepEqual(heard[1], [id, false]);
+    assert.deepEqual(late, [[id, true]], "unsubscribed");
+    assert.deepEqual(booted.needsLoginProfiles(), []);
+
+    profiles.deleteCredentialProfile(id);
+    assert.equal(booted.credentialStatus(id), undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(heard.length, 2, "a removal sends no event");
+  } finally {
+    if (profiles.credentialProfileById(id))
+      profiles.deleteCredentialProfile(id);
+    profiles.deleteCredentialProfile(compatible);
   }
 });
 

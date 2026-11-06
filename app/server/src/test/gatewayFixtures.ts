@@ -295,7 +295,6 @@ export async function startFakeUpstreams(
       anthropic.length = 0;
       chatgpt.length = 0;
       platform.length = 0;
-      for (const server of servers) server.closeAllConnections();
     },
     async close() {
       for (const server of servers) {

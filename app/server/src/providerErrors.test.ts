@@ -9,6 +9,7 @@ import {
 import {
   analyzeProviderError,
   isLoginDeath,
+  loginEnded,
   providerErrorDisplayText,
   runFailureFacts,
   shouldSuppressProviderRetry,
@@ -300,4 +301,62 @@ describe("credential gateway refusals (C16)", () => {
       );
     },
   );
+});
+
+describe("1368 AC9: a gateway-served login ends only on the gateway's needs-login", () => {
+  const CLAUDE_401 = { provider: "anthropic", statusCode: 401 };
+  const facts = {
+    "401": runFailureFacts(
+      analyzeProviderError(
+        'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}',
+        CLAUDE_401,
+      ),
+    ),
+    "needs-login refusal": runFailureFacts(
+      analyzeProviderError(
+        `API Error: 401 ${refusalText({ case: "needs-login", name: "Work" })}`,
+        CLAUDE_401,
+      ),
+    ),
+    "other refusal": runFailureFacts(
+      analyzeProviderError(
+        `API Error: 401 ${refusalText({ case: "unknown-lease" })}`,
+        CLAUDE_401,
+      ),
+    ),
+  };
+
+  test("only the needs-login refusal carries gatewayNeedsLogin", () => {
+    assert.equal(facts["401"].gatewayNeedsLogin, undefined);
+    assert.equal(facts["401"].loginDeath, true);
+    assert.equal(facts["needs-login refusal"].gatewayNeedsLogin, true);
+    assert.equal(facts["needs-login refusal"].loginDeath, undefined);
+    assert.equal(facts["other refusal"].gatewayNeedsLogin, undefined);
+    // Codex's shape too.
+    assert.equal(
+      runFailureFacts(
+        analyzeProviderError(
+          refusalText({ case: "needs-login", name: "Codex" }),
+          { ...CODEX, statusCode: 401 },
+        ),
+      ).gatewayNeedsLogin,
+      true,
+    );
+  });
+
+  test.each([
+    ["401", true, false],
+    ["401", false, true],
+    ["needs-login refusal", true, true],
+    ["needs-login refusal", false, false],
+    ["other refusal", true, false],
+    ["other refusal", false, false],
+  ] as const)("%s, served %s: login ended %s", (kind, served, ended) => {
+    assert.equal(loginEnded(facts[kind], served), ended);
+  });
+
+  test("no facts end no login", () => {
+    assert.equal(loginEnded(undefined, true), false);
+    assert.equal(loginEnded(undefined, false), false);
+  });
 });

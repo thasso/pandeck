@@ -363,14 +363,15 @@ test.each(REFUSALS)(
   },
 );
 
-test("AC16: an upstream's own 401 still reads as a rejected login", async () => {
+test("AC16/1368 AC4: an upstream's own 401 is transient, never a rejected login", async () => {
   const { id } = await leased("Usage rejected upstream");
-  await readCodexUsage(id);
+  const good = await readCodexUsage(id);
   answers.usage = { status: 401, body: { error: "unauthorized" } };
-  const rejected = await readCodexUsage(id);
-  assert.equal(rejected.available, false);
-  assert.equal(rejected.unavailableCode, "rejected");
-  assert.equal(readAccountHealth(id, true).state, "needs-login");
+  await assert.rejects(readCodexUsage(id), {
+    message: "OpenAI usage request failed (HTTP 401).",
+  });
+  assert.equal(peekUsageSnapshot(id, "openai-codex")?.snapshot, good);
+  assert.notEqual(readAccountHealth(id, true).state, "needs-login");
 });
 
 test("AC17a: a revoked server lease consumes nothing", async () => {
