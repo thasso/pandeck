@@ -11,6 +11,7 @@
  * from the lease alone: a lease for one account never reaches another's key.
  */
 import net from "node:net";
+import { openAiCompatibleBaseUrl } from "../../../shared/openAiCompatibleValidation.ts";
 
 /** Where `/compat` forwards, and with which key: one push, frozen. */
 export interface CompatTarget {
@@ -25,19 +26,6 @@ export interface CompatTarget {
   /** The base URL's path without trailing slashes, possibly empty. */
   readonly basePath: string;
   readonly apiKey: string;
-}
-
-/** `baseUrl` as a URL `compat.set` accepts: http(s), no userinfo, query or fragment. */
-export function compatBaseUrl(baseUrl: string): URL | undefined {
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-  if (url.username || url.password || url.search || url.hash) return undefined;
-  return url;
 }
 
 function targetOf(url: URL, apiKey: string): CompatTarget {
@@ -73,7 +61,7 @@ export function createCompatUpstream(): CompatUpstream {
   const targets = new Map<string, CompatTarget>();
   return {
     set(profileId, baseUrl, apiKey) {
-      const url = compatBaseUrl(baseUrl);
+      const url = openAiCompatibleBaseUrl(baseUrl);
       if (!url) {
         targets.delete(profileId);
         return false;

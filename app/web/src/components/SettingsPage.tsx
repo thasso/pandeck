@@ -65,6 +65,10 @@ import {
   OPENAI_COMPATIBLE_THINKING_FORMATS,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
+import {
+  normalizeOpenAiCompatibleBaseUrl,
+  openAiCompatibleBaseUrlError,
+} from "@assistant/shared/openAiCompatibleValidation";
 import { visibleModels } from "../lib/models.ts";
 import {
   Accordion,
@@ -920,6 +924,16 @@ function EndpointFields({
     setThinkingFormat(endpoint.thinkingFormat);
   }, [endpoint.baseUrl, endpoint.thinkingFormat]);
   const save = (patch: { apiKey?: string; clearApiKey?: boolean }) => {
+    const normalizedBaseUrl = normalizeOpenAiCompatibleBaseUrl(baseUrl);
+    if (normalizedBaseUrl !== endpoint.baseUrl) {
+      const validationError = openAiCompatibleBaseUrlError(normalizedBaseUrl);
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+    }
+    // Only the server can compare a re-entered key with its stored secret.
+    // It validates changed keys and returns a fixed, key-free error here.
     setSaving(true);
     setError(null);
     void saveCredentialProfileEndpoint(profile.id, {
@@ -981,7 +995,7 @@ function EndpointFields({
         <Button
           busy={saving}
           disabled={!baseUrl.trim()}
-          onClick={() => save(apiKey.trim() ? { apiKey: apiKey.trim() } : {})}
+          onClick={() => save(apiKey.trim() ? { apiKey } : {})}
         >
           Save and discover models
         </Button>

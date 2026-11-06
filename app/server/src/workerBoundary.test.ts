@@ -366,7 +366,10 @@ function sourceModules(dir = SRC_ROOT): string[] {
 }
 
 const scans = new Map(
-  sourceModules().map((file) => [relative(SRC_ROOT, file), scanModule(file)]),
+  [
+    ...sourceModules(),
+    resolve(SRC_ROOT, "../../shared/openAiCompatibleValidation.ts"),
+  ].map((file) => [relative(SRC_ROOT, file), scanModule(file)]),
 );
 
 function importersOf(
@@ -445,10 +448,11 @@ test("the Worker side reaches no server state", () => {
  * itself: the private atomic writer for its state, the worker protocol's codec
  * and connection for its control channel (gateway control 1.0), and what those
  * import. No package either, and each of these imports only `node:` or this
- * list, so the closure ends here and the gateway can run as its own process
- * (ADR-0004).
+ * list, including the dependency-free shared endpoint rules, so the closure
+ * ends here and the gateway can run as its own process (ADR-0004).
  */
 const GATEWAY_ALLOWED = new Set([
+  "../../shared/openAiCompatibleValidation.ts",
   "errors.ts",
   "privateJsonFile.ts",
   "workerProtocol/codec.ts",

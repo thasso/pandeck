@@ -418,7 +418,17 @@ payload carries `apiKeyConfigured`, never the key. A new account's id is
   one, disconnected until it has a base URL and models.
 - `PATCH /api/credential-profiles/<id>/endpoint` edits the endpoint and returns
   the summary. A new base URL clears the discovered models, and a new origin
-  drops the key unless the same edit sets one.
+  drops the key unless the same edit sets one. Changed URLs must be http or
+  https, without userinfo, a query or a fragment, and at most 2048 UTF-8 bytes.
+  Changed keys must be 1 to 8192 visible ASCII characters, 0x21 to 0x7e.
+  `app/shared/openAiCompatibleValidation.ts` owns these rules for saves, the
+  Settings form and gateway control. Saves compare after the existing URL and
+  key trimming, including removing trailing URL slashes. An omitted or blank key
+  keeps the saved key; `clearApiKey` removes it. Unchanged legacy values are not
+  revalidated, including a re-entered identical key. They remain usable on the
+  direct path, with no migration or repair. The browser checks changed URLs
+  locally; key validation stays on the server because the browser cannot compare
+  against a write-only secret. Errors never include either value.
 - `POST /api/credential-profiles/<id>/endpoint/test` discovers the models from
   the endpoint's `/models` and stores them, returning the status and summary. It
   is cancelled when the request closes, checks that right before storing, and

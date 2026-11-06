@@ -45,7 +45,10 @@ import {
   WorkerMethodError,
   type ConnectionProtocol,
 } from "../workerProtocol/connection.ts";
-import { compatBaseUrl } from "./compatUpstream.ts";
+import {
+  openAiCompatibleBaseUrlError,
+  openAiCompatibleApiKeyError,
+} from "../../../shared/openAiCompatibleValidation.ts";
 import { isHoldId, type HoldAcquired, type HoldStatus } from "./holds.ts";
 import { isLeaseId } from "./leases.ts";
 import { isPid, isStartTime } from "./processIdentity.ts";
@@ -152,10 +155,6 @@ export interface CompatConfig {
   baseUrl: string;
   apiKey: string;
 }
-
-const MAX_BASE_URL_BYTES = 2048;
-/** Printable ASCII only: a key can never end a header or start another. */
-const API_KEY_RE = /^[\x21-\x7e]{1,8192}$/;
 
 /** What `control.hello`, the profile methods and the reconcile answer. */
 export interface LeasesRevoked {
@@ -314,13 +313,9 @@ export function decodeCompatPair(
   payload: Payload,
 ): Omit<CompatConfig, "profileId"> {
   const { baseUrl, apiKey } = json(payload);
-  if (
-    typeof baseUrl !== "string" ||
-    Buffer.byteLength(baseUrl) > MAX_BASE_URL_BYTES ||
-    !compatBaseUrl(baseUrl)
-  )
+  if (typeof baseUrl !== "string" || openAiCompatibleBaseUrlError(baseUrl))
     invalid("base URL");
-  if (typeof apiKey !== "string" || !API_KEY_RE.test(apiKey))
+  if (typeof apiKey !== "string" || openAiCompatibleApiKeyError(apiKey))
     invalid("API key");
   return { baseUrl, apiKey };
 }
