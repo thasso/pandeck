@@ -23,6 +23,8 @@ export function createPrivateJsonFile(
     privateDirectory?: "create" | "enforce";
     /** Keep compact stores' existing JSON representation. */
     compact?: boolean;
+    /** Shared stores use unique temp names; callers still own write locking. */
+    uniqueTemp?: boolean;
   } = {},
 ) {
   return {
@@ -45,8 +47,10 @@ export function createPrivateJsonFile(
         ...(options.privateDirectory ? { mode: 0o700 } : {}),
       });
       if (options.privateDirectory === "enforce") chmodSync(directory, 0o700);
-      const tmp = `${path}.${randomUUID()}.tmp`;
-      const fd = openSync(tmp, "wx", 0o600);
+      const tmp = options.uniqueTemp
+        ? `${path}.${randomUUID()}.tmp`
+        : `${path}.tmp`;
+      const fd = openSync(tmp, options.uniqueTemp ? "wx" : "w", 0o600);
       try {
         try {
           fchmodSync(fd, 0o600);
@@ -60,7 +64,7 @@ export function createPrivateJsonFile(
         }
         renameSync(tmp, path);
       } finally {
-        rmSync(tmp, { force: true });
+        if (options.uniqueTemp) rmSync(tmp, { force: true });
       }
     },
   };

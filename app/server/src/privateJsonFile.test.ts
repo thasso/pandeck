@@ -66,7 +66,7 @@ test("keeps the named error for normalization failures", () => {
 });
 
 for (const staleTemp of [false, true]) {
-  test(`writes owner-only before secrets reach disk, stale temp: ${staleTemp}`, async () => {
+  test(`unique writes are owner-only before secrets reach disk, stale temp: ${staleTemp}`, async () => {
     const actual = await vi.importActual<typeof fs>("node:fs");
     if (staleTemp) {
       fs.mkdirSync(join(directory, "settings"));
@@ -85,7 +85,9 @@ for (const staleTemp of [false, true]) {
     );
     const previous = process.umask(0o022);
     try {
-      createPrivateJsonFile(path, "Example settings").write({
+      createPrivateJsonFile(path, "Example settings", {
+        uniqueTemp: true,
+      }).write({
         token: "fake-secret",
       });
     } finally {
@@ -102,6 +104,21 @@ for (const staleTemp of [false, true]) {
     if (staleTemp) assert.equal(fs.readFileSync(`${path}.tmp`, "utf8"), "{}\n");
   });
 }
+
+test("other callers retain fixed-temp writes and tighten a leftover temp before writing", async () => {
+  const actual = await vi.importActual<typeof fs>("node:fs");
+  fs.mkdirSync(join(directory, "settings"));
+  fs.writeFileSync(`${path}.tmp`, "old", { mode: 0o644 });
+  vi.mocked(fs.writeFileSync).mockImplementationOnce(
+    (target, data, options) => {
+      assert.equal(fs.statSync(`${path}.tmp`).mode & 0o777, 0o600);
+      actual.writeFileSync(target, data, options);
+    },
+  );
+  createPrivateJsonFile(path, "Example settings").write({ version: 1 });
+  assert.equal(fs.existsSync(`${path}.tmp`), false);
+  assert.equal(fs.statSync(path).mode & 0o777, 0o600);
+});
 
 for (const privateDirectory of [undefined, "create", "enforce"] as const) {
   for (const existing of [false, true]) {
@@ -185,8 +202,10 @@ test("replaces the destination only after a complete, closed temp file", async (
   }
 });
 
-test("closes the temp file and preserves the destination after a failed write", () => {
-  const file = createPrivateJsonFile(path, "Example settings");
+test("closes the unique temp file and preserves the destination after a failed write", () => {
+  const file = createPrivateJsonFile(path, "Example settings", {
+    uniqueTemp: true,
+  });
   file.write({ version: 1 });
   const oldContents = fs.readFileSync(path, "utf8");
   vi.mocked(fs.renameSync).mockClear();
@@ -205,9 +224,11 @@ test("closes the temp file and preserves the destination after a failed write", 
   ]);
 });
 
-test("overlapping writes use distinct temporary files", async () => {
+test("overlapping writes use distinct temporary files when requested", async () => {
   const actual = await vi.importActual<typeof fs>("node:fs");
-  const file = createPrivateJsonFile(path, "Example settings");
+  const file = createPrivateJsonFile(path, "Example settings", {
+    uniqueTemp: true,
+  });
   vi.mocked(fs.writeFileSync).mockImplementationOnce(
     (target, data, options) => {
       actual.writeFileSync(target, data, options);

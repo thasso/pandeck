@@ -104,6 +104,7 @@ export class ClientRegistry {
     this.path = join(stateDir, "clients.json");
     this.file = createPrivateJsonFile(this.path, "gateway clients", {
       privateDirectory: "enforce",
+      uniqueTemp: true,
     });
     this.now = now;
   }
