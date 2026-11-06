@@ -1183,11 +1183,19 @@ test("AC2: a server lease's extra routes match exactly and only its provider's",
     body: "{}",
   });
   assert.equal(claudeModel.status, 200);
+  // The Claude CLI also counts tokens on its engine's lease.
+  const claudeCount = await send(gw.port, {
+    path: `${CLAUDE_PATH}/count_tokens`,
+    headers: bearer(claude),
+    body: "{}",
+  });
+  assert.equal(claudeCount.status, 200);
   assert.deepEqual(
     [...chatgpt.seen, ...anthropic.seen].map((seen) => [seen.method, seen.url]),
     [
       ["POST", "/backend-api/codex/responses"],
       ["POST", "/v1/messages"],
+      ["POST", "/v1/messages/count_tokens"],
     ],
   );
 });

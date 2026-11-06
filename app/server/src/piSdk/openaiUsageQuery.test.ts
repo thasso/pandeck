@@ -8,7 +8,11 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
-import { createCredentialProfile, piAgentDir } from "../credentialProfiles.ts";
+import {
+  createCredentialProfile,
+  mirrorRemoteCredentialProfiles,
+  piAgentDir,
+} from "../credentialProfiles.ts";
 import {
   refusalResponse,
   refusalText,
@@ -439,6 +443,24 @@ test("AC14: the server's Codex read is presence and expiry only", async () => {
   const expires = Date.now() + 3_600_000;
   assert.deepEqual(await readPiCodexMeta(signedIn(expires)), { expires });
   assert.equal(await readPiCodexMeta(codexProfile(undefined)), null);
+});
+
+test("client mode: the gateway's account state stands in for the local login", async () => {
+  const account = {
+    name: "Gateway",
+    provider: "openai-codex",
+    enabled: true,
+  } as const;
+  try {
+    mirrorRemoteCredentialProfiles([
+      { ...account, id: "codex-ready", needsLogin: false },
+      { ...account, id: "codex-login", needsLogin: true },
+    ]);
+    assert.deepEqual(await readPiCodexMeta("codex-ready"), { expires: null });
+    assert.equal(await readPiCodexMeta("codex-login"), null);
+  } finally {
+    mirrorRemoteCredentialProfiles(undefined);
+  }
 });
 
 test("AC14: an expired or missing Codex login sends nothing to the gateway", async () => {

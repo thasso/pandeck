@@ -39,6 +39,10 @@ const {
   clearCredentialProfileLoginState,
   completeCredentialProfileLogin,
   credentialProfileSummaryById,
+  mirrorRemoteCredentialProfiles,
+  openAiProfileHasCredential,
+  claudeProfileHasCredential,
+  remoteOpenAiAccountReady,
 } = await import("./credentialProfiles.ts");
 const { setChildProcessEnvOverlay } = await import("./subprocessEnv.ts");
 
@@ -543,6 +547,48 @@ test("AC8/AC11: a login account's summary says loginStuck while the gateway hold
     for (const { id } of [claude, codex, compatible])
       deleteCredentialProfile(id);
   }
+});
+
+test("client mode: an account's readiness comes from the gateway, not from a local file", () => {
+  assert.equal(remoteOpenAiAccountReady(), false);
+  const account = {
+    name: "Gateway",
+    enabled: true,
+    needsLogin: false,
+  };
+  try {
+    mirrorRemoteCredentialProfiles([
+      { ...account, id: "codex-ready", provider: "openai-codex" },
+      { ...account, id: "claude-ready", provider: "claude" },
+      {
+        ...account,
+        id: "codex-login",
+        provider: "openai-codex",
+        needsLogin: true,
+      },
+    ]);
+    assert.equal(openAiProfileHasCredential("codex-ready"), true);
+    assert.equal(claudeProfileHasCredential("claude-ready"), true);
+    assert.equal(credentialProfileHasCredential("codex-ready"), true);
+    assert.equal(openAiProfileHasCredential("codex-login"), false);
+    assert.equal(openAiProfileHasCredential("not-mirrored"), false);
+    assert.equal(remoteOpenAiAccountReady(), true);
+
+    mirrorRemoteCredentialProfiles([
+      { ...account, id: "claude-ready", provider: "claude" },
+      {
+        ...account,
+        id: "codex-login",
+        provider: "openai-codex",
+        needsLogin: true,
+      },
+    ]);
+    assert.equal(remoteOpenAiAccountReady(), false);
+  } finally {
+    mirrorRemoteCredentialProfiles(undefined);
+  }
+  assert.equal(remoteOpenAiAccountReady(), false);
+  assert.equal(openAiProfileHasCredential("codex-ready"), false);
 });
 
 afterAll(() => {

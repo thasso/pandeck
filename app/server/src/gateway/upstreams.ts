@@ -45,7 +45,10 @@ const UPSTREAMS: readonly Upstream[] = [
     provider: "claude",
     host: "api.anthropic.com",
     label: "Anthropic",
-    allowed: [{ method: "POST", pathname: "/v1/messages" }],
+    allowed: [
+      { method: "POST", pathname: "/v1/messages" },
+      { method: "POST", pathname: "/v1/messages/count_tokens" },
+    ],
     // The server's Claude usage read (G4b); never refreshed.
     serverAllowed: [{ method: "GET", pathname: "/api/oauth/usage" }],
   },
