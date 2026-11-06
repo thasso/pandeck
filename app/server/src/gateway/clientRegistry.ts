@@ -5,13 +5,20 @@
  * once; a client is named by the common name of its certificate and matched
  * by its fingerprint too.
  *
- * The admin CLI writes the same file from its own process, so every read
- * reloads the file when it changed on disk and every change reloads before
- * writing: a `clients revoke` takes effect at the edge's next check.
+ * The admin CLI writes the same file from its own process, so reads always
+ * reload the current file. Writers hold clients.json.lock across the complete
+ * read-modify-rename, including code redemption. A crashed writer leaves its
+ * lock behind and fails closed until an operator removes it.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { statSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
 
 /** How long an enrollment code stays valid. */
@@ -75,52 +82,96 @@ function hashOf(code: string): string {
   return createHash("sha256").update(code, "utf8").digest("hex");
 }
 
+export class ClientRegistryLockedError extends Error {
+  constructor(lock: string) {
+    super(
+      `Gateway client registry lock ${lock} did not clear within one second. Check that the writer PID recorded in this file is no longer running before removing the lock and retrying.`,
+    );
+  }
+}
+
 export class ClientRegistry {
   private readonly path: string;
   private readonly file: ReturnType<typeof createPrivateJsonFile>;
   private readonly now: () => number;
-  private state: Stored = empty();
-  /** The file's mtime and size when last read or written. */
-  private seen = "";
+  private lockReported = false;
+  private seenFile = false;
 
-  constructor(stateDir: string, now: () => number = Date.now) {
+  constructor(
+    stateDir: string,
+    now: () => number = Date.now,
+    private readonly reportLock: (message: string) => void = () => {},
+  ) {
     this.path = join(stateDir, "clients.json");
     this.file = createPrivateJsonFile(this.path, "gateway clients", {
       privateDirectory: "enforce",
+      uniqueTemp: true,
     });
     this.now = now;
   }
 
-  private stamp(): string {
-    try {
-      const stat = statSync(this.path);
-      return `${stat.mtimeMs}:${stat.size}`;
-    } catch {
-      return "";
-    }
-  }
-
   private load(): Stored {
-    const stamp = this.stamp();
-    if (stamp === this.seen) return this.state;
-    this.state = this.file.read<Partial<Stored>, Stored>((value) => ({
-      ...empty(),
-      ...(value ?? {}),
-      v: 1,
-    }));
-    this.seen = stamp;
-    return this.state;
+    return this.file.read<Stored, Stored>((value) => {
+      if (value === undefined) {
+        if (this.seenFile)
+          throw new Error("Gateway client registry file is missing.");
+        return empty();
+      }
+      if (
+        !value ||
+        value.v !== 1 ||
+        !Array.isArray(value.users) ||
+        !Array.isArray(value.clients) ||
+        !Array.isArray(value.codes) ||
+        !Array.isArray(value.accounts)
+      )
+        throw new Error("Invalid gateway client registry.");
+      this.seenFile = true;
+      return value;
+    });
   }
 
-  private change<T>(apply: (state: Stored) => T): T {
-    this.seen = "";
-    const state = this.load();
-    const answer = apply(state);
-    const now = this.now();
-    state.codes = state.codes.filter((code) => code.expiresAt > now);
-    this.file.write(state);
-    this.seen = this.stamp();
-    return answer;
+  private change<T>(
+    apply: (state: Stored) => T,
+    write = (_answer: T) => true,
+  ): T {
+    const lock = `${this.path}.lock`;
+    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+    const deadline = Date.now() + 1_000;
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    let fd: number;
+    for (;;) {
+      try {
+        fd = openSync(lock, "wx", 0o600);
+        this.lockReported = false;
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        if (Date.now() >= deadline) {
+          const error = new ClientRegistryLockedError(lock);
+          if (!this.lockReported) {
+            this.lockReported = true;
+            this.reportLock(error.message);
+          }
+          throw error;
+        }
+        Atomics.wait(pause, 0, 0, 10);
+      }
+    }
+    try {
+      writeFileSync(fd, `${process.pid}\n`);
+      const state = this.load();
+      const answer = apply(state);
+      if (write(answer)) {
+        state.codes = state.codes.filter((code) => code.expiresAt > this.now());
+        this.file.write(state);
+        this.seenFile = true;
+      }
+      return answer;
+    } finally {
+      closeSync(fd);
+      unlinkSync(lock);
+    }
   }
 
   addUser(id: string, userLabel = id): void {
@@ -159,19 +210,25 @@ export class ClientRegistry {
     register: (pending: { userId: string; label: string }) => GatewayClient,
   ): GatewayClient | undefined {
     const hash = Buffer.from(hashOf(code), "hex");
-    return this.change((state) => {
-      const now = this.now();
-      const index = state.codes.findIndex(
-        (pending) =>
-          pending.expiresAt > now &&
-          timingSafeEqual(Buffer.from(pending.hash, "hex"), hash),
-      );
-      if (index < 0) return undefined;
-      const [pending] = state.codes.splice(index, 1);
-      const client = register(pending!);
-      state.clients.push(client);
-      return client;
-    });
+    const matches = (pending: PendingCode): boolean =>
+      pending.expiresAt > this.now() &&
+      typeof pending.hash === "string" &&
+      /^[a-f0-9]{64}$/.test(pending.hash) &&
+      timingSafeEqual(Buffer.from(pending.hash, "hex"), hash);
+    // Misses are read-only, even while an administrator holds the write lock.
+    if (!this.load().codes.some(matches)) return undefined;
+    return this.change(
+      (state) => {
+        // Recheck under the lock: another process may have used the code.
+        const index = state.codes.findIndex(matches);
+        if (index < 0) return undefined;
+        const [pending] = state.codes.splice(index, 1);
+        const client = register(pending!);
+        state.clients.push(client);
+        return client;
+      },
+      (client) => client !== undefined,
+    );
   }
 
   clients(): GatewayClient[] {

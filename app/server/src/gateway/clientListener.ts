@@ -45,7 +45,11 @@ import {
   encodeClientMessage,
   type ClientAccount,
 } from "./clientMethods.ts";
-import { ClientRegistry, type GatewayClient } from "./clientRegistry.ts";
+import {
+  ClientRegistry,
+  ClientRegistryLockedError,
+  type GatewayClient,
+} from "./clientRegistry.ts";
 import { createLoginManager, LoginRefusal } from "./logins.ts";
 import type { VaultPort } from "./vaultPort.ts";
 import {
@@ -78,6 +82,11 @@ import {
 } from "./x509.ts";
 
 const MAX_ENROLL_BYTES = 16 * 1024;
+const MAX_CONNECTIONS = 64;
+const HANDSHAKE_TIMEOUT_MS = 10_000;
+const ENROLL_WINDOW_MS = 60_000;
+const ENROLL_ATTEMPTS = 30;
+const MAX_ENROLL_SOURCES = 4_096;
 
 export interface ClientListenerOptions {
   /** Where the three ports bind; `127.0.0.1` unless given. */
@@ -195,13 +204,19 @@ export async function startClientListener(
     deps.stateDir,
     options.hosts ?? ["localhost", "127.0.0.1"],
   );
-  const registry = new ClientRegistry(deps.stateDir, now);
+  const registry = new ClientRegistry(deps.stateDir, now, log);
   const sockets = new Set<net.Socket>();
+  const authenticated = new Map<net.Socket, GatewayClient>();
+  const knownClients = new Set<string>();
   const track = (socket: net.Socket): void => {
     sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
+    socket.once("close", () => {
+      sockets.delete(socket);
+      authenticated.delete(socket);
+    });
   };
   const mutualTls = {
+    handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
     key: edgeTls.serverKeyPem,
     cert: edgeTls.serverCertPem,
     ca: edgeTls.caCertPem,
@@ -212,7 +227,12 @@ export async function startClientListener(
   /** The socket's client while it is enrolled with that certificate. */
   const activeClient = (socket: net.Socket): GatewayClient | undefined => {
     const identity = peerIdentity(socket);
-    return registry.active(identity?.clientId, identity?.fingerprint);
+    const client = registry.active(identity?.clientId, identity?.fingerprint);
+    if (client) {
+      authenticated.set(socket, client);
+      knownClients.add(client.id);
+    }
+    return client;
   };
 
   // --- accounts ---------------------------------------------------------
@@ -253,14 +273,53 @@ export async function startClientListener(
 
   const connections = new Map<WorkerConnection, GatewayClient>();
 
+  const revokeClient = (clientId: string): void => {
+    // Remove before cancellation: a driver's final event must not push again.
+    for (const [connection, client] of connections) {
+      if (client.id !== clientId) continue;
+      connections.delete(connection);
+      connection.end("the client is no longer active");
+    }
+    for (const [socket, client] of authenticated)
+      if (client.id === clientId) socket.destroy();
+    logins.cancelClient(clientId);
+    leases.revokeWhere(
+      (record) => record.owner.clientId === clientId,
+      "session-ended",
+    );
+  };
+
+  const canPush = (
+    connection: WorkerConnection,
+    client: GatewayClient,
+  ): boolean => {
+    try {
+      if (registry.active(client.id, client.fingerprint)) return true;
+      revokeClient(client.id);
+    } catch {
+      connections.delete(connection);
+      connection.end("the client registry is unavailable");
+      log("client registry unavailable");
+    }
+    return false;
+  };
+
   const accountsChanged = (): void => {
-    for (const [connection, client] of connections)
-      connection
-        .request(
-          CLIENT_METHODS.accountsChanged,
-          encodeClientMessage({ accounts: accountsOf(client.userId) }),
-        )
-        .catch(() => log(`client ${client.id} accounts.changed: failed`));
+    for (const [connection, client] of connections) {
+      if (!canPush(connection, client)) continue;
+      try {
+        connection
+          .request(
+            CLIENT_METHODS.accountsChanged,
+            encodeClientMessage({ accounts: accountsOf(client.userId) }),
+          )
+          .catch(() => log(`client ${client.id} accounts.changed: failed`));
+      } catch {
+        connections.delete(connection);
+        connection.end("the client registry is unavailable");
+        log("client registry unavailable");
+      }
+    }
   };
 
   const putAccount = ({ userId, ...profile }: ClientAccountRecord): void => {
@@ -283,11 +342,23 @@ export async function startClientListener(
     vault: deps.vault,
     profiles,
     ownerOf: (profileId) => registry.ownerOf(profileId),
+    isClientActive: (clientId) => {
+      try {
+        return registry
+          .clients()
+          .some(
+            (client) =>
+              client.id === clientId && client.revokedAt === undefined,
+          );
+      } catch {
+        return false;
+      }
+    },
     putAccount,
     removeAccount,
     send: (clientId, loginId, accountId, event) => {
       for (const [connection, client] of connections)
-        if (client.id === clientId)
+        if (client.id === clientId && canPush(connection, client))
           connection
             .request(
               CLIENT_METHODS.loginEvent,
@@ -442,11 +513,32 @@ export async function startClientListener(
     const handlers: Record<string, MethodHandler> = {};
     for (const [method, body] of Object.entries(methods))
       handlers[method] = (payload) => {
-        if (!registry.active(identity.clientId, identity.fingerprint)) {
-          log(`client ${client.id} ${method}: ${CLIENT_REVOKED}`);
-          setImmediate(() => connection.end("the client is revoked"));
+        try {
+          if (!registry.active(identity.clientId, identity.fingerprint)) {
+            setImmediate(() => {
+              try {
+                revokeClient(client.id);
+              } catch {
+                log("client revocation persistence failed");
+              }
+            });
+            throw new WorkerMethodError(
+              CLIENT_REVOKED,
+              "The client is revoked.",
+            );
+          }
+        } catch (err) {
+          if (!(err instanceof WorkerMethodError))
+            setImmediate(() =>
+              connection.end("the client registry is unavailable"),
+            );
           return Promise.reject(
-            new WorkerMethodError(CLIENT_REVOKED, "The client is revoked."),
+            err instanceof WorkerMethodError
+              ? err
+              : new WorkerMethodError(
+                  STATE_WRITE_FAILED,
+                  "The client registry is unavailable.",
+                ),
           );
         }
         try {
@@ -458,9 +550,10 @@ export async function startClientListener(
             err instanceof StateWriteError
               ? new WorkerMethodError(STATE_WRITE_FAILED, err.message)
               : err;
-          log(
-            `client ${client.id} ${method}: ${failure instanceof WorkerMethodError ? failure.code : "failed"}`,
-          );
+          if (!(err instanceof ClientRegistryLockedError))
+            log(
+              `client ${client.id} ${method}: ${failure instanceof WorkerMethodError ? failure.code : "failed"}`,
+            );
           return Promise.reject(failure);
         }
       };
@@ -490,7 +583,13 @@ export async function startClientListener(
   };
 
   const model = https.createServer(mutualTls, (req, res) => {
-    if (!activeClient(req.socket)) {
+    let client: GatewayClient | undefined;
+    try {
+      client = activeClient(req.socket);
+    } catch {
+      return json(res, 503, { error: "client registry unavailable" });
+    }
+    if (!client) {
       const { status, body } = refusalResponse({ case: "forbidden" }, "claude");
       res.writeHead(status, {
         "content-type": "application/json",
@@ -504,24 +603,61 @@ export async function startClientListener(
   });
   model.on("secureConnection", (socket: tls.TLSSocket) => {
     track(socket);
-    if (!activeClient(socket)) refuseClient(socket);
+    try {
+      if (!activeClient(socket)) refuseClient(socket);
+    } catch {
+      socket.destroy();
+    }
   });
   model.on("tlsClientError", () => {});
 
   const clientServer = tls.createServer(mutualTls, (socket) => {
     track(socket);
-    const client = activeClient(socket);
-    if (!client) return refuseClient(socket);
-    attachClient(socket, client);
+    try {
+      const client = activeClient(socket);
+      if (!client) return refuseClient(socket);
+      attachClient(socket, client);
+    } catch {
+      socket.destroy();
+    }
   });
-  clientServer.on("tlsClientError", () => {});
+  // Unlike HTTPS, a plain TLS server does not close timed-out handshakes.
+  // Release their connection slots instead of retaining silent TCP peers.
+  clientServer.on("tlsClientError", (_err, socket) => socket.destroy());
 
   let ports = { modelPort: 0, clientPort: 0 };
+  const attempts = new Map<string, { until: number; count: number }>();
+  const admitEnrollment = (address: string): boolean => {
+    const time = now();
+    for (const [source, entry] of attempts)
+      if (entry.until <= time) attempts.delete(source);
+    let entry = attempts.get(address);
+    if (!entry) {
+      if (attempts.size >= MAX_ENROLL_SOURCES) return false;
+      entry = { until: time + ENROLL_WINDOW_MS, count: 0 };
+      attempts.set(address, entry);
+    }
+    return ++entry.count <= ENROLL_ATTEMPTS;
+  };
   const enroll = https.createServer(
-    { key: edgeTls.serverKeyPem, cert: edgeTls.serverCertPem },
+    {
+      key: edgeTls.serverKeyPem,
+      cert: edgeTls.serverCertPem,
+      handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
+      headersTimeout: 5_000,
+      requestTimeout: 10_000,
+      connectionsCheckingInterval: 1_000,
+    },
     (req, res) => {
+      req.on("error", () => {});
       if (req.method !== "POST" || req.url !== "/enroll")
         return json(res, 404, { error: "not found" });
+      if (!admitEnrollment(req.socket.remoteAddress ?? "unknown")) {
+        res.setHeader("retry-after", "60");
+        res.setHeader("connection", "close");
+        req.resume();
+        return json(res, 429, { error: "too many enrollment attempts" });
+      }
       const chunks: Buffer[] = [];
       let size = 0;
       req.on("data", (chunk: Buffer) => {
@@ -530,50 +666,60 @@ export async function startClientListener(
         else chunks.push(chunk);
       });
       req.on("end", () => {
-        let body: Record<string, unknown> | undefined;
         try {
-          body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
-            string,
-            unknown
-          >;
-        } catch {
-          body = undefined;
+          let body: Record<string, unknown> | undefined;
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
+              string,
+              unknown
+            >;
+          } catch {
+            body = undefined;
+          }
+          const code = body?.code;
+          const publicKey =
+            typeof body?.publicKeyPem === "string"
+              ? clientPublicKey(body.publicKeyPem)
+              : undefined;
+          if (typeof code !== "string" || !publicKey)
+            return json(res, 400, { error: "code and an EC P-256 key needed" });
+          let certificatePem = "";
+          const client = registry.redeem(code, ({ userId, label }) => {
+            const id = randomBytes(12).toString("base64url");
+            const issued = issueClientCertificate(edgeTls, id, publicKey);
+            certificatePem = issued.certificatePem;
+            return {
+              id,
+              userId,
+              label,
+              fingerprint: issued.fingerprint,
+              createdAt: now(),
+            };
+          });
+          if (!client) {
+            log("enrollment refused: unknown, used or expired code");
+            return json(res, 403, { error: "unknown, used or expired code" });
+          }
+          log(`enrolled client ${client.id} for user ${client.userId}`);
+          json(res, 200, {
+            clientId: client.id,
+            certificatePem,
+            caPem: edgeTls.caCertPem,
+            ...ports,
+          });
+        } catch (err) {
+          if (!(err instanceof ClientRegistryLockedError))
+            log("enrollment failed: client registry unavailable");
+          json(res, 503, { error: "client registry unavailable" });
         }
-        const code = body?.code;
-        const publicKey =
-          typeof body?.publicKeyPem === "string"
-            ? clientPublicKey(body.publicKeyPem)
-            : undefined;
-        if (typeof code !== "string" || !publicKey)
-          return json(res, 400, { error: "code and an EC P-256 key needed" });
-        let certificatePem = "";
-        const client = registry.redeem(code, ({ userId, label }) => {
-          const id = randomBytes(12).toString("base64url");
-          const issued = issueClientCertificate(edgeTls, id, publicKey);
-          certificatePem = issued.certificatePem;
-          return {
-            id,
-            userId,
-            label,
-            fingerprint: issued.fingerprint,
-            createdAt: now(),
-          };
-        });
-        if (!client) {
-          log("enrollment refused: unknown, used or expired code");
-          return json(res, 403, { error: "unknown, used or expired code" });
-        }
-        log(`enrolled client ${client.id} for user ${client.userId}`);
-        json(res, 200, {
-          clientId: client.id,
-          certificatePem,
-          caPem: edgeTls.caCertPem,
-          ...ports,
-        });
       });
     },
   );
-  for (const server of [model, enroll]) server.on("connection", track);
+  for (const server of [model, clientServer, enroll]) {
+    server.maxConnections = MAX_CONNECTIONS;
+    server.on("connection", track);
+  }
+  enroll.setTimeout(10_000, (socket) => socket.destroy());
 
   const modelPort = await listen(model, options.modelPort ?? 0, bindHost);
   const clientPort = await listen(
@@ -587,6 +733,39 @@ export async function startClientListener(
     `client listener on ${bindHost}: model ${modelPort}, client ${clientPort}, enroll ${enrollPort}`,
   );
 
+  // The admin CLI writes from another process. Also cover clients with leases
+  // or running logins but no current connection. A failed read gives no new
+  // revocation evidence; preserve the last successfully observed state.
+  let registryReadFailed = false;
+  const revocations = setInterval(() => {
+    let active: Set<string>;
+    try {
+      active = new Set(
+        registry
+          .clients()
+          .filter((client) => client.revokedAt === undefined)
+          .map((client) => client.id),
+      );
+    } catch {
+      if (!registryReadFailed)
+        log("client revocation check deferred: client registry unavailable");
+      registryReadFailed = true;
+      return;
+    }
+    registryReadFailed = false;
+    for (const record of leases.records())
+      if (record.owner.clientId) knownClients.add(record.owner.clientId);
+    for (const clientId of knownClients) {
+      if (active.has(clientId)) continue;
+      try {
+        revokeClient(clientId);
+      } catch {
+        log("client revocation persistence failed");
+      }
+    }
+  }, 250);
+  revocations.unref();
+
   return {
     modelPort,
     clientPort,
@@ -597,6 +776,7 @@ export async function startClientListener(
     removeAccount,
     accountsChanged,
     async close() {
+      clearInterval(revocations);
       logins.close();
       for (const connection of [...connections.keys()])
         connection.end("the gateway closed");

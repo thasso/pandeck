@@ -2,7 +2,7 @@
  * The relay's command line (`relay.ts`), its own entry:
  *
  * - `enroll --state-dir <dir> --gateway <host:enrollPort> --ca <pem file>
- *   --code <code>`
+ *   [--code-file <0600 file>]` (otherwise reads the code from stdin)
  * - `run --state-dir <dir> --port <loopback port> --socket <path>`
  *
  * It runs as Pandeck's server account, so agents can read neither its key
@@ -11,10 +11,11 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { enrollRelay, startRelay } from "./relay.ts";
+import { readEnrollmentCode } from "./enrollmentCode.ts";
 
 function usage(): never {
   console.error(
-    "usage: relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file> --code <code>\n       relay run --state-dir <dir> --port <port> --socket <path>",
+    "usage: relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file> [--code-file <0600 file>]\n       enrollment reads stdin unless --code-file is given\n       relay run --state-dir <dir> --port <port> --socket <path>",
   );
   process.exit(2);
 }
@@ -32,7 +33,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     gateway: { type: "string" },
     ca: { type: "string" },
-    code: { type: "string" },
+    "code-file": { type: "string" },
     port: { type: "string" },
     socket: { type: "string" },
   },
@@ -41,14 +42,14 @@ const stateDir = values["state-dir"];
 if (!stateDir) usage();
 
 if (command === "enroll") {
-  if (!values.gateway || !values.ca || !values.code) usage();
+  if (!values.gateway || !values.ca) usage();
   const { host, port } = hostPort(values.gateway);
   const clientId = await enrollRelay({
     stateDir,
     host,
     enrollPort: port,
     caPem: readFileSync(values.ca, "utf8"),
-    code: values.code,
+    code: readEnrollmentCode(values["code-file"]),
   });
   console.log(`enrolled as client ${clientId}`);
 } else if (command === "run") {

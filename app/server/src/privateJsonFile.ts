@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -7,6 +8,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
@@ -21,6 +23,8 @@ export function createPrivateJsonFile(
     privateDirectory?: "create" | "enforce";
     /** Keep compact stores' existing JSON representation. */
     compact?: boolean;
+    /** Shared stores use unique temp names; callers still own write locking. */
+    uniqueTemp?: boolean;
   } = {},
 ) {
   return {
@@ -43,21 +47,25 @@ export function createPrivateJsonFile(
         ...(options.privateDirectory ? { mode: 0o700 } : {}),
       });
       if (options.privateDirectory === "enforce") chmodSync(directory, 0o700);
-      const tmp = `${path}.tmp`;
-      // Creation mode does not tighten a leftover temp file. Do so before it
-      // holds secrets; rename then carries that mode to the destination.
-      const fd = openSync(tmp, "w", 0o600);
+      const tmp = options.uniqueTemp
+        ? `${path}.${randomUUID()}.tmp`
+        : `${path}.tmp`;
+      const fd = openSync(tmp, options.uniqueTemp ? "wx" : "w", 0o600);
       try {
-        fchmodSync(fd, 0o600);
-        writeFileSync(
-          fd,
-          `${JSON.stringify(value, null, options.compact ? undefined : 2)}\n`,
-          "utf8",
-        );
+        try {
+          fchmodSync(fd, 0o600);
+          writeFileSync(
+            fd,
+            `${JSON.stringify(value, null, options.compact ? undefined : 2)}\n`,
+            "utf8",
+          );
+        } finally {
+          closeSync(fd);
+        }
+        renameSync(tmp, path);
       } finally {
-        closeSync(fd);
+        if (options.uniqueTemp) rmSync(tmp, { force: true });
       }
-      renameSync(tmp, path);
     },
   };
 }

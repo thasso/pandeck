@@ -76,6 +76,7 @@ interface LoginManagerDeps {
   vault: Pick<VaultPort, "login" | "newTokenFile">;
   profiles: Pick<ProfileRegistry, "get">;
   ownerOf(profileId: string): string | undefined;
+  isClientActive(clientId: string): boolean;
   putAccount(account: Account): void;
   removeAccount(profileId: string): void;
   /** Sends `event` to the client's connections. */
@@ -95,6 +96,8 @@ interface LoginManager {
   ): { loginId: string; accountId: string };
   input(clientId: string, loginId: string, text: string): void;
   cancel(clientId: string, loginId: string): void;
+  /** Cancels every running login of a revoked client, even if disconnected. */
+  cancelClient(clientId: string): void;
   /** Accounts whose first login is still running. */
   pendingAccounts(): Set<string>;
   /** Cancels the account's login, which then never registers it. */
@@ -118,7 +121,9 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
   };
 
   const current = (login: ActiveLogin): boolean =>
-    !login.cancelled && byAccount.get(login.accountId) === login;
+    !login.cancelled &&
+    byAccount.get(login.accountId) === login &&
+    deps.isClientActive(login.clientId);
 
   /** Ends the login; a ready one registers its account, no longer pending. */
   const finish = (
@@ -219,9 +224,6 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
         );
       }
       login.run = run;
-      if (login.isNew) deps.putAccount(account);
-      log(`login ${login.loginId} (account ${login.accountId}): started`);
-      emit(login, { type: "state", state: "running" });
       const timeout = setTimeout(() => {
         login.cancelled = true;
         login.timedOut = true;
@@ -246,7 +248,17 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
                 : "The login failed.",
             );
         })
-        .finally(() => clearTimeout(timeout));
+        .finally(() => clearTimeout(timeout))
+        .catch(() => log(`login ${login.loginId}: state update failed`));
+      try {
+        if (login.isNew) deps.putAccount(account);
+        log(`login ${login.loginId} (account ${login.accountId}): started`);
+        emit(login, { type: "state", state: "running" });
+      } catch (err) {
+        login.cancelled = true;
+        run.cancel();
+        throw err;
+      }
       return { loginId: login.loginId, accountId: login.accountId };
     },
     input(clientId, loginId, text) {
@@ -259,6 +271,13 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
       const login = owned(clientId, loginId);
       login.cancelled = true;
       login.run?.cancel();
+    },
+    cancelClient(clientId) {
+      for (const login of byId.values()) {
+        if (login.clientId !== clientId || login.cancelled) continue;
+        login.cancelled = true;
+        login.run?.cancel();
+      }
     },
     forget(accountId) {
       const login = byAccount.get(accountId);
