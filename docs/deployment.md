@@ -101,17 +101,21 @@ The gateway reads only its environment: `DATA_DIR` (state in
 `ASSISTANT_GATEWAY_SOCKET` (the control socket, `DATA_DIR/gateway/control.sock`
 by default). The optional `ASSISTANT_GATEWAY_CLIENTS` holds the client
 listener's options as JSON; client mode belongs to the IDB pilot and the
-self-hosted default leaves this unset, with no client listener. SIGTERM stops
-it: it closes the control socket, refuses new model requests and lets open
-streams finish for up to two minutes. In development,
-`pnpm --filter ./app/server gateway` runs the same entry. No service units or
-production enablement are included yet. With `ASSISTANT_GATEWAY=1`, setting
-`ASSISTANT_GATEWAY_SOCKET` makes the server dial that process and reconnect with
-backoff; without it the in-process boot stays one-shot. Both modes remain off
-unless explicitly enabled. After 10 seconds without a ready socket connection
-the app shows "Credential gateway not running"; a refused or incompatible
-control handshake shows "Credential gateway incompatible". The server logs the
-existing explanations:
+self-hosted default leaves this unset, with no client listener. With
+`ASSISTANT_GATEWAY_CLIENTS` set, the packaged entry runs client mode without
+logins. It supplies no login drivers, preserving its closed, pi-free import
+boundary; live client logins remain on the separate development entry,
+`gatewayDevMain.ts` (`pnpm --filter @assistant/server gateway:dev`). Login child
+adapters are not included. SIGTERM stops it: it closes the control socket,
+refuses new model requests and lets open streams finish for up to two minutes.
+In development, `pnpm --filter ./app/server gateway` runs the same entry. No
+service units or production enablement are included yet. With
+`ASSISTANT_GATEWAY=1`, setting `ASSISTANT_GATEWAY_SOCKET` makes the server dial
+that process and reconnect with backoff; without it the in-process boot stays
+one-shot. Both modes remain off unless explicitly enabled. After 10 seconds
+without a ready socket connection the app shows "Credential gateway not
+running"; a refused or incompatible control handshake shows "Credential gateway
+incompatible". The server logs the existing explanations:
 
 - "Pandeck's credential gateway isn't reachable, so this session can't start a
   model request. It restarts automatically; try again shortly."

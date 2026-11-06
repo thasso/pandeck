@@ -26,6 +26,7 @@ export interface GatewayProcessOptions extends Pick<
   | "port"
   | "log"
   | "renewCodex"
+  | "loginDrivers"
   | "upstreams"
   | "claudeTokenEndpoint"
   | "clients"

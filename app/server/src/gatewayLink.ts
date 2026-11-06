@@ -470,7 +470,9 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
             ...(options.log ? { log: options.log } : {}),
             ...(options.upstreams ? { upstreams: options.upstreams } : {}),
             ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
-            ...(options.loginDrivers ? { loginDrivers: options.loginDrivers } : {}),
+            ...(options.loginDrivers
+              ? { loginDrivers: options.loginDrivers }
+              : {}),
             ...(options.claudeTokenEndpoint
               ? { claudeTokenEndpoint: options.claudeTokenEndpoint }
               : {}),

@@ -1707,9 +1707,11 @@ path above.
   client link starts (`docs/credential-distribution.md`).
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
-  (`gatewayDevMain.ts`, until the packaged entry can run logins) runs a gateway
-  with the client listener and both drivers on 127.0.0.1, or on `--bind-host`
-  with each `--host` in the edge's certificate; `gateway:admin` and
+  (`gatewayDevMain.ts`) remains the separate composition with the client
+  listener and both live login drivers on 127.0.0.1, or on `--bind-host` with
+  each `--host` in the edge's certificate. The packaged `gateway/main.ts` entry
+  can run a configured client listener but supplies no login drivers; login
+  child adapters remain outside this slice. The commands `gateway:admin` and
   `gateway:relay` run the admin CLI and the relay. A second dev instance with
   its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN` and
   `ASSISTANT_GATEWAY_RELAY` is the client.

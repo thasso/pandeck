@@ -171,6 +171,11 @@ test("with client options the process runs the client listener (A5)", async () =
     log: () => {},
     claudeTokenEndpoint: NO_TOKEN_ENDPOINT,
     clients: {},
+    loginDrivers: {
+      claude: () => {
+        throw new Error("No fake login was requested.");
+      },
+    },
     drainMs: 0,
   });
   try {

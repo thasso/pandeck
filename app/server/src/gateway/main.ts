@@ -8,7 +8,8 @@
  *   `DATA_DIR/gateway/control.sock`;
  * - `ASSISTANT_GATEWAY_CLIENTS` (optional): the client listener's options as
  *   JSON (`clientListener.ts`). Without it there is no client listener, the
- *   self-hosted default.
+ *   self-hosted default. This entry supplies no login drivers, so configured
+ *   client mode has no logins; live login composition stays in gatewayDevMain.
  *
  * Codex renews through one child per renewal (`codexChild.ts`): the renewal
  * entry beside this one, run by the same runtime.
