@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,6 +28,34 @@ function fixture() {
 afterEach(() => {
   for (const dir of directories.splice(0))
     rmSync(dir, { recursive: true, force: true });
+});
+
+test("a first start without a registry file remains valid", () => {
+  const dir = mkdtempSync(join(tmpdir(), "client-registry-new-"));
+  directories.push(dir);
+  const registry = new ClientRegistry(dir);
+  assert.deepEqual(registry.clients(), []);
+  assert.deepEqual(registry.clients(), []);
+  assert.equal(existsSync(join(dir, "clients.json")), false);
+  registry.addUser("u");
+  assert.ok(registry.user("u"));
+});
+
+test("a previously observed registry must not become empty when its file disappears", () => {
+  const { dir, registry, path } = fixture();
+  const contents = readFileSync(path, "utf8");
+  // The writer has seen its own successful creation even before another read.
+  unlinkSync(path);
+  assert.throws(() => registry.clients(), /registry.*missing/i);
+  assert.throws(() => registry.addUser("other"), /registry.*missing/i);
+  assert.equal(existsSync(path), false);
+  writeFileSync(path, contents);
+  const reader = new ClientRegistry(dir);
+  assert.deepEqual(reader.clients(), []);
+  unlinkSync(path);
+  assert.throws(() => reader.clients(), /registry.*missing/i);
+  writeFileSync(path, contents);
+  assert.ok(reader.user("u"));
 });
 
 test("unknown and expired codes write nothing, not even a lock file", () => {

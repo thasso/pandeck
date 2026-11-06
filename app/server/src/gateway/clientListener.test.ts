@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, X509Certificate } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, writeFile, unlink } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, unlink, rename } from "node:fs/promises";
 import https from "node:https";
 import net from "node:net";
 import { join } from "node:path";
@@ -652,14 +652,19 @@ test("failed revocation checks preserve all clients and warn once per read-failu
         line ===
         "client revocation check deferred: client registry unavailable",
     );
-  for (const episode of [1, 2]) {
-    await writeFile(path, "temporarily invalid JSON");
+  const failures = [
+    () => writeFile(path, "temporarily invalid JSON"),
+    () => unlink(path),
+    () => rename(path, `${path}.backup`),
+  ];
+  for (const [episode, failRead] of failures.entries()) {
+    await failRead();
     await vi.advanceTimersByTimeAsync(1_000);
     assert.deepEqual(gateway.leases.records(), before);
     assert.equal(a.isEnded, false);
     assert.equal(b.isEnded, false);
     assert.equal(run.cancels(), 0);
-    assert.equal(warnings().length, episode);
+    assert.equal(warnings().length, episode + 1);
     await writeFile(path, good);
     await vi.advanceTimersByTimeAsync(250);
   }
@@ -694,6 +699,18 @@ test("failed revocation checks preserve all clients and warn once per read-failu
     assert.ok(
       !gateway.clients!.registry.accountsOf("u1").includes(login.accountId),
     ),
+  );
+  // A successfully read empty list is authoritative, unlike a missing file.
+  const state = JSON.parse(await readFile(path, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  await writeFile(path, JSON.stringify({ ...state, clients: [] }));
+  await vi.advanceTimersByTimeAsync(250);
+  await b.ended;
+  assert.ok(
+    gateway.leases.records().find((lease) => lease.leaseId === bLease.leaseId)!
+      .revoked,
   );
 });
 

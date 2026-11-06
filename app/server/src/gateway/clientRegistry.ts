@@ -95,6 +95,7 @@ export class ClientRegistry {
   private readonly file: ReturnType<typeof createPrivateJsonFile>;
   private readonly now: () => number;
   private lockReported = false;
+  private seenFile = false;
 
   constructor(
     stateDir: string,
@@ -111,7 +112,11 @@ export class ClientRegistry {
 
   private load(): Stored {
     return this.file.read<Stored, Stored>((value) => {
-      if (value === undefined) return empty();
+      if (value === undefined) {
+        if (this.seenFile)
+          throw new Error("Gateway client registry file is missing.");
+        return empty();
+      }
       if (
         !value ||
         value.v !== 1 ||
@@ -121,6 +126,7 @@ export class ClientRegistry {
         !Array.isArray(value.accounts)
       )
         throw new Error("Invalid gateway client registry.");
+      this.seenFile = true;
       return value;
     });
   }
@@ -159,6 +165,7 @@ export class ClientRegistry {
       if (write(answer)) {
         state.codes = state.codes.filter((code) => code.expiresAt > this.now());
         this.file.write(state);
+        this.seenFile = true;
       }
       return answer;
     } finally {

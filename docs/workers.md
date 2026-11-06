@@ -1682,14 +1682,17 @@ path above.
   A 250 ms check notices admin-CLI revocations even for a silent or disconnected
   client; a finishing login rechecks before ingesting its credential. A failed
   registry read defers the timer's cleanup, preserves connections, logins and
-  leases, and logs once per failure episode; only a successful read may trigger
-  revocation cleanup. Registry failures in requests answer 503 or close the
-  affected connection, never exit the process. Each port allows 64 connections
-  and a 10 s TLS handshake; enrollment also has 5 s header and 10 s request
-  timeouts, and allows 30 attempts per source address per minute. The source
-  table holds at most 4,096 addresses and refuses new sources until entries
-  expire if full. A lease names its client and is spent only on that client's
-  connection; the loopback listener refuses client leases.
+  leases, and logs once per failure episode. After a successful read or write, a
+  missing `clients.json` is also unknown, not an empty registry. A first start
+  without that file remains valid; a valid empty client list is authoritative.
+  Only a successful read may trigger revocation cleanup. Registry failures in
+  requests answer 503 or close the affected connection, never exit the process.
+  Each port allows 64 connections and a 10 s TLS handshake; enrollment also has
+  5 s header and 10 s request timeouts, and allows 30 attempts per source
+  address per minute. The source table holds at most 4,096 addresses and refuses
+  new sources until entries expire if full. A lease names its client and is
+  spent only on that client's connection; the loopback listener refuses client
+  leases.
 - **Enrollment.** `gateway/adminMain.ts` adds users, prints a one-time code (15
   minutes, kept hashed) and lists, revokes clients and prints the CA. The client
   sends the code and its EC P-256 public key to `POST /enroll` and gets a
