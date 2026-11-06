@@ -237,6 +237,18 @@ export function startGatewayClientLink(
         encodeClientMessage({ loginId, text }),
       );
     },
+    async remove(accountId) {
+      await request(
+        CLIENT_METHODS.removeAccount,
+        encodeClientMessage({ accountId }),
+      );
+      // The mirror drops it now, not only at the next `accounts.changed`.
+      mirror(
+        decodeAccounts(
+          await request(CLIENT_METHODS.listAccounts, encodeClientMessage({})),
+        ),
+      );
+    },
     async cancel(loginId) {
       await request(
         CLIENT_METHODS.loginCancel,

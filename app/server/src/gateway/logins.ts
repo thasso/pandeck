@@ -149,10 +149,17 @@ export interface LoginManager {
   cancel(clientId: string, loginId: string): void;
   /** Accounts whose first login is still running. */
   pendingAccounts(): Set<string>;
+  /** Cancels the account's login, which then never registers it. */
+  forget(accountId: string): void;
   close(): void;
 }
 
-/** Moves the verified credential into `tokenFile` by a same-directory rename. */
+/**
+ * Moves the verified credential into `tokenFile` by a same-directory rename.
+ * It replaces the whole file: right for the gateway's own accounts, whose file
+ * holds only this login, but it would drop other providers' entries from a
+ * shared pi `auth.json`.
+ */
 function install(source: string, tokenFile: string): void {
   const directory = dirname(tokenFile);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -342,6 +349,13 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
       login.cancelled = true;
       if (login.run) login.run.cancel();
       else finish(login, "cancelled");
+    },
+    forget(accountId) {
+      const login = byAccount.get(accountId);
+      if (!login) return;
+      login.cancelled = true;
+      byAccount.delete(accountId);
+      login.run?.cancel();
     },
     pendingAccounts: () =>
       new Set(

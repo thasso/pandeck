@@ -48,6 +48,7 @@ import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startGatewayClientLink } from "./gatewayClientLink.ts";
 import {
   createRemoteAccount,
+  deleteRemoteAccount,
   remoteLoginsActive,
   startRemoteCodexLogin,
 } from "./remoteLogins.ts";
@@ -956,7 +957,8 @@ async function handleRequest(
         // Settings pins never block deletion; they are reported and dropped so
         // no stale account id survives in the persisted settings. Cleared only
         // after the delete succeeds — it still refuses while sessions are bound.
-        deleteCredentialProfile(profileId);
+        if (remoteLoginsActive()) await deleteRemoteAccount(profileId);
+        else deleteCredentialProfile(profileId);
         const clearedSlots = await clearProfilePins(profileId);
         res.writeHead(200, corsJsonHeaders(req));
         res.end(JSON.stringify({ ok: true, clearedSlots }));

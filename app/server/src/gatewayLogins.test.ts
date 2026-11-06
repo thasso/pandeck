@@ -3,11 +3,13 @@
  * adds and logs in accounts through relay and edge (`remoteLogins.ts`,
  * `gatewayClientLink.ts`, `gateway/logins.ts`), with fake login drivers in
  * place of the Claude CLI and pi's device-code login, and fake upstreams that
- * show which token a model request carried. Every value is fake.
+ * show which token a model request carried, and deletes one. Every value is
+ * fake.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import {
+  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -26,7 +28,7 @@ process.env.HOME = home;
 
 const profiles = await import("./credentialProfiles.ts");
 const { attachClaudeLoginSocket } = await import("./claudeLoginTerminal.ts");
-const { createRemoteAccount, startRemoteCodexLogin } =
+const { createRemoteAccount, deleteRemoteAccount, startRemoteCodexLogin } =
   await import("./remoteLogins.ts");
 const { startGatewayClientLink } = await import("./gatewayClientLink.ts");
 const { startGateway } = await import("./gateway/gateway.ts");
@@ -240,6 +242,15 @@ test("a client-mode server adds and logs in accounts through the gateway", async
   assert.equal(
     upstreams.chatgpt.at(-1)!.headers.authorization,
     "Bearer codex-new-access",
+  );
+
+  // Deleting an account removes it on the gateway, with its token file.
+  await deleteRemoteAccount(codexId);
+  assert.equal(profiles.credentialProfileById(codexId), undefined);
+  assert.equal(existsSync(join(gatewayDir, "accounts", codexId)), false);
+  assert.equal(
+    (await modelRequest(relay.port, CODEX_PATH, access.leaseToken)).status,
+    401,
   );
 
   // Logging in again replaces an existing account's token in its own file.

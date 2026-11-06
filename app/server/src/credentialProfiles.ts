@@ -237,6 +237,14 @@ export function mirrorRemoteCredentialProfiles(
     ];
   });
   const after = new Map((remoteProfiles ?? []).map((p) => [p.id, p]));
+  // An account the gateway dropped is deleted here as well: its caches go.
+  if (accounts)
+    for (const id of before.keys())
+      if (!after.has(id)) {
+        transient.delete(id);
+        credentialProfileDeletedHandler?.(id);
+        for (const listener of credentialProfileDeletedListeners) listener(id);
+      }
   for (const id of new Set([...before.keys(), ...after.keys()]))
     if (
       before.get(id)?.updatedAt !== after.get(id)?.updatedAt ||
@@ -954,7 +962,8 @@ export function renameCredentialProfile(
   return patchCredentialProfile(id, { name: rawName });
 }
 
-export function deleteCredentialProfile(id: string): void {
+/** Throws unless the account may be deleted: not a default, not bound. */
+export function assertCredentialProfileDeletable(id: string): void {
   if (isProtectedProfile(id))
     throw new Error("A default profile cannot be deleted.");
   // Every scope: a profile an internal session is still bound to is just as
@@ -966,6 +975,10 @@ export function deleteCredentialProfile(id: string): void {
   ) {
     throw new Error("This profile is still bound to one or more sessions.");
   }
+}
+
+export function deleteCredentialProfile(id: string): void {
+  assertCredentialProfileDeletable(id);
   const profiles = readRegistry();
   if (!profiles.some((profile) => profile.id === id))
     throw new Error("Credential profile not found.");

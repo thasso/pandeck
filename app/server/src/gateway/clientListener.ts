@@ -22,7 +22,8 @@ import { randomBytes } from "node:crypto";
 import https from "node:https";
 import type http from "node:http";
 import type net from "node:net";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import tls from "node:tls";
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -438,6 +439,16 @@ export async function startClientListener(
     [CLIENT_METHODS.loginCancel]: (payload, client) => {
       const loginId = decodeLoginId(payload);
       loginCall(() => logins.cancel(client.id, loginId));
+      return encodeControlDone();
+    },
+    [CLIENT_METHODS.removeAccount]: (payload, client) => {
+      const profile = ownedAccount(client.userId, decodeAccountId(payload));
+      logins.forget(profile.id);
+      removeAccount(profile.id);
+      // Only a token file the gateway made for the account goes with it.
+      const ownDir = join(deps.stateDir, "accounts", profile.id);
+      if (dirname(profile.tokenFile) === ownDir)
+        rmSync(ownDir, { recursive: true, force: true });
       return encodeControlDone();
     },
   };

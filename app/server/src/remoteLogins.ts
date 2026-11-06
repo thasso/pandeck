@@ -12,6 +12,8 @@
  * - Codex: the device code's URL and code become the account's login state,
  *   as the server's own login sets them.
  *
+ * - Deleting an account removes it on the gateway; the mirror then drops it.
+ *
  * One run per account; a finished one is kept two minutes for a viewer that
  * reconnects.
  */
@@ -21,6 +23,7 @@ import type {
   ClaudeLoginTerminalStatus,
 } from "@assistant/shared";
 import {
+  assertCredentialProfileDeletable,
   clearCredentialProfileLoginState,
   completeCredentialProfileLogin,
   credentialProfileById,
@@ -50,6 +53,8 @@ export interface RemoteLoginPort {
   }): Promise<{ loginId: string; accountId: string }>;
   input(loginId: string, text: string): Promise<void>;
   cancel(loginId: string): Promise<void>;
+  /** Removes the account on the gateway (`accounts.remove`). */
+  remove(accountId: string): Promise<void>;
 }
 
 interface RemoteRun {
@@ -201,6 +206,15 @@ export async function createRemoteAccount(
   name: string,
 ): Promise<string> {
   return (await begin({ kind, name })).accountId;
+}
+
+/** Settings' delete in client mode: the gateway removes the account. */
+export async function deleteRemoteAccount(accountId: string): Promise<void> {
+  if (!port) throw new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT);
+  if (!credentialProfileById(accountId))
+    throw new Error("Credential profile not found.");
+  assertCredentialProfileDeletable(accountId);
+  await port.remove(accountId);
 }
 
 /** Settings' Codex login for an account: its device code shows on it. */

@@ -16,6 +16,9 @@
  * - `leases.bindSession`, `leases.revoke` and `leases.reconcileWorker` as in
  *   gateway control 1.x, on this client's leases only.
  *
+ * - `accounts.remove {accountId}` answers `{}`: removes the user's account,
+ *   its leases and any login it has running, and the token file the gateway
+ *   made for it.
  * - `logins.start {kind, accountId?, name?}` answers `{loginId, accountId}`:
  *   a login for the user's account, or for a new one (`logins.ts`).
  * - `logins.input {loginId, text}` and `logins.cancel {loginId}` answer `{}`,
@@ -53,6 +56,7 @@ export const CLIENT_METHODS = {
   bindSession: "leases.bindSession",
   revoke: "leases.revoke",
   reconcileWorker: "leases.reconcileWorker",
+  removeAccount: "accounts.remove",
   loginStart: "logins.start",
   loginInput: "logins.input",
   loginCancel: "logins.cancel",
