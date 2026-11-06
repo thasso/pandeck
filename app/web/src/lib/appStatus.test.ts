@@ -45,3 +45,29 @@ it("ranks restart and connection above login without bypassing the connection gr
     appStatus({ ...input, connected: false, graceElapsed: false }),
   ).toBeNull();
 });
+it("says the gateway's state below restart and connection, above a login, with a static icon and no link", () => {
+  expect(appStatus({ ...input, gatewayStatus: "unreachable" })).toEqual({
+    kind: "gateway-unreachable",
+    label: "Credential gateway not running",
+    busy: false,
+  });
+  expect(appStatus({ ...input, gatewayStatus: "incompatible" })).toEqual({
+    kind: "gateway-incompatible",
+    label: "Credential gateway incompatible",
+    busy: false,
+  });
+  expect(appStatus({ ...input, gatewayStatus: "ok" })?.kind).toBe(
+    "needs-login",
+  );
+  expect(
+    appStatus({
+      ...input,
+      gatewayStatus: "unreachable",
+      reloading: { phase: "pending" },
+    })?.kind,
+  ).toBe("restart-queued");
+  expect(
+    appStatus({ ...input, gatewayStatus: "unreachable", connected: false })
+      ?.kind,
+  ).toBe("reconnecting");
+});

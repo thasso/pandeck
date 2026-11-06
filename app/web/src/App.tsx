@@ -7088,6 +7088,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                         reloading={state.reloading}
                         hydrationSource={state.hydrationSource}
                         accountLoginAlerts={state.accountLoginAlerts}
+                        gatewayStatus={state.gatewayStatus}
                         onNavigate={navigate}
                       />
                     )
@@ -7723,6 +7724,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                 reloading={state.reloading}
                 hydrationSource={state.hydrationSource}
                 accountLoginAlerts={state.accountLoginAlerts}
+                gatewayStatus={state.gatewayStatus}
                 onNavigate={navigate}
                 placement="floating"
               />

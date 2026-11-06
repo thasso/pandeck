@@ -37,6 +37,7 @@ import {
   announceAccountHealthChanged,
   initializeAccountHealth,
 } from "./accountHealth.ts";
+import { setGatewayStatusBroadcaster } from "./gatewayStatus.ts";
 import { setLoginHoldAnnouncer } from "./loginHolds.ts";
 import {
   listCredentialProfiles,
@@ -230,6 +231,7 @@ class SessionHub {
       subscribeDeleted: subscribeCredentialProfileDeleted,
     });
     setLoginHoldAnnouncer(announceAccountHealthChanged);
+    setGatewayStatusBroadcaster((message) => this.broadcastAll(message));
     // The usage cache never fetches headlessly, so it asks the hub whether any
     // browser is attached at all before doing background work.
     setUsageBroadcaster({

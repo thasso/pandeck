@@ -167,6 +167,16 @@ const serverBundle = await bundle(join(repoRoot, "app/server/src/index.ts"), {
   define: SERVER_BUNDLE_DEFINE,
   plugins,
 });
+// The standalone gateway and its Codex renewal child, each its own entry
+// (docs/deployment.md#bun-package).
+const gatewayBundle = await bundle(
+  join(repoRoot, "app/server/src/gateway/main.ts"),
+  { define: SERVER_BUNDLE_DEFINE, plugins },
+);
+const codexRenewBundle = await bundle(
+  join(repoRoot, "app/server/src/codexRenewMain.ts"),
+  { define: SERVER_BUNDLE_DEFINE, plugins },
+);
 const workerBundle = await bundle(xhrWorkerSource, { plugins });
 const layoutWorkerBundle = await bundle(
   join(repoRoot, "app/server/src/initiativeLayoutWorker.ts"),
@@ -181,6 +191,18 @@ mkdirSync(join(outputDir, "workers"), { recursive: true });
 mkdirSync(join(outputDir, "native"), { recursive: true });
 copy(process.execPath, "personal-assistant-server", 0o755);
 await write(join(outputDir, "server.js"), serverBundle);
+await write(join(outputDir, "gateway.js"), gatewayBundle);
+await write(join(outputDir, "codex-renew.js"), codexRenewBundle);
+await write(
+  join(outputDir, "gateway-admin.js"),
+  await bundle(join(repoRoot, "app/server/src/gateway/adminMain.ts"), {
+    plugins,
+  }),
+);
+await write(
+  join(outputDir, "relay.js"),
+  await bundle(join(repoRoot, "app/server/src/relay/main.ts"), { plugins }),
+);
 await write(join(outputDir, "workers", "xhr-sync-worker.js"), workerBundle);
 // elkjs ships inside the layout worker, unmodified and under the EPL-2.0
 // (NOTICE). Minifying drops its file headers, so the bundle ends with its

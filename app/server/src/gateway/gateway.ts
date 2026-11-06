@@ -56,6 +56,9 @@ import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
 import { createVault } from "./vault.ts";
 
+/** How often a drain looks for streams that have ended. */
+const DRAIN_POLL_MS = 100;
+
 export interface GatewayOptions {
   /** 0 picks a free port. The host is always `127.0.0.1`. */
   port?: number;
@@ -108,8 +111,11 @@ export interface RunningGateway {
   checkHolds(): void;
   /** Runs one renewal tick now, as the timer does; tests and the probe. */
   renewDue(): Promise<void>;
-  /** Stops listening, ends control connections and destroys open sockets. */
-  close(): Promise<void>;
+  /**
+   * Stops listening and ends control connections. Open model requests get
+   * `drainMs` to finish (default none), then their sockets are destroyed.
+   */
+  close(options?: { drainMs?: number }): Promise<void>;
 }
 
 export async function startGateway(
@@ -253,15 +259,23 @@ export async function startGateway(
     holds: vault.holdRecords,
     checkHolds: control.checkHolds,
     renewDue: vault.renewDue,
-    async close() {
+    async close({ drainMs = 0 } = {}) {
       clearInterval(holdCheck);
       clearInterval(renewTick);
-      vault.close();
       control.close();
       await clients?.close();
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),
       );
+      // A stream still answering keeps its credential until it ends or the
+      // drain does.
+      const drainUntil = Date.now() + drainMs;
+      for (;;) {
+        server.closeIdleConnections();
+        if (sockets.size === 0 || Date.now() >= drainUntil) break;
+        await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+      }
+      vault.close();
       for (const socket of sockets) socket.destroy();
       sockets.clear();
       agent.destroy();

@@ -19,6 +19,7 @@ import {
   directDependencyRoot,
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
+import { checkGatewayEntries } from "./bun-gateway-check.mjs";
 import {
   collectWebNotices,
   renderWebNotices,
@@ -68,6 +69,9 @@ const commandArguments =
   command === directExecutable ? [command, serverModule] : [command];
 if (!existsSync(command))
   throw new Error(`Server executable not found: ${command}`);
+const gatewayCommand = process.argv[4]
+  ? [resolve(process.argv[4])]
+  : [directExecutable, join(runtimeRoot, "gateway.js")];
 const runtimeManifest = await file(join(runtimeRoot, "package.json")).json();
 const expectedVersion = runtimeManifest.version;
 if (typeof expectedVersion !== "string" || !expectedVersion)
@@ -918,6 +922,10 @@ function checkElkjsNotices() {
 async function checkBunPragma() {
   for (const [bundled, pragma] of [
     ["server.js", BUN_PRAGMA],
+    ["gateway.js", BUN_PRAGMA],
+    ["codex-renew.js", BUN_PRAGMA],
+    ["gateway-admin.js", BUN_PRAGMA],
+    ["relay.js", BUN_PRAGMA],
     ["workers/xhr-sync-worker.js", BUN_PRAGMA],
     ["workers/initiative-layout-worker.js", BUN_PRAGMA],
     ["native/watcher-wrapper.js", BUN_CJS_PRAGMA],
@@ -1581,6 +1589,9 @@ try {
   await checkNativeAssets();
   await runRuntimeProbes();
   await checkCollectedFileHandles();
+  console.log(
+    `Standalone gateway: ${await checkGatewayEntries(runtimeRoot, gatewayCommand)}.`,
+  );
 
   seedDataDir();
   const first = start();
@@ -1627,7 +1638,7 @@ try {
   );
 
   console.log(
-    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, collected FileHandles in server and broker, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
+    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, standalone gateway and Codex child, collected FileHandles in server and broker, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
   );
 } finally {
   await terminateChildren();

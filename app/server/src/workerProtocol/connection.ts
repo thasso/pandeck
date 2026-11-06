@@ -107,8 +107,12 @@ interface ConnectionOptions {
    * without it, at once.
    */
   quiescence?: () => Promise<void>;
-  /** Called once, synchronously, when the connection ends. */
-  onEnd?: (reason: string) => void;
+  /**
+   * Called once, synchronously, when the connection ends. `incompatible` is
+   * true when the dialer's handshake was refused or the welcome named a
+   * version it does not speak.
+   */
+  onEnd?: (reason: string, end: { incompatible: boolean }) => void;
 }
 
 interface Outgoing {
@@ -226,6 +230,10 @@ export class WorkerConnection {
 
   /** End the connection; see the module comment for what happens to requests. */
   end(reason: string): void {
+    this.finish(reason, false);
+  }
+
+  private finish(reason: string, incompatible: boolean): void {
     if (this.endReason !== undefined) return;
     this.endReason = reason;
     clearTimeout(this.handshakeTimer);
@@ -242,7 +250,7 @@ export class WorkerConnection {
     if (this.options.quiescence && received.length > 0)
       void this.options.quiescence().then(release, release);
     else release();
-    this.options.onEnd?.(reason);
+    this.options.onEnd?.(reason, { incompatible });
     this.resolveEnded(reason);
   }
 
@@ -344,13 +352,13 @@ export class WorkerConnection {
       );
     } else {
       if (frame.type === "refused") {
-        this.end(`the server refused: ${frame.reason}`);
+        this.finish(`the server refused: ${frame.reason}`, true);
         return;
       }
       if (frame.type !== "welcome")
         throw new WorkerProtocolError(`Expected welcome, got ${frame.type}.`);
       if (!this.protocol.compatible(frame.version)) {
-        this.end(`the server speaks protocol ${frame.version}`);
+        this.finish(`the server speaks protocol ${frame.version}`, true);
         return;
       }
     }

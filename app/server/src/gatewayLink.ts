@@ -1,9 +1,9 @@
 /**
  * The server's link to the credential gateway (`docs/workers.md`
  * "Credentials"), behind `ASSISTANT_GATEWAY=1`. It runs the gateway in this
- * process with its state in `DATA_DIR/gateway/` and speaks gateway control
- * 1.4 to it over an in-process pair, until the gateway gets its own process
- * and socket.
+ * process with its state in `DATA_DIR/gateway/`, or dials `socketPath` for a
+ * standalone gateway. Both speak gateway control 1.4. Socket mode reconnects
+ * with backoff; in-process mode retains its one-shot boot.
  *
  * Before it is ready the link says hello as this server boot, syncs every
  * credential profile (an OpenAI-compatible account without a token file),
@@ -95,6 +95,7 @@ import {
   WorkerRequestError,
 } from "./workerProtocol/connection.ts";
 import { createInProcessTransport } from "./workerProtocol/inProcessTransport.ts";
+import { dialUnixSocket } from "./workerProtocol/unixSocketTransport.ts";
 
 /** U7's text for an engine open that got no lease. */
 export const GATEWAY_UNAVAILABLE_TEXT =
@@ -153,6 +154,14 @@ export interface GatewayLinkOptions {
   stateDir: string;
   /** The gateway's model listener; 0 picks a free one. */
   port: number;
+  /** Dial a standalone gateway; this link never starts or stops it. */
+  socketPath?: string;
+  /** Socket reconnect backoff, repeating the last delay. */
+  retryDelays?: readonly number[];
+  /** Socket outage threshold; 10 s by default. */
+  unreachableMs?: number;
+  /** Test-only barrier hook, after the snapshot and before its sync. */
+  beforeSync?: (pass: number) => Promise<void>;
   log?: (line: string) => void;
   /** Test and probe seam, passed to the gateway; the server never sets it. */
   upstreams?: UpstreamOverrides;
@@ -174,9 +183,23 @@ interface EngineLeaseGrant {
   profileId: string;
 }
 
+/**
+ * The link's connection: `unreachable` once a standalone gateway has had no
+ * ready connection for 10 s, `incompatible` when its handshake was refused or
+ * it speaks another control major.
+ */
+export type GatewayConnectionState =
+  "connected" | "connecting" | "unreachable" | "incompatible";
+
 export interface GatewayLink {
   /** True once hello, sync and reconcile are done; false if the link failed. */
   readonly ready: Promise<boolean>;
+  /** The connection now (`gatewayStatus.ts`). */
+  connectionState(): GatewayConnectionState;
+  /** Calls `listener` on each change of the connection; answers the unsubscribe. */
+  onConnectionState(
+    listener: (state: GatewayConnectionState) => void,
+  ): () => void;
   /** The gateway this link started, once it has. Tests and the probe read it. */
   readonly gateway: RunningGateway | undefined;
   /**
@@ -326,11 +349,48 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   let gateway: RunningGateway | undefined;
   let connection: WorkerConnection | undefined;
   let closing: Promise<void> | undefined;
+  let stopped = false;
+  let profileGeneration = 0;
+  let leaseGeneration = 0;
+  const liveLocalLeases = new Set<string>();
+  const pendingReleases = new Set<string>();
+  const readyWaiters = new Set<(ok: boolean) => void>();
+  let resolveBoot!: (ok: boolean) => void;
+  const boot = new Promise<boolean>((resolve) => {
+    resolveBoot = resolve;
+  });
+  let wakeRetry: (() => void) | undefined;
+  let outageTimer: ReturnType<typeof setTimeout> | undefined;
+  let outageSince = Date.now();
+  let bootFailed = false;
   const loginStatuses = new Map<string, LoginStatus>();
   const loginStatusListeners = new Set<
     (profileId: string, status: LoginStatus) => void
   >();
   const credentialStatuses = new Map<string, boolean>();
+  let state: GatewayConnectionState = "connecting";
+  const stateListeners = new Set<(state: GatewayConnectionState) => void>();
+  const setState = (next: GatewayConnectionState): void => {
+    if (state === next) return;
+    if (state === "connected") outageSince = Date.now();
+    state = next;
+    if (next === "connected") {
+      clearTimeout(outageTimer);
+      outageTimer = undefined;
+      resolveBoot(true);
+      for (const resolve of readyWaiters) resolve(true);
+      readyWaiters.clear();
+    } else if (next === "unreachable" || next === "incompatible") {
+      log(GATEWAY_UNAVAILABLE_TEXT);
+      log(GATEWAY_LOGIN_UNAVAILABLE_TEXT);
+    }
+    for (const listener of [...stateListeners])
+      try {
+        listener(next);
+      } catch (err) {
+        log(`connection state listener: ${errorText(err)}`);
+      }
+  };
   /**
    * This boot's server leases by profile, from the first call on. A removal
    * drops its entry, so a grant still in flight then is never kept: the
@@ -368,122 +428,240 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
     }
   };
 
-  const boot = (async (): Promise<boolean> => {
-    try {
-      gateway = await (options.start ?? startGateway)({
-        stateDir: options.stateDir,
-        port: options.port,
-        ...(options.log ? { log: options.log } : {}),
-        ...(options.upstreams ? { upstreams: options.upstreams } : {}),
-        ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
-        ...(options.loginDrivers ? { loginDrivers: options.loginDrivers } : {}),
-        ...(options.claudeTokenEndpoint
-          ? { claudeTokenEndpoint: options.claudeTokenEndpoint }
-          : {}),
-      });
-      const [serverEnd, gatewayEnd] = createInProcessTransport();
-      gateway.attachControl(gatewayEnd);
-      const control = new WorkerConnection(serverEnd, {
-        handshake: { role: "worker", workerId: "pandeck-server" },
-        protocol: GATEWAY_CONTROL_PROTOCOL,
-        handlers: {
-          [CONTROL_METHODS.status]: (payload) => {
-            const { profileId, ...status } = decodeHoldStatus(payload);
-            loginStatuses.set(profileId, status);
-            for (const listener of [...loginStatusListeners])
-              try {
-                listener(profileId, { ...status });
-              } catch (err) {
-                log(`${CONTROL_METHODS.status} listener: ${errorText(err)}`);
-              }
-            return Promise.resolve(encodeControlDone());
-          },
-          [CONTROL_METHODS.credential]: (payload) => {
-            const { profileId, needsLogin } = decodeCredentialStatus(payload);
-            credentialStatuses.set(profileId, needsLogin);
-            return Promise.resolve(encodeControlDone());
-          },
-        },
-        onEnd: (reason) => {
-          if (!closing) log(`control connection ended: ${reason}`);
-        },
-      });
-      connection = control;
-      const ofOtherBoots = decodeLeasesRevoked(
-        await control.request(
-          CONTROL_METHODS.hello,
-          encodeControlRequest(hello),
-        ),
-      ).revoked;
-      const profiles: GatewayProfile[] = [];
-      const compatible: CredentialProfile[] = [];
-      for (const profile of registeredProfiles()) {
-        const known = gatewayProfile(profile);
-        if (!known) {
-          log(`profile ${profile.id} skipped: the gateway cannot hold it`);
-          continue;
+  const startOutage = (): void => {
+    if (
+      !options.socketPath ||
+      outageTimer ||
+      stopped ||
+      state === "incompatible"
+    )
+      return;
+    outageTimer = setTimeout(
+      () => {
+        outageTimer = undefined;
+        if (state !== "connected" && state !== "incompatible" && !stopped)
+          setState("unreachable");
+      },
+      Math.max(
+        0,
+        (options.unreachableMs ?? READY_TIMEOUT_MS) -
+          (Date.now() - outageSince),
+      ),
+    );
+    outageTimer.unref();
+  };
+  startOutage();
+
+  const attempts = (async (): Promise<void> => {
+    let failures = 0;
+    const delays = options.retryDelays?.length
+      ? options.retryDelays
+      : [500, 1000, 2000, 4000, 8000, 10_000];
+    while (!stopped) {
+      let control: WorkerConnection | undefined;
+      try {
+        let serverEnd;
+        if (options.socketPath) {
+          serverEnd = await dialUnixSocket(options.socketPath);
+        } else {
+          gateway = await (options.start ?? startGateway)({
+            stateDir: options.stateDir,
+            port: options.port,
+            ...(options.log ? { log: options.log } : {}),
+            ...(options.upstreams ? { upstreams: options.upstreams } : {}),
+            ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
+            ...(options.loginDrivers ? { loginDrivers: options.loginDrivers } : {}),
+            ...(options.claudeTokenEndpoint
+              ? { claudeTokenEndpoint: options.claudeTokenEndpoint }
+              : {}),
+          });
+          const pair = createInProcessTransport();
+          serverEnd = pair[0];
+          gateway.attachControl(pair[1]);
         }
-        profiles.push(known);
-        if (known.provider === "openai-compatible") compatible.push(profile);
+        if (stopped) {
+          serverEnd.close();
+          break;
+        }
+        control = new WorkerConnection(serverEnd, {
+          handshake: { role: "worker", workerId: "pandeck-server" },
+          protocol: GATEWAY_CONTROL_PROTOCOL,
+          handlers: {
+            [CONTROL_METHODS.status]: (payload) => {
+              const { profileId, ...status } = decodeHoldStatus(payload);
+              loginStatuses.set(profileId, status);
+              for (const listener of [...loginStatusListeners])
+                try {
+                  listener(profileId, { ...status });
+                } catch (err) {
+                  log(`${CONTROL_METHODS.status} listener: ${errorText(err)}`);
+                }
+              return Promise.resolve(encodeControlDone());
+            },
+            [CONTROL_METHODS.credential]: (payload) => {
+              const { profileId, needsLogin } = decodeCredentialStatus(payload);
+              credentialStatuses.set(profileId, needsLogin);
+              return Promise.resolve(encodeControlDone());
+            },
+          },
+          onEnd: (reason, { incompatible }) => {
+            if (stopped) return;
+            log(`control connection ended: ${reason}`);
+            setState(incompatible ? "incompatible" : "connecting");
+            startOutage();
+          },
+        });
+        connection = control;
+        const ofOtherBoots = decodeLeasesRevoked(
+          await control.request(
+            CONTROL_METHODS.hello,
+            encodeControlRequest(hello),
+          ),
+        ).revoked;
+        let pass = 0;
+        for (;;) {
+          const generation = profileGeneration;
+          const liveGeneration = leaseGeneration;
+          const profiles: GatewayProfile[] = [];
+          const compatible: CredentialProfile[] = [];
+          for (const profile of registeredProfiles()) {
+            const known = gatewayProfile(profile);
+            if (!known) {
+              log(`profile ${profile.id} skipped: the gateway cannot hold it`);
+              continue;
+            }
+            profiles.push(known);
+            if (known.provider === "openai-compatible")
+              compatible.push(profile);
+          }
+          await options.beforeSync?.(++pass);
+          decodeLeasesRevoked(
+            await control.request(
+              CONTROL_METHODS.syncProfiles,
+              encodeControlRequest({ profiles }),
+            ),
+          );
+          // The first pass of a new boot has no live local engines.
+          const ofDeadEngines = decodeLeasesRevoked(
+            await control.request(
+              CONTROL_METHODS.reconcileWorker,
+              encodeControlRequest({
+                workerId: IN_PROCESS_WORKER_ID,
+                live: [...liveLocalLeases],
+              }),
+            ),
+          ).revoked;
+          for (const holdId of pendingReleases) {
+            try {
+              decodeHoldReleased(
+                await control.request(
+                  CONTROL_METHODS.loginRelease,
+                  encodeControlRequest({ holdId }),
+                ),
+              );
+              pendingReleases.delete(holdId);
+            } catch (err) {
+              if (
+                err instanceof WorkerRequestError &&
+                err.code === UNKNOWN_HOLD
+              )
+                pendingReleases.delete(holdId);
+              else throw err;
+            }
+          }
+          // Before ready, so no engine's first compatible request beats it; one
+          // account's failure does not stop the next.
+          for (const profile of compatible)
+            await pushCompat(
+              (method, payload) => control!.request(method, payload),
+              profile,
+            );
+          // No await between the final generation checks and ready. A change
+          // during any awaited pass is covered by another complete snapshot.
+          if (
+            generation !== profileGeneration ||
+            liveGeneration !== leaseGeneration
+          )
+            continue;
+          if (stopped || connection !== control || control.isEnded) break;
+          setState("connected");
+          failures = 0;
+          log(
+            `ready: ${profiles.length} profiles; revoked ${ofOtherBoots.length} server and ${ofDeadEngines.length} engine leases of earlier boots`,
+          );
+          break;
+        }
+        if (!stopped) await control.ended;
+      } catch (err) {
+        if (!stopped) log(`unavailable: ${failure(err)}`);
+      } finally {
+        control?.end("the gateway attempt ended");
+        if (connection === control) connection = undefined;
       }
-      decodeLeasesRevoked(
-        await control.request(
-          CONTROL_METHODS.syncProfiles,
-          encodeControlRequest({ profiles }),
-        ),
-      );
-      // This boot holds no lease yet: every grant waits for ready.
-      const ofDeadEngines = decodeLeasesRevoked(
-        await control.request(
-          CONTROL_METHODS.reconcileWorker,
-          encodeControlRequest({ workerId: IN_PROCESS_WORKER_ID, live: [] }),
-        ),
-      ).revoked;
-      // Before ready, so no engine's first compatible request beats it; one
-      // account's failure does not stop the next.
-      for (const profile of compatible)
-        await pushCompat(
-          (method, payload) => control.request(method, payload),
-          profile,
-        );
-      log(
-        `ready: ${profiles.length} profiles; revoked ${ofOtherBoots.length} server and ${ofDeadEngines.length} engine leases of earlier boots`,
-      );
-      return true;
-    } catch (err) {
-      log(`unavailable: ${failure(err)}`);
-      return false;
+      // Preserve today's one-shot in-process boot. Only socket mode retries.
+      if (!options.socketPath) {
+        bootFailed = true;
+        resolveBoot(false);
+        for (const resolve of readyWaiters) resolve(false);
+        readyWaiters.clear();
+        break;
+      }
+      if (stopped) break;
+      startOutage();
+      const delay = delays[Math.min(failures++, delays.length - 1)]!;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          wakeRetry = undefined;
+          resolve();
+        }, delay);
+        wakeRetry = () => {
+          clearTimeout(timer);
+          wakeRetry = undefined;
+          resolve();
+        };
+      });
     }
   })();
 
   /** The tail of the one queue, so requests reach the gateway in call order. */
-  let tail: Promise<unknown> = boot;
+  let tail: Promise<unknown> = Promise.resolve();
   const request = (method: string, payload: Payload): Promise<Payload> => {
+    const current = state === "connected" ? connection : undefined;
     const sent = tail.then(() => {
-      if (!connection) throw new Error("the gateway did not start");
-      return connection.request(method, payload);
+      if (!current || current !== connection || state !== "connected")
+        throw new Error("the gateway is not ready");
+      return current.request(method, payload);
     });
     tail = sent.catch(() => {});
     return sent;
   };
 
   /** After the queue's tail like `request`, without becoming it. */
-  const requestAside = (method: string, payload: Payload): Promise<Payload> =>
-    tail.then(() => {
-      if (!connection) throw new Error("the gateway did not start");
-      return connection.request(method, payload);
+  const requestAside = (method: string, payload: Payload): Promise<Payload> => {
+    const current = state === "connected" ? connection : undefined;
+    return tail.then(() => {
+      if (!current || current !== connection || state !== "connected")
+        throw new Error("the gateway is not ready");
+      return current.request(method, payload);
     });
+  };
 
-  const readyWithin = (ms: number): Promise<boolean> =>
-    new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), ms);
-      void boot.then((ok) => {
+  const readyWithin = (ms: number): Promise<boolean> => {
+    if (state === "connected" && !stopped) return Promise.resolve(true);
+    if (stopped || bootFailed) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const done = (ok: boolean): void => {
         clearTimeout(timer);
+        readyWaiters.delete(done);
         resolve(ok);
-      });
+      };
+      const timer = setTimeout(() => done(false), ms);
+      readyWaiters.add(done);
     });
+  };
 
   const unsubscribe = subscribeCredentialProfileChanges((id) => {
+    profileGeneration += 1;
     // Read now, so quick changes are sent in the order they happened.
     const current = credentialProfileById(id);
     const profile = current && gatewayProfile(current);
@@ -491,6 +669,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       ? CONTROL_METHODS.upsertProfile
       : CONTROL_METHODS.removeProfile;
     if (!profile) serverLeases.delete(id);
+    if (state !== "connected") return;
     request(
       method,
       encodeControlRequest(profile ? { profile } : { profileId: id }),
@@ -512,7 +691,9 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
   ): Promise<EngineGatewayAccess> => {
     // Ready implies a started gateway, the lease's only destination.
     const baseUrl = (await readyWithin(READY_TIMEOUT_MS))
-      ? gateway?.url
+      ? options.socketPath
+        ? `http://127.0.0.1:${options.port}`
+        : gateway?.url
       : undefined;
     if (baseUrl === undefined) {
       log(`${CONTROL_METHODS.grant} (server, profile ${profileId}): not ready`);
@@ -536,11 +717,20 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
 
   const link: GatewayLink = {
     ready: boot,
+    connectionState: () => state,
+    onConnectionState(listener) {
+      stateListeners.add(listener);
+      return () => {
+        stateListeners.delete(listener);
+      };
+    },
     get gateway() {
       return gateway;
     },
     get baseUrl() {
-      return gateway?.url;
+      return options.socketPath
+        ? `http://127.0.0.1:${options.port}`
+        : gateway?.url;
     },
     async grantEngineLease({ workerId, sessionId, profileId }) {
       if (!(await readyWithin(READY_TIMEOUT_MS))) {
@@ -548,7 +738,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         throw new GatewayUnavailableError();
       }
       try {
-        return decodeLeaseGranted(
+        const granted = decodeLeaseGranted(
           await request(
             CONTROL_METHODS.grant,
             encodeControlRequest({
@@ -559,6 +749,11 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
             }),
           ),
         );
+        if (workerId === undefined || workerId === IN_PROCESS_WORKER_ID) {
+          liveLocalLeases.add(granted.leaseId);
+          leaseGeneration += 1;
+        }
+        return granted;
       } catch (err) {
         log(`${CONTROL_METHODS.grant} (profile ${profileId}): ${failure(err)}`);
         throw new GatewayUnavailableError();
@@ -589,6 +784,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       }
     },
     async revokeLease(leaseId, reason) {
+      if (liveLocalLeases.delete(leaseId)) leaseGeneration += 1;
       try {
         decodeLeaseRevoked(
           await request(
@@ -640,6 +836,10 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
       }
     },
     async releaseLoginHold(holdId) {
+      // Record before awaiting: a release settled during a reconnect's last
+      // pass must be replayed before it can become ready.
+      pendingReleases.add(holdId);
+      profileGeneration += 1;
       try {
         decodeHoldReleased(
           await request(
@@ -651,7 +851,10 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         log(
           `${CONTROL_METHODS.loginRelease} (hold ${holdId}): ${failure(err)}`,
         );
+        if (!(err instanceof WorkerRequestError && err.code === UNKNOWN_HOLD))
+          return;
       }
+      pendingReleases.delete(holdId);
     },
     async forceReleaseLoginHold(holdId) {
       try {
@@ -687,9 +890,15 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
     close() {
       closing ??= (async () => {
         if (installed === link) installed = undefined;
+        stopped = true;
         unsubscribe();
-        await boot;
+        clearTimeout(outageTimer);
+        wakeRetry?.();
         connection?.end("the server link closed");
+        resolveBoot(false);
+        for (const resolve of readyWaiters) resolve(false);
+        readyWaiters.clear();
+        await attempts;
         await gateway?.close();
       })();
       return closing;

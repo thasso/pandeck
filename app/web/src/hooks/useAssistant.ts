@@ -879,6 +879,8 @@ export interface UIState {
     ServerMessage,
     { type: "accountLoginAlerts" }
   >["accounts"];
+  /** The credential gateway's state; `ok` until the server says otherwise. */
+  gatewayStatus: Extract<ServerMessage, { type: "gatewayStatus" }>["state"];
   /** Compact title/route/existence metadata for resolved pa:// object links. */
   objectLinks: Record<string, PaObjectLinkResolution>;
 }
@@ -1036,6 +1038,7 @@ const emptyInitial: UIState = {
   revealRequest: null,
   reloading: null,
   accountLoginAlerts: [],
+  gatewayStatus: "ok",
   objectLinks: {},
 };
 
@@ -6448,6 +6451,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return state;
     case "accountLoginAlerts":
       return { ...state, accountLoginAlerts: msg.accounts };
+    case "gatewayStatus":
+      return { ...state, gatewayStatus: msg.state };
     case "devReload":
       return {
         ...state,

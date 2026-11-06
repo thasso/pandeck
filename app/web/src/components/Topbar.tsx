@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { AccountLoginAlert } from "@assistant/shared";
+import type { AccountLoginAlert, GatewayStatusState } from "@assistant/shared";
 import {
   ArrowLeft,
   ArrowRight,
@@ -65,6 +65,7 @@ interface Props {
   reloading: AppReloadState | null | undefined;
   hydrationSource: "empty" | "cache" | "live";
   accountLoginAlerts?: AccountLoginAlert[] | undefined;
+  gatewayStatus?: GatewayStatusState | undefined;
   onNavigate?: ((path: string) => void) | undefined;
 }
 
@@ -80,6 +81,7 @@ export function Topbar({
   reloading,
   hydrationSource,
   accountLoginAlerts,
+  gatewayStatus,
   onNavigate,
 }: Props) {
   const dragRegion = usesOverlayTitlebar();
@@ -139,6 +141,7 @@ export function Topbar({
           reloading={reloading}
           hydrationSource={hydrationSource}
           accountLoginAlerts={accountLoginAlerts}
+          gatewayStatus={gatewayStatus}
           onNavigate={onNavigate}
           placement="bar"
         />

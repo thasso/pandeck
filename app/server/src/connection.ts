@@ -94,6 +94,7 @@ import { testJiraSettings } from "./jiraSettings.ts";
 import { hub } from "./hub.ts";
 import { sessionListHiddenProbe } from "./permanentAssistantVisibility.ts";
 import { sendAccountLoginAlertsTo } from "./accountHealth.ts";
+import { sendGatewayStatusTo } from "./gatewayStatus.ts";
 import {
   isLiveSession,
   type HarnessDriver,
@@ -657,6 +658,7 @@ export class Connection implements Viewer {
     if (initial.unavailable) this.send(initial.unavailable);
     hub.sendReloadStateTo(this);
     sendAccountLoginAlertsTo(this);
+    sendGatewayStatusTo(this);
     await hub.sendPermanentAssistantUnreadTo(this);
     await this.deliverInitialPendingAgentRelays();
     await this.maybeStartPostReloadContinuation();

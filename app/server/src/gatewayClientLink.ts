@@ -40,6 +40,7 @@ import {
   GATEWAY_LOGIN_UNAVAILABLE_TEXT,
   GatewayUnavailableError,
   installGatewayLink,
+  type GatewayConnectionState,
   type GatewayLink,
 } from "./gatewayLink.ts";
 import { installRemoteLoginPort, remoteLoginEvent } from "./remoteLogins.ts";
@@ -86,6 +87,14 @@ export function startGatewayClientLink(
   let redial: ReturnType<typeof setTimeout> | undefined;
   const needsLogin = new Map<string, boolean>();
   const serverLeases = new Map<string, Promise<EngineGatewayAccess>>();
+  const stateListeners = new Set<(state: GatewayConnectionState) => void>();
+  /** Connected or connecting only: client mode reports no unreachable yet. */
+  const stateNow = (): GatewayConnectionState =>
+    connection ? "connected" : "connecting";
+  const stateChanged = (): void => {
+    const state = stateNow();
+    for (const listener of [...stateListeners]) listener(state);
+  };
   let resolveReady!: (ok: boolean) => void;
   const ready = new Promise<boolean>((resolve) => {
     resolveReady = resolve;
@@ -122,7 +131,10 @@ export function startGatewayClientLink(
         },
       },
       onEnd: (reason) => {
-        if (connection === opened) connection = undefined;
+        if (connection === opened) {
+          connection = undefined;
+          stateChanged();
+        }
         if (closing) return;
         log(`connection ended: ${reason}`);
         schedule();
@@ -162,6 +174,7 @@ export function startGatewayClientLink(
         return;
       }
       connection = opened;
+      stateChanged();
       log(`ready as client ${clientId} of user ${userId}`);
       resolveReady(true);
     } catch (err) {
@@ -259,6 +272,13 @@ export function startGatewayClientLink(
   let uninstall: () => void = () => {};
   const link: GatewayLink = {
     ready,
+    connectionState: stateNow,
+    onConnectionState(listener) {
+      stateListeners.add(listener);
+      return () => {
+        stateListeners.delete(listener);
+      };
+    },
     gateway: undefined,
     baseUrl,
     async grantEngineLease({ workerId, sessionId, profileId }) {
