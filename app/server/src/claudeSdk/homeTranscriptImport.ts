@@ -27,7 +27,7 @@
  *   boot continues; the next boot resumes from the persisted phase.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { constants, type Dirent } from "node:fs";
+import { constants, type Dirent, type Stats } from "node:fs";
 import {
   chmod,
   lstat,
@@ -53,6 +53,8 @@ export type HomeTranscriptImportStep =
   | "state-backup"
   | "set-aside"
   | "state-copy"
+  /** A source directory of the unit was listed, before its entries are copied. */
+  | "listed"
   | "staged"
   | "recorded"
   | "installed-tree"
@@ -344,7 +346,9 @@ async function runImport(
     await rm(installedTree, { recursive: true, force: true });
     let files: ManifestFile[];
     try {
-      files = await stageUnit(source, staging, unit);
+      files = await stageUnit(source, staging, unit, () =>
+        afterStep("listed", unit.id),
+      );
     } catch (err) {
       if (!(err instanceof UnitSkip)) throw err;
       counts[err.kind] += 1;
@@ -493,29 +497,43 @@ async function regularTreeBytes(dir: string): Promise<number | undefined> {
  * Copy one unit into `staging/<key>/`: the `<id>/` tree, then the main, each
  * file hashed from the bytes written and fsynced, each directory fsynced
  * once its entries are in. Files end 0600 and directories 0700.
+ *
+ * Paths are walked by name, so every source directory the copy goes through
+ * (the project, the tree and each directory in it) must be a real directory,
+ * not a link, both before it is used and after everything under it is
+ * staged, with the same device and inode. A directory replaced since the plan
+ * makes the unit unsupported and its staging is discarded, so nothing read
+ * through a link is recorded or installed. This detects a replacement present
+ * at either check; it cannot see one made and undone between them, since Node
+ * has no directory-relative open or listing.
  */
 async function stageUnit(
   source: string,
   staging: string,
   unit: Unit,
+  listed: () => void,
 ): Promise<ManifestFile[]> {
+  const project = join(source, unit.key);
+  const projectBefore = await sourceDirectory(project);
   const stagedKey = join(staging, unit.key);
   await ensureDir(stagedKey);
   const files: ManifestFile[] = [];
   if (unit.hasTree)
     await stageTree(
-      join(source, unit.key, unit.id),
+      join(project, unit.id),
       join(stagedKey, unit.id),
       `${unit.key}/${unit.id}`,
       files,
+      listed,
     );
   files.push({
     path: `${unit.key}/${unit.id}.jsonl`,
     ...(await copyFile(
-      join(source, unit.key, `${unit.id}.jsonl`),
+      join(project, `${unit.id}.jsonl`),
       join(stagedKey, `${unit.id}.jsonl`),
     )),
   });
+  await assertSameDirectory(project, projectBefore);
   await fsyncDir(stagedKey);
   return files;
 }
@@ -525,7 +543,9 @@ async function stageTree(
   to: string,
   relative: string,
   files: ManifestFile[],
+  listed: () => void,
 ): Promise<void> {
+  const before = await sourceDirectory(from);
   await mkdir(to, { mode: 0o700 });
   await chmod(to, 0o700);
   let entries: Dirent[];
@@ -534,6 +554,7 @@ async function stageTree(
   } catch (err) {
     throw skipFor(err);
   }
+  listed();
   entries.sort(byName);
   for (const entry of entries) {
     const path = `${relative}/${entry.name}`;
@@ -543,6 +564,7 @@ async function stageTree(
         join(to, entry.name),
         path,
         files,
+        listed,
       );
     else if (entry.isFile())
       files.push({
@@ -551,7 +573,33 @@ async function stageTree(
       });
     else throw new UnitSkip("unsupported");
   }
+  await assertSameDirectory(from, before);
   await fsyncDir(to);
+}
+
+/**
+ * The source directory at `path`, never through a link at it: gone makes the
+ * unit missing, anything but a directory unsupported.
+ */
+async function sourceDirectory(path: string): Promise<Stats> {
+  let stat: Stats;
+  try {
+    stat = await lstat(path);
+  } catch (err) {
+    throw skipFor(err);
+  }
+  if (!stat.isDirectory()) throw new UnitSkip("unsupported");
+  return stat;
+}
+
+/**
+ * `path` is still the directory `before` was. Either way the unit is skipped:
+ * gone makes it missing (AC10(2)), replaced unsupported.
+ */
+async function assertSameDirectory(path: string, before: Stats): Promise<void> {
+  const after = await sourceDirectory(path);
+  if (after.dev !== before.dev || after.ino !== before.ino)
+    throw new UnitSkip("unsupported");
 }
 
 /** Stream `from` into a new `to`, never following a link at `from`. */
@@ -851,7 +899,24 @@ async function listNames(dir: string): Promise<string[]> {
   }
 }
 
-/** Free bytes for `dir`'s filesystem, from its nearest existing ancestor. */
+/**
+ * What says statfs itself is not there: no such call in the kernel or on the
+ * filesystem, or none in this runtime. Only these skip the space check.
+ */
+const STATFS_UNSUPPORTED = new Set([
+  "ENOSYS",
+  "ENOTSUP",
+  "EOPNOTSUPP",
+  "ERR_METHOD_NOT_IMPLEMENTED",
+  "ERR_NOT_IMPLEMENTED",
+]);
+
+/**
+ * Free bytes for `dir`'s filesystem, from its nearest existing ancestor;
+ * undefined only when statfs is unsupported. Any other failure (EIO, EACCES,
+ * …) throws, so the run aborts before it changes anything and retries next
+ * boot.
+ */
 async function statfsFreeBytes(dir: string): Promise<number | undefined> {
   if (typeof statfs !== "function") return undefined;
   let probe = dir;
@@ -860,8 +925,10 @@ async function statfsFreeBytes(dir: string): Promise<number | undefined> {
       const disk = await statfs(probe);
       return Number(disk.bavail) * Number(disk.bsize);
     } catch (err) {
+      const code = errorCode(err);
+      if (code !== undefined && STATFS_UNSUPPORTED.has(code)) return undefined;
       const parent = dirname(probe);
-      if (errorCode(err) !== "ENOENT" || parent === probe) return undefined;
+      if (code !== "ENOENT" || parent === probe) throw err;
       probe = parent;
     }
   }

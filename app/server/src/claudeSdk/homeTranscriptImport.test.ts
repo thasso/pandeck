@@ -26,6 +26,8 @@ import {
   appendFileSync,
   cpSync,
 } from "node:fs";
+import fsp from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, test, vi } from "vitest";
@@ -654,6 +656,10 @@ test("AC12: a unit's record is complete on disk before any of its renames, and i
     `${U3}:staged:false:false:false`,
     `${U3}:recorded:true:false:false`,
     `${U3}:installed-main:true:false:true`,
+    // U1's tree, subagents/ and tool-results/, each listed before any record.
+    `${U1}:listed:false:false:false`,
+    `${U1}:listed:false:false:false`,
+    `${U1}:listed:false:false:false`,
     `${U1}:staged:false:false:false`,
     `${U1}:recorded:true:false:false`,
     `${U1}:installed-tree:true:true:false`,
@@ -756,12 +762,139 @@ test("AC10(3): a unit holding a link or a linked main is unsupported and skipped
   assert.ok(existsSync(join(fx.D, K1, `${U2}.jsonl`)));
 });
 
+/** A home directory that is not Pandeck's: anything copied from it is a leak. */
+const FOREIGN = "FOREIGN-SENTINEL";
+function foreignDir(fx: Fixture, layout: Record<string, string>): string {
+  const dir = join(fx.home, ".claude", "personal-config");
+  for (const [path, body] of Object.entries(layout)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), `${FOREIGN} ${body}\n`);
+  }
+  return dir;
+}
+
+/** Every installed or staged file body holding the foreign sentinel. */
+function leaked(fx: Fixture): string[] {
+  return Object.entries({
+    ...digest(fx.D),
+    ...Object.fromEntries(
+      Object.entries(digest(fx.W)).map(([rel, node]) => [`W/${rel}`, node]),
+    ),
+  })
+    .filter(([, node]) => node.kind === "file")
+    .map(([rel]) =>
+      rel.startsWith("W/") ? join(fx.W, rel.slice(2)) : join(fx.D, rel),
+    )
+    .filter((path) => readFileSync(path, "utf8").includes(FOREIGN));
+}
+
+/** One import whose hook changes the home under it, as another local actor might. */
+function runChangingHome(
+  fx: Fixture,
+  afterStep: NonNullable<HomeTranscriptImportOptions["afterStep"]>,
+): Promise<HomeTranscriptImportResult> {
+  return importDefaultClaudeHomeTranscripts({
+    homeProjectsDir: fx.S,
+    profileRoot: fx.P,
+    providerSessionIds: () => IDS,
+    freeBytes: async () => undefined,
+    now: () => NOW,
+    afterStep,
+  });
+}
+
+/** U1 skipped as unsupported, U2 and U3 copied and recorded, nothing foreign anywhere. */
+function assertOnlyU1Unsupported(
+  fx: Fixture,
+  result: HomeTranscriptImportResult,
+): void {
+  assert.equal(result.outcome, "done");
+  if (result.outcome !== "done") return;
+  assert.equal(result.counts.unsupported, 1);
+  assert.equal(result.counts.copied, 2);
+  assert.deepEqual(leaked(fx), []);
+  assert.equal(existsSync(join(fx.D, K1, `${U1}.jsonl`)), false);
+  assert.equal(existsSync(join(fx.D, K1, U1)), false);
+  assert.deepEqual(
+    Object.keys(manifest(fx).effective).sort(),
+    [`${K1}/${U2}`, `${K2}/${U3}`].sort(),
+  );
+  assertManifestMatchesInstalled(fx);
+  assert.equal(existsSync(join(fx.W, "staging")), false);
+}
+
+test("F001: a unit's tree replaced by a link after the plan is unsupported, and nothing behind the link is copied", async () => {
+  const fx = fixture();
+  const foreign = foreignDir(fx, { "settings.json": "settings" });
+  const result = await runChangingHome(fx, (step) => {
+    if (step !== "state-copy") return;
+    rmSync(join(fx.S, K1, U1), { recursive: true });
+    symlinkSync(foreign, join(fx.S, K1, U1));
+  });
+  assertOnlyU1Unsupported(fx, result);
+  assert.equal((await run(fx)).outcome, "already-done");
+});
+
+test("F001: a nested tree directory replaced by a link after its parent was listed is unsupported", async () => {
+  const fx = fixture();
+  const foreign = foreignDir(fx, { "agent-a.jsonl": "nested" });
+  let swapped = false;
+  const result = await runChangingHome(fx, (step, id) => {
+    if (step !== "listed" || id !== U1 || swapped) return;
+    swapped = true;
+    rmSync(join(fx.S, K1, U1, "subagents"), { recursive: true });
+    symlinkSync(foreign, join(fx.S, K1, U1, "subagents"));
+  });
+  assert.ok(swapped, "the tree was listed");
+  assertOnlyU1Unsupported(fx, result);
+});
+
+test("F001: a tree replaced by a look-alike link while its files are copied is caught by the recheck", async () => {
+  const fx = fixture();
+  const foreign = foreignDir(fx, {
+    "subagents/agent-a.jsonl": "look-alike",
+    "tool-results/r1.txt": "look-alike",
+  });
+  let swapped = false;
+  const result = await runChangingHome(fx, (step, id) => {
+    if (step !== "listed" || id !== U1 || swapped) return;
+    swapped = true;
+    renameSync(join(fx.S, K1, U1), join(fx.home, "moved-tree"));
+    symlinkSync(foreign, join(fx.S, K1, U1));
+  });
+  assert.ok(swapped, "the tree was listed");
+  assertOnlyU1Unsupported(fx, result);
+});
+
+test("F001: a project directory replaced by a link after the plan makes its units unsupported; other projects complete", async () => {
+  const fx = fixture();
+  const foreign = foreignDir(fx, {
+    [`${U1}.jsonl`]: "main",
+    [`${U1}/subagents/agent-a.jsonl`]: "tree",
+    [`${U2}.jsonl`]: "main",
+  });
+  const result = await runChangingHome(fx, (step) => {
+    if (step !== "state-copy") return;
+    renameSync(join(fx.S, K1), join(fx.home, "moved-project"));
+    symlinkSync(foreign, join(fx.S, K1));
+  });
+  assert.equal(result.outcome, "done");
+  assert.equal(result.outcome === "done" && result.counts.unsupported, 2);
+  assert.equal(result.outcome === "done" && result.counts.copied, 1);
+  assert.deepEqual(leaked(fx), []);
+  assert.deepEqual(Object.keys(manifest(fx).effective), [`${K2}/${U3}`]);
+  assertManifestMatchesInstalled(fx);
+  assert.equal(existsSync(join(fx.D, K1)), false);
+  assert.equal(existsSync(join(fx.W, "staging")), false);
+});
+
 const STEPS: Array<[HomeTranscriptImportStep, string | undefined]> = [
   ["cleaned", undefined],
   ["manifest-repaired", undefined],
   ["state-backup", "backup"],
   ["set-aside", "backup"],
   ["state-copy", "copy"],
+  ["listed", "copy"],
   ["staged", "copy"],
   ["recorded", "copy"],
   ["installed-tree", "copy"],
@@ -897,6 +1030,103 @@ test("AC11(b,c): a retry leaves an installed unit out of the need and never stag
   assert.equal(result.outcome, "done");
   assert.ok(!staged.includes(U1));
 });
+
+// F002: the default free-space query, through the runtime's own statfs --------
+
+/**
+ * Run with the import's own free-space helper over `node:fs/promises` statfs
+ * replaced by `fake` (absent when undefined), restoring it afterwards. The
+ * helper is reached exactly as production reaches it: no `freeBytes` option.
+ */
+async function withNativeStatfs<T>(
+  fake: typeof fsp.statfs | undefined,
+  body: () => Promise<T>,
+): Promise<T> {
+  const original = fsp.statfs;
+  (fsp as { statfs: typeof fsp.statfs | undefined }).statfs = fake;
+  syncBuiltinESMExports();
+  try {
+    return await body();
+  } finally {
+    fsp.statfs = original;
+    syncBuiltinESMExports();
+  }
+}
+
+/** `run` with the import's own free-space helper: no `freeBytes` option at all. */
+async function runNative(fx: Fixture): Promise<HomeTranscriptImportResult> {
+  const before = homeSnapshot(fx.home);
+  const result = await importDefaultClaudeHomeTranscripts({
+    homeProjectsDir: fx.S,
+    profileRoot: fx.P,
+    providerSessionIds: () => IDS,
+    now: () => NOW,
+  });
+  assert.deepEqual(homeSnapshot(fx.home), before, "the home is untouched");
+  return result;
+}
+
+function failingStatfs(code: string, probes: string[]): typeof fsp.statfs {
+  return (async (path: unknown) => {
+    probes.push(String(path));
+    throw Object.assign(new Error(`fixture statfs ${code}`), { code });
+  }) as typeof fsp.statfs;
+}
+
+test.each(["EIO", "EACCES"])(
+  "F002: a native statfs %s aborts before any state, set-aside or copy, and the next boot completes",
+  async (code) => {
+    const fx = fixture();
+    seedOldDestination(fx);
+    const before = digest(fx.P);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const probes: string[] = [];
+    const result = await withNativeStatfs(failingStatfs(code, probes), () =>
+      runNative(fx),
+    );
+    assert.deepEqual(result, { outcome: "aborted", reason: code });
+    assert.deepEqual(probes, [fx.P]);
+    assert.deepEqual(digest(fx.P), before, "no state, set-aside or copy");
+    const retry = await runNative(fx);
+    assert.equal(retry.outcome === "done" && retry.preflight, "statfs");
+    await assertCompletedLikeReference(fx, seedOldDestination);
+  },
+);
+
+test("F002: statfs walks up from a missing directory to its nearest existing ancestor", async () => {
+  const fx = fixture();
+  const probes: string[] = [];
+  const original = fsp.statfs;
+  const result = await withNativeStatfs(
+    (async (path: Parameters<typeof fsp.statfs>[0]) => {
+      probes.push(String(path));
+      if (path === fx.P)
+        throw Object.assign(new Error("fixture gone"), { code: "ENOENT" });
+      return original(path);
+    }) as typeof fsp.statfs,
+    () => runNative(fx),
+  );
+  assert.deepEqual(probes, [fx.P, dirname(fx.P)]);
+  assert.equal(result.outcome === "done" && result.preflight, "statfs");
+});
+
+test.each([
+  ["no statfs in the runtime", undefined],
+  ["ENOSYS", failingStatfs("ENOSYS", [])],
+  ["EOPNOTSUPP", failingStatfs("EOPNOTSUPP", [])],
+  [
+    "ERR_METHOD_NOT_IMPLEMENTED",
+    failingStatfs("ERR_METHOD_NOT_IMPLEMENTED", []),
+  ],
+] as const)(
+  "F002: an unsupported statfs (%s) skips the space check and completes",
+  async (_label, fake) => {
+    const fx = fixture();
+    const result = await withNativeStatfs(fake, () => runNative(fx));
+    assert.equal(result.outcome === "done" && result.preflight, "unavailable");
+    await assertCompletedLikeReference(fx);
+  },
+);
 
 // AC12: manifest append failures and the runbook hazard -----------------------
 

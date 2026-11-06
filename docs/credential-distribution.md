@@ -96,7 +96,11 @@ backup.
   (`db/defaultClaudeTranscriptSelection.ts`). A unit is `<key>/<id>.jsonl` plus
   its `<key>/<id>/` tree, copied under the same `<key>`. Nothing else: no
   terminal-only transcript, named-account session, config or credential. A unit
-  holding a link or other non-regular entry is skipped as unsupported.
+  holding a link or other non-regular entry is skipped as unsupported, and so is
+  one whose project, `<id>/` or inner directory is no longer the same real
+  directory when it is copied or once its files are staged. That check sees a
+  directory replaced at either moment, not one replaced and restored between
+  them.
 - **Work files** in `credential-profiles/claude-default/home-import/`:
   `state.json` (phase `backup`, `copy`, then `done`, replaced atomically with
   fsync), `manifest.jsonl` (one fsynced line per unit: provider id, project key,
@@ -106,7 +110,8 @@ backup.
   persisted before the rename. Nothing is merged into it.
 - **Space.** Before any change it needs the pending bytes × 1.1 + 256 MiB free
   on the data dir's filesystem; with less, it logs both numbers, changes nothing
-  and retries next boot.
+  and retries next boot. A failed free-space query (EIO, EACCES, …) aborts the
+  same way; only a runtime or filesystem without `statfs` skips the check.
 - **Recovery.** Each unit is staged, recorded, then renamed into place, its main
   file last. A failed or killed run never fails boot: the next boot removes
   staging, cuts a torn manifest tail, skips installed units and resumes. If
