@@ -51,25 +51,26 @@ under `DATA_DIR/settings/`. They are runtime state, never bootstrap config.
 `ASSISTANT_TOKEN` and the APNs credential follow their existing file-backed
 contracts in `authToken.ts` and `docs/notifications.md`.
 
-Model-provider credentials are separate. Every Claude and OpenAI login lives
-under `DATA_DIR/credential-profiles/`, `claude-default` included; nothing is
-read from the service user's home directory. An OpenAI-compatible account's
-endpoint key lives only in its `credential-profiles/<id>/endpoint.json` (0600);
-the former `settings/openai-compatible.json` is migrated there and deleted
+Model-provider credentials are separate. In local mode every Claude and OpenAI
+login lives under `DATA_DIR/credential-profiles/`, `claude-default` included;
+nothing is read from the service user's home directory. An OpenAI-compatible
+account's endpoint key lives only in its
+`credential-profiles/<id>/endpoint.json` (0600); the former
+`settings/openai-compatible.json` is migrated there and deleted
 (`docs/settings.md` "OpenAI-compatible accounts"). It is write-only: Settings
 sends it in one `PATCH …/endpoint` and shows only `apiKeyConfigured`, no agent
 tool reads or writes it, and the opt-in credential gateway leases only OpenAI
 accounts, so it never receives an endpoint's key. Moving the four integration
 secrets above does not isolate model credentials. Apply the credential-profile
-filters and preview rules independently. With the credential gateway on, the
-gateway renews these tokens in place, in the same profile files and formats; no
-new location holds them. A terminal CLI shares a profile's directory only when
-the user points it there with that profile's `CLAUDE_CONFIG_DIR`
+filters and preview rules independently. With the embedded credential gateway
+on, the gateway renews these tokens in place, in the same profile files and
+formats; no new location holds them. A terminal CLI shares a profile's directory
+only when the user points it there with that profile's `CLAUDE_CONFIG_DIR`
 (`docs/workers.md` "Renewal").
 
 ### Default Claude
 
-`claude-default` is an ordinary Claude account in
+`claude-default` uses an ordinary Claude runtime directory in
 `DATA_DIR/credential-profiles/claude-default/claude/` (0700), run with
 `CLAUDE_CONFIG_DIR` set there and inherited credential variables scrubbed. A
 Claude session with no recorded account runs as it, gateway on or off; its
@@ -140,6 +141,15 @@ backup.
   home again. Without the state the next boot sets the current `projects/` aside
   again and copies from home anew; the only recovery is moving the set-aside
   back by hand.
+
+In client mode (`docs/workers.md`, "Client mode"), this import still runs on
+Pandeck before it connects to the gateway. Claude's runtime and transcripts
+remain in Pandeck's local `DATA_DIR`; the import copies only its selected local
+Default/NULL transcripts, creates or remaps no account, and sends nothing to the
+gateway. The gateway owns the accounts and credentials. Its login driver uses a
+fresh directory under the gateway's state directory, not Pandeck's transcript
+root or the user's home. Local transcript completion does not log an account in
+or change the existing account bindings and default fallback.
 
 ## Supplying the service environment
 

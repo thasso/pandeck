@@ -658,6 +658,30 @@ test("only the home transcript import joins the home directory with .claude", ()
   assert.deepEqual(offenders, ["claudeSdk/homeTranscriptImport.ts"]);
 });
 
+test("the home import refusal precedes local/client gateway startup, login drivers and listening", () => {
+  const source = readFileSync(join(SRC_ROOT, "index.ts"), "utf8");
+  const gate = source.indexOf(
+    "const homeImportRefusal = await homeTranscriptImportStartupRefusal();",
+  );
+  const refused = source.indexOf(
+    "if (homeImportRefusal !== undefined) {",
+    gate,
+  );
+  const exit = source.indexOf("process.exit(1);", refused);
+  assert.ok(gate >= 0 && refused > gate && exit > refused);
+  for (const call of [
+    "if (GATEWAY_RELAY)",
+    "startGatewayClientLink({",
+    "startGatewayLink({",
+    "loginDrivers: {",
+    "server.listen(",
+  ])
+    assert.ok(
+      source.indexOf(call) > exit,
+      `${call} must wait for the whole-service import gate`,
+    );
+});
+
 /**
  * The Claude token endpoint override is a test seam (RD-G5a-4): production
  * code only declares it and hands it down, from the link's options to the

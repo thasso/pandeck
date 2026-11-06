@@ -1675,7 +1675,10 @@ path above.
   gives engines the relay's loopback URL. Settings' existing UI drives the
   gateway (`remoteLogins.ts`): adding an account starts its first login, the
   Claude login terminal renders the login's events, a Codex device code shows on
-  the account, and delete calls `accounts.remove`.
+  the account, and delete calls `accounts.remove`. This credential ownership
+  does not move Claude's local runtime/transcript directories: Pandeck's
+  one-time Default transcript import and startup gate still apply before the
+  client link starts (`docs/credential-distribution.md`).
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
   (`gatewayDevMain.ts`, until the gateway's own entry lands) runs a gateway with
