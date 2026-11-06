@@ -1,5 +1,5 @@
 /**
- * The credential gateway composition (ADR-0004, `docs/workers.md`
+ * The credential gateway composition (ADR-0005, `docs/workers.md`
  * "Credentials"): a loopback HTTP model listener that checks lease tokens
  * against its lease table and forwards Claude Messages and Codex responses
  * requests with the bound profile's real credential, and OpenAI-compatible
@@ -18,6 +18,11 @@
  * (`renewal.ts`), from the saved leases even before a control connects. Every
  * hold that ends has its profile's file re-read at once.
  *
+ * The edge (listener, forwarding, leases, compatible endpoints, control)
+ * reaches the vault (renewal, the writer lane and the login holds,
+ * `vault.ts`) only through `VaultPort` (`vaultPort.ts`); this module wires
+ * the two and owns their timers.
+ *
  * It runs in the process that starts it: the server's, through
  * `gatewayLink.ts` under `ASSISTANT_GATEWAY=1`, and tests', against fake
  * upstreams.
@@ -35,17 +40,14 @@ import {
 import { createCompatUpstream } from "./compatUpstream.ts";
 import type { TokenEndpoint } from "./claudeRenewal.ts";
 import { createControlEndpoint } from "./control.ts";
-import { HoldTable, WriterLane, type HoldRecord } from "./holds.ts";
+import type { HoldRecord, WriterLane } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
 import type { ProcessProbe } from "./processIdentity.ts";
-import { isLoginProfile, ProfileRegistry } from "./profiles.ts";
+import { ProfileRegistry } from "./profiles.ts";
 import type { RefreshLockOptions } from "./refreshLock.ts";
-import {
-  createRenewal,
-  RENEW_TICK_MS,
-  type CodexRenewPort,
-} from "./renewal.ts";
+import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
+import { createVault } from "./vault.ts";
 
 export interface GatewayOptions {
   /** 0 picks a free port. The host is always `127.0.0.1`. */
@@ -107,49 +109,39 @@ export async function startGateway(
     persist: state?.persistLeases,
   });
   const profiles = new ProfileRegistry(state?.persistProfiles);
-  const holds = new HoldTable({
-    now: options.now,
-    persist: state?.persistHolds,
-    probe: options.processProbe,
-    fenced: state?.holdsUnreadable,
-  });
   if (state) {
     leases.restore(state.leases);
     profiles.restore(state.profiles);
-    holds.restore(state.holds);
-    // Fence holds are stuck: the next hello reports them.
-    if (holds.fence(profiles.loginIds()).saveError !== undefined)
-      log("hold fence: holds.json not saved; the change stands in memory");
   }
-  // A profile without a login has no lane: `undefined` is unknown there.
-  const lane = new WriterLane(holds, (id) => {
-    const profile = profiles.get(id);
-    return profile && isLoginProfile(profile) ? profile.provider : undefined;
-  });
-  const compat = createCompatUpstream();
-  const renewal = createRenewal({
-    profiles,
-    leases,
-    lane,
+  // The vault restores its holds and fences them from the restored registry.
+  const vault = createVault({
+    inputs: {
+      profiles,
+      hasLiveLease: (profileId) => leases.hasLiveLease(profileId),
+      report: (profileId, needsLogin) =>
+        control.reportCredential({ profileId, needsLogin }),
+    },
     log,
     now: options.now,
-    claudeEndpoint: options.claudeTokenEndpoint,
-    renewCodex: options.renewCodex,
-    lockOptions: options.refreshLockOptions,
-    report: (profileId, needsLogin) =>
-      control.reportCredential({ profileId, needsLogin }),
+    holds: {
+      persist: state?.persistHolds,
+      probe: options.processProbe,
+      fenced: state?.holdsUnreadable,
+      restored: state?.holds,
+    },
+    renewal: {
+      claudeEndpoint: options.claudeTokenEndpoint,
+      renewCodex: options.renewCodex,
+      lockOptions: options.refreshLockOptions,
+    },
   });
+  const compat = createCompatUpstream();
   const control = createControlEndpoint({
     leases,
     profiles,
-    holds,
-    lane,
     compat,
     log,
-    needsLogin: renewal.needsLogin,
-    holdsEnded: (profileIds) => {
-      for (const profileId of profileIds) void renewal.recheck(profileId);
-    },
+    vault,
   });
 
   const stats: GatewayStats = {
@@ -169,7 +161,7 @@ export async function startGateway(
     compat,
     compatCa: options.compatCa,
     stats,
-    renewal,
+    vault,
   });
   const sockets = new Set<net.Socket>();
 
@@ -200,7 +192,7 @@ export async function startGateway(
   );
   holdCheck.unref();
   const renewTick = setInterval(() => {
-    renewal.tick().catch(() => log("renewal tick failed"));
+    vault.renewDue().catch(() => log("renewal tick failed"));
   }, options.renewTickMs ?? RENEW_TICK_MS);
   renewTick.unref();
 
@@ -209,16 +201,16 @@ export async function startGateway(
     port,
     leases,
     stats,
-    lane,
+    lane: vault.lane,
     attachControl: control.attach,
     lastHello: control.hello,
-    holds: () => holds.records(),
+    holds: vault.holdRecords,
     checkHolds: control.checkHolds,
-    renewDue: renewal.tick,
+    renewDue: vault.renewDue,
     async close() {
       clearInterval(holdCheck);
       clearInterval(renewTick);
-      renewal.close();
+      vault.close();
       control.close();
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),

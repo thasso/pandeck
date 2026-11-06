@@ -17,9 +17,9 @@
  * login-stuck hold, is sent to the current connection as `profiles.status`
  * once the answer that caused it has gone out; a failure is logged, never
  * retried. Renewal's needs-login changes go out as `profiles.credential` the
- * same way, and each hello resends every profile that needs a login. Every
- * hold that ends, by release, force release or evidence, is passed to
- * `holdsEnded` after its status, even when saving failed.
+ * same way, and each hello resends every profile that needs a login. The
+ * holds, the writer lane and the needs-login list are the vault's
+ * (`vaultPort.ts`): a hold that ends there is re-read by the vault itself.
  *
  * Every hello also clears every pushed OpenAI-compatible endpoint: its key
  * belongs to the boot that pushed it, which the next push replaces. A
@@ -74,22 +74,19 @@ import {
   type CredentialStatus,
 } from "./controlMethods.ts";
 import type { CompatUpstream } from "./compatUpstream.ts";
-import type { HoldStatus, HoldTable, HoldUpdate, WriterLane } from "./holds.ts";
+import type { HoldStatus, HoldUpdate } from "./holds.ts";
 import type { LeaseBinding, LeaseTable } from "./leases.ts";
 import { isLoginProfile, type ProfileRegistry } from "./profiles.ts";
 import { StateWriteError } from "./state.ts";
+import type { VaultPort } from "./vaultPort.ts";
 
 interface ControlContext {
   leases: LeaseTable;
   profiles: ProfileRegistry;
-  holds: HoldTable;
-  lane: WriterLane;
   compat: CompatUpstream;
   log: (line: string) => void;
-  /** The profiles that need a login now, resent on every hello. */
-  needsLogin?: () => string[];
-  /** The profiles whose login hold just ended; renewal re-reads them. */
-  holdsEnded?: (profileIds: string[]) => void;
+  /** The holds, the writer lane and the profiles that need a login now. */
+  vault: Pick<VaultPort, "needsLogin" | "holds">;
 }
 
 /** What a method's log line names besides the method, and its outcome. */
@@ -138,13 +135,11 @@ export interface ControlEndpoint {
 export function createControlEndpoint({
   leases,
   profiles,
-  holds,
-  lane,
   compat,
   log,
-  needsLogin = () => [],
-  holdsEnded = () => {},
+  vault,
 }: ControlContext): ControlEndpoint {
+  const { holds } = vault;
   const connections = new Set<WorkerConnection>();
   /** The connection whose hello came last; an older one is ended. */
   let current: WorkerConnection | undefined;
@@ -206,7 +201,6 @@ export function createControlEndpoint({
   /** Reports a memory-first hold change; a failed save is only logged. */
   const settle = (update: HoldUpdate, context: string): void => {
     report(update.statuses);
-    if (update.ended.length > 0) holdsEnded(update.ended);
     if (update.saveError !== undefined)
       log(`${context}: holds.json not saved; the change stands in memory`);
   };
@@ -354,7 +348,7 @@ export function createControlEndpoint({
       if (!registered && !holds.fencing)
         fail(UNKNOWN_PROFILE, "The gateway does not know this profile.");
       const { serverBootId, pid, startTime } = connection.hello!;
-      return lane
+      return holds
         .acquire(profileId, holdId, { serverBootId, pid, startTime }, signal)
         .then((acquired) => {
           if (!acquired)
@@ -394,7 +388,6 @@ export function createControlEndpoint({
         return encodeHoldReleased(false);
       }
       report(outcome.statuses);
-      holdsEnded(outcome.ended);
       if (outcome.saveError !== undefined) throw outcome.saveError;
       return encodeHoldReleased(true);
     },
@@ -406,7 +399,6 @@ export function createControlEndpoint({
       if (!update)
         fail(UNKNOWN_HOLD, "The gateway holds no login hold by this id.");
       report(update.statuses);
-      holdsEnded(update.ended);
       if (update.saveError !== undefined) throw update.saveError;
       return encodeHoldReleased(true);
     },
@@ -498,7 +490,7 @@ export function createControlEndpoint({
         },
         "control.hello hold check",
       );
-      for (const profileId of needsLogin())
+      for (const profileId of vault.needsLogin())
         reportCredential({ profileId, needsLogin: true });
       return encodeLeasesRevoked(
         leases.revokeWhere(

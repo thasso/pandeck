@@ -9,8 +9,9 @@ lease, credential gateway, placement, Worker id, isolation boundary, secret
 store) are defined in [glossary.md](glossary.md), and the decisions that are
 hard to reverse are recorded in [ADR-0001](adr/0001-worker-hosts-the-engine.md),
 [ADR-0002](adr/0002-server-runs-under-its-own-account.md),
-[ADR-0003](adr/0003-worker-owns-checkout-operations.md) and
-[ADR-0004](adr/0004-credential-gateway.md).
+[ADR-0003](adr/0003-worker-owns-checkout-operations.md),
+[ADR-0004](adr/0004-credential-gateway.md) and
+[ADR-0005](adr/0005-gateway-edge-and-vault.md).
 
 ## Goals
 
@@ -1161,6 +1162,9 @@ gateway on every Worker host would put model credentials on each of those
 machines. The package proxy lives in the same service, so builds keep working
 through server deploys and remote Workers reach registries the same way. Its
 public trust material lives outside `DATA_DIR`, where Workers can read it.
+[ADR-0005](adr/0005-gateway-edge-and-vault.md) makes the gateway a service of
+its own, not bound to the server's host, split into an edge and a vault that
+meet at one port (`gateway/vaultPort.ts`).
 
 The Task-1321 spike showed both engines running on subscription credentials
 through a custom endpoint with a placeholder bearer (ADR-0004), so the gateway

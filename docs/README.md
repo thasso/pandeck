@@ -300,7 +300,8 @@ only binding rules; everything else lives here.
   rejected. `0001`–`0003` cover the Worker split: the Worker hosts the engine,
   the server runs under its own account apart from agents, and the Worker owns
   every checkout operation. `0004` makes a credential gateway the only refresher
-  of model credentials.
+  of model credentials; `0005` makes it a service of its own, split into an edge
+  and a vault.
 
 ## Implementation reference
 

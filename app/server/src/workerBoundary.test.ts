@@ -449,7 +449,7 @@ test("the Worker side reaches no server state", () => {
  * and connection for its control channel (gateway control 1.0), and what those
  * import. No package either, and each of these imports only `node:` or this
  * list, including the dependency-free shared endpoint rules, so the closure
- * ends here and the gateway can run as its own process (ADR-0004).
+ * ends here and the gateway can run as its own process (ADR-0005).
  */
 const GATEWAY_ALLOWED = new Set([
   "../../shared/openAiCompatibleValidation.ts",
@@ -494,6 +494,76 @@ test("the gateway reaches no server state", () => {
     pending.push(...(scans.get(target)?.imports ?? []));
   }
   assert.deepEqual([...reached].sort(), [...GATEWAY_ALLOWED].sort());
+});
+
+/**
+ * The gateway's two tiers (ADR-0005), by module under `gateway/`. The vault
+ * holds credentials, renewal, the writer lane and the login holds; the edge
+ * everything exposed. Shared modules serve both and run neither; the root
+ * composes them and persists both tiers' state. Only value imports count: a
+ * type-only one is erased and joins no closure.
+ */
+const GATEWAY_VAULT = [
+  "claudeRenewal",
+  "holds",
+  "processIdentity",
+  "profileCredential",
+  "refreshLock",
+  "renewal",
+  "vault",
+];
+const GATEWAY_EDGE = [
+  "compatUpstream",
+  "control",
+  "controlMethods",
+  "forward",
+  "leases",
+  "upstreams",
+];
+const GATEWAY_SHARED = ["profiles", "refusals", "vaultPort"];
+const GATEWAY_ROOT = ["gateway", "state"];
+/**
+ * gateway control 1.4's wire validators (`isHoldId`, `isPid`, `isStartTime`):
+ * the one edge-to-vault crossing, gone with that protocol.
+ */
+const GATEWAY_EDGE_TO_VAULT = [
+  "gateway/controlMethods.ts -> gateway/holds.ts",
+  "gateway/controlMethods.ts -> gateway/processIdentity.ts",
+];
+
+test("the gateway's edge reaches the vault only through its port", () => {
+  const path = (name: string): string => `gateway/${name}.ts`;
+  const vault = new Set(GATEWAY_VAULT.map(path));
+  const edge = new Set(GATEWAY_EDGE.map(path));
+  const shared = new Set(GATEWAY_SHARED.map(path));
+  const classified = [vault, edge, shared, new Set(GATEWAY_ROOT.map(path))];
+  const modules = [...scans.keys()].filter((module) =>
+    module.startsWith("gateway/"),
+  );
+  for (const module of modules)
+    assert.equal(
+      classified.filter((tier) => tier.has(module)).length,
+      1,
+      `${module} belongs to exactly one gateway tier list`,
+    );
+  for (const tier of classified)
+    for (const module of tier)
+      assert.ok(modules.includes(module), `the scan found ${module}`);
+  const crossings: string[] = [];
+  for (const module of modules)
+    for (const target of scans.get(module)!.valueImports) {
+      const crosses =
+        (edge.has(module) && vault.has(target)) ||
+        (vault.has(module) && edge.has(target)) ||
+        (shared.has(module) && (vault.has(target) || edge.has(target)));
+      if (crosses) crossings.push(`${module} -> ${target}`);
+    }
+  assert.deepEqual(crossings.sort(), GATEWAY_EDGE_TO_VAULT);
+  assert.deepEqual(
+    [...scans.get(path("vaultPort"))!.valueImports],
+    [],
+    "the port holds types only",
+  );
 });
 
 test("only the server link and the error classifier import the gateway", () => {

@@ -1,6 +1,6 @@
 # Credential gateway
 
-Contract: `docs/workers.md` "Credentials" and ADR-0004.
+Contract: `docs/workers.md` "Credentials" and ADR-0005.
 
 - `gateway/` imports only `node:` modules, itself and `GATEWAY_ALLOWED` in
   `workerBoundary.test.ts`, never a package or other server module; that list
