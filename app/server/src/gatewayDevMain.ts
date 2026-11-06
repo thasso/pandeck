@@ -1,14 +1,17 @@
 /**
  * A standalone gateway for local live tests of client mode and gateway
- * logins (Task-1385), until the gateway's own entry and unit land
- * (Task-1383, which replaces this file). It runs `startGateway` with the
- * edge's client listener and both login drivers, in its own state
- * directory, on 127.0.0.1 only:
+ * logins (Task-1385), and the IDB pilot's gateway until the packaged entry
+ * can run logins (Task-1387). It runs `startGateway` with the edge's client
+ * listener and both login drivers, in its own state directory:
  *
  *   gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>]
- *     [--client-port <n>] [--enroll-port <n>]
+ *     [--client-port <n>] [--enroll-port <n>] [--bind-host <address>]
+ *     [--host <name>]...
  *
- * Every port defaults to a free one; the ports in use are printed. It reads
+ * Every port defaults to a free one; the ports in use are printed. The edge's
+ * three ports bind to `--bind-host`, 127.0.0.1 unless given, and each `--host`
+ * is a name or IP in the edge's certificate, which relays connect by; the
+ * loopback listener stays on 127.0.0.1. It reads
  * no `DATA_DIR`: the drivers and pi's Codex refresh load no server state.
  * Admin (users, enrollment codes, the CA) is `gateway/adminMain.ts` on the
  * same state directory; the relay is `relay/main.ts`. See `docs/workers.md`
@@ -26,7 +29,7 @@ import {
 
 function usage(): never {
   console.error(
-    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>]",
+    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]...",
   );
   process.exit(2);
 }
@@ -38,6 +41,8 @@ const { values } = parseArgs({
     "model-port": { type: "string" },
     "client-port": { type: "string" },
     "enroll-port": { type: "string" },
+    "bind-host": { type: "string" },
+    host: { type: "string", multiple: true },
   },
 });
 if (!values["state-dir"]) usage();
@@ -57,6 +62,8 @@ const gateway = await startGateway({
     modelPort: port(values["model-port"]),
     clientPort: port(values["client-port"]),
     enrollPort: port(values["enroll-port"]),
+    ...(values["bind-host"] ? { bindHost: values["bind-host"] } : {}),
+    ...(values.host ? { hosts: values.host } : {}),
   },
   loginDrivers: { claude: claudeLoginDriver, "openai-codex": codexLoginDriver },
 });
