@@ -39,6 +39,8 @@ function fakeJwt(tag: string): string {
   })}.sig`;
 }
 
+/** Every Codex refresh-grant request, regardless of its carried token. */
+let codexRefreshGrantRequests = 0;
 /** Codex token requests, by the refresh token each carried. */
 const codexRenewals: string[] = [];
 /** Requests `fetch` answered off loopback, as `METHOD host/path`. */
@@ -55,6 +57,7 @@ vi.stubGlobal(
       init.method ?? (input instanceof Request ? input.method : "GET");
     offLoopback.push(`${method} ${url.host}${url.pathname}`);
     if (url.href === CODEX_TOKEN_URL) {
+      codexRefreshGrantRequests += 1;
       const refresh = new URLSearchParams(String(init.body ?? "")).get(
         "refresh_token",
       );
@@ -167,6 +170,14 @@ const identity = (account: Account): Identity => ({
   bytes: readFileSync(account.file, "utf8"),
 });
 
+/** Every refresh-grant request at either fake token endpoint. */
+function totalRefreshGrantRequests(): number {
+  const claude = upstreams.platform.filter(
+    (request) => request.method === "POST",
+  ).length;
+  return claude + codexRefreshGrantRequests;
+}
+
 /** Token requests that carried this account's refresh token, either host. */
 function renewalsOf(account: Account): number {
   if (account.provider === "openai-codex")
@@ -205,6 +216,7 @@ test("1368 AC7 step 1: model runtime creation, warm-up and the forced refresh re
   const models = await import("./piSdk/models.ts");
   await models.warmCredentialProfileModelRuntimes();
   await models.refreshModels();
+  assert.equal(totalRefreshGrantRequests(), 0, "no refresh-grant requests");
   for (const account of accounts)
     assert.equal(renewalsOf(account), 0, `${account.id} not renewed`);
   assert.ok(
@@ -224,6 +236,7 @@ test("1368 AC7 step 2: each account's first usage read renews it once, through t
     else
       assert.equal((await fetchOpenAiAccountUsage(account.id)).available, true);
   renewed = accounts.map(identity);
+  assert.equal(totalRefreshGrantRequests(), accounts.length);
   accounts.forEach((account, index) => {
     assert.equal(renewalsOf(account), 1, `${account.id}: one renewal`);
     assert.notEqual(renewed[index]!.ino, initial[index]!.ino, "renamed in");
@@ -267,6 +280,7 @@ test("1368 AC7 step 3: a Codex one-shot on the gateway's pi port and later reads
     if (account.provider === "claude")
       await fetchClaudeAccountUsage(account.id, 20_000);
     else await fetchOpenAiAccountUsage(account.id);
+  assert.equal(totalRefreshGrantRequests(), accounts.length);
   for (const account of accounts)
     assert.equal(renewalsOf(account), 1, `${account.id}: still one renewal`);
   assert.deepEqual(accounts.map(identity), renewed, "no second write");
