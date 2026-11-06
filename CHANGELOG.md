@@ -3,6 +3,73 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.65.0] - 2026-11-06
+
+### Upgrade notes
+
+- This release adds SQLite migration `0099`. The OpenAI-compatible endpoint is
+  now an account of its own, and the migration rebinds every session and held
+  peer child that runs an `openai-compatible` model to that account
+  (`session_index` and `direct_peer_children`). An older version does not
+  reverse it. Back up `DATA_DIR` before upgrading if you may need to roll back
+  to 0.64.0.
+- The credential gateway (`ASSISTANT_GATEWAY=1`) is still opt-in and off by
+  default; Claude, Codex and OpenAI-compatible traffic only runs through it when
+  you enable it.
+
+### Other changes
+
+- Run each OpenAI-compatible account through the gateway
+  ([PR #297](https://github.com/thasso/pandeck/pull/297))
+- Hold both login flows and recover unfinished logins
+  ([PR #296](https://github.com/thasso/pandeck/pull/296))
+- Make OpenAI-compatible endpoints first-class accounts
+  ([PR #295](https://github.com/thasso/pandeck/pull/295))
+- Renew Claude and Codex logins through the opt-in gateway
+  ([PR #293](https://github.com/thasso/pandeck/pull/293))
+- Close idle Claude hosts when settings await a restart
+  ([PR #294](https://github.com/thasso/pandeck/pull/294))
+- Offer only the compatible endpoint when no account is connected
+  ([PR #292](https://github.com/thasso/pandeck/pull/292))
+- Add a Session panel that reuses the center chat
+  ([PR #290](https://github.com/thasso/pandeck/pull/290))
+- Keep the sidebar scrollbar solid and above its rows
+  ([PR #291](https://github.com/thasso/pandeck/pull/291))
+- Unify worktree navigation and polish shared UI controls
+  ([PR #289](https://github.com/thasso/pandeck/pull/289))
+- Read Claude usage through the credential gateway behind the switch
+  ([PR #288](https://github.com/thasso/pandeck/pull/288))
+- Route server one-shots and Codex usage through the gateway on server leases
+  ([PR #287](https://github.com/thasso/pandeck/pull/287))
+- Pair the compatible key with its origin on the server's pi runtimes
+  ([PR #286](https://github.com/thasso/pandeck/pull/286))
+- Route OpenAI-compatible engine requests through the credential gateway
+  ([PR #285](https://github.com/thasso/pandeck/pull/285))
+- Route pi Codex engines through the credential gateway behind the switch
+  ([PR #284](https://github.com/thasso/pandeck/pull/284))
+- Collect the spawn broker's garbage under Bun
+  ([PR #283](https://github.com/thasso/pandeck/pull/283))
+- Route Claude engines through the credential gateway behind the switch
+  ([PR #282](https://github.com/thasso/pandeck/pull/282))
+- Add the gateway writer lane and login holds, still unwired
+  ([PR #281](https://github.com/thasso/pandeck/pull/281))
+- Link the server to the credential gateway behind ASSISTANT_GATEWAY=1
+  ([PR #280](https://github.com/thasso/pandeck/pull/280))
+- Add gateway control 1.0, profile registry and persisted leases
+  ([PR #279](https://github.com/thasso/pandeck/pull/279))
+- Stop the transcript wobbling while it settles at the bottom
+  ([PR #277](https://github.com/thasso/pandeck/pull/277))
+- Add the credential gateway forwarding core, off by default
+  ([PR #278](https://github.com/thasso/pandeck/pull/278))
+- Harden the Worker connection against hostile peer input
+  ([PR #276](https://github.com/thasso/pandeck/pull/276))
+- Skip the CLI's transcript scan in the Claude usage fetch
+  ([PR #275](https://github.com/thasso/pandeck/pull/275))
+- Update pi to 1.5.0 and the Claude agent SDK to 0.3.316
+  ([PR #274](https://github.com/thasso/pandeck/pull/274))
+- Report peer background work in session lookup and read
+  ([PR #273](https://github.com/thasso/pandeck/pull/273))
+
 ## [0.64.0] - 2026-11-02
 
 ### Upgrade notes
