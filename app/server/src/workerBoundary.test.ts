@@ -637,7 +637,7 @@ test("the gateway's Codex refresher imports only node, pi and proper-lockfile", 
     );
   assert.deepEqual(
     importersOf((target) => target === "piSdk/codexRenewal.ts"),
-    ["codexRenewMain.ts", "harnesses/gatewayPorts.ts"],
+    ["harnesses/gatewayPorts.ts"],
   );
 });
 
@@ -654,7 +654,7 @@ test("the Codex renewal child imports only the refresher and node, and only the 
   assert.ok(scan, "the scan found the Codex renewal child");
   for (const target of scan.imports)
     assert.ok(
-      target.startsWith("node:") || target === "piSdk/codexRenewal.ts",
+      target.startsWith("node:") || target === "harnesses/gatewayPorts.ts",
       `codexRenewMain.ts imports ${target}`,
     );
   assert.deepEqual(

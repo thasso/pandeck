@@ -2,11 +2,11 @@
  * The Codex renewal child (ADR-0005, M5), its own entry: the standalone
  * gateway spawns one per renewal through `gateway/codexChild.ts`. It reads one
  * line, `{authFile, minValidityMs}`, renews that one file with pi's refresh
- * (`piSdk/codexRenewal.ts`, unchanged), prints one `CodexRenewResult` line,
+ * (`piSdk/codexRenewal.ts`, via the harness gateway port), prints one result line,
  * never a token, and exits 0. SIGTERM aborts the refresh; stdin's end does
  * not, so a piped single line works.
  */
-import { renewCodexCredential } from "./piSdk/codexRenewal.ts";
+import { renewCodexCredential } from "./harnesses/gatewayPorts.ts";
 
 const abort = new AbortController();
 process.once("SIGTERM", () => abort.abort());
