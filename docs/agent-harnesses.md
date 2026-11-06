@@ -198,7 +198,8 @@ Four layers, each depending only on the ones below it:
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each
      account's model runtime, the OpenAI account login, and the one-time import
-     of Default Claude's transcripts from the user's home
+     of Default Claude's transcripts from the user's home, whose startup gate
+     stops the boot until the import's boundary is durable
      (`docs/credential-distribution.md`).
    - `harnesses/storage.ts` answers where each engine keeps a session on disk
      from paths alone, loading no store: the `file` a session's ref and list

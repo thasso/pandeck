@@ -108,15 +108,28 @@ backup.
 - **Set-aside.** A non-empty `claude/projects/` that predates the import is
   renamed once to `projects.before-home-import-<UTC stamp>`, under a name
   persisted before the rename. Nothing is merged into it.
-- **Space.** Before any change it needs the pending bytes × 1.1 + 256 MiB free
-  on the data dir's filesystem; with less, it logs both numbers, changes nothing
-  and retries next boot. A failed free-space query (EIO, EACCES, …) aborts the
-  same way; only a runtime or filesystem without `statfs` skips the check.
+- **Boundary before startup.** If home has a `projects/`, the import first
+  records phase `backup`, makes the set-aside, then records phase `copy`, each
+  durably. Only after that does it list home or check space. Until `copy` or
+  `done` is durable, or when the state is unreadable or unknown, the service
+  refuses to start (`docs/deployment.md`, "Default Claude transcript import"),
+  so no session writes `claude/projects/` before the old content is aside. After
+  `copy`, a retry never sets anything aside again, so sessions created or
+  appended to in between stay where they are.
+- **Space.** After the boundary and before staging anything, it needs the
+  pending bytes × 1.1 + 256 MiB free on the data dir's filesystem. A unit whose
+  main file is already in `claude/projects/` is not pending. With less space it
+  logs both numbers, copies nothing and retries next boot, while the service
+  runs with the transcripts copied so far. A failed free-space query (EIO,
+  EACCES, …) defers the copy the same way. Only a runtime or filesystem without
+  `statfs` skips the check.
 - **Recovery.** Each unit is staged, recorded, then renamed into place, its main
-  file last. A failed or killed run never fails boot: the next boot removes
-  staging, cuts a torn manifest tail, skips installed units and resumes. If
-  `~/.claude/projects` is gone, the run ends `done` with `sourceMissing` and
-  keeps what it already installed.
+  file last. A failed or killed run after the boundary never fails boot: the
+  next boot removes staging, cuts a torn manifest tail, skips installed units
+  and resumes. If `~/.claude/projects` is gone, the run ends `done` with
+  `sourceMissing` and keeps what it already installed. In that case its count
+  includes recorded units whose main file never arrived, and such a unit's
+  `<key>/<id>/` tree stays.
 - **Never delete `home-import/state.json`.** After `done` the import never reads
   home again. Without the state the next boot sets the current `projects/` aside
   again and copies from home anew; the only recovery is moving the set-aside

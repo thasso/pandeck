@@ -23,8 +23,15 @@
  *   source, and never re-copies a unit whose main is installed.
  * - **Set-aside.** A non-empty destination `projects/` that predates the
  *   import is renamed aside once, under a name persisted before the rename.
- * - **Never throws.** Any other failure aborts the run with one log line and
- *   boot continues; the next boot resumes from the persisted phase.
+ * - **Boundary before release.** The set-aside and the durable `copy` phase
+ *   come before the source is listed or the space checked, so nothing a
+ *   session writes later is ever taken for pre-existing content. Until `copy`
+ *   or `done` is durable, the service must not start
+ *   ({@link homeTranscriptImportStartupRefusal}); after it, a failure or low
+ *   space only defers the copy to the next boot.
+ * - **Never throws.** A failure returns `refused` before the boundary and
+ *   `aborted` after it, with one log line; the next boot resumes from the
+ *   persisted phase.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Dirent, type Stats } from "node:fs";
@@ -53,6 +60,8 @@ export type HomeTranscriptImportStep =
   | "state-backup"
   | "set-aside"
   | "state-copy"
+  /** The copy is planned and the space checked, before any unit is staged. */
+  | "planned"
   /** A source directory of the unit was listed, before its entries are copied. */
   | "listed"
   | "staged"
@@ -104,8 +113,16 @@ export type HomeTranscriptImportResult =
       /** How the space preflight ran: `statfs`, or skipped without it. */
       preflight: "statfs" | "unavailable" | "not-needed";
     }
+  /** The boundary is durable; the copy waits for more free space. */
   | { outcome: "insufficient-space"; need: number; free: number }
-  | { outcome: "aborted"; reason: string };
+  /** The boundary is durable; the rest of the copy resumes next boot. */
+  | { outcome: "aborted"; reason: string }
+  /**
+   * The boundary is not durable, or the state is unknown: no session may run
+   * as Default Claude, so the service must not start. `operation` is what
+   * failed, in words for the operator.
+   */
+  | { outcome: "refused"; operation: string; reason: string };
 
 type ImportState =
   | { phase: "backup"; aside: string }
@@ -159,31 +176,81 @@ const SPACE_MARGIN = 256 * 1024 * 1024;
 const COPY_CHUNK = 1024 * 1024;
 
 /**
+ * How far a run got: the operation under way, and whether the destination's
+ * boundary (`copy` or `done`) is durable, so the service may start.
+ */
+interface ImportProgress {
+  operation: string;
+  startupSafe: boolean;
+  /** The unit being copied, for the abort line. */
+  providerSessionId: string | undefined;
+}
+
+/**
  * Run the import once. Never throws: a failure is logged and returned, and the
- * next call resumes from the persisted phase.
+ * next call resumes from the persisted phase. A failure before the boundary is
+ * durable returns `refused`, which the caller must enforce.
  */
 export async function importDefaultClaudeHomeTranscripts(
   options: HomeTranscriptImportOptions = {},
 ): Promise<HomeTranscriptImportResult> {
-  let context: { providerSessionId?: string } = {};
+  const progress: ImportProgress = {
+    operation: "read the import state",
+    startupSafe: false,
+    providerSessionId: undefined,
+  };
   try {
-    return await runImport(options, (id) => {
-      context = id === undefined ? {} : { providerSessionId: id };
-    });
+    return await runImport(options, progress);
   } catch (err) {
     const reason =
       err instanceof ImportAbort ? err.message : (errorCode(err) ?? "error");
+    if (!progress.startupSafe) {
+      console.error(
+        `${LOG} could not ${progress.operation} (${reason}) before Default Claude's transcript directory was separated from earlier content`,
+      );
+      return { outcome: "refused", operation: progress.operation, reason };
+    }
     console.warn(
-      `${LOG} aborted (${reason})${context.providerSessionId !== undefined ? ` at ${context.providerSessionId}` : ""}; it resumes next boot`,
+      `${LOG} aborted (${reason})${progress.providerSessionId !== undefined ? ` at ${progress.providerSessionId}` : ""}; it resumes next boot`,
     );
     return { outcome: "aborted", reason };
   }
 }
 
+/**
+ * Startup's gate on the import: undefined when the service may start, else
+ * the operator's refusal, to be logged before the process exits ahead of the
+ * gateway, the listener and every session. A `run` that throws is an unknown
+ * outcome and refuses too. Never throws.
+ */
+export async function homeTranscriptImportStartupRefusal(
+  run: () => Promise<HomeTranscriptImportResult> = importDefaultClaudeHomeTranscripts,
+): Promise<string | undefined> {
+  let failure: string;
+  try {
+    const result = await run();
+    if (result.outcome !== "refused") return undefined;
+    failure = `could not ${result.operation} (${result.reason})`;
+  } catch (err) {
+    failure = `ended in an unknown state (${errorCode(err) ?? "error"})`;
+  }
+  return (
+    `${LOG} startup refused: the one-time import of Default Claude's transcripts ${failure}, ` +
+    `so Default Claude's transcript directory is not yet separated from what was there before and no session may run. ` +
+    `Fix the cause (free space on the DATA_DIR filesystem, permissions or ownership under credential-profiles/claude-default/, ` +
+    `a file where ~/.claude/projects should be a directory, or what the reason names) and restart the service; the import resumes from its saved state. ` +
+    `Keep every file in the data directory: deleting home-import/, a projects directory or its set-aside is not a recovery. ` +
+    `See "Default Claude transcript import" in docs/deployment.md.`
+  );
+}
+
 async function runImport(
   options: HomeTranscriptImportOptions,
-  setUnit: (providerSessionId: string | undefined) => void,
+  progress: ImportProgress,
 ): Promise<HomeTranscriptImportResult> {
+  const step = (operation: string) => {
+    progress.operation = operation;
+  };
   const now = options.now ?? Date.now;
   const afterStep = options.afterStep ?? (() => {});
   const io = options.manifestIo ?? fileManifestIo;
@@ -196,12 +263,15 @@ async function runImport(
   const manifestPath = join(work, "manifest.jsonl");
   const staging = join(work, "staging");
 
-  // 1. Done: nothing under home is read.
+  // 1. Done: nothing under home is read. A `copy` on disk is the durable
+  // boundary of an earlier run, so startup is safe from here on.
   const state = await readState(statePath);
   if (state?.phase === "done") return { outcome: "already-done" };
+  if (state?.phase === "copy") progress.startupSafe = true;
   const startedAt = now();
 
   // 2. Owned leftovers of a dead run: staging and temp state files.
+  step("remove the import's leftover staging and temp state files");
   await rm(staging, { recursive: true, force: true });
   for (const name of await listNames(work))
     if (name.startsWith("state.json.tmp-"))
@@ -209,14 +279,17 @@ async function runImport(
   afterStep("cleaned");
 
   // 3. Manifest tail repair, before anything can append.
+  step("repair the import manifest");
   const records = await repairManifest(manifestPath, io);
   afterStep("manifest-repaired");
 
-  // 4. Source.
+  // 4. Source: only whether it is there, before the boundary.
+  step("check the home transcript directory");
   const source =
     options.homeProjectsDir ?? join(userHomeDir(), ".claude", "projects");
   const sourceStat = await lstatOrUndefined(source);
   if (sourceStat === undefined) {
+    step("record the finished import");
     if (state === undefined) {
       await writeState(work, statePath, {
         phase: "done",
@@ -226,6 +299,7 @@ async function runImport(
         startedAt,
         finishedAt: now(),
       });
+      progress.startupSafe = true;
       console.info(`${LOG} done: no Claude transcripts in the home directory`);
       return {
         outcome: "done",
@@ -256,6 +330,7 @@ async function runImport(
       startedAt,
       finishedAt: now(),
     });
+    progress.startupSafe = true;
     console.warn(
       `${LOG} done: the home transcripts disappeared after an earlier attempt; ${counts.copied} sessions copied before stay`,
     );
@@ -271,50 +346,19 @@ async function runImport(
   if (!sourceStat.isDirectory())
     throw new ImportAbort("the home transcript path is not a directory");
 
-  // 5. Plan and preflight, before any change to state, backup or destination.
-  const counts = zeroCounts();
-  const ids = new Set<string>();
-  for (const id of (options.providerSessionIds ?? selectedIds)()) {
-    counts.selected += 1;
-    if (PROVIDER_ID.test(id)) ids.add(id);
-    else counts.invalid += 1;
-  }
-  const { units, unsupported } = await planUnits(source, ids);
-  counts.unsupported = unsupported.size;
-  const found = new Set([...units.map((u) => u.id), ...unsupported]);
-  counts.missing = [...ids].filter((id) => !found.has(id)).length;
-
-  const destinationHasEntries = await nonEmpty(destination);
-  const setAsideFirst =
-    (state === undefined || state.phase === "backup") &&
-    !(
-      state !== undefined &&
-      (await lstatOrUndefined(join(configDir, state.aside))) !== undefined
-    ) &&
-    destinationHasEntries;
-  const pending: Unit[] = [];
-  for (const unit of units)
-    if (setAsideFirst || !(await exists(mainPath(destination, unit))))
-      pending.push(unit);
-  const peak = pending.reduce((sum, unit) => sum + unit.bytes, 0);
-  const need = Math.ceil(peak * 1.1) + SPACE_MARGIN;
-  const free = await (options.freeBytes ?? statfsFreeBytes)(profile);
-  if (free !== undefined && free < need) {
-    console.warn(
-      `${LOG} needs ${need} free bytes and ${free} are free; it retries next boot`,
-    );
-    return { outcome: "insufficient-space", need, free };
-  }
-
-  // 6. Phase dispatch, 7. backup.
+  // 5. Boundary, before the source is listed or the space checked: the
+  // set-aside and a durable `copy`. Only then may the service start, so no
+  // session can have written the destination before it is set aside.
   let aside: string | null;
   if (state === undefined || state.phase === "backup") {
     let name: string;
     if (state === undefined) {
+      step("record the import's backup state");
       name = await freshAsideName(configDir, now());
       await writeState(work, statePath, { phase: "backup", aside: name });
       afterStep("state-backup");
     } else name = state.aside;
+    step("set the former projects/ aside");
     const asidePath = join(configDir, name);
     if ((await lstatOrUndefined(asidePath)) !== undefined) {
       if (await nonEmpty(destination))
@@ -328,14 +372,47 @@ async function runImport(
       afterStep("set-aside");
       aside = name;
     } else aside = null;
+    step("record the import's copy state");
     await writeState(work, statePath, { phase: "copy", aside });
+    progress.startupSafe = true;
     afterStep("state-copy");
   } else aside = state.aside;
 
+  // 6. Plan against the destination as it stands: a unit whose main is there
+  // is installed, never staged, and not in the need.
+  step("plan the copy");
+  const counts = zeroCounts();
+  const ids = new Set<string>();
+  for (const id of (options.providerSessionIds ?? selectedIds)()) {
+    counts.selected += 1;
+    if (PROVIDER_ID.test(id)) ids.add(id);
+    else counts.invalid += 1;
+  }
+  const { units, unsupported } = await planUnits(source, ids);
+  counts.unsupported = unsupported.size;
+  const found = new Set([...units.map((u) => u.id), ...unsupported]);
+  counts.missing = [...ids].filter((id) => !found.has(id)).length;
+
+  // 7. Preflight: below the need, stage nothing and retry next boot.
+  const pending: Unit[] = [];
+  for (const unit of units)
+    if (!(await exists(mainPath(destination, unit)))) pending.push(unit);
+  const peak = pending.reduce((sum, unit) => sum + unit.bytes, 0);
+  const need = Math.ceil(peak * 1.1) + SPACE_MARGIN;
+  const free = await (options.freeBytes ?? statfsFreeBytes)(profile);
+  if (free !== undefined && free < need) {
+    console.warn(
+      `${LOG} needs ${need} free bytes and ${free} are free; it retries next boot`,
+    );
+    return { outcome: "insufficient-space", need, free };
+  }
+  afterStep("planned");
+
   // 8. Copy each unit not installed yet.
+  step("copy the transcripts");
   let bytes = 0;
   for (const unit of units) {
-    setUnit(unit.id);
+    progress.providerSessionId = unit.id;
     const main = mainPath(destination, unit);
     if (await exists(main)) {
       counts.alreadyInstalled += 1;
@@ -380,7 +457,7 @@ async function runImport(
     counts.copied += 1;
     bytes += files.reduce((sum, file) => sum + file.size, 0);
   }
-  setUnit(undefined);
+  progress.providerSessionId = undefined;
 
   // 9. Done.
   await rm(staging, { recursive: true, force: true });

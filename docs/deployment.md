@@ -318,28 +318,30 @@ scratch directories, over one unit with an `<id>/` tree, starting from a
 manifest whose last record is torn: the run must end `done` with the tail cut,
 installed files whose size and sha256 match the manifest, no staging left, and
 its space preflight reported as `statfs` or the fallback; a second run must
-answer `already-done`. `checkProcessState` then reads its own child's start time
-under Bun and sees that child running, then exited once it is killed, which
-login holds rely on. From an unrelated cwd and a clean environment, it also runs
-the packaged browser MCP CLI's version command and an MCP initialize plus
-`tools/list`, covering the patched local imports without a workspace
-`node_modules`. When Chrome or Chromium is available, the check also launches it
-and navigates a page. The Nix sandbox has neither browser, so that last probe
-reports an explicit skip there; the same clean-environment probe with the pinned
-Bun 1.4.2 passes launch and navigation on a host with Chrome, run outside the
-sandbox against the built package. The server itself keeps its deterministic
-bundle beside the executable because Bun's standalone compiler randomizes its
-embedded module-table encryption; the package wrapper invokes that module
-explicitly, while `/proc/<pid>/exe` remains the packaged Bun executable. Bun's
-ordinary bundler also emits scheduler-dependent module order and identifier
-names, even when pinned to one CPU and given a lexically recreated source tree.
-The builder therefore uses pinned esbuild for the server module and its two
-bundled helpers; Bun remains the packaged runtime. The flake closure check
-rejects Node, tsx, `node_modules`, and source derivations, then confirms pinned
-git and OpenSSH remain present. The install check also scans every runtime file
-for the Nix source path and build directory. CI builds the package and its
-closure check on every change (`docs/ci-cd.md`), and a deployment of that commit
-builds the same derivation.
+answer `already-done`, its startup gate must let that boot through, and an
+unreadable import state must make the gate refuse with its operator line.
+`checkProcessState` then reads its own child's start time under Bun and sees
+that child running, then exited once it is killed, which login holds rely on.
+From an unrelated cwd and a clean environment, it also runs the packaged browser
+MCP CLI's version command and an MCP initialize plus `tools/list`, covering the
+patched local imports without a workspace `node_modules`. When Chrome or
+Chromium is available, the check also launches it and navigates a page. The Nix
+sandbox has neither browser, so that last probe reports an explicit skip there;
+the same clean-environment probe with the pinned Bun 1.4.2 passes launch and
+navigation on a host with Chrome, run outside the sandbox against the built
+package. The server itself keeps its deterministic bundle beside the executable
+because Bun's standalone compiler randomizes its embedded module-table
+encryption; the package wrapper invokes that module explicitly, while
+`/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary bundler
+also emits scheduler-dependent module order and identifier names, even when
+pinned to one CPU and given a lexically recreated source tree. The builder
+therefore uses pinned esbuild for the server module and its two bundled helpers;
+Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
+`node_modules`, and source derivations, then confirms pinned git and OpenSSH
+remain present. The install check also scans every runtime file for the Nix
+source path and build directory. CI builds the package and its closure check on
+every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
+derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses
@@ -842,6 +844,43 @@ The production unit also sets `ASSISTANT_BACKGROUND_FETCH=1` and
 owner of periodic remote Git and pull-request provider reads. Preview units get
 neither flag, so N previews cannot multiply those reads against repositories or
 hosting APIs they share with production.
+
+### Default Claude transcript import
+
+Every boot runs the one-time import of Default Claude's transcripts from
+`~/.claude/projects` (`docs/credential-distribution.md`) before the gateway, the
+listener and any session start. Until the import has durably recorded phase
+`copy` or `done` in `credential-profiles/claude-default/home-import/state.json`,
+the service refuses to start, because a session could otherwise write
+transcripts that a later attempt would set aside with the old `projects/`. A
+state file it cannot read or does not recognize refuses the same way at any
+later boot. The refusal stops every account, not only Default Claude, and the
+unit exits 1, so systemd restarts it and each start retries.
+
+The journal names the cause in one line starting
+`[home-transcript-import] startup refused:`. It gives the operation that failed
+(for example `record the import's copy state`) and the error code (`ENOSPC`,
+`EACCES`, `EIO`, …). To recover:
+
+1. Fix what the line names: free space on the data directory's filesystem,
+   ownership or permissions of `credential-profiles/claude-default/` and its
+   `home-import/` and `claude/` directories for the service user, a file where
+   `~/.claude/projects` should be a directory. An unreadable `state.json` is
+   restored from a backup of the data directory, never deleted.
+2. Restart the service. The import resumes from its saved phase. It never
+   repeats a set-aside and never copies over an installed transcript.
+3. If the line says `both the destination and its set-aside exist`, something
+   other than the import wrote `claude/projects/` while the old one was set
+   aside. Compare the two directories, move whatever belongs to Pandeck into the
+   set-aside `projects.before-home-import-<stamp>/` (whose name the state file
+   holds), leave `claude/projects/` empty, and restart.
+
+Keep every file under the data directory. Deleting `home-import/`, its state or
+manifest, `claude/projects/`, a set-aside, or anything else in `assistant-data`
+is never a supported recovery: without the state the import sets the current
+`projects/` aside again. Once the boundary is durable, low space or a failed
+copy no longer stops the service. The import logs the reason and continues on
+the next boot.
 
 ## Host tools
 

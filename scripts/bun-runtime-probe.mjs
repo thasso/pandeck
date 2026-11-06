@@ -140,7 +140,10 @@ import {
 } from "../app/server/src/gateway/processIdentity.ts";
 import { GATEWAY_REFUSAL_MARKER } from "../app/server/src/gateway/refusals.ts";
 import { startGatewayLink } from "../app/server/src/gatewayLink.ts";
-import { importDefaultClaudeHomeTranscripts } from "../app/server/src/claudeSdk/homeTranscriptImport.ts";
+import {
+  homeTranscriptImportStartupRefusal,
+  importDefaultClaudeHomeTranscripts,
+} from "../app/server/src/claudeSdk/homeTranscriptImport.ts";
 import {
   issueLeafCertificate,
   loadOrCreateCa,
@@ -4936,7 +4939,29 @@ async function checkHomeTranscriptImport() {
     again.outcome === "already-done",
     `A second import ran again: ${JSON.stringify(again)}.`,
   );
-  console.log(`home transcript import ok (preflight ${result.preflight})`);
+  // The startup gate: a durable boundary lets boot through, an unreadable
+  // state refuses it with the operator's line.
+  const released = await homeTranscriptImportStartupRefusal(() =>
+    importDefaultClaudeHomeTranscripts(options),
+  );
+  assert(
+    released === undefined,
+    `The startup gate refused after done: ${released}.`,
+  );
+  const unreadable = join(root, "unreadable-profile");
+  mkdirSync(join(unreadable, "home-import"), { recursive: true });
+  writeFileSync(join(unreadable, "home-import", "state.json"), "{");
+  const refusal = await homeTranscriptImportStartupRefusal(() =>
+    importDefaultClaudeHomeTranscripts({ ...options, profileRoot: unreadable }),
+  );
+  assert(
+    refusal?.startsWith("[home-transcript-import] startup refused:") &&
+      refusal.includes("could not read the import state"),
+    `The startup gate did not refuse an unreadable state: ${refusal}.`,
+  );
+  console.log(
+    `home transcript import ok (preflight ${result.preflight}, startup gate)`,
+  );
 }
 
 /**

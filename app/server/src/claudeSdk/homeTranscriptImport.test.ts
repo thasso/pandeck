@@ -5,7 +5,9 @@
  * was afterwards (names, sizes, modes, mtimes, sha256).
  *
  * The crash fixtures (F1-F11) are built on disk as a killed process leaves
- * them, then run once and compared with an uninterrupted reference run.
+ * them, then run once and compared with an uninterrupted reference run. The
+ * F004 cases pin the boundary: the set-aside and a durable `copy` come before
+ * the source is listed or the space checked, and until then startup refuses.
  *   pnpm --filter @assistant/server exec vitest run src/claudeSdk/homeTranscriptImport.test.ts
  */
 import assert from "node:assert/strict";
@@ -32,6 +34,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import {
+  homeTranscriptImportStartupRefusal,
   importDefaultClaudeHomeTranscripts,
   type HomeTranscriptImportOptions,
   type HomeTranscriptImportResult,
@@ -713,12 +716,17 @@ test("AC10(1): no home transcripts on a first run: done with zero counts and no 
   assert.equal(state(fx)?.aside, null);
 });
 
-test("AC10: a source that is not a directory aborts without a state", async () => {
+test("AC10: a source that is not a directory refuses startup without a state", async () => {
   const fx = fixture();
   rmSync(fx.S, { recursive: true });
   writeFileSync(fx.S, "file");
+  vi.spyOn(console, "error").mockImplementation(() => {});
   const result = await run(fx);
-  assert.equal(result.outcome, "aborted");
+  assert.deepEqual(result, {
+    outcome: "refused",
+    operation: "check the home transcript directory",
+    reason: "the home transcript path is not a directory",
+  });
   assert.equal(state(fx), undefined);
 });
 
@@ -733,7 +741,7 @@ test("AC10(2): a unit that vanishes mid-copy is missing; the rest completes", as
     freeBytes: async () => undefined,
     now: () => NOW,
     afterStep: (step) => {
-      if (step === "state-copy") rmSync(join(fx.S, K1, `${U2}.jsonl`));
+      if (step === "planned") rmSync(join(fx.S, K1, `${U2}.jsonl`));
     },
   });
   assert.equal(result.outcome, "done");
@@ -827,7 +835,7 @@ test("F001: a unit's tree replaced by a link after the plan is unsupported, and 
   const fx = fixture();
   const foreign = foreignDir(fx, { "settings.json": "settings" });
   const result = await runChangingHome(fx, (step) => {
-    if (step !== "state-copy") return;
+    if (step !== "planned") return;
     rmSync(join(fx.S, K1, U1), { recursive: true });
     symlinkSync(foreign, join(fx.S, K1, U1));
   });
@@ -874,7 +882,7 @@ test("F001: a project directory replaced by a link after the plan makes its unit
     [`${U2}.jsonl`]: "main",
   });
   const result = await runChangingHome(fx, (step) => {
-    if (step !== "state-copy") return;
+    if (step !== "planned") return;
     renameSync(join(fx.S, K1), join(fx.home, "moved-project"));
     symlinkSync(foreign, join(fx.S, K1));
   });
@@ -897,7 +905,7 @@ test("F001: the projects directory itself replaced by a look-alike link after th
     [`${K2}/${U3}.jsonl`]: "main",
   });
   const result = await runChangingHome(fx, (step) => {
-    if (step !== "state-copy") return;
+    if (step !== "planned") return;
     renameSync(fx.S, join(fx.home, "moved-projects"));
     symlinkSync(foreign, fx.S);
   });
@@ -909,36 +917,62 @@ test("F001: the projects directory itself replaced by a look-alike link after th
   assert.equal(existsSync(join(fx.W, "staging")), false);
 });
 
-const STEPS: Array<[HomeTranscriptImportStep, string | undefined]> = [
-  ["cleaned", undefined],
-  ["manifest-repaired", undefined],
-  ["state-backup", "backup"],
-  ["set-aside", "backup"],
-  ["state-copy", "copy"],
-  ["listed", "copy"],
-  ["staged", "copy"],
-  ["recorded", "copy"],
-  ["installed-tree", "copy"],
-  ["installed-main", "copy"],
+/** Before `state-copy` the boundary is not durable, so a failure refuses startup. */
+const STEPS: Array<
+  [HomeTranscriptImportStep, string | undefined, string | undefined]
+> = [
+  [
+    "cleaned",
+    undefined,
+    "remove the import's leftover staging and temp state files",
+  ],
+  ["manifest-repaired", undefined, "repair the import manifest"],
+  ["state-backup", "backup", "record the import's backup state"],
+  ["set-aside", "backup", "set the former projects/ aside"],
+  ["state-copy", "copy", undefined],
+  ["planned", "copy", undefined],
+  ["listed", "copy", undefined],
+  ["staged", "copy", undefined],
+  ["recorded", "copy", undefined],
+  ["installed-tree", "copy", undefined],
+  ["installed-main", "copy", undefined],
 ];
 
 test.each(STEPS)(
-  "AC10(4): a failure after %s aborts with phase %s, and the next boot completes like the reference",
-  async (failAt, phase) => {
+  "AC10(4): a failure after %s leaves phase %s, refuses startup before the boundary, and the next boot completes like the reference",
+  async (failAt, phase, refusedAt) => {
     const fx = fixture();
     seedOldDestination(fx);
     const old = digest(fx.D);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await run(fx, {
       afterStep: (step) => {
         if (step === failAt)
           throw Object.assign(new Error("injected"), { code: "EIO" });
       },
     });
-    assert.deepEqual(result, { outcome: "aborted", reason: "EIO" });
-    assert.ok(
-      warn.mock.calls.some(([text]) => /aborted \(EIO\)/.test(String(text))),
-    );
+    if (refusedAt === undefined) {
+      assert.deepEqual(result, { outcome: "aborted", reason: "EIO" });
+      assert.ok(
+        warn.mock.calls.some(([text]) => /aborted \(EIO\)/.test(String(text))),
+      );
+    } else {
+      assert.deepEqual(result, {
+        outcome: "refused",
+        operation: refusedAt,
+        reason: "EIO",
+      });
+      assert.ok(
+        error.mock.calls.some(([text]) =>
+          String(text).includes(`could not ${refusedAt} (EIO)`),
+        ),
+      );
+      assert.match(
+        (await homeTranscriptImportStartupRefusal(async () => result)) ?? "",
+        /startup refused/,
+      );
+    }
     assert.equal(state(fx)?.phase, phase);
     assert.equal((await run(fx)).outcome, "done");
     await assertCompletedLikeReference(fx, seedOldDestination);
@@ -954,6 +988,7 @@ test("AC10: the boot wrapper never throws, whatever a seam throws", async () => 
       throw new TypeError("no code at all");
     },
   });
+  // Both seams run after the boundary, so boot continues.
   assert.deepEqual(thrown, { outcome: "aborted", reason: "error" });
   const space = await run(fx, {
     freeBytes: async () => {
@@ -961,7 +996,8 @@ test("AC10: the boot wrapper never throws, whatever a seam throws", async () => 
     },
   });
   assert.equal(space.outcome, "aborted");
-  assert.equal(state(fx), undefined);
+  assert.equal(state(fx)?.phase, "copy");
+  assert.equal(existsSync(join(fx.W, "staging")), false);
 });
 
 test("a complete manifest line it did not write stops the run, changing nothing further", async () => {
@@ -974,13 +1010,31 @@ test("a complete manifest line it did not write stops the run, changing nothing 
   assert.equal(state(fx)?.phase, "copy");
 });
 
-test("a set-aside next to a non-empty destination in phase backup is refused", async () => {
+test("without a durable copy, a complete manifest line it did not write refuses startup", async () => {
+  const fx = fixture();
+  appendRecord(fx, '{"someone":"else"}\n');
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const result = await run(fx);
+  assert.deepEqual(result, {
+    outcome: "refused",
+    operation: "repair the import manifest",
+    reason: "the manifest holds a line it did not write",
+  });
+  assert.equal(state(fx), undefined);
+});
+
+test("a set-aside next to a non-empty destination in phase backup refuses startup", async () => {
   const fx = fixture();
   seedOldDestination(fx);
   cpSync(fx.D, fx.A, { recursive: true });
   writeState(fx, { phase: "backup", aside: ASIDE });
+  vi.spyOn(console, "error").mockImplementation(() => {});
   const result = await run(fx);
-  assert.equal(result.outcome, "aborted");
+  assert.deepEqual(result, {
+    outcome: "refused",
+    operation: "set the former projects/ aside",
+    reason: "both the destination and its set-aside exist; resolve by hand",
+  });
   assert.equal(state(fx)?.phase, "backup");
 });
 
@@ -996,16 +1050,23 @@ function unitBytes(fx: Fixture, units: Array<[string, string]>): number {
   return total;
 }
 
-test("AC11(a): a first run below the threshold changes nothing; at it, it completes", async () => {
+test("AC11(a): a first run below the threshold keeps the boundary and stages nothing; at it, it completes", async () => {
   const fx = fixture();
   seedOldDestination(fx);
-  // A large destination main matching a unit: it is set aside, so it counts.
+  // A large destination main matching a unit: it is set aside before the
+  // plan, so the unit is pending and counts.
   mkdirSync(join(fx.D, K1), { recursive: true });
   writeFileSync(join(fx.D, K1, `${U1}.jsonl`), "x".repeat(2 * MiB));
+  const old = digest(fx.D);
   const need = Math.ceil(unitBytes(fx, UNITS) * 1.1) + 256 * MiB;
-  const before = digest(fx.P);
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const low = await run(fx, { freeBytes: async () => need - 1 });
+  const staged: string[] = [];
+  const low = await run(fx, {
+    freeBytes: async () => need - 1,
+    afterStep: (step, id) => {
+      if (step === "staged") staged.push(id!);
+    },
+  });
   assert.deepEqual(low, {
     outcome: "insufficient-space",
     need,
@@ -1014,7 +1075,16 @@ test("AC11(a): a first run below the threshold changes nothing; at it, it comple
   assert.ok(
     warn.mock.calls.some(([text]) => String(text).includes(String(need))),
   );
-  assert.deepEqual(digest(fx.P), before, "no state, set-aside or copy");
+  assert.deepEqual(state(fx), { phase: "copy", aside: ASIDE });
+  assert.deepEqual(digest(fx.A), old, "the original destination, set aside");
+  assert.equal(existsSync(fx.D), false, "nothing copied");
+  assert.deepEqual(staged, []);
+  assert.equal(manifest(fx).lines, 0);
+  assert.equal(
+    await homeTranscriptImportStartupRefusal(async () => low),
+    undefined,
+    "startup continues",
+  );
   const enough = await run(fx, { freeBytes: async () => need });
   assert.equal(enough.outcome === "done" && enough.preflight, "statfs");
   assert.equal(enough.outcome === "done" && enough.aside, ASIDE);
@@ -1095,11 +1165,11 @@ function failingStatfs(code: string, probes: string[]): typeof fsp.statfs {
 }
 
 test.each(["EIO", "EACCES"])(
-  "F002: a native statfs %s aborts before any state, set-aside or copy, and the next boot completes",
+  "F002: a native statfs %s aborts after the boundary and before any copy, and the next boot completes",
   async (code) => {
     const fx = fixture();
     seedOldDestination(fx);
-    const before = digest(fx.P);
+    const old = digest(fx.D);
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const probes: string[] = [];
     const result = await withNativeStatfs(failingStatfs(code, probes), () =>
@@ -1107,7 +1177,10 @@ test.each(["EIO", "EACCES"])(
     );
     assert.deepEqual(result, { outcome: "aborted", reason: code });
     assert.deepEqual(probes, [fx.P]);
-    assert.deepEqual(digest(fx.P), before, "no state, set-aside or copy");
+    assert.deepEqual(state(fx), { phase: "copy", aside: ASIDE });
+    assert.deepEqual(digest(fx.A), old);
+    assert.equal(existsSync(fx.D), false, "nothing copied");
+    assert.equal(manifest(fx).lines, 0);
     const retry = await runNative(fx);
     assert.equal(retry.outcome === "done" && retry.preflight, "statfs");
     await assertCompletedLikeReference(fx, seedOldDestination);
@@ -1214,4 +1287,417 @@ test("AC12 runbook hazard: deleting the state after done sets the current projec
   assert.ok(aside && aside !== ASIDE);
   assert.deepEqual(digest(join(fx.P, "claude", aside)), installed);
   assert.deepEqual(digest(fx.D), installed, "copied again from home");
+});
+
+// F004: the boundary before release ------------------------------------------
+
+test("F004: the backup state, the set-aside and a durable copy all come before the source is planned or the space checked", async () => {
+  const fx = fixture();
+  seedOldDestination(fx);
+  const seen: string[] = [];
+  const result = await run(fx, {
+    afterStep: (step) => {
+      if (["state-backup", "set-aside", "state-copy", "planned"].includes(step))
+        seen.push(step);
+    },
+    providerSessionIds: () => {
+      seen.push(`plan:${String(state(fx)?.phase)}:${existsSync(fx.A)}`);
+      return IDS;
+    },
+    freeBytes: async () => {
+      seen.push(`preflight:${String(state(fx)?.phase)}`);
+      return undefined;
+    },
+  });
+  assert.equal(result.outcome, "done");
+  assert.deepEqual(seen, [
+    "state-backup",
+    "set-aside",
+    "state-copy",
+    "plan:copy:true",
+    "preflight:copy",
+    "planned",
+  ]);
+});
+
+/** A session Pandeck runs as Default Claude after startup was released. */
+const FRESH = "u-fresh";
+
+function writeFreshSession(fx: Fixture): void {
+  mkdirSync(join(fx.D, K1, FRESH, "subagents"), { recursive: true });
+  writeFileSync(join(fx.D, K1, `${FRESH}.jsonl`), line("fresh session"));
+  writeFileSync(
+    join(fx.D, K1, FRESH, "subagents", "agent-f.jsonl"),
+    line("fresh sub"),
+  );
+}
+
+test.each([
+  ["a non-empty", true],
+  ["no", false],
+] as const)(
+  "F004: with %s initial destination, low space releases startup; sessions created then, with no home counterpart, survive the retry",
+  async (_label, seeded) => {
+    const fx = fixture();
+    if (seeded) seedOldDestination(fx);
+    const old = seeded ? digest(fx.D) : undefined;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const ids = () => [...IDS, FRESH];
+    const low = await run(fx, {
+      providerSessionIds: ids,
+      freeBytes: async () => 0,
+    });
+    assert.equal(low.outcome, "insufficient-space");
+    assert.equal(
+      await homeTranscriptImportStartupRefusal(async () => low),
+      undefined,
+    );
+    // Released: a new Default (or NULL) session writes the live destination.
+    writeFreshSession(fx);
+    const fresh = digest(join(fx.D, K1));
+    const result = await run(fx, { providerSessionIds: ids });
+    assert.equal(result.outcome, "done");
+    assert.equal(result.outcome === "done" && result.counts.missing, 2);
+    for (const [path, node] of Object.entries(fresh))
+      assert.deepEqual(digest(join(fx.D, K1))[path], node, path);
+    for (const [key, id] of UNITS)
+      assert.ok(existsSync(join(fx.D, key, `${id}.jsonl`)), id);
+    if (old !== undefined) assert.deepEqual(digest(fx.A), old);
+    const asides = readdirSync(join(fx.P, "claude")).filter((n) =>
+      n.startsWith("projects.before-home-import-"),
+    );
+    assert.deepEqual(asides, seeded ? [ASIDE] : []);
+    assertManifestMatchesInstalled(fx);
+  },
+);
+
+test.each([
+  ["a non-empty", true],
+  ["no", false],
+] as const)(
+  "F004: with %s initial destination, a same-id append and a new session after an aborted copy survive the retry",
+  async (_label, seeded) => {
+    const fx = fixture();
+    if (seeded) seedOldDestination(fx);
+    const old = seeded ? digest(fx.D) : undefined;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const aborted = await run(fx, {
+      afterStep: (step, id) => {
+        if (step === "installed-main" && id === U3)
+          throw Object.assign(new Error("injected"), { code: "EIO" });
+      },
+    });
+    assert.deepEqual(aborted, { outcome: "aborted", reason: "EIO" });
+    assert.equal(
+      await homeTranscriptImportStartupRefusal(async () => aborted),
+      undefined,
+    );
+    appendFileSync(join(fx.D, K2, `${U3}.jsonl`), line("appended by the CLI"));
+    const appended = sha256(join(fx.D, K2, `${U3}.jsonl`));
+    writeFreshSession(fx);
+    const fresh = digest(join(fx.D, K1));
+    const result = await run(fx);
+    assert.equal(
+      result.outcome === "done" && result.counts.alreadyInstalled,
+      1,
+    );
+    assert.equal(sha256(join(fx.D, K2, `${U3}.jsonl`)), appended);
+    for (const [path, node] of Object.entries(fresh))
+      assert.deepEqual(digest(join(fx.D, K1))[path], node, path);
+    assert.ok(existsSync(join(fx.D, K1, `${U1}.jsonl`)));
+    assert.ok(existsSync(join(fx.D, K1, `${U2}.jsonl`)));
+    if (old !== undefined) assert.deepEqual(digest(fx.A), old);
+    assert.equal(state(fx)?.phase, "done");
+  },
+);
+
+function eio(what: string): Error {
+  return Object.assign(new Error(`fixture ${what}`), { code: "EIO" });
+}
+
+interface FsFaults {
+  /** Fail `rename(from, to)` with EIO when this says so. */
+  rename?: (from: string, to: string) => boolean;
+  /** Fail the fsync of a handle opened on `path` when this says so. */
+  sync?: (path: string) => boolean;
+}
+
+/**
+ * Run `body` with the import's `node:fs/promises` rename and open wrapped to
+ * fail as `faults` decide, restoring both afterwards. Everything else passes
+ * through.
+ */
+async function withFsFaults<T>(
+  faults: FsFaults,
+  body: () => Promise<T>,
+): Promise<T> {
+  const original = { rename: fsp.rename, open: fsp.open };
+  fsp.rename = (async (...args: Parameters<typeof fsp.rename>) => {
+    if (faults.rename?.(String(args[0]), String(args[1]))) throw eio("rename");
+    return original.rename(...args);
+  }) as typeof fsp.rename;
+  fsp.open = (async (...args: Parameters<typeof fsp.open>) => {
+    const handle = await original.open(...args);
+    if (faults.sync?.(String(args[0])))
+      handle.sync = async () => {
+        throw eio("fsync");
+      };
+    return handle;
+  }) as typeof fsp.open;
+  syncBuiltinESMExports();
+  try {
+    return await body();
+  } finally {
+    fsp.rename = original.rename;
+    fsp.open = original.open;
+    syncBuiltinESMExports();
+  }
+}
+
+/** The phase the state file holds right now, without the test's helpers. */
+function phaseOnDisk(fx: Fixture): unknown {
+  return state(fx)?.phase;
+}
+
+/** Each boundary write or fsync, failing: what it refuses as, and the phase it leaves. */
+const BOUNDARY_FAULTS: Array<
+  [string, (fx: Fixture) => FsFaults, string, string | undefined, boolean]
+> = [
+  [
+    "the backup state's temp-file fsync",
+    (fx) => ({
+      sync: (path) =>
+        path.startsWith(join(fx.W, "state.json.tmp-")) &&
+        phaseOnDisk(fx) === undefined,
+    }),
+    "record the import's backup state",
+    undefined,
+    false,
+  ],
+  [
+    "the backup state's rename",
+    (fx) => ({
+      rename: (_from, to) =>
+        to === join(fx.W, "state.json") && phaseOnDisk(fx) === undefined,
+    }),
+    "record the import's backup state",
+    undefined,
+    false,
+  ],
+  [
+    "the backup state's directory fsync",
+    (fx) => ({
+      sync: (path) => path === fx.W && phaseOnDisk(fx) === "backup",
+    }),
+    "record the import's backup state",
+    "backup",
+    false,
+  ],
+  [
+    "the set-aside rename",
+    (fx) => ({ rename: (from, to) => from === fx.D && to === fx.A }),
+    "set the former projects/ aside",
+    "backup",
+    true,
+  ],
+  [
+    "the set-aside's parent fsync",
+    (fx) => ({ sync: (path) => path === join(fx.P, "claude") }),
+    "set the former projects/ aside",
+    "backup",
+    true,
+  ],
+  [
+    "the copy state's temp-file fsync",
+    (fx) => ({
+      sync: (path) =>
+        path.startsWith(join(fx.W, "state.json.tmp-")) &&
+        phaseOnDisk(fx) === "backup",
+    }),
+    "record the import's copy state",
+    "backup",
+    false,
+  ],
+  [
+    "the copy state's rename",
+    (fx) => ({
+      rename: (_from, to) =>
+        to === join(fx.W, "state.json") && phaseOnDisk(fx) === "backup",
+    }),
+    "record the import's copy state",
+    "backup",
+    false,
+  ],
+  [
+    // The rename landed but is not known durable: still a refusal.
+    "the copy state's directory fsync",
+    (fx) => ({ sync: (path) => path === fx.W && phaseOnDisk(fx) === "copy" }),
+    "record the import's copy state",
+    "copy",
+    false,
+  ],
+];
+
+for (const seeded of [true, false])
+  test.each(
+    BOUNDARY_FAULTS.filter(([, , , , needsSeed]) => seeded || !needsSeed),
+  )(
+    `F004: ${seeded ? "a non-empty" : "an empty"} initial destination, %s failing, refuses startup; the next boot completes`,
+    async (_label, faults, operation, phase) => {
+      const fx = fixture();
+      if (seeded) seedOldDestination(fx);
+      const old = seeded ? digest(fx.D) : undefined;
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const planned: string[] = [];
+      const result = await withFsFaults(faults(fx), () =>
+        run(fx, {
+          providerSessionIds: () => {
+            planned.push("plan");
+            return IDS;
+          },
+        }),
+      );
+      assert.deepEqual(result, {
+        outcome: "refused",
+        operation,
+        reason: "EIO",
+      });
+      assert.deepEqual(planned, [], "the source is never listed");
+      assert.equal(phaseOnDisk(fx), phase);
+      const refusal = await homeTranscriptImportStartupRefusal(
+        async () => result,
+      );
+      assert.ok(refusal?.includes(`could not ${operation} (EIO)`));
+      assert.ok(
+        error.mock.calls.some(([text]) =>
+          String(text).includes(`could not ${operation} (EIO)`),
+        ),
+      );
+      assert.ok(
+        !existsSync(join(fx.D, K1)),
+        "nothing was copied into the destination",
+      );
+      assert.equal((await run(fx)).outcome, "done");
+      await assertCompletedLikeReference(
+        fx,
+        seeded ? seedOldDestination : undefined,
+      );
+      if (old !== undefined) assert.deepEqual(digest(fx.A), old);
+    },
+  );
+
+test("F004: with the source gone and no durable copy, a failed done write refuses startup", async () => {
+  const fx = fixture();
+  rmSync(fx.S, { recursive: true });
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const result = await withFsFaults(
+    { rename: (_from, to) => to === join(fx.W, "state.json") },
+    () => run(fx),
+  );
+  assert.deepEqual(result, {
+    outcome: "refused",
+    operation: "record the finished import",
+    reason: "EIO",
+  });
+  assert.equal(state(fx), undefined);
+  assert.equal((await run(fx)).outcome, "done");
+});
+
+test("F004: in phase backup with the source gone, a failed done write refuses startup", async () => {
+  const fx = fixture();
+  seedOldDestination(fx);
+  renameSync(fx.D, fx.A);
+  writeState(fx, { phase: "backup", aside: ASIDE });
+  rmSync(fx.S, { recursive: true });
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const result = await withFsFaults(
+    { rename: (_from, to) => to === join(fx.W, "state.json") },
+    () => run(fx),
+  );
+  assert.equal(result.outcome, "refused");
+  assert.equal(state(fx)?.phase, "backup");
+});
+
+test("F004: in phase copy with the source gone, a failed done write only aborts", async () => {
+  const fx = fixture();
+  writeState(fx, { phase: "copy", aside: null });
+  rmSync(fx.S, { recursive: true });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const result = await withFsFaults(
+    { rename: (_from, to) => to === join(fx.W, "state.json") },
+    () => run(fx),
+  );
+  assert.deepEqual(result, { outcome: "aborted", reason: "EIO" });
+  assert.equal(state(fx)?.phase, "copy");
+});
+
+test.each([
+  ["not JSON", "{"],
+  ["an unknown phase", '{"phase":"merge","aside":null}'],
+  ["a backup with no name", '{"phase":"backup","aside":null}'],
+  ["a bad set-aside name", '{"phase":"copy","aside":"../projects"}'],
+])(
+  "F004: an import state that is %s refuses startup at any later boot, changing nothing",
+  async (_label, raw) => {
+    const fx = fixture();
+    seedOldDestination(fx);
+    mkdirSync(fx.W, { recursive: true });
+    writeFileSync(join(fx.W, "state.json"), raw);
+    const before = digest(fx.P);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await run(fx);
+    assert.deepEqual(result, {
+      outcome: "refused",
+      operation: "read the import state",
+      reason: "the import state is unreadable",
+    });
+    assert.deepEqual(digest(fx.P), before);
+  },
+);
+
+test("F004: the startup gate lets every outcome with a durable boundary through, and refuses the rest loudly", async () => {
+  const counts = {
+    selected: 0,
+    copied: 0,
+    alreadyInstalled: 0,
+    missing: 0,
+    unsupported: 0,
+    invalid: 0,
+  };
+  const released: HomeTranscriptImportResult[] = [
+    { outcome: "already-done" },
+    {
+      outcome: "done",
+      sourceMissing: false,
+      aside: null,
+      counts,
+      bytes: 0,
+      preflight: "statfs",
+    },
+    { outcome: "insufficient-space", need: 2, free: 1 },
+    { outcome: "aborted", reason: "EIO" },
+  ];
+  for (const result of released)
+    assert.equal(
+      await homeTranscriptImportStartupRefusal(async () => result),
+      undefined,
+      result.outcome,
+    );
+  const refusal = await homeTranscriptImportStartupRefusal(async () => ({
+    outcome: "refused",
+    operation: "record the import's copy state",
+    reason: "ENOSPC",
+  }));
+  assert.ok(refusal);
+  assert.match(refusal, /^\[home-transcript-import\] startup refused: /);
+  assert.ok(
+    refusal.includes("could not record the import's copy state (ENOSPC)"),
+  );
+  assert.ok(refusal.includes("restart"));
+  assert.ok(refusal.includes("Keep every file in the data directory"));
+  assert.ok(refusal.includes("docs/deployment.md"));
+  const unknown = await homeTranscriptImportStartupRefusal(async () => {
+    throw eio("importer");
+  });
+  assert.ok(unknown?.includes("ended in an unknown state (EIO)"));
 });

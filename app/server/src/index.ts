@@ -96,7 +96,7 @@ import {
   startOpenAiProfileLogin,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
-  importDefaultClaudeHomeTranscripts,
+  homeTranscriptImportStartupRefusal,
 } from "./harnesses/boot.ts";
 import {
   codexLoginDriver,
@@ -1948,15 +1948,14 @@ startSpawnBroker();
 startInProcessWorker();
 // Default Claude runs from DATA_DIR, not ~/.claude: copy Pandeck's own
 // transcripts from home once, before the gateway or any session can run as it
-// (docs/credential-distribution.md). It never throws; a failed run is logged
-// and resumes next boot.
-try {
-  await importDefaultClaudeHomeTranscripts();
-} catch (err) {
-  const code = (err as { code?: unknown } | null)?.code;
-  console.warn(
-    `[assistant] home transcript import failed (${typeof code === "string" ? code : "error"})`,
-  );
+// (docs/credential-distribution.md). Until the import's destination boundary is
+// durable, nothing may write there, so a refusal stops the service here, before
+// the gateway, the listener and every session; the next start retries
+// (docs/deployment.md, "Default Claude transcript import").
+const homeImportRefusal = await homeTranscriptImportStartupRefusal();
+if (homeImportRefusal !== undefined) {
+  console.error(homeImportRefusal);
+  process.exit(1);
 }
 // Opt-in: the credential gateway runs in this process, and every engine open
 // on a profile holds a lease first. A failed start is logged and only fails
