@@ -8,7 +8,7 @@
  * temp `HOME`; every value is fake.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -143,6 +143,7 @@ test("a server in client mode streams model responses through relay and edge", a
     log: () => {},
   });
   open.push(relay);
+  assert.equal(statSync(relay.socketPath).mode & 0o777, 0o600);
 
   const lines: string[] = [];
   const link = startGatewayClientLink({

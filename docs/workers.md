@@ -1623,6 +1623,45 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   - The Claude refresh is an undocumented contract: C17 and the operator's smoke
     guard it, and a CLI or pi pin bump re-measures it.
 
+### Client mode
+
+A Pandeck on another machine (the IDB pilot) can run its models through a remote
+gateway that owns the accounts (Task-1384, gateway-service M13-M15). It is off
+unless `ASSISTANT_GATEWAY_RELAY=<socket path>,<loopback port>` is set, which
+takes precedence over `ASSISTANT_GATEWAY`; self-hosted keeps the server-master
+path above.
+
+- **Edge ports** (`gateway/clientListener.ts`, started by `startGateway`'s
+  `clients` option): an HTTPS enrollment port without a client certificate, and
+  two mutual-TLS ports with the gateway's own CA as the only trust root: the
+  model port (the loopback listener's routes) and the client-protocol port. The
+  client is its certificate's common name, matched by fingerprint, and is
+  checked on every connection, request and method, so a revocation is immediate.
+  A lease names its client and is spent only on that client's connection; the
+  loopback listener refuses client leases.
+- **Enrollment.** `gateway/adminMain.ts` adds users, prints a one-time code (15
+  minutes, kept hashed) and lists, revokes clients and prints the CA. The client
+  sends the code and its EC P-256 public key to `POST /enroll` and gets a
+  certificate (`gateway/x509.ts`, issued with `node:crypto`) and the ports.
+- **`gateway-client/1.0`** (`gateway/clientMethods.ts`), on the worker
+  protocol's framing: `client.hello`, `accounts.list` and the gateway's
+  `accounts.changed`, `leases.grant`, `leases.client` (the server's own
+  requests, one lease per account and client), `leases.bindSession`,
+  `leases.revoke` and `leases.reconcileWorker`, all on the calling client's
+  leases and its user's accounts only.
+- **The relay** (`relay/`, its own entry and process under Pandeck's server
+  account, `node:` only) is the only holder of the client key. It pipes its
+  loopback port to the model port and each connection on its 0600 Unix socket to
+  the client-protocol port, understanding neither.
+- **The server** (`gatewayClientLink.ts`) speaks the client protocol through the
+  relay's socket, mirrors the gateway's accounts read-only into the profile
+  registry, gives engines the relay's loopback URL and refuses logins.
+- **Known gaps.** The admin CLI and the running gateway both write
+  `clients.json`; a simultaneous write can lose one change, a revocation
+  included (later: an admin socket on the gateway). No OpenAI-compatible
+  accounts and no lease TTL (leases live until revoked). Accounts exist only
+  through the test seam until logins move into the gateway (Task-1385).
+
 ### Engine-version guard
 
 The engines' CLIs are pinned, and a pin moves only with evidence that the new

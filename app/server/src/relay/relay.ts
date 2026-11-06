@@ -305,13 +305,19 @@ export async function startRelay(options: RelayOptions): Promise<RunningRelay> {
     });
   });
   clearSocketPath(options.socketPath);
-  await new Promise<void>((resolve, reject) => {
-    control.once("error", reject);
-    control.listen(options.socketPath, () => {
-      control.removeListener("error", reject);
-      resolve();
+  // The socket is created 0600: no window in which another account opens it.
+  const umask = process.umask(0o177);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      control.once("error", reject);
+      control.listen(options.socketPath, () => {
+        control.removeListener("error", reject);
+        resolve();
+      });
     });
-  });
+  } finally {
+    process.umask(umask);
+  }
   chmodSync(options.socketPath, 0o600);
   const address = model.address();
   const port = typeof address === "object" && address ? address.port : 0;
