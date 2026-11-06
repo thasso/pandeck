@@ -169,28 +169,38 @@ token has two live writers across the switch. Then check:
 - `systemctl status personal-assistant-gateway personal-assistant` shows both
   active, and `/run/personal-assistant-gateway/control.sock` exists with mode
   `srw-------`;
-- `systemctl show personal-assistant -p Environment` shows
-  `ASSISTANT_GATEWAY=1`, unless the EnvironmentFile overrides it;
+- `systemctl show personal-assistant -p Environment` shows `ASSISTANT_GATEWAY=1`
+  and `ASSISTANT_GATEWAY_SOCKET=/run/personal-assistant-gateway/control.sock`;
 - the app shows no "Credential gateway" status 10 seconds after the start.
+
+A preview that was already running keeps the gateway off until
+`sudo pa-pr deploy <n>`.
 
 **Restarting.** Only the operator restarts the gateway
 (`sudo systemctl restart personal-assistant-gateway`); a deploy or a server
 restart leaves it running. Open streams get two minutes to finish.
 
-**Rollback.** Set `gateway.enable = false` and deploy, or put
-`ASSISTANT_GATEWAY=0` in the production EnvironmentFile, restart the server and
-stop the gateway unit. The engines' own refreshers return and read the same
-token files. Switch-off rollback and the CLI-compatible credential locks remain
-until slice 5's encrypted store. A re-login recovers any account that needs one.
+**Rollback.** Set `services.personal-assistant.gateway.enable = false`, deploy,
+and restart each running preview. That is the only supported rollback
+([deployment.md](deployment.md#credential-gateway-unit) has the commands and the
+reasons). Do not switch only the server off through its EnvironmentFile: the
+gateway unit would start again at the next server restart or boot and renew
+tokens for its persisted leases beside the engines. The engines' own refreshers
+return and read the same token files. Switch-off rollback and the CLI-compatible
+credential locks remain until slice 5's encrypted store. A re-login recovers any
+account that needs one.
 
 ## Supplying the service environment
 
 Use the deployment's existing systemd `EnvironmentFile` mechanism rather than
 putting secret values in Nix expressions, the repository, the package, or the
-Nix store. The file may define the four variables above alongside
-`ASSISTANT_TOKEN`. Keep it outside the repository, owned by the service user or
-root, and readable only by the account that needs it. Secret-manager templates
-such as sops-nix may render that file.
+Nix store. The file may define the four integration secrets under "Storage
+contract" alongside `ASSISTANT_TOKEN`. It reaches only the server, never the
+gateway unit, so it must not set `ASSISTANT_GATEWAY`, `ASSISTANT_GATEWAY_PORT`
+or `ASSISTANT_GATEWAY_SOCKET`; the NixOS module sets those from `gateway.enable`
+and `gateway.port`. Keep the file outside the repository, owned by the service
+user or root, and readable only by the account that needs it. Secret-manager
+templates such as sops-nix may render that file.
 
 Do not place these values in `extraEnvironment`. Nix-rendered environment values
 can become world-readable store content. Do not copy production values into a

@@ -1255,17 +1255,21 @@ EOF
                 default = true;
                 description = ''
                   Run the credential gateway (sets ASSISTANT_GATEWAY=1). Disable
-                  to roll back to the engines' own refreshers. When on, the
-                  gateway runs as its own unit, `personal-assistant-gateway`
-                  (each preview as `pa-pr-gateway@<n>`), and the server dials
-                  its control socket. A deploy never restarts that unit; the
-                  operator does (docs/deployment.md "Credential gateway unit").
+                  to roll back to the engines' own refreshers; this is the only
+                  supported rollback, never ASSISTANT_GATEWAY=0 in tokenFile or
+                  extraEnvironment. When on, the gateway runs as its own unit,
+                  `personal-assistant-gateway` (each preview as
+                  `pa-pr-gateway@<n>`), and the server dials its control socket.
+                  A deploy never restarts that unit; the operator does. Running
+                  previews keep their mode after a change: switching on needs
+                  `pa-pr deploy <n>`, rollback a restart of `pa-pr@<n>`
+                  (docs/deployment.md "Credential gateway unit").
                 '';
               };
               port = lib.mkOption {
                 type = lib.types.port;
                 default = 8788;
-                description = "The production gateway's loopback model port.";
+                description = "The production gateway's loopback model port, passed to both the server and the gateway unit. Set it here, not in tokenFile or extraEnvironment, which reach only the server.";
               };
             };
 
@@ -1498,7 +1502,10 @@ EOF
                   ASSISTANT_HOST_TOOLS =
                     "${cfg.package}/libexec/personal-assistant/config/host-tools.json";
                   # The credential gateway switch. Off restores the engines' own
-                  # refreshers (the rollback); the EnvironmentFile may override.
+                  # refreshers (the rollback). Set these through the gateway
+                  # options only: the gateway unit reads neither tokenFile nor
+                  # extraEnvironment, so an override there splits server and
+                  # gateway, and a server-only "0" leaves the gateway renewing.
                   ASSISTANT_GATEWAY = if cfg.gateway.enable then "1" else "0";
                   ASSISTANT_GATEWAY_PORT = toString cfg.gateway.port;
                 }

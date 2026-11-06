@@ -939,11 +939,13 @@ base environment and PATH and the same `DATA_DIR` (state in
 `DATA_DIR/gateway/`). Its model port is `127.0.0.1:<gateway.port>` (8788). Its
 control socket is `/run/personal-assistant-gateway/control.sock`, in a 0700
 runtime directory that survives the gateway's restarts. The server unit gets
-`ASSISTANT_GATEWAY=1`, the same port and the socket, and the production
-EnvironmentFile can override each of them. The server wants the gateway and
-starts after it, but does not require it or share its lifetime: the server boots
-without a gateway and shows its status, and restarting either one never restarts
-the other.
+`ASSISTANT_GATEWAY=1`, the same port and the socket. Set the model port only
+with `gateway.port`; the module fixes the socket. The gateway unit reads neither
+`tokenFile` nor `extraEnvironment`, so a port, socket or switch set there
+reaches only the server and splits it from its gateway. The server wants the
+gateway and starts after it, but does not require it or share its lifetime: the
+server boots without a gateway and shows its status, and restarting either one
+never restarts the other.
 
 **Only the operator restarts it.** The unit has `restartIfChanged = false`, so a
 deploy that changes the package leaves the running gateway alone. New gateway
@@ -977,18 +979,30 @@ access to the token files.
 **Switching on.** Deploy while no agent turn or login is running. The switch
 restarts the server with the gateway on and starts the new gateway unit. From
 then on the gateway is the only refresher of Claude and Codex logins
-(`docs/credential-distribution.md` "Credential gateway service").
+(`docs/credential-distribution.md` "Credential gateway service"). Activation
+does not touch running previews (`restartIfChanged = false`), so each keeps the
+gateway off until you run `sudo pa-pr deploy <n>` for it. A restart is not
+enough: only deploy writes the preview gateway's package and socket into the
+instance env file and starts `pa-pr-gateway@<n>`. List running previews with
+`systemctl list-units 'pa-pr@*'`.
 
-**Rollback.** Set `gateway.enable = false` and deploy. The module drops both
-gateway units and sets `ASSISTANT_GATEWAY=0` on the server and on previews, so
-the engines refresh their own tokens again. Without a redeploy, put
-`ASSISTANT_GATEWAY=0` in the production EnvironmentFile, restart the server, and
-stop the gateway with `sudo systemctl stop personal-assistant-gateway`. A
-gateway started again later, at boot for example, stays idle while the server is
-switched off, because it renews a token only for a request made with one of its
-leases. Token files keep their format, so both directions read them. Switch-off
-rollback and the CLI-compatible credential locks remain until slice 5's
-encrypted store.
+**Rollback.** Set `services.personal-assistant.gateway.enable = false` and
+deploy. This is the only supported rollback. It sets `ASSISTANT_GATEWAY=0` on
+the server and on previews and removes both gateway units, so the engines
+refresh their own tokens again. Setting only the server's switch, in `tokenFile`
+or `extraEnvironment`, is not a rollback. The gateway unit would still exist,
+wanted by the server and by `multi-user.target`, so the next server restart or
+boot starts it again. It keeps the server leases in `DATA_DIR/gateway/` and
+renews every due token that a live lease covers, without any new request, so it
+would refresh beside the engines.
+
+Activation stops the removed `pa-pr-gateway@<n>` units but not the previews:
+each running `pa-pr@<n>` keeps `ASSISTANT_GATEWAY=1` and keeps redialling a
+gateway that is gone. Restart each one with
+`sudo systemctl restart 'pa-pr@<n>.service'`, or redeploy it with
+`sudo pa-pr deploy <n>`. Token files keep their format, so both directions read
+them. Switch-off rollback and the CLI-compatible credential locks remain until
+slice 5's encrypted store.
 
 ## Host tools
 
@@ -1277,7 +1291,11 @@ instance env file, which both units read. Deploy restarts the gateway and then
 the app, and teardown stops both. The deploy refuses a `stateDir` long enough to
 push that socket path past the 107-byte Unix socket limit. A preview's gateway
 holds only that preview's accounts. With `gateway.enable` off, previews get
-`ASSISTANT_GATEWAY=0` and no gateway unit.
+`ASSISTANT_GATEWAY=0` and no gateway unit. A running preview keeps its gateway
+mode until `pa-pr` touches it, so changing `gateway.enable` needs one more step
+per preview: switching on needs `sudo pa-pr deploy <n>`, and rollback needs
+`sudo systemctl restart 'pa-pr@<n>.service'` or a deploy ("Credential gateway
+unit").
 
 Ports come from disjoint ranges. Preview `<n>`'s app listens on `portBase + n`
 (default 8800), inside `[portBase, gatewayPortBase)`. Its gateway listens on

@@ -1368,8 +1368,11 @@ stops accepting model requests, lets active streams finish for up to two
 minutes, then destroys remaining sockets. The NixOS module runs it as
 `personal-assistant-gateway` and each preview's as `pa-pr-gateway@<n>`; only the
 operator restarts them, never a deploy or the server. Switch-off rollback
-(`gateway.enable = false`, or `ASSISTANT_GATEWAY=0`) and the CLI-compatible
-credential locks stay until slice 5's encrypted store migration.
+(`gateway.enable = false`, which sets `ASSISTANT_GATEWAY=0` and removes the
+gateway units) and the CLI-compatible credential locks stay until slice 5's
+encrypted store migration. Turning only the server's switch off is no rollback:
+the still-installed gateway renews the tokens its persisted server leases cover
+on its own ([deployment.md](deployment.md) "Credential gateway unit").
 
 - Before it is ready the link says hello as this server boot (16 random bytes,
   the pid and the process start time), syncs every credential profile with its
