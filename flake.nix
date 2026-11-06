@@ -69,7 +69,7 @@
           # (docs/deployment.md#bun-package). Linux-only.
           personal-assistant = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "personal-assistant";
-            version = "0.64.0";
+            version = "0.65.0";
 
             src = cleanSrc;
 
