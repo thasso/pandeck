@@ -21,8 +21,10 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readlinkSync,
   statSync,
@@ -531,6 +533,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
         "Contract renewed 401",
         "fake-contract-401-refresh-0",
       );
+      const originalFile = openSync(file, "r");
       const before = identity(file);
       try {
         const ran = await turn({ credentialProfileId: id });
@@ -564,6 +567,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
         assert.equal(after.accessToken, `fake-contract-401-access-${renewals}`);
         assertNoTokenLogged([ran.leaseToken]);
       } finally {
+        closeSync(originalFile);
         env.setRenewal(undefined);
         env.setResponder(env.fakeClaudeStream(REPLY));
       }
