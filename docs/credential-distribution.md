@@ -115,7 +115,12 @@ backup.
   refuses to start (`docs/deployment.md`, "Default Claude transcript import"),
   so no session writes `claude/projects/` before the old content is aside. After
   `copy`, a retry never sets anything aside again, so sessions created or
-  appended to in between stay where they are.
+  appended to in between stay where they are. Every boot renews the saved
+  state's file and directory syncs before accepting `copy` or `done`; a failure
+  at or below `DATA_DIR` refuses startup even after `done`. Renewal stops at the
+  existing `DATA_DIR` inclusive, never opening or syncing its ancestors, which
+  need path traversal permission but not directory-read permission or fsync
+  support.
 - **Space.** After the boundary and before staging anything, it needs the
   pending bytes × 1.1 + 256 MiB free on the data dir's filesystem. A unit whose
   main file is already in `claude/projects/` is not pending. With less space it
@@ -124,8 +129,9 @@ backup.
   EACCES, …) defers the copy the same way. Only a runtime or filesystem without
   `statfs` skips the check.
 - **Recovery.** Each unit is staged, recorded, then renamed into place, its main
-  file last. A failed or killed run after the boundary never fails boot: the
-  next boot removes staging, cuts a torn manifest tail, skips installed units
+  file last. After that boot establishes or renews the boundary, a copy failure
+  no longer stops startup. The next boot validates and renews the saved
+  boundary, removes staging, cuts a torn manifest tail, skips installed units
   and resumes. If `~/.claude/projects` is gone, the run ends `done` with
   `sourceMissing` and keeps what it already installed. In that case its count
   includes recorded units whose main file never arrived, and such a unit's

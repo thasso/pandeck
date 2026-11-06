@@ -80,6 +80,7 @@ afterEach(() => {
 
 interface Fixture {
   home: string;
+  dataDir: string;
   S: string;
   P: string;
   D: string;
@@ -93,9 +94,11 @@ function fixture(): Fixture {
   roots.push(root);
   const home = join(root, "home");
   const S = join(home, ".claude", "projects");
-  const P = join(root, "data", "credential-profiles", "claude-default");
+  const dataDir = join(root, "instance");
+  const P = join(dataDir, "data", "credential-profiles", "claude-default");
   const fx = {
     home,
+    dataDir,
     S,
     P,
     D: join(P, "claude", "projects"),
@@ -190,6 +193,7 @@ async function run(
   const result = await importDefaultClaudeHomeTranscripts({
     homeProjectsDir: fx.S,
     profileRoot: fx.P,
+    dataDir: fx.dataDir,
     providerSessionIds: () => IDS,
     freeBytes: async () => undefined,
     now: () => NOW,
@@ -737,6 +741,7 @@ test("AC10(2): a unit that vanishes mid-copy is missing; the rest completes", as
   const result = await importDefaultClaudeHomeTranscripts({
     homeProjectsDir: fx.S,
     profileRoot: fx.P,
+    dataDir: fx.dataDir,
     providerSessionIds: () => IDS,
     freeBytes: async () => undefined,
     now: () => NOW,
@@ -804,6 +809,7 @@ function runChangingHome(
   return importDefaultClaudeHomeTranscripts({
     homeProjectsDir: fx.S,
     profileRoot: fx.P,
+    dataDir: fx.dataDir,
     providerSessionIds: () => IDS,
     freeBytes: async () => undefined,
     now: () => NOW,
@@ -1150,6 +1156,7 @@ async function runNative(fx: Fixture): Promise<HomeTranscriptImportResult> {
   const result = await importDefaultClaudeHomeTranscripts({
     homeProjectsDir: fx.S,
     profileRoot: fx.P,
+    dataDir: fx.dataDir,
     providerSessionIds: () => IDS,
     now: () => NOW,
   });
@@ -1416,6 +1423,10 @@ function eio(what: string): Error {
 }
 
 interface FsFaults {
+  /** Observe or refuse an open before the native call. */
+  open?: (path: string) => void;
+  /** The sync failure code, EIO by default. */
+  syncError?: string;
   /** Fail `rename(from, to)` with EIO when this says so. */
   rename?: (from: string, to: string) => boolean;
   /** Fail the fsync of a handle opened on `path` when this says so. */
@@ -1437,10 +1448,11 @@ async function withFsFaults<T>(
     return original.rename(...args);
   }) as typeof fsp.rename;
   fsp.open = (async (...args: Parameters<typeof fsp.open>) => {
+    faults.open?.(String(args[0]));
     const handle = await original.open(...args);
     if (faults.sync?.(String(args[0])))
       handle.sync = async () => {
-        throw eio("fsync");
+        throw Object.assign(eio("fsync"), { code: faults.syncError ?? "EIO" });
       };
     return handle;
   }) as typeof fsp.open;
@@ -1872,6 +1884,184 @@ test("F010 refuted: retry after manifest-name fsync failure renews W before inst
   assert.equal(phaseOnDisk(fx), "copy");
   assert.ok(existsSync(join(fx.D, K2, `${U3}.jsonl`)));
   assert.ok(manifest(fx).lines > 0);
+});
+
+/** Directory names above the existing data root, never importer-owned entries. */
+function aboveDataRoot(fx: Fixture): Set<string> {
+  const paths = new Set<string>();
+  let path = fx.dataDir;
+  while (dirname(path) !== path) {
+    path = dirname(path);
+    paths.add(path);
+  }
+  return paths;
+}
+
+for (const phase of ["absent", "copy", "done"] as const)
+  test.each(["root-owned 0711 model", "unsupported directory sync"])(
+    `F011: ${phase} startup never opens ancestors above DATA_DIR with %s`,
+    async (scenario) => {
+      const fx = fixture();
+      if (phase !== "absent") writeState(fx, { phase, aside: null });
+      const ancestor = dirname(fx.dataDir);
+      // Owned 0711 is readable to this uid. Model the non-owner EACCES;
+      // the separate 0111 case below exercises actual kernel denial.
+      chmodSync(ancestor, 0o711);
+      const forbidden = aboveDataRoot(fx);
+      const opened: string[] = [];
+      let result: HomeTranscriptImportResult;
+      try {
+        result = await withFsFaults(
+          {
+            open: (path) => {
+              opened.push(path);
+              if (scenario === "root-owned 0711 model" && forbidden.has(path))
+                throw Object.assign(new Error("fixture non-owner read"), {
+                  code: "EACCES",
+                });
+            },
+            sync: (path) => forbidden.has(path),
+            syncError: "ENOTSUP",
+          },
+          () => run(fx),
+        );
+      } finally {
+        chmodSync(ancestor, 0o700);
+      }
+      assert.equal(result.outcome, phase === "done" ? "already-done" : "done");
+      assert.equal(
+        await homeTranscriptImportStartupRefusal(async () => result),
+        undefined,
+      );
+      assert.deepEqual(
+        opened.filter((path) => forbidden.has(path)),
+        [],
+      );
+      assert.ok(opened.includes(fx.dataDir), "DATA_DIR itself is still synced");
+    },
+  );
+
+test.each(["absent", "copy", "done"] as const)(
+  "F011: %s startup traverses a real owned 0111 ancestor without opening it",
+  async (phase) => {
+    const fx = fixture();
+    if (phase !== "absent") writeState(fx, { phase, aside: null });
+    const ancestor = dirname(fx.dataDir);
+    assert.notEqual(
+      process.getuid?.(),
+      0,
+      "the native permission test must be unprivileged",
+    );
+    assert.equal(lstatSync(ancestor).uid, process.getuid?.());
+    chmodSync(ancestor, 0o111);
+    try {
+      await assert.rejects(fsp.open(ancestor, "r"), { code: "EACCES" });
+      assert.ok(
+        (await fsp.stat(fx.dataDir)).isDirectory(),
+        "child traversal still works",
+      );
+      const forbidden = aboveDataRoot(fx);
+      const opened: string[] = [];
+      const result = await withFsFaults(
+        {
+          open: (path) => {
+            opened.push(path);
+          },
+        },
+        () => run(fx),
+      );
+      assert.equal(result.outcome, phase === "done" ? "already-done" : "done");
+      assert.deepEqual(
+        opened.filter((path) => forbidden.has(path)),
+        [],
+      );
+      assert.equal(
+        await homeTranscriptImportStartupRefusal(async () => result),
+        undefined,
+      );
+    } finally {
+      chmodSync(ancestor, 0o700);
+    }
+  },
+);
+
+for (const phase of ["absent", "copy", "done"] as const)
+  test.each(["root", "profile", "work", "config"])(
+    `F011: ${phase} startup still refuses repeated barrier failure at/below DATA_DIR: %s`,
+    async (barrier) => {
+      const fx = fixture();
+      if (phase !== "absent") writeState(fx, { phase, aside: null });
+      const target = {
+        root: fx.dataDir,
+        profile: fx.P,
+        work: fx.W,
+        config: dirname(fx.D),
+      }[barrier];
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const fault = { sync: (path: string) => path === target };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = await withFsFaults(fault, () => run(fx));
+        // With no state, configDir is first synced after copy, during installation.
+        const afterCopy = phase === "absent" && barrier === "config";
+        assert.equal(
+          result.outcome,
+          afterCopy && attempt === 0 ? "aborted" : "refused",
+        );
+        if (!afterCopy || attempt > 0)
+          assert.ok(
+            await homeTranscriptImportStartupRefusal(async () => result),
+          );
+      }
+      assert.equal(
+        (await run(fx)).outcome,
+        phase === "done" ? "already-done" : "done",
+      );
+    },
+  );
+
+test("F011: a profile override cannot infer an unbounded data root or escape the explicit root", async () => {
+  const fx = fixture();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const opened: string[] = [];
+  for (const dataDir of [undefined, join(fx.dataDir, "elsewhere"), fx.P]) {
+    const result = await withFsFaults(
+      {
+        open: (path) => {
+          opened.push(path);
+        },
+      },
+      () =>
+        importDefaultClaudeHomeTranscripts({
+          profileRoot: fx.P,
+          ...(dataDir === undefined ? {} : { dataDir }),
+        }),
+    );
+    assert.equal(result.outcome, "refused");
+    assert.ok(await homeTranscriptImportStartupRefusal(async () => result));
+  }
+  assert.deepEqual(opened, []);
+  assert.equal(state(fx), undefined);
+});
+
+test("F011: the importer never creates a missing DATA_DIR or scans its parent", async () => {
+  const fx = fixture();
+  rmSync(fx.dataDir, { recursive: true });
+  const opened: string[] = [];
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const result = await withFsFaults(
+    {
+      open: (path) => {
+        opened.push(path);
+      },
+    },
+    () => run(fx),
+  );
+  assert.equal(result.outcome, "refused");
+  assert.equal(existsSync(fx.dataDir), false);
+  assert.deepEqual(
+    opened.filter((path) => aboveDataRoot(fx).has(path)),
+    [],
+  );
 });
 
 test("F004: the startup gate lets every outcome with a durable boundary through, and refuses the rest loudly", async () => {

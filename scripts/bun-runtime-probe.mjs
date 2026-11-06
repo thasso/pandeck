@@ -4880,6 +4880,7 @@ async function checkHomeTranscriptImport() {
   const options = {
     homeProjectsDir: source,
     profileRoot: profile,
+    dataDir: root,
     providerSessionIds: () => [id],
   };
 

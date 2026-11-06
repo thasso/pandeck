@@ -47,7 +47,8 @@ import {
   statfs,
   type FileHandle,
 } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { DATA_DIR } from "../config.ts";
 import { credentialProfileRoot } from "../credentialProfilePaths.ts";
 import { DEFAULT_CLAUDE_PROFILE_ID } from "../credentialProfiles.ts";
 import { defaultClaudeProviderSessionIds } from "../db/defaultClaudeTranscriptSelection.ts";
@@ -80,8 +81,10 @@ export interface ManifestIo {
 export interface HomeTranscriptImportOptions {
   /** `~/.claude/projects`. */
   homeProjectsDir?: string;
-  /** `credentialProfileRoot("claude-default")`. */
+  /** `credentialProfileRoot("claude-default")`. Must be below `dataDir`. */
   profileRoot?: string;
+  /** Existing DATA_DIR; tests with an outside profileRoot must set this explicitly. */
+  dataDir?: string;
   providerSessionIds?: () => string[];
   /** Free bytes on the profile's filesystem; undefined skips the check. */
   freeBytes?: (dir: string) => Promise<number | undefined>;
@@ -254,8 +257,15 @@ async function runImport(
   const now = options.now ?? Date.now;
   const afterStep = options.afterStep ?? (() => {});
   const io = options.manifestIo ?? fileManifestIo;
-  const profile =
-    options.profileRoot ?? credentialProfileRoot(DEFAULT_CLAUDE_PROFILE_ID);
+  const dataDir = resolve(options.dataDir ?? DATA_DIR);
+  const profile = resolve(
+    options.profileRoot ?? credentialProfileRoot(DEFAULT_CLAUDE_PROFILE_ID),
+  );
+  step("validate the import's data root");
+  assertWithinDataDir(profile, dataDir);
+  if (profile === dataDir)
+    throw new ImportAbort("the import profile must be below DATA_DIR");
+  step("read the import state");
   const configDir = join(profile, "claude");
   const destination = join(configDir, "projects");
   const work = join(profile, "home-import");
@@ -275,9 +285,9 @@ async function runImport(
     } finally {
       await handle.close();
     }
-    await fsyncDirectoryPath(work);
+    await fsyncDirectoryPath(work, dataDir);
     if ((await lstatOrUndefined(configDir)) !== undefined)
-      await fsyncDirectoryPath(configDir);
+      await fsyncDirectoryPath(configDir, dataDir);
   }
   if (state?.phase === "done") return { outcome: "already-done" };
   if (state?.phase === "copy") progress.startupSafe = true;
@@ -304,7 +314,7 @@ async function runImport(
   if (sourceStat === undefined) {
     step("record the finished import");
     if (state === undefined) {
-      await writeState(work, statePath, {
+      await writeState(dataDir, work, statePath, {
         phase: "done",
         aside: null,
         counts: zeroCounts(),
@@ -334,7 +344,7 @@ async function runImport(
       (sum, record) => sum + record.files.reduce((n, f) => n + f.size, 0),
       0,
     );
-    await writeState(work, statePath, {
+    await writeState(dataDir, work, statePath, {
       phase: "done",
       aside,
       sourceMissing: true,
@@ -368,7 +378,10 @@ async function runImport(
     if (state === undefined) {
       step("record the import's backup state");
       name = await freshAsideName(configDir, now());
-      await writeState(work, statePath, { phase: "backup", aside: name });
+      await writeState(dataDir, work, statePath, {
+        phase: "backup",
+        aside: name,
+      });
       afterStep("state-backup");
     } else name = state.aside;
     step("set the former projects/ aside");
@@ -386,7 +399,7 @@ async function runImport(
       aside = name;
     } else aside = null;
     step("record the import's copy state");
-    await writeState(work, statePath, { phase: "copy", aside });
+    await writeState(dataDir, work, statePath, { phase: "copy", aside });
     progress.startupSafe = true;
     afterStep("state-copy");
   } else aside = state.aside;
@@ -436,7 +449,7 @@ async function runImport(
     await rm(installedTree, { recursive: true, force: true });
     let files: ManifestFile[];
     try {
-      files = await stageUnit(source, sourceStat, staging, unit, () =>
+      files = await stageUnit(dataDir, source, sourceStat, staging, unit, () =>
         afterStep("listed", unit.id),
       );
     } catch (err) {
@@ -447,6 +460,7 @@ async function runImport(
     }
     afterStep("staged", unit.id);
     await appendRecord(
+      dataDir,
       manifestPath,
       work,
       {
@@ -459,7 +473,7 @@ async function runImport(
     );
     afterStep("recorded", unit.id);
     const keyDir = join(destination, unit.key);
-    await ensureDir(keyDir);
+    await ensureDir(keyDir, dataDir);
     if (unit.hasTree) {
       await rename(join(staging, unit.key, unit.id), installedTree);
       afterStep("installed-tree", unit.id);
@@ -474,7 +488,7 @@ async function runImport(
 
   // 9. Done.
   await rm(staging, { recursive: true, force: true });
-  await writeState(work, statePath, {
+  await writeState(dataDir, work, statePath, {
     phase: "done",
     aside,
     counts,
@@ -599,6 +613,7 @@ async function regularTreeBytes(dir: string): Promise<number | undefined> {
  * has no directory-relative open or listing.
  */
 async function stageUnit(
+  dataDir: string,
   source: string,
   sourceBefore: Stats,
   staging: string,
@@ -609,7 +624,7 @@ async function stageUnit(
   const project = join(source, unit.key);
   const projectBefore = await sourceDirectory(project);
   const stagedKey = join(staging, unit.key);
-  await ensureDir(stagedKey);
+  await ensureDir(stagedKey, dataDir);
   const files: ManifestFile[] = [];
   if (unit.hasTree)
     await stageTree(
@@ -832,13 +847,14 @@ function effectiveManifest(
  * before the unit's renames.
  */
 async function appendRecord(
+  dataDir: string,
   path: string,
   work: string,
   record: ManifestRecord,
   io: ManifestIo,
 ): Promise<void> {
   const before = await lstatOrUndefined(path);
-  await ensureDir(work);
+  await ensureDir(work, dataDir);
   try {
     await io.append(path, Buffer.from(`${JSON.stringify(record)}\n`, "utf8"));
   } catch (err) {
@@ -908,11 +924,12 @@ async function readState(path: string): Promise<ImportState | undefined> {
 
 /** Replace the state: fsynced temp file, rename, fsynced directory. */
 async function writeState(
+  dataDir: string,
   work: string,
   path: string,
   state: ImportState,
 ): Promise<void> {
-  await ensureDir(work);
+  await ensureDir(work, dataDir);
   const temp = join(work, `state.json.tmp-${randomUUID()}`);
   const handle = await open(temp, "wx", 0o600);
   try {
@@ -939,16 +956,28 @@ async function freshAsideName(configDir: string, at: number): Promise<string> {
   }
 }
 
-/** Create `dir` and any missing parents at 0700, each durably. */
-async function ensureDir(dir: string): Promise<void> {
+/** Reject an outside test profile before any state read or directory operation. */
+function assertWithinDataDir(dir: string, dataDir: string): void {
+  const path = relative(dataDir, dir);
+  if (path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path))
+    throw new ImportAbort("the import path is outside DATA_DIR");
+}
+
+/** Create missing directories below the existing DATA_DIR at 0700, each durably. */
+async function ensureDir(dir: string, dataDir: string): Promise<void> {
+  assertWithinDataDir(dir, dataDir);
+  if (dir === dataDir) {
+    await fsyncDir(dir);
+    return;
+  }
   const stat = await lstatOrUndefined(dir);
   if (stat?.isDirectory()) {
     // mkdir may have succeeded before a previous parent's sync failed.
-    await fsyncDirectoryPath(dirname(dir));
+    await fsyncDirectoryPath(dirname(dir), dataDir);
     return;
   }
   if (stat !== undefined) throw new ImportAbort("a directory path is taken");
-  await ensureDir(dirname(dir));
+  await ensureDir(dirname(dir), dataDir);
   try {
     await mkdir(dir, { mode: 0o700 });
   } catch (err) {
@@ -958,13 +987,13 @@ async function ensureDir(dir: string): Promise<void> {
   await fsyncDir(dirname(dir));
 }
 
-/** Renew namespace barriers through every ancestor, without creating or changing entries. */
-async function fsyncDirectoryPath(dir: string): Promise<void> {
+/** Renew namespace barriers up to DATA_DIR inclusive, never its ancestors. */
+async function fsyncDirectoryPath(dir: string, dataDir: string): Promise<void> {
+  assertWithinDataDir(dir, dataDir);
   for (;;) {
     await fsyncDir(dir);
-    const parent = dirname(dir);
-    if (parent === dir) return;
-    dir = parent;
+    if (dir === dataDir) return;
+    dir = dirname(dir);
   }
 }
 

@@ -854,8 +854,13 @@ listener and any session start. Until the import has durably recorded phase
 the service refuses to start, because a session could otherwise write
 transcripts that a later attempt would set aside with the old `projects/`. A
 state file it cannot read or does not recognize refuses the same way at any
-later boot. The refusal stops every account, not only Default Claude, and the
-unit exits 1, so systemd restarts it and each start retries.
+later boot. Each boot renews the saved state's file and directory syncs before
+accepting `copy` or `done`. A failed renewal at or below `DATA_DIR` also refuses
+startup, even after `done`. Renewal stops at the existing `DATA_DIR` inclusive;
+it never opens or syncs directories above it. Those ancestors need normal path
+traversal permission, not directory-read permission or directory-fsync support.
+The refusal stops every account, not only Default Claude, and the unit exits 1,
+so systemd restarts it and each start retries.
 
 The journal names the cause in one line starting
 `[home-transcript-import] startup refused:`. It gives the operation that failed
@@ -863,10 +868,10 @@ The journal names the cause in one line starting
 `EACCES`, `EIO`, …). To recover:
 
 1. Fix what the line names: free space on the data directory's filesystem,
-   ownership or permissions of `credential-profiles/claude-default/` and its
-   `home-import/` and `claude/` directories for the service user, a file where
-   `~/.claude/projects` should be a directory. An unreadable `state.json` is
-   restored from a backup of the data directory, never deleted.
+   ownership or permissions of `DATA_DIR`, `credential-profiles/claude-default/`
+   and its `home-import/` and `claude/` directories for the service user, a file
+   where `~/.claude/projects` should be a directory. An unreadable `state.json`
+   is restored from a backup of the data directory, never deleted.
 2. Restart the service. The import resumes from its saved phase. It never
    repeats a set-aside and never copies over an installed transcript.
 3. If the line says `both the destination and its set-aside exist`, something
