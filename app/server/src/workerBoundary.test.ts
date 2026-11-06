@@ -581,7 +581,12 @@ test("only the server links and the error classifier import the gateway", () => 
     importersOf((target) => target.startsWith("gateway/")).filter(
       (module) => !module.startsWith("gateway/"),
     ),
-    ["gatewayClientLink.ts", "gatewayLink.ts", "providerErrors.ts"],
+    [
+      "gatewayClientLink.ts",
+      "gatewayDevMain.ts",
+      "gatewayLink.ts",
+      "providerErrors.ts",
+    ],
   );
 });
 

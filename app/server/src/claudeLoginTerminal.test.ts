@@ -102,10 +102,11 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-test("production resolves the native CLI bundled with the Agent SDK", () => {
+test("production resolves the native CLI bundled with the Agent SDK", async () => {
   process.env.NODE_ENV = "production";
   try {
-    const path = terminal.bundledClaudeCliPath();
+    const { bundledClaudeCliPath } = await import("./claudeLoginDriver.ts");
+    const path = bundledClaudeCliPath();
     assert.equal(existsSync(path), true);
     assert.match(path, /claude-agent-sdk-.*\/claude(?:\.exe)?$/);
   } finally {

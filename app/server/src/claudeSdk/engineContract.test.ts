@@ -888,8 +888,9 @@ describe.runIf(ENABLED)("the Claude login CLI offline (AC13)", () => {
     assert.ok(under(userHomeDir(), tmpdir()), userHomeDir());
     assert.ok(under(DATA_DIR, tmpdir()), DATA_DIR);
     const profiles = await import("../credentialProfiles.ts");
-    const { CLAUDE_LOGIN_ARGS, claudeLoginEnvironment } =
+    const { claudeLoginEnvironment } =
       await import("../claudeLoginTerminal.ts");
+    const { CLAUDE_LOGIN_ARGS } = await import("../claudeLoginDriver.ts");
 
     // 3. The repo-installed CLI the SDK bundles, at the locked version.
     const sdkRequire = createRequire(

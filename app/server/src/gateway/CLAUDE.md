@@ -6,8 +6,9 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
 
 - `gateway/` imports only `node:` modules, itself and `GATEWAY_ALLOWED` in
   `workerBoundary.test.ts`, never a package or other server module; that list
-  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts` and
-  `providerErrors.ts` (refusal marker) import it; new wiring updates that pin.
+  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts`,
+  `gatewayDevMain.ts` and `providerErrors.ts` (refusal marker) import it; new
+  wiring updates that pin.
 - Only a control or client connection grants a lease, and a grant binds provider
   and, for a login, token file from the registry, never from the request.
 - State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes

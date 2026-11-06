@@ -1648,19 +1648,43 @@ path above.
   `accounts.changed`, `leases.grant`, `leases.client` (the server's own
   requests, one lease per account and client), `leases.bindSession`,
   `leases.revoke` and `leases.reconcileWorker`, all on the calling client's
-  leases and its user's accounts only.
+  leases and its user's accounts only; `accounts.remove`; and the login API
+  below.
+- **Logins** (`gateway/logins.ts`, Task-1385, M11):
+  `logins.start {kind, accountId?, name?}` answers `{loginId, accountId}`; the
+  gateway sends `logins.event` (output, URL, code, state) to the starting
+  client, which may send `logins.input` and `logins.cancel`. Without `accountId`
+  the account is registered at once, needing a login, and removed if its first
+  login does not succeed. Each login runs an injected driver (`startGateway`'s
+  `loginDrivers`: the official CLI's `claude auth login` as a child with
+  `CLAUDE_CONFIG_DIR` set, `claudeLoginDriver.ts`; pi's device-code login,
+  `piSdk/codexLogin.ts`) in a fresh directory under the state directory. On
+  success one writer-lane item checks the credential and renames it into the
+  account's token file, which replaces the whole file; the directory is always
+  deleted. The credential never leaves the gateway, and no login hold is taken.
 - **The relay** (`relay/`, its own entry and process under Pandeck's server
   account, `node:` only) is the only holder of the client key. It pipes its
   loopback port to the model port and each connection on its 0600 Unix socket to
   the client-protocol port, understanding neither.
 - **The server** (`gatewayClientLink.ts`) speaks the client protocol through the
-  relay's socket, mirrors the gateway's accounts read-only into the profile
-  registry, gives engines the relay's loopback URL and refuses logins.
+  relay's socket, mirrors the gateway's accounts into the profile registry and
+  gives engines the relay's loopback URL. Settings' existing UI drives the
+  gateway (`remoteLogins.ts`): adding an account starts its first login, the
+  Claude login terminal renders the login's events, a Codex device code shows on
+  the account, and delete calls `accounts.remove`.
+- **Local live test.**
+  `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
+  (`gatewayDevMain.ts`, until the gateway's own entry lands) runs a gateway with
+  the client listener and both drivers on 127.0.0.1; `gateway:admin` and
+  `gateway:relay` run the admin CLI and the relay. A second dev instance with
+  its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN` and
+  `ASSISTANT_GATEWAY_RELAY` is the client.
 - **Known gaps.** The admin CLI and the running gateway both write
   `clients.json`; a simultaneous write can lose one change, a revocation
   included (later: an admin socket on the gateway). No OpenAI-compatible
-  accounts and no lease TTL (leases live until revoked). Accounts exist only
-  through the test seam until logins move into the gateway (Task-1385).
+  accounts and no lease TTL (leases live until revoked). In client mode, no
+  rename, enable toggle or Clear of an unfinished login, and the Codex driver
+  runs in the gateway's process rather than as a child.
 
 ### Engine-version guard
 

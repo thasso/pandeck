@@ -96,9 +96,12 @@ import {
   startOpenAiProfileLogin,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
-  renewCodexCredential,
-  codexLoginDriver,
 } from "./harnesses/boot.ts";
+import {
+  codexLoginDriver,
+  renewCodexCredential,
+} from "./harnesses/gatewayPorts.ts";
+import { claudeLoginDriver } from "./claudeLoginDriver.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import {
   createGoogleOAuthStartUrl,
@@ -206,7 +209,6 @@ import {
 } from "./speech/speechSocket.ts";
 import {
   attachClaudeLoginSocket,
-  claudeLoginDriver,
   stopClaudeLoginTerminals,
 } from "./claudeLoginTerminal.ts";
 import { sttEngine } from "./speech/sttEngine.ts";
