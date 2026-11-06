@@ -46,6 +46,11 @@ import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startGatewayClientLink } from "./gatewayClientLink.ts";
+import {
+  createRemoteAccount,
+  remoteLoginsActive,
+  startRemoteCodexLogin,
+} from "./remoteLogins.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
 import {
   clearUnfinishedProfileLogin,
@@ -67,6 +72,7 @@ import { pickAccount } from "./accountRouter.ts";
 import {
   createCredentialProfile,
   credentialProfileById,
+  credentialProfileSummaryById,
   defaultClaudeProfileId,
   defaultOpenAiProfileId,
   deleteCredentialProfile,
@@ -90,6 +96,7 @@ import {
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
   renewCodexCredential,
+  codexLoginDriver,
 } from "./harnesses/boot.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import {
@@ -198,6 +205,7 @@ import {
 } from "./speech/speechSocket.ts";
 import {
   attachClaudeLoginSocket,
+  claudeLoginDriver,
   stopClaudeLoginTerminals,
 } from "./claudeLoginTerminal.ts";
 import { sttEngine } from "./speech/sttEngine.ts";
@@ -890,6 +898,19 @@ async function handleRequest(
         );
         if (typeof body.name !== "string" || !isAccountKind(body.provider))
           throw new Error("A name and supported provider are required.");
+        // Client mode: the gateway adds the account with its first login.
+        if (remoteLoginsActive()) {
+          if (body.provider !== "claude" && body.provider !== "openai-codex")
+            throw new Error(
+              "The gateway manages the accounts of this Pandeck.",
+            );
+          const id = await createRemoteAccount(body.provider, body.name);
+          res.writeHead(201, corsJsonHeaders(req));
+          res.end(
+            JSON.stringify({ profile: credentialProfileSummaryById(id) }),
+          );
+          return;
+        }
         const profile = createCredentialProfile({
           name: body.name,
           provider: body.provider,
@@ -1004,7 +1025,8 @@ async function handleRequest(
     }
     const profileId = requestUrl.pathname.split("/")[3] ?? "";
     try {
-      startOpenAiProfileLogin(profileId);
+      if (remoteLoginsActive()) await startRemoteCodexLogin(profileId);
+      else startOpenAiProfileLogin(profileId);
       res.writeHead(202, corsJsonHeaders(req));
       res.end(JSON.stringify({ ok: true }));
     } catch (err) {
@@ -1936,6 +1958,10 @@ if (GATEWAY_RELAY) {
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
     renewCodex: renewCodexCredential,
+    loginDrivers: {
+      claude: claudeLoginDriver,
+      "openai-codex": codexLoginDriver,
+    },
   });
   // Settings hears of every login-stuck change from the link's start.
   followLoginHoldStatuses();

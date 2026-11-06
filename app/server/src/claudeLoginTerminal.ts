@@ -48,6 +48,7 @@ import {
   type LoginHold,
   type LoginHoldTaken,
 } from "./loginHolds.ts";
+import { attachRemoteClaudeLogin, remoteLoginsActive } from "./remoteLogins.ts";
 import { packagedClaudeCliPath } from "./runtimeAssets.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
@@ -147,7 +148,12 @@ export const CLAUDE_LOGIN_ARGS = ["auth", "login", "--claudeai"];
 export function claudeLoginEnvironment(
   profileId: string,
 ): Record<string, string> {
-  const source = claudeProfileEnvironment(profileId);
+  return loginEnvironmentFrom(claudeProfileEnvironment(profileId));
+}
+
+function loginEnvironmentFrom(
+  source: NodeJS.ProcessEnv,
+): Record<string, string> {
   const allowed = new Set([
     "PATH",
     "HOME",
@@ -177,7 +183,9 @@ export function claudeLoginEnvironment(
   ]);
   const env = Object.fromEntries(
     Object.entries(source).filter(
-      ([key]) => allowed.has(key) || key.startsWith("LC_"),
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined &&
+        (allowed.has(entry[0]) || entry[0].startsWith("LC_")),
     ),
   );
   return { ...env, NO_COLOR: "1", BROWSER: "false" };
@@ -498,6 +506,11 @@ export function attachClaudeLoginSocket(
     `http://${req.headers.host ?? "localhost"}`,
   );
   const profileId = url.searchParams.get("profileId") ?? "";
+  // Client mode: the gateway runs the login (Task-1385).
+  if (remoteLoginsActive()) {
+    attachRemoteClaudeLogin(viewer, profileId);
+    return;
+  }
   let run: LoginRun;
   try {
     run = runs.get(profileId) ?? startRun(profileId);
@@ -569,6 +582,84 @@ subscribeCredentialProfileDeleted((profileId) => {
       "SIGKILL",
     );
 });
+
+const LOGIN_URL_RE = /https:\/\/\S+oauth\S*/;
+
+/**
+ * The gateway's Claude login driver (plan Task-1385, M11; `gateway/logins.ts`
+ * `LoginDriver`): the same official CLI login as a run here, as an isolated
+ * child whose `CLAUDE_CONFIG_DIR` is the login's fresh directory, so its
+ * credential lands there. Output goes out sanitised, with the first
+ * authorization URL also as a `url` event; a line typed in goes to its
+ * stdin and is never logged. A cancel sends SIGTERM, then SIGKILL after 5 s.
+ */
+export function claudeLoginDriver(
+  configDir: string,
+  events: { output(text: string): void; url(url: string): void },
+): { input(text: string): void; cancel(): void; done: Promise<void> } {
+  const child = spawnClaudeLogin(
+    bundledClaudeCliPath(),
+    [...CLAUDE_LOGIN_ARGS],
+    {
+      env: {
+        ...loginEnvironmentFrom(process.env),
+        CLAUDE_CONFIG_DIR: configDir,
+      },
+      windowsHide: true,
+    },
+  );
+  let urlSent = false;
+  const output = (raw: string): void => {
+    const text = sanitizeClaudeLoginOutput(raw);
+    if (!text) return;
+    events.output(text);
+    const url = urlSent ? undefined : LOGIN_URL_RE.exec(text)?.[0];
+    if (url) {
+      urlSent = true;
+      events.url(url);
+    }
+  };
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", output);
+  child.stderr.on("data", output);
+  child.stdin.on("error", () => child.kill("SIGTERM"));
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const done = new Promise<void>((resolve, reject) => {
+    child.on("error", (error) => {
+      if (child.pid === undefined)
+        reject(
+          new Error(
+            `Could not start the official Claude CLI: ${errorText(error)}`,
+          ),
+        );
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(killTimer);
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            signal
+              ? `Claude login stopped (${signal}).`
+              : `Claude login exited with code ${code ?? "unknown"}.`,
+          ),
+        );
+    });
+  });
+  return {
+    input: (text) => {
+      if (child.exitCode === null) child.stdin.write(`${text}\n`);
+    },
+    cancel: () => {
+      if (child.exitCode !== null || killTimer) return;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), KILL_AFTER_MS);
+      killTimer.unref?.();
+    },
+    done,
+  };
+}
 
 /** Test seams; production callers never replace the official CLI spawn. */
 export function setClaudeLoginSpawnForTests(

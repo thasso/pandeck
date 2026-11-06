@@ -391,12 +391,39 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
   if (ACCOUNT_KINDS[profile.provider].credential === "endpoint")
     return endpointSummary(profile);
   if (remoteProfiles) {
-    // The gateway holds the credential: no file here says anything.
+    // The gateway holds the credential: no file here says anything. A login
+    // it runs for this account shows as today's (`remoteLogins.ts`).
     const ready = !remoteNeedsLogin.has(profile.id);
+    const pending = transient.get(profile.id);
+    const status =
+      pending?.status === "connecting"
+        ? "connecting"
+        : ready
+          ? "ready"
+          : pending?.status === "error"
+            ? "error"
+            : "disconnected";
     return {
       ...profile,
-      status: ready ? "ready" : "disconnected",
+      status,
       health: readAccountHealth(profile.id, ready),
+      ...(pending?.error ? { error: pending.error } : {}),
+      ...(status === "connecting" && profile.provider === "openai-codex"
+        ? {
+            setup: {
+              path: "",
+              command: "",
+              detail:
+                "Open the verification link and enter the one-time code. The gateway stores the resulting OAuth credential.",
+              ...(pending?.verificationUri !== undefined
+                ? { verificationUri: pending.verificationUri }
+                : {}),
+              ...(pending?.userCode !== undefined
+                ? { userCode: pending.userCode }
+                : {}),
+            },
+          }
+        : {}),
     };
   }
   const pending = transient.get(profile.id);

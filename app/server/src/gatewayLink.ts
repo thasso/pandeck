@@ -160,6 +160,8 @@ export interface GatewayLinkOptions {
   start?: (options: GatewayOptions) => Promise<RunningGateway>;
   /** pi's Codex refresh, passed to the gateway. */
   renewCodex?: GatewayOptions["renewCodex"];
+  /** The login drivers an enrolled client's logins run (Task-1385). */
+  loginDrivers?: GatewayOptions["loginDrivers"];
   /** Test and probe seam, passed to the gateway; the server never sets it. */
   claudeTokenEndpoint?: GatewayOptions["claudeTokenEndpoint"];
 }
@@ -374,6 +376,7 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
         ...(options.log ? { log: options.log } : {}),
         ...(options.upstreams ? { upstreams: options.upstreams } : {}),
         ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
+        ...(options.loginDrivers ? { loginDrivers: options.loginDrivers } : {}),
         ...(options.claudeTokenEndpoint
           ? { claudeTokenEndpoint: options.claudeTokenEndpoint }
           : {}),
