@@ -10,6 +10,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, readFile, writeFile, unlink } from "node:fs/promises";
 import https from "node:https";
+import net from "node:net";
 import { join } from "node:path";
 import tls from "node:tls";
 import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
@@ -61,6 +62,7 @@ afterEach(async () => {
   upstreams.reset();
   clock = Date.now();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 afterAll(() => upstreams.close());
@@ -572,6 +574,121 @@ test("the timer notices an admin process revocation without a call or push, incl
     },
     { timeout: 2_000 },
   );
+  await completeLogin(run);
+  await vi.waitFor(() =>
+    assert.ok(
+      !gateway.clients!.registry.accountsOf("u1").includes(login.accountId),
+    ),
+  );
+});
+
+test("silent TLS peers release the client port's slots after handshake timeout", async () => {
+  const createServer = tls.createServer;
+  // Keep the configured production timeout covered above; shorten only this
+  // real-socket exercise so the regression does not need a ten-second wait.
+  vi.spyOn(tls, "createServer").mockImplementationOnce((options, listener) =>
+    createServer({ ...options, handshakeTimeout: 1_000 }, listener),
+  );
+  const gateway = await gatewayWithClients();
+  const identity = await enroll(gateway);
+  const peers = Array.from({ length: 64 }, () =>
+    net.connect(gateway.clients!.clientPort, "127.0.0.1"),
+  );
+  const closed = peers.map(
+    (peer) =>
+      new Promise<void>((resolve) => peer.once("close", () => resolve())),
+  );
+  for (const peer of peers) {
+    peer.on("error", () => {});
+    open.push({ close: () => peer.destroy() });
+  }
+  await Promise.all(
+    peers.map(
+      (peer) =>
+        new Promise<void>((resolve, reject) => {
+          peer.once("connect", resolve);
+          peer.once("error", reject);
+        }),
+    ),
+  );
+  assert.equal(peers.filter((peer) => !peer.destroyed).length, 64);
+  await Promise.all(closed);
+  const client = await dialClient(gateway, identity);
+  await client.request(CLIENT_METHODS.hello, encodeClientMessage({}));
+});
+
+test("failed revocation checks preserve all clients and warn once per read-failure episode", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const run = fakeLogin();
+  const logs: string[] = [];
+  const gateway = await gatewayWithClients(run.drivers, logs);
+  gateway.clients!.putAccount({
+    id: "claude-b",
+    provider: "claude",
+    name: "B",
+    enabled: true,
+    tokenFile: claudeFile,
+    userId: "u2",
+  });
+  const aIdentity = await enroll(gateway);
+  const bIdentity = await enroll(gateway, "u2");
+  const a = await dialClient(gateway, aIdentity);
+  const b = await dialClient(gateway, bIdentity);
+  const aLease = await grant(a);
+  const bLease = await grant(b, "claude-b");
+  const login = await startLogin(a);
+  await Promise.all(
+    [a, b].map((client) =>
+      client.request(CLIENT_METHODS.hello, encodeClientMessage({})),
+    ),
+  );
+  const before = gateway.leases.records();
+  const path = join(stateDirs.get(gateway)!, "clients.json");
+  const good = await readFile(path, "utf8");
+  logs.length = 0;
+  const warnings = () =>
+    logs.filter(
+      (line) =>
+        line ===
+        "client revocation check deferred: client registry unavailable",
+    );
+  for (const episode of [1, 2]) {
+    await writeFile(path, "temporarily invalid JSON");
+    await vi.advanceTimersByTimeAsync(1_000);
+    assert.deepEqual(gateway.leases.records(), before);
+    assert.equal(a.isEnded, false);
+    assert.equal(b.isEnded, false);
+    assert.equal(run.cancels(), 0);
+    assert.equal(warnings().length, episode);
+    await writeFile(path, good);
+    await vi.advanceTimersByTimeAsync(250);
+  }
+  await a.request(CLIENT_METHODS.listAccounts, encodeClientMessage({}));
+  await b.request(CLIENT_METHODS.listAccounts, encodeClientMessage({}));
+  assert.equal(
+    (await modelRequest(gateway, aIdentity, aLease.token)).status,
+    200,
+  );
+  assert.equal(
+    (await modelRequest(gateway, bIdentity, bLease.token)).status,
+    200,
+  );
+  // A successful read can still find a real revocation and limit its effects
+  // to that client. Its running login is cancelled only at that point.
+  gateway.clients!.registry.revoke(aIdentity.clientId);
+  await vi.advanceTimersByTimeAsync(250);
+  await a.ended;
+  assert.equal(run.cancels(), 1);
+  assert.ok(
+    gateway.leases.records().find((lease) => lease.leaseId === aLease.leaseId)!
+      .revoked,
+  );
+  assert.equal(
+    gateway.leases.records().find((lease) => lease.leaseId === bLease.leaseId)!
+      .revoked,
+    undefined,
+  );
+  assert.equal(b.isEnded, false);
   await completeLogin(run);
   await vi.waitFor(() =>
     assert.ok(

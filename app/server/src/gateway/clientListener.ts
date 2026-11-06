@@ -621,7 +621,9 @@ export async function startClientListener(
       socket.destroy();
     }
   });
-  clientServer.on("tlsClientError", () => {});
+  // Unlike HTTPS, a plain TLS server does not close timed-out handshakes.
+  // Release their connection slots instead of retaining silent TCP peers.
+  clientServer.on("tlsClientError", (_err, socket) => socket.destroy());
 
   let ports = { modelPort: 0, clientPort: 0 };
   const attempts = new Map<string, { until: number; count: number }>();
@@ -732,7 +734,9 @@ export async function startClientListener(
   );
 
   // The admin CLI writes from another process. Also cover clients with leases
-  // or running logins but no current connection. Fail closed if reads fail.
+  // or running logins but no current connection. A failed read gives no new
+  // revocation evidence; preserve the last successfully observed state.
+  let registryReadFailed = false;
   const revocations = setInterval(() => {
     let active: Set<string>;
     try {
@@ -743,8 +747,12 @@ export async function startClientListener(
           .map((client) => client.id),
       );
     } catch {
-      active = new Set();
+      if (!registryReadFailed)
+        log("client revocation check deferred: client registry unavailable");
+      registryReadFailed = true;
+      return;
     }
+    registryReadFailed = false;
     for (const record of leases.records())
       if (record.owner.clientId) knownClients.add(record.owner.clientId);
     for (const clientId of knownClients) {
