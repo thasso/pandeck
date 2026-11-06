@@ -18,7 +18,9 @@
       "entry": [
         "src/check*.ts",
         "src/measure*.ts",
-        "src/initiativeLayoutWorker.ts"
+        "src/initiativeLayoutWorker.ts",
+        "src/gateway/adminMain.ts",
+        "src/relay/main.ts"
       ],
       "project": "src/**/*.ts",
       "ignoreBinaries": ["mkfifo"]

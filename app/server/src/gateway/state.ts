@@ -78,18 +78,21 @@ function parseOwnership(
   owner: unknown,
 ): LeaseOwnership | undefined {
   if (typeof owner !== "object" || owner === null) return undefined;
-  const { workerId, sessionId, serverBootId } = owner as Record<
+  const { workerId, sessionId, serverBootId, clientId } = owner as Record<
     string,
     unknown
   >;
+  if (clientId !== undefined && !isOwnerId(clientId)) return undefined;
+  const client = clientId !== undefined ? { clientId } : {};
   if (kind === "engine" && isOwnerId(workerId)) {
-    if (sessionId === undefined) return { kind, owner: { workerId } };
+    if (sessionId === undefined)
+      return { kind, owner: { workerId, ...client } };
     return isOwnerId(sessionId)
-      ? { kind, owner: { workerId, sessionId } }
+      ? { kind, owner: { workerId, sessionId, ...client } }
       : undefined;
   }
   if (kind === "server" && isOwnerId(serverBootId))
-    return { kind, owner: { serverBootId } };
+    return { kind, owner: { serverBootId, ...client } };
   return undefined;
 }
 
