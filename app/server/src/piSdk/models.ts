@@ -10,6 +10,7 @@ import {
   type Credential,
 } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
+import { deviceCodeInteraction } from "./codexLogin.ts";
 import { chmodSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -629,28 +630,14 @@ export function startOpenAiProfileLogin(profileId: string): void {
     });
     providerLogin = runOpenAiProfileLogin(
       runtime,
-      {
-        notify(event) {
-          // Device codes/URLs are short-lived authorization instructions, not
-          // credentials. Keep them out of persistent metadata and logs.
-          if (event.type === "device_code" && isCurrent() && !completed)
-            setCredentialProfileLoginState(profileId, {
-              status: "connecting",
-              verificationUri: event.verificationUri,
-              userCode: event.userCode,
-            });
-        },
-        async prompt(prompt) {
-          // The provider asks once to choose browser vs device code. Our remote UI
-          // deliberately selects its documented headless/device-code option.
-          if (
-            prompt.type === "select" &&
-            prompt.options.some((option) => option.id === "device_code")
-          )
-            return "device_code";
-          throw new Error("This OpenAI login requires the device-code flow.");
-        },
-      },
+      deviceCodeInteraction((verificationUri, userCode) => {
+        if (isCurrent() && !completed)
+          setCredentialProfileLoginState(profileId, {
+            status: "connecting",
+            verificationUri,
+            userCode,
+          });
+      }),
       completeLogin,
       `${agentDir}/auth.json`,
     );

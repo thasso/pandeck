@@ -48,6 +48,7 @@ import {
 import { createControlEndpoint } from "./control.ts";
 import type { HoldRecord, WriterLane } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
+import type { LoginDrivers } from "./vaultPort.ts";
 import type { ProcessProbe } from "./processIdentity.ts";
 import { ProfileRegistry } from "./profiles.ts";
 import type { RefreshLockOptions } from "./refreshLock.ts";
@@ -84,6 +85,8 @@ export interface GatewayOptions {
    * needs `stateDir`. Without it the gateway serves only the loopback port.
    */
   clients?: ClientListenerOptions;
+  /** The login drivers enrolled clients' logins run (`logins.ts`). */
+  loginDrivers?: LoginDrivers;
 }
 
 export interface RunningGateway {
@@ -150,6 +153,10 @@ export async function startGateway(
       claudeEndpoint: options.claudeTokenEndpoint,
       renewCodex: options.renewCodex,
       lockOptions: options.refreshLockOptions,
+    },
+    logins: {
+      stateDir: options.stateDir,
+      drivers: options.loginDrivers ?? {},
     },
   });
   const compat = createCompatUpstream();
@@ -219,6 +226,7 @@ export async function startGateway(
         }),
         log,
         ...(options.now ? { now: options.now } : {}),
+        vault,
       },
       options.clients,
     );

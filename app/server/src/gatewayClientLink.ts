@@ -12,7 +12,8 @@
  * dialled again every 2 s, without a reconcile, and grants in between fail
  * with U7's text. The server's own requests spend a client lease
  * (`leases.client`), one per account for this boot. Logins are the gateway's
- * (slice 4): every login call refuses here.
+ * (Task-1385): `remoteLogins.ts` drives them through `logins.*`, and the
+ * login-hold calls refuse here.
  */
 import {
   mirrorRemoteCredentialProfiles,
@@ -24,6 +25,8 @@ import {
   GATEWAY_CLIENT_PROTOCOL,
   decodeAccounts,
   decodeClientIdentity,
+  decodeLoginEvent,
+  decodeLoginStarted,
   encodeClientMessage,
   type ClientAccount,
 } from "./gateway/clientMethods.ts";
@@ -39,6 +42,7 @@ import {
   installGatewayLink,
   type GatewayLink,
 } from "./gatewayLink.ts";
+import { installRemoteLoginPort, remoteLoginEvent } from "./remoteLogins.ts";
 import type { Payload } from "./workerProtocol/codec.ts";
 import {
   WorkerConnection,
@@ -109,6 +113,11 @@ export function startGatewayClientLink(
       handlers: {
         [CLIENT_METHODS.accountsChanged]: (payload) => {
           mirror(decodeAccounts(payload));
+          return Promise.resolve(encodeControlDone());
+        },
+        [CLIENT_METHODS.loginEvent]: (payload) => {
+          const decoded = decodeLoginEvent(payload);
+          if (decoded) remoteLoginEvent(decoded.loginId, decoded.event);
           return Promise.resolve(encodeControlDone());
         },
       },
@@ -205,6 +214,48 @@ export function startGatewayClientLink(
     }
   };
 
+  const uninstallLogins = installRemoteLoginPort({
+    async start(start) {
+      if (!(await readyWithin(READY_TIMEOUT_MS)))
+        throw new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT);
+      const started = decodeLoginStarted(
+        await request(CLIENT_METHODS.loginStart, encodeClientMessage(start)),
+      );
+      // A new account is in the mirror before its login is answered.
+      if (!needsLogin.has(started.accountId))
+        mirror(
+          decodeAccounts(
+            await request(CLIENT_METHODS.listAccounts, encodeClientMessage({})),
+          ),
+        );
+      log(`logins.start (account ${started.accountId}): ok`);
+      return started;
+    },
+    async input(loginId, text) {
+      await request(
+        CLIENT_METHODS.loginInput,
+        encodeClientMessage({ loginId, text }),
+      );
+    },
+    async remove(accountId) {
+      await request(
+        CLIENT_METHODS.removeAccount,
+        encodeClientMessage({ accountId }),
+      );
+      // The mirror drops it now, not only at the next `accounts.changed`.
+      mirror(
+        decodeAccounts(
+          await request(CLIENT_METHODS.listAccounts, encodeClientMessage({})),
+        ),
+      );
+    },
+    async cancel(loginId) {
+      await request(
+        CLIENT_METHODS.loginCancel,
+        encodeClientMessage({ loginId }),
+      );
+    },
+  });
   let uninstall: () => void = () => {};
   const link: GatewayLink = {
     ready,
@@ -281,6 +332,7 @@ export function startGatewayClientLink(
       if (closing) return;
       closing = true;
       uninstall();
+      uninstallLogins();
       if (redial) clearTimeout(redial);
       connection?.end("the server link closed");
       mirrorRemoteCredentialProfiles(undefined);

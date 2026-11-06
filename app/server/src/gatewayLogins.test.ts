@@ -1,0 +1,280 @@
+/**
+ * Logins in the gateway end to end (plan Task-1385): a client-mode server
+ * adds and logs in accounts through relay and edge (`remoteLogins.ts`,
+ * `gatewayClientLink.ts`, `gateway/logins.ts`), with fake login drivers in
+ * place of the Claude CLI and pi's device-code login, and fake upstreams that
+ * show which token a model request carried, and deletes one. Every value is
+ * fake.
+ */
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import type { IncomingMessage } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, test, vi } from "vitest";
+import type { WebSocket } from "ws";
+
+const home = mkdtempSync(join(tmpdir(), "gateway-logins-home-"));
+process.env.HOME = home;
+
+const profiles = await import("./credentialProfiles.ts");
+const { attachClaudeLoginSocket } = await import("./claudeLoginTerminal.ts");
+const { createRemoteAccount, deleteRemoteAccount, startRemoteCodexLogin } =
+  await import("./remoteLogins.ts");
+const { startGatewayClientLink } = await import("./gatewayClientLink.ts");
+const { startGateway } = await import("./gateway/gateway.ts");
+const { enrollRelay, startRelay } = await import("./relay/relay.ts");
+const { DATA_DIR } = await import("./config.ts");
+const {
+  CLAUDE_PATH,
+  CODEX_PATH,
+  fakeClaudeStream,
+  fakeCodexStream,
+  modelRequest,
+  startFakeUpstreams,
+  writeTokenFiles,
+} = await import("./test/gatewayFixtures.ts");
+type LoginDriver = NonNullable<
+  import("./gateway/vaultPort.ts").LoginDrivers["claude"]
+>;
+
+const open: { close(): unknown }[] = [];
+afterAll(async () => {
+  while (open.length) await open.pop()!.close();
+  rmSync(home, { recursive: true, force: true });
+});
+
+const expires = () => Date.now() + 3_600_000;
+
+/** Claude's fake CLI: prints a URL, takes the pasted code, writes a token. */
+const fakeClaude: LoginDriver = (configDir, events) => {
+  let settle!: { resolve: () => void; reject: (err: Error) => void };
+  const done = new Promise<void>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  events.output(
+    "Open https://claude.example/oauth/authorize?x=1\nPaste code: ",
+  );
+  return {
+    input(text) {
+      writeFileSync(
+        join(configDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: `claude-${text}`,
+            expiresAt: expires(),
+          },
+        }),
+      );
+      settle.resolve();
+    },
+    cancel: () => settle.reject(new Error("Claude login stopped (SIGTERM).")),
+    done,
+  };
+};
+
+/** pi's fake device-code login: URL and code, then a token once approved. */
+let approveCodex!: () => void;
+const fakeCodex: LoginDriver = (configDir, events) => {
+  events.url("https://auth.example/device");
+  events.code("ABCD-1234");
+  const done = new Promise<void>((resolve) => {
+    approveCodex = () => {
+      writeFileSync(
+        join(configDir, "auth.json"),
+        JSON.stringify({
+          "openai-codex": {
+            type: "oauth",
+            access: "codex-new-access",
+            accountId: "acct-new",
+            expires: expires(),
+          },
+        }),
+      );
+      resolve();
+    };
+  });
+  return { input: () => {}, cancel: () => {}, done };
+};
+
+/** A browser on the login terminal's socket. */
+function viewer(profileId: string) {
+  const socket = Object.assign(new EventEmitter(), {
+    readyState: 1,
+    messages: [] as { type: string; [key: string]: unknown }[],
+    send(text: string) {
+      socket.messages.push(JSON.parse(text) as { type: string });
+    },
+    close() {
+      socket.readyState = 3;
+    },
+  });
+  attachClaudeLoginSocket(
+    socket as unknown as WebSocket,
+    {
+      url: `/ws/claude-login?profileId=${profileId}`,
+      headers: { host: "localhost" },
+    } as IncomingMessage,
+  );
+  const output = () =>
+    socket.messages
+      .map((m) =>
+        m.type === "output" ? m.chunk : m.type === "snapshot" ? m.output : "",
+      )
+      .join("");
+  const status = () =>
+    socket.messages.filter((m) => m.type === "status").at(-1)?.status;
+  const type = (message: object) =>
+    socket.emit("message", Buffer.from(JSON.stringify(message)));
+  return { output, status, type };
+}
+
+test("a client-mode server adds and logs in accounts through the gateway", async () => {
+  const upstreams = await startFakeUpstreams({
+    claude: fakeClaudeStream("hi"),
+    codex: fakeCodexStream("hello"),
+  });
+  open.push(upstreams);
+  const gatewayDir = mkdtempSync(join(DATA_DIR, "edge-"));
+  const gateway = await startGateway({
+    stateDir: gatewayDir,
+    upstreams: upstreams.overrides,
+    log: () => {},
+    clients: {},
+    loginDrivers: { claude: fakeClaude, "openai-codex": fakeCodex },
+  });
+  open.push(gateway);
+  const edge = gateway.clients!;
+  edge.registry.addUser("thasso");
+  const { claudeFile } = await writeTokenFiles();
+  edge.putAccount({
+    id: "claude-old",
+    provider: "claude",
+    name: "Old Claude",
+    enabled: true,
+    tokenFile: claudeFile,
+    userId: "thasso",
+  });
+
+  const relayDir = mkdtempSync(join(tmpdir(), "relay-"));
+  open.push({
+    close: () => rmSync(relayDir, { recursive: true, force: true }),
+  });
+  await enrollRelay({
+    stateDir: relayDir,
+    host: "127.0.0.1",
+    enrollPort: edge.enrollPort,
+    caPem: edge.caPem,
+    code: edge.registry.createCode("thasso", "devbox"),
+  });
+  const relay = await startRelay({
+    stateDir: relayDir,
+    port: 0,
+    socketPath: join(relayDir, "relay.sock"),
+    log: () => {},
+  });
+  open.push(relay);
+  const link = startGatewayClientLink({
+    socketPath: relay.socketPath,
+    relayPort: relay.port,
+    log: () => {},
+  });
+  open.push(link);
+  assert.equal(await link.ready, true);
+  const status = (id: string) =>
+    profiles.credentialProfileSummaryById(id)?.status;
+  const tempDirs = () => readdirSync(join(gatewayDir, "login-tmp"));
+
+  // Claude: adding the account starts its login; the pasted code reaches the
+  // driver and the account turns ready with the new token.
+  const claudeId = await createRemoteAccount("claude", "Work Claude");
+  assert.equal(status(claudeId), "connecting");
+  const terminal = viewer(claudeId);
+  await vi.waitFor(() => assert.match(terminal.output(), /oauth\/authorize/));
+  terminal.type({ type: "input", data: "one" });
+  await vi.waitFor(() => assert.equal(terminal.status(), "ready"));
+  await vi.waitFor(() => assert.equal(status(claudeId), "ready"));
+  const tokenFile = join(gatewayDir, "accounts", claudeId, ".credentials.json");
+  assert.equal(statSync(tokenFile).mode & 0o777, 0o600);
+  assert.deepEqual(tempDirs(), []);
+  const lease = await link.grantEngineLease({
+    workerId: undefined,
+    profileId: claudeId,
+  });
+  assert.equal(
+    (await modelRequest(relay.port, CLAUDE_PATH, lease.token)).status,
+    200,
+  );
+  assert.equal(
+    upstreams.anthropic.at(-1)!.headers.authorization,
+    "Bearer claude-one",
+  );
+
+  // Codex: the device code shows on the account, as the server's own login.
+  const codexId = await createRemoteAccount("openai-codex", "Work Codex");
+  await vi.waitFor(() =>
+    assert.deepEqual(
+      profiles.credentialProfileSummaryById(codexId)?.setup && {
+        uri: profiles.credentialProfileSummaryById(codexId)!.setup!
+          .verificationUri,
+        code: profiles.credentialProfileSummaryById(codexId)!.setup!.userCode,
+      },
+      { uri: "https://auth.example/device", code: "ABCD-1234" },
+    ),
+  );
+  await startRemoteCodexLogin(codexId); // attaches to the running one
+  approveCodex();
+  await vi.waitFor(() => assert.equal(status(codexId), "ready"));
+  const access = await link.serverAccess(codexId);
+  assert.equal(
+    (await modelRequest(relay.port, CODEX_PATH, access.leaseToken)).status,
+    200,
+  );
+  assert.equal(
+    upstreams.chatgpt.at(-1)!.headers.authorization,
+    "Bearer codex-new-access",
+  );
+
+  // Deleting an account removes it on the gateway, with its token file.
+  await deleteRemoteAccount(codexId);
+  assert.equal(profiles.credentialProfileById(codexId), undefined);
+  assert.equal(existsSync(join(gatewayDir, "accounts", codexId)), false);
+  assert.equal(
+    (await modelRequest(relay.port, CODEX_PATH, access.leaseToken)).status,
+    401,
+  );
+
+  // Logging in again replaces an existing account's token in its own file.
+  const again = viewer("claude-old");
+  await vi.waitFor(() => assert.match(again.output(), /Paste code/));
+  again.type({ type: "input", data: "two" });
+  await vi.waitFor(() => assert.equal(again.status(), "ready"));
+  assert.match(readFileSync(claudeFile, "utf8"), /claude-two/);
+
+  // A cancelled first login removes its account again.
+  const tempId = await createRemoteAccount("claude", "Short-lived");
+  const cancelled = viewer(tempId);
+  await vi.waitFor(() => assert.match(cancelled.output(), /Paste code/));
+  cancelled.type({ type: "cancel" });
+  await vi.waitFor(() => assert.equal(cancelled.status(), "cancelled"));
+  await vi.waitFor(() =>
+    assert.equal(profiles.credentialProfileById(tempId), undefined),
+  );
+  assert.deepEqual(tempDirs(), []);
+  assert.deepEqual(
+    profiles
+      .credentialProfilesOfKind("claude")
+      .map((p) => p.id)
+      .sort(),
+    [claudeId, "claude-old"].sort(),
+  );
+});

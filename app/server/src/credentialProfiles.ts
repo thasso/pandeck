@@ -237,6 +237,14 @@ export function mirrorRemoteCredentialProfiles(
     ];
   });
   const after = new Map((remoteProfiles ?? []).map((p) => [p.id, p]));
+  // An account the gateway dropped is deleted here as well: its caches go.
+  if (accounts)
+    for (const id of before.keys())
+      if (!after.has(id)) {
+        transient.delete(id);
+        credentialProfileDeletedHandler?.(id);
+        for (const listener of credentialProfileDeletedListeners) listener(id);
+      }
   for (const id of new Set([...before.keys(), ...after.keys()]))
     if (
       before.get(id)?.updatedAt !== after.get(id)?.updatedAt ||
@@ -391,12 +399,39 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
   if (ACCOUNT_KINDS[profile.provider].credential === "endpoint")
     return endpointSummary(profile);
   if (remoteProfiles) {
-    // The gateway holds the credential: no file here says anything.
+    // The gateway holds the credential: no file here says anything. A login
+    // it runs for this account shows as today's (`remoteLogins.ts`).
     const ready = !remoteNeedsLogin.has(profile.id);
+    const pending = transient.get(profile.id);
+    const status =
+      pending?.status === "connecting"
+        ? "connecting"
+        : ready
+          ? "ready"
+          : pending?.status === "error"
+            ? "error"
+            : "disconnected";
     return {
       ...profile,
-      status: ready ? "ready" : "disconnected",
+      status,
       health: readAccountHealth(profile.id, ready),
+      ...(pending?.error ? { error: pending.error } : {}),
+      ...(status === "connecting" && profile.provider === "openai-codex"
+        ? {
+            setup: {
+              path: "",
+              command: "",
+              detail:
+                "Open the verification link and enter the one-time code. The gateway stores the resulting OAuth credential.",
+              ...(pending?.verificationUri !== undefined
+                ? { verificationUri: pending.verificationUri }
+                : {}),
+              ...(pending?.userCode !== undefined
+                ? { userCode: pending.userCode }
+                : {}),
+            },
+          }
+        : {}),
     };
   }
   const pending = transient.get(profile.id);
@@ -927,7 +962,8 @@ export function renameCredentialProfile(
   return patchCredentialProfile(id, { name: rawName });
 }
 
-export function deleteCredentialProfile(id: string): void {
+/** Throws unless the account may be deleted: not a default, not bound. */
+export function assertCredentialProfileDeletable(id: string): void {
   if (isProtectedProfile(id))
     throw new Error("A default profile cannot be deleted.");
   // Every scope: a profile an internal session is still bound to is just as
@@ -939,6 +975,10 @@ export function deleteCredentialProfile(id: string): void {
   ) {
     throw new Error("This profile is still bound to one or more sessions.");
   }
+}
+
+export function deleteCredentialProfile(id: string): void {
+  assertCredentialProfileDeletable(id);
   const profiles = readRegistry();
   if (!profiles.some((profile) => profile.id === id))
     throw new Error("Credential profile not found.");

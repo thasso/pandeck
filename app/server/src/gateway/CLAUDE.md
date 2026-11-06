@@ -1,11 +1,14 @@
+<!-- instruction-budget: bytes=2400 reason="Ten contracts; logins in the gateway add the second token-file writer and keep drivers out of live files." task=1385 date=2026-11-06 -->
+
 # Credential gateway
 
 Contract: `docs/workers.md` "Credentials" and ADR-0005.
 
 - `gateway/` imports only `node:` modules, itself and `GATEWAY_ALLOWED` in
   `workerBoundary.test.ts`, never a package or other server module; that list
-  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts` and
-  `providerErrors.ts` (refusal marker) import it; new wiring updates that pin.
+  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts`,
+  `gatewayDevMain.ts` and `providerErrors.ts` (refusal marker) import it; new
+  wiring updates that pin.
 - Only a control or client connection grants a lease, and a grant binds provider
   and, for a login, token file from the registry, never from the request.
 - State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes
@@ -16,7 +19,9 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
 - Only renewal writes token files, in the profile's writer lane: Claude's under
   the CLI's locks with compare-and-swap and a same-directory rename that never
   creates a directory, Codex's only through the injected pi port's lock-fenced
-  atomic store.
+  atomic store. Exception: a login's ingest (`vaultLogins.ts`) renames a checked
+  credential in, in the same lane; its driver writes only its own fresh
+  directory.
 - A login hold ends only on its owning boot's release, the observed exit of its
   owner and registered writer (`processState`; uncertain is alive), or the
   operator's force release; never on elapsed time, a lost connection, a restart

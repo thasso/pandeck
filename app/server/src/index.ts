@@ -46,6 +46,12 @@ import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startGatewayClientLink } from "./gatewayClientLink.ts";
+import {
+  createRemoteAccount,
+  deleteRemoteAccount,
+  remoteLoginsActive,
+  startRemoteCodexLogin,
+} from "./remoteLogins.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
 import {
   clearUnfinishedProfileLogin,
@@ -67,6 +73,7 @@ import { pickAccount } from "./accountRouter.ts";
 import {
   createCredentialProfile,
   credentialProfileById,
+  credentialProfileSummaryById,
   defaultClaudeProfileId,
   defaultOpenAiProfileId,
   deleteCredentialProfile,
@@ -89,8 +96,12 @@ import {
   startOpenAiProfileLogin,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
-  renewCodexCredential,
 } from "./harnesses/boot.ts";
+import {
+  codexLoginDriver,
+  renewCodexCredential,
+} from "./harnesses/gatewayPorts.ts";
+import { claudeLoginDriver } from "./claudeLoginDriver.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import {
   createGoogleOAuthStartUrl,
@@ -890,6 +901,19 @@ async function handleRequest(
         );
         if (typeof body.name !== "string" || !isAccountKind(body.provider))
           throw new Error("A name and supported provider are required.");
+        // Client mode: the gateway adds the account with its first login.
+        if (remoteLoginsActive()) {
+          if (body.provider !== "claude" && body.provider !== "openai-codex")
+            throw new Error(
+              "The gateway manages the accounts of this Pandeck.",
+            );
+          const id = await createRemoteAccount(body.provider, body.name);
+          res.writeHead(201, corsJsonHeaders(req));
+          res.end(
+            JSON.stringify({ profile: credentialProfileSummaryById(id) }),
+          );
+          return;
+        }
         const profile = createCredentialProfile({
           name: body.name,
           provider: body.provider,
@@ -935,7 +959,8 @@ async function handleRequest(
         // Settings pins never block deletion; they are reported and dropped so
         // no stale account id survives in the persisted settings. Cleared only
         // after the delete succeeds — it still refuses while sessions are bound.
-        deleteCredentialProfile(profileId);
+        if (remoteLoginsActive()) await deleteRemoteAccount(profileId);
+        else deleteCredentialProfile(profileId);
         const clearedSlots = await clearProfilePins(profileId);
         res.writeHead(200, corsJsonHeaders(req));
         res.end(JSON.stringify({ ok: true, clearedSlots }));
@@ -1004,7 +1029,8 @@ async function handleRequest(
     }
     const profileId = requestUrl.pathname.split("/")[3] ?? "";
     try {
-      startOpenAiProfileLogin(profileId);
+      if (remoteLoginsActive()) await startRemoteCodexLogin(profileId);
+      else startOpenAiProfileLogin(profileId);
       res.writeHead(202, corsJsonHeaders(req));
       res.end(JSON.stringify({ ok: true }));
     } catch (err) {
@@ -1936,6 +1962,10 @@ if (GATEWAY_RELAY) {
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
     renewCodex: renewCodexCredential,
+    loginDrivers: {
+      claude: claudeLoginDriver,
+      "openai-codex": codexLoginDriver,
+    },
   });
   // Settings hears of every login-stuck change from the link's start.
   followLoginHoldStatuses();

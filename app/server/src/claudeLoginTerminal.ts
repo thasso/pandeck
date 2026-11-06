@@ -3,8 +3,6 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
 /**
@@ -48,7 +46,14 @@ import {
   type LoginHold,
   type LoginHoldTaken,
 } from "./loginHolds.ts";
-import { packagedClaudeCliPath } from "./runtimeAssets.ts";
+import { attachRemoteClaudeLogin, remoteLoginsActive } from "./remoteLogins.ts";
+import {
+  bundledClaudeCliPath,
+  CLAUDE_LOGIN_ARGS,
+  claudeLoginEnvironmentFrom,
+  KILL_AFTER_MS,
+  sanitizeClaudeLoginOutput,
+} from "./claudeLoginDriver.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
 const MAX_INPUT_CHARS = 8_192;
@@ -56,8 +61,6 @@ const MAX_INPUT_CHARS = 8_192;
 const MAX_PENDING_INPUT_CHARS = 64_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const FINISHED_RETENTION_MS = 2 * 60_000;
-/** How long a SIGTERM'd child has before SIGKILL. */
-const KILL_AFTER_MS = 5_000;
 const TIMED_OUT_TEXT =
   "Claude login timed out after 10 minutes. Start it again to retry.";
 const CANCELLED_LINE = "\nClaude login cancelled.\n";
@@ -110,84 +113,11 @@ interface LoginRun {
 
 const runs = new Map<string, LoginRun>();
 
-/** Resolve the exact native Claude CLI bundled with the installed Agent SDK. */
-export function bundledClaudeCliPath(): string {
-  const packaged = packagedClaudeCliPath();
-  if (packaged) return packaged;
-  // The Nix package wraps the bundled native executable with its glibc loader;
-  // an unpackaged NixOS checkout cannot execute that raw FHS binary, so local
-  // development deliberately uses the CLI already available on PATH.
-  if (process.env.NODE_ENV !== "production") return "claude";
-  const packageArch =
-    process.arch === "arm64"
-      ? "arm64"
-      : process.arch === "x64"
-        ? "x64"
-        : process.arch;
-  const packageName = `@anthropic-ai/claude-agent-sdk-${process.platform}-${packageArch}`;
-  try {
-    const localRequire = createRequire(import.meta.url);
-    const sdkEntry = localRequire.resolve("@anthropic-ai/claude-agent-sdk");
-    const sdkRequire = createRequire(sdkEntry);
-    const packageJson = sdkRequire.resolve(`${packageName}/package.json`);
-    return join(
-      dirname(packageJson),
-      process.platform === "win32" ? "claude.exe" : "claude",
-    );
-  } catch {
-    // Development environments may intentionally use a separately installed CLI.
-    return "claude";
-  }
-}
-
-/** The login child's arguments: the official CLI's subscription login. */
-export const CLAUDE_LOGIN_ARGS = ["auth", "login", "--claudeai"];
-
 /** Minimal child environment: login never needs the server's integration tokens or app secret. */
 export function claudeLoginEnvironment(
   profileId: string,
 ): Record<string, string> {
-  const source = claudeProfileEnvironment(profileId);
-  const allowed = new Set([
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-    "TZ",
-    "LANG",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "NIX_SSL_CERT_FILE",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "NO_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-    "XDG_CONFIG_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_DATA_HOME",
-    "XDG_STATE_HOME",
-    "XDG_RUNTIME_DIR",
-    "CLAUDE_CONFIG_DIR",
-  ]);
-  const env = Object.fromEntries(
-    Object.entries(source).filter(
-      ([key]) => allowed.has(key) || key.startsWith("LC_"),
-    ),
-  );
-  return { ...env, NO_COLOR: "1", BROWSER: "false" };
-}
-
-/** Output is display-only: drop terminal controls and bound retained/browser-visible text. */
-function sanitizeClaudeLoginOutput(value: string): string {
-  return value
-    .replace(/[^\t\n\r\x20-\x7e\u00a0-\uffff]/g, "")
-    .replace(/[\u202a-\u202e\u2066-\u2069]/g, "");
+  return claudeLoginEnvironmentFrom(claudeProfileEnvironment(profileId));
 }
 
 function send(viewer: WebSocket, message: ClaudeLoginServerMessage): void {
@@ -498,6 +428,11 @@ export function attachClaudeLoginSocket(
     `http://${req.headers.host ?? "localhost"}`,
   );
   const profileId = url.searchParams.get("profileId") ?? "";
+  // Client mode: the gateway runs the login (Task-1385).
+  if (remoteLoginsActive()) {
+    attachRemoteClaudeLogin(viewer, profileId);
+    return;
+  }
   let run: LoginRun;
   try {
     run = runs.get(profileId) ?? startRun(profileId);
