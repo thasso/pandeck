@@ -15,9 +15,14 @@
  * Neither writes anything.
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { userHomeDir } from "./userHome.ts";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
+import {
+  claudeProjectsDirIn,
+  CREDENTIAL_PROFILES_ROOT,
+  isSafeCredentialProfileId,
+} from "./credentialProfilePaths.ts";
+import { DEFAULT_CLAUDE_PROFILE_ID } from "./credentialProfiles.ts";
 import { objectRefsForSession } from "./db/sessionObjectStore.ts";
 import { readSessionSnapshot } from "./db/sessionSnapshotRead.ts";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -37,17 +42,31 @@ import {
   SessionInspectionError,
 } from "./tools/sessions/sessionInspection.ts";
 
-/** Default Claude CLI transcript root; `undefined` disables the join. */
-function defaultClaudeProjectsDir(): string {
-  return join(userHomeDir(), ".claude", "projects");
-}
-
 export interface AuditSourceOptions {
   /**
-   * Claude CLI transcript root. Pass `undefined` explicitly to skip the join
-   * (the app's own data dir then answers everything it can on its own).
+   * The credential-profiles root whose `<account>/claude/projects` holds a
+   * Claude session's CLI transcript: by default this process's root in process
+   * and `<dataDir>/credential-profiles` from the CLI. Pass `undefined`
+   * explicitly to skip the join (the app's own data dir then answers
+   * everything it can on its own).
    */
-  claudeProjectsDir?: string | undefined;
+  credentialProfilesRoot?: string | undefined;
+}
+
+/**
+ * The session's own account's transcript directory: a session with no account
+ * ran as `claude-default`. Undefined when the join is off or the stored id is
+ * not a safe directory name.
+ */
+function claudeProjectsDirFor(
+  profilesRoot: string | undefined,
+  credentialProfileId: string | undefined,
+): string | undefined {
+  if (!profilesRoot) return undefined;
+  const account = credentialProfileId ?? DEFAULT_CLAUDE_PROFILE_ID;
+  return isSafeCredentialProfileId(account)
+    ? claudeProjectsDirIn(profilesRoot, account)
+    : undefined;
 }
 
 function parseConditions(
@@ -133,10 +152,12 @@ export function resolveAuditSource(
   const resolved = resolveInspectableSession(sessionId);
   const meta = resolved.meta;
   const warnings = resolved.warning ? [resolved.warning] : [];
-  const projectsDir =
-    "claudeProjectsDir" in options
-      ? options.claudeProjectsDir
-      : defaultClaudeProjectsDir();
+  const projectsDir = claudeProjectsDirFor(
+    "credentialProfilesRoot" in options
+      ? options.credentialProfilesRoot
+      : CREDENTIAL_PROFILES_ROOT,
+    meta.credentialProfileId,
+  );
   const calls = callTranscriptFor(
     meta.id,
     meta.harness,
@@ -212,10 +233,12 @@ export function resolveAuditSourceFromDataDir(
       `Session ${id} is not a user session (${row.scope}) and is not inspectable.`,
     );
 
-  const projectsDir =
-    "claudeProjectsDir" in options
-      ? options.claudeProjectsDir
-      : defaultClaudeProjectsDir();
+  const projectsDir = claudeProjectsDirFor(
+    "credentialProfilesRoot" in options
+      ? options.credentialProfilesRoot
+      : join(dataDir, "credential-profiles"),
+    row.credentialProfileId,
+  );
   const calls = callTranscriptFor(
     id,
     row.harness,

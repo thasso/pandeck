@@ -197,7 +197,9 @@ Four layers, each depending only on the ones below it:
      including the protected default used to reopen a legacy unbound session.
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each
-     account's model runtime and the OpenAI account login.
+     account's model runtime, the OpenAI account login, and the one-time import
+     of Default Claude's transcripts from the user's home
+     (`docs/credential-distribution.md`).
    - `harnesses/storage.ts` answers where each engine keeps a session on disk
      from paths alone, loading no store: the `file` a session's ref and list
      item carry (`sessionRefFile`), the engine's own transcript

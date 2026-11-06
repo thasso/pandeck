@@ -51,11 +51,11 @@ under `DATA_DIR/settings/`. They are runtime state, never bootstrap config.
 `ASSISTANT_TOKEN` and the APNs credential follow their existing file-backed
 contracts in `authToken.ts` and `docs/notifications.md`.
 
-Model-provider credentials are separate. Named Claude and OpenAI profiles live
-under `DATA_DIR/credential-profiles/`, while a default Claude login may come
-from the service user's home directory. An OpenAI-compatible account's endpoint
-key lives only in its `credential-profiles/<id>/endpoint.json` (0600); the
-former `settings/openai-compatible.json` is migrated there and deleted
+Model-provider credentials are separate. Every Claude and OpenAI login lives
+under `DATA_DIR/credential-profiles/`, `claude-default` included; nothing is
+read from the service user's home directory. An OpenAI-compatible account's
+endpoint key lives only in its `credential-profiles/<id>/endpoint.json` (0600);
+the former `settings/openai-compatible.json` is migrated there and deleted
 (`docs/settings.md` "OpenAI-compatible accounts"). It is write-only: Settings
 sends it in one `PATCH …/endpoint` and shows only `apiKeyConfigured`, no agent
 tool reads or writes it, and the opt-in credential gateway leases only OpenAI
@@ -63,8 +63,59 @@ accounts, so it never receives an endpoint's key. Moving the four integration
 secrets above does not isolate model credentials. Apply the credential-profile
 filters and preview rules independently. With the credential gateway on, the
 gateway renews these tokens in place, in the same profile files and formats; no
-new location holds them. The user's own terminal CLI shares `~/.claude` with the
-default profile (`docs/workers.md` "Renewal").
+new location holds them. A terminal CLI shares a profile's directory only when
+the user points it there with that profile's `CLAUDE_CONFIG_DIR`
+(`docs/workers.md` "Renewal").
+
+### Default Claude
+
+`claude-default` is an ordinary Claude account in
+`DATA_DIR/credential-profiles/claude-default/claude/` (0700), run with
+`CLAUDE_CONFIG_DIR` set there and inherited credential variables scrubbed. A
+Claude session with no recorded account runs as it, gateway on or off; its
+binding stays NULL. It no longer inherits anything from the service user's home:
+
+- no `~/.claude` login: the user logs in again from Settings → Claude SDK;
+- no `ANTHROPIC_API_KEY`, `apiKeyHelper`, Bedrock or Vertex configuration;
+- for coding sessions, none of the personal `~/.claude` settings, `CLAUDE.md`,
+  skills, commands, agents, plugins or hooks. A user who wants some of them
+  copies them by hand into `credential-profiles/claude-default/claude/`.
+
+### Home transcript import
+
+On boot, before the gateway starts or any session runs,
+`claudeSdk/homeTranscriptImport.ts` copies Pandeck's own Default Claude
+transcripts from `~/.claude/projects` into
+`credential-profiles/claude-default/claude/projects`, once. It is the only
+server module that reads home's `.claude` (`architecture.test.ts`), and it never
+writes, renames or deletes anything under home: the untouched home folder is the
+backup.
+
+- **Selection.** Every non-deleted `claude-sdk` session row with a provider id
+  bound to `claude-default` or to no account, in any scope, archived included
+  (`db/defaultClaudeTranscriptSelection.ts`). A unit is `<key>/<id>.jsonl` plus
+  its `<key>/<id>/` tree, copied under the same `<key>`. Nothing else: no
+  terminal-only transcript, named-account session, config or credential. A unit
+  holding a link or other non-regular entry is skipped as unsupported.
+- **Work files** in `credential-profiles/claude-default/home-import/`:
+  `state.json` (phase `backup`, `copy`, then `done`, replaced atomically with
+  fsync), `manifest.jsonl` (one fsynced line per unit: provider id, project key,
+  and each file's path, size and sha256) and `staging/`.
+- **Set-aside.** A non-empty `claude/projects/` that predates the import is
+  renamed once to `projects.before-home-import-<UTC stamp>`, under a name
+  persisted before the rename. Nothing is merged into it.
+- **Space.** Before any change it needs the pending bytes × 1.1 + 256 MiB free
+  on the data dir's filesystem; with less, it logs both numbers, changes nothing
+  and retries next boot.
+- **Recovery.** Each unit is staged, recorded, then renamed into place, its main
+  file last. A failed or killed run never fails boot: the next boot removes
+  staging, cuts a torn manifest tail, skips installed units and resumes. If
+  `~/.claude/projects` is gone, the run ends `done` with `sourceMissing` and
+  keeps what it already installed.
+- **Never delete `home-import/state.json`.** After `done` the import never reads
+  home again. Without the state the next boot sets the current `projects/` aside
+  again and copies from home anew; the only recovery is moving the set-aside
+  back by hand.
 
 ## Supplying the service environment
 

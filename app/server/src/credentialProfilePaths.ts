@@ -1,3 +1,4 @@
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DATA_DIR } from "./config.ts";
 
@@ -13,6 +14,40 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
 export function isSafeCredentialProfileId(id: string): boolean {
   return SAFE_ID.test(id);
+}
+
+/**
+ * A Claude account's CLI transcripts under any credential-profiles root (this
+ * process's {@link CREDENTIAL_PROFILES_ROOT}, or another data dir's for the
+ * measurement CLIs): `<root>/<id>/claude/projects`. Pure; throws for an id
+ * that could leave the root.
+ */
+export function claudeProjectsDirIn(
+  profilesRoot: string,
+  profileId: string,
+): string {
+  if (!isSafeCredentialProfileId(profileId))
+    throw new Error("Invalid credential profile id.");
+  return join(profilesRoot, profileId, "claude", "projects");
+}
+
+/**
+ * Every account's Claude CLI transcript directory under a credential-profiles
+ * root, in name order: `<root>/<account>/claude/projects` where it exists.
+ */
+export function claudeProjectsDirsUnder(profilesRoot: string): string[] {
+  if (!existsSync(profilesRoot)) return [];
+  return readdirSync(profilesRoot)
+    .filter(isSafeCredentialProfileId)
+    .sort()
+    .map((account) => claudeProjectsDirIn(profilesRoot, account))
+    .filter((dir) => {
+      try {
+        return statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    });
 }
 
 /** The profile's private directory; throws for an id that could leave the root. */

@@ -1341,11 +1341,12 @@ until the gateway runs as its own process.
 
 - Before it is ready the link says hello as this server boot (16 random bytes,
   the pid and the process start time), syncs every credential profile with its
-  token file path (`.credentials.json` in the profile's Claude config directory,
-  `~/.claude` for the default; `auth.json` in its pi agent directory), and
-  reconciles the in-process Worker with no live lease: its engines died with the
-  previous process. Every profile change is then sent as an upsert or a removal,
-  and every request takes one queue, in order.
+  token file path (`.credentials.json` in the profile's Claude config directory
+  under `DATA_DIR/credential-profiles/`, the default's included; `auth.json` in
+  its pi agent directory), and reconciles the in-process Worker with no live
+  lease: its engines died with the previous process. Every profile change is
+  then sent as an upsert or a removal, and every request takes one queue, in
+  order.
 - **Grant before open.** An engine open on a credential profile (a pi engine, a
   Claude turn or standalone `/compact` of a session with a profile) is granted
   an engine lease before `engine.open` goes out. A grant waits at most 10
@@ -1445,18 +1446,16 @@ until the gateway runs as its own process.
   gateway's `/anthropic` prefix), `CLAUDE_CODE_OAUTH_TOKEN` (the lease token)
   and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so nothing before them
   overrides them. A gateway engine without a profile's scrub is refused.
-- **Profile-less sessions run as `claude-default`** (U12). With the switch on, a
-  Claude session without a profile, for a turn or a standalone `/compact`,
-  leases `claude-default` and gets the default profile's scrub (no
-  `CLAUDE_CONFIG_DIR`, so `~/.claude`). Its `credentialProfileId`, records, auth
-  mode and account routing are unchanged. The scrub drops every `ANTHROPIC_*`,
-  `CLAUDE_*` (including `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`/`_VERTEX`
-  and tunings such as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`), `AWS_*` and
-  `VERTEXAI_*` variable and `GOOGLE_APPLICATION_CREDENTIALS`
-  (`claudeChildEnvironment.ts`). So a profile-less session changes only on a
-  service whose environment sets one of them; a service-level
-  `CLAUDE_CONFIG_DIR` no longer applies to it, and the CLI then writes its
-  transcripts in `~/.claude`, where the store already reads them.
+- **Profile-less sessions run as `claude-default`** (U12). A Claude session
+  without a profile, for a turn or a standalone `/compact`, gets the default
+  profile's runtime, gateway on or off: its scrub and its `CLAUDE_CONFIG_DIR`
+  under `DATA_DIR/credential-profiles/claude-default/claude`, where the store
+  reads its transcripts. With the switch on it also leases `claude-default`. Its
+  `credentialProfileId`, records, auth mode and account routing are unchanged.
+  The scrub drops every `ANTHROPIC_*`, `CLAUDE_*` (including a service-level
+  `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`/`_VERTEX` and tunings such as
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW`), `AWS_*` and `VERTEXAI_*` variable and
+  `GOOGLE_APPLICATION_CREDENTIALS` (`claudeChildEnvironment.ts`).
 - **pi engines use the lease.** With `host.gateway`, the pi factory
   (`createPiHostedEngineFactory({ models, compat })`) gives the engine its own
   model port (`gatewayPiModelPort.ts`) instead of the server's: one in-memory pi
@@ -1595,12 +1594,15 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   gets the same refusal and status until the first good read; an unreadable one
   gets the credential refusal. The link records the latest status
   (`credentialStatus`); health ignores it until G5c.
-- **U9.** `claude-default`'s `~/.claude` is renewed like any profile. The user's
-  terminal CLI uses the same locks and compare-and-swap, so the two serialise
-  and adopt each other's tokens.
+- **U9.** Every Claude account's directory is Pandeck's, `claude-default`'s
+  included, and is renewed like any profile. Only a terminal CLI the user points
+  at one with the setup fallback's `CLAUDE_CONFIG_DIR` shares it, under the same
+  locks and compare-and-swap, so the two serialise and adopt each other's
+  tokens.
 - **Interim writers** (until G5c): the server's pi runtimes' catalog refresh,
-  under pi's lock with its re-check; and the user's terminal CLI (U9). A login
-  flow is none with the switch on: its hold fences renewal (Login holds).
+  under pi's lock with its re-check; and a terminal CLI pointed at an account's
+  directory (U9). A login flow is none with the switch on: its hold fences
+  renewal (Login holds).
 - **Tests never reach a token host.** The Claude endpoint override is a test
   seam that only tests and the Bun probe set (`architecture.test.ts` pins every
   production mention); `startGatewayLinkForTests` points it at a closed loopback
@@ -1608,8 +1610,9 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   the name lookup and in `fetch`, and fails the test that asked
   (`test/tokenHostGuard.ts`).
 - **Known limits.**
-  - A rotation race outside the lock protocol, such as the user's CLI with
-    another `CLAUDE_CONFIG_DIR`, can still end in needs-login.
+  - A rotation race outside the lock protocol, such as a copy of an account's
+    login used from another directory (a terminal CLI's own `~/.claude`), can
+    still end in needs-login.
   - pi's own in-place `auth.json` write remains for the server's pi runtimes
     (until G5c), logins (under their hold) and switch-off engines; a crash
     during one can truncate the file, as today.

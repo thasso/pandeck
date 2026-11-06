@@ -1405,15 +1405,18 @@ test("compaction awaiting Stop owns the epoch when Stop acknowledges", async () 
   }
 });
 
-test("an unbound start keeps the inherited variable without a stored window and drops it with one", async () => {
+test("an unbound start runs with the default account's scrub: the server's variable never reaches it, a stored window still applies", async () => {
   process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV] = "150000";
   const { id, session, queries } = makeHarness();
   const adapter = session.createRuntimeAdapter();
   const first = adapter.prompt("first");
   await until(() => queries.length === 1);
   assert.equal(
-    queries[0]!.params.options?.env?.[CLAUDE_AUTO_COMPACT_WINDOW_ENV],
-    "150000",
+    Object.hasOwn(
+      queries[0]!.params.options?.env ?? {},
+      CLAUDE_AUTO_COMPACT_WINDOW_ENV,
+    ),
+    false,
   );
   assert.equal(window(session)?.appliedTokens, null);
   queries[0]!.output.emit(result("r1"));

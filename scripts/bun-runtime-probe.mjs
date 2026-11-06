@@ -13,7 +13,8 @@
  * Initiative map laid out by elkjs in the bundled layout worker, and the
  * credential gateway the server links to under `ASSISTANT_GATEWAY=1`, granting
  * and forwarding with the seeded ChatGPT credential, and renewing a Claude
- * and a Codex login. First of all,
+ * and a Codex login, and the one-time home transcript import (its streaming
+ * copy and hash, `statfs`, fsync, truncate and rename). First of all,
  * that a child's managed stdio never closes a descriptor number something
  * else reused (Bun 1.3.13 did, at GC), and that `maxBuffer` bounds each
  * stream's length on overflow as Node does.
@@ -139,6 +140,7 @@ import {
 } from "../app/server/src/gateway/processIdentity.ts";
 import { GATEWAY_REFUSAL_MARKER } from "../app/server/src/gateway/refusals.ts";
 import { startGatewayLink } from "../app/server/src/gatewayLink.ts";
+import { importDefaultClaudeHomeTranscripts } from "../app/server/src/claudeSdk/homeTranscriptImport.ts";
 import {
   issueLeafCertificate,
   loadOrCreateCa,
@@ -4846,6 +4848,98 @@ async function checkGatewayRenewal(ca) {
 }
 
 /**
+ * The one-time home transcript import (`docs/credential-distribution.md`) under
+ * the packaged Bun: its streaming copy and sha256, `statfs` or the fallback it
+ * reports, fsync, truncate and rename. It starts from a manifest whose last
+ * append was torn, which the run must cut before it appends. Every path is
+ * injected under the probe's scratch data dir, so the real HOME is never read
+ * or written.
+ */
+async function checkHomeTranscriptImport() {
+  const root = join(scratch, "home-transcript-import");
+  rmSync(root, { recursive: true, force: true });
+  const source = join(root, "home", ".claude", "projects");
+  const profile = join(root, "credential-profiles", "claude-default");
+  const work = join(profile, "home-import");
+  const id = "bun-probe-unit";
+  const key = "-work-repo";
+  const files = {
+    [`${key}/${id}.jsonl`]: '{"type":"user"}\n{"type":"assistant"}\n',
+    [`${key}/${id}/subagents/agent-1.jsonl`]: '{"type":"assistant"}\n',
+    [`${key}/${id}/tool-results/r1.txt`]: "tool output\n",
+  };
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(source, rel)), { recursive: true });
+    writeFileSync(join(source, rel), text);
+  }
+  mkdirSync(work, { recursive: true });
+  writeFileSync(join(work, "manifest.jsonl"), '{"providerSessionId":"torn');
+  const options = {
+    homeProjectsDir: source,
+    profileRoot: profile,
+    providerSessionIds: () => [id],
+  };
+
+  const result = await importDefaultClaudeHomeTranscripts(options);
+  assert(
+    result.outcome === "done",
+    `The home transcript import did not finish: ${JSON.stringify(result)}.`,
+  );
+  assert(
+    result.preflight === "statfs" || result.preflight === "unavailable",
+    `The import's space preflight did not run: ${result.preflight}.`,
+  );
+  assert(
+    result.counts.copied === 1,
+    `The import copied ${result.counts.copied} units, not 1.`,
+  );
+  const manifest = readFileSync(join(work, "manifest.jsonl"), "utf8");
+  assert(
+    manifest.endsWith("\n") && !manifest.includes("torn"),
+    "The import kept the manifest's torn tail.",
+  );
+  const records = manifest
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert(
+    records.length === 1 && records[0].providerSessionId === id,
+    `The manifest holds ${records.length} records, not the one unit's.`,
+  );
+  const recorded = new Map(records[0].files.map((file) => [file.path, file]));
+  assert(
+    recorded.size === Object.keys(files).length,
+    `The manifest records ${recorded.size} files, not ${Object.keys(files).length}.`,
+  );
+  for (const [rel, text] of Object.entries(files)) {
+    const installed = join(profile, "claude", "projects", rel);
+    const bytes = readFileSync(installed);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const entry = recorded.get(rel);
+    assert(
+      bytes.toString("utf8") === text &&
+        entry?.size === bytes.length &&
+        entry.sha256 === sha256,
+      `${rel} was not installed as recorded.`,
+    );
+    assert(
+      (statSync(installed).mode & 0o777) === 0o600,
+      `${rel} was not installed private.`,
+    );
+  }
+  assert(
+    !existsSync(join(work, "staging")),
+    "The import left its staging directory behind.",
+  );
+  const again = await importDefaultClaudeHomeTranscripts(options);
+  assert(
+    again.outcome === "already-done",
+    `A second import ran again: ${JSON.stringify(again)}.`,
+  );
+  console.log(`home transcript import ok (preflight ${result.preflight})`);
+}
+
+/**
  * A login hold is released only on its processes' observed exit
  * (`gateway/processIdentity.ts`): signal 0 and `/proc/<pid>/stat` must answer
  * under Bun as under Node, or a hold would never be released. Observes and
@@ -4893,6 +4987,7 @@ if (mode === "broker") {
   await checkPiOAuthFlows();
   await checkInitiativeLayout();
   await checkGatewayLink();
+  await checkHomeTranscriptImport();
   await checkProcessState();
 }
 console.log(`Bun runtime probe (${mode}) passed.`);

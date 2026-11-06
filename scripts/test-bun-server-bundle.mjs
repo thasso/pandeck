@@ -88,10 +88,15 @@ if (typeof expectedBrowserMcpVersion !== "string" || !expectedBrowserMcpVersion)
 const temp = mkdtempSync(join(tmpdir(), "pa-bun-runtime-"));
 const work = join(temp, "unrelated-workspace");
 const data = join(temp, "data");
+// The booted server imports Default Claude's transcripts from
+// `~/.claude/projects` once (`docs/credential-distribution.md`): a fresh HOME
+// keeps that read off the real home, and its first boot records an empty import.
+const serverHome = join(temp, "server-home");
 const token = "bun-bundle-runtime-test-token";
 const port = 19000 + Math.floor(Math.random() * 1000);
 const baseUrl = `http://127.0.0.1:${port}`;
 mkdirSync(work, { recursive: true });
+mkdirSync(serverHome, { recursive: true });
 await write(join(work, ".keep"), "");
 
 function assert(value, message) {
@@ -150,6 +155,7 @@ const serverEnv = () => ({
   ASSISTANT_STT_DISABLED: "1",
   ASSISTANT_SLACK_APP_DISABLED: "1",
   DATA_DIR: data,
+  HOME: serverHome,
   NODE_ENV: "production",
 });
 
@@ -160,6 +166,31 @@ function start() {
     stdout: "inherit",
     stderr: "inherit",
   });
+}
+
+/**
+ * The first boot ran the home transcript import against the fresh, empty
+ * `serverHome`: it recorded `done` with nothing copied and left no backup.
+ */
+function checkEmptyHomeTranscriptImport() {
+  const work = join(
+    data,
+    "credential-profiles",
+    "claude-default",
+    "home-import",
+  );
+  const state = JSON.parse(readFileSync(join(work, "state.json"), "utf8"));
+  assert(
+    state.phase === "done" &&
+      state.aside === null &&
+      state.counts?.copied === 0 &&
+      state.bytes === 0,
+    `The first boot's home transcript import is not an empty done: ${JSON.stringify(state)}`,
+  );
+  assert(
+    !existsSync(join(serverHome, ".claude")),
+    "The home transcript import wrote to HOME.",
+  );
 }
 
 async function waitForHealth(child) {
@@ -1554,6 +1585,7 @@ try {
   seedDataDir();
   const first = start();
   await waitForHealth(first);
+  checkEmptyHomeTranscriptImport();
   await checkWebAndSocket();
   console.log(
     `Wrong-token WebSocket upgrade answered: ${await checkRejectedUpgrade()}`,

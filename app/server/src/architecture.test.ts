@@ -637,6 +637,28 @@ test("server code resolves the home directory only through userHome.ts", () => {
 });
 
 /**
+ * Pandeck no longer reads the user's home directory for Claude: every account,
+ * `claude-default` included, lives under `DATA_DIR/credential-profiles/`
+ * (`docs/credential-distribution.md`). The one-time transcript import is the
+ * only module that may join home with `.claude`, and it only reads there. The
+ * list is exact: an entry the code no longer needs fails too.
+ */
+test("only the home transcript import joins the home directory with .claude", () => {
+  const home = /\buserHomeDir\b|\bprocess\.env\.HOME\b|\benv\.HOME\b/;
+  const claudeDir = /["'`/]\.claude(?![\w.-])/;
+  const offenders: string[] = [];
+  for (const path of sourceFiles(SRC_ROOT)) {
+    const file = relative(SRC_ROOT, path);
+    // Comments may name `~/.claude`; only code reads it.
+    const source = readFileSync(path, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    if (home.test(source) && claudeDir.test(source)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, ["claudeSdk/homeTranscriptImport.ts"]);
+});
+
+/**
  * The Claude token endpoint override is a test seam (RD-G5a-4): production
  * code only declares it and hands it down, from the link's options to the
  * gateway's to its renewal. No env, config, settings or control path sets it,

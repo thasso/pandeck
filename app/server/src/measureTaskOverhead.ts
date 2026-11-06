@@ -9,7 +9,7 @@
  *   DATA_DIR=~/assistant-data pnpm run measure:tasks
  *   pnpm run measure:tasks -- --data-dir ~/assistant-data --json
  *   pnpm run measure:tasks -- --since 2026-07-01        # narrow the before window
- *   pnpm run measure:tasks -- --no-claude-transcripts   # DATA_DIR only
+ *   pnpm run measure:tasks -- --no-claude-transcripts   # app logs only
  *
  * The window boundaries default to the first and last slice that changed the
  * surface; override with `--before-end`/`--after-start` (any Date-parsable
@@ -262,9 +262,9 @@ function main(): void {
   const sinceMsValue = instant("since");
   const report = measureTaskOverhead({
     ...(dataDirValue !== undefined ? { dataDir: dataDirValue } : {}),
-    claudeProjectsDir: process.argv.includes("--no-claude-transcripts")
-      ? ""
-      : arg("claude-projects"),
+    ...(process.argv.includes("--no-claude-transcripts")
+      ? { credentialProfilesRoot: "" }
+      : {}),
     ...(sinceMsValue !== undefined ? { sinceMs: sinceMsValue } : {}),
     ...(beforeEndMsValue !== undefined
       ? { beforeEndMs: beforeEndMsValue }
@@ -284,8 +284,8 @@ function main(): void {
   console.log(`- data dir: \`${report.dataDir}\``);
   console.log(
     `- Claude CLI transcripts: ${
-      report.claudeProjectsDir
-        ? `\`${report.claudeProjectsDir}\``
+      report.credentialProfilesRoot
+        ? `\`${report.credentialProfilesRoot}/*/claude/projects\``
         : "not joined"
     }`,
   );

@@ -61,7 +61,7 @@ export interface ClaudeUsageSnapshot {
   /** Epoch ms this snapshot was fetched, for a "last updated" display. */
   fetchedAt: number;
   subscriptionType: string | null;
-  /** False for API-key/Bedrock/Vertex sessions, where plan limits do not apply. */
+  /** False when this Claude login reports no 5-hour or weekly plan limits. */
   rateLimitsAvailable: boolean;
   fiveHour: UsageLimitWindow | null;
   weekly: UsageLimitWindow | null;
@@ -316,8 +316,9 @@ export interface UsageIndicator {
   fetchedAt: number | null;
   /**
    * False when the account reports no subscription limits at all — a Claude
-   * API-key/Bedrock/Vertex session, or an OpenAI profile whose credentials are
-   * missing/expired. The card shows a capability line instead of meters.
+   * login that reports no 5-hour or weekly limits, or an OpenAI profile whose
+   * credentials are missing/expired. The card shows a capability line instead
+   * of meters.
    */
   limitsAvailable: boolean;
   /** Short rolling cycle (5-hour), or null when the provider reports none. */

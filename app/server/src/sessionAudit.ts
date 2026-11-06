@@ -21,7 +21,9 @@
  * - pi's `native.jsonl` — one assistant message per provider call, each with its
  *   own usage (including `reasoning`, which the app log does not model). This is
  *   the only source that resolves per-call context jumps for pi sessions.
- * - The Claude CLI transcript under `~/.claude/projects`, joined through
+ * - The Claude CLI transcript under the session's account,
+ *   `DATA_DIR/credential-profiles/<account>/claude/projects` (no account means
+ *   `claude-default`), joined through
  *   `session_index.provider_session_id`, is the same thing for Claude sessions
  *   when it still exists; `DATA_DIR/claude-sdk/<id>.json` does not resolve calls
  *   at all.

@@ -179,34 +179,37 @@ launches that worker with `process.execPath`, which is the packaged Bun runtime
 in this package; Pandeck's current JSDOM use does not issue synchronous XHR.
 
 The package's install check boots from an unrelated temporary cwd and data
-directory, applies exactly the migration set named by the packaged lock to a
-fresh database, checks health, web and WebSocket service, verifies the native
-process executable, restarts against the same database, and asserts the explicit
-file set. A wrong-token WebSocket upgrade must be answered with an
-`HTTP/1.1 401` status line within 5 s and never open. A granted port-forward
-session echoes 1 MiB through a local TCP target in frames of at most 64 KiB, and
-both the target's end and the client's close end it. The restart is a Claude
-session's whole life, driven over the WebSocket with
-`scripts/fake-claude-cli.mjs` standing in for the Claude CLI through the
-existing `ASSISTANT_CLAUDE_CLI_BIN` override, so no account or network is
-involved. The fake speaks the SDK's stream-json protocol and answers each prompt
-with `Fake reply to: <prompt>`. The session is created with a turn, opened while
-resident, released once unviewed, opened by a reader from storage and released
-again, resumed for a second turn with `--resume`, and deleted through the
-one-transaction delete. Every open must show the model and thinking level it was
-created with. That boot runs the same `server.js` under the packaged Bun with
-`scripts/bun-check-short-graces.mjs` preloaded, a check-only file that shortens
-the two release graces to 200 ms. The check waits for the server's
-`[sessions] released <id>: …` lines. Before the first boot, in both modes, a
-separate boot preloads `scripts/bun-check-collected-file-handle.mjs`, which
-`BUN_OPTIONS` also carries into the spawn broker. On SIGWINCH each process that
-loaded it leaks three FileHandles on a disposable file and forces collection,
-and it installs no handler of its own. The server, and in broker mode the
-broker, must keep running and log the production warning; without the guard,
-either one exits. A SIGUSR1 must leave the server running and write a private
-V8-format heap snapshot, and a second one right after must write nothing. The
-check starts every process in its own process group and ends every group still
-running before it deletes its temporary directory, on success or failure.
+directory, with a fresh temporary `HOME`, so the server's one-time home
+transcript import never reads the real home and its first boot records an empty
+`done` (no transcript copied, nothing set aside), which the check asserts. It
+applies exactly the migration set named by the packaged lock to a fresh
+database, checks health, web and WebSocket service, verifies the native process
+executable, restarts against the same database, and asserts the explicit file
+set. A wrong-token WebSocket upgrade must be answered with an `HTTP/1.1 401`
+status line within 5 s and never open. A granted port-forward session echoes 1
+MiB through a local TCP target in frames of at most 64 KiB, and both the
+target's end and the client's close end it. The restart is a Claude session's
+whole life, driven over the WebSocket with `scripts/fake-claude-cli.mjs`
+standing in for the Claude CLI through the existing `ASSISTANT_CLAUDE_CLI_BIN`
+override, so no account or network is involved. The fake speaks the SDK's
+stream-json protocol and answers each prompt with `Fake reply to: <prompt>`. The
+session is created with a turn, opened while resident, released once unviewed,
+opened by a reader from storage and released again, resumed for a second turn
+with `--resume`, and deleted through the one-transaction delete. Every open must
+show the model and thinking level it was created with. That boot runs the same
+`server.js` under the packaged Bun with `scripts/bun-check-short-graces.mjs`
+preloaded, a check-only file that shortens the two release graces to 200 ms. The
+check waits for the server's `[sessions] released <id>: …` lines. Before the
+first boot, in both modes, a separate boot preloads
+`scripts/bun-check-collected-file-handle.mjs`, which `BUN_OPTIONS` also carries
+into the spawn broker. On SIGWINCH each process that loaded it leaks three
+FileHandles on a disposable file and forces collection, and it installs no
+handler of its own. The server, and in broker mode the broker, must keep running
+and log the production warning; without the guard, either one exits. A SIGUSR1
+must leave the server running and write a private V8-format heap snapshot, and a
+second one right after must write nothing. The check starts every process in its
+own process group and ends every group still running before it deletes its
+temporary directory, on success or failure.
 
 Before booting, the check asserts the pragma on the first line of `server.js`,
 the worker and the watcher wrapper. It then runs a copy of `server.js` whose
@@ -309,29 +312,34 @@ the server's credential gateway link as `ASSISTANT_GATEWAY=1` does: its control
 endpoint must refuse a worker-protocol dialer, a granted engine lease must reach
 a loopback fake ChatGPT upstream with the seeded credential, `leases.json` must
 be 0600 in a 0700 directory without the token, and a gateway restarted without
-control must still forward that lease and refuse a revoked one;
-`checkProcessState` then reads its own child's start time under Bun and sees
-that child running, then exited once it is killed, which login holds rely on.
-From an unrelated cwd and a clean environment, it also runs the packaged browser
-MCP CLI's version command and an MCP initialize plus `tools/list`, covering the
-patched local imports without a workspace `node_modules`. When Chrome or
-Chromium is available, the check also launches it and navigates a page. The Nix
-sandbox has neither browser, so that last probe reports an explicit skip there;
-the same clean-environment probe with the pinned Bun 1.4.2 passes launch and
-navigation on a host with Chrome, run outside the sandbox against the built
-package. The server itself keeps its deterministic bundle beside the executable
-because Bun's standalone compiler randomizes its embedded module-table
-encryption; the package wrapper invokes that module explicitly, while
-`/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary bundler
-also emits scheduler-dependent module order and identifier names, even when
-pinned to one CPU and given a lexically recreated source tree. The builder
-therefore uses pinned esbuild for the server module and its two bundled helpers;
-Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
-`node_modules`, and source derivations, then confirms pinned git and OpenSSH
-remain present. The install check also scans every runtime file for the Nix
-source path and build directory. CI builds the package and its closure check on
-every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
-derivation.
+control must still forward that lease and refuse a revoked one. It then runs the
+one-time home transcript import (`docs/credential-distribution.md`) on injected
+scratch directories, over one unit with an `<id>/` tree, starting from a
+manifest whose last record is torn: the run must end `done` with the tail cut,
+installed files whose size and sha256 match the manifest, no staging left, and
+its space preflight reported as `statfs` or the fallback; a second run must
+answer `already-done`. `checkProcessState` then reads its own child's start time
+under Bun and sees that child running, then exited once it is killed, which
+login holds rely on. From an unrelated cwd and a clean environment, it also runs
+the packaged browser MCP CLI's version command and an MCP initialize plus
+`tools/list`, covering the patched local imports without a workspace
+`node_modules`. When Chrome or Chromium is available, the check also launches it
+and navigates a page. The Nix sandbox has neither browser, so that last probe
+reports an explicit skip there; the same clean-environment probe with the pinned
+Bun 1.4.2 passes launch and navigation on a host with Chrome, run outside the
+sandbox against the built package. The server itself keeps its deterministic
+bundle beside the executable because Bun's standalone compiler randomizes its
+embedded module-table encryption; the package wrapper invokes that module
+explicitly, while `/proc/<pid>/exe` remains the packaged Bun executable. Bun's
+ordinary bundler also emits scheduler-dependent module order and identifier
+names, even when pinned to one CPU and given a lexically recreated source tree.
+The builder therefore uses pinned esbuild for the server module and its two
+bundled helpers; Bun remains the packaged runtime. The flake closure check
+rejects Node, tsx, `node_modules`, and source derivations, then confirms pinned
+git and OpenSSH remain present. The install check also scans every runtime file
+for the Nix source path and build directory. CI builds the package and its
+closure check on every change (`docs/ci-cd.md`), and a deployment of that commit
+builds the same derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses
@@ -1079,9 +1087,10 @@ none of them. Later deploys retain state created by that preview.
 The preview unit inherits the host-tool PATH because previews still need the
 host toolchain. It does not inherit production's `tokenFile`,
 `extraEnvironment`, HOME, or DATA_DIR. The server mints its own browser token in
-the empty preview DATA_DIR. Default Claude now resolves against the
-preview-local HOME rather than the service user's `~/.claude`, and the legacy pi
-import points at a nonexistent preview-local path. Slack app mode and speech
+the empty preview DATA_DIR. Default Claude lives in that preview DATA_DIR like
+every account, and its one-time home transcript import reads only the empty
+preview-local HOME, never the service user's `~/.claude`. The legacy pi import
+points at a nonexistent preview-local path. Slack app mode and speech
 recognition remain explicitly disabled as extra guards.
 
 Independent preview credentials require deliberate host configuration. Set

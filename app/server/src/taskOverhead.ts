@@ -30,9 +30,9 @@
  *
  * - pi: `DATA_DIR/sessions/<id>/native.jsonl` — one assistant message per
  *   provider call, each carrying its own usage. Complete.
- * - Claude with a CLI transcript: the `<providerSessionId>.jsonl` under
- *   `~/.claude/projects`, joined through `session_index.provider_session_id`
- *   and its per-project directory. Sidechain (subagent)
+ * - Claude with a CLI transcript: the `<providerSessionId>.jsonl` under any
+ *   account's `DATA_DIR/credential-profiles/<account>/claude/projects`, joined
+ *   through `session_index.provider_session_id` and its per-project directory. Sidechain (subagent)
  *   lines are skipped: they are a different conversation with its own budget.
  * - Claude without one: `DATA_DIR/claude-sdk/<id>.json` collapses a whole turn
  *   into ONE assistant entry, so calls can be counted but round trips cannot.
@@ -49,12 +49,12 @@
  * comparison.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { userHomeDir } from "./userHome.ts";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentType } from "@assistant/shared";
 import { readClaudeSdkRecord } from "./claudeSdk/claudeSdkRecords.ts";
 import { DATA_DIR } from "./config.ts";
+import { claudeProjectsDirsUnder } from "./credentialProfilePaths.ts";
 import { MCP_SERVER_NAME } from "./mcp/names.ts";
 import { eagerToolNamesFor, toolGroupsFor } from "./tools/catalog.ts";
 
@@ -202,7 +202,8 @@ interface StorageCounters {
 
 export interface TaskOverheadReport {
   dataDir: string;
-  claudeProjectsDir: string | undefined;
+  /** The credential-profiles root scanned for Claude CLI transcripts, if any. */
+  credentialProfilesRoot: string | undefined;
   beforeEndMs: number;
   afterStartMs: number;
   earliestSessionMs: number | undefined;
@@ -224,8 +225,12 @@ export interface TaskOverheadReport {
 
 export interface TaskOverheadOptions {
   dataDir?: string;
-  /** Claude CLI transcript root; `undefined` disables the join entirely. */
-  claudeProjectsDir?: string | undefined;
+  /**
+   * The credential-profiles root whose every `<account>/claude/projects` is
+   * scanned for Claude CLI transcripts; defaults to
+   * `<dataDir>/credential-profiles`, and `""` disables the join entirely.
+   */
+  credentialProfilesRoot?: string | undefined;
   beforeEndMs?: number;
   afterStartMs?: number;
   /** Ignore sessions created before this instant. */
@@ -452,23 +457,33 @@ function scanClaudeStore(entries: readonly unknown[]): CallScan {
   return { calls: [call], resolvesCalls: false };
 }
 
-/** Index every Claude CLI transcript by its provider session id. */
-function indexClaudeTranscripts(root: string): Map<string, string> {
-  const index = new Map<string, string>();
-  if (!existsSync(root)) return index;
-  for (const dir of readdirSync(root)) {
-    const path = join(root, dir);
-    try {
-      if (!statSync(path).isDirectory()) continue;
-      for (const file of readdirSync(path)) {
-        if (!file.endsWith(".jsonl")) continue;
-        index.set(file.slice(0, -".jsonl".length), join(path, file));
+/**
+ * Index every Claude CLI transcript under each root by its provider session
+ * id. An account switch copies a transcript to the new account, which then
+ * grows; where an id appears under two accounts the larger file wins.
+ */
+function indexClaudeTranscripts(roots: string[]): Map<string, string> {
+  const index = new Map<string, { path: string; size: number }>();
+  for (const root of roots) {
+    for (const dir of readdirSync(root)) {
+      const path = join(root, dir);
+      try {
+        if (!statSync(path).isDirectory()) continue;
+        for (const file of readdirSync(path)) {
+          if (!file.endsWith(".jsonl")) continue;
+          const id = file.slice(0, -".jsonl".length);
+          const candidate = join(path, file);
+          const size = statSync(candidate).size;
+          const known = index.get(id);
+          if (!known || size > known.size)
+            index.set(id, { path: candidate, size });
+        }
+      } catch {
+        // An unreadable project dir is not worth failing a measurement over.
       }
-    } catch {
-      // An unreadable project dir is not worth failing a measurement over.
     }
   }
-  return index;
+  return new Map([...index].map(([id, { path }]) => [id, path]));
 }
 
 function summarize(
@@ -779,12 +794,12 @@ export function measureTaskOverhead(
   const dataDir = options.dataDir ?? DATA_DIR;
   const beforeEndMs = options.beforeEndMs ?? TASK_SURFACE_BEFORE_END_MS;
   const afterStartMs = options.afterStartMs ?? TASK_SURFACE_AFTER_START_MS;
-  const claudeProjectsDir =
-    options.claudeProjectsDir === undefined
-      ? join(userHomeDir(), ".claude", "projects")
-      : options.claudeProjectsDir;
-  const transcripts = claudeProjectsDir
-    ? indexClaudeTranscripts(claudeProjectsDir)
+  const credentialProfilesRoot =
+    options.credentialProfilesRoot === undefined
+      ? join(dataDir, "credential-profiles")
+      : options.credentialProfilesRoot;
+  const transcripts = credentialProfilesRoot
+    ? indexClaudeTranscripts(claudeProjectsDirsUnder(credentialProfilesRoot))
     : new Map<string, string>();
 
   const dbPath = join(dataDir, "app.sqlite3");
@@ -872,7 +887,7 @@ export function measureTaskOverhead(
 
   return {
     dataDir,
-    claudeProjectsDir: claudeProjectsDir || undefined,
+    credentialProfilesRoot: credentialProfilesRoot || undefined,
     beforeEndMs,
     afterStartMs,
     earliestSessionMs: earliest,
