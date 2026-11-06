@@ -3,7 +3,7 @@
  *
  * Order: route by prefix, then the lease, then the route's allowlist and the
  * lease's provider, then the credential, then the upstream. The credential
- * comes through renewal (`renewal.ts`): a token about to expire is renewed
+ * comes from the vault (`vaultPort.ts`): a token about to expire is renewed
  * first, a dead or absent login gets U7's needs-login refusal, and an
  * upstream 401 may force one renewal while it passes through. A provider route
  * refuses a lease of an OpenAI-compatible profile. `/compat` instead takes
@@ -33,13 +33,13 @@ import {
   type RefusalShape,
   type UpstreamLabel,
 } from "./refusals.ts";
-import type { Renewal } from "./renewal.ts";
 import {
   isAllowed,
   isCompatAllowed,
   routeFor,
   type Route,
 } from "./upstreams.ts";
+import type { VaultPort } from "./vaultPort.ts";
 
 /** Where to connect for an upstream instead of its logical host (tests). */
 export type UpstreamOverrides = Partial<
@@ -67,7 +67,7 @@ interface ForwarderDeps {
   /** Test seam: the CA an https compatible endpoint is checked against. */
   compatCa: string | string[] | undefined;
   stats: GatewayStats;
-  renewal: Renewal;
+  vault: Pick<VaultPort, "credentialFor" | "upstream401">;
 }
 
 /** Where a request goes once it is allowed, credential included. */
@@ -263,13 +263,18 @@ export function createForwarder(deps: ForwarderDeps): {
     )
       return refuse(res, shape, { case: "forbidden" }, done, leaseId);
     // A renewal may come first; a dead login is refused without upstream.
-    const credential = await deps.renewal.credentialFor(binding);
+    const credential = await deps.vault.credentialFor(binding);
     // A revocation that arrived while it waited takes effect now.
     const still = leases.verify(bearerOf(req.headers.authorization));
     if (!still.ok) return refuseLease(still);
-    if (!credential.ok)
-      return refuse(res, shape, credential.refusal, done, leaseId);
-    const { read } = credential;
+    if (!credential.ok) {
+      // G10's locked answer is never given yet; it has no text of its own.
+      const refusal: Refusal =
+        "locked" in credential
+          ? { case: "credential", problem: "unreadable" }
+          : credential.refusal;
+      return refuse(res, shape, refusal, done, leaseId);
+    }
     const override = deps.upstreams[upstream.provider];
     send(
       req,
@@ -287,11 +292,11 @@ export function createForwarder(deps: ForwarderDeps): {
         host: upstream.host,
         replaced:
           upstream.provider === "openai-codex" ? ["chatgpt-account-id"] : [],
-        credentialHeaders: read.headers,
+        credentialHeaders: credential.headers,
         label: upstream.label,
         // The 401 passes through unchanged; renewal may force one (once).
         onStatus: (status) => {
-          if (status === 401) deps.renewal.upstream401(binding, read.token);
+          if (status === 401) deps.vault.upstream401(binding, credential.token);
         },
       },
       shape,

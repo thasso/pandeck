@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by 0005
 ---
 
 # A credential gateway is the only refresher of model credentials
