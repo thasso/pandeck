@@ -596,6 +596,11 @@ DATA_DIR=/home/alice/assistant-data pnpm run measure:tasks           # markdown 
 DATA_DIR=/home/alice/assistant-data pnpm run measure:tasks -- --json  # every session, raw
 ```
 
+Claude CLI transcripts are read from every account under the data dir
+(`credential-profiles/*/claude/projects`), never from home. The removed
+`--claude-projects` and `--claude-projects-dir` overrides are not supported;
+`--no-claude-transcripts` skips transcripts.
+
 **The unit is PROVIDER CALLS, not tool-output bytes.** A tool call cannot end a
 turn, so it forces a continuation call that reprocesses the conversation; a turn
 whose tool calls are ALL `task_*` is bookkeeping-only, and that continuation is
