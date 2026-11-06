@@ -3,7 +3,8 @@
  * interaction the server's own profile login uses (`models.ts`), and the
  * gateway's Codex login driver, which runs that login on a runtime whose
  * `auth.json` lies in the login's fresh directory. The gateway moves the
- * credential from there into the account's token file (`gateway/logins.ts`).
+ * credential from there into the account's token file
+ * (`gateway/vaultLogins.ts`).
  *
  * This module never imports `models.ts`, whose load refreshes the model
  * catalog.
