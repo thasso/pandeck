@@ -684,10 +684,12 @@ test("the home import refusal precedes local/client gateway startup, login drive
 
 /**
  * The Claude token endpoint override is a test seam (RD-G5a-4): production
- * code only declares it and hands it down, from the link's options to the
- * gateway's to its renewal. No env, config, settings or control path sets it,
- * and the server's composition (`index.ts`) never passes it, so a refresh
- * token goes only to `platform.claude.com`.
+ * code only declares it and hands it down, from the link's or the standalone
+ * process's options to the gateway's to its renewal. No env, config, settings
+ * or control path sets it; neither the server's composition (`index.ts`) nor
+ * the gateway's entry (`gateway/main.ts`) passes it, and tests reach the
+ * process through `gateway/processFixture.ts`. So a refresh token goes only
+ * to `platform.claude.com`.
  */
 test("only tests and the probe set the gateway's Claude token endpoint", () => {
   const mentions: string[] = [];
@@ -701,6 +703,9 @@ test("only tests and the probe set the gateway's Claude token endpoint", () => {
   assert.deepEqual(mentions.sort(), [
     "gateway/gateway.ts: claudeEndpoint: options.claudeTokenEndpoint,",
     "gateway/gateway.ts: claudeTokenEndpoint?: TokenEndpoint;",
+    'gateway/process.ts: | "claudeTokenEndpoint"',
+    'gateway/processFixture.ts: claudeTokenEndpoint: NonNullable<GatewayOptions["claudeTokenEndpoint"]>;',
+    "gateway/processFixture.ts: claudeTokenEndpoint: options.claudeTokenEndpoint,",
     "gateway/renewal.ts: claudeEndpoint?: TokenEndpoint | undefined;",
     "gateway/renewal.ts: options.claudeEndpoint,",
     "gatewayLink.ts: ...(options.claudeTokenEndpoint",

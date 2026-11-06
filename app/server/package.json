@@ -8,6 +8,7 @@
     "check:apns": "tsx src/checkApnsCredential.ts",
     "check:prompts": "tsx src/checkPromptBudgets.ts",
     "dev": "tsx src/dev-supervisor.ts",
+    "gateway": "tsx src/gateway/main.ts",
     "gateway:admin": "tsx src/gateway/adminMain.ts",
     "gateway:dev": "tsx src/gatewayDevMain.ts",
     "gateway:relay": "tsx src/relay/main.ts",

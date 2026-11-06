@@ -35,6 +35,7 @@ import {
   GATEWAY_ENABLED,
   GATEWAY_RELAY,
   GATEWAY_PORT,
+  GATEWAY_SOCKET,
   HOST,
   IS_PROD,
   PORT,
@@ -53,6 +54,7 @@ import {
   startRemoteCodexLogin,
 } from "./remoteLogins.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
+import { followGatewayStatus } from "./gatewayStatus.ts";
 import {
   clearUnfinishedProfileLogin,
   followLoginHoldStatuses,
@@ -1957,12 +1959,9 @@ if (homeImportRefusal !== undefined) {
   console.error(homeImportRefusal);
   process.exit(1);
 }
-// Opt-in: the credential gateway runs in this process, and every engine open
-// on a profile holds a lease first. A failed start is logged and only fails
-// those opens. Graceful shutdown leaves it running, as the package proxy, for
-// a draining turn; it dies with the process. The link pushes each
-// OpenAI-compatible account's endpoint and key itself; the gateway renews
-// Codex logins through pi's refresh passed in here.
+// Opt-in: dial a standalone gateway when its socket is configured, otherwise
+// preserve the one-shot in-process boot. The socket link reconnects and resyncs
+// without starting or stopping the gateway. Every profiled open gets a lease.
 if (GATEWAY_RELAY) {
   // Client mode: a remote gateway owns the accounts; logins wait for it.
   startGatewayClientLink({
@@ -1973,15 +1972,20 @@ if (GATEWAY_RELAY) {
   startGatewayLink({
     stateDir: join(DATA_DIR, "gateway"),
     port: GATEWAY_PORT,
-    renewCodex: renewCodexCredential,
-    loginDrivers: {
-      claude: claudeLoginDriver,
-      "openai-codex": codexLoginDriver,
-    },
+    ...(GATEWAY_SOCKET
+      ? { socketPath: GATEWAY_SOCKET }
+      : {
+          renewCodex: renewCodexCredential,
+          loginDrivers: {
+            claude: claudeLoginDriver,
+            "openai-codex": codexLoginDriver,
+          },
+        }),
   });
   // Settings hears of every login-stuck change from the link's start.
   followLoginHoldStatuses();
 }
+followGatewayStatus();
 // The unit keeps this process the OOM killer's last victim; hand every agent
 // process, and the broker, back the neutral score they inherited away.
 startChildOomScoreRelease();

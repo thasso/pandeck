@@ -88,24 +88,58 @@ sync-XHR worker, the bundled Initiative layout worker (elkjs, which `server.js`
 does not contain), the Claude CLI, and `browser-mcp/` with the pinned Playwright
 MCP CLI and its `playwright-core` package. It does not contain Node, tsx,
 workspace sources, or a `node_modules` tree. The wrapper sets
-`ASSISTANT_RUNTIME_DIR` to this asset root. elkjs ships under the EPL-2.0
-(`NOTICE`), its license text, copyright notices and source location in
-`workers/licenses/elkjs/`, which the install check requires. The web UI's
-Initiative map bundles @xyflow/react and the packages under it; the web build
-writes their license texts, read from the installed packages, to
-`licenses/third-party-web.md` in `app/web/dist` (so `web/` in the package),
-fails on a package, version or holder it does not expect, and names the file in
-the map's chunk. The install check requires that file to equal what the
-installed packages render (`app/web/thirdPartyNotices.ts`). `runtimeAssets.ts`
-captures it once at module load and is the single server-side resolver for these
-files, so the bundled module never uses its own location to infer installed
-asset paths. The variable is then scrubbed before any agent starts: a worktree
-dev server must not inherit production assets or identify its checkout as a
-packaged build. The optional `ASSISTANT_CLAUDE_CLI_BIN` override is captured and
-scrubbed for the same reason. Lazy Photon and JSDOM loaders consume the captured
-paths rather than rereading the scrubbed environment. Starting the packaged
-bundle without `ASSISTANT_RUNTIME_DIR` fails immediately with a named
-packaged-server error.
+`ASSISTANT_RUNTIME_DIR` to this asset root.
+
+Beside `server.js`, the package carries four more entries bundled the same way:
+`gateway.js`, the standalone credential gateway
+(`app/server/src/gateway/main.ts`), started by its own wrapper
+`$out/bin/pandeck-gateway`; `codex-renew.js`, the Codex renewal child it spawns
+once per renewal (`codexRenewMain.ts`), the only one of them that loads pi; and
+`gateway-admin.js` and `relay.js` for client mode, which have no wrapper yet.
+The gateway reads only its environment: `DATA_DIR` (state in
+`DATA_DIR/gateway/`), `ASSISTANT_GATEWAY_PORT` (8788) and
+`ASSISTANT_GATEWAY_SOCKET` (the control socket, `DATA_DIR/gateway/control.sock`
+by default). The optional `ASSISTANT_GATEWAY_CLIENTS` holds the client
+listener's options as JSON; client mode belongs to the IDB pilot and the
+self-hosted default leaves this unset, with no client listener. With
+`ASSISTANT_GATEWAY_CLIENTS` set, the packaged entry runs client mode without
+logins. It supplies no login drivers, preserving its closed, pi-free import
+boundary; live client logins remain on the separate development entry,
+`gatewayDevMain.ts` (`pnpm --filter @assistant/server gateway:dev`). Login child
+adapters are not included. SIGTERM stops it: it closes the control socket,
+refuses new model requests and lets open streams finish for up to two minutes.
+In development, `pnpm --filter ./app/server gateway` runs the same entry. No
+service units or production enablement are included yet. With
+`ASSISTANT_GATEWAY=1`, setting `ASSISTANT_GATEWAY_SOCKET` makes the server dial
+that process and reconnect with backoff; without it the in-process boot stays
+one-shot. Both modes remain off unless explicitly enabled. After 10 seconds
+without a ready socket connection the app shows "Credential gateway not
+running"; a refused or incompatible control handshake shows "Credential gateway
+incompatible". The server logs the existing explanations:
+
+- "Pandeck's credential gateway isn't reachable, so this session can't start a
+  model request. It restarts automatically; try again shortly."
+- "Pandeck can't start this login while the credential gateway is unreachable;
+  try again shortly."
+
+Switch-off rollback and the CLI-compatible credential locks remain until slice
+5's encrypted store. elkjs ships under the EPL-2.0 (`NOTICE`), its license text,
+copyright notices and source location in `workers/licenses/elkjs/`, which the
+install check requires. The web UI's Initiative map bundles @xyflow/react and
+the packages under it; the web build writes their license texts, read from the
+installed packages, to `licenses/third-party-web.md` in `app/web/dist` (so
+`web/` in the package), fails on a package, version or holder it does not
+expect, and names the file in the map's chunk. The install check requires that
+file to equal what the installed packages render
+(`app/web/thirdPartyNotices.ts`). `runtimeAssets.ts` captures it once at module
+load and is the single server-side resolver for these files, so the bundled
+module never uses its own location to infer installed asset paths. The variable
+is then scrubbed before any agent starts: a worktree dev server must not inherit
+production assets or identify its checkout as a packaged build. The optional
+`ASSISTANT_CLAUDE_CLI_BIN` override is captured and scrubbed for the same
+reason. Lazy Photon and JSDOM loaders consume the captured paths rather than
+rereading the scrubbed environment. Starting the packaged bundle without
+`ASSISTANT_RUNTIME_DIR` fails immediately with a named packaged-server error.
 
 `scripts/bun-bundle.mjs` owns the esbuild call and its plugins, so the install
 check bundles its runtime probe exactly as the builder bundles `server.js`.
@@ -212,14 +246,14 @@ own process group and ends every group still running before it deletes its
 temporary directory, on success or failure.
 
 Before booting, the check asserts the pragma on the first line of `server.js`,
-the worker and the watcher wrapper. It then runs a copy of `server.js` whose
-first statement after the banner prints the process's peak RSS and exits. An ES
-module is parsed and linked whole before its first statement runs, so that is
-the cost of parse and link alone, and it must stay under 300 MB: 130–180 MB with
-the pragma, about 1.6 GB without. The check then bundles
-`scripts/bun-runtime-probe.mjs` with the server's plugins and defines and runs
-it with the packaged Bun, which reaches code a booted server runs only on
-demand. First, in both modes, a child's managed stdio must never close a
+the four other entries, the worker and the watcher wrapper. It then runs a copy
+of `server.js` whose first statement after the banner prints the process's peak
+RSS and exits. An ES module is parsed and linked whole before its first
+statement runs, so that is the cost of parse and link alone, and it must stay
+under 300 MB: 130–180 MB with the pragma, about 1.6 GB without. The check then
+bundles `scripts/bun-runtime-probe.mjs` with the server's plugins and defines
+and runs it with the packaged Bun, which reaches code a booted server runs only
+on demand. First, in both modes, a child's managed stdio must never close a
 descriptor number something else reused since. Bun 1.3.13 closed a dead child's
 stdio numbers late, at GC, whatever had reused them
 ([Task-1231](pa://task/1231)). For 10 iterations the probe starts a detached
@@ -321,27 +355,31 @@ its space preflight reported as `statfs` or the fallback; a second run must
 answer `already-done`, its startup gate must let that boot through, and an
 unreadable import state must make the gate refuse with its operator line.
 `checkProcessState` then reads its own child's start time under Bun and sees
-that child running, then exited once it is killed, which login holds rely on.
-From an unrelated cwd and a clean environment, it also runs the packaged browser
-MCP CLI's version command and an MCP initialize plus `tools/list`, covering the
-patched local imports without a workspace `node_modules`. When Chrome or
-Chromium is available, the check also launches it and navigates a page. The Nix
-sandbox has neither browser, so that last probe reports an explicit skip there;
-the same clean-environment probe with the pinned Bun 1.4.2 passes launch and
-navigation on a host with Chrome, run outside the sandbox against the built
-package. The server itself keeps its deterministic bundle beside the executable
-because Bun's standalone compiler randomizes its embedded module-table
-encryption; the package wrapper invokes that module explicitly, while
-`/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary bundler
-also emits scheduler-dependent module order and identifier names, even when
-pinned to one CPU and given a lexically recreated source tree. The builder
-therefore uses pinned esbuild for the server module and its two bundled helpers;
-Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
-`node_modules`, and source derivations, then confirms pinned git and OpenSSH
-remain present. The install check also scans every runtime file for the Nix
-source path and build directory. CI builds the package and its closure check on
-every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
-derivation.
+that child running, then exited once it is killed, which login holds rely on. It
+then starts the packaged `pandeck-gateway` on a temporary `DATA_DIR`
+(`scripts/bun-gateway-check.mjs`): a control hello must be answered on its
+socket, a request without a lease must get the gateway's own 401 refusal, its
+`codex-renew.js` child must answer `failed` with exit 0 for a missing file, and
+SIGTERM must exit 0 and remove the socket. From an unrelated cwd and a clean
+environment, it also runs the packaged browser MCP CLI's version command and an
+MCP initialize plus `tools/list`, covering the patched local imports without a
+workspace `node_modules`. When Chrome or Chromium is available, the check also
+launches it and navigates a page. The Nix sandbox has neither browser, so that
+last probe reports an explicit skip there; the same clean-environment probe with
+the pinned Bun 1.4.2 passes launch and navigation on a host with Chrome, run
+outside the sandbox against the built package. The server itself keeps its
+deterministic bundle beside the executable because Bun's standalone compiler
+randomizes its embedded module-table encryption; the package wrapper invokes
+that module explicitly, while `/proc/<pid>/exe` remains the packaged Bun
+executable. Bun's ordinary bundler also emits scheduler-dependent module order
+and identifier names, even when pinned to one CPU and given a lexically
+recreated source tree. The builder therefore uses pinned esbuild for the server
+module and its two bundled helpers; Bun remains the packaged runtime. The flake
+closure check rejects Node, tsx, `node_modules`, and source derivations, then
+confirms pinned git and OpenSSH remain present. The install check also scans
+every runtime file for the Nix source path and build directory. CI builds the
+package and its closure check on every change (`docs/ci-cd.md`), and a
+deployment of that commit builds the same derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses

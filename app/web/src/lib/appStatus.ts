@@ -1,4 +1,4 @@
-import type { AccountLoginAlert } from "@assistant/shared";
+import type { AccountLoginAlert, GatewayStatusState } from "@assistant/shared";
 import { accountSettingsPath } from "@assistant/shared/accountHealth";
 
 /**
@@ -30,6 +30,8 @@ export interface AppStatusInput {
   /** Whether the connection's grace period has elapsed (see `AppStatus`). */
   graceElapsed: boolean;
   accountLoginAlerts?: AccountLoginAlert[] | undefined;
+  /** The credential gateway's state, as the server reports it. */
+  gatewayStatus?: GatewayStatusState | undefined;
 }
 
 /**
@@ -98,6 +100,8 @@ type AppStatusKind =
   | "restarting"
   | "connecting"
   | "reconnecting"
+  | "gateway-unreachable"
+  | "gateway-incompatible"
   | "needs-login";
 
 export interface AppStatusState {
@@ -137,6 +141,20 @@ export function appStatus(input: AppStatusInput): AppStatusState | null {
     return { kind: "restarting", label: "Restarting…", busy: true };
   }
   if (connected) {
+    // Below the restart and connection states, which a disconnected server
+    // cannot report past, and above a login, which needs the gateway.
+    if (input.gatewayStatus === "unreachable")
+      return {
+        kind: "gateway-unreachable",
+        label: "Credential gateway not running",
+        busy: false,
+      };
+    if (input.gatewayStatus === "incompatible")
+      return {
+        kind: "gateway-incompatible",
+        label: "Credential gateway incompatible",
+        busy: false,
+      };
     const accounts = input.accountLoginAlerts ?? [];
     const first = accounts[0];
     return first

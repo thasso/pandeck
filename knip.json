@@ -21,6 +21,10 @@
         "src/initiativeLayoutWorker.ts",
         "src/gateway/adminMain.ts",
         "src/gatewayDevMain.ts",
+        "src/gateway/main.ts",
+        "src/gateway/processFixture.ts",
+        "src/test/gatewayLinkFixture.ts",
+        "src/codexRenewMain.ts",
         "src/relay/main.ts"
       ],
       "project": "src/**/*.ts",

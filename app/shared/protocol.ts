@@ -391,6 +391,9 @@ export interface AccountLoginAlert {
   provider: CredentialProfileProvider;
 }
 
+/** The credential gateway's state as app status (`gatewayStatus`). */
+export type GatewayStatusState = "ok" | "unreachable" | "incompatible";
+
 export interface CredentialProfileSummary {
   id: string;
   name: string;
@@ -8998,6 +9001,12 @@ export type ServerMessage =
     }
   /** Authoritative app-wide login state, replayed on connect and broadcast on change, unlike advisory appNotification. */
   | { type: "accountLoginAlerts"; accounts: AccountLoginAlert[] }
+  /**
+   * The credential gateway's reachability, replayed on connect and broadcast on
+   * change: `unreachable` once a standalone gateway has not answered for 10 s,
+   * `incompatible` when it speaks another control major; else `ok`.
+   */
+  | { type: "gatewayStatus"; state: GatewayStatusState }
   /** Invalidate account cards/previews without raising a login alert. */
   | { type: "accountHealthChanged" }
   /**

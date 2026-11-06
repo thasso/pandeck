@@ -1333,20 +1333,46 @@ OpenAI-compatible profile answers `unknown_profile` before any lane.
   owned by no boot and cleared only by force release. A registry of compatible
   profiles alone leaves the fence pending.
 
-The server's link to the gateway (`gatewayLink.ts`) is opt-in:
-`ASSISTANT_GATEWAY=1` starts the gateway inside the server process, its model
-listener on `127.0.0.1:${ASSISTANT_GATEWAY_PORT}` (8788) and its state in
-`DATA_DIR/gateway/`, and speaks gateway control to it over an in-process pair
-until the gateway runs as its own process.
+The server's link to the gateway (`gatewayLink.ts`) is opt-in and off by
+default. With `ASSISTANT_GATEWAY=1` and no socket configured it starts the
+gateway inside the server process, its model listener on
+`127.0.0.1:${ASSISTANT_GATEWAY_PORT}` (8788), its state in `DATA_DIR/gateway/`
+and control over an in-process pair. This boot remains one-shot.
+
+With `ASSISTANT_GATEWAY_SOCKET` also set, the server dials that Unix control
+socket instead. It never starts or stops the standalone gateway. After a lost
+connection it reconnects with backoff from 500 ms to 10 s, using the same server
+boot identity. Each attempt syncs a fresh profile snapshot, reconciles `local`
+with this boot's live engine lease ids, retries settled login releases and
+re-pushes compatible endpoints. Profile changes during an attempt cause another
+full sync and push pass, without a pass cap. Ready follows only a pass with an
+unchanged generation. Changes while ready keep the ordered delta queue. A bind
+lost during disconnection is not replayed; external Workers are not reconciled
+here.
+
+The standalone entry (`gateway/main.ts`, packaged as `pandeck-gateway`) keeps
+the edge and vault in one process. It takes its control socket before opening
+state, refuses an answered socket, removes a stale one and sets mode 0600. On
+Linux it holds an abstract Unix-socket ownership claim through shutdown,
+serializing overlapping starts before probing or removing a stale path. The
+claim derives from the canonical socket path, so previews and production do not
+collide and symlink path aliases contend. A crash releases the claim in the
+kernel; a failed start releases it after closing its control listener. Known
+limit: non-Linux socket mode is development-only and retains probe/unlink
+without interprocess startup serialization. SIGTERM or SIGINT closes control and
+stops accepting model requests, lets active streams finish for up to two
+minutes, then destroys remaining sockets. The code ships without service units
+or a production switch. Switch-off rollback and the CLI-compatible credential
+locks stay until slice 5's encrypted store migration.
 
 - Before it is ready the link says hello as this server boot (16 random bytes,
   the pid and the process start time), syncs every credential profile with its
   token file path (`.credentials.json` in the profile's Claude config directory
   under `DATA_DIR/credential-profiles/`, the default's included; `auth.json` in
   its pi agent directory), and reconciles the in-process Worker with no live
-  lease: its engines died with the previous process. Every profile change is
-  then sent as an upsert or a removal, and every request takes one queue, in
-  order.
+  lease on a new boot: its engines died with the previous process. A reconnect
+  retains this boot's live ids. Every profile change is then sent as an upsert
+  or a removal, and every request takes one queue, in order.
 - **Grant before open.** An engine open on a credential profile (a pi engine, a
   Claude turn or standalone `/compact` of a session with a profile) is granted
   an engine lease before `engine.open` goes out. A grant waits at most 10
@@ -1369,8 +1395,12 @@ until the gateway runs as its own process.
   hold id and `acquireLoginHold` waits for ready (10 seconds) and for the lane;
   a hold waiting for the lane is ordered after the queue but holds up no grant,
   profile change or other request. `registerLoginWriter` sends the writer's pid
-  and start time, `releaseLoginHold` is best-effort, and the link records each
-  profile's latest `profiles.status` for the login-stuck state.
+  and start time, `releaseLoginHold` is best-effort and replayed before ready
+  after a socket reconnect unless the hold is already absent, and the link
+  records each profile's latest `profiles.status` for the login-stuck state. An
+  acquisition whose answer fails also releases its minted id through that replay
+  path: the caller never received the hold, so no login writer started. This
+  does not release any successfully returned hold on disconnection.
   - **Order.** The Claude login (`claudeLoginTerminal.ts`) takes the hold before
     it spawns `claude auth login`, and names the child as the hold's writer
     right after the spawn. It forwards no input until the gateway acknowledged
@@ -1575,7 +1605,15 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   serialise and re-check under one lock. It commits only while the lock was not
   reported lost and the `openai-codex` entry is still the one the refresh
   started from, keeps every other provider's entry, and replaces the file by an
-  atomic rename.
+  atomic rename. In the standalone gateway the port spawns one Codex renewal
+  child per credential through `gateway/codexChild.ts`; pi loads only in that
+  child (`codexRenewMain.ts`). The child reads `{authFile, minValidityMs}` on
+  stdin, writes one result line without credentials and exits 0. The parent
+  accepts only fixed result codes, preserving the refresher's `400` and `401`
+  rejections as needs-login, never copying arbitrary upstream strings. Every
+  outcome waits for its exit. Abort or deadline sends SIGTERM then SIGKILL after
+  a five-second grace, so no child writer outlives its lane item. In-process
+  mode still injects the direct refresher.
 - **Outcomes.** A failure (timeout, network, a 5xx, a malformed answer, a busy
   or lost lock, a conflict) writes nothing, never marks the login dead and backs
   off from 30 s, doubling to 10 minutes; success or a changed file ends the
@@ -1681,9 +1719,11 @@ path above.
   client link starts (`docs/credential-distribution.md`).
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
-  (`gatewayDevMain.ts`, until the packaged entry can run logins) runs a gateway
-  with the client listener and both drivers on 127.0.0.1, or on `--bind-host`
-  with each `--host` in the edge's certificate; `gateway:admin` and
+  (`gatewayDevMain.ts`) remains the separate composition with the client
+  listener and both live login drivers on 127.0.0.1, or on `--bind-host` with
+  each `--host` in the edge's certificate. The packaged `gateway/main.ts` entry
+  can run a configured client listener but supplies no login drivers; login
+  child adapters remain outside this slice. The commands `gateway:admin` and
   `gateway:relay` run the admin CLI and the relay. A second dev instance with
   its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN` and
   `ASSISTANT_GATEWAY_RELAY` is the client.

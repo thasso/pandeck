@@ -506,6 +506,8 @@ test("the gateway reaches no server state", () => {
  */
 const GATEWAY_VAULT = [
   "claudeRenewal",
+  // The standalone process's Codex renewal child, behind the renewal port.
+  "codexChild",
   "holds",
   "processIdentity",
   "profileCredential",
@@ -530,7 +532,8 @@ const GATEWAY_EDGE = [
   "x509",
 ];
 const GATEWAY_SHARED = ["profiles", "refusals", "vaultPort"];
-const GATEWAY_ROOT = ["gateway", "state"];
+/** The composition, and the standalone process and its entries around it. */
+const GATEWAY_ROOT = ["gateway", "main", "process", "processFixture", "state"];
 /**
  * gateway control 1.4's wire validators (`isHoldId`, `isPid`, `isStartTime`):
  * the one edge-to-vault crossing, gone with that protocol.
@@ -635,6 +638,30 @@ test("the gateway's Codex refresher imports only node, pi and proper-lockfile", 
   assert.deepEqual(
     importersOf((target) => target === "piSdk/codexRenewal.ts"),
     ["harnesses/gatewayPorts.ts"],
+  );
+});
+
+test("the process fixture is not imported by production modules", () => {
+  assert.deepEqual(
+    importersOf((target) => target === "gateway/processFixture.ts"),
+    [],
+  );
+});
+
+test("the Codex renewal child imports only the refresher and node, and only the gateway's child port spawns", () => {
+  // The child is the only gateway-shipped module that loads pi (ADR-0005, M5).
+  const scan = scans.get("codexRenewMain.ts");
+  assert.ok(scan, "the scan found the Codex renewal child");
+  for (const target of scan.imports)
+    assert.ok(
+      target.startsWith("node:") || target === "harnesses/gatewayPorts.ts",
+      `codexRenewMain.ts imports ${target}`,
+    );
+  assert.deepEqual(
+    importersOf((target) => target === "node:child_process").filter((module) =>
+      module.startsWith("gateway/"),
+    ),
+    ["gateway/codexChild.ts"],
   );
 });
 

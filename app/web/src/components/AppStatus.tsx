@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { RefreshCw, KeyRound } from "lucide-react";
-import type { AccountLoginAlert } from "@assistant/shared";
+import { RefreshCw, KeyRound, ShieldOff } from "lucide-react";
+import type { AccountLoginAlert, GatewayStatusState } from "@assistant/shared";
 
 import {
   appStatus,
@@ -58,6 +58,7 @@ export interface AppStatusProps {
    */
   placement: "bar" | "floating";
   accountLoginAlerts?: AccountLoginAlert[] | undefined;
+  gatewayStatus?: GatewayStatusState | undefined;
   onNavigate?: ((path: string) => void) | undefined;
 }
 
@@ -67,6 +68,7 @@ export function AppStatus({
   hydrationSource,
   placement,
   accountLoginAlerts,
+  gatewayStatus,
   onNavigate,
 }: AppStatusProps) {
   const mobile = useMobileLayout();
@@ -91,6 +93,7 @@ export function AppStatus({
     hydrationSource,
     graceElapsed,
     accountLoginAlerts,
+    gatewayStatus,
   });
   if (!status) return null;
   if (placement === "floating") {
@@ -148,12 +151,16 @@ function StatusPill({
       }
       className={`${status.href ? "pointer-events-auto" : "pointer-events-none"} ${className ?? ""}`}
     >
-      {/* Waits spin; a queued restart or a dead login has a static icon. The
-          login pill keeps native link semantics while announcing changes. */}
+      {/* Waits spin; a queued restart, a gateway state or a dead login has a
+          static icon. The login pill keeps native link semantics while
+          announcing changes. */}
       {status.busy ? (
         <Spinner size="xs" />
       ) : status.kind === "needs-login" ? (
         <KeyRound />
+      ) : status.kind === "gateway-unreachable" ||
+        status.kind === "gateway-incompatible" ? (
+        <ShieldOff />
       ) : (
         <RefreshCw />
       )}

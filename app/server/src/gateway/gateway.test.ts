@@ -774,6 +774,64 @@ test("a client closing an endless stream cancels the upstream and is no error", 
   assert.ok(!logLines.some((line) => /upstream error|unreachable/.test(line)));
 });
 
+test("a draining close lets an open stream finish and cuts one that outlasts the drain", async () => {
+  const gw = await gateway();
+  running.splice(running.indexOf(gw), 1);
+  const { token } = grant(gw, "claude", (await tokenFiles()).claudeFile);
+  let finish!: () => void;
+  anthropic.handler = (_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: first\n\n");
+    finish = () => res.end("data: last\n\n");
+  };
+  const finishing = await open(gw.port, {
+    path: CLAUDE_PATH,
+    headers: bearer(token),
+    body: "{}",
+  });
+  const body: Buffer[] = [];
+  const ended = new Promise<void>((resolve, reject) => {
+    finishing.response.on("data", (chunk: Buffer) => body.push(chunk));
+    finishing.response.on("end", resolve);
+    finishing.response.on("error", reject);
+  });
+  let closed = false;
+  const closing = gw.close({ drainMs: 5_000 }).then(() => (closed = true));
+  await delay(150);
+  assert.equal(closed, false, "the drain waits for the open stream");
+  await assert.rejects(
+    send(gw.port, { path: CLAUDE_PATH, headers: bearer(token), body: "{}" }),
+    "no new request is accepted while draining",
+  );
+  finish();
+  await ended;
+  assert.match(Buffer.concat(body).toString(), /first[\s\S]*last/);
+  await closing;
+
+  const second = await gateway();
+  running.splice(running.indexOf(second), 1);
+  const endless = grant(second, "claude", (await tokenFiles()).claudeFile);
+  anthropic.handler = (_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: first\n\n");
+  };
+  const cut = await open(second.port, {
+    path: CLAUDE_PATH,
+    headers: bearer(endless.token),
+    body: "{}",
+  });
+  const aborted = new Promise<void>((resolve) => {
+    cut.response.on("error", () => resolve());
+    cut.response.on("close", () => resolve());
+  });
+  cut.response.resume();
+  const started = Date.now();
+  await second.close({ drainMs: 300 });
+  assert.ok(Date.now() - started >= 250, "the drain waited");
+  await aborted;
+  assert.equal(cut.response.complete, false);
+});
+
 test("an upstream abort mid-stream reaches the client as a failure, not an end", async () => {
   const gw = await gateway();
   const { token } = grant(gw, "claude", (await tokenFiles()).claudeFile);

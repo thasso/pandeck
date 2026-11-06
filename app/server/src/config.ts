@@ -51,14 +51,16 @@ export const BACKGROUND_PR_SYNC_ENABLED =
     process.env.ASSISTANT_BACKGROUND_PR_SYNC !== "0");
 
 /**
- * Run the credential gateway in this process (`gatewayLink.ts`), so every
- * engine open on a credential profile holds a lease first. Opt-in, development
- * only, until it becomes the default.
+ * Use the credential gateway (`gatewayLink.ts`), in process unless a control
+ * socket is configured. Off by default until the separate units ship.
  */
 export const GATEWAY_ENABLED = process.env.ASSISTANT_GATEWAY === "1";
 
 /** The gateway's loopback model listener. */
 export const GATEWAY_PORT = Number(process.env.ASSISTANT_GATEWAY_PORT ?? 8788);
+
+/** A standalone gateway's control socket; unset keeps the in-process boot. */
+export const GATEWAY_SOCKET = process.env.ASSISTANT_GATEWAY_SOCKET || undefined;
 
 /**
  * Client mode (`gatewayClientLink.ts`): `<socket path>,<loopback port>` of the

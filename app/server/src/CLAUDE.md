@@ -34,8 +34,8 @@
 - Background work enters only through `admitBackgroundWork`; provider hooks and
   tools never write its rows directly.
 - Request/watch/list children use `spawnBroker.ts`: server forks stall
-  connections. Only warm speech models may spawn directly, once per warm-up, for
-  PID lifetime control and SIGKILL escalation unavailable in the broker.
+  connections. In the server, only warm speech models may spawn directly, once
+  per warm-up, for PID control and SIGKILL escalation the broker lacks.
 - Git mutations to a WORKING TREE, INDEX, or LOCAL ref use
   `withRepoLock(await checkoutGitOn(side).repoLockKey(cwd), …)`, never a
   checkout key or nested lock. Only network-bound work is lock-free: fetch/push,

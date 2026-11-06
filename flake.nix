@@ -230,6 +230,13 @@
                 --set ASSISTANT_RUNTIME_DIR "$runtime" \
                 --set ASSISTANT_BUILD_COMMIT "$ASSISTANT_BUILD_COMMIT" \
                 --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.openssh ]}
+              # The standalone credential gateway: same runtime, its own entry.
+              makeWrapper "$runtime/personal-assistant-server" \
+                "$out/bin/pandeck-gateway" \
+                --add-flags "$runtime/gateway.js" \
+                --set NODE_ENV production \
+                --set ASSISTANT_RUNTIME_DIR "$runtime" \
+                --set ASSISTANT_BUILD_COMMIT "$ASSISTANT_BUILD_COMMIT"
 
               runHook postInstall
             '';
@@ -248,7 +255,8 @@
               runHook preInstallCheck
               bun scripts/test-bun-server-bundle.mjs \
                 "$out/libexec/personal-assistant" \
-                "$out/bin/personal-assistant-server"
+                "$out/bin/personal-assistant-server" \
+                "$out/bin/pandeck-gateway"
               for forbiddenSource in "$src" "$PWD"; do
                 if grep -R -a -F -l -- "$forbiddenSource" \
                   "$out/libexec/personal-assistant"; then

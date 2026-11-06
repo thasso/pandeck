@@ -4,10 +4,19 @@
  * or a `tls.TLSSocket` (the gateway edge's mutual-TLS client port). Frame
  * reassembly stays in `FrameDecoder`; this only moves bytes.
  *
- * Shared shape with the standalone gateway's transport (Task-1383); only the
- * parts client mode needs are here so far.
+ * The standalone gateway listens for its control connection here
+ * (`gateway/process.ts`), and the server dials it.
  */
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import net from "node:net";
+import { basename, dirname } from "node:path";
 import type { ByteEndpoint } from "./inProcessTransport.ts";
 
 /** A peer that never closes after `close` is cut off after this long. */
@@ -61,4 +70,132 @@ export function dialUnixSocket(
       resolve(socketEndpoint(socket));
     });
   });
+}
+
+/**
+ * Listens on the Unix socket at `path` and hands each accepted connection to
+ * `onEndpoint`. Refuses when another process answers on `path`; a stale file
+ * no one answers on is removed first. The file gets mode 0600, and `close`
+ * stops listening, ends open connections and removes the file. On Linux an
+ * abstract socket serializes ownership, including stale-file recovery. The
+ * kernel releases that claim on crash, without a stale lock to recover.
+ * Other development hosts retain probe/unlink without that serialization.
+ */
+export async function listenUnixSocket(
+  path: string,
+  onEndpoint: (endpoint: ByteEndpoint) => void,
+): Promise<{ close(): Promise<void> }> {
+  if (process.platform !== "linux")
+    return listenClaimedUnixSocket(path, onEndpoint);
+  // Derive ownership from the canonical socket path: previews and production
+  // never share a claim, while relative paths and symlinks still contend.
+  const identity = createHash("sha256")
+    .update(`${realpathSync(dirname(path))}/${basename(path)}`)
+    .digest("hex");
+  const claim = net.createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve, reject) => {
+    claim.once("error", (err: NodeJS.ErrnoException) => {
+      reject(
+        err.code === "EADDRINUSE"
+          ? new Error(`Another process listens on ${path}.`)
+          : err,
+      );
+    });
+    claim.listen(`\u0000pandeck-unix-${identity}`, () => {
+      claim.removeAllListeners("error");
+      resolve();
+    });
+  });
+  const release = (): Promise<void> =>
+    new Promise((resolve) => claim.close(() => resolve()));
+  try {
+    const listener = await listenClaimedUnixSocket(path, onEndpoint);
+    let closing: Promise<void> | undefined;
+    return {
+      close() {
+        closing ??= (async () => {
+          try {
+            await listener.close();
+          } finally {
+            await release();
+          }
+        })();
+        return closing;
+      },
+    };
+  } catch (err) {
+    await release();
+    throw err;
+  }
+}
+
+/** Linux callers hold the kernel claim until this listener has closed. */
+async function listenClaimedUnixSocket(
+  path: string,
+  onEndpoint: (endpoint: ByteEndpoint) => void,
+): Promise<{ close(): Promise<void> }> {
+  if (existsSync(path)) {
+    const answered = await new Promise<boolean>((resolve, reject) => {
+      const probe = net.createConnection(path);
+      const timer = setTimeout(() => {
+        probe.destroy();
+        reject(new Error(`Cannot probe the control socket at ${path}.`));
+      }, 1000);
+      probe.once("connect", () => {
+        clearTimeout(timer);
+        probe.destroy();
+        resolve(true);
+      });
+      probe.once("error", (err: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        if (err.code === "ECONNREFUSED" || err.code === "ENOENT")
+          resolve(false);
+        else reject(err);
+      });
+    });
+    if (answered) throw new Error(`Another process listens on ${path}.`);
+    try {
+      unlinkSync(path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    onEndpoint(socketEndpoint(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(path, () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  try {
+    chmodSync(path, 0o600);
+  } catch (err) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw err;
+  }
+  const bound = statSync(path);
+  let closing: Promise<void> | undefined;
+  return {
+    close() {
+      closing ??= new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        for (const socket of sockets) socket.destroy();
+        sockets.clear();
+        try {
+          const current = statSync(path);
+          if (current.ino === bound.ino && current.dev === bound.dev)
+            unlinkSync(path);
+        } catch {
+          // Removed already.
+        }
+      });
+      return closing;
+    },
+  };
 }
