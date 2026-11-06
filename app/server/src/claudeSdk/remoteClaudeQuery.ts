@@ -21,7 +21,6 @@ import {
   DEFAULT_CLAUDE_PROFILE_ID,
   claudeProfileRuntime,
 } from "../credentialProfiles.ts";
-import { installedGatewayLink } from "../gatewayLink.ts";
 import type { EngineItem } from "../workerProtocol/engineMethods.ts";
 import {
   openEngineChannel,
@@ -256,9 +255,12 @@ function remoteClaudeQuery(
  * Open `spec`'s query on the session's Worker. Aborting `signal` aborts the
  * hosted query's own controller; its stream then ends as the query does.
  * With a gateway link, the query's engine holds a lease for
- * `credentialProfileId`, owned by the session. A session without one runs as
- * `claude-default` with that profile's environment (U12), so no gateway
- * engine runs on the service's own; its binding and records stay as they are.
+ * `credentialProfileId`, owned by the session. A session without one always
+ * runs as `claude-default` with that profile's environment (U12): its scrub
+ * and its DATA_DIR `CLAUDE_CONFIG_DIR`, whether or not a gateway link is
+ * installed, so no Claude child inherits the service's credentials or
+ * `~/.claude`. It is leased only when a link exists, and its binding and
+ * records stay as they are.
  */
 export async function openHostedClaudeQuery(input: {
   prompt: AsyncIterable<ClaudeSdkUserMessage>;
@@ -267,9 +269,7 @@ export async function openHostedClaudeQuery(input: {
   onCompactSummary?: (summary: string) => void;
   credentialProfileId?: string;
 }): Promise<RemoteClaudeQuery> {
-  const asDefault =
-    input.credentialProfileId === undefined &&
-    installedGatewayLink() !== undefined;
+  const asDefault = input.credentialProfileId === undefined;
   const profileId = asDefault
     ? DEFAULT_CLAUDE_PROFILE_ID
     : input.credentialProfileId;

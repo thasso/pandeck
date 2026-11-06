@@ -280,8 +280,9 @@ SDK option construction, stream/message mapping, persistence, and tests.
   (`autoMemoryEnabled: false`, `autoDreamEnabled: false`) exported from
   `options.ts`. Our in-app first-class Memory (`memory_*` tools) is the sole
   authoritative memory surface; do not re-enable the SDK's separate on-disk
-  `~/.claude/.../memory` store. The persona system prompts already teach the
-  in-app Memory system (`memoryPrompt.ts`, injected by `agents.ts`).
+  `<CLAUDE_CONFIG_DIR>/projects/.../memory` store. The persona system prompts
+  already teach the in-app Memory system (`memoryPrompt.ts`, injected by
+  `agents.ts`).
 - The same settings object pins `cleanupPeriodDays` far past the CLI default of
   30 days. The native `.jsonl` under `CLAUDE_CONFIG_DIR` is the only thing a
   fork can be cut from, so the vendor sweep would silently expire forkability
@@ -303,17 +304,17 @@ SDK option construction, stream/message mapping, persistence, and tests.
 ## Contract notes and rationale
 
 - Claude account profiles are provisioned by the official Claude CLI, never by
-  hidden Agent SDK OAuth controls. The protected Default Claude profile reflects
-  the service user's normal `~/.claude/.credentials.json`, runs without a
-  `CLAUDE_CONFIG_DIR` override, and intentionally applies to PR previews too
-  because they run as the same service user. Named profiles get a private
-  `CLAUDE_CONFIG_DIR` under `DATA_DIR/credential-profiles/<id>/claude`. Settings
-  may wrap `claude auth login --claudeai` in the dedicated authenticated browser
-  terminal (`../claudeLoginTerminal.ts`) or show the direct shell command as
-  fallback; PA may stream bounded CLI output and forward an unlogged
-  authorization code to stdin, but must never own the OAuth exchange, call
-  undocumented SDK auth controls, or expose profile credentials to the browser.
-  A selected profile id persists in record/session metadata;
+  hidden Agent SDK OAuth controls. Every profile, the protected Default Claude
+  included, gets a private `CLAUDE_CONFIG_DIR` under
+  `DATA_DIR/credential-profiles/<id>/claude`; nothing reads `~/.claude` except
+  the one-time home transcript import (`homeTranscriptImport.ts`,
+  `docs/credential-distribution.md`). A session with no account runs as the
+  default. Settings may wrap `claude auth login --claudeai` in the dedicated
+  authenticated browser terminal (`../claudeLoginTerminal.ts`) or show the
+  direct shell command as fallback; PA may stream bounded CLI output and forward
+  an unlogged authorization code to stdin, but must never own the OAuth
+  exchange, call undocumented SDK auth controls, or expose profile credentials
+  to the browser. A selected profile id persists in record/session metadata;
   `claudeProfileEnvironment` always scrubs inherited Anthropic/Claude credential
   variables before choosing ordinary or isolated config resolution.
 - Do not double-count streamed text/thinking: live deltas build visible text;

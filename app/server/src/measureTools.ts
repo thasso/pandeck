@@ -9,15 +9,13 @@ const valueAfter = (flag: string): string | undefined => {
 };
 
 const dataDirValue = valueAfter("--data-dir");
-const claudeProjectsDirValue = process.argv.includes("--no-claude-transcripts")
-  ? ""
-  : valueAfter("--claude-projects-dir");
+// Claude CLI transcripts are read from every account under the data dir's
+// `credential-profiles/`; `--no-claude-transcripts` skips them.
+const skipClaudeTranscripts = process.argv.includes("--no-claude-transcripts");
 const payloadProbeFileValue = valueAfter("--payload-probe");
 const report = measureTools({
   ...(dataDirValue !== undefined ? { dataDir: dataDirValue } : {}),
-  ...(claudeProjectsDirValue !== undefined
-    ? { claudeProjectsDir: claudeProjectsDirValue }
-    : {}),
+  ...(skipClaudeTranscripts ? { credentialProfilesRoot: "" } : {}),
   ...(payloadProbeFileValue !== undefined
     ? { payloadProbeFile: payloadProbeFileValue }
     : {}),

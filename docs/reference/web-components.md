@@ -2415,15 +2415,15 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   mobile-safe modal around `hooks/useClaudeLoginTerminal.ts`: it shows bounded
   streamed output from the official `claude auth login --claudeai` process,
   turns only Claude's authorization URL into a tappable external action, and
-  forwards the password-masked pasted code without displaying it. The protected
-  Default Claude mirrors the server user's ordinary `~/.claude` login and
-  becomes Ready automatically when that login exists; named profiles remain
-  isolated and retain `CLAUDE_CONFIG_DIR=… claude` as a terminal fallback.
-  Connect/Reconnect uses the browser terminal for every Claude profile. Every
-  profile, including the default, can be disabled; only named profiles can be
-  renamed/deleted (deletion is refused while sessions remain bound). Settings →
-  OpenAI owns isolated OpenAI/Codex profiles and the pi device-code flow. Both
-  list only safe metadata; tokens and raw credential files never enter the UI.
+  forwards the password-masked pasted code without displaying it. Every Claude
+  profile, the protected Default Claude included, is isolated under
+  `DATA_DIR/credential-profiles/` and retains `CLAUDE_CONFIG_DIR=… claude` as a
+  terminal fallback. Connect/Reconnect uses the browser terminal for every
+  Claude profile. Every profile, including the default, can be disabled; only
+  named profiles can be renamed/deleted (deletion is refused while sessions
+  remain bound). Settings → OpenAI owns isolated OpenAI/Codex profiles and the
+  pi device-code flow. Both list only safe metadata; tokens and raw credential
+  files never enter the UI.
 - Jira and Tempo are two separate settings pages. `Jira` is token-based
   (Atlassian email + API token, host shown read-only from deployment config)
   and, like `GitHub`, keeps an explicit token entry with a `Save and test`

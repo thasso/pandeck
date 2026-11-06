@@ -51,20 +51,105 @@ under `DATA_DIR/settings/`. They are runtime state, never bootstrap config.
 `ASSISTANT_TOKEN` and the APNs credential follow their existing file-backed
 contracts in `authToken.ts` and `docs/notifications.md`.
 
-Model-provider credentials are separate. Named Claude and OpenAI profiles live
-under `DATA_DIR/credential-profiles/`, while a default Claude login may come
-from the service user's home directory. An OpenAI-compatible account's endpoint
-key lives only in its `credential-profiles/<id>/endpoint.json` (0600); the
-former `settings/openai-compatible.json` is migrated there and deleted
+Model-provider credentials are separate. In local mode every Claude and OpenAI
+login lives under `DATA_DIR/credential-profiles/`, `claude-default` included;
+nothing is read from the service user's home directory. An OpenAI-compatible
+account's endpoint key lives only in its
+`credential-profiles/<id>/endpoint.json` (0600); the former
+`settings/openai-compatible.json` is migrated there and deleted
 (`docs/settings.md` "OpenAI-compatible accounts"). It is write-only: Settings
 sends it in one `PATCH …/endpoint` and shows only `apiKeyConfigured`, no agent
 tool reads or writes it, and the opt-in credential gateway leases only OpenAI
 accounts, so it never receives an endpoint's key. Moving the four integration
 secrets above does not isolate model credentials. Apply the credential-profile
-filters and preview rules independently. With the credential gateway on, the
-gateway renews these tokens in place, in the same profile files and formats; no
-new location holds them. The user's own terminal CLI shares `~/.claude` with the
-default profile (`docs/workers.md` "Renewal").
+filters and preview rules independently. With the embedded credential gateway
+on, the gateway renews these tokens in place, in the same profile files and
+formats; no new location holds them. A terminal CLI shares a profile's directory
+only when the user points it there with that profile's `CLAUDE_CONFIG_DIR`
+(`docs/workers.md` "Renewal").
+
+### Default Claude
+
+`claude-default` uses an ordinary Claude runtime directory in
+`DATA_DIR/credential-profiles/claude-default/claude/` (0700), run with
+`CLAUDE_CONFIG_DIR` set there and inherited credential variables scrubbed. A
+Claude session with no recorded account runs as it, gateway on or off; its
+binding stays NULL. It no longer inherits anything from the service user's home:
+
+- no `~/.claude` login: the user logs in again from Settings → Claude SDK;
+- no `ANTHROPIC_API_KEY`, `apiKeyHelper`, Bedrock or Vertex configuration;
+- for coding sessions, none of the personal `~/.claude` settings, `CLAUDE.md`,
+  skills, commands, agents, plugins or hooks. A user who wants some of them
+  copies them by hand into `credential-profiles/claude-default/claude/`.
+
+### Home transcript import
+
+On boot, before the gateway starts or any session runs,
+`claudeSdk/homeTranscriptImport.ts` copies Pandeck's own Default Claude
+transcripts from `~/.claude/projects` into
+`credential-profiles/claude-default/claude/projects`, once. It is the only
+server module that reads home's `.claude` (`architecture.test.ts`), and it never
+writes, renames or deletes anything under home: the untouched home folder is the
+backup.
+
+- **Selection.** Every non-deleted `claude-sdk` session row with a provider id
+  bound to `claude-default` or to no account, in any scope, archived included
+  (`db/defaultClaudeTranscriptSelection.ts`). A unit is `<key>/<id>.jsonl` plus
+  its `<key>/<id>/` tree, copied under the same `<key>`. Nothing else: no
+  terminal-only transcript, named-account session, config or credential. A unit
+  holding a link or other non-regular entry is skipped as unsupported, and so is
+  one whose `projects/`, project, `<id>/` or inner directory is no longer the
+  same real directory when it is copied or once its files are staged. That check
+  sees a directory replaced at either moment, not one replaced and restored
+  between them.
+- **Work files** in `credential-profiles/claude-default/home-import/`:
+  `state.json` (phase `backup`, `copy`, then `done`, replaced atomically with
+  fsync), `manifest.jsonl` (one fsynced line per unit: provider id, project key,
+  and each file's path, size and sha256) and `staging/`.
+- **Set-aside.** A non-empty `claude/projects/` that predates the import is
+  renamed once to `projects.before-home-import-<UTC stamp>`, under a name
+  persisted before the rename. Nothing is merged into it.
+- **Boundary before startup.** If home has a `projects/`, the import first
+  records phase `backup`, makes the set-aside, then records phase `copy`, each
+  durably. Only after that does it list home or check space. Until `copy` or
+  `done` is durable, or when the state is unreadable or unknown, the service
+  refuses to start (`docs/deployment.md`, "Default Claude transcript import"),
+  so no session writes `claude/projects/` before the old content is aside. After
+  `copy`, a retry never sets anything aside again, so sessions created or
+  appended to in between stay where they are. Every boot renews the saved
+  state's file and directory syncs before accepting `copy` or `done`; a failure
+  at or below `DATA_DIR` refuses startup even after `done`. Renewal stops at the
+  existing `DATA_DIR` inclusive, never opening or syncing its ancestors, which
+  need path traversal permission but not directory-read permission or fsync
+  support.
+- **Space.** After the boundary and before staging anything, it needs the
+  pending bytes × 1.1 + 256 MiB free on the data dir's filesystem. A unit whose
+  main file is already in `claude/projects/` is not pending. With less space it
+  logs both numbers, copies nothing and retries next boot, while the service
+  runs with the transcripts copied so far. A failed free-space query (EIO,
+  EACCES, …) defers the copy the same way. Only a runtime or filesystem without
+  `statfs` skips the check.
+- **Recovery.** Each unit is staged, recorded, then renamed into place, its main
+  file last. After that boot establishes or renews the boundary, a copy failure
+  no longer stops startup. The next boot validates and renews the saved
+  boundary, removes staging, cuts a torn manifest tail, skips installed units
+  and resumes. If `~/.claude/projects` is gone, the run ends `done` with
+  `sourceMissing` and keeps what it already installed. In that case its count
+  includes recorded units whose main file never arrived, and such a unit's
+  `<key>/<id>/` tree stays.
+- **Never delete `home-import/state.json`.** After `done` the import never reads
+  home again. Without the state the next boot sets the current `projects/` aside
+  again and copies from home anew; the only recovery is moving the set-aside
+  back by hand.
+
+In client mode (`docs/workers.md`, "Client mode"), this import still runs on
+Pandeck before it connects to the gateway. Claude's runtime and transcripts
+remain in Pandeck's local `DATA_DIR`; the import copies only its selected local
+Default/NULL transcripts, creates or remaps no account, and sends nothing to the
+gateway. The gateway owns the accounts and credentials. Its login driver uses a
+fresh directory under the gateway's state directory, not Pandeck's transcript
+root or the user's home. Local transcript completion does not log an account in
+or change the existing account bindings and default fallback.
 
 ## Supplying the service environment
 

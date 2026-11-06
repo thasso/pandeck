@@ -1,9 +1,9 @@
 /** Deferred-tool benchmark and retrospective used by `pnpm run measure:tools`. */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { userHomeDir } from "./userHome.ts";
 import { join } from "node:path";
 import type { AgentType } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
+import { claudeProjectsDirsUnder } from "./credentialProfilePaths.ts";
 import { toolGroupsFor } from "./tools/catalog.ts";
 import { rankToolSearch } from "./tools/findTools.ts";
 import { toolDefinitionChars } from "./tools/toolExposure.ts";
@@ -74,7 +74,11 @@ export interface ToolMeasurementReport {
 export function measureTools(
   options: {
     dataDir?: string;
-    claudeProjectsDir?: string;
+    /**
+     * The credential-profiles root whose every `<account>/claude/projects` is
+     * read; defaults to `<dataDir>/credential-profiles`, and `""` skips them.
+     */
+    credentialProfilesRoot?: string;
     payloadProbeFile?: string;
   } = {},
 ): ToolMeasurementReport {
@@ -110,9 +114,13 @@ export function measureTools(
   });
 
   const appLogs = appSessionLogs(join(dataDir, "sessions"));
-  const claudeRoot =
-    options.claudeProjectsDir ?? join(userHomeDir(), ".claude", "projects");
-  const claudeLogs = filesEnding(claudeRoot, ".jsonl");
+  const profilesRoot =
+    options.credentialProfilesRoot ?? join(dataDir, "credential-profiles");
+  const claudeLogs = profilesRoot
+    ? claudeProjectsDirsUnder(profilesRoot).flatMap((root) =>
+        filesEnding(root, ".jsonl"),
+      )
+    : [];
   const activity = [...appLogs, ...claudeLogs].map(readActivity);
   const loadedNames = activity.reduce((sum, row) => sum + row.loaded, 0);
   const calledAfterLoad = activity.reduce((sum, row) => sum + row.used, 0);

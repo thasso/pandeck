@@ -14,8 +14,10 @@
  *   pnpm run measure:session -- <sessionId> --entry e42-22f3c714   # drill-down
  *   pnpm run measure:session -- <sessionId> --run 7                # provider call
  *
- * The data dir is opened READ-ONLY; nothing here writes. `--no-claude-transcripts`
- * skips the `~/.claude/projects` join, which is the only read outside DATA_DIR.
+ * The data dir is opened READ-ONLY; nothing here writes. A Claude session's CLI
+ * transcript is read from its account's
+ * `<data dir>/credential-profiles/<account>/claude/projects` (no account means
+ * `claude-default`); `--no-claude-transcripts` skips that join.
  */
 import { DATA_DIR } from "./config.ts";
 import { catalogAuditInventory } from "./tools/catalog.ts";
@@ -402,7 +404,7 @@ function main(): void {
   const providerRun = intArg("run");
   const source = resolveAuditSourceFromDataDir(sessionId, dataDir, {
     ...(process.argv.includes("--no-claude-transcripts")
-      ? { claudeProjectsDir: undefined }
+      ? { credentialProfilesRoot: undefined }
       : {}),
   });
   const report = auditSession(source, {

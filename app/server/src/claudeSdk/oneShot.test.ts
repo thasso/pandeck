@@ -492,12 +492,8 @@ test("AC8: with a server lease the child's only credential is the lease at the g
       assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "fake-server-lease");
       assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
       assert.equal(env.ANTHROPIC_API_KEY, undefined);
-      assert.equal(
-        env.CLAUDE_CONFIG_DIR,
-        profileId === DEFAULT_CLAUDE_PROFILE_ID
-          ? undefined
-          : claudeConfigDir(profileId),
-      );
+      // The default is a DATA_DIR account like any other, never ~/.claude.
+      assert.equal(env.CLAUDE_CONFIG_DIR, claudeConfigDir(profileId));
       for (const value of Object.values(inherited))
         assert.ok(!Object.values(env).includes(value), profileId);
 

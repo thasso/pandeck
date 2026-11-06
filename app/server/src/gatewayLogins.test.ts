@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -28,8 +29,16 @@ process.env.HOME = home;
 
 const profiles = await import("./credentialProfiles.ts");
 const { attachClaudeLoginSocket } = await import("./claudeLoginTerminal.ts");
-const { createRemoteAccount, deleteRemoteAccount, startRemoteCodexLogin } =
-  await import("./remoteLogins.ts");
+const {
+  createRemoteAccount,
+  deleteRemoteAccount,
+  remoteLoginsActive,
+  startRemoteCodexLogin,
+} = await import("./remoteLogins.ts");
+const {
+  homeTranscriptImportStartupRefusal,
+  importDefaultClaudeHomeTranscripts,
+} = await import("./claudeSdk/homeTranscriptImport.ts");
 const { startGatewayClientLink } = await import("./gatewayClientLink.ts");
 const { startGateway } = await import("./gateway/gateway.ts");
 const { enrollRelay, startRelay } = await import("./relay/relay.ts");
@@ -56,7 +65,9 @@ afterAll(async () => {
 const expires = () => Date.now() + 3_600_000;
 
 /** Claude's fake CLI: prints a URL, takes the pasted code, writes a token. */
+const claudeLoginDirs: string[] = [];
 const fakeClaude: LoginDriver = (configDir, events) => {
+  claudeLoginDirs.push(configDir);
   let settle!: { resolve: () => void; reject: (err: Error) => void };
   const done = new Promise<void>((resolve, reject) => {
     settle = { resolve, reject };
@@ -139,6 +150,43 @@ function viewer(profileId: string) {
 }
 
 test("a client-mode server adds and logs in accounts through the gateway", async () => {
+  // Import affects only this Pandeck's runtime/transcripts, before any gateway
+  // connection. Its default account's credential will belong to the gateway.
+  const projectKey = "-fixture-repo";
+  const providerId = "fixture-default-session";
+  const source = join(home, ".claude", "projects");
+  // Startup creates DATA_DIR before the importer; its boundary must exist.
+  mkdirSync(DATA_DIR, { recursive: true });
+  mkdirSync(join(source, projectKey), { recursive: true });
+  const transcript = '{"type":"user","text":"fixture transcript"}\n';
+  writeFileSync(join(source, projectKey, `${providerId}.jsonl`), transcript);
+  const profileRoot = join(
+    DATA_DIR,
+    "credential-profiles",
+    profiles.DEFAULT_CLAUDE_PROFILE_ID,
+  );
+  assert.equal(
+    await homeTranscriptImportStartupRefusal(() =>
+      importDefaultClaudeHomeTranscripts({
+        homeProjectsDir: source,
+        profileRoot,
+        dataDir: DATA_DIR,
+        providerSessionIds: () => [providerId],
+        freeBytes: async () => undefined,
+      }),
+    ),
+    undefined,
+  );
+  const localConfig = join(profileRoot, "claude");
+  const installed = join(
+    localConfig,
+    "projects",
+    projectKey,
+    `${providerId}.jsonl`,
+  );
+  assert.equal(readFileSync(installed, "utf8"), transcript);
+  assert.equal(existsSync(join(localConfig, ".credentials.json")), false);
+  assert.equal(remoteLoginsActive(), false);
   const upstreams = await startFakeUpstreams({
     claude: fakeClaudeStream("hi"),
     codex: fakeCodexStream("hello"),
@@ -162,6 +210,16 @@ test("a client-mode server adds and logs in accounts through the gateway", async
     name: "Old Claude",
     enabled: true,
     tokenFile: claudeFile,
+    userId: "thasso",
+  });
+
+  const { claudeFile: defaultFile } = await writeTokenFiles();
+  edge.putAccount({
+    id: profiles.DEFAULT_CLAUDE_PROFILE_ID,
+    provider: "claude",
+    name: "Default Claude",
+    enabled: true,
+    tokenFile: defaultFile,
     userId: "thasso",
   });
 
@@ -193,6 +251,30 @@ test("a client-mode server adds and logs in accounts through the gateway", async
   const status = (id: string) =>
     profiles.credentialProfileSummaryById(id)?.status;
   const tempDirs = () => readdirSync(join(gatewayDir, "login-tmp"));
+
+  assert.equal(remoteLoginsActive(), true);
+  assert.equal(
+    profiles.claudeProfileRuntime(profiles.DEFAULT_CLAUDE_PROFILE_ID).configDir,
+    localConfig,
+  );
+  const defaultLogin = viewer(profiles.DEFAULT_CLAUDE_PROFILE_ID);
+  await vi.waitFor(() => assert.match(defaultLogin.output(), /Paste code/));
+  assert.ok(
+    claudeLoginDirs
+      .at(-1)
+      ?.startsWith(join(gatewayDir, "login-tmp", "claude-")),
+  );
+  assert.notEqual(claudeLoginDirs.at(-1), localConfig);
+  defaultLogin.type({ type: "input", data: "default-fixture" });
+  await vi.waitFor(() => assert.equal(defaultLogin.status(), "ready"));
+  assert.match(readFileSync(defaultFile, "utf8"), /claude-default-fixture/);
+  assert.equal(existsSync(join(localConfig, ".credentials.json")), false);
+  assert.equal(readFileSync(installed, "utf8"), transcript);
+  assert.equal(
+    readFileSync(join(source, projectKey, `${providerId}.jsonl`), "utf8"),
+    transcript,
+  );
+  assert.deepEqual(tempDirs(), []);
 
   // Claude: adding the account starts its login; the pasted code reaches the
   // driver and the account turns ready with the new token.
@@ -275,6 +357,6 @@ test("a client-mode server adds and logs in accounts through the gateway", async
       .credentialProfilesOfKind("claude")
       .map((p) => p.id)
       .sort(),
-    [claudeId, "claude-old"].sort(),
+    [claudeId, "claude-old", profiles.DEFAULT_CLAUDE_PROFILE_ID].sort(),
   );
 });

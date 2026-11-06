@@ -10,15 +10,18 @@ import type { EngineGatewayAccess } from "./workerProtocol/engineMethods.ts";
 
 /** What a Claude credential profile changes in the CLI's environment. */
 export interface ClaudeProfileRuntime {
-  /** `CLAUDE_CONFIG_DIR`; absent for the default profile's `~/.claude`. */
+  /**
+   * `CLAUDE_CONFIG_DIR`: the account's directory under DATA_DIR. Every account
+   * sets it, `claude-default` included (`claudeProfileRuntime`).
+   */
   configDir?: string;
 }
 
 /**
  * `base` without undefined entries. With a profile, provider switches and
  * credentials never leak from the service into it: only ordinary process
- * settings (PATH, locale, proxy, etc.) stay, and a named profile binds the CLI
- * to its config directory.
+ * settings (PATH, locale, proxy, etc.) stay, and the profile binds the CLI to
+ * its config directory.
  */
 export function claudeChildEnvironment(
   base: NodeJS.ProcessEnv,

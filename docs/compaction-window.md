@@ -118,9 +118,11 @@ range:
   `settings: { ...CLAUDE_SDK_HARNESS_SETTINGS, autoCompactWindow }` when a value
   is stored. It then also drops `CLAUDE_CODE_AUTO_COMPACT_WINDOW` from the
   environment, because the CLI reads that variable before any settings. With
-  nothing stored, settings and environment are exactly as before. This includes
-  an unbound session that inherits the server's variable. One-shot and usage
-  queries never take a window, and `idleCompaction` is never set.
+  nothing stored, settings and environment are exactly as before. No session
+  inherits the server's variable: every Claude session, an unbound one included,
+  runs as an account whose scrub drops every `CLAUDE_*` variable
+  (`docs/workers.md` U9). One-shot and usage queries never take a window, and
+  `idleCompaction` is never set.
 - **A running process keeps the window it started with.** The CLI fixes the
   window when a query starts. `applyFlagSettings({ autoCompactWindow })` is
   accepted on a running process, but it changes neither the reported threshold

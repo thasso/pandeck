@@ -664,7 +664,7 @@ function UsageMeter({
   );
 }
 
-function ClaudeUsageContent({
+export function ClaudeUsageContent({
   snapshot,
   now,
 }: {
@@ -674,8 +674,8 @@ function ClaudeUsageContent({
   if (!snapshot.rateLimitsAvailable) {
     return (
       <EmptyBox>
-        Plan rate limits are not available for this connection
-        (API-key/Bedrock/Vertex sessions have no 5-hour or weekly caps).
+        Plan rate limits are not available for this connection: this Claude
+        login reports no 5-hour or weekly limits.
       </EmptyBox>
     );
   }

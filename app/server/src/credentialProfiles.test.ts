@@ -151,17 +151,43 @@ test("enterprise metadata is explicit, durable, and change-notified", () => {
   );
 });
 
-test("the protected Claude default reflects the normal user login without an isolated terminal override", () => {
+test("the protected Claude default is an isolated DATA_DIR account like any named one, never ~/.claude", () => {
   ensureDefaultPiProfile();
-  const defaultConfig = join(process.env.HOME!, ".claude");
-  const disconnected = listCredentialProfiles().find(
+  const defaultConfig = join(root, "claude-default", "claude");
+  assert.equal(claudeConfigDir("claude-default"), defaultConfig);
+  assert.equal(mode(defaultConfig), 0o700);
+  assert.deepEqual(claudeProfileRuntime("claude-default"), {
+    configDir: defaultConfig,
+  });
+
+  // Logged out, its summary is a named account's but for id, name and path.
+  const named = createCredentialProfile({
+    name: "Claude named",
+    provider: "claude",
+  });
+  const summaries = listCredentialProfiles();
+  const disconnected = summaries.find(
     (profile) => profile.id === "claude-default",
   );
+  const namedSummary = summaries.find((profile) => profile.id === named.id);
   assert.equal(disconnected?.status, "disconnected");
   assert.equal(disconnected?.setup?.path, defaultConfig);
-  assert.equal(disconnected?.setup?.command, "claude");
+  assert.equal(
+    disconnected?.setup?.command,
+    `CLAUDE_CONFIG_DIR='${defaultConfig}' claude`,
+  );
+  const comparable = (summary: (typeof summaries)[number] | undefined) => ({
+    status: summary?.status,
+    health: summary?.health,
+    setup: {
+      ...summary?.setup,
+      path: summary?.setup?.path.replace(/[^/]+\/claude$/, "<id>/claude"),
+      command: summary?.setup?.command.replace(/'[^']*'/, "<dir>"),
+    },
+  });
+  assert.deepEqual(comparable(disconnected), comparable(namedSummary));
+  assert.doesNotMatch(JSON.stringify(disconnected), /~\/\.claude/);
 
-  mkdirSync(defaultConfig, { recursive: true });
   writeFileSync(
     join(defaultConfig, ".credentials.json"),
     '{"token":"default-secret"}',
@@ -172,13 +198,16 @@ test("the protected Claude default reflects the normal user login without an iso
   );
   assert.equal(ready?.status, "ready");
   assert.equal(ready?.setup, undefined);
-  const environment = claudeProfileEnvironment("claude-default");
-  assert.equal(
-    environment.CLAUDE_CONFIG_DIR,
-    undefined,
-    "the SDK should use the ordinary ~/.claude resolution",
-  );
+  setChildProcessEnvOverlay({ ANTHROPIC_API_KEY: "ambient-api-key" });
+  try {
+    const environment = claudeProfileEnvironment("claude-default");
+    assert.equal(environment.CLAUDE_CONFIG_DIR, defaultConfig);
+    assert.equal(environment.ANTHROPIC_API_KEY, undefined);
+  } finally {
+    setChildProcessEnvOverlay(null);
+  }
   assert.doesNotMatch(JSON.stringify(ready), /default-secret/);
+  assert.equal(existsSync(join(process.env.HOME!, ".claude")), false);
 });
 
 test("fresh profiles never import home auth implicitly, but explicit legacy import remains available", () => {
@@ -318,7 +347,9 @@ test("a Claude profile's runtime half is only its config directory, validated on
     name: "OpenAI runtime",
     provider: "openai-codex",
   });
-  assert.deepEqual(claudeProfileRuntime("claude-default"), {});
+  assert.deepEqual(claudeProfileRuntime("claude-default"), {
+    configDir: join(root, "claude-default", "claude"),
+  });
   assert.deepEqual(claudeProfileRuntime(claude.id), {
     configDir: claudeConfigDir(claude.id),
   });

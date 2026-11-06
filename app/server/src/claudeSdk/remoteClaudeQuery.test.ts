@@ -41,7 +41,6 @@ const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings } = await import("../settings.ts");
 const profiles = await import("../credentialProfiles.ts");
-const { childProcessEnv } = await import("../subprocessEnv.ts");
 const {
   answerNextInProcessWorkerCallForTests,
   inProcessWorkerEnginesForTests,
@@ -345,10 +344,12 @@ test.each([
       const spec = decodeEngineOpen(sent).spec as {
         env: { profile?: { configDir?: string } };
       };
-      if (profile === "named")
-        assert.deepEqual(spec.env.profile, {
-          configDir: profiles.claudeConfigDir(profileId!),
-        });
+      // No profile runs as the default's DATA_DIR account, link or not.
+      const runsAs = profileId ?? profiles.DEFAULT_CLAUDE_PROFILE_ID;
+      assert.deepEqual(spec.env.profile, {
+        configDir: profiles.claudeConfigDir(runsAs),
+      });
+      assert.equal("gateway" in decodeEngineOpen(sent), false);
 
       const env = queries[0]!.env;
       const tmp = env.TMPDIR!;
@@ -360,15 +361,14 @@ test.each([
         thinkingLevel: "medium",
         abortController: new AbortController(),
         env: {
-          ...(profileId
-            ? profiles.claudeProfileEnvironment(profileId)
-            : childProcessEnv()),
+          ...profiles.claudeProfileEnvironment(runsAs),
           TMPDIR: tmp,
           CLAUDE_CODE_TMPDIR: tmp,
         },
       }).env;
       assert.deepEqual(env, expected);
-      assert.equal(env.ANTHROPIC_API_KEY, profileId ? undefined : SENTINEL);
+      assert.equal(env.ANTHROPIC_API_KEY, undefined);
+      assert.equal(env.CLAUDE_CONFIG_DIR, profiles.claudeConfigDir(runsAs));
       queries[0]!.output.emit(result("hosted-env"));
       await turn;
     } finally {
@@ -381,19 +381,14 @@ test.each([
 );
 
 /** A turn's environment with the switch off, as the env test above builds it. */
-function switchOffEnv(
-  profileId: string | undefined,
-  tmp: string,
-): Record<string, string> {
+function switchOffEnv(profileId: string, tmp: string): Record<string, string> {
   return buildClaudeSdkQueryOptions({
     cwd: dataDir,
     modelId: "sonnet",
     thinkingLevel: "medium",
     abortController: new AbortController(),
     env: {
-      ...(profileId
-        ? profiles.claudeProfileEnvironment(profileId)
-        : childProcessEnv()),
+      ...profiles.claudeProfileEnvironment(profileId),
       TMPDIR: tmp,
       CLAUDE_CODE_TMPDIR: tmp,
     },
@@ -422,6 +417,14 @@ function splitGatewayEnv(env: Record<string, string | undefined>): {
 }
 
 /** One hosted query opened directly, on a session binding of its own. */
+/** `spec` with its env's profile removed. */
+function withoutProfile(
+  spec: Record<string, unknown>,
+): Record<string, unknown> {
+  const { profile: _profile, ...env } = spec.env as Record<string, unknown>;
+  return { ...spec, env };
+}
+
 async function openDirect(
   query: (params: ClaudeQueryParams) => ClaudeQuery,
   options: {
@@ -1024,7 +1027,10 @@ test("with a gateway link, a profiled session's turns, its account switch and a 
     const env = plain.queries[0]!.env;
     assert.equal(env.ANTHROPIC_API_KEY, undefined);
     assert.ok(!Object.values(env).includes(SENTINEL));
-    assert.equal(env.CLAUDE_CONFIG_DIR, undefined);
+    assert.equal(
+      env.CLAUDE_CONFIG_DIR,
+      profiles.claudeConfigDir(profiles.DEFAULT_CLAUDE_PROFILE_ID),
+    );
     assert.equal(
       env.ANTHROPIC_BASE_URL,
       `${gateway.link.gateway!.url}/anthropic`,
@@ -1082,7 +1088,10 @@ test("with a gateway link, a profiled session's turns, its account switch and a 
     });
     assert.equal(leaseOf(compactEnv.CLAUDE_CODE_OAUTH_TOKEN), compact!.leaseId);
     assert.equal(compactEnv.ANTHROPIC_API_KEY, undefined);
-    assert.equal(compactEnv.CLAUDE_CONFIG_DIR, undefined);
+    assert.equal(
+      compactEnv.CLAUDE_CONFIG_DIR,
+      profiles.claudeConfigDir(profiles.DEFAULT_CLAUDE_PROFILE_ID),
+    );
     await until(() => lease(compact!.leaseId)?.revoked === "session-ended");
     assert.equal(compactingPlain.credentialProfileId, undefined);
   } finally {
@@ -1094,7 +1103,7 @@ test("with a gateway link, a profiled session's turns, its account switch and a 
   await until(() => inProcessWorkerEnginesForTests() === 0);
 });
 
-test("without a link, a session's open carries no gateway access and its env is today's", async () => {
+test("without a link, a session with no account still runs as the default's DATA_DIR account, scrubbed and unleased", async () => {
   assert.equal(installedGatewayLink(), undefined);
   const { session, queries } = makeSession();
   let sent: Payload | undefined;
@@ -1110,12 +1119,19 @@ test("without a link, a session's open carries no gateway access and its env is 
     await until(() => queries.length === 1);
     assert.equal("gateway" in decodeEngineOpen(sent!), false);
     const env = queries[0]!.env;
-    assert.equal(env.ANTHROPIC_API_KEY, SENTINEL);
+    assert.equal(env.ANTHROPIC_API_KEY, undefined);
+    assert.ok(!Object.values(env).includes(SENTINEL));
+    assert.equal(
+      env.CLAUDE_CONFIG_DIR,
+      profiles.claudeConfigDir(profiles.DEFAULT_CLAUDE_PROFILE_ID),
+    );
     assert.equal(env.ANTHROPIC_BASE_URL, undefined);
     assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
     assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, undefined);
     queries[0]!.output.emit(result("off"));
     await turn;
+    assert.equal(session.credentialProfileId, undefined);
+    assert.equal(sessionStore.get(session.id)?.credentialProfileId, undefined);
   } finally {
     disarm();
     session.dispose();
@@ -1125,6 +1141,8 @@ test("without a link, a session's open carries no gateway access and its env is 
 
 test("a Claude engine opened with gateway access and no profile is refused before any query", async () => {
   let queried = 0;
+  // The server always sends a profile now (a session with none runs as the
+  // default); the Worker still refuses an open that lacks one.
   const disarm = answerNextInProcessWorkerCallForTests(
     ENGINE_METHODS.open,
     (payload, signal, real) =>
@@ -1133,6 +1151,9 @@ test("a Claude engine opened with gateway access and no profile is refused befor
           ...payload,
           json: {
             ...(payload.json as object),
+            spec: withoutProfile(
+              (payload.json as { spec: Record<string, unknown> }).spec,
+            ),
             gateway: {
               baseUrl: "http://127.0.0.1:8788",
               leaseToken: LEASE_TOKEN,

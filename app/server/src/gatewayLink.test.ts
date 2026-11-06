@@ -29,6 +29,8 @@ const home = mkdtempSync(join(tmpdir(), "gateway-link-home-"));
 process.env.HOME = home;
 
 const profiles = await import("./credentialProfiles.ts");
+const { CREDENTIAL_PROFILES_ROOT } =
+  await import("./credentialProfilePaths.ts");
 const {
   openAiCompatibleEndpointPath,
   readOpenAiCompatibleEndpoint,
@@ -328,8 +330,8 @@ test("boot: hello as this process, sync every profile, then reconcile the in-pro
     CONTROL_METHODS.grant,
   ]);
 
-  // The registry is every profile, the default Claude one at the user's own
-  // `~/.claude`, which the link only names.
+  // The registry is every profile, the default Claude one in its own DATA_DIR
+  // directory like any named one, never `~/.claude`.
   const expected = profiles
     .listCredentialProfiles()
     .map((profile) => ({
@@ -352,7 +354,12 @@ test("boot: hello as this process, sync every profile, then reconcile the in-pro
   assert.equal(
     expected.find((p) => p.id === profiles.DEFAULT_CLAUDE_PROFILE_ID)
       ?.tokenFile,
-    join(home, ".claude", ".credentials.json"),
+    join(
+      CREDENTIAL_PROFILES_ROOT,
+      profiles.DEFAULT_CLAUDE_PROFILE_ID,
+      "claude",
+      ".credentials.json",
+    ),
   );
   assert.equal(existsSync(join(home, ".claude")), false);
 

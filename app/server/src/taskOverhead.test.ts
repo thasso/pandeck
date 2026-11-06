@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
@@ -82,7 +89,7 @@ test("a bookkeeping-only turn is charged one round trip and its continuation's i
   const report = measureTaskOverhead({
     beforeEndMs: BEFORE_MS + 1,
     afterStartMs: AFTER_MS,
-    claudeProjectsDir: "",
+    credentialProfilesRoot: "",
   });
   const session = report.sessions.find((s) => s.sessionId === id);
   assert.ok(session, "the pi session was measured");
@@ -116,7 +123,7 @@ test("Task calls before the first real tool call are the pre-work opening", () =
   const report = measureTaskOverhead({
     beforeEndMs: BEFORE_MS + 1,
     afterStartMs: AFTER_MS,
-    claudeProjectsDir: "",
+    credentialProfilesRoot: "",
   });
   const session = report.sessions.find((s) => s.sessionId === id);
   assert.ok(session);
@@ -168,7 +175,7 @@ for (const format of ["legacy", "split"] as const)
     const report = measureTaskOverhead({
       beforeEndMs: BEFORE_MS + 1,
       afterStartMs: AFTER_MS,
-      claudeProjectsDir: "",
+      credentialProfilesRoot: "",
     });
     const session = report.sessions.find((s) => s.sessionId === id);
     assert.ok(session);
@@ -186,6 +193,112 @@ for (const format of ["legacy", "split"] as const)
       before.taskAttachedSessions > before.perAttachedSession.measuredSessions,
     );
   });
+
+/** One assistant line of a Claude CLI transcript: a provider call. */
+function claudeCall(requestId: string, toolName: string): string {
+  return JSON.stringify({
+    type: "assistant",
+    requestId,
+    message: {
+      usage: { input_tokens: 10 },
+      content: [{ type: "tool_use", name: toolName, input: { id: "8" } }],
+    },
+  });
+}
+
+test("Claude CLI transcripts are read from every account under the data dir, never from HOME", () => {
+  const stamp = Date.now();
+  const sessions = [
+    { id: `overhead-default-${stamp}`, account: "claude-default" },
+    { id: `overhead-named-${stamp}`, account: "claude-work" },
+  ];
+  for (const { id, account } of sessions) {
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "developer",
+      title: id,
+      createdAt: BEFORE_MS,
+      updatedAt: BEFORE_MS,
+      providerSessionId: `${id}-provider`,
+      credentialProfileId: account,
+    });
+    const dir = join(
+      DATA_DIR,
+      "credential-profiles",
+      account,
+      "claude",
+      "projects",
+      "-work-repo",
+    );
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${id}-provider.jsonl`),
+      `${claudeCall("r1", "mcp__pa__task_read")}\n${claudeCall("r2", "Bash")}\n`,
+    );
+  }
+  // The same kind of transcript under the old home location is never found.
+  const homeOnly = `overhead-home-${stamp}`;
+  sessionStore.upsert({
+    id: homeOnly,
+    harness: "claude-sdk",
+    agentType: "developer",
+    title: homeOnly,
+    createdAt: BEFORE_MS,
+    updatedAt: BEFORE_MS,
+    providerSessionId: `${homeOnly}-provider`,
+  });
+  // A throwaway HOME, so the decoy never lands in whatever HOME the run has.
+  const home = mkdtempSync(join(tmpdir(), "overhead-home-"));
+  const previousHome = process.env.HOME;
+  const homeDir = join(home, ".claude", "projects", "-work-repo");
+  mkdirSync(homeDir, { recursive: true });
+  writeFileSync(
+    join(homeDir, `${homeOnly}-provider.jsonl`),
+    `${claudeCall("r1", "Bash")}\n`,
+  );
+
+  process.env.HOME = home;
+  let report: ReturnType<typeof measureTaskOverhead>;
+  try {
+    report = measureTaskOverhead({
+      beforeEndMs: BEFORE_MS + 1,
+      afterStartMs: AFTER_MS,
+    });
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
+  assert.equal(
+    report.credentialProfilesRoot,
+    join(DATA_DIR, "credential-profiles"),
+  );
+  for (const { id } of sessions) {
+    const session = report.sessions.find((s) => s.sessionId === id);
+    assert.ok(session, id);
+    assert.equal(session.source, "claude-transcript", id);
+    assert.equal(session.providerCalls, 2, id);
+  }
+  // No transcript under DATA_DIR and no store: not resolved from HOME.
+  assert.equal(
+    report.sessions.find((s) => s.sessionId === homeOnly)?.source,
+    undefined,
+  );
+  assert.ok(existsSync(homeDir));
+  rmSync(home, { recursive: true, force: true });
+
+  const off = measureTaskOverhead({
+    beforeEndMs: BEFORE_MS + 1,
+    afterStartMs: AFTER_MS,
+    credentialProfilesRoot: "",
+  });
+  assert.equal(off.credentialProfilesRoot, undefined);
+  for (const { id } of sessions)
+    assert.notEqual(
+      off.sessions.find((s) => s.sessionId === id)?.source,
+      "claude-transcript",
+    );
+});
 
 test("a batched closeout is one call carrying several lifecycle steps", () => {
   const steps = lifecycleStepsOf("task_manage", {

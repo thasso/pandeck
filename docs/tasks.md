@@ -596,6 +596,11 @@ DATA_DIR=/home/alice/assistant-data pnpm run measure:tasks           # markdown 
 DATA_DIR=/home/alice/assistant-data pnpm run measure:tasks -- --json  # every session, raw
 ```
 
+Claude CLI transcripts are read from every account under the data dir
+(`credential-profiles/*/claude/projects`), never from home. The removed
+`--claude-projects` and `--claude-projects-dir` overrides are not supported;
+`--no-claude-transcripts` skips transcripts.
+
 **The unit is PROVIDER CALLS, not tool-output bytes.** A tool call cannot end a
 turn, so it forces a continuation call that reprocesses the conversation; a turn
 whose tool calls are ALL `task_*` is bookkeeping-only, and that continuation is
@@ -606,12 +611,13 @@ here as a win rather than as unchanged call counts.
 Two limits are structural and the report states both rather than papering over
 them. Only a source with per-call usage can resolve round trips: pi's
 `native.jsonl` always can, a Claude session can when its CLI transcript under
-`~/.claude/projects` still exists (about half of them), and the app's own
-`claude-sdk/<id>.json` never can, because it collapses a whole turn into one
-entry. Those sessions still contribute call counts, and every average names the
-cohort it was computed over. And the windows are not a single instant: the
-slices landed over one day, so sessions started between the first and the last
-are reported as `transition` and excluded.
+its account's `DATA_DIR/credential-profiles/<account>/claude/projects` still
+exists (Default Claude's were copied there from `~/.claude/projects` once, about
+half of them), and the app's own `claude-sdk/<id>.json` never can, because it
+collapses a whole turn into one entry. Those sessions still contribute call
+counts, and every average names the cohort it was computed over. And the windows
+are not a single instant: the slices landed over one day, so sessions started
+between the first and the last are reported as `transition` and excluded.
 
 ### The reduction (measured 2026-08-02)
 

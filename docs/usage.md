@@ -15,10 +15,10 @@ accounts and approved peer runtimes remain pinned.
 
 ## Sources
 
-| Provider       | Source                                                                                                             | Windows                                                                   | "No data" case                                        | Fetch cost                                                 |
-| -------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
-| `claude`       | Claude Agent SDK experimental usage control request; under the gateway, `GET /api/oauth/usage` through the gateway | 5-hour, weekly, per-model weekly, generic `limits[]`, extra-usage credits | `rateLimitsAvailable: false` (API key/Bedrock/Vertex) | CLI subprocess, seconds; under the gateway, one HTTPS call |
-| `openai-codex` | ChatGPT backend `GET /backend-api/wham/usage`                                                                      | 5-hour, weekly, named model caps, spend control, reset credits            | `available: false` (missing/expired token)            | one HTTPS call, sub-second                                 |
+| Provider       | Source                                                                                                             | Windows                                                                   | "No data" case                                                              | Fetch cost                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `claude`       | Claude Agent SDK experimental usage control request; under the gateway, `GET /api/oauth/usage` through the gateway | 5-hour, weekly, per-model weekly, generic `limits[]`, extra-usage credits | `rateLimitsAvailable: false` (the login reports no 5-hour or weekly limits) | CLI subprocess, seconds; under the gateway, one HTTPS call |
+| `openai-codex` | ChatGPT backend `GET /backend-api/wham/usage`                                                                      | 5-hour, weekly, named model caps, spend control, reset credits            | `available: false` (missing/expired token)                                  | one HTTPS call, sub-second                                 |
 
 Those are the only two `CredentialProfileSummary.provider` values, so both card
 types show real data. Fetchers live in `claudeSdk/usageQuery.ts`,
@@ -273,9 +273,9 @@ or none.
   says a fetch is actually running — a flat track next to `—` is the honest
   other case (nothing known, nothing being done about it, e.g. an account deep
   in failure backoff). Where there is no meter the row says why rather than
-  showing an empty one — `no plan limits` (Claude API key/Bedrock/Vertex),
-  `sign in` (OpenAI credentials missing/expired), `no weekly limit` (a provider
-  with a single window).
+  showing an empty one — `no plan limits` (a Claude login that reports no 5-hour
+  or weekly limits), `sign in` (OpenAI credentials missing/expired),
+  `no weekly limit` (a provider with a single window).
 - Errors never reach the card: the last good value stays, marked stale. Error
   text belongs on the Usage page.
 - Nothing depends on hover, and the existing snap-scroll row carries the mobile

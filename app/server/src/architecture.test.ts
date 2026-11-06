@@ -637,6 +637,52 @@ test("server code resolves the home directory only through userHome.ts", () => {
 });
 
 /**
+ * Pandeck no longer reads the user's home directory for Claude: every account,
+ * `claude-default` included, lives under `DATA_DIR/credential-profiles/`
+ * (`docs/credential-distribution.md`). The one-time transcript import is the
+ * only module that may join home with `.claude`, and it only reads there. The
+ * list is exact: an entry the code no longer needs fails too.
+ */
+test("only the home transcript import joins the home directory with .claude", () => {
+  const home = /\buserHomeDir\b|\bprocess\.env\.HOME\b|\benv\.HOME\b/;
+  const claudeDir = /["'`/]\.claude(?![\w.-])/;
+  const offenders: string[] = [];
+  for (const path of sourceFiles(SRC_ROOT)) {
+    const file = relative(SRC_ROOT, path);
+    // Comments may name `~/.claude`; only code reads it.
+    const source = readFileSync(path, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    if (home.test(source) && claudeDir.test(source)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, ["claudeSdk/homeTranscriptImport.ts"]);
+});
+
+test("the home import refusal precedes local/client gateway startup, login drivers and listening", () => {
+  const source = readFileSync(join(SRC_ROOT, "index.ts"), "utf8");
+  const gate = source.indexOf(
+    "const homeImportRefusal = await homeTranscriptImportStartupRefusal();",
+  );
+  const refused = source.indexOf(
+    "if (homeImportRefusal !== undefined) {",
+    gate,
+  );
+  const exit = source.indexOf("process.exit(1);", refused);
+  assert.ok(gate >= 0 && refused > gate && exit > refused);
+  for (const call of [
+    "if (GATEWAY_RELAY)",
+    "startGatewayClientLink({",
+    "startGatewayLink({",
+    "loginDrivers: {",
+    "server.listen(",
+  ])
+    assert.ok(
+      source.indexOf(call) > exit,
+      `${call} must wait for the whole-service import gate`,
+    );
+});
+
+/**
  * The Claude token endpoint override is a test seam (RD-G5a-4): production
  * code only declares it and hands it down, from the link's options to the
  * gateway's to its renewal. No env, config, settings or control path sets it,

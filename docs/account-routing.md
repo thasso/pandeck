@@ -90,12 +90,10 @@ Evidence rules:
   history is durable. Health reads are pure lookups. Registry listing is the
   single publication point: it reads credential presence, records connection
   history and broadcasts only a changed alert projection. Runtime success never
-  establishes credential-presence history. A default Claude account using an API
-  key or apiKeyHelper without an OAuth credential file remains card-only "Not
-  connected.", even after successful runs or usage and across restart. Every
-  health mutation ends with one listing. File changes alone have no filesystem
-  watch; the next listing clears a derived alert when credentials reappear, even
-  without a registry event. Observed rejection remains until positive proof.
+  establishes credential-presence history. Every health mutation ends with one
+  listing. File changes alone have no filesystem watch; the next listing clears
+  a derived alert when credentials reappear, even without a registry event.
+  Observed rejection remains until positive proof.
 - OpenAI usage with `available: true` marks the account `ok`; `rejected` marks
   it `needs-login`. `not-signed-in` is not runtime evidence because an
   unreadable or partially rewritten auth file also produces it. Credential

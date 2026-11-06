@@ -179,34 +179,37 @@ launches that worker with `process.execPath`, which is the packaged Bun runtime
 in this package; Pandeck's current JSDOM use does not issue synchronous XHR.
 
 The package's install check boots from an unrelated temporary cwd and data
-directory, applies exactly the migration set named by the packaged lock to a
-fresh database, checks health, web and WebSocket service, verifies the native
-process executable, restarts against the same database, and asserts the explicit
-file set. A wrong-token WebSocket upgrade must be answered with an
-`HTTP/1.1 401` status line within 5 s and never open. A granted port-forward
-session echoes 1 MiB through a local TCP target in frames of at most 64 KiB, and
-both the target's end and the client's close end it. The restart is a Claude
-session's whole life, driven over the WebSocket with
-`scripts/fake-claude-cli.mjs` standing in for the Claude CLI through the
-existing `ASSISTANT_CLAUDE_CLI_BIN` override, so no account or network is
-involved. The fake speaks the SDK's stream-json protocol and answers each prompt
-with `Fake reply to: <prompt>`. The session is created with a turn, opened while
-resident, released once unviewed, opened by a reader from storage and released
-again, resumed for a second turn with `--resume`, and deleted through the
-one-transaction delete. Every open must show the model and thinking level it was
-created with. That boot runs the same `server.js` under the packaged Bun with
-`scripts/bun-check-short-graces.mjs` preloaded, a check-only file that shortens
-the two release graces to 200 ms. The check waits for the server's
-`[sessions] released <id>: …` lines. Before the first boot, in both modes, a
-separate boot preloads `scripts/bun-check-collected-file-handle.mjs`, which
-`BUN_OPTIONS` also carries into the spawn broker. On SIGWINCH each process that
-loaded it leaks three FileHandles on a disposable file and forces collection,
-and it installs no handler of its own. The server, and in broker mode the
-broker, must keep running and log the production warning; without the guard,
-either one exits. A SIGUSR1 must leave the server running and write a private
-V8-format heap snapshot, and a second one right after must write nothing. The
-check starts every process in its own process group and ends every group still
-running before it deletes its temporary directory, on success or failure.
+directory, with a fresh temporary `HOME`, so the server's one-time home
+transcript import never reads the real home and its first boot records an empty
+`done` (no transcript copied, nothing set aside), which the check asserts. It
+applies exactly the migration set named by the packaged lock to a fresh
+database, checks health, web and WebSocket service, verifies the native process
+executable, restarts against the same database, and asserts the explicit file
+set. A wrong-token WebSocket upgrade must be answered with an `HTTP/1.1 401`
+status line within 5 s and never open. A granted port-forward session echoes 1
+MiB through a local TCP target in frames of at most 64 KiB, and both the
+target's end and the client's close end it. The restart is a Claude session's
+whole life, driven over the WebSocket with `scripts/fake-claude-cli.mjs`
+standing in for the Claude CLI through the existing `ASSISTANT_CLAUDE_CLI_BIN`
+override, so no account or network is involved. The fake speaks the SDK's
+stream-json protocol and answers each prompt with `Fake reply to: <prompt>`. The
+session is created with a turn, opened while resident, released once unviewed,
+opened by a reader from storage and released again, resumed for a second turn
+with `--resume`, and deleted through the one-transaction delete. Every open must
+show the model and thinking level it was created with. That boot runs the same
+`server.js` under the packaged Bun with `scripts/bun-check-short-graces.mjs`
+preloaded, a check-only file that shortens the two release graces to 200 ms. The
+check waits for the server's `[sessions] released <id>: …` lines. Before the
+first boot, in both modes, a separate boot preloads
+`scripts/bun-check-collected-file-handle.mjs`, which `BUN_OPTIONS` also carries
+into the spawn broker. On SIGWINCH each process that loaded it leaks three
+FileHandles on a disposable file and forces collection, and it installs no
+handler of its own. The server, and in broker mode the broker, must keep running
+and log the production warning; without the guard, either one exits. A SIGUSR1
+must leave the server running and write a private V8-format heap snapshot, and a
+second one right after must write nothing. The check starts every process in its
+own process group and ends every group still running before it deletes its
+temporary directory, on success or failure.
 
 Before booting, the check asserts the pragma on the first line of `server.js`,
 the worker and the watcher wrapper. It then runs a copy of `server.js` whose
@@ -309,7 +312,14 @@ the server's credential gateway link as `ASSISTANT_GATEWAY=1` does: its control
 endpoint must refuse a worker-protocol dialer, a granted engine lease must reach
 a loopback fake ChatGPT upstream with the seeded credential, `leases.json` must
 be 0600 in a 0700 directory without the token, and a gateway restarted without
-control must still forward that lease and refuse a revoked one;
+control must still forward that lease and refuse a revoked one. It then runs the
+one-time home transcript import (`docs/credential-distribution.md`) on injected
+scratch directories, over one unit with an `<id>/` tree, starting from a
+manifest whose last record is torn: the run must end `done` with the tail cut,
+installed files whose size and sha256 match the manifest, no staging left, and
+its space preflight reported as `statfs` or the fallback; a second run must
+answer `already-done`, its startup gate must let that boot through, and an
+unreadable import state must make the gate refuse with its operator line.
 `checkProcessState` then reads its own child's start time under Bun and sees
 that child running, then exited once it is killed, which login holds rely on.
 From an unrelated cwd and a clean environment, it also runs the packaged browser
@@ -835,6 +845,52 @@ owner of periodic remote Git and pull-request provider reads. Preview units get
 neither flag, so N previews cannot multiply those reads against repositories or
 hosting APIs they share with production.
 
+### Default Claude transcript import
+
+Every boot runs the one-time import of Default Claude's transcripts from
+`~/.claude/projects` (`docs/credential-distribution.md`) before the gateway, the
+listener and any session start. This gate also precedes the client-mode relay
+link and remote login setup; a refusal prevents either gateway mode from
+starting. The local transcript import does not move or create the gateway's
+accounts or credentials (`docs/credential-distribution.md`). Until the import
+has durably recorded phase `copy` or `done` in
+`credential-profiles/claude-default/home-import/state.json`, the service refuses
+to start, because a session could otherwise write transcripts that a later
+attempt would set aside with the old `projects/`. A state file it cannot read or
+does not recognize refuses the same way at any later boot. Each boot renews the
+saved state's file and directory syncs before accepting `copy` or `done`. A
+failed renewal at or below `DATA_DIR` also refuses startup, even after `done`.
+Renewal stops at the existing `DATA_DIR` inclusive; it never opens or syncs
+directories above it. Those ancestors need normal path traversal permission, not
+directory-read permission or directory-fsync support. The refusal stops every
+account, not only Default Claude, and the unit exits 1, so systemd restarts it
+and each start retries.
+
+The journal names the cause in one line starting
+`[home-transcript-import] startup refused:`. It gives the operation that failed
+(for example `record the import's copy state`) and the error code (`ENOSPC`,
+`EACCES`, `EIO`, …). To recover:
+
+1. Fix what the line names: free space on the data directory's filesystem,
+   ownership or permissions of `DATA_DIR`, `credential-profiles/claude-default/`
+   and its `home-import/` and `claude/` directories for the service user, a file
+   where `~/.claude/projects` should be a directory. An unreadable `state.json`
+   is restored from a backup of the data directory, never deleted.
+2. Restart the service. The import resumes from its saved phase. It never
+   repeats a set-aside and never copies over an installed transcript.
+3. If the line says `both the destination and its set-aside exist`, something
+   other than the import wrote `claude/projects/` while the old one was set
+   aside. Compare the two directories, move whatever belongs to Pandeck into the
+   set-aside `projects.before-home-import-<stamp>/` (whose name the state file
+   holds), leave `claude/projects/` empty, and restart.
+
+Keep every file under the data directory. Deleting `home-import/`, its state or
+manifest, `claude/projects/`, a set-aside, or anything else in `assistant-data`
+is never a supported recovery: without the state the import sets the current
+`projects/` aside again. Once the boundary is durable, low space or a failed
+copy no longer stops the service. The import logs the reason and continues on
+the next boot.
+
 ## Host tools
 
 The agents' toolchain is the HOST's, not vendored. The service PATH is exactly
@@ -1079,9 +1135,10 @@ none of them. Later deploys retain state created by that preview.
 The preview unit inherits the host-tool PATH because previews still need the
 host toolchain. It does not inherit production's `tokenFile`,
 `extraEnvironment`, HOME, or DATA_DIR. The server mints its own browser token in
-the empty preview DATA_DIR. Default Claude now resolves against the
-preview-local HOME rather than the service user's `~/.claude`, and the legacy pi
-import points at a nonexistent preview-local path. Slack app mode and speech
+the empty preview DATA_DIR. Default Claude lives in that preview DATA_DIR like
+every account, and its one-time home transcript import reads only the empty
+preview-local HOME, never the service user's `~/.claude`. The legacy pi import
+points at a nonexistent preview-local path. Slack app mode and speech
 recognition remain explicitly disabled as extra guards.
 
 Independent preview credentials require deliberate host configuration. Set

@@ -182,7 +182,11 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       profiles.claudeConfigDir(named),
       ".credentials.json",
     );
-    const defaultFile = join(home, ".claude", ".credentials.json");
+    // The default is a DATA_DIR account like any named one, never `~/.claude`.
+    const defaultFile = join(
+      profiles.claudeConfigDir(profiles.DEFAULT_CLAUDE_PROFILE_ID),
+      ".credentials.json",
+    );
     writeCredential(namedFile, CLAUDE_ACCESS);
     writeCredential(defaultFile, CLAUDE_DEFAULT_ACCESS);
 

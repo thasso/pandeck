@@ -8,6 +8,7 @@ import type {
 } from "@assistant/shared/usage";
 import { failed, loading, ready, refreshing } from "../lib/loadState.ts";
 import {
+  ClaudeUsageContent,
   OpenAiCreditsCard,
   UsageOverviewCard,
   usageOverviewRows,
@@ -174,6 +175,22 @@ describe("Usage load states", () => {
     const html = card(failed<ClaudeUsageSnapshot>("not signed in"));
     expect(html).toContain("not signed in");
     expect(html).not.toContain("animate-pulse");
+  });
+});
+
+describe("Claude without plan limits", () => {
+  it("says the login reports no limits, and blames no API key, Bedrock or Vertex", () => {
+    const html = renderToStaticMarkup(
+      <ClaudeUsageContent
+        snapshot={{ ...claude, rateLimitsAvailable: false }}
+        now={0}
+      />,
+    );
+    expect(html).toContain(
+      "Plan rate limits are not available for this connection: this Claude login reports no 5-hour or weekly limits.",
+    );
+    expect(html).not.toMatch(/API.key|Bedrock|Vertex/i);
+    expect(html).not.toContain("27%");
   });
 });
 

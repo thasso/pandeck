@@ -30,6 +30,8 @@ interface SessionSnapshotRow {
   model?: string;
   provider?: string;
   providerSessionId?: string;
+  /** The account the session is bound to; absent for none (NULL). */
+  credentialProfileId?: string;
   thinkingLevel?: string;
   archived: boolean;
   deleted: boolean;
@@ -82,14 +84,9 @@ function n(value: unknown): number {
  * handle. So the shape is probed and the legacy column read in place, with
  * `sessionScopeOrFailClosed` normalizing either one.
  */
-function scopeColumn(db: DatabaseSync): "scope" | "visibility" | undefined {
-  const columns = new Set(
-    (
-      db.prepare("PRAGMA table_info(session_index)").all() as Array<{
-        name: string;
-      }>
-    ).map((column) => column.name),
-  );
+function scopeColumn(
+  columns: ReadonlySet<string>,
+): "scope" | "visibility" | undefined {
   if (columns.has("scope")) return "scope";
   if (columns.has("visibility")) return "visibility";
   return undefined;
@@ -111,13 +108,26 @@ export function readSessionSnapshot(
   try {
     // No session table at all (an empty or unrelated database): no session row,
     // which is a not-found rather than a failure to read.
-    const scopeSource = scopeColumn(db);
+    const columns = new Set(
+      (
+        db.prepare("PRAGMA table_info(session_index)").all() as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name),
+    );
+    const scopeSource = scopeColumn(columns);
     if (!scopeSource) return undefined;
+    // A data dir from before credential profiles has no binding column: every
+    // session there ran as no account, which callers read as the default.
+    const binding = columns.has("credential_profile_id")
+      ? "credential_profile_id"
+      : "NULL";
     const row = db
       .prepare(
         `SELECT id, title, harness, agent_type, model, provider, provider_session_id,
                 thinking_level, created_at_ms, updated_at_ms, archived_at_ms,
-                deleted_at_ms, ${scopeSource} AS scope, message_count
+                deleted_at_ms, ${scopeSource} AS scope, message_count,
+                ${binding} AS credential_profile_id
            FROM session_index WHERE id = ?`,
       )
       .get(sessionId) as Record<string, unknown> | undefined;
@@ -163,6 +173,9 @@ export function readSessionSnapshot(
         ...(text(row.provider) ? { provider: text(row.provider)! } : {}),
         ...(text(row.provider_session_id)
           ? { providerSessionId: text(row.provider_session_id)! }
+          : {}),
+        ...(text(row.credential_profile_id)
+          ? { credentialProfileId: text(row.credential_profile_id)! }
           : {}),
         ...(text(row.thinking_level)
           ? { thinkingLevel: text(row.thinking_level)! }

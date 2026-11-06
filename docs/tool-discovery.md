@@ -15,7 +15,11 @@ cache hits, and opt-in pi payload-prefix captures. Task-264's deleted
 reported separately rather than credited to discovery. Set
 `ASSISTANT_TOOL_PAYLOAD_PROBE_FILE=/path/to/probe.jsonl` before real pi turns to
 capture content-free request size/hash/common-prefix metrics through pi's
-`onPayload` hook; request bodies are never persisted.
+`onPayload` hook; request bodies are never persisted. Claude cache figures come
+from every account's CLI transcripts under the data dir
+(`credential-profiles/*/claude/projects`, `--data-dir` to choose it), never from
+home. The removed `--claude-projects` and `--claude-projects-dir` overrides are
+not supported; `--no-claude-transcripts` skips those transcripts.
 
 ## pi discovery contract
 

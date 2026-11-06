@@ -34,12 +34,13 @@ const NATIVE_TRANSCRIPT_RETENTION_DAYS = 3650;
  *
  * This app has its own first-class Memory system (the `memory_*` tools + the
  * memory domain), which is authoritative. Claude's separate on-disk auto-memory
- * store (default `~/.claude/projects/<cwd>/memory/`) would be redundant and
+ * store (default `<CLAUDE_CONFIG_DIR>/projects/<cwd>/memory/`) would be redundant and
  * could diverge/conflict, so we disable both its reads/writes
  * (`autoMemoryEnabled`) and the background consolidation pass
  * (`autoDreamEnabled`). Applied as an inline flag-layer `settings` object — the
  * highest-priority user-controlled settings tier — so it holds regardless of
- * any on-disk `~/.claude` settings and independently of `settingSources`.
+ * any on-disk settings in the account's config directory and independently of
+ * `settingSources`.
  */
 export const CLAUDE_SDK_HARNESS_SETTINGS = {
   autoMemoryEnabled: false,

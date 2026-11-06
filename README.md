@@ -103,8 +103,8 @@ The browser token is created on first start at `assistant-data/.assistant-token`
 and injected into the page, so there is nothing to log in to. Then open
 **Settings → Models & providers** and connect a provider:
 
-- **Claude SDK**: the Default Claude profile uses the server user's normal
-  `~/.claude` login. You can also connect any Claude profile from the browser,
+- **Claude SDK**: every Claude profile, Default Claude included, keeps its own
+  login under `DATA_DIR/credential-profiles/`. Connect one from the browser,
   which streams the official `claude auth login` flow.
 - **OpenAI**: OpenAI/Codex profiles.
 - **OpenAI-compatible**: a self-hosted or hosted endpoint.
@@ -295,19 +295,23 @@ or caches) without retaining a runtime dependency on `~/.pi`. Set
 nonexistent path to disable the seed, as PR previews do). Back up or remove the
 old directory only after confirming the service starts normally.
 
-Claude's protected **Default Claude** profile reflects the service user's normal
-`~/.claude` login. Settings → Claude SDK can connect or reconnect any Claude
-profile from a desktop or phone: it streams the official bundled
-`claude auth login --claudeai` command, offers Claude's authorization URL as a
-tappable link, and forwards the pasted authorization code directly to the CLI
-without displaying or storing it. PA does not implement the OAuth exchange.
-Settings marks the profile Ready as soon as Claude writes `.credentials.json`.
-Plain `claude` (Default Claude) and the displayed isolated
-`CLAUDE_CONFIG_DIR=… claude` command (named profiles) remain terminal fallbacks.
+Claude's protected **Default Claude** profile is an isolated account like any
+other, in `DATA_DIR/credential-profiles/claude-default/claude`; it does not use
+the service user's `~/.claude` login, API key or personal Claude config. On the
+first boot after upgrading, the server copies Pandeck's own Default Claude
+transcripts from `~/.claude/projects` once, so old sessions still resume; home
+is left untouched (`docs/credential-distribution.md`). Settings → Claude SDK can
+connect or reconnect any Claude profile from a desktop or phone: it streams the
+official bundled `claude auth login --claudeai` command, offers Claude's
+authorization URL as a tappable link, and forwards the pasted authorization code
+directly to the CLI without displaying or storing it. PA does not implement the
+OAuth exchange. Settings marks the profile Ready as soon as Claude writes
+`.credentials.json`. The displayed isolated `CLAUDE_CONFIG_DIR=… claude` command
+remains the terminal fallback for every profile, Default Claude included.
 Automatic Claude workflows use the first enabled Claude profile. PR previews use
 a separate per-instance HOME, so their Default Claude and named profile
 directories start empty and require preview-local setup. They do not inherit the
-service user's normal `~/.claude` login.
+service user's `~/.claude` login or transcripts.
 
 ### Status and logs
 
