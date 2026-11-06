@@ -39,10 +39,19 @@ import {
   UNKNOWN_ACCOUNT,
   decodeAccountId,
   decodeClientGrant,
+  decodeLoginId,
+  decodeLoginInput,
+  decodeLoginStart,
   encodeClientMessage,
   type ClientAccount,
 } from "./clientMethods.ts";
 import { ClientRegistry, type GatewayClient } from "./clientRegistry.ts";
+import type { WriterLane } from "./holds.ts";
+import {
+  createLoginManager,
+  LoginRefusal,
+  type LoginDrivers,
+} from "./logins.ts";
 import {
   INVALID_PARAMS,
   OWNER_CONFLICT,
@@ -100,9 +109,15 @@ interface ClientListenerDeps {
   };
   log: (line: string) => void;
   now?: () => number;
+  /** Logins (`logins.ts`); without drivers every start is refused. */
+  logins?: {
+    drivers: LoginDrivers;
+    lane: Pick<WriterLane, "run">;
+    recheck: (profileId: string) => void;
+  };
 }
 
-/** An account of a user, as tests and (later) logins create it. */
+/** An account of a user, as logins and tests create it. */
 type ClientAccountRecord = LoginProfile & { userId: string };
 
 export interface RunningClientListener {
@@ -212,6 +227,7 @@ export async function startClientListener(
 
   const accountsOf = (userId: string): ClientAccount[] => {
     const needing = new Set(deps.needsLogin());
+    for (const id of logins.pendingAccounts()) needing.add(id);
     return registry.accountsOf(userId).flatMap((id): ClientAccount[] => {
       const profile = profiles.get(id);
       return profile && isLoginProfile(profile)
@@ -253,6 +269,57 @@ export async function startClientListener(
           encodeClientMessage({ accounts: accountsOf(client.userId) }),
         )
         .catch(() => log(`client ${client.id} accounts.changed: failed`));
+  };
+
+  const putAccount = ({ userId, ...profile }: ClientAccountRecord): void => {
+    profiles.upsert(profile);
+    registry.setAccountOwner(profile.id, userId);
+    accountsChanged();
+  };
+
+  const removeAccount = (profileId: string): void => {
+    profiles.remove(profileId);
+    leases.revokeWhere(
+      (record) => record.profileId === profileId,
+      "profile-removed",
+    );
+    registry.removeAccount(profileId);
+    accountsChanged();
+  };
+
+  const logins = createLoginManager({
+    stateDir: deps.stateDir,
+    drivers: deps.logins?.drivers ?? {},
+    profiles,
+    lane: deps.logins?.lane ?? {
+      run: () => Promise.reject(new Error("no writer lane")),
+    },
+    ownerOf: (profileId) => registry.ownerOf(profileId),
+    putAccount,
+    removeAccount,
+    recheck: (profileId) => deps.logins?.recheck(profileId),
+    send: (clientId, loginId, accountId, event) => {
+      for (const [connection, client] of connections)
+        if (client.id === clientId)
+          connection
+            .request(
+              CLIENT_METHODS.loginEvent,
+              encodeClientMessage({ loginId, accountId, event }),
+            )
+            .catch(() => log(`client ${client.id} logins.event: failed`));
+    },
+    log,
+  });
+
+  /** A login refusal as the method error the client sees. */
+  const loginCall = <T>(call: () => T): T => {
+    try {
+      return call();
+    } catch (err) {
+      if (err instanceof LoginRefusal)
+        throw new WorkerMethodError(err.code, err.message);
+      throw err;
+    }
   };
 
   // --- gateway client 1.0 -----------------------------------------------
@@ -354,6 +421,24 @@ export async function startClientListener(
           "session-ended",
         ),
       );
+    },
+    [CLIENT_METHODS.loginStart]: (payload, client) => {
+      const start = decodeLoginStart(payload);
+      return encodeClientMessage(
+        loginCall(() =>
+          logins.start({ clientId: client.id, userId: client.userId }, start),
+        ),
+      );
+    },
+    [CLIENT_METHODS.loginInput]: (payload, client) => {
+      const { loginId, text } = decodeLoginInput(payload);
+      loginCall(() => logins.input(client.id, loginId, text));
+      return encodeControlDone();
+    },
+    [CLIENT_METHODS.loginCancel]: (payload, client) => {
+      const loginId = decodeLoginId(payload);
+      loginCall(() => logins.cancel(client.id, loginId));
+      return encodeControlDone();
     },
   };
 
@@ -513,22 +598,11 @@ export async function startClientListener(
     enrollPort,
     caPem: edgeTls.caCertPem,
     registry,
-    putAccount({ userId, ...profile }) {
-      profiles.upsert(profile);
-      registry.setAccountOwner(profile.id, userId);
-      accountsChanged();
-    },
-    removeAccount(profileId) {
-      profiles.remove(profileId);
-      leases.revokeWhere(
-        (record) => record.profileId === profileId,
-        "profile-removed",
-      );
-      registry.removeAccount(profileId);
-      accountsChanged();
-    },
+    putAccount,
+    removeAccount,
     accountsChanged,
     async close() {
+      logins.close();
       for (const connection of [...connections.keys()])
         connection.end("the gateway closed");
       const closed = Promise.all(

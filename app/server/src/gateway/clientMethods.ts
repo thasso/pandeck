@@ -16,8 +16,13 @@
  * - `leases.bindSession`, `leases.revoke` and `leases.reconcileWorker` as in
  *   gateway control 1.x, on this client's leases only.
  *
+ * - `logins.start {kind, accountId?, name?}` answers `{loginId, accountId}`:
+ *   a login for the user's account, or for a new one (`logins.ts`).
+ * - `logins.input {loginId, text}` and `logins.cancel {loginId}` answer `{}`,
+ *   for this client's logins only.
+ *
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
- * change, answered `{}`.
+ * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
  */
 import type { Payload } from "../workerProtocol/codec.ts";
 import {
@@ -25,6 +30,7 @@ import {
   type ConnectionProtocol,
 } from "../workerProtocol/connection.ts";
 import type { LeaseProvider } from "./leases.ts";
+import type { LoginEvent, LoginStart } from "./logins.ts";
 import { isLeaseProvider, isProfileId } from "./profiles.ts";
 import { isOwnerId } from "./state.ts";
 import { INVALID_PARAMS } from "./controlMethods.ts";
@@ -47,14 +53,22 @@ export const CLIENT_METHODS = {
   bindSession: "leases.bindSession",
   revoke: "leases.revoke",
   reconcileWorker: "leases.reconcileWorker",
+  loginStart: "logins.start",
+  loginInput: "logins.input",
+  loginCancel: "logins.cancel",
   /** Gateway → client. */
   accountsChanged: "accounts.changed",
+  loginEvent: "logins.event",
 } as const;
 
 /** The client's certificate is unknown or revoked: the connection ends. */
 export const CLIENT_REVOKED = "client_revoked";
 /** The account is not the client's user's, or not a login. */
 export const UNKNOWN_ACCOUNT = "unknown_account";
+/** No login by this id for this client. */
+export const UNKNOWN_LOGIN = "unknown_login";
+/** The gateway runs no driver for this kind of login. */
+export const LOGIN_UNAVAILABLE = "login_unavailable";
 
 export interface ClientAccount {
   id: string;
@@ -141,4 +155,77 @@ export function decodeAccountId(payload: Payload): string {
   const accountId = record(payload.json)?.accountId;
   if (!isProfileId(accountId)) invalid("account id");
   return accountId;
+}
+
+export function decodeLoginStart(payload: Payload): LoginStart {
+  const { kind, accountId, name } = record(payload.json) ?? {};
+  if (!isLeaseProvider(kind)) invalid("login kind");
+  if (accountId !== undefined && !isProfileId(accountId)) invalid("account id");
+  if (name !== undefined && (typeof name !== "string" || name.length > 200))
+    invalid("account name");
+  return {
+    kind,
+    ...(accountId !== undefined ? { accountId } : {}),
+    ...(name !== undefined ? { name } : {}),
+  };
+}
+
+export function decodeLoginStarted(payload: Payload): {
+  loginId: string;
+  accountId: string;
+} {
+  const { loginId, accountId } = record(payload.json) ?? {};
+  if (typeof loginId !== "string" || !isProfileId(accountId))
+    malformed("login start answer");
+  return { loginId, accountId };
+}
+
+export function decodeLoginId(payload: Payload): string {
+  const loginId = record(payload.json)?.loginId;
+  if (typeof loginId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(loginId))
+    invalid("login id");
+  return loginId;
+}
+
+export function decodeLoginInput(payload: Payload): {
+  loginId: string;
+  text: string;
+} {
+  const text = record(payload.json)?.text;
+  if (typeof text !== "string") invalid("login input");
+  return { loginId: decodeLoginId(payload), text };
+}
+
+const LOGIN_STATES = new Set(["running", "ready", "error", "cancelled"]);
+
+/** A `logins.event` from the gateway, or undefined when malformed. */
+export function decodeLoginEvent(
+  payload: Payload,
+): { loginId: string; accountId: string; event: LoginEvent } | undefined {
+  const { loginId, accountId, event } = record(payload.json) ?? {};
+  const e = record(event);
+  if (typeof loginId !== "string" || !isProfileId(accountId) || !e)
+    return undefined;
+  const at = { loginId, accountId };
+  if (e.type === "output" && typeof e.text === "string")
+    return { ...at, event: { type: "output", text: e.text } };
+  if (e.type === "url" && typeof e.url === "string")
+    return { ...at, event: { type: "url", url: e.url } };
+  if (e.type === "code" && typeof e.code === "string")
+    return { ...at, event: { type: "code", code: e.code } };
+  if (
+    e.type === "state" &&
+    typeof e.state === "string" &&
+    LOGIN_STATES.has(e.state) &&
+    (e.error === undefined || typeof e.error === "string")
+  )
+    return {
+      ...at,
+      event: {
+        type: "state",
+        state: e.state as Extract<LoginEvent, { type: "state" }>["state"],
+        ...(typeof e.error === "string" ? { error: e.error } : {}),
+      },
+    };
+  return undefined;
 }
