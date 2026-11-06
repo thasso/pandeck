@@ -57,7 +57,18 @@ type UsageEvidence =
   | (Pick<ClaudeUsageSnapshot, "fetchedAt" | "rateLimitsAvailable"> &
       Partial<ClaudeUsageSnapshot>);
 
-/** Durable login evidence; ordering tickets are process-local. */
+/**
+ * Durable login evidence; ordering tickets are process-local.
+ *
+ * For an account the credential gateway serves (`setGatewayServed`), only the
+ * gateway's renewal says it needs a login (`gatewayCredential`): a 401, a
+ * rejected usage read or a failed usage request leaves it unchanged, since
+ * the gateway renews the login and reports a renewal it could not make. Each
+ * link connection then sets a baseline (`gatewayBaseline`): a saved
+ * needs-login the gateway no longer reports becomes unknown, and its next
+ * needs-login is not announced again. Every other account keeps the error
+ * classifier (`docs/account-routing.md`).
+ */
 export class AccountHealthStore {
   private readonly health = new Map<string, AccountHealth>();
   private readonly clocks = new Map<string, EvidenceClock>();
@@ -74,6 +85,13 @@ export class AccountHealthStore {
   private readonly healthListeners = new Set<() => void>();
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private expiryAt: number | undefined;
+  private gatewayServed: (id: string) => boolean = () => false;
+  /**
+   * Accounts a baseline demoted, whose next needs-login is a replay: it is set
+   * without a push. Consumed by that needs-login, an accepted ok (a login
+   * included) or the account's removal.
+   */
+  private readonly replayed = new Set<string>();
 
   constructor(private readonly deps: HealthDeps) {
     this.benches = new AccountBenchStore(
@@ -238,8 +256,47 @@ export class AccountHealthStore {
 
   loginCompleted(id: string): void {
     this.recordEvidence(() => {
+      this.replayed.delete(id);
       if (this.profiles.has(id)) this.clock(id).generation++;
       this.update(id, "ok");
+    });
+  }
+
+  /** Which accounts the gateway serves; none until a link says so. */
+  setGatewayServed(served: (id: string) => boolean): void {
+    this.gatewayServed = served;
+  }
+
+  /** The gateway's renewal found the account needing a login, or no longer. */
+  gatewayCredential(id: string, needsLogin: boolean): void {
+    this.recordEvidence(() => {
+      if (!this.gatewayServed(id)) {
+        this.deps.profiles();
+        return;
+      }
+      this.update(id, needsLogin ? "needs-login" : "ok", this.observe(id));
+    });
+  }
+
+  /**
+   * After a link connection is ready: every served account saved as
+   * needs-login that the gateway does not report (`reported`) becomes unknown,
+   * since nothing else would ever clear it. Its next needs-login is a replay.
+   */
+  gatewayBaseline(reported: readonly string[]): void {
+    this.recordEvidence(() => {
+      const still = new Set(reported);
+      for (const [id, health] of this.health)
+        if (
+          health.state === "needs-login" &&
+          !still.has(id) &&
+          this.gatewayServed(id)
+        ) {
+          this.health.delete(id);
+          this.replayed.add(id);
+          this.dirty = true;
+        }
+      this.deps.profiles();
     });
   }
 
@@ -268,7 +325,8 @@ export class AccountHealthStore {
         profile &&
         isSubscriptionAccountModel(profile.provider, modelProvider) &&
         failure?.kind === "auth" &&
-        failure.loginDeath
+        failure.loginDeath &&
+        !this.gatewayServed(id)
       ) {
         const reported = this.observe(id);
         this.update(id, "needs-login", {
@@ -315,7 +373,8 @@ export class AccountHealthStore {
         this.update(id, "ok", ticket);
       else if (
         "available" in snapshot &&
-        snapshot.unavailableCode === "rejected"
+        snapshot.unavailableCode === "rejected" &&
+        !this.gatewayServed(id)
       )
         this.update(id, "needs-login", ticket);
       else this.deps.profiles();
@@ -342,7 +401,10 @@ export class AccountHealthStore {
     observation?: AccountObservation,
   ): void {
     this.recordEvidence(() => {
-      if (runFailureFacts(analyzeProviderError(message)).loginDeath)
+      if (
+        !this.gatewayServed(id) &&
+        runFailureFacts(analyzeProviderError(message)).loginDeath
+      )
         this.update(id, "needs-login", observation);
       else this.deps.profiles();
     });
@@ -376,6 +438,7 @@ export class AccountHealthStore {
       (state === "ok" || this.deps.hasCredential(id)) &&
       this.accept(id, observation)
     ) {
+      const replay = this.replayed.delete(id);
       if (this.health.get(id)?.state !== state) {
         this.health.set(id, {
           state,
@@ -383,7 +446,7 @@ export class AccountHealthStore {
           ...(state === "needs-login" ? { reason: REJECTED } : {}),
         });
         this.dirty = true;
-        notify = state === "needs-login" && profile.enabled;
+        notify = state === "needs-login" && profile.enabled && !replay;
       }
     }
     this.deps.profiles();
@@ -404,6 +467,7 @@ export class AccountHealthStore {
   }
 
   private remove(id: string): void {
+    this.replayed.delete(id);
     this.benches.forget(id);
     if (this.health.delete(id)) this.dirty = true;
     if (this.wasConnected.delete(id)) this.dirty = true;
@@ -456,6 +520,7 @@ export class AccountHealthStore {
 
 let store: AccountHealthStore | undefined;
 let announceHealth: (() => void) | undefined;
+let gatewayServed: (id: string) => boolean = () => false;
 export function initializeAccountHealth(host: {
   broadcast: (message: ServerMessage) => void;
   push: HealthDeps["push"];
@@ -472,6 +537,7 @@ export function initializeAccountHealth(host: {
     persistPath: join(DATA_DIR, "cache", "account-health.json"),
     push: host.push,
   });
+  store.setGatewayServed(gatewayServed);
   host.profiles();
   announceHealth = () => host.broadcast({ type: "accountHealthChanged" });
   store.subscribeHealth(announceHealth);
@@ -539,6 +605,27 @@ export function reportAccountUsageSnapshot(
   observation?: AccountObservation,
 ): void {
   store?.usageSnapshot(id, snapshot, observation);
+}
+/**
+ * Which accounts the credential gateway serves (`gatewayHealth.ts`); this
+ * module cannot import the link (`credentialProfiles.ts` imports it).
+ */
+export function setAccountHealthGatewayServed(
+  served: (id: string) => boolean,
+): void {
+  gatewayServed = served;
+  store?.setGatewayServed(served);
+}
+export function reportAccountGatewayCredential(
+  id: string,
+  needsLogin: boolean,
+): void {
+  store?.gatewayCredential(id, needsLogin);
+}
+export function reportAccountGatewayBaseline(
+  reported: readonly string[],
+): void {
+  store?.gatewayBaseline(reported);
 }
 export function reportAccountUsageFailure(
   id: string,

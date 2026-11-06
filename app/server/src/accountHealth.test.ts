@@ -1207,3 +1207,123 @@ it.each([
     runFailureFacts(analyzeProviderError(message)).loginDeath,
   ).toBeUndefined();
 });
+
+it("1368 AC11: a gateway-served account takes needs-login only from the gateway", () => {
+  const f = fixture("ready", "openai-codex");
+  f.store.setGatewayServed(() => true);
+  f.store.runFailure("acct", authFailure(), "openai-codex");
+  f.store.usageSnapshot("acct", unavailable("rejected"));
+  f.store.usageFailure("acct", "401 unauthorized");
+  f.store.usageFailure("acct", "Claude did not accept the usage request.");
+  expect(f.store.read("acct", true).state).toBe("unknown");
+  expect(f.push).not.toHaveBeenCalled();
+
+  const stale = f.store.observe("acct");
+  f.store.gatewayCredential("acct", true);
+  expect(f.store.read("acct", true)).toMatchObject({
+    state: "needs-login",
+    reason: "Login is no longer valid. Reconnect this account.",
+  });
+  expect(f.push).toHaveBeenCalledTimes(1);
+  expect(f.store.alerts()).toEqual([
+    { profileId: "acct", name: "Private", provider: "openai-codex" },
+  ]);
+  // An ok whose ticket predates the gateway's report is stale.
+  f.store.usageSnapshot(
+    "acct",
+    { ...unavailable("rejected"), available: true },
+    stale,
+  );
+  expect(f.store.read("acct", true).state).toBe("needs-login");
+  f.store.gatewayCredential("acct", true);
+  expect(f.push).toHaveBeenCalledTimes(1);
+  f.store.gatewayCredential("acct", false);
+  expect(f.store.read("acct", true).state).toBe("ok");
+  expect(f.store.alerts()).toEqual([]);
+});
+
+it("1368 AC11: without the gateway the classifier rules, and the gateway's report is ignored", () => {
+  const f = fixture();
+  f.store.gatewayCredential("acct", true);
+  expect(f.store.read("acct", true).state).toBe("unknown");
+  f.store.runFailure("acct", authFailure(), "claude-sdk");
+  expect(f.store.read("acct", true).state).toBe("needs-login");
+  expect(f.push).toHaveBeenCalledTimes(1);
+});
+
+it("1368 AC11: a compatible account stays untracked", () => {
+  const f = fixture("ready", "openai-compatible");
+  f.store.setGatewayServed(() => true);
+  f.store.gatewayCredential("acct", true);
+  expect(f.store.read("acct", true).state).toBe("unknown");
+  expect(f.push).not.toHaveBeenCalled();
+});
+
+/** A served account saved as needs-login, then a fresh store as at a restart. */
+function servedRestart() {
+  const f = fixture("ready", "openai-codex");
+  f.store.setGatewayServed(() => true);
+  f.store.gatewayCredential("acct", true);
+  expect(f.push).toHaveBeenCalledTimes(1);
+  f.push.mockClear();
+  const store = f.restart();
+  store.setGatewayServed(() => true);
+  expect(store.read("acct", true).state).toBe("needs-login");
+  return { ...f, store };
+}
+
+it("1368 AC12 (a): a baseline drops an unreported saved needs-login to unknown and keeps a reported one", () => {
+  const kept = servedRestart();
+  kept.store.gatewayBaseline(["acct"]);
+  expect(kept.store.read("acct", true).state).toBe("needs-login");
+
+  const f = servedRestart();
+  f.store.gatewayBaseline([]);
+  expect(f.store.read("acct", true)).toEqual({ state: "unknown", since: null });
+  expect(JSON.parse(readFileSync(f.deps.persistPath, "utf8")).acct).toEqual({
+    state: "unknown",
+    since: null,
+    wasConnected: true,
+  });
+  expect(f.push).not.toHaveBeenCalled();
+  // An unserved account keeps its saved state.
+  const unserved = servedRestart();
+  unserved.store.setGatewayServed(() => false);
+  unserved.store.gatewayBaseline([]);
+  expect(unserved.store.read("acct", true).state).toBe("needs-login");
+});
+
+it("1368 AC12 (b): the gateway's needs-login after a baseline is a replay, with no push", () => {
+  const f = servedRestart();
+  f.store.gatewayBaseline([]);
+  f.store.gatewayCredential("acct", true);
+  expect(f.store.read("acct", true).state).toBe("needs-login");
+  expect(f.push).not.toHaveBeenCalled();
+  // Consumed: a later transition pushes.
+  f.store.gatewayCredential("acct", false);
+  f.store.gatewayCredential("acct", true);
+  expect(f.push).toHaveBeenCalledTimes(1);
+});
+
+it.each(["runWorking", "loginCompleted", "gatewayCredential(false)", "forget"])(
+  "1368 AC12 (c): %s after a baseline ends the replay, so the next needs-login pushes once",
+  (evidence) => {
+    const f = servedRestart();
+    f.store.gatewayBaseline([]);
+    if (evidence === "runWorking") f.store.runWorking("acct", "openai-codex");
+    else if (evidence === "loginCompleted") f.store.loginCompleted("acct");
+    else if (evidence === "forget") f.store.forget("acct");
+    else f.store.gatewayCredential("acct", false);
+    if (evidence === "forget") f.store.summaries(() => f.profiles());
+    f.store.gatewayCredential("acct", true);
+    expect(f.push).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("1368 AC12 (d): an account the baseline did not demote pushes on the gateway's needs-login", () => {
+  const f = fixture("ready", "openai-codex");
+  f.store.setGatewayServed(() => true);
+  f.store.gatewayBaseline([]);
+  f.store.gatewayCredential("acct", true);
+  expect(f.push).toHaveBeenCalledTimes(1);
+});

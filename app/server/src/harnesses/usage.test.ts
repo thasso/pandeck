@@ -15,13 +15,14 @@ import {
   claudeProfileEnvironment,
   createCredentialProfile,
   deleteCredentialProfile,
+  piAgentDir,
 } from "../credentialProfiles.ts";
 import { GATEWAY_UNAVAILABLE_TEXT, startGatewayLink } from "../gatewayLink.ts";
 import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
 import { MEASURED_USAGE } from "../test/claudeUsageFixtures.ts";
 import { startFakeUpstreams } from "../test/gatewayFixtures.ts";
 import { startGatewayLinkForTests } from "../test/gatewayLink.ts";
-import { fetchClaudeAccountUsage } from "./usage.ts";
+import { fetchClaudeAccountUsage, fetchOpenAiAccountUsage } from "./usage.ts";
 
 /** The CLI's usage control request, answered by a fake seam that records. */
 function recordingSeam(): {
@@ -123,12 +124,34 @@ test("AC8: with the switch on, Claude usage starts no CLI child", async () => {
   }
 });
 
+/** A Codex profile with a fake login the direct path would send. */
+function codexProfile(name: string): string {
+  const { id } = createCredentialProfile({ name, provider: "openai-codex" });
+  profiles.push(id);
+  writeFileSync(
+    join(piAgentDir(id), "auth.json"),
+    JSON.stringify({
+      "openai-codex": {
+        type: "oauth",
+        access: FAKE_ACCESS,
+        refresh: FAKE_REFRESH,
+        expires: Date.now() + 86_400_000,
+        accountId: "fake-account",
+      },
+    }),
+  );
+  return id;
+}
+
 test.each(["failed", "not ready"] as const)(
-  "AC9: a gateway that has %s fails Claude usage with U7's text, never falling back to the CLI",
+  "AC9/1368 AC5: a gateway that has %s fails Claude and Codex usage with U7's text, never falling back",
   async (state) => {
     const id = claudeProfile(`Usage gateway ${state}`);
+    const codexId = codexProfile(`Codex usage gateway ${state}`);
     const seam = recordingSeam();
     setClaudeSdkUsageSeam(seam.factory);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
     if (state === "not ready")
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let endStart = (): void => {};
@@ -144,8 +167,7 @@ test.each(["failed", "not ready"] as const)(
               endStart = () => reject(new Error("the test ends the start"));
             }),
     });
-    try {
-      const read = fetchClaudeAccountUsage(id, 20_000);
+    const settled = async (read: Promise<unknown>): Promise<unknown> => {
       let outcome: { err: unknown } | undefined;
       void read.then(
         () => (outcome = { err: undefined }),
@@ -156,11 +178,21 @@ test.each(["failed", "not ready"] as const)(
         await new Promise<void>((resolve) => setImmediate(resolve));
         if (state === "not ready") await vi.advanceTimersByTimeAsync(1_000);
       }
-      const { err } = outcome;
-      assert.ok(err instanceof Error);
-      assert.equal(err.message, GATEWAY_UNAVAILABLE_TEXT);
-      assert.ok(!runFailureFacts(analyzeProviderError(err.message)).loginDeath);
+      return outcome.err;
+    };
+    try {
+      for (const err of [
+        await settled(fetchClaudeAccountUsage(id, 20_000)),
+        await settled(fetchOpenAiAccountUsage(codexId)),
+      ]) {
+        assert.ok(err instanceof Error);
+        assert.equal(err.message, GATEWAY_UNAVAILABLE_TEXT);
+        assert.ok(
+          !runFailureFacts(analyzeProviderError(err.message)).loginDeath,
+        );
+      }
       assert.equal(seam.factory.mock.calls.length, 0, "no CLI fallback");
+      assert.equal(fetchSpy.mock.calls.length, 0, "no direct request");
     } finally {
       vi.useRealTimers();
       endStart();

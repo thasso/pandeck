@@ -47,6 +47,7 @@ import { startSpawnBroker } from "./spawnBroker.ts";
 import { ignoreCollectedFileHandle } from "./collectedFileHandle.ts";
 import { startInProcessWorker } from "./workers/inProcessWorker.ts";
 import { startGatewayClientLink } from "./gatewayClientLink.ts";
+import { followGatewayCredentialStatuses } from "./gatewayHealth.ts";
 import {
   createRemoteAccount,
   deleteRemoteAccount,
@@ -1984,6 +1985,8 @@ if (GATEWAY_RELAY) {
   });
   // Settings hears of every login-stuck change from the link's start.
   followLoginHoldStatuses();
+  // Health takes a served account's needs-login only from the gateway (C16).
+  followGatewayCredentialStatuses();
 }
 followGatewayStatus();
 // The unit keeps this process the OOM killer's last victim; hand every agent
@@ -2053,6 +2056,8 @@ server.listen(PORT, HOST, () => {
     .catch((err) =>
       console.warn("[knowledge] link migration failed:", errorText(err)),
     );
+  // Under either switch: with the gateway on, these runtimes read credential
+  // presence only and never refresh (`piSdk/presenceCredentialStore.ts`).
   void warmCredentialProfileModelRuntimes().catch((err) =>
     console.warn("[models] credential profile warm-up failed:", errorText(err)),
   );

@@ -4,6 +4,8 @@ import { pickAccount } from "./accountRouter.ts";
 import { formatLocalDateTime } from "./googleTime.ts";
 import { markUsageProfileDirty } from "./usageCache.ts";
 import { readAccountBench, readAccountHealth } from "./accountHealth.ts";
+import { gatewayServesProfile } from "./gatewayLink.ts";
+import { loginEnded } from "./providerErrors.ts";
 import {
   credentialProfileById,
   credentialProfileHasCredential,
@@ -242,7 +244,7 @@ export function installAccountRecovery(
       isSubscriptionAccountModel(source.provider, selection.model.provider) &&
       (facts.kind === "quota" ||
         facts.kind === "rate_limit" ||
-        facts.loginDeath ||
+        loginEnded(facts, gatewayServesProfile(source)) ||
         (moved &&
           facts.encryptedReasoningRejected &&
           !stripped.has(ended.profileId)))
@@ -294,7 +296,14 @@ export function installAccountRecovery(
     profileId: string,
     modelId: string,
   ): string {
-    if (failure.failure.loginDeath) return "login expired";
+    const source = credentialProfileById(profileId);
+    if (
+      loginEnded(
+        failure.failure,
+        source !== undefined && gatewayServesProfile(source),
+      )
+    )
+      return "login expired";
     const limit = readAccountBench(profileId, modelId);
     const model = failure.failure.limitModel
       ? `${failure.failure.limitModel} `

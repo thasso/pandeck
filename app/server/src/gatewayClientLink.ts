@@ -348,6 +348,11 @@ export function startGatewayClientLink(
       const value = needsLogin.get(profileId);
       return value === undefined ? undefined : { needsLogin: value };
     },
+    // The remote gateway's needs-login arrives only on its account list, and
+    // health keeps the error classifier for these accounts.
+    reportsCredentialStatus: false,
+    onCredentialStatus: () => () => {},
+    needsLoginProfiles: () => [],
     async close() {
       if (closing) return;
       closing = true;

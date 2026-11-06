@@ -11,10 +11,11 @@
  *
  * Under the credential gateway the same requests go to its `/chatgpt` prefix
  * with the server's lease as the bearer; the gateway adds the token and
- * account id. The server then reads only whether `auth.json` holds a Codex
- * login and when it expires, or in client mode the mirrored account's state.
- * A gateway refusal (its marker) is a temporary
- * failure, never a rejected login.
+ * account id, and renews it. The server then reads only whether `auth.json`
+ * holds a Codex login, never its expiry, or in client mode the mirrored
+ * account's readiness state. An upstream 401 is a temporary failure: only the
+ * gateway's renewal decides that a login is dead (RD-G4-3). A gateway refusal
+ * (its marker) is a temporary failure too, never a rejected login.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -44,6 +45,8 @@ interface PiCodexAuth {
 interface CodexBackend {
   /** Epoch ms of access-token expiry, when pi recorded it. */
   expires: number | null;
+  /** Through the gateway, which owns the token's expiry and renewal. */
+  gateway?: true;
   /** The wham base: chatgpt.com's, or the gateway's. */
   base: string;
   headers: Record<string, string>;
@@ -126,17 +129,24 @@ async function readPiCodexAuth(
 }
 
 /**
- * Whether the profile holds a Codex login, and its expiry: never the token
- * or account id, which only the gateway reads (RD-G4-3). In client mode no
- * file exists here: the gateway says whether the login works and renews it,
- * so there is no expiry to read.
+ * Whether the profile has a Codex login: never its token, account id or
+ * expiry, which only the gateway reads (RD-G4-3). In client mode the gateway's
+ * mirrored readiness state stands in for the local login file.
  */
-export async function readPiCodexMeta(
-  profileId: string,
-): Promise<{ expires: number | null } | null> {
-  if (remoteAccountReady(profileId)) return { expires: null };
-  const auth = await readCodexLogin(profileId);
-  return auth && { expires: auth.expires };
+export async function hasPiCodexLogin(profileId: string): Promise<boolean> {
+  if (remoteAccountReady(profileId)) return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(piAuthPath(profileId), "utf8"));
+  } catch {
+    return false;
+  }
+  const codex = (parsed as Record<string, unknown> | null)?.["openai-codex"];
+  return (
+    !!codex &&
+    typeof codex === "object" &&
+    (codex as { type?: unknown }).type === "oauth"
+  );
 }
 
 /** The gateway's `/chatgpt`, with the server lease: the gateway adds the rest. */
@@ -144,18 +154,17 @@ async function readGatewayBackend(
   profileId: string,
   access: EngineGatewayAccess,
 ): Promise<CodexBackend | null> {
-  const meta = await readPiCodexMeta(profileId);
-  return (
-    meta && {
-      expires: meta.expires,
-      base: `${access.baseUrl}/chatgpt/backend-api/wham`,
-      headers: {
-        Authorization: `Bearer ${access.leaseToken}`,
-        Accept: "application/json",
-        ...BROWSER_HEADERS,
-      },
-    }
-  );
+  if (!(await hasPiCodexLogin(profileId))) return null;
+  return {
+    expires: null,
+    gateway: true,
+    base: `${access.baseUrl}/chatgpt/backend-api/wham`,
+    headers: {
+      Authorization: `Bearer ${access.leaseToken}`,
+      Accept: "application/json",
+      ...BROWSER_HEADERS,
+    },
+  };
 }
 
 async function readHttpResult(res: Response): Promise<HttpResult> {
@@ -468,7 +477,9 @@ export async function fetchOpenAiUsage(
 
   const { status, body } = await fetchUsage(auth);
   throwGatewayRefusal(body);
-  if (status === 401) {
+  // Through the gateway a 401 follows its renewal: transient, like any other
+  // failed status, never a rejected login.
+  if (status === 401 && !auth.gateway) {
     return unavailable(
       "OpenAI rejected this profile login token (expired or invalid). Reconnect it in Settings.",
       fetchedAt,

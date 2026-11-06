@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=2560 reason="Nine contracts; the newest is the gateway's Codex refresher, whose lock-fenced commit keeps a lost lock or a stale snapshot from rotating a login away." task=1366 date=2026-11-04 -->
+<!-- instruction-budget: bytes=2688 reason="Ten contracts; the gateway's Codex refresher, whose lock-fenced commit keeps a lost lock or a stale snapshot from rotating a login away, and the presence-only server runtimes that keep it the one refresher." task=1368 date=2026-11-06 -->
 
 # pi SDK harness
 
@@ -28,7 +28,9 @@
   physical history.
 - `codexRenewal.ts` is the gateway's Codex refresher: it never imports
   `models.ts`, and commits only under pi's lock after an entry compare-and-swap,
-  by atomic rename.
+  by atomic rename. With the gateway on, server runtimes read credentials only
+  through `PresenceCredentialStore` and never refresh; the login runtime is the
+  held writer.
 - Session-open/canonicalize paths encode pi footguns (empty-header id minting,
   pending-output retargeting); keep `sessionResolver.test.ts` green.
 - A session's cwd is its `in_worktree` edge, else the record `cwd`, threaded

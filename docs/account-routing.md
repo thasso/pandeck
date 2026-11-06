@@ -79,7 +79,8 @@ credentials. Only `wasConnected: true` restores connection history. Deleted
 accounts are forgotten; late evidence for deleted ids is ignored. Disabled
 accounts retain health but never alert or push.
 
-Evidence rules:
+Evidence rules (a gateway-served account's login evidence follows
+"Gateway-served accounts" below instead):
 
 - Missing credentials derive `needs-login` with "Not connected." on Settings
   cards, independent of setup status and overriding observed `ok`.
@@ -176,6 +177,43 @@ not.
 Runtime run-failure subscribers are independent, isolated and notified once per
 run. They do not replace the durable failure hook or repeat when it retries.
 
+### Gateway-served accounts
+
+With a link that reports credential status installed (`gatewayLink.ts`; not a
+client-mode link), a Claude or Codex account is gateway-served
+(`gatewayServesProfile`). The gateway is its only refresher (`docs/workers.md`
+"One refresher"), so only the gateway can tell that its login died.
+
+- **Needs-login comes only from the gateway.** The link's
+  `profiles.credential {profileId, needsLogin}` reaches health through
+  `gatewayHealth.ts`: `true` marks the account `needs-login` with the usual
+  reason, alert and push; `false` marks it `ok`. Each report takes a fresh
+  observation ticket, so older usage or run evidence cannot undo it. Missing
+  credentials still derive `needs-login` as above, and the login-stuck state
+  stays separate (`loginHolds.ts`).
+- **A 401 is transient.** After the gateway renewed, an upstream 401 says
+  nothing about the login. A run's 401 with `loginDeath`, a usage `rejected` and
+  a Claude usage failure leave the state unchanged. Codex usage on the gateway
+  reads no expiry and throws `OpenAI usage request failed (HTTP 401).` instead
+  of `rejected` (RD-G4-3).
+- **`loginEnded(facts, gatewayServed)`** (`providerErrors.ts`) is the one
+  question an automatic switch or a one-shot fallback asks. For a served account
+  it is `facts.gatewayNeedsLogin`, set when the failure's raw text is the
+  gateway's needs-login refusal, whatever its kind; otherwise it is
+  `facts.loginDeath`. Any other gateway refusal is neither.
+- **Baseline.** Each time a link connection becomes ready, a socket reconnect
+  included, every served account saved as `needs-login` that the gateway does
+  not report becomes `unknown` (persisted), since nothing else would clear it:
+  the link drops its recorded statuses at each new connection, and the hello
+  resends every current one before ready. Such an account is marked replayed.
+- **Replay.** A replayed account's next accepted transition consumes the mark.
+  If that transition is the gateway's `needs-login`, it restores the state
+  without a push: the user was already told. A run success, a completed login,
+  the gateway's `false` or forgetting the account also consumes it, so a later
+  dead login pushes again.
+- **Client mode** keeps the rules above this section: a remote gateway's link
+  does not report credential status.
+
 ## Alerts
 
 `accountLoginAlerts` is app-wide lifecycle state, replayed after `ready` to each
@@ -196,11 +234,12 @@ login-alert projection changes while Settings is open.
 
 Runtime evidence from usage, a session or a one-shot sends one app notification
 per transition into `needs-login` for an enabled account. Repeated failures,
-registry discovery and startup replay send none. A successful login or run
-clears the transition, so a later dead login can notify again. Push taps open
-provider settings. Delivery and foreground handling remain the existing
-`deliverAppNotification` policy. This is the user's explicit exception to the
-object-only messaging rule, documented in `messaging.md`.
+registry discovery, startup replay and a gateway-served account's replayed
+needs-login send none. A successful login or run clears the transition, so a
+later dead login can notify again. Push taps open provider settings. Delivery
+and foreground handling remain the existing `deliverAppNotification` policy.
+This is the user's explicit exception to the object-only messaging rule,
+documented in `messaging.md`.
 
 ## Account picker
 

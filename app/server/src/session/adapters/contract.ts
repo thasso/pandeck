@@ -241,6 +241,11 @@ export interface RunFailureFacts {
   limitModel?: string;
   /** Narrow dead-login evidence derived from the raw error before display sanitization. */
   loginDeath?: true;
+  /**
+   * The credential gateway refused because the account needs a new login: the
+   * only dead-login evidence for a gateway-served account (`loginEnded`).
+   */
+  gatewayNeedsLogin?: true;
   /** OpenAI explicitly rejected opaque reasoning after a cross-account replay. */
   encryptedReasoningRejected?: true;
 }

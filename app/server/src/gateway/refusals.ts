@@ -18,6 +18,27 @@ export function isGatewayRefusal(text: string): boolean {
   return text.includes(GATEWAY_REFUSAL_MARKER);
 }
 
+/** The needs-login refusal around the account's name. */
+const NEEDS_LOGIN_BEFORE = `${GATEWAY_REFUSAL_MARKER} the account `;
+const NEEDS_LOGIN_AFTER = " needs a new login (Settings → Accounts).";
+const NEEDS_LOGIN_RE = new RegExp(
+  `${escapeRegExp(NEEDS_LOGIN_BEFORE)}[\\s\\S]*?${escapeRegExp(NEEDS_LOGIN_AFTER)}`,
+);
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Whether a provider error text holds the gateway's needs-login refusal: the
+ * only local refusal that says something about the login, which the
+ * classifier reads for a gateway-served account (`providerErrors.ts`
+ * `loginEnded`).
+ */
+export function isNeedsLoginRefusal(text: string): boolean {
+  return NEEDS_LOGIN_RE.test(text);
+}
+
 /** Why a lease was revoked; the refusal names it. */
 export type RevokeReason =
   "profile-removed" | "account-switch" | "session-ended";
@@ -92,7 +113,7 @@ export function refusalText(refusal: Refusal): string {
     case "credential":
       return `${GATEWAY_REFUSAL_MARKER} the credential for this session's account could not be read (${refusal.problem}).`;
     case "needs-login":
-      return `${GATEWAY_REFUSAL_MARKER} the account ${refusal.name} needs a new login (Settings → Accounts).`;
+      return `${NEEDS_LOGIN_BEFORE}${refusal.name}${NEEDS_LOGIN_AFTER}`;
     case "compat-unset":
       return `${GATEWAY_REFUSAL_MARKER} the OpenAI-compatible endpoint's settings have not reached the gateway yet. Try again shortly.`;
     case "unreachable":

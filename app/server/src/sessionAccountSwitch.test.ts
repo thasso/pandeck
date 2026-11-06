@@ -42,6 +42,8 @@ const { formatLocalDateTime } = await import("./googleTime.ts");
 const usageCache = await import("./usageCache.ts");
 const { usageProfileForSession } = await import("./harnesses/usage.ts");
 const health = await import("./accountHealth.ts");
+const { installGatewayLink } = await import("./gatewayLink.ts");
+type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 health.initializeAccountHealth({
   broadcast: () => {},
   push: async () => {},
@@ -582,6 +584,41 @@ for (const harness of engines) {
           ),
         );
         assert.ok(!text.includes(new Date(bench.until).toISOString()));
+      }
+    },
+  );
+  test.each([
+    [{ kind: "auth", gatewayNeedsLogin: true }, true, true],
+    [{ kind: "auth", loginDeath: true }, true, false],
+    [{ kind: "auth", gatewayNeedsLogin: true }, false, false],
+  ] as [RunFailureFacts, boolean, boolean][])(
+    `${harness} 1368 AC10: after %j, gateway-served %s, the session moves: %s`,
+    async (failure, served, moves) => {
+      // Only `gatewayServesProfile` reads the link here.
+      const uninstall = served
+        ? installGatewayLink({
+            reportsCredentialStatus: true,
+          } as unknown as GatewayLink)
+        : () => {};
+      try {
+        const a = account(harness, "Account A");
+        const b = account(harness, "Account B");
+        const s = setup(harness, a, [failure, undefined]);
+        await s.send().catch(() => {});
+        if (moves) await vi.waitFor(() => assert.equal(s.calls.length, 2));
+        await vi.waitFor(() =>
+          assert.equal(s.runtime.get(s.id)!.isRunning, false),
+        );
+        assert.deepEqual(s.moves, moves ? [b] : []);
+        assert.equal(s.calls.length, moves ? 2 : 1);
+        assert.equal(
+          JSON.stringify(messages(s)).includes(
+            "Switched from Account A to Account B — login expired",
+          ),
+          moves,
+        );
+      } finally {
+        uninstall();
       }
     },
   );

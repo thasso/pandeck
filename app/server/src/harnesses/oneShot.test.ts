@@ -26,8 +26,11 @@ import {
 } from "../piSdk/oneShot.ts";
 import {
   GATEWAY_UNAVAILABLE_TEXT,
+  installGatewayLink,
   serverGatewayAccess,
+  type GatewayLink,
 } from "../gatewayLink.ts";
+import { refusalText } from "../gateway/refusals.ts";
 import { isLoginDeath } from "../providerErrors.ts";
 import {
   NoHelperModelError,
@@ -833,6 +836,47 @@ test.each(["returned", "thrown"] as const)(
       kind: "auth",
       loginDeath: true,
     });
+  },
+);
+
+test.each([
+  ["the gateway's needs-login refusal", true],
+  ["a 401 after the gateway's renewal", false],
+] as const)(
+  "1368 AC10: an automatic gateway-served Claude one-shot falls back on %s: %s",
+  async (_case, fallsBack) => {
+    vi.mocked(credentialProfileById).mockReturnValue({
+      enterprise: true,
+      provider: "claude",
+    } as never);
+    // Only `gatewayServesProfile` reads the link here.
+    const uninstall = installGatewayLink({
+      reportsCredentialStatus: true,
+    } as unknown as GatewayLink);
+    try {
+      const engine = vi.mocked(runClaudeSdkOneShot);
+      engine.mockResolvedValueOnce({
+        text: "",
+        usage: { inputTokens: 3 },
+        failure: fallsBack
+          ? `API Error: 401 ${refusalText({ case: "needs-login", name: "Work" })}`
+          : "Request failed without auth prose",
+        failureStatus: 401,
+      });
+      engine.mockResolvedValueOnce({ text: "ok", usage: { inputTokens: 5 } });
+      const run = runOneShot(
+        request({
+          credentialProfileId: undefined,
+          model: { provider: "claude-sdk", modelId: "sonnet" },
+        }),
+      );
+      if (fallsBack) assert.equal((await run).text, "ok");
+      else await assert.rejects(run, OneShotError);
+      assert.equal(engine.mock.calls.length, fallsBack ? 2 : 1);
+      assert.equal(vi.mocked(pickAccount).mock.calls.length, fallsBack ? 1 : 0);
+    } finally {
+      uninstall();
+    }
   },
 );
 

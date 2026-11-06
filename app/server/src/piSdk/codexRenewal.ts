@@ -5,8 +5,10 @@
  * `harnesses/boot.ts`.
  *
  * pi's store is replaced by {@link AtomicAuthFileStore}, which takes pi's own
- * `proper-lockfile` lock with pi's options, so pi's engines, the server's pi
- * runtimes and this refresher serialise on one lock and re-check under it.
+ * `proper-lockfile` lock with pi's options, so this refresher and any pi
+ * writer of the file (a login, or pi with the switch off) serialise on one
+ * lock and re-check under it. With the gateway on, the server's pi runtimes
+ * only read presence and never write (`presenceCredentialStore.ts`).
  * It never commits after a known lock loss, writes only when the
  * `openai-codex` entry is still what the refresh started from, keeps every
  * other provider's entry, and replaces the file by an atomic rename. It never

@@ -43,7 +43,11 @@ import {
   reportAccountRunWorking,
   reportAccountRunFailure,
 } from "../accountHealth.ts";
-import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
+import {
+  analyzeProviderError,
+  loginEnded,
+  runFailureFacts,
+} from "../providerErrors.ts";
 import { errorText } from "../errors.ts";
 import {
   EnterpriseAccountRequiredError,
@@ -159,7 +163,8 @@ export async function runOneShot(
     !request.credentialProfileId?.trim() &&
     (failure?.kind === "quota" ||
       failure?.kind === "rate_limit" ||
-      failure?.loginDeath)
+      (failure !== undefined &&
+        loginEnded(failure, await gatewayServes(profileId))))
   ) {
     const { pickAccount } = await import("../accountRouter.ts");
     // Failure to find a replacement must not obscure the original outcome.
@@ -382,6 +387,14 @@ async function serverGatewayAccess(
 ): Promise<EngineGatewayAccess | undefined> {
   const { serverGatewayAccess } = await import("../gatewayLink.ts");
   return serverGatewayAccess(profileId);
+}
+
+/** Whether the gateway renews the attempt's login (`loginEnded`). */
+async function gatewayServes(profileId: string): Promise<boolean> {
+  const profile = credentialProfileById(profileId);
+  if (!profile) return false;
+  const { gatewayServesProfile } = await import("../gatewayLink.ts");
+  return gatewayServesProfile(profile);
 }
 
 function noHelperModel(request: ResolvedOneShotRequest): NoHelperModelError {

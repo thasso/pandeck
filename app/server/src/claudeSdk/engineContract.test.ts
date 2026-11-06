@@ -77,6 +77,22 @@ function writeCredential(file: string, accessToken: string): void {
   );
 }
 
+/** A credential that expired an hour ago, with its own refresh token. */
+function writeExpired(file: string, accessToken: string, refreshToken: string) {
+  mkdirSync(resolve(file, ".."), { recursive: true });
+  writeFileSync(
+    file,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken,
+        refreshToken,
+        expiresAt: Date.now() - 3_600_000,
+        scopes: ["user:inference"],
+      },
+    }),
+  );
+}
+
 const under = (path: string, root: string) =>
   resolve(path).startsWith(resolve(root) + sep);
 
@@ -119,7 +135,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     assert.ok(under(userHomeDir(), tmpdir()), userHomeDir());
     assert.ok(under(DATA_DIR, tmpdir()), DATA_DIR);
     const profiles = await import("../credentialProfiles.ts");
-    const { analyzeProviderError, isLoginDeath, runFailureFacts } =
+    const { analyzeProviderError, isLoginDeath, loginEnded, runFailureFacts } =
       await import("../providerErrors.ts");
     const {
       answerNextInProcessWorkerCallForTests,
@@ -199,6 +215,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
       profiles,
       analyzeProviderError,
       isLoginDeath,
+      loginEnded,
       runFailureFacts,
       answerNextInProcessWorkerCallForTests,
       ENGINE_METHODS,
@@ -482,33 +499,121 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
     CASE_MS * 2,
   );
 
+  /** A Claude profile whose fake login expired an hour ago; its file. */
+  function expiredProfile(name: string, refreshToken: string) {
+    const id = env.profiles.createCredentialProfile({
+      name,
+      provider: "claude",
+    }).id;
+    const file = join(env.profiles.claudeConfigDir(id), ".credentials.json");
+    writeExpired(file, CLAUDE_ACCESS, refreshToken);
+    return { id, file };
+  }
+
+  /** The 401 an upstream answers a token it does not accept. */
+  const unauthorized: Parameters<typeof env.setResponder>[0] = (_seen, res) => {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        type: "error",
+        error: { type: "authentication_error", message: "fake unauthorized" },
+      }),
+    );
+  };
+
   test(
-    "an upstream 401 ends the turn as a dead login after the engine's own retries",
+    "1368 Change 10: after a successful renewal, an upstream 401 on the renewed token ends the turn transiently, not as a dead login",
     async () => {
       env.upstream.reset();
-      env.setResponder((_seen, res) => {
-        res.writeHead(401, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "authentication_error",
-              message: "fake unauthorized",
-            },
+      env.setResponder(unauthorized);
+      env.setRenewal(env.rotatingClaudeTokens("fake-contract-401"));
+      const { id, file } = expiredProfile(
+        "Contract renewed 401",
+        "fake-contract-401-refresh-0",
+      );
+      const before = identity(file);
+      try {
+        const ran = await turn({ credentialProfileId: id });
+        assert.equal(ran.aborted, false, "the turn ended on its own");
+        const text = errorText(ran);
+        const renewals = env.upstream.platform.length;
+        assert.ok(renewals >= 1, "the gateway renewed first");
+        assert.ok(env.upstream.anthropic.length >= 1);
+        for (const seen of env.upstream.anthropic)
+          assert.match(
+            String(seen.headers.authorization),
+            /^Bearer fake-contract-401-access-\d+$/,
+            "every upstream request carried a renewed token",
+          );
+        const facts = env.runFailureFacts(
+          env.analyzeProviderError(text, {
+            provider: "anthropic",
+            statusCode: 401,
           }),
         );
+        assert.equal(env.loginEnded(facts, true), false, text);
+        assert.notEqual(
+          env.gateway.link.credentialStatus(id)?.needsLogin,
+          true,
+          "the gateway does not call a renewed login dead",
+        );
+        assert.deepEqual(env.egress.seen, []);
+        // Only the gateway's renames wrote it: the last renewal is the file.
+        assert.notEqual(identity(file).ino, before.ino);
+        const after = JSON.parse(readFileSync(file, "utf8")).claudeAiOauth;
+        assert.equal(after.accessToken, `fake-contract-401-access-${renewals}`);
+        assertNoTokenLogged([ran.leaseToken]);
+      } finally {
+        env.setRenewal(undefined);
+        env.setResponder(env.fakeClaudeStream(REPLY));
+      }
+    },
+    CASE_MS * 2,
+  );
+
+  test(
+    "1368 Change 10: a renewal answered invalid_grant ends the turn with the gateway's needs-login",
+    async () => {
+      env.upstream.reset();
+      env.setResponder(env.fakeClaudeStream(REPLY));
+      env.setRenewal((_seen, res) => {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid_grant" }));
       });
-      const before = identity(env.namedFile);
-      const ran = await turn({ credentialProfileId: env.named });
-      assert.equal(ran.aborted, false, "the turn ended on its own");
-      assert.ok(ran.elapsedMs < 30_000, `ended after ${ran.elapsedMs} ms`);
-      const text = errorText(ran);
-      assert.ok(env.upstream.anthropic.length >= 1);
-      assert.ok(!text.includes("Pandeck gateway:"), text);
-      assert.equal(env.isLoginDeath(text), true, text);
-      assert.deepEqual(identity(env.namedFile), before);
-      assert.deepEqual(env.egress.seen, []);
-      assertNoTokenLogged([ran.leaseToken]);
+      const { id, file } = expiredProfile(
+        "Contract rejected",
+        "fake-contract-rejected-refresh",
+      );
+      const before = identity(file);
+      try {
+        const ran = await turn({ credentialProfileId: id });
+        assert.equal(ran.aborted, false, "the turn ended on its own");
+        const text = errorText(ran);
+        assert.ok(
+          text.includes("the account Contract rejected needs a new login"),
+          text,
+        );
+        const facts = env.runFailureFacts(
+          env.analyzeProviderError(text, {
+            provider: "anthropic",
+            statusCode: 401,
+          }),
+        );
+        assert.equal(facts.gatewayNeedsLogin, true, text);
+        assert.equal(env.loginEnded(facts, true), true, text);
+        assert.equal(env.gateway.link.credentialStatus(id)?.needsLogin, true);
+        assert.ok(env.upstream.platform.length >= 1, "the renewal was asked");
+        assert.equal(env.upstream.anthropic.length, 0);
+        assert.deepEqual(
+          identity(file),
+          before,
+          "a rejected renewal writes nothing",
+        );
+        assert.deepEqual(env.egress.seen, []);
+        assertNoTokenLogged([ran.leaseToken]);
+      } finally {
+        env.setRenewal(undefined);
+      }
     },
     CASE_MS * 2,
   );
@@ -676,6 +781,7 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
         }),
       );
       assert.equal(facts.loginDeath, undefined, text);
+      assert.equal(facts.gatewayNeedsLogin, true, text);
       assert.equal(env.isLoginDeath(text), false, text);
       assert.equal(env.upstream.anthropic.length, 0);
       assert.deepEqual(env.egress.seen, []);
@@ -737,6 +843,63 @@ describe.runIf(ENABLED)("the Claude engine through the gateway", () => {
         ]);
       } finally {
         env.setRenewal(undefined);
+      }
+    },
+    CASE_MS * 2,
+  );
+
+  test(
+    "1368 AC8: an expired named profile and claude-default each renew once, through the gateway, across a turn and a one-shot",
+    async () => {
+      env.upstream.reset();
+      env.setResponder(env.fakeClaudeStream(REPLY));
+      env.setRenewal(env.rotatingClaudeTokens("fake-contract-ac8"));
+      const named = expiredProfile(
+        "Contract expired",
+        "fake-contract-ac8-named",
+      );
+      const fallback = {
+        id: env.profiles.DEFAULT_CLAUDE_PROFILE_ID,
+        file: env.defaultFile,
+      };
+      writeExpired(
+        fallback.file,
+        CLAUDE_DEFAULT_ACCESS,
+        "fake-contract-ac8-default",
+      );
+      const renewalsOf = (refreshToken: string) =>
+        env.upstream.platform.filter((seen) =>
+          seen.body.toString().includes(refreshToken),
+        ).length;
+      try {
+        for (const [profile, refreshToken, profiled] of [
+          [named, "fake-contract-ac8-named", true],
+          [fallback, "fake-contract-ac8-default", false],
+        ] as const) {
+          const before = identity(profile.file);
+          const ran = await turn(
+            profiled ? { credentialProfileId: profile.id } : {},
+          );
+          assert.equal(ran.thrown, undefined, ran.thrown);
+          assert.equal(replyText(ran.messages), REPLY);
+          const renewed = identity(profile.file);
+          assert.notEqual(renewed.ino, before.ino, "renewed by a rename");
+          const shot = await oneShot(profile.id);
+          assert.equal(shot.thrown, undefined, shot.thrown);
+          assert.equal(shot.result?.text, REPLY);
+          assert.equal(renewalsOf(refreshToken), 1, "one renewal per profile");
+          assert.deepEqual(
+            identity(profile.file),
+            renewed,
+            "the identity changed exactly once",
+          );
+          assertNoTokenLogged([ran.leaseToken, shot.leaseToken]);
+        }
+        assert.equal(env.upstream.platform.length, 2);
+        assert.deepEqual(env.egress.seen, []);
+      } finally {
+        env.setRenewal(undefined);
+        writeCredential(env.defaultFile, CLAUDE_DEFAULT_ACCESS);
       }
     },
     CASE_MS * 2,

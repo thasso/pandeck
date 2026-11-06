@@ -1348,7 +1348,9 @@ re-pushes compatible endpoints. Profile changes during an attempt cause another
 full sync and push pass, without a pass cap. Ready follows only a pass with an
 unchanged generation. Changes while ready keep the ordered delta queue. A bind
 lost during disconnection is not replayed; external Workers are not reconciled
-here.
+here. Each connection starts its credential statuses afresh: the gateway's hello
+resends every needs-login, and once the connection is ready account health
+re-takes its baseline (`docs/account-routing.md` "Gateway-served accounts").
 
 The standalone entry (`gateway/main.ts`, packaged as `pandeck-gateway`) keeps
 the edge and vault in one process. It takes its control socket before opening
@@ -1459,7 +1461,7 @@ locks stay until slice 5's encrypted store migration.
     - Whether the CLI's own login save takes the refresh lock is not
       established; the save is atomic and 0600 without the compare-and-swap. The
       hold keeps the gateway from racing it; a terminal CLI on the same
-      directory is U9.
+      directory is outside Pandeck (One refresher).
     - A `browser` setting in the CLI's own config, or another callback path,
       could let a login complete without the pasted code: the flow pins
       `BROWSER=false`, but what the CLI's opener reads first is not determined.
@@ -1601,19 +1603,19 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
 - **Codex** goes through pi 1.5.0's own refresh (`getAuth` with
   `minOAuthValidityMs`), injected into the gateway as a port
   (`piSdk/codexRenewal.ts`). Its store takes pi's own `proper-lockfile` lock
-  with pi's options, so pi's engines, the server's runtimes and the gateway
-  serialise and re-check under one lock. It commits only while the lock was not
-  reported lost and the `openai-codex` entry is still the one the refresh
-  started from, keeps every other provider's entry, and replaces the file by an
-  atomic rename. In the standalone gateway the port spawns one Codex renewal
-  child per credential through `gateway/codexChild.ts`; pi loads only in that
-  child (`codexRenewMain.ts`). The child reads `{authFile, minValidityMs}` on
-  stdin, writes one result line without credentials and exits 0. The parent
-  accepts only fixed result codes, preserving the refresher's `400` and `401`
-  rejections as needs-login, never copying arbitrary upstream strings. Every
-  outcome waits for its exit. Abort or deadline sends SIGTERM then SIGKILL after
-  a five-second grace, so no child writer outlives its lane item. In-process
-  mode still injects the direct refresher.
+  with pi's options, so pi's engines, a login and the gateway serialise and
+  re-check under one lock. It commits only while the lock was not reported lost
+  and the `openai-codex` entry is still the one the refresh started from, keeps
+  every other provider's entry, and replaces the file by an atomic rename. In
+  the standalone gateway the port spawns one Codex renewal child per credential
+  through `gateway/codexChild.ts`; pi loads only in that child
+  (`codexRenewMain.ts`). The child reads `{authFile, minValidityMs}` on stdin,
+  writes one result line without credentials and exits 0. The parent accepts
+  only fixed result codes, preserving the refresher's `400` and `401` rejections
+  as needs-login, never copying arbitrary upstream strings. Every outcome waits
+  for its exit. Abort or deadline sends SIGTERM then SIGKILL after a five-second
+  grace, so no child writer outlives its lane item. In-process mode still
+  injects the direct refresher.
 - **Outcomes.** A failure (timeout, network, a 5xx, a malformed answer, a busy
   or lost lock, a conflict) writes nothing, never marks the login dead and backs
   off from 30 s, doubling to 10 minutes; success or a changed file ends the
@@ -1631,16 +1633,19 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   (including the CLI's blanked tokens) is read twice more, 50 ms apart, then
   gets the same refusal and status until the first good read; an unreadable one
   gets the credential refusal. The link records the latest status
-  (`credentialStatus`); health ignores it until G5c.
-- **U9.** Every Claude account's directory is Pandeck's, `claude-default`'s
-  included, and is renewed like any profile. Only a terminal CLI the user points
-  at one with the setup fallback's `CLAUDE_CONFIG_DIR` shares it, under the same
-  locks and compare-and-swap, so the two serialise and adopt each other's
-  tokens.
-- **Interim writers** (until G5c): the server's pi runtimes' catalog refresh,
-  under pi's lock with its re-check; and a terminal CLI pointed at an account's
-  directory (U9). A login flow is none with the switch on: its hold fences
-  renewal (Login holds).
+  (`credentialStatus`), and account health takes it as the only needs-login
+  evidence for a Claude or Codex account (`gatewayHealth.ts`,
+  `docs/account-routing.md` "Gateway-served accounts").
+- **One refresher.** With the switch on the gateway is the only Pandeck writer
+  of a token file, `claude-default`'s included. The server's pi runtimes read
+  credentials through `PresenceCredentialStore`, which answers presence and type
+  with placeholders that never expire, so pi never refreshes or writes through
+  them; they keep their model catalog. Their `getAuth` answers no auth for a
+  Codex model, while an OpenAI-compatible model keeps its own pairing
+  (`serverCredentialPairing.ts`). The login runtime is the server's only writer,
+  fenced by its hold (Login holds). A terminal CLI the user points at an
+  account's directory with the setup fallback's `CLAUDE_CONFIG_DIR` stays
+  outside Pandeck, under the same locks and compare-and-swap.
 - **Tests never reach a token host.** The Claude endpoint override is a test
   seam that only tests and the Bun probe set (`architecture.test.ts` pins every
   production mention); `startGatewayLinkForTests` points it at a closed loopback
@@ -1651,9 +1656,8 @@ CLI's environment token is never refreshed, and pi uses the lease as a key.
   - A rotation race outside the lock protocol, such as a copy of an account's
     login used from another directory (a terminal CLI's own `~/.claude`), can
     still end in needs-login.
-  - pi's own in-place `auth.json` write remains for the server's pi runtimes
-    (until G5c), logins (under their hold) and switch-off engines; a crash
-    during one can truncate the file, as today.
+  - pi's own in-place `auth.json` write remains for logins (under their hold)
+    and switch-off engines; a crash during one can truncate the file, as today.
   - A renewal whose request succeeded but whose commit is refused (a lost lock,
     a changed entry, a deleted profile) loses that rotation; a provider that
     invalidates the old refresh token may then need a login.

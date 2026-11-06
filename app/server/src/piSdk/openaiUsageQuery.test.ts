@@ -23,8 +23,8 @@ import {
   fetchOpenAiUsageForProfile,
   fetchOpenAiUsageViaGateway,
   mapOpenAiUsageResponse,
+  hasPiCodexLogin,
   mapResetCredits,
-  readPiCodexMeta,
   redeemOpenAiResetCredit,
   redeemOpenAiResetCreditForProfile,
   redeemOpenAiResetCreditViaGateway,
@@ -439,10 +439,15 @@ test("AC14: through the gateway, usage, credits and consume carry the lease and 
   }
 });
 
-test("AC14: the server's Codex read is presence and expiry only", async () => {
-  const expires = Date.now() + 3_600_000;
-  assert.deepEqual(await readPiCodexMeta(signedIn(expires)), { expires });
-  assert.equal(await readPiCodexMeta(codexProfile(undefined)), null);
+test("AC4: the server's Codex read is presence only", async () => {
+  const present = await hasPiCodexLogin(signedIn(Date.now() - 1_000));
+  assert.equal(present, true);
+  assert.equal(typeof present, "boolean");
+  assert.equal(await hasPiCodexLogin(codexProfile(undefined)), false);
+  assert.equal(
+    await hasPiCodexLogin(codexProfile({ type: "api_key", key: "k" })),
+    false,
+  );
 });
 
 test("client mode: the gateway's account state stands in for the local login", async () => {
@@ -456,26 +461,59 @@ test("client mode: the gateway's account state stands in for the local login", a
       { ...account, id: "codex-ready", needsLogin: false },
       { ...account, id: "codex-login", needsLogin: true },
     ]);
-    assert.deepEqual(await readPiCodexMeta("codex-ready"), { expires: null });
-    assert.equal(await readPiCodexMeta("codex-login"), null);
+    assert.equal(await hasPiCodexLogin("codex-ready"), true);
+    assert.equal(await hasPiCodexLogin("codex-login"), false);
   } finally {
     mirrorRemoteCredentialProfiles(undefined);
   }
 });
 
-test("AC14: an expired or missing Codex login sends nothing to the gateway", async () => {
+test("AC4: through the gateway an expired-looking login still asks, and a missing one sends nothing", async () =>
   const sent = stubFetch(ANSWERS);
+  // The gateway owns the expiry: it renews before it forwards.
   const expired = await fetchOpenAiUsageViaGateway(
     signedIn(Date.now() - 1_000),
     GATEWAY,
   );
-  assert.equal(expired.unavailableCode, "expired");
+  assert.equal(expired.available, true);
+  assert.equal(sent.length, 2, "usage and the credit inventory");
+  sent.length = 0;
   const missing = await fetchOpenAiUsageViaGateway(
     codexProfile(undefined),
     GATEWAY,
   );
   assert.equal(missing.unavailableCode, "not-signed-in");
   assert.deepEqual(sent, []);
+});
+
+test("AC4: through the gateway an upstream 401 is a failed request, never a rejected login", async () => {
+  vi.stubGlobal(
+    "fetch",
+    async () =>
+      new Response(JSON.stringify({ detail: "unauthorized" }), { status: 401 }),
+  );
+  await assert.rejects(
+    fetchOpenAiUsageViaGateway(signedIn(Date.now() + 3_600_000), GATEWAY),
+    { message: "OpenAI usage request failed (HTTP 401)." },
+  );
+});
+
+test("AC4: the direct path keeps its expiry and rejection", async () => {
+  const sent = stubFetch(ANSWERS);
+  const expired = await fetchOpenAiUsageForProfile(
+    signedIn(Date.now() - 1_000),
+  );
+  assert.equal(expired.unavailableCode, "expired");
+  assert.deepEqual(sent, []);
+  vi.stubGlobal(
+    "fetch",
+    async () =>
+      new Response(JSON.stringify({ detail: "unauthorized" }), { status: 401 }),
+  );
+  const rejected = await fetchOpenAiUsageForProfile(
+    signedIn(Date.now() + 3_600_000),
+  );
+  assert.equal(rejected.unavailableCode, "rejected");
 });
 
 test("AC14: with the switch off, the direct requests carry today's headers", async () => {

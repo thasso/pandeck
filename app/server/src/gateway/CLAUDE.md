@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=2400 reason="Ten contracts; logins in the gateway add the second token-file writer and keep drivers out of live files." task=1385 date=2026-11-06 -->
+<!-- instruction-budget: bytes=2560 reason="Ten contracts; logins in the gateway add the second token-file writer and keep drivers out of live files; the needs-login refusal is the one marked refusal a switch reads." task=1368 date=2026-11-06 -->
 
 # Credential gateway
 
@@ -32,6 +32,7 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
   body. Refusal texts hold no string from a request or upstream; a profile name
   comes only from the registry.
 - Every local refusal carries `GATEWAY_REFUSAL_MARKER` in the provider's error
-  shape, so the classifier never reads it as a dead login.
+  shape, so the classifier never reads it as a dead login, except the
+  needs-login refusal, which `loginEnded` reads for gateway-served profiles.
 - `verifiedEngines.json` changes only with that engine's contract test green and
   the operator's live smoke (`docs/workers.md` "Engine-version guard").

@@ -4,7 +4,7 @@ import {
   accountLimitMatches,
   isSubscriptionAccountModel,
 } from "@assistant/shared/accountHealth";
-import { isGatewayRefusal } from "./gateway/refusals.ts";
+import { isGatewayRefusal, isNeedsLoginRefusal } from "./gateway/refusals.ts";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
 
 export interface ProviderErrorContext {
@@ -200,6 +200,9 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
     ...(info.kind === "auth" && isLoginDeath(info.rawMessage, info)
       ? { loginDeath: true }
       : {}),
+    ...(isNeedsLoginRefusal(info.rawMessage)
+      ? { gatewayNeedsLogin: true as const }
+      : {}),
     // Checked after the conversion: seconds that look fine can still overflow
     // into a number no `Date` represents.
     ...(resetAtMs !== undefined &&
@@ -209,6 +212,21 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
       ? { resetAtMs }
       : {}),
   };
+}
+
+/**
+ * Whether a failed run ended its account's login. For an account the gateway
+ * serves (`gatewayLink.ts` `gatewayServesProfile`), only the gateway's
+ * needs-login refusal does: it renews the login itself, so a 401 after its
+ * renewal is transient. Any other account keeps the dead-login evidence.
+ */
+export function loginEnded(
+  facts: RunFailureFacts | undefined,
+  gatewayServed: boolean,
+): boolean {
+  return gatewayServed
+    ? facts?.gatewayNeedsLogin === true
+    : facts?.loginDeath === true;
 }
 
 /** The largest instant a JavaScript `Date` represents. */

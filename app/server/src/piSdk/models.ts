@@ -12,7 +12,7 @@ import {
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { deviceCodeInteraction } from "./codexLogin.ts";
 import { chmodSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ACCOUNT_KINDS,
   accountServesModel,
@@ -33,6 +33,8 @@ import {
   takeLoginHold,
   type LoginHold,
 } from "../loginHolds.ts";
+import { GATEWAY_ENABLED } from "../config.ts";
+import { PresenceCredentialStore } from "./presenceCredentialStore.ts";
 import { guardServerRuntime } from "./serverCredentialPairing.ts";
 import {
   clearCredentialProfileLoginState,
@@ -92,6 +94,21 @@ function runtimeOptions(agentDir: string) {
   };
 }
 
+/**
+ * A server runtime's options: with the gateway on it reads its account's
+ * credentials only through {@link PresenceCredentialStore}, so pi never
+ * refreshes or writes them; the gateway is the only refresher
+ * (`docs/workers.md` "Credentials"). The catalog fetch is unchanged.
+ */
+function serverRuntimeOptions(agentDir: string) {
+  return GATEWAY_ENABLED
+    ? {
+        ...runtimeOptions(agentDir),
+        credentials: new PresenceCredentialStore(join(agentDir, "auth.json")),
+      }
+    : runtimeOptions(agentDir);
+}
+
 /** In memory only: no auth.json, models.json or models-store.json, and no catalog fetch. */
 function inMemoryRuntime(): Promise<ModelRuntime> {
   return ModelRuntime.create({
@@ -105,7 +122,7 @@ function inMemoryRuntime(): Promise<ModelRuntime> {
 // Every runtime that runs sessions or one-shots pairs a compatible key with
 // its origin before anyone holds it, whatever the gateway switch.
 const modelRuntime = guardServerRuntime(
-  await ModelRuntime.create(runtimeOptions(defaultAgentDir)),
+  await ModelRuntime.create(serverRuntimeOptions(defaultAgentDir)),
 );
 const profileRuntimes = new Map<string, Promise<ModelRuntime>>([
   [defaultPiProfile.id, Promise.resolve(modelRuntime)],
@@ -193,9 +210,9 @@ export function modelRuntimeForProfile(
       );
       runtime = creating;
     } else {
-      runtime = ModelRuntime.create(runtimeOptions(piAgentDir(profileId))).then(
-        guardServerRuntime,
-      );
+      runtime = ModelRuntime.create(
+        serverRuntimeOptions(piAgentDir(profileId)),
+      ).then(guardServerRuntime);
     }
     profileRuntimes.set(profileId, runtime);
   }
@@ -626,6 +643,8 @@ export function startOpenAiProfileLogin(profileId: string): void {
     }
     // A login-only facade can attest its own OAuth result without changing a
     // live run's provider. The SDK still owns all credential serialization.
+    // It keeps pi's file store under either switch: the login, under its
+    // gateway hold, is the server's only credential writer.
     const runtime = await ModelRuntime.create({
       ...runtimeOptions(agentDir),
       refreshOnCreate: false,
