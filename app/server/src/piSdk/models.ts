@@ -43,6 +43,7 @@ import {
   listCredentialProfiles,
   migrateOpenAiCompatibleSettingsToAccount,
   openAiProfileHasCredential,
+  remoteOpenAiAccountReady,
   piAgentDir,
   setCredentialProfileDeletedHandler,
   setCredentialProfileLoginState,
@@ -364,7 +365,8 @@ export function listModels(): ModelOption[] {
     ...listRegistryModels(
       modelRegistry,
       (provider) => !isOpenAiCompatibleModelProvider(provider),
-      openAiProfileHasCredential(defaultPiProfile.id),
+      openAiProfileHasCredential(defaultPiProfile.id) ||
+        remoteOpenAiAccountReady(),
     ),
     ...listRegistryModels(compatibleCatalog, (provider) =>
       enabled.has(provider),

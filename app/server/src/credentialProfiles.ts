@@ -252,6 +252,24 @@ export function mirrorRemoteCredentialProfiles(
       credentialProfileChanged(id);
 }
 
+/** A mirrored account the gateway holds a working login for; none keeps a file here. */
+function remoteAccountReady(id: string): boolean {
+  return (
+    remoteProfiles?.some((profile) => profile.id === id) === true &&
+    !remoteNeedsLogin.has(id)
+  );
+}
+
+/** Client mode only: whether any mirrored OpenAI account has a working login. */
+export function remoteOpenAiAccountReady(): boolean {
+  return (
+    remoteProfiles?.some(
+      (profile) =>
+        profile.provider === "openai-codex" && remoteAccountReady(profile.id),
+    ) === true
+  );
+}
+
 function readRegistry(): CredentialProfile[] {
   if (remoteProfiles) return remoteProfiles.map((profile) => ({ ...profile }));
   if (!existsSync(REGISTRY)) return [];
@@ -348,6 +366,7 @@ export function claudeProfileEnvironment(
 
 /** Non-secret readiness hint for the profile-local OpenAI credential. */
 export function openAiProfileHasCredential(id: string): boolean {
+  if (remoteProfiles) return remoteAccountReady(id);
   try {
     const raw = JSON.parse(
       readFileSync(join(piAgentDir(id), "auth.json"), "utf8"),
@@ -361,6 +380,7 @@ export function openAiProfileHasCredential(id: string): boolean {
 }
 
 export function claudeProfileHasCredential(id: string): boolean {
+  if (remoteProfiles) return remoteAccountReady(id);
   // Claude owns this format. Presence is enough for a non-secret readiness hint;
   // the SDK remains the final authority when it starts a query.
   return existsSync(join(claudeConfigDir(id), ".credentials.json"));
