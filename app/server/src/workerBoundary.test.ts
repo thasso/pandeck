@@ -513,12 +513,18 @@ const GATEWAY_VAULT = [
   "vault",
 ];
 const GATEWAY_EDGE = [
+  // The admin CLI and the client listener's enrollment, CA and protocol.
+  "adminMain",
+  "clientListener",
+  "clientMethods",
+  "clientRegistry",
   "compatUpstream",
   "control",
   "controlMethods",
   "forward",
   "leases",
   "upstreams",
+  "x509",
 ];
 const GATEWAY_SHARED = ["profiles", "refusals", "vaultPort"];
 const GATEWAY_ROOT = ["gateway", "state"];
@@ -566,14 +572,33 @@ test("the gateway's edge reaches the vault only through its port", () => {
   );
 });
 
-test("only the server link and the error classifier import the gateway", () => {
-  // The link starts it and speaks control; engine modules reach it only
-  // through the link. The classifier reads the local-refusal marker.
+test("only the server links and the error classifier import the gateway", () => {
+  // The link starts it and speaks control, the client-mode link speaks
+  // gateway client 1.0; engine modules reach it only through a link. The
+  // classifier reads the local-refusal marker.
   assert.deepEqual(
     importersOf((target) => target.startsWith("gateway/")).filter(
       (module) => !module.startsWith("gateway/"),
     ),
-    ["gatewayLink.ts", "providerErrors.ts"],
+    ["gatewayClientLink.ts", "gatewayLink.ts", "providerErrors.ts"],
+  );
+});
+
+test("the relay imports only node and itself, and nothing imports it", () => {
+  // It holds the client key in its own process (Task-1384, M14).
+  const modules = [...scans].filter(([module]) => module.startsWith("relay/"));
+  assert.ok(modules.length > 0, "the scan found the relay modules");
+  for (const [module, scan] of modules)
+    for (const target of scan.imports)
+      assert.ok(
+        target.startsWith("node:") || target.startsWith("relay/"),
+        `${module} imports ${target}`,
+      );
+  assert.deepEqual(
+    importersOf((target) => target.startsWith("relay/")).filter(
+      (module) => !module.startsWith("relay/"),
+    ),
+    [],
   );
 });
 

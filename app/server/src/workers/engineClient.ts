@@ -238,7 +238,7 @@ async function openLeased<T>(
   // A link that started no gateway gives the engine nowhere to send the
   // lease: refuse before granting one. Ready implies a started gateway.
   const baseUrl =
-    link.gateway?.url ?? ((await link.ready) ? link.gateway?.url : undefined);
+    link.baseUrl ?? ((await link.ready) ? link.baseUrl : undefined);
   if (baseUrl === undefined) throw new GatewayUnavailableError();
   // Before an open the Worker can see: a failed grant throws here.
   const granted = await link.grantEngineLease({

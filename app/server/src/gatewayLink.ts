@@ -178,6 +178,11 @@ export interface GatewayLink {
   /** The gateway this link started, once it has. Tests and the probe read it. */
   readonly gateway: RunningGateway | undefined;
   /**
+   * Where engines spend their leases: the started gateway's loopback port, or
+   * in client mode the relay's. Undefined until known.
+   */
+  readonly baseUrl: string | undefined;
+  /**
    * Waits for ready (at most 10 s), then grants. Rejects with a
    * {@link GatewayUnavailableError} when no lease could be had.
    */
@@ -225,6 +230,18 @@ export interface GatewayLink {
 }
 
 let installed: GatewayLink | undefined;
+
+/**
+ * Installs a link another module made (client mode's remote link); answers
+ * the uninstall. Throws when one is installed.
+ */
+export function installGatewayLink(link: GatewayLink): () => void {
+  if (installed) throw new Error("A gateway link is already installed.");
+  installed = link;
+  return () => {
+    if (installed === link) installed = undefined;
+  };
+}
 
 /** The process's link while one runs; without it no open grants a lease. */
 export function installedGatewayLink(): GatewayLink | undefined {
@@ -518,6 +535,9 @@ export function startGatewayLink(options: GatewayLinkOptions): GatewayLink {
     ready: boot,
     get gateway() {
       return gateway;
+    },
+    get baseUrl() {
+      return gateway?.url;
     },
     async grantEngineLease({ workerId, sessionId, profileId }) {
       if (!(await readyWithin(READY_TIMEOUT_MS))) {
