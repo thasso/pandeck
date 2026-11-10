@@ -25,12 +25,15 @@ import type { GatewayProfile } from "./profiles.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
   OUTSIDE_ACCOUNTS,
+  VAULT_LIMITS,
   VAULT_METHODS,
   accountTokenFile,
   vaultBody,
   vaultMessage,
+  type LoginFailure,
   type VaultLinkTls,
 } from "./vaultMethods.ts";
+import type { CredentialProblem } from "./refusals.ts";
 import type {
   LoginDriverEvents,
   LoginRun,
@@ -43,6 +46,8 @@ const REDIAL_MAX_MS = 10_000;
 /** A credential read the vault has not answered by then is refused. */
 const CREDENTIAL_TIMEOUT_MS = 30_000;
 const KEEPALIVE_MS = 15_000;
+/** Dial, TLS handshake and `vault.hello` each get this long. */
+const CONNECT_TIMEOUT_MS = 10_000;
 
 const UNAVAILABLE: VaultCredential = {
   ok: false,
@@ -64,6 +69,8 @@ interface RemoteVaultDeps {
   /** A profile's needs-login changed, as the vault told. */
   report(profileId: string, needsLogin: boolean): void;
   log(line: string): void;
+  /** Test seam: the dial, TLS and hello deadline; 10 s. */
+  connectTimeoutMs?: number;
 }
 
 export interface RemoteVault extends VaultPort {
@@ -76,7 +83,28 @@ export interface RemoteVault extends VaultPort {
 
 interface PendingLogin {
   events: LoginDriverEvents;
+  /** The edge's own check, which the vault asks before moving it in. */
+  commit(): boolean | Promise<boolean>;
   settle(error?: Error): void;
+}
+
+/** The edge's own text for a failure the vault names by code. */
+const LOGIN_FAILURE_TEXT: Record<LoginFailure, string> = {
+  cancelled: "The login was cancelled.",
+  failed: "The login failed.",
+};
+
+const CREDENTIAL_PROBLEMS: readonly CredentialProblem[] = [
+  "missing",
+  "unreadable",
+  "malformed",
+];
+
+/** A Node socket error's code, the only error text logged here. */
+function socketErrorCode(err: unknown): string {
+  const code =
+    err instanceof Error && "code" in err ? String(err.code) : undefined;
+  return code && /^E[A-Z_]{1,40}$/.test(code) ? code : "connection failed";
 }
 
 export function createRemoteVault(
@@ -95,6 +123,49 @@ export function createRemoteVault(
   let lastSent: { profiles: string; liveLeases: string } | undefined;
   let sendQueued = false;
   const logins = new Map<string, PendingLogin>();
+  const connectTimeoutMs = deps.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
+  /** The socket being dialed, so `close` can stop it. */
+  let dialing: tls.TLSSocket | undefined;
+  /** The connection waiting for its hello answer, likewise. */
+  let opening: WorkerConnection | undefined;
+
+  /**
+   * The vault's answer as the edge's own value: a needs-login refusal names
+   * the edge's registry entry, any other refusal is one this side knows, and
+   * anything else is unavailable.
+   */
+  const decodeCredential = (
+    binding: LoginBinding,
+    value: unknown,
+  ): VaultCredential => {
+    if (typeof value !== "object" || value === null) return UNAVAILABLE;
+    const answer = value as Record<string, unknown>;
+    if (answer.ok === true) {
+      const { headers, token } = answer;
+      if (
+        typeof token !== "string" ||
+        typeof headers !== "object" ||
+        headers === null ||
+        Object.values(headers).some((v) => typeof v !== "string")
+      )
+        return UNAVAILABLE;
+      return { ok: true, headers: headers as Record<string, string>, token };
+    }
+    if (answer.locked === true) return { ok: false, locked: true };
+    const refusal = answer.refusal as Record<string, unknown> | undefined;
+    if (refusal?.case === "needs-login") {
+      const profile = deps
+        .profiles()
+        .find((candidate) => candidate.id === binding.profileId);
+      return profile
+        ? { ok: false, refusal: { case: "needs-login", name: profile.name } }
+        : UNAVAILABLE;
+    }
+    const problem = CREDENTIAL_PROBLEMS.find((p) => p === refusal?.problem);
+    return refusal?.case === "credential" && problem
+      ? { ok: false, refusal: { case: "credential", problem } }
+      : UNAVAILABLE;
+  };
 
   const setNeedsLogin = (profileId: string, needsLogin: boolean): void => {
     if (needing.has(profileId) === needsLogin) return;
@@ -151,10 +222,25 @@ export function createRemoteVault(
           ok === true
             ? undefined
             : new Error(
-                typeof error === "string" ? error : "The login failed.",
+                LOGIN_FAILURE_TEXT[
+                  error === "cancelled" ? "cancelled" : "failed"
+                ],
               ),
         );
       return Promise.resolve(vaultMessage({}));
+    },
+    // Asked in the vault's writer lane: the edge's own check decides.
+    [VAULT_METHODS.loginCommit]: async (payload) => {
+      const { loginId } = vaultBody(payload);
+      const login =
+        typeof loginId === "string" ? logins.get(loginId) : undefined;
+      let commit = false;
+      try {
+        commit = login ? (await login.commit()) === true : false;
+      } catch {
+        commit = false;
+      }
+      return vaultMessage({ commit });
     },
   };
 
@@ -165,6 +251,7 @@ export function createRemoteVault(
     backoff = Math.min(backoff * 2, REDIAL_MAX_MS);
   };
 
+  /** Dials and completes TLS within the deadline, or destroys the socket. */
   const dial = (): Promise<tls.TLSSocket> =>
     new Promise((resolveSocket, reject) => {
       const socket = tls.connect({
@@ -179,8 +266,29 @@ export function createRemoteVault(
             ? undefined
             : new Error("the vault's certificate is not the pinned one"),
       });
-      socket.once("secureConnect", () => resolveSocket(socket));
-      socket.on("error", reject);
+      dialing = socket;
+      const timer = setTimeout(() => {
+        const err = Object.assign(new Error("dial timed out"), {
+          code: "ETIMEDOUT",
+        });
+        socket.destroy(err);
+      }, connectTimeoutMs);
+      const settle = (): void => {
+        clearTimeout(timer);
+        if (dialing === socket) dialing = undefined;
+      };
+      socket.once("secureConnect", () => {
+        settle();
+        resolveSocket(socket);
+      });
+      socket.on("error", (err: Error) => {
+        settle();
+        reject(err);
+      });
+      socket.once("close", () => {
+        settle();
+        reject(new Error("closed while dialing"));
+      });
     });
 
   const connect = async (): Promise<void> => {
@@ -193,19 +301,39 @@ export function createRemoteVault(
         handshake: { role: "worker", workerId: "pandeck-gateway-edge" },
         protocol: GATEWAY_VAULT_PROTOCOL,
         handlers,
-        onEnd: (reason) => {
+        limits: VAULT_LIMITS,
+        onEnd: (_reason, { cause }) => {
           if (connection === opened) {
             connection = undefined;
             for (const login of logins.values())
               login.settle(new Error("The vault became unavailable."));
             logins.clear();
-            log(`vault link ended: ${reason}`);
+            // The cause only: the reason may carry the vault's words.
+            log(`vault link ended (${cause})`);
           }
           schedule();
         },
       });
+      opening = opened;
+      let helloTimer: ReturnType<typeof setTimeout> | undefined;
       const hello = vaultBody(
-        await opened.request(VAULT_METHODS.hello, vaultMessage({})),
+        await Promise.race([
+          opened.request(VAULT_METHODS.hello, vaultMessage({})),
+          new Promise<never>((_resolve, reject) => {
+            helloTimer = setTimeout(
+              () =>
+                reject(
+                  Object.assign(new Error("hello timed out"), {
+                    code: "ETIMEDOUT",
+                  }),
+                ),
+              connectTimeoutMs,
+            );
+          }),
+        ]).finally(() => {
+          clearTimeout(helloTimer);
+          opening = undefined;
+        }),
       );
       if (closing) {
         opened.end("the vault link closed");
@@ -231,9 +359,7 @@ export function createRemoteVault(
       log(`vault link up at ${options.host}:${options.port}`);
     } catch (err) {
       opened?.end("the vault hello failed");
-      log(
-        `vault unreachable: ${err instanceof Error && "code" in err ? String(err.code) : "connection failed"}`,
-      );
+      log(`vault unreachable: ${socketErrorCode(err)}`);
       schedule();
     }
   };
@@ -257,8 +383,8 @@ export function createRemoteVault(
       });
       try {
         return await Promise.race([
-          request(VAULT_METHODS.credentialFor, { binding }).then(
-            (payload) => vaultBody(payload).credential as VaultCredential,
+          request(VAULT_METHODS.credentialFor, { binding }).then((payload) =>
+            decodeCredential(binding, vaultBody(payload).credential),
           ),
           timeout,
         ]);
@@ -288,7 +414,7 @@ export function createRemoteVault(
           else resolveDone();
         };
       });
-      logins.set(loginId, { events, settle });
+      logins.set(loginId, { events, commit: login.commit, settle });
       request(VAULT_METHODS.loginStart, {
         loginId,
         kind: login.kind,
@@ -331,6 +457,8 @@ export function createRemoteVault(
     close() {
       closing = true;
       if (redial) clearTimeout(redial);
+      dialing?.destroy();
+      opening?.end("the vault link closed");
       connection?.end("the vault link closed");
     },
   };

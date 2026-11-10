@@ -48,8 +48,11 @@ interface VaultLogin {
   kind: LeaseProvider;
   accountId: string;
   tokenFile: string;
-  /** Asked in the writer lane right before the credential is moved in. */
-  commit(): boolean;
+  /**
+   * Asked in the writer lane right before the credential is moved in; only
+   * `true` moves it. A remote vault asks the edge, which answers this.
+   */
+  commit(): boolean | Promise<boolean>;
 }
 
 /** What a login driver tells its user; never the credential. */

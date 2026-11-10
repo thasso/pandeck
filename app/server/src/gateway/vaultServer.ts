@@ -41,12 +41,16 @@ import { createVault } from "./vault.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
+  LOGIN_UNAVAILABLE,
+  MAX_VAULT_LOGINS,
   OUTSIDE_ACCOUNTS,
+  VAULT_LIMITS,
   VAULT_INVALID_PARAMS,
   VAULT_METHODS,
   accountTokenFile,
   vaultBody,
   vaultMessage,
+  type LoginFailure,
   type VaultLinkTls,
 } from "./vaultMethods.ts";
 import type { LoginDrivers, LoginRun } from "./vaultPort.ts";
@@ -55,7 +59,10 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const KEEPALIVE_MS = 15_000;
 const LOGIN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_INPUT_CHARS = 8_192;
-const MAX_ERROR_CHARS = 180;
+/** A login ends after this long, as the edge's do (`logins.ts`). */
+const LOGIN_TIMEOUT_MS = 10 * 60_000;
+/** How long the edge has to answer `logins.commit`. */
+const COMMIT_TIMEOUT_MS = 10_000;
 
 export interface VaultServerOptions {
   stateDir: string;
@@ -67,6 +74,8 @@ export interface VaultServerOptions {
   renewCodex?: CodexRenewPort;
   loginDrivers?: LoginDrivers;
   log?: (line: string) => void;
+  /** Test seam: the login deadline, 10 minutes. */
+  loginTimeoutMs?: number;
 }
 
 export interface RunningVaultServer {
@@ -84,6 +93,7 @@ interface MirroredInputs {
 
 interface ServedLogin {
   connection: WorkerConnection;
+  accountId: string;
   run: LoginRun;
   withdrawn: boolean;
 }
@@ -96,6 +106,7 @@ export async function startVaultServer(
   options: VaultServerOptions,
 ): Promise<RunningVaultServer> {
   const log = options.log ?? ((line: string) => console.log(`[vault] ${line}`));
+  const loginTimeoutMs = options.loginTimeoutMs ?? LOGIN_TIMEOUT_MS;
   const accountsDir = join(resolve(options.stateDir), "accounts");
   const pinned = new X509Certificate(options.tls.peerCertPem).fingerprint256;
 
@@ -198,6 +209,51 @@ export async function startVaultServer(
     return { profileId, provider, tokenFile: profile.tokenFile };
   };
 
+  const withdraw = (login: ServedLogin): void => {
+    login.withdrawn = true;
+    login.run.cancel();
+  };
+
+  /**
+   * In the account's writer lane: the edge's own commit check, asked over the
+   * link. Anything but its explicit `true` in time, from the connection that
+   * started the login, fails closed.
+   */
+  const commitLogin = async (
+    login: ServedLogin,
+    loginId: string,
+  ): Promise<boolean> => {
+    if (login.withdrawn || current !== login.connection) {
+      login.withdrawn = true;
+      return false;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const answer = await Promise.race([
+        login.connection.request(
+          VAULT_METHODS.loginCommit,
+          vaultMessage({ loginId }),
+        ),
+        new Promise<undefined>((resolveLate) => {
+          timer = setTimeout(() => resolveLate(undefined), COMMIT_TIMEOUT_MS);
+        }),
+      ]);
+      const commit =
+        answer !== undefined &&
+        vaultBody(answer).commit === true &&
+        !login.withdrawn &&
+        current === login.connection;
+      // A refused commit is a withdrawal: the login ends cancelled.
+      if (!commit) login.withdrawn = true;
+      return commit;
+    } catch {
+      login.withdrawn = true;
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const ownedLogin = (
     connection: WorkerConnection,
     loginId: unknown,
@@ -260,7 +316,21 @@ export async function startVaultServer(
           OUTSIDE_ACCOUNTS,
           "The vault keeps no such credential.",
         );
-      const served = { connection, withdrawn: false } as ServedLogin;
+      // The vault's own admission: the edge's is not trusted.
+      const running = [...logins.values()];
+      if (
+        running.length >= MAX_VAULT_LOGINS ||
+        running.some((login) => login.accountId === accountId)
+      )
+        throw new WorkerMethodError(
+          LOGIN_UNAVAILABLE,
+          "The vault runs no more logins now.",
+        );
+      const served = {
+        connection,
+        accountId,
+        withdrawn: false,
+      } as ServedLogin;
       const event = (type: string) => (text: string) =>
         tell(VAULT_METHODS.loginEvent, { loginId, type, text });
       const run = vault.login(
@@ -268,33 +338,38 @@ export async function startVaultServer(
           kind,
           accountId,
           tokenFile: own,
-          commit: () => !served.withdrawn && current === connection,
+          commit: () => commitLogin(served, loginId),
         },
         { output: event("output"), url: event("url"), code: event("code") },
       );
       if (!run)
         throw new WorkerMethodError(
-          "login_unavailable",
+          LOGIN_UNAVAILABLE,
           "The vault runs no such login.",
         );
       served.run = run;
       logins.set(loginId, served);
       log(`login ${loginId} (account ${accountId}): started`);
+      const deadline = setTimeout(() => {
+        log(`login ${loginId} (account ${accountId}): timed out`);
+        withdraw(served);
+      }, loginTimeoutMs);
+      deadline.unref();
       void run.done
         .then(
-          () => ({ ok: true }),
-          (err: unknown) => ({
+          (): { ok: true } | { ok: false; error: LoginFailure } => ({
+            ok: true,
+          }),
+          () => ({
             ok: false,
-            error:
-              err instanceof Error
-                ? err.message.slice(0, MAX_ERROR_CHARS)
-                : "The login failed.",
+            error: served.withdrawn ? "cancelled" : "failed",
           }),
         )
         .then((outcome) => {
+          clearTimeout(deadline);
           logins.delete(loginId);
           log(
-            `login ${loginId} (account ${accountId}): ${outcome.ok ? "done" : "failed"}`,
+            `login ${loginId} (account ${accountId}): ${outcome.ok ? "done" : outcome.error}`,
           );
           if (current === connection)
             tell(VAULT_METHODS.loginDone, { loginId, ...outcome });
@@ -314,10 +389,7 @@ export async function startVaultServer(
     },
     [VAULT_METHODS.loginCancel]: (body) => {
       const login = ownedLogin(connection, body.loginId);
-      if (login) {
-        login.withdrawn = true;
-        login.run.cancel();
-      }
+      if (login) withdraw(login);
       return {};
     },
   });
@@ -337,17 +409,16 @@ export async function startVaultServer(
               : `this vault speaks ${GATEWAY_VAULT_VERSION} only`,
         },
         handlers,
-        onEnd: (reason) => {
+        limits: VAULT_LIMITS,
+        onEnd: (_reason, { cause }) => {
           // The edge that started them is gone: none of its logins commits.
-          for (const [loginId, login] of logins) {
-            if (login.connection !== connection) continue;
-            login.withdrawn = true;
-            login.run.cancel();
-            logins.delete(loginId);
-          }
+          // Each stays counted until its driver has ended.
+          for (const login of logins.values())
+            if (login.connection === connection) withdraw(login);
           if (current === connection) {
             current = undefined;
-            log(`edge disconnected: ${reason}`);
+            // The cause only: the reason may carry the peer's words.
+            log(`edge disconnected (${cause})`);
           }
         },
       },

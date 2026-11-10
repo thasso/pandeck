@@ -89,7 +89,8 @@ export function createVaultLogins(
           const read = await readCredential(request.kind, source);
           if (!read.ok) throw new Error("The login left no usable credential.");
           await lane.run(request.accountId, async () => {
-            if (!request.commit()) throw new Error("The login was cancelled.");
+            if ((await request.commit()) !== true)
+              throw new Error("The login was cancelled.");
             install(source, request.tokenFile);
           });
           recheck(request.accountId);

@@ -18,18 +18,27 @@
  * - `logins.start {loginId, kind, accountId, tokenFile}` answers `{}`;
  *   `logins.input {loginId, text}` and `logins.cancel {loginId}` answer
  *   `{}`. A cancel also withdraws the run: its credential is never moved in.
+ *   The vault runs one login per account, at most `MAX_VAULT_LOGINS`, each
+ *   for at most 10 minutes.
  *
- * Vault to edge, each answered `{}`: `credential.report {profileId,
- * needsLogin}`, `logins.event {loginId, type, text}` (`output`, `url` or
- * `code`), `logins.done {loginId, ok, error?}`.
+ * Vault to edge: `credential.report {profileId, needsLogin}`, `logins.event
+ * {loginId, type, text}` (`output`, `url` or `code`) and `logins.done
+ * {loginId, ok, error?}` (`error` a `LoginFailure` code) answer `{}`;
+ * `logins.commit {loginId}` answers `{commit}`, asked in the account's writer
+ * lane right before the credential is moved in, and only `true` moves it.
  *
  * The vault takes a binding or a token file only under `<stateDir>/accounts/`
- * (`accountTokenFile`), so an edge cannot point it at any other file.
+ * (`accountTokenFile`), so an edge cannot point it at any other file. Both
+ * ends hold the other to `VAULT_LIMITS`, log only a connection's end cause,
+ * and reflect no peer text.
  */
 import { join } from "node:path";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
-import type { ConnectionProtocol } from "../workerProtocol/connection.ts";
+import type {
+  ConnectionLimits,
+  ConnectionProtocol,
+} from "../workerProtocol/connection.ts";
 import type { LeaseProvider } from "./leases.ts";
 
 export const GATEWAY_VAULT_VERSION = "gateway-vault/1.0";
@@ -55,10 +64,30 @@ export const VAULT_METHODS = {
   report: "credential.report",
   loginEvent: "logins.event",
   loginDone: "logins.done",
+  loginCommit: "logins.commit",
 } as const;
+
+/**
+ * What either end may make the other buffer or run: the protocol's messages
+ * are small (bindings, credentials, login lines, a registry snapshot).
+ */
+export const VAULT_LIMITS: ConnectionLimits = {
+  maxMessageBytes: 1024 * 1024,
+  maxBufferedBytes: 2 * 1024 * 1024,
+  maxPartialMessages: 8,
+  maxServing: 256,
+};
+
+/** Logins the vault runs at once, across accounts. */
+export const MAX_VAULT_LOGINS = 4;
+
+/** Why a login failed, as `logins.done` says it; never driver text. */
+export type LoginFailure = "cancelled" | "failed";
 
 /** The vault takes no binding or token file outside its accounts. */
 export const OUTSIDE_ACCOUNTS = "outside_accounts";
+/** The vault runs no such login, or no more now. */
+export const LOGIN_UNAVAILABLE = "login_unavailable";
 /** A request did not decode. */
 export const VAULT_INVALID_PARAMS = "invalid_params";
 

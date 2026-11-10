@@ -13,9 +13,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import tls from "node:tls";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
 import {
   CLAUDE_ACCESS,
@@ -29,11 +31,21 @@ import {
   startFakeUpstreams,
   type FakeUpstreams,
 } from "../test/gatewayFixtures.ts";
+import { encodeControlFrame, encodeMessage } from "../workerProtocol/codec.ts";
+import {
+  WorkerConnection,
+  WorkerRequestError,
+} from "../workerProtocol/connection.ts";
+import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { startGateway, type RunningGateway } from "./gateway.ts";
 import type { LeaseProvider } from "./leases.ts";
 import { refusalText } from "./refusals.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
-import { LOGIN_CREDENTIAL_FILE } from "./vaultMethods.ts";
+import {
+  GATEWAY_VAULT_PROTOCOL,
+  GATEWAY_VAULT_VERSION,
+  LOGIN_CREDENTIAL_FILE,
+} from "./vaultMethods.ts";
 import type { LoginDrivers, LoginRun } from "./vaultPort.ts";
 import { startVaultServer, type RunningVaultServer } from "./vaultServer.ts";
 import { selfSignedIdentity, type PinnedIdentity } from "./x509.ts";
@@ -120,6 +132,7 @@ async function vault(
     peer?: PinnedIdentity;
     self?: PinnedIdentity;
     drivers?: LoginDrivers;
+    loginTimeoutMs?: number;
   } = {},
 ): Promise<Vault> {
   const dir = options.dir ?? mkdtempSync(join(root, "vault-"));
@@ -134,6 +147,9 @@ async function vault(
       peerCertPem: (options.peer ?? edgeId).certPem,
     },
     ...(options.drivers ? { loginDrivers: options.drivers } : {}),
+    ...(options.loginTimeoutMs
+      ? { loginTimeoutMs: options.loginTimeoutMs }
+      : {}),
     log: (line) => lines.push(line),
   });
   open.push(running);
@@ -431,4 +447,308 @@ test("a login runs on the vault through the link: events, input, cancel, withdra
   finishers.get(cancelled[0]!)!("late");
   await assert.rejects(b.run.done, /cancelled/);
   assert.equal(existsSync(b.tokenFile), false);
+});
+
+// --- review fixes (C1-C5) ---------------------------------------------------
+
+const SENTINEL = "access_token=sentinel-c3";
+
+/** A raw TLS socket with the pinned edge certificate, past the handshake. */
+async function rawEdge(port: number): Promise<tls.TLSSocket> {
+  const socket = tls.connect({
+    host: "127.0.0.1",
+    port,
+    key: edgeId.keyPem,
+    cert: edgeId.certPem,
+    ca: vaultId.certPem,
+    checkServerIdentity: () => undefined,
+  });
+  socket.on("error", () => {});
+  socket.resume();
+  await new Promise((resolve) => socket.once("secureConnect", resolve));
+  socket.write(
+    encodeControlFrame({
+      type: "hello",
+      workerId: "raw",
+      version: GATEWAY_VAULT_VERSION,
+    }),
+  );
+  return socket;
+}
+
+const closed = (socket: net.Socket) =>
+  new Promise<void>((resolve) => {
+    if (socket.destroyed) resolve();
+    else socket.once("close", () => resolve());
+  });
+
+/** One fake Claude driver per test: input finishes the login. */
+function claudeDriver() {
+  const cancelled: string[] = [];
+  const driver: NonNullable<LoginDrivers["claude"]> = (dir, events) => {
+    let resolveDone!: () => void;
+    let rejectDone!: (err: Error) => void;
+    const done = new Promise<void>((resolve, reject) => {
+      resolveDone = resolve;
+      rejectDone = reject;
+    });
+    events.output("Paste code: ");
+    return {
+      input: (text) => {
+        writeFileSync(
+          join(dir, ".credentials.json"),
+          JSON.stringify({
+            claudeAiOauth: {
+              accessToken: `claude-${text}`,
+              expiresAt: expires(),
+            },
+          }),
+        );
+        resolveDone();
+      },
+      cancel: () => {
+        cancelled.push(dir);
+        rejectDone(new Error(`stopped ${SENTINEL}`));
+      },
+      done,
+    };
+  };
+  return { driver, cancelled };
+}
+
+/** A remote vault whose registry holds every account a login is started for. */
+async function loginLink(v: Vault) {
+  const accounts = new Map<string, string>();
+  const remote = createRemoteVault(
+    { host: "127.0.0.1", port: v.port, tls: linkTls() },
+    {
+      profiles: () =>
+        [...accounts].map(([id, tokenFile]) => ({
+          id,
+          provider: "claude" as const,
+          name: id,
+          enabled: true,
+          tokenFile,
+        })),
+      liveLeases: () => [],
+      report: () => {},
+      log: () => {},
+    },
+  );
+  open.push(remote);
+  await until(remote.connected, "the vault link");
+  const start = (accountId: string, commit: () => boolean = () => true) => {
+    const tokenFile = remote.newTokenFile("claude", accountId);
+    accounts.set(accountId, tokenFile);
+    remote.inputsChanged();
+    const run = remote.login(
+      { kind: "claude", accountId, tokenFile, commit },
+      { output() {}, url() {}, code() {} },
+    )!;
+    assert.ok(run);
+    run.done.catch(() => {});
+    return { run, tokenFile };
+  };
+  return { remote, start };
+}
+
+test("C1: the vault ends a link that streams a message over its bounds", async () => {
+  const v = await vault();
+  const socket = await rawEdge(v.port);
+  // One request's data frames, 3 MiB in all, never completed.
+  const frames = encodeMessage(
+    "request",
+    1,
+    { method: "vault.hello" },
+    { json: "x".repeat(3 * 1024 * 1024) },
+  );
+  for (const frame of frames.slice(0, -1)) socket.write(frame);
+  await closed(socket);
+  await until(
+    () => v.lines.includes("edge disconnected (protocol)"),
+    "the vault to end the link",
+  );
+  // Only that connection: an edge still connects and forwards.
+  const claudeFile = writeAccountFile(v.dir, "claude", "claude-a");
+  const gw = await edge(v.port);
+  await until(linkUp(gw), "the vault link");
+  const token = account(gw, "claude-a", "claude", claudeFile);
+  assert.equal((await modelRequest(gw.port, CLAUDE_PATH, token)).status, 200);
+});
+
+test("C3: no peer text from a malformed frame or unknown method reaches logs or replies", async () => {
+  const v = await vault();
+  // A frame whose type is peer text.
+  const socket = await rawEdge(v.port);
+  const head = Buffer.from(JSON.stringify({ type: `SECRET?${SENTINEL}` }));
+  const prefix = Buffer.alloc(8);
+  prefix.writeUInt32BE(head.length, 0);
+  prefix.writeUInt32BE(0, 4);
+  await delay(50);
+  socket.write(Buffer.concat([prefix, head]));
+  await closed(socket);
+  await until(
+    () => v.lines.includes("edge disconnected (protocol)"),
+    "the vault to end the link",
+  );
+
+  // An unknown method: the reply is fixed.
+  const tlsSocket = tls.connect({
+    host: "127.0.0.1",
+    port: v.port,
+    key: edgeId.keyPem,
+    cert: edgeId.certPem,
+    ca: vaultId.certPem,
+    checkServerIdentity: () => undefined,
+  });
+  await new Promise((resolve) => tlsSocket.once("secureConnect", resolve));
+  const connection = new WorkerConnection(socketEndpoint(tlsSocket), {
+    handshake: { role: "worker", workerId: "raw" },
+    protocol: GATEWAY_VAULT_PROTOCOL,
+  });
+  open.push({ close: () => connection.end("test done") });
+  await assert.rejects(
+    connection.request(`SECRET.${SENTINEL}`, { json: {} }),
+    (err: unknown) =>
+      err instanceof WorkerRequestError &&
+      err.code === "unknown_method" &&
+      !err.message.includes(SENTINEL),
+  );
+  for (const line of v.lines) assert.ok(!line.includes(SENTINEL), line);
+});
+
+test("C2: the vault installs a login's credential only on the edge's commit", async () => {
+  const { driver } = claudeDriver();
+  const v = await vault({ drivers: { claude: driver } });
+  const { start } = await loginLink(v);
+  const refused = start("claude-a", () => false);
+  await delay(50);
+  refused.run.input("abc");
+  await assert.rejects(refused.run.done, /cancelled/);
+  assert.equal(existsSync(refused.tokenFile), false);
+
+  const committed = start("claude-b", () => true);
+  await delay(50);
+  committed.run.input("def");
+  await committed.run.done;
+  assert.match(readFileSync(committed.tokenFile, "utf8"), /claude-def/);
+});
+
+test("C4: the vault runs one login per account, at most four, each with a deadline", async () => {
+  const { driver, cancelled } = claudeDriver();
+  const v = await vault({ drivers: { claude: driver }, loginTimeoutMs: 500 });
+  const { start } = await loginLink(v);
+  const first = start("claude-a");
+  const again = start("claude-a");
+  await assert.rejects(again.run.done, /cannot run that login/);
+  const more = ["claude-b", "claude-c", "claude-d"].map((id) => start(id));
+  const fifth = start("claude-e");
+  await assert.rejects(fifth.run.done, /cannot run that login/);
+  // The deadline cancels the four, withdrawn: none commits.
+  for (const login of [first, ...more])
+    await assert.rejects(login.run.done, /cancelled/);
+  assert.equal(cancelled.length, 4);
+  for (const line of v.lines) assert.ok(!line.includes(SENTINEL), line);
+});
+
+test("C5: dial, TLS and hello have deadlines; close stops a dial in flight", async () => {
+  // A TCP peer that never speaks TLS.
+  const silent = net.createServer((socket) => socket.on("error", () => {}));
+  await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  open.push({
+    close: () => new Promise<void>((resolve) => silent.close(() => resolve())),
+  });
+  let accepted = 0;
+  silent.on("connection", (socket) => {
+    accepted += 1;
+    open.push({ close: () => socket.destroy() });
+  });
+  const lines: string[] = [];
+  const deps = {
+    profiles: () => [],
+    liveLeases: () => [],
+    report: () => {},
+    log: (line: string) => lines.push(line),
+    connectTimeoutMs: 150,
+  };
+  const stalled = createRemoteVault(
+    {
+      host: "127.0.0.1",
+      port: (silent.address() as net.AddressInfo).port,
+      tls: linkTls(),
+    },
+    deps,
+  );
+  await until(
+    () => lines.filter((l) => l === "vault unreachable: ETIMEDOUT").length >= 2,
+    "two timed-out dials",
+  );
+  stalled.close();
+  const after = accepted;
+  await delay(1_500);
+  assert.equal(accepted, after, "no dial after close");
+
+  // A vault that completes TLS and the handshake but never answers hello.
+  const mute = tls.createServer(
+    {
+      key: vaultId.keyPem,
+      cert: vaultId.certPem,
+      ca: edgeId.certPem,
+      requestCert: true,
+      rejectUnauthorized: true,
+    },
+    (socket) => {
+      const connection = new WorkerConnection(socketEndpoint(socket), {
+        protocol: GATEWAY_VAULT_PROTOCOL,
+        handshake: { role: "server", admit: () => undefined },
+        handlers: { "vault.hello": () => new Promise(() => {}) },
+      });
+      open.push({ close: () => connection.end("test done") });
+    },
+  );
+  await new Promise<void>((resolve) => mute.listen(0, "127.0.0.1", resolve));
+  open.push({
+    close: () => new Promise<void>((resolve) => mute.close(() => resolve())),
+  });
+  lines.length = 0;
+  const hung = createRemoteVault(
+    {
+      host: "127.0.0.1",
+      port: (mute.address() as net.AddressInfo).port,
+      tls: linkTls(),
+    },
+    deps,
+  );
+  open.push(hung);
+  await until(
+    () => lines.includes("vault unreachable: ETIMEDOUT"),
+    "the hello deadline",
+  );
+  assert.equal(hung.connected(), false);
+});
+
+test("C1: empty data frames with a new stream name each count against the bounds", async () => {
+  const v = await vault();
+  const socket = await rawEdge(v.port);
+  // Zero-byte frames, each naming a new stream, never completed.
+  for (let seq = 0; seq < 40_000 && !socket.destroyed; seq++) {
+    const head = Buffer.from(
+      JSON.stringify({
+        type: "data",
+        of: "request",
+        id: 1,
+        stream: `text:s${seq}`,
+        seq,
+      }),
+    );
+    const prefix = Buffer.alloc(8);
+    prefix.writeUInt32BE(head.length, 0);
+    prefix.writeUInt32BE(0, 4);
+    socket.write(Buffer.concat([prefix, head]));
+  }
+  await closed(socket);
+  await until(
+    () => v.lines.includes("edge disconnected (protocol)"),
+    "the vault to end the link",
+  );
 });

@@ -1781,21 +1781,35 @@ server's local gateway does.
 - **Link.** Worker-protocol framing over mutual TLS. Each side has its own key
   and self-signed certificate and trusts exactly the other's, checked by
   fingerprint too. The edge dials, redials with backoff (0.5 s to 10 s), and on
-  every connect reads the vault's needs-login set and sends both inputs. The
-  vault serves one edge connection; a newer one replaces the older.
+  every connect reads the vault's needs-login set and sends both inputs. Dial,
+  TLS handshake and `vault.hello` each have a 10 s deadline, and closing the
+  edge stops a dial in flight. The vault serves one edge connection; a newer one
+  replaces the older.
+- **Bounds.** Both ends hold the other to `VAULT_LIMITS`: 1 MiB per message, 2
+  MiB and 8 unfinished messages buffered, 256 requests served at once (more
+  answer `busy`). A peer over them loses its connection, and only that one. The
+  generic worker protocol keeps its own limits.
 - **Methods.** Edge to vault: `vault.hello` (needs-login set, the vault's
   accounts directory, the login kinds it runs), `inputs.profiles` and
   `inputs.liveLeases` (the whole registry and live-lease set, on connect and on
   every change), `credential.for`, `credential.upstream401`, `accounts.discard`,
   `logins.start`, `logins.input` and `logins.cancel`. Vault to edge:
-  `credential.report`, `logins.event` and `logins.done`.
+  `credential.report`, `logins.event`, `logins.done` (a failure code, never
+  driver text) and `logins.commit`.
 - **Rules.** The vault answers an access token and headers only, never a refresh
   token or a token file's content. It keeps only login profiles whose token file
   is under `<stateDir>/accounts/` and refuses any other binding, which the edge
   answers as the forbidden refusal. It saves the mirrored inputs in
   `vault-inputs.json`, so it renews across its own restart and while the edge is
-  away. A login's cancel also withdraws it: its credential is never moved in,
-  and a lost edge connection withdraws all that connection's logins.
+  away. In the writer lane, right before moving a login's credential in, the
+  vault asks the edge `logins.commit`, which answers the edge's own check; only
+  an explicit `true` within 10 s moves it. A cancel, the vault's 10-minute
+  deadline or a lost edge connection withdraws a login. The vault admits one
+  login per account and four in all, whatever the edge allows.
+- **No peer text.** Either end logs only a connection's end cause (`local`,
+  `peer-closed`, `protocol`, `handshake-timeout`, `refused`), answers an unknown
+  method with fixed text, and turns the other's answers into its own values: the
+  edge rebuilds a vault refusal from its registry and known cases.
 - **Link down.** A credential read answers the marked "vault unavailable"
   refusal (503) at once, or after 30 s without an answer, never needs-login, so
   no account shows as logged out; `needsLogin()` answers the last set the vault
