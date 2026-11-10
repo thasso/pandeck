@@ -23,15 +23,9 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { WriterLane } from "./holds.ts";
-import type { LeaseProvider } from "./leases.ts";
 import { readCredential } from "./profileCredential.ts";
+import { LOGIN_CREDENTIAL_FILE } from "./vaultMethods.ts";
 import type { LoginDrivers, VaultPort } from "./vaultPort.ts";
-
-/** The file a driver leaves its credential in, inside its directory. */
-const LOGIN_CREDENTIAL_FILE: Record<LeaseProvider, string> = {
-  claude: ".credentials.json",
-  "openai-codex": "auth.json",
-};
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 

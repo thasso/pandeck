@@ -3,15 +3,17 @@
  * forwarding, leases, compatible endpoints, control) reaches the vault
  * (renewal, credential reads, the writer lane and the login holds) only
  * through `VaultPort`, and the vault reads the edge only through
- * `VaultInputs`. Both tiers run in one process today; this module holds types
- * only, so neither tier's code crosses it (`workerBoundary.test.ts`).
+ * `VaultInputs`. The tiers run in one process (`vault.ts`) or apart, the edge
+ * reaching a vault process over `gateway-vault/1.0` (`remoteVault.ts`,
+ * `vaultServer.ts`). This module holds types only, so neither tier's code
+ * crosses it (`workerBoundary.test.ts`).
  */
 import type { HoldTable, WriterLane } from "./holds.ts";
 import type { LeaseProvider, LoginBinding } from "./leases.ts";
 import type { ProfileRegistry } from "./profiles.ts";
 import type { Refusal } from "./refusals.ts";
 
-/** What the edge asks of the vault (ADR-0005). In process today. */
+/** What the edge asks of the vault (ADR-0005), in process or remote. */
 export interface VaultPort {
   /** The credential for one forwarded request; renews first when nearly due. */
   credentialFor(binding: LoginBinding): Promise<VaultCredential>;
@@ -19,12 +21,6 @@ export interface VaultPort {
   upstream401(binding: LoginBinding, sentToken: string): void;
   /** The login profiles that need a login now (resent on every hello). */
   needsLogin(): string[];
-  /**
-   * Login holds and the writer lane, for gateway control 1.4 only. A hold
-   * that ends here is re-read by the vault itself. A client's login is a lane
-   * item instead (`login`).
-   */
-  readonly holds: VaultHolds;
   /**
    * Runs one login (M11, `vaultLogins.ts`): the driver in a fresh directory,
    * then, in the writer lane and only while `commit()` says so, the credential
@@ -38,6 +34,16 @@ export interface VaultPort {
   discardCredential(accountId: string): void;
 }
 
+/** The in-process vault, which also serves gateway control 1.4's holds. */
+export interface LocalVaultPort extends VaultPort {
+  /**
+   * Login holds and the writer lane, for gateway control 1.4 only. A hold
+   * that ends here is re-read by the vault itself. A client's login is a lane
+   * item instead (`login`).
+   */
+  readonly holds: VaultHolds;
+}
+
 interface VaultLogin {
   kind: LeaseProvider;
   accountId: string;
@@ -47,7 +53,7 @@ interface VaultLogin {
 }
 
 /** What a login driver tells its user; never the credential. */
-interface LoginDriverEvents {
+export interface LoginDriverEvents {
   output(text: string): void;
   url(url: string): void;
   code(code: string): void;

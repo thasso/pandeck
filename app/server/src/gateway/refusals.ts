@@ -68,7 +68,12 @@ export type Refusal =
   /** No OpenAI-compatible endpoint was pushed since the last hello or clear. */
   | { case: "compat-unset" }
   /** `reason` is an error code or "connection failed", never peer text. */
-  | { case: "unreachable"; upstream: UpstreamLabel; reason: string };
+  | { case: "unreachable"; upstream: UpstreamLabel; reason: string }
+  /**
+   * The edge's link to a remote vault is down or did not answer: no verdict
+   * on the login, so never read as needs-login (`remoteVault.ts`).
+   */
+  | { case: "vault-unavailable" };
 
 /** Which provider's error shape a refusal takes. */
 export type RefusalShape = "claude" | "codex";
@@ -83,6 +88,7 @@ const STATUS: Record<Refusal["case"], number> = {
   "needs-login": 401,
   "compat-unset": 503,
   unreachable: 502,
+  "vault-unavailable": 503,
 };
 
 /** Anthropic's error type names, which both shapes use. */
@@ -118,6 +124,8 @@ export function refusalText(refusal: Refusal): string {
       return `${GATEWAY_REFUSAL_MARKER} the OpenAI-compatible endpoint's settings have not reached the gateway yet. Try again shortly.`;
     case "unreachable":
       return `${GATEWAY_REFUSAL_MARKER} ${refusal.upstream} could not be reached: ${refusal.reason}.`;
+    case "vault-unavailable":
+      return `${GATEWAY_REFUSAL_MARKER} the credential vault is unavailable. Try again shortly.`;
   }
 }
 

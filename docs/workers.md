@@ -1768,6 +1768,55 @@ path above.
   client mode, no rename, enable toggle or Clear of an unfinished login, and the
   Codex driver runs in the gateway's process rather than as a child.
 
+### Remote vault
+
+The vault can run as its own process on another machine (Task-1394, M20), so the
+edge holds no refresh token. Renewal, the token files, the writer lane and the
+login runs then execute in the vault process (`gateway/vaultServer.ts`); the
+edge reaches it through `gateway/remoteVault.ts`, a `VaultPort` over
+**`gateway-vault/1.0`** (`gateway/vaultMethods.ts`). `startGateway`'s `vault`
+option selects it; without it the vault runs in the edge's process, as the
+server's local gateway does.
+
+- **Link.** Worker-protocol framing over mutual TLS. Each side has its own key
+  and self-signed certificate and trusts exactly the other's, checked by
+  fingerprint too. The edge dials, redials with backoff (0.5 s to 10 s), and on
+  every connect reads the vault's needs-login set and sends both inputs. The
+  vault serves one edge connection; a newer one replaces the older.
+- **Methods.** Edge to vault: `vault.hello` (needs-login set, the vault's
+  accounts directory, the login kinds it runs), `inputs.profiles` and
+  `inputs.liveLeases` (the whole registry and live-lease set, on connect and on
+  every change), `credential.for`, `credential.upstream401`, `accounts.discard`,
+  `logins.start`, `logins.input` and `logins.cancel`. Vault to edge:
+  `credential.report`, `logins.event` and `logins.done`.
+- **Rules.** The vault answers an access token and headers only, never a refresh
+  token or a token file's content. It keeps only login profiles whose token file
+  is under `<stateDir>/accounts/` and refuses any other binding, which the edge
+  answers as the forbidden refusal. It saves the mirrored inputs in
+  `vault-inputs.json`, so it renews across its own restart and while the edge is
+  away. A login's cancel also withdraws it: its credential is never moved in,
+  and a lost edge connection withdraws all that connection's logins.
+- **Link down.** A credential read answers the marked "vault unavailable"
+  refusal (503) at once, or after 30 s without an answer, never needs-login, so
+  no account shows as logged out; `needsLogin()` answers the last set the vault
+  told. A login needs the link. No access token is cached on the edge: one round
+  trip per forwarded request.
+- **No control.** An edge with a remote vault serves no gateway control 1.4 (its
+  holds are the in-process vault's); it is a client-mode edge.
+- **Pairing.**
+  `gateway:admin --state-dir <vault dir> vault-init --host <name> ...` makes the
+  vault's key and certificate (`vault-tls.json`) and prints the certificate.
+  `gateway:admin --state-dir <edge dir> vault-pair --vault-cert <file>` makes
+  the edge's (`vault-link.json`), pins the vault's and prints its own;
+  `vault-init --edge-cert <file>` pins it on the vault. Certificates are public;
+  keys never leave their machine.
+- **Running.**
+  `gateway:vault --state-dir <dir> [--bind-host <address>] [--port <n>]`
+  (`vaultDevMain.ts`, port 8794) runs the vault with both login drivers;
+  `gateway:dev ... --vault-host <address> [--vault-port <n>]` runs the edge
+  against it. The packaged entry waits for Task-1387; the encrypted store for
+  Task-1395.
+
 ### Engine-version guard
 
 The engines' CLIs are pinned, and a pin moves only with evidence that the new

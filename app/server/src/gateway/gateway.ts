@@ -21,7 +21,10 @@
  * The edge (listener, forwarding, leases, compatible endpoints, control)
  * reaches the vault (renewal, the writer lane and the login holds,
  * `vault.ts`) only through `VaultPort` (`vaultPort.ts`); this module wires
- * the two and owns their timers.
+ * the two and owns their timers. With `vault`, the vault is a process of its
+ * own (`remoteVault.ts`, `vaultServer.ts`): the edge then holds no token
+ * file, renews nothing, and serves no gateway control 1.4, so it is a
+ * client-mode edge only.
  *
  * It runs in the process that starts it: the server's, through
  * `gatewayLink.ts` under `ASSISTANT_GATEWAY=1`, and tests', against fake
@@ -48,13 +51,14 @@ import {
 import { createControlEndpoint } from "./control.ts";
 import type { HoldRecord, WriterLane } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
-import type { LoginDrivers } from "./vaultPort.ts";
+import type { LoginDrivers, VaultPort } from "./vaultPort.ts";
 import type { ProcessProbe } from "./processIdentity.ts";
 import { ProfileRegistry } from "./profiles.ts";
 import type { RefreshLockOptions } from "./refreshLock.ts";
 import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
 import { openGatewayState } from "./state.ts";
-import { createVault } from "./vault.ts";
+import { createRemoteVault, type RemoteVaultOptions } from "./remoteVault.ts";
+import { createVault, type Vault } from "./vault.ts";
 
 /** How often a drain looks for streams that have ended. */
 const DRAIN_POLL_MS = 100;
@@ -90,6 +94,11 @@ export interface GatewayOptions {
   clients?: ClientListenerOptions;
   /** The login drivers enrolled clients' logins run (`logins.ts`). */
   loginDrivers?: LoginDrivers;
+  /**
+   * A vault in its own process, reached over `gateway-vault/1.0`. Without it
+   * the vault runs in this process.
+   */
+  vault?: RemoteVaultOptions;
 }
 
 export interface RunningGateway {
@@ -126,53 +135,75 @@ export async function startGateway(
   const state = options.stateDir
     ? openGatewayState(options.stateDir, log)
     : undefined;
+  /** Set with a remote vault: each change of its inputs is sent to it. */
+  let remote: ReturnType<typeof createRemoteVault> | undefined;
   const leases = new LeaseTable({
     now: options.now,
-    persist: state?.persistLeases,
+    persist: options.vault
+      ? (records) => {
+          remote?.inputsChanged();
+          state?.persistLeases(records);
+        }
+      : state?.persistLeases,
   });
-  const profiles = new ProfileRegistry(state?.persistProfiles);
+  const profiles = new ProfileRegistry(
+    options.vault
+      ? (records) => {
+          remote?.inputsChanged();
+          state?.persistProfiles(records);
+        }
+      : state?.persistProfiles,
+  );
   if (state) {
     leases.restore(state.leases);
     profiles.restore(state.profiles);
   }
   /** Set once the client listener runs; the vault's reports reach it. */
   let clients: RunningClientListener | undefined;
+  const report = (profileId: string, needsLogin: boolean): void => {
+    control?.reportCredential({ profileId, needsLogin });
+    clients?.accountsChanged();
+  };
+  if (options.vault)
+    remote = createRemoteVault(options.vault, {
+      profiles: () => profiles.ids().map((id) => profiles.get(id)!),
+      liveLeases: () => profiles.ids().filter((id) => leases.hasLiveLease(id)),
+      report,
+      log,
+    });
   // The vault restores its holds and fences them from the restored registry.
-  const vault = createVault({
-    inputs: {
-      profiles,
-      hasLiveLease: (profileId) => leases.hasLiveLease(profileId),
-      report: (profileId, needsLogin) => {
-        control.reportCredential({ profileId, needsLogin });
-        clients?.accountsChanged();
-      },
-    },
-    log,
-    now: options.now,
-    holds: {
-      persist: state?.persistHolds,
-      probe: options.processProbe,
-      fenced: state?.holdsUnreadable,
-      restored: state?.holds,
-    },
-    renewal: {
-      claudeEndpoint: options.claudeTokenEndpoint,
-      renewCodex: options.renewCodex,
-      lockOptions: options.refreshLockOptions,
-    },
-    logins: {
-      stateDir: options.stateDir,
-      drivers: options.loginDrivers ?? {},
-    },
-  });
+  const local: Vault | undefined = remote
+    ? undefined
+    : createVault({
+        inputs: {
+          profiles,
+          hasLiveLease: (profileId) => leases.hasLiveLease(profileId),
+          report,
+        },
+        log,
+        now: options.now,
+        holds: {
+          persist: state?.persistHolds,
+          probe: options.processProbe,
+          fenced: state?.holdsUnreadable,
+          restored: state?.holds,
+        },
+        renewal: {
+          claudeEndpoint: options.claudeTokenEndpoint,
+          renewCodex: options.renewCodex,
+          lockOptions: options.refreshLockOptions,
+        },
+        logins: {
+          stateDir: options.stateDir,
+          drivers: options.loginDrivers ?? {},
+        },
+      });
+  const vault: VaultPort = remote ?? local!;
   const compat = createCompatUpstream();
-  const control = createControlEndpoint({
-    leases,
-    profiles,
-    compat,
-    log,
-    vault,
-  });
+  // Gateway control 1.4 needs the vault's holds: only an in-process one.
+  const control = local
+    ? createControlEndpoint({ leases, profiles, compat, log, vault: local })
+    : undefined;
 
   const stats: GatewayStats = {
     forwarded: 0,
@@ -237,13 +268,15 @@ export async function startGateway(
       options.clients,
     );
   }
+  const checkHolds = (): void => control?.checkHolds();
   const holdCheck = setInterval(
-    control.checkHolds,
+    checkHolds,
     options.holdCheckIntervalMs ?? 60_000,
   );
   holdCheck.unref();
+  const renewDue = (): Promise<void> => local?.renewDue() ?? Promise.resolve();
   const renewTick = setInterval(() => {
-    vault.renewDue().catch(() => log("renewal tick failed"));
+    renewDue().catch(() => log("renewal tick failed"));
   }, options.renewTickMs ?? RENEW_TICK_MS);
   renewTick.unref();
 
@@ -253,16 +286,23 @@ export async function startGateway(
     leases,
     stats,
     clients,
-    lane: vault.lane,
-    attachControl: control.attach,
-    lastHello: control.hello,
-    holds: vault.holdRecords,
-    checkHolds: control.checkHolds,
-    renewDue: vault.renewDue,
+    lane: local?.lane ?? {
+      run: () =>
+        Promise.reject(new Error("The vault runs in its own process.")),
+    },
+    attachControl(endpoint) {
+      if (control) return control.attach(endpoint);
+      log("control refused: this edge's vault runs in its own process");
+      endpoint.close();
+    },
+    lastHello: () => control?.hello(),
+    holds: () => local?.holdRecords() ?? [],
+    checkHolds,
+    renewDue,
     async close({ drainMs = 0 } = {}) {
       clearInterval(holdCheck);
       clearInterval(renewTick);
-      control.close();
+      control?.close();
       await clients?.close();
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),
@@ -275,7 +315,8 @@ export async function startGateway(
         if (sockets.size === 0 || Date.now() >= drainUntil) break;
         await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
       }
-      vault.close();
+      local?.close();
+      remote?.close();
       for (const socket of sockets) socket.destroy();
       sockets.clear();
       agent.destroy();

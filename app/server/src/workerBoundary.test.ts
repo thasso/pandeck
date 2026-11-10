@@ -515,6 +515,8 @@ const GATEWAY_VAULT = [
   "renewal",
   "vault",
   "vaultLogins",
+  // The vault in its own process, serving gateway-vault/1.0.
+  "vaultServer",
 ];
 const GATEWAY_EDGE = [
   // The admin CLI and the client listener's enrollment, CA and protocol.
@@ -528,10 +530,12 @@ const GATEWAY_EDGE = [
   "forward",
   "leases",
   "logins",
+  // The edge's VaultPort over gateway-vault/1.0.
+  "remoteVault",
   "upstreams",
   "x509",
 ];
-const GATEWAY_SHARED = ["profiles", "refusals", "vaultPort"];
+const GATEWAY_SHARED = ["profiles", "refusals", "vaultMethods", "vaultPort"];
 /** The composition, and the standalone process and its entries around it. */
 const GATEWAY_ROOT = ["gateway", "main", "process", "processFixture", "state"];
 /**
@@ -581,7 +585,8 @@ test("the gateway's edge reaches the vault only through its port", () => {
 test("only the server links and the error classifier import the gateway", () => {
   // The link starts it and speaks control, the client-mode link speaks
   // gateway client 1.0; engine modules reach it only through a link. The
-  // classifier reads the local-refusal marker.
+  // classifier reads the local-refusal marker. The two dev entries run the
+  // edge and the vault process.
   assert.deepEqual(
     importersOf((target) => target.startsWith("gateway/")).filter(
       (module) => !module.startsWith("gateway/"),
@@ -591,6 +596,7 @@ test("only the server links and the error classifier import the gateway", () => 
       "gatewayDevMain.ts",
       "gatewayLink.ts",
       "providerErrors.ts",
+      "vaultDevMain.ts",
     ],
   );
 });

@@ -21,10 +21,10 @@ import { isLoginProfile } from "./profiles.ts";
 import { createRenewal, type RenewalOptions } from "./renewal.ts";
 import { createVaultLogins, type VaultLoginOptions } from "./vaultLogins.ts";
 import type {
+  LocalVaultPort,
   VaultCredential,
   VaultHolds,
   VaultInputs,
-  VaultPort,
 } from "./vaultPort.ts";
 
 export interface VaultOptions {
@@ -44,7 +44,7 @@ export interface VaultOptions {
   logins?: VaultLoginOptions | undefined;
 }
 
-export interface Vault extends VaultPort {
+export interface Vault extends LocalVaultPort {
   /** The profiles' writer lane, for in-gateway writers (G4, G5). */
   readonly lane: Pick<WriterLane, "run">;
   /** The login holds, as records. */

@@ -6,16 +6,16 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
 
 - `gateway/` imports only `node:` modules, itself and `GATEWAY_ALLOWED` in
   `workerBoundary.test.ts`, never a package or other server module; that list
-  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts`,
-  `gatewayDevMain.ts` and `providerErrors.ts` (refusal marker) import it; new
-  wiring updates that pin.
+  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts`, the two dev
+  entries and `providerErrors.ts` (the marker) import it; new wiring updates
+  that pin.
 - Only a control or client connection grants a lease, and a grant binds provider
   and, for a login, token file from the registry, never from the request.
 - State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes
   and paths (lease secrets and enrollment codes hashed), never a token, lease
-  token or pushed key; its only keys are the edge's TLS keys. Each compatible
-  profile's pushed endpoint and key live in memory only, and a lease reaches
-  only its own profile's pair. A client lease, only its client.
+  token or pushed key; its only keys are TLS keys (edge, vault link). Each
+  compatible profile's pushed endpoint and key live in memory only, and a lease
+  reaches only its own profile's pair. A client lease, only its client.
 - Only renewal writes token files, in the profile's writer lane: Claude's under
   the CLI's locks with compare-and-swap and a same-directory rename that never
   creates a directory, Codex's only through the injected pi port's lock-fenced

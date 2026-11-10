@@ -6,7 +6,12 @@
  *
  *   gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>]
  *     [--client-port <n>] [--enroll-port <n>] [--bind-host <address>]
- *     [--host <name>]...
+ *     [--host <name>]... [--vault-host <address> [--vault-port <n>]]
+ *
+ * With `--vault-host`, the vault runs in its own process (`vaultDevMain.ts`,
+ * port 8794 unless `--vault-port`), reached over the pinned link that
+ * `gateway/adminMain.ts vault-pair` set up in the state directory; this edge
+ * then holds no token file and runs no login itself.
  *
  * Every port defaults to a free one; the ports in use are printed. The edge's
  * three ports bind to `--bind-host`, 127.0.0.1 unless given, and each `--host`
@@ -22,6 +27,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { claudeLoginDriver } from "./claudeLoginDriver.ts";
 import { startGateway } from "./gateway/gateway.ts";
+import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
 import {
   codexLoginDriver,
   renewCodexCredential,
@@ -29,7 +35,7 @@ import {
 
 function usage(): never {
   console.error(
-    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]...",
+    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... [--vault-host <address> [--vault-port <n>]]",
   );
   process.exit(2);
 }
@@ -43,6 +49,8 @@ const { values } = parseArgs({
     "enroll-port": { type: "string" },
     "bind-host": { type: "string" },
     host: { type: "string", multiple: true },
+    "vault-host": { type: "string" },
+    "vault-port": { type: "string" },
   },
 });
 if (!values["state-dir"]) usage();
@@ -53,6 +61,19 @@ const port = (value: string | undefined): number => {
 };
 const stateDir = resolve(values["state-dir"]);
 mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+
+/** The remote vault's address and pinned link TLS, when `--vault-host`. */
+function remoteVault() {
+  const host = values["vault-host"];
+  if (!host) return undefined;
+  const tls = readEdgeVaultLink(stateDir);
+  if (typeof tls === "string") {
+    console.error(`[gateway-dev] not paired: ${tls}`);
+    process.exit(2);
+  }
+  return { host, port: port(values["vault-port"] ?? "8794"), tls };
+}
+const vault = remoteVault();
 
 const gateway = await startGateway({
   stateDir,
@@ -65,11 +86,18 @@ const gateway = await startGateway({
     ...(values["bind-host"] ? { bindHost: values["bind-host"] } : {}),
     ...(values.host ? { hosts: values.host } : {}),
   },
-  loginDrivers: { claude: claudeLoginDriver, "openai-codex": codexLoginDriver },
+  ...(vault
+    ? { vault }
+    : {
+        loginDrivers: {
+          claude: claudeLoginDriver,
+          "openai-codex": codexLoginDriver,
+        },
+      }),
 });
 const edge = gateway.clients!;
 console.log(
-  `[gateway-dev] state ${stateDir}; loopback ${gateway.port}, model ${edge.modelPort}, client ${edge.clientPort}, enroll ${edge.enrollPort}`,
+  `[gateway-dev] state ${stateDir}; loopback ${gateway.port}, model ${edge.modelPort}, client ${edge.clientPort}, enroll ${edge.enrollPort}${vault ? `; vault ${vault.host}:${vault.port}` : ""}`,
 );
 
 const stop = (): void => {

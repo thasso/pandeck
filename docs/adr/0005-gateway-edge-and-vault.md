@@ -11,8 +11,11 @@ account. A self-hosted install runs it on one machine; a multi-user install can
 separate its parts. The same code serves both.
 
 The gateway has two tiers that meet at one port (`VaultPort`,
-`app/server/src/gateway/vaultPort.ts`). They share one process now and get
-separate processes later.
+`app/server/src/gateway/vaultPort.ts`). They share one process by default, and
+can run as separate processes on separate machines: the edge then reaches the
+vault over `gateway-vault/1.0`, on mutual TLS with each side's certificate
+pinned, and holds no refresh token (Task-1394, `docs/workers.md` "Remote
+vault"). Gateway control 1.4's login holds stay with an in-process vault.
 
 - The **vault** holds the credentials, is their only refresher, and runs the
   writer lane and the login holds. It imports only `node:` modules, with one
