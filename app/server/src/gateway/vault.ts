@@ -49,6 +49,8 @@ export interface Vault extends LocalVaultPort {
   readonly lane: Pick<WriterLane, "run">;
   /** The login holds, as records. */
   holdRecords(): HoldRecord[];
+  /** Re-reads one profile's file and renews it when due; never rejects. */
+  recheck(profileId: string): Promise<void>;
   /** One renewal tick: renews every leased profile inside its margin. */
   renewDue(): Promise<void>;
   /** Aborts renewals in flight. */
@@ -124,6 +126,7 @@ export function createVault(options: VaultOptions): Vault {
     ),
     lane,
     holdRecords: () => table.records(),
+    recheck: (profileId) => renewal.recheck(profileId),
     renewDue: () => renewal.tick(),
     close: () => renewal.close(),
   };

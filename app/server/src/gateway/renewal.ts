@@ -110,6 +110,11 @@ export interface RenewalOptions {
   report: (profileId: string, needsLogin: boolean) => void;
   /** Tests: the Claude lock's clock and retry sleeps. */
   lockOptions?: RefreshLockOptions | undefined;
+  /**
+   * A sealing vault's seal-after-write (`sealedStore.ts`): called in the lane
+   * after every attempt, before its outcome settles. Never throws.
+   */
+  written?: ((tokenFile: string) => void) | undefined;
 }
 
 /** What a forwarded request spends, or the refusal it gets. */
@@ -370,6 +375,18 @@ export function createRenewal(options: RenewalOptions): Renewal {
     sync(profile.id, state);
   };
 
+  /** One lane item; a sealing vault seals the file after it, in the lane. */
+  const sealedRun = <T>(fn: () => Promise<T>, profileId: string): Promise<T> =>
+    lane.run(profileId, async () => {
+      try {
+        return await fn();
+      } finally {
+        const profile = profiles.get(profileId);
+        if (profile && isLoginProfile(profile))
+          options.written?.(profile.tokenFile);
+      }
+    });
+
   const run = async (
     profileId: string,
     force: boolean,
@@ -383,7 +400,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
     // The file the attempt that decided `outcome` started from.
     let examined: FileIdentity | undefined;
     try {
-      outcome = await lane.run(profileId, async () => {
+      outcome = await sealedRun(async () => {
         const current = profiles.get(profileId);
         if (!current || !isLoginProfile(current))
           return { kind: "skipped" } as const;
@@ -403,7 +420,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
         const again = await readCredential(profile.provider, profile.tokenFile);
         examined = again.identity;
         return (await renewOnce(profile, again, force, rejectedToken)).outcome;
-      });
+      }, profileId);
     } catch (err) {
       if (err instanceof LaneHeldError) return { kind: "held" };
       outcome = { kind: "failed", code: "error" };

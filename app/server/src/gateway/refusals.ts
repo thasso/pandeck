@@ -73,7 +73,12 @@ export type Refusal =
    * The edge's link to a remote vault is down or did not answer: no verdict
    * on the login, so never read as needs-login (`remoteVault.ts`).
    */
-  | { case: "vault-unavailable" };
+  | { case: "vault-unavailable" }
+  /**
+   * A sealing vault that no human has unlocked since it started (Task-1395):
+   * no verdict on the login either.
+   */
+  | { case: "vault-locked" };
 
 /** Which provider's error shape a refusal takes. */
 export type RefusalShape = "claude" | "codex";
@@ -89,6 +94,7 @@ const STATUS: Record<Refusal["case"], number> = {
   "compat-unset": 503,
   unreachable: 502,
   "vault-unavailable": 503,
+  "vault-locked": 503,
 };
 
 /** Anthropic's error type names, which both shapes use. */
@@ -126,6 +132,8 @@ export function refusalText(refusal: Refusal): string {
       return `${GATEWAY_REFUSAL_MARKER} ${refusal.upstream} could not be reached: ${refusal.reason}.`;
     case "vault-unavailable":
       return `${GATEWAY_REFUSAL_MARKER} the credential vault is unavailable. Try again shortly.`;
+    case "vault-locked":
+      return `${GATEWAY_REFUSAL_MARKER} the credential vault is locked until its operator unlocks it. Try again later.`;
   }
 }
 

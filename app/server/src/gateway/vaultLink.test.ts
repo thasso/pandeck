@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import tls from "node:tls";
+import { generateKeyPairSync } from "node:crypto";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
 import {
   CLAUDE_ACCESS,
@@ -40,6 +41,8 @@ import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { startGateway, type RunningGateway } from "./gateway.ts";
 import type { LeaseProvider } from "./leases.ts";
 import { refusalText } from "./refusals.ts";
+import { recipientOf, sealExisting, writeRecipients } from "./sealedStore.ts";
+import { askVaultControl } from "./vaultControl.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
@@ -133,6 +136,7 @@ async function vault(
     self?: PinnedIdentity;
     drivers?: LoginDrivers;
     loginTimeoutMs?: number;
+    controlSocket?: string;
   } = {},
 ): Promise<Vault> {
   const dir = options.dir ?? mkdtempSync(join(root, "vault-"));
@@ -150,6 +154,7 @@ async function vault(
     ...(options.loginTimeoutMs
       ? { loginTimeoutMs: options.loginTimeoutMs }
       : {}),
+    ...(options.controlSocket ? { controlSocket: options.controlSocket } : {}),
     log: (line) => lines.push(line),
   });
   open.push(running);
@@ -751,4 +756,99 @@ test("C1: empty data frames with a new stream name each count against the bounds
     () => v.lines.includes("edge disconnected (protocol)"),
     "the vault to end the link",
   );
+});
+
+test("a sealing vault starts locked: the edge refuses 503 vault locked, nothing needs a login, logins are refused; unlocked it serves", async () => {
+  const dir = mkdtempSync(join(root, "sealed-vault-"));
+  const claudeFile = writeAccountFile(dir, "claude", "claude-a");
+  const { publicKey, privateKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const privateKeyFile = join(dir, "software-key.pem");
+  writeFileSync(
+    privateKeyFile,
+    privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+  );
+  writeRecipients(dir, [
+    recipientOf(publicKey.export({ type: "spki", format: "pem" }) as string, {
+      privateKeyFile,
+    }),
+  ]);
+  assert.deepEqual(await sealExisting(dir), { sealed: 1 });
+  assert.equal(existsSync(claudeFile), false);
+
+  const controlSocket = join(dir, "control.sock");
+  const v = await vault({
+    dir,
+    controlSocket,
+    drivers: {
+      claude: () => ({
+        input: () => {},
+        cancel: () => {},
+        done: Promise.resolve(),
+      }),
+    },
+  });
+  // A bare link: no needs-login report, and a login is refused.
+  const reports: [string, boolean][] = [];
+  const remote = createRemoteVault(
+    { host: "127.0.0.1", port: v.port, tls: linkTls() },
+    {
+      profiles: () => [
+        {
+          id: "claude-a",
+          provider: "claude",
+          name: "claude-a",
+          enabled: true,
+          tokenFile: claudeFile,
+        },
+      ],
+      liveLeases: () => ["claude-a"],
+      report: (id, needs) => reports.push([id, needs]),
+      log: () => {},
+    },
+  );
+  open.push(remote);
+  await until(remote.connected, "the vault link");
+  await v.renewDue();
+  assert.deepEqual(remote.needsLogin(), []);
+  const run = remote.login(
+    {
+      kind: "claude",
+      accountId: "claude-b",
+      tokenFile: remote.newTokenFile("claude", "claude-b"),
+      commit: () => true,
+    },
+    { output() {}, url() {}, code() {} },
+  );
+  await assert.rejects(run!.done);
+  assert.deepEqual(reports, []);
+  remote.close();
+  open.splice(open.indexOf(remote), 1);
+
+  const gw = await edge(v.port);
+  await until(linkUp(gw), "the vault link");
+  assert.ok(
+    gw.lines.some((line) => line.endsWith("(vault locked)")),
+    gw.lines.join("\n"),
+  );
+  const token = account(gw, "claude-a", "claude", claudeFile);
+  const before = upstreams.anthropic.length;
+  const refused = await modelRequest(gw.port, CLAUDE_PATH, token);
+  assert.equal(refused.status, 503);
+  assert.ok(
+    refused.text.includes(refusalText({ case: "vault-locked" })),
+    refused.text,
+  );
+  assert.equal(upstreams.anthropic.length, before);
+
+  // Unlocked: the record opens into accounts/ and the edge serves again.
+  assert.deepEqual(
+    await askVaultControl(controlSocket, { method: "unlock", pin: "unused" }),
+    { ok: true, opened: 1, unopened: 0 },
+  );
+  assert.equal(existsSync(claudeFile), true);
+  assert.equal((await modelRequest(gw.port, CLAUDE_PATH, token)).status, 200);
+  for (const line of [...gw.lines, ...v.lines])
+    assert.ok(!line.includes(CLAUDE_ACCESS), line);
 });

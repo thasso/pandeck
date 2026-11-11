@@ -10,7 +10,9 @@
  * here; the credential never does. The edge's side is `logins.ts`.
  *
  * New accounts' token files live under `<stateDir>/accounts/<accountId>/`,
- * which `discardCredential` deletes when the account goes.
+ * which `discardCredential` deletes when the account goes. A sealing vault
+ * (`sealedStore.ts`) moves the temporary directories into its RAM filesystem,
+ * seals the moved-in file in the lane and deletes the account's records too.
  */
 import { randomBytes } from "node:crypto";
 import {
@@ -33,6 +35,11 @@ export interface VaultLoginOptions {
   /** Where temporary directories and new accounts' files go. */
   stateDir: string | undefined;
   drivers: LoginDrivers;
+  /** A sealing vault's: the login directory inside its RAM filesystem. */
+  tempDir?: string | undefined;
+  /** A sealing vault's seal-after-write and record deletion. */
+  written?: ((tokenFile: string) => void) | undefined;
+  discarded?: ((accountId: string) => void) | undefined;
 }
 
 /**
@@ -73,7 +80,7 @@ export function createVaultLogins(
     login(request, events) {
       const driver = drivers[request.kind];
       if (!driver || !stateDir) return undefined;
-      const tempRoot = join(stateDir, "login-tmp");
+      const tempRoot = options.tempDir ?? join(stateDir, "login-tmp");
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const configDir = mkdtempSync(join(tempRoot, `${request.kind}-`));
       let run: ReturnType<typeof driver>;
@@ -92,6 +99,7 @@ export function createVaultLogins(
             if ((await request.commit()) !== true)
               throw new Error("The login was cancelled.");
             install(source, request.tokenFile);
+            options.written?.(request.tokenFile);
           });
           recheck(request.accountId);
         })
@@ -101,8 +109,10 @@ export function createVaultLogins(
     newTokenFile: (kind, accountId) =>
       join(accountDir(accountId), LOGIN_CREDENTIAL_FILE[kind]),
     discardCredential(accountId) {
-      if (stateDir && ID_RE.test(accountId))
+      if (stateDir && ID_RE.test(accountId)) {
         rmSync(accountDir(accountId), { recursive: true, force: true });
+        options.discarded?.(accountId);
+      }
     },
   };
 }

@@ -509,18 +509,23 @@ const GATEWAY_VAULT = [
   // The standalone process's Codex renewal child, behind the renewal port.
   "codexChild",
   "holds",
+  // The YubiKey helper's port (Task-1395), the second spawn exception.
+  "pivChild",
   "processIdentity",
   "profileCredential",
   "refreshLock",
   "renewal",
+  // The sealed store: its record format, the store and its control socket.
+  "sealedRecord",
+  "sealedStore",
   "vault",
+  "vaultControl",
   "vaultLogins",
   // The vault in its own process, serving gateway-vault/1.0.
   "vaultServer",
 ];
 const GATEWAY_EDGE = [
-  // The admin CLI and the client listener's enrollment, CA and protocol.
-  "adminMain",
+  // The client listener's enrollment, CA and protocol.
   "clientListener",
   "clientMethods",
   "clientRegistry",
@@ -536,8 +541,19 @@ const GATEWAY_EDGE = [
   "x509",
 ];
 const GATEWAY_SHARED = ["profiles", "refusals", "vaultMethods", "vaultPort"];
-/** The composition, and the standalone process and its entries around it. */
-const GATEWAY_ROOT = ["gateway", "main", "process", "processFixture", "state"];
+/**
+ * The composition, and the standalone process and its entries around it. The
+ * admin CLI edits both tiers' files: the edge's clients, the vault's pairing
+ * and its sealed store.
+ */
+const GATEWAY_ROOT = [
+  "adminMain",
+  "gateway",
+  "main",
+  "process",
+  "processFixture",
+  "state",
+];
 /**
  * gateway control 1.4's wire validators (`isHoldId`, `isPid`, `isStartTime`):
  * the one edge-to-vault crossing, gone with that protocol.
@@ -654,7 +670,7 @@ test("the process fixture is not imported by production modules", () => {
   );
 });
 
-test("the Codex renewal child imports only the refresher and node, and only the gateway's child port spawns", () => {
+test("the Codex renewal child imports only the refresher and node, and only the gateway's two child ports spawn", () => {
   // The child is the only gateway-shipped module that loads pi (ADR-0005, M5).
   const scan = scans.get("codexRenewMain.ts");
   assert.ok(scan, "the scan found the Codex renewal child");
@@ -667,7 +683,8 @@ test("the Codex renewal child imports only the refresher and node, and only the 
     importersOf((target) => target === "node:child_process").filter((module) =>
       module.startsWith("gateway/"),
     ),
-    ["gateway/codexChild.ts"],
+    // Codex's renewal child, and the YubiKey helper (Task-1395).
+    ["gateway/codexChild.ts", "gateway/pivChild.ts"],
   );
 });
 

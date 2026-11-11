@@ -13,6 +13,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, test, vi } from "vitest";
@@ -93,6 +94,8 @@ interface Rig {
   afterLane: { hook?: () => Promise<void> };
   /** Every profile id the writer lane ran for. */
   laneRuns: string[];
+  /** Each seal-after-write call: the file, its token then, inside the lane. */
+  written: { file: string; access: string; inLane: boolean }[];
 }
 
 function rig(): Rig {
@@ -106,10 +109,19 @@ function rig(): Rig {
   });
   const afterLane: Rig["afterLane"] = {};
   const laneRuns: string[] = [];
+  let lanesOpen = 0;
+  const written: Rig["written"] = [];
   const lane: Pick<WriterLane, "run"> = {
     run: async <T>(id: string, fn: () => Promise<T>): Promise<T> => {
       laneRuns.push(id);
-      const result = await writerLane.run(id, fn);
+      const result = await writerLane.run(id, async () => {
+        lanesOpen++;
+        try {
+          return await fn();
+        } finally {
+          lanesOpen--;
+        }
+      });
       await afterLane.hook?.();
       return result;
     },
@@ -138,6 +150,20 @@ function rig(): Rig {
         await lockSleep.hook?.();
       },
     },
+    written: (file) => {
+      let doc: Record<string, { accessToken?: string; access?: string }>;
+      try {
+        doc = JSON.parse(readFileSync(file, "utf8"));
+      } catch {
+        return; // As the store: a missing file is not sealed.
+      }
+      written.push({
+        file,
+        access:
+          doc.claudeAiOauth?.accessToken ?? doc["openai-codex"]?.access ?? "",
+        inLane: lanesOpen > 0,
+      });
+    },
   });
   return {
     renewal,
@@ -152,6 +178,7 @@ function rig(): Rig {
     lockSleep,
     afterLane,
     laneRuns,
+    written,
   };
 }
 
@@ -664,4 +691,22 @@ test("AC2: a compatible profile with live engine and server leases is never read
   assert.deepEqual(r.renewal.needsLogin(), []);
   assert.equal(upstreams.platform.length, 0);
   assert.deepEqual(r.portCalls, []);
+});
+
+test("Task-1395: a sealing vault's seal-after-write runs in the lane after each renewal, Claude's and Codex's, with the renewed file", async () => {
+  const r = rig();
+  const claude = await claudeFile(START + 5 * MIN);
+  const codex = await codexFile(START + 5 * MIN);
+  register(r, "c", "claude", claude);
+  register(r, "x", "openai-codex", codex);
+  r.port.write = () =>
+    writeCodex(codex, START + 60 * MIN, "fake-codex-renewed");
+  await r.renewal.tick();
+  assert.deepEqual(
+    r.written.sort((a, b) => a.file.localeCompare(b.file)),
+    [
+      { file: claude, access: "fake-claude-renewed-access-1", inLane: true },
+      { file: codex, access: "fake-codex-renewed", inLane: true },
+    ].sort((a, b) => a.file.localeCompare(b.file)),
+  );
 });
