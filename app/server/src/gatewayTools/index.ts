@@ -13,7 +13,11 @@ import {
   type AtlassianCheck,
 } from "./atlassian.ts";
 import { createToolHost, type ToolHostOptions } from "./host.ts";
-import { createMcpHandler, type McpCaller } from "./mcp.ts";
+import {
+  createMcpHandler,
+  type McpCaller,
+  type McpHandlerOptions,
+} from "./mcp.ts";
 import { EDGE_TOOLS } from "./tools.ts";
 
 interface AtlassianIntegration {
@@ -35,11 +39,20 @@ export interface EdgeToolSet {
   integrations: { atlassian: AtlassianIntegration };
 }
 
-export function createEdgeTools(options: ToolHostOptions = {}): EdgeToolSet {
+export function createEdgeTools(
+  options: ToolHostOptions & McpHandlerOptions = {},
+): EdgeToolSet {
   const log = options.log ?? ((line: string) => console.log(`[tools] ${line}`));
   const host = createToolHost(EDGE_TOOLS, { ...options, log });
   return {
-    handleMcp: createMcpHandler(host, log),
+    handleMcp: createMcpHandler(host, log, {
+      ...(options.deadlineMs !== undefined
+        ? { deadlineMs: options.deadlineMs }
+        : {}),
+      ...(options.lifecycleMs !== undefined
+        ? { lifecycleMs: options.lifecycleMs }
+        : {}),
+    }),
     integrations: {
       atlassian: {
         parse(input) {

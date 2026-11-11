@@ -1788,13 +1788,18 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   packaged entry wires none yet (D1).
 - **`/mcp`** on the model port, reached by a harness through the box's relay at
   `http://127.0.0.1:<relay port>/mcp`: stateless Streamable HTTP with JSON
-  responses, one fresh SDK server and transport per POST, closed when the
-  response closes; GET and DELETE answer 405, a body over 1 MiB 413. The gate
-  needs the client's certificate (as every model-port request), no `Origin`
-  header (403), and `Authorization: Bearer <MCP token>` of that same client (401
-  otherwise). It never forwards, so a lease token opens no tool and an MCP token
-  spends no lease. A tool failure is an `isError` result with the fixed text; a
-  client that goes away aborts its call.
+  responses, one fresh SDK server and transport per POST. The gate needs the
+  client's certificate (as every model-port request), no `Origin` header (403),
+  and `Authorization: Bearer <MCP token>` of that same client (401 otherwise).
+  It never forwards, so a lease token opens no tool and an MCP token spends no
+  lease. The adapter (`gatewayTools/mcp.ts`) owns the HTTP exchange: GET and
+  DELETE answer 405; a JSON-RPC batch or an unsupported `mcp-protocol-version`
+  400; a body over 1 MiB 413 as soon as it crosses the cap. Every JSON-RPC error
+  the SDK answers is rewritten to a fixed text for its code, without `data`. The
+  exchange is bounded at the host's deadline plus 5 s: then the call is aborted,
+  the response ends 504 with fixed text and the SDK instances close. A tool
+  failure is an `isError` result with the fixed text; a client that goes away
+  aborts its call.
 - **MCP tokens.** `gateway:admin clients mcp-token <clientId>` mints one
   (`pgmcp_…`), prints it once and keeps only its SHA-256 on the client record,
   replacing an earlier one; `clients mcp-token-revoke <clientId>` removes it;

@@ -21,7 +21,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterAll, afterEach, beforeEach, test, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
@@ -436,7 +436,7 @@ test("an MCP client that goes away aborts the call and closes the SDK instances"
   const connects = vi.spyOn(Server.prototype, "connect");
   const serverCloses = vi.spyOn(Server.prototype, "close");
   const transportCloses = vi.spyOn(
-    StreamableHTTPServerTransport.prototype,
+    WebStandardStreamableHTTPServerTransport.prototype,
     "close",
   );
   const { e, a1, tokens } = await twoUsers();
@@ -503,6 +503,19 @@ test("the gate refuses a missing, wrong, cleared or revoked token, an Origin, ot
   assert.equal(origin.status, 403);
   assert.deepEqual(JSON.parse(origin.text), { error: "origin not allowed" });
 
+  // One message per POST; no SDK text or request text comes back.
+  const batch = await raw(a1.url, {
+    headers: { authorization: `Bearer ${tokens.a1}` },
+    body: JSON.stringify([JSON.parse(INIT), JSON.parse(INIT)]),
+  });
+  assert.equal(batch.status, 400);
+  assert.match(batch.text, /Batches are not supported\./);
+  const version = await post(tokens.a1, {
+    "mcp-protocol-version": "SENTINEL-REQUEST-SECRET",
+  });
+  assert.equal(version.status, 400);
+  assert.doesNotMatch(version.text, /SENTINEL/);
+
   for (const method of ["GET", "DELETE"])
     assert.equal(
       (
@@ -538,7 +551,7 @@ test("the gate refuses a missing, wrong, cleared or revoked token, an Origin, ot
     body: INIT,
   });
   assert.ok([403, 502].includes(revoked.status), String(revoked.status));
-  assert.doesNotMatch(e.lines.join("\n"), /evil-origin/);
+  assert.doesNotMatch(e.lines.join("\n"), /evil-origin|SENTINEL/);
 });
 
 test("no token or credential reaches a log, an MCP error, a method error or the edge's own files", async () => {
