@@ -1780,14 +1780,15 @@ path above.
   registration holds the gateway's tools.
 - **Known limitations of gateway tools.** A tool newly deployed on the gateway
   reaches a live pi session only at its next open, because pi registers its tool
-  universe at open; Claude sessions get it at once (D8). This includes tools
-  added after an empty first listing. The follow-up, named and not built: "pi
-  late registration or reopen on listing change". A changed schema of a known
-  name reaches pi at its next open too; the edge checks arguments either way.
-  Only Jira is mapped: a gateway tool of another product needs a Pandeck change
-  (mapping and gate) before it appears. Pandeck's local Jira search, lookup and
-  mutate tools are not offered in client mode, and Confluence's local tools
-  still list and fail there (Task-1399).
+  universe at open; Claude sessions get it once the next connection's listing is
+  applied, without reopening (D8). This includes tools added after an empty
+  first listing. The follow-up, named and not built: "pi late registration or
+  reopen on listing change". A changed schema of a known name reaches pi at its
+  next open too; the edge checks arguments either way. Only Jira is mapped: a
+  gateway tool of another product needs a Pandeck change (mapping and gate)
+  before it appears. Pandeck's local Jira search, lookup and mutate tools are
+  not offered in client mode, and Confluence's local tools still list and fail
+  there (Task-1399).
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
   (`gatewayDevMain.ts`) remains the separate composition with the client
