@@ -236,6 +236,37 @@ export function clientPublicKey(publicKeyPem: string): KeyObject | undefined {
   }
 }
 
+/** One side of a pinned link: its key and its self-signed certificate. */
+export interface PinnedIdentity {
+  keyPem: string;
+  certPem: string;
+}
+
+/**
+ * A new key and a self-signed certificate for one side of the vault link
+ * (`gateway-vault/1.0`): the vault's names `hosts` for server auth, the edge's
+ * is a client certificate. The peer trusts exactly this certificate (pinned).
+ */
+export function selfSignedIdentity(
+  subject: string,
+  side: "server" | "client",
+  hosts: string[] = [],
+): PinnedIdentity {
+  const key = newKey();
+  return {
+    keyPem: pem(key.privateKey),
+    certPem: issue({
+      subject,
+      publicKey: key.publicKey,
+      issuer: subject,
+      issuerKey: key.privateKey,
+      days: CA_DAYS,
+      usage: side === "server" ? SERVER_AUTH : CLIENT_AUTH,
+      hosts,
+    }),
+  };
+}
+
 /** A client certificate whose common name is `clientId`. */
 export function issueClientCertificate(
   tlsState: EdgeTls,

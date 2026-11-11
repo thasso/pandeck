@@ -334,6 +334,22 @@ export class FrameDecoder {
 
 type CompletingFrame = Extract<Frame, { type: MessageKind }>;
 
+/** What a bounded assembler charges per data frame beyond its bytes. */
+const DATA_FRAME_COST = 64;
+
+/**
+ * Opt-in bounds on what a peer may make this side buffer (`gateway-vault/1.0`,
+ * whose messages are small). Without them only the per-frame caps apply.
+ */
+export interface AssemblyLimits {
+  /** Bytes of one message, its data frames and completing frame together. */
+  maxMessageBytes: number;
+  /** Bytes buffered across every unfinished message. */
+  maxBufferedBytes: number;
+  /** Unfinished messages at once. */
+  maxPartialMessages: number;
+}
+
 /**
  * Collects each message's `data` frames until the frame that completes it.
  * Sequence numbers count every data frame of a message from zero, across its
@@ -343,14 +359,19 @@ type CompletingFrame = Extract<Frame, { type: MessageKind }>;
 export class MessageAssembler {
   private partial = new Map<
     string,
-    { seq: number; streams: Map<string, Buffer[]> }
+    { seq: number; bytes: number; streams: Map<string, Buffer[]> }
   >();
+  private buffered = 0;
+
+  constructor(private readonly limits?: AssemblyLimits) {}
 
   data(frame: Extract<Frame, { type: "data" }>): void {
     const key = `${frame.of}:${frame.id}`;
     let message = this.partial.get(key);
     if (!message) {
-      message = { seq: 0, streams: new Map() };
+      if (this.limits && this.partial.size >= this.limits.maxPartialMessages)
+        this.overBounds();
+      message = { seq: 0, bytes: 0, streams: new Map() };
       this.partial.set(key, message);
     }
     if (frame.seq !== message.seq)
@@ -358,6 +379,19 @@ export class MessageAssembler {
         `Data frame ${frame.seq} of ${key} arrived where ${message.seq} was due.`,
       );
     message.seq += 1;
+    // Each frame costs its bookkeeping too, so empty frames or a new stream
+    // name per frame still count against the bounds.
+    const cost = this.limits
+      ? frame.payload.length + frame.stream.length + DATA_FRAME_COST
+      : frame.payload.length;
+    message.bytes += cost;
+    this.buffered += cost;
+    if (
+      this.limits &&
+      (message.bytes > this.limits.maxMessageBytes ||
+        this.buffered > this.limits.maxBufferedBytes)
+    )
+      this.overBounds();
     let parts = message.streams.get(frame.stream);
     if (!parts) {
       parts = [];
@@ -366,10 +400,28 @@ export class MessageAssembler {
     parts.push(frame.payload);
   }
 
+  /** Drops every unfinished message: the connection has ended. */
+  clear(): void {
+    this.partial.clear();
+    this.buffered = 0;
+  }
+
+  /** Releases what the peer made this side hold, then fails. */
+  private overBounds(): never {
+    this.clear();
+    return fail("A message is over the connection's bounds.");
+  }
+
   complete(frame: CompletingFrame): Payload {
     const key = `${frame.type}:${frame.id}`;
     const message = this.partial.get(key);
     this.partial.delete(key);
+    this.buffered -= message?.bytes ?? 0;
+    if (
+      this.limits &&
+      (message?.bytes ?? 0) + frame.payload.length > this.limits.maxMessageBytes
+    )
+      this.overBounds();
     const streams = message?.streams ?? new Map<string, Buffer[]>();
     if (frame.chunks !== (message?.seq ?? 0))
       fail(

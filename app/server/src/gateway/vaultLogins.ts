@@ -23,15 +23,9 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { WriterLane } from "./holds.ts";
-import type { LeaseProvider } from "./leases.ts";
 import { readCredential } from "./profileCredential.ts";
+import { LOGIN_CREDENTIAL_FILE } from "./vaultMethods.ts";
 import type { LoginDrivers, VaultPort } from "./vaultPort.ts";
-
-/** The file a driver leaves its credential in, inside its directory. */
-const LOGIN_CREDENTIAL_FILE: Record<LeaseProvider, string> = {
-  claude: ".credentials.json",
-  "openai-codex": "auth.json",
-};
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -95,7 +89,8 @@ export function createVaultLogins(
           const read = await readCredential(request.kind, source);
           if (!read.ok) throw new Error("The login left no usable credential.");
           await lane.run(request.accountId, async () => {
-            if (!request.commit()) throw new Error("The login was cancelled.");
+            if ((await request.commit()) !== true)
+              throw new Error("The login was cancelled.");
             install(source, request.tokenFile);
           });
           recheck(request.accountId);

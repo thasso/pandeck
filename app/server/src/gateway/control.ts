@@ -78,7 +78,7 @@ import type { HoldStatus, HoldUpdate } from "./holds.ts";
 import type { LeaseBinding, LeaseTable } from "./leases.ts";
 import { isLoginProfile, type ProfileRegistry } from "./profiles.ts";
 import { StateWriteError } from "./state.ts";
-import type { VaultPort } from "./vaultPort.ts";
+import type { LocalVaultPort } from "./vaultPort.ts";
 
 interface ControlContext {
   leases: LeaseTable;
@@ -86,7 +86,7 @@ interface ControlContext {
   compat: CompatUpstream;
   log: (line: string) => void;
   /** The holds, the writer lane and the profiles that need a login now. */
-  vault: Pick<VaultPort, "needsLogin" | "holds">;
+  vault: Pick<LocalVaultPort, "needsLogin" | "holds">;
 }
 
 /** What a method's log line names besides the method, and its outcome. */

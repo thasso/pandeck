@@ -19,6 +19,7 @@ import { errorText } from "../errors.ts";
 import {
   FrameDecoder,
   MessageAssembler,
+  type AssemblyLimits,
   WorkerProtocolError,
   encodeControlFrame,
   encodeMessage,
@@ -35,6 +36,24 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 /** The error code of a request for a method the peer does not serve. */
 export const UNKNOWN_METHOD = "unknown_method";
+/** The error code of a request over a bounded connection's serving cap. */
+const BUSY = "busy";
+
+/**
+ * Why a connection ended, as a closed set a log line may hold; the reason
+ * text may carry the peer's words.
+ */
+export type ConnectionEndCause =
+  "local" | "peer-closed" | "protocol" | "handshake-timeout" | "refused";
+
+/**
+ * Opt-in bounds for a connection whose peer is held to small messages: what
+ * it may make this side buffer, how many of its requests run at once (more
+ * are answered `busy`), and no peer text reflected in a reply.
+ */
+export interface ConnectionLimits extends AssemblyLimits {
+  maxServing: number;
+}
 
 export type MethodHandler = (
   payload: Payload,
@@ -112,7 +131,11 @@ interface ConnectionOptions {
    * true when the dialer's handshake was refused or the welcome named a
    * version it does not speak.
    */
-  onEnd?: (reason: string, end: { incompatible: boolean }) => void;
+  onEnd?: (
+    reason: string,
+    end: { incompatible: boolean; cause: ConnectionEndCause },
+  ) => void;
+  limits?: ConnectionLimits;
 }
 
 interface Outgoing {
@@ -130,7 +153,7 @@ export class WorkerConnection {
   private resolveEnded!: (reason: string) => void;
   private open = false;
   private readonly decoder = new FrameDecoder();
-  private readonly assembler = new MessageAssembler();
+  private readonly assembler: MessageAssembler;
   private readonly handlers: MethodHandlers;
   private nextId = 1;
   private readonly unsent: Outgoing[] = [];
@@ -145,6 +168,7 @@ export class WorkerConnection {
     private readonly options: ConnectionOptions,
   ) {
     this.handlers = options.handlers ?? {};
+    this.assembler = new MessageAssembler(options.limits);
     this.protocol = options.protocol ?? WORKER_PROTOCOL;
     this.ended = new Promise((resolve) => {
       this.resolveEnded = resolve;
@@ -153,13 +177,13 @@ export class WorkerConnection {
     transport.onClose(() => {
       try {
         this.decoder.finish();
-        this.end("the peer closed the connection");
+        this.finish("the peer closed the connection", false, "peer-closed");
       } catch (err) {
-        this.end(`protocol error: ${errorText(err)}`);
+        this.finish(`protocol error: ${errorText(err)}`, false, "protocol");
       }
     });
     this.handshakeTimer = setTimeout(
-      () => this.end("the handshake timed out"),
+      () => this.finish("the handshake timed out", false, "handshake-timeout"),
       HANDSHAKE_TIMEOUT_MS,
     );
     this.handshakeTimer.unref?.();
@@ -233,10 +257,16 @@ export class WorkerConnection {
     this.finish(reason, false);
   }
 
-  private finish(reason: string, incompatible: boolean): void {
+  private finish(
+    reason: string,
+    incompatible: boolean,
+    cause: ConnectionEndCause = "local",
+  ): void {
     if (this.endReason !== undefined) return;
     this.endReason = reason;
     clearTimeout(this.handshakeTimer);
+    // Unfinished messages are never completed now; release their bytes.
+    this.assembler.clear();
     this.open = false;
     this.transport.close();
     const error = this.endedError();
@@ -250,7 +280,7 @@ export class WorkerConnection {
     if (this.options.quiescence && received.length > 0)
       void this.options.quiescence().then(release, release);
     else release();
-    this.options.onEnd?.(reason, { incompatible });
+    this.options.onEnd?.(reason, { incompatible, cause });
     this.resolveEnded(reason);
   }
 
@@ -274,7 +304,7 @@ export class WorkerConnection {
     } catch (err) {
       if (!(err instanceof WorkerProtocolError))
         console.error("[worker-protocol] internal error on peer input:", err);
-      this.end(`protocol error: ${errorText(err)}`);
+      this.finish(`protocol error: ${errorText(err)}`, false, "protocol");
     }
   }
 
@@ -341,7 +371,7 @@ export class WorkerConnection {
             reason: refusal,
           }),
         );
-        this.end(`refused: ${refusal}`);
+        this.finish(`refused: ${refusal}`, false, "refused");
         return;
       }
       this.transport.write(
@@ -352,13 +382,17 @@ export class WorkerConnection {
       );
     } else {
       if (frame.type === "refused") {
-        this.finish(`the server refused: ${frame.reason}`, true);
+        this.finish(`the server refused: ${frame.reason}`, true, "refused");
         return;
       }
       if (frame.type !== "welcome")
         throw new WorkerProtocolError(`Expected welcome, got ${frame.type}.`);
       if (!this.protocol.compatible(frame.version)) {
-        this.finish(`the server speaks protocol ${frame.version}`, true);
+        this.finish(
+          `the server speaks protocol ${frame.version}`,
+          true,
+          "refused",
+        );
         return;
       }
     }
@@ -382,14 +416,23 @@ export class WorkerConnection {
     const handler = Object.hasOwn(this.handlers, method)
       ? this.handlers[method]
       : undefined;
+    const { limits } = this.options;
     if (!handler) {
       this.respond(
         id,
         { failure: UNKNOWN_METHOD },
         {
-          text: { message: `Unknown method ${JSON.stringify(method)}.` },
+          text: {
+            message: limits
+              ? "Unknown method."
+              : `Unknown method ${JSON.stringify(method)}.`,
+          },
         },
       );
+      return;
+    }
+    if (limits && this.serving.size >= limits.maxServing) {
+      this.respond(id, { failure: BUSY }, { text: { message: "Busy." } });
       return;
     }
     const controller = new AbortController();
