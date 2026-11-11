@@ -18,8 +18,9 @@
  *   plaintext never touches its record.
  * - Sealing needs public keys only, so it runs unattended.
  *
- * Without recipients there is no store and the vault behaves as before. No
- * log line holds a PIN, a token or a file's content; only account ids, counts
+ * Without a recipients file there is no store and the vault behaves as
+ * before. A present but invalid file, or `sealed/` without recipients, is a
+ * startup error: the vault never falls back to plaintext on disk. No log line holds a PIN, a token or a file's content; only account ids, counts
  * and fixed codes.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -95,12 +96,37 @@ function isRecipient(value: unknown): value is Recipient {
     : r.kind === "software" && typeof r.privateKeyFile === "string";
 }
 
+/** Whether the entry's key is P-256 and its key id is that key's. */
+function keyMatches(recipient: Recipient): boolean {
+  try {
+    return (
+      keyIdOf(recipientPublicKey(recipient.publicKeyPem)) === recipient.kid
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The vault's recipients; `[]` when there is no file. A file that is present
+ * but unreadable, of another version, empty, or with any invalid entry (a bad
+ * kind or field, a key that is not P-256, a key id not its key's) throws:
+ * the vault never silently drops to storing plaintext.
+ */
 export function readRecipients(stateDir: string): Recipient[] {
-  return recipientsFile(stateDir).read<RecipientsFile, Recipient[]>((value) =>
-    value?.v === 1 && Array.isArray(value.recipients)
-      ? value.recipients.filter(isRecipient)
-      : [],
-  );
+  return recipientsFile(stateDir).read<RecipientsFile, Recipient[]>((value) => {
+    if (value === undefined) return [];
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      value.v !== 1 ||
+      !Array.isArray(value.recipients) ||
+      value.recipients.length === 0 ||
+      !value.recipients.every((r) => isRecipient(r) && keyMatches(r))
+    )
+      throw new Error("invalid recipient list");
+    return value.recipients;
+  });
 }
 
 export function writeRecipients(
@@ -232,9 +258,16 @@ export function createSealedStore(
 ): SealedStore | undefined {
   const { stateDir, log } = options;
   let recipients = readRecipients(stateDir);
-  if (recipients.length === 0) return undefined;
   const accountsDir = join(resolve(stateDir), "accounts");
   const sealedDir = join(resolve(stateDir), "sealed");
+  if (recipients.length === 0) {
+    // A sealed installation never downgrades to plaintext on disk.
+    if (existsSync(sealedDir))
+      throw new Error(
+        "sealed records exist but vault-recipients.json is missing: refusing to start unsealed",
+      );
+    return undefined;
+  }
   mkdirSync(accountsDir, { recursive: true, mode: 0o700 });
   if (options.requireTmpfs && statfsSync(accountsDir).type !== TMPFS_MAGIC)
     throw new Error(
@@ -361,7 +394,7 @@ export function createSealedStore(
         ),
       });
       const opened: [string, string, Buffer][] = [];
-      let unopened = 0;
+      const unopened: string[] = [];
       for (const [accountId, file, record] of records()) {
         let plaintext: Buffer | undefined;
         try {
@@ -373,7 +406,7 @@ export function createSealedStore(
         }
         if (plaintext) opened.push([accountId, file, plaintext]);
         else {
-          unopened++;
+          unopened.push(join(accountsDir, accountId, file));
           log(
             `account ${accountId}: sealed ${file} did not open; it needs a login`,
           );
@@ -381,14 +414,37 @@ export function createSealedStore(
       }
       await helper?.close();
       helper = undefined;
-      for (const [accountId, file, plaintext] of opened) {
-        const path = join(accountsDir, accountId, file);
-        writePrivate(path, plaintext);
-        known.set(path, sha256(plaintext));
+      // All or nothing: a failed write or removal clears every token file this
+      // unlock touches (written, being written, stale or unopened) and stays
+      // locked. A record that did not open keeps no live plaintext.
+      const targets = opened.map(([accountId, file]) =>
+        join(accountsDir, accountId, file),
+      );
+      try {
+        opened.forEach(([, , plaintext], i) =>
+          writePrivate(targets[i]!, plaintext),
+        );
+        for (const path of unopened) rmSync(path, { force: true });
+      } catch {
+        let left = 0;
+        for (const path of [...targets, ...unopened])
+          try {
+            rmSync(path, { force: true });
+          } catch {
+            left++;
+          }
+        log(
+          `unlock: writing the opened records failed; still locked${left ? ` (${left} files not removed)` : ""}`,
+        );
+        return { failed: "write" };
       }
+      for (const [accountId, file, plaintext] of opened)
+        known.set(join(accountsDir, accountId, file), sha256(plaintext));
       locked = false;
-      log(`unlocked: ${opened.length} records opened, ${unopened} did not`);
-      return { ok: true, opened: opened.length, unopened };
+      log(
+        `unlocked: ${opened.length} records opened, ${unopened.length} did not`,
+      );
+      return { ok: true, opened: opened.length, unopened: unopened.length };
     } finally {
       unlocking = false;
       await helper?.close();

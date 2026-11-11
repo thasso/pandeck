@@ -18,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
-import type { PivHelperCommand } from "./pivChild.ts";
+import { openPivHelper, type PivHelperCommand } from "./pivChild.ts";
 import {
   keyIdOf,
   openRecord,
@@ -496,4 +496,223 @@ test("unlock through the control socket: a wrong PIN stays locked with tries lef
   for (const line of lines)
     for (const secret of [PIN, "fake-wrong", TOKEN, "fake-second-token"])
       assert.ok(!line.includes(secret), line);
+});
+
+// --- review fixes ----------------------------------------------------------
+
+/** A sealed record to one fresh key, and that key's ECDH. */
+function sealedToOne(): {
+  record: SealedRecord;
+  ecdh: (kid: string, epk: Buffer) => Buffer | undefined;
+} {
+  const a = keyPair();
+  const kid = keyIdOf(recipientPublicKey(a.publicKeyPem));
+  return {
+    record: sealRecord(Buffer.from(claudeJson(TOKEN)), "acc", "auth.json", [
+      { kid, publicKeyPem: a.publicKeyPem },
+    ]),
+    ecdh: ecdhWith(a.privateKeyPem, kid),
+  };
+}
+
+const truncate = (b64: string, bytes: number): string =>
+  Buffer.from(b64, "base64").subarray(0, bytes).toString("base64");
+
+test("C1: a truncated tag never opens, on the body or the wrapped key", async () => {
+  const { record, ecdh } = sealedToOne();
+  assert.ok(await openRecord(record, "acc", "auth.json", ecdh));
+  const entry = record.recipients[0]!;
+  for (const bad of [
+    { ...record, tag: truncate(record.tag, 4) },
+    { ...record, recipients: [{ ...entry, tag: truncate(entry.tag, 4) }] },
+    {
+      ...record,
+      tag: truncate(record.tag, 4),
+      recipients: [{ ...entry, tag: truncate(entry.tag, 4) }],
+    },
+  ]) {
+    assert.equal(parseSealedRecord(bad), undefined);
+    assert.equal(await openRecord(bad, "acc", "auth.json", ecdh), undefined);
+  }
+});
+
+test("C1: malformed fields do not parse", () => {
+  const { record } = sealedToOne();
+  const entry = record.recipients[0]!;
+  const offCurve = Buffer.from(entry.epk, "base64");
+  offCurve[64] = offCurve[64]! ^ 1;
+  const withEntry = (patch: Partial<typeof entry>) => ({
+    ...record,
+    recipients: [{ ...entry, ...patch }],
+  });
+  for (const bad of [
+    { ...record, iv: truncate(record.iv, 11) },
+    { ...record, ct: `${record.ct.slice(0, -1)}!` },
+    { ...record, recipients: [] },
+    withEntry({ iv: truncate(entry.iv, 11) }),
+    withEntry({ wrapped: truncate(entry.wrapped, 31) }),
+    withEntry({ epk: offCurve.toString("base64") }),
+    withEntry({ epk: truncate(entry.epk, 33) }),
+    withEntry({ kid: entry.kid.toUpperCase() }),
+    withEntry({ kid: entry.kid.slice(1) }),
+    // Non-canonical base64: the last pad bits set.
+    withEntry({
+      tag: entry.tag.replace(/.(==)$/, (_m, pad: string) => `B${pad}`),
+    }),
+  ])
+    assert.equal(parseSealedRecord(bad), undefined, JSON.stringify(bad));
+  assert.ok(parseSealedRecord(JSON.parse(JSON.stringify(record))));
+});
+
+test("C2: an invalid recipients file is a startup error, and sealed/ never runs unsealed", () => {
+  const good = (dir: string) => softwareRecipient(dir, "soft");
+  const cases: [string, (dir: string) => string][] = [
+    ["malformed JSON", () => "{"],
+    ["another version", (d) => JSON.stringify({ v: 2, recipients: [good(d)] })],
+    ["an empty list", () => JSON.stringify({ v: 1, recipients: [] })],
+    [
+      "a misspelled kind",
+      (d) =>
+        JSON.stringify({ v: 1, recipients: [{ ...good(d), kind: "sofware" }] }),
+    ],
+    [
+      "a missing field",
+      (d) => {
+        const { privateKeyFile: _drop, ...rest } = good(d) as Extract<
+          Recipient,
+          { kind: "software" }
+        >;
+        return JSON.stringify({ v: 1, recipients: [rest] });
+      },
+    ],
+    [
+      "a key that is not P-256",
+      (d) => {
+        const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 });
+        return JSON.stringify({
+          v: 1,
+          recipients: [
+            {
+              ...good(d),
+              publicKeyPem: rsa.publicKey.export({
+                type: "spki",
+                format: "pem",
+              }),
+            },
+          ],
+        });
+      },
+    ],
+    [
+      "a key id not its key's",
+      (d) =>
+        JSON.stringify({
+          v: 1,
+          recipients: [{ ...good(d), kid: "0".repeat(64) }],
+        }),
+    ],
+  ];
+  for (const [what, content] of cases) {
+    const dir = stateDir();
+    writeFileSync(join(dir, "vault-recipients.json"), content(dir));
+    assert.throws(
+      () => createSealedStore({ stateDir: dir, log: () => {} }),
+      /vault recipients/,
+      what,
+    );
+  }
+  // A sealed installation without its recipients file refuses to start.
+  const sealedDir = stateDir();
+  mkdirSync(join(sealedDir, "sealed", "acc-1"), { recursive: true });
+  assert.throws(
+    () => createSealedStore({ stateDir: sealedDir, log: () => {} }),
+    /refusing to start unsealed/,
+  );
+});
+
+test("C3: a helper that cannot spawn answers failed and closes", async () => {
+  const helper = openPivHelper({
+    file: join(root, "no-such-python"),
+    args: [],
+  });
+  assert.deepEqual(await helper.request({ op: "public", slot: "9d" }), {
+    error: "failed",
+  });
+  await helper.close();
+});
+
+test("C4: a failed write leaves the vault locked with nothing installed; a retry leaves no plaintext for a record that does not open", async () => {
+  const dir = stateDir();
+  writeRecipients(dir, [softwareRecipient(dir, "soft")]);
+  writeToken(dir, "acc-1", TOKEN);
+  writeToken(dir, "acc-2", "fake-second-token");
+  await sealExisting(dir);
+  // acc-2's directory is a file: its write fails.
+  rmSync(join(dir, "accounts", "acc-2"), { recursive: true });
+  writeFileSync(join(dir, "accounts", "acc-2"), "blocker");
+  // A stale copy of acc-1 is cleared by the rollback too.
+  writeToken(dir, "acc-1", "fake-stale-token");
+  const store = createSealedStore({ stateDir: dir, log: () => {} });
+  assert.ok(store);
+  assert.deepEqual(await store.unlock("unused"), { failed: "write" });
+  assert.equal(store.locked(), true);
+  assert.equal(existsSync(tokenPath(dir, "acc-1")), false);
+
+  // Retry: acc-1's record no longer opens, and a stale copy of it is removed.
+  rmSync(join(dir, "accounts", "acc-2"));
+  writeFileSync(recordPath(dir, "acc-1"), "not a record");
+  writeToken(dir, "acc-1", "fake-stale-token");
+  assert.deepEqual(await store.unlock("unused"), {
+    ok: true,
+    opened: 1,
+    unopened: 1,
+  });
+  assert.equal(existsSync(tokenPath(dir, "acc-1")), false);
+  assert.equal(
+    readFileSync(tokenPath(dir, "acc-2"), "utf8"),
+    claudeJson("fake-second-token"),
+  );
+});
+
+test("C5: a stale first recipient falls through to a usable second (software and piv)", async () => {
+  // Software: the first key's file is gone.
+  const dir = stateDir();
+  const first = softwareRecipient(dir, "first");
+  const second = softwareRecipient(dir, "second");
+  writeRecipients(dir, [first, second]);
+  writeToken(dir, "acc-1", TOKEN);
+  await sealExisting(dir);
+  assert.equal(first.kind, "software");
+  if (first.kind === "software") rmSync(first.privateKeyFile);
+  assert.deepEqual(
+    await createSealedStore({ stateDir: dir, log: () => {} })!.unlock("unused"),
+    {
+      ok: true,
+      opened: 1,
+      unopened: 0,
+    },
+  );
+
+  // PIV: an old key in the same slot, replaced on the YubiKey by the new one.
+  const pivDir = stateDir();
+  const helper = fakeHelper(pivDir);
+  const old = recipientOf(keyPair().publicKeyPem, { slot: "9d" });
+  writeRecipients(pivDir, [old, helper.recipient]);
+  writeToken(pivDir, "acc-1", TOKEN);
+  await sealExisting(pivDir);
+  assert.deepEqual(readRecord(pivDir, "acc-1").recipients[0]!.kid, old.kid);
+  const store = createSealedStore({
+    stateDir: pivDir,
+    log: () => {},
+    pivHelper: helper.command,
+  });
+  assert.deepEqual(await store!.unlock(PIN), {
+    ok: true,
+    opened: 1,
+    unopened: 0,
+  });
+  assert.equal(
+    readFileSync(tokenPath(pivDir, "acc-1"), "utf8"),
+    claudeJson(TOKEN),
+  );
 });

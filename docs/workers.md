@@ -1834,7 +1834,10 @@ server's local gateway does.
 
 With recipients in `<stateDir>/vault-recipients.json` the vault process keeps
 credentials on disk only as ciphertext (Task-1395, `gateway/sealedStore.ts`). A
-vault without recipients, and every in-process vault, behaves as above.
+vault without recipients, and every in-process vault, behaves as above. A
+recipients file that is present but invalid (unreadable, another version, empty,
+any bad entry or key id), or `sealed/` without one, stops the vault at start: it
+never falls back to plaintext on disk.
 
 - **Records.** `pandeck-sealed/1` (`gateway/sealedRecord.ts`), one per token
   file at `<stateDir>/sealed/<accountId>/<file>.sealed`, 0600: a random data key

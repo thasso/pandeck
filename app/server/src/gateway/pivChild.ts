@@ -57,21 +57,28 @@ export function openPivHelper(
     for (const answer of waiting.splice(0)) answer(FAILED);
   };
   const exited = new Promise<void>((resolveExit) => {
+    /** Idempotent: the helper is gone, whichever event says so first. */
+    const finish = (): void => {
+      end();
+      resolveExit();
+    };
     try {
       child = spawn(command.file, [...command.args], {
         stdio: ["pipe", "pipe", "ignore"],
         env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" },
       });
     } catch {
-      ended = true;
-      resolveExit();
+      finish();
       return;
     }
-    child.once("error", () => end());
-    child.once("exit", () => {
+    const spawned = child;
+    // A spawn error (no python3) emits no `exit`: it ends the helper too.
+    spawned.on("error", () => {
       end();
-      resolveExit();
+      if (spawned.pid === undefined) finish();
     });
+    spawned.once("exit", finish);
+    spawned.once("close", finish);
   });
   const timer = setTimeout(() => {
     end();
