@@ -216,3 +216,88 @@ test("a server in client mode streams model responses through relay and edge", a
   );
   assert.ok(lines.some((line) => line.startsWith("ready as client")));
 });
+
+test("after every connect the link reads the gateway's Jira status and announces the section", async () => {
+  const { createEdgeTools } = await import("./gatewayTools/index.ts");
+  const { onSettingsChanged } = await import("./settingsService.ts");
+  const { getJiraSettings, updateJiraSettings } =
+    await import("./jiraSettings.ts");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ displayName: "Fake" }))),
+  );
+  open.push({ close: () => vi.unstubAllGlobals() });
+
+  const gatewayDir = mkdtempSync(join(DATA_DIR, "edge-"));
+  const gateway = await startGateway({
+    stateDir: gatewayDir,
+    log: () => {},
+    clients: {},
+    tools: createEdgeTools({ log: () => {} }),
+  });
+  open.push(gateway);
+  gateway.clients!.registry.addUser("thasso");
+  const relayDir = mkdtempSync(join(tmpdir(), "relay-"));
+  open.push({
+    close: () => rmSync(relayDir, { recursive: true, force: true }),
+  });
+  await enrollRelay({
+    stateDir: relayDir,
+    host: "127.0.0.1",
+    enrollPort: gateway.clients!.enrollPort,
+    caPem: gateway.clients!.caPem,
+    code: gateway.clients!.registry.createCode("thasso", "devbox"),
+  });
+  const relayOptions = {
+    stateDir: relayDir,
+    port: 0,
+    socketPath: join(relayDir, "relay.sock"),
+    log: () => {},
+  };
+  let relay = await startRelay(relayOptions);
+
+  const heard: string[][] = [];
+  open.push({
+    close: onSettingsChanged((change) => heard.push(change.sections)),
+  });
+  const announced = async (count: number) => {
+    for (let i = 0; i < 400 && heard.length < count; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(heard.length, count);
+  };
+
+  const link = startGatewayClientLink({
+    socketPath: relay.socketPath,
+    relayPort: relay.port,
+    log: () => {},
+  });
+  open.push(link);
+  assert.equal(await link.ready, true);
+  await announced(1);
+  assert.deepEqual(heard[0], ["jira"]);
+  assert.equal(getJiraSettings().credentialStore, "gateway");
+  assert.equal(getJiraSettings().atlassianTokenConfigured, false);
+
+  // The token goes to the gateway; Pandeck's own file never sees it.
+  const site = getJiraSettings().jiraHost;
+  await updateJiraSettings({
+    atlassianEmail: "me@example.com",
+    atlassianToken: "fake-link-token",
+  });
+  assert.equal(getJiraSettings().atlassianTokenConfigured, true);
+
+  // A reconnect reads the status again: a restarted server shows it too.
+  await relay.close();
+  relay = await startRelay(relayOptions);
+  open.push(relay);
+  await announced(2);
+  assert.deepEqual(heard[1], ["jira"]);
+  assert.deepEqual(
+    {
+      email: getJiraSettings().atlassianEmail,
+      configured: getJiraSettings().atlassianTokenConfigured,
+      site,
+    },
+    { email: "me@example.com", configured: true, site },
+  );
+});

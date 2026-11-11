@@ -32,7 +32,38 @@ export interface VaultPort {
   newTokenFile(kind: LeaseProvider, accountId: string): string;
   /** Deletes the token files the vault made for the account, if any. */
   discardCredential(accountId: string): void;
+  /**
+   * A user's integration credential (Task-1397): an opaque JSON string the
+   * vault stores, sealed when it has recipients, and parses nothing in. None
+   * of these rejects; a remote vault bounds each call.
+   */
+  integrationPut(
+    userId: string,
+    integration: Integration,
+    credential: string,
+  ): Promise<IntegrationWrite>;
+  integrationGet(
+    userId: string,
+    integration: Integration,
+    options?: { signal?: AbortSignal },
+  ): Promise<IntegrationRecord>;
+  integrationClear(
+    userId: string,
+    integration: Integration,
+  ): Promise<IntegrationWrite>;
 }
+
+/** The integrations whose credentials the vault keeps. */
+type Integration = "atlassian";
+
+export type IntegrationRecord =
+  | { ok: true; credential: string }
+  | { ok: false; absent: true }
+  | { ok: false; locked: true }
+  | { ok: false; unavailable: true };
+
+export type IntegrationWrite =
+  { ok: true } | { ok: false; locked: true } | { ok: false; unavailable: true };
 
 /** The in-process vault, which also serves gateway control 1.4's holds. */
 export interface LocalVaultPort extends VaultPort {

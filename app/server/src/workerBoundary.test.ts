@@ -520,6 +520,8 @@ const GATEWAY_VAULT = [
   "sealedStore",
   "vault",
   "vaultControl",
+  // Users' integration credentials (Task-1397), sealed like token files.
+  "vaultIntegrations",
   "vaultLogins",
   // The vault in its own process, serving gateway-vault/1.0.
   "vaultServer",
@@ -540,7 +542,14 @@ const GATEWAY_EDGE = [
   "upstreams",
   "x509",
 ];
-const GATEWAY_SHARED = ["profiles", "refusals", "vaultMethods", "vaultPort"];
+const GATEWAY_SHARED = [
+  // What the edge takes from its injected tools (Task-1397): types only.
+  "edgeTools",
+  "profiles",
+  "refusals",
+  "vaultMethods",
+  "vaultPort",
+];
 /**
  * The composition, and the standalone process and its entries around it. The
  * admin CLI edits both tiers' files: the edge's clients, the vault's pairing
@@ -596,6 +605,55 @@ test("the gateway's edge reaches the vault only through its port", () => {
     [],
     "the port holds types only",
   );
+  assert.deepEqual(
+    [...scans.get(path("edgeTools"))!.valueImports],
+    [],
+    "the edge's tool port holds types only",
+  );
+});
+
+/**
+ * The edge's tools (Task-1397): beyond `node:`, themselves and the MCP SDK,
+ * only the shared Jira client and its helpers, a closed set. They import
+ * nothing from `gateway/`, which reaches them only through `EdgeTools`, and
+ * only the edge's entry loads them, so the vault process never does.
+ */
+const GATEWAY_TOOLS_ALLOWED = new Set([
+  "atlassian/adfToMarkdown.ts",
+  "atlassian/atlassianFetch.ts",
+  "httpRetry.ts",
+  "jiraClient.ts",
+]);
+
+test("only the edge's entry loads its tools, and they reach no server state", () => {
+  assert.deepEqual(
+    importersOf((target) => target.startsWith("gatewayTools/")).filter(
+      (module) => !module.startsWith("gatewayTools/"),
+    ),
+    ["gatewayDevMain.ts"],
+  );
+  const modules = [...scans].filter(([module]) =>
+    module.startsWith("gatewayTools/"),
+  );
+  assert.ok(modules.length > 0, "the scan found the tool modules");
+  for (const [module, scan] of modules)
+    for (const target of scan.imports)
+      assert.ok(
+        target.startsWith("node:") ||
+          target.startsWith("gatewayTools/") ||
+          target.startsWith("@modelcontextprotocol/sdk/") ||
+          GATEWAY_TOOLS_ALLOWED.has(target),
+        `${module} imports ${target}`,
+      );
+  for (const module of GATEWAY_TOOLS_ALLOWED) {
+    const scan = scans.get(module);
+    assert.ok(scan, `the scan found ${module}`);
+    for (const target of scan.imports)
+      assert.ok(
+        target.startsWith("node:") || GATEWAY_TOOLS_ALLOWED.has(target),
+        `${module}, which the edge's tools may import, imports ${target}`,
+      );
+  }
 });
 
 test("only the server links and the error classifier import the gateway", () => {

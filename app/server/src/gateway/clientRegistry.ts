@@ -3,7 +3,8 @@
  * user owns each account (plan Task-1384 §1), in `clients.json` through
  * `privateJsonFile.ts`. A code is kept only as its SHA-256 and is used up
  * once; a client is named by the common name of its certificate and matched
- * by its fingerprint too.
+ * by its fingerprint too. A client's MCP token (Task-1397) is likewise kept
+ * only as its SHA-256.
  *
  * The admin CLI writes the same file from its own process, so reads always
  * reload the current file. Writers hold clients.json.lock across the complete
@@ -39,6 +40,8 @@ export interface GatewayClient {
   fingerprint: string;
   createdAt: number;
   revokedAt?: number;
+  /** Hex SHA-256 of the client's MCP token, when one was minted. */
+  mcpTokenHash?: string;
 }
 
 interface PendingCode {
@@ -80,6 +83,26 @@ function label(text: string): string {
 
 function hashOf(code: string): string {
   return createHash("sha256").update(code, "utf8").digest("hex");
+}
+
+const HASH_RE = /^[a-f0-9]{64}$/;
+
+/**
+ * Whether `token` is the client's MCP token. A stored hash that is not 64
+ * hex characters counts as none.
+ */
+export function mcpTokenMatches(client: GatewayClient, token: string): boolean {
+  const stored = client.mcpTokenHash;
+  if (typeof stored !== "string" || !HASH_RE.test(stored)) return false;
+  return timingSafeEqual(
+    Buffer.from(stored, "hex"),
+    Buffer.from(hashOf(token), "hex"),
+  );
+}
+
+/** One line of `clients list`. */
+export function clientListLine(client: GatewayClient): string {
+  return `${client.id}\tuser=${client.userId}\t${client.revokedAt !== undefined ? "revoked" : "active"}\tmcp=${client.mcpTokenHash !== undefined ? "yes" : "no"}\t${client.label}`;
 }
 
 export class ClientRegistryLockedError extends Error {
@@ -257,6 +280,35 @@ export class ClientRegistry {
       client.revokedAt = this.now();
       return true;
     });
+  }
+
+  /**
+   * Mints the client's MCP token, replacing any earlier one, and answers it:
+   * the only time it exists outside its holder. Throws for an unknown or
+   * revoked client.
+   */
+  setMcpToken(clientId: string): string {
+    const token = `pgmcp_${randomBytes(32).toString("base64url")}`;
+    this.change((state) => {
+      const client = state.clients.find((c) => c.id === clientId);
+      if (!client || client.revokedAt !== undefined)
+        throw new Error(`No active client ${clientId}.`);
+      client.mcpTokenHash = hashOf(token);
+    });
+    return token;
+  }
+
+  /** Answers whether the client had an MCP token. */
+  clearMcpToken(clientId: string): boolean {
+    return this.change(
+      (state) => {
+        const client = state.clients.find((c) => c.id === clientId);
+        if (!client || client.mcpTokenHash === undefined) return false;
+        delete client.mcpTokenHash;
+        return true;
+      },
+      (changed) => changed,
+    );
   }
 
   setAccountOwner(profileId: string, userId: string): void {

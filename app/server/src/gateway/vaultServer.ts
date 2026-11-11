@@ -22,7 +22,7 @@
  */
 import { X509Certificate } from "node:crypto";
 import type net from "node:net";
-import { join, relative, resolve, isAbsolute } from "node:path";
+import { basename, join, relative, resolve, isAbsolute } from "node:path";
 import tls from "node:tls";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
@@ -50,13 +50,18 @@ import { startVaultControl, type VaultControl } from "./vaultControl.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
+  LOGIN_CREDENTIAL_FILE,
   LOGIN_UNAVAILABLE,
+  MAX_INTEGRATION_CREDENTIAL,
   MAX_VAULT_LOGINS,
   OUTSIDE_ACCOUNTS,
   VAULT_LIMITS,
   VAULT_INVALID_PARAMS,
+  VAULT_LOCKED,
   VAULT_METHODS,
   accountTokenFile,
+  isIntegration,
+  isVaultId,
   vaultBody,
   vaultMessage,
   type LoginFailure,
@@ -129,12 +134,17 @@ export async function startVaultServer(
     const rel = relative(accountsDir, resolve(file));
     return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
   };
-  /** Only login profiles whose token file is the vault's to keep. */
+  const loginFiles = new Set(Object.values(LOGIN_CREDENTIAL_FILE));
+  /**
+   * Only login profiles whose token file is the vault's to keep, and a login
+   * credential file: no profile points renewal at an integration record.
+   */
   const admitted = (value: unknown): LoginProfile | undefined => {
     const profile = parseProfile(value);
     return profile &&
       isLoginProfile(profile) &&
-      underAccounts(profile.tokenFile)
+      underAccounts(profile.tokenFile) &&
+      loginFiles.has(basename(profile.tokenFile))
       ? profile
       : undefined;
   };
@@ -210,7 +220,35 @@ export async function startVaultServer(
       written: sealed?.written,
       discarded: sealed?.discarded,
     },
+    integrations: {
+      stateDir: options.stateDir,
+      written: sealed?.written,
+      discarded: sealed?.discarded,
+    },
   });
+
+  /** An integration request's user and integration, decoded. */
+  const integrationOf = (
+    body: Record<string, unknown>,
+  ): { userId: string; integration: "atlassian" } => {
+    const { userId, integration } = body;
+    if (!isVaultId(userId) || !isIntegration(integration))
+      throw invalid("integration");
+    return { userId, integration };
+  };
+  const refuseLocked = (): void => {
+    if (locked())
+      throw new WorkerMethodError(VAULT_LOCKED, "The vault is locked.");
+  };
+  /** A write's outcome on the wire: `{}`, or the locked or failed code. */
+  const wrote = (
+    outcome: Awaited<ReturnType<typeof vault.integrationPut>>,
+  ): Record<string, never> => {
+    if (outcome.ok) return {};
+    if ("locked" in outcome)
+      throw new WorkerMethodError(VAULT_LOCKED, "The vault is locked.");
+    throw new WorkerMethodError("failed", "The vault request failed.");
+  };
 
   /** The request's binding when it is the mirrored profile's own. */
   const bindingOf = (value: unknown): LoginBinding => {
@@ -334,6 +372,31 @@ export async function startVaultServer(
       if (!isProfileId(body.accountId)) throw invalid("account");
       vault.discardCredential(body.accountId);
       return {};
+    },
+    [VAULT_METHODS.integrationPut]: async (body) => {
+      const { userId, integration } = integrationOf(body);
+      const { credential } = body;
+      if (
+        typeof credential !== "string" ||
+        credential.length === 0 ||
+        credential.length > MAX_INTEGRATION_CREDENTIAL
+      )
+        throw invalid("integration credential");
+      refuseLocked();
+      return wrote(await vault.integrationPut(userId, integration, credential));
+    },
+    [VAULT_METHODS.integrationGet]: async (body) => {
+      const { userId, integration } = integrationOf(body);
+      return {
+        record: locked()
+          ? { ok: false, locked: true }
+          : await vault.integrationGet(userId, integration),
+      };
+    },
+    [VAULT_METHODS.integrationClear]: async (body) => {
+      const { userId, integration } = integrationOf(body);
+      refuseLocked();
+      return wrote(await vault.integrationClear(userId, integration));
     },
     [VAULT_METHODS.loginStart]: (body) => {
       const { loginId, kind, accountId, tokenFile } = body;

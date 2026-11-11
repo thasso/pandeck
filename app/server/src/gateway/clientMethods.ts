@@ -24,6 +24,17 @@
  * - `logins.input {loginId, text}` and `logins.cancel {loginId}` answer `{}`,
  *   for this client's logins only.
  *
+ * The user's integration credentials (Task-1397), the user always the
+ * client's from the registry; a `userId` in a payload is ignored:
+ *
+ * - `integrations.set {integration, site, email, token}` checks the
+ *   credential with the integration and stores it in the vault; answers
+ *   `{connected: true, site, email, displayName?, accountId?}`.
+ * - `integrations.clear {integration}` answers `{}`.
+ * - `integrations.status {integration, check?}` answers `{connected, site?,
+ *   email?, displayName?, accountId?, problem?}`: `site` and `email` whenever
+ *   a credential is stored, and with `check` whether it works. Never a token.
+ *
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
  * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
  */
@@ -60,6 +71,9 @@ export const CLIENT_METHODS = {
   loginStart: "logins.start",
   loginInput: "logins.input",
   loginCancel: "logins.cancel",
+  integrationSet: "integrations.set",
+  integrationClear: "integrations.clear",
+  integrationStatus: "integrations.status",
   /** Gateway → client. */
   accountsChanged: "accounts.changed",
   loginEvent: "logins.event",
@@ -73,6 +87,50 @@ export const UNKNOWN_ACCOUNT = "unknown_account";
 export const UNKNOWN_LOGIN = "unknown_login";
 /** The gateway runs no driver for this kind of login. */
 export const LOGIN_UNAVAILABLE = "login_unavailable";
+
+/**
+ * The integration methods' failures (Task-1397), each with one fixed text
+ * the gateway sends and the client may show.
+ */
+const INTEGRATION_FAILURES = {
+  integration_invalid: "The site, email or API token is not valid.",
+  integration_rejected: "Atlassian rejected the email and API token.",
+  integration_unreachable: "Atlassian could not check the credential.",
+  vault_locked: "The vault is locked.",
+  vault_unavailable: "The vault did not answer; check the Jira status.",
+  tools_unavailable: "This gateway runs no tools.",
+} as const;
+export type IntegrationFailure = keyof typeof INTEGRATION_FAILURES;
+
+export function integrationFailure(code: IntegrationFailure): never {
+  throw new WorkerMethodError(code, INTEGRATION_FAILURES[code]);
+}
+
+/** Why a status answer is not connected. */
+type IntegrationProblem =
+  | "vault_locked"
+  | "vault_unavailable"
+  | "invalid"
+  | "rejected"
+  | "unreachable"
+  | "failed";
+const INTEGRATION_PROBLEMS = new Set<string>([
+  "vault_locked",
+  "vault_unavailable",
+  "invalid",
+  "rejected",
+  "unreachable",
+  "failed",
+]);
+
+export interface IntegrationStatus {
+  connected: boolean;
+  site?: string;
+  email?: string;
+  displayName?: string;
+  accountId?: string;
+  problem?: IntegrationProblem;
+}
 
 export interface ClientAccount {
   id: string;
@@ -198,6 +256,67 @@ export function decodeLoginInput(payload: Payload): {
   const text = record(payload.json)?.text;
   if (typeof text !== "string") invalid("login input");
   return { loginId: decodeLoginId(payload), text };
+}
+
+function integrationOf(value: unknown): "atlassian" {
+  if (value !== "atlassian") invalid("integration");
+  return value;
+}
+
+/** `integrations.set`: the integration and the raw fields its parser checks. */
+export function decodeIntegrationSet(payload: Payload): {
+  integration: "atlassian";
+  input: { site: unknown; email: unknown; token: unknown };
+} {
+  const { integration, site, email, token } = record(payload.json) ?? {};
+  return {
+    integration: integrationOf(integration),
+    input: { site, email, token },
+  };
+}
+
+export function decodeIntegration(payload: Payload): "atlassian" {
+  return integrationOf(record(payload.json)?.integration);
+}
+
+export function decodeIntegrationStatusRequest(payload: Payload): {
+  integration: "atlassian";
+  check: boolean;
+} {
+  const body = record(payload.json) ?? {};
+  if (body.check !== undefined && typeof body.check !== "boolean")
+    invalid("check");
+  return {
+    integration: integrationOf(body.integration),
+    check: body.check === true,
+  };
+}
+
+const text = (value: unknown, max: number): string | undefined =>
+  typeof value === "string" && value.length <= max ? value : undefined;
+
+/** A `integrations.set` or `integrations.status` answer, on the client. */
+export function decodeIntegrationStatus(payload: Payload): IntegrationStatus {
+  const answer = record(payload.json);
+  if (!answer || typeof answer.connected !== "boolean")
+    malformed("integration status");
+  const site = text(answer.site, 255);
+  const email = text(answer.email, 254);
+  const displayName = text(answer.displayName, 200);
+  const accountId = text(answer.accountId, 200);
+  const problem =
+    typeof answer.problem === "string" &&
+    INTEGRATION_PROBLEMS.has(answer.problem)
+      ? (answer.problem as IntegrationProblem)
+      : undefined;
+  return {
+    connected: answer.connected,
+    ...(site !== undefined ? { site } : {}),
+    ...(email !== undefined ? { email } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(accountId !== undefined ? { accountId } : {}),
+    ...(problem !== undefined ? { problem } : {}),
+  };
 }
 
 const LOGIN_STATES = new Set(["running", "ready", "error", "cancelled"]);

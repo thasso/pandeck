@@ -26,6 +26,7 @@ import {
   GATEWAY_VAULT_PROTOCOL,
   OUTSIDE_ACCOUNTS,
   VAULT_LIMITS,
+  VAULT_LOCKED,
   VAULT_METHODS,
   accountTokenFile,
   vaultBody,
@@ -35,6 +36,8 @@ import {
 } from "./vaultMethods.ts";
 import type { CredentialProblem } from "./refusals.ts";
 import type {
+  IntegrationRecord,
+  IntegrationWrite,
   LoginDriverEvents,
   LoginRun,
   VaultCredential,
@@ -48,6 +51,8 @@ const CREDENTIAL_TIMEOUT_MS = 30_000;
 const KEEPALIVE_MS = 15_000;
 /** Dial, TLS handshake and `vault.hello` each get this long. */
 const CONNECT_TIMEOUT_MS = 10_000;
+/** An integration call the vault has not answered by then is unavailable. */
+const INTEGRATION_TIMEOUT_MS = 10_000;
 
 const UNAVAILABLE: VaultCredential = {
   ok: false,
@@ -59,6 +64,8 @@ export interface RemoteVaultOptions {
   host: string;
   port: number;
   tls: VaultLinkTls;
+  /** Test seam: the integration calls' deadline; 10 s. */
+  integrationTimeoutMs?: number;
 }
 
 interface RemoteVaultDeps {
@@ -371,6 +378,62 @@ export function createRemoteVault(
     return connection.request(method, vaultMessage(json));
   };
 
+  const integrationTimeoutMs =
+    options.integrationTimeoutMs ?? INTEGRATION_TIMEOUT_MS;
+  /**
+   * One integration request, bounded (Task-1397): no link, the deadline or
+   * `signal` first, or any request error answers unavailable; `VAULT_LOCKED`
+   * answers locked. A late reply settles a promise nobody reads.
+   */
+  const integrationCall = async <T>(
+    method: string,
+    json: unknown,
+    decode: (body: Record<string, unknown>) => T,
+    signal?: AbortSignal,
+  ): Promise<
+    T | { ok: false; locked: true } | { ok: false; unavailable: true }
+  > => {
+    const unavailable = { ok: false, unavailable: true } as const;
+    if (!connection || signal?.aborted) return unavailable;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort = (): void => {};
+    const giveUp = new Promise<typeof unavailable>((resolveGiveUp) => {
+      timer = setTimeout(
+        () => resolveGiveUp(unavailable),
+        integrationTimeoutMs,
+      );
+      onAbort = () => resolveGiveUp(unavailable);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    const sent = request(method, json);
+    sent.catch(() => {});
+    try {
+      return await Promise.race([
+        sent.then((payload) => decode(vaultBody(payload))),
+        giveUp,
+      ]);
+    } catch (err) {
+      return err instanceof WorkerRequestError && err.code === VAULT_LOCKED
+        ? { ok: false, locked: true }
+        : unavailable;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  };
+  const decodeRecord = (body: Record<string, unknown>): IntegrationRecord => {
+    const record = body.record;
+    if (typeof record !== "object" || record === null)
+      return { ok: false, unavailable: true };
+    const r = record as Record<string, unknown>;
+    if (r.ok === true && typeof r.credential === "string")
+      return { ok: true, credential: r.credential };
+    if (r.absent === true) return { ok: false, absent: true };
+    if (r.locked === true) return { ok: false, locked: true };
+    return { ok: false, unavailable: true };
+  };
+  const written = (): IntegrationWrite => ({ ok: true });
+
   void connect();
 
   return {
@@ -447,6 +510,25 @@ export function createRemoteVault(
         log(`vault discard of account ${accountId} not delivered`),
       );
     },
+    integrationPut: (userId, integration, credential) =>
+      integrationCall(
+        VAULT_METHODS.integrationPut,
+        { userId, integration, credential },
+        written,
+      ),
+    integrationGet: (userId, integration, { signal } = {}) =>
+      integrationCall(
+        VAULT_METHODS.integrationGet,
+        { userId, integration },
+        decodeRecord,
+        signal,
+      ),
+    integrationClear: (userId, integration) =>
+      integrationCall(
+        VAULT_METHODS.integrationClear,
+        { userId, integration },
+        written,
+      ),
     inputsChanged() {
       if (sendQueued) return;
       sendQueued = true;

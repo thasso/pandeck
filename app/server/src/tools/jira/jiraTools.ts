@@ -13,12 +13,16 @@ import {
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
 import {
+  JIRA_ISSUE_BASE_FIELDS,
+  clampMaxComments,
+  fetchJiraComments,
   jiraBaseUrl,
   jiraDelete,
   jiraGet,
   jiraPost,
   jiraPut,
   normalizeAvatarUrls,
+  normalizeIssueInput,
   normalizeJiraIssue,
   pickAvatarUrl,
   type JiraApiConfig,
@@ -167,20 +171,6 @@ type JiraFieldSchema = {
   customId?: number;
 };
 
-type JiraCommentsResponse = {
-  comments?: Array<{
-    id?: string;
-    self?: string;
-    author?: any;
-    body?: unknown;
-    created?: string;
-    updated?: string;
-  }>;
-  total?: number;
-  maxResults?: number;
-  startAt?: number;
-};
-
 type JiraSearchResponse = {
   issues?: JiraIssueResponse[];
   total?: number;
@@ -265,26 +255,6 @@ type RenderField = {
   valueText: string | null;
   value?: unknown;
 };
-
-const BASE_FIELDS = [
-  "summary",
-  "project",
-  "issuetype",
-  "status",
-  "priority",
-  "assignee",
-  "reporter",
-  "creator",
-  "labels",
-  "components",
-  "fixVersions",
-  "created",
-  "updated",
-  "duedate",
-  "parent",
-  "subtasks",
-  "issuelinks",
-] as const;
 
 const TECHNICAL_FIELD_NAME_RE =
   /^(Rank|Development|\[CHART\] Time in Status)$/i;
@@ -740,7 +710,7 @@ export const jiraGetIssueTool = defineAgentTool<GetIssueParams>({
     const config = getJiraToolConfig();
 
     const baseFields = [
-      ...BASE_FIELDS,
+      ...JIRA_ISSUE_BASE_FIELDS,
       ...(includeDescription ? ["description"] : []),
     ];
     const customResult = await fetchIssueWithCustomFields({
@@ -759,7 +729,7 @@ export const jiraGetIssueTool = defineAgentTool<GetIssueParams>({
     );
     const comments =
       includeComments && normalized.key
-        ? await fetchComments(config, normalized.key, maxComments)
+        ? await fetchJiraComments(config, normalized.key, maxComments)
         : null;
 
     const payload = {
@@ -1517,39 +1487,6 @@ function summarizeProfile(
     learnedAt: profile.learnedAt,
     learnedFromIssue: profile.learnedFromIssue,
     fieldCount: profile.fields.length,
-  };
-}
-
-async function fetchComments(
-  config: ReturnType<typeof getJiraToolConfig>,
-  issueKey: string,
-  maxComments: number,
-) {
-  const page = await jiraGet<JiraCommentsResponse>(
-    config,
-    `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`,
-    {
-      orderBy: "-created",
-      maxResults: maxComments,
-    },
-  );
-  return {
-    total: page.total ?? null,
-    returned: page.comments?.length ?? 0,
-    comments: (page.comments ?? []).map((comment) => ({
-      id: comment.id ?? null,
-      self: comment.self ?? null,
-      author: comment.author
-        ? {
-            accountId: comment.author.accountId ?? null,
-            displayName: comment.author.displayName ?? null,
-            emailAddress: comment.author.emailAddress ?? null,
-          }
-        : null,
-      body: adfToText(comment.body),
-      created: comment.created ?? null,
-      updated: comment.updated ?? null,
-    })),
   };
 }
 
@@ -3107,18 +3044,4 @@ function normalizeCustomFieldMode(value: unknown): CustomFieldMode {
   throw new Error(
     "customFields must be one of: none, known, selected, discoverNonEmpty.",
   );
-}
-
-function normalizeIssueInput(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error("issue must be a Jira issue key or id.");
-  if (trimmed.length > 120)
-    throw new Error("issue is too long to be a Jira issue key or id.");
-  return trimmed;
-}
-
-function clampMaxComments(value: number | undefined): number {
-  if (value === undefined) return 10;
-  if (!Number.isFinite(value) || value <= 0) return 10;
-  return Math.min(50, Math.floor(value));
 }

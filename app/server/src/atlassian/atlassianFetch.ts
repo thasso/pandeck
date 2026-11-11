@@ -29,6 +29,20 @@ export interface AtlassianCallOptions {
   retry?: boolean;
 }
 
+/**
+ * A non-2xx answer. The message is the one callers always saw; `status` lets
+ * a caller that must not repeat upstream text (the gateway's tools) decide by
+ * code alone.
+ */
+export class AtlassianHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 export type AtlassianQuery = Record<
   string,
   string | number | boolean | undefined
@@ -83,8 +97,9 @@ export async function atlassianFetch<T>(
   );
   const text = await res.text();
   if (!res.ok)
-    throw new Error(
+    throw new AtlassianHttpError(
       `${product} API returned HTTP ${res.status} for ${method} ${url.pathname}: ${text.slice(0, 400)}`,
+      res.status,
     );
   return text ? (JSON.parse(text) as T) : ({} as T);
 }

@@ -151,6 +151,8 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "jira.atlassianEmail",
   "jira.atlassianToken",
   "jira.jiraHost",
+  // The intro copy says where the token is kept.
+  "jira.credentialStore",
   // confluence
   "confluence.enabled",
   "confluence.confluenceHost",

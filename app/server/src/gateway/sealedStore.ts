@@ -58,11 +58,15 @@ import {
   type RecipientKey,
   type SealedRecord,
 } from "./sealedRecord.ts";
-import { LOGIN_CREDENTIAL_FILE } from "./vaultMethods.ts";
+import { INTEGRATION_FILE, LOGIN_CREDENTIAL_FILE } from "./vaultMethods.ts";
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const SLOT_RE = /^[0-9a-f]{2}$/;
-const TOKEN_FILES = new Set(Object.values(LOGIN_CREDENTIAL_FILE));
+/** The files kept sealed: login token files and integration credentials. */
+const SEALED_FILES = new Set([
+  ...Object.values(LOGIN_CREDENTIAL_FILE),
+  INTEGRATION_FILE,
+]);
 const SEALED_SUFFIX = ".sealed";
 /** `statfs` type of a tmpfs. */
 const TMPFS_MAGIC = 0x01021994;
@@ -215,7 +219,7 @@ function tokenFilesUnder(accountsDir: string): [string, string][] {
   if (!existsSync(accountsDir)) return [];
   return readdirSync(accountsDir).flatMap((accountId) =>
     ID_RE.test(accountId)
-      ? [...TOKEN_FILES]
+      ? [...SEALED_FILES]
           .filter((file) => existsSync(join(accountsDir, accountId, file)))
           .map((file): [string, string] => [accountId, file])
       : [],
@@ -286,7 +290,7 @@ export function createSealedStore(
     const parts = relative(accountsDir, resolve(tokenFile)).split(sep);
     return parts.length === 2 &&
       ID_RE.test(parts[0]!) &&
-      TOKEN_FILES.has(parts[1]!)
+      SEALED_FILES.has(parts[1]!)
       ? [parts[0]!, parts[1]!]
       : undefined;
   };
@@ -327,7 +331,7 @@ export function createSealedStore(
       ID_RE.test(accountId)
         ? readdirSync(join(sealedDir, accountId)).flatMap((name) => {
             const file = name.slice(0, -SEALED_SUFFIX.length);
-            if (!name.endsWith(SEALED_SUFFIX) || !TOKEN_FILES.has(file))
+            if (!name.endsWith(SEALED_SUFFIX) || !SEALED_FILES.has(file))
               return [];
             let record: SealedRecord | undefined;
             try {
@@ -464,7 +468,7 @@ export function createSealedStore(
     discarded(accountId) {
       if (!ID_RE.test(accountId)) return;
       rmSync(join(sealedDir, accountId), { recursive: true, force: true });
-      for (const file of TOKEN_FILES)
+      for (const file of SEALED_FILES)
         known.delete(join(accountsDir, accountId, file));
     },
     sweep,

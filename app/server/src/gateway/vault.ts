@@ -19,6 +19,10 @@ import {
 } from "./holds.ts";
 import { isLoginProfile } from "./profiles.ts";
 import { createRenewal, type RenewalOptions } from "./renewal.ts";
+import {
+  createVaultIntegrations,
+  type VaultIntegrationOptions,
+} from "./vaultIntegrations.ts";
 import { createVaultLogins, type VaultLoginOptions } from "./vaultLogins.ts";
 import type {
   LocalVaultPort,
@@ -42,6 +46,8 @@ export interface VaultOptions {
   >;
   /** Clients' logins (`vaultLogins.ts`); without it none runs. */
   logins?: VaultLoginOptions | undefined;
+  /** Users' integration credentials (`vaultIntegrations.ts`); without it none. */
+  integrations?: VaultIntegrationOptions | undefined;
 }
 
 export interface Vault extends LocalVaultPort {
@@ -124,6 +130,7 @@ export function createVault(options: VaultOptions): Vault {
       lane,
       (profileId) => void renewal.recheck(profileId),
     ),
+    ...createVaultIntegrations(options.integrations ?? { stateDir: undefined }),
     lane,
     holdRecords: () => table.records(),
     recheck: (profileId) => renewal.recheck(profileId),
