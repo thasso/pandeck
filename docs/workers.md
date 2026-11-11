@@ -1828,8 +1828,51 @@ server's local gateway does.
   `gateway:vault --state-dir <dir> [--bind-host <address>] [--port <n>]`
   (`vaultDevMain.ts`, port 8794) runs the vault with both login drivers;
   `gateway:dev ... --vault-host <address> [--vault-port <n>]` runs the edge
-  against it. The packaged entry waits for Task-1387; the encrypted store for
-  Task-1395.
+  against it. The packaged entry waits for Task-1387.
+
+#### Sealed store
+
+With recipients in `<stateDir>/vault-recipients.json` the vault process keeps
+credentials on disk only as ciphertext (Task-1395, `gateway/sealedStore.ts`). A
+vault without recipients, and every in-process vault, behaves as above. A
+recipients file that is present but invalid (unreadable, another version, empty,
+any bad entry or key id), or `sealed/` without one, stops the vault at start: it
+never falls back to plaintext on disk.
+
+- **Records.** `pandeck-sealed/1` (`gateway/sealedRecord.ts`), one per token
+  file at `<stateDir>/sealed/<accountId>/<file>.sealed`, 0600: a random data key
+  encrypts the file with AES-256-GCM, bound to the account id and file name; for
+  each recipient an ephemeral P-256 ECDH and HKDF-SHA256 give the key that wraps
+  the data key. A recipient's key id is the SHA-256 of its SPKI. Kinds: `piv` (a
+  YubiKey slot) and `software` (a private key file, for tests and self-hosted
+  installs).
+- **Plaintext in RAM.** Token files keep their paths under `accounts/`, which is
+  a private tmpfs of the vault's unit (`TemporaryFileSystem=`); the vault
+  refuses to start otherwise. Logins' temporary directories move into it too.
+- **Locked.** Every start is locked: a credential read answers `locked`, which
+  the edge refuses with the marked "vault locked" text (503), never needs-login.
+  Renewal and the sweep skip, `credential.upstream401` is dropped, logins are
+  refused, and `vault.hello` says `locked`.
+- **Unlock.** `gateway:admin unlock` reads the PIN from the terminal with echo
+  off and sends it over the vault's control socket
+  (`/run/pandeck-vault/control.sock`, 0600, `gateway/vaultControl.ts`). The
+  vault verifies it once through the YubiKey helper (ADR-0005), opens every
+  record and writes the plaintext under `accounts/`. A wrong PIN answers the
+  tries left and stays locked. A record that does not open is logged by account
+  id and that account needs a login; the rest unlock.
+- **Seal after write.** Renewal (Claude's and Codex's) seals in the writer lane
+  after each attempt, a login's ingest after moving the credential in;
+  `accounts.discard` deletes the records. Every 60 s a sweep seals any token
+  file whose content changed since it was last sealed or opened. A record whose
+  plaintext is missing is never touched. A crash between a write and its seal
+  can leave the previous token sealed (accepted, M21).
+- **Admin.** `vault-recipient add --from-piv <slot>` (no PIN),
+  `--pem <file> --slot <slot>` or `--pem <file> --private-key <file>`;
+  `vault-recipient list`; `vault-recipient remove <kid>` (never the last).
+  `vault-reseal` re-encrypts every token file to the current recipients through
+  the control socket. Replacing a key: add the new one, reseal, remove the old
+  one, reseal. `vault-seal-existing`, once and with the vault stopped, seals
+  today's plaintext files, then overwrites and removes them.
 
 ### Engine-version guard
 

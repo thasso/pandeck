@@ -13,6 +13,12 @@
  *
  * It answers access tokens only: never a refresh token or a token file's
  * content. No log line holds a token, a login's input or its output.
+ *
+ * With recipients (plan Task-1395, `sealedStore.ts`) the disk holds only
+ * sealed records and the vault starts locked: until a human unlocks it over
+ * the control socket (`vaultControl.ts`), a credential read answers locked,
+ * renewal and the sweep skip, `upstream401` is dropped and logins are
+ * refused. `vault.hello` tells the edge.
  */
 import { X509Certificate } from "node:crypto";
 import type net from "node:net";
@@ -36,8 +42,11 @@ import {
   type GatewayProfile,
   type LoginProfile,
 } from "./profiles.ts";
+import type { PivHelperCommand } from "./pivChild.ts";
 import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
+import { createSealedStore } from "./sealedStore.ts";
 import { createVault } from "./vault.ts";
+import { startVaultControl, type VaultControl } from "./vaultControl.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
@@ -76,6 +85,12 @@ export interface VaultServerOptions {
   log?: (line: string) => void;
   /** Test seam: the login deadline, 10 minutes. */
   loginTimeoutMs?: number;
+  /** A sealing vault's control socket; without it nothing can unlock it. */
+  controlSocket?: string;
+  /** A sealing vault refuses to start unless `accounts/` is a tmpfs. */
+  requireTmpfs?: boolean;
+  /** Test seam: the YubiKey helper (`pivChild.ts`). */
+  pivHelper?: PivHelperCommand;
 }
 
 export interface RunningVaultServer {
@@ -166,6 +181,13 @@ export async function startVaultServer(
 
   // --- the vault ----------------------------------------------------------
 
+  const sealed = createSealedStore({
+    stateDir: options.stateDir,
+    log,
+    pivHelper: options.pivHelper,
+    requireTmpfs: options.requireTmpfs,
+  });
+  const locked = (): boolean => sealed?.locked() ?? false;
   let current: WorkerConnection | undefined;
   const logins = new Map<string, ServedLogin>();
   const tell = (method: string, json: unknown): void => {
@@ -180,8 +202,14 @@ export async function startVaultServer(
     },
     log,
     holds: {},
-    renewal: { renewCodex: options.renewCodex },
-    logins: { stateDir: options.stateDir, drivers: options.loginDrivers ?? {} },
+    renewal: { renewCodex: options.renewCodex, written: sealed?.written },
+    logins: {
+      stateDir: options.stateDir,
+      drivers: options.loginDrivers ?? {},
+      tempDir: sealed?.loginTempDir,
+      written: sealed?.written,
+      discarded: sealed?.discarded,
+    },
   });
 
   /** The request's binding when it is the mirrored profile's own. */
@@ -268,6 +296,7 @@ export async function startVaultServer(
     [VAULT_METHODS.hello]: () => ({
       version: GATEWAY_VAULT_VERSION,
       needsLogin: vault.needsLogin(),
+      locked: locked(),
       accountsDir,
       loginKinds: Object.keys(options.loginDrivers ?? {}),
     }),
@@ -287,12 +316,18 @@ export async function startVaultServer(
       persistInputs();
       return {};
     },
-    [VAULT_METHODS.credentialFor]: async (body) => ({
-      credential: await vault.credentialFor(bindingOf(body.binding)),
-    }),
+    [VAULT_METHODS.credentialFor]: async (body) => {
+      const binding = bindingOf(body.binding);
+      return {
+        credential: locked()
+          ? { ok: false, locked: true }
+          : await vault.credentialFor(binding),
+      };
+    },
     [VAULT_METHODS.upstream401]: (body) => {
       if (typeof body.sentToken !== "string") throw invalid("token");
-      vault.upstream401(bindingOf(body.binding), body.sentToken);
+      const binding = bindingOf(body.binding);
+      if (!locked()) vault.upstream401(binding, body.sentToken);
       return {};
     },
     [VAULT_METHODS.discard]: (body) => {
@@ -318,6 +353,8 @@ export async function startVaultServer(
         );
       // The vault's own admission: the edge's is not trusted.
       const running = [...logins.values()];
+      if (locked())
+        throw new WorkerMethodError(LOGIN_UNAVAILABLE, "The vault is locked.");
       if (
         running.length >= MAX_VAULT_LOGINS ||
         running.some((login) => login.accountId === accountId)
@@ -442,6 +479,20 @@ export async function startVaultServer(
     log("edge connected");
   };
 
+  let control: VaultControl | undefined;
+  if (sealed) {
+    log("sealed store: locked until unlocked");
+    if (options.controlSocket)
+      control = await startVaultControl(options.controlSocket, {
+        store: sealed,
+        log,
+        unlocked: () => {
+          // Every profile's file is read now: needs-login goes out at once.
+          for (const profileId of profiles.ids()) void vault.recheck(profileId);
+        },
+      });
+  }
+
   const sockets = new Set<net.Socket>();
   const server = tls.createServer(
     {
@@ -479,15 +530,18 @@ export async function startVaultServer(
   log(`listening on ${options.host ?? "127.0.0.1"}:${port}`);
 
   const renewTick = setInterval(() => {
+    if (locked()) return;
+    sealed?.sweep();
     vault.renewDue().catch(() => log("renewal tick failed"));
   }, RENEW_TICK_MS);
   renewTick.unref();
 
   return {
     port,
-    renewDue: vault.renewDue,
+    renewDue: () => (locked() ? Promise.resolve() : vault.renewDue()),
     async close() {
       clearInterval(renewTick);
+      await control?.close();
       current?.end("the vault is stopping");
       const closed = new Promise<void>((done) => server.close(() => done()));
       for (const socket of sockets) socket.destroy();

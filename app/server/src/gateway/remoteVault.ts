@@ -356,7 +356,9 @@ export function createRemoteVault(
       connection = opened;
       backoff = REDIAL_MIN_MS;
       sendInputs(opened, true);
-      log(`vault link up at ${options.host}:${options.port}`);
+      log(
+        `vault link up at ${options.host}:${options.port}${hello.locked === true ? " (vault locked)" : ""}`,
+      );
     } catch (err) {
       opened?.end("the vault hello failed");
       log(`vault unreachable: ${socketErrorCode(err)}`);

@@ -8,7 +8,8 @@
  *
  * Edge to vault:
  *
- * - `vault.hello {}` answers `{needsLogin, accountsDir, loginKinds}`.
+ * - `vault.hello {}` answers `{needsLogin, locked, accountsDir, loginKinds}`;
+ *   `locked` is a sealing vault not unlocked yet (Task-1395).
  * - `inputs.profiles {profiles}`: the edge's whole registry, on connect and
  *   on every change; `inputs.liveLeases {profileIds}` likewise. Both `{}`.
  * - `credential.for {binding}` answers `{credential}`, a `VaultCredential`:

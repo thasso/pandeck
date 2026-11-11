@@ -79,7 +79,10 @@ export type LoginDrivers = Partial<Record<LeaseProvider, LoginDriver>>;
 export type VaultCredential =
   | { ok: true; headers: Record<string, string>; token: string }
   | { ok: false; refusal: Refusal }
-  /** G10: a credential its user has not unlocked. Never answered yet. */
+  /**
+   * A sealing vault no human has unlocked since it started (Task-1395); later
+   * also G10's per-user unlock.
+   */
   | { ok: false; locked: true };
 
 export type VaultHolds = Pick<

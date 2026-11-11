@@ -276,11 +276,9 @@ export function createForwarder(deps: ForwarderDeps): {
     const still = leases.verify(bearerOf(req.headers.authorization));
     if (!still.ok) return refuseLease(still);
     if (!credential.ok) {
-      // G10's locked answer is never given yet; it has no text of its own.
+      // A sealing vault not unlocked yet: never read as a dead login.
       const refusal: Refusal =
-        "locked" in credential
-          ? { case: "credential", problem: "unreadable" }
-          : credential.refusal;
+        "locked" in credential ? { case: "vault-locked" } : credential.refusal;
       return refuse(res, shape, refusal, done, leaseId);
     }
     const override = deps.upstreams[upstream.provider];

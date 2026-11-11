@@ -18,11 +18,32 @@
  *   pins the edge's certificate when given, and prints the vault's;
  * - on the edge, `vault-pair --vault-cert <file>`: makes the edge's link key
  *   and certificate once, pins the vault's, and prints the edge's.
+ *
+ * The vault's sealed store (plan Task-1395, `sealedStore.ts`), on the vault:
+ *
+ * - `vault-recipient add --from-piv <slot>` reads the public key from the
+ *   YubiKey (no PIN); `--pem <file> --slot <slot>` adds another YubiKey's
+ *   exported key, `--pem <file> --private-key <file>` a software key.
+ *   `vault-recipient list`, `vault-recipient remove <kid>` (never the last).
+ * - `vault-seal-existing`, with the vault stopped: seals today's plaintext
+ *   token files and overwrites and removes them.
+ * - `vault-reseal` and `unlock` ask the running vault over its control socket
+ *   (`--control-socket`, `/run/pandeck-vault/control.sock` unless given).
+ *   `unlock` reads the PIN from the terminal with echo off, never from argv
+ *   or the environment.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { ClientRegistry } from "./clientRegistry.ts";
+import {
+  pivPublicKeyPem,
+  readRecipients,
+  recipientOf,
+  sealExisting,
+  writeRecipients,
+} from "./sealedStore.ts";
+import { askVaultControl } from "./vaultControl.ts";
 import {
   edgeVaultLinkFile,
   vaultTlsFile,
@@ -33,7 +54,7 @@ import { selfSignedIdentity } from "./x509.ts";
 
 function usage(): never {
   console.error(
-    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | enroll-code --user <id> --label <text> | clients list | clients revoke <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file>)",
+    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | enroll-code --user <id> --label <text> | clients list | clients revoke <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file> | vault-recipient (add (--from-piv <slot> | --pem <file> (--slot <slot> | --private-key <file>)) | list | remove <kid>) | vault-seal-existing | vault-reseal | unlock) [--control-socket <path>]",
   );
   process.exit(2);
 }
@@ -47,6 +68,11 @@ const { values, positionals } = parseArgs({
     host: { type: "string", multiple: true },
     "edge-cert": { type: "string" },
     "vault-cert": { type: "string" },
+    "from-piv": { type: "string" },
+    pem: { type: "string" },
+    "private-key": { type: "string" },
+    slot: { type: "string" },
+    "control-socket": { type: "string" },
   },
 });
 const stateDir = values["state-dir"];
@@ -94,6 +120,128 @@ if (command === "vault-pair") {
   file.write(link);
   process.stdout.write(link.certPem);
   process.exit(0);
+}
+
+const controlSocket =
+  values["control-socket"] ?? "/run/pandeck-vault/control.sock";
+
+/**
+ * The PIN from the terminal with echo off; one line from a pipe otherwise.
+ * Never echoed, never in argv or the environment.
+ */
+function readPin(): Promise<string> {
+  const input = process.stdin;
+  process.stderr.write("YubiKey PIN: ");
+  return new Promise((resolvePin) => {
+    let pin = "";
+    const finish = (): void => {
+      input.removeListener("data", onData);
+      if (input.isTTY) input.setRawMode(false);
+      input.pause();
+      process.stderr.write("\n");
+      resolvePin(pin);
+    };
+    const onData = (chunk: string): void => {
+      for (const ch of chunk) {
+        if (ch === "\r" || ch === "\n") return finish();
+        if (ch === "\u0003") {
+          if (input.isTTY) input.setRawMode(false);
+          process.stderr.write("\n");
+          process.exit(130);
+        }
+        if (ch === "\u007f" || ch === "\b") pin = pin.slice(0, -1);
+        else if (pin.length < 64) pin += ch;
+      }
+    };
+    if (input.isTTY) input.setRawMode(true);
+    input.setEncoding("utf8");
+    input.on("data", onData);
+    input.on("end", finish);
+    input.resume();
+  });
+}
+
+/** Whether a vault answers on the control socket. */
+async function vaultRunning(): Promise<boolean> {
+  try {
+    await askVaultControl(controlSocket, { method: "status" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (command === "vault-recipient") {
+  const recipients = readRecipients(stateDir);
+  if (sub === "add") {
+    const slot = values["from-piv"];
+    const recipient = slot
+      ? recipientOf(await pivPublicKeyPem(slot), { slot })
+      : values.pem
+        ? recipientOf(
+            readFileSync(values.pem, "utf8"),
+            values["private-key"]
+              ? { privateKeyFile: values["private-key"] }
+              : values.slot
+                ? { slot: values.slot }
+                : usage(),
+          )
+        : usage();
+    if (recipients.some((r) => r.kid === recipient.kid)) {
+      console.log(`recipient ${recipient.kid} already present`);
+    } else {
+      writeRecipients(stateDir, [...recipients, recipient]);
+      console.log(`recipient ${recipient.kid} (${recipient.kind}) added`);
+    }
+  } else if (sub === "list") {
+    for (const r of recipients)
+      console.log(
+        `${r.kid}\t${r.kind}\t${r.kind === "piv" ? `slot ${r.slot}` : r.privateKeyFile}`,
+      );
+  } else if (sub === "remove" && arg) {
+    const kept = recipients.filter((r) => r.kid !== arg);
+    if (kept.length === recipients.length) console.log("no change");
+    else if (kept.length === 0) {
+      console.error("refused: the vault keeps at least one recipient");
+      process.exit(1);
+    } else {
+      writeRecipients(stateDir, kept);
+      console.log(`recipient ${arg} removed; run vault-reseal`);
+    }
+  } else usage();
+  process.exit(0);
+}
+if (command === "vault-seal-existing") {
+  if (await vaultRunning()) {
+    console.error("refused: stop the vault first");
+    process.exit(1);
+  }
+  const { sealed } = await sealExisting(stateDir);
+  console.log(`${sealed} token files sealed; the plaintext is removed`);
+  process.exit(0);
+}
+if (command === "vault-reseal" || command === "unlock") {
+  const request =
+    command === "unlock"
+      ? { method: "unlock", pin: await readPin() }
+      : { method: "reseal" };
+  const answer = await askVaultControl(controlSocket, request);
+  if (answer.ok === true) {
+    console.log(
+      command === "unlock"
+        ? `unlocked: ${String(answer.opened)} records opened, ${String(answer.unopened)} did not (those accounts need a login)`
+        : `resealed ${String(answer.resealed)} records`,
+    );
+    process.exit(0);
+  }
+  console.error(
+    answer.wrong_pin === true
+      ? `wrong PIN; ${String(answer.triesLeft)} tries left`
+      : answer.blocked === true
+        ? "the PIN is blocked: unblock it with the PUK"
+        : `refused (${typeof answer.failed === "string" ? answer.failed : "failed"})`,
+  );
+  process.exit(1);
 }
 
 const registry = new ClientRegistry(stateDir);

@@ -4,6 +4,7 @@
  * pi's Codex refresh, serving one edge over `gateway-vault/1.0`:
  *
  *   vault-dev --state-dir <dir> [--bind-host <address>] [--port <n>]
+ *     [--control-socket <path>]
  *
  * It listens on `--bind-host` (127.0.0.1 unless given) and `--port` (8794
  * unless given). The state directory holds the token files under
@@ -11,6 +12,10 @@
  * `gateway/adminMain.ts vault-init` makes and pairs first. It reads no
  * `DATA_DIR`. The edge is `gatewayDevMain.ts --vault-host`. See
  * `docs/workers.md` "Credentials".
+ *
+ * With recipients (`gateway-admin vault-recipient add`) it seals: `accounts/`
+ * must be a tmpfs, it starts locked, and `gateway-admin unlock` unlocks it
+ * over `--control-socket` (`/run/pandeck-vault/control.sock` unless given).
  */
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -25,7 +30,7 @@ import {
 
 function usage(): never {
   console.error(
-    "usage: vault-dev --state-dir <dir> [--bind-host <address>] [--port <n>]",
+    "usage: vault-dev --state-dir <dir> [--bind-host <address>] [--port <n>] [--control-socket <path>]",
   );
   process.exit(2);
 }
@@ -35,6 +40,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     "bind-host": { type: "string" },
     port: { type: "string" },
+    "control-socket": { type: "string" },
   },
 });
 if (!values["state-dir"]) usage();
@@ -55,6 +61,8 @@ const vault = await startVaultServer({
   tls,
   renewCodex: renewCodexCredential,
   loginDrivers: { claude: claudeLoginDriver, "openai-codex": codexLoginDriver },
+  controlSocket: values["control-socket"] ?? "/run/pandeck-vault/control.sock",
+  requireTmpfs: true,
 });
 console.log(`[vault-dev] state ${stateDir}; port ${vault.port}`);
 
