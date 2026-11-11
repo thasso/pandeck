@@ -48,6 +48,8 @@ const { piStore } = await import("./piStore.ts");
 const { findModelForProfile } = await import("./models.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 const { updateGithubSettings } = await import("../githubSettings.ts");
+const { updateJiraSettings } = await import("../jiraSettings.ts");
+const remoteTools = await import("../remoteTools.ts");
 const { notifyIntegrationToolsChanged } =
   await import("../integrationToolChanges.ts");
 const { sessionToolExposure } = await import("../tools/sessionToolExposure.ts");
@@ -422,5 +424,72 @@ test("a normal Settings save of the raw browser MCP switch reaches a live develo
     );
   } finally {
     await setRawMcp(false);
+  }
+});
+
+test("client mode: the gateway's Jira tool is in a pi universe, gated by connection, and refused before dispatch once disconnected", async () => {
+  const calls: string[] = [];
+  const uninstall = remoteTools.installRemoteToolPort({
+    call: (name) => {
+      calls.push(name);
+      return Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });
+    },
+  });
+  try {
+    await updateJiraSettings({ enabled: true });
+    remoteTools.applyListing(
+      remoteTools.acceptRemoteTools([
+        {
+          name: "jira_get_issue",
+          description: "Fetch one Jira issue.",
+          inputSchema: { type: "object", properties: {} },
+          effect: "read",
+          actionKey: "jira:read",
+        },
+      ]),
+    );
+    const live = await piStore.acquireNew("assistant", await chosen(), "off", {
+      cwd: tmp,
+      credentialProfileId: "openai-compatible",
+    });
+    lives.push(live);
+    const { engine } = live;
+    assert.equal(usable(engine, "jira_get_issue"), true);
+    await load(engine, "jira_get_issue");
+    assert.equal(active(engine, "jira_get_issue"), true);
+    const call = () =>
+      nativePiSessionForTests(engine)
+        .getToolDefinition("jira_get_issue")!
+        .execute(`call-${Math.random()}`, {}, undefined, undefined, {} as never)
+        .catch((err: unknown) => err);
+    await call();
+    assert.deepEqual(calls, ["jira_get_issue"]);
+
+    // The relay drops: the gate goes off, and a retained call never dispatches.
+    remoteTools.markDisconnected();
+    await vi.waitFor(() =>
+      assert.equal(usable(engine, "jira_get_issue"), false),
+    );
+    assert.equal(active(engine, "jira_get_issue"), false);
+    await call();
+    assert.deepEqual(calls, ["jira_get_issue"]);
+
+    // The redial's listing turns it back on in the same live session.
+    remoteTools.applyListing(
+      remoteTools.acceptRemoteTools([
+        {
+          name: "jira_get_issue",
+          description: "Fetch one Jira issue.",
+          inputSchema: { type: "object", properties: {} },
+          effect: "read",
+          actionKey: "jira:read",
+        },
+      ]),
+    );
+    await vi.waitFor(() =>
+      assert.equal(active(engine, "jira_get_issue"), true),
+    );
+  } finally {
+    uninstall();
   }
 });

@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
-import { describe, test } from "vitest";
+import { afterEach, describe, test } from "vitest";
 import type { AgentType } from "@assistant/shared";
 import type { AgentTool } from "../mcp/tool.ts";
 import {
   agentToolsFor,
   assistantIntegrationTools,
   eagerToolNamesFor,
+  integrationGatedActiveToolNames,
   modeGatedActiveToolNames,
   toolGroupsFor,
 } from "./catalog.ts";
+import { updateJiraSettings } from "../jiraSettings.ts";
+import {
+  acceptRemoteTools,
+  applyListing,
+  installRemoteToolPort,
+  markDisconnected,
+} from "../remoteTools.ts";
 
 const PERSONAS: AgentType[] = [
   "assistant",
@@ -645,5 +653,98 @@ describe("tool catalog", () => {
         workshop.has(name),
         `workshop is missing assistant tool ${name}`,
       );
+  });
+});
+
+describe("client mode: the gateway's Jira tools (Task-1398)", () => {
+  const listed = (name: string) => ({
+    name,
+    description: `${name} on the gateway.`,
+    inputSchema: { type: "object", properties: {} },
+    effect: "read",
+    actionKey: "jira:read",
+  });
+  let uninstall: () => void = () => {};
+  afterEach(() => uninstall());
+
+  const clientMode = (names: string[]) => {
+    uninstall = installRemoteToolPort({
+      call: () => Promise.reject(new Error("unused")),
+    });
+    applyListing(acceptRemoteTools(names.map(listed)));
+  };
+  const active = (agentType: AgentType) => {
+    const tools = agentToolsFor(agentType);
+    return integrationGatedActiveToolNames(
+      agentType,
+      tools,
+      new Set(tools.map((tool) => tool.name)),
+    );
+  };
+
+  test("the gateway group replaces the local Jira group; a name another tool has stays out", () => {
+    const local = new Map(
+      PERSONAS.map((p) => [p, agentToolsFor(p).map((t) => t.name)]),
+    );
+    clientMode(["jira_get_issue", "kb_read"]);
+    for (const persona of PERSONAS) {
+      const groups = toolGroupsFor(persona);
+      assert.equal(
+        groups.find((g) => g.id === "jira"),
+        undefined,
+        persona,
+      );
+      const group = groups.find((g) => g.id === "gateway-jira");
+      assert.ok(group, persona);
+      assert.equal(group.loading, "deferred");
+      assert.equal(group.family, "integration");
+      assert.equal(group.gate, "gatewayJira");
+      assert.deepEqual(
+        group.tools.map((t) => [t.name, t.sideEffects]),
+        [["jira_get_issue", "none"]],
+      );
+      const names = agentToolsFor(persona).map((t) => t.name);
+      assert.equal(names.filter((n) => n === "jira_get_issue").length, 1);
+      assert.equal(names.filter((n) => n === "kb_read").length, 1);
+      assert.ok(!names.includes("jira_search_issues"), persona);
+      // Plan keeps the read tool.
+      assert.ok(
+        modeGatedActiveToolNames(
+          "plan",
+          agentToolsFor(persona),
+          new Set(names),
+        ).has("jira_get_issue"),
+      );
+    }
+    uninstall();
+    // Outside client mode the catalog is as before.
+    for (const persona of PERSONAS)
+      assert.deepEqual(
+        agentToolsFor(persona).map((t) => t.name),
+        local.get(persona),
+      );
+  });
+
+  test("connection and the Jira toggle gate the group; a vanished name stays in it", async () => {
+    clientMode(["jira_get_issue"]);
+    await updateJiraSettings({ enabled: false });
+    assert.ok(!active("assistant").has("jira_get_issue"));
+    await updateJiraSettings({ enabled: true });
+    assert.ok(active("assistant").has("jira_get_issue"));
+    await updateJiraSettings({ enabled: false });
+    assert.ok(!active("assistant").has("jira_get_issue"));
+
+    await updateJiraSettings({ enabled: true });
+    applyListing(acceptRemoteTools([listed("jira_other")]));
+    const group = toolGroupsFor("assistant").find(
+      (g) => g.id === "gateway-jira",
+    )!;
+    assert.deepEqual(
+      group.tools.map((t) => t.name),
+      ["jira_get_issue", "jira_other"],
+    );
+    markDisconnected();
+    assert.ok(!active("assistant").has("jira_get_issue"));
+    assert.ok(!active("assistant").has("jira_other"));
   });
 });

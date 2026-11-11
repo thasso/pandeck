@@ -70,6 +70,13 @@ import {
   inProcessWorkerServedMethodForTests,
 } from "../workers/inProcessWorker.ts";
 import { defineAgentTool, type AgentTool } from "./tool.ts";
+import { updateJiraSettings } from "../jiraSettings.ts";
+import {
+  acceptRemoteTools,
+  applyListing,
+  installRemoteToolPort,
+  markDisconnected,
+} from "../remoteTools.ts";
 
 interface ToolListResult {
   tools: Array<{
@@ -790,5 +797,93 @@ test("a deferred activation leaves the Claude first-request surface byte-identic
       JSON.stringify(claudeSdkSystemPrompt(agentType, "", { conditions })),
       `${agentType}: the system prompt moved under identical session-start conditions`,
     );
+  }
+});
+
+test("client mode: a Claude session lists the gateway's Jira tool while connected, in Plan too, and refuses it before dispatch when not", async () => {
+  const ID = `tool-server-gateway-${Date.now()}`;
+  const calls: string[] = [];
+  const uninstall = installRemoteToolPort({
+    call: (name) => {
+      calls.push(name);
+      return Promise.resolve({ ok: true, text: '{"key":"OPS-1"}' });
+    },
+  });
+  await updateJiraSettings({ enabled: true });
+  const listing = acceptRemoteTools([
+    {
+      name: "jira_get_issue",
+      description: "Fetch one Jira issue.",
+      inputSchema: { type: "object", properties: {} },
+      effect: "read",
+      actionKey: "jira:read",
+    },
+  ]);
+  applyListing(listing);
+  installClaudeStateBuilder(claudeSdkStore);
+  const session = claudeSdkStore.acquire(ID, {
+    modelId: "opus",
+    thinkingLevel: "high",
+  });
+  const server = createClaudeSessionToolServer({
+    id: session.id,
+    agentType: session.agentType,
+    get sessionMode() {
+      return session.sessionMode;
+    },
+    get sessionFile() {
+      return session.sessionFile;
+    },
+    get title() {
+      return session.title;
+    },
+    cwd: session.cwd,
+    timelineEntries: () => session.timelineEntries(),
+    broadcastState: () => session.broadcastState(),
+    assertToolAdmission() {},
+  });
+  server.bindExecutor(appToolExecutorFor(ID));
+  const client = await connect(server);
+  const listed = async () =>
+    new Set(
+      ((await client.listTools()) as ToolListResult).tools.map(
+        (tool) => tool.name,
+      ),
+    );
+  const call = async () =>
+    (await client.callTool({
+      name: "jira_get_issue",
+      arguments: {},
+    })) as ToolCallResult;
+  try {
+    assert.ok((await listed()).has("jira_get_issue"));
+    const first = await call();
+    assert.ok(!first.isError, JSON.stringify(first.content));
+    assert.deepEqual(calls, ["jira_get_issue"]);
+    session.setMode("plan");
+    assert.ok((await listed()).has("jira_get_issue"), "Plan keeps a read tool");
+    session.setMode("build");
+
+    markDisconnected();
+    assert.ok(!(await listed()).has("jira_get_issue"));
+    assert.equal((await call()).isError, true);
+    assert.deepEqual(calls, ["jira_get_issue"]);
+
+    applyListing(listing);
+    await updateJiraSettings({ enabled: false });
+    assert.ok(!(await listed()).has("jira_get_issue"));
+    assert.equal((await call()).isError, true);
+    assert.deepEqual(calls, ["jira_get_issue"]);
+  } finally {
+    await client.close().catch(() => {});
+    await server.close().catch(() => {});
+    claudeSdkStore.remove(ID);
+    deleteToolGroupSessionData(ID);
+    try {
+      removeClaudeSdkRecord(join(DATA_DIR, "claude-sdk"), ID);
+    } catch {
+      // ignore
+    }
+    uninstall();
   }
 });

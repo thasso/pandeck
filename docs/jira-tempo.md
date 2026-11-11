@@ -19,6 +19,13 @@ integrations" epic; it is the source of truth the implementing slices reference.
 The two integrations enable, configure, test, and gate their tools
 independently.
 
+In gateway client mode (Task-1398, `docs/workers.md` "Client mode") the agents'
+Jira tools are the gateway's: the catalog's `gateway-jira` group, gated by
+`gatewayJira` (the gateway is connected and Jira is `enabled`), replaces the
+local four. The same Settings → Jira toggle governs it, and a call while it is
+off answers the same disabled text. Today the gateway offers `jira_get_issue`
+only.
+
 ## Jira cache files
 
 `jiraCacheFile.ts` owns host-safe paths under `DATA_DIR/cache/jira` and tolerant

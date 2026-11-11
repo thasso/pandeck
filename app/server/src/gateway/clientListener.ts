@@ -15,7 +15,9 @@
  * edge's MCP endpoint and never reaches the forwarder. It needs the client's
  * certificate, no `Origin` header, and that client's MCP token, kept only as
  * its hash (`clientRegistry.ts`); each tool call reads the user's credential
- * from the vault and keeps nothing.
+ * from the vault and keeps nothing. Gateway client 1.0's `tools.list` and
+ * `tools.call` (Task-1398) run the same host, with the same per-call vault
+ * read for the client's user from the registry.
  *
  * The gateway's CA is the only trust root on both mutual-TLS ports. The
  * client is the common name of its certificate, matched by fingerprint, and
@@ -48,6 +50,7 @@ import {
   decodeIntegration,
   decodeIntegrationSet,
   decodeIntegrationStatusRequest,
+  decodeToolCall,
   integrationFailure,
   decodeLoginId,
   decodeLoginInput,
@@ -409,7 +412,23 @@ export async function startClientListener(
   type ClientMethod = (
     payload: Payload,
     client: GatewayClient,
+    /** Aborts on the client's `cancel` or when its connection ends. */
+    signal: AbortSignal,
   ) => Payload | Promise<Payload>;
+
+  /** The user's integration credential, read from the vault on every call. */
+  const vaultCredential =
+    (client: GatewayClient) =>
+    (
+      integration: "atlassian",
+      signal: AbortSignal,
+    ): Promise<CredentialOutcome> =>
+      deps.vault
+        .integrationGet(client.userId, integration, { signal })
+        .catch(() => ({ ok: false, unavailable: true }));
+  /** The edge's tool host, or the fixed refusal. */
+  const toolHost = (): EdgeTools["host"] =>
+    deps.tools?.host ?? integrationFailure("tools_unavailable");
 
   /** The integration tools, or the fixed refusal. */
   const integrations = (): EdgeTools["integrations"] =>
@@ -612,6 +631,20 @@ export async function startClientListener(
           : { connected: false, ...described, problem: checked.problem },
       );
     },
+    [CLIENT_METHODS.toolsList]: () =>
+      encodeClientMessage({ tools: toolHost().list() }),
+    // The tool's own failure is an answer, not a failed call; the user is
+    // the registry's, never a payload's.
+    [CLIENT_METHODS.toolsCall]: async (payload, client, signal) => {
+      const { name, args } = decodeToolCall(payload);
+      return encodeClientMessage(
+        await toolHost().call(name, args, {
+          clientId: client.id,
+          credential: vaultCredential(client),
+          signal,
+        }),
+      );
+    },
     [CLIENT_METHODS.removeAccount]: (payload, client) => {
       const profile = ownedAccount(client.userId, decodeAccountId(payload));
       logins.forget(profile.id);
@@ -626,7 +659,7 @@ export async function startClientListener(
     const identity = peerIdentity(socket)!;
     const handlers: Record<string, MethodHandler> = {};
     for (const [method, body] of Object.entries(methods))
-      handlers[method] = (payload) => {
+      handlers[method] = (payload, signal) => {
         try {
           if (!registry.active(identity.clientId, identity.fingerprint)) {
             setImmediate(() => {
@@ -657,7 +690,7 @@ export async function startClientListener(
         }
         return (async () => {
           try {
-            const answer = await body(payload, client);
+            const answer = await body(payload, client, signal);
             log(`client ${client.id} ${method}: ok`);
             return answer;
           } catch (err) {
@@ -738,10 +771,7 @@ export async function startClientListener(
     }
     tools.handleMcp(req, res, {
       clientId: client.id,
-      credential: (integration, signal): Promise<CredentialOutcome> =>
-        deps.vault
-          .integrationGet(client.userId, integration, { signal })
-          .catch(() => ({ ok: false, unavailable: true })),
+      credential: vaultCredential(client),
     });
   };
 

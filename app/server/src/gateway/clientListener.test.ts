@@ -38,7 +38,7 @@ import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { edgeTlsFor, issueClientCertificate } from "./x509.ts";
 import { ClientRegistry } from "./clientRegistry.ts";
 import type { LoginDrivers } from "./vaultPort.ts";
-import type { EdgeTools, IntegrationCheck } from "./edgeTools.ts";
+import type { EdgeTools, IntegrationCheck, ToolAnswer } from "./edgeTools.ts";
 type LoginDriverEvents = Parameters<NonNullable<LoginDrivers["claude"]>>[1];
 
 interface Identity {
@@ -739,13 +739,27 @@ test("a login finishing before the revocation timer cannot ingest its credential
 
 // --- tools and integrations (Task-1397) -----------------------------------
 
+const NO_HOST: EdgeTools["host"] = {
+  list: () => [],
+  call: () =>
+    Promise.resolve({
+      ok: false,
+      code: "unknown_tool",
+      message: "No such tool.",
+    }),
+};
+
 /** Fake tools: `check` answers as told; the MCP handler answers 200 "mcp". */
-function fakeTools(check: () => Promise<IntegrationCheck>): EdgeTools {
+function fakeTools(
+  check: () => Promise<IntegrationCheck>,
+  host: EdgeTools["host"] = NO_HOST,
+): EdgeTools {
   return {
     handleMcp: (_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("mcp");
     },
+    host,
     integrations: {
       atlassian: {
         parse: (input) => {
@@ -823,6 +837,12 @@ test("without tools /mcp is an unknown path and the integration methods refuse",
     (err: unknown) =>
       err instanceof WorkerRequestError && err.code === "tools_unavailable",
   );
+  for (const method of [CLIENT_METHODS.toolsList, CLIENT_METHODS.toolsCall])
+    await assert.rejects(
+      connection.request(method, encodeClientMessage({ name: "a_tool" })),
+      (err: unknown) =>
+        err instanceof WorkerRequestError && err.code === "tools_unavailable",
+    );
 });
 
 test("the /mcp gate: a malformed stored hash refuses 401 without a throw; a valid token reaches the tools", async () => {
@@ -912,4 +932,171 @@ test("async client methods: a coded rejection answers its code, a foreign one an
     email: "a@x.test",
   });
   for (const line of lines) assert.ok(!line.includes("FAKE-SET-TOKEN"), line);
+});
+
+// --- tools.list and tools.call (Task-1398) ---------------------------------
+
+const STUB_LISTING = [
+  {
+    name: "stub_read",
+    description: "A stub tool.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      additionalProperties: false as const,
+    },
+    effect: "read" as const,
+    actionKey: "jira:read",
+  },
+];
+
+interface HostCall {
+  name: string;
+  args: unknown;
+  clientId: string;
+  signal: AbortSignal | undefined;
+}
+
+async function gatewayWithHost(
+  call: (
+    caller: Parameters<EdgeTools["host"]["call"]>[2],
+  ) => Promise<ToolAnswer>,
+  calls: HostCall[],
+): Promise<RunningGateway> {
+  const gateway = await startGateway({
+    stateDir: await mkdtemp(join(DATA_DIR, "client-listener-")),
+    upstreams: upstreams.overrides,
+    clients: {},
+    tools: fakeTools(() => Promise.resolve({ ok: true }), {
+      list: () => STUB_LISTING,
+      call: (name, args, caller) => {
+        calls.push({
+          name,
+          args,
+          clientId: caller.clientId,
+          signal: caller.signal,
+        });
+        return call(caller);
+      },
+    }),
+  });
+  open.push(gateway);
+  gateway.clients!.registry.addUser("u1");
+  gateway.clients!.registry.addUser("u2");
+  return gateway;
+}
+
+test("tools.list answers the host's listing; tools.call runs it with the registry's user", async () => {
+  const calls: HostCall[] = [];
+  let answer: ToolAnswer = { ok: false, code: "tool_error", message: "Nope." };
+  const gateway = await gatewayWithHost(async (caller) => {
+    // The credential the host reads names whose it is.
+    const outcome = await caller.credential("atlassian", caller.signal!);
+    return outcome.ok
+      ? { ok: true, text: JSON.parse(outcome.credential).email as string }
+      : answer;
+  }, calls);
+  const identity = await enroll(gateway, "u1");
+  const connection = await dialClient(gateway, identity);
+  assert.deepEqual(
+    (
+      await connection.request(
+        CLIENT_METHODS.toolsList,
+        encodeClientMessage({}),
+      )
+    ).json,
+    { tools: STUB_LISTING },
+  );
+
+  // Nothing stored: the tool's own failure is the answer, not a failed call.
+  const call = (json: object) =>
+    connection.request(CLIENT_METHODS.toolsCall, encodeClientMessage(json));
+  assert.deepEqual((await call({ name: "stub_read" })).json, answer);
+  assert.deepEqual(calls[0]!.args, {});
+  assert.equal(calls[0]!.clientId, identity.clientId);
+
+  await connection.request(
+    CLIENT_METHODS.integrationSet,
+    encodeClientMessage({
+      integration: "atlassian",
+      site: "x.atlassian.net",
+      email: "u1@x.test",
+      token: "FAKE-TOOL-TOKEN",
+    }),
+  );
+  // A `userId` in the payload is ignored: the credential is u1's.
+  answer = { ok: false, code: "failed", message: "unused" };
+  assert.deepEqual(
+    (await call({ name: "stub_read", args: { a: 1 }, userId: "u2" })).json,
+    { ok: true, text: "u1@x.test" },
+  );
+  assert.deepEqual(calls[1]!.args, { a: 1 });
+});
+
+test("tools.call refuses a malformed name or arguments before the host", async () => {
+  const calls: HostCall[] = [];
+  const gateway = await gatewayWithHost(
+    () => Promise.resolve({ ok: true, text: "{}" }),
+    calls,
+  );
+  const connection = await dialClient(gateway, await enroll(gateway));
+  for (const json of [
+    {},
+    { name: "Bad-Name" },
+    { name: "x".repeat(65) },
+    { name: "stub_read", args: [1] },
+    { name: "stub_read", args: "x" },
+    { name: "stub_read", args: null },
+  ])
+    await assert.rejects(
+      connection.request(CLIENT_METHODS.toolsCall, encodeClientMessage(json)),
+      (err: unknown) =>
+        err instanceof WorkerRequestError && err.code === "invalid_params",
+    );
+  assert.equal(calls.length, 0);
+});
+
+test("a client's cancel and its connection's end abort the host's call", async () => {
+  const calls: HostCall[] = [];
+  const gateway = await gatewayWithHost(
+    (caller) =>
+      new Promise<ToolAnswer>((resolve) =>
+        caller.signal!.addEventListener("abort", () =>
+          resolve({
+            ok: false,
+            code: "cancelled",
+            message: "The call was cancelled.",
+          }),
+        ),
+      ),
+    calls,
+  );
+  const identity = await enroll(gateway);
+  const connection = await dialClient(gateway, identity);
+  const controller = new AbortController();
+  const pending = connection.request(
+    CLIENT_METHODS.toolsCall,
+    encodeClientMessage({ name: "stub_read" }),
+    controller.signal,
+  );
+  await vi.waitFor(() => assert.equal(calls.length, 1));
+  controller.abort();
+  // The cancel frame reaches the host, whose answer still settles the call.
+  assert.deepEqual((await pending).json, {
+    ok: false,
+    code: "cancelled",
+    message: "The call was cancelled.",
+  });
+  assert.ok(calls[0]!.signal!.aborted);
+
+  const second = await dialClient(gateway, identity);
+  void second
+    .request(
+      CLIENT_METHODS.toolsCall,
+      encodeClientMessage({ name: "stub_read" }),
+    )
+    .catch(() => {});
+  await vi.waitFor(() => assert.equal(calls.length, 2));
+  second.end("test over");
+  await vi.waitFor(() => assert.ok(calls[1]!.signal!.aborted));
 });

@@ -35,6 +35,7 @@ import {
 import { sessionSkills, startSessionSkillNames } from "../sessionSkills.ts";
 import { getSettings } from "../settings.ts";
 import { skillSetHash } from "../skills/skillRuntimeMaterializer.ts";
+import { remoteToolsReady } from "../remoteTools.ts";
 import { eagerToolNamesFor } from "../tools/catalog.ts";
 import { currentIntegrationToolGates } from "../tools/toolPolicy.ts";
 import {
@@ -177,6 +178,9 @@ export type PiEngineStartFields = Pick<
 > &
   Partial<Pick<PiEngineOpenSpec, "compactionWindow">>;
 
+/** As long as a client-mode lease grant waits for the link. */
+const REMOTE_TOOLS_WAIT_MS = 10_000;
+
 /**
  * Resolve everything the engine reads at open, before the open. The server
  * calls this before every `openEngine`; nothing is recomputed afterwards.
@@ -184,6 +188,9 @@ export type PiEngineStartFields = Pick<
 export async function resolvePiEngineStart(
   input: PiEngineStartInput,
 ): Promise<PiEngineStartFields> {
+  // pi registers its tool universe at open (Task-1398): in client mode the
+  // gateway's tools are in it only once the boot's first listing is.
+  await remoteToolsReady(REMOTE_TOOLS_WAIT_MS);
   const { kind, knownId } = input;
   // Session-START prompt conditions (Task 287): pi rebuilds the system prompt
   // on every active-tool change and every reopen, so a known id reads its

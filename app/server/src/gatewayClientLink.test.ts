@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
@@ -23,6 +24,16 @@ const { startGatewayClientLink } = await import("./gatewayClientLink.ts");
 const { startGateway } = await import("./gateway/gateway.ts");
 const { enrollRelay, startRelay } = await import("./relay/relay.ts");
 const { DATA_DIR } = await import("./config.ts");
+const remoteTools = await import("./remoteTools.ts");
+const { subscribeIntegrationToolChanges } =
+  await import("./integrationToolChanges.ts");
+const { updateJiraSettings } = await import("./jiraSettings.ts");
+const { WorkerConnection, WorkerMethodError } =
+  await import("./workerProtocol/connection.ts");
+const { socketEndpoint } =
+  await import("./workerProtocol/unixSocketTransport.ts");
+const { CLIENT_METHODS, GATEWAY_CLIENT_PROTOCOL, encodeClientMessage } =
+  await import("./gateway/clientMethods.ts");
 const {
   CLAUDE_ACCESS,
   CLAUDE_PATH,
@@ -300,4 +311,367 @@ test("after every connect the link reads the gateway's Jira status and announces
     },
     { email: "me@example.com", configured: true, site },
   );
+});
+
+// --- the gateway's tools (Task-1398) ---------------------------------------
+
+test("the link lists the edge's tools before it is ready, and calls them through relay and edge", async () => {
+  const { createEdgeTools } = await import("./gatewayTools/index.ts");
+  const gateway = await startGateway({
+    stateDir: mkdtempSync(join(DATA_DIR, "edge-")),
+    log: () => {},
+    clients: {},
+    tools: createEdgeTools({ log: () => {} }),
+  });
+  open.push(gateway);
+  gateway.clients!.registry.addUser("thasso");
+  const relayDir = mkdtempSync(join(tmpdir(), "relay-"));
+  open.push({
+    close: () => rmSync(relayDir, { recursive: true, force: true }),
+  });
+  await enrollRelay({
+    stateDir: relayDir,
+    host: "127.0.0.1",
+    enrollPort: gateway.clients!.enrollPort,
+    caPem: gateway.clients!.caPem,
+    code: gateway.clients!.registry.createCode("thasso", "devbox"),
+  });
+  const relayOptions = {
+    stateDir: relayDir,
+    port: 0,
+    socketPath: join(relayDir, "relay.sock"),
+    log: () => {},
+  };
+  let relay = await startRelay(relayOptions);
+  let changes = 0;
+  open.push({ close: subscribeIntegrationToolChanges(() => changes++) });
+
+  const link = startGatewayClientLink({
+    socketPath: relay.socketPath,
+    relayPort: relay.port,
+    log: () => {},
+  });
+  open.push(link);
+  await updateJiraSettings({ enabled: true });
+  assert.equal(await link.ready, true);
+  // Listed before `ready`: the real descriptor, gate on.
+  const [listed] = remoteTools.knownRemoteTools("jira");
+  assert.equal(listed?.name, "jira_get_issue");
+  assert.equal(listed.actionKey, "jira:read");
+  assert.deepEqual(listed.inputSchema.required, ["issue"]);
+  assert.equal(remoteTools.remoteToolGate("jira"), true);
+  assert.ok(changes >= 1);
+
+  // The edge answers with the user's own (absent) credential: its fixed text.
+  const port = remoteTools.remoteToolPort()!;
+  assert.deepEqual(
+    await port.call(
+      "jira_get_issue",
+      { issue: "OPS-1" },
+      new AbortController().signal,
+    ),
+    {
+      ok: false,
+      code: "tool_error",
+      message:
+        "Jira is not connected for this user; connect it in Pandeck's Settings.",
+    },
+  );
+
+  // A lost connection turns the gate off; the redial lists again.
+  const before = changes;
+  await relay.close();
+  await vi.waitFor(() =>
+    assert.equal(remoteTools.remoteToolGate("jira"), false),
+  );
+  assert.ok(changes > before);
+  await assert.rejects(
+    port.call("jira_get_issue", {}, new AbortController().signal),
+    (err: unknown) =>
+      err instanceof remoteTools.RemoteToolRefusal &&
+      err.code === "gateway_unavailable",
+  );
+  relay = await startRelay(relayOptions);
+  open.push(relay);
+  await vi.waitFor(
+    () => assert.equal(remoteTools.remoteToolGate("jira"), true),
+    { timeout: 8_000 },
+  );
+});
+
+type StubHandler = (
+  payload: { json?: unknown },
+  signal: AbortSignal,
+) => Promise<{ json?: unknown }>;
+
+/** A stub edge on a Unix socket: hello, accounts and reconcile, plus `handlers`. */
+async function stubEdge(handlers: Record<string, StubHandler>): Promise<{
+  socketPath: string;
+  connections: InstanceType<typeof WorkerConnection>[];
+}> {
+  const dir = mkdtempSync(join(tmpdir(), "stub-edge-"));
+  const socketPath = join(dir, "edge.sock");
+  const connections: InstanceType<typeof WorkerConnection>[] = [];
+  const server = net.createServer((socket) => {
+    connections.push(
+      new WorkerConnection(socketEndpoint(socket), {
+        protocol: GATEWAY_CLIENT_PROTOCOL,
+        handshake: { role: "server", admit: () => undefined },
+        handlers: {
+          [CLIENT_METHODS.hello]: () =>
+            Promise.resolve(
+              encodeClientMessage({ clientId: "c-stub", userId: "u-stub" }),
+            ),
+          [CLIENT_METHODS.listAccounts]: () =>
+            Promise.resolve(encodeClientMessage({ accounts: [] })),
+          [CLIENT_METHODS.reconcileWorker]: () =>
+            Promise.resolve(encodeClientMessage({ revoked: [] })),
+          ...handlers,
+        },
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  open.push({
+    close: async () => {
+      for (const connection of connections) connection.end("stub closed");
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    },
+  });
+  return { socketPath, connections };
+}
+
+const STUB_TOOL = {
+  name: "jira_stub_read",
+  description: "A stub read tool.",
+  inputSchema: { type: "object", properties: {} },
+  effect: "read",
+  actionKey: "jira:read",
+};
+
+function linkTo(socketPath: string) {
+  const link = startGatewayClientLink({
+    socketPath,
+    relayPort: 1,
+    log: () => {},
+  });
+  open.push(link);
+  return link;
+}
+
+test("a held listing holds `ready`; an edge without tools is ready with none", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: async () => {
+      await held;
+      return encodeClientMessage({ tools: [STUB_TOOL] });
+    },
+  });
+  const link = linkTo(edge.socketPath);
+  let ready = false;
+  void link.ready.then(() => (ready = true));
+  await vi.waitFor(() => assert.equal(edge.connections.length, 1));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(ready, false);
+  assert.equal(remoteTools.remoteToolsConnected(), false);
+  release();
+  assert.equal(await link.ready, true);
+  assert.deepEqual(
+    remoteTools.knownRemoteTools("jira").map((tool) => tool.name),
+    ["jira_stub_read"],
+  );
+  await link.close();
+
+  const bare = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.reject(
+        new WorkerMethodError(
+          "tools_unavailable",
+          "This gateway runs no tools.",
+        ),
+      ),
+  });
+  const second = linkTo(bare.socketPath);
+  assert.equal(await second.ready, true);
+  assert.deepEqual(remoteTools.knownRemoteTools("jira"), []);
+  assert.equal(remoteTools.remoteToolsConnected(), true);
+  // The first listing, though empty, lets a pi open go on.
+  await remoteTools.remoteToolsReady(10);
+});
+
+test("a dial that ends after its listing's answer, or a closing link, publishes nothing", async () => {
+  const lines: string[] = [];
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: [STUB_TOOL] })),
+  });
+  // The answer arrives, then the connection ends before the link goes on.
+  const request = WorkerConnection.prototype.request;
+  let ended = 0;
+  const spy = vi
+    .spyOn(WorkerConnection.prototype, "request")
+    .mockImplementation(async function (
+      this: InstanceType<typeof WorkerConnection>,
+      method,
+      payload,
+      signal,
+    ) {
+      const answer = await request.call(this, method, payload, signal);
+      if (method === CLIENT_METHODS.toolsList && ended++ === 0)
+        this.end("ended after the listing");
+      return answer;
+    });
+  open.push({ close: () => spy.mockRestore() });
+  const link = startGatewayClientLink({
+    socketPath: edge.socketPath,
+    relayPort: 1,
+    log: (line) => lines.push(line),
+  });
+  open.push(link);
+  await vi.waitFor(() => assert.equal(ended, 1));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(link.connectionState(), "connecting");
+  assert.equal(remoteTools.remoteToolsConnected(), false);
+  assert.deepEqual(remoteTools.knownRemoteTools("jira"), []);
+  assert.ok(lines.includes("connection ended: ended after the listing"));
+  // The redial publishes.
+  assert.equal(await link.ready, true);
+  assert.equal(ended, 2);
+  assert.equal(remoteTools.remoteToolsConnected(), true);
+  await link.close();
+  spy.mockRestore();
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let listed = false;
+  const slow = await stubEdge({
+    [CLIENT_METHODS.toolsList]: async () => {
+      await held;
+      listed = true;
+      return encodeClientMessage({ tools: [STUB_TOOL] });
+    },
+  });
+  const closing = linkTo(slow.socketPath);
+  await vi.waitFor(() => assert.equal(slow.connections.length, 1));
+  await closing.close();
+  release();
+  await vi.waitFor(() => assert.ok(listed));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(remoteTools.remoteToolsConnected(), false);
+  assert.equal(remoteTools.remoteToolPort(), undefined);
+});
+
+test("a gateway tool call: the edge's answer, a caller's cancel, and the 40 s bound", async () => {
+  const seen: AbortSignal[] = [];
+  let answerLate!: () => void;
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(encodeClientMessage({ tools: [STUB_TOOL] })),
+    [CLIENT_METHODS.toolsCall]: (payload, signal) => {
+      const { args } = payload.json as { args: { mode?: string } };
+      if (args.mode === "big")
+        return Promise.resolve(
+          encodeClientMessage({ ok: true, text: "x".repeat(60_000) }),
+        );
+      seen.push(signal);
+      // Never answers on its own; the cancel or the test settles it.
+      return new Promise((resolve) => {
+        answerLate = () =>
+          resolve(encodeClientMessage({ ok: true, text: "late" }));
+        if (args.mode === "cancellable")
+          signal.addEventListener("abort", () =>
+            resolve(
+              encodeClientMessage({
+                ok: false,
+                code: "cancelled",
+                message: "The call was cancelled.",
+              }),
+            ),
+          );
+      });
+    },
+  });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  const port = remoteTools.remoteToolPort()!;
+
+  // The maximum answer arrives intact.
+  const big = await port.call(
+    "jira_stub_read",
+    { mode: "big" },
+    new AbortController().signal,
+  );
+  assert.ok(big.ok && big.text.length === 60_000);
+
+  // The caller's abort settles the call and cancels the edge's handler.
+  const caller = new AbortController();
+  const cancelled = port.call(
+    "jira_stub_read",
+    { mode: "cancellable" },
+    caller.signal,
+  );
+  await vi.waitFor(() => assert.equal(seen.length, 1));
+  caller.abort();
+  assert.deepEqual(await cancelled, {
+    ok: false,
+    code: "cancelled",
+    message: "",
+  });
+  await vi.waitFor(() => assert.ok(seen[0]!.aborted));
+
+  // A silent edge: the call settles at 40 s and sends a cancel.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  open.push({ close: () => vi.useRealTimers() });
+  const silent = port.call(
+    "jira_stub_read",
+    { mode: "silent" },
+    new AbortController().signal,
+  );
+  // Not `vi.waitFor`: it would advance the faked clock while it polls.
+  while (seen.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  let settled = false;
+  void silent.then(() => (settled = true));
+  await vi.advanceTimersByTimeAsync(39_999);
+  assert.equal(settled, false);
+  await vi.advanceTimersByTimeAsync(1);
+  assert.deepEqual(await silent, { ok: false, code: "timeout", message: "" });
+  await vi.waitFor(() => assert.ok(seen[1]!.aborted));
+  vi.useRealTimers();
+  // Its late answer is dropped unread; the link goes on.
+  answerLate();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(remoteTools.remoteToolsConnected(), true);
+  assert.ok(
+    (
+      await port.call(
+        "jira_stub_read",
+        { mode: "big" },
+        new AbortController().signal,
+      )
+    ).ok,
+  );
+});
+
+test("a malformed listing fails that connect: its dial ends and the redial publishes", async () => {
+  let lists = 0;
+  const edge = await stubEdge({
+    [CLIENT_METHODS.toolsList]: () =>
+      Promise.resolve(
+        encodeClientMessage(
+          lists++ === 0 ? { tools: "not a list" } : { tools: [STUB_TOOL] },
+        ),
+      ),
+  });
+  const link = linkTo(edge.socketPath);
+  assert.equal(await link.ready, true);
+  assert.equal(lists, 2);
+  await vi.waitFor(() => assert.ok(edge.connections[0]!.isEnded));
+  assert.equal(edge.connections[1]!.isEnded, false);
+  assert.equal(remoteTools.remoteToolsConnected(), true);
 });
