@@ -13,6 +13,9 @@
  * `gateway/adminMain.ts vault-pair` set up in the state directory; this edge
  * then holds no token file and runs no login itself.
  *
+ * It is the only entry that loads the edge's tools (`gatewayTools/`): `/mcp`
+ * on the model port and the integration methods (Task-1397).
+ *
  * Every port defaults to a free one; the ports in use are printed. The edge's
  * three ports bind to `--bind-host`, 127.0.0.1 unless given, and each `--host`
  * is a name or IP in the edge's certificate, which relays connect by; the
@@ -28,6 +31,7 @@ import { parseArgs } from "node:util";
 import { claudeLoginDriver } from "./claudeLoginDriver.ts";
 import { startGateway } from "./gateway/gateway.ts";
 import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
+import { createEdgeTools } from "./gatewayTools/index.ts";
 import {
   codexLoginDriver,
   renewCodexCredential,
@@ -79,6 +83,8 @@ const gateway = await startGateway({
   stateDir,
   port: port(values.port),
   renewCodex: renewCodexCredential,
+  // The edge's tools and MCP endpoint run here only (Task-1397).
+  tools: createEdgeTools(),
   clients: {
     modelPort: port(values["model-port"]),
     clientPort: port(values["client-port"]),

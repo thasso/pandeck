@@ -1768,6 +1768,72 @@ path above.
   client mode, no rename, enable toggle or Clear of an unfinished login, and the
   Codex driver runs in the gateway's process rather than as a child.
 
+#### Tools on the edge
+
+The edge runs integration tools for its clients' users (Task-1397, M22): a tool
+host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
+
+- **Host** (`gatewayTools/`, loaded only by the edge's entry
+  `gatewayDevMain.ts`): one module per tool (`descriptor.ts`: name, schema,
+  `effect` read or write, action key, integration), registered by one line in
+  `tools.ts`. `host.call` checks arguments against a closed schema, settles by
+  its 30 s deadline or the caller's abort whatever an await inside ignores, and
+  answers the tool's JSON or a fixed failure (`unknown_tool`, `invalid_params`,
+  `tool_error`, `result_too_large`, `timeout`, `cancelled`, `failed`). Only
+  edge-owned `ToolError` text reaches a caller; any other error's message is
+  dropped unlogged. `gateway/` holds no tool code or package: it takes the tools
+  as `EdgeTools` (`gateway/edgeTools.ts`, types only) through `startGateway`'s
+  `tools`, and the vault process never loads them. Without them `/mcp` is an
+  unknown path and the integration methods answer `tools_unavailable`; the
+  packaged entry wires none yet (D1).
+- **`/mcp`** on the model port, reached by a harness through the box's relay at
+  `http://127.0.0.1:<relay port>/mcp`: stateless Streamable HTTP with JSON
+  responses, one fresh SDK server and transport per POST, closed when the
+  response closes; GET and DELETE answer 405, a body over 1 MiB 413. The gate
+  needs the client's certificate (as every model-port request), no `Origin`
+  header (403), and `Authorization: Bearer <MCP token>` of that same client (401
+  otherwise). It never forwards, so a lease token opens no tool and an MCP token
+  spends no lease. A tool failure is an `isError` result with the fixed text; a
+  client that goes away aborts its call.
+- **MCP tokens.** `gateway:admin clients mcp-token <clientId>` mints one
+  (`pgmcp_…`), prints it once and keeps only its SHA-256 on the client record,
+  replacing an earlier one; `clients mcp-token-revoke <clientId>` removes it;
+  `clients list` shows `mcp=yes|no`. Revoking the token or the client takes
+  effect on the next request. The token identifies the client and so its user.
+- **Integration credentials.** The user's Atlassian site, email and API token
+  are entered in Pandeck's Settings → Jira, pass the edge once and are kept by
+  the vault (`VaultPort.integrationPut/Get/Clear`,
+  `gateway/vaultIntegrations.ts`), sealed when it has recipients. The site is
+  Pandeck's deployment-configured `JIRA_HOST`, checked on the edge as a bare
+  `<name>.atlassian.net` host at set and again at every decode. For each tool
+  call the edge reads the calling client's user's credential from the vault and
+  keeps nothing: no cache, no disk. The gateway hands tools typed outcomes
+  (`ok`, `absent`, `locked`, `unavailable`), and
+  `gatewayTools/toolCredential.ts` turns them into fixed tool errors; a
+  credential arriving after the call was aborted is dropped before any Atlassian
+  request.
+- **Client methods** (`gateway-client/1.0`, additive), always for the client's
+  registry user: `integrations.set {integration, site, email, token}` checks the
+  credential with Atlassian (`/rest/api/3/myself`, 15 s) and stores it;
+  `integrations.clear {integration}`;
+  `integrations.status {integration, check?}` answers
+  `{connected, site?, email?, displayName?, accountId?, problem?}`, never a
+  token. Failures carry fixed codes and texts: `integration_invalid`,
+  `integration_rejected`, `integration_unreachable`, `vault_locked`,
+  `vault_unavailable`, `tools_unavailable`.
+- **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
+  `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the
+  email and `JIRA_HOST` through `integrations.set`, a clear through
+  `integrations.clear`, and the connection test through
+  `integrations.status {check: true}`; it writes only `enabled` to `jira.json`
+  and leaves any old local email or token there untouched. Changing the email
+  needs the token again; a clear wins over an email or token in the same patch.
+  After every connect the link reads the status and announces the Jira section,
+  so a restarted Pandeck shows connected. Settings reports
+  `credentialStore: "gateway"`. Pandeck's own Jira tools and its non-agent Jira
+  features (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no
+  credential in client mode until a later slice (D3).
+
 ### Remote vault
 
 The vault can run as its own process on another machine (Task-1394, M20), so the
@@ -1793,19 +1859,22 @@ server's local gateway does.
   accounts directory, the login kinds it runs), `inputs.profiles` and
   `inputs.liveLeases` (the whole registry and live-lease set, on connect and on
   every change), `credential.for`, `credential.upstream401`, `accounts.discard`,
-  `logins.start`, `logins.input` and `logins.cancel`. Vault to edge:
+  `logins.start`, `logins.input`, `logins.cancel`, and `integrations.put`,
+  `integrations.get` and `integrations.clear` (a user's opaque integration
+  credential, at most 4 KiB, which the vault parses nothing in). Vault to edge:
   `credential.report`, `logins.event`, `logins.done` (a failure code, never
   driver text) and `logins.commit`.
 - **Rules.** The vault answers an access token and headers only, never a refresh
   token or a token file's content. It keeps only login profiles whose token file
-  is under `<stateDir>/accounts/` and refuses any other binding, which the edge
-  answers as the forbidden refusal. It saves the mirrored inputs in
-  `vault-inputs.json`, so it renews across its own restart and while the edge is
-  away. In the writer lane, right before moving a login's credential in, the
-  vault asks the edge `logins.commit`, which answers the edge's own check; only
-  an explicit `true` within 10 s moves it. A cancel, the vault's 10-minute
-  deadline or a lost edge connection withdraws a login. The vault admits one
-  login per account and four in all, whatever the edge allows.
+  is under `<stateDir>/accounts/` and is a login credential file (never an
+  integration record), and refuses any other binding, which the edge answers as
+  the forbidden refusal. It saves the mirrored inputs in `vault-inputs.json`, so
+  it renews across its own restart and while the edge is away. In the writer
+  lane, right before moving a login's credential in, the vault asks the edge
+  `logins.commit`, which answers the edge's own check; only an explicit `true`
+  within 10 s moves it. A cancel, the vault's 10-minute deadline or a lost edge
+  connection withdraws a login. The vault admits one login per account and four
+  in all, whatever the edge allows.
 - **No peer text.** Either end logs only a connection's end cause (`local`,
   `peer-closed`, `protocol`, `handshake-timeout`, `refused`), answers an unknown
   method with fixed text, and turns the other's answers into its own values: the
@@ -1814,7 +1883,11 @@ server's local gateway does.
   refusal (503) at once, or after 30 s without an answer, never needs-login, so
   no account shows as logged out; `needsLogin()` answers the last set the vault
   told. A login needs the link. No access token is cached on the edge: one round
-  trip per forwarded request.
+  trip per forwarded request. Every integration call is bounded at 10 s, and a
+  get also by its caller's signal: no link, the deadline, the abort or any
+  request error answers `unavailable`, and a late reply settles a promise nobody
+  reads. A put or clear that timed out has an unknown result, which the next
+  status shows.
 - **No control.** An edge with a remote vault serves no gateway control 1.4 (its
   holds are the in-process vault's); it is a client-mode edge.
 - **Pairing.**
@@ -1840,7 +1913,10 @@ any bad entry or key id), or `sealed/` without one, stops the vault at start: it
 never falls back to plaintext on disk.
 
 - **Records.** `pandeck-sealed/1` (`gateway/sealedRecord.ts`), one per token
-  file at `<stateDir>/sealed/<accountId>/<file>.sealed`, 0600: a random data key
+  file at `<stateDir>/sealed/<accountId>/<file>.sealed`, 0600, and one per
+  user's integration credential at `sealed/int-<hash>/integration.json.sealed`
+  (the hash of user id and integration, so no user id is on the disk), covered
+  by the sweep, unlock, reseal and discard like a token file: a random data key
   encrypts the file with AES-256-GCM, bound to the account id and file name; for
   each recipient an ephemeral P-256 ECDH and HKDF-SHA256 give the key that wraps
   the data key. A recipient's key id is the SHA-256 of its SPKI. Kinds: `piv` (a
@@ -1852,7 +1928,8 @@ never falls back to plaintext on disk.
 - **Locked.** Every start is locked: a credential read answers `locked`, which
   the edge refuses with the marked "vault locked" text (503), never needs-login.
   Renewal and the sweep skip, `credential.upstream401` is dropped, logins are
-  refused, and `vault.hello` says `locked`.
+  refused, `integrations.put` and `integrations.clear` fail `vault_locked`,
+  `integrations.get` answers locked, and `vault.hello` says `locked`.
 - **Unlock.** `gateway:admin unlock` reads the PIN from the terminal with echo
   off and sends it over the vault's control socket
   (`/run/pandeck-vault/control.sock`, 0600, `gateway/vaultControl.ts`). The
@@ -1861,8 +1938,9 @@ never falls back to plaintext on disk.
   tries left and stays locked. A record that does not open is logged by account
   id and that account needs a login; the rest unlock.
 - **Seal after write.** Renewal (Claude's and Codex's) seals in the writer lane
-  after each attempt, a login's ingest after moving the credential in;
-  `accounts.discard` deletes the records. Every 60 s a sweep seals any token
+  after each attempt, a login's ingest after moving the credential in, and
+  `integrations.put` right after its rename; `accounts.discard` and
+  `integrations.clear` delete the records. Every 60 s a sweep seals any token
   file whose content changed since it was last sealed or opened. A record whose
   plaintext is missing is never touched. A crash between a write and its seal
   can leave the previous token sealed (accepted, M21).

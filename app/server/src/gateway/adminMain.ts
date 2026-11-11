@@ -7,6 +7,9 @@
  * - `enroll-code --user <id> --label <text>`: prints a one-time code, valid
  *   15 minutes
  * - `clients list`, `clients revoke <id>`
+ * - `clients mcp-token <id>`: mints the client's MCP token (Task-1397),
+ *   printed once and kept only as its hash, replacing an earlier one;
+ *   `clients mcp-token-revoke <id>` removes it
  * - `ca`: prints the gateway's CA, which a relay's enrollment trusts
  *
  * Pairing a vault in its own process (`gateway-vault/1.0`, plan Task-1394).
@@ -35,7 +38,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { ClientRegistry } from "./clientRegistry.ts";
+import { ClientRegistry, clientListLine } from "./clientRegistry.ts";
 import {
   pivPublicKeyPem,
   readRecipients,
@@ -54,7 +57,7 @@ import { selfSignedIdentity } from "./x509.ts";
 
 function usage(): never {
   console.error(
-    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | enroll-code --user <id> --label <text> | clients list | clients revoke <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file> | vault-recipient (add (--from-piv <slot> | --pem <file> (--slot <slot> | --private-key <file>)) | list | remove <kid>) | vault-seal-existing | vault-reseal | unlock) [--control-socket <path>]",
+    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | enroll-code --user <id> --label <text> | clients list | clients revoke <id> | clients mcp-token <id> | clients mcp-token-revoke <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file> | vault-recipient (add (--from-piv <slot> | --pem <file> (--slot <slot> | --private-key <file>)) | list | remove <kid>) | vault-seal-existing | vault-reseal | unlock) [--control-socket <path>]",
   );
   process.exit(2);
 }
@@ -252,12 +255,18 @@ if (command === "user" && sub === "add" && arg) {
   if (!values.user || !values.label) usage();
   console.log(registry.createCode(values.user, values.label));
 } else if (command === "clients" && sub === "list") {
-  for (const client of registry.clients())
-    console.log(
-      `${client.id}\tuser=${client.userId}\t${client.revokedAt !== undefined ? "revoked" : "active"}\t${client.label}`,
-    );
+  for (const client of registry.clients()) console.log(clientListLine(client));
 } else if (command === "clients" && sub === "revoke" && arg) {
   console.log(registry.revoke(arg) ? `client ${arg} revoked` : "no change");
+} else if (command === "clients" && sub === "mcp-token" && arg) {
+  // Shown once, on stdout only; the registry keeps its hash.
+  process.stdout.write(`${registry.setMcpToken(arg)}\n`);
+} else if (command === "clients" && sub === "mcp-token-revoke" && arg) {
+  console.log(
+    registry.clearMcpToken(arg)
+      ? `client ${arg} MCP token revoked`
+      : "no change",
+  );
 } else if (command === "ca") {
   const state = JSON.parse(
     readFileSync(join(stateDir, "edge-tls.json"), "utf8"),

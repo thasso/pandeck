@@ -1128,6 +1128,8 @@ export interface JiraSettings {
   atlassianEmail: string;
   /** Whether an Atlassian API token is saved server-side. The token itself is never sent to the browser. */
   atlassianTokenConfigured: boolean;
+  /** Where the token is kept: this server's data, or the credential gateway (client mode). */
+  credentialStore: "local" | "gateway";
 }
 
 /** Compact Jira issue metadata used to enrich linked-ticket UI rows. */

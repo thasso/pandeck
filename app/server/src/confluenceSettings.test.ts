@@ -10,27 +10,27 @@ import { updateJiraSettings } from "./jiraSettings.ts";
 
 const originalFetch = globalThis.fetch;
 
-function withJiraCredentials(): void {
-  updateJiraSettings({
+async function withJiraCredentials(): Promise<void> {
+  await updateJiraSettings({
     enabled: true,
     atlassianEmail: "me@example.com",
     atlassianToken: "secret-token",
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
   updateConfluenceSettings({ enabled: false });
-  updateJiraSettings({
+  await updateJiraSettings({
     enabled: false,
     atlassianEmail: "",
     clearAtlassianToken: true,
   });
 });
 
-test("the projection carries the static host and the shared-credential state", () => {
-  withJiraCredentials();
+test("the projection carries the static host and the shared-credential state", async () => {
+  await withJiraCredentials();
   const projection = updateConfluenceSettings({ enabled: true });
   assert.equal(projection.enabled, true);
   assert.ok(projection.confluenceHost);
@@ -39,25 +39,25 @@ test("the projection carries the static host and the shared-credential state", (
   assert.doesNotMatch(JSON.stringify(projection), /secret-token/);
 });
 
-test("credentialsAvailable follows the Jira integration", () => {
+test("credentialsAvailable follows the Jira integration", async () => {
   updateConfluenceSettings({ enabled: true });
   assert.equal(getConfluenceSettings().credentialsAvailable, false);
-  withJiraCredentials();
+  await withJiraCredentials();
   assert.equal(getConfluenceSettings().credentialsAvailable, true);
-  updateJiraSettings({ enabled: false });
+  await updateJiraSettings({ enabled: false });
   assert.equal(getConfluenceSettings().credentialsAvailable, false);
 });
 
-test("the tool config names the setting that is missing", () => {
-  withJiraCredentials();
+test("the tool config names the setting that is missing", async () => {
+  await withJiraCredentials();
   updateConfluenceSettings({ enabled: false });
   assert.throws(() => getConfluenceToolConfig(), /Settings → Confluence/);
 
   updateConfluenceSettings({ enabled: true });
-  updateJiraSettings({ enabled: false });
+  await updateJiraSettings({ enabled: false });
   assert.throws(() => getConfluenceToolConfig(), /Settings → Jira/);
 
-  withJiraCredentials();
+  await withJiraCredentials();
   const config = getConfluenceToolConfig();
   assert.equal(config.atlassianEmail, "me@example.com");
   assert.equal(config.atlassianToken, "secret-token");
@@ -65,7 +65,7 @@ test("the tool config names the setting that is missing", () => {
 });
 
 test("the connection test reports the authenticated user", async () => {
-  withJiraCredentials();
+  await withJiraCredentials();
   globalThis.fetch = vi.fn(
     async () =>
       new Response(JSON.stringify({ accountId: "abc", displayName: "Ada" }), {
@@ -79,7 +79,7 @@ test("the connection test reports the authenticated user", async () => {
 });
 
 test("a site that refuses the identity call still counts as reachable", async () => {
-  withJiraCredentials();
+  await withJiraCredentials();
   let call = 0;
   globalThis.fetch = vi.fn(async () => {
     call += 1;

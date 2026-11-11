@@ -13,7 +13,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, test } from "vitest";
-import { ClientRegistry } from "./clientRegistry.ts";
+import {
+  ClientRegistry,
+  clientListLine,
+  mcpTokenMatches,
+} from "./clientRegistry.ts";
 
 const directories: string[] = [];
 const run = promisify(execFile);
@@ -197,4 +201,43 @@ test("failed writes release their lock and corrupt data is not overwritten", () 
   );
   registry.addUser("repaired");
   assert.ok(registry.user("repaired"));
+});
+
+test("an MCP token is minted once, kept only as its hash, replaced, cleared and refused for a revoked client", () => {
+  const { registry, path } = fixture();
+  const client = registry.redeem(
+    registry.createCode("u", "box"),
+    (pending) => ({
+      id: "c1",
+      userId: pending.userId,
+      label: pending.label,
+      fingerprint: "fp",
+      createdAt: 1,
+    }),
+  )!;
+  assert.equal(clientListLine(client), "c1\tuser=u\tactive\tmcp=no\tbox");
+  const token = registry.setMcpToken("c1");
+  assert.match(token, /^pgmcp_[A-Za-z0-9_-]{43}$/);
+  assert.ok(!readFileSync(path, "utf8").includes(token));
+  const stored = registry.clients()[0]!;
+  assert.match(stored.mcpTokenHash!, /^[0-9a-f]{64}$/);
+  assert.equal(mcpTokenMatches(stored, token), true);
+  assert.equal(mcpTokenMatches(stored, `${token}x`), false);
+  assert.equal(clientListLine(stored), "c1\tuser=u\tactive\tmcp=yes\tbox");
+
+  const next = registry.setMcpToken("c1");
+  assert.equal(mcpTokenMatches(registry.clients()[0]!, token), false);
+  assert.equal(mcpTokenMatches(registry.clients()[0]!, next), true);
+  // A stored hash that is not 64 hex characters counts as none.
+  assert.equal(
+    mcpTokenMatches({ ...stored, mcpTokenHash: "zz" }, token),
+    false,
+  );
+
+  assert.equal(registry.clearMcpToken("c1"), true);
+  assert.equal(registry.clearMcpToken("c1"), false);
+  assert.equal(registry.clients()[0]!.mcpTokenHash, undefined);
+  assert.throws(() => registry.setMcpToken("nope"), /No active client nope/);
+  registry.revoke("c1");
+  assert.throws(() => registry.setMcpToken("c1"), /No active client c1/);
 });

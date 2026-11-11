@@ -279,6 +279,7 @@ const defaultSettings: AppSettings = {
     jiraHost: "",
     atlassianEmail: "",
     atlassianTokenConfigured: false,
+    credentialStore: "local",
   },
   confluence: {
     enabled: false,

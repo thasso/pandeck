@@ -23,8 +23,9 @@ vault"). Gateway control 1.4's login holds stay with an in-process vault.
   credential per renewal, and a sealing vault's unlock runs the YubiKey helper
   (both below).
 - The **edge** holds everything exposed: listeners, client authentication,
-  leases, forwarding, the control and client protocols, and later tools and
-  config. It gets access tokens from the vault, never refresh tokens.
+  leases, forwarding, the control and client protocols, the integration tools
+  (below), and later config. It gets access tokens from the vault, never refresh
+  tokens.
 - The vault's API carries a per-credential `locked` state from the start, so
   credentials their user must unlock can follow.
 
@@ -72,6 +73,27 @@ operations run in a small Python helper on the installed `yubikit`
   public key, so renewals and logins run unattended.
 - Only `pivChild.ts` and `codexChild.ts` may spawn in `gateway/`; a boundary
   test pins both.
+
+## Tools on the edge
+
+Integration tools run in the edge process (Task-1397, `docs/workers.md` "Tools
+on the edge"):
+
+- Tool code lives in `gatewayTools/`, loaded only by the edge's entry. The vault
+  process never loads it, and `gateway/` holds no tool code or package: it
+  reaches the tools only through the injected `EdgeTools`
+  (`gateway/edgeTools.ts`, types only). A boundary test pins both directions.
+- A user's integration credential (the Atlassian API token for the pilot) is a
+  vault record, sealed like a token file. The edge reads it from the vault for
+  one tool call, or one set or status check, and never caches, logs or writes
+  it. Every vault integration call is bounded, and a late answer is dropped.
+- The gateway hands tools typed credential outcomes and never builds a tool
+  error; only fixed, edge-owned tool texts reach a caller.
+- The MCP endpoint needs the client's certificate and that client's MCP token,
+  kept only as a hash; it never forwards and spends no lease.
+
+The API token reaches the edge in plaintext per call. That is accepted for the
+pilot (M22); OAuth apps (G12) replace it later.
 
 ## Still in force from ADR-0004
 

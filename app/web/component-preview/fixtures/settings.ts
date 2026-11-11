@@ -105,6 +105,7 @@ export const settingsFixture: AppSettings = {
     jiraHost: "example.atlassian.net",
     atlassianEmail: "alex@example.com",
     atlassianTokenConfigured: true,
+    credentialStore: "local",
   },
   confluence: {
     enabled: true,

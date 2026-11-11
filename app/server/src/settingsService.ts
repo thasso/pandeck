@@ -68,6 +68,7 @@ export type SettingsPatch = {
     : AppSettings[K];
 };
 
+/** Each writer is awaited before the next section is written. */
 const INTEGRATION_WRITERS: {
   [K in IntegrationKey]: (patch: IntegrationPatches[K]) => unknown;
 } = {
@@ -189,7 +190,8 @@ export async function saveSettings(patch: SettingsPatch): Promise<AppSettings> {
     for (const key of integrationKeys) {
       written.push(key);
       const write = INTEGRATION_WRITERS[key] as (patch: unknown) => unknown;
-      write(patch[key]);
+      // A gateway-backed writer (Jira in client mode) settles remotely.
+      await write(patch[key]);
     }
   } catch (err) {
     writeFailed = true;

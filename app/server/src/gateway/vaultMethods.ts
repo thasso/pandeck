@@ -16,6 +16,11 @@
  *   an access token and headers, a refusal, or locked. Never a refresh token.
  * - `credential.upstream401 {binding, sentToken}` answers `{}`.
  * - `accounts.discard {accountId}` answers `{}`.
+ * - `integrations.put {userId, integration, credential}` and
+ *   `integrations.clear {userId, integration}` answer `{}`, or fail with
+ *   `VAULT_LOCKED`; `integrations.get {userId, integration}` answers
+ *   `{record}`, an `IntegrationRecord`. The credential is opaque JSON, at most
+ *   `MAX_INTEGRATION_CREDENTIAL` characters (Task-1397).
  * - `logins.start {loginId, kind, accountId, tokenFile}` answers `{}`;
  *   `logins.input {loginId, text}` and `logins.cancel {loginId}` answer
  *   `{}`. A cancel also withdraws the run: its credential is never moved in.
@@ -33,6 +38,7 @@
  * ends hold the other to `VAULT_LIMITS`, log only a connection's end cause,
  * and reflect no peer text.
  */
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
@@ -58,6 +64,9 @@ export const VAULT_METHODS = {
   credentialFor: "credential.for",
   upstream401: "credential.upstream401",
   discard: "accounts.discard",
+  integrationPut: "integrations.put",
+  integrationGet: "integrations.get",
+  integrationClear: "integrations.clear",
   loginStart: "logins.start",
   loginInput: "logins.input",
   loginCancel: "logins.cancel",
@@ -91,6 +100,26 @@ export const OUTSIDE_ACCOUNTS = "outside_accounts";
 export const LOGIN_UNAVAILABLE = "login_unavailable";
 /** A request did not decode. */
 export const VAULT_INVALID_PARAMS = "invalid_params";
+/** A sealing vault no human has unlocked since it started. */
+export const VAULT_LOCKED = "vault_locked";
+
+/** The file a user's integration credential lives in, in its directory. */
+export const INTEGRATION_FILE = "integration.json";
+export const MAX_INTEGRATION_CREDENTIAL = 4096;
+const INTEGRATIONS = new Set(["atlassian"]);
+
+/** Whether the vault keeps credentials of this integration. */
+export function isIntegration(value: unknown): value is "atlassian" {
+  return typeof value === "string" && INTEGRATIONS.has(value);
+}
+
+/**
+ * The directory of a user's integration credential under `accounts/`: a hash,
+ * so user ids stay off the disk, with a prefix no login account id has.
+ */
+export function integrationDirId(userId: string, integration: string): string {
+  return `int-${createHash("sha256").update(`${userId}\0${integration}`).digest("hex").slice(0, 40)}`;
+}
 
 /** The file a login leaves its credential in, in its account's directory. */
 export const LOGIN_CREDENTIAL_FILE: Record<LeaseProvider, string> = {
@@ -99,6 +128,11 @@ export const LOGIN_CREDENTIAL_FILE: Record<LeaseProvider, string> = {
 };
 
 const ACCOUNT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Whether `value` is an id the gateway gives users and accounts. */
+export function isVaultId(value: unknown): value is string {
+  return typeof value === "string" && ACCOUNT_ID_RE.test(value);
+}
 
 /**
  * The token file of `accountId` for `kind` under `accountsDir`, or undefined

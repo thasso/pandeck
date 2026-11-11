@@ -11,6 +11,12 @@
  * - the client port, TLS with mutual TLS, serving gateway client 1.0
  *   (`clientMethods.ts`).
  *
+ * With tools (Task-1397, `edgeTools.ts`), `/mcp` on the model port is the
+ * edge's MCP endpoint and never reaches the forwarder. It needs the client's
+ * certificate, no `Origin` header, and that client's MCP token, kept only as
+ * its hash (`clientRegistry.ts`); each tool call reads the user's credential
+ * from the vault and keeps nothing.
+ *
  * The gateway's CA is the only trust root on both mutual-TLS ports. The
  * client is the common name of its certificate, matched by fingerprint, and
  * is checked on every connection and again on every request and method, so a
@@ -39,6 +45,10 @@ import {
   UNKNOWN_ACCOUNT,
   decodeAccountId,
   decodeClientGrant,
+  decodeIntegration,
+  decodeIntegrationSet,
+  decodeIntegrationStatusRequest,
+  integrationFailure,
   decodeLoginId,
   decodeLoginInput,
   decodeLoginStart,
@@ -48,8 +58,10 @@ import {
 import {
   ClientRegistry,
   ClientRegistryLockedError,
+  mcpTokenMatches,
   type GatewayClient,
 } from "./clientRegistry.ts";
+import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
 import { createLoginManager, LoginRefusal } from "./logins.ts";
 import type { VaultPort } from "./vaultPort.ts";
 import {
@@ -87,6 +99,8 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const ENROLL_WINDOW_MS = 60_000;
 const ENROLL_ATTEMPTS = 30;
 const MAX_ENROLL_SOURCES = 4_096;
+/** How long `integrations.set` and a checked status wait for Atlassian. */
+const INTEGRATION_CHECK_MS = 15_000;
 
 export interface ClientListenerOptions {
   /** Where the three ports bind; `127.0.0.1` unless given. */
@@ -114,8 +128,18 @@ interface ClientListenerDeps {
   };
   log: (line: string) => void;
   now?: () => number;
-  /** The vault's side of logins (`logins.ts`, `vaultLogins.ts`). */
-  vault: Pick<VaultPort, "login" | "newTokenFile" | "discardCredential">;
+  /** The vault's side of logins and integration credentials. */
+  vault: Pick<
+    VaultPort,
+    | "login"
+    | "newTokenFile"
+    | "discardCredential"
+    | "integrationPut"
+    | "integrationGet"
+    | "integrationClear"
+  >;
+  /** The edge's tools; without them `/mcp` is 404 and integrations refuse. */
+  tools?: EdgeTools | undefined;
 }
 
 /** An account of a user, as logins and tests create it. */
@@ -382,7 +406,22 @@ export async function startClientListener(
 
   // --- gateway client 1.0 -----------------------------------------------
 
-  type ClientMethod = (payload: Payload, client: GatewayClient) => Payload;
+  type ClientMethod = (
+    payload: Payload,
+    client: GatewayClient,
+  ) => Payload | Promise<Payload>;
+
+  /** The integration tools, or the fixed refusal. */
+  const integrations = (): EdgeTools["integrations"] =>
+    deps.tools?.integrations ?? integrationFailure("tools_unavailable");
+  const checkSignal = (): AbortSignal =>
+    AbortSignal.timeout(INTEGRATION_CHECK_MS);
+  const wrote = (outcome: Awaited<ReturnType<VaultPort["integrationPut"]>>) => {
+    if (outcome.ok) return;
+    integrationFailure(
+      "locked" in outcome ? "vault_locked" : "vault_unavailable",
+    );
+  };
 
   const methods: Record<string, ClientMethod> = {
     [CLIENT_METHODS.hello]: (_payload, client) =>
@@ -498,6 +537,81 @@ export async function startClientListener(
       loginCall(() => logins.cancel(client.id, loginId));
       return encodeControlDone();
     },
+    [CLIENT_METHODS.integrationSet]: async (payload, client) => {
+      const { integration, input } = decodeIntegrationSet(payload);
+      const tools = integrations()[integration];
+      const parsed = tools.parse(input);
+      if (!parsed.ok) integrationFailure("integration_invalid");
+      const checked = await tools.check(parsed.credential, checkSignal());
+      if (!checked.ok)
+        integrationFailure(
+          checked.problem === "rejected"
+            ? "integration_rejected"
+            : "integration_unreachable",
+        );
+      wrote(
+        await deps.vault.integrationPut(
+          client.userId,
+          integration,
+          parsed.credential,
+        ),
+      );
+      return encodeClientMessage({
+        connected: true,
+        site: parsed.site,
+        email: parsed.email,
+        ...(checked.displayName !== undefined
+          ? { displayName: checked.displayName }
+          : {}),
+        ...(checked.accountId !== undefined
+          ? { accountId: checked.accountId }
+          : {}),
+      });
+    },
+    [CLIENT_METHODS.integrationClear]: async (payload, client) => {
+      const integration = decodeIntegration(payload);
+      integrations();
+      wrote(await deps.vault.integrationClear(client.userId, integration));
+      return encodeControlDone();
+    },
+    [CLIENT_METHODS.integrationStatus]: async (payload, client) => {
+      const { integration, check } = decodeIntegrationStatusRequest(payload);
+      const tools = integrations()[integration];
+      const record = await deps.vault.integrationGet(
+        client.userId,
+        integration,
+        {},
+      );
+      if (!record.ok)
+        return encodeClientMessage(
+          "absent" in record
+            ? { connected: false }
+            : {
+                connected: false,
+                problem:
+                  "locked" in record ? "vault_locked" : "vault_unavailable",
+              },
+        );
+      const described = tools.describe(record.credential);
+      if (!described)
+        return encodeClientMessage({ connected: false, problem: "invalid" });
+      if (!check) return encodeClientMessage({ connected: true, ...described });
+      const checked = await tools.check(record.credential, checkSignal());
+      return encodeClientMessage(
+        checked.ok
+          ? {
+              connected: true,
+              ...described,
+              ...(checked.displayName !== undefined
+                ? { displayName: checked.displayName }
+                : {}),
+              ...(checked.accountId !== undefined
+                ? { accountId: checked.accountId }
+                : {}),
+            }
+          : { connected: false, ...described, problem: checked.problem },
+      );
+    },
     [CLIENT_METHODS.removeAccount]: (payload, client) => {
       const profile = ownedAccount(client.userId, decodeAccountId(payload));
       logins.forget(profile.id);
@@ -541,21 +655,23 @@ export async function startClientListener(
                 ),
           );
         }
-        try {
-          const answer = body(payload, client);
-          log(`client ${client.id} ${method}: ok`);
-          return Promise.resolve(answer);
-        } catch (err) {
-          const failure =
-            err instanceof StateWriteError
-              ? new WorkerMethodError(STATE_WRITE_FAILED, err.message)
-              : err;
-          if (!(err instanceof ClientRegistryLockedError))
-            log(
-              `client ${client.id} ${method}: ${failure instanceof WorkerMethodError ? failure.code : "failed"}`,
-            );
-          return Promise.reject(failure);
-        }
+        return (async () => {
+          try {
+            const answer = await body(payload, client);
+            log(`client ${client.id} ${method}: ok`);
+            return answer;
+          } catch (err) {
+            const failure =
+              err instanceof StateWriteError
+                ? new WorkerMethodError(STATE_WRITE_FAILED, err.message)
+                : err;
+            if (!(err instanceof ClientRegistryLockedError))
+              log(
+                `client ${client.id} ${method}: ${failure instanceof WorkerMethodError ? failure.code : "failed"}`,
+              );
+            throw failure;
+          }
+        })();
       };
     const connection: WorkerConnection = new WorkerConnection(
       socketEndpoint(socket),
@@ -582,6 +698,53 @@ export async function startClientListener(
     socket.destroy();
   };
 
+  /**
+   * `/mcp` (Task-1397), in order: no `Origin`, then the client's own MCP
+   * token. It never forwards, so a lease token opens no tool and an MCP token
+   * spends no lease. Refusals are fixed; no header value is logged or echoed.
+   */
+  const mcpGate = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    client: GatewayClient,
+    tools: EdgeTools,
+  ): void => {
+    const refuse = (
+      status: number,
+      error: string,
+      headers: Record<string, string> = {},
+    ): void => {
+      req.resume();
+      const body = JSON.stringify({ error });
+      res.writeHead(status, {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        ...headers,
+      });
+      res.end(body);
+    };
+    if (req.headers.origin !== undefined) {
+      log(`mcp refused for client ${client.id}: origin header`);
+      return refuse(403, "origin not allowed");
+    }
+    const bearer = /^Bearer ([A-Za-z0-9_-]{1,200})$/.exec(
+      req.headers.authorization ?? "",
+    )?.[1];
+    if (!bearer || !mcpTokenMatches(client, bearer)) {
+      log(`mcp refused for client ${client.id}: no valid token`);
+      return refuse(401, "mcp token required", {
+        "www-authenticate": "Bearer",
+      });
+    }
+    tools.handleMcp(req, res, {
+      clientId: client.id,
+      credential: (integration, signal): Promise<CredentialOutcome> =>
+        deps.vault
+          .integrationGet(client.userId, integration, { signal })
+          .catch(() => ({ ok: false, unavailable: true })),
+    });
+  };
+
   const model = https.createServer(mutualTls, (req, res) => {
     let client: GatewayClient | undefined;
     try {
@@ -599,6 +762,10 @@ export async function startClientListener(
       res.end(body);
       return;
     }
+    // Without tools `/mcp` is an unknown path to the forwarder, as before.
+    // The path only, without parsing: a malformed target must not throw here.
+    if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
+      return mcpGate(req, res, client, deps.tools);
     deps.forwarder.handleRequest(req, res);
   });
   model.on("secureConnection", (socket: tls.TLSSocket) => {

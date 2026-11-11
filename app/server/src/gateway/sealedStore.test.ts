@@ -39,7 +39,9 @@ import {
   type SealedStore,
 } from "./sealedStore.ts";
 import { askVaultControl, startVaultControl } from "./vaultControl.ts";
+import { createVaultIntegrations } from "./vaultIntegrations.ts";
 import { createVaultLogins } from "./vaultLogins.ts";
+import { INTEGRATION_FILE, integrationDirId } from "./vaultMethods.ts";
 
 const root = mkdtempSync(join(tmpdir(), "sealed-store-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -312,6 +314,75 @@ test("written seals a changed file; discard deletes the record; the sweep reseal
   store.discarded("acc-1");
   assert.equal(existsSync(join(dir, "sealed", "acc-1")), false);
   for (const line of lines) assert.ok(!line.includes("fake-"), line);
+});
+
+test("integration records are sealed after a write, swept on drift, left alone without plaintext, and discarded on clear", async () => {
+  const dir = stateDir();
+  const recipient = softwareRecipient(dir, "soft");
+  writeRecipients(dir, [recipient]);
+  const lines: string[] = [];
+  const store = await unlockedStore(dir, lines);
+  const integrations = createVaultIntegrations({
+    stateDir: dir,
+    written: store.written,
+    discarded: store.discarded,
+  });
+  const dirId = integrationDirId("u1", "atlassian");
+  const record = join(dir, "sealed", dirId, `${INTEGRATION_FILE}.sealed`);
+  const plaintext = join(dir, "accounts", dirId, INTEGRATION_FILE);
+  const opened = async (): Promise<string | undefined> =>
+    recipient.kind === "software"
+      ? (
+          await openRecord(
+            parseSealedRecord(JSON.parse(readFileSync(record, "utf8")))!,
+            dirId,
+            INTEGRATION_FILE,
+            ecdhWith(
+              readFileSync(recipient.privateKeyFile, "utf8"),
+              recipient.kid,
+            ),
+          )
+        )?.toString("utf8")
+      : undefined;
+
+  assert.deepEqual(
+    await integrations.integrationPut("u1", "atlassian", '{"fake":1}'),
+    { ok: true },
+  );
+  assert.equal(await opened(), '{"fake":1}');
+  // The AAD binds it to its directory: it opens as no other.
+  assert.equal(
+    await openRecord(
+      parseSealedRecord(JSON.parse(readFileSync(record, "utf8")))!,
+      integrationDirId("u2", "atlassian"),
+      INTEGRATION_FILE,
+      ecdhWith(
+        readFileSync(
+          (recipient as { privateKeyFile: string }).privateKeyFile,
+          "utf8",
+        ),
+        recipient.kid,
+      ),
+    ),
+    undefined,
+  );
+
+  writeFileSync(plaintext, '{"fake":2}');
+  store.sweep();
+  assert.equal(await opened(), '{"fake":2}');
+
+  rmSync(plaintext);
+  const kept = readFileSync(record, "utf8");
+  store.sweep();
+  assert.equal(readFileSync(record, "utf8"), kept);
+
+  assert.deepEqual(await integrations.integrationClear("u1", "atlassian"), {
+    ok: true,
+  });
+  assert.equal(existsSync(join(dir, "sealed", dirId)), false);
+  store.sweep();
+  assert.equal(existsSync(record), false);
+  for (const line of lines) assert.ok(!line.includes("fake"), line);
 });
 
 test("a login's ingest seals the moved-in file in the lane; discard deletes both copies", async () => {

@@ -2846,9 +2846,11 @@ function JiraCard({
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-sm font-semibold">Jira</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Jira uses your Atlassian email and an API token (Basic auth). The token
-        is stored server-side and never sent back to the browser. The Atlassian
-        host is set by the deployment.
+        Jira uses your Atlassian email and an API token (Basic auth).{" "}
+        {jira.credentialStore === "gateway"
+          ? "The token is kept on your gateway, not on this machine."
+          : "The token is stored server-side and never sent back to the browser."}{" "}
+        The Atlassian host is set by the deployment.
       </p>
       <SettingsCard className="mt-6">
         <PreferenceToggle

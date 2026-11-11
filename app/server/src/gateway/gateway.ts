@@ -51,6 +51,7 @@ import {
 import { createControlEndpoint } from "./control.ts";
 import type { HoldRecord, WriterLane } from "./holds.ts";
 import { LeaseTable } from "./leases.ts";
+import type { EdgeTools } from "./edgeTools.ts";
 import type { LoginDrivers, VaultPort } from "./vaultPort.ts";
 import type { ProcessProbe } from "./processIdentity.ts";
 import { ProfileRegistry } from "./profiles.ts";
@@ -99,6 +100,12 @@ export interface GatewayOptions {
    * the vault runs in this process.
    */
   vault?: RemoteVaultOptions;
+  /**
+   * The edge's tools (`edgeTools.ts`), injected by the edge's entry: `/mcp`
+   * and the integration methods on the client listener. Without them `/mcp`
+   * is unknown and the integration methods refuse.
+   */
+  tools?: EdgeTools;
 }
 
 export interface RunningGateway {
@@ -197,6 +204,7 @@ export async function startGateway(
           stateDir: options.stateDir,
           drivers: options.loginDrivers ?? {},
         },
+        integrations: { stateDir: options.stateDir },
       });
   const vault: VaultPort = remote ?? local!;
   const compat = createCompatUpstream();
@@ -264,6 +272,7 @@ export async function startGateway(
         log,
         ...(options.now ? { now: options.now } : {}),
         vault,
+        tools: options.tools,
       },
       options.clients,
     );

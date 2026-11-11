@@ -13,7 +13,10 @@
  * with U7's text. The server's own requests spend a client lease
  * (`leases.client`), one per account for this boot. Logins are the gateway's
  * (Task-1385): `remoteLogins.ts` drives them through `logins.*`, and the
- * login-hold calls refuse here.
+ * login-hold calls refuse here. The user's Atlassian credential is the
+ * gateway's too (Task-1397): `remoteIntegrations.ts` sets, clears and reads
+ * its status through `integrations.*`; after every connect the link reads
+ * the status and announces the Jira section, so Settings shows it.
  */
 import {
   mirrorRemoteCredentialProfiles,
@@ -25,6 +28,7 @@ import {
   GATEWAY_CLIENT_PROTOCOL,
   decodeAccounts,
   decodeClientIdentity,
+  decodeIntegrationStatus,
   decodeLoginEvent,
   decodeLoginStarted,
   encodeClientMessage,
@@ -43,6 +47,12 @@ import {
   type GatewayConnectionState,
   type GatewayLink,
 } from "./gatewayLink.ts";
+import {
+  IntegrationRefusal,
+  installRemoteIntegrationPort,
+  isIntegrationRefusalCode,
+  rememberAtlassianStatus,
+} from "./remoteIntegrations.ts";
 import { installRemoteLoginPort, remoteLoginEvent } from "./remoteLogins.ts";
 import type { Payload } from "./workerProtocol/codec.ts";
 import {
@@ -177,9 +187,35 @@ export function startGatewayClientLink(
       stateChanged();
       log(`ready as client ${clientId} of user ${userId}`);
       resolveReady(true);
+      void readIntegrationStatus(opened);
     } catch (err) {
       log(`unavailable: ${failure(err)}`);
       schedule();
+    }
+  };
+
+  /** The stored credential's status, so a restarted server shows it. */
+  const readIntegrationStatus = async (
+    opened: WorkerConnection,
+  ): Promise<void> => {
+    try {
+      rememberAtlassianStatus(
+        decodeIntegrationStatus(
+          await opened.request(
+            CLIENT_METHODS.integrationStatus,
+            encodeClientMessage({ integration: "atlassian", check: false }),
+          ),
+        ),
+      );
+    } catch (err) {
+      log(`${CLIENT_METHODS.integrationStatus}: ${failure(err)}`);
+      return;
+    }
+    try {
+      const { announceSettingsWritten } = await import("./settingsService.ts");
+      await announceSettingsWritten(["jira"]);
+    } catch (err) {
+      log(`announcing the Jira status failed: ${errorText(err)}`);
     }
   };
 
@@ -266,6 +302,41 @@ export function startGatewayClientLink(
       await request(
         CLIENT_METHODS.loginCancel,
         encodeClientMessage({ loginId }),
+      );
+    },
+  });
+  const integrationRequest = async (
+    method: string,
+    json: object,
+  ): Promise<Payload> => {
+    if (!(await readyWithin(READY_TIMEOUT_MS)))
+      throw new IntegrationRefusal("gateway_unavailable");
+    try {
+      return await request(
+        method,
+        encodeClientMessage({ integration: "atlassian", ...json }),
+      );
+    } catch (err) {
+      log(`${method}: ${failure(err)}`);
+      throw new IntegrationRefusal(
+        err instanceof WorkerRequestError && isIntegrationRefusalCode(err.code)
+          ? err.code
+          : "gateway_unavailable",
+      );
+    }
+  };
+  const uninstallIntegrations = installRemoteIntegrationPort({
+    async set(input) {
+      return decodeIntegrationStatus(
+        await integrationRequest(CLIENT_METHODS.integrationSet, input),
+      );
+    },
+    async clear() {
+      await integrationRequest(CLIENT_METHODS.integrationClear, {});
+    },
+    async status(check) {
+      return decodeIntegrationStatus(
+        await integrationRequest(CLIENT_METHODS.integrationStatus, { check }),
       );
     },
   });
@@ -358,6 +429,7 @@ export function startGatewayClientLink(
       closing = true;
       uninstall();
       uninstallLogins();
+      uninstallIntegrations();
       if (redial) clearTimeout(redial);
       connection?.end("the server link closed");
       mirrorRemoteCredentialProfiles(undefined);

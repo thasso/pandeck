@@ -223,6 +223,91 @@ export async function resolveJiraIssueInfos(
   return out;
 }
 
+/** The fields every issue read asks for, besides `description`. */
+export const JIRA_ISSUE_BASE_FIELDS = [
+  "summary",
+  "project",
+  "issuetype",
+  "status",
+  "priority",
+  "assignee",
+  "reporter",
+  "creator",
+  "labels",
+  "components",
+  "fixVersions",
+  "created",
+  "updated",
+  "duedate",
+  "parent",
+  "subtasks",
+  "issuelinks",
+] as const;
+
+type JiraCommentsResponse = {
+  comments?: Array<{
+    id?: string;
+    self?: string;
+    author?: any;
+    body?: unknown;
+    created?: string;
+    updated?: string;
+  }>;
+  total?: number;
+  maxResults?: number;
+  startAt?: number;
+};
+
+/** The issue's newest comments, as plain text. */
+export async function fetchJiraComments(
+  config: JiraApiConfig,
+  issueKey: string,
+  maxComments: number,
+  options: { signal?: AbortSignal } = {},
+) {
+  const page = await jiraGet<JiraCommentsResponse>(
+    config,
+    `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`,
+    {
+      orderBy: "-created",
+      maxResults: maxComments,
+    },
+    options.signal ? { signal: options.signal } : {},
+  );
+  return {
+    total: page.total ?? null,
+    returned: page.comments?.length ?? 0,
+    comments: (page.comments ?? []).map((comment) => ({
+      id: comment.id ?? null,
+      self: comment.self ?? null,
+      author: comment.author
+        ? {
+            accountId: comment.author.accountId ?? null,
+            displayName: comment.author.displayName ?? null,
+            emailAddress: comment.author.emailAddress ?? null,
+          }
+        : null,
+      body: adfToText(comment.body),
+      created: comment.created ?? null,
+      updated: comment.updated ?? null,
+    })),
+  };
+}
+
+export function normalizeIssueInput(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("issue must be a Jira issue key or id.");
+  if (trimmed.length > 120)
+    throw new Error("issue is too long to be a Jira issue key or id.");
+  return trimmed;
+}
+
+export function clampMaxComments(value: number | undefined): number {
+  if (value === undefined) return 10;
+  if (!Number.isFinite(value) || value <= 0) return 10;
+  return Math.min(50, Math.floor(value));
+}
+
 export function normalizeJiraIssue(
   issue: JiraIssueResponse,
   jiraHost: string,

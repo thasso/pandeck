@@ -690,6 +690,12 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Atlassian site",
     "Set in the deployment config.",
   ),
+  readonly(
+    "jira.credentialStore",
+    "jira",
+    "Credential store",
+    "This server, or the credential gateway in client mode.",
+  ),
   setting("confluence.enabled", "confluence", "Confluence", BOOLEAN),
   readonly(
     "confluence.confluenceHost",

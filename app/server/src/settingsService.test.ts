@@ -10,6 +10,11 @@ import type { AppSettings, ServerMessage } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
 import { getSettings } from "./settings.ts";
+import {
+  IntegrationRefusal,
+  installRemoteIntegrationPort,
+  type IntegrationStatus,
+} from "./remoteIntegrations.ts";
 import { listSettingsModelSlots } from "./settingsModelSlots.ts";
 import {
   announceSettingsWritten,
@@ -470,6 +475,53 @@ describe("saveSettings", () => {
     // Brave file, so the Brave writer never ran: appearance alone is announced.
     assert.deepEqual(heard, [{ sections: ["appearance"] }]);
     assert.equal(getSettings().appearance.separatorAtTurnEnd, false);
+  });
+
+  test("an async writer is awaited: nothing is announced until it settles, and its rejection throws after the announcement", async () => {
+    let settle!: {
+      resolve(s: IntegrationStatus): void;
+      reject(e: Error): void;
+    };
+    cleanups.push(
+      installRemoteIntegrationPort({
+        set: () =>
+          new Promise<IntegrationStatus>((resolve, reject) => {
+            settle = { resolve, reject };
+          }),
+        clear: () => Promise.resolve(),
+        status: () => Promise.resolve({ connected: false }),
+      }),
+    );
+    const heard: SettingsChange[] = [];
+    cleanups.push(onSettingsChanged((change) => heard.push(change)));
+    let done = false;
+    const saving = saveSettings({
+      jira: { atlassianToken: "fake-deferred-token" },
+    }).finally(() => {
+      done = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(done, false);
+    assert.deepEqual(heard, []);
+    settle.resolve({
+      connected: true,
+      site: "example.atlassian.net",
+      email: "",
+    });
+    const settings = await saving;
+    assert.deepEqual(heard, [{ sections: ["jira"] }]);
+    assert.equal(settings.jira.credentialStore, "gateway");
+    assert.equal(settings.jira.atlassianTokenConfigured, true);
+
+    const failing = saveSettings({ jira: { atlassianToken: "fake-again" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(heard.length, 1);
+    settle.reject(new IntegrationRefusal("vault_locked"));
+    await assert.rejects(
+      failing,
+      /^Error: Jira: the gateway's vault is locked\.$/,
+    );
+    assert.deepEqual(heard, [{ sections: ["jira"] }, { sections: ["jira"] }]);
   });
 
   test("announcing a write made elsewhere reaches every listener", async () => {

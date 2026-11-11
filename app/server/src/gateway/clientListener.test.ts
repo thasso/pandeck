@@ -38,6 +38,7 @@ import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { edgeTlsFor, issueClientCertificate } from "./x509.ts";
 import { ClientRegistry } from "./clientRegistry.ts";
 import type { LoginDrivers } from "./vaultPort.ts";
+import type { EdgeTools, IntegrationCheck } from "./edgeTools.ts";
 type LoginDriverEvents = Parameters<NonNullable<LoginDrivers["claude"]>>[1];
 
 interface Identity {
@@ -734,4 +735,181 @@ test("a login finishing before the revocation timer cannot ingest its credential
     ".credentials.json",
   );
   await assert.rejects(readFile(tokenFile), { code: "ENOENT" });
+});
+
+// --- tools and integrations (Task-1397) -----------------------------------
+
+/** Fake tools: `check` answers as told; the MCP handler answers 200 "mcp". */
+function fakeTools(check: () => Promise<IntegrationCheck>): EdgeTools {
+  return {
+    handleMcp: (_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("mcp");
+    },
+    integrations: {
+      atlassian: {
+        parse: (input) => {
+          const { site, email, token } = input as Record<string, string>;
+          return site === "x.atlassian.net"
+            ? {
+                ok: true,
+                credential: JSON.stringify({ site, email, token }),
+                site,
+                email: email ?? "",
+              }
+            : { ok: false };
+        },
+        check: () => check(),
+        describe: (credential) => {
+          const { site, email } = JSON.parse(credential) as Record<
+            string,
+            string
+          >;
+          return { site: site!, email: email! };
+        },
+      },
+    },
+  };
+}
+
+function mcpRequest(
+  gateway: RunningGateway,
+  identity: Identity,
+  headers: Record<string, string>,
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      {
+        host: "127.0.0.1",
+        port: gateway.clients!.modelPort,
+        ca: gateway.clients!.caPem,
+        key: identity.key,
+        cert: identity.cert,
+        agent: false,
+        method: "POST",
+        path: "/mcp",
+        headers,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    request.on("error", reject);
+    request.end("{}");
+  });
+}
+
+test("without tools /mcp is an unknown path and the integration methods refuse", async () => {
+  const gateway = await gatewayWithClients();
+  const identity = await enroll(gateway);
+  const token = gateway.clients!.registry.setMcpToken(identity.clientId);
+  const answer = await mcpRequest(gateway, identity, {
+    authorization: `Bearer ${token}`,
+  });
+  assert.equal(answer.status, 404);
+  const connection = await dialClient(gateway, identity);
+  await assert.rejects(
+    connection.request(
+      CLIENT_METHODS.integrationStatus,
+      encodeClientMessage({ integration: "atlassian" }),
+    ),
+    (err: unknown) =>
+      err instanceof WorkerRequestError && err.code === "tools_unavailable",
+  );
+});
+
+test("the /mcp gate: a malformed stored hash refuses 401 without a throw; a valid token reaches the tools", async () => {
+  const stateDir = await mkdtemp(join(DATA_DIR, "client-listener-"));
+  const lines: string[] = [];
+  const gateway = await startGateway({
+    stateDir,
+    upstreams: upstreams.overrides,
+    log: (line) => lines.push(line),
+    clients: {},
+    tools: fakeTools(() => Promise.resolve({ ok: true })),
+  });
+  open.push(gateway);
+  gateway.clients!.registry.addUser("u1");
+  const identity = await enroll(gateway);
+  const token = gateway.clients!.registry.setMcpToken(identity.clientId);
+  assert.equal(
+    (await mcpRequest(gateway, identity, { authorization: `Bearer ${token}` }))
+      .text,
+    "mcp",
+  );
+  const file = join(stateDir, "clients.json");
+  const state = JSON.parse(await readFile(file, "utf8")) as {
+    clients: { mcpTokenHash?: string }[];
+  };
+  state.clients[0]!.mcpTokenHash = "not-a-hash";
+  await writeFile(file, JSON.stringify(state));
+  const refused = await mcpRequest(gateway, identity, {
+    authorization: `Bearer ${token}`,
+  });
+  assert.equal(refused.status, 401);
+  assert.deepEqual(JSON.parse(refused.text), { error: "mcp token required" });
+  assert.ok(!lines.join("\n").includes(token));
+});
+
+test("async client methods: a coded rejection answers its code, a foreign one answers failed without its text", async () => {
+  const stateDir = await mkdtemp(join(DATA_DIR, "client-listener-"));
+  const lines: string[] = [];
+  let check: () => Promise<IntegrationCheck> = () =>
+    Promise.reject(new Error("SENTINEL-check"));
+  const gateway = await startGateway({
+    stateDir,
+    upstreams: upstreams.overrides,
+    log: (line) => lines.push(line),
+    clients: {},
+    tools: fakeTools(() => check()),
+  });
+  open.push(gateway);
+  gateway.clients!.registry.addUser("u1");
+  const identity = await enroll(gateway);
+  const connection = await dialClient(gateway, identity);
+  const set = () =>
+    connection.request(
+      CLIENT_METHODS.integrationSet,
+      encodeClientMessage({
+        integration: "atlassian",
+        site: "x.atlassian.net",
+        email: "a@x.test",
+        token: "FAKE-SET-TOKEN",
+      }),
+    );
+  const code = (err: unknown) =>
+    err instanceof WorkerRequestError ? err.code : undefined;
+  assert.equal(await set().catch(code), "failed");
+  assert.ok(!lines.join("\n").includes("SENTINEL"));
+  assert.ok(
+    lines.includes(`client ${identity.clientId} integrations.set: failed`),
+  );
+
+  check = () => Promise.resolve({ ok: false, problem: "rejected" });
+  assert.equal(await set().catch(code), "integration_rejected");
+  assert.ok(
+    lines.includes(
+      `client ${identity.clientId} integrations.set: integration_rejected`,
+    ),
+  );
+
+  // The vault cannot write: unavailable, with nothing kept.
+  check = () => Promise.resolve({ ok: true });
+  await writeFile(join(stateDir, "accounts"), "not a directory");
+  assert.equal(await set().catch(code), "vault_unavailable");
+  await unlink(join(stateDir, "accounts"));
+  const answer = await set();
+  assert.deepEqual(answer.json, {
+    connected: true,
+    site: "x.atlassian.net",
+    email: "a@x.test",
+  });
+  for (const line of lines) assert.ok(!line.includes("FAKE-SET-TOKEN"), line);
 });

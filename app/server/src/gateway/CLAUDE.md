@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=2976 reason="Eleven contracts; logins add a second token-file writer, the sealed store keeps plaintext in RAM only and adds the YubiKey helper as a second spawn exception." task=1395 date=2026-11-11 -->
+<!-- instruction-budget: bytes=3328 reason="Twelve contracts; edge tools add the injected-tools and /mcp rule and an integration-record writer next to logins and the sealed store." task=1397 date=2026-11-11 -->
 
 # Credential gateway
 
@@ -21,7 +21,12 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
   creates a directory, Codex's only through the injected pi port's lock-fenced
   atomic store. Exception: a login's ingest (`vaultLogins.ts`) renames a checked
   credential in, in the same lane; its driver writes only its own fresh
-  directory.
+  directory. Integration records: only the vault's put and clear
+  (`vaultIntegrations.ts`), sealed right after.
+- No tool code or package here: tools come only as the injected `EdgeTools`,
+  which get typed credential outcomes, never a tool error built here. `/mcp`
+  needs the client's certificate, no `Origin`, and its MCP token (hashed). Every
+  vault integration call is bounded and answers a typed outcome.
 - A vault with recipients keeps credentials on disk only as sealed records
   (`sealedStore.ts`); plaintext lives only under its tmpfs `accounts/`, written
   by unlock. Each writer seals in its lane; the sweep never overwrites a record
