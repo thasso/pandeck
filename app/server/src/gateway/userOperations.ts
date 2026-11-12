@@ -16,6 +16,13 @@ import {
   type ClientAccount,
   type IntegrationFailure,
 } from "./clientMethods.ts";
+import {
+  ENROLLMENT_CODE_TTL_MS,
+  EnrollmentLimitError,
+  type ClientRegistry,
+  type EnrollmentLimits,
+  type GatewayClient,
+} from "./clientRegistry.ts";
 import type { EdgeTools, IntegrationCheck } from "./edgeTools.ts";
 import {
   createLoginManager,
@@ -37,9 +44,28 @@ export type UserAccountRecord = LoginProfile & { userId: string };
 
 /** A refused user operation: a fixed code, never request or upstream text. */
 export class UserOperationRefusal extends Error {
-  constructor(readonly code: IntegrationFailure) {
+  constructor(
+    readonly code: IntegrationFailure | "unknown_client" | "limit_reached",
+  ) {
     super(code);
   }
+}
+
+/**
+ * The bounds on codes the page issues (the admin CLI's are unbounded): four
+ * unused codes, and sixteen active clients counting those codes.
+ */
+const PAGE_ENROLLMENT_LIMITS: EnrollmentLimits = {
+  maxPendingCodes: 4,
+  maxClients: 16,
+};
+
+/** One of the user's active clients; whether it has an MCP token, not it. */
+export interface UserClient {
+  id: string;
+  label: string;
+  createdAt: number;
+  mcpToken: boolean;
 }
 
 /** What Atlassian said about a credential that works. */
@@ -85,6 +111,15 @@ interface UserOperationsDeps {
   integrations(): EdgeTools["integrations"] | undefined;
   /** A fresh deadline for one Atlassian check, created as the check starts. */
   checkSignal(): AbortSignal;
+  registry: Pick<
+    ClientRegistry,
+    "clients" | "createCode" | "revoke" | "setMcpToken" | "clearMcpToken"
+  >;
+  /**
+   * A client was revoked: its connections end and its logins and leases go
+   * now, not at the next poll.
+   */
+  clientRevoked(clientId: string): void;
   profiles: Pick<ProfileRegistry, "get">;
   /** The registry's account ownership; either may throw when unavailable. */
   ownerOf(profileId: string): string | undefined;
@@ -136,6 +171,22 @@ export interface UserOperations {
   /** Checks the credential with Atlassian, then stores it for the user. */
   setAtlassian(userId: string, input: unknown): Promise<AtlassianSet>;
   clearAtlassian(userId: string): Promise<void>;
+  /** The user's clients that are not revoked. */
+  clients(userId: string): UserClient[];
+  /**
+   * A one-time code for the user's next client, within the page's limits
+   * (`limit_reached`); the only time the code exists outside its hash.
+   */
+  createEnrollmentCode(
+    userId: string,
+    label: string,
+  ): { code: string; validForSeconds: number };
+  /** Revokes the user's client (`unknown_client` if not theirs or active). */
+  revokeClient(userId: string, clientId: string): void;
+  /** Mints the client's MCP token, replacing any earlier one; shown once. */
+  mintMcpToken(userId: string, clientId: string): string;
+  /** Removes the client's MCP token, if it has one. */
+  revokeMcpToken(userId: string, clientId: string): void;
   close(): void;
 }
 
@@ -175,6 +226,16 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
         "The gateway holds no such account for this user.",
       );
     return profile;
+  };
+
+  /** The user's active client by id, or the unknown-client refusal. */
+  const ownedClient = (userId: string, clientId: string): GatewayClient => {
+    const client = deps.registry
+      .clients()
+      .find((c) => c.id === clientId && c.userId === userId);
+    if (!client || client.revokedAt !== undefined)
+      throw new UserOperationRefusal("unknown_client");
+    return client;
   };
 
   /** The Atlassian tools, or the fixed refusal. */
@@ -268,6 +329,38 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
     async clearAtlassian(userId) {
       atlassian();
       wrote(await deps.vault.integrationClear(userId, "atlassian"));
+    },
+    clients: (userId) =>
+      deps.registry
+        .clients()
+        .filter((c) => c.userId === userId && c.revokedAt === undefined)
+        .map((c) => ({
+          id: c.id,
+          label: c.label,
+          createdAt: c.createdAt,
+          mcpToken: c.mcpTokenHash !== undefined,
+        })),
+    createEnrollmentCode(userId, label) {
+      try {
+        return {
+          code: deps.registry.createCode(userId, label, PAGE_ENROLLMENT_LIMITS),
+          validForSeconds: ENROLLMENT_CODE_TTL_MS / 1000,
+        };
+      } catch (err) {
+        if (err instanceof EnrollmentLimitError)
+          throw new UserOperationRefusal("limit_reached");
+        throw err;
+      }
+    },
+    revokeClient(userId, clientId) {
+      const client = ownedClient(userId, clientId);
+      deps.registry.revoke(client.id);
+      deps.clientRevoked(client.id);
+    },
+    mintMcpToken: (userId, clientId) =>
+      deps.registry.setMcpToken(ownedClient(userId, clientId).id),
+    revokeMcpToken(userId, clientId) {
+      deps.registry.clearMcpToken(ownedClient(userId, clientId).id);
     },
     close: () => logins.close(),
   };

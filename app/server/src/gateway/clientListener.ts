@@ -60,6 +60,7 @@ import {
   decodeIntegrationStatusRequest,
   decodeToolCall,
   integrationFailure,
+  isIntegrationFailure,
   decodeLoginId,
   decodeLoginInput,
   decodeLoginStart,
@@ -492,6 +493,8 @@ export async function startClientListener(
     vault: deps.vault,
     integrations: () => deps.tools?.integrations,
     checkSignal,
+    registry,
+    clientRevoked: (clientId) => revokeClient(clientId),
     profiles,
     ownerOf: (profileId) => registry.ownerOf(profileId),
     accountsOf: (userId) => registry.accountsOf(userId),
@@ -552,7 +555,8 @@ export async function startClientListener(
     try {
       return await call();
     } catch (err) {
-      if (err instanceof UserOperationRefusal) integrationFailure(err.code);
+      if (err instanceof UserOperationRefusal && isIntegrationFailure(err.code))
+        integrationFailure(err.code);
       throw err;
     }
   };

@@ -113,6 +113,10 @@ const INTEGRATION_FAILURES = {
 } as const;
 export type IntegrationFailure = keyof typeof INTEGRATION_FAILURES;
 
+export function isIntegrationFailure(code: string): code is IntegrationFailure {
+  return Object.hasOwn(INTEGRATION_FAILURES, code);
+}
+
 export function integrationFailure(code: IntegrationFailure): never {
   throw new WorkerMethodError(code, INTEGRATION_FAILURES[code]);
 }

@@ -27,7 +27,7 @@ import { dirname, join } from "node:path";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
 
 /** How long an enrollment code stays valid. */
-const CODE_TTL_MS = 15 * 60_000;
+export const ENROLLMENT_CODE_TTL_MS = 15 * 60_000;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_LABEL = 200;
 const MAX_EMAIL = 254;
@@ -152,6 +152,24 @@ export class ClientRegistryLockedError extends Error {
     super(
       `Gateway client registry lock ${lock} did not clear within one second. Check that the writer PID recorded in this file is no longer running before removing the lock and retrying.`,
     );
+  }
+}
+
+/**
+ * Bounds on a user's enrollment codes, checked where a code is issued: at
+ * most `maxPendingCodes` unexpired codes, and active clients plus unexpired
+ * codes at most `maxClients`. A pending code reserves a client's place, so
+ * redeeming every code keeps the user within `maxClients`.
+ */
+export interface EnrollmentLimits {
+  maxPendingCodes: number;
+  maxClients: number;
+}
+
+/** A code would take the user past its `EnrollmentLimits`; nothing written. */
+export class EnrollmentLimitError extends Error {
+  constructor() {
+    super("The user has too many clients or unused enrollment codes.");
   }
 }
 
@@ -339,16 +357,39 @@ export class ClientRegistry {
     return { userId, outcome };
   }
 
-  /** A one-time code for `userId`'s next client; only its hash is kept. */
-  createCode(userId: string, clientLabel: string): string {
+  /**
+   * A one-time code for `userId`'s next client; only its hash is kept. With
+   * `limits`, counted under the lock with the push, the code is refused
+   * (`EnrollmentLimitError`) rather than take the user past them; without,
+   * as the admin CLI issues, it is unbounded.
+   */
+  createCode(
+    userId: string,
+    clientLabel: string,
+    limits?: EnrollmentLimits,
+  ): string {
     if (!this.user(userId)) throw new Error(`No user ${userId}.`);
     const code = randomBytes(18).toString("base64url");
     this.change((state) => {
+      if (limits) {
+        const now = this.now();
+        const pending = state.codes.filter(
+          (c) => c.userId === userId && c.expiresAt > now,
+        ).length;
+        const active = state.clients.filter(
+          (c) => c.userId === userId && c.revokedAt === undefined,
+        ).length;
+        if (
+          pending >= limits.maxPendingCodes ||
+          active + pending >= limits.maxClients
+        )
+          throw new EnrollmentLimitError();
+      }
       state.codes.push({
         hash: hashOf(code),
         userId,
         label: label(clientLabel),
-        expiresAt: this.now() + CODE_TTL_MS,
+        expiresAt: this.now() + ENROLLMENT_CODE_TTL_MS,
       });
     });
     return code;

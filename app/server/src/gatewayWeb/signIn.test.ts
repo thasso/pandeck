@@ -19,6 +19,11 @@ import { ClientRegistry } from "../gateway/clientRegistry.ts";
 import { edgeTlsFor } from "../gateway/x509.ts";
 import { startEdge } from "../gatewayEdge.ts";
 import { AccountsRefusal, type GatewayWebAccounts } from "./accounts.ts";
+import { ClientsRefusal, type GatewayWebClients } from "./clients.ts";
+import {
+  IntegrationsRefusal,
+  type GatewayWebIntegrations,
+} from "./integrations.ts";
 import type { GatewayWebConfig } from "./config.ts";
 import type { OidcTestOptions } from "./oidc.ts";
 import { startGatewayWeb, type RunningGatewayWeb } from "./server.ts";
@@ -109,6 +114,28 @@ function cookieValue(answer: Answer, name: string): string | undefined {
   return line?.slice(name.length + 1).split(";")[0];
 }
 
+/** Sign-in tests touch no credential or client: every change is refused. */
+const NO_INTEGRATIONS: GatewayWebIntegrations = {
+  status: () => Promise.resolve({ connected: false }),
+  set: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+  clear: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+};
+const NO_CLIENTS: GatewayWebClients = {
+  list: () => [],
+  createCode: () => {
+    throw new ClientsRefusal("limit_reached");
+  },
+  revoke: () => {
+    throw new ClientsRefusal("unknown_client");
+  },
+  mintMcpToken: () => {
+    throw new ClientsRefusal("unknown_client");
+  },
+  revokeMcpToken: () => {
+    throw new ClientsRefusal("unknown_client");
+  },
+};
+
 /** Sign-in tests touch no account: every account call is refused. */
 const NO_ACCOUNTS: GatewayWebAccounts = {
   list: () => [],
@@ -171,6 +198,8 @@ async function startUi(
       user: (id) => registry.user(id),
     },
     accounts: NO_ACCOUNTS,
+    integrations: NO_INTEGRATIONS,
+    clients: NO_CLIENTS,
     log: (line) => logs.push(line),
     now: () => clock,
     oidcTestOptions: provider.oidcTestOptions ?? {

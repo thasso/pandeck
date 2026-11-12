@@ -45,6 +45,7 @@ import {
   type ModelDeadlines,
 } from "./clientListener.ts";
 import { LeaseTable } from "./leases.ts";
+import { UserOperationRefusal } from "./userOperations.ts";
 import { ProfileRegistry } from "./profiles.ts";
 import type {
   IntegrationRecord,
@@ -1451,6 +1452,71 @@ test("T2a a client's cancel during a set's check does not change its outcome", a
     email: "a@x.test",
   });
   assert.deepEqual(vault.calls, ["put u1"]);
+});
+
+// --- the seam's client operations (Task-1405 T3) --------------------------
+
+test("T3 the seam's client operations: another user's client is unknown; a revoke takes effect at once", async () => {
+  const run = fakeLogin();
+  const gateway = await gatewayWithClients(run.drivers);
+  const ops = gateway.clients!.userOperations;
+  const identity = await enroll(gateway, "u1");
+  const connection = await dialClient(gateway, identity);
+  const { leaseId } = await grant(connection);
+  await startLogin(connection);
+  const refusal = (call: () => unknown) =>
+    assert.throws(
+      call,
+      (err: unknown) =>
+        err instanceof UserOperationRefusal && err.code === "unknown_client",
+    );
+
+  // u2 cannot touch u1's client, which stays active and unchanged.
+  refusal(() => ops.revokeClient("u2", identity.clientId));
+  refusal(() => ops.mintMcpToken("u2", identity.clientId));
+  refusal(() => ops.revokeMcpToken("u2", identity.clientId));
+  assert.deepEqual(ops.clients("u2"), []);
+  assert.deepEqual(
+    ops.clients("u1").map((client) => client.id),
+    [identity.clientId],
+  );
+  assert.equal(connection.isEnded, false);
+
+  // Synchronously after the call, before any poll tick: lease and login gone.
+  ops.revokeClient("u1", identity.clientId);
+  assert.ok(
+    gateway.leases.records().find((lease) => lease.leaseId === leaseId)!
+      .revoked,
+  );
+  assert.equal(run.cancels(), 1);
+  await connection.ended;
+  assert.deepEqual(ops.clients("u1"), []);
+  refusal(() => ops.mintMcpToken("u1", identity.clientId));
+  refusal(() => ops.revokeClient("u1", identity.clientId));
+  // The fake driver ignores its cancel; end it so the gateway can close.
+  run.complete();
+});
+
+test("T3 setAtlassian stores under the given user only", async () => {
+  const vault = stubVault();
+  const edge = await listenerWith(
+    vault,
+    fakeTools(() => Promise.resolve({ ok: true })),
+  );
+  const ops = edge.clients!.userOperations;
+  assert.deepEqual(
+    await ops.setAtlassian("u2", {
+      site: "x.atlassian.net",
+      email: "b@x.test",
+      token: "FAKE-T3",
+    }),
+    { connected: true, site: "x.atlassian.net", email: "b@x.test" },
+  );
+  assert.deepEqual(vault.calls, ["put u2"]);
+  assert.deepEqual([...vault.stored.keys()], ["u2"]);
+  assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
+    connected: false,
+  });
 });
 
 // --- tools.list and tools.call (Task-1398) ---------------------------------

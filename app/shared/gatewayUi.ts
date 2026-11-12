@@ -21,7 +21,15 @@ export interface GatewayUiError {
     | "unknown_account"
     | "unknown_login"
     | "login_unavailable"
-    | "bad_request";
+    | "bad_request"
+    | "unknown_client"
+    | "limit_reached"
+    | "integration_invalid"
+    | "integration_rejected"
+    | "integration_unreachable"
+    | "vault_locked"
+    | "vault_unavailable"
+    | "tools_unavailable";
 }
 
 export type GatewayUiProvider = "claude" | "openai-codex";
@@ -97,6 +105,61 @@ export const GATEWAY_UI_SIGNIN_CODES = [
   "busy",
 ] as const;
 export type GatewayUiSigninCode = (typeof GATEWAY_UI_SIGNIN_CODES)[number];
+
+/** Why a stored Atlassian credential cannot be used now. */
+export const GATEWAY_UI_ATLASSIAN_PROBLEMS = [
+  "vault_locked",
+  "vault_unavailable",
+  "invalid",
+] as const;
+export type GatewayUiAtlassianProblem =
+  (typeof GATEWAY_UI_ATLASSIAN_PROBLEMS)[number];
+
+/**
+ * `GET /api/integrations/atlassian` and what a set answers: whether the
+ * user's Atlassian credential is stored, with its site and email. Never the
+ * API token, which is write-only.
+ */
+export interface GatewayUiAtlassian {
+  connected: boolean;
+  site?: string;
+  email?: string;
+  /** Atlassian's name for the account, from the check a set ran. */
+  displayName?: string;
+  problem?: GatewayUiAtlassianProblem;
+}
+
+/** `POST /api/integrations/atlassian/set`: checked, then stored. */
+export interface GatewayUiAtlassianSetRequest {
+  site: string;
+  email: string;
+  token: string;
+}
+
+/** One of the user's active clients, as `GET /api/clients` lists it. */
+export interface GatewayUiClient {
+  id: string;
+  label: string;
+  /** Epoch milliseconds of its enrollment. */
+  createdAt: number;
+  /** Whether it has an MCP token; never the token. */
+  mcpToken: boolean;
+}
+
+export interface GatewayUiClients {
+  clients: GatewayUiClient[];
+}
+
+/** `POST /api/clients/code`: a one-time code, shown once, then gone. */
+export interface GatewayUiEnrollmentCode {
+  code: string;
+  validForSeconds: number;
+}
+
+/** `POST /api/clients/mcp-token`: the client's new MCP token, shown once. */
+export interface GatewayUiMcpToken {
+  token: string;
+}
 
 /** Every mutation sends this header with the value `1` (and its Origin). */
 export const GATEWAY_UI_CSRF_HEADER = "x-gateway-ui";
@@ -195,4 +258,80 @@ export function decodeGatewayUiLogin(
     };
   }
   return login;
+}
+
+const optionalText = (value: unknown): value is string | undefined =>
+  value === undefined || typeof value === "string";
+
+/** A well-formed `GatewayUiAtlassian`, or undefined; an unknown problem drops. */
+export function decodeGatewayUiAtlassian(
+  value: unknown,
+): GatewayUiAtlassian | undefined {
+  if (!isRecord(value)) return undefined;
+  const { connected, site, email, displayName, problem } = value;
+  if (
+    typeof connected !== "boolean" ||
+    !optionalText(site) ||
+    !optionalText(email) ||
+    !optionalText(displayName)
+  )
+    return undefined;
+  return {
+    connected,
+    ...(site !== undefined ? { site } : {}),
+    ...(email !== undefined ? { email } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...((GATEWAY_UI_ATLASSIAN_PROBLEMS as readonly unknown[]).includes(problem)
+      ? { problem: problem as GatewayUiAtlassianProblem }
+      : {}),
+  };
+}
+
+/** A well-formed `GatewayUiClients`, or undefined. */
+export function decodeGatewayUiClients(
+  value: unknown,
+): GatewayUiClients | undefined {
+  if (!isRecord(value) || !Array.isArray(value.clients)) return undefined;
+  const clients: GatewayUiClient[] = [];
+  for (const entry of value.clients as unknown[]) {
+    if (!isRecord(entry)) return undefined;
+    const { id, label, createdAt, mcpToken } = entry;
+    if (
+      typeof id !== "string" ||
+      id === "" ||
+      typeof label !== "string" ||
+      typeof createdAt !== "number" ||
+      !Number.isFinite(createdAt) ||
+      typeof mcpToken !== "boolean"
+    )
+      return undefined;
+    clients.push({ id, label, createdAt, mcpToken });
+  }
+  return { clients };
+}
+
+/** A well-formed `GatewayUiEnrollmentCode`, or undefined. */
+export function decodeGatewayUiEnrollmentCode(
+  value: unknown,
+): GatewayUiEnrollmentCode | undefined {
+  if (!isRecord(value)) return undefined;
+  const { code, validForSeconds } = value;
+  if (
+    typeof code !== "string" ||
+    code === "" ||
+    typeof validForSeconds !== "number" ||
+    !Number.isInteger(validForSeconds) ||
+    validForSeconds <= 0
+  )
+    return undefined;
+  return { code, validForSeconds };
+}
+
+/** A well-formed `GatewayUiMcpToken`, or undefined. */
+export function decodeGatewayUiMcpToken(
+  value: unknown,
+): GatewayUiMcpToken | undefined {
+  if (!isRecord(value)) return undefined;
+  const { token } = value;
+  return typeof token === "string" && token !== "" ? { token } : undefined;
 }
