@@ -2216,7 +2216,7 @@ server's local gateway does.
   keeps systemd's default `KillMode=control-group` (or `mixed`): either kills
   every process left in the unit's cgroup when the unit stops or restarts.
   `KillMode=process` or `none` would break this bound. The vault's unit is not
-  defined in this repository.
+  defined in this repository; the deployed one uses `KillMode=control-group`.
 
 #### Sealed store
 
