@@ -70,6 +70,9 @@ const SEALED_FILES = new Set([
 const SEALED_SUFFIX = ".sealed";
 /** `statfs` type of a tmpfs. */
 const TMPFS_MAGIC = 0x01021994;
+/** A stop's seal: this many tries, this far apart, before it reports. */
+const FLUSH_ATTEMPTS = 3;
+const FLUSH_RETRY_MS = 200;
 const HELPER_CODES = new Set(["no_device", "no_key", "failed"]);
 
 export type Recipient =
@@ -214,16 +217,36 @@ function shred(file: string): void {
   unlinkSync(file);
 }
 
-/** Every `[accountId, file]` with a token file under `accountsDir`. */
-function tokenFilesUnder(accountsDir: string): [string, string][] {
-  if (!existsSync(accountsDir)) return [];
-  return readdirSync(accountsDir).flatMap((accountId) =>
-    ID_RE.test(accountId)
-      ? [...SEALED_FILES]
-          .filter((file) => existsSync(join(accountsDir, accountId, file)))
-          .map((file): [string, string] => [accountId, file])
-      : [],
-  );
+/**
+ * A token file's plaintext: `absent` when nothing is there (no such file, or
+ * no directory where one would be), `unreadable` for any other error.
+ */
+function readPlaintext(path: string): Buffer | "absent" | "unreadable" {
+  try {
+    return readFileSync(path);
+  } catch (err) {
+    const { code } = err as NodeJS.ErrnoException;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
+  }
+}
+
+/**
+ * Every `[accountId, file]` that may hold a token file, for the strict
+ * `seal`, which tells a missing file from an unreadable one. Only a missing
+ * `accountsDir` is empty; any other listing error answers undefined.
+ */
+function candidatesUnder(accountsDir: string): [string, string][] | undefined {
+  let names: string[];
+  try {
+    names = readdirSync(accountsDir);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? [] : undefined;
+  }
+  return names
+    .filter((accountId) => ID_RE.test(accountId))
+    .flatMap((accountId) =>
+      [...SEALED_FILES].map((file): [string, string] => [accountId, file]),
+    );
 }
 
 export type UnlockAnswer =
@@ -242,6 +265,12 @@ export interface SealedStore {
   discarded(accountId: string): void;
   /** Seals every token file that drifted from its record. */
   sweep(): void;
+  /**
+   * A stop's last step: seals every file that drifted from its record,
+   * retrying a failure a few times, and answers the account ids still
+   * unsealed (none when every record matches its file).
+   */
+  flush(): Promise<string[]>;
   /** Re-reads the recipients and seals every token file to them. */
   reseal(): number;
   /** Where logins leave their credential: inside the RAM filesystem. */
@@ -295,33 +324,42 @@ export function createSealedStore(
       : undefined;
   };
 
-  const seal = (accountId: string, file: string, force: boolean): boolean => {
+  /**
+   * Seals one file when it differs from its record (always with `force`):
+   * `absent` when there is no plaintext (left alone on purpose), `unreadable`
+   * when it is there but cannot be read. A failed record write throws.
+   */
+  const seal = (
+    accountId: string,
+    file: string,
+    force: boolean,
+  ): "sealed" | "unchanged" | "absent" | "unreadable" => {
     const path = join(accountsDir, accountId, file);
-    let plaintext: Buffer;
-    try {
-      plaintext = readFileSync(path);
-    } catch {
-      return false;
-    }
+    const plaintext = readPlaintext(path);
+    if (typeof plaintext === "string") return plaintext;
     const hash = sha256(plaintext);
-    if (!force && known.get(path) === hash) return false;
+    if (!force && known.get(path) === hash) return "unchanged";
     writePrivate(
       recordPath(accountId, file),
       JSON.stringify(sealRecord(plaintext, accountId, file, recipients)),
     );
     known.set(path, hash);
-    return true;
+    return "sealed";
   };
 
   const written = (tokenFile: string): void => {
     if (locked) return;
     const at = locate(tokenFile);
     if (!at) return;
+    let result: ReturnType<typeof seal> | undefined;
     try {
-      if (seal(at[0], at[1], false)) log(`sealed account ${at[0]}`);
+      result = seal(at[0], at[1], false);
     } catch {
-      log(`sealing account ${at[0]} failed; the sweep retries`);
+      result = undefined;
     }
+    if (result === "sealed") log(`sealed account ${at[0]}`);
+    else if (result === undefined || result === "unreadable")
+      log(`sealing account ${at[0]} failed; the sweep retries`);
   };
 
   /** Every record on disk, `[accountId, file, record or undefined]`. */
@@ -457,8 +495,45 @@ export function createSealedStore(
 
   const sweep = (): void => {
     if (locked) return;
-    for (const [accountId, file] of tokenFilesUnder(accountsDir))
+    const candidates = candidatesUnder(accountsDir);
+    if (!candidates) log("sweep: the accounts directory could not be read");
+    for (const [accountId, file] of candidates ?? [])
       written(join(accountsDir, accountId, file));
+  };
+
+  const flush = async (): Promise<string[]> => {
+    if (locked) return [];
+    let pending: [string, string][] | undefined;
+    for (let attempt = 1; ; attempt++) {
+      // The listing too tries again: only a missing directory is empty.
+      pending ??= candidatesUnder(accountsDir);
+      if (!pending) {
+        log(`listing the accounts failed at stop (try ${attempt})`);
+        if (attempt >= FLUSH_ATTEMPTS)
+          throw new Error("the accounts directory could not be read");
+        await new Promise((done) => setTimeout(done, FLUSH_RETRY_MS));
+        continue;
+      }
+      // Done: sealed, already matching, or not there. Anything else, a file
+      // or directory that cannot be read or a record that cannot be written,
+      // tries again.
+      pending = pending.filter(([accountId, file]) => {
+        let result: ReturnType<typeof seal>;
+        try {
+          result = seal(accountId, file, false);
+        } catch {
+          return true;
+        }
+        if (result === "sealed") log(`sealed account ${accountId}`);
+        return result === "unreadable";
+      });
+      if (pending.length === 0) return [];
+      for (const [accountId] of pending)
+        log(`sealing account ${accountId} failed at stop (try ${attempt})`);
+      if (attempt >= FLUSH_ATTEMPTS)
+        return [...new Set(pending.map(([accountId]) => accountId))].sort();
+      await new Promise((done) => setTimeout(done, FLUSH_RETRY_MS));
+    }
   };
 
   return {
@@ -472,15 +547,28 @@ export function createSealedStore(
         known.delete(join(accountsDir, accountId, file));
     },
     sweep,
+    flush,
     reseal() {
       if (locked) throw new Error("The vault is locked.");
       const next = readRecipients(stateDir);
       if (next.length === 0) throw new Error("The vault has no recipients.");
       recipients = next;
+      const candidates = candidatesUnder(accountsDir);
+      if (!candidates)
+        throw new Error("The accounts directory could not be read.");
       let count = 0;
-      for (const [accountId, file] of tokenFilesUnder(accountsDir))
-        if (seal(accountId, file, true)) count++;
+      const unread = new Set<string>();
+      for (const [accountId, file] of candidates) {
+        const result = seal(accountId, file, true);
+        if (result === "sealed") count++;
+        else if (result === "unreadable") unread.add(accountId);
+      }
       log(`resealed ${count} records to ${recipients.length} recipients`);
+      // A file left on the old recipients would be lost once they go.
+      if (unread.size > 0) {
+        log(`reseal: ${[...unread].sort().join(", ")} could not be read`);
+        throw new Error("Some token files could not be read.");
+      }
       return count;
     },
     loginTempDir: join(accountsDir, ".login-tmp"),
@@ -502,15 +590,31 @@ export async function sealExisting(
   const accountsDir = join(resolve(stateDir), "accounts");
   const sealedDir = join(resolve(stateDir), "sealed");
   const software = recipients.find((r) => r.kind === "software");
+  const candidates = candidatesUnder(accountsDir);
+  if (!candidates) throw new Error("The accounts directory could not be read.");
   let sealed = 0;
-  for (const [accountId, file] of tokenFilesUnder(accountsDir)) {
+  // Directories with a file that is there but cannot be read: nothing of
+  // theirs is sealed or removed, and the migration fails naming them.
+  const unread = new Set<string>();
+  for (const [accountId, file] of candidates) {
     const path = join(accountsDir, accountId, file);
-    const plaintext = readFileSync(path);
+    const plaintext = readPlaintext(path);
+    if (plaintext === "absent") continue;
+    if (plaintext === "unreadable") {
+      unread.add(accountId);
+      continue;
+    }
     const target = join(sealedDir, accountId, `${file}${SEALED_SUFFIX}`);
-    writePrivate(
-      target,
-      JSON.stringify(sealRecord(plaintext, accountId, file, recipients)),
-    );
+    try {
+      writePrivate(
+        target,
+        JSON.stringify(sealRecord(plaintext, accountId, file, recipients)),
+      );
+    } catch {
+      throw new Error(
+        `The record of account ${accountId} could not be written.`,
+      );
+    }
     const back = parseSealedRecord(JSON.parse(readFileSync(target, "utf8")));
     if (!back)
       throw new Error(`The record of account ${accountId} is unreadable.`);
@@ -525,6 +629,11 @@ export async function sealExisting(
     shred(path);
     sealed++;
   }
+  // Before the login leftovers go: a failed run removes nothing unverified.
+  if (unread.size > 0)
+    throw new Error(
+      `The token files of ${[...unread].sort().join(", ")} could not be read; ${sealed} others were sealed. Fix the permissions and run it again.`,
+    );
   for (const temp of [
     join(stateDir, "login-tmp"),
     join(accountsDir, ".login-tmp"),

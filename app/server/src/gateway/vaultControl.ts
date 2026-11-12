@@ -20,6 +20,7 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const MAX_PIN_CHARS = 64;
 
 export interface VaultControl {
+  /** Stops listening and ends every open connection. */
   close(): Promise<void>;
 }
 
@@ -78,7 +79,10 @@ export async function startVaultControl(
   } catch {
     // None there.
   }
+  const sockets = new Set<net.Socket>();
   const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
     socket.setTimeout(REQUEST_TIMEOUT_MS, () => socket.destroy());
     let buffer = "";
     let handled = false;
@@ -118,9 +122,11 @@ export async function startVaultControl(
   chmodSync(path, 0o600);
   handlers.log(`control socket at ${path}`);
   return {
+    // An open connection, idle or not, does not hold a stop.
     close: () =>
       new Promise<void>((done) => {
         server.close(() => done());
+        for (const socket of sockets) socket.destroy();
       }),
   };
 }

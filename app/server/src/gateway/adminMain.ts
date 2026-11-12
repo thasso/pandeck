@@ -219,8 +219,16 @@ if (command === "vault-seal-existing") {
     console.error("refused: stop the vault first");
     process.exit(1);
   }
-  const { sealed } = await sealExisting(stateDir);
-  console.log(`${sealed} token files sealed; the plaintext is removed`);
+  try {
+    const { sealed } = await sealExisting(stateDir);
+    console.log(`${sealed} token files sealed; the plaintext is removed`);
+  } catch (err) {
+    // Fixed texts from `sealExisting`, naming ID-checked directories only.
+    console.error(
+      `vault-seal-existing failed: ${err instanceof Error ? err.message : "unknown error"}`,
+    );
+    process.exit(1);
+  }
   process.exit(0);
 }
 if (command === "vault-reseal" || command === "unlock") {

@@ -141,8 +141,11 @@ export interface Renewal {
   ): Promise<RenewalOutcome>;
   /** The profiles that need a login now. */
   needsLogin(): string[];
-  /** Aborts renewals in flight; later ones still run. */
-  close(): void;
+  /**
+   * Admits no further renewal, aborts the ones in flight and resolves once
+   * each has ended, its file sealed in the lane.
+   */
+  close(): Promise<void>;
 }
 
 export function createRenewal(options: RenewalOptions): Renewal {
@@ -150,6 +153,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
   const now = options.now ?? Date.now;
   const states = new Map<string, ProfileState>();
   const closing = new AbortController();
+  let closed = false;
   let noPortLogged = false;
 
   const stateOf = (profileId: string): ProfileState => {
@@ -440,6 +444,8 @@ export function createRenewal(options: RenewalOptions): Renewal {
   ): Promise<RenewalOutcome> {
     const state = stateOf(profileId);
     if (state.inFlight) return state.inFlight;
+    // A closed renewal enters no lane: its stop awaits only what is in flight.
+    if (closed) return Promise.resolve({ kind: "skipped" });
     const flight = run(profileId, force, rejectedToken).finally(() => {
       if (state.inFlight === flight) state.inFlight = undefined;
     });
@@ -524,6 +530,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
   };
 
   const tick = async (): Promise<void> => {
+    if (closed) return;
     const due: Promise<RenewalOutcome>[] = [];
     for (const profileId of profiles.ids()) {
       const profile = profiles.get(profileId);
@@ -550,6 +557,7 @@ export function createRenewal(options: RenewalOptions): Renewal {
   };
 
   const recheck = async (profileId: string): Promise<void> => {
+    if (closed) return;
     const profile = profiles.get(profileId);
     if (!profile || !isLoginProfile(profile)) return;
     const read = await readCredential(profile.provider, profile.tokenFile);
@@ -577,6 +585,13 @@ export function createRenewal(options: RenewalOptions): Renewal {
       [...states]
         .filter(([, state]) => state.reported)
         .map(([profileId]) => profileId),
-    close: () => closing.abort(),
+    async close() {
+      closed = true;
+      closing.abort();
+      // Each flight settles after its lane item, the seal included.
+      await Promise.allSettled(
+        [...states.values()].flatMap((state) => state.inFlight ?? []),
+      );
+    },
   };
 }

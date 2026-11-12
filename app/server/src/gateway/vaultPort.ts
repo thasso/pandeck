@@ -102,7 +102,10 @@ export interface LoginRun {
 }
 
 /** Runs one login whose credential lands in `configDir` and nowhere else. */
-type LoginDriver = (configDir: string, events: LoginDriverEvents) => LoginRun;
+export type LoginDriver = (
+  configDir: string,
+  events: LoginDriverEvents,
+) => LoginRun;
 
 /** The drivers the gateway's process is given (`startGateway`). */
 export type LoginDrivers = Partial<Record<LeaseProvider, LoginDriver>>;

@@ -83,7 +83,7 @@ test("a Claude renewal with no endpoint override is refused at the real host, an
       code: TOKEN_HOST_REFUSED,
     });
   } finally {
-    renewal.close();
+    await renewal.close();
   }
   assert.deepEqual(takeTokenHostAttempts(), ["platform.claude.com"]);
   assert.equal(await readFile(tokenFile, "utf8"), stored);

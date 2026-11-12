@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,7 +17,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { join, resolve } from "node:path";
 import { afterAll, test } from "vitest";
 import { openPivHelper, type PivHelperCommand } from "./pivChild.ts";
 import {
@@ -787,3 +789,98 @@ test("C5: a stale first recipient falls through to a usable second (software and
     claudeJson(TOKEN),
   );
 });
+
+test("an unreadable account directory is not skipped: the sweep logs it and reseal refuses", async () => {
+  const dir = stateDir();
+  const recipient = softwareRecipient(dir, "soft");
+  writeRecipients(dir, [recipient]);
+  const lines: string[] = [];
+  const store = await unlockedStore(dir, lines);
+  writeToken(dir, "acc-dir", TOKEN);
+  const accountDir = join(dir, "accounts", "acc-dir");
+  chmodSync(accountDir, 0o000);
+  try {
+    store.sweep();
+    assert.ok(
+      lines.includes("sealing account acc-dir failed; the sweep retries"),
+      lines.join("\n"),
+    );
+    assert.throws(() => store.reseal(), /could not be read/);
+  } finally {
+    chmodSync(accountDir, 0o700);
+  }
+  store.sweep();
+  assert.equal(await opensWith(dir, "acc-dir", recipient), claudeJson(TOKEN));
+});
+
+test("vault-seal-existing fails naming an unreadable account, seals the readable one, and a rerun completes", async () => {
+  const dir = stateDir();
+  const recipient = softwareRecipient(dir, "soft");
+  writeRecipients(dir, [recipient]);
+  writeToken(dir, "acc-ok", TOKEN);
+  writeToken(dir, "acc-locked", "fake-locked-token");
+  mkdirSync(join(dir, "login-tmp", "claude-x"), { recursive: true });
+  writeFileSync(join(dir, "login-tmp", "claude-x", ".credentials.json"), "x");
+  const locked = join(dir, "accounts", "acc-locked");
+  chmodSync(locked, 0o000);
+  let message = "";
+  try {
+    await sealExisting(dir).then(
+      () => assert.fail("the migration succeeded"),
+      (err: Error) => (message = err.message),
+    );
+  } finally {
+    chmodSync(locked, 0o700);
+  }
+  assert.match(message, /acc-locked/);
+  assert.equal(message.includes("acc-ok"), false);
+  // The readable one is sealed, verified and removed as before.
+  assert.equal(existsSync(tokenPath(dir, "acc-ok")), false);
+  assert.equal(await opensWith(dir, "acc-ok", recipient), claudeJson(TOKEN));
+  // The unreadable one is untouched: no record, its plaintext kept, and the
+  // login leftovers stay until a run succeeds.
+  assert.equal(existsSync(recordPath(dir, "acc-locked")), false);
+  assert.equal(
+    readFileSync(tokenPath(dir, "acc-locked"), "utf8"),
+    claudeJson("fake-locked-token"),
+  );
+  assert.equal(existsSync(join(dir, "login-tmp")), true);
+  // The rerun seals the rest and cleans up.
+  assert.deepEqual(await sealExisting(dir), { sealed: 1 });
+  assert.equal(existsSync(tokenPath(dir, "acc-locked")), false);
+  assert.equal(
+    await opensWith(dir, "acc-locked", recipient),
+    claudeJson("fake-locked-token"),
+  );
+  assert.equal(existsSync(join(dir, "login-tmp")), false);
+});
+
+test("gateway-admin vault-seal-existing exits 1 and names the unreadable account", () => {
+  const dir = stateDir();
+  writeRecipients(dir, [softwareRecipient(dir, "soft")]);
+  writeToken(dir, "acc-locked", TOKEN);
+  const locked = join(dir, "accounts", "acc-locked");
+  chmodSync(locked, 0o000);
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        resolve("src/gateway/adminMain.ts"),
+        "--state-dir",
+        dir,
+        "--control-socket",
+        join(dir, "absent.sock"),
+        "vault-seal-existing",
+      ],
+      { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir } },
+    );
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, /vault-seal-existing failed: .*acc-locked/);
+    assert.equal(run.stdout.includes("the plaintext is removed"), false);
+    assert.equal(`${run.stdout}${run.stderr}`.includes(TOKEN), false);
+  } finally {
+    chmodSync(locked, 0o700);
+  }
+}, 60_000);

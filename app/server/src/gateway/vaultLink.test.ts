@@ -6,19 +6,21 @@
  */
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import tls from "node:tls";
-import { generateKeyPairSync } from "node:crypto";
+import { X509Certificate, generateKeyPairSync } from "node:crypto";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
 import {
   CLAUDE_ACCESS,
@@ -40,7 +42,9 @@ import {
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { startGateway, type RunningGateway } from "./gateway.ts";
 import type { LeaseProvider } from "./leases.ts";
+import { loginChildDriver } from "./loginChild.ts";
 import { refusalText } from "./refusals.ts";
+import { openRecord, parseSealedRecord, softwareEcdh } from "./sealedRecord.ts";
 import { recipientOf, sealExisting, writeRecipients } from "./sealedStore.ts";
 import { askVaultControl } from "./vaultControl.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
@@ -48,7 +52,9 @@ import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
   LOGIN_CREDENTIAL_FILE,
+  isPinnedPeer,
 } from "./vaultMethods.ts";
+import type { CodexRenewPort } from "./renewal.ts";
 import type { LoginDrivers, LoginRun } from "./vaultPort.ts";
 import { startVaultServer, type RunningVaultServer } from "./vaultServer.ts";
 import { selfSignedIdentity, type PinnedIdentity } from "./x509.ts";
@@ -137,6 +143,7 @@ async function vault(
     drivers?: LoginDrivers;
     loginTimeoutMs?: number;
     controlSocket?: string;
+    renewCodex?: CodexRenewPort;
   } = {},
 ): Promise<Vault> {
   const dir = options.dir ?? mkdtempSync(join(root, "vault-"));
@@ -155,6 +162,7 @@ async function vault(
       ? { loginTimeoutMs: options.loginTimeoutMs }
       : {}),
     ...(options.controlSocket ? { controlSocket: options.controlSocket } : {}),
+    ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
     log: (line) => lines.push(line),
   });
   open.push(running);
@@ -311,7 +319,48 @@ test("the vault refuses a binding outside its accounts directory", async () => {
   );
 });
 
+test("the link's pin: exactly the pinned certificate, inside its dates, else refused", () => {
+  const cert = new X509Certificate(edgeId.certPem);
+  const peer = (presented: object) => ({
+    getPeerCertificate: () => presented as tls.PeerCertificate,
+  });
+  const pinned = {
+    fingerprint256: cert.fingerprint256,
+    valid_from: cert.validFrom,
+    valid_to: cert.validTo,
+  };
+  const now = Date.now();
+  assert.equal(isPinnedPeer(peer(pinned), cert.fingerprint256, now), true);
+  // No certificate, another one, expired, not yet valid.
+  assert.equal(isPinnedPeer(peer({}), cert.fingerprint256, now), false);
+  assert.equal(
+    isPinnedPeer(
+      peer({ ...pinned, fingerprint256: "AA:BB" }),
+      cert.fingerprint256,
+      now,
+    ),
+    false,
+  );
+  assert.equal(
+    isPinnedPeer(
+      peer(pinned),
+      cert.fingerprint256,
+      Date.parse(cert.validTo) + 1000,
+    ),
+    false,
+  );
+  assert.equal(
+    isPinnedPeer(
+      peer(pinned),
+      cert.fingerprint256,
+      Date.parse(cert.validFrom) - 1000,
+    ),
+    false,
+  );
+});
+
 test("an unpinned client or server certificate is refused", async () => {
+  // Self-signed with the same subject as the pinned one: only the pin differs.
   const stranger = selfSignedIdentity("pandeck-gateway-edge", "client");
   const v = await vault();
   const deps = {
@@ -352,6 +401,23 @@ test("an unpinned client or server certificate is refused", async () => {
     ok: false,
     refusal: { case: "vault-unavailable" },
   });
+  // No client certificate at all: the pin refuses it before any frame.
+  const unpinned = () =>
+    v.lines.filter((line) => line.endsWith("unpinned certificate")).length;
+  const before = unpinned();
+  const bare = tls.connect({
+    host: "127.0.0.1",
+    port: v.port,
+    ca: vaultId.certPem,
+    checkServerIdentity: () => undefined,
+  });
+  bare.on("error", () => {});
+  let received = 0;
+  bare.on("data", (chunk: Buffer) => (received += chunk.length));
+  await new Promise((resolve) => bare.once("close", resolve));
+  assert.equal(unpinned(), before + 1);
+  assert.equal(received, 0, "the vault answered an unpinned peer");
+  assert.ok(!v.lines.includes("edge connected"));
 });
 
 test("a login runs on the vault through the link: events, input, cancel, withdraw", async () => {
@@ -639,6 +705,68 @@ test("C2: the vault installs a login's credential only on the edge's commit", as
   assert.match(readFileSync(committed.tokenFile, "utf8"), /claude-def/);
 });
 
+test("a login child's credential stays in its directory: ingested, the directory removed, never on the pipe", async () => {
+  // The real child side (`loginChildEntry.ts`) over a fake driver, its stdout
+  // copied to a file so the test can read what crossed the pipe.
+  const pipeLog = join(root, `pipe-${Date.now()}.log`);
+  const entry = join(root, `login-entry-${Date.now()}.ts`);
+  writeFileSync(
+    entry,
+    `import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { runLoginChild } from ${JSON.stringify(resolve("src/loginChildEntry.ts"))};
+const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = ((chunk: string, ...rest: never[]) => {
+  appendFileSync(${JSON.stringify(pipeLog)}, String(chunk));
+  return write(chunk, ...rest);
+}) as typeof process.stdout.write;
+runLoginChild((configDir, events) => {
+  let finish!: () => void;
+  const done = new Promise<void>((resolve) => (finish = resolve));
+  events.output("Paste code: ");
+  events.url("https://claude.example/oauth");
+  return {
+    input: (text) => {
+      writeFileSync(
+        join(configDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: { accessToken: "claude-" + text, expiresAt: ${expires()} },
+        }),
+      );
+      finish();
+    },
+    cancel: () => {},
+    done,
+  };
+});
+`,
+  );
+  const v = await vault({
+    drivers: {
+      claude: loginChildDriver(
+        { file: process.execPath, args: ["--import", "tsx", entry] },
+        { log: () => {} },
+      ),
+    },
+  });
+  const { start } = await loginLink(v);
+  const login = start("claude-child");
+  await until(
+    () => existsSync(pipeLog) && readFileSync(pipeLog, "utf8").includes("url"),
+    "the child's events",
+  );
+  login.run.input("fake-child-code-1387");
+  await login.run.done;
+  assert.match(
+    readFileSync(login.tokenFile, "utf8"),
+    /claude-fake-child-code-1387/,
+  );
+  assert.deepEqual(readdirSync(join(v.dir, "login-tmp")), []);
+  const pipe = readFileSync(pipeLog, "utf8");
+  assert.match(pipe, /"type":"done","ok":true/);
+  assert.equal(pipe.includes("fake-child-code-1387"), false);
+}, 60_000);
+
 test("C4: the vault runs one login per account, at most four, each with a deadline", async () => {
   const { driver, cancelled } = claudeDriver();
   const v = await vault({ drivers: { claude: driver }, loginTimeoutMs: 500 });
@@ -851,4 +979,268 @@ test("a sealing vault starts locked: the edge refuses 503 vault locked, nothing 
   assert.equal((await modelRequest(gw.port, CLAUDE_PATH, token)).status, 200);
   for (const line of [...gw.lines, ...v.lines])
     assert.ok(!line.includes(CLAUDE_ACCESS), line);
+});
+
+// --- the stop (Task-1387 review C1, C2) -----------------------------------
+
+/** Synthetic; not a real credential. */
+const RENEWED_ACCESS = "fake-stop-renewed-access";
+
+/** A vault dir with a software recipient and `claude-a`'s record sealed. */
+async function sealedVaultDir(): Promise<{
+  dir: string;
+  claudeFile: string;
+  controlSocket: string;
+  privateKeyFile: string;
+}> {
+  const dir = mkdtempSync(join(root, "sealed-stop-"));
+  const claudeFile = writeAccountFile(dir, "claude", "claude-a");
+  const { publicKey, privateKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const privateKeyFile = join(dir, "software-key.pem");
+  writeFileSync(
+    privateKeyFile,
+    privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+  );
+  writeRecipients(dir, [
+    recipientOf(publicKey.export({ type: "spki", format: "pem" }) as string, {
+      privateKeyFile,
+    }),
+  ]);
+  assert.deepEqual(await sealExisting(dir), { sealed: 1 });
+  return {
+    dir,
+    claudeFile,
+    controlSocket: join(dir, "control.sock"),
+    privateKeyFile,
+  };
+}
+
+async function settledWithin(
+  promise: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
+  return Promise.race([
+    promise.then(
+      () => true,
+      () => true,
+    ),
+    delay(ms).then(() => false),
+  ]);
+}
+
+test("C1: a stop admits nothing from its first moment, and an open control connection does not hold it", async () => {
+  const { dir, controlSocket } = await sealedVaultDir();
+  let portCalls = 0;
+  let driverStarts = 0;
+  const v = await vault({
+    dir,
+    controlSocket,
+    renewCodex: async () => {
+      portCalls += 1;
+      return { ok: true };
+    },
+    drivers: {
+      claude: (configDir) => {
+        driverStarts += 1;
+        writeFileSync(
+          join(configDir, ".credentials.json"),
+          JSON.stringify({
+            claudeAiOauth: { accessToken: CLAUDE_ACCESS, expiresAt: expires() },
+          }),
+        );
+        return { input: () => {}, cancel: () => {}, done: Promise.resolve() };
+      },
+    },
+  });
+  open.splice(open.indexOf(v), 1);
+  assert.deepEqual(
+    await askVaultControl(controlSocket, { method: "unlock", pin: "unused" }),
+    { ok: true, opened: 1, unopened: 0 },
+  );
+  // A Codex account due for renewal, leased.
+  const codexFile = join(v.dir, "accounts", "codex-a", "auth.json");
+  mkdirSync(join(v.dir, "accounts", "codex-a"), { recursive: true });
+  writeFileSync(
+    codexFile,
+    JSON.stringify({
+      "openai-codex": {
+        type: "oauth",
+        access: CODEX_ACCESS,
+        accountId: CODEX_ACCOUNT,
+        expires: Date.now() + 60_000,
+      },
+    }),
+  );
+  const accounts = new Map<string, string>([["codex-a", codexFile]]);
+  const remote = createRemoteVault(
+    { host: "127.0.0.1", port: v.port, tls: linkTls() },
+    {
+      profiles: () =>
+        [...accounts].map(([id, tokenFile]) => ({
+          id,
+          provider: id.startsWith("codex") ? "openai-codex" : "claude",
+          name: id,
+          enabled: true,
+          tokenFile,
+        })),
+      liveLeases: () => ["codex-a"],
+      report: () => {},
+      log: () => {},
+    },
+  );
+  open.push(remote);
+  await until(remote.connected, "the vault link");
+  const start = (accountId: string) => {
+    const tokenFile = remote.newTokenFile("claude", accountId);
+    accounts.set(accountId, tokenFile);
+    remote.inputsChanged();
+    const run = remote.login(
+      { kind: "claude", accountId, tokenFile, commit: () => true },
+      { output() {}, url() {}, code() {} },
+    )!;
+    run.done.catch(() => {});
+    return { run, tokenFile };
+  };
+  // The vault takes both inputs before the stop.
+  await delay(100);
+  // An idle control connection, held open across the stop.
+  const held = net.connect(controlSocket);
+  held.on("error", () => {});
+  await new Promise((resolve) => held.once("connect", resolve));
+  const heldClosed = new Promise((resolve) => held.once("close", resolve));
+
+  const closing = v.close();
+  // Asked once the stop began: no login runs, no renewal reaches the port.
+  const late = start("claude-late");
+  await assert.rejects(late.run.done);
+  await v.renewDue();
+  assert.equal(await settledWithin(closing, 10_000), true, "the stop hung");
+  await closing;
+  await heldClosed;
+  assert.equal(driverStarts, 0);
+  assert.equal(portCalls, 0);
+  assert.equal(existsSync(late.tokenFile), false);
+});
+
+test("C2: a seal that keeps failing at stop rejects the stop, naming the account; one that recovers seals the new credential", async () => {
+  // The record cannot be written, or the plaintext, its account directory
+  // or the accounts directory cannot be read.
+  for (const [fault, recovers] of [
+    ["record", false],
+    ["record", true],
+    ["plaintext", false],
+    ["plaintext", true],
+    ["account", false],
+    ["account", true],
+    ["accounts", false],
+    ["accounts", true],
+  ] as const) {
+    const { dir, claudeFile, controlSocket, privateKeyFile } =
+      await sealedVaultDir();
+    const v = await vault({ dir, controlSocket });
+    open.splice(open.indexOf(v), 1);
+    assert.deepEqual(
+      await askVaultControl(controlSocket, { method: "unlock", pin: "unused" }),
+      { ok: true, opened: 1, unopened: 0 },
+    );
+    // A renewal wrote the file and its seal failed: the record is stale.
+    const renewed = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: RENEWED_ACCESS,
+        expiresAt: expires(),
+      },
+    });
+    writeFileSync(claudeFile, renewed);
+    const recordDir = join(dir, "sealed", "claude-a");
+    const faults: Record<typeof fault, [string, number, number]> = {
+      record: [recordDir, 0o500, 0o700],
+      plaintext: [claudeFile, 0o000, 0o600],
+      account: [join(dir, "accounts", "claude-a"), 0o000, 0o700],
+      accounts: [join(dir, "accounts"), 0o000, 0o700],
+    };
+    const [faulty, broken, healthy] = faults[fault];
+    chmodSync(faulty, broken);
+    try {
+      const closing = v.close();
+      if (recovers) {
+        await until(
+          () => v.lines.some((line) => line.includes("failed at stop")),
+          "a failed seal",
+        );
+        chmodSync(faulty, healthy);
+        await closing;
+        const record = parseSealedRecord(
+          JSON.parse(
+            readFileSync(join(recordDir, ".credentials.json.sealed"), "utf8"),
+          ),
+        );
+        assert.ok(record);
+        const opened = await openRecord(
+          record,
+          "claude-a",
+          ".credentials.json",
+          (_kid, epk) =>
+            softwareEcdh(readFileSync(privateKeyFile, "utf8"), epk),
+        );
+        assert.equal(opened?.toString("utf8"), renewed);
+      } else {
+        await assert.rejects(closing, {
+          message:
+            fault === "accounts"
+              ? "not sealed at stop: the accounts could not be read"
+              : "not sealed at stop: claude-a",
+        });
+        for (const line of v.lines)
+          assert.ok(!line.includes(RENEWED_ACCESS), line);
+      }
+    } finally {
+      chmodSync(faulty, healthy);
+    }
+  }
+});
+
+test("C3: a connection accepted before a stop neither attaches nor is served after it, and the stop needs no peer", async () => {
+  const v = await vault();
+  open.splice(open.indexOf(v), 1);
+  // Both accepted before the stop: one never starts TLS, one finishes the
+  // pinned handshake only after the stop began.
+  const raw = (): Promise<net.Socket> =>
+    new Promise((resolve) => {
+      const socket = net.connect(v.port, "127.0.0.1", () => resolve(socket));
+      socket.on("error", () => {});
+    });
+  const idle = await raw();
+  const late = await raw();
+  await delay(50);
+  const idleClosed = new Promise((resolve) => idle.once("close", resolve));
+  const closing = v.close();
+  const upgraded = tls.connect({
+    socket: late,
+    key: edgeId.keyPem,
+    cert: edgeId.certPem,
+    ca: vaultId.certPem,
+    checkServerIdentity: () => undefined,
+  });
+  let answered = 0;
+  upgraded.on("data", (chunk: Buffer) => (answered += chunk.length));
+  upgraded.on("error", () => {});
+  upgraded.once("secureConnect", () =>
+    upgraded.write(
+      encodeControlFrame({
+        type: "hello",
+        workerId: "late",
+        version: GATEWAY_VAULT_VERSION,
+      }),
+    ),
+  );
+  assert.equal(await settledWithin(closing, 10_000), true, "the stop hung");
+  await closing;
+  await idleClosed;
+  await new Promise((resolve) =>
+    upgraded.destroyed ? resolve(undefined) : upgraded.once("close", resolve),
+  );
+  assert.equal(answered, 0, "the vault served a connection after its stop");
+  assert.ok(!v.lines.includes("edge connected"));
 });

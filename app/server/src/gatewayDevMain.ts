@@ -8,7 +8,7 @@
  *     [--client-port <n>] [--enroll-port <n>] [--bind-host <address>]
  *     [--host <name>]... [--vault-host <address> [--vault-port <n>]]
  *
- * With `--vault-host`, the vault runs in its own process (`vaultDevMain.ts`,
+ * With `--vault-host`, the vault runs in its own process (`gateway/vaultMain.ts`,
  * port 8794 unless `--vault-port`), reached over the pinned link that
  * `gateway/adminMain.ts vault-pair` set up in the state directory; this edge
  * then holds no token file and runs no login itself.

@@ -167,14 +167,26 @@ const serverBundle = await bundle(join(repoRoot, "app/server/src/index.ts"), {
   define: SERVER_BUNDLE_DEFINE,
   plugins,
 });
-// The standalone gateway and its Codex renewal child, each its own entry
-// (docs/deployment.md#bun-package).
+// The standalone gateway, the vault, and their children: Codex renewal and
+// the two logins, each its own entry (docs/deployment.md#bun-package).
 const gatewayBundle = await bundle(
   join(repoRoot, "app/server/src/gateway/main.ts"),
   { define: SERVER_BUNDLE_DEFINE, plugins },
 );
+const vaultBundle = await bundle(
+  join(repoRoot, "app/server/src/gateway/vaultMain.ts"),
+  { define: SERVER_BUNDLE_DEFINE, plugins },
+);
 const codexRenewBundle = await bundle(
   join(repoRoot, "app/server/src/codexRenewMain.ts"),
+  { define: SERVER_BUNDLE_DEFINE, plugins },
+);
+const claudeLoginBundle = await bundle(
+  join(repoRoot, "app/server/src/claudeLoginMain.ts"),
+  { define: SERVER_BUNDLE_DEFINE, plugins },
+);
+const codexLoginBundle = await bundle(
+  join(repoRoot, "app/server/src/codexLoginMain.ts"),
   { define: SERVER_BUNDLE_DEFINE, plugins },
 );
 const workerBundle = await bundle(xhrWorkerSource, { plugins });
@@ -192,7 +204,10 @@ mkdirSync(join(outputDir, "native"), { recursive: true });
 copy(process.execPath, "personal-assistant-server", 0o755);
 await write(join(outputDir, "server.js"), serverBundle);
 await write(join(outputDir, "gateway.js"), gatewayBundle);
+await write(join(outputDir, "vault.js"), vaultBundle);
 await write(join(outputDir, "codex-renew.js"), codexRenewBundle);
+await write(join(outputDir, "claude-login.js"), claudeLoginBundle);
+await write(join(outputDir, "codex-login.js"), codexLoginBundle);
 await write(
   join(outputDir, "gateway-admin.js"),
   await bundle(join(repoRoot, "app/server/src/gateway/adminMain.ts"), {
@@ -232,6 +247,9 @@ copy(
   "speech/kokoroSidecar.py",
 );
 copy(join(repoRoot, "config/prompts"), "config/prompts");
+// The YubiKey helper beside vault.js and gateway-admin.js, which resolve it
+// next to themselves (gateway/pivChild.ts).
+copy(join(repoRoot, "app/server/src/gateway/pivHelper.py"), "pivHelper.py");
 copy(join(repoRoot, "app/server/src/db/migrations"), "migrations");
 copy(
   join(repoRoot, "app/server/src/db/migrations.lock.json"),

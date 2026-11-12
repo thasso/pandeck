@@ -6,9 +6,9 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
 
 - `gateway/` imports only `node:` modules, itself and `GATEWAY_ALLOWED` in
   `workerBoundary.test.ts`, never a package or other server module; that list
-  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts`, the two dev
-  entries and `providerErrors.ts` (the marker) import it; new wiring updates
-  that pin.
+  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts`,
+  `gatewayDevMain.ts` and `providerErrors.ts` (the marker) import it; new wiring
+  updates that pin.
 - Only a control or client connection grants a lease, and a grant binds provider
   and, for a login, token file from the registry, never from the request.
 - State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes
@@ -31,8 +31,9 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
 - A vault with recipients keeps credentials on disk only as sealed records
   (`sealedStore.ts`); plaintext lives only under its tmpfs `accounts/`, written
   by unlock. Each writer seals in its lane; the sweep never overwrites a record
-  whose plaintext is missing. Only `codexChild.ts` and `pivChild.ts` spawn; the
-  PIN goes only from the terminal over the control socket to the helper's stdin.
+  whose plaintext is missing. Only `codexChild.ts`, `loginChild.ts` and
+  `pivChild.ts` spawn; the PIN goes only from the terminal over the control
+  socket to the helper's stdin.
 - A login hold ends only on its owning boot's release, the observed exit of its
   owner and registered writer (`processState`; uncertain is alive), or the
   operator's force release; never on elapsed time, a lost connection, a restart
