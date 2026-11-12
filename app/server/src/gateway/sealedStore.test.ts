@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -786,4 +787,27 @@ test("C5: a stale first recipient falls through to a usable second (software and
     readFileSync(tokenPath(pivDir, "acc-1"), "utf8"),
     claudeJson(TOKEN),
   );
+});
+
+test("an unreadable account directory is not skipped: the sweep logs it and reseal refuses", async () => {
+  const dir = stateDir();
+  const recipient = softwareRecipient(dir, "soft");
+  writeRecipients(dir, [recipient]);
+  const lines: string[] = [];
+  const store = await unlockedStore(dir, lines);
+  writeToken(dir, "acc-dir", TOKEN);
+  const accountDir = join(dir, "accounts", "acc-dir");
+  chmodSync(accountDir, 0o000);
+  try {
+    store.sweep();
+    assert.ok(
+      lines.includes("sealing account acc-dir failed; the sweep retries"),
+      lines.join("\n"),
+    );
+    assert.throws(() => store.reseal(), /could not be read/);
+  } finally {
+    chmodSync(accountDir, 0o700);
+  }
+  store.sweep();
+  assert.equal(await opensWith(dir, "acc-dir", recipient), claudeJson(TOKEN));
 });

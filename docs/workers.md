@@ -2010,9 +2010,10 @@ never falls back to plaintext on disk.
   connection (one still in its TLS handshake included) and the control socket's,
   and waits until each login's child group has ended and its directory is gone
   and each renewal attempt has left its lane. Then it seals every file that
-  still differs from its record, trying three times; a file that is there but
-  cannot be read counts as unsealed, one that is gone is left alone. It exits 0
-  only when every record matches its file. Otherwise it exits 1 with
+  still differs from its record, trying three times; a file, its account
+  directory or `accounts/` that is there but cannot be read counts as unsealed,
+  a file that is not there is left alone. It exits 0 only when every record
+  matches its file. Otherwise it exits 1 with
   `stop failed, not sealed at stop: <names>`, the record directories' names (an
   account id, or `int-<hash>` for a user's integration credential, both checked
   against the id pattern; never a value). This is a limitation, not a guarantee:
@@ -2024,7 +2025,8 @@ never falls back to plaintext on disk.
   `--pem <file> --slot <slot>` or `--pem <file> --private-key <file>`;
   `vault-recipient list`; `vault-recipient remove <kid>` (never the last).
   `vault-reseal` re-encrypts every token file to the current recipients through
-  the control socket. Replacing a key: add the new one, reseal, remove the old
+  the control socket, and fails, naming the accounts in the log, when a token
+  file cannot be read. Replacing a key: add the new one, reseal, remove the old
   one, reseal. `vault-seal-existing`, once and with the vault stopped, seals
   today's plaintext files, then overwrites and removes them.
 

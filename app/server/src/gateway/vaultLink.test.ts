@@ -1125,12 +1125,17 @@ test("C1: a stop admits nothing from its first moment, and an open control conne
 });
 
 test("C2: a seal that keeps failing at stop rejects the stop, naming the account; one that recovers seals the new credential", async () => {
-  // The record cannot be written, or the plaintext cannot be read.
+  // The record cannot be written, or the plaintext, its account directory
+  // or the accounts directory cannot be read.
   for (const [fault, recovers] of [
     ["record", false],
     ["record", true],
     ["plaintext", false],
     ["plaintext", true],
+    ["account", false],
+    ["account", true],
+    ["accounts", false],
+    ["accounts", true],
   ] as const) {
     const { dir, claudeFile, controlSocket, privateKeyFile } =
       await sealedVaultDir();
@@ -1149,10 +1154,13 @@ test("C2: a seal that keeps failing at stop rejects the stop, naming the account
     });
     writeFileSync(claudeFile, renewed);
     const recordDir = join(dir, "sealed", "claude-a");
-    const [faulty, broken, healthy] =
-      fault === "record"
-        ? [recordDir, 0o500, 0o700]
-        : [claudeFile, 0o000, 0o600];
+    const faults: Record<typeof fault, [string, number, number]> = {
+      record: [recordDir, 0o500, 0o700],
+      plaintext: [claudeFile, 0o000, 0o600],
+      account: [join(dir, "accounts", "claude-a"), 0o000, 0o700],
+      accounts: [join(dir, "accounts"), 0o000, 0o700],
+    };
+    const [faulty, broken, healthy] = faults[fault];
     chmodSync(faulty, broken);
     try {
       const closing = v.close();
@@ -1179,7 +1187,10 @@ test("C2: a seal that keeps failing at stop rejects the stop, naming the account
         assert.equal(opened?.toString("utf8"), renewed);
       } else {
         await assert.rejects(closing, {
-          message: "not sealed at stop: claude-a",
+          message:
+            fault === "accounts"
+              ? "not sealed at stop: the accounts could not be read"
+              : "not sealed at stop: claude-a",
         });
         for (const line of v.lines)
           assert.ok(!line.includes(RENEWED_ACCESS), line);

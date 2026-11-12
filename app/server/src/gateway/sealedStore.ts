@@ -229,6 +229,25 @@ function tokenFilesUnder(accountsDir: string): [string, string][] {
   );
 }
 
+/**
+ * Every `[accountId, file]` that may hold a token file, for the strict
+ * `seal`, which tells a missing file from an unreadable one. Only a missing
+ * `accountsDir` is empty; any other listing error answers undefined.
+ */
+function candidatesUnder(accountsDir: string): [string, string][] | undefined {
+  let names: string[];
+  try {
+    names = readdirSync(accountsDir);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? [] : undefined;
+  }
+  return names
+    .filter((accountId) => ID_RE.test(accountId))
+    .flatMap((accountId) =>
+      [...SEALED_FILES].map((file): [string, string] => [accountId, file]),
+    );
+}
+
 export type UnlockAnswer =
   | { ok: true; opened: number; unopened: number }
   | { wrong_pin: true; triesLeft: number }
@@ -319,9 +338,9 @@ export function createSealedStore(
     try {
       plaintext = readFileSync(path);
     } catch (err) {
-      return (err as NodeJS.ErrnoException).code === "ENOENT"
-        ? "absent"
-        : "unreadable";
+      // No such file, or no directory where one would be: nothing there.
+      const { code } = err as NodeJS.ErrnoException;
+      return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
     }
     const hash = sha256(plaintext);
     if (!force && known.get(path) === hash) return "unchanged";
@@ -481,22 +500,28 @@ export function createSealedStore(
 
   const sweep = (): void => {
     if (locked) return;
-    for (const [accountId, file] of tokenFilesUnder(accountsDir))
+    const candidates = candidatesUnder(accountsDir);
+    if (!candidates) log("sweep: the accounts directory could not be read");
+    for (const [accountId, file] of candidates ?? [])
       written(join(accountsDir, accountId, file));
   };
 
   const flush = async (): Promise<string[]> => {
     if (locked) return [];
-    let pending: [string, string][];
-    try {
-      pending = tokenFilesUnder(accountsDir);
-    } catch {
-      throw new Error("the accounts directory could not be read");
-    }
+    let pending: [string, string][] | undefined;
     for (let attempt = 1; ; attempt++) {
-      // Done: sealed, already matching, or gone on purpose. Anything else,
-      // a file that cannot be read or a record that cannot be written, tries
-      // again.
+      // The listing too tries again: only a missing directory is empty.
+      pending ??= candidatesUnder(accountsDir);
+      if (!pending) {
+        log(`listing the accounts failed at stop (try ${attempt})`);
+        if (attempt >= FLUSH_ATTEMPTS)
+          throw new Error("the accounts directory could not be read");
+        await new Promise((done) => setTimeout(done, FLUSH_RETRY_MS));
+        continue;
+      }
+      // Done: sealed, already matching, or not there. Anything else, a file
+      // or directory that cannot be read or a record that cannot be written,
+      // tries again.
       pending = pending.filter(([accountId, file]) => {
         let result: ReturnType<typeof seal>;
         try {
@@ -533,10 +558,22 @@ export function createSealedStore(
       const next = readRecipients(stateDir);
       if (next.length === 0) throw new Error("The vault has no recipients.");
       recipients = next;
+      const candidates = candidatesUnder(accountsDir);
+      if (!candidates)
+        throw new Error("The accounts directory could not be read.");
       let count = 0;
-      for (const [accountId, file] of tokenFilesUnder(accountsDir))
-        if (seal(accountId, file, true) === "sealed") count++;
+      const unread = new Set<string>();
+      for (const [accountId, file] of candidates) {
+        const result = seal(accountId, file, true);
+        if (result === "sealed") count++;
+        else if (result === "unreadable") unread.add(accountId);
+      }
       log(`resealed ${count} records to ${recipients.length} recipients`);
+      // A file left on the old recipients would be lost once they go.
+      if (unread.size > 0) {
+        log(`reseal: ${[...unread].sort().join(", ")} could not be read`);
+        throw new Error("Some token files could not be read.");
+      }
       return count;
     },
     loginTempDir: join(accountsDir, ".login-tmp"),
