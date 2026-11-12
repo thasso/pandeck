@@ -28,13 +28,9 @@ const home = mkdtempSync(join(tmpdir(), "gateway-logins-home-"));
 process.env.HOME = home;
 
 const profiles = await import("./credentialProfiles.ts");
-const { attachClaudeLoginSocket } = await import("./claudeLoginTerminal.ts");
-const {
-  createRemoteAccount,
-  deleteRemoteAccount,
-  remoteLoginsActive,
-  startRemoteCodexLogin,
-} = await import("./remoteLogins.ts");
+const { attachAccountLoginSocket } = await import("./accountLoginSocket.ts");
+const { createRemoteAccount, deleteRemoteAccount, remoteLoginsActive } =
+  await import("./remoteLogins.ts");
 const {
   homeTranscriptImportStartupRefusal,
   importDefaultClaudeHomeTranscripts,
@@ -93,12 +89,14 @@ const fakeClaude: LoginDriver = (configDir, events) => {
   };
 };
 
-/** pi's fake device-code login: URL and code, then a token once approved. */
+/** pi's fake device-code login: URL and code, then a token once approved; cancel rejects it, as pi's abort does. */
 let approveCodex!: () => void;
 const fakeCodex: LoginDriver = (configDir, events) => {
   events.url("https://auth.example/device");
   events.code("ABCD-1234");
-  const done = new Promise<void>((resolve) => {
+  let abort!: (err: Error) => void;
+  const done = new Promise<void>((resolve, reject) => {
+    abort = reject;
     approveCodex = () => {
       writeFileSync(
         join(configDir, "auth.json"),
@@ -114,10 +112,14 @@ const fakeCodex: LoginDriver = (configDir, events) => {
       resolve();
     };
   });
-  return { input: () => {}, cancel: () => {}, done };
+  return {
+    input: () => {},
+    cancel: () => abort(new Error("This operation was aborted")),
+    done,
+  };
 };
 
-/** A browser on the login terminal's socket. */
+/** A browser on the login dialog's socket. */
 function viewer(profileId: string) {
   const socket = Object.assign(new EventEmitter(), {
     readyState: 1,
@@ -129,10 +131,10 @@ function viewer(profileId: string) {
       socket.readyState = 3;
     },
   });
-  attachClaudeLoginSocket(
+  attachAccountLoginSocket(
     socket as unknown as WebSocket,
     {
-      url: `/ws/claude-login?profileId=${profileId}`,
+      url: `/ws/account-login?profileId=${profileId}&intent=start`,
       headers: { host: "localhost" },
     } as IncomingMessage,
   );
@@ -146,7 +148,14 @@ function viewer(profileId: string) {
     socket.messages.filter((m) => m.type === "status").at(-1)?.status;
   const type = (message: object) =>
     socket.emit("message", Buffer.from(JSON.stringify(message)));
-  return { output, status, type };
+  const device = () =>
+    socket.messages
+      .map((m) =>
+        m.type === "device" || m.type === "snapshot" ? m.device : undefined,
+      )
+      .filter((d) => d !== undefined)
+      .at(-1) as { verificationUri: string; userCode: string } | undefined;
+  return { output, status, type, device };
 }
 
 test("a client-mode server adds and logs in accounts through the gateway", async () => {
@@ -301,20 +310,22 @@ test("a client-mode server adds and logs in accounts through the gateway", async
     "Bearer claude-one",
   );
 
-  // Codex: the device code shows on the account, as the server's own login.
+  // Codex: the login dialog joins the login adding the account started and
+  // shows its device code; the account summary never carries it.
   const codexId = await createRemoteAccount("openai-codex", "Work Codex");
+  const codexLogin = viewer(codexId);
   await vi.waitFor(() =>
-    assert.deepEqual(
-      profiles.credentialProfileSummaryById(codexId)?.setup && {
-        uri: profiles.credentialProfileSummaryById(codexId)!.setup!
-          .verificationUri,
-        code: profiles.credentialProfileSummaryById(codexId)!.setup!.userCode,
-      },
-      { uri: "https://auth.example/device", code: "ABCD-1234" },
-    ),
+    assert.deepEqual(codexLogin.device(), {
+      verificationUri: "https://auth.example/device",
+      userCode: "ABCD-1234",
+    }),
   );
-  await startRemoteCodexLogin(codexId); // attaches to the running one
+  assert.doesNotMatch(
+    JSON.stringify(profiles.credentialProfileSummaryById(codexId)),
+    /ABCD-1234|auth\.example/,
+  );
   approveCodex();
+  await vi.waitFor(() => assert.equal(codexLogin.status(), "ready"));
   await vi.waitFor(() => assert.equal(status(codexId), "ready"));
   const access = await link.serverAccess(codexId);
   assert.equal(
@@ -325,6 +336,26 @@ test("a client-mode server adds and logs in accounts through the gateway", async
     upstreams.chatgpt.at(-1)!.headers.authorization,
     "Bearer codex-new-access",
   );
+
+  // AC4: Cancel on a Codex login reaches the gateway's driver; the dialog
+  // ends cancelled and the account keeps its credential, not connecting.
+  const relogin = viewer(codexId);
+  await vi.waitFor(() => assert.equal(relogin.device()?.userCode, "ABCD-1234"));
+  assert.equal(status(codexId), "connecting");
+  relogin.type({ type: "cancel" });
+  await vi.waitFor(() => assert.equal(relogin.status(), "cancelled"));
+  await vi.waitFor(() => assert.equal(status(codexId), "ready"));
+
+  // A cancelled first Codex login removes its new account from the mirror.
+  const shortCodex = await createRemoteAccount("openai-codex", "Short Codex");
+  const shortLogin = viewer(shortCodex);
+  await vi.waitFor(() => assert.ok(shortLogin.device()));
+  shortLogin.type({ type: "cancel" });
+  await vi.waitFor(() => assert.equal(shortLogin.status(), "cancelled"));
+  await vi.waitFor(() =>
+    assert.equal(profiles.credentialProfileById(shortCodex), undefined),
+  );
+  assert.deepEqual(tempDirs(), []);
 
   // Deleting an account removes it on the gateway, with its token file.
   await deleteRemoteAccount(codexId);
