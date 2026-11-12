@@ -24,6 +24,7 @@ import { DATA_DIR } from "../config.ts";
 import { ClientRegistry } from "../gateway/clientRegistry.ts";
 import { edgeTlsFor } from "../gateway/x509.ts";
 import type { GatewayWebConfig } from "./config.ts";
+import type { OidcTestOptions } from "./oidc.ts";
 import { startGatewayWeb, type RunningGatewayWeb } from "./server.ts";
 
 const CLIENT_ID = "gateway-ui-test-client";
@@ -54,6 +55,8 @@ interface KeySet {
   status: number;
   /** Bytes of padding, to exceed the gateway's size cap. */
   padding: number;
+  /** How long it waits before answering. */
+  delayMs: number;
 }
 
 interface Authorization {
@@ -99,7 +102,7 @@ async function startFakeIssuer(): Promise<FakeIssuer> {
     k1: { ...publicKey.export({ format: "jwk" }), kid: "k1" },
     k2: { ...second.publicKey.export({ format: "jwk" }), kid: "k2" },
   };
-  const keySet: KeySet = { kids: ["k1"], status: 200, padding: 0 };
+  const keySet: KeySet = { kids: ["k1"], status: 200, padding: 0, delayMs: 0 };
   let keyRequests = 0;
   const pending = new Map<string, Authorization>();
   const secrets = new Set<string>([CLIENT_PW]);
@@ -135,10 +138,13 @@ async function startFakeIssuer(): Promise<FakeIssuer> {
       });
     if (url.pathname === "/jwks") {
       keyRequests++;
-      return reply(keySet.status, {
-        keys: keySet.kids.map((kid) => jwks[kid]),
-        ...(keySet.padding ? { padding: "x".repeat(keySet.padding) } : {}),
-      });
+      const { status, kids, padding, delayMs } = keySet;
+      const body = {
+        keys: kids.map((kid) => jwks[kid]),
+        ...(padding ? { padding: "x".repeat(padding) } : {}),
+      };
+      setTimeout(() => reply(status, body), delayMs);
+      return;
     }
     if (url.pathname !== "/token" || req.method !== "POST")
       return reply(404, { error: "not_found" });
@@ -292,6 +298,10 @@ interface Gateway {
 
 async function startUi(
   allow: Partial<GatewayWebConfig["allow"]> = {},
+  provider: {
+    issuer?: string;
+    oidcTestOptions?: OidcTestOptions;
+  } = {},
 ): Promise<Gateway> {
   mkdirSync(DATA_DIR, { recursive: true });
   const stateDir = mkdtempSync(join(DATA_DIR, "gateway-web-"));
@@ -304,7 +314,7 @@ async function startUi(
       keyPem: tls.serverKeyPem,
       distDir,
       oidc: {
-        issuer: issuer.url,
+        issuer: provider.issuer ?? issuer.url,
         clientId: CLIENT_ID,
         clientSecret: CLIENT_PW,
       },
@@ -321,7 +331,9 @@ async function startUi(
     },
     log: (line) => logs.push(line),
     now: () => clock,
-    oidcTestOptions: { allowInsecureRequests: true },
+    oidcTestOptions: provider.oidcTestOptions ?? {
+      allowInsecureRequests: true,
+    },
   });
   open.push(web);
   return { web, registry };
@@ -339,6 +351,14 @@ interface Flow {
 
 /** One browser sign-in; answers the callback. */
 async function signIn(gateway: Gateway, flow: Flow = {}): Promise<Answer> {
+  return (await startSignIn(gateway, flow))();
+}
+
+/** A browser sign-in up to the provider's answer; the callback is returned. */
+async function startSignIn(
+  gateway: Gateway,
+  flow: Flow = {},
+): Promise<() => Promise<Answer>> {
   const login = await request(gateway.web, "/auth/login");
   assert.equal(login.status, 302);
   const provider = new URL(login.headers.location!);
@@ -351,14 +371,16 @@ async function signIn(gateway: Gateway, flow: Flow = {}): Promise<Answer> {
     flow.signinCookie === null
       ? undefined
       : `__Host-pgw_signin=${flow.signinCookie ?? signin}`;
-  const answer = await request(
-    gateway.web,
-    `/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-    cookie ? { headers: { cookie } } : {},
-  );
-  const session = cookieValue(answer, "__Host-pgw_session");
-  if (session) issuer.secrets.add(session);
-  return answer;
+  return async () => {
+    const answer = await request(
+      gateway.web,
+      `/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+      cookie ? { headers: { cookie } } : {},
+    );
+    const session = cookieValue(answer, "__Host-pgw_session");
+    if (session) issuer.secrets.add(session);
+    return answer;
+  };
 }
 
 function sessionOf(answer: Answer): string {
@@ -415,7 +437,12 @@ beforeAll(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  issuer.keySet.kids = ["k1"];
+  Object.assign(issuer.keySet, {
+    kids: ["k1"],
+    status: 200,
+    padding: 0,
+    delayMs: 0,
+  });
   while (open.length) await open.pop()!.close();
   clock = Date.now();
   logs.length = 0;
@@ -736,6 +763,129 @@ test("AC14: an unreadable key set fails the sign-in with no session or user", as
     issuer.keySet.status = 200;
     issuer.keySet.padding = 0;
   }
+});
+
+test("AC14: concurrent callbacks with an unknown kid share one refetch", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: clock });
+  const gateway = await startUi();
+  assert.equal((await signIn(gateway)).headers.location, "/");
+  const fetched = issuer.keyRequests();
+  vi.setSystemTime((clock += 61_000));
+  const callbacks = await Promise.all(
+    Array.from({ length: 8 }, () =>
+      startSignIn(gateway, { testCase: { kid: "k2" } }),
+    ),
+  );
+  issuer.keySet.delayMs = 500;
+  logs.length = 0;
+  const answers = await Promise.all(callbacks.map((callback) => callback()));
+  for (const answer of answers) assertRefused(answer, "failed");
+  assert.deepEqual(logs, Array(8).fill("ui sign-in: failed (signature)"));
+  assert.equal(issuer.keyRequests(), fetched + 1, "exactly one refetch");
+});
+
+test("AC14: callbacks during a failing key fetch all fail as keys after one fetch; the failure starts the wait", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: clock });
+  const gateway = await startUi();
+  const callbacks = await Promise.all(
+    Array.from({ length: 8 }, () => startSignIn(gateway)),
+  );
+  Object.assign(issuer.keySet, { status: 500, delayMs: 500 });
+  const before = issuer.keyRequests();
+  logs.length = 0;
+  const answers = await Promise.all(callbacks.map((callback) => callback()));
+  for (const answer of answers) assertRefused(answer, "failed");
+  assert.deepEqual(logs, Array(8).fill("ui sign-in: failed (keys)"));
+  const fetched = issuer.keyRequests();
+  assert.equal(fetched, before + 1, "exactly one fetch");
+  assert.equal(gateway.registry.users().length, 0);
+  // Within the minute after the failed fetch: no fetch, fails as keys.
+  Object.assign(issuer.keySet, { status: 200, delayMs: 0 });
+  assertRefused(await signIn(gateway), "failed");
+  assert.equal(logs.at(-1), "ui sign-in: failed (keys)");
+  assert.equal(issuer.keyRequests(), fetched);
+  vi.setSystemTime((clock += 61_000));
+  assert.equal((await signIn(gateway)).headers.location, "/");
+  assert.equal(issuer.keyRequests(), fetched + 1);
+});
+
+/** A provider served by a fetch stub, with production (https-only) options. */
+function stubProvider(document: Record<string, unknown>): OidcTestOptions {
+  return {
+    fetch: async (url) => {
+      if (url === "https://issuer.test/.well-known/openid-configuration")
+        return new Response(JSON.stringify(document), {
+          headers: { "content-type": "application/json" },
+        });
+      return new Response("{}", { status: 404 });
+    },
+  };
+}
+
+test("C1: discovery refuses an endpoint that is not https, or another issuer", async () => {
+  const usable = {
+    issuer: "https://issuer.test",
+    authorization_endpoint: "https://issuer.test/authorize",
+    token_endpoint: "https://issuer.test/token",
+    jwks_uri: "https://issuer.test/jwks",
+  };
+  const ok = await startUi(
+    {},
+    { issuer: "https://issuer.test", oidcTestOptions: stubProvider(usable) },
+  );
+  const login = await request(ok.web, "/auth/login");
+  assert.equal(login.status, 302);
+  assert.match(login.headers.location!, /^https:\/\/issuer\.test\/authorize\?/);
+  for (const [name, document] of [
+    [
+      "http authorization",
+      { ...usable, authorization_endpoint: "http://issuer.test/authorize" },
+    ],
+    [
+      "script authorization",
+      { ...usable, authorization_endpoint: "javascript:alert(1)" },
+    ],
+    [
+      "ftp authorization",
+      { ...usable, authorization_endpoint: "ftp://issuer.test/authorize" },
+    ],
+    ["no authorization", { ...usable, authorization_endpoint: undefined }],
+    ["http token", { ...usable, token_endpoint: "http://issuer.test/token" }],
+    ["http keys", { ...usable, jwks_uri: "http://issuer.test/jwks" }],
+    ["issuer with a slash", { ...usable, issuer: "https://issuer.test/" }],
+  ] as const) {
+    logs.length = 0;
+    const gateway = await startUi(
+      {},
+      {
+        issuer: "https://issuer.test",
+        oidcTestOptions: stubProvider(document),
+      },
+    );
+    const answer = await request(gateway.web, "/auth/login");
+    assert.equal(answer.status, 303, name);
+    assert.equal(answer.headers.location, "/?signin=failed", name);
+    assert.equal(cookieValue(answer, "__Host-pgw_signin"), "", name);
+    assert.deepEqual(logs.slice(-1), ["ui sign-in: failed (discovery)"], name);
+  }
+  // Tests may use http, never another scheme.
+  const script = await startUi(
+    {},
+    {
+      issuer: "https://issuer.test",
+      oidcTestOptions: {
+        ...stubProvider({
+          ...usable,
+          authorization_endpoint: "javascript:alert(1)",
+        }),
+        allowInsecureRequests: true,
+      },
+    },
+  );
+  assert.equal(
+    (await request(script.web, "/auth/login")).headers.location,
+    "/?signin=failed",
+  );
 });
 
 test("AC5: a claim binds an existing user once, only on an admitted verified sign-in", async () => {

@@ -1928,11 +1928,12 @@ out, and reaches only its own origin with its session cookie.
   `port` defaults to 443 (a unit then needs only
   `AmbientCapabilities=CAP_NET_BIND_SERVICE`); `distDir` defaults to the
   checkout's `app/web/dist-gateway`. `publicOrigin` must be
-  `https://host[:port]` with no path, the issuer `https://`; the cert and key
-  are the deployment's browser-trusted pair. The provider's client needs the
-  redirect URI `<publicOrigin>/auth/callback`. A Google Workspace deployment,
-  for example, uses `https://accounts.google.com` as the issuer, its domain in
-  `emailDomains` and the `hd` claim.
+  `https://host[:port]` with no path, the issuer `https://` and exactly the
+  provider's issuer string; the cert and key are the deployment's
+  browser-trusted pair. The provider's client needs the redirect URI
+  `<publicOrigin>/auth/callback`. A Google Workspace deployment, for example,
+  uses `https://accounts.google.com` as the issuer, its domain in `emailDomains`
+  and the `hd` claim.
 
 - **Allow rule.** Admitted only when `email_verified` is the boolean `true`,
   `email` is a string whose lowercased address is in `emails` or whose domain is
@@ -1945,15 +1946,19 @@ out, and reaches only its own origin with its session cookie.
   hour, every provider call bounded at 10 s. The library checks state, `iss`,
   `aud`, `azp`, `exp` (30 s tolerance), the presence and type of `iat` and
   `sub`, the nonce and that an ID token came; the gateway adds the ID token's
-  signature, an `iat` more than 30 s ahead and the allow rule above. The token
-  comes only from the token endpoint that discovery of the configured `https`
-  issuer names, and its signature is checked against the discovered `https`
-  `jwks_uri` (`validateApplicationLevelSignature`). The key set is read within
-  10 s and 64 KiB and cached for 5 minutes; a `kid` it does not hold refetches
-  it at most once a minute, then the sign-in fails, so a forged `kid` cannot
-  make the gateway hammer the issuer. An unreadable key set fails the sign-in as
-  `keys`, a bad signature as `signature`. `allowInsecureRequests` is reachable
-  only through `startGatewayWeb`'s `oidcTestOptions`, never from the file.
+  signature, an `iat` more than 30 s ahead and the allow rule above. Discovery
+  must name exactly the configured `issuer` (the same string, no added slash),
+  and the authorization, token and key-set endpoints it names must be `https`;
+  anything else fails the sign-in as `discovery` before any redirect. The
+  signature is checked against the discovered `jwks_uri`
+  (`validateApplicationLevelSignature`). The gateway owns the key-set fetch:
+  within 10 s and 64 KiB, one fetch in flight per issuer that every waiting
+  callback shares, and at most one fetch a minute, whether the last one
+  succeeded or failed. Within that minute the last good set answers; without one
+  the sign-in fails as `keys`. A `kid` the set lacks therefore costs at most one
+  fetch a minute however many callbacks carry it, and then fails as `signature`.
+  `oidcTestOptions` (HTTP endpoints, a stub fetch) is reachable only through
+  `startGatewayWeb`, never from the file.
 - **Users.** Keyed by issuer plus subject; the email (lowercased) and the label
   are attributes. The first admitted sign-in of an identity creates a user with
   an opaque id (`u_` and 16 random characters, label = email); a later one

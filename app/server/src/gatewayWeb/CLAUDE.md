@@ -15,9 +15,9 @@ Contract: `docs/workers.md` "The gateway's sign-in and UI".
   token, cookie or email in a log line, a refusal body or a redirect back to the
   gateway; only the provider authorization redirect carries state, nonce and the
   PKCE challenge. Provider error text is never echoed.
-- ID tokens come only from the token endpoint discovered from the configured
-  `https` issuer, and their signature is checked against its `jwks_uri` with a
-  bounded fetch and the library's rate-limited refetch; `allowInsecureRequests`
-  only through `oidcTestOptions`.
+- Discovery names the configured issuer exactly, and every endpoint used is
+  `https`. ID tokens come only from its token endpoint; their signature is
+  checked against its `jwks_uri` through our single-flight key-set fetch, at
+  most once a minute per issuer. `oidcTestOptions` comes only from tests.
 - Static files come only from the tree enumerated at start; no request path
   reaches the filesystem.

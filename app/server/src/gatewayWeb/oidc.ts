@@ -7,11 +7,15 @@
  * `iat` more than 30 s ahead. `admittedEmail` (`config.ts`) owns
  * `email_verified` and `email`.
  *
- * The key set is fetched within 10 s and 64 KiB and cached by the library
- * for 5 minutes; a `kid` it does not hold refetches it at most once a minute,
- * so a forged `kid` cannot make the gateway hammer the issuer. Tokens come
- * only from the discovered `https` token endpoint. `allowInsecureRequests`
- * comes only from `OidcTestOptions`, never from the config file.
+ * Discovery must name the configured issuer exactly, and every endpoint the
+ * flow uses (authorization, token, key set) must be `https`. The key set is
+ * read within 10 s and 64 KiB through one fetch at a time per issuer, and the
+ * network is asked at most once a minute: a waiting callback shares the fetch
+ * in flight, and within the minute after a fetch, success or failure, the
+ * last good set answers (or the sign-in fails as `keys` when there is none).
+ * So no number of forged `kid`s can make the gateway hammer the issuer.
+ * `OidcTestOptions` (HTTP endpoints, a fetch) come only from tests, never
+ * from the config file.
  */
 import * as oauth from "oauth4webapi";
 
@@ -23,11 +27,17 @@ const DISCOVERY_TTL_MS = 60 * 60_000;
 const IAT_TOLERANCE_S = 30;
 /** The largest key set the gateway reads. */
 const MAX_JWKS_BYTES = 64 * 1024;
+/** The least time between two fetches of the issuer's key set. */
+const KEYS_REFETCH_MS = 60_000;
+
+type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
 /** Only tests start the server with these. */
 export interface OidcTestOptions {
-  /** Lets discovery and the token call use `http://`. */
+  /** Lets the provider's endpoints use `http://`. */
   allowInsecureRequests?: boolean;
+  /** Answers every provider request instead of the network. */
+  fetch?: Fetch;
 }
 
 /** Where a failed sign-in failed; a fixed word for the log line. */
@@ -43,18 +53,33 @@ export class OidcFailure extends Error {
 /** The issuer's key set could not be read: unreachable, refused or too big. */
 class KeysUnavailable extends Error {}
 
-/** The key set's fetch, its body bounded; every failure is `KeysUnavailable`. */
-async function boundedKeysFetch(
+/** The library's request as `fetch` options; absent fields stay absent. */
+function requestInit(
+  init: oauth.CustomFetchOptions<string, unknown>,
+): RequestInit {
+  return {
+    method: init.method,
+    headers: init.headers,
+    redirect: init.redirect,
+    ...(init.body === undefined ? {} : { body: init.body as BodyInit }),
+    ...(init.signal ? { signal: init.signal } : {}),
+  };
+}
+
+interface KeySet {
+  /** The JSON text. */
+  body: string;
+  type: string;
+}
+
+/** One read of the key set, its body bounded; any failure is `KeysUnavailable`. */
+async function readKeySet(
+  fetcher: Fetch,
   url: string,
-  init: oauth.CustomFetchOptions<"GET">,
-): Promise<Response> {
+  init: RequestInit,
+): Promise<KeySet> {
   try {
-    const response = await fetch(url, {
-      method: init.method,
-      headers: init.headers,
-      redirect: init.redirect,
-      ...(init.signal ? { signal: init.signal } : {}),
-    });
+    const response = await fetcher(url, init);
     if (response.status !== 200 || !response.body) {
       await response.body?.cancel();
       throw new KeysUnavailable();
@@ -72,13 +97,50 @@ async function boundedKeysFetch(
       }
       chunks.push(value);
     }
-    return new Response(Buffer.concat(chunks), {
-      status: 200,
-      headers: response.headers,
-    });
+    return {
+      body: Buffer.concat(chunks).toString("utf8"),
+      type: response.headers.get("content-type") ?? "",
+    };
   } catch {
     throw new KeysUnavailable();
   }
+}
+
+/**
+ * The library's key-set fetch for one issuer: a single fetch in flight that
+ * every caller shares, and at most one fetch per `KEYS_REFETCH_MS`, whatever
+ * the library asks. A failed fetch starts the wait too; meanwhile the last
+ * good set answers, or `KeysUnavailable` when there is none.
+ */
+function keySetFetch(
+  fetcher: Fetch,
+  now: () => number,
+): (url: string, init: oauth.CustomFetchOptions<"GET">) => Promise<Response> {
+  let held: (KeySet & { url: string }) | undefined;
+  let lastFetch: { url: string; at: number } | undefined;
+  let inFlight: { url: string; keys: Promise<KeySet> } | undefined;
+  const answer = (keys: KeySet): Response =>
+    new Response(keys.body, {
+      status: 200,
+      headers: { "content-type": keys.type },
+    });
+  return async (url, init) => {
+    if (inFlight?.url === url) return answer(await inFlight.keys);
+    if (lastFetch?.url === url && now() - lastFetch.at < KEYS_REFETCH_MS) {
+      if (held?.url === url) return answer(held);
+      throw new KeysUnavailable();
+    }
+    lastFetch = { url, at: now() };
+    const keys = readKeySet(fetcher, url, requestInit(init));
+    inFlight = { url, keys };
+    try {
+      const read = await keys;
+      held = { url, ...read };
+      return answer(read);
+    } finally {
+      if (inFlight?.keys === keys) inFlight = undefined;
+    }
+  };
 }
 
 /** What one sign-in keeps until its callback. */
@@ -112,10 +174,30 @@ export function createOidcClient(options: {
   const { clientId, clientSecret, redirectUri, now } = options;
   const issuer = new URL(options.issuer);
   const insecure = options.test?.allowInsecureRequests === true;
+  const testFetch = options.test?.fetch;
   const http = () => ({
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     ...(insecure ? { [oauth.allowInsecureRequests]: true } : {}),
+    ...(testFetch
+      ? {
+          [oauth.customFetch]: (
+            url: string,
+            init: oauth.CustomFetchOptions<string, unknown>,
+          ) => testFetch(url, requestInit(init)),
+        }
+      : {}),
   });
+  const keysFetch = keySetFetch(testFetch ?? fetch, now);
+  /** An endpoint the flow may use: `https`, or `http` in tests only. */
+  const usable = (value: unknown): boolean => {
+    if (typeof value !== "string") return false;
+    try {
+      const { protocol } = new URL(value);
+      return protocol === "https:" || (insecure && protocol === "http:");
+    } catch {
+      return false;
+    }
+  };
   // The library times on its own clock; align it with the injected one.
   const client = (): oauth.Client => ({
     client_id: clientId,
@@ -132,12 +214,10 @@ export function createOidcClient(options: {
         await oauth.discoveryRequest(issuer, http()),
       );
       if (
-        typeof as.authorization_endpoint !== "string" ||
-        typeof as.token_endpoint !== "string" ||
-        typeof as.jwks_uri !== "string" ||
-        (!insecure &&
-          (!as.token_endpoint.startsWith("https://") ||
-            !as.jwks_uri.startsWith("https://")))
+        as.issuer !== options.issuer ||
+        ![as.authorization_endpoint, as.token_endpoint, as.jwks_uri].every(
+          usable,
+        )
       )
         throw new Error("unusable discovery document");
       discovered = { as, at: now() };
@@ -222,7 +302,7 @@ export function createOidcClient(options: {
       try {
         await oauth.validateApplicationLevelSignature(as, response, {
           ...http(),
-          [oauth.customFetch]: boundedKeysFetch,
+          [oauth.customFetch]: keysFetch,
         });
       } catch (err) {
         throw new OidcFailure(
