@@ -435,7 +435,7 @@ test("a login's ingest seals the moved-in file in the lane; discard deletes both
   await run!.done;
   assert.deepEqual(sealedInLane, [true]);
   assert.equal(await opensWith(dir, "acc-login", recipient), claudeJson(TOKEN));
-  logins.discardCredential("acc-login");
+  await logins.discardCredential("acc-login");
   assert.equal(existsSync(tokenFile), false);
   assert.equal(existsSync(join(dir, "sealed", "acc-login")), false);
 });
