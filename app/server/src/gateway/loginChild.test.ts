@@ -316,7 +316,7 @@ test("a leader that ignores SIGTERM and a descendant outside the group holding t
   const killGraceMs = 200;
   const closeWaitMs = 200;
   const groupWaitMs = 200;
-  const { run, seen } = login(
+  const { run, seen, lines } = login(
     child(`process.on("SIGTERM", () => {});
 const escaped = spawn(process.execPath, ["-e", ${JSON.stringify(
       `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
@@ -350,4 +350,15 @@ setInterval(() => {}, 1000);`),
     took < killGraceMs + closeWaitMs + groupWaitMs + 1_000,
     `settled after ${took} ms`,
   );
+  // Settled with its pipes still held: one fixed line, no path or pid.
+  assert.deepEqual(lines, ["login child settled with processes still running"]);
+});
+
+test("a login child that ends normally logs nothing", async () => {
+  const { run, lines } = login(
+    child(`send({ type: "done", ok: true });
+process.exit(0);`),
+  );
+  await run.done;
+  assert.deepEqual(lines, []);
 });

@@ -2202,21 +2202,28 @@ server's local gateway does.
   credential or removes the directory.
 - **Login bound.** Every vault login run reports done within
   `VAULT_LOGIN_SETTLE_BOUND_MS` (10 min 35 s) of its start
-  (`gateway/vaultMethods.ts`). At its 10-minute deadline the vault withdraws a
-  run that was not granted its commit: an ingest still waiting for its writer
-  lane turn is abandoned, and the child gets SIGTERM, its group SIGKILL after 10
-  s; `done` then waits at most 5 s for the pipes after the leader exited (a
-  descendant outside the group may hold them) and 5 s for the group to empty,
-  and settles even if they never close (`loginChild.ts`). A run granted its
-  commit is bounded by the 10 s commit exchange and a synchronous install and
-  seal. Whatever the driver does, the vault itself reports the run done
+  (`gateway/vaultMethods.ts`). The bound covers when a run reports done and the
+  killing of its child's process group; it does not physically contain
+  processes. At its 10-minute deadline the vault withdraws a run that was not
+  granted its commit: an ingest still waiting for its writer lane turn is
+  abandoned, and the child gets SIGTERM, its group SIGKILL after 10 s; `done`
+  then waits at most 5 s for the pipes after the leader exited and 5 s for the
+  group to empty, and settles even if they never close (`loginChild.ts`, which
+  then logs `login child settled with processes still running`). A run granted
+  its commit is bounded by the 10 s commit exchange and a synchronous install
+  and seal. Whatever the driver does, the vault itself reports the run done
   (`abandoned`) 35 s past the deadline, waiting only for a commit already in
-  flight. The edge's hold after a lost link is this bound plus a minute. An
-  abrupt vault restart cannot leave a driver behind as long as the vault's unit
-  keeps systemd's default `KillMode=control-group` (or `mixed`): either kills
-  every process left in the unit's cgroup when the unit stops or restarts.
-  `KillMode=process` or `none` would break this bound. The vault's unit is not
+  flight. The edge's hold after a lost link is this bound plus a minute.
+- **Not contained: detached descendants.** A descendant that leaves the child's
+  process group (its own session or group) survives a per-login Cancel and the
+  group kill while the vault keeps running, and may write into the login's
+  directory after `done`. Only the vault unit's stop or restart ends it:
+  `KillMode=control-group` (or `mixed`) kills every process left in the unit's
+  cgroup; `KillMode=process` or `none` would not. The vault's unit is not
   defined in this repository; the deployed one uses `KillMode=control-group`.
+  This is accepted because the drivers are the official Claude CLI and pi's
+  device-code login, which the vault trusts with the credential by design. Full
+  per-login containment (its own cgroup) is Task-1407.
 
 #### Sealed store
 

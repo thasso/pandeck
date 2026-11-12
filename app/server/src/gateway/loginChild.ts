@@ -10,8 +10,14 @@
  * - out, JSON lines on stdout: `{"type":"output"|"url"|"code","text"}`, then
  *   exactly one `{"type":"done","ok"}`, then exit 0. Its stderr is dropped.
  * - The child leads its own process group. Once the leader exits, on every
- *   path, the port kills the group and settles only when no live member is
- *   left, so nothing writes into `configDir` after `done`.
+ *   path, the port kills the group and waits, bounded, for no live member to
+ *   be left, so no process of that group writes into `configDir` after
+ *   `done`. A descendant that detached from the group (its own session or
+ *   group) is not contained: a per-login Cancel does not reach it, only the
+ *   vault unit's stop or restart does (Task-1407 contains logins fully).
+ * - `done` settles within a bound even if the pipes never close or the
+ *   leader never exits after its SIGKILL; settling that way logs
+ *   "login child settled with processes still running".
  * - A line or output over its bound, or anything malformed, cancels the
  *   login. Every rejection is a fixed text, never the child's.
  *
@@ -178,7 +184,10 @@ export function loginChildDriver(
       child.kill("SIGTERM");
       graceTimer = setTimeout(killGroup, killGraceMs);
       // Even a leader that never exits after the SIGKILL ends the run.
-      hardTimer = setTimeout(() => finish(null), killGraceMs + closeWaitMs);
+      hardTimer = setTimeout(
+        () => finish(null, true),
+        killGraceMs + closeWaitMs,
+      );
     };
     const fault = (): void => {
       faulted = true;
@@ -247,12 +256,16 @@ export function loginChildDriver(
       killGroup();
       closeTimer = setTimeout(() => {
         child.stdout?.destroy();
-        finish(exitCode);
+        finish(exitCode, true);
       }, closeWaitMs);
     });
     child.on("close", (code) => finish(code));
     /** Waits for the group to end, then settles `done`, once. */
-    function finish(code: number | null): void {
+    /**
+     * `forced`: by the hard timer or the close watchdog, so the pipes are
+     * still held (or the leader still runs) when `done` settles.
+     */
+    function finish(code: number | null, forced = false): void {
       if (settled || finishing) return;
       finishing = true;
       clearTimeout(closeTimer);
@@ -270,7 +283,8 @@ export function loginChildDriver(
         // From here no signal goes to this group id.
         settled = true;
         clearTimeout(graceTimer);
-        if (!empty) log("login child group did not end");
+        if (forced) log("login child settled with processes still running");
+        else if (!empty) log("login child group did not end");
         if (
           empty &&
           !faulted &&
