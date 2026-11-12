@@ -9,6 +9,7 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 import {
   createLoginManager,
   LoginNotRun,
+  LoginOutcomeUnknown,
   LoginRefusal,
   type LoginActor,
   type LoginEvent,
@@ -31,11 +32,19 @@ interface FakeRun {
   fail(err?: Error): void;
   /** The driver honoured its cancel. */
   stopped(): void;
+  /** Asks the edge to commit, as the vault does before it installs. */
+  commit(): Promise<boolean>;
+  /** The vault installed: `done` resolves. */
+  installed(): void;
 }
 
 let clock = 0;
 
-function harness() {
+function harness({
+  failPut,
+  uncertainHoldMs,
+}: { failPut?: (n: number) => boolean; uncertainHoldMs?: number } = {}) {
+  let puts = 0;
   const runs: FakeRun[] = [];
   let refuse = false;
   const profiles = new Map<string, LoginProfile>();
@@ -67,6 +76,8 @@ function harness() {
           },
           fail: (err = new Error(`driver failed ${MARKER}`)) => reject(err),
           stopped: () => reject(new Error(`stopped ${MARKER}`)),
+          commit: async () => (await request.commit()) === true,
+          installed: () => resolve(),
         };
         runs.push(run);
         return {
@@ -80,6 +91,7 @@ function harness() {
     profiles: { get: (id) => profiles.get(id) },
     ownerOf: (id) => owners.get(id),
     putAccount: ({ userId, ...profile }) => {
+      if (failPut?.(++puts)) throw new Error("registry write failed");
       profiles.set(profile.id, profile);
       owners.set(profile.id, userId);
       put.push(profile.id);
@@ -94,6 +106,7 @@ function harness() {
     log: (line) => logs.push(line),
     now: () => clock,
     successorWaitMs: WAIT_MS,
+    ...(uncertainHoldMs !== undefined ? { uncertainHoldMs } : {}),
   });
   const addAccount = (id: string, userId = "u1") => {
     profiles.set(id, {
@@ -517,4 +530,103 @@ test("a refused immediate start leaves nothing behind", () => {
   );
   assert.deepEqual(h.put, []);
   assert.equal(h.manager.pendingAccounts().size, 0);
+});
+
+// --- review rv-1402-b2-code-01 ---------------------------------------------
+
+test("C1: a take-over after the commit was granted leaves the old login alone; the saved account survives the successor", async () => {
+  const h = harness();
+  const client = actor("c1");
+  const session = actor("s1", "u1", "session");
+  const old = h.manager.start(client, { kind: "claude" });
+  assert.equal(await h.runs[0]!.commit(), true);
+  const next = h.manager.start(session, {
+    kind: "claude",
+    accountId: old.accountId,
+  });
+  // Not superseded, not cancelled: its outcome stands.
+  assert.equal(h.manager.read(client, old.loginId, 0).state, "running");
+  assert.equal(h.runs[0]!.cancels, 0);
+  assert.equal(h.runs.length, 1);
+  h.runs[0]!.installed();
+  await flush();
+  assert.equal(h.manager.read(client, old.loginId, 0).state, "ready");
+  assert.equal(h.manager.pendingAccounts().size, 0);
+  assert.equal(h.runs.length, 2, "the successor started after the old driver");
+  h.runs[1]!.fail();
+  await flush();
+  assert.equal(h.manager.read(session, next.loginId, 0).state, "error");
+  assert.deepEqual(h.removed, []);
+});
+
+test("C1: a committing predecessor that fails hands the new account to the waiting successor", async () => {
+  const h = harness();
+  const client = actor("c1");
+  const session = actor("s1", "u1", "session");
+  const old = h.manager.start(client, { kind: "claude" });
+  await h.runs[0]!.commit();
+  h.manager.start(session, { kind: "claude", accountId: old.accountId });
+  // The vault's install failed after the commit.
+  h.runs[0]!.fail();
+  await flush();
+  assert.equal(h.manager.read(client, old.loginId, 0).state, "error");
+  assert.deepEqual(h.removed, []);
+  assert.deepEqual([...h.manager.pendingAccounts()], [old.accountId]);
+  h.runs[1]!.fail();
+  await flush();
+  assert.deepEqual(h.removed, [old.accountId]);
+});
+
+test("C1: removing the account while its login commits registers nothing afterwards", async () => {
+  const h = harness();
+  const client = actor("c1");
+  const old = h.manager.start(client, { kind: "claude" });
+  await h.runs[0]!.commit();
+  h.manager.forget(old.accountId);
+  h.runs[0]!.installed();
+  await flush();
+  assert.equal(h.manager.read(client, old.loginId, 0).state, "cancelled");
+  assert.deepEqual(h.put, [old.accountId], "only the start's registration");
+});
+
+test("C2: a lost vault link ends the login at once but holds its slot and cleanup until the hold passed", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const h = harness({ uncertainHoldMs: 5_000 });
+  const a = actor("s1", "u1", "session");
+  const first = h.manager.start(a, { kind: "claude" });
+  h.manager.start(a, { kind: "claude" });
+  h.runs[0]!.fail(new LoginOutcomeUnknown("The vault became unavailable."));
+  await vi.advanceTimersByTimeAsync(0);
+  const view = h.manager.read(a, first.loginId, 0);
+  assert.equal(view.state, "error");
+  assert.equal(view.reason, "unavailable");
+  assert.throws(() => h.manager.start(a, { kind: "claude" }), LoginRefusal);
+  assert.deepEqual(h.removed, []);
+  await vi.advanceTimersByTimeAsync(4_999);
+  assert.deepEqual(h.removed, []);
+  await vi.advanceTimersByTimeAsync(1);
+  assert.deepEqual(h.removed, [first.accountId]);
+  h.manager.start(a, { kind: "claude" });
+});
+
+test("C3: a registry write failing after success still ends the login, frees the account and keeps it", async () => {
+  const h = harness({ failPut: (n) => n === 2 });
+  const a = actor("s1", "u1", "session");
+  const first = h.manager.start(a, { kind: "claude" });
+  await h.runs[0]!.succeed();
+  const view = h.manager.read(a, first.loginId, 0);
+  assert.equal(view.state, "error");
+  assert.equal(view.reason, "unavailable");
+  // Saved: not removed, and no longer pending as a first login.
+  assert.deepEqual(h.removed, []);
+  assert.equal(h.manager.pendingAccounts().size, 0);
+  // A retry is a new login, not the stranded one; the old one is finished.
+  const retry = h.manager.start(a, {
+    kind: "claude",
+    accountId: first.accountId,
+  });
+  assert.notEqual(retry.loginId, first.loginId);
+  assert.throws(() => h.manager.cancel(a, first.loginId), LoginRefusal);
+  await h.runs[1]!.succeed();
+  assert.equal(h.manager.read(a, retry.loginId, 0).state, "ready");
 });

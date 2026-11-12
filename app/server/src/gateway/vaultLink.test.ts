@@ -58,6 +58,7 @@ import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
   LOGIN_CREDENTIAL_FILE,
+  VAULT_METHODS,
   isPinnedPeer,
 } from "./vaultMethods.ts";
 import type { CodexRenewPort } from "./renewal.ts";
@@ -816,7 +817,11 @@ const linkActor = (
  * The edge's login manager over a real remote vault, and the vault's own
  * record of which account's driver started and settled, in order.
  */
-async function managedLink(v: Vault, release: () => void) {
+async function managedLink(
+  v: Vault,
+  release: () => void,
+  { uncertainHoldMs }: { uncertainHoldMs?: number } = {},
+) {
   const profiles = new Map<string, LoginProfile>();
   const owners = new Map<string, string>();
   const removed: string[] = [];
@@ -851,6 +856,7 @@ async function managedLink(v: Vault, release: () => void) {
       events.push({ loginId, event }),
     log: () => {},
     successorWaitMs: WAIT_MS,
+    ...(uncertainHoldMs !== undefined ? { uncertainHoldMs } : {}),
   });
   open.push({ close: () => manager.close() });
   // Released first, so nothing closes on a held driver.
@@ -1125,6 +1131,181 @@ test("R1.6: the same actor's second start answers the same login over the link",
   assert.equal(again.loginId, first.loginId);
   await delay(100);
   assert.deepEqual(vaultRecord(first.accountId), ["start"]);
+});
+
+// --- review rv-1402-b2-code-01 (C1, C2) ----------------------------------
+
+/**
+ * Runs `hook` in the gap the reviewer found: on `method`'s request, after
+ * (`after`) or before it is sent. Only timing is intercepted.
+ */
+function interceptRequest(
+  method: string,
+  hook: () => void,
+  { after }: { after: boolean },
+): () => void {
+  const original = WorkerConnection.prototype.request;
+  let fired = false;
+  WorkerConnection.prototype.request = function (
+    this: WorkerConnection,
+    ...args: Parameters<WorkerConnection["request"]>
+  ) {
+    if (args[0] === method && !fired && !after) {
+      fired = true;
+      hook();
+    }
+    const sent = original.apply(this, args);
+    if (args[0] !== method || fired || !after) return sent;
+    fired = true;
+    return sent.then((answer) => {
+      hook();
+      return answer;
+    });
+  };
+  const restore = () => {
+    WorkerConnection.prototype.request = original;
+  };
+  open.push({ close: restore });
+  return restore;
+}
+
+test("C1: a take-over after the edge granted the commit leaves the old login's outcome standing", async () => {
+  const { driver, release, cancelled } = claudeDriver({ holdCancel: true });
+  const v = await vault({ drivers: { claude: driver } });
+  const { manager, removed, lastState, vaultRecord } = await managedLink(
+    v,
+    release,
+  );
+  const a = linkActor("client", "a");
+  const b = linkActor("session", "b");
+  const old = manager.start(a, { kind: "claude" });
+  await until(() => vaultRecord(old.accountId).length === 1, "old driver");
+  let successor: { loginId: string } | undefined;
+  // The edge answered the commit; the vault has not installed yet.
+  interceptRequest(
+    VAULT_METHODS.loginCommit,
+    () => {
+      successor = manager.start(b, {
+        kind: "claude",
+        accountId: old.accountId,
+      });
+    },
+    { after: true },
+  );
+  manager.input(a, old.loginId, "committed-code");
+  await until(
+    () => successor !== undefined && vaultRecord(old.accountId).length === 3,
+    "the successor's driver after the old one settled",
+  );
+  const tokenFile = join(v.dir, "accounts", old.accountId, ".credentials.json");
+  // What happened is what the old dialog shows: it logged in.
+  assert.deepEqual(lastState(old.loginId), { type: "state", state: "ready" });
+  assert.match(readFileSync(tokenFile, "utf8"), /claude-committed-code/);
+  assert.deepEqual(vaultRecord(old.accountId), ["start", "end", "start"]);
+  assert.equal(cancelled.length, 0, "the committing driver was not cancelled");
+  // The successor is a re-login of a saved account: its cancel keeps it.
+  manager.cancel(b, successor!.loginId);
+  await until(() => cancelled.length === 1, "the successor's cancel");
+  release();
+  await until(
+    () => manager.read(b, successor!.loginId, 0).state === "cancelled",
+    "the successor's end",
+  );
+  await delay(100);
+  assert.deepEqual(removed, []);
+  assert.ok(existsSync(tokenFile));
+});
+
+test("C1: a take-over after the vault saved but before its answer arrived keeps the saved account", async () => {
+  const { driver, release, cancelled } = claudeDriver({ holdCancel: true });
+  const v = await vault({ drivers: { claude: driver } });
+  const { manager, removed, lastState, vaultRecord } = await managedLink(
+    v,
+    release,
+  );
+  const a = linkActor("client", "a");
+  const b = linkActor("session", "b");
+  const old = manager.start(a, { kind: "claude" });
+  await until(() => vaultRecord(old.accountId).length === 1, "old driver");
+  const tokenFile = join(v.dir, "accounts", old.accountId, ".credentials.json");
+  let successor: { loginId: string } | undefined;
+  let savedFirst = false;
+  // The file is saved; the completion has not reached the edge.
+  interceptRequest(
+    VAULT_METHODS.loginDone,
+    () => {
+      savedFirst = existsSync(tokenFile);
+      successor = manager.start(b, {
+        kind: "claude",
+        accountId: old.accountId,
+      });
+    },
+    { after: false },
+  );
+  manager.input(a, old.loginId, "saved-code");
+  await until(
+    () => successor !== undefined && vaultRecord(old.accountId).length === 3,
+    "the successor's driver",
+  );
+  assert.equal(savedFirst, true);
+  assert.deepEqual(lastState(old.loginId), { type: "state", state: "ready" });
+  manager.cancel(b, successor!.loginId);
+  await until(() => cancelled.length === 1, "the successor's cancel");
+  release();
+  await until(
+    () => manager.read(b, successor!.loginId, 0).state === "cancelled",
+    "the successor's end",
+  );
+  await delay(100);
+  assert.deepEqual(removed, []);
+  assert.match(readFileSync(tokenFile, "utf8"), /claude-saved-code/);
+});
+
+test("C2: a lost vault link keeps the drivers' slots and cleanup until the hold passes, then frees them", async () => {
+  const HOLD_MS = 1_500;
+  const { driver, release, cancelled } = claudeDriver({ holdCancel: true });
+  const v = await vault({ drivers: { claude: driver } });
+  const { manager, remote, removed, vaultRecord } = await managedLink(
+    v,
+    release,
+    { uncertainHoldMs: HOLD_MS },
+  );
+  const a = linkActor("session", "a");
+  const first = manager.start(a, { kind: "claude" });
+  const second = manager.start(a, { kind: "claude" });
+  await until(
+    () =>
+      vaultRecord(first.accountId).length === 1 &&
+      vaultRecord(second.accountId).length === 1,
+    "two held drivers",
+  );
+  // A second authenticated link replaces the first: the edge's link breaks
+  // while both drivers still run on the vault.
+  const replacement = await rawEdge(v.port);
+  open.push({ close: () => replacement.destroy() });
+  await until(() => cancelled.length >= 2, "the vault withdrew both");
+  const lost = Date.now();
+  await until(remote.connected, "the reconnect");
+  // Ended for their actor, but their slots are held and nothing is removed.
+  assert.equal(manager.read(a, first.loginId, 0).state, "error");
+  assert.equal(manager.read(a, first.loginId, 0).reason, "unavailable");
+  assert.throws(
+    () => manager.start(a, { kind: "claude" }),
+    (err: unknown) =>
+      err instanceof Error && "code" in err && err.code === "login_unavailable",
+  );
+  assert.deepEqual(removed, []);
+  assert.equal(v.lines.filter((line) => line.endsWith(": started")).length, 2);
+  // After the hold every reservation is released, and the new accounts the
+  // lost logins owned are removed once.
+  await until(() => removed.length === 2, "the release after the hold");
+  assert.ok(Date.now() - lost >= HOLD_MS - 100);
+  assert.deepEqual(
+    [...removed].sort(),
+    [first.accountId, second.accountId].sort(),
+  );
+  const third = manager.start(a, { kind: "claude" });
+  await until(() => vaultRecord(third.accountId).length === 1, "a new driver");
 });
 
 test("C5: dial, TLS and hello have deadlines; close stops a dial in flight", async () => {

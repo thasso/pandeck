@@ -17,11 +17,12 @@ import tls from "node:tls";
 import {
   WorkerConnection,
   WorkerRequestError,
+  WorkerRequestNotSentError,
   type MethodHandler,
 } from "../workerProtocol/connection.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import type { LeaseProvider, LoginBinding } from "./leases.ts";
-import { LoginNotRun } from "./logins.ts";
+import { LoginNotRun, LoginOutcomeUnknown } from "./logins.ts";
 import type { GatewayProfile } from "./profiles.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
@@ -318,8 +319,11 @@ export function createRemoteVault(
         onEnd: (_reason, { cause }) => {
           if (connection === opened) {
             connection = undefined;
+            // Not a settlement: the vault may still run them.
             for (const login of logins.values())
-              login.settle(new Error("The vault became unavailable."));
+              login.settle(
+                new LoginOutcomeUnknown("The vault became unavailable."),
+              );
             logins.clear();
             // The cause only: the reason may carry the vault's words.
             log(`vault link ended (${cause})`);
@@ -491,9 +495,15 @@ export function createRemoteVault(
         kind: login.kind,
         accountId: login.accountId,
         tokenFile: login.tokenFile,
-      }).catch(() =>
-        // Refused by the vault's own admission: the driver never ran.
-        settle(new LoginNotRun("This gateway cannot run that login now.")),
+      }).catch((err: unknown) =>
+        settle(
+          // Only the vault's own answer, or a start never sent, proves the
+          // driver never ran; a lost link leaves it unknown.
+          err instanceof WorkerRequestError ||
+            err instanceof WorkerRequestNotSentError
+            ? new LoginNotRun("This gateway cannot run that login now.")
+            : new LoginOutcomeUnknown("The vault became unavailable."),
+        ),
       );
       return {
         input: (text) => {

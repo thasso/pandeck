@@ -47,6 +47,13 @@ const SUCCESSOR_WAIT_MS = 30_000;
 /** Logins with a slot: per user, and in all (the remote vault's own bound). */
 const MAX_USER_LOGINS = 2;
 const MAX_EDGE_LOGINS = MAX_VAULT_LOGINS;
+/**
+ * How long an account's driver counts as running after the vault link broke
+ * under it: past the vault's own 10-minute deadline plus a minute for the
+ * driver to settle. The vault's hello names no running logins, so nothing
+ * shorter is known to be safe; its own admission still answers last.
+ */
+const UNCERTAIN_HOLD_MS = LOGIN_TIMEOUT_MS + 60_000;
 /** How long, and how many, finished logins stay readable. */
 const FINISHED_TTL_MS = 2 * 60_000;
 const MAX_FINISHED = 64;
@@ -54,6 +61,8 @@ const MAX_FINISHED = 64;
 const SUPERSEDED_TEXT = "This login was started again elsewhere.";
 const STALLED_TEXT = "The earlier login did not stop in time. Try again.";
 const TIMED_OUT_TEXT = "The login timed out after 10 minutes.";
+const ACCOUNT_WRITE_TEXT =
+  "The login succeeded but the gateway could not record the account.";
 
 const DEFAULT_NAME: Record<LeaseProvider, string> = {
   claude: "Claude",
@@ -117,6 +126,12 @@ export class LoginRefusal extends Error {
  */
 export class LoginNotRun extends Error {}
 
+/**
+ * A `done` rejected with this means the link to the vault broke: the driver
+ * may still run there, so its account's slot stays held (`UNCERTAIN_HOLD_MS`).
+ */
+export class LoginOutcomeUnknown extends Error {}
+
 type Account = LoginProfile & { userId: string };
 
 interface Login {
@@ -128,6 +143,13 @@ interface Login {
   run?: LoginRun;
   cancelled: boolean;
   timedOut: boolean;
+  /**
+   * The vault was told to move the credential in: from then on nothing takes
+   * the login over or stops it, and its own outcome stands.
+   */
+  committing: boolean;
+  /** Its account was removed: a late success registers nothing. */
+  forgotten: boolean;
   /** Set once terminal for its actor: the event sent, the view finished. */
   ended?: { state: Exclude<LoginState, "running">; reason?: LoginReason };
   /** Why it was cancelled, when not by its own actor's cancel. */
@@ -162,6 +184,8 @@ interface LoginManagerDeps {
   now?: () => number;
   /** Test seam: a shorter successor wait. */
   successorWaitMs?: number;
+  /** Test seam: a shorter hold after a lost vault link. */
+  uncertainHoldMs?: number;
 }
 
 export interface LoginManager {
@@ -194,6 +218,7 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
   const { log, vault } = deps;
   const now = deps.now ?? Date.now;
   const waitMs = deps.successorWaitMs ?? SUCCESSOR_WAIT_MS;
+  const uncertainHoldMs = deps.uncertainHoldMs ?? UNCERTAIN_HOLD_MS;
   /** Logins not yet terminal for their actor. */
   const active = new Map<string, Login>();
   /** Terminal logins still readable, oldest first. */
@@ -240,16 +265,29 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 
   /**
    * Removes a new account whose owning login ended other than ready, once
-   * no driver of it is left; a newer owner keeps it.
+   * no driver of it is left; a newer owner keeps it. A login that started
+   * while the owner was committing takes the account over only now.
    */
   const cleanup = (accountId: string): void => {
     const state = accounts.get(accountId);
     const owner = state?.registration;
     if (!state || !owner || state.driver) return;
     if (owner.ended === undefined || owner.ended.state === "ready") return;
+    if (state.current && !state.current.ended) {
+      state.registration = state.current;
+      return;
+    }
     state.registration = undefined;
-    deps.removeAccount(accountId);
+    try {
+      deps.removeAccount(accountId);
+    } catch {
+      log(`login ${owner.loginId}: account update failed`);
+    }
   };
+
+  /** Whether a takeover may move the registration off its current owner. */
+  const ownerYields = (state: AccountState): boolean =>
+    !state.registration?.committing || state.registration.ended !== undefined;
 
   /** Makes the login terminal for its actor: its event, its view finished. */
   const end = (
@@ -290,7 +328,8 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
    * slot until it settled.
    */
   const stop = (login: Login, reason?: LoginReason, endNow = false): void => {
-    if (login.ended) return;
+    // Once committing, the vault's answer is the outcome.
+    if (login.ended || login.committing) return;
     if (!login.cancelled && reason) login.cancelReason = reason;
     login.cancelled = true;
     if (login.phase === "started") login.run?.cancel();
@@ -311,7 +350,11 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
           kind: login.account.provider,
           accountId: login.accountId,
           tokenFile: login.account.tokenFile,
-          commit: () => current(login),
+          commit: () => {
+            const granted = current(login);
+            if (granted) login.committing = true;
+            return granted;
+          },
         },
         {
           output: (text) => {
@@ -340,6 +383,7 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
     login.phase = "started";
     login.run = run;
     const timeout = setTimeout(() => {
+      if (login.committing) return;
       login.cancelled = true;
       login.timedOut = true;
       run.cancel();
@@ -350,7 +394,22 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
         settled(login, driver, undefined);
       },
       (err: unknown) => {
-        settled(login, driver, err);
+        if (!(err instanceof LoginOutcomeUnknown))
+          return settled(login, driver, err);
+        // The link broke: the driver may still run on the vault. The login
+        // ends for its actor now; the slot and any cleanup wait.
+        // A granted commit may have saved the credential: keep the account.
+        const held = accounts.get(login.accountId);
+        if (login.committing && held?.registration === login)
+          held.registration = undefined;
+        try {
+          end(login, "error", "unavailable", err.message);
+        } catch {
+          log(`login ${login.loginId}: state update failed`);
+        }
+        return new Promise<void>((resolve) => {
+          setTimeout(resolve, uncertainHoldMs).unref();
+        }).then(() => settled(login, driver, err));
       },
     );
     state.driver = driver;
@@ -360,21 +419,31 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
     return true;
   };
 
-  /** The driver of `login` settled: free the account, then its successor. */
-  const settled = (login: Login, driver: Promise<void>, err: unknown): void => {
-    const state = accounts.get(login.accountId);
-    if (state?.driver === driver) state.driver = undefined;
-    if (!login.ended) {
+  /** The login's own outcome once its driver settled. */
+  const outcome = (
+    login: Login,
+    state: AccountState | undefined,
+    err: unknown,
+  ): void => {
+    if (login.ended) return;
+    {
       // An actor that ended before its cancel arrived: the vault's commit
       // was refused, which is that actor's cancel, not a failure.
-      if (!login.cancelled && !login.actor.active()) {
+      if (!login.cancelled && !login.committing && !login.actor.active()) {
         login.cancelled = true;
         if (login.actor.kind === "session")
           login.cancelReason = "session_ended";
       }
-      if (err === undefined && current(login)) {
+      const saved = err === undefined && (login.committing || current(login));
+      if (saved && !login.forgotten) {
+        // The credential is in: the account stays, whatever comes next.
         if (state?.registration === login) state.registration = undefined;
-        deps.putAccount(login.account);
+        try {
+          deps.putAccount(login.account);
+        } catch {
+          end(login, "error", "unavailable", ACCOUNT_WRITE_TEXT);
+          return;
+        }
         end(login, "ready");
       } else if (login.cancelled || err === undefined) cancelledEnd(login);
       else if (err instanceof LoginNotRun)
@@ -389,17 +458,40 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
             : "The login failed.",
         );
     }
+  };
+
+  /**
+   * The driver of `login` settled: its outcome, the account freed, then its
+   * successor. Every step runs even when an earlier one threw.
+   */
+  const settled = (login: Login, driver: Promise<void>, err: unknown): void => {
+    const state = accounts.get(login.accountId);
+    if (state?.driver === driver) state.driver = undefined;
+    try {
+      outcome(login, state, err);
+    } catch {
+      log(`login ${login.loginId}: state update failed`);
+    }
+    // Whatever failed above, the login is terminal and frees the account.
+    if (!login.ended) login.ended = { state: "error", reason: "unavailable" };
+    if (active.delete(login.loginId))
+      finished.set(login.loginId, { login, at: now() });
+    if (state?.current === login) state.current = undefined;
     cleanup(login.accountId);
     const next = state?.current;
     if (next && next.phase === "waiting" && !next.ended && !state.driver) {
       if (next.waitTimer) clearTimeout(next.waitTimer);
       if (!launch(next)) {
-        end(
-          next,
-          "error",
-          "unavailable",
-          "This gateway cannot run that login now.",
-        );
+        try {
+          end(
+            next,
+            "error",
+            "unavailable",
+            "This gateway cannot run that login now.",
+          );
+        } catch {
+          log(`login ${next.loginId}: state update failed`);
+        }
         cleanup(login.accountId);
       }
     }
@@ -475,6 +567,8 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
         phase: "waiting",
         cancelled: false,
         timedOut: false,
+        committing: false,
+        forgotten: false,
         output: "",
       };
       const isNew = start.accountId === undefined;
@@ -495,7 +589,8 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
         }
         if (before) stop(before, "superseded", true);
         if (isNew) state.registration = login;
-        else if (state.registration) state.registration = login;
+        else if (state.registration && ownerYields(state))
+          state.registration = login;
         try {
           if (isNew) deps.putAccount(account);
           log(`login ${login.loginId} (account ${login.accountId}): started`);
@@ -512,7 +607,9 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
       const before = state.current;
       state.current = login;
       active.set(login.loginId, login);
-      if (state.registration) state.registration = login;
+      // A committing predecessor is left alone and keeps the account until
+      // its own outcome; this login then waits for its driver.
+      if (state.registration && ownerYields(state)) state.registration = login;
       if (before) stop(before, "superseded", true);
       login.waitTimer = setTimeout(() => {
         if (login.ended || login.phase !== "waiting") return;
@@ -564,6 +661,9 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
       if (!state) return;
       // The removal is the cleanup: no deferred duty may run for it later.
       state.registration = undefined;
+      // A committing predecessor may not be the current login: mark them all.
+      for (const login of [...active.values()])
+        if (login.accountId === accountId) login.forgotten = true;
       const login = state.current;
       if (login) {
         stop(login);

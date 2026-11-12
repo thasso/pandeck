@@ -1792,14 +1792,23 @@ path above.
   (`MAX_VAULT_LOGINS`), refused `login_unavailable` beyond them; the vault's own
   admission (4 in all, one per account) still answers last. A new account whose
   owning login ended other than ready is removed exactly once, when no driver of
-  it is left, unless a newer login took it over. Each login runs an injected
-  driver (`startGateway`'s `loginDrivers`: the official CLI's
-  `claude auth login` as a child with `CLAUDE_CONFIG_DIR` set,
-  `claudeLoginDriver.ts`; pi's device-code login, `piSdk/codexLogin.ts`) in a
-  fresh directory under the state directory. On success one writer-lane item
-  checks the credential and renames it into the account's token file, which
-  replaces the whole file; the directory is always deleted. The credential never
-  leaves the gateway, and no login hold is taken.
+  it is left, unless a newer login took it over. Once the edge granted a login's
+  commit (the vault is moving the credential in), nothing takes it over or stops
+  it: a start from elsewhere waits for its driver and then runs as a re-login,
+  and the old dialog shows the real outcome. A login whose credential was saved
+  never has its account removed, even if recording the account then fails (it
+  ends `error`, reason `unavailable`). If the vault link breaks under a running
+  login, the vault may still run its driver: the login ends for its actor
+  (`unavailable`), but its account's slot and any cleanup stay held for 11
+  minutes (the vault's 10-minute deadline plus a minute to settle), since the
+  vault's hello names no running logins; only the vault's own refusal of a start
+  counts as "never ran". Each login runs an injected driver (`startGateway`'s
+  `loginDrivers`: the official CLI's `claude auth login` as a child with
+  `CLAUDE_CONFIG_DIR` set, `claudeLoginDriver.ts`; pi's device-code login,
+  `piSdk/codexLogin.ts`) in a fresh directory under the state directory. On
+  success one writer-lane item checks the credential and renames it into the
+  account's token file, which replaces the whole file; the directory is always
+  deleted. The credential never leaves the gateway, and no login hold is taken.
 - **The relay** (`relay/`, its own entry and process under Pandeck's server
   account, `node:` only) is the only holder of the client key. It pipes its
   loopback port to the model port and each connection on its 0600 Unix socket to
