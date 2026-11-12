@@ -5,7 +5,8 @@
  * cursor about once a second while the dialog is open and the login runs.
  *
  * A failed read keeps the last state and tries again. A Cancel pressed before
- * the start answered is latched and sent once the login id is known; a cancel
+ * the start answered is latched and sent once the login id is known, even
+ * after a Close; a cancel
  * the gateway did not take shows `cancelUnconfirmed`. Close stops reading and
  * never cancels. The gateway sends fixed reason codes, which this turns into
  * the page's own text.
@@ -101,7 +102,12 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
   const generation = useRef(0);
   const current = useRef<string | undefined>(undefined);
   const cursor = useRef(0);
-  const cancelLatched = useRef(false);
+  /**
+   * The open start request's cancel intent, its own object per start: a
+   * Close before the answer leaves it intact, so a Cancel already pressed
+   * is still sent. The generation only guards what the dialog shows.
+   */
+  const pending = useRef<{ cancel: boolean } | undefined>(undefined);
   const changed = useRef(onChanged);
   useEffect(() => {
     changed.current = onChanged;
@@ -125,7 +131,8 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
       const run = ++generation.current;
       current.current = undefined;
       cursor.current = 0;
-      cancelLatched.current = false;
+      const intent = { cancel: false };
+      pending.current = intent;
       setLoginId(undefined);
       setDialog({
         provider: target.provider,
@@ -143,12 +150,14 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
       }).then(
         (started) => {
           changed.current();
+          if (pending.current === intent) pending.current = undefined;
+          if (intent.cancel) sendCancel(run, started.loginId);
           if (generation.current !== run) return;
           current.current = started.loginId;
           setLoginId(started.loginId);
-          if (cancelLatched.current) sendCancel(run, started.loginId);
         },
         (err: unknown) => {
+          if (pending.current === intent) pending.current = undefined;
           if (generation.current !== run) return;
           setDialog(
             (d) => d && { ...d, status: "error", error: startErrorText(err) },
@@ -161,8 +170,8 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
 
   const cancel = useCallback(() => {
     const id = current.current;
-    if (id === undefined) cancelLatched.current = true;
-    else sendCancel(generation.current, id);
+    if (id !== undefined) sendCancel(generation.current, id);
+    else if (pending.current) pending.current.cancel = true;
   }, [sendCancel]);
 
   const close = useCallback(() => {

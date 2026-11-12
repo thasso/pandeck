@@ -267,3 +267,44 @@ test("each reason becomes the page's own text; a refused start says why", async 
     "The gateway is running as many logins as it can. Try again in a moment.",
   );
 });
+
+/** A start the test answers later, recorded like any other call. */
+function heldStart(): () => void {
+  let answerStart!: () => void;
+  const started = new Promise<void>((resolve) => (answerStart = resolve));
+  fetchMock.mockImplementationOnce(async (input, init) => {
+    calls.push({
+      path: String(input),
+      body: JSON.parse(String(init!.body)) as unknown,
+    });
+    await started;
+    return json(200, { loginId: "L1", accountId: "claude-a" });
+  });
+  return answerStart;
+}
+
+test("a Cancel before the start answered is still sent after a Close (review C4)", async () => {
+  const answerStart = heldStart();
+  route("/api/logins/cancel", () => json(204));
+  const { login } = harness();
+  act(() => login().open({ provider: "claude", accountName: "Claude" }));
+  act(() => login().cancel());
+  act(() => login().close());
+  answerStart();
+  await flush();
+  expect(calls.filter((c) => c.path === "/api/logins/cancel")).toEqual([
+    { path: "/api/logins/cancel", body: { loginId: "L1" } },
+  ]);
+  expect(login().dialog).toBeNull();
+});
+
+test("a Close alone before the start answered sends no cancel", async () => {
+  const answerStart = heldStart();
+  route("/api/logins/cancel", () => json(204));
+  const { login } = harness();
+  act(() => login().open({ provider: "claude", accountName: "Claude" }));
+  act(() => login().close());
+  answerStart();
+  await flush();
+  expect(calls.some((c) => c.path === "/api/logins/cancel")).toBe(false);
+});
