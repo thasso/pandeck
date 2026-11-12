@@ -1791,20 +1791,20 @@ path above.
   relay's socket, mirrors the gateway's accounts into the profile registry and
   gives engines the relay's loopback URL. Settings' existing UI drives the
   gateway (`remoteLogins.ts`): adding an account starts its first login, the
-  login dialog renders both providers' login events (Claude's output, Codex's
-  URL and code as one `device` message, never on the account), Cancel sends
-  `logins.cancel`, also while the gateway's start has not answered yet (it is
-  latched and forwarded once the login id is known), and delete calls
-  `accounts.remove`. The gateway sends a login's events only over current
-  connections, so a lost connection marks the server's running logins
-  interrupted; after the next connect each is cancelled on the gateway. An
-  `unknown_login` answer, to that cancel or to the user's, means the gateway no
-  longer runs it: the dialog ends with "The gateway connection was interrupted.
-  Start the login again." and the account shows the mirror's state. Otherwise
-  the gateway's own terminal event ends it. Known limit: a start whose answer is
-  lost with the connection can leave the gateway's login running until its
-  10-minute timeout; a retry rejoins it (without the device code or output it
-  already sent) and Cancel ends it. This credential ownership does not move
+  login dialog receives both providers' login events (Claude's output, read only
+  for its authorization URL, Codex's URL and code as one `device` message, never
+  on the account), Cancel sends `logins.cancel`, also while the gateway's start
+  has not answered yet (it is latched and forwarded once the login id is known),
+  and delete calls `accounts.remove`. The gateway sends a login's events only
+  over current connections, so a lost connection marks the server's running
+  logins interrupted; after the next connect each is cancelled on the gateway.
+  An `unknown_login` answer, to that cancel or to the user's, means the gateway
+  no longer runs it: the dialog ends with "The gateway connection was
+  interrupted. Start the login again." and the account shows the mirror's state.
+  Otherwise the gateway's own terminal event ends it. Known limit: a start whose
+  answer is lost with the connection can leave the gateway's login running until
+  its 10-minute timeout; a retry rejoins it (without the device code or output
+  it already sent) and Cancel ends it. This credential ownership does not move
   Claude's local runtime/transcript directories: Pandeck's one-time Default
   transcript import and startup gate still apply before the client link starts
   (`docs/credential-distribution.md`).
