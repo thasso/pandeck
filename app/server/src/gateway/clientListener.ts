@@ -5,11 +5,19 @@
  *   client certificate: `POST /enroll {code, publicKeyPem}` uses up a
  *   one-time code and answers `{clientId, certificatePem, caPem, modelPort,
  *   clientPort}`;
- * - the model port, HTTPS with mutual TLS, the same routes as the loopback
+ * - the model port, HTTP over mutual TLS, the same routes as the loopback
  *   listener through a forwarder that spends only the calling client's
  *   leases;
  * - the client port, TLS with mutual TLS, serving gateway client 1.0
  *   (`clientMethods.ts`).
+ *
+ * The model port is a TLS server that hands each admitted socket to an
+ * unlistened HTTP parser, not an `https.Server`: Bun 1.4.2 verifies client
+ * certificates on an `https.Server` but its sockets have no
+ * `getPeerCertificate()`, so the client could not be named (Task-1401). Its
+ * request deadlines are ours (`modelConnection`), the same on both runtimes:
+ * Node enforces an HTTP server's header and request timeouts only once that
+ * server listens, and Bun's parser enforces none on a handed-in socket.
  *
  * With tools (Task-1397, `edgeTools.ts`), `/mcp` on the model port is the
  * edge's MCP endpoint and never reaches the forwarder. It needs the client's
@@ -27,8 +35,8 @@
  * both under the state directory.
  */
 import { randomBytes } from "node:crypto";
+import http from "node:http";
 import https from "node:https";
-import type http from "node:http";
 import type net from "node:net";
 import { join } from "node:path";
 import tls from "node:tls";
@@ -105,6 +113,32 @@ const MAX_ENROLL_SOURCES = 4_096;
 /** How long `integrations.set` and a checked status wait for Atlassian. */
 const INTEGRATION_CHECK_MS = 15_000;
 
+/**
+ * The model port's request deadlines, each a separate phase of a
+ * connection:
+ *
+ * - `headersMs`: while the connection awaits a request (after the handshake,
+ *   and whenever its last open request's response has ended), the next
+ *   request's headers must be complete within this;
+ * - `requestMs`: each request's body must be complete within this, counted
+ *   from its headers, by its own timer;
+ * - `idleMs`: while awaiting a request, the socket may stay silent this long.
+ *
+ * Nothing bounds a response: a long, quiet model stream is never cut.
+ */
+export interface ModelDeadlines {
+  headersMs: number;
+  requestMs: number;
+  idleMs: number;
+}
+
+/** The values of Node's `https.Server` defaults the port had before. */
+const MODEL_DEADLINES: ModelDeadlines = {
+  headersMs: 60_000,
+  requestMs: 300_000,
+  idleMs: 5_000,
+};
+
 export interface ClientListenerOptions {
   /** Where the three ports bind; `127.0.0.1` unless given. */
   bindHost?: string;
@@ -143,6 +177,8 @@ interface ClientListenerDeps {
   >;
   /** The edge's tools; without them `/mcp` is 404 and integrations refuse. */
   tools?: EdgeTools | undefined;
+  /** Test seam: shorter model-port deadlines; no entry passes it. */
+  modelDeadlines?: ModelDeadlines | undefined;
 }
 
 /** An account of a user, as logins and tests create it. */
@@ -154,6 +190,8 @@ export interface RunningClientListener {
   readonly enrollPort: number;
   /** The gateway's CA, PEM: what a relay trusts the edge with. */
   readonly caPem: string;
+  /** The model port's deadlines in force. */
+  readonly modelDeadlines: Readonly<ModelDeadlines>;
   readonly registry: ClientRegistry;
   /** Adds or replaces a user's account and tells its clients. */
   putAccount(account: ClientAccountRecord): void;
@@ -181,6 +219,70 @@ function peerIdentity(
 /** The client id the request's certificate names, for the forwarder. */
 export function peerClientId(req: http.IncomingMessage): string | undefined {
   return peerIdentity(req.socket)?.clientId;
+}
+
+/** One model-port connection's deadlines, from its handoff to HTTP. */
+export interface ModelConnection {
+  /** Called on each request's `request` event, before any handling. */
+  request(req: http.IncomingMessage, res: http.ServerResponse): void;
+}
+
+/**
+ * Enforces `ModelDeadlines` on a socket through public events only. A request
+ * is open from its `request` event until its response finishes or closes;
+ * pipelined requests can be open together. The connection awaits a request
+ * (headers timer and socket idle timeout) only at the handoff and whenever
+ * the count of open requests drops to zero, and any request ends that. Each
+ * request's body timer is its own, cleared only by its own `end` or `close`.
+ * Every expiry destroys the socket, whose `close` clears every timer.
+ */
+export function modelConnection(
+  socket: net.Socket,
+  deadlines: ModelDeadlines,
+): ModelConnection {
+  let open = 0;
+  let headers: NodeJS.Timeout | undefined;
+  const bodies = new Set<NodeJS.Timeout>();
+  const expire = (): void => {
+    socket.destroy();
+  };
+  const awaitRequest = (): void => {
+    clearTimeout(headers);
+    headers = setTimeout(expire, deadlines.headersMs);
+    socket.setTimeout(deadlines.idleMs);
+  };
+  socket.on("timeout", expire);
+  socket.once("close", () => {
+    clearTimeout(headers);
+    for (const timer of bodies) clearTimeout(timer);
+    bodies.clear();
+    socket.setTimeout(0);
+  });
+  awaitRequest();
+  return {
+    request(req, res) {
+      open++;
+      clearTimeout(headers);
+      headers = undefined;
+      socket.setTimeout(0);
+      const body = setTimeout(expire, deadlines.requestMs);
+      bodies.add(body);
+      const received = (): void => {
+        clearTimeout(body);
+        bodies.delete(body);
+      };
+      req.once("end", received);
+      req.once("close", received);
+      let ended = false;
+      const responded = (): void => {
+        if (ended) return;
+        ended = true;
+        if (--open === 0 && !socket.destroyed) awaitRequest();
+      };
+      res.once("finish", responded);
+      res.once("close", responded);
+    },
+  };
 }
 
 function loadEdgeTls(stateDir: string, hosts: string[]): EdgeTls {
@@ -775,7 +877,27 @@ export async function startClientListener(
     });
   };
 
-  const model = https.createServer(mutualTls, (req, res) => {
+  const modelDeadlines = deps.modelDeadlines ?? MODEL_DEADLINES;
+  const modelConnections = new WeakMap<net.Socket, ModelConnection>();
+  // Never listened: only admitted sockets reach it, through `connection`.
+  const modelHttp = http.createServer((req, res) => {
+    const connection = modelConnections.get(req.socket);
+    if (!connection) {
+      req.socket.destroy();
+      return;
+    }
+    connection.request(req, res);
+    serveModel(req, res);
+  });
+  // Its own timeouts are off, so the socket's timeout is ours alone. Set as
+  // properties: Bun 1.4.2 ignores `keepAliveTimeout` as an option.
+  modelHttp.keepAliveTimeout = 0;
+  modelHttp.headersTimeout = 0;
+  modelHttp.requestTimeout = 0;
+  const serveModel = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void => {
     let client: GatewayClient | undefined;
     try {
       client = activeClient(req.socket);
@@ -797,16 +919,20 @@ export async function startClientListener(
     if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
       return mcpGate(req, res, client, deps.tools);
     deps.forwarder.handleRequest(req, res);
-  });
-  model.on("secureConnection", (socket: tls.TLSSocket) => {
+  };
+  const model = tls.createServer(mutualTls, (socket) => {
     track(socket);
     try {
-      if (!activeClient(socket)) refuseClient(socket);
+      if (!activeClient(socket)) return refuseClient(socket);
     } catch {
       socket.destroy();
+      return;
     }
+    modelConnections.set(socket, modelConnection(socket, modelDeadlines));
+    modelHttp.emit("connection", socket);
   });
-  model.on("tlsClientError", () => {});
+  // A plain TLS server does not close timed-out handshakes (below).
+  model.on("tlsClientError", (_err, socket) => socket.destroy());
 
   const clientServer = tls.createServer(mutualTls, (socket) => {
     track(socket);
@@ -968,6 +1094,7 @@ export async function startClientListener(
     clientPort,
     enrollPort,
     caPem: edgeTls.caCertPem,
+    modelDeadlines,
     registry,
     putAccount,
     removeAccount,
