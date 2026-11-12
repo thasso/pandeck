@@ -1769,9 +1769,15 @@ path above.
   URL and code as one `device` message, never on the account), Cancel sends
   `logins.cancel`, also while the gateway's start has not answered yet (it is
   latched and forwarded once the login id is known), and delete calls
-  `accounts.remove`. This credential ownership does not move Claude's local
-  runtime/transcript directories: Pandeck's one-time Default transcript import
-  and startup gate still apply before the client link starts
+  `accounts.remove`. The gateway sends a login's events only over current
+  connections, so a lost connection marks the server's running logins
+  interrupted; after the next connect each is cancelled on the gateway. An
+  `unknown_login` answer, to that cancel or to the user's, means the gateway no
+  longer runs it: the dialog ends with "The gateway connection was interrupted.
+  Start the login again." and the account shows the mirror's state. Otherwise
+  the gateway's own terminal event ends it. This credential ownership does not
+  move Claude's local runtime/transcript directories: Pandeck's one-time Default
+  transcript import and startup gate still apply before the client link starts
   (`docs/credential-distribution.md`).
 - **Gateway tools** (Task-1398, `remoteTools.ts`,
   `tools/gateway/remoteToolGroup.ts`). On every connect the link calls

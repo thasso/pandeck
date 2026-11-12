@@ -21,6 +21,14 @@
  * and a viewer that closes just leaves. A run finishes on the gateway's
  * terminal state, sent after its driver settled, and is kept exactly two
  * minutes from then.
+ *
+ * The gateway sends a login's events only over current connections, so a
+ * run whose link dropped may have missed its end. Such a run is marked
+ * interrupted; once a connection is back it is cancelled on the gateway.
+ * An `unknown_login` answer (to that or to the user's own cancel) proves the
+ * gateway no longer runs it: it ends with the interrupted text, and the
+ * account's state is the mirror's. Otherwise the gateway's own terminal
+ * event ends it. A transport loss alone never ends a run.
  */
 import type { WebSocket } from "ws";
 import type {
@@ -60,7 +68,8 @@ export interface RemoteLoginPort {
     name?: string;
   }): Promise<{ loginId: string; accountId: string }>;
   input(loginId: string, text: string): Promise<void>;
-  cancel(loginId: string): Promise<void>;
+  /** `unknown`: the gateway runs no such login for this client any more. */
+  cancel(loginId: string): Promise<"cancelled" | "unknown">;
   /** Removes the account on the gateway (`accounts.remove`). */
   remove(accountId: string): Promise<void>;
 }
@@ -81,6 +90,8 @@ interface RemoteRun {
   code?: string;
   /** A cancel before the start's answer, forwarded once with its login id. */
   cancelLatched: boolean;
+  /** The link dropped while it ran: its events may be lost. */
+  interrupted: boolean;
   /** The gateway's answer to the start. */
   started: Promise<void>;
 }
@@ -88,6 +99,8 @@ interface RemoteRun {
 const MAX_OUTPUT_CHARS = 64_000;
 const FINISHED_RETENTION_MS = 2 * 60_000;
 const MAX_EARLY_EVENTS = 100;
+const INTERRUPTED_TEXT =
+  "The gateway connection was interrupted. Start the login again.";
 
 let port: RemoteLoginPort | undefined;
 const runs = new Map<string, RemoteRun>();
@@ -127,10 +140,12 @@ function deviceOf(run: RemoteRun): AccountLoginDevice | undefined {
     : undefined;
 }
 
+/** `errorOnAccount: false` shows an error to the dialog only, not on the account. */
 function finish(
   run: RemoteRun,
   status: Exclude<AccountLoginStatus, "connecting">,
   error?: string,
+  errorOnAccount = true,
 ): void {
   if (run.finished) return;
   run.finished = true;
@@ -138,7 +153,11 @@ function finish(
   if (error !== undefined) run.error = error;
   if (run.loginId !== undefined) byLogin.delete(run.loginId);
   if (status === "ready") completeCredentialProfileLogin(run.accountId);
-  else if (status === "error" && credentialProfileById(run.accountId))
+  else if (
+    status === "error" &&
+    errorOnAccount &&
+    credentialProfileById(run.accountId)
+  )
     setCredentialProfileLoginState(run.accountId, {
       status: "error",
       error: error?.slice(0, 180) ?? "Login failed.",
@@ -173,8 +192,39 @@ function apply(run: RemoteRun, event: RemoteLoginEvent): void {
       return;
     }
     case "state":
-      if (event.state !== "running") finish(run, event.state, event.error);
+      if (event.state === "running") return;
+      // The reconnect's cancel ended it; its own end was lost.
+      if (event.state === "cancelled" && run.interrupted)
+        finish(run, "error", INTERRUPTED_TEXT, false);
+      else finish(run, event.state, event.error);
   }
+}
+
+/**
+ * Cancels the run's login on the gateway. An `unknown` answer means the
+ * gateway no longer runs it, so its end never reached this server.
+ */
+function cancelOnGateway(run: RemoteRun, loginId: string): void {
+  const gateway = port;
+  if (!gateway) return;
+  gateway.cancel(loginId).then(
+    (answer) => {
+      if (answer === "unknown") finish(run, "error", INTERRUPTED_TEXT, false);
+    },
+    // No answer (the link dropped): a later reconnect cancels it again.
+    () => {},
+  );
+}
+
+/** The link's connection ended: every running login may miss its events. */
+export function remoteLoginsDisconnected(): void {
+  for (const run of byLogin.values()) run.interrupted = true;
+}
+
+/** A connection is back: each interrupted login is ended on the gateway. */
+export function remoteLoginsReconnected(): void {
+  for (const [loginId, run] of [...byLogin])
+    if (run.interrupted) cancelOnGateway(run, loginId);
 }
 
 /** A `logins.event` from the gateway. */
@@ -211,6 +261,7 @@ function launch(start: {
     finished: false,
     viewers: new Set(),
     cancelLatched: false,
+    interrupted: false,
     started: Promise.resolve(),
   };
   if (start.accountId) runs.set(start.accountId, run);
@@ -224,8 +275,7 @@ function launch(start: {
       const queued = early.get(loginId) ?? [];
       early.delete(loginId);
       for (const event of queued) apply(run, event);
-      if (run.cancelLatched && !run.finished)
-        void gateway.cancel(loginId).catch(() => {});
+      if (run.cancelLatched && !run.finished) cancelOnGateway(run, loginId);
     },
     (err: unknown) => {
       if (runs.get(run.accountId) === run) runs.delete(run.accountId);
@@ -266,7 +316,7 @@ function handleMessage(run: RemoteRun, message: AccountLoginClientMessage) {
   if (run.finished) return;
   if (message.type === "cancel") {
     if (run.loginId === undefined) run.cancelLatched = true;
-    else void port?.cancel(run.loginId).catch(() => {});
+    else cancelOnGateway(run, run.loginId);
     return;
   }
   // Before the answer there is no login to take it; Codex takes none.

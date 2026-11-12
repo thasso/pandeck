@@ -20,8 +20,12 @@ process.env.HOME = join(tmp, "home");
 
 const profiles = await import("./credentialProfiles.ts");
 const { attachAccountLoginSocket } = await import("./accountLoginSocket.ts");
-const { installRemoteLoginPort, remoteLoginEvent } =
-  await import("./remoteLogins.ts");
+const {
+  installRemoteLoginPort,
+  remoteLoginEvent,
+  remoteLoginsDisconnected,
+  remoteLoginsReconnected,
+} = await import("./remoteLogins.ts");
 const { deferred } = await import("./test/fakeLoginHoldLink.ts");
 
 class FakeSocket extends EventEmitter {
@@ -47,6 +51,8 @@ class FakeSocket extends EventEmitter {
 /** A fake port: every start waits for the test; calls land in `calls`. */
 function fakePort() {
   const calls: string[] = [];
+  /** What the gateway answers a cancel. */
+  const cancelAnswer = { value: "cancelled" as "cancelled" | "unknown" };
   const starts: ReturnType<
     typeof deferred<{ loginId: string; accountId: string }>
   >[] = [];
@@ -62,10 +68,11 @@ function fakePort() {
     },
     cancel: async (loginId) => {
       calls.push(`cancel ${loginId}`);
+      return cancelAnswer.value;
     },
     remove: async () => {},
   });
-  return { calls, starts, uninstall };
+  return { calls, starts, uninstall, cancelAnswer };
 }
 
 let port: ReturnType<typeof fakePort> | undefined;
@@ -231,4 +238,86 @@ test("Codex's device message goes out once both the URL and the code arrived, an
     /CODE-D|auth\.example/,
   );
   remoteLoginEvent("login-d", { type: "state", state: "cancelled" });
+});
+
+// C2 (rv-1402-b1-code-01): the gateway keeps no login events for a dropped
+// connection, so a run whose link dropped is reconciled, never left running.
+describe("a login whose link dropped", () => {
+  const INTERRUPTED =
+    "The gateway connection was interrupted. Start the login again.";
+
+  async function running(name: string) {
+    port = fakePort();
+    const { id } = profiles.createCredentialProfile({
+      name,
+      provider: "openai-codex",
+    });
+    const viewer = open(id);
+    port.starts[0]!.resolve({ loginId: `login-${name}`, accountId: id });
+    await ticks();
+    return { id, viewer, loginId: `login-${name}` };
+  }
+
+  test("a cancel the gateway answers unknown_login ends it with the interrupted text, and a new start reaches the gateway", async () => {
+    const { id, viewer, loginId } = await running("unknown");
+    port!.cancelAnswer.value = "unknown";
+    viewer.type(JSON.stringify({ type: "cancel" }));
+    await ticks();
+    assert.deepEqual(port!.calls.slice(1), [`cancel ${loginId}`]);
+    assert.equal(viewer.sent.at(-1)?.status, "error");
+    assert.equal(viewer.sent.at(-1)?.error, INTERRUPTED);
+    const state = profiles.credentialProfileSummaryById(id)!;
+    assert.notEqual(state.status, "connecting");
+    assert.equal(
+      state.error,
+      undefined,
+      "the account shows the mirror's state",
+    );
+    open(id);
+    assert.equal(port!.calls.at(-1), `start openai-codex ${id}`);
+  });
+
+  test("after a reconnect it is cancelled on the gateway; unknown_login ends it interrupted", async () => {
+    const { viewer, loginId } = await running("gone");
+    remoteLoginsDisconnected();
+    // A transport loss alone ends nothing.
+    assert.equal(viewer.statuses().length, 0);
+    port!.cancelAnswer.value = "unknown";
+    remoteLoginsReconnected();
+    await ticks();
+    assert.deepEqual(port!.calls.slice(1), [`cancel ${loginId}`]);
+    assert.deepEqual(viewer.statuses(), ["error"]);
+    assert.equal(viewer.sent.at(-1)?.error, INTERRUPTED);
+  });
+
+  test("after a reconnect a login the gateway still ran ends with its own event, shown as interrupted when cancelled", async () => {
+    const { viewer, loginId } = await running("alive");
+    remoteLoginsDisconnected();
+    remoteLoginsReconnected();
+    await ticks();
+    assert.deepEqual(port!.calls.slice(1), [`cancel ${loginId}`]);
+    assert.equal(viewer.statuses().length, 0, "waits for the gateway's end");
+    remoteLoginEvent(loginId, { type: "state", state: "cancelled" });
+    assert.deepEqual(viewer.statuses(), ["error"]);
+    assert.equal(viewer.sent.at(-1)?.error, INTERRUPTED);
+  });
+
+  test("a login that ended ready while reconnecting stays ready", async () => {
+    const { id, viewer, loginId } = await running("ready");
+    remoteLoginsDisconnected();
+    remoteLoginsReconnected();
+    remoteLoginEvent(loginId, { type: "state", state: "ready" });
+    await ticks();
+    assert.deepEqual(viewer.statuses(), ["ready"]);
+    assert.notEqual(profiles.credentialProfileSummaryById(id)?.status, "error");
+  });
+
+  test("a reconnect leaves logins that never lost their link alone", async () => {
+    const { viewer, loginId } = await running("steady");
+    remoteLoginsReconnected();
+    await ticks();
+    assert.deepEqual(port!.calls.slice(1), []);
+    remoteLoginEvent(loginId, { type: "state", state: "cancelled" });
+    assert.deepEqual(viewer.statuses(), ["cancelled"]);
+  });
 });

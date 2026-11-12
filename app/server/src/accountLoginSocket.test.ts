@@ -145,7 +145,7 @@ const KINDS: Record<string, () => Harness> = {
     const uninstall = installRemoteLoginPort({
       start: async () => ({ loginId: `remote-${++started}`, accountId: id }),
       input: async () => {},
-      cancel: async () => {},
+      cancel: async () => "cancelled",
       remove: async () => {},
     });
     return {
