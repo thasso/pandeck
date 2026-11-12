@@ -172,3 +172,54 @@ test("each refusal shows its fixed text", async () => {
   expect(dialog()?.textContent).toContain("This client is no longer enrolled.");
   act(() => view.root.unmount());
 });
+
+/** A promise the test settles. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => (resolve = settle));
+  return { promise, resolve };
+}
+
+test("a repeated Mint click sends one mint; the client's actions wait for it", async () => {
+  const minted = deferred<{ token: string }>();
+  const p = props({ mintMcpToken: vi.fn(() => minted.promise) });
+  mount(<GatewayClients {...p} />);
+  const mint = button("Mint MCP token for Laptop")!;
+  // Two clicks before any re-render, then a third once it rendered.
+  await act(async () => {
+    mint.click();
+    mint.click();
+  });
+  await act(async () => button("Mint MCP token for Laptop")!.click());
+  expect(p.mintMcpToken).toHaveBeenCalledTimes(1);
+  expect(button("Mint MCP token for Laptop")!.disabled).toBe(true);
+  expect(button("Revoke Laptop")!.disabled).toBe(true);
+  // Another client is not held up.
+  expect(button("Revoke Desktop")!.disabled).toBe(false);
+  await act(async () => minted.resolve({ token: "pgmcp_ONCE" }));
+  expect(
+    document.querySelector<HTMLInputElement>('input[aria-label="MCP token"]')
+      ?.value,
+  ).toBe("pgmcp_ONCE");
+  await click("Done");
+  expect(button("Mint MCP token for Laptop")!.disabled).toBe(false);
+  expect(button("Revoke Laptop")!.disabled).toBe(false);
+});
+
+test("a confirmed revoke holds the client's actions until it settles", async () => {
+  const revoked = deferred<void>();
+  const p = props({ revoke: vi.fn(() => revoked.promise) });
+  mount(<GatewayClients {...p} />);
+  await click("Revoke Laptop");
+  const confirm = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+  ].find((b) => b.textContent === "Revoke client")!;
+  await act(async () => {
+    confirm.click();
+    confirm.click();
+  });
+  expect(p.revoke).toHaveBeenCalledTimes(1);
+  expect(button("Mint MCP token for Laptop")!.disabled).toBe(true);
+  await act(async () => revoked.resolve());
+  expect(button("Mint MCP token for Laptop")!.disabled).toBe(false);
+});

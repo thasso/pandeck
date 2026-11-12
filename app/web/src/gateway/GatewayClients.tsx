@@ -2,11 +2,12 @@
  * The signed-in user's enrolled clients on the gateway page (Task-1405): the
  * list with each client's MCP token state, a one-time enrollment code for a
  * new client, minting (or replacing) and revoking a client's MCP token, and
- * revoking a client. Every revoke and every replacement asks first. A new
+ * revoking a client. Every revoke and every replacement asks first, and a
+ * client's actions are disabled while one of them is in flight. A new
  * code or token is shown once in `GatewaySecretDialog` and dropped when it
  * closes; the list never carries one.
  */
-import { useCallback, useState, type SyntheticEvent } from "react";
+import { useCallback, useRef, useState, type SyntheticEvent } from "react";
 import { Ban, KeyRound, Plus, Trash2 } from "lucide-react";
 import type {
   GatewayUiClient,
@@ -115,6 +116,25 @@ export function GatewayClients({
   const [pendingError, setPendingError] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
+  /**
+   * Clients with a mint or revoke in flight: the ref answers at once (a
+   * repeated click before a re-render), the state disables their actions.
+   */
+  const inFlight = useRef(new Set<string>());
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
+  /** Runs one change of the client, unless one is already in flight. */
+  const once = useCallback(
+    <T,>(clientId: string, run: () => Promise<T>): Promise<T> | undefined => {
+      if (inFlight.current.has(clientId)) return undefined;
+      inFlight.current.add(clientId);
+      setBusyIds(new Set(inFlight.current));
+      return run().finally(() => {
+        inFlight.current.delete(clientId);
+        setBusyIds(new Set(inFlight.current));
+      });
+    },
+    [],
+  );
 
   const create = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -146,9 +166,10 @@ export function GatewayClients({
   };
 
   const startMint = (client: GatewayUiClient) => {
+    if (inFlight.current.has(client.id)) return;
     setRowError(null);
     if (client.mcpToken) return ask({ kind: "replaceToken", client });
-    mint(client).then(
+    void once(client.id, () => mint(client))?.then(
       ({ token }) => setShown({ kind: "token", client, token }),
       (err: unknown) => setRowError(refusalText(err)),
     );
@@ -156,10 +177,8 @@ export function GatewayClients({
 
   const confirm = useCallback(() => {
     if (!pending) return;
-    setPendingBusy(true);
-    setPendingError(null);
     const { client } = pending;
-    const run: Promise<Shown | null> =
+    const run = once(client.id, (): Promise<Shown | null> =>
       pending.kind === "revoke"
         ? revoke(client.id).then(() => null)
         : pending.kind === "revokeToken"
@@ -168,7 +187,11 @@ export function GatewayClients({
               kind: "token" as const,
               client,
               token,
-            }));
+            })),
+    );
+    if (!run) return;
+    setPendingBusy(true);
+    setPendingError(null);
     run.then(
       (next) => {
         setPendingBusy(false);
@@ -180,7 +203,7 @@ export function GatewayClients({
         setPendingError(refusalText(err));
       },
     );
-  }, [pending, revoke, revokeMcpToken, mint]);
+  }, [pending, once, revoke, revokeMcpToken, mint]);
 
   const closeShown = () => {
     const wasCode = shown?.kind === "code";
@@ -240,6 +263,7 @@ export function GatewayClients({
                         : `Mint MCP token for ${client.label}`,
                       icon: <KeyRound />,
                       primary: true,
+                      disabled: busyIds.has(client.id),
                       onSelect: () => startMint(client),
                     },
                     ...(client.mcpToken
@@ -248,6 +272,7 @@ export function GatewayClients({
                             id: "revoke-token",
                             label: `Revoke MCP token of ${client.label}`,
                             icon: <Ban />,
+                            disabled: busyIds.has(client.id),
                             onSelect: () =>
                               ask({ kind: "revokeToken", client }),
                           },
@@ -258,6 +283,7 @@ export function GatewayClients({
                       label: `Revoke ${client.label}`,
                       icon: <Trash2 />,
                       primary: true,
+                      disabled: busyIds.has(client.id),
                       variant: "destructive" as const,
                       onSelect: () => ask({ kind: "revoke", client }),
                     },
