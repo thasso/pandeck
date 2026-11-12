@@ -308,3 +308,58 @@ test("a Close alone before the start answered sends no cancel", async () => {
   await flush();
   expect(calls.some((c) => c.path === "/api/logins/cancel")).toBe(false);
 });
+
+test("this dialog's Cancel shows cancelling, and its login ending cancelled sets cancelledHere (B1.1 props)", async () => {
+  route("/api/logins/start", () =>
+    json(200, { loginId: "L1", accountId: "claude-a" }),
+  );
+  route(
+    "/api/logins/read",
+    () => json(200, { state: "running", output: "", cursor: 0 }),
+    () => json(200, { state: "running", output: "", cursor: 0 }),
+    () => json(200, { state: "cancelled", output: "", cursor: 0 }),
+  );
+  route("/api/logins/cancel", () => json(204));
+  const { login } = harness();
+  act(() => login().open({ provider: "claude", accountName: "Claude" }));
+  await flush();
+  expect(login().dialog?.cancelling).toBe(false);
+  act(() => login().cancel());
+  await flush();
+  expect(login().dialog?.cancelling).toBe(true);
+  expect(login().dialog?.cancelledHere).toBe(false);
+  await tick(1_000);
+  await tick(1_000);
+  expect(login().dialog?.status).toBe("cancelled");
+  expect(login().dialog?.cancelling).toBe(false);
+  expect(login().dialog?.cancelledHere).toBe(true);
+});
+
+test("a login cancelled elsewhere is not cancelledHere; a refused cancel is not cancelling", async () => {
+  route("/api/logins/start", () =>
+    json(200, { loginId: "L1", accountId: "claude-a" }),
+  );
+  route(
+    "/api/logins/read",
+    () => json(200, { state: "running", output: "", cursor: 0 }),
+    () =>
+      json(200, {
+        state: "cancelled",
+        reason: "superseded",
+        output: "",
+        cursor: 0,
+      }),
+  );
+  route("/api/logins/cancel", () => json(503, { error: "unavailable" }));
+  const { login } = harness();
+  act(() => login().open({ provider: "claude", accountName: "Claude" }));
+  await flush();
+  act(() => login().cancel());
+  await flush();
+  expect(login().dialog?.cancelling).toBe(false);
+  expect(login().dialog?.cancelUnconfirmed).toBe(true);
+  await tick(1_000);
+  expect(login().dialog?.status).toBe("cancelled");
+  expect(login().dialog?.cancelledHere).toBe(false);
+  expect(login().dialog?.error).toBe("This login was started again elsewhere.");
+});

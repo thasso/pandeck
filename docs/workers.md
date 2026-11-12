@@ -2109,7 +2109,9 @@ and ChatGPT accounts, and reaches only its own origin with its session cookie.
   `unavailable` or `session_ended`, which the page turns into its own text. The
   page polls a login's read about once a second while its dialog is open and the
   login is not finished; it starts a login only on a click (Add or Log in),
-  renders it in B1's `AccountLoginDialogView` and asks before Remove.
+  renders it in B1's `AccountLoginDialogView` and asks before Remove. Its Cancel
+  shows "Cancelling…", and the dialog closes once that login ended cancelled; a
+  login ended elsewhere keeps its notice.
 - **Logs.** Only `ui sign-in: ok user=<id> (existing|created|bound)`,
   `ui sign-in: denied`,
   `ui sign-in: failed (discovery|exchange|keys|signature|claims|state|registry)`

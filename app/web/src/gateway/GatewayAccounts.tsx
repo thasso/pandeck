@@ -185,6 +185,8 @@ export function GatewayAccounts({
           device={login.dialog.device}
           error={login.dialog.error}
           cancelUnconfirmed={login.dialog.cancelUnconfirmed}
+          cancelling={login.dialog.cancelling}
+          cancelledHere={login.dialog.cancelledHere}
           submit={login.submit}
           cancel={login.cancel}
           onClose={login.close}

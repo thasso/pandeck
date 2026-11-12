@@ -7,7 +7,9 @@
  * A failed read keeps the last state and tries again. A Cancel pressed before
  * the start answered is latched and sent once the login id is known, even
  * after a Close; a cancel
- * the gateway did not take shows `cancelUnconfirmed`. Close stops reading and
+ * the gateway did not take shows `cancelUnconfirmed`; while one is latched or
+ * taken the dialog shows `cancelling`, and once that login ended cancelled
+ * `cancelledHere` closes it. Close stops reading and
  * never cancels. The gateway sends fixed reason codes, which this turns into
  * the page's own text.
  */
@@ -47,6 +49,10 @@ interface GatewayLoginDialog {
   device?: AccountLoginDevice | undefined;
   error?: string | undefined;
   cancelUnconfirmed: boolean;
+  /** This dialog's Cancel is latched or taken for the shown login. */
+  cancelling: boolean;
+  /** The login this dialog cancelled ended cancelled: the view closes. */
+  cancelledHere: boolean;
 }
 
 const STATUS: Record<GatewayUiLoginState, AccountLoginStatus> = {
@@ -117,11 +123,15 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
     cancelLogin(id).then(
       () => {
         if (generation.current === run)
-          setDialog((d) => d && { ...d, cancelUnconfirmed: false });
+          setDialog(
+            (d) => d && { ...d, cancelUnconfirmed: false, cancelling: true },
+          );
       },
       () => {
         if (generation.current === run)
-          setDialog((d) => d && { ...d, cancelUnconfirmed: true });
+          setDialog(
+            (d) => d && { ...d, cancelUnconfirmed: true, cancelling: false },
+          );
       },
     );
   }, []);
@@ -140,6 +150,8 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
         status: "connecting",
         output: "",
         cancelUnconfirmed: false,
+        cancelling: false,
+        cancelledHere: false,
       });
       startLogin({
         kind: target.provider,
@@ -160,7 +172,13 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
           if (pending.current === intent) pending.current = undefined;
           if (generation.current !== run) return;
           setDialog(
-            (d) => d && { ...d, status: "error", error: startErrorText(err) },
+            (d) =>
+              d && {
+                ...d,
+                status: "error",
+                error: startErrorText(err),
+                cancelling: false,
+              },
           );
         },
       );
@@ -172,6 +190,12 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
     const id = current.current;
     if (id !== undefined) sendCancel(generation.current, id);
     else if (pending.current) pending.current.cancel = true;
+    else return;
+    setDialog((d) =>
+      d && d.status === "connecting"
+        ? { ...d, cancelling: true, cancelUnconfirmed: false }
+        : d,
+    );
   }, [sendCancel]);
 
   const close = useCallback(() => {
@@ -205,6 +229,8 @@ export function useGatewayLogin(onChanged: () => void): GatewayLogin {
               output: d.output + view.output,
               ...(view.device ? { device: view.device } : {}),
               error: endText(view),
+              cancelling: view.state === "running" && d.cancelling,
+              cancelledHere: view.state === "cancelled" && d.cancelling,
             },
         );
         if (view.state !== "running") {

@@ -101,8 +101,9 @@ test("one Add click opens the dialog and starts exactly one login, under StrictM
   ]);
   const dialog = document.querySelector('[role="dialog"]');
   expect(dialog?.getAttribute("aria-label")).toBe("Connect Claude");
-  // Close never cancels.
-  await act(async () => button("Close Claude login")!.click());
+  // While it runs the only way out is Cancel (B1.1); nothing cancelled yet.
+  expect(button("Close Claude login")).toBeUndefined();
+  expect(button("Cancel login")).toBeDefined();
   expect(calls.some((c) => c.path === "/api/logins/cancel")).toBe(false);
   act(() => view.root.unmount());
 });
