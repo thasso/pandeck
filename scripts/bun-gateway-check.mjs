@@ -1039,12 +1039,12 @@ export async function checkEdgeEntry(runtimeRoot) {
       `/api/me signed out answered ${me.status}.`,
     );
     // The accounts routes (Task-1402 B2) are wired in the packaged edge.
-    const accounts = await ui("/api/accounts");
+    const accountsRoute = await ui("/api/accounts");
     assert(
-      accounts.status === 401 &&
-        JSON.stringify(JSON.parse(accounts.body.toString("utf8"))) ===
+      accountsRoute.status === 401 &&
+        JSON.stringify(JSON.parse(accountsRoute.body.toString("utf8"))) ===
           '{"error":"signed_out"}',
-      `/api/accounts signed out answered ${accounts.status}.`,
+      `/api/accounts signed out answered ${accountsRoute.status}.`,
     );
     const login = await ui("/auth/login");
     assert(
