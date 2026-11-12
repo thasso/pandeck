@@ -147,6 +147,105 @@ describe("Claude", () => {
     act(() => view.root.unmount());
   });
 
+  /** Types `value` into the code field and submits the form. */
+  function paste(node: HTMLElement, value: string) {
+    const input = node.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => {
+      node
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        );
+    });
+    return input;
+  }
+
+  function deferred() {
+    let resolve!: (sent: boolean) => void;
+    let reject!: (err: Error) => void;
+    const promise = new Promise<boolean>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const submitButton = (node: HTMLElement) =>
+    [...node.querySelectorAll("button")].find(
+      (b) => b.getAttribute("type") === "submit",
+    )!;
+
+  test("a promised submission shows submitted only once it answered true", async () => {
+    const answer = deferred();
+    const submit = vi.fn(() => answer.promise);
+    const { node, view } = dialog({ ...claude, submit });
+    const input = paste(node, "async-code");
+    expect(submit).toHaveBeenCalledWith("async-code");
+    // Pending: the field and Submit wait; nothing claims it was sent.
+    expect(input.disabled).toBe(true);
+    expect(submitButton(node).getAttribute("aria-busy")).toBe("true");
+    expect(node.textContent).not.toContain("Code submitted");
+    expect(input.value).toBe("async-code");
+    await act(async () => answer.resolve(true));
+    expect(input.value).toBe("");
+    expect(input.disabled).toBe(false);
+    expect(node.textContent).toContain("Code submitted; waiting for Claude…");
+    act(() => view.root.unmount());
+  });
+
+  for (const outcome of ["false", "rejection"] as const)
+    test(`a promised submission answering ${outcome} keeps the code and says it was not sent`, async () => {
+      const answer = deferred();
+      const { node, view } = dialog({
+        ...claude,
+        submit: () => answer.promise,
+      });
+      const input = paste(node, "kept-code");
+      await act(async () => {
+        if (outcome === "false") answer.resolve(false);
+        else answer.reject(new Error("network"));
+      });
+      expect(input.value).toBe("kept-code");
+      expect(input.disabled).toBe(false);
+      expect(node.textContent).not.toContain("Code submitted");
+      expect(node.querySelector('[role="alert"]')?.textContent).toContain(
+        "The code was not sent. Try again.",
+      );
+      act(() => view.root.unmount());
+    });
+
+  test("a synchronous false answer changes nothing, as before", () => {
+    const { node, view } = dialog({ ...claude, submit: () => false });
+    const input = paste(node, "sync-code");
+    expect(input.value).toBe("sync-code");
+    expect(node.textContent).not.toContain("Code submitted");
+    expect(node.querySelector('[role="alert"]')).toBeNull();
+    act(() => view.root.unmount());
+  });
+
+  test("an answer arriving after the login left connecting is ignored", async () => {
+    const answer = deferred();
+    const props = { ...claude, submit: () => answer.promise };
+    const { node, view } = dialog(props);
+    paste(node, "late-code");
+    view.render(<AccountLoginDialogView {...props} status="ready" />);
+    await act(async () => answer.resolve(false));
+    const shown = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(shown.querySelector('[role="alert"]')).toBeNull();
+    expect(shown.textContent).toContain("is connected for this account");
+    expect(node.isConnected).toBe(true);
+    act(() => view.root.unmount());
+  });
+
   test("a failed login shows its error, not the CLI output", () => {
     const { node, button, view } = dialog({
       ...claude,

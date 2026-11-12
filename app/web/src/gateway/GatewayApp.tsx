@@ -7,7 +7,9 @@ import {
   type GatewayUiSigninCode,
 } from "@assistant/shared/gatewayUi";
 import { useFetchState } from "../hooks/useFetchState.ts";
+import { fetchAccounts, removeAccount } from "./gatewayApi.ts";
 import { GatewayPage, type GatewayPageState } from "./GatewayPage.tsx";
+import { useGatewayLogin } from "./useGatewayLogin.ts";
 
 /**
  * The signed-in user, or null when signed out. The page talks only to its own
@@ -46,6 +48,21 @@ export function GatewayApp({
 }) {
   const { state } = useFetchState("me", fetchMe);
   const [signingOut, setSigningOut] = useState(false);
+  const signedIn =
+    (state.status === "ready" || state.status === "refreshing") &&
+    state.data !== null;
+  const { state: accounts, reload: reloadAccounts } = useFetchState(
+    signedIn ? "accounts" : null,
+    fetchAccounts,
+  );
+  const login = useGatewayLogin(reloadAccounts);
+  const remove = useCallback(
+    async (accountId: string) => {
+      await removeAccount(accountId);
+      reloadAccounts();
+    },
+    [reloadAccounts],
+  );
 
   const signOut = useCallback(() => {
     setSigningOut(true);
@@ -69,6 +86,11 @@ export function GatewayApp({
         : { kind: "loading" };
 
   return (
-    <GatewayPage state={page} onSignOut={signOut} signingOut={signingOut} />
+    <GatewayPage
+      state={page}
+      onSignOut={signOut}
+      signingOut={signingOut}
+      accounts={{ accounts, login, remove }}
+    />
   );
 }

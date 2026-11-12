@@ -13,6 +13,10 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
+import {
+  GatewayAccounts,
+  type GatewayAccountsProps,
+} from "./GatewayAccounts.tsx";
 
 export type GatewayPageState =
   | { kind: "loading" }
@@ -33,21 +37,25 @@ export interface GatewayPageProps {
   state: GatewayPageState;
   onSignOut: () => void;
   signingOut: boolean;
+  /** The signed-in user's accounts and logins. */
+  accounts?: GatewayAccountsProps | undefined;
 }
 
 /**
  * The gateway's own page (Task-1402): sign in with the deployment's provider,
- * see who you are, sign out. Its own entry, served by the edge; no Pandeck
- * store, socket, router or token.
+ * see who you are and your accounts, sign out. Its own entry, served by the
+ * edge; no Pandeck store, socket, router or token.
  */
 export function GatewayPage({
   state,
   onSignOut,
   signingOut,
+  accounts,
 }: GatewayPageProps) {
+  const signedIn = state.kind === "signedIn";
   return (
     <main className="flex min-h-svh items-center justify-center bg-background p-4 text-foreground">
-      <Card className="w-full max-w-md">
+      <Card className={signedIn ? "w-full max-w-2xl" : "w-full max-w-md"}>
         <CardHeader>
           <CardTitle>Pandeck gateway</CardTitle>
           <CardDescription>
@@ -71,6 +79,9 @@ export function GatewayPage({
             <p className="text-sm">
               Signed in as <span className="font-medium">{state.me.email}</span>
             </p>
+          ) : null}
+          {state.kind === "signedIn" && accounts ? (
+            <GatewayAccounts {...accounts} />
           ) : null}
         </CardContent>
         {state.kind === "signedOut" ? (

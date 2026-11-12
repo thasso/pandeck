@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, userEvent, within } from "storybook/test";
 import { AccountLoginDialogView } from "../../../src/components/AccountLoginDialogView.tsx";
 
 const CLAUDE_OUTPUT =
@@ -16,7 +17,8 @@ const meta = {
     accountName: "Claude personal",
     status: "connecting",
     output: CLAUDE_OUTPUT,
-    submit: () => true,
+    // Pandeck's host answers at once; the gateway page's with a promise.
+    submit: (() => true) as (code: string) => boolean | Promise<boolean>,
     cancel: () => {},
     onClose: () => {},
   },
@@ -41,6 +43,34 @@ export const ClaudeError: Story = {
     status: "error",
     output: "Authorization failed.",
     error: "The authorization code expired. Close and start login again.",
+  },
+};
+
+/** Pastes a code and submits it; the dialog is portaled to the body. */
+async function pasteCode(): Promise<void> {
+  const body = within(document.body);
+  await userEvent.type(
+    body.getByLabelText("Paste the authorization code"),
+    "preview-code",
+  );
+  await userEvent.click(body.getByRole("button", { name: "Submit" }));
+}
+
+/** The gateway page's host: the code is sent while Submit is busy. */
+export const ClaudeSubmitting: Story = {
+  args: { submit: () => new Promise<boolean>(() => {}) },
+  play: pasteCode,
+};
+/** The gateway did not take the code: it stays, with an inline error. */
+export const ClaudeSubmitFailed: Story = {
+  args: { submit: () => Promise.resolve(false) },
+  play: async () => {
+    await pasteCode();
+    await expect(
+      await within(document.body).findByText(
+        "The code was not sent. Try again.",
+      ),
+    ).toBeInTheDocument();
   },
 };
 
