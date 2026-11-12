@@ -412,8 +412,6 @@ export interface CredentialProfileSummary {
     path: string;
     command: string;
     detail: string;
-    verificationUri?: string;
-    userCode?: string;
   };
   /** An OpenAI-compatible account's endpoint; never its key. Absent for every other kind. */
   endpoint?: OpenAiCompatibleEndpointSummary;
@@ -457,21 +455,35 @@ export interface CredentialProfileUsage {
   boundSessionCount: number;
 }
 
-/** Browser terminal projection for one official Claude CLI login process. */
-export type ClaudeLoginTerminalStatus =
-  "connecting" | "ready" | "error" | "cancelled";
-export type ClaudeLoginServerMessage =
+/**
+ * The login dialog's socket (`/ws/account-login`) for one Claude or OpenAI
+ * account login: Claude's official CLI output and pasted code, or OpenAI's
+ * device code, with cancel. `start` begins or joins the account's login;
+ * `attach` only rejoins one that still runs or just finished.
+ */
+export type AccountLoginProvider = "claude" | "openai-codex";
+export type AccountLoginStatus = "connecting" | "ready" | "error" | "cancelled";
+export type AccountLoginIntent = "start" | "attach";
+/** OpenAI's verification link and one-time code: short-lived, never logged. */
+export interface AccountLoginDevice {
+  verificationUri: string;
+  userCode: string;
+}
+export type AccountLoginServerMessage =
   | {
       type: "snapshot";
       profileId: string;
-      status: ClaudeLoginTerminalStatus;
+      provider: AccountLoginProvider;
+      status: AccountLoginStatus;
       output: string;
       startedAt: number;
       error?: string;
+      device?: AccountLoginDevice;
     }
   | { type: "output"; chunk: string }
-  | { type: "status"; status: ClaudeLoginTerminalStatus; error?: string };
-export type ClaudeLoginClientMessage =
+  | { type: "device"; device: AccountLoginDevice }
+  | { type: "status"; status: AccountLoginStatus; error?: string };
+export type AccountLoginClientMessage =
   { type: "input"; data: string } | { type: "cancel" };
 
 /**

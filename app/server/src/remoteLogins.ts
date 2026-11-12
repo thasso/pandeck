@@ -1,26 +1,34 @@
 /**
- * Client mode's logins (plan Task-1385, M12): Settings' existing login UI,
- * rendered from the gateway's login API (`logins.*` on gateway client 1.0,
- * through `gatewayClientLink.ts`). The gateway runs the driver and keeps the
- * credential; this server only relays the interaction.
+ * Client mode's logins (plan Task-1385, M12; Task-1402 B1): the login
+ * dialog, rendered from the gateway's login API (`logins.*` on gateway
+ * client 1.0, through `gatewayClientLink.ts`). The gateway runs the driver
+ * and keeps the credential; this server only relays the interaction.
  *
  * - Adding an account starts its first login on the gateway, which registers
  *   the account at once (it needs a login until that succeeds).
- * - Claude: the login terminal's socket (`/ws/claude-login`) attaches to the
- *   account's run, started on demand, and sees today's `snapshot`, `output`
- *   and `status` messages; its input and cancel go to the gateway.
- * - Codex: the device code's URL and code become the account's login state,
- *   as the server's own login sets them.
- *
+ * - The login dialog's socket (`/ws/account-login`, `accountLoginSocket.ts`)
+ *   attaches to the account's run. Claude's output streams and its input goes
+ *   to the gateway; Codex's URL and code become one `device` message once
+ *   both arrived, and never the account's login state. Cancel goes to the
+ *   gateway for both.
  * - Deleting an account removes it on the gateway; the mirror then drops it.
  *
- * One run per account; a finished one is kept two minutes for a viewer that
- * reconnects.
+ * Lifecycle: `start` joins an unfinished run, or retires a finished one and
+ * asks the gateway for a new login; `attach` joins any retained run and never
+ * starts one. A run exists from the moment its start is asked, so a viewer's
+ * listeners are in place before the gateway answers: a cancel meanwhile is
+ * latched and forwarded once the answer names the login, input is dropped,
+ * and a viewer that closes just leaves. A run finishes on the gateway's
+ * terminal state, sent after its driver settled, and is kept exactly two
+ * minutes from then.
  */
 import type { WebSocket } from "ws";
 import type {
-  ClaudeLoginServerMessage,
-  ClaudeLoginTerminalStatus,
+  AccountLoginClientMessage,
+  AccountLoginDevice,
+  AccountLoginIntent,
+  AccountLoginServerMessage,
+  AccountLoginStatus,
 } from "@assistant/shared";
 import {
   assertCredentialProfileDeletable,
@@ -58,16 +66,23 @@ export interface RemoteLoginPort {
 }
 
 interface RemoteRun {
-  loginId: string;
+  /** Absent until the gateway answered the start. */
+  loginId?: string;
+  /** Empty for an account being added, until the gateway answered. */
   accountId: string;
   kind: LoginKind;
-  status: ClaudeLoginTerminalStatus;
+  status: AccountLoginStatus;
   output: string;
   startedAt: number;
   error?: string;
   finished: boolean;
   viewers: Set<WebSocket>;
   url?: string;
+  code?: string;
+  /** A cancel before the start's answer, forwarded once with its login id. */
+  cancelLatched: boolean;
+  /** The gateway's answer to the start. */
+  started: Promise<void>;
 }
 
 const MAX_OUTPUT_CHARS = 64_000;
@@ -93,7 +108,7 @@ export function remoteLoginsActive(): boolean {
   return port !== undefined;
 }
 
-function send(viewer: WebSocket, message: ClaudeLoginServerMessage): void {
+function send(viewer: WebSocket, message: AccountLoginServerMessage): void {
   if (viewer.readyState !== 1) return;
   try {
     viewer.send(JSON.stringify(message));
@@ -102,20 +117,26 @@ function send(viewer: WebSocket, message: ClaudeLoginServerMessage): void {
   }
 }
 
-function broadcast(run: RemoteRun, message: ClaudeLoginServerMessage): void {
+function broadcast(run: RemoteRun, message: AccountLoginServerMessage): void {
   for (const viewer of run.viewers) send(viewer, message);
+}
+
+function deviceOf(run: RemoteRun): AccountLoginDevice | undefined {
+  return run.url !== undefined && run.code !== undefined
+    ? { verificationUri: run.url, userCode: run.code }
+    : undefined;
 }
 
 function finish(
   run: RemoteRun,
-  status: Exclude<ClaudeLoginTerminalStatus, "connecting">,
+  status: Exclude<AccountLoginStatus, "connecting">,
   error?: string,
 ): void {
   if (run.finished) return;
   run.finished = true;
   run.status = status;
   if (error !== undefined) run.error = error;
-  byLogin.delete(run.loginId);
+  if (run.loginId !== undefined) byLogin.delete(run.loginId);
   if (status === "ready") completeCredentialProfileLogin(run.accountId);
   else if (status === "error" && credentialProfileById(run.accountId))
     setCredentialProfileLoginState(run.accountId, {
@@ -133,6 +154,8 @@ function apply(run: RemoteRun, event: RemoteLoginEvent): void {
   if (run.finished) return;
   switch (event.type) {
     case "output": {
+      // Codex's output repeats its URL and code; the dialog shows `device`.
+      if (run.kind !== "claude") return;
       const chunk = event.text.slice(0, MAX_OUTPUT_CHARS - run.output.length);
       if (!chunk) return;
       run.output += chunk;
@@ -140,17 +163,15 @@ function apply(run: RemoteRun, event: RemoteLoginEvent): void {
       return;
     }
     case "url":
-      run.url = event.url;
-      return;
-    case "code":
+    case "code": {
+      if (run.kind !== "openai-codex") return;
       // Short-lived instructions, not credentials: kept out of logs.
-      if (run.kind === "openai-codex")
-        setCredentialProfileLoginState(run.accountId, {
-          status: "connecting",
-          ...(run.url !== undefined ? { verificationUri: run.url } : {}),
-          userCode: event.code,
-        });
+      if (event.type === "url") run.url = event.url;
+      else run.code = event.code;
+      const device = deviceOf(run);
+      if (device) broadcast(run, { type: "device", device });
       return;
+    }
     case "state":
       if (event.state !== "running") finish(run, event.state, event.error);
   }
@@ -169,34 +190,56 @@ export function remoteLoginEvent(
   early.set(loginId, queued);
 }
 
-/** The account's running login, or a new one on the gateway. */
-async function begin(start: {
+/**
+ * Asks the gateway for a login and answers its run at once: in the account's
+ * slot when the account is known, else (an account being added) once the
+ * gateway named it. A rejected start ends its viewers with its error.
+ */
+function launch(start: {
   kind: LoginKind;
   accountId?: string;
   name?: string;
-}): Promise<RemoteRun> {
-  if (!port) throw new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT);
-  const running = start.accountId ? runs.get(start.accountId) : undefined;
-  if (running && !running.finished) return running;
-  const { loginId, accountId } = await port.start(start);
-  const known = byLogin.get(loginId);
-  if (known) return known;
+}): RemoteRun {
+  const gateway = port;
+  if (!gateway) throw new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT);
   const run: RemoteRun = {
-    loginId,
-    accountId,
+    accountId: start.accountId ?? "",
     kind: start.kind,
     status: "connecting",
     output: "",
     startedAt: Date.now(),
     finished: false,
     viewers: new Set(),
+    cancelLatched: false,
+    started: Promise.resolve(),
   };
-  runs.set(accountId, run);
-  byLogin.set(loginId, run);
-  setCredentialProfileLoginState(accountId, { status: "connecting" });
-  const queued = early.get(loginId) ?? [];
-  early.delete(loginId);
-  for (const event of queued) apply(run, event);
+  if (start.accountId) runs.set(start.accountId, run);
+  run.started = gateway.start(start).then(
+    ({ loginId, accountId }) => {
+      run.loginId = loginId;
+      run.accountId = accountId;
+      runs.set(accountId, run);
+      byLogin.set(loginId, run);
+      setCredentialProfileLoginState(accountId, { status: "connecting" });
+      const queued = early.get(loginId) ?? [];
+      early.delete(loginId);
+      for (const event of queued) apply(run, event);
+      if (run.cancelLatched && !run.finished)
+        void gateway.cancel(loginId).catch(() => {});
+    },
+    (err: unknown) => {
+      if (runs.get(run.accountId) === run) runs.delete(run.accountId);
+      run.finished = true;
+      run.status = "error";
+      run.error = errorText(err);
+      for (const viewer of run.viewers) {
+        send(viewer, { type: "status", status: "error", error: run.error });
+        viewer.close(1011, "Login unavailable");
+      }
+      run.viewers.clear();
+      throw err;
+    },
+  );
   return run;
 }
 
@@ -205,7 +248,9 @@ export async function createRemoteAccount(
   kind: LoginKind,
   name: string,
 ): Promise<string> {
-  return (await begin({ kind, name })).accountId;
+  const run = launch({ kind, name });
+  await run.started;
+  return run.accountId;
 }
 
 /** Settings' delete in client mode: the gateway removes the account. */
@@ -217,61 +262,60 @@ export async function deleteRemoteAccount(accountId: string): Promise<void> {
   await port.remove(accountId);
 }
 
-/** Settings' Codex login for an account: its device code shows on it. */
-export async function startRemoteCodexLogin(accountId: string): Promise<void> {
-  const profile = credentialProfileById(accountId);
-  if (!profile || profile.provider !== "openai-codex")
-    throw new Error("That is not an OpenAI profile.");
-  await begin({ kind: "openai-codex", accountId });
-}
-
-/** Settings' Claude login terminal for an account, on the gateway's login. */
-export function attachRemoteClaudeLogin(
-  viewer: WebSocket,
-  accountId: string,
-): void {
-  const profile = credentialProfileById(accountId);
-  if (!profile || profile.provider !== "claude") {
-    send(viewer, {
-      type: "status",
-      status: "error",
-      error: "That is not a Claude credential profile.",
-    });
-    viewer.close(1008, "Invalid Claude credential profile");
+function handleMessage(run: RemoteRun, message: AccountLoginClientMessage) {
+  if (run.finished) return;
+  if (message.type === "cancel") {
+    if (run.loginId === undefined) run.cancelLatched = true;
+    else void port?.cancel(run.loginId).catch(() => {});
     return;
   }
-  begin({ kind: "claude", accountId }).then(
-    (run) => {
-      run.viewers.add(viewer);
-      send(viewer, {
-        type: "snapshot",
-        profileId: accountId,
-        status: run.status,
-        output: run.output,
-        startedAt: run.startedAt,
-        ...(run.error ? { error: run.error } : {}),
-      });
-      viewer.on("message", (raw) => {
-        let message: { type?: unknown; data?: unknown };
-        try {
-          message = JSON.parse(raw.toString()) as typeof message;
-        } catch {
-          return;
-        }
-        if (run.finished || !port) return;
-        if (message.type === "cancel")
-          void port.cancel(run.loginId).catch(() => {});
-        else if (message.type === "input" && typeof message.data === "string")
-          // Never logged: it may be the OAuth authorization code.
-          void port.input(run.loginId, message.data).catch(() => {});
-      });
-      const detach = () => run.viewers.delete(viewer);
-      viewer.on("close", detach);
-      viewer.on("error", detach);
-    },
-    (err: unknown) => {
-      send(viewer, { type: "status", status: "error", error: errorText(err) });
-      viewer.close(1011, "Login unavailable");
-    },
-  );
+  // Before the answer there is no login to take it; Codex takes none.
+  if (run.loginId === undefined || run.kind !== "claude") return;
+  // Never logged: it may be the OAuth authorization code.
+  void port?.input(run.loginId, message.data).catch(() => {});
+}
+
+/**
+ * The login dialog's viewer of an account's gateway login, under `intent`;
+ * undefined for an `attach` that finds no run. Throws, sending nothing, when
+ * no gateway is linked or the account is no login account.
+ */
+export function attachRemoteLogin(
+  viewer: WebSocket,
+  accountId: string,
+  intent: AccountLoginIntent,
+):
+  | { message(message: AccountLoginClientMessage): void; detach(): void }
+  | undefined {
+  const profile = credentialProfileById(accountId);
+  if (
+    !profile ||
+    (profile.provider !== "claude" && profile.provider !== "openai-codex")
+  )
+    throw new Error("That is not a login account.");
+  let run = runs.get(accountId);
+  if (intent === "attach") {
+    if (!run) return undefined;
+  } else if (!run || run.finished) {
+    // A finished run's viewers keep it; the account's slot gets a new one.
+    run = launch({ kind: profile.provider, accountId });
+    run.started.catch(() => {});
+  }
+  const current = run;
+  current.viewers.add(viewer);
+  const device = deviceOf(current);
+  send(viewer, {
+    type: "snapshot",
+    profileId: accountId,
+    provider: current.kind,
+    status: current.status,
+    output: current.output,
+    startedAt: current.startedAt,
+    ...(current.error ? { error: current.error } : {}),
+    ...(device ? { device } : {}),
+  });
+  return {
+    message: (message) => handleMessage(current, message),
+    detach: () => current.viewers.delete(viewer),
+  };
 }

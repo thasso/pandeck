@@ -3,12 +3,16 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
-import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
 /**
  * The official Claude CLI's login for a profile, viewed and driven from the
- * browser (`docs/workers.md` "Credentials"). One run per profile; a second
- * browser attaches to it.
+ * login dialog (`accountLoginSocket.ts`, `docs/workers.md` "Credentials").
+ * One current run per profile; a second browser attaches to it.
+ *
+ * Lifecycle: `start` joins an unfinished run, or retires a finished one (its
+ * viewers keep their finished state) and starts anew; `attach` joins any
+ * retained run and never spawns. A run finishes only on its child's `close`
+ * and is kept exactly two minutes from then, whatever its viewers do.
  *
  * With the gateway switch on, the run takes the profile's login hold before
  * it spawns `claude auth login`, names the child as the hold's writer right
@@ -26,9 +30,10 @@ import type { WebSocket } from "ws";
 import { releaseChildOomScore } from "./childOomScore.ts";
 import {
   loginStuckText,
-  type ClaudeLoginClientMessage,
-  type ClaudeLoginServerMessage,
-  type ClaudeLoginTerminalStatus,
+  type AccountLoginClientMessage,
+  type AccountLoginIntent,
+  type AccountLoginServerMessage,
+  type AccountLoginStatus,
 } from "@assistant/shared";
 import {
   claudeProfileEnvironment,
@@ -46,7 +51,6 @@ import {
   type LoginHold,
   type LoginHoldTaken,
 } from "./loginHolds.ts";
-import { attachRemoteClaudeLogin, remoteLoginsActive } from "./remoteLogins.ts";
 import {
   bundledClaudeCliPath,
   CLAUDE_LOGIN_ARGS,
@@ -56,7 +60,6 @@ import {
 } from "./claudeLoginDriver.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
-const MAX_INPUT_CHARS = 8_192;
 /** Input held until the gateway acknowledged the writer (L8). */
 const MAX_PENDING_INPUT_CHARS = 64_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -93,7 +96,7 @@ interface LoginRun {
   child?: ChildProcessWithoutNullStreams;
   hold?: LoginHold;
   viewers: Set<WebSocket>;
-  status: ClaudeLoginTerminalStatus;
+  status: AccountLoginStatus;
   output: string;
   startedAt: number;
   error?: string;
@@ -120,7 +123,7 @@ export function claudeLoginEnvironment(
   return claudeLoginEnvironmentFrom(claudeProfileEnvironment(profileId));
 }
 
-function send(viewer: WebSocket, message: ClaudeLoginServerMessage): void {
+function send(viewer: WebSocket, message: AccountLoginServerMessage): void {
   if (viewer.readyState !== 1) return;
   try {
     viewer.send(JSON.stringify(message));
@@ -129,7 +132,7 @@ function send(viewer: WebSocket, message: ClaudeLoginServerMessage): void {
   }
 }
 
-function broadcast(run: LoginRun, message: ClaudeLoginServerMessage): void {
+function broadcast(run: LoginRun, message: AccountLoginServerMessage): void {
   for (const viewer of run.viewers) send(viewer, message);
 }
 
@@ -160,7 +163,7 @@ function retainFinished(run: LoginRun): void {
 /** `errorOnAccount: false` shows an error to the dialog only, not on the account. */
 function finish(
   run: LoginRun,
-  status: ClaudeLoginTerminalStatus,
+  status: AccountLoginStatus,
   message?: string,
   errorOnAccount = true,
 ): void {
@@ -376,10 +379,11 @@ function stop(
 const acceptsInput = (run: LoginRun): boolean =>
   !run.finished && !run.ending && !run.closed;
 
-function snapshot(run: LoginRun): ClaudeLoginServerMessage {
+function snapshot(run: LoginRun): AccountLoginServerMessage {
   return {
     type: "snapshot",
     profileId: run.profileId,
+    provider: "claude",
     status: run.status,
     output: run.output,
     startedAt: run.startedAt,
@@ -387,27 +391,18 @@ function snapshot(run: LoginRun): ClaudeLoginServerMessage {
   };
 }
 
-function handleClientMessage(run: LoginRun, raw: string): void {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return;
-  }
-  if (!parsed || typeof parsed !== "object") return;
-  const message = parsed as Partial<ClaudeLoginClientMessage>;
+/** One validated message (`accountLoginSocket.ts`); input is never logged. */
+function handleClientMessage(
+  run: LoginRun,
+  message: AccountLoginClientMessage,
+): void {
   if (message.type === "cancel") {
     stop(run, { status: "cancelled", line: CANCELLED_LINE }, "SIGTERM");
     return;
   }
-  if (
-    message.type !== "input" ||
-    !acceptsInput(run) ||
-    typeof message.data !== "string"
-  )
-    return;
+  if (!acceptsInput(run)) return;
   const data = message.data.trim();
-  if (!data || data.length > MAX_INPUT_CHARS) return;
+  if (!data) return;
   // Never append or log this value: it may be the short-lived OAuth authorization code.
   if (run.writerReady) {
     run.child!.stdin.write(`${data}\n`);
@@ -418,45 +413,33 @@ function handleClientMessage(run: LoginRun, raw: string): void {
   run.pendingChars += data.length;
 }
 
-/** Attach one authenticated browser to a single-flight, reconnectable profile login. */
-export function attachClaudeLoginSocket(
+/**
+ * Attaches one viewer to the profile's run under `intent`; undefined for an
+ * `attach` that finds no run. Throws, sending nothing, for a profile that is
+ * not a Claude login.
+ */
+export function attachClaudeLogin(
   viewer: WebSocket,
-  req: IncomingMessage,
-): void {
-  const url = new URL(
-    req.url ?? "/ws/claude-login",
-    `http://${req.headers.host ?? "localhost"}`,
-  );
-  const profileId = url.searchParams.get("profileId") ?? "";
-  // Client mode: the gateway runs the login (Task-1385).
-  if (remoteLoginsActive()) {
-    attachRemoteClaudeLogin(viewer, profileId);
-    return;
+  profileId: string,
+  intent: AccountLoginIntent,
+):
+  | { message(message: AccountLoginClientMessage): void; detach(): void }
+  | undefined {
+  let run = runs.get(profileId);
+  if (intent === "attach") {
+    if (!run) return undefined;
+  } else if (!run || run.finished) {
+    // A finished run's viewers keep it; the account's slot gets a new one.
+    if (run?.retention) clearTimeout(run.retention);
+    run = startRun(profileId);
   }
-  let run: LoginRun;
-  try {
-    run = runs.get(profileId) ?? startRun(profileId);
-  } catch (error) {
-    send(viewer, { type: "status", status: "error", error: errorText(error) });
-    viewer.close(1008, "Invalid Claude credential profile");
-    return;
-  }
-  run.viewers.add(viewer);
-  send(viewer, snapshot(run));
-  viewer.on("message", (raw) => handleClientMessage(run, raw.toString()));
-  const detach = () => {
-    run.viewers.delete(viewer);
-    if (
-      run.finished &&
-      run.viewers.size === 0 &&
-      runs.get(run.profileId) === run
-    ) {
-      if (run.retention) clearTimeout(run.retention);
-      runs.delete(run.profileId);
-    }
+  const current = run;
+  current.viewers.add(viewer);
+  send(viewer, snapshot(current));
+  return {
+    message: (message) => handleClientMessage(current, message),
+    detach: () => current.viewers.delete(viewer),
   };
-  viewer.on("close", detach);
-  viewer.on("error", detach);
 }
 
 /** Login subprocesses are not agent turns and must never hold a deploy drain open. */

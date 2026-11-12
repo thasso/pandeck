@@ -52,7 +52,6 @@ import {
   createRemoteAccount,
   deleteRemoteAccount,
   remoteLoginsActive,
-  startRemoteCodexLogin,
 } from "./remoteLogins.ts";
 import { startGatewayLink } from "./gatewayLink.ts";
 import { followGatewayStatus } from "./gatewayStatus.ts";
@@ -96,7 +95,6 @@ import {
 } from "./credentialProfileUsage.ts";
 import {
   modelRuntimeForProfile,
-  startOpenAiProfileLogin,
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
   homeTranscriptImportStartupRefusal,
@@ -211,10 +209,8 @@ import {
   maxUtteranceBytes,
   pcm16ToFloat32,
 } from "./speech/speechSocket.ts";
-import {
-  attachClaudeLoginSocket,
-  stopClaudeLoginTerminals,
-} from "./claudeLoginTerminal.ts";
+import { stopClaudeLoginTerminals } from "./claudeLoginTerminal.ts";
+import { attachAccountLoginSocket } from "./accountLoginSocket.ts";
 import { sttEngine } from "./speech/sttEngine.ts";
 import { streamingSttEngine } from "./speech/streamingSttEngine.ts";
 import { attachConversationSocket } from "./speech/conversationSocket.ts";
@@ -1021,29 +1017,6 @@ async function handleRequest(
     return;
   }
 
-  if (
-    requestUrl.pathname.match(
-      /^\/api\/credential-profiles\/[A-Za-z0-9_-]+\/login$/,
-    )
-  ) {
-    if (req.method !== "POST") {
-      res.writeHead(405, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-      return;
-    }
-    const profileId = requestUrl.pathname.split("/")[3] ?? "";
-    try {
-      if (remoteLoginsActive()) await startRemoteCodexLogin(profileId);
-      else startOpenAiProfileLogin(profileId);
-      res.writeHead(202, corsJsonHeaders(req));
-      res.end(JSON.stringify({ ok: true }));
-    } catch (err) {
-      res.writeHead(400, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: errorText(err) }));
-    }
-    return;
-  }
-
   // Clear the unfinished login (U7): ok when nothing is stuck or the switch
   // is off; a failure answers U7's login text, or pi's own while it runs.
   if (
@@ -1613,7 +1586,7 @@ const server = createServer((req, res) => {
 /**
  * Four WebSocket surfaces share this HTTP server: the session protocol on `/ws`,
  * dictation audio on `/ws/speech`, official Claude CLI login on
- * `/ws/claude-login`, and binary desktop forwarding on `/ws/port-forward`.
+ * `/ws/account-login`, and binary desktop forwarding on `/ws/port-forward`.
  * They must all be `noServer` and be
  * routed by one `upgrade` listener — constructing them with `{ server, path }`
  * would attach two independent listeners, each calling `handleUpgrade`
@@ -1638,7 +1611,7 @@ const speechWss = new WebSocketServer({
   noServer: true,
   perMessageDeflate: false,
 });
-const claudeLoginWss = new WebSocketServer({
+const accountLoginWss = new WebSocketServer({
   noServer: true,
   perMessageDeflate: false,
 });
@@ -1725,8 +1698,8 @@ server.on("upgrade", (req, socket, head) => {
         ? conversationWss
         : url.pathname === "/ws/speech"
           ? speechWss
-          : url.pathname === "/ws/claude-login"
-            ? claudeLoginWss
+          : url.pathname === "/ws/account-login"
+            ? accountLoginWss
             : undefined;
   if (!target) {
     abortUpgrade(socket, 404, "Not Found");
@@ -1753,7 +1726,9 @@ server.on("upgrade", (req, socket, head) => {
 
 speechWss.on("connection", (ws) => attachSpeechSocket(ws));
 conversationWss.on("connection", (ws) => attachConversationSocket(ws));
-claudeLoginWss.on("connection", (ws, req) => attachClaudeLoginSocket(ws, req));
+accountLoginWss.on("connection", (ws, req) =>
+  attachAccountLoginSocket(ws, req),
+);
 
 wss.on("connection", (ws, req) => {
   const connection = new Connection(
@@ -1822,10 +1797,10 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
         err.message,
       );
   });
-  claudeLoginWss.close((err) => {
+  accountLoginWss.close((err) => {
     if (err)
       console.warn(
-        `[assistant] Claude login WebSocket close during ${signal} failed:`,
+        `[assistant] account login WebSocket close during ${signal} failed:`,
         err.message,
       );
   });
