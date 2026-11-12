@@ -1449,7 +1449,13 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     is repeated after a reconnect only while that same run is still connecting,
     and dropped unsent for any other or finished run; the server ignores a
     cancel naming another run. So a Cancel never ends a login of the same
-    account that the dialog neither started nor joined.
+    account that the dialog neither started nor joined. An early Cancel that
+    cannot be proven to be for the shown run is never sent: if that run is still
+    running (a start that joined another's login and lost its first snapshot),
+    the dialog shows "Cancel not confirmed. Press Cancel again to stop this
+    login." and keeps Cancel enabled; pressing it cancels the shown run. A
+    finished run needs nothing, and the notice clears when the run ends or the
+    dialog closes.
   - **Refusals** map to existing texts only. A `login_stuck` refusal naming its
     hold marks the account login-stuck, and the login starts nothing.
     `hold_exists`, a `login_stuck` refusal without a hold, and a link that is

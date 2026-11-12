@@ -58,6 +58,8 @@ export interface AccountLoginDialogViewProps {
   /** OpenAI's verification link and code, once known. */
   device?: AccountLoginDevice | undefined;
   error?: string | undefined;
+  /** An early Cancel could not be tied to this run and was not sent. */
+  cancelUnconfirmed?: boolean | undefined;
   /** Claude's pasted code; answers whether it was sent. */
   submit?: ((code: string) => boolean) | undefined;
   cancel: () => void;
@@ -76,6 +78,7 @@ export function AccountLoginDialogView({
   output,
   device,
   error,
+  cancelUnconfirmed,
   submit,
   cancel,
   onClose,
@@ -115,6 +118,11 @@ export function AccountLoginDialogView({
           <ClaudeStep status={status} output={output} submit={submit} />
         ) : (
           <OpenAiStep status={status} device={device} />
+        )}
+        {status === "connecting" && cancelUnconfirmed && (
+          <p role="status" className="text-sm text-foreground">
+            Cancel not confirmed. Press Cancel again to stop this login.
+          </p>
         )}
         {status === "ready" ? (
           <Badge variant="success">

@@ -255,6 +255,7 @@ describe("useAccountLogin", () => {
     second.open();
     second.receive(snapshot("run-2", "connecting", "someone-elses-token"));
     expect(second.sent).toEqual([]);
+    expect(latest?.cancelUnconfirmed).toBe(true);
     const third = reconnect(second);
     third.open();
     third.receive(snapshot("run-2", "connecting", "someone-elses-token"));
@@ -283,6 +284,54 @@ describe("useAccountLogin", () => {
     // Continue login: the start joined a run another start created.
     first!.receive(snapshot("run-9", "connecting", "someone-elses-token"));
     expect(first!.sent).toEqual([cancelFor("run-9")]);
+    act(() => view.root.unmount());
+  });
+
+  // C4 (rv-1402-b1-code r2): an early Cancel that cannot be proven ours is
+  // never sent; for a still running login the dialog asks for it again.
+  test("C4: a start that joined another's login and lost its snapshot asks for Cancel again, and an explicit Cancel reaches the shown run", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    act(() => latest!.cancel());
+    first!.open();
+    // The start joined run 1 (created by another start); its snapshot is lost.
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-1", "connecting", "someone-elses-token"));
+    expect(second.sent).toEqual([]);
+    expect(latest?.status).toBe("connecting");
+    expect(latest?.cancelUnconfirmed).toBe(true);
+    act(() => latest!.cancel());
+    expect(second.sent).toEqual([cancelFor("run-1")]);
+    expect(latest?.cancelUnconfirmed).toBe(false);
+    act(() => view.root.unmount());
+  });
+
+  test("C4: an unproven early Cancel meeting a finished run sets no notice", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    act(() => latest!.cancel());
+    first!.open();
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-1", "error", "someone-elses-token"));
+    expect(second.sent).toEqual([]);
+    expect(latest?.cancelUnconfirmed).toBe(false);
+    act(() => view.root.unmount());
+  });
+
+  test("C4: the notice clears when the shown run ends", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    act(() => latest!.cancel());
+    first!.open();
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-1", "connecting", "someone-elses-token"));
+    expect(latest?.cancelUnconfirmed).toBe(true);
+    second.receive({ type: "status", runId: "run-1", status: "ready" });
+    expect(latest?.cancelUnconfirmed).toBe(false);
+    expect(second.sent).toEqual([]);
     act(() => view.root.unmount());
   });
 });

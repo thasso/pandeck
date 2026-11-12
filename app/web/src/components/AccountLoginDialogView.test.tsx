@@ -168,4 +168,32 @@ describe("OpenAI", () => {
       act(() => view.root.unmount());
     },
   );
+
+  test("C4: an unconfirmed early Cancel asks for Cancel again while the login runs, and Cancel stays enabled", () => {
+    const cancel = vi.fn();
+    const { node, button, view } = dialog({
+      ...openAi,
+      device: DEVICE,
+      cancelUnconfirmed: true,
+      cancel,
+    });
+    expect(node.querySelector('[role="status"]')?.textContent).toBe(
+      "Cancel not confirmed. Press Cancel again to stop this login.",
+    );
+    expect(node.textContent).not.toContain("Login cancelled.");
+    expect(button("Cancel login")?.disabled).toBe(false);
+    act(() => button("Cancel login")!.click());
+    expect(cancel).toHaveBeenCalledOnce();
+    act(() => view.root.unmount());
+  });
+
+  test("C4: the notice shows only while the login runs", () => {
+    const { node, view } = dialog({
+      ...openAi,
+      status: "cancelled",
+      cancelUnconfirmed: true,
+    });
+    expect(node.textContent).not.toContain("Cancel not confirmed");
+    act(() => view.root.unmount());
+  });
 });

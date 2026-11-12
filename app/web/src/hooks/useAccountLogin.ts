@@ -46,13 +46,17 @@ function newStartToken(): string {
  * chose: the start socket's own snapshot (the run it created or joined), or
  * after a reconnect a snapshot echoing this mount's `startToken` (the run it
  * created). Any other run drops it unsent: an earlier Cancel never ends a
- * login this mount did not start or join.
+ * login this mount did not start or join. If that run is still running (a
+ * start that joined another's login, whose snapshot was lost), the dialog
+ * asks for Cancel again (`cancelUnconfirmed`); a finished run needs nothing.
  */
 export function useAccountLogin(profileId: string, onFinished: () => void) {
   const [status, setStatus] = useState<AccountLoginStatus>("connecting");
   const [output, setOutput] = useState("");
   const [device, setDevice] = useState<AccountLoginDevice | undefined>();
   const [error, setError] = useState<string | undefined>();
+  // An early Cancel could not be tied to the shown run and was not sent.
+  const [cancelUnconfirmed, setCancelUnconfirmed] = useState(false);
   const [reconnect, setReconnect] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<AccountLoginStatus>("connecting");
@@ -82,7 +86,10 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
     snapshotSeenRef.current = false;
     const updateStatus = (next: AccountLoginStatus, nextError?: string) => {
       statusRef.current = next;
-      if (next !== "connecting") cancelRef.current = null;
+      if (next !== "connecting") {
+        cancelRef.current = null;
+        setCancelUnconfirmed(false);
+      }
       setStatus(next);
       setError(nextError);
       if (next === "ready") onFinishedRef.current();
@@ -112,7 +119,12 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
             socket.send(
               JSON.stringify({ type: "cancel", runId: message.runId }),
             );
-          else cancelRef.current = null;
+          else {
+            // Never sent to a run not proven ours; a running one needs the
+            // user's explicit Cancel.
+            if (latched.runId === undefined) setCancelUnconfirmed(true);
+            cancelRef.current = null;
+          }
         }
       } else if (message.type === "output") {
         setOutput((current) => current + message.chunk);
@@ -152,9 +164,11 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
     output,
     device,
     error,
+    cancelUnconfirmed,
     submit: (data: string) => send({ type: "input", data }),
     cancel: () => {
       if (statusRef.current !== "connecting") return;
+      setCancelUnconfirmed(false);
       // Before this socket's snapshot, the snapshot sends it.
       const runId = snapshotSeenRef.current ? runIdRef.current : undefined;
       cancelRef.current = { runId: runIdRef.current };

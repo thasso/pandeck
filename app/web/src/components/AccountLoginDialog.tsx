@@ -25,6 +25,7 @@ export function AccountLoginDialog({
       output={login.output}
       device={login.device}
       error={login.error}
+      cancelUnconfirmed={login.cancelUnconfirmed}
       submit={login.submit}
       cancel={login.cancel}
       onClose={onClose}

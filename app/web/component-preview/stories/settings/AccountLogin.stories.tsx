@@ -53,6 +53,9 @@ export const OpenAiStarting: Story = { args: { ...openAi } };
 export const OpenAiDeviceShown: Story = {
   args: { ...openAi, device: DEVICE },
 };
+export const OpenAiCancelNotConfirmed: Story = {
+  args: { ...openAi, device: DEVICE, cancelUnconfirmed: true },
+};
 export const OpenAiCancelled: Story = {
   args: { ...openAi, status: "cancelled", device: DEVICE },
 };
