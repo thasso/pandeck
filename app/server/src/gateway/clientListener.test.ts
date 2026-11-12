@@ -5,10 +5,12 @@
  * client. Fake upstreams and fake token files under the test's `DATA_DIR`.
  */
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { generateKeyPairSync, X509Certificate } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, readFile, writeFile, unlink, rename } from "node:fs/promises";
+import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import { join } from "node:path";
@@ -37,6 +39,7 @@ import { startGateway, type RunningGateway } from "./gateway.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { edgeTlsFor, issueClientCertificate } from "./x509.ts";
 import { ClientRegistry } from "./clientRegistry.ts";
+import { modelConnection, type ModelDeadlines } from "./clientListener.ts";
 import type { LoginDrivers } from "./vaultPort.ts";
 import type { EdgeTools, IntegrationCheck, ToolAnswer } from "./edgeTools.ts";
 type LoginDriverEvents = Parameters<NonNullable<LoginDrivers["claude"]>>[1];
@@ -71,12 +74,14 @@ afterAll(() => upstreams.close());
 async function gatewayWithClients(
   loginDrivers?: LoginDrivers,
   logs?: string[],
+  extra: { modelDeadlines?: ModelDeadlines; upstreams?: FakeUpstreams } = {},
 ): Promise<RunningGateway> {
   const stateDir = await mkdtemp(join(DATA_DIR, "client-listener-"));
   const gateway = await startGateway({
     stateDir,
     ...(loginDrivers ? { loginDrivers } : {}),
-    upstreams: upstreams.overrides,
+    ...(extra.modelDeadlines ? { modelDeadlines: extra.modelDeadlines } : {}),
+    upstreams: (extra.upstreams ?? upstreams).overrides,
     now: () => clock,
     log: (line) => logs?.push(line),
     clients: {},
@@ -235,6 +240,24 @@ async function grant(
   );
 }
 
+/**
+ * Shortens one port's TLS handshake timeout to 1 s, so a real-socket
+ * exercise needs no ten-second wait; the production value stays covered by
+ * the bounds test. The listener creates the model port's TLS server first,
+ * then the client port's.
+ */
+function shortenHandshake(port: "model" | "client"): void {
+  const createServer = tls.createServer;
+  const target = port === "model" ? 0 : 1;
+  let calls = 0;
+  vi.spyOn(tls, "createServer").mockImplementation((options, listener) =>
+    createServer(
+      calls++ === target ? { ...options, handshakeTimeout: 1_000 } : options,
+      listener,
+    ),
+  );
+}
+
 test("an enrollment code is used once, expires, and yields a certificate of the CA", async () => {
   const gateway = await gatewayWithClients();
   const registry = gateway.clients!.registry;
@@ -370,20 +393,37 @@ test("leases are scoped to their client", async () => {
 test("enrollment limits attempts per source and sets listener connection and timeout bounds", async () => {
   const httpsServers = vi.spyOn(https, "createServer");
   const tlsServers = vi.spyOn(tls, "createServer");
+  const httpServers = vi.spyOn(http, "createServer");
   const gateway = await gatewayWithClients();
-  for (const call of httpsServers.mock.calls) {
-    assert.equal((call[0] as https.ServerOptions).handshakeTimeout, 10_000);
+  // The model and client ports are TLS servers, the enrollment port HTTPS.
+  assert.equal(tlsServers.mock.calls.length, 2);
+  assert.equal(httpsServers.mock.calls.length, 1);
+  for (const call of [...httpsServers.mock.calls, ...tlsServers.mock.calls]) {
+    assert.equal((call[0] as tls.TlsOptions).handshakeTimeout, 10_000);
   }
-  assert.equal(
-    (tlsServers.mock.calls[0]![0] as tls.TlsOptions).handshakeTimeout,
-    10_000,
-  );
   for (const result of [
     ...httpsServers.mock.results,
     ...tlsServers.mock.results,
   ]) {
     assert.equal((result.value as tls.Server).maxConnections, 64);
   }
+  // The model port's deadlines are the former Node HTTPS defaults, and its
+  // HTTP parser sets no socket timeout of its own.
+  assert.deepEqual(gateway.clients!.modelDeadlines, {
+    headersMs: 60_000,
+    requestMs: 300_000,
+    idleMs: 5_000,
+  });
+  // The parser is the one HTTP server that never listens.
+  const unlistened = httpServers.mock.results
+    .map((result) => result.value as http.Server)
+    .filter((server) => !server.listening);
+  assert.equal(unlistened.length, 1);
+  const modelHttp = unlistened[0]!;
+  assert.equal(modelHttp.keepAliveTimeout, 0);
+  assert.equal(modelHttp.headersTimeout, 0);
+  assert.equal(modelHttp.requestTimeout, 0);
+  assert.equal(modelHttp.timeout, 0);
   const enrollment = httpsServers.mock.results.at(-1)!.value as https.Server;
   assert.equal(enrollment.headersTimeout, 5_000);
   assert.equal(enrollment.requestTimeout, 10_000);
@@ -584,12 +624,7 @@ test("the timer notices an admin process revocation without a call or push, incl
 });
 
 test("silent TLS peers release the client port's slots after handshake timeout", async () => {
-  const createServer = tls.createServer;
-  // Keep the configured production timeout covered above; shorten only this
-  // real-socket exercise so the regression does not need a ten-second wait.
-  vi.spyOn(tls, "createServer").mockImplementationOnce((options, listener) =>
-    createServer({ ...options, handshakeTimeout: 1_000 }, listener),
-  );
+  shortenHandshake("client");
   const gateway = await gatewayWithClients();
   const identity = await enroll(gateway);
   const peers = Array.from({ length: 64 }, () =>
@@ -1099,4 +1134,604 @@ test("a client's cancel and its connection's end abort the host's call", async (
   await vi.waitFor(() => assert.equal(calls.length, 2));
   second.end("test over");
   await vi.waitFor(() => assert.ok(calls[1]!.signal!.aborted));
+});
+
+// --- model-port deadlines (plan Task-1401 §0, §9 M1-M6, M3b) -------------
+
+/** Test bounds: every expiry happens well inside a 5 s outer deadline. */
+const SHORT: ModelDeadlines = { headersMs: 500, requestMs: 1_500, idleMs: 500 };
+
+/** Rejects unless `promise` settles within `ms`. */
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${what}: not within ${ms} ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+interface RawModel {
+  socket: tls.TLSSocket;
+  /** Everything the edge sent, as text. */
+  received: () => string;
+  /** Resolves on the client socket's `close`, with `Date.now()` then. */
+  closed: Promise<number>;
+  /** Resolves once `received()` satisfies `done`, within `ms`. */
+  until: (done: (text: string) => boolean, ms: number) => Promise<void>;
+}
+
+/** An enrolled client's raw mutual-TLS connection to the model port. */
+async function dialModel(
+  gateway: RunningGateway,
+  identity: Identity,
+): Promise<RawModel> {
+  const socket = tls.connect({
+    host: "127.0.0.1",
+    port: gateway.clients!.modelPort,
+    ca: gateway.clients!.caPem,
+    key: identity.key,
+    cert: identity.cert,
+  });
+  open.push({ close: () => socket.destroy() });
+  socket.on("error", () => {});
+  let text = "";
+  const waiters = new Set<() => void>();
+  socket.on("data", (chunk: Buffer) => {
+    text += chunk.toString("latin1");
+    for (const waiter of waiters) waiter();
+  });
+  const closed = new Promise<number>((resolve) =>
+    socket.once("close", () => resolve(Date.now())),
+  );
+  await within(
+    new Promise<void>((resolve, reject) => {
+      socket.once("secureConnect", resolve);
+      socket.once("error", reject);
+    }),
+    5_000,
+    "model-port handshake",
+  );
+  return {
+    socket,
+    received: () => text,
+    closed,
+    until: (done, ms) =>
+      within(
+        new Promise<void>((resolve) => {
+          const check = (): void => {
+            if (!done(text)) return;
+            waiters.delete(check);
+            resolve();
+          };
+          waiters.add(check);
+          check();
+        }),
+        ms,
+        "model-port response",
+      ),
+  };
+}
+
+/** A forwarded Claude request's head, for `body` or a declared length. */
+function requestHead(token: string, length: number): string {
+  return (
+    `POST ${CLAUDE_PATH} HTTP/1.1\r\nhost: edge\r\n` +
+    `authorization: Bearer ${token}\r\ncontent-type: application/json\r\n` +
+    `content-length: ${length}\r\n\r\n`
+  );
+}
+
+function fullRequest(token: string, body: string): string {
+  return requestHead(token, Buffer.byteLength(body)) + body;
+}
+
+/** A Claude upstream that records request starts and aborts. */
+async function observedUpstream(
+  claude: (seen: { body: Buffer }, res: http.ServerResponse) => void,
+): Promise<{
+  upstream: FakeUpstreams;
+  started: () => number;
+  aborted: () => number;
+}> {
+  let started = 0;
+  let aborted = 0;
+  const upstream = await startFakeUpstreams({
+    claude,
+    claudeStarted: (req) => {
+      started++;
+      req.once("close", () => {
+        if (!req.complete) aborted++;
+      });
+    },
+  });
+  open.push(upstream);
+  return { upstream, started: () => started, aborted: () => aborted };
+}
+
+/** Writes `chunks` `gapMs` apart, then ends: a long, quiet model stream. */
+function quietStream(chunks: string[], gapMs: number) {
+  return (res: http.ServerResponse): void => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    let next = 0;
+    const timer = setInterval(() => {
+      if (res.destroyed) return clearInterval(timer);
+      res.write(chunks[next]!);
+      if (++next === chunks.length) {
+        clearInterval(timer);
+        res.end();
+      }
+    }, gapMs);
+  };
+}
+
+/** A client, its lease token and the gateway, with test or production bounds. */
+async function deadlineSetup(
+  upstream: FakeUpstreams,
+  bounds: ModelDeadlines | "production" = SHORT,
+) {
+  const gateway = await gatewayWithClients(undefined, undefined, {
+    upstreams: upstream,
+    ...(bounds === "production" ? {} : { modelDeadlines: bounds }),
+  });
+  if (bounds === "production")
+    assert.equal(gateway.clients!.modelDeadlines.requestMs, 300_000);
+  const identity = await enroll(gateway);
+  const { token } = await grant(await dialClient(gateway, identity));
+  return { gateway, identity, token };
+}
+
+/** The chunked body's end, after the last chunk. */
+const CHUNKED_END = "\r\n0\r\n\r\n";
+const STREAM = [
+  "data: one\n\n",
+  "data: two\n\n",
+  "data: three\n\n",
+  "data: four\n\n",
+];
+
+test("M1 stalled headers: a request line and a header, then nothing, is closed at the headers bound", async () => {
+  const { upstream, started } = await observedUpstream(() => {});
+  const { gateway, identity } = await deadlineSetup(upstream);
+  const model = await dialModel(gateway, identity);
+  const from = Date.now();
+  model.socket.write(`POST ${CLAUDE_PATH} HTTP/1.1\r\nhost: edge\r\n`);
+  const at = await within(model.closed, 5_000, "stalled headers close");
+  assert.ok(
+    at - from <= SHORT.headersMs + 1_000,
+    `closed after ${at - from} ms`,
+  );
+  assert.equal(started(), 0);
+  assert.equal(model.received(), "");
+});
+
+test("M1 stalled headers: one header byte every 100 ms is closed at the headers bound", async () => {
+  const { upstream, started } = await observedUpstream(() => {});
+  const { gateway, identity } = await deadlineSetup(upstream);
+  const model = await dialModel(gateway, identity);
+  const from = Date.now();
+  model.socket.write(`POST ${CLAUDE_PATH} HTTP/1.1\r\n`);
+  // Bytes keep arriving faster than the idle bound; only the headers timer
+  // can end this.
+  const header = "x-slow: " + "a".repeat(200);
+  let sent = 0;
+  const drip = setInterval(() => {
+    if (model.socket.destroyed) return clearInterval(drip);
+    model.socket.write(header[sent++ % header.length]!);
+  }, 100);
+  open.push({ close: () => clearInterval(drip) });
+  const at = await within(model.closed, 5_000, "dripped headers close");
+  clearInterval(drip);
+  assert.ok(at - from >= SHORT.headersMs - 50, `closed after ${at - from} ms`);
+  assert.ok(
+    at - from <= SHORT.headersMs + 1_000,
+    `closed after ${at - from} ms`,
+  );
+  assert.equal(started(), 0);
+});
+
+test("M2 stalled body: a dripped body is closed at the request bound and the upstream request is aborted", async () => {
+  const { upstream, started, aborted } = await observedUpstream((_seen, res) =>
+    res.end('{"ok":true}'),
+  );
+  const { gateway, identity, token } = await deadlineSetup(upstream);
+  const model = await dialModel(gateway, identity);
+  const from = Date.now();
+  model.socket.write(requestHead(token, 1_000) + '{"model":"');
+  const drip = setInterval(() => {
+    if (model.socket.destroyed) return clearInterval(drip);
+    model.socket.write("x");
+  }, 100);
+  open.push({ close: () => clearInterval(drip) });
+  const at = await within(model.closed, 5_000, "stalled body close");
+  clearInterval(drip);
+  assert.ok(at - from >= SHORT.requestMs - 50, `closed after ${at - from} ms`);
+  assert.ok(
+    at - from <= SHORT.requestMs + 1_000,
+    `closed after ${at - from} ms`,
+  );
+  await within(
+    (async () => {
+      while (aborted() === 0) await new Promise((r) => setTimeout(r, 20));
+    })(),
+    2_000,
+    "upstream abort",
+  );
+  assert.equal(started(), 1);
+  assert.equal(aborted(), 1);
+  assert.equal(upstream.anthropic.length, 0);
+  assert.doesNotMatch(model.received(), /HTTP\/1\.1 2\d\d/);
+});
+
+/** Asserts `text`, from `from` on, holds every `STREAM` chunk in order. */
+function assertWholeStream(text: string, from: number): void {
+  let at = from;
+  for (const chunk of STREAM) {
+    const found = text.indexOf(chunk, at);
+    assert.ok(found > at, `missing ${JSON.stringify(chunk)}`);
+    at = found;
+  }
+  assert.ok(text.endsWith(CHUNKED_END), "the stream ended");
+}
+
+test("M3 keep-alive: a short answer, then a long, quiet stream on the same connection, then another request; nothing is cut", async () => {
+  const { upstream } = await observedUpstream((seen, res) =>
+    seen.body.toString() === "long"
+      ? quietStream(STREAM, 700)(res)
+      : res.end('{"ok":true}'),
+  );
+  const { gateway, identity, token } = await deadlineSetup(upstream);
+  const model = await dialModel(gateway, identity);
+  model.socket.write(fullRequest(token, "short"));
+  await model.until((text) => text.endsWith('{"ok":true}'), 5_000);
+  // Each 700 ms gap outlasts the headers and idle bounds; the whole stream
+  // (2.8 s) outlasts the request bound.
+  const from = model.received().length;
+  model.socket.write(fullRequest(token, "long"));
+  await model.until((text) => text.endsWith(CHUNKED_END), 5_000);
+  assertWholeStream(model.received(), from);
+  // The same connection is still open and serves the next request.
+  model.socket.write(fullRequest(token, "short"));
+  await model.until(
+    (text) => text.match(/HTTP\/1\.1 200 /g)?.length === 3,
+    5_000,
+  );
+  await model.until((text) => text.endsWith('{"ok":true}'), 5_000);
+  assert.equal(model.socket.destroyed, false);
+  assert.equal(upstream.anthropic.length, 3);
+});
+
+/** Two complete requests in one write, before any response. */
+async function pipelined() {
+  const tlsServers = vi.spyOn(tls, "createServer");
+  const { upstream } = await observedUpstream((seen, res) =>
+    seen.body.toString() === "long"
+      ? quietStream(STREAM, 700)(res)
+      : res.end('{"ok":true}'),
+  );
+  return { tlsServers, upstream };
+}
+
+test.skipIf(Boolean(process.versions.bun))(
+  "M3b pipelined (Node): a short first response does not let a long, quiet second stream be cut",
+  async () => {
+    const { upstream } = await pipelined();
+    const { gateway, identity, token } = await deadlineSetup(upstream);
+    const model = await dialModel(gateway, identity);
+    model.socket.write(
+      fullRequest(token, "short") + fullRequest(token, "long"),
+    );
+    await model.until((text) => text.endsWith(CHUNKED_END), 5_000);
+    const text = model.received();
+    const short = text.indexOf('{"ok":true}');
+    const second = text.indexOf("HTTP/1.1 200 ", short);
+    assert.ok(text.startsWith("HTTP/1.1 200 ") && short > 0 && second > short);
+    assertWholeStream(text, second);
+    assert.equal(model.socket.destroyed, false);
+    assert.equal(upstream.anthropic.length, 2);
+  },
+);
+
+test.runIf(Boolean(process.versions.bun))(
+  "M3b pipelined (Bun 1.4.2 runtime-difference pin): the runtime's parser closes a pipelined connection at once; our deadlines play no part",
+  async () => {
+    // Bun 1.4.2's `http.Server`, handed a socket by `emit("connection")`,
+    // destroys the connection when a request arrives before the previous
+    // response finished (docs/deployment.md "Bun runtime differences"). The
+    // relay never pipelines. If a later Bun serves both answers, this pin
+    // fails: run the Node assertions of M3b under Bun instead.
+    const { tlsServers, upstream } = await pipelined();
+    // Long bounds: any close before them is the runtime's, not ours.
+    const bounds = { headersMs: 3_000, requestMs: 3_000, idleMs: 3_000 };
+    const { gateway, identity, token } = await deadlineSetup(upstream, bounds);
+    const model = await dialModel(gateway, identity);
+    const from = Date.now();
+    model.socket.write(
+      fullRequest(token, "short") + fullRequest(token, "long"),
+    );
+    const at = await within(model.closed, 2_000, "the runtime's close");
+    assert.ok(at - from < bounds.headersMs, `closed after ${at - from} ms`);
+    // The long stream was never served, so nothing of it was cut.
+    assert.doesNotMatch(model.received(), /data: /);
+    // The edge's side of the connection is gone too: nothing is left open.
+    const modelServer = tlsServers.mock.results[0]!.value as tls.Server;
+    await within(
+      (async () => {
+        for (;;) {
+          const count = await new Promise<number>((resolve, reject) =>
+            modelServer.getConnections((err, n) =>
+              err ? reject(err) : resolve(n),
+            ),
+          );
+          if (count === 0) return;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      })(),
+      2_000,
+      "the edge's connection to close",
+    );
+  },
+);
+
+test("M4 keep-alive idle: after a response, a silent connection is closed at the idle bound, not before", async () => {
+  const { upstream } = await observedUpstream((_seen, res) =>
+    res.end('{"ok":true}'),
+  );
+  const { gateway, identity, token } = await deadlineSetup(upstream);
+  const model = await dialModel(gateway, identity);
+  model.socket.write(fullRequest(token, "short"));
+  await model.until((text) => text.endsWith('{"ok":true}'), 5_000);
+  const from = Date.now();
+  const at = await within(model.closed, 5_000, "idle close");
+  assert.ok(at - from >= SHORT.idleMs - 100, `closed after ${at - from} ms`);
+  assert.ok(at - from <= SHORT.idleMs + 1_000, `closed after ${at - from} ms`);
+});
+
+test("M5 silent TLS peers release the model port's slots after handshake timeout", async () => {
+  shortenHandshake("model");
+  const gateway = await gatewayWithClients();
+  const identity = await enroll(gateway);
+  const connection = await dialClient(gateway, identity);
+  const { token } = await grant(connection);
+  const peers = Array.from({ length: 64 }, () =>
+    net.connect(gateway.clients!.modelPort, "127.0.0.1"),
+  );
+  const closed = peers.map(
+    (peer) =>
+      new Promise<void>((resolve) => peer.once("close", () => resolve())),
+  );
+  for (const peer of peers) {
+    peer.on("error", () => {});
+    open.push({ close: () => peer.destroy() });
+  }
+  await within(
+    Promise.all(
+      peers.map(
+        (peer) =>
+          new Promise<void>((resolve, reject) => {
+            peer.once("connect", resolve);
+            peer.once("error", reject);
+          }),
+      ),
+    ),
+    5_000,
+    "silent peers connect",
+  );
+  const from = Date.now();
+  await within(Promise.all(closed), 1_000 + 1_000, "silent peers close");
+  assert.ok(Date.now() - from <= 2_000);
+  assert.equal((await modelRequest(gateway, identity, token)).status, 200);
+});
+
+test("M6 close after stalls: close() ends stalled, silent, idle and streaming connections promptly", async () => {
+  let streaming: http.ServerResponse | undefined;
+  const { upstream, started } = await observedUpstream((seen, res) => {
+    if (seen.body.toString() !== "stream") {
+      res.end('{"ok":true}');
+      return;
+    }
+    // A stream that never ends by itself.
+    streaming = res;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(STREAM[0]);
+  });
+  // Production bounds: no deadline fires during this test.
+  const { gateway, identity, token } = await deadlineSetup(
+    upstream,
+    "production",
+  );
+  const stalledHeaders = await dialModel(gateway, identity);
+  stalledHeaders.socket.write(`POST ${CLAUDE_PATH} HTTP/1.1\r\nhost: edge\r\n`);
+  const stalledBody = await dialModel(gateway, identity);
+  stalledBody.socket.write(requestHead(token, 1_000) + '{"model":"');
+  const idle = await dialModel(gateway, identity);
+  idle.socket.write(fullRequest(token, "short"));
+  await idle.until((text) => text.endsWith('{"ok":true}'), 5_000);
+  const stream = await dialModel(gateway, identity);
+  stream.socket.write(fullRequest(token, "stream"));
+  await stream.until((text) => text.includes(STREAM[0]!), 5_000);
+  const silent = net.connect(gateway.clients!.modelPort, "127.0.0.1");
+  silent.on("error", () => {});
+  open.push({ close: () => silent.destroy() });
+  const silentClosed = new Promise<void>((resolve) =>
+    silent.once("close", () => resolve()),
+  );
+  await new Promise<void>((resolve) => silent.once("connect", resolve));
+  // The stalled body's upstream request is in flight.
+  await within(
+    (async () => {
+      while (started() < 3) await new Promise((r) => setTimeout(r, 20));
+    })(),
+    2_000,
+    "upstream requests start",
+  );
+  assert.ok(streaming && !streaming.writableEnded);
+
+  const from = Date.now();
+  await within(gateway.clients!.close(), 2_000, "close()");
+  assert.ok(Date.now() - from <= 2_000);
+  await within(
+    Promise.all([
+      stalledHeaders.closed,
+      stalledBody.closed,
+      idle.closed,
+      stream.closed,
+      silentClosed,
+    ]),
+    2_000,
+    "client sockets close",
+  );
+});
+
+// The same state machine on fake emitters and fake timers: what real sockets
+// cannot order deterministically (pipelined requests whose bodies and
+// responses end in any order), on any runtime.
+
+class FakeSocket extends EventEmitter {
+  destroyed = false;
+  destroys = 0;
+  /** Every `setTimeout` value, in order; the last one is in force. */
+  idle: number[] = [];
+  destroy(): this {
+    this.destroys++;
+    this.destroyed = true;
+    return this;
+  }
+  setTimeout(ms: number): this {
+    this.idle.push(ms);
+    return this;
+  }
+}
+
+function fakeConnection() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const socket = new FakeSocket();
+  const connection = modelConnection(socket as unknown as net.Socket, SHORT);
+  const request = () => {
+    const req = new EventEmitter();
+    const res = new EventEmitter();
+    connection.request(
+      req as unknown as http.IncomingMessage,
+      res as unknown as http.ServerResponse,
+    );
+    return { req, res };
+  };
+  return { socket, request };
+}
+
+test("model deadlines: awaiting a request arms the headers timer and the idle timeout, a request disarms both", () => {
+  const { socket } = fakeConnection();
+  assert.deepEqual(socket.idle, [SHORT.idleMs]);
+  socket.emit("timeout");
+  assert.equal(socket.destroys, 1);
+
+  const fresh = fakeConnection();
+  vi.advanceTimersByTime(SHORT.headersMs - 1);
+  assert.equal(fresh.socket.destroys, 0);
+  vi.advanceTimersByTime(1);
+  assert.equal(fresh.socket.destroys, 1);
+
+  const busy = fakeConnection();
+  vi.advanceTimersByTime(SHORT.headersMs - 1);
+  const { req } = busy.request();
+  assert.deepEqual(busy.socket.idle, [SHORT.idleMs, 0]);
+  req.emit("end");
+  vi.advanceTimersByTime(SHORT.requestMs * 10);
+  // The response never ends: nothing bounds it.
+  assert.equal(busy.socket.destroys, 0);
+});
+
+test("model deadlines: each request's body timer is its own, cleared only by its own end or close", () => {
+  // The second request's body stalls; the first's end must not clear it.
+  const a = fakeConnection();
+  const first = a.request();
+  vi.advanceTimersByTime(100);
+  a.request();
+  first.req.emit("end");
+  first.req.emit("close");
+  vi.advanceTimersByTime(SHORT.requestMs - 1);
+  assert.equal(a.socket.destroys, 0);
+  vi.advanceTimersByTime(1);
+  assert.equal(a.socket.destroys, 1);
+
+  // The first stalls; the second's end must not clear it, and a response
+  // finishing does not count as the body.
+  const b = fakeConnection();
+  const stalled = b.request();
+  vi.advanceTimersByTime(100);
+  const second = b.request();
+  second.req.emit("end");
+  stalled.res.emit("finish");
+  vi.advanceTimersByTime(SHORT.requestMs - 101);
+  assert.equal(b.socket.destroys, 0);
+  vi.advanceTimersByTime(1);
+  assert.equal(b.socket.destroys, 1);
+});
+
+test("model deadlines: the connection awaits a request again only when its last open response ends", () => {
+  const { socket, request } = fakeConnection();
+  const short = request();
+  const long = request();
+  short.req.emit("end");
+  long.req.emit("end");
+  // The short response ends (finish, then close: counted once) while the
+  // long one still streams: no timer may run.
+  short.res.emit("finish");
+  short.res.emit("close");
+  assert.deepEqual(socket.idle, [SHORT.idleMs, 0, 0]);
+  vi.advanceTimersByTime(SHORT.requestMs * 10);
+  assert.equal(socket.destroys, 0);
+  // The last response ends: awaiting again, headers timer and idle timeout.
+  long.res.emit("finish");
+  assert.deepEqual(socket.idle, [SHORT.idleMs, 0, 0, SHORT.idleMs]);
+  vi.advanceTimersByTime(SHORT.headersMs - 1);
+  assert.equal(socket.destroys, 0);
+  vi.advanceTimersByTime(1);
+  assert.equal(socket.destroys, 1);
+});
+
+test("model deadlines: no response's end re-arms while another request is open, in any order", () => {
+  const { socket, request } = fakeConnection();
+  const one = request();
+  one.req.emit("end");
+  one.res.emit("finish");
+  // Count zero: awaiting again, then a request ends that.
+  assert.deepEqual(socket.idle, [SHORT.idleMs, 0, SHORT.idleMs]);
+  const two = request();
+  const three = request();
+  two.req.emit("end");
+  three.req.emit("end");
+  // The later request's response ends first, then the earlier one's closes.
+  three.res.emit("finish");
+  vi.advanceTimersByTime(SHORT.requestMs * 10);
+  assert.equal(socket.destroys, 0);
+  two.res.emit("close");
+  assert.deepEqual(socket.idle, [
+    SHORT.idleMs,
+    0,
+    SHORT.idleMs,
+    0,
+    0,
+    SHORT.idleMs,
+  ]);
+  // A late duplicate end changes nothing: one arm, as counted.
+  three.res.emit("close");
+  two.res.emit("finish");
+  assert.equal(socket.idle.length, 6);
+  vi.advanceTimersByTime(SHORT.headersMs);
+  assert.equal(socket.destroys, 1);
+});
+
+test("model deadlines: the socket's close clears every timer", () => {
+  const { socket, request } = fakeConnection();
+  request();
+  request();
+  socket.emit("close");
+  vi.advanceTimersByTime(SHORT.requestMs * 10);
+  assert.equal(socket.destroys, 0);
+  assert.equal(vi.getTimerCount(), 0);
 });

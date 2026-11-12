@@ -19,7 +19,11 @@ import {
   directDependencyRoot,
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
-import { checkGatewayEntries, checkVaultEntry } from "./bun-gateway-check.mjs";
+import {
+  checkEdgeEntry,
+  checkGatewayEntries,
+  checkVaultEntry,
+} from "./bun-gateway-check.mjs";
 import {
   collectWebNotices,
   renderWebNotices,
@@ -923,6 +927,7 @@ async function checkBunPragma() {
   for (const [bundled, pragma] of [
     ["server.js", BUN_PRAGMA],
     ["gateway.js", BUN_PRAGMA],
+    ["gateway-edge.js", BUN_PRAGMA],
     ["vault.js", BUN_PRAGMA],
     ["codex-renew.js", BUN_PRAGMA],
     ["claude-login.js", BUN_PRAGMA],
@@ -1596,6 +1601,7 @@ try {
     `Standalone gateway: ${await checkGatewayEntries(runtimeRoot, gatewayCommand)}.`,
   );
   console.log(`Vault: ${await checkVaultEntry(runtimeRoot)}.`);
+  console.log(`Packaged edge: ${await checkEdgeEntry(runtimeRoot)}.`);
 
   seedDataDir();
   const first = start();

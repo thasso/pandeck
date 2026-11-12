@@ -25,7 +25,7 @@ export interface GatewayWebConfig {
   publicOrigin: string;
   certPem: string;
   keyPem: string;
-  /** The built gateway entry (`app/web/dist-gateway`). */
+  /** The built gateway entry (`defaultDistDir` unless the file names one). */
   distDir: string;
   oidc: { issuer: string; clientId: string; clientSecret: string };
   allow: AllowRule;
@@ -33,10 +33,19 @@ export interface GatewayWebConfig {
 
 export class GatewayWebConfigError extends Error {}
 
-/** `app/web/dist-gateway` in this checkout. */
-const CHECKOUT_DIST = fileURLToPath(
-  new URL("../../../web/dist-gateway", import.meta.url),
-);
+/**
+ * Where the built gateway entry is when the file names none: under a `.ts`
+ * module, `app/web/dist-gateway` in this checkout; in the Bun package,
+ * `gateway-web/` beside the bundle (`docs/deployment.md#bun-package`).
+ */
+export function defaultDistDir(moduleUrl: string = import.meta.url): string {
+  return fileURLToPath(
+    new URL(
+      moduleUrl.endsWith(".ts") ? "../../../web/dist-gateway" : "./gateway-web",
+      moduleUrl,
+    ),
+  );
+}
 
 function refuse(message: string): never {
   throw new GatewayWebConfigError(`gateway UI config: ${message}`);
@@ -142,7 +151,7 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   const certPem = pem(raw.certFile, "certFile");
   const keyPem = pem(raw.keyFile, "keyFile");
   const distDir =
-    raw.distDir === undefined ? CHECKOUT_DIST : text(raw.distDir, "distDir");
+    raw.distDir === undefined ? defaultDistDir() : text(raw.distDir, "distDir");
   if (!existsSync(join(distDir, "gateway.html")))
     refuse("distDir holds no gateway.html (run pnpm run build)");
 

@@ -46,6 +46,7 @@ import {
   peerClientId,
   startClientListener,
   type ClientListenerOptions,
+  type ModelDeadlines,
   type RunningClientListener,
 } from "./clientListener.ts";
 import { createControlEndpoint } from "./control.ts";
@@ -93,6 +94,11 @@ export interface GatewayOptions {
    * needs `stateDir`. Without it the gateway serves only the loopback port.
    */
   clients?: ClientListenerOptions;
+  /**
+   * Test seam: shorter model-port deadlines for the client listener. Not in
+   * `clients`, which an entry may read from its environment.
+   */
+  modelDeadlines?: ModelDeadlines;
   /** The login drivers enrolled clients' logins run (`logins.ts`). */
   loginDrivers?: LoginDrivers;
   /**
@@ -273,6 +279,7 @@ export async function startGateway(
         ...(options.now ? { now: options.now } : {}),
         vault,
         tools: options.tools,
+        modelDeadlines: options.modelDeadlines,
       },
       options.clients,
     );

@@ -231,6 +231,8 @@ export async function startFakeUpstreams(
     claude?: UpstreamResponder;
     codex?: UpstreamResponder;
     claudeToken?: UpstreamResponder;
+    /** Sees each `api.anthropic.com` request as it starts, before its body. */
+    claudeStarted?: (req: http.IncomingMessage) => void;
   } = {},
 ): Promise<FakeUpstreams> {
   const ca = await loadOrCreateCa();
@@ -239,11 +241,13 @@ export async function startFakeUpstreams(
     host: string,
     seen: Seen[],
     responder: UpstreamResponder,
+    started?: (req: http.IncomingMessage) => void,
   ) => {
     const leaf = issueLeafCertificate(ca, host);
     const server = https.createServer(
       { key: leaf.keyPem, cert: leaf.certPem },
       (req, res) => {
+        started?.(req);
         const chunks: Buffer[] = [];
         req.on("data", (chunk: Buffer) => chunks.push(chunk));
         req.on("end", () => {
@@ -273,6 +277,7 @@ export async function startFakeUpstreams(
       "api.anthropic.com",
       anthropic,
       respond.claude ?? answerOk,
+      respond.claudeStarted,
     ),
     "openai-codex": await start(
       "chatgpt.com",

@@ -14,8 +14,15 @@
  * with `--network none`): the Codex login reaches for OpenAI as soon as it
  * starts.
  *
- * `test-bun-server-bundle.mjs` runs both on the package. Run alone, it checks
- * a runtime directory holding the bundles beside the Bun executable:
+ * The packaged edge (Task-1401): `gateway-edge.js` refuses to start without
+ * `--vault-host` or unpaired, links to a paired `vault.js`, serves an enrolled
+ * relay's client protocol and `/mcp` (whose Jira tool answers "not
+ * connected"), refuses peers without a certificate of its CA on the model and
+ * client ports, serves the packaged gateway UI from `gateway-web/` with
+ * `--ui-config`, and exits 0 on SIGTERM. No provider is reached.
+ *
+ * `test-bun-server-bundle.mjs` runs all three on the package. Run alone, it
+ * checks a runtime directory holding the bundles beside the Bun executable:
  * `bun scripts/bun-gateway-check.mjs <runtime dir> [gateway command]`.
  */
 import { spawn, sleep } from "bun";
@@ -29,9 +36,16 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import { connect, createServer } from "node:net";
 import tls from "node:tls";
 import { join, resolve } from "node:path";
+import {
+  CLIENT_METHODS,
+  GATEWAY_CLIENT_PROTOCOL,
+  encodeClientMessage,
+} from "../app/server/src/gateway/clientMethods.ts";
 import {
   CONTROL_METHODS,
   GATEWAY_CONTROL_PROTOCOL,
@@ -42,7 +56,11 @@ import { processStartTime } from "../app/server/src/gateway/processIdentity.ts";
 import { GATEWAY_REFUSAL_MARKER } from "../app/server/src/gateway/refusals.ts";
 import { createRemoteVault } from "../app/server/src/gateway/remoteVault.ts";
 import { readEdgeVaultLink } from "../app/server/src/gateway/vaultMethods.ts";
-import { selfSignedIdentity } from "../app/server/src/gateway/x509.ts";
+import {
+  edgeTlsFor,
+  selfSignedIdentity,
+} from "../app/server/src/gateway/x509.ts";
+import { enrollRelay, startRelay } from "../app/server/src/relay/relay.ts";
 import { WorkerConnection } from "../app/server/src/workerProtocol/connection.ts";
 import { dialUnixSocket } from "../app/server/src/workerProtocol/unixSocketTransport.ts";
 
@@ -593,6 +611,469 @@ export async function checkVaultEntry(runtimeRoot) {
   }
 }
 
+/** Whether a TCP connection to `port` on loopback is accepted. */
+function accepts(port) {
+  return new Promise((done) => {
+    const probe = connect(port, "127.0.0.1", () => {
+      probe.destroy();
+      done(true);
+    });
+    probe.on("error", () => done(false));
+  });
+}
+
+/**
+ * A TLS peer that `identity` (or no certificate) cannot get past: the edge
+ * closes it within 10 s without one application byte.
+ */
+async function assertRefusedPeer(port, caPem, identity, what) {
+  const peer = tls.connect({
+    host: "127.0.0.1",
+    port,
+    ca: caPem,
+    checkServerIdentity: () => undefined,
+    ...(identity ? { key: identity.keyPem, cert: identity.certPem } : {}),
+  });
+  let answered = 0;
+  peer.on("secureConnect", () =>
+    peer.write("GET / HTTP/1.1\r\nhost: x\r\n\r\n"),
+  );
+  peer.on("data", (chunk) => (answered += chunk.length));
+  peer.on("error", () => {});
+  try {
+    await within(
+      new Promise((done) => peer.once("close", done)),
+      10_000,
+      `the edge to close ${what}`,
+    );
+  } finally {
+    peer.destroy();
+  }
+  assert(answered === 0, `The edge answered ${what}.`);
+}
+
+/** One request; answers status, headers and the body's bytes. */
+function fetchBytes(url, options = {}) {
+  const { body, ...rest } = options;
+  return within(
+    new Promise((done, fail) => {
+      const request = (url.startsWith("https:") ? https : http).request(
+        url,
+        { agent: false, ...rest },
+        (response) => {
+          const chunks = [];
+          response.on("data", (chunk) => chunks.push(chunk));
+          response.on("end", () =>
+            done({
+              status: response.statusCode,
+              headers: response.headers,
+              body: Buffer.concat(chunks),
+            }),
+          );
+          response.on("error", fail);
+        },
+      );
+      request.on("error", fail);
+      request.end(body);
+    }),
+    15_000,
+    `${options.method ?? "GET"} ${new URL(url).pathname}`,
+  );
+}
+
+/** The text the edge's Jira tool answers a user with no credential. */
+const JIRA_NOT_CONNECTED =
+  "Jira is not connected for this user; connect it in Pandeck's Settings.";
+
+/**
+ * @param {string} runtimeRoot the directory with `gateway-edge.js`,
+ *   `gateway-web/`, `vault.js` and `gateway-admin.js`
+ */
+export async function checkEdgeEntry(runtimeRoot) {
+  const bunExecutable = join(runtimeRoot, "personal-assistant-server");
+  for (const bundled of [
+    "gateway-edge.js",
+    "gateway-web/gateway.html",
+    "vault.js",
+    "gateway-admin.js",
+  ])
+    assert(
+      existsSync(join(runtimeRoot, bundled)),
+      `The package has no ${bundled}.`,
+    );
+  // Short: the relay's Unix socket path holds at most 108 bytes.
+  const temp = mkdtempSync("/tmp/");
+  const vaultDir = join(temp, "v");
+  const edgeDir = join(temp, "e");
+  for (const name of ["v", "e", "h", "t", "r"])
+    mkdirSync(join(temp, name), { mode: 0o700 });
+  // The edge's and the vault's whole environment: no DATA_DIR.
+  const env = {
+    PATH: process.env.PATH ?? "",
+    HOME: join(temp, "h"),
+    TMPDIR: join(temp, "t"),
+    NODE_ENV: "production",
+    ASSISTANT_RUNTIME_DIR: runtimeRoot,
+  };
+  const admin = async (dir, ...args) => {
+    const run = spawn(
+      [
+        bunExecutable,
+        join(runtimeRoot, "gateway-admin.js"),
+        "--state-dir",
+        dir,
+        ...args,
+      ],
+      { env, stdout: "pipe", stderr: "inherit" },
+    );
+    const [code, output] = await within(
+      Promise.all([run.exited, new globalThis.Response(run.stdout).text()]),
+      30_000,
+      `gateway-admin ${args[0]}`,
+    );
+    assert(code === 0, `gateway-admin ${args[0]} exited with ${code}.`);
+    return output;
+  };
+  /** Starts the edge; `lines` collects its stdout, echoed. */
+  const startEdge = (args) => {
+    const run = spawn(
+      [bunExecutable, join(runtimeRoot, "gateway-edge.js"), ...args],
+      { env, stdout: "pipe", stderr: "inherit" },
+    );
+    const lines = [];
+    void (async () => {
+      const decoder = new globalThis.TextDecoder();
+      let rest = "";
+      for await (const chunk of run.stdout) {
+        const text = rest + decoder.decode(chunk, { stream: true });
+        const parts = text.split("\n");
+        rest = parts.pop();
+        for (const line of parts) {
+          console.log(line);
+          lines.push(line);
+        }
+      }
+    })();
+    return { run, lines };
+  };
+  const exitOf = (run, what) => within(run.exited, 10_000, what);
+
+  // (1) Refusals: no --vault-host, and an unpaired state directory.
+  const fresh = join(temp, "f");
+  for (const [args, what] of [
+    [["--state-dir", fresh], "without --vault-host"],
+    [["--state-dir", fresh, "--vault-host", "127.0.0.1"], "unpaired"],
+  ]) {
+    const { run } = startEdge(args);
+    const code = await exitOf(run, `gateway-edge ${what}`);
+    assert(code === 2, `gateway-edge ${what} exited with ${code}, not 2.`);
+  }
+
+  // (2) A paired vault, a user and an enrollment code.
+  writeFileSync(join(temp, "vault.pem"), await admin(vaultDir, "vault-init"));
+  writeFileSync(
+    join(temp, "edge.pem"),
+    await admin(edgeDir, "vault-pair", "--vault-cert", join(temp, "vault.pem")),
+  );
+  await admin(vaultDir, "vault-init", "--edge-cert", join(temp, "edge.pem"));
+  await admin(edgeDir, "user", "add", "u1");
+  const code = (
+    await admin(edgeDir, "enroll-code", "--user", "u1", "--label", "check")
+  ).trim();
+  const vaultPort = await freePort();
+  const vault = spawn(
+    [
+      bunExecutable,
+      join(runtimeRoot, "vault.js"),
+      "--state-dir",
+      vaultDir,
+      "--port",
+      String(vaultPort),
+    ],
+    { env, stdout: "inherit", stderr: "inherit" },
+  );
+  const [modelPort, clientPort, enrollPort] = [
+    await freePort(),
+    await freePort(),
+    await freePort(),
+  ];
+  const flags = [
+    "--state-dir",
+    edgeDir,
+    "--port",
+    "0",
+    "--model-port",
+    String(modelPort),
+    "--client-port",
+    String(clientPort),
+    "--enroll-port",
+    String(enrollPort),
+    "--bind-host",
+    "127.0.0.1",
+    "--host",
+    "127.0.0.1",
+    "--vault-host",
+    "127.0.0.1",
+    "--vault-port",
+    String(vaultPort),
+  ];
+  const linkUp = (edge) =>
+    eventually(
+      () => {
+        assert(
+          edge.run.exitCode === null,
+          `gateway-edge.js exited during start (${edge.run.exitCode}).`,
+        );
+        assert(vault.exitCode === null, `vault.js exited (${vault.exitCode}).`);
+        return edge.lines.some((line) =>
+          line.includes(`vault link up at 127.0.0.1:${vaultPort}`),
+        );
+      },
+      30_000,
+      "the edge's vault link",
+    );
+  const portsLine = (edge) =>
+    edge.lines.find((line) => line.startsWith("[gateway-edge] state "));
+  let edge;
+  let relay;
+  let link;
+  try {
+    // (3) Boot A, without --ui-config.
+    edge = startEdge(flags);
+    await linkUp(edge);
+    assert(
+      portsLine(edge) &&
+        portsLine(edge).includes(`model ${modelPort}`) &&
+        !portsLine(edge).includes(", ui "),
+      `Boot A's ports line is wrong: ${portsLine(edge)}.`,
+    );
+    const caPem = await admin(edgeDir, "ca");
+
+    // (4) An enrolled relay and its MCP token.
+    const relayDir = join(temp, "r");
+    const clientId = await within(
+      enrollRelay({
+        stateDir: relayDir,
+        host: "127.0.0.1",
+        enrollPort,
+        caPem,
+        code,
+      }),
+      15_000,
+      "the relay's enrollment",
+    );
+    relay = await startRelay({
+      stateDir: relayDir,
+      port: 0,
+      socketPath: join(temp, "r.sock"),
+      log: () => {},
+    });
+    const mcpToken = (
+      await admin(edgeDir, "clients", "mcp-token", clientId)
+    ).trim();
+
+    // (5) Gateway client 1.0 through the relay's socket (the client port).
+    link = new WorkerConnection(await dialUnixSocket(relay.socketPath), {
+      handshake: { role: "worker", workerId: "edge-check" },
+      protocol: GATEWAY_CLIENT_PROTOCOL,
+      handlers: Object.fromEntries(
+        [CLIENT_METHODS.accountsChanged, CLIENT_METHODS.loginEvent].map(
+          (method) => [method, async () => encodeClientMessage({})],
+        ),
+      ),
+    });
+    const call = async (method, json) =>
+      (
+        await within(
+          link.request(method, encodeClientMessage(json)),
+          15_000,
+          method,
+        )
+      ).json;
+    const accounts = await call(CLIENT_METHODS.listAccounts, {});
+    assert(
+      Array.isArray(accounts.accounts) && accounts.accounts.length === 0,
+      "accounts.list answered accounts for a new user.",
+    );
+    const tools = await call(CLIENT_METHODS.toolsList, {});
+    assert(
+      tools.tools.some((tool) => tool.name === "jira_get_issue"),
+      "tools.list names no jira_get_issue.",
+    );
+    const called = await call(CLIENT_METHODS.toolsCall, {
+      name: "jira_get_issue",
+      args: { issue: "OPS-1" },
+    });
+    assert(
+      called.ok === false && called.message === JIRA_NOT_CONNECTED,
+      `tools.call answered ${JSON.stringify(called)}.`,
+    );
+
+    // (6) /mcp through the relay's HTTP (the model port).
+    const mcp = (body, token = mcpToken) =>
+      fetchBytes(`${relay.url}/mcp`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2025-06-18",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...body }),
+      });
+    const init = await mcp({
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "edge-check", version: "1" },
+      },
+    });
+    assert(init.status === 200, `/mcp initialize answered ${init.status}.`);
+    const listed = await mcp({ method: "tools/list", params: {} });
+    assert(
+      listed.status === 200 &&
+        JSON.parse(listed.body).result.tools.some(
+          (tool) => tool.name === "jira_get_issue",
+        ),
+      `/mcp tools/list answered ${listed.status}.`,
+    );
+    const toolCall = await mcp({
+      method: "tools/call",
+      params: { name: "jira_get_issue", arguments: { issue: "OPS-1" } },
+    });
+    const result = JSON.parse(toolCall.body).result;
+    assert(
+      toolCall.status === 200 &&
+        result.isError === true &&
+        result.content.map((part) => part.text).join("") === JIRA_NOT_CONNECTED,
+      `/mcp tools/call answered ${toolCall.status} ${toolCall.body}.`,
+    );
+    const wrong = await mcp({ method: "tools/list" }, "wrong-token");
+    assert(wrong.status === 401, `A wrong MCP token got ${wrong.status}.`);
+
+    // (7) Mutual TLS: no certificate, and one the edge's CA did not issue.
+    const stranger = selfSignedIdentity("stranger", "client");
+    for (const [port, name] of [
+      [modelPort, "model"],
+      [clientPort, "client"],
+    ]) {
+      await assertRefusedPeer(
+        port,
+        caPem,
+        undefined,
+        `a ${name}-port peer without a certificate`,
+      );
+      await assertRefusedPeer(port, caPem, stranger, `a ${name}-port stranger`);
+    }
+
+    // (8) Boot B, with --ui-config and the packaged gateway-web/.
+    edge.run.kill("SIGTERM");
+    const stopA = await exitOf(edge.run, "boot A's stop");
+    assert(stopA === 0, `Boot A's SIGTERM exited with ${stopA}.`);
+    const uiPort = await freePort();
+    const closedPort = await freePort();
+    // A CA-issued certificate, as a deployment's is: Bun 1.4.2's client does
+    // not accept a self-signed leaf as its own trust root.
+    const uiTls = edgeTlsFor(["127.0.0.1"], undefined);
+    writeFileSync(join(temp, "ui-cert.pem"), uiTls.serverCertPem);
+    writeFileSync(join(temp, "ui-key.pem"), uiTls.serverKeyPem, {
+      mode: 0o600,
+    });
+    const uiConfig = join(temp, "ui.json");
+    writeFileSync(
+      uiConfig,
+      JSON.stringify({
+        port: uiPort,
+        publicOrigin: `https://127.0.0.1:${uiPort}`,
+        certFile: join(temp, "ui-cert.pem"),
+        keyFile: join(temp, "ui-key.pem"),
+        oidc: {
+          issuer: `https://127.0.0.1:${closedPort}`,
+          clientId: "fake-check-client",
+          clientSecret: "fake-check-secret",
+        },
+        allow: { emailDomains: ["example.org"] },
+      }),
+      { mode: 0o600 },
+    );
+    edge = startEdge([...flags, "--ui-config", uiConfig]);
+    await linkUp(edge);
+    assert(
+      portsLine(edge)?.includes(`, ui ${uiPort}`),
+      `Boot B's ports line is wrong: ${portsLine(edge)}.`,
+    );
+    const ui = (path) =>
+      fetchBytes(`https://127.0.0.1:${uiPort}${path}`, { ca: uiTls.caCertPem });
+    const page = await ui("/");
+    const html = readFileSync(join(runtimeRoot, "gateway-web", "gateway.html"));
+    assert(
+      page.status === 200 &&
+        page.body.equals(html) &&
+        page.headers["content-security-policy"],
+      `GET / answered ${page.status}, not the packaged gateway.html.`,
+    );
+    const assets = [
+      ...new Set(
+        [
+          ...html.toString("utf8").matchAll(/["'](\/assets\/[^"'?#]+)["']/g),
+        ].map((match) => match[1]),
+      ),
+    ];
+    assert(assets.length > 0, "gateway.html references no asset.");
+    for (const asset of assets) {
+      const served = await ui(asset);
+      assert(
+        served.status === 200 &&
+          served.body.equals(
+            readFileSync(join(runtimeRoot, "gateway-web", asset.slice(1))),
+          ),
+        `${asset} is not served as packaged (${served.status}).`,
+      );
+    }
+    const me = await ui("/api/me");
+    assert(
+      me.status === 401 &&
+        JSON.stringify(JSON.parse(me.body.toString("utf8"))) ===
+          '{"error":"signed_out"}',
+      `/api/me signed out answered ${me.status}.`,
+    );
+    const login = await ui("/auth/login");
+    assert(
+      login.status === 303 && login.headers.location === "/?signin=failed",
+      `/auth/login with an unreachable issuer answered ${login.status} ${login.headers.location}.`,
+    );
+
+    // (9) SIGTERM: exit 0, the ports close, no credential file on the edge.
+    edge.run.kill("SIGTERM");
+    const stopB = await exitOf(edge.run, "boot B's stop");
+    assert(stopB === 0, `Boot B's SIGTERM exited with ${stopB}.`);
+    for (const port of [modelPort, clientPort, enrollPort, uiPort])
+      assert(!(await accepts(port)), `Port ${port} still accepts.`);
+    const accountsDir = join(edgeDir, "accounts");
+    assert(
+      !existsSync(accountsDir) || readdirSync(accountsDir).length === 0,
+      "The edge holds files under accounts/.",
+    );
+    link.end("check done");
+    link = undefined;
+    await relay.close();
+    relay = undefined;
+    vault.kill("SIGTERM");
+    const stopVault = await within(vault.exited, 30_000, "vault.js's stop");
+    assert(stopVault === 0, `vault.js's stop exited with ${stopVault}.`);
+    return `refused unpaired and vault-less starts, vault link up, client protocol and /mcp through a relay (Jira not connected), no-cert and stranger peers refused on both ports, gateway-web served with --ui-config, SIGTERM exit 0`;
+  } finally {
+    link?.end("check done");
+    await relay?.close();
+    if (edge && edge.run.exitCode === null) edge.run.kill("SIGKILL");
+    await edge?.run.exited;
+    if (vault.exitCode === null) vault.kill("SIGKILL");
+    await vault.exited;
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
 if (import.meta.main) {
   const runtimeRoot = resolve(process.argv[2] ?? "");
   const command = process.argv[3]
@@ -603,4 +1084,5 @@ if (import.meta.main) {
       ];
   console.log(await checkGatewayEntries(runtimeRoot, command));
   console.log(await checkVaultEntry(runtimeRoot));
+  console.log(await checkEdgeEntry(runtimeRoot));
 }

@@ -23,6 +23,7 @@ import { afterAll, afterEach, beforeAll, test, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { ClientRegistry } from "../gateway/clientRegistry.ts";
 import { edgeTlsFor } from "../gateway/x509.ts";
+import { startEdge } from "../gatewayEdge.ts";
 import type { GatewayWebConfig } from "./config.ts";
 import type { OidcTestOptions } from "./oidc.ts";
 import { startGatewayWeb, type RunningGatewayWeb } from "./server.ts";
@@ -69,6 +70,8 @@ interface Authorization {
 
 interface FakeIssuer {
   url: string;
+  /** Its loopback HTTP URL. */
+  listening: string;
   /** Approves the provider URL the gateway redirected to; answers the code. */
   authorize(provider: URL, testCase?: TokenCase): string;
   /** Every value the issuer saw that must never leak. */
@@ -95,7 +98,12 @@ function encode(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
-async function startFakeIssuer(): Promise<FakeIssuer> {
+/**
+ * `advertised` is the issuer URL its documents and tokens name, for a client
+ * that reaches the loopback listener through a fetch stub (`fetchVia`);
+ * otherwise the loopback URL itself.
+ */
+async function startFakeIssuer(advertised?: string): Promise<FakeIssuer> {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
   });
@@ -207,9 +215,11 @@ async function startFakeIssuer(): Promise<FakeIssuer> {
     server.listen(0, "127.0.0.1", () => resolve()),
   );
   const address = server.address();
-  base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+  const listening = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+  base = advertised ?? listening;
   return {
     url: base,
+    listening,
     secrets,
     idTokens,
     publicKey,
@@ -242,7 +252,7 @@ interface Answer {
 }
 
 function request(
-  gateway: RunningGatewayWeb,
+  gateway: Pick<RunningGatewayWeb, "port">,
   path: string,
   options: {
     method?: string;
@@ -299,8 +309,10 @@ function cookieValue(answer: Answer, name: string): string | undefined {
 }
 
 interface Gateway {
-  web: RunningGatewayWeb;
+  web: Pick<RunningGatewayWeb, "port">;
   registry: ClientRegistry;
+  /** The issuer it signs in with, when not the file's shared one. */
+  issuer?: FakeIssuer;
 }
 
 async function startUi(
@@ -370,8 +382,9 @@ async function startSignIn(
   assert.equal(login.status, 302);
   const provider = new URL(login.headers.location!);
   const signin = cookieValue(login, "__Host-pgw_signin")!;
-  issuer.secrets.add(signin);
-  const code = issuer.authorize(provider, flow.testCase);
+  const by = gateway.issuer ?? issuer;
+  by.secrets.add(signin);
+  const code = by.authorize(provider, flow.testCase);
   clock += flow.waitMs ?? 0;
   const state = flow.state ?? provider.searchParams.get("state")!;
   const cookie =
@@ -385,7 +398,7 @@ async function startSignIn(
       cookie ? { headers: { cookie } } : {},
     );
     const session = cookieValue(answer, "__Host-pgw_session");
-    if (session) issuer.secrets.add(session);
+    if (session) by.secrets.add(session);
     return answer;
   };
 }
@@ -1199,4 +1212,147 @@ test("AC9: the listener serves only TLS with the configured certificate", async 
     }),
     /self-signed|unable to verify|certificate/i,
   );
+});
+
+// The edge's composition (`gatewayEdge.ts`, Task-1401 V7): `startEdge` reads
+// a real 0600 UI config file, and the page signs in against the running
+// gateway's own client registry. The issuer is named `https://issuer.test`,
+// as the file requires; a fetch stub carries the gateway's requests to the
+// loopback fake, so the production https-only checks stay on.
+
+const EDGE_ISSUER = "https://issuer.test";
+
+test("V7: startEdge serves the sign-in over its own registry from a real config file", async () => {
+  const edgeIssuer = await startFakeIssuer(EDGE_ISSUER);
+  open.push({
+    close: () => {
+      // Its values join the file's leak check (afterAll).
+      for (const secret of edgeIssuer.secrets) issuer.secrets.add(secret);
+      return edgeIssuer.close();
+    },
+  });
+  const dir = mkdtempSync(join(DATA_DIR, "gateway-edge-"));
+  const stateDir = join(dir, "state");
+  writeFileSync(join(dir, "cert.pem"), tls.serverCertPem);
+  writeFileSync(join(dir, "key.pem"), tls.serverKeyPem, { mode: 0o600 });
+  const uiConfig = join(dir, "ui.json");
+  writeFileSync(
+    uiConfig,
+    JSON.stringify({
+      port: 0,
+      publicOrigin: PUBLIC_ORIGIN,
+      certFile: join(dir, "cert.pem"),
+      keyFile: join(dir, "key.pem"),
+      distDir,
+      oidc: {
+        issuer: EDGE_ISSUER,
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_PW,
+      },
+      allow: { emailDomains: ["example.org"] },
+    }),
+    { mode: 0o600 },
+  );
+  const lines: string[] = [];
+  const edge = await startEdge(
+    {
+      stateDir,
+      port: 0,
+      modelPort: 0,
+      clientPort: 0,
+      enrollPort: 0,
+      uiConfig,
+    },
+    {
+      log: (line) => lines.push(line),
+      oidcTestOptions: {
+        fetch: (url, init) =>
+          fetch(url.replace(EDGE_ISSUER, edgeIssuer.listening), init),
+      },
+    },
+  );
+  open.push(edge);
+  assert.ok(edge.uiPort, "the UI listens");
+  assert.match(lines.at(-1)!, new RegExp(`, ui ${edge.uiPort}$`));
+  const registry = edge.gateway.clients!.registry;
+  const gateway: Gateway = {
+    web: { port: edge.uiPort },
+    registry,
+    issuer: edgeIssuer,
+  };
+
+  // (a) A first admitted sign-in creates a user of the running registry,
+  // which another registry on the same state directory reads too.
+  const first = await signIn(gateway);
+  assert.equal(first.status, 303);
+  assert.equal(first.headers.location, "/");
+  const [user] = registry.users();
+  assert.ok(user);
+  assert.deepEqual(user.oidc, { issuer: EDGE_ISSUER, subject: "subject-1" });
+  assert.deepEqual(await me(gateway, sessionOf(first)), {
+    status: 200,
+    body: { userId: user.id, email: EMAIL, label: EMAIL },
+  });
+  assert.deepEqual(
+    new ClientRegistry(stateDir, () => clock).users().map((u) => u.id),
+    [user.id],
+  );
+
+  // (b) A claim made on the running registry binds the next sign-in.
+  registry.addUser("claimed");
+  registry.claimUser("claimed", "claimed@example.org", 60 * MINUTE);
+  const bound = await signIn(gateway, {
+    testCase: {
+      claims: (c) => ({ ...c, sub: "subject-2", email: "claimed@example.org" }),
+    },
+  });
+  assert.equal(bound.headers.location, "/");
+  assert.equal((await me(gateway, sessionOf(bound))).body.userId, "claimed");
+  const users = registry
+    .users()
+    .map((u) => u.id)
+    .sort();
+
+  // (c) A bad signature and (d) an email outside the rule change nothing.
+  assertRefused(
+    await signIn(gateway, {
+      testCase: {
+        tamperSignature: true,
+        claims: (c) => ({ ...c, sub: "subject-3" }),
+      },
+    }),
+    "failed",
+  );
+  assertRefused(
+    await signIn(gateway, {
+      testCase: {
+        claims: (c) => ({ ...c, sub: "subject-4", email: "x@other.org" }),
+      },
+    }),
+    "denied",
+  );
+  assert.deepEqual(
+    registry
+      .users()
+      .map((u) => u.id)
+      .sort(),
+    users,
+  );
+});
+
+test("V7: without --ui-config the edge starts no UI", async () => {
+  const lines: string[] = [];
+  const edge = await startEdge(
+    {
+      stateDir: mkdtempSync(join(DATA_DIR, "gateway-edge-")),
+      port: 0,
+      modelPort: 0,
+      clientPort: 0,
+      enrollPort: 0,
+    },
+    { log: (line) => lines.push(line) },
+  );
+  open.push(edge);
+  assert.equal(edge.uiPort, undefined);
+  assert.doesNotMatch(lines.join("\n"), /, ui /);
 });

@@ -11,10 +11,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "vitest";
 import {
   admittedEmail,
+  defaultDistDir,
   GatewayWebConfigError,
   loadGatewayWebConfig,
   type AllowRule,
@@ -191,4 +193,24 @@ test("the allow rule: a verified email by domain or address, and every claim", (
       undefined,
       JSON.stringify(claims),
     );
+});
+
+test("without distDir, the source reads the checkout's build and a bundle the directory beside it", () => {
+  const checkout = resolve(
+    fileURLToPath(new URL(".", import.meta.url)),
+    "../../../web/dist-gateway",
+  );
+  assert.equal(defaultDistDir(), checkout);
+  assert.equal(
+    defaultDistDir("file:///opt/pandeck/runtime/gateway-edge.js"),
+    "/opt/pandeck/runtime/gateway-web",
+  );
+  // The default is checked like a named directory.
+  const { file } = fixture((config) => delete config.distDir);
+  try {
+    assert.equal(loadGatewayWebConfig(file).distDir, checkout);
+  } catch (err) {
+    assert.ok(err instanceof GatewayWebConfigError);
+    assert.match(err.message, /distDir holds no gateway\.html/);
+  }
 });

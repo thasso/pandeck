@@ -1700,10 +1700,19 @@ path above.
   requests answer 503 or close the affected connection, never exit the process.
   Each port allows 64 connections and a 10 s TLS handshake; enrollment also has
   5 s header and 10 s request timeouts, and allows 30 attempts per source
-  address per minute. The source table holds at most 4,096 addresses and refuses
-  new sources until entries expire if full. A lease names its client and is
-  spent only on that client's connection; the loopback listener refuses client
-  leases.
+  address per minute. The model port is a TLS server that hands each admitted
+  socket to an HTTP parser (Bun's `https.Server` names no client certificate:
+  `docs/deployment.md` "Bun runtime differences"), and its deadlines are the
+  listener's own, separate budgets per phase: while a connection awaits a
+  request (after the handshake, and whenever no request is open) the next
+  request's headers must be complete within 60 s and the socket may stay silent
+  5 s; each request's body must be complete within 300 s of its headers, by its
+  own timer. A request is open from its headers until its response ends, so
+  pipelined requests keep the connection out of awaiting. Nothing bounds a
+  response: a long, quiet model stream is never cut. Every expiry closes the
+  connection. The source table holds at most 4,096 addresses and refuses new
+  sources until entries expire if full. A lease names its client and is spent
+  only on that client's connection; the loopback listener refuses client leases.
 - **Enrollment.** `gateway/adminMain.ts` adds users, prints a one-time code (15
   minutes, kept hashed) and lists, revokes clients and prints the CA. The client
   sends the code and its EC P-256 public key to `POST /enroll` and gets a
@@ -1794,11 +1803,13 @@ path above.
   there (Task-1399).
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
-  (`gatewayDevMain.ts`) remains the separate composition with the client
-  listener and both live login drivers on 127.0.0.1, or on `--bind-host` with
-  each `--host` in the edge's certificate. The packaged `gateway/main.ts` entry
-  can run a configured client listener but supplies no login drivers; packaged
-  logins run on the vault (`vault.js`, "Remote vault"). The commands
+  (`gatewayDevMain.ts`) runs the edge's composition (`gatewayEdge.ts`) with the
+  client listener and both live login drivers on 127.0.0.1, or on `--bind-host`
+  with each `--host` in the edge's certificate. The packaged edge,
+  `gateway-edge.js` (`gatewayEdgeMain.ts`), runs the same composition and flags
+  but requires `--vault-host`: its logins run on the vault (`vault.js`, "Remote
+  vault"). The packaged `gateway/main.ts` entry can run a configured client
+  listener but supplies no login drivers and no tools. The commands
   `gateway:admin` and `gateway:relay` run the admin CLI and the relay. A second
   dev instance with its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN`
   and `ASSISTANT_GATEWAY_RELAY` is the client.
@@ -1813,16 +1824,17 @@ path above.
 The edge runs integration tools for its clients' users (Task-1397, M22): a tool
 host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
 
-- **Host** (`gatewayTools/`, loaded only by the edge's entry
-  `gatewayDevMain.ts`): one module per tool (`descriptor.ts`: name, schema,
-  `effect` read or write, action key, integration), registered by one line in
-  `tools.ts`. `host.call` checks arguments against a closed schema, settles by
-  its 30 s deadline or the caller's abort whatever an await inside ignores, and
-  answers the tool's JSON or a fixed failure (`unknown_tool`, `invalid_params`,
-  `tool_error`, `result_too_large`, `timeout`, `cancelled`, `failed`). Only
-  edge-owned `ToolError` text reaches a caller; any other error's message is
-  dropped unlogged. `gateway/` holds no tool code or package: it takes the tools
-  as `EdgeTools` (`gateway/edgeTools.ts`, types only) through `startGateway`'s
+- **Host** (`gatewayTools/`, loaded only by the edge's composition
+  `gatewayEdge.ts`, which both edge entries run): one module per tool
+  (`descriptor.ts`: name, schema, `effect` read or write, action key,
+  integration), registered by one line in `tools.ts`. `host.call` checks
+  arguments against a closed schema, settles by its 30 s deadline or the
+  caller's abort whatever an await inside ignores, and answers the tool's JSON
+  or a fixed failure (`unknown_tool`, `invalid_params`, `tool_error`,
+  `result_too_large`, `timeout`, `cancelled`, `failed`). Only edge-owned
+  `ToolError` text reaches a caller; any other error's message is dropped
+  unlogged. `gateway/` holds no tool code or package: it takes the tools as
+  `EdgeTools` (`gateway/edgeTools.ts`, types only) through `startGateway`'s
   `tools`, and the vault process never loads them. Without them `/mcp` is an
   unknown path and the integration methods answer `tools_unavailable`; the
   packaged entry wires none yet (D1).
@@ -1893,13 +1905,14 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
 #### The gateway's sign-in and UI
 
 People sign in to the gateway itself in a browser, without a Pandeck instance
-(Task-1402, M23). `gatewayWeb/` is edge-only: with `--ui-config <file>`,
-`gatewayDevMain.ts` starts an HTTPS listener on `--bind-host` beside the client
-listener; without it nothing changes. The mutual-TLS ports, the enrollment port
-and the vault are untouched. The page is `app/web/gateway.html`, its own React
-entry, built by `vite.gateway.config.ts` into `app/web/dist-gateway/`
-(`pnpm run build` builds both bundles); it shows "Signed in as <email>" and Sign
-out, and reaches only its own origin with its session cookie.
+(Task-1402, M23). `gatewayWeb/` is edge-only: with `--ui-config <file>`, the
+edge (`gatewayEdge.ts`: `gateway-edge.js` or `gatewayDevMain.ts`) starts an
+HTTPS listener on `--bind-host` beside the client listener; without it nothing
+changes. The mutual-TLS ports, the enrollment port and the vault are untouched.
+The page is `app/web/gateway.html`, its own React entry, built by
+`vite.gateway.config.ts` into `app/web/dist-gateway/` (`pnpm run build` builds
+both bundles); it shows "Signed in as <email>" and Sign out, and reaches only
+its own origin with its session cookie.
 
 - **Config.** One JSON file, refused unless mode 0600 (no group or other bits),
   so the client secret stays out of argv. Every refusal is a fixed message
@@ -1911,7 +1924,6 @@ out, and reaches only its own origin with its session cookie.
     "publicOrigin": "https://gateway.example.org",
     "certFile": "/etc/pandeck-gateway/ui/fullchain.pem",
     "keyFile": "/etc/pandeck-gateway/ui/key.pem",
-    "distDir": "/opt/pandeck/app/web/dist-gateway",
     "oidc": {
       "issuer": "https://issuer.example",
       "clientId": "<client id>",
@@ -1927,9 +1939,10 @@ out, and reaches only its own origin with its session cookie.
 
   `port` defaults to 443 (a unit then needs only
   `AmbientCapabilities=CAP_NET_BIND_SERVICE`); `distDir` defaults to the
-  checkout's `app/web/dist-gateway`. `publicOrigin` must be
-  `https://host[:port]` with no path, the issuer `https://` and exactly the
-  provider's issuer string; the cert and key are the deployment's
+  checkout's `app/web/dist-gateway` under the source entries and to
+  `gateway-web/` beside `gateway-edge.js` in the Bun package. `publicOrigin`
+  must be `https://host[:port]` with no path, the issuer `https://` and exactly
+  the provider's issuer string; the cert and key are the deployment's
   browser-trusted pair. The provider's client needs the redirect URI
   `<publicOrigin>/auth/callback`. A Google Workspace deployment, for example,
   uses `https://accounts.google.com` as the issuer, its domain in `emailDomains`
@@ -2000,10 +2013,9 @@ out, and reaches only its own origin with its session cookie.
   `ui sign-in: failed (discovery|exchange|keys|signature|claims|state|registry)`
   and `ui sign-out: user=<id>`; never an email, code, state, nonce, verifier,
   token, cookie, secret or query. Provider error text is never echoed.
-- **Packaged entry (Task-1401).** The packaged edge must call `startGatewayWeb`
-  with the same config, a `GatewayWebUsers` adapter over its `ClientRegistry`
-  and its log, and ship `dist-gateway` as a runtime asset. Today only
-  `gatewayDevMain.ts` wires it.
+- **Packaged entry (Task-1401).** Both edge entries start the UI through
+  `gatewayEdge.ts`, with a `GatewayWebUsers` adapter over the running gateway's
+  own `ClientRegistry`; the Bun package ships `dist-gateway` as `gateway-web/`.
 
 ### Remote vault
 
@@ -2073,13 +2085,14 @@ server's local gateway does.
 - **Running.**
   `gateway:vault --state-dir <dir> [--bind-host <address>] [--port <n>] [--control-socket <path>]`
   (`gateway/vaultMain.ts`, port 8794; `vault.js` in the Bun package) runs the
-  vault; `gateway:dev ... --vault-host <address> [--vault-port <n>]` runs the
-  edge against it. pi and the Claude CLI never load in the vault process: each
-  Codex renewal and each login runs in its own child beside the entry,
-  `codex-renew`, `claude-login` or `codex-login` (`gateway/childEntries.ts`;
-  ADR-0005 "The login children"). A login child leads its own process group and
-  writes only into the login's directory; the vault ends the whole group before
-  it reads the credential or removes the directory.
+  vault; `gateway:dev ... --vault-host <address> [--vault-port <n>]`, or
+  `gateway-edge.js` with the same flags in the Bun package, runs the edge
+  against it. pi and the Claude CLI never load in the vault process: each Codex
+  renewal and each login runs in its own child beside the entry, `codex-renew`,
+  `claude-login` or `codex-login` (`gateway/childEntries.ts`; ADR-0005 "The
+  login children"). A login child leads its own process group and writes only
+  into the login's directory; the vault ends the whole group before it reads the
+  credential or removes the directory.
 
 #### Sealed store
 
