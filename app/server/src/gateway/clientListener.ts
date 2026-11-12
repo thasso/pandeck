@@ -184,6 +184,11 @@ interface ClientListenerDeps {
   tools?: EdgeTools | undefined;
   /** Test seam: shorter model-port deadlines; no entry passes it. */
   modelDeadlines?: ModelDeadlines | undefined;
+  /**
+   * Test seam: a shorter Atlassian check deadline than
+   * `INTEGRATION_CHECK_MS`; no entry passes it.
+   */
+  integrationCheckMs?: number | undefined;
 }
 
 export interface RunningClientListener {
@@ -538,8 +543,9 @@ export async function startClientListener(
   /** The integration tools, or the fixed refusal. */
   const integrations = (): EdgeTools["integrations"] =>
     deps.tools?.integrations ?? integrationFailure("tools_unavailable");
+  /** A fresh deadline, created where each check starts. */
   const checkSignal = (): AbortSignal =>
-    AbortSignal.timeout(INTEGRATION_CHECK_MS);
+    AbortSignal.timeout(deps.integrationCheckMs ?? INTEGRATION_CHECK_MS);
   const wrote = (outcome: Awaited<ReturnType<VaultPort["integrationPut"]>>) => {
     if (outcome.ok) return;
     integrationFailure(
