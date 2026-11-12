@@ -581,3 +581,155 @@ describe("login-stuck Clear in the accounts section", () => {
     expect(button(view.container, CLEAR_UNFINISHED_LOGIN_LABEL)).toBeDefined();
   });
 });
+
+/**
+ * Task-1402 B1: one login dialog for Claude and OpenAI (AC1, AC6, AC8). The
+ * dialog is the real one over a fake socket; no login runs.
+ */
+describe("the login dialog in the accounts section", () => {
+  let accounts: CredentialProfileSummary[] = [];
+  let requests: string[] = [];
+  let sockets: string[] = [];
+
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 0;
+    onmessage: unknown = null;
+    onerror: unknown = null;
+    onclose: unknown = null;
+    constructor(url: string) {
+      sockets.push(url);
+    }
+    send() {}
+    close() {}
+  }
+
+  const openAi = (
+    status: CredentialProfileSummary["status"],
+  ): CredentialProfileSummary => ({
+    ...profile(status),
+    id: "openai-work",
+    name: "OpenAI work",
+    provider: "openai-codex",
+    ...(status === "connecting"
+      ? {
+          setup: {
+            path: "",
+            command: "",
+            detail: "Use Continue login to see the verification link.",
+          },
+        }
+      : {}),
+  });
+
+  beforeEach(() => {
+    requests = [];
+    sockets = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const path = new URL(url, "http://localhost").pathname;
+        requests.push(`${init?.method ?? "GET"} ${path}`);
+        if (path === "/api/credential-profiles" && init?.method === "POST") {
+          const { name, provider } = JSON.parse(String(init.body)) as {
+            name: string;
+            provider: CredentialProfileSummary["provider"];
+          };
+          const created = {
+            ...profile("connecting"),
+            id: `${provider}-new`,
+            name,
+            provider,
+          };
+          accounts = [...accounts, created];
+          return Response.json({ profile: created }, { status: 201 });
+        }
+        if (path === "/api/credential-profiles")
+          return Response.json({ profiles: accounts });
+        return Response.json({});
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function section(name: "claude-sdk" | "openai") {
+    const view = mount(
+      <SettingsPage
+        {...({
+          section: name,
+          models: [],
+          accountModels: [],
+          credentialProfiles: [],
+          projects: [],
+          settings: settingsFixture,
+          onUpdate: () => {},
+        } as unknown as Parameters<typeof SettingsPage>[0])}
+      />,
+    );
+    await act(async () => {});
+    return view;
+  }
+  const dialog = (name: string) =>
+    document.querySelector(`[role="dialog"][aria-label="Connect ${name}"]`);
+
+  test.each([
+    ["claude-sdk", profile("disconnected"), "Connect"],
+    ["openai", openAi("disconnected"), "Connect"],
+    ["openai", openAi("ready"), "Reconnect"],
+  ] as const)(
+    "AC1: %s's %s opens the one login dialog, starting its login",
+    async (name, account, label) => {
+      accounts = [account];
+      const view = await section(name);
+      expect(dialog(account.name)).toBeNull();
+      await act(async () => button(view.container, label)!.click());
+      expect(dialog(account.name)).not.toBeNull();
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0]).toContain("/ws/account-login?");
+      expect(sockets[0]).toContain(`profileId=${account.id}`);
+      expect(sockets[0]).toContain("intent=start");
+      // No HTTP login start remains.
+      expect(requests.some((r) => r.endsWith("/login"))).toBe(false);
+      act(() => view.root.unmount());
+    },
+  );
+
+  test("AC1/AC6: a connecting OpenAI account offers Continue login, enabled, and shows no inline code", async () => {
+    accounts = [openAi("connecting")];
+    const view = await section("openai");
+    const action = button(view.container, "Continue login")!;
+    expect(action.disabled).toBe(false);
+    expect(view.container.textContent).not.toContain("Code:");
+    await act(async () => action.click());
+    expect(dialog("OpenAI work")).not.toBeNull();
+    act(() => view.root.unmount());
+  });
+
+  test.each([
+    ["claude-sdk", "Claude profile", "claude"],
+    ["openai", "OpenAI profile", "openai-codex"],
+  ] as const)(
+    "AC8: adding a %s login account opens the dialog for the returned profile",
+    async (name, noun, provider) => {
+      accounts = [];
+      const view = await section(name);
+      const input = view.container.querySelector<HTMLInputElement>(
+        `input[aria-label="${noun} name"]`,
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(input, "Fresh account");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(view.container, `Add ${noun}`)!.click());
+      await act(async () => {});
+      expect(dialog("Fresh account")).not.toBeNull();
+      expect(sockets[0]).toContain(`profileId=${provider}-new`);
+      expect(sockets[0]).toContain("intent=start");
+      act(() => view.root.unmount());
+    },
+  );
+});

@@ -120,14 +120,12 @@ import {
   disableAccountImpact,
   deleteCredentialProfile,
   fetchCredentialProfiles,
-  openAiProfileConnectionAction,
   renameCredentialProfile,
   setCredentialProfileEnabled,
   setCredentialProfileEnterprise,
   setCredentialProfilePriority,
   saveCredentialProfileEndpoint,
   slotModelOptions,
-  startOpenAiProfileLogin,
   testCredentialProfileEndpoint,
   type SlotModelOption,
 } from "../lib/credentialProfiles.ts";
@@ -155,7 +153,7 @@ import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
 import { AgentsSettingsSection } from "./AgentsSettingsSection.tsx";
 import { AboutSettingsSection } from "./AboutSettingsSection.tsx";
 import { PushNotificationsSection } from "./PushNotificationsSection.tsx";
-import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
+import { AccountLoginDialog } from "./AccountLoginDialog.tsx";
 import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
 import { Button } from "@/components/ui/button";
 import { useDialogs } from "./common/dialogs.tsx";
@@ -811,21 +809,6 @@ export function CredentialProfileCard({
         <Item variant="muted" className="mt-2">
           <ItemContent>
             <p>{profile.setup.detail}</p>
-            {profile.setup.verificationUri ? (
-              <a
-                href={profile.setup.verificationUri}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-1 block text-primary underline"
-              >
-                {profile.setup.verificationUri}
-              </a>
-            ) : null}
-            {profile.setup.userCode ? (
-              <p className="mt-1 font-mono text-foreground">
-                Code: {profile.setup.userCode}
-              </p>
-            ) : null}
             {profile.setup.command ? (
               <code className="mt-2 block break-all text-foreground">
                 {profile.setup.command}
@@ -1103,7 +1086,8 @@ function CredentialProfilesSection({
   const [profiles, setProfiles] = useState<CredentialProfileSummary[]>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [claudeLoginProfile, setClaudeLoginProfile] =
+  // The login dialog's account (Claude or OpenAI), while it is open.
+  const [loginProfile, setLoginProfile] =
     useState<CredentialProfileSummary | null>(null);
   // Endpoint accounts: the last Test answer per account, and those testing.
   const [endpointStatus, setEndpointStatus] = useState<
@@ -1145,8 +1129,11 @@ function CredentialProfilesSection({
   }, [profiles, provider]);
   const add = async () => {
     try {
-      await createCredentialProfile(name, provider);
+      const created = await createCredentialProfile(name, provider);
       setName("");
+      // A login account is added to sign it in: its login dialog opens.
+      if (ACCOUNT_KINDS[created.provider].credential === "login")
+        setLoginProfile(created);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1204,17 +1191,15 @@ function CredentialProfilesSection({
                 profile.id === "default" || profile.id === "claude-default";
               const connection = endpoints
                 ? { label: "Test", disabled: !profile.endpoint?.baseUrl }
-                : provider === "openai-codex"
-                  ? openAiProfileConnectionAction(profile.status)
-                  : {
-                      label:
-                        profile.status === "connecting"
-                          ? "Continue login"
-                          : profile.status === "ready"
-                            ? "Reconnect"
-                            : "Connect",
-                      disabled: false,
-                    };
+                : {
+                    label:
+                      profile.status === "connecting"
+                        ? "Continue login"
+                        : profile.status === "ready"
+                          ? "Reconnect"
+                          : "Connect",
+                    disabled: false,
+                  };
               const fail = (err: unknown) =>
                 setError(err instanceof Error ? err.message : String(err));
               const test = () => {
@@ -1335,12 +1320,7 @@ function CredentialProfilesSection({
                   loginClearError={clearErrors[profile.id]}
                   onConnect={() => {
                     if (endpoints) test();
-                    else if (provider === "claude")
-                      setClaudeLoginProfile(profile);
-                    else
-                      void startOpenAiProfileLogin(profile.id)
-                        .then(refresh)
-                        .catch(fail);
+                    else setLoginProfile(profile);
                   }}
                   {...(!protectedProfile
                     ? {
@@ -1369,12 +1349,12 @@ function CredentialProfilesSection({
           </div>
         </SettingsCard>
       </div>
-      {claudeLoginProfile ? (
-        <ClaudeLoginTerminal
-          profile={claudeLoginProfile}
+      {loginProfile ? (
+        <AccountLoginDialog
+          profile={loginProfile}
           onFinished={() => void refresh()}
           onClose={() => {
-            setClaudeLoginProfile(null);
+            setLoginProfile(null);
             void refresh();
           }}
         />
