@@ -24,7 +24,8 @@
     "./portForwarding": "./portForwarding.ts",
     "./settingsRegistry": "./settingsRegistry.ts",
     "./zonedTime": "./zonedTime.ts",
-    "./sessionTreeWorktrees": "./sessionTreeWorktrees.ts"
+    "./sessionTreeWorktrees": "./sessionTreeWorktrees.ts",
+    "./gatewayUi": "./gatewayUi.ts"
   },
   "types": "./protocol.ts",
   "scripts": {

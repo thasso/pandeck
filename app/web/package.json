@@ -6,7 +6,7 @@
   "version": "0.65.0",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build --config vite.gateway.config.ts",
     "preview": "vite preview",
     "preview:story": "tsx component-preview/build-story.ts",
     "storybook": "storybook dev --config-dir component-preview/storybook-config --port 6006 --no-open",

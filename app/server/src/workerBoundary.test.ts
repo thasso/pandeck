@@ -662,6 +662,51 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
   }
 });
 
+/**
+ * The gateway's own sign-in and page (Task-1402): beyond `node:` and
+ * themselves, only the OIDC library, the shared wire model and the static
+ * content types. Only the edge's entry loads them, and the OIDC library is
+ * theirs alone, so neither `gateway/` nor the vault process ever loads it.
+ */
+const GATEWAY_WEB_ALLOWED = new Set([
+  "oauth4webapi",
+  "@assistant/shared/gatewayUi",
+  "webStatic.ts",
+]);
+
+test("only the edge's entry loads its sign-in, which alone uses the OIDC library", () => {
+  assert.deepEqual(
+    importersOf((target) => target.startsWith("gatewayWeb/")).filter(
+      (module) => !module.startsWith("gatewayWeb/"),
+    ),
+    ["gatewayDevMain.ts"],
+  );
+  const modules = [...scans].filter(([module]) =>
+    module.startsWith("gatewayWeb/"),
+  );
+  assert.ok(modules.length > 0, "the scan found the sign-in modules");
+  for (const [module, scan] of modules)
+    for (const target of scan.imports)
+      assert.ok(
+        target.startsWith("node:") ||
+          target.startsWith("gatewayWeb/") ||
+          GATEWAY_WEB_ALLOWED.has(target),
+        `${module} imports ${target}`,
+      );
+  assert.deepEqual(
+    importersOf(
+      (target) =>
+        target === "oauth4webapi" || target.startsWith("oauth4webapi/"),
+    ).filter((module) => !module.startsWith("gatewayWeb/")),
+    [],
+  );
+  // What they may import beyond the library reaches nothing further.
+  for (const target of scans.get("webStatic.ts")!.imports)
+    assert.ok(target.startsWith("node:"), `webStatic.ts imports ${target}`);
+  const shared = scanModule(resolve(SRC_ROOT, "../../shared/gatewayUi.ts"));
+  assert.deepEqual([...shared.imports], [], "the shared leaf imports nothing");
+});
+
 test("only the server links and the error classifier import the gateway", () => {
   // The link starts it and speaks control, the client-mode link speaks
   // gateway client 1.0; engine modules reach it only through a link. The

@@ -6,6 +6,10 @@
  * by its fingerprint too. A client's MCP token (Task-1397) is likewise kept
  * only as its SHA-256.
  *
+ * A user signs in to the gateway's page (Task-1402) with an OIDC identity,
+ * issuer plus subject; the email is an attribute. An operator's claim binds
+ * the next admitted sign-in with that email to an existing user once.
+ *
  * The admin CLI writes the same file from its own process, so reads always
  * reload the current file. Writers hold clients.json.lock across the complete
  * read-modify-rename, including code redemption. A crashed writer leaves its
@@ -26,10 +30,15 @@ import { createPrivateJsonFile } from "../privateJsonFile.ts";
 const CODE_TTL_MS = 15 * 60_000;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_LABEL = 200;
+const MAX_EMAIL = 254;
 
 export interface GatewayUser {
   id: string;
   label: string;
+  /** The OIDC identity this user signs in to the gateway's page with. */
+  oidc?: { issuer: string; subject: string };
+  /** The email of the latest sign-in, lowercased; an attribute, not a key. */
+  email?: string;
 }
 
 export interface GatewayClient {
@@ -52,6 +61,17 @@ interface PendingCode {
   expiresAt: number;
 }
 
+/** An operator's `user claim`: binds the next admitted sign-in once. */
+interface PendingClaim {
+  userId: string;
+  /** Lowercased. */
+  email: string;
+  expiresAt: number;
+}
+
+/** How a sign-in reached its user. */
+export type SignInOutcome = "existing" | "created" | "bound";
+
 interface AccountOwner {
   profileId: string;
   userId: string;
@@ -63,6 +83,8 @@ interface Stored {
   clients: GatewayClient[];
   codes: PendingCode[];
   accounts: AccountOwner[];
+  /** Absent in a file an older build wrote; read as empty. */
+  claims?: PendingClaim[];
 }
 
 const empty = (): Stored => ({
@@ -79,6 +101,26 @@ function isGatewayId(value: unknown): value is string {
 
 function label(text: string): string {
   return text.slice(0, MAX_LABEL);
+}
+
+function hasIdentity(user: GatewayUser): boolean {
+  return typeof user.oidc === "object" && user.oidc !== null;
+}
+
+function emailOf(text: string): string {
+  const email = text.trim().toLowerCase();
+  const at = email.lastIndexOf("@");
+  if (at <= 0 || at === email.length - 1 || email.length > MAX_EMAIL)
+    throw new Error("Not an email address.");
+  return email;
+}
+
+/** An opaque random user id; it fits `ID_RE`. */
+function newUserId(state: Stored): string {
+  for (;;) {
+    const id = `u_${randomBytes(12).toString("base64url")}`;
+    if (!state.users.some((user) => user.id === id)) return id;
+  }
 }
 
 function hashOf(code: string): string {
@@ -187,6 +229,9 @@ export class ClientRegistry {
       const answer = apply(state);
       if (write(answer)) {
         state.codes = state.codes.filter((code) => code.expiresAt > this.now());
+        state.claims = (state.claims ?? []).filter(
+          (claim) => claim.expiresAt > this.now(),
+        );
         this.file.write(state);
         this.seenFile = true;
       }
@@ -207,6 +252,91 @@ export class ClientRegistry {
 
   user(id: string): GatewayUser | undefined {
     return this.load().users.find((user) => user.id === id);
+  }
+
+  /** A copy of every user, for `user list`. */
+  users(): GatewayUser[] {
+    return this.load().users.map((user) => ({
+      ...user,
+      ...(user.oidc ? { oidc: { ...user.oidc } } : {}),
+    }));
+  }
+
+  /**
+   * Lets the next admitted sign-in with `email` become `userId`, once, within
+   * `ttlMs`. Replaces an earlier claim on that user or that email. Throws for
+   * an unknown user or one that already has an identity.
+   */
+  claimUser(userId: string, email: string, ttlMs: number): void {
+    const claimed = emailOf(email);
+    this.change((state) => {
+      const user = state.users.find((u) => u.id === userId);
+      if (!user) throw new Error(`No user ${userId}.`);
+      if (hasIdentity(user))
+        throw new Error(`User ${userId} already signs in with an identity.`);
+      state.claims = (state.claims ?? []).filter(
+        (claim) => claim.userId !== userId && claim.email !== claimed,
+      );
+      state.claims.push({
+        userId,
+        email: claimed,
+        expiresAt: this.now() + ttlMs,
+      });
+    });
+  }
+
+  /**
+   * The user an admitted OIDC sign-in reaches, in one change: the user with
+   * this identity (its email updated), else the user an unexpired claim on
+   * this email names, if it still has no identity (the claim used up), else a
+   * new user. The caller has applied the deployment's allow rule.
+   */
+  signIn(identity: { issuer: string; subject: string; email: string }): {
+    userId: string;
+    outcome: SignInOutcome;
+  } {
+    const email = emailOf(identity.email);
+    const { issuer, subject } = identity;
+    const { userId, outcome } = this.change(
+      (state) => {
+        const known = state.users.find(
+          (user) =>
+            user.oidc?.issuer === issuer && user.oidc.subject === subject,
+        );
+        if (known) {
+          const changed = known.email !== email;
+          if (changed) {
+            if (known.label === known.email) known.label = label(email);
+            known.email = email;
+          }
+          return { userId: known.id, outcome: "existing" as const, changed };
+        }
+        const claims = state.claims ?? [];
+        const index = claims.findIndex((claim) => {
+          if (claim.email !== email || claim.expiresAt <= this.now())
+            return false;
+          const user = state.users.find((u) => u.id === claim.userId);
+          return user !== undefined && !hasIdentity(user);
+        });
+        if (index >= 0) {
+          const [claim] = claims.splice(index, 1);
+          const user = state.users.find((u) => u.id === claim!.userId)!;
+          user.oidc = { issuer, subject };
+          user.email = email;
+          return { userId: user.id, outcome: "bound" as const, changed: true };
+        }
+        const id = newUserId(state);
+        state.users.push({
+          id,
+          label: label(email),
+          oidc: { issuer, subject },
+          email,
+        });
+        return { userId: id, outcome: "created" as const, changed: true };
+      },
+      (answer) => answer.changed,
+    );
+    return { userId, outcome };
   }
 
   /** A one-time code for `userId`'s next client; only its hash is kept. */

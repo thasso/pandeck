@@ -46,6 +46,7 @@
     "mdast-util-gfm": "catalog:",
     "micromark-extension-gfm": "catalog:",
     "node-forge": "catalog:",
+    "oauth4webapi": "catalog:",
     "proper-lockfile": "catalog:",
     "turndown": "catalog:",
     "typebox": "catalog:",

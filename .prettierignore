@@ -3,6 +3,7 @@
 node_modules/
 .pnpm-store/
 app/web/dist/
+app/web/dist-gateway/
 app/server/dist/
 app/shell/target/
 app/shell/gen/

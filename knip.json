@@ -36,6 +36,7 @@
     "app/web": {
       "entry": [
         "component-preview/main.tsx",
+        "src/gateway/main.tsx",
         "component-preview/build-story.ts",
         "component-preview/storybook-config/preview.tsx",
         "src/components/ui/*.tsx"

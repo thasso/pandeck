@@ -1715,7 +1715,10 @@ path above.
   without reporting success; their error names the lock and asks the operator to
   verify that its writer is no longer running before removing it. The gateway
   logs that same error once per blocked-lock episode, not on every request.
-  Reads and unknown-code refusals still work.
+  Reads and unknown-code refusals still work. `user list` prints each user's id,
+  label, email and whether it has a sign-in identity;
+  `user claim <id> --email <addr>` binds that user to the next admitted sign-in
+  to the gateway's page (below).
   `gateway:relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file>`
   reads its code from stdin, or from `--code-file <0600 file>`. Never put the
   code in argv or a shell command. For example, redirect a protected code file
@@ -1886,6 +1889,111 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   ("Gateway tools" under Client mode). Pandeck's non-agent Jira features
   (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no credential in
   client mode until a later slice (D3, Task-1399).
+
+#### The gateway's sign-in and UI
+
+People sign in to the gateway itself in a browser, without a Pandeck instance
+(Task-1402, M23). `gatewayWeb/` is edge-only: with `--ui-config <file>`,
+`gatewayDevMain.ts` starts an HTTPS listener on `--bind-host` beside the client
+listener; without it nothing changes. The mutual-TLS ports, the enrollment port
+and the vault are untouched. The page is `app/web/gateway.html`, its own React
+entry, built by `vite.gateway.config.ts` into `app/web/dist-gateway/`
+(`pnpm run build` builds both bundles); it shows "Signed in as <email>" and Sign
+out, and reaches only its own origin with its session cookie.
+
+- **Config.** One JSON file, refused unless mode 0600 (no group or other bits),
+  so the client secret stays out of argv. Every refusal is a fixed message
+  naming the field, never the file's content.
+
+  ```json
+  {
+    "port": 443,
+    "publicOrigin": "https://gateway.example.org",
+    "certFile": "/etc/pandeck-gateway/ui/fullchain.pem",
+    "keyFile": "/etc/pandeck-gateway/ui/key.pem",
+    "distDir": "/opt/pandeck/app/web/dist-gateway",
+    "oidc": {
+      "issuer": "https://issuer.example",
+      "clientId": "<client id>",
+      "clientSecret": "<client secret>"
+    },
+    "allow": {
+      "emailDomains": ["example.org"],
+      "emails": [],
+      "claims": { "hd": "example.org" }
+    }
+  }
+  ```
+
+  `port` defaults to 443 (a unit then needs only
+  `AmbientCapabilities=CAP_NET_BIND_SERVICE`); `distDir` defaults to the
+  checkout's `app/web/dist-gateway`. `publicOrigin` must be
+  `https://host[:port]` with no path, the issuer `https://`; the cert and key
+  are the deployment's browser-trusted pair. The provider's client needs the
+  redirect URI `<publicOrigin>/auth/callback`. A Google Workspace deployment,
+  for example, uses `https://accounts.google.com` as the issuer, its domain in
+  `emailDomains` and the `hd` claim.
+
+- **Allow rule.** Admitted only when `email_verified` is the boolean `true`,
+  `email` is a string whose lowercased address is in `emails` or whose domain is
+  in `emailDomains`, and every `claims` entry equals that top-level claim
+  exactly. A rule without emails and domains refuses to start. The rule runs
+  before the registry sees the identity.
+- **OIDC.** Authorization code with PKCE S256, `state` and `nonce`,
+  `scope=openid email`, client secret basic, on `oauth4webapi` 3.8.8 (exact in
+  the catalog, imported only under `gatewayWeb/`). Discovery is cached for an
+  hour, every provider call bounded at 10 s. The library checks state, `iss`,
+  `aud`, `azp`, `exp` (30 s tolerance), the presence and type of `iat` and
+  `sub`, the nonce and that an ID token came; the gateway adds the ID token's
+  signature, an `iat` more than 30 s ahead and the allow rule above. The token
+  comes only from the token endpoint that discovery of the configured `https`
+  issuer names, and its signature is checked against the discovered `https`
+  `jwks_uri` (`validateApplicationLevelSignature`). The key set is read within
+  10 s and 64 KiB and cached for 5 minutes; a `kid` it does not hold refetches
+  it at most once a minute, then the sign-in fails, so a forged `kid` cannot
+  make the gateway hammer the issuer. An unreadable key set fails the sign-in as
+  `keys`, a bad signature as `signature`. `allowInsecureRequests` is reachable
+  only through `startGatewayWeb`'s `oidcTestOptions`, never from the file.
+- **Users.** Keyed by issuer plus subject; the email (lowercased) and the label
+  are attributes. The first admitted sign-in of an identity creates a user with
+  an opaque id (`u_` and 16 random characters, label = email); a later one
+  updates the email (and a label that was the old email). An operator maps an
+  existing user, such as a pilot's, with
+  `gateway:admin user claim <id> --email <addr> [--ttl-minutes <n>]`: for a user
+  without an identity only, used up by the first admitted sign-in with that
+  email within its TTL (60 minutes unless given, at most 1,440), replacing an
+  earlier claim on that user or email. All of it is one `clients.json` change
+  under its lock; files of older builds load unchanged (`claims` absent is
+  empty).
+- **Sessions.** In memory: an edge restart signs everyone out. The cookie
+  `__Host-pgw_session` (32 random bytes, kept as its SHA-256; `HttpOnly`,
+  `Secure`, `SameSite=Lax`, `Path=/`) lasts 2 h idle and 12 h in all; the table
+  holds 1,024 sessions and 16 per user (the oldest dropped). A sign-in waits at
+  most 10 minutes, one of at most 256, under its random `state` and bound to the
+  browser by `__Host-pgw_signin`; any callback naming the state uses it up.
+  `POST /auth/logout` ends the session on the server.
+- **Routes.** `GET /` (the page) and `GET /assets/<file>` (only files found at
+  start; no path from a request reaches the filesystem); `GET /auth/login` and
+  `GET /auth/callback`, which answers `303 /` with the session or
+  `303 /?signin=denied|expired|failed|busy`; `GET /api/me` answers
+  `{userId, email, label}` from the session only, or
+  `401 {"error": "signed_out"}`, or `503 {"error": "unavailable"}`. Every
+  non-GET/HEAD needs `Origin` equal to `publicOrigin` and `x-gateway-ui: 1`,
+  else `403 {"error": "forbidden"}`; bodies above 1 KiB are refused. Every
+  answer carries
+  `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
+  `nosniff` and `no-referrer`. The listener has the enrollment port's bounds (64
+  connections, 10 s handshake, 5 s headers, 10 s request). The wire shapes are
+  `app/shared/gatewayUi.ts`.
+- **Logs.** Only `ui sign-in: ok user=<id> (existing|created|bound)`,
+  `ui sign-in: denied`,
+  `ui sign-in: failed (discovery|exchange|keys|signature|claims|state|registry)`
+  and `ui sign-out: user=<id>`; never an email, code, state, nonce, verifier,
+  token, cookie, secret or query. Provider error text is never echoed.
+- **Packaged entry (Task-1401).** The packaged edge must call `startGatewayWeb`
+  with the same config, a `GatewayWebUsers` adapter over its `ClientRegistry`
+  and its log, and ship `dist-gateway` as a runtime asset. Today only
+  `gatewayDevMain.ts` wires it.
 
 ### Remote vault
 
