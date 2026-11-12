@@ -92,7 +92,7 @@ const stop = (signal: string): void => {
   void vault.close().then(
     () => process.exit(0),
     (err: unknown) => {
-      // Fixed text and account ids only (`vaultServer.ts`).
+      // Fixed text and ID-checked record directory names only (`vaultServer.ts`).
       console.error(
         `[vault] stop failed, ${err instanceof Error ? err.message : "unknown"}: their last renewal or login may be lost`,
       );

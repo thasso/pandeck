@@ -2005,15 +2005,21 @@ never falls back to plaintext on disk.
   plaintext is missing is never touched. A crash between a write and its seal
   can leave the previous token sealed (accepted, M21).
 - **Stop.** From the moment SIGTERM or SIGINT arrives the vault admits no login,
-  renewal or edge link: it withdraws every login, so none commits, cancels the
-  logins and aborts the renewals in flight, ends the control socket's
-  connections, and waits until each login's child group has ended and its
-  directory is gone and each renewal attempt has left its lane. Then it seals
-  every file that still differs from its record, trying three times. It exits 0
-  only when every record matches its file. A seal that still fails (a disk
-  fault) exits 1 with `stop failed, not sealed at stop: <account ids>`: those
-  records may still hold the previous token, and the next start opens it, so the
-  account may need a new login. A second signal changes nothing.
+  renewal, edge link or request: it withdraws every login, so none commits,
+  cancels the logins and aborts the renewals in flight, drops every accepted
+  connection (one still in its TLS handshake included) and the control socket's,
+  and waits until each login's child group has ended and its directory is gone
+  and each renewal attempt has left its lane. Then it seals every file that
+  still differs from its record, trying three times; a file that is there but
+  cannot be read counts as unsealed, one that is gone is left alone. It exits 0
+  only when every record matches its file. Otherwise it exits 1 with
+  `stop failed, not sealed at stop: <names>`, the record directories' names (an
+  account id, or `int-<hash>` for a user's integration credential, both checked
+  against the id pattern; never a value). This is a limitation, not a guarantee:
+  a disk fault that lasts loses that write, because the plaintext lives only in
+  the tmpfs. Those records still hold the previous credential, which the next
+  start opens, so the account may need a new login. A second signal changes
+  nothing.
 - **Admin.** `vault-recipient add --from-piv <slot>` (no PIN),
   `--pem <file> --slot <slot>` or `--pem <file> --private-key <file>`;
   `vault-recipient list`; `vault-recipient remove <kid>` (never the last).

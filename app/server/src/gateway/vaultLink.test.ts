@@ -1125,7 +1125,13 @@ test("C1: a stop admits nothing from its first moment, and an open control conne
 });
 
 test("C2: a seal that keeps failing at stop rejects the stop, naming the account; one that recovers seals the new credential", async () => {
-  for (const recovers of [false, true]) {
+  // The record cannot be written, or the plaintext cannot be read.
+  for (const [fault, recovers] of [
+    ["record", false],
+    ["record", true],
+    ["plaintext", false],
+    ["plaintext", true],
+  ] as const) {
     const { dir, claudeFile, controlSocket, privateKeyFile } =
       await sealedVaultDir();
     const v = await vault({ dir, controlSocket });
@@ -1143,7 +1149,11 @@ test("C2: a seal that keeps failing at stop rejects the stop, naming the account
     });
     writeFileSync(claudeFile, renewed);
     const recordDir = join(dir, "sealed", "claude-a");
-    chmodSync(recordDir, 0o500);
+    const [faulty, broken, healthy] =
+      fault === "record"
+        ? [recordDir, 0o500, 0o700]
+        : [claudeFile, 0o000, 0o600];
+    chmodSync(faulty, broken);
     try {
       const closing = v.close();
       if (recovers) {
@@ -1151,7 +1161,7 @@ test("C2: a seal that keeps failing at stop rejects the stop, naming the account
           () => v.lines.some((line) => line.includes("failed at stop")),
           "a failed seal",
         );
-        chmodSync(recordDir, 0o700);
+        chmodSync(faulty, healthy);
         await closing;
         const record = parseSealedRecord(
           JSON.parse(
@@ -1175,7 +1185,51 @@ test("C2: a seal that keeps failing at stop rejects the stop, naming the account
           assert.ok(!line.includes(RENEWED_ACCESS), line);
       }
     } finally {
-      chmodSync(recordDir, 0o700);
+      chmodSync(faulty, healthy);
     }
   }
+});
+
+test("C3: a connection accepted before a stop neither attaches nor is served after it, and the stop needs no peer", async () => {
+  const v = await vault();
+  open.splice(open.indexOf(v), 1);
+  // Both accepted before the stop: one never starts TLS, one finishes the
+  // pinned handshake only after the stop began.
+  const raw = (): Promise<net.Socket> =>
+    new Promise((resolve) => {
+      const socket = net.connect(v.port, "127.0.0.1", () => resolve(socket));
+      socket.on("error", () => {});
+    });
+  const idle = await raw();
+  const late = await raw();
+  await delay(50);
+  const idleClosed = new Promise((resolve) => idle.once("close", resolve));
+  const closing = v.close();
+  const upgraded = tls.connect({
+    socket: late,
+    key: edgeId.keyPem,
+    cert: edgeId.certPem,
+    ca: vaultId.certPem,
+    checkServerIdentity: () => undefined,
+  });
+  let answered = 0;
+  upgraded.on("data", (chunk: Buffer) => (answered += chunk.length));
+  upgraded.on("error", () => {});
+  upgraded.once("secureConnect", () =>
+    upgraded.write(
+      encodeControlFrame({
+        type: "hello",
+        workerId: "late",
+        version: GATEWAY_VAULT_VERSION,
+      }),
+    ),
+  );
+  assert.equal(await settledWithin(closing, 10_000), true, "the stop hung");
+  await closing;
+  await idleClosed;
+  await new Promise((resolve) =>
+    upgraded.destroyed ? resolve(undefined) : upgraded.once("close", resolve),
+  );
+  assert.equal(answered, 0, "the vault served a connection after its stop");
+  assert.ok(!v.lines.includes("edge connected"));
 });

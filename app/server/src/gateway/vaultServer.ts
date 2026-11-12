@@ -105,8 +105,9 @@ export interface RunningVaultServer {
   renewDue(): Promise<void>;
   /**
    * Stops admitting at once, then resolves once every login and renewal has
-   * ended and every credential is sealed. It rejects, naming the account ids
-   * only, when a credential could not be sealed. Once.
+   * ended and every credential is sealed. It rejects with a fixed text,
+   * naming only the record directories (ID-checked), when one could not be
+   * sealed. Once.
    */
   close(): Promise<void>;
 }
@@ -500,6 +501,9 @@ export async function startVaultServer(
     },
   });
 
+  /** Set at the first moment of a stop: nothing attaches or is served. */
+  let halted = false;
+
   const attach = (socket: tls.TLSSocket): void => {
     socket.setKeepAlive(true, KEEPALIVE_MS);
     const handlers: Record<string, MethodHandler> = {};
@@ -531,6 +535,8 @@ export async function startVaultServer(
     );
     for (const [method, body] of Object.entries(handlersFor(connection)))
       handlers[method] = async (payload: Payload) => {
+        if (halted)
+          throw new WorkerMethodError("failed", "The vault is stopping.");
         try {
           return vaultMessage(await body(vaultBody(payload)));
         } catch (err) {
@@ -562,6 +568,7 @@ export async function startVaultServer(
       });
   }
 
+  /** Every accepted connection, from before its handshake to its close. */
   const sockets = new Set<net.Socket>();
   const server = tls.createServer(
     {
@@ -574,8 +581,10 @@ export async function startVaultServer(
       handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
     },
     (socket) => {
-      sockets.add(socket);
-      socket.once("close", () => sockets.delete(socket));
+      if (halted) {
+        socket.destroy();
+        return;
+      }
       if (!isPinnedPeer(socket, pinned)) {
         log("edge connection refused: unpinned certificate");
         socket.destroy();
@@ -584,6 +593,14 @@ export async function startVaultServer(
       attach(socket);
     },
   );
+  server.on("connection", (socket: net.Socket) => {
+    if (halted) {
+      socket.destroy();
+      return;
+    }
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   server.on("tlsClientError", (_err, socket) => {
     log("edge connection refused: TLS handshake failed");
     socket.destroy();
@@ -615,6 +632,7 @@ export async function startVaultServer(
         // All before the first await, so nothing starts once a stop began:
         // no login commits (each running one ends cancelled), the vault
         // admits no login or renewal, and no edge links.
+        halted = true;
         clearInterval(renewTick);
         for (const login of logins.values()) withdraw(login);
         const vaultClosed = vault.close();
@@ -623,7 +641,13 @@ export async function startVaultServer(
         for (const socket of sockets) socket.destroy();
         await Promise.all([control?.close(), vaultClosed, closed]);
         // Every login and renewal has ended; each file must match its record.
-        const unsealed = (await sealed?.flush()) ?? [];
+        // Fixed texts only: the names are ID_RE-checked directory names.
+        let unsealed: string[];
+        try {
+          unsealed = (await sealed?.flush()) ?? [];
+        } catch {
+          throw new Error("not sealed at stop: the accounts could not be read");
+        }
         if (unsealed.length > 0)
           throw new Error(`not sealed at stop: ${unsealed.join(", ")}`);
       })();
