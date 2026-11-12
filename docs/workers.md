@@ -2028,7 +2028,11 @@ never falls back to plaintext on disk.
   the control socket, and fails, naming the accounts in the log, when a token
   file cannot be read. Replacing a key: add the new one, reseal, remove the old
   one, reseal. `vault-seal-existing`, once and with the vault stopped, seals
-  today's plaintext files, then overwrites and removes them.
+  today's plaintext files, then overwrites and removes each only after its
+  record reads back. A token file that is there but cannot be read fails the
+  run, exit 1, naming its account directory: its plaintext and the login
+  leftovers stay, the readable ones are sealed, and a rerun after the fix
+  completes it.
 
 ### Engine-version guard
 

@@ -217,16 +217,17 @@ function shred(file: string): void {
   unlinkSync(file);
 }
 
-/** Every `[accountId, file]` with a token file under `accountsDir`. */
-function tokenFilesUnder(accountsDir: string): [string, string][] {
-  if (!existsSync(accountsDir)) return [];
-  return readdirSync(accountsDir).flatMap((accountId) =>
-    ID_RE.test(accountId)
-      ? [...SEALED_FILES]
-          .filter((file) => existsSync(join(accountsDir, accountId, file)))
-          .map((file): [string, string] => [accountId, file])
-      : [],
-  );
+/**
+ * A token file's plaintext: `absent` when nothing is there (no such file, or
+ * no directory where one would be), `unreadable` for any other error.
+ */
+function readPlaintext(path: string): Buffer | "absent" | "unreadable" {
+  try {
+    return readFileSync(path);
+  } catch (err) {
+    const { code } = err as NodeJS.ErrnoException;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
+  }
 }
 
 /**
@@ -334,14 +335,8 @@ export function createSealedStore(
     force: boolean,
   ): "sealed" | "unchanged" | "absent" | "unreadable" => {
     const path = join(accountsDir, accountId, file);
-    let plaintext: Buffer;
-    try {
-      plaintext = readFileSync(path);
-    } catch (err) {
-      // No such file, or no directory where one would be: nothing there.
-      const { code } = err as NodeJS.ErrnoException;
-      return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
-    }
+    const plaintext = readPlaintext(path);
+    if (typeof plaintext === "string") return plaintext;
     const hash = sha256(plaintext);
     if (!force && known.get(path) === hash) return "unchanged";
     writePrivate(
@@ -595,15 +590,31 @@ export async function sealExisting(
   const accountsDir = join(resolve(stateDir), "accounts");
   const sealedDir = join(resolve(stateDir), "sealed");
   const software = recipients.find((r) => r.kind === "software");
+  const candidates = candidatesUnder(accountsDir);
+  if (!candidates) throw new Error("The accounts directory could not be read.");
   let sealed = 0;
-  for (const [accountId, file] of tokenFilesUnder(accountsDir)) {
+  // Directories with a file that is there but cannot be read: nothing of
+  // theirs is sealed or removed, and the migration fails naming them.
+  const unread = new Set<string>();
+  for (const [accountId, file] of candidates) {
     const path = join(accountsDir, accountId, file);
-    const plaintext = readFileSync(path);
+    const plaintext = readPlaintext(path);
+    if (plaintext === "absent") continue;
+    if (plaintext === "unreadable") {
+      unread.add(accountId);
+      continue;
+    }
     const target = join(sealedDir, accountId, `${file}${SEALED_SUFFIX}`);
-    writePrivate(
-      target,
-      JSON.stringify(sealRecord(plaintext, accountId, file, recipients)),
-    );
+    try {
+      writePrivate(
+        target,
+        JSON.stringify(sealRecord(plaintext, accountId, file, recipients)),
+      );
+    } catch {
+      throw new Error(
+        `The record of account ${accountId} could not be written.`,
+      );
+    }
     const back = parseSealedRecord(JSON.parse(readFileSync(target, "utf8")));
     if (!back)
       throw new Error(`The record of account ${accountId} is unreadable.`);
@@ -618,6 +629,11 @@ export async function sealExisting(
     shred(path);
     sealed++;
   }
+  // Before the login leftovers go: a failed run removes nothing unverified.
+  if (unread.size > 0)
+    throw new Error(
+      `The token files of ${[...unread].sort().join(", ")} could not be read; ${sealed} others were sealed. Fix the permissions and run it again.`,
+    );
   for (const temp of [
     join(stateDir, "login-tmp"),
     join(accountsDir, ".login-tmp"),
