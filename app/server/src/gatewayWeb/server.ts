@@ -97,6 +97,7 @@ const INTEGRATION_STATUS: Record<IntegrationsRefusalCode, number> = {
   vault_locked: 503,
   vault_unavailable: 503,
   tools_unavailable: 503,
+  integration_busy: 409,
 };
 
 const SECURITY_HEADERS = {

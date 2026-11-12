@@ -432,6 +432,7 @@ test("T4 each refusal answers its status and fixed code; a MARKER token reaches 
     ["vault_locked", 503],
     ["vault_unavailable", 503],
     ["tools_unavailable", 503],
+    ["integration_busy", 409],
   ];
   for (const [code, status] of expected) {
     fake.fail(new IntegrationsRefusal(code));
@@ -802,6 +803,36 @@ test("T5 two users over the real seam: clients, MCP tokens, limits and the Atlas
   );
   assert.equal(rejected.status, 422);
   assert.deepEqual(json(rejected), { error: "integration_rejected" });
+
+  // While one write runs, a second one is refused at once: 409, no change.
+  let release: (() => void) | undefined;
+  check = () =>
+    new Promise((resolve) => {
+      release = () => resolve({ ok: true });
+    });
+  const first = api(port, a, "POST", "/api/integrations/atlassian/set", {
+    site: "x.atlassian.net",
+    email: EMAIL,
+    token: MARKER,
+  });
+  await vi.waitFor(() => assert.ok(release));
+  for (const [path, body] of [
+    [
+      "/api/integrations/atlassian/set",
+      { site: "x.atlassian.net", email: "other@example.org", token: MARKER },
+    ],
+    ["/api/integrations/atlassian/clear", {}],
+  ] as const) {
+    const busy = await api(port, a, "POST", path, body);
+    assert.equal(busy.status, 409, path);
+    assert.deepEqual(json(busy), { error: "integration_busy" });
+  }
+  release!();
+  assert.equal((await first).status, 200);
+  assert.deepEqual(
+    json(await api(port, a, "GET", "/api/integrations/atlassian")),
+    { connected: true, site: "x.atlassian.net", email: EMAIL },
+  );
 
   // 6. Each code and token is in its creating answer only, and in no log.
   const later = answers.slice(from);

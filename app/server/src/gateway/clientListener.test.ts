@@ -1345,6 +1345,56 @@ test("T2a integrations.status with check: a failed check is an answer, not a ref
   }
 });
 
+test("T2a beside: a second write while one runs answers integration_busy with its text; a cancelled set still frees the slot", async () => {
+  const vault = stubVault();
+  const { tools, settles } = heldChecks();
+  const edge = await listenerWith(vault, tools);
+  const connection = await dialClient(edge, await enroll(edge, "u1"));
+  const controller = new AbortController();
+  const pending = integrationCall(
+    connection,
+    CLIENT_METHODS.integrationSet,
+    SET,
+    controller.signal,
+  );
+  await vi.waitFor(() => assert.equal(settles.length, 1));
+  const busy = {
+    code: "integration_busy",
+    text: "Another change to this credential is still running. Try again.",
+  };
+  for (const [method, json] of [
+    [CLIENT_METHODS.integrationSet, SET],
+    [CLIENT_METHODS.integrationClear, { integration: "atlassian" }],
+  ] as const)
+    assert.deepEqual(
+      await integrationCall(connection, method, json).then(
+        () => "answered",
+        failureOf,
+      ),
+      busy,
+    );
+  assert.deepEqual(
+    await integrationCall(connection, CLIENT_METHODS.integrationStatus, {
+      integration: "atlassian",
+    }),
+    { connected: false },
+  );
+  // The client's cancel changes nothing; the set ends, then frees the slot.
+  controller.abort();
+  settles[0]!({ ok: true });
+  assert.deepEqual(await pending, {
+    connected: true,
+    site: "x.atlassian.net",
+    email: "a@x.test",
+  });
+  assert.deepEqual(
+    await integrationCall(connection, CLIENT_METHODS.integrationClear, {
+      integration: "atlassian",
+    }),
+    {},
+  );
+});
+
 /**
  * A check that answers ok after `ms` unless its deadline aborts first, then
  * unreachable, as the real one does; records whether its signal was already
@@ -1517,6 +1567,122 @@ test("T3 setAtlassian stores under the given user only", async () => {
   assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
     connected: false,
   });
+});
+
+// --- one Atlassian write per user (Task-1405, rv-1405-c01 C2) -------------
+
+const CREDENTIAL = { site: "x.atlassian.net", email: "a@x", token: "T" };
+
+/** Checks held until the test settles them, each with its own answer. */
+function heldChecks() {
+  const settles: ((answer: IntegrationCheck) => void)[] = [];
+  const tools = fakeTools(
+    () => new Promise<IntegrationCheck>((resolve) => settles.push(resolve)),
+  );
+  return { tools, settles };
+}
+
+const isBusy = (err: unknown) =>
+  err instanceof UserOperationRefusal && err.code === "integration_busy";
+
+test("while a set runs, another set or a clear of that user is refused busy at once and changes nothing; status answers", async () => {
+  const vault = stubVault();
+  const { tools, settles } = heldChecks();
+  const ops = (await listenerWith(vault, tools)).clients!.userOperations;
+  const held = ops.setAtlassian("u1", CREDENTIAL);
+  await vi.waitFor(() => assert.equal(settles.length, 1));
+  await assert.rejects(
+    ops.setAtlassian("u1", { ...CREDENTIAL, email: "late@x" }),
+    isBusy,
+  );
+  await assert.rejects(ops.clearAtlassian("u1"), isBusy);
+  // A malformed set is refused for what it is, without the slot.
+  await assert.rejects(
+    ops.setAtlassian("u1", { ...CREDENTIAL, site: "x.example" }),
+    (err: unknown) =>
+      err instanceof UserOperationRefusal && err.code === "integration_invalid",
+  );
+  assert.equal(settles.length, 1);
+  assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
+    connected: false,
+  });
+  // Another user is not held.
+  const other = ops.setAtlassian("u2", CREDENTIAL);
+  await vi.waitFor(() => assert.equal(settles.length, 2));
+  settles[1]!({ ok: true });
+  await other;
+  settles[0]!({ ok: true });
+  await held;
+  assert.deepEqual(vault.calls, ["get u1", "put u2", "put u1"]);
+  assert.ok(vault.stored.get("u1")?.includes("a@x"));
+});
+
+test("the slot is free again after a success, a refusal, a failed write and a deadline", async () => {
+  const vault = stubVault();
+  const { tools, settles } = heldChecks();
+  const ops = (await listenerWith(vault, tools)).clients!.userOperations;
+  let used = 0;
+  /** Settles the next held check with `answer`; the call's outcome. */
+  const settleNext = async (
+    run: Promise<unknown>,
+    answer: IntegrationCheck,
+  ): Promise<unknown> => {
+    await vi.waitFor(() => assert.ok(settles.length > used));
+    settles[used++]!(answer);
+    return run.then(
+      () => "ok",
+      (err: unknown) =>
+        err instanceof UserOperationRefusal ? err.code : "thrown",
+    );
+  };
+  assert.equal(
+    await settleNext(ops.setAtlassian("u1", CREDENTIAL), { ok: true }),
+    "ok",
+  );
+  assert.equal(
+    await settleNext(ops.setAtlassian("u1", CREDENTIAL), {
+      ok: false,
+      problem: "rejected",
+    }),
+    "integration_rejected",
+  );
+  vault.putAnswer = { ok: false, locked: true };
+  assert.equal(
+    await settleNext(ops.setAtlassian("u1", CREDENTIAL), { ok: true }),
+    "vault_locked",
+  );
+  vault.putAnswer = undefined;
+  vault.clearAnswer = { ok: false, unavailable: true };
+  await assert.rejects(
+    ops.clearAtlassian("u1"),
+    (err: unknown) =>
+      err instanceof UserOperationRefusal && err.code === "vault_unavailable",
+  );
+  vault.clearAnswer = undefined;
+  await ops.clearAtlassian("u1");
+  assert.deepEqual(await ops.atlassianStatus("u1", { check: false }), {
+    connected: false,
+  });
+
+  // A check cut by its deadline frees the slot too.
+  const timed = stubVault();
+  const entries: boolean[] = [];
+  const timedOps = (
+    await listenerWith(
+      timed,
+      fakeTools((signal) => timedCheck(400, entries)(signal)),
+      100,
+    )
+  ).clients!.userOperations;
+  await assert.rejects(
+    timedOps.setAtlassian("u1", CREDENTIAL),
+    (err: unknown) =>
+      err instanceof UserOperationRefusal &&
+      err.code === "integration_unreachable",
+  );
+  assert.deepEqual(entries, [false]);
+  await timedOps.clearAtlassian("u1");
+  assert.deepEqual(timed.calls, ["clear u1"]);
 });
 
 // --- tools.list and tools.call (Task-1398) ---------------------------------

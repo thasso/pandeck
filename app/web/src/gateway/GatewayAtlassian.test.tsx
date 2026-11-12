@@ -124,6 +124,10 @@ test("each refusal shows its fixed text and keeps the token to retry", async () 
     ["vault_locked", "The gateway's vault is locked."],
     ["vault_unavailable", "The gateway's vault did not answer."],
     ["tools_unavailable", "This gateway does not run the Jira tools."],
+    [
+      "integration_busy",
+      "Another change to this credential is still running. Try again.",
+    ],
     ["unavailable", "The credential could not be saved."],
   ];
   for (const [code, text] of cases) {
@@ -143,4 +147,54 @@ test("each refusal shows its fixed text and keeps the token to retry", async () 
     expect(field("token").value).toBe("FAKE-API-TOKEN");
     act(() => view.root.unmount());
   }
+});
+
+/** A promise the test settles. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => (resolve = settle));
+  return { promise, resolve };
+}
+
+const CONNECTED = ready({
+  connected: true,
+  site: "x.atlassian.net",
+  email: "p@example.org",
+});
+
+test("while a Save is pending, Clear cannot start", async () => {
+  const saved = deferred<{ connected: boolean }>();
+  const p = props({ status: CONNECTED, save: vi.fn(() => saved.promise) });
+  mount(<GatewayAtlassian {...p} />);
+  await fill();
+  const save = button("Replace credential")!;
+  await act(async () => {
+    save.click();
+    save.click();
+  });
+  expect(p.save).toHaveBeenCalledTimes(1);
+  expect(button("Clear")!.disabled).toBe(true);
+  await act(async () => saved.resolve({ connected: true }));
+  expect(button("Clear")!.disabled).toBe(false);
+});
+
+test("while a Clear is pending, Save cannot start", async () => {
+  const cleared = deferred<void>();
+  const p = props({ status: CONNECTED, clear: vi.fn(() => cleared.promise) });
+  mount(<GatewayAtlassian {...p} />);
+  await fill();
+  await act(async () => button("Clear")!.click());
+  const confirm = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+  ].find((b) => b.textContent === "Clear")!;
+  await act(async () => confirm.click());
+  expect(p.clear).toHaveBeenCalledOnce();
+  expect(button("Replace credential")!.disabled).toBe(true);
+  // Even a submit that reaches the form (Enter) sends nothing.
+  await act(async () => {
+    field("token").form!.requestSubmit();
+  });
+  expect(p.save).not.toHaveBeenCalled();
+  await act(async () => cleared.resolve());
+  expect(button("Replace credential")!.disabled).toBe(false);
 });

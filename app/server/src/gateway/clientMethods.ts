@@ -110,6 +110,8 @@ const INTEGRATION_FAILURES = {
   vault_locked: "The vault is locked.",
   vault_unavailable: "The vault did not answer; check the Jira status.",
   tools_unavailable: "This gateway runs no tools.",
+  integration_busy:
+    "Another change to this credential is still running. Try again.",
 } as const;
 export type IntegrationFailure = keyof typeof INTEGRATION_FAILURES;
 

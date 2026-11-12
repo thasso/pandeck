@@ -29,7 +29,8 @@ export interface GatewayUiError {
     | "integration_unreachable"
     | "vault_locked"
     | "vault_unavailable"
-    | "tools_unavailable";
+    | "tools_unavailable"
+    | "integration_busy";
 }
 
 export type GatewayUiProvider = "claude" | "openai-codex";

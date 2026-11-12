@@ -19,7 +19,8 @@ export type IntegrationsRefusalCode =
   | "integration_unreachable"
   | "vault_locked"
   | "vault_unavailable"
-  | "tools_unavailable";
+  | "tools_unavailable"
+  | "integration_busy";
 
 export class IntegrationsRefusal extends Error {
   constructor(readonly code: IntegrationsRefusalCode) {

@@ -1950,13 +1950,19 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   before any Atlassian request.
 - **Client methods** (`gateway-client/1.0`, additive), always for the client's
   registry user: `integrations.set {integration, site, email, token}` checks the
-  credential with Atlassian (`/rest/api/3/myself`, 15 s) and stores it;
-  `integrations.clear {integration}`;
+  credential with Atlassian (`/rest/api/3/myself`, 15 s from the check's start)
+  and stores it; `integrations.clear {integration}`;
   `integrations.status {integration, check?}` answers
   `{connected, site?, email?, displayName?, accountId?, problem?}`, never a
   token. Failures carry fixed codes and texts: `integration_invalid`,
   `integration_rejected`, `integration_unreachable`, `vault_locked`,
-  `vault_unavailable`, `tools_unavailable`.
+  `vault_unavailable`, `tools_unavailable`, `integration_busy`. One set or clear
+  runs per user at a time, from any client or the gateway page
+  (`userOperations.ts`); another meanwhile is refused `integration_busy`
+  ("Another change to this credential is still running. Try again.") at once and
+  changes nothing, so an earlier set can never land after a later clear. A
+  status is never refused. Pandeck's Settings shows its own text for each code
+  (`remoteIntegrations.ts`), `integration_busy` included.
 - **Tool calls** (`gateway-client/1.0`, additive, Task-1398), the client's
   second adapter over the same host: `tools.list {}` answers `{tools}`, each
   `{name, description, inputSchema, effect, actionKey}`;
@@ -2131,10 +2137,14 @@ and ChatGPT accounts, and reaches only its own origin with its session cookie.
     live check. `POST /api/integrations/atlassian/set {site, email, token}`
     checks with Atlassian (15 s from the check's start) then stores, as
     `integrations.set` does, → `{connected: true, site, email, displayName?}`;
-    `POST /api/integrations/atlassian/clear` → 204. The token is write-only: no
-    answer carries it. Refusals: `400 integration_invalid`,
-    `422 integration_rejected`, `502 integration_unreachable`,
-    `503 vault_locked|vault_unavailable|tools_unavailable`.
+    `POST /api/integrations/atlassian/clear` → 204. While a set or clear of the
+    user runs (from this page, another tab or a client), another is refused
+    `409 integration_busy` and changes nothing; the page itself never sends one
+    while its own is pending. The token is write-only: no answer carries it.
+    Refusals: `400 integration_invalid`, `422 integration_rejected`,
+    `502 integration_unreachable`,
+    `503 vault_locked|vault_unavailable|tools_unavailable`,
+    `409 integration_busy`.
   - `GET /api/clients` → `{clients: [{id, label, createdAt, mcpToken}]}`, the
     user's clients that are not revoked, `mcpToken` a boolean.
     `POST /api/clients/code {label}` → `{code, validForSeconds: 900}`;

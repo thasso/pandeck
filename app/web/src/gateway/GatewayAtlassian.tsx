@@ -3,9 +3,10 @@
  * whether it is set (site and email only), a form that checks a new one with
  * Atlassian before the gateway stores it, and Clear after a confirmation. The
  * API token is write-only: the field is a password field, emptied once the
- * gateway took it, and nothing ever shows a stored token.
+ * gateway took it, and nothing ever shows a stored token. A Save and a Clear
+ * never overlap from this page: each waits for the other to settle.
  */
-import { useCallback, useState, type SyntheticEvent } from "react";
+import { useCallback, useRef, useState, type SyntheticEvent } from "react";
 import type {
   GatewayUiAtlassian,
   GatewayUiAtlassianProblem,
@@ -51,6 +52,8 @@ const SAVE_TEXT: Partial<Record<GatewayUiError["error"], string>> = {
   vault_locked: "The gateway's vault is locked. Ask its operator to unlock it.",
   vault_unavailable: "The gateway's vault did not answer. Try again.",
   tools_unavailable: "This gateway does not run the Jira tools.",
+  integration_busy:
+    "Another change to this credential is still running. Try again.",
   signed_out: "Your session ended. Reload the page and sign in again.",
   bad_request: "Fill in the site, email and API token.",
 };
@@ -73,18 +76,23 @@ export function GatewayAtlassian({
   const [clearing, setClearing] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
+  /** The write in flight, set before any re-render can disable a control. */
+  const writing = useRef<"save" | "clear" | null>(null);
 
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (saving) return;
+    if (writing.current) return;
+    writing.current = "save";
     setSaving(true);
     setSaveError(null);
     save({ site: site.trim(), email: email.trim(), token }).then(
       () => {
+        writing.current = null;
         setSaving(false);
         setToken("");
       },
       (err: unknown) => {
+        writing.current = null;
         setSaving(false);
         setSaveError(
           refusalText(err, "The credential could not be saved. Try again."),
@@ -94,14 +102,18 @@ export function GatewayAtlassian({
   };
 
   const confirmClear = useCallback(() => {
+    if (writing.current) return;
+    writing.current = "clear";
     setClearBusy(true);
     setClearError(null);
     clear().then(
       () => {
+        writing.current = null;
         setClearBusy(false);
         setClearing(false);
       },
       (err: unknown) => {
+        writing.current = null;
         setClearBusy(false);
         setClearError(
           refusalText(err, "The credential could not be cleared. Try again."),
@@ -150,6 +162,7 @@ export function GatewayAtlassian({
               type="button"
               variant="outline"
               size="sm"
+              disabled={saving}
               onClick={() => {
                 setClearError(null);
                 setClearing(true);
@@ -203,7 +216,7 @@ export function GatewayAtlassian({
           <Button
             type="submit"
             busy={saving}
-            disabled={!site.trim() || !email.trim() || !token}
+            disabled={clearBusy || !site.trim() || !email.trim() || !token}
           >
             {current?.connected ? "Replace credential" : "Save credential"}
           </Button>
@@ -216,6 +229,7 @@ export function GatewayAtlassian({
           confirmLabel="Clear"
           danger
           busy={clearBusy}
+          confirmDisabled={saving}
           error={clearError}
           onConfirm={confirmClear}
           onCancel={() => setClearing(false)}

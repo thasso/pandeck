@@ -14,6 +14,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
+import type { EdgeTools } from "./gateway/edgeTools.ts";
 
 const home = mkdtempSync(join(tmpdir(), "gateway-client-home-"));
 process.env.HOME = home;
@@ -311,6 +312,95 @@ test("after every connect the link reads the gateway's Jira status and announces
     },
     { email: "me@example.com", configured: true, site },
   );
+});
+
+test("a write while the gateway runs another for the user: integration_busy reaches Settings as its own text", async () => {
+  const { updateJiraSettings } = await import("./jiraSettings.ts");
+  // Fake Atlassian tools whose checks the test releases.
+  const releases: (() => void)[] = [];
+  const tools: EdgeTools = {
+    handleMcp: (_req, res) => {
+      res.writeHead(404);
+      res.end();
+    },
+    host: { list: () => [], call: () => Promise.reject(new Error("unused")) },
+    integrations: {
+      atlassian: {
+        parse: (input) => {
+          const { site, email, token } = input as Record<string, unknown>;
+          return typeof site === "string" &&
+            typeof email === "string" &&
+            typeof token === "string"
+            ? {
+                ok: true,
+                credential: JSON.stringify({ site, email, token }),
+                site,
+                email,
+              }
+            : { ok: false };
+        },
+        check: () =>
+          new Promise((resolve) => releases.push(() => resolve({ ok: true }))),
+        describe: (credential) => {
+          const { site, email } = JSON.parse(credential) as Record<
+            string,
+            string
+          >;
+          return site && email ? { site, email } : undefined;
+        },
+      },
+    },
+  };
+  const gateway = await startGateway({
+    stateDir: mkdtempSync(join(DATA_DIR, "edge-")),
+    log: () => {},
+    clients: {},
+    tools,
+  });
+  open.push(gateway);
+  gateway.clients!.registry.addUser("thasso");
+  const relayDir = mkdtempSync(join(tmpdir(), "relay-"));
+  open.push({
+    close: () => rmSync(relayDir, { recursive: true, force: true }),
+  });
+  await enrollRelay({
+    stateDir: relayDir,
+    host: "127.0.0.1",
+    enrollPort: gateway.clients!.enrollPort,
+    caPem: gateway.clients!.caPem,
+    code: gateway.clients!.registry.createCode("thasso", "devbox"),
+  });
+  const relay = await startRelay({
+    stateDir: relayDir,
+    port: 0,
+    socketPath: join(relayDir, "relay.sock"),
+    log: () => {},
+  });
+  open.push(relay);
+  const link = startGatewayClientLink({
+    socketPath: relay.socketPath,
+    relayPort: relay.port,
+    log: () => {},
+  });
+  open.push(link);
+  assert.equal(await link.ready, true);
+
+  // The gateway page's set for the same user is still checking.
+  const held = gateway.clients!.userOperations.setAtlassian("thasso", {
+    site: "x.atlassian.net",
+    email: "page@example.com",
+    token: "fake-page-token",
+  });
+  await vi.waitFor(() => assert.equal(releases.length, 1));
+  await assert.rejects(
+    updateJiraSettings({
+      atlassianEmail: "me@example.com",
+      atlassianToken: "fake-busy-token",
+    }),
+    /^Error: Jira: another change to this credential is still running; try again\.$/,
+  );
+  releases[0]!();
+  await held;
 });
 
 // --- the gateway's tools (Task-1398) ---------------------------------------

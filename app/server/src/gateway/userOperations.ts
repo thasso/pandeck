@@ -168,7 +168,10 @@ export interface UserOperations {
     userId: string,
     options: { check: boolean },
   ): Promise<AtlassianStatus>;
-  /** Checks the credential with Atlassian, then stores it for the user. */
+  /**
+   * Checks the credential with Atlassian, then stores it for the user. While
+   * one set or clear of the user runs, another is refused `integration_busy`.
+   */
   setAtlassian(userId: string, input: unknown): Promise<AtlassianSet>;
   clearAtlassian(userId: string): Promise<void>;
   /** The user's clients that are not revoked. */
@@ -244,6 +247,26 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
     if (!tools) throw new UserOperationRefusal("tools_unavailable");
     return tools.atlassian;
   };
+  /**
+   * The users with an Atlassian set or clear running. One runs per user at a
+   * time and another meanwhile is refused `integration_busy` at once, so an
+   * earlier set's check can never land its write after a later clear, and no
+   * request waits for another. Reads are never refused.
+   */
+  const atlassianWriting = new Set<string>();
+  const alone = async <T>(
+    userId: string,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    if (atlassianWriting.has(userId))
+      throw new UserOperationRefusal("integration_busy");
+    atlassianWriting.add(userId);
+    try {
+      return await run();
+    } finally {
+      atlassianWriting.delete(userId);
+    }
+  };
   const wrote = (outcome: IntegrationWrite): void => {
     if (outcome.ok) return;
     throw new UserOperationRefusal(
@@ -309,26 +332,37 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
       const tools = atlassian();
       const parsed = tools.parse(input);
       if (!parsed.ok) throw new UserOperationRefusal("integration_invalid");
-      const checked = await tools.check(parsed.credential, deps.checkSignal());
-      if (!checked.ok)
-        throw new UserOperationRefusal(
-          checked.problem === "rejected"
-            ? "integration_rejected"
-            : "integration_unreachable",
+      return alone(userId, async (): Promise<AtlassianSet> => {
+        const checked = await tools.check(
+          parsed.credential,
+          deps.checkSignal(),
         );
-      wrote(
-        await deps.vault.integrationPut(userId, "atlassian", parsed.credential),
-      );
-      return {
-        connected: true,
-        site: parsed.site,
-        email: parsed.email,
-        ...identityOf(checked),
-      };
+        if (!checked.ok)
+          throw new UserOperationRefusal(
+            checked.problem === "rejected"
+              ? "integration_rejected"
+              : "integration_unreachable",
+          );
+        wrote(
+          await deps.vault.integrationPut(
+            userId,
+            "atlassian",
+            parsed.credential,
+          ),
+        );
+        return {
+          connected: true,
+          site: parsed.site,
+          email: parsed.email,
+          ...identityOf(checked),
+        };
+      });
     },
     async clearAtlassian(userId) {
       atlassian();
-      wrote(await deps.vault.integrationClear(userId, "atlassian"));
+      await alone(userId, async () =>
+        wrote(await deps.vault.integrationClear(userId, "atlassian")),
+      );
     },
     clients: (userId) =>
       deps.registry
