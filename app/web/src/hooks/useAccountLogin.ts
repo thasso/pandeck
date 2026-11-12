@@ -53,9 +53,11 @@ function newStartToken(): string {
  * The dialog learns what its Cancel did per run, never per mount:
  * `cancelling` holds only while this mount's Cancel is latched or sent for the
  * shown run (a snapshot of another run clears it, so Cancel works there
- * again), and `cancelledHere` only once the shown run ended cancelled after
- * this mount's Cancel was sent for that same run. A login cancelled by anyone
- * else keeps its notice.
+ * again), and `cancelledHere` once a run this mount sent a Cancel for ended
+ * cancelled, whoever's cancel the server applied.
+ * A run this mount sent no Cancel for keeps its notice when it ends cancelled.
+ * This is not proof of cause: if someone else cancels the same run at the same
+ * moment, the dialog still closes and their notice may not be shown.
  */
 export function useAccountLogin(profileId: string, onFinished: () => void) {
   const [status, setStatus] = useState<AccountLoginStatus>("connecting");
@@ -66,7 +68,8 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
   const [cancelUnconfirmed, setCancelUnconfirmed] = useState(false);
   // This mount's Cancel is latched or sent for the shown run.
   const [cancelling, setCancelling] = useState(false);
-  // The shown run ended cancelled after this mount's Cancel was sent for it.
+  // The shown run, which this mount sent a Cancel for, ended cancelled (not
+  // necessarily by that Cancel).
   const [cancelledHere, setCancelledHere] = useState(false);
   const [reconnect, setReconnect] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);

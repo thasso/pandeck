@@ -14,11 +14,13 @@
  * appears as soon as Cancel was pressed, so a cancel the server never confirms
  * cannot trap the user. The host tells which run its Cancel concerns:
  * `cancelling` shows "Cancelling…" for the shown run, and `cancelledHere`
- * closes the dialog once that run ended cancelled by this dialog's Cancel,
- * with no cancelled screen. The dialog stays mounted until then because the
- * host may still have to deliver a latched Cancel. A login cancelled by anyone
- * else (taken over elsewhere, another viewer) keeps its notice and Close; a
- * finished login offers Done (signed in) or Close.
+ * closes the dialog, with no cancelled screen, once the run this dialog sent a
+ * Cancel for ended cancelled. The dialog stays mounted until then because the
+ * host may still have to deliver a latched Cancel. A run this dialog sent no
+ * Cancel for (taken over elsewhere, cancelled by another viewer) keeps its
+ * notice and Close. If another place cancels the same run at the same moment,
+ * the dialog still closes and that notice may not be shown. A finished login
+ * offers Done (signed in) or Close.
  */
 import {
   useEffect,
@@ -80,7 +82,8 @@ export interface AccountLoginDialogViewProps {
   cancelUnconfirmed?: boolean | undefined;
   /** This dialog's Cancel is latched or sent for the shown run. */
   cancelling?: boolean | undefined;
-  /** The shown run ended cancelled by this dialog's Cancel: close silently. */
+  /** The run this dialog sent a Cancel for ended cancelled (whoever's cancel
+   * won): close silently. */
   cancelledHere?: boolean | undefined;
   /** Claude's pasted code; answers whether it was sent. */
   submit?: ((code: string) => boolean) | undefined;

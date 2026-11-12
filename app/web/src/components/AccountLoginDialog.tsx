@@ -6,7 +6,7 @@ import { AccountLoginDialogView } from "./AccountLoginDialogView.tsx";
  * Pandeck's login dialog for a Claude or OpenAI account: the transport-free
  * view over this server's login socket. Mounting it starts or joins the
  * account's login. A running login leaves only through Cancel, which closes
- * the dialog once the hook proves this run was cancelled by it (Close appears
+ * the dialog once the run it was sent for ended cancelled (Close appears
  * meanwhile); closing never cancels.
  */
 export function AccountLoginDialog({

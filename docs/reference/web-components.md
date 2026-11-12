@@ -2423,14 +2423,16 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   clipboard (plain http). While a login runs, Cancel login is the only way out:
   no X, and Escape or an outside click does nothing. While the hook reports its
   Cancel latched or sent for the shown run (`cancelling`) the dialog shows
-  "Cancelling…", and once that same run ends cancelled (`cancelledHere`) it
-  closes itself with no cancelled screen; it stays mounted until then so the
-  hook can deliver a latched Cancel. Both are run-scoped: after a reconnect to
-  another run, Cancel works again and that run's cancel is not claimed. Close
-  appears as soon as Cancel was pressed, so an unconfirmed cancel cannot trap
-  the user. A login cancelled by anyone else (started again elsewhere) keeps its
-  notice and Close; a finished login offers Done or Close, and Close never
-  cancels. Every Claude profile, the protected Default Claude included, is
+  "Cancelling…", and once the run it sent a Cancel for ends cancelled
+  (`cancelledHere`) it closes itself with no cancelled screen; it stays mounted
+  until then so the hook can deliver a latched Cancel. Both are run-scoped:
+  after a reconnect to another run, Cancel works again and that run's cancel is
+  not claimed. Close appears as soon as Cancel was pressed, so an unconfirmed
+  cancel cannot trap the user. A run the dialog sent no Cancel for (started
+  again elsewhere) keeps its notice and Close; if another place cancels the same
+  run at the same moment as the dialog's Cancel, the dialog still closes and
+  that notice may not be shown; a finished login offers Done or Close, and Close
+  never cancels. Every Claude profile, the protected Default Claude included, is
   isolated under `DATA_DIR/credential-profiles/` and retains
   `CLAUDE_CONFIG_DIR=… claude` as a terminal fallback. Connect/Reconnect uses
   the browser terminal for every Claude profile. Every profile, including the
