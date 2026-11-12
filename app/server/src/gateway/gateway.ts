@@ -324,7 +324,8 @@ export async function startGateway(
         if (sockets.size === 0 || Date.now() >= drainUntil) break;
         await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
       }
-      local?.close();
+      // The vault's logins and renewals end, sealed, before the rest closes.
+      await local?.close();
       remote?.close();
       for (const socket of sockets) socket.destroy();
       sockets.clear();

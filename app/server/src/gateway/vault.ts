@@ -26,6 +26,7 @@ import {
 import { createVaultLogins, type VaultLoginOptions } from "./vaultLogins.ts";
 import type {
   LocalVaultPort,
+  LoginRun,
   VaultCredential,
   VaultHolds,
   VaultInputs,
@@ -59,8 +60,12 @@ export interface Vault extends LocalVaultPort {
   recheck(profileId: string): Promise<void>;
   /** One renewal tick: renews every leased profile inside its margin. */
   renewDue(): Promise<void>;
-  /** Aborts renewals in flight. */
-  close(): void;
+  /**
+   * Starts no further login or renewal, cancels the logins it started and
+   * aborts renewals, then resolves once each has ended: a login's driver,
+   * ingest and directory removal, a renewal's attempt with its seal.
+   */
+  close(): Promise<void>;
 }
 
 export function createVault(options: VaultOptions): Vault {
@@ -114,6 +119,15 @@ export function createVault(options: VaultOptions): Vault {
       lane.acquire(profileId, holdId, owner, signal),
   };
 
+  const logins = createVaultLogins(
+    options.logins ?? { stateDir: undefined, drivers: {} },
+    lane,
+    (profileId) => void renewal.recheck(profileId),
+  );
+  /** Every login this vault started that has not ended. */
+  const runs = new Set<LoginRun>();
+  let closed = false;
+
   return {
     async credentialFor(binding): Promise<VaultCredential> {
       const credential = await renewal.credentialFor(binding);
@@ -125,16 +139,30 @@ export function createVault(options: VaultOptions): Vault {
       renewal.upstream401(binding, sentToken),
     needsLogin: () => renewal.needsLogin(),
     holds,
-    ...createVaultLogins(
-      options.logins ?? { stateDir: undefined, drivers: {} },
-      lane,
-      (profileId) => void renewal.recheck(profileId),
-    ),
+    newTokenFile: logins.newTokenFile,
+    discardCredential: logins.discardCredential,
+    login(request, events) {
+      if (closed) return undefined;
+      const run = logins.login(request, events);
+      if (run) {
+        runs.add(run);
+        const ended = (): boolean => runs.delete(run);
+        run.done.then(ended, ended);
+      }
+      return run;
+    },
     ...createVaultIntegrations(options.integrations ?? { stateDir: undefined }),
     lane,
     holdRecords: () => table.records(),
     recheck: (profileId) => renewal.recheck(profileId),
     renewDue: () => renewal.tick(),
-    close: () => renewal.close(),
+    async close() {
+      closed = true;
+      for (const run of runs) run.cancel();
+      await Promise.allSettled([
+        ...[...runs].map((run) => run.done),
+        renewal.close(),
+      ]);
+    },
   };
 }

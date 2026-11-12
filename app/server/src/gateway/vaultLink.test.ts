@@ -10,15 +10,16 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import tls from "node:tls";
-import { generateKeyPairSync } from "node:crypto";
+import { X509Certificate, generateKeyPairSync } from "node:crypto";
 import { afterAll, afterEach, beforeAll, test } from "vitest";
 import {
   CLAUDE_ACCESS,
@@ -40,6 +41,7 @@ import {
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { startGateway, type RunningGateway } from "./gateway.ts";
 import type { LeaseProvider } from "./leases.ts";
+import { loginChildDriver } from "./loginChild.ts";
 import { refusalText } from "./refusals.ts";
 import { recipientOf, sealExisting, writeRecipients } from "./sealedStore.ts";
 import { askVaultControl } from "./vaultControl.ts";
@@ -48,6 +50,7 @@ import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
   LOGIN_CREDENTIAL_FILE,
+  isPinnedPeer,
 } from "./vaultMethods.ts";
 import type { LoginDrivers, LoginRun } from "./vaultPort.ts";
 import { startVaultServer, type RunningVaultServer } from "./vaultServer.ts";
@@ -311,7 +314,48 @@ test("the vault refuses a binding outside its accounts directory", async () => {
   );
 });
 
+test("the link's pin: exactly the pinned certificate, inside its dates, else refused", () => {
+  const cert = new X509Certificate(edgeId.certPem);
+  const peer = (presented: object) => ({
+    getPeerCertificate: () => presented as tls.PeerCertificate,
+  });
+  const pinned = {
+    fingerprint256: cert.fingerprint256,
+    valid_from: cert.validFrom,
+    valid_to: cert.validTo,
+  };
+  const now = Date.now();
+  assert.equal(isPinnedPeer(peer(pinned), cert.fingerprint256, now), true);
+  // No certificate, another one, expired, not yet valid.
+  assert.equal(isPinnedPeer(peer({}), cert.fingerprint256, now), false);
+  assert.equal(
+    isPinnedPeer(
+      peer({ ...pinned, fingerprint256: "AA:BB" }),
+      cert.fingerprint256,
+      now,
+    ),
+    false,
+  );
+  assert.equal(
+    isPinnedPeer(
+      peer(pinned),
+      cert.fingerprint256,
+      Date.parse(cert.validTo) + 1000,
+    ),
+    false,
+  );
+  assert.equal(
+    isPinnedPeer(
+      peer(pinned),
+      cert.fingerprint256,
+      Date.parse(cert.validFrom) - 1000,
+    ),
+    false,
+  );
+});
+
 test("an unpinned client or server certificate is refused", async () => {
+  // Self-signed with the same subject as the pinned one: only the pin differs.
   const stranger = selfSignedIdentity("pandeck-gateway-edge", "client");
   const v = await vault();
   const deps = {
@@ -352,6 +396,23 @@ test("an unpinned client or server certificate is refused", async () => {
     ok: false,
     refusal: { case: "vault-unavailable" },
   });
+  // No client certificate at all: the pin refuses it before any frame.
+  const unpinned = () =>
+    v.lines.filter((line) => line.endsWith("unpinned certificate")).length;
+  const before = unpinned();
+  const bare = tls.connect({
+    host: "127.0.0.1",
+    port: v.port,
+    ca: vaultId.certPem,
+    checkServerIdentity: () => undefined,
+  });
+  bare.on("error", () => {});
+  let received = 0;
+  bare.on("data", (chunk: Buffer) => (received += chunk.length));
+  await new Promise((resolve) => bare.once("close", resolve));
+  assert.equal(unpinned(), before + 1);
+  assert.equal(received, 0, "the vault answered an unpinned peer");
+  assert.ok(!v.lines.includes("edge connected"));
 });
 
 test("a login runs on the vault through the link: events, input, cancel, withdraw", async () => {
@@ -638,6 +699,68 @@ test("C2: the vault installs a login's credential only on the edge's commit", as
   await committed.run.done;
   assert.match(readFileSync(committed.tokenFile, "utf8"), /claude-def/);
 });
+
+test("a login child's credential stays in its directory: ingested, the directory removed, never on the pipe", async () => {
+  // The real child side (`loginChildEntry.ts`) over a fake driver, its stdout
+  // copied to a file so the test can read what crossed the pipe.
+  const pipeLog = join(root, `pipe-${Date.now()}.log`);
+  const entry = join(root, `login-entry-${Date.now()}.ts`);
+  writeFileSync(
+    entry,
+    `import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { runLoginChild } from ${JSON.stringify(resolve("src/loginChildEntry.ts"))};
+const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = ((chunk: string, ...rest: never[]) => {
+  appendFileSync(${JSON.stringify(pipeLog)}, String(chunk));
+  return write(chunk, ...rest);
+}) as typeof process.stdout.write;
+runLoginChild((configDir, events) => {
+  let finish!: () => void;
+  const done = new Promise<void>((resolve) => (finish = resolve));
+  events.output("Paste code: ");
+  events.url("https://claude.example/oauth");
+  return {
+    input: (text) => {
+      writeFileSync(
+        join(configDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: { accessToken: "claude-" + text, expiresAt: ${expires()} },
+        }),
+      );
+      finish();
+    },
+    cancel: () => {},
+    done,
+  };
+});
+`,
+  );
+  const v = await vault({
+    drivers: {
+      claude: loginChildDriver(
+        { file: process.execPath, args: ["--import", "tsx", entry] },
+        { log: () => {} },
+      ),
+    },
+  });
+  const { start } = await loginLink(v);
+  const login = start("claude-child");
+  await until(
+    () => existsSync(pipeLog) && readFileSync(pipeLog, "utf8").includes("url"),
+    "the child's events",
+  );
+  login.run.input("fake-child-code-1387");
+  await login.run.done;
+  assert.match(
+    readFileSync(login.tokenFile, "utf8"),
+    /claude-fake-child-code-1387/,
+  );
+  assert.deepEqual(readdirSync(join(v.dir, "login-tmp")), []);
+  const pipe = readFileSync(pipeLog, "utf8");
+  assert.match(pipe, /"type":"done","ok":true/);
+  assert.equal(pipe.includes("fake-child-code-1387"), false);
+}, 60_000);
 
 test("C4: the vault runs one login per account, at most four, each with a deadline", async () => {
   const { driver, cancelled } = claudeDriver();

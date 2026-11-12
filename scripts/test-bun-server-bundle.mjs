@@ -19,7 +19,7 @@ import {
   directDependencyRoot,
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
-import { checkGatewayEntries } from "./bun-gateway-check.mjs";
+import { checkGatewayEntries, checkVaultEntry } from "./bun-gateway-check.mjs";
 import {
   collectWebNotices,
   renderWebNotices,
@@ -923,7 +923,10 @@ async function checkBunPragma() {
   for (const [bundled, pragma] of [
     ["server.js", BUN_PRAGMA],
     ["gateway.js", BUN_PRAGMA],
+    ["vault.js", BUN_PRAGMA],
     ["codex-renew.js", BUN_PRAGMA],
+    ["claude-login.js", BUN_PRAGMA],
+    ["codex-login.js", BUN_PRAGMA],
     ["gateway-admin.js", BUN_PRAGMA],
     ["relay.js", BUN_PRAGMA],
     ["workers/xhr-sync-worker.js", BUN_PRAGMA],
@@ -1592,6 +1595,7 @@ try {
   console.log(
     `Standalone gateway: ${await checkGatewayEntries(runtimeRoot, gatewayCommand)}.`,
   );
+  console.log(`Vault: ${await checkVaultEntry(runtimeRoot)}.`);
 
   seedDataDir();
   const first = start();
@@ -1638,7 +1642,7 @@ try {
   );
 
   console.log(
-    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, standalone gateway and Codex child, collected FileHandles in server and broker, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
+    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, standalone gateway and Codex child, vault with its login children, collected FileHandles in server and broker, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
   );
 } finally {
   await terminateChildren();

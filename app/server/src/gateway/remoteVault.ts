@@ -29,6 +29,7 @@ import {
   VAULT_LOCKED,
   VAULT_METHODS,
   accountTokenFile,
+  isPinnedPeer,
   vaultBody,
   vaultMessage,
   type LoginFailure,
@@ -267,11 +268,9 @@ export function createRemoteVault(
         key: options.tls.keyPem,
         cert: options.tls.certPem,
         ca: options.tls.peerCertPem,
-        // Pinned: the vault's certificate itself, whatever name it holds.
-        checkServerIdentity: (_host, cert) =>
-          cert.fingerprint256 === pinned
-            ? undefined
-            : new Error("the vault's certificate is not the pinned one"),
+        // Pinned on `secureConnect` (`isPinnedPeer`): the vault's certificate
+        // itself, whatever name it holds, before any frame.
+        rejectUnauthorized: false,
       });
       dialing = socket;
       const timer = setTimeout(() => {
@@ -285,6 +284,12 @@ export function createRemoteVault(
         if (dialing === socket) dialing = undefined;
       };
       socket.once("secureConnect", () => {
+        if (!isPinnedPeer(socket, pinned)) {
+          socket.destroy(
+            new Error("the vault's certificate is not the pinned one"),
+          );
+          return;
+        }
         settle();
         resolveSocket(socket);
       });

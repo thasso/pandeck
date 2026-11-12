@@ -509,7 +509,9 @@ const GATEWAY_VAULT = [
   // The standalone process's Codex renewal child, behind the renewal port.
   "codexChild",
   "holds",
-  // The YubiKey helper's port (Task-1395), the second spawn exception.
+  // The login children's port (Task-1387), one child per login.
+  "loginChild",
+  // The YubiKey helper's port (Task-1395), the third spawn exception.
   "pivChild",
   "processIdentity",
   "profileCredential",
@@ -557,11 +559,15 @@ const GATEWAY_SHARED = [
  */
 const GATEWAY_ROOT = [
   "adminMain",
+  // Where the entries find their children, source or bundle.
+  "childEntries",
   "gateway",
   "main",
   "process",
   "processFixture",
   "state",
+  // The vault's own entry (Task-1387), `vault.js`.
+  "vaultMain",
 ];
 /**
  * gateway control 1.4's wire validators (`isHoldId`, `isPid`, `isStartTime`):
@@ -659,8 +665,8 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
 test("only the server links and the error classifier import the gateway", () => {
   // The link starts it and speaks control, the client-mode link speaks
   // gateway client 1.0; engine modules reach it only through a link. The
-  // classifier reads the local-refusal marker. The two dev entries run the
-  // edge and the vault process.
+  // classifier reads the local-refusal marker. The dev entry runs the edge;
+  // the vault's entry is `gateway/vaultMain.ts`.
   assert.deepEqual(
     importersOf((target) => target.startsWith("gateway/")).filter(
       (module) => !module.startsWith("gateway/"),
@@ -670,7 +676,6 @@ test("only the server links and the error classifier import the gateway", () => 
       "gatewayDevMain.ts",
       "gatewayLink.ts",
       "providerErrors.ts",
-      "vaultDevMain.ts",
     ],
   );
 });
@@ -728,7 +733,7 @@ test("the process fixture is not imported by production modules", () => {
   );
 });
 
-test("the Codex renewal child imports only the refresher and node, and only the gateway's two child ports spawn", () => {
+test("the Codex renewal child imports only the refresher and node, and only the gateway's three child ports spawn", () => {
   // The child is the only gateway-shipped module that loads pi (ADR-0005, M5).
   const scan = scans.get("codexRenewMain.ts");
   assert.ok(scan, "the scan found the Codex renewal child");
@@ -741,8 +746,49 @@ test("the Codex renewal child imports only the refresher and node, and only the 
     importersOf((target) => target === "node:child_process").filter((module) =>
       module.startsWith("gateway/"),
     ),
-    // Codex's renewal child, and the YubiKey helper (Task-1395).
-    ["gateway/codexChild.ts", "gateway/pivChild.ts"],
+    // Codex's renewal child, the login children (Task-1387) and the
+    // YubiKey helper (Task-1395).
+    ["gateway/codexChild.ts", "gateway/loginChild.ts", "gateway/pivChild.ts"],
+  );
+});
+
+/** Every module `entry` reaches, itself included. */
+function closureOf(entry: string): Set<string> {
+  const reached = new Set<string>();
+  const pending = [entry];
+  for (let module = pending.pop(); module; module = pending.pop()) {
+    if (reached.has(module)) continue;
+    reached.add(module);
+    pending.push(...(scans.get(module)?.imports ?? []));
+  }
+  return reached;
+}
+
+test("the login children: only the Codex one loads pi, through the gateway port", () => {
+  // The child side's protocol imports only node, so each entry adds only its
+  // own driver (ADR-0005 "The login children").
+  for (const target of scans.get("loginChildEntry.ts")!.imports)
+    assert.ok(
+      target.startsWith("node:"),
+      `loginChildEntry.ts imports ${target}`,
+    );
+  for (const target of scans.get("codexLoginMain.ts")!.imports)
+    assert.ok(
+      target.startsWith("node:") ||
+        target === "harnesses/gatewayPorts.ts" ||
+        target === "loginChildEntry.ts",
+      `codexLoginMain.ts imports ${target}`,
+    );
+  const claude = closureOf("claudeLoginMain.ts");
+  assert.ok(claude.has("claudeLoginDriver.ts"), "the scan found the driver");
+  assert.deepEqual(
+    [...claude].filter((module) => module.startsWith("@earendil-works/")),
+    [],
+    "the Claude login child loads no pi",
+  );
+  assert.ok(
+    ![...claude].some((module) => module.startsWith("piSdk/")),
+    "the Claude login child reaches no pi module",
   );
 });
 

@@ -90,33 +90,38 @@ MCP CLI and its `playwright-core` package. It does not contain Node, tsx,
 workspace sources, or a `node_modules` tree. The wrapper sets
 `ASSISTANT_RUNTIME_DIR` to this asset root.
 
-Beside `server.js`, the package carries four more entries bundled the same way:
+Beside `server.js`, the package carries seven more entries bundled the same way:
 `gateway.js`, the standalone credential gateway
 (`app/server/src/gateway/main.ts`), started by its own wrapper
-`$out/bin/pandeck-gateway`; `codex-renew.js`, the Codex renewal child it spawns
-once per renewal (`codexRenewMain.ts`), the only one of them that loads pi; and
-`gateway-admin.js` and `relay.js` for client mode, which have no wrapper yet.
-The gateway reads only its environment: `DATA_DIR` (state in
-`DATA_DIR/gateway/`), `ASSISTANT_GATEWAY_PORT` (8788) and
-`ASSISTANT_GATEWAY_SOCKET` (the control socket, `DATA_DIR/gateway/control.sock`
-by default). The optional `ASSISTANT_GATEWAY_CLIENTS` holds the client
-listener's options as JSON; client mode belongs to the IDB pilot and the
-self-hosted default leaves this unset, with no client listener. With
-`ASSISTANT_GATEWAY_CLIENTS` set, the packaged entry runs client mode without
-logins. It supplies no login drivers, preserving its closed, pi-free import
-boundary; live client logins remain on the separate development entry,
-`gatewayDevMain.ts` (`pnpm --filter @assistant/server gateway:dev`). Login child
-adapters are not included. SIGTERM stops it: it closes the control socket,
-refuses new model requests and lets open streams finish for up to two minutes.
-In development, `pnpm --filter ./app/server gateway` runs the same entry. The
-NixOS module runs it as its own unit, on by default ("Credential gateway unit").
-With `ASSISTANT_GATEWAY=1`, setting `ASSISTANT_GATEWAY_SOCKET` makes the server
-dial that process and reconnect with backoff; without it the in-process boot
-stays one-shot. Outside the module both modes stay off unless explicitly
-enabled. After 10 seconds without a ready socket connection the app shows
-"Credential gateway not running"; a refused or incompatible control handshake
-shows "Credential gateway incompatible". The server logs the existing
-explanations:
+`$out/bin/pandeck-gateway`; `vault.js`, the vault as its own process
+(`gateway/vaultMain.ts`, `docs/workers.md` "Remote vault"); `codex-renew.js`,
+the Codex renewal child both spawn once per renewal (`codexRenewMain.ts`);
+`claude-login.js` and `codex-login.js`, the vault's login children, one per
+login (`claudeLoginMain.ts`, `codexLoginMain.ts`; ADR-0005 "The login
+children"); and `gateway-admin.js` and `relay.js` for client mode. Only
+`codex-renew.js` and `codex-login.js` load pi. `vault.js`, `gateway-admin.js`
+and `relay.js` have no wrapper; the YubiKey helper `pivHelper.py` sits beside
+`vault.js` and `gateway-admin.js`, which resolve it next to themselves. The
+gateway reads only its environment: `DATA_DIR` (state in `DATA_DIR/gateway/`),
+`ASSISTANT_GATEWAY_PORT` (8788) and `ASSISTANT_GATEWAY_SOCKET` (the control
+socket, `DATA_DIR/gateway/control.sock` by default). The optional
+`ASSISTANT_GATEWAY_CLIENTS` holds the client listener's options as JSON; client
+mode belongs to the IDB pilot and the self-hosted default leaves this unset,
+with no client listener. With `ASSISTANT_GATEWAY_CLIENTS` set, the packaged
+entry runs client mode without logins. It supplies no login drivers, preserving
+its closed, pi-free import boundary; packaged logins run on `vault.js`, and a
+single-process client gateway with logins remains the development entry
+`gatewayDevMain.ts` (`pnpm --filter @assistant/server gateway:dev`). SIGTERM
+stops it: it closes the control socket, refuses new model requests and lets open
+streams finish for up to two minutes. In development,
+`pnpm --filter ./app/server gateway` runs the same entry. The NixOS module runs
+it as its own unit, on by default ("Credential gateway unit"). With
+`ASSISTANT_GATEWAY=1`, setting `ASSISTANT_GATEWAY_SOCKET` makes the server dial
+that process and reconnect with backoff; without it the in-process boot stays
+one-shot. Outside the module both modes stay off unless explicitly enabled.
+After 10 seconds without a ready socket connection the app shows "Credential
+gateway not running"; a refused or incompatible control handshake shows
+"Credential gateway incompatible". The server logs the existing explanations:
 
 - "Pandeck's credential gateway isn't reachable, so this session can't start a
   model request. It restarts automatically; try again shortly."
@@ -361,26 +366,36 @@ then starts the packaged `pandeck-gateway` on a temporary `DATA_DIR`
 (`scripts/bun-gateway-check.mjs`): a control hello must be answered on its
 socket, a request without a lease must get the gateway's own 401 refusal, its
 `codex-renew.js` child must answer `failed` with exit 0 for a missing file, and
-SIGTERM must exit 0 and remove the socket. From an unrelated cwd and a clean
-environment, it also runs the packaged browser MCP CLI's version command and an
-MCP initialize plus `tools/list`, covering the patched local imports without a
-workspace `node_modules`. When Chrome or Chromium is available, the check also
-launches it and navigates a page. The Nix sandbox has neither browser, so that
-last probe reports an explicit skip there; the same clean-environment probe with
-the pinned Bun 1.4.2 passes launch and navigation on a host with Chrome, run
-outside the sandbox against the built package. The server itself keeps its
-deterministic bundle beside the executable because Bun's standalone compiler
-randomizes its embedded module-table encryption; the package wrapper invokes
-that module explicitly, while `/proc/<pid>/exe` remains the packaged Bun
-executable. Bun's ordinary bundler also emits scheduler-dependent module order
-and identifier names, even when pinned to one CPU and given a lexically
-recreated source tree. The builder therefore uses pinned esbuild for the server
-module and its two bundled helpers; Bun remains the packaged runtime. The flake
-closure check rejects Node, tsx, `node_modules`, and source derivations, then
-confirms pinned git and OpenSSH remain present. The install check also scans
-every runtime file for the Nix source path and build directory. CI builds the
-package and its closure check on every change (`docs/ci-cd.md`), and a
-deployment of that commit builds the same derivation.
+SIGTERM must exit 0 and remove the socket. The same script then pairs a
+temporary vault and edge with `gateway-admin.js` and starts `vault.js` with a
+fake Claude CLI (`ASSISTANT_CLAUDE_CLI_BIN`) and only `PATH`, `HOME`, `TMPDIR`,
+`NODE_ENV` and `ASSISTANT_RUNTIME_DIR` in its environment. Over the link, a
+Claude login through `claude-login.js` must install its credential, a cancelled
+login whose CLI ignores SIGTERM and forks must leave no live member of its
+process group, a Codex login must show `codex-login.js`'s first output, and
+SIGTERM during a login must exit 0 only once that login's group is gone. The
+vault check needs no provider network and must run without one: the Codex login
+reaches for OpenAI as soon as it starts. The Nix sandbox provides that; run by
+hand, use a network-less container or namespace. From an unrelated cwd and a
+clean environment, it also runs the packaged browser MCP CLI's version command
+and an MCP initialize plus `tools/list`, covering the patched local imports
+without a workspace `node_modules`. When Chrome or Chromium is available, the
+check also launches it and navigates a page. The Nix sandbox has neither
+browser, so that last probe reports an explicit skip there; the same
+clean-environment probe with the pinned Bun 1.4.2 passes launch and navigation
+on a host with Chrome, run outside the sandbox against the built package. The
+server itself keeps its deterministic bundle beside the executable because Bun's
+standalone compiler randomizes its embedded module-table encryption; the package
+wrapper invokes that module explicitly, while `/proc/<pid>/exe` remains the
+packaged Bun executable. Bun's ordinary bundler also emits scheduler-dependent
+module order and identifier names, even when pinned to one CPU and given a
+lexically recreated source tree. The builder therefore uses pinned esbuild for
+the server module and its two bundled helpers; Bun remains the packaged runtime.
+The flake closure check rejects Node, tsx, `node_modules`, and source
+derivations, then confirms pinned git and OpenSSH remain present. The install
+check also scans every runtime file for the Nix source path and build directory.
+CI builds the package and its closure check on every change (`docs/ci-cd.md`),
+and a deployment of that commit builds the same derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler. As
 observed on Bun 1.3.13, and not re-measured on 1.4.2 since the package uses

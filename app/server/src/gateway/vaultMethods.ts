@@ -40,6 +40,7 @@
  */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import type { PeerCertificate } from "node:tls";
 import { createPrivateJsonFile } from "../privateJsonFile.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
 import type {
@@ -228,4 +229,24 @@ export function readEdgeVaultLink(stateDir: string): VaultLinkTls | string {
     certPem: file.certPem,
     peerCertPem: file.vaultCertPem,
   };
+}
+
+/**
+ * Whether the link's peer presented exactly the pinned certificate, inside its
+ * validity: the link's only trust check, run once the handshake has proved the
+ * peer's key and before any frame. Both ends set `rejectUnauthorized: false`
+ * because Bun's TLS takes no self-signed leaf as its own anchor, so a chain
+ * check would refuse every peer there. No certificate, another one, or one
+ * outside its dates is refused.
+ */
+export function isPinnedPeer(
+  socket: { getPeerCertificate(): PeerCertificate },
+  pinned: string,
+  now = Date.now(),
+): boolean {
+  const cert = socket.getPeerCertificate();
+  if (!cert || cert.fingerprint256 !== pinned) return false;
+  const from = Date.parse(cert.valid_from);
+  const to = Date.parse(cert.valid_to);
+  return from <= now && now <= to;
 }

@@ -61,6 +61,7 @@ import {
   VAULT_METHODS,
   accountTokenFile,
   isIntegration,
+  isPinnedPeer,
   isVaultId,
   vaultBody,
   vaultMessage,
@@ -563,13 +564,14 @@ export async function startVaultServer(
       cert: options.tls.certPem,
       ca: options.tls.peerCertPem,
       requestCert: true,
-      rejectUnauthorized: true,
+      // The pin below (`isPinnedPeer`) is the check, before any frame.
+      rejectUnauthorized: false,
       handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
     },
     (socket) => {
       sockets.add(socket);
       socket.once("close", () => sockets.delete(socket));
-      if (socket.getPeerCertificate().fingerprint256 !== pinned) {
+      if (!isPinnedPeer(socket, pinned)) {
         log("edge connection refused: unpinned certificate");
         socket.destroy();
         return;
@@ -604,12 +606,14 @@ export async function startVaultServer(
     renewDue: () => (locked() ? Promise.resolve() : vault.renewDue()),
     async close() {
       clearInterval(renewTick);
+      // No login commits from here: each one running ends cancelled.
+      for (const login of logins.values()) withdraw(login);
       await control?.close();
       current?.end("the vault is stopping");
       const closed = new Promise<void>((done) => server.close(() => done()));
       for (const socket of sockets) socket.destroy();
-      vault.close();
-      await closed;
+      // Every login and renewal has ended, sealed, before this resolves.
+      await Promise.all([vault.close(), closed]);
     },
   };
 }

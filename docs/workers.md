@@ -1794,15 +1794,16 @@ path above.
   (`gatewayDevMain.ts`) remains the separate composition with the client
   listener and both live login drivers on 127.0.0.1, or on `--bind-host` with
   each `--host` in the edge's certificate. The packaged `gateway/main.ts` entry
-  can run a configured client listener but supplies no login drivers; login
-  child adapters remain outside this slice. The commands `gateway:admin` and
-  `gateway:relay` run the admin CLI and the relay. A second dev instance with
-  its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN` and
-  `ASSISTANT_GATEWAY_RELAY` is the client.
+  can run a configured client listener but supplies no login drivers; packaged
+  logins run on the vault (`vault.js`, "Remote vault"). The commands
+  `gateway:admin` and `gateway:relay` run the admin CLI and the relay. A second
+  dev instance with its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN`
+  and `ASSISTANT_GATEWAY_RELAY` is the client.
 - **Known gaps.** No automatic recovery of a crashed registry writer's lock. No
   OpenAI-compatible accounts and no lease TTL (leases live until revoked). In
-  client mode, no rename, enable toggle or Clear of an unfinished login, and the
-  Codex driver runs in the gateway's process rather than as a child.
+  client mode, no rename, enable toggle or Clear of an unfinished login, and
+  `gateway:dev`'s own vault runs both drivers in its process; a vault process
+  runs them as children ("Remote vault").
 
 #### Tools on the edge
 
@@ -1897,12 +1898,14 @@ option selects it; without it the vault runs in the edge's process, as the
 server's local gateway does.
 
 - **Link.** Worker-protocol framing over mutual TLS. Each side has its own key
-  and self-signed certificate and trusts exactly the other's, checked by
-  fingerprint too. The edge dials, redials with backoff (0.5 s to 10 s), and on
-  every connect reads the vault's needs-login set and sends both inputs. Dial,
-  TLS handshake and `vault.hello` each have a 10 s deadline, and closing the
-  edge stops a dial in flight. The vault serves one edge connection; a newer one
-  replaces the older.
+  and self-signed certificate and trusts exactly the other's, inside its dates,
+  checked by its SHA-256 fingerprint once the handshake has proved the key and
+  before any frame, not by a chain: Bun's TLS takes no self-signed leaf as its
+  own anchor (ADR-0005). The edge dials, redials with backoff (0.5 s to 10 s),
+  and on every connect reads the vault's needs-login set and sends both inputs.
+  Dial, TLS handshake and `vault.hello` each have a 10 s deadline, and closing
+  the edge stops a dial in flight. The vault serves one edge connection; a newer
+  one replaces the older.
 - **Bounds.** Both ends hold the other to `VAULT_LIMITS`: 1 MiB per message, 2
   MiB and 8 unfinished messages buffered, 256 requests served at once (more
   answer `busy`). A peer over them loses its connection, and only that one. The
@@ -1950,10 +1953,15 @@ server's local gateway does.
   `vault-init --edge-cert <file>` pins it on the vault. Certificates are public;
   keys never leave their machine.
 - **Running.**
-  `gateway:vault --state-dir <dir> [--bind-host <address>] [--port <n>]`
-  (`vaultDevMain.ts`, port 8794) runs the vault with both login drivers;
-  `gateway:dev ... --vault-host <address> [--vault-port <n>]` runs the edge
-  against it. The packaged entry waits for Task-1387.
+  `gateway:vault --state-dir <dir> [--bind-host <address>] [--port <n>] [--control-socket <path>]`
+  (`gateway/vaultMain.ts`, port 8794; `vault.js` in the Bun package) runs the
+  vault; `gateway:dev ... --vault-host <address> [--vault-port <n>]` runs the
+  edge against it. pi and the Claude CLI never load in the vault process: each
+  Codex renewal and each login runs in its own child beside the entry,
+  `codex-renew`, `claude-login` or `codex-login` (`gateway/childEntries.ts`;
+  ADR-0005 "The login children"). A login child leads its own process group and
+  writes only into the login's directory; the vault ends the whole group before
+  it reads the credential or removes the directory.
 
 #### Sealed store
 
@@ -1995,7 +2003,12 @@ never falls back to plaintext on disk.
   `integrations.clear` delete the records. Every 60 s a sweep seals any token
   file whose content changed since it was last sealed or opened. A record whose
   plaintext is missing is never touched. A crash between a write and its seal
-  can leave the previous token sealed (accepted, M21).
+  can leave the previous token sealed (accepted, M21); an orderly stop cannot.
+- **Stop.** SIGTERM or SIGINT withdraws every login, so none commits, admits no
+  further renewal, cancels the logins and aborts the renewals in flight. The
+  vault exits 0 only once each login's child group has ended and its directory
+  is gone, and each renewal attempt has sealed its file in the lane. A second
+  signal changes nothing.
 - **Admin.** `vault-recipient add --from-piv <slot>` (no PIN),
   `--pem <file> --slot <slot>` or `--pem <file> --private-key <file>`;
   `vault-recipient list`; `vault-recipient remove <kid>` (never the last).

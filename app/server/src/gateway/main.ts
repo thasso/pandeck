@@ -16,7 +16,7 @@
  */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { childEntry } from "./childEntries.ts";
 import type { ClientListenerOptions } from "./clientListener.ts";
 import { codexChildPort } from "./codexChild.ts";
 import { runGatewayProcess, stopOnSignals } from "./process.ts";
@@ -52,13 +52,6 @@ function clientOptions(): ClientListenerOptions | undefined {
   return parsed as ClientListenerOptions;
 }
 
-/** The renewal entry beside this one: source under tsx, else the bundle. */
-const renewEntry = fileURLToPath(
-  import.meta.url.endsWith(".ts")
-    ? new URL("../codexRenewMain.ts", import.meta.url)
-    : new URL("./codex-renew.js", import.meta.url),
-);
-
 const clients = clientOptions();
 mkdirSync(stateDir, { recursive: true, mode: 0o700 });
 try {
@@ -67,10 +60,7 @@ try {
     port,
     socketPath,
     log,
-    renewCodex: codexChildPort({
-      file: process.execPath,
-      args: [...process.execArgv, renewEntry],
-    }),
+    renewCodex: codexChildPort(childEntry("codex-renew")),
     ...(clients ? { clients } : {}),
   });
   stopOnSignals(running, log);
