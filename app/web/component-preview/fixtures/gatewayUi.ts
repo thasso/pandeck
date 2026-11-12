@@ -1,5 +1,9 @@
 import type {
   GatewayUiAccount,
+  GatewayUiAtlassian,
+  GatewayUiClient,
+  GatewayUiEnrollmentCode,
+  GatewayUiMcpToken,
   GatewayUiMe,
 } from "@assistant/shared/gatewayUi";
 
@@ -25,3 +29,49 @@ export const gatewayUiAccounts: GatewayUiAccount[] = [
     needsLogin: true,
   },
 ];
+
+/** `GET /api/integrations/atlassian` with nothing stored. */
+export const gatewayUiAtlassianNotSet: GatewayUiAtlassian = {
+  connected: false,
+};
+
+/** A stored credential: site and email, never the token. */
+export const gatewayUiAtlassianConnected: GatewayUiAtlassian = {
+  connected: true,
+  site: "example-team.atlassian.net",
+  email: "person@example.org",
+  displayName: "Person Example",
+};
+
+/** The vault is locked: the stored credential cannot be read now. */
+export const gatewayUiAtlassianLocked: GatewayUiAtlassian = {
+  connected: false,
+  problem: "vault_locked",
+};
+
+/** `GET /api/clients`: two machines, one with an MCP token. */
+export const gatewayUiClients: GatewayUiClient[] = [
+  {
+    id: "cl_4f2a9c1e7b3d",
+    label: "Work laptop",
+    createdAt: Date.UTC(2026, 9, 14, 9, 30),
+    mcpToken: true,
+  },
+  {
+    id: "cl_8e1d6b0a5c2f",
+    label: "Home desktop",
+    createdAt: Date.UTC(2026, 10, 2, 18, 5),
+    mcpToken: false,
+  },
+];
+
+/** `POST /api/clients/code`: an obviously fake one-time code. */
+export const gatewayUiEnrollmentCode: GatewayUiEnrollmentCode = {
+  code: "FAKE-enrollment-code-0000",
+  validForSeconds: 900,
+};
+
+/** `POST /api/clients/mcp-token`: an obviously fake MCP token. */
+export const gatewayUiMcpToken: GatewayUiMcpToken = {
+  token: "pgmcp_FAKE-token-for-the-preview-only",
+};

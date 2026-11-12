@@ -3,11 +3,23 @@ import {
   decodeGatewayUiMe,
   GATEWAY_UI_CSRF_HEADER,
   GATEWAY_UI_SIGNIN_CODES,
+  type GatewayUiAtlassianSetRequest,
   type GatewayUiMe,
   type GatewayUiSigninCode,
 } from "@assistant/shared/gatewayUi";
 import { useFetchState } from "../hooks/useFetchState.ts";
-import { fetchAccounts, removeAccount } from "./gatewayApi.ts";
+import {
+  clearAtlassian,
+  createEnrollmentCode,
+  fetchAccounts,
+  fetchAtlassian,
+  fetchClients,
+  mintMcpToken,
+  removeAccount,
+  revokeClient,
+  revokeMcpToken,
+  setAtlassian,
+} from "./gatewayApi.ts";
 import { GatewayPage, type GatewayPageState } from "./GatewayPage.tsx";
 import { useGatewayLogin } from "./useGatewayLogin.ts";
 
@@ -55,7 +67,40 @@ export function GatewayApp({
     signedIn ? "accounts" : null,
     fetchAccounts,
   );
+  const { state: atlassian, reload: reloadAtlassian } = useFetchState(
+    signedIn ? "atlassian" : null,
+    fetchAtlassian,
+  );
+  const { state: clients, reload: reloadClients } = useFetchState(
+    signedIn ? "clients" : null,
+    fetchClients,
+  );
   const login = useGatewayLogin(reloadAccounts);
+  const saveAtlassian = useCallback(
+    async (request: GatewayUiAtlassianSetRequest) => {
+      const answer = await setAtlassian(request);
+      reloadAtlassian();
+      return answer;
+    },
+    [reloadAtlassian],
+  );
+  const removeAtlassian = useCallback(async () => {
+    await clearAtlassian();
+    reloadAtlassian();
+  }, [reloadAtlassian]);
+  /** A client mutation, then the list again, whether or not it was done. */
+  const thenReload = useCallback(
+    <T,>(run: Promise<T>): Promise<T> => run.finally(reloadClients),
+    [reloadClients],
+  );
+  const clientsProps = {
+    clients,
+    createCode: createEnrollmentCode,
+    revoke: (clientId: string) => thenReload(revokeClient(clientId)),
+    mintMcpToken: (clientId: string) => thenReload(mintMcpToken(clientId)),
+    revokeMcpToken: (clientId: string) => thenReload(revokeMcpToken(clientId)),
+    reload: reloadClients,
+  };
   const remove = useCallback(
     async (accountId: string) => {
       await removeAccount(accountId);
@@ -91,6 +136,12 @@ export function GatewayApp({
       onSignOut={signOut}
       signingOut={signingOut}
       accounts={{ accounts, login, remove }}
+      atlassian={{
+        status: atlassian,
+        save: saveAtlassian,
+        clear: removeAtlassian,
+      }}
+      clients={clientsProps}
     />
   );
 }

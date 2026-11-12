@@ -32,6 +32,8 @@ const REFUSALS = {
   vault_unavailable:
     "the gateway's vault did not answer; check the Jira status.",
   tools_unavailable: "the credential gateway runs no integrations.",
+  integration_busy:
+    "another change to this credential is still running; try again.",
   gateway_unavailable:
     "the credential gateway is unreachable; try again shortly.",
 } as const;

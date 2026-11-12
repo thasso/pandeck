@@ -112,3 +112,57 @@ test("a 503 or a malformed answer shows the unavailable state", async () => {
     act(() => root?.unmount());
   }
 });
+
+test("signed in: Accounts, Jira and Clients each load; signed out none is fetched", async () => {
+  const paths = () => fetchMock.mock.calls.map(([input]) => String(input));
+  fetchMock.mockResolvedValueOnce(answer(401, { error: "signed_out" }));
+  await render("/");
+  expect(paths()).toEqual(["/api/me"]);
+  act(() => root?.unmount());
+
+  fetchMock.mockReset();
+  fetchMock.mockImplementation((input) => {
+    switch (String(input)) {
+      case "/api/me":
+        return Promise.resolve(
+          answer(200, { userId: "u1", email: "p@example.org", label: "p" }),
+        );
+      case "/api/accounts":
+        return Promise.resolve(answer(200, { accounts: [] }));
+      case "/api/integrations/atlassian":
+        return Promise.resolve(
+          answer(200, {
+            connected: true,
+            site: "x.atlassian.net",
+            email: "p@example.org",
+          }),
+        );
+      case "/api/clients":
+        return Promise.resolve(
+          answer(200, {
+            clients: [
+              { id: "c1", label: "Laptop", createdAt: 1, mcpToken: false },
+            ],
+          }),
+        );
+      default:
+        return Promise.resolve(answer(404, {}));
+    }
+  });
+  host = document.createElement("div");
+  document.body.append(host);
+  await render("/");
+  await act(async () => {});
+  expect(paths().sort()).toEqual([
+    "/api/accounts",
+    "/api/clients",
+    "/api/integrations/atlassian",
+    "/api/me",
+  ]);
+  const sections = [...host.querySelectorAll("section")].map((section) =>
+    section.getAttribute("aria-label"),
+  );
+  expect(sections).toEqual(["Accounts", "Jira", "Clients"]);
+  expect(host.textContent).toContain("x.atlassian.net");
+  expect(host.textContent).toContain("Laptop");
+});

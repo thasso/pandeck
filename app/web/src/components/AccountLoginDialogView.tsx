@@ -4,7 +4,7 @@
  * gateway's page each render it over their own login API. It imports no
  * transport: only React, icons, `ui/` and three `common/` leaves
  * (`AccountLoginDialogView.imports.test.ts` pins this), so the gateway bundle
- * stays small.
+ * stays small; its links' Copy button is the shared `CopyableText`.
  *
  * Claude shows its authorization link and a paste field, never the CLI's
  * output; OpenAI shows its verification link and one-time code. Each link also
@@ -30,21 +30,14 @@ import {
   useState,
   type SyntheticEvent,
 } from "react";
-import {
-  Check,
-  CheckCircle2,
-  Copy,
-  ExternalLink,
-  KeyRound,
-  Terminal,
-} from "lucide-react";
+import { CheckCircle2, ExternalLink, KeyRound, Terminal } from "lucide-react";
 import type {
   AccountLoginDevice,
   AccountLoginProvider,
   AccountLoginStatus,
 } from "@assistant/shared";
 import { ErrorNote, Spinner } from "./common/load.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { CopyableText } from "./common/CopyableText.tsx";
 import { LinkButton } from "./common/LinkButton.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -98,9 +91,6 @@ const PROVIDER_LABEL: Record<AccountLoginProvider, string> = {
   claude: "Claude",
   "openai-codex": "OpenAI",
 };
-
-/** How long the Copy button shows its check after a successful copy. */
-const COPIED_FEEDBACK_MS = 2000;
 
 export function AccountLoginDialogView({
   provider,
@@ -208,54 +198,15 @@ export function AccountLoginDialogView({
   );
 }
 
-/** The browser's clipboard writer, absent outside a secure context (http). */
-function clipboardWriter(): ((text: string) => Promise<void>) | undefined {
-  const clipboard =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard;
-  if (typeof clipboard?.writeText !== "function") return undefined;
-  return (text) => clipboard.writeText(text);
-}
-
-/**
- * A login link as read-only, selectable text with a Copy button. Without a
- * clipboard the button is hidden and selecting the text is the fallback.
- */
+/** A login link with its Copy button. */
 function CopyableLink({ url, label }: { url: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const write = clipboardWriter();
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
-    return () => clearTimeout(timer);
-  }, [copied]);
-  const copy = () => {
-    if (!write) return;
-    // A refused write (permission, focus), rejected or thrown, leaves the
-    // text to select by hand.
-    try {
-      write(url).then(
-        () => setCopied(true),
-        () => {},
-      );
-    } catch {
-      // Nothing to report: the field stays selectable.
-    }
-  };
   return (
-    <div className="flex items-center gap-2">
-      <Input
-        readOnly
-        value={url}
-        aria-label={label}
-        onFocus={(event) => event.currentTarget.select()}
-        className="min-w-0 flex-1 font-mono"
-      />
-      {write && (
-        <IconButton label={copied ? "Link copied" : "Copy link"} onClick={copy}>
-          {copied ? <Check /> : <Copy />}
-        </IconButton>
-      )}
-    </div>
+    <CopyableText
+      value={url}
+      label={label}
+      copyLabel="Copy link"
+      copiedLabel="Link copied"
+    />
   );
 }
 

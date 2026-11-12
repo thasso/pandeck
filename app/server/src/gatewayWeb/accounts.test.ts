@@ -30,6 +30,8 @@ import {
   type GatewayWebActor,
   type GatewayWebLoginView,
 } from "./accounts.ts";
+import { ClientsRefusal } from "./clients.ts";
+import { IntegrationsRefusal } from "./integrations.ts";
 import { startGatewayWeb } from "./server.ts";
 
 const HOUR = 60 * 60_000;
@@ -243,6 +245,27 @@ async function startUi(fake = fakeAccounts()) {
       user: (id) => ({ id, label: EMAIL, email: EMAIL }),
     },
     accounts: fake.accounts,
+    // These tests touch no credential or client.
+    integrations: {
+      status: () => Promise.resolve({ connected: false }),
+      set: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+      clear: () => Promise.reject(new IntegrationsRefusal("tools_unavailable")),
+    },
+    clients: {
+      list: () => [],
+      createCode: () => {
+        throw new ClientsRefusal("limit_reached");
+      },
+      revoke: () => {
+        throw new ClientsRefusal("unknown_client");
+      },
+      mintMcpToken: () => {
+        throw new ClientsRefusal("unknown_client");
+      },
+      revokeMcpToken: () => {
+        throw new ClientsRefusal("unknown_client");
+      },
+    },
     log: (line) => logs.push(line),
     now: () => clock,
     oidcTestOptions: { allowInsecureRequests: true },

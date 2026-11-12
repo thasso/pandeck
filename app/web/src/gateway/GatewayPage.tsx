@@ -17,6 +17,11 @@ import {
   GatewayAccounts,
   type GatewayAccountsProps,
 } from "./GatewayAccounts.tsx";
+import {
+  GatewayAtlassian,
+  type GatewayAtlassianProps,
+} from "./GatewayAtlassian.tsx";
+import { GatewayClients, type GatewayClientsProps } from "./GatewayClients.tsx";
 
 export type GatewayPageState =
   | { kind: "loading" }
@@ -39,11 +44,16 @@ export interface GatewayPageProps {
   signingOut: boolean;
   /** The signed-in user's accounts and logins. */
   accounts?: GatewayAccountsProps | undefined;
+  /** The signed-in user's Atlassian credential (Task-1405). */
+  atlassian?: GatewayAtlassianProps | undefined;
+  /** The signed-in user's clients and MCP tokens (Task-1405). */
+  clients?: GatewayClientsProps | undefined;
 }
 
 /**
- * The gateway's own page (Task-1402): sign in with the deployment's provider,
- * see who you are and your accounts, sign out. Its own entry, served by the
+ * The gateway's own page (Task-1402, Task-1405): sign in with the
+ * deployment's provider, see who you are, your accounts, your Jira credential
+ * and your clients, sign out. Its own entry, served by the
  * edge; no Pandeck store, socket, router or token.
  */
 export function GatewayPage({
@@ -51,6 +61,8 @@ export function GatewayPage({
   onSignOut,
   signingOut,
   accounts,
+  atlassian,
+  clients,
 }: GatewayPageProps) {
   const signedIn = state.kind === "signedIn";
   return (
@@ -82,6 +94,12 @@ export function GatewayPage({
           ) : null}
           {state.kind === "signedIn" && accounts ? (
             <GatewayAccounts {...accounts} />
+          ) : null}
+          {state.kind === "signedIn" && atlassian ? (
+            <GatewayAtlassian {...atlassian} />
+          ) : null}
+          {state.kind === "signedIn" && clients ? (
+            <GatewayClients {...clients} />
           ) : null}
         </CardContent>
         {state.kind === "signedOut" ? (

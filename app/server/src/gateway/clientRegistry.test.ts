@@ -16,6 +16,8 @@ import { afterEach, test } from "vitest";
 import {
   ClientRegistry,
   ClientRegistryLockedError,
+  ENROLLMENT_CODE_TTL_MS,
+  EnrollmentLimitError,
   clientListLine,
   mcpTokenMatches,
 } from "./clientRegistry.ts";
@@ -338,3 +340,159 @@ test("signIn writes under the registry lock, and only when something changed", (
   assert.equal(readFileSync(path, "utf8"), written);
   assert.equal(statSync(path).mtimeMs, before);
 });
+
+// --- enrollment limits (Task-1405 T1) --------------------------------------
+
+const LIMITS = { maxPendingCodes: 4, maxClients: 16 };
+
+/** A registry over its own file, on a clock the test moves. */
+function limitFixture() {
+  const { dir, path } = fixture();
+  let clock = Date.now();
+  const registry = new ClientRegistry(dir, () => clock);
+  registry.addUser("v");
+  return {
+    dir,
+    path,
+    registry,
+    advance: (ms: number) => {
+      clock += ms;
+    },
+  };
+}
+
+/** Enrolls `count` active clients for `userId`, through unbounded codes. */
+function seedActive(
+  registry: ClientRegistry,
+  userId: string,
+  count: number,
+  prefix = userId,
+): void {
+  for (let i = 0; i < count; i++)
+    redeemAs(registry, registry.createCode(userId, "seed"), `${prefix}-${i}`);
+}
+
+function redeemAs(registry: ClientRegistry, code: string, id: string): void {
+  const client = registry.redeem(code, (pending) => ({
+    id,
+    userId: pending.userId,
+    label: pending.label,
+    fingerprint: `fp-${id}`,
+    createdAt: 1,
+  }));
+  assert.ok(client, `redeem ${id}`);
+}
+
+const pendingOf = (path: string, userId: string, now = Date.now()): number =>
+  (
+    JSON.parse(readFileSync(path, "utf8")) as {
+      codes: { userId: string; expiresAt: number }[];
+    }
+  ).codes.filter((code) => code.userId === userId && code.expiresAt > now)
+    .length;
+
+test("T1 page limits: at most 4 unexpired codes; a refusal writes nothing", () => {
+  const { registry, path } = limitFixture();
+  for (let i = 0; i < 4; i++) registry.createCode("u", `c${i}`, LIMITS);
+  const before = readFileSync(path, "utf8");
+  assert.throws(
+    () => registry.createCode("u", "fifth", LIMITS),
+    EnrollmentLimitError,
+  );
+  assert.equal(readFileSync(path, "utf8"), before);
+  assert.equal(existsSync(`${path}.lock`), false);
+});
+
+test("T1 page limits: pending codes reserve client places up to 16", () => {
+  const { registry } = limitFixture();
+  seedActive(registry, "u", 13);
+  const codes = [0, 1, 2].map((i) => registry.createCode("u", `n${i}`, LIMITS));
+  assert.throws(
+    () => registry.createCode("u", "over", LIMITS),
+    EnrollmentLimitError,
+  );
+  codes.forEach((code, i) => redeemAs(registry, code, `n${i}`));
+  const active = registry
+    .clients()
+    .filter((c) => c.userId === "u" && c.revokedAt === undefined);
+  assert.equal(active.length, 16);
+  assert.throws(
+    () => registry.createCode("u", "over", LIMITS),
+    EnrollmentLimitError,
+  );
+});
+
+test("T1 page limits: at 15 active clients one code, then redeemed to 16", () => {
+  const { registry } = limitFixture();
+  seedActive(registry, "u", 15);
+  const code = registry.createCode("u", "last", LIMITS);
+  assert.throws(
+    () => registry.createCode("u", "over", LIMITS),
+    EnrollmentLimitError,
+  );
+  redeemAs(registry, code, "last");
+  assert.equal(
+    registry.clients().filter((c) => c.revokedAt === undefined).length,
+    16,
+  );
+});
+
+test("T1 page limits: expired codes, revoked clients and other users do not count", () => {
+  const { registry, advance } = limitFixture();
+  for (let i = 0; i < 4; i++) registry.createCode("u", `c${i}`, LIMITS);
+  advance(ENROLLMENT_CODE_TTL_MS + 1);
+  for (let i = 0; i < 4; i++) registry.createCode("u", `d${i}`, LIMITS);
+
+  const other = limitFixture();
+  seedActive(other.registry, "u", 16);
+  other.registry.revoke("u-0");
+  other.registry.revoke("u-1");
+  // v's clients and codes are v's own.
+  seedActive(other.registry, "v", 16);
+  for (let i = 0; i < 4; i++) other.registry.createCode("v", `v${i}`);
+  other.registry.createCode("u", "one", LIMITS);
+  other.registry.createCode("u", "two", LIMITS);
+  assert.throws(
+    () => other.registry.createCode("u", "three", LIMITS),
+    EnrollmentLimitError,
+  );
+});
+
+test("T1 without limits, as the admin CLI issues, codes are unbounded", () => {
+  const { registry } = limitFixture();
+  seedActive(registry, "u", 16);
+  for (let i = 0; i < 20; i++) registry.createCode("u", `cli${i}`);
+});
+
+test("T1 page limits hold across competing processes: the count is taken under the lock", async () => {
+  const { dir, registry, path } = limitFixture();
+  seedActive(registry, "u", 13);
+  const outcomes = await Promise.all(
+    [0, 1, 2, 3].map(async () => {
+      const { stdout } = await run(process.execPath, [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `import { ClientRegistry, EnrollmentLimitError } from ${JSON.stringify(moduleUrl)};
+     const r = new ClientRegistry(${JSON.stringify(dir)});
+     let made = 0, refused = 0;
+     for (let i = 0; i < 3; i++) {
+       try { r.createCode('u', 'race', ${JSON.stringify(LIMITS)}); made++; }
+       catch (err) { if (!(err instanceof EnrollmentLimitError)) throw err; refused++; }
+     }
+     console.log(JSON.stringify({ made, refused }));`,
+      ]);
+      return JSON.parse(stdout) as { made: number; refused: number };
+    }),
+  );
+  assert.equal(
+    outcomes.reduce((sum, outcome) => sum + outcome.made, 0),
+    3,
+  );
+  assert.equal(
+    outcomes.reduce((sum, outcome) => sum + outcome.refused, 0),
+    9,
+  );
+  assert.equal(pendingOf(path, "u"), 3);
+}, 20_000);

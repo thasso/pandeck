@@ -2,8 +2,11 @@
  * The gateway's own browser listener (Task-1402, `docs/workers.md` "The
  * gateway's sign-in and UI"): HTTPS with the deployment's certificate, OIDC
  * sign-in, in-memory sessions, `/api/me`, the user's accounts and logins
- * (`/api/accounts*`, `/api/logins*`, over the injected `GatewayWebAccounts`)
- * and the gateway page's built files.
+ * (`/api/accounts*`, `/api/logins*`, over the injected `GatewayWebAccounts`),
+ * the Atlassian credential (`/api/integrations/*`, `GatewayWebIntegrations`),
+ * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`) and the
+ * gateway page's built files. An enrollment code or MCP token is only in the
+ * answer that creates it; the Atlassian token is in no answer.
  *
  * A session is the actor of the logins it starts: it alone reads, feeds and
  * cancels them, and when it ends (sign-out, expiry, eviction) they are
@@ -22,9 +25,13 @@ import { join } from "node:path";
 import {
   GATEWAY_UI_CSRF_HEADER,
   type GatewayUiAccounts,
+  type GatewayUiAtlassian,
+  type GatewayUiClients,
+  type GatewayUiEnrollmentCode,
   type GatewayUiError,
   type GatewayUiLogin,
   type GatewayUiLoginStart,
+  type GatewayUiMcpToken,
   type GatewayUiMe,
   type GatewayUiSigninCode,
 } from "@assistant/shared/gatewayUi";
@@ -41,7 +48,19 @@ import {
   type GatewayWebAccounts,
   type GatewayWebActor,
 } from "./accounts.ts";
+import {
+  ClientsRefusal,
+  decodeClientRequest,
+  decodeCodeRequest,
+  type GatewayWebClients,
+} from "./clients.ts";
 import { admittedEmail, type GatewayWebConfig } from "./config.ts";
+import {
+  decodeAtlassianSet,
+  IntegrationsRefusal,
+  type GatewayWebIntegrations,
+  type IntegrationsRefusalCode,
+} from "./integrations.ts";
 import { createOidcClient, OidcFailure, type OidcTestOptions } from "./oidc.ts";
 import {
   ABSOLUTE_MS,
@@ -59,7 +78,27 @@ const MAX_BODY_BYTES = 1_024;
 /** Claude's pasted code: up to 8,192 characters, JSON-quoted. */
 const MAX_INPUT_BODY_BYTES = 16 * 1_024;
 const INPUT_PATH = "/api/logins/input";
+/** A parser-valid Atlassian credential exceeds 1 KiB once JSON-escaped. */
+const MAX_ATLASSIAN_BODY_BYTES = 4 * 1_024;
+const ATLASSIAN_SET_PATH = "/api/integrations/atlassian/set";
 const SWEEP_MS = 60_000;
+/** An idle socket is destroyed after this. */
+const IDLE_MS = 10_000;
+/**
+ * The idle bound while an integration adapter runs: a set's check (15 s)
+ * then the vault's write (10 s). The baseline is back before its response.
+ */
+const INTEGRATION_IDLE_MS = 30_000;
+
+const INTEGRATION_STATUS: Record<IntegrationsRefusalCode, number> = {
+  integration_invalid: 400,
+  integration_rejected: 422,
+  integration_unreachable: 502,
+  vault_locked: 503,
+  vault_unavailable: 503,
+  tools_unavailable: 503,
+  integration_busy: 409,
+};
 
 const SECURITY_HEADERS = {
   "content-security-policy":
@@ -72,12 +111,16 @@ export interface GatewayWebOptions {
   config: GatewayWebConfig;
   users: GatewayWebUsers;
   accounts: GatewayWebAccounts;
+  integrations: GatewayWebIntegrations;
+  clients: GatewayWebClients;
   log: (line: string) => void;
   /** Where the port binds; `127.0.0.1` unless given. */
   bindHost?: string;
   now?: () => number;
   /** Tests only; never read from the config file. */
   oidcTestOptions?: OidcTestOptions;
+  /** Tests only, as `oidcTestOptions`: shorter socket idle bounds. */
+  testIdleMs?: { idle: number; integration: number };
 }
 
 export interface RunningGatewayWeb {
@@ -162,7 +205,10 @@ function readBody(
 export async function startGatewayWeb(
   options: GatewayWebOptions,
 ): Promise<RunningGatewayWeb> {
-  const { config, users, accounts, log } = options;
+  const { config, users, accounts, integrations, clients, log } = options;
+  const idleMs = options.testIdleMs?.idle ?? IDLE_MS;
+  const integrationIdleMs =
+    options.testIdleMs?.integration ?? INTEGRATION_IDLE_MS;
   const now = options.now ?? Date.now;
   const files = staticFiles(config.distDir);
   const pending = new PendingSignins(now);
@@ -198,7 +244,11 @@ export async function startGatewayWeb(
       | GatewayUiError
       | GatewayUiAccounts
       | GatewayUiLoginStart
-      | GatewayUiLogin,
+      | GatewayUiLogin
+      | GatewayUiAtlassian
+      | GatewayUiClients
+      | GatewayUiEnrollmentCode
+      | GatewayUiMcpToken,
   ): void =>
     send(
       res,
@@ -390,6 +440,97 @@ export async function startGatewayWeb(
     }
   };
 
+  /**
+   * `/api/integrations/*` and `/api/clients*`, behind the session; the user
+   * comes only from it. Log lines name the user and client ids only.
+   */
+  const settingsApi = async (
+    req: IncomingMessage,
+    method: string,
+    path: string,
+    body: Buffer,
+    userId: string,
+    res: ServerResponse,
+  ): Promise<void> => {
+    const badRequest = () => json(res, 400, { error: "bad_request" });
+    try {
+      if (path.startsWith("/api/integrations/")) {
+        // Atlassian and the vault may take longer than the idle bound: the
+        // socket has the longer one while the adapter runs, and the baseline
+        // back before the response, so keep-alive handling is as for any route.
+        const held = async <T>(run: () => Promise<T>): Promise<T> => {
+          req.socket.setTimeout(integrationIdleMs);
+          try {
+            return await run();
+          } finally {
+            req.socket.setTimeout(idleMs);
+          }
+        };
+        if (method === "GET" && path === "/api/integrations/atlassian")
+          return json(res, 200, await held(() => integrations.status(userId)));
+        if (method !== "POST") return text(res, 404, "not found");
+        if (path === ATLASSIAN_SET_PATH) {
+          const input = decodeAtlassianSet(parseJson(body));
+          if (!input) return badRequest();
+          const answer = await held(() => integrations.set(userId, input));
+          log(`ui integration atlassian: set user=${userId}`);
+          return json(res, 200, answer);
+        }
+        if (path === "/api/integrations/atlassian/clear") {
+          await held(() => integrations.clear(userId));
+          log(`ui integration atlassian: cleared user=${userId}`);
+          return noContent(res);
+        }
+        return text(res, 404, "not found");
+      }
+      if (method === "GET" && path === "/api/clients")
+        return json(res, 200, { clients: clients.list(userId) });
+      if (method !== "POST") return text(res, 404, "not found");
+      const value = parseJson(body);
+      if (path === "/api/clients/code") {
+        const label = decodeCodeRequest(value);
+        if (label === undefined) return badRequest();
+        const answer = clients.createCode(userId, label);
+        log(`ui clients: code created user=${userId}`);
+        return json(res, 200, answer);
+      }
+      const clientRoutes: Record<string, (clientId: string) => void> = {
+        "/api/clients/revoke": (clientId) => {
+          clients.revoke(userId, clientId);
+          log(`ui clients: client ${clientId} revoked user=${userId}`);
+          noContent(res);
+        },
+        "/api/clients/mcp-token": (clientId) => {
+          const answer = clients.mintMcpToken(userId, clientId);
+          log(`ui clients: client ${clientId} mcp token minted user=${userId}`);
+          json(res, 200, answer);
+        },
+        "/api/clients/mcp-token/revoke": (clientId) => {
+          clients.revokeMcpToken(userId, clientId);
+          log(
+            `ui clients: client ${clientId} mcp token revoked user=${userId}`,
+          );
+          noContent(res);
+        },
+      };
+      const route = Object.hasOwn(clientRoutes, path)
+        ? clientRoutes[path]
+        : undefined;
+      if (!route) return text(res, 404, "not found");
+      const clientId = decodeClientRequest(value);
+      if (clientId === undefined) return badRequest();
+      return route(clientId);
+    } catch (err) {
+      if (err instanceof IntegrationsRefusal)
+        return json(res, INTEGRATION_STATUS[err.code], { error: err.code });
+      if (err instanceof ClientsRefusal)
+        return json(res, err.code === "unknown_client" ? 404 : 409, {
+          error: err.code,
+        });
+      return json(res, 503, { error: "unavailable" });
+    }
+  };
+
   const handle = async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -412,7 +553,9 @@ export async function startGatewayWeb(
       req,
       method === "POST" && path === INPUT_PATH
         ? MAX_INPUT_BODY_BYTES
-        : MAX_BODY_BYTES,
+        : method === "POST" && path === ATLASSIAN_SET_PATH
+          ? MAX_ATLASSIAN_BODY_BYTES
+          : MAX_BODY_BYTES,
     );
     if (!body) {
       res.setHeader("connection", "close");
@@ -431,6 +574,15 @@ export async function startGatewayWeb(
       const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
       if (!session) return json(res, 401, { error: "signed_out" });
       return accountsApi(method, path, url, body, session, res);
+    }
+    if (
+      path.startsWith("/api/integrations/") ||
+      path === "/api/clients" ||
+      path.startsWith("/api/clients/")
+    ) {
+      const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
+      if (!session) return json(res, 401, { error: "signed_out" });
+      return settingsApi(req, method, path, body, session.userId, res);
     }
     const file = read ? files.get(path) : undefined;
     if (!file) return text(res, 404, "not found");
@@ -460,7 +612,7 @@ export async function startGatewayWeb(
     },
   );
   server.maxConnections = MAX_CONNECTIONS;
-  server.setTimeout(10_000, (socket) => socket.destroy());
+  server.setTimeout(idleMs, (socket) => socket.destroy());
 
   const bindHost = options.bindHost ?? "127.0.0.1";
   await new Promise<void>((resolve, reject) => {

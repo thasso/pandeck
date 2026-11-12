@@ -17,7 +17,7 @@ const ALLOWED = [
   /^\.\/[A-Za-z]+\.tsx?$/,
   /^\.\.\/components\/AccountLoginDialogView\.tsx$/,
   /^\.\.\/components\/ui\/[a-z-]+\.tsx$/,
-  /^\.\.\/components\/common\/(?:load|dialogs|ListRow|ListRowActions|LinkButton)\.tsx$/,
+  /^\.\.\/components\/common\/(?:load|dialogs|ListRow|ListRowActions|LinkButton|CopyableText)\.tsx$/,
   /^\.\.\/hooks\/useFetchState\.ts$/,
   /^\.\.\/lib\/loadState\.ts$/,
   /^\.\.\/index\.css$/,

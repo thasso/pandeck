@@ -85,10 +85,10 @@ export function browserLogin(view: GatewayWebLoginView): GatewayUiLogin {
 const MAX_ID_CHARS = 128;
 const MAX_NAME_CHARS = 200;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isId = (value: unknown): value is string =>
+export const isId = (value: unknown): value is string =>
   typeof value === "string" && value !== "" && value.length <= MAX_ID_CHARS;
 
 /** A body's JSON, or undefined when it is not JSON. */

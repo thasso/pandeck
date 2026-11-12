@@ -9,8 +9,9 @@
  * (`--vault-host`) or the vault in this process with the caller's login
  * drivers, and, with `--ui-config`, the gateway's sign-in and page
  * (`gatewayWeb/`) over the running gateway's own client registry and its
- * user-scoped account and login operations (`gateway/userOperations.ts`), so
- * the page and enrolled clients run the same implementation.
+ * user-scoped operations (`gateway/userOperations.ts`: accounts, logins, the
+ * Atlassian credential, clients and MCP tokens), so the page and enrolled
+ * clients run the same implementation.
  *
  * It imports `gateway/`, `gatewayTools/`, `gatewayWeb/` and `node:` only: no
  * login driver, harness or SDK, so the packaged entry's closure holds none
@@ -23,7 +24,12 @@ import { startGateway, type RunningGateway } from "./gateway/gateway.ts";
 import { LoginRefusal, type LoginActor } from "./gateway/logins.ts";
 import type { CodexRenewPort } from "./gateway/renewal.ts";
 import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
-import type { UserOperations } from "./gateway/userOperations.ts";
+import {
+  UserOperationRefusal,
+  type AtlassianStatus,
+  type UserOperations,
+} from "./gateway/userOperations.ts";
+import type { EdgeTools } from "./gateway/edgeTools.ts";
 import type { LoginDrivers } from "./gateway/vaultPort.ts";
 import { createEdgeTools } from "./gatewayTools/index.ts";
 import {
@@ -32,9 +38,17 @@ import {
   type GatewayWebActor,
 } from "./gatewayWeb/accounts.ts";
 import {
+  ClientsRefusal,
+  type GatewayWebClients,
+} from "./gatewayWeb/clients.ts";
+import {
   GatewayWebConfigError,
   loadGatewayWebConfig,
 } from "./gatewayWeb/config.ts";
+import {
+  IntegrationsRefusal,
+  type GatewayWebIntegrations,
+} from "./gatewayWeb/integrations.ts";
 import type { OidcTestOptions } from "./gatewayWeb/oidc.ts";
 import { startGatewayWeb } from "./gatewayWeb/server.ts";
 
@@ -160,6 +174,78 @@ function webAccounts(operations: UserOperations): GatewayWebAccounts {
   };
 }
 
+/** A seam refusal as the page's fixed code; anything else rethrown. */
+function settingsRefusal(err: unknown): never {
+  if (err instanceof UserOperationRefusal)
+    throw err.code === "unknown_client" || err.code === "limit_reached"
+      ? new ClientsRefusal(err.code)
+      : new IntegrationsRefusal(err.code);
+  throw err;
+}
+
+/**
+ * What the page shows of a credential: site, email, Atlassian's display name
+ * and a stored record's problem; never the account id or the token.
+ */
+function browserAtlassian(
+  status: AtlassianStatus,
+): Awaited<ReturnType<GatewayWebIntegrations["status"]>> {
+  const problem =
+    "problem" in status &&
+    (status.problem === "vault_locked" ||
+      status.problem === "vault_unavailable" ||
+      status.problem === "invalid")
+      ? status.problem
+      : undefined;
+  return {
+    connected: status.connected,
+    ...(status.site !== undefined ? { site: status.site } : {}),
+    ...(status.email !== undefined ? { email: status.email } : {}),
+    ...("displayName" in status && status.displayName !== undefined
+      ? { displayName: status.displayName }
+      : {}),
+    ...(problem ? { problem } : {}),
+  };
+}
+
+/** The page's Atlassian credential over the edge's user-scoped operations. */
+function webIntegrations(operations: UserOperations): GatewayWebIntegrations {
+  return {
+    status: (userId) =>
+      operations
+        .atlassianStatus(userId, { check: false })
+        .then(browserAtlassian, settingsRefusal),
+    set: (userId, input) =>
+      operations
+        .setAtlassian(userId, input)
+        .then(browserAtlassian, settingsRefusal),
+    clear: (userId) => operations.clearAtlassian(userId).catch(settingsRefusal),
+  };
+}
+
+/** The page's clients over the edge's user-scoped operations. */
+function webClients(operations: UserOperations): GatewayWebClients {
+  const call = <T>(run: () => T): T => {
+    try {
+      return run();
+    } catch (err) {
+      return settingsRefusal(err);
+    }
+  };
+  return {
+    list: (userId) => operations.clients(userId),
+    createCode: (userId, label) =>
+      call(() => operations.createEnrollmentCode(userId, label)),
+    revoke: (userId, clientId) =>
+      call(() => operations.revokeClient(userId, clientId)),
+    mintMcpToken: (userId, clientId) => ({
+      token: call(() => operations.mintMcpToken(userId, clientId)),
+    }),
+    revokeMcpToken: (userId, clientId) =>
+      call(() => operations.revokeMcpToken(userId, clientId)),
+  };
+}
+
 /** A start the operator must fix (exit 2): not paired, a bad UI config. */
 export class EdgeStartRefusal extends Error {}
 
@@ -174,6 +260,8 @@ export interface EdgeExtras {
   oidcTestOptions?: OidcTestOptions;
   /** Tests only, as `oidcTestOptions`: the UI's clock, for session expiry. */
   uiNow?: () => number;
+  /** Tests only, as `oidcTestOptions`: tools in place of the real ones. */
+  tools?: EdgeTools;
 }
 
 export interface RunningEdge {
@@ -213,7 +301,7 @@ export async function startEdge(
     stateDir,
     port: options.port,
     ...(extras.renewCodex ? { renewCodex: extras.renewCodex } : {}),
-    tools: createEdgeTools(),
+    tools: extras.tools ?? createEdgeTools(),
     clients: {
       modelPort: options.modelPort,
       clientPort: options.clientPort,
@@ -239,6 +327,8 @@ export async function startEdge(
             user: (id) => registry.user(id),
           },
           accounts: webAccounts(edge.userOperations),
+          integrations: webIntegrations(edge.userOperations),
+          clients: webClients(edge.userOperations),
           log: (line) => console.log(`[gateway] ${line}`),
           ...(options.bindHost ? { bindHost: options.bindHost } : {}),
           ...(extras.oidcTestOptions
