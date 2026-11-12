@@ -1758,7 +1758,9 @@ path above.
   Reads and unknown-code refusals still work. `user list` prints each user's id,
   label, email and whether it has a sign-in identity;
   `user claim <id> --email <addr>` binds that user to the next admitted sign-in
-  to the gateway's page (below).
+  to the gateway's page (below). A signed-in user also creates codes, lists and
+  revokes their own clients on the gateway's page, over the same registry
+  (Task-1405, below); the page's codes are bounded, the CLI's are not.
   `gateway:relay enroll --state-dir <dir> --gateway <host:port> --ca <pem file>`
   reads its code from stdin, or from `--code-file <0600 file>`. Never put the
   code in argv or a shell command. For example, redirect a protected code file
@@ -1931,18 +1933,21 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   replacing an earlier one; `clients mcp-token-revoke <clientId>` removes it;
   `clients list` shows `mcp=yes|no`. Revoking the token or the client takes
   effect on the next request. The token identifies the client and so its user.
+  The gateway's page mints, replaces and revokes a user's own clients' tokens
+  over the same registry (Task-1405, below).
 - **Integration credentials.** The user's Atlassian site, email and API token
-  are entered in Pandeck's Settings → Jira, pass the edge once and are kept by
-  the vault (`VaultPort.integrationPut/Get/Clear`,
-  `gateway/vaultIntegrations.ts`), sealed when it has recipients. The site is
-  Pandeck's deployment-configured `JIRA_HOST`, checked on the edge as a bare
-  `<name>.atlassian.net` host at set and again at every decode. For each tool
-  call the edge reads the calling client's user's credential from the vault and
-  keeps nothing: no cache, no disk. The gateway hands tools typed outcomes
-  (`ok`, `absent`, `locked`, `unavailable`), and
-  `gatewayTools/toolCredential.ts` turns them into fixed tool errors; a
-  credential arriving after the call was aborted is dropped before any Atlassian
-  request.
+  are entered in Pandeck's Settings → Jira or on the gateway's page (Task-1405,
+  below; any `<name>.atlassian.net`), both through the edge's user-scoped seam
+  (`gateway/userOperations.ts`), pass the edge once and are kept by the vault
+  (`VaultPort.integrationPut/Get/Clear`, `gateway/vaultIntegrations.ts`), sealed
+  when it has recipients. The site is Pandeck's deployment-configured
+  `JIRA_HOST`, checked on the edge as a bare `<name>.atlassian.net` host at set
+  and again at every decode. For each tool call the edge reads the calling
+  client's user's credential from the vault and keeps nothing: no cache, no
+  disk. The gateway hands tools typed outcomes (`ok`, `absent`, `locked`,
+  `unavailable`), and `gatewayTools/toolCredential.ts` turns them into fixed
+  tool errors; a credential arriving after the call was aborted is dropped
+  before any Atlassian request.
 - **Client methods** (`gateway-client/1.0`, additive), always for the client's
   registry user: `integrations.set {integration, site, email, token}` checks the
   credential with Atlassian (`/rest/api/3/myself`, 15 s) and stores it;
@@ -2086,8 +2091,12 @@ and ChatGPT accounts, and reaches only its own origin with its session cookie.
   method and path before a byte is read. Every answer carries
   `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   `nosniff` and `no-referrer`. The listener has the enrollment port's bounds (64
-  connections, 10 s handshake, 5 s headers, 10 s request). The wire shapes are
-  `app/shared/gatewayUi.ts`.
+  connections, 10 s handshake, 5 s headers, 10 s request, 10 s socket idle).
+  `/api/integrations/atlassian/set` takes 4 KiB (a valid credential exceeds 1
+  KiB once JSON-escaped). While an `/api/integrations/*` route's adapter runs (a
+  set: Atlassian's 15 s check, then the vault's 10 s write) its socket idles up
+  to 30 s; the 10 s bound is back before the response, so keep-alive handling is
+  as for every route. The wire shapes are `app/shared/gatewayUi.ts`.
 - **Accounts and logins** (Task-1402 B2). Behind the session (else
   `401 {"error": "signed_out"}`), the user and the actor only from it:
   `GET /api/accounts` → `{accounts: [{id, provider, name, needsLogin}]}`;
@@ -2112,17 +2121,60 @@ and ChatGPT accounts, and reaches only its own origin with its session cookie.
   renders it in B1's `AccountLoginDialogView` and asks before Remove. Its Cancel
   shows "Cancelling…", and the dialog closes once that login ended cancelled; a
   login ended elsewhere keeps its notice.
+- **Atlassian credential, clients and MCP tokens** (Task-1405). Behind the
+  session, the user only from it (a body `userId` is ignored), over the same
+  seam as `gateway-client/1.0`, through the `GatewayWebIntegrations` and
+  `GatewayWebClients` adapters in `gatewayEdge.ts`
+  (`gatewayWeb/integrations.ts`, `gatewayWeb/clients.ts`):
+  - `GET /api/integrations/atlassian` → `{connected, site?, email?, problem?}`
+    with `problem` one of `vault_locked`, `vault_unavailable`, `invalid`; no
+    live check. `POST /api/integrations/atlassian/set {site, email, token}`
+    checks with Atlassian (15 s from the check's start) then stores, as
+    `integrations.set` does, → `{connected: true, site, email, displayName?}`;
+    `POST /api/integrations/atlassian/clear` → 204. The token is write-only: no
+    answer carries it. Refusals: `400 integration_invalid`,
+    `422 integration_rejected`, `502 integration_unreachable`,
+    `503 vault_locked|vault_unavailable|tools_unavailable`.
+  - `GET /api/clients` → `{clients: [{id, label, createdAt, mcpToken}]}`, the
+    user's clients that are not revoked, `mcpToken` a boolean.
+    `POST /api/clients/code {label}` → `{code, validForSeconds: 900}`;
+    `POST /api/clients/revoke {clientId}` → 204;
+    `POST /api/clients/mcp-token {clientId}` → `{token}`, replacing an earlier
+    one; `POST /api/clients/mcp-token/revoke {clientId}` → 204. Another user's
+    client, a missing or a revoked one is `404 unknown_client`, alike.
+  - Page bounds: a code is refused (`409 limit_reached`, nothing written) when
+    the user has 4 unexpired codes, or when active clients plus unexpired codes
+    reach 16, counted inside the registry's write lock. A pending code thus
+    reserves a client's place: redeeming every code keeps the user within 16.
+    Codes from the admin CLI count as pending, but the CLI's own issuance and
+    redemption stay unbounded. One MCP token per client.
+  - A revoke on the page takes effect at once, as the listener's own revocation:
+    the client's protocol connections end, its mutual-TLS sockets (relay,
+    `/mcp`) close, its running logins are cancelled and its leases revoked; its
+    accounts stay with the user. The machine enrolls again with a new code. The
+    250 ms poll still applies CLI revocations.
+  - A code or MCP token exists outside its hash only in the answer that creates
+    it (`no-store`): the page shows it once in a dialog with a Copy button and
+    drops it on Done. Every secret travels in a POST body or its answer, never a
+    URL. The page asks before every client revoke, every token revoke and a
+    token replacement, and before clearing the credential; its token field is a
+    password field, emptied once saved.
 - **Logs.** Only `ui sign-in: ok user=<id> (existing|created|bound)`,
   `ui sign-in: denied`,
   `ui sign-in: failed (discovery|exchange|keys|signature|claims|state|registry)`
-  `ui sign-out: user=<id>` and `ui session end: login cancel failed`, beside the
-  login manager's own `login <id> (account <id>): <state>`; never an email,
-  code, state, nonce, verifier, token, cookie, secret, query, pasted code, login
-  URL or output. Provider error text is never echoed.
+  `ui sign-out: user=<id>`, `ui session end: login cancel failed`,
+  `ui clients: code created user=<id>`,
+  `ui clients: client <id> revoked user=<id>`,
+  `ui clients: client <id> mcp token minted|revoked user=<id>` and
+  `ui integration atlassian: set|cleared user=<id>`, beside the login manager's
+  own `login <id> (account <id>): <state>`; never an email, code, state, nonce,
+  verifier, token, cookie, secret, query, pasted code, login URL or output.
+  Provider error text is never echoed.
 - **Packaged entry (Task-1401).** Both edge entries start the UI through
   `gatewayEdge.ts`, with a `GatewayWebUsers` adapter over the running gateway's
-  own `ClientRegistry` and a `GatewayWebAccounts` adapter over its
-  `userOperations`; the Bun package ships `dist-gateway` as `gateway-web/`.
+  own `ClientRegistry` and `GatewayWebAccounts`, `GatewayWebIntegrations` and
+  `GatewayWebClients` adapters over its `userOperations`; the Bun package ships
+  `dist-gateway` as `gateway-web/`.
 
 ### Remote vault
 

@@ -1046,6 +1046,16 @@ export async function checkEdgeEntry(runtimeRoot) {
           '{"error":"signed_out"}',
       `/api/accounts signed out answered ${accountsRoute.status}.`,
     );
+    // So are the credential and client routes (Task-1405).
+    for (const path of ["/api/integrations/atlassian", "/api/clients"]) {
+      const route = await ui(path);
+      assert(
+        route.status === 401 &&
+          JSON.stringify(JSON.parse(route.body.toString("utf8"))) ===
+            '{"error":"signed_out"}',
+        `${path} signed out answered ${route.status}.`,
+      );
+    }
     const login = await ui("/auth/login");
     assert(
       login.status === 303 && login.headers.location === "/?signin=failed",

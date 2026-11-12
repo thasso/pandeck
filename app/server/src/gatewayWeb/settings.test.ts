@@ -490,12 +490,14 @@ test("T4 socket idle: an integration request outlives the idle bound, which is b
   // sockets set none.
   const bounds: { socket: net.Socket; ms: number; at: number }[] = [];
   const setTimeout = net.Socket.prototype.setTimeout;
-  vi.spyOn(net.Socket.prototype, "setTimeout").mockImplementation(
-    function (this: net.Socket, ms: number, ...rest: unknown[]) {
-      bounds.push({ socket: this, ms, at: Date.now() });
-      return setTimeout.call(this, ms, ...(rest as [])) as net.Socket;
-    },
-  );
+  vi.spyOn(net.Socket.prototype, "setTimeout").mockImplementation(function (
+    this: net.Socket,
+    ms: number,
+    ...rest: unknown[]
+  ) {
+    bounds.push({ socket: this, ms, at: Date.now() });
+    return setTimeout.call(this, ms, ...(rest as [])) as net.Socket;
+  });
 
   // A set answering after 1 s, beyond the 300 ms baseline, is answered.
   fake.delaySet(1_000);

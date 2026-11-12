@@ -61,7 +61,7 @@ const PAGE_ENROLLMENT_LIMITS: EnrollmentLimits = {
 };
 
 /** One of the user's active clients; whether it has an MCP token, not it. */
-export interface UserClient {
+interface UserClient {
   id: string;
   label: string;
   createdAt: number;
@@ -75,7 +75,7 @@ interface AtlassianIdentity {
 }
 
 /** A credential stored and checked: site and email, never the token. */
-export type AtlassianSet = {
+type AtlassianSet = {
   connected: true;
   site: string;
   email: string;

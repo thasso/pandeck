@@ -21,7 +21,7 @@ test("AC10: the view imports no transport, only what the gateway bundle may carr
     from === "react" ||
     from === "lucide-react" ||
     /^\.\/ui\/[a-z-]+\.tsx$/.test(from) ||
-    /^\.\/common\/(?:load|IconButton|LinkButton)\.tsx$/.test(from) ||
+    /^\.\/common\/(?:load|LinkButton|CopyableText)\.tsx$/.test(from) ||
     (from === "@assistant/shared" && typeOnly);
   expect(
     imports.filter(({ from, typeOnly }) => !allowed(from, typeOnly)),
