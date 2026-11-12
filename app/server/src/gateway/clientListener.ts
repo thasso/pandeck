@@ -76,6 +76,7 @@ import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
 import { LoginRefusal, type LoginActor } from "./logins.ts";
 import {
   createUserOperations,
+  UserOperationRefusal,
   type UserAccountRecord,
   type UserOperations,
 } from "./userOperations.ts";
@@ -483,8 +484,14 @@ export async function startClientListener(
     active: () => isClientActive(client.id),
   });
 
+  /** A fresh deadline, created where each check starts. */
+  const checkSignal = (): AbortSignal =>
+    AbortSignal.timeout(deps.integrationCheckMs ?? INTEGRATION_CHECK_MS);
+
   const userOperations = createUserOperations({
     vault: deps.vault,
+    integrations: () => deps.tools?.integrations,
+    checkSignal,
     profiles,
     ownerOf: (profileId) => registry.ownerOf(profileId),
     accountsOf: (userId) => registry.accountsOf(userId),
@@ -540,17 +547,14 @@ export async function startClientListener(
   const toolHost = (): EdgeTools["host"] =>
     deps.tools?.host ?? integrationFailure("tools_unavailable");
 
-  /** The integration tools, or the fixed refusal. */
-  const integrations = (): EdgeTools["integrations"] =>
-    deps.tools?.integrations ?? integrationFailure("tools_unavailable");
-  /** A fresh deadline, created where each check starts. */
-  const checkSignal = (): AbortSignal =>
-    AbortSignal.timeout(deps.integrationCheckMs ?? INTEGRATION_CHECK_MS);
-  const wrote = (outcome: Awaited<ReturnType<VaultPort["integrationPut"]>>) => {
-    if (outcome.ok) return;
-    integrationFailure(
-      "locked" in outcome ? "vault_locked" : "vault_unavailable",
-    );
+  /** An integration refusal as the method error the client sees. */
+  const integrationCall = async <T>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (err) {
+      if (err instanceof UserOperationRefusal) integrationFailure(err.code);
+      throw err;
+    }
   };
 
   const methods: Record<string, ClientMethod> = {
@@ -667,79 +671,27 @@ export async function startClientListener(
       loginCall(() => userOperations.cancelLogin(actorOf(client), loginId));
       return encodeControlDone();
     },
+    // The method's cancel signal stays unused: a set or check runs to its
+    // own deadline.
     [CLIENT_METHODS.integrationSet]: async (payload, client) => {
-      const { integration, input } = decodeIntegrationSet(payload);
-      const tools = integrations()[integration];
-      const parsed = tools.parse(input);
-      if (!parsed.ok) integrationFailure("integration_invalid");
-      const checked = await tools.check(parsed.credential, checkSignal());
-      if (!checked.ok)
-        integrationFailure(
-          checked.problem === "rejected"
-            ? "integration_rejected"
-            : "integration_unreachable",
-        );
-      wrote(
-        await deps.vault.integrationPut(
-          client.userId,
-          integration,
-          parsed.credential,
+      const { input } = decodeIntegrationSet(payload);
+      return encodeClientMessage(
+        await integrationCall(() =>
+          userOperations.setAtlassian(client.userId, input),
         ),
       );
-      return encodeClientMessage({
-        connected: true,
-        site: parsed.site,
-        email: parsed.email,
-        ...(checked.displayName !== undefined
-          ? { displayName: checked.displayName }
-          : {}),
-        ...(checked.accountId !== undefined
-          ? { accountId: checked.accountId }
-          : {}),
-      });
     },
     [CLIENT_METHODS.integrationClear]: async (payload, client) => {
-      const integration = decodeIntegration(payload);
-      integrations();
-      wrote(await deps.vault.integrationClear(client.userId, integration));
+      decodeIntegration(payload);
+      await integrationCall(() => userOperations.clearAtlassian(client.userId));
       return encodeControlDone();
     },
     [CLIENT_METHODS.integrationStatus]: async (payload, client) => {
-      const { integration, check } = decodeIntegrationStatusRequest(payload);
-      const tools = integrations()[integration];
-      const record = await deps.vault.integrationGet(
-        client.userId,
-        integration,
-        {},
-      );
-      if (!record.ok)
-        return encodeClientMessage(
-          "absent" in record
-            ? { connected: false }
-            : {
-                connected: false,
-                problem:
-                  "locked" in record ? "vault_locked" : "vault_unavailable",
-              },
-        );
-      const described = tools.describe(record.credential);
-      if (!described)
-        return encodeClientMessage({ connected: false, problem: "invalid" });
-      if (!check) return encodeClientMessage({ connected: true, ...described });
-      const checked = await tools.check(record.credential, checkSignal());
+      const { check } = decodeIntegrationStatusRequest(payload);
       return encodeClientMessage(
-        checked.ok
-          ? {
-              connected: true,
-              ...described,
-              ...(checked.displayName !== undefined
-                ? { displayName: checked.displayName }
-                : {}),
-              ...(checked.accountId !== undefined
-                ? { accountId: checked.accountId }
-                : {}),
-            }
-          : { connected: false, ...described, problem: checked.problem },
+        await integrationCall(() =>
+          userOperations.atlassianStatus(client.userId, { check }),
+        ),
       );
     },
     [CLIENT_METHODS.toolsList]: () =>
