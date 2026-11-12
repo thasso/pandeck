@@ -21,6 +21,7 @@ import {
 } from "../workerProtocol/connection.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import type { LeaseProvider, LoginBinding } from "./leases.ts";
+import { LoginNotRun } from "./logins.ts";
 import type { GatewayProfile } from "./profiles.ts";
 import {
   GATEWAY_VAULT_PROTOCOL,
@@ -491,7 +492,8 @@ export function createRemoteVault(
         accountId: login.accountId,
         tokenFile: login.tokenFile,
       }).catch(() =>
-        settle(new Error("This gateway cannot run that login now.")),
+        // Refused by the vault's own admission: the driver never ran.
+        settle(new LoginNotRun("This gateway cannot run that login now.")),
       );
       return {
         input: (text) => {

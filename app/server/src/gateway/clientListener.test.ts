@@ -197,6 +197,7 @@ async function dialClient(
   gateway: RunningGateway,
   identity: Identity,
   pushes?: string[],
+  payloads?: { method: string; json: unknown }[],
 ): Promise<WorkerConnection> {
   const socket = tls.connect({
     host: "127.0.0.1",
@@ -216,8 +217,9 @@ async function dialClient(
       [CLIENT_METHODS.accountsChanged, CLIENT_METHODS.loginEvent].map(
         (method) => [
           method,
-          () => {
+          (payload: { json?: unknown }) => {
             pushes?.push(method);
+            payloads?.push({ method, json: payload.json });
             return Promise.resolve(encodeClientMessage({}));
           },
         ],
@@ -770,6 +772,69 @@ test("a login finishing before the revocation timer cannot ingest its credential
     ".credentials.json",
   );
   await assert.rejects(readFile(tokenFile), { code: "ENOENT" });
+});
+
+test("the page's operations reach clients: a take-over ends the client's login as superseded, a removal pushes accounts.changed", async () => {
+  const run = fakeLogin();
+  const gateway = await gatewayWithClients(run.drivers);
+  const identity = await enroll(gateway);
+  const payloads: { method: string; json: unknown }[] = [];
+  const connection = await dialClient(gateway, identity, undefined, payloads);
+  const started = (
+    await connection.request(
+      CLIENT_METHODS.loginStart,
+      encodeClientMessage({ kind: "claude", accountId: "claude-a" }),
+    )
+  ).json as { loginId: string };
+  const operations = gateway.clients!.userOperations;
+  const session = {
+    kind: "session" as const,
+    id: "s1",
+    userId: "u1",
+    active: () => true,
+  };
+  const taken = operations.startLogin(session, {
+    kind: "claude",
+    accountId: "claude-a",
+  });
+  assert.notEqual(taken.loginId, started.loginId);
+  await vi.waitFor(() =>
+    assert.ok(
+      payloads.some(
+        (p) =>
+          p.method === CLIENT_METHODS.loginEvent &&
+          JSON.stringify(p.json) ===
+            JSON.stringify({
+              loginId: started.loginId,
+              accountId: "claude-a",
+              event: {
+                type: "state",
+                state: "cancelled",
+                error: "This login was started again elsewhere.",
+              },
+            }),
+      ),
+    ),
+  );
+  // The session's events never go to the client.
+  assert.ok(
+    !payloads.some((p) => JSON.stringify(p.json).includes(taken.loginId)),
+  );
+  // Another user's session cannot remove it; its own user can.
+  assert.throws(
+    () => operations.removeAccount("u2", "claude-a"),
+    (err: unknown) =>
+      err instanceof Error && "code" in err && err.code === "unknown_account",
+  );
+  payloads.length = 0;
+  operations.removeAccount("u1", "claude-a");
+  await vi.waitFor(() =>
+    assert.ok(
+      payloads.some((p) => p.method === CLIENT_METHODS.accountsChanged),
+    ),
+  );
+  assert.deepEqual(operations.accounts("u1"), []);
+  run.complete();
 });
 
 // --- tools and integrations (Task-1397) -----------------------------------

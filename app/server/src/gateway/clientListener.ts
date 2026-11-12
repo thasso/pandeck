@@ -73,7 +73,12 @@ import {
   type GatewayClient,
 } from "./clientRegistry.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
-import { createLoginManager, LoginRefusal } from "./logins.ts";
+import { LoginRefusal, type LoginActor } from "./logins.ts";
+import {
+  createUserOperations,
+  type UserAccountRecord,
+  type UserOperations,
+} from "./userOperations.ts";
 import type { VaultPort } from "./vaultPort.ts";
 import {
   INVALID_PARAMS,
@@ -181,9 +186,6 @@ interface ClientListenerDeps {
   modelDeadlines?: ModelDeadlines | undefined;
 }
 
-/** An account of a user, as logins and tests create it. */
-type ClientAccountRecord = LoginProfile & { userId: string };
-
 export interface RunningClientListener {
   readonly modelPort: number;
   readonly clientPort: number;
@@ -193,8 +195,13 @@ export interface RunningClientListener {
   /** The model port's deadlines in force. */
   readonly modelDeadlines: Readonly<ModelDeadlines>;
   readonly registry: ClientRegistry;
+  /**
+   * The user-scoped account and login operations, which the client methods
+   * and the gateway page both use.
+   */
+  readonly userOperations: UserOperations;
   /** Adds or replaces a user's account and tells its clients. */
-  putAccount(account: ClientAccountRecord): void;
+  putAccount(account: UserAccountRecord): void;
   /** Removes an account, revokes its leases and tells its clients. */
   removeAccount(profileId: string): void;
   /** Sends every connected client its user's accounts again. */
@@ -366,24 +373,8 @@ export async function startClientListener(
 
   // --- accounts ---------------------------------------------------------
 
-  const accountsOf = (userId: string): ClientAccount[] => {
-    const needing = new Set(deps.needsLogin());
-    for (const id of logins.pendingAccounts()) needing.add(id);
-    return registry.accountsOf(userId).flatMap((id): ClientAccount[] => {
-      const profile = profiles.get(id);
-      return profile && isLoginProfile(profile)
-        ? [
-            {
-              id,
-              provider: profile.provider,
-              name: profile.name,
-              enabled: profile.enabled,
-              needsLogin: needing.has(id),
-            },
-          ]
-        : [];
-    });
-  };
+  const accountsOf = (userId: string): ClientAccount[] =>
+    userOperations.accounts(userId);
 
   /** The user's login account by id, or the unknown-account failure. */
   const ownedAccount = (userId: string, accountId: string): LoginProfile => {
@@ -411,7 +402,7 @@ export async function startClientListener(
     }
     for (const [socket, client] of authenticated)
       if (client.id === clientId) socket.destroy();
-    logins.cancelClient(clientId);
+    userOperations.endActor({ kind: "client", id: clientId });
     leases.revokeWhere(
       (record) => record.owner.clientId === clientId,
       "session-ended",
@@ -451,7 +442,7 @@ export async function startClientListener(
     }
   };
 
-  const putAccount = ({ userId, ...profile }: ClientAccountRecord): void => {
+  const putAccount = ({ userId, ...profile }: UserAccountRecord): void => {
     profiles.upsert(profile);
     registry.setAccountOwner(profile.id, userId);
     accountsChanged();
@@ -467,27 +458,39 @@ export async function startClientListener(
     accountsChanged();
   };
 
-  const logins = createLoginManager({
+  const isClientActive = (clientId: string): boolean => {
+    try {
+      return registry
+        .clients()
+        .some(
+          (client) => client.id === clientId && client.revokedAt === undefined,
+        );
+    } catch {
+      return false;
+    }
+  };
+
+  /** The client as a login actor: active while enrolled and not revoked. */
+  const actorOf = (client: GatewayClient): LoginActor => ({
+    kind: "client",
+    id: client.id,
+    userId: client.userId,
+    active: () => isClientActive(client.id),
+  });
+
+  const userOperations = createUserOperations({
     vault: deps.vault,
     profiles,
     ownerOf: (profileId) => registry.ownerOf(profileId),
-    isClientActive: (clientId) => {
-      try {
-        return registry
-          .clients()
-          .some(
-            (client) =>
-              client.id === clientId && client.revokedAt === undefined,
-          );
-      } catch {
-        return false;
-      }
-    },
+    accountsOf: (userId) => registry.accountsOf(userId),
+    needsLogin: deps.needsLogin,
     putAccount,
     removeAccount,
-    send: (clientId, loginId, accountId, event) => {
+    // Only a client's connections take events; a session reads its login.
+    send: (actor, loginId, accountId, event) => {
+      if (actor.kind !== "client") return;
       for (const [connection, client] of connections)
-        if (client.id === clientId && canPush(connection, client))
+        if (client.id === actor.id && canPush(connection, client))
           connection
             .request(
               CLIENT_METHODS.loginEvent,
@@ -643,19 +646,19 @@ export async function startClientListener(
     [CLIENT_METHODS.loginStart]: (payload, client) => {
       const start = decodeLoginStart(payload);
       return encodeClientMessage(
-        loginCall(() =>
-          logins.start({ clientId: client.id, userId: client.userId }, start),
-        ),
+        loginCall(() => userOperations.startLogin(actorOf(client), start)),
       );
     },
     [CLIENT_METHODS.loginInput]: (payload, client) => {
       const { loginId, text } = decodeLoginInput(payload);
-      loginCall(() => logins.input(client.id, loginId, text));
+      loginCall(() =>
+        userOperations.inputLogin(actorOf(client), loginId, text),
+      );
       return encodeControlDone();
     },
     [CLIENT_METHODS.loginCancel]: (payload, client) => {
       const loginId = decodeLoginId(payload);
-      loginCall(() => logins.cancel(client.id, loginId));
+      loginCall(() => userOperations.cancelLogin(actorOf(client), loginId));
       return encodeControlDone();
     },
     [CLIENT_METHODS.integrationSet]: async (payload, client) => {
@@ -748,11 +751,8 @@ export async function startClientListener(
       );
     },
     [CLIENT_METHODS.removeAccount]: (payload, client) => {
-      const profile = ownedAccount(client.userId, decodeAccountId(payload));
-      logins.forget(profile.id);
-      removeAccount(profile.id);
-      // Only a token file the vault made for the account goes with it.
-      deps.vault.discardCredential(profile.id);
+      const accountId = decodeAccountId(payload);
+      loginCall(() => userOperations.removeAccount(client.userId, accountId));
       return encodeControlDone();
     },
   };
@@ -1096,12 +1096,13 @@ export async function startClientListener(
     caPem: edgeTls.caCertPem,
     modelDeadlines,
     registry,
+    userOperations,
     putAccount,
     removeAccount,
     accountsChanged,
     async close() {
       clearInterval(revocations);
-      logins.close();
+      userOperations.close();
       for (const connection of [...connections.keys()])
         connection.end("the gateway closed");
       const closed = Promise.all(
