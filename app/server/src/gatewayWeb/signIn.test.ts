@@ -57,6 +57,8 @@ interface KeySet {
   padding: number;
   /** How long it waits before answering. */
   delayMs: number;
+  /** Answers 200 with this instead of the keys. */
+  raw?: { type: string; body: string } | undefined;
 }
 
 interface Authorization {
@@ -138,7 +140,12 @@ async function startFakeIssuer(): Promise<FakeIssuer> {
       });
     if (url.pathname === "/jwks") {
       keyRequests++;
-      const { status, kids, padding, delayMs } = keySet;
+      const { status, kids, padding, delayMs, raw } = keySet;
+      if (raw) {
+        res.writeHead(200, { "content-type": raw.type });
+        res.end(raw.body);
+        return;
+      }
       const body = {
         keys: kids.map((kid) => jwks[kid]),
         ...(padding ? { padding: "x".repeat(padding) } : {}),
@@ -442,6 +449,7 @@ afterEach(async () => {
     status: 200,
     padding: 0,
     delayMs: 0,
+    raw: undefined,
   });
   while (open.length) await open.pop()!.close();
   clock = Date.now();
@@ -806,6 +814,59 @@ test("AC14: callbacks during a failing key fetch all fail as keys after one fetc
   assert.equal(issuer.keyRequests(), fetched);
   vi.setSystemTime((clock += 61_000));
   assert.equal((await signIn(gateway)).headers.location, "/");
+  assert.equal(issuer.keyRequests(), fetched + 1);
+});
+
+test("C3: a malformed 200 key set never replaces the last good one", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: clock });
+  const gateway = await startUi();
+  assert.equal((await signIn(gateway)).headers.location, "/");
+  let fetched = issuer.keyRequests();
+  for (const raw of [
+    { type: "text/html", body: "<html>maintenance</html>" },
+    { type: "application/json", body: "{not json" },
+    { type: "application/json", body: '{"keys":"none"}' },
+    { type: "application/json", body: '{"keys":[1]}' },
+  ]) {
+    vi.setSystemTime((clock += 61_000));
+    issuer.keySet.raw = raw;
+    // An unknown kid asks for a newer set, which comes back malformed.
+    assertRefused(await signIn(gateway, { testCase: { kid: "k2" } }), "failed");
+    assert.equal(logs.at(-1), "ui sign-in: failed (signature)", raw.body);
+    assert.equal(issuer.keyRequests(), ++fetched, raw.body);
+    // The known key still signs in, from the kept set, without a fetch.
+    assert.equal((await signIn(gateway)).headers.location, "/", raw.body);
+    assert.equal(issuer.keyRequests(), fetched, raw.body);
+  }
+  issuer.keySet.raw = undefined;
+  issuer.keySet.kids = ["k1", "k2"];
+  vi.setSystemTime((clock += 61_000));
+  assert.equal(
+    (await signIn(gateway, { testCase: { kid: "k2" } })).headers.location,
+    "/",
+  );
+  assert.equal(issuer.keyRequests(), fetched + 1);
+});
+
+test("C3: a rotated key is found within a minute of the last fetch, not two", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: clock });
+  const gateway = await startUi();
+  assert.equal((await signIn(gateway)).headers.location, "/");
+  vi.setSystemTime((clock += 61_000));
+  // A refresh that still lacks k2.
+  assertRefused(await signIn(gateway, { testCase: { kid: "k2" } }), "failed");
+  const fetched = issuer.keyRequests();
+  // k2 is published 30 s later; within the wait the kept set answers.
+  issuer.keySet.kids = ["k1", "k2"];
+  vi.setSystemTime((clock += 30_000));
+  assertRefused(await signIn(gateway, { testCase: { kid: "k2" } }), "failed");
+  assert.equal(issuer.keyRequests(), fetched);
+  // Once the minute since the last fetch is over, the next k2 sign-in fetches.
+  vi.setSystemTime((clock += 31_000));
+  assert.equal(
+    (await signIn(gateway, { testCase: { kid: "k2" } })).headers.location,
+    "/",
+  );
   assert.equal(issuer.keyRequests(), fetched + 1);
 });
 

@@ -9,11 +9,14 @@
  *
  * Discovery must name the configured issuer exactly, and every endpoint the
  * flow uses (authorization, token, key set) must be `https`. The key set is
- * read within 10 s and 64 KiB through one fetch at a time per issuer, and the
- * network is asked at most once a minute: a waiting callback shares the fetch
- * in flight, and within the minute after a fetch, success or failure, the
- * last good set answers (or the sign-in fails as `keys` when there is none).
- * So no number of forged `kid`s can make the gateway hammer the issuer.
+ * read within 10 s and 64 KiB and checked (a JSON key set) before it is
+ * kept, through one fetch at a time per issuer that every waiting callback
+ * shares. A kept set serves for 5 minutes; a `kid` it lacks asks for a newer
+ * one, but the network is asked at most once a minute, success or failure.
+ * A failed or refused fetch keeps the last good set (or fails as `keys` when
+ * there is none). This cache is the only one: the library gets a fresh copy
+ * of the discovery answer per check, so its own key cache never answers. So
+ * no number of forged `kid`s can make the gateway hammer the issuer.
  * `OidcTestOptions` (HTTP endpoints, a fetch) come only from tests, never
  * from the config file.
  */
@@ -29,6 +32,8 @@ const IAT_TOLERANCE_S = 30;
 const MAX_JWKS_BYTES = 64 * 1024;
 /** The least time between two fetches of the issuer's key set. */
 const KEYS_REFETCH_MS = 60_000;
+/** How long a kept key set serves without asking the issuer again. */
+const KEYS_MAX_AGE_MS = 5 * 60_000;
 
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -97,26 +102,49 @@ async function readKeySet(
       }
       chunks.push(value);
     }
-    return {
+    const keys = {
       body: Buffer.concat(chunks).toString("utf8"),
       type: response.headers.get("content-type") ?? "",
     };
+    if (!isKeySet(keys)) throw new KeysUnavailable();
+    return keys;
   } catch {
     throw new KeysUnavailable();
   }
 }
 
 /**
- * The library's key-set fetch for one issuer: a single fetch in flight that
- * every caller shares, and at most one fetch per `KEYS_REFETCH_MS`, whatever
- * the library asks. A failed fetch starts the wait too; meanwhile the last
- * good set answers, or `KeysUnavailable` when there is none.
+ * Whether `keys` is a JSON key set as the library would accept it: a JSON
+ * media type, an object, and `keys` a list of objects. A maintenance page
+ * answering 200 is not.
  */
-function keySetFetch(
-  fetcher: Fetch,
-  now: () => number,
-): (url: string, init: oauth.CustomFetchOptions<"GET">) => Promise<Response> {
-  let held: (KeySet & { url: string }) | undefined;
+function isKeySet({ body, type }: KeySet): boolean {
+  const media = (type.split(";")[0] ?? "").trim().toLowerCase();
+  if (media !== "application/json" && media !== "application/jwk-set+json")
+    return false;
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return false;
+  }
+  const isObject = (v: unknown): boolean =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+  if (!isObject(value)) return false;
+  const list = (value as { keys?: unknown }).keys;
+  return Array.isArray(list) && list.every(isObject);
+}
+
+/**
+ * The issuer's key set, kept by the gateway: `fetchFor(refresh)` is the
+ * library's fetch hook. A kept set younger than `KEYS_MAX_AGE_MS` answers
+ * unless `refresh` asks for a newer one; one fetch in flight is shared by
+ * every caller; the network is asked at most once per `KEYS_REFETCH_MS`. A
+ * failed fetch starts that wait too and keeps the last good set, which keeps
+ * its own age; without one the caller gets `KeysUnavailable`.
+ */
+function keySetCache(fetcher: Fetch, now: () => number) {
+  let held: (KeySet & { url: string; at: number }) | undefined;
   let lastFetch: { url: string; at: number } | undefined;
   let inFlight: { url: string; keys: Promise<KeySet> } | undefined;
   const answer = (keys: KeySet): Response =>
@@ -124,23 +152,39 @@ function keySetFetch(
       status: 200,
       headers: { "content-type": keys.type },
     });
-  return async (url, init) => {
-    if (inFlight?.url === url) return answer(await inFlight.keys);
-    if (lastFetch?.url === url && now() - lastFetch.at < KEYS_REFETCH_MS) {
-      if (held?.url === url) return answer(held);
-      throw new KeysUnavailable();
-    }
-    lastFetch = { url, at: now() };
-    const keys = readKeySet(fetcher, url, requestInit(init));
-    inFlight = { url, keys };
-    try {
-      const read = await keys;
-      held = { url, ...read };
-      return answer(read);
-    } finally {
-      if (inFlight?.keys === keys) inFlight = undefined;
-    }
-  };
+  const fetchFor =
+    (refresh: boolean) =>
+    async (
+      url: string,
+      init: oauth.CustomFetchOptions<"GET">,
+    ): Promise<Response> => {
+      if (inFlight?.url === url) return answer(await inFlight.keys);
+      const kept = held?.url === url ? held : undefined;
+      if (kept && !refresh && now() - kept.at < KEYS_MAX_AGE_MS)
+        return answer(kept);
+      if (lastFetch?.url === url && now() - lastFetch.at < KEYS_REFETCH_MS) {
+        if (kept) return answer(kept);
+        throw new KeysUnavailable();
+      }
+      lastFetch = { url, at: now() };
+      const keys = readKeySet(fetcher, url, requestInit(init)).then(
+        (read) => {
+          held = { url, at: now(), ...read };
+          return read;
+        },
+        (err: unknown) => {
+          if (kept) return kept;
+          throw err;
+        },
+      );
+      inFlight = { url, keys };
+      try {
+        return answer(await keys);
+      } finally {
+        if (inFlight?.keys === keys) inFlight = undefined;
+      }
+    };
+  return { fetchFor };
 }
 
 /** What one sign-in keeps until its callback. */
@@ -187,7 +231,7 @@ export function createOidcClient(options: {
         }
       : {}),
   });
-  const keysFetch = keySetFetch(testFetch ?? fetch, now);
+  const keys = keySetCache(testFetch ?? fetch, now);
   /** An endpoint the flow may use: `https`, or `http` in tests only. */
   const usable = (value: unknown): boolean => {
     if (typeof value !== "string") return false;
@@ -299,11 +343,25 @@ export function createOidcClient(options: {
             : "claims",
         );
       }
-      try {
-        await oauth.validateApplicationLevelSignature(as, response, {
+      // A fresh copy of `as` per check keeps the library's own key cache
+      // (keyed by that object) empty, so `keys` alone decides when to fetch.
+      const verify = (refresh: boolean): Promise<void> =>
+        oauth.validateApplicationLevelSignature({ ...as }, response, {
           ...http(),
-          [oauth.customFetch]: keysFetch,
+          [oauth.customFetch]: keys.fetchFor(refresh),
         });
+      try {
+        try {
+          await verify(false);
+        } catch (err) {
+          // No key for this `kid` in the kept set: ask once for a newer one.
+          if (
+            !(err instanceof oauth.OperationProcessingError) ||
+            err.code !== oauth.KEY_SELECTION
+          )
+            throw err;
+          await verify(true);
+        }
       } catch (err) {
         throw new OidcFailure(
           err instanceof KeysUnavailable ? "keys" : "signature",
