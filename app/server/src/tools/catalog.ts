@@ -79,6 +79,8 @@ import { assistantGoogleGmailTools } from "./google/googleGmailTools.ts";
 import { assistantGoogleMeetTools } from "./google/googleMeetTools.ts";
 import { assistantConfluenceTools } from "./confluence/confluenceTools.ts";
 import { assistantJiraTools } from "./jira/jiraTools.ts";
+import { remoteJiraTools } from "./gateway/remoteToolGroup.ts";
+import { remoteToolPort } from "../remoteTools.ts";
 import { assistantAttachmentTools } from "./knowledge/attachmentTools.ts";
 import { assistantDocumentTools } from "./knowledge/documentTools.ts";
 import { assistantSpreadsheetTools } from "./knowledge/spreadsheetTools.ts";
@@ -140,7 +142,11 @@ export interface ToolGroup {
   tools: Array<AgentTool & { sideEffects: ToolSideEffects }>;
 }
 
-type UnclassifiedToolGroup = Omit<ToolGroup, "tools"> & { tools: AgentTool[] };
+type UnclassifiedToolGroup = Omit<ToolGroup, "tools"> & {
+  tools: AgentTool[];
+  /** The tools carry their own classification: the gateway's read tools. */
+  remote?: true;
+};
 
 /**
  * The explicit side-effect decision for the complete catalog. This is kept
@@ -321,10 +327,21 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
 };
 
 function classifyToolGroups(groups: UnclassifiedToolGroup[]): ToolGroup[] {
-  return groups.map((group) => ({
+  // A remote tool named like any other tool of the persona is left out.
+  const local = new Set(
+    groups.flatMap((group) =>
+      group.remote ? [] : group.tools.map((tool) => tool.name),
+    ),
+  );
+  return groups.map(({ remote, ...group }) => ({
     ...group,
-    tools: group.tools.map((tool) => {
-      const sideEffects = TOOL_SIDE_EFFECTS[tool.name];
+    tools: (remote
+      ? group.tools.filter((tool) => !local.has(tool.name))
+      : group.tools
+    ).map((tool) => {
+      const sideEffects = remote
+        ? tool.sideEffects
+        : TOOL_SIDE_EFFECTS[tool.name];
       if (!sideEffects)
         throw new Error(
           `Catalog tool ${tool.name} needs an explicit sideEffects classification.`,
@@ -583,16 +600,30 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       tools: context7Tools,
     },
     // --------------------------- deferred, gated --------------------------
-    {
-      id: "jira",
-      label: "Jira",
-      description:
-        "Jira issues: read, search (JQL), field/project/user lookup, and approval-gated mutations.",
-      loading: "deferred",
-      family: "integration",
-      gate: "jira",
-      tools: assistantJiraTools,
-    },
+    // Client mode: Jira runs on the gateway, which lists its tools.
+    remoteToolPort()
+      ? {
+          id: "gateway-jira",
+          label: "Jira (gateway)",
+          description:
+            "Jira issues read through the user's credential gateway with the user's own Atlassian account.",
+          searchHint: "jira issue ticket atlassian gateway",
+          loading: "deferred",
+          family: "integration",
+          gate: "gatewayJira",
+          tools: remoteJiraTools(),
+          remote: true,
+        }
+      : {
+          id: "jira",
+          label: "Jira",
+          description:
+            "Jira issues: read, search (JQL), field/project/user lookup, and approval-gated mutations.",
+          loading: "deferred",
+          family: "integration",
+          gate: "jira",
+          tools: assistantJiraTools,
+        },
     {
       id: "confluence",
       label: "Confluence",

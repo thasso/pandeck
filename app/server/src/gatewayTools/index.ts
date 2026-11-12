@@ -12,7 +12,7 @@ import {
   parseAtlassianCredential,
   type AtlassianCheck,
 } from "./atlassian.ts";
-import { createToolHost, type ToolHostOptions } from "./host.ts";
+import { createToolHost, type ToolHost, type ToolHostOptions } from "./host.ts";
 import {
   createMcpHandler,
   type McpCaller,
@@ -36,6 +36,8 @@ export interface EdgeToolSet {
     res: http.ServerResponse,
     caller: McpCaller,
   ): void;
+  /** The same host, for gateway client 1.0's `tools.*` (Task-1398). */
+  host: ToolHost;
   integrations: { atlassian: AtlassianIntegration };
 }
 
@@ -53,6 +55,7 @@ export function createEdgeTools(
         ? { lifecycleMs: options.lifecycleMs }
         : {}),
     }),
+    host,
     integrations: {
       atlassian: {
         parse(input) {

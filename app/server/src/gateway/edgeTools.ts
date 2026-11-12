@@ -1,8 +1,9 @@
 /**
  * What the edge takes from its tools (Task-1397, ADR-0005): the MCP handler
- * behind the `/mcp` gate and the integrations' credential checks. The edge's
- * entry injects them (`gatewayTools/index.ts`); `gateway/` holds no tool code
- * or package. The gateway hands tools typed credential outcomes and never
+ * behind the `/mcp` gate, the tool host gateway client 1.0's `tools.*` call
+ * (Task-1398), and the integrations' credential checks. The edge's entry
+ * injects them (`gatewayTools/index.ts`); `gateway/` holds no tool code or
+ * package. The gateway hands tools typed credential outcomes and never
  * builds a tool error. Types only (`workerBoundary.test.ts`).
  */
 import type http from "node:http";
@@ -23,6 +24,34 @@ interface McpCaller {
   ): Promise<CredentialOutcome>;
 }
 
+type ToolCaller = McpCaller & {
+  /** Aborts when the client cancels the call or its connection ends. */
+  signal?: AbortSignal;
+};
+
+/** One tool as the host lists it. */
+interface ListedTool {
+  name: string;
+  description: string;
+  inputSchema: object;
+  effect: "read" | "write";
+  actionKey: string;
+}
+
+export type ToolFailureCode =
+  | "unknown_tool"
+  | "invalid_params"
+  | "tool_error"
+  | "result_too_large"
+  | "timeout"
+  | "cancelled"
+  | "failed";
+
+/** The host's answer to one call; it never throws. */
+export type ToolAnswer =
+  | { ok: true; text: string }
+  | { ok: false; code: ToolFailureCode; message: string };
+
 export type IntegrationCheck =
   | { ok: true; displayName?: string; accountId?: string }
   | { ok: false; problem: "rejected" | "unreachable" | "failed" };
@@ -33,6 +62,11 @@ export interface EdgeTools {
     res: http.ServerResponse,
     caller: McpCaller,
   ): void;
+  /** The host `/mcp` runs on, for gateway client 1.0's `tools.*`. */
+  host: {
+    list(): ListedTool[];
+    call(name: string, args: unknown, caller: ToolCaller): Promise<ToolAnswer>;
+  };
   integrations: {
     atlassian: {
       /** The checked credential as the opaque text the vault stores. */

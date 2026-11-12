@@ -18,10 +18,13 @@ import { getSlackRuntimeSettings } from "../slackSettings.ts";
 import { getTempoSettings } from "../tempoSettings.ts";
 import { getBrowserToolSettings } from "../browserSettings.ts";
 import { knowledgeBaseEnabled } from "../knowledgeBaseSettings.ts";
+import { remoteToolGate } from "../remoteTools.ts";
 
 /** Integration gates (Settings-driven) that switch optional tool groups. */
 export interface IntegrationToolGates {
   jira: boolean;
+  /** Client mode: the gateway is connected and Jira is turned on. */
+  gatewayJira: boolean;
   /** Confluence pages; authenticates with the Jira integration's Atlassian credentials. */
   confluence: boolean;
   tempo: boolean;
@@ -41,6 +44,7 @@ export function currentIntegrationToolGates(): IntegrationToolGates {
   const slack = getSlackRuntimeSettings();
   return {
     jira: getJiraSettings().enabled,
+    gatewayJira: remoteToolGate("jira"),
     confluence: getConfluenceSettings().enabled,
     tempo: getTempoSettings().enabled,
     google: getGoogleSettings().enabled,

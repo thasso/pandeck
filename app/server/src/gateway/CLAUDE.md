@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3328 reason="Twelve contracts; edge tools add the injected-tools and /mcp rule and an integration-record writer next to logins and the sealed store." task=1397 date=2026-11-11 -->
+<!-- instruction-budget: bytes=3456 reason="Twelve contracts; edge tools add the injected-tools rule, the per-call credential read of /mcp and tools.call, and an integration-record writer next to logins and the sealed store." task=1398 date=2026-11-11 -->
 
 # Credential gateway
 
@@ -25,8 +25,9 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
   (`vaultIntegrations.ts`), sealed right after.
 - No tool code or package here: tools come only as the injected `EdgeTools`,
   which get typed credential outcomes, never a tool error built here. `/mcp`
-  needs the client's certificate, no `Origin`, and its MCP token (hashed). Every
-  vault integration call is bounded and answers a typed outcome.
+  needs the client's certificate, no `Origin`, and its MCP token (hashed); it
+  and `tools.call` read the registry user's credential per call. Every vault
+  integration call is bounded and answers a typed outcome.
 - A vault with recipients keeps credentials on disk only as sealed records
   (`sealedStore.ts`); plaintext lives only under its tmpfs `accounts/`, written
   by unlock. Each writer seals in its lane; the sweep never overwrites a record

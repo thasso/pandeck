@@ -35,6 +35,14 @@
  *   email?, displayName?, accountId?, problem?}`: `site` and `email` whenever
  *   a credential is stored, and with `check` whether it works. Never a token.
  *
+ * The edge's tools (Task-1398), run with the client's user's credential:
+ *
+ * - `tools.list {}` answers `{tools}`: each `{name, description,
+ *   inputSchema, effect, actionKey}`.
+ * - `tools.call {name, args}` answers the tool's outcome, `{ok: true, text}`
+ *   or `{ok: false, code, message}`; only a malformed request fails the call.
+ *   A `cancel` aborts it.
+ *
  * Gateway → client: `accounts.changed {accounts}`, the full list after any
  * change, and `logins.event {loginId, accountId, event}`, each answered `{}`.
  */
@@ -48,6 +56,7 @@ import type { LoginEvent, LoginStart } from "./logins.ts";
 import { isLeaseProvider, isProfileId } from "./profiles.ts";
 import { isOwnerId } from "./state.ts";
 import { INVALID_PARAMS } from "./controlMethods.ts";
+import type { ToolAnswer, ToolFailureCode } from "./edgeTools.ts";
 
 export const GATEWAY_CLIENT_VERSION = "gateway-client/1.0";
 
@@ -74,6 +83,8 @@ export const CLIENT_METHODS = {
   integrationSet: "integrations.set",
   integrationClear: "integrations.clear",
   integrationStatus: "integrations.status",
+  toolsList: "tools.list",
+  toolsCall: "tools.call",
   /** Gateway → client. */
   accountsChanged: "accounts.changed",
   loginEvent: "logins.event",
@@ -351,4 +362,58 @@ export function decodeLoginEvent(
       },
     };
   return undefined;
+}
+
+const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** `tools.call`: the tool's name and its arguments, a plain object. */
+export function decodeToolCall(payload: Payload): {
+  name: string;
+  args: Record<string, unknown>;
+} {
+  const { name, args } = record(payload.json) ?? {};
+  if (typeof name !== "string" || !TOOL_NAME_RE.test(name))
+    invalid("tool name");
+  if (args === undefined) return { name, args: {} };
+  const object = record(args);
+  if (!object) invalid("tool arguments");
+  return { name, args: object };
+}
+
+/** A `tools.list` answer's entries, unchecked: the client accepts them. */
+export function decodeToolListing(payload: Payload): unknown[] {
+  const tools = record(payload.json)?.tools;
+  if (!Array.isArray(tools)) malformed("tool list");
+  return tools;
+}
+
+const TOOL_FAILURE_CODES = new Set<string>([
+  "unknown_tool",
+  "invalid_params",
+  "tool_error",
+  "result_too_large",
+  "timeout",
+  "cancelled",
+  "failed",
+] satisfies ToolFailureCode[]);
+const TOOL_MESSAGE_MAX = 500;
+
+/** A `tools.call` answer, on the client: an unknown code reads as `failed`. */
+export function decodeToolAnswer(payload: Payload): ToolAnswer {
+  const answer = record(payload.json);
+  if (answer?.ok === true && typeof answer.text === "string")
+    return { ok: true, text: answer.text };
+  if (answer?.ok !== false) malformed("tool answer");
+  const message =
+    typeof answer.message === "string"
+      ? answer.message.slice(0, TOOL_MESSAGE_MAX)
+      : "";
+  return {
+    ok: false,
+    code:
+      typeof answer.code === "string" && TOOL_FAILURE_CODES.has(answer.code)
+        ? (answer.code as ToolFailureCode)
+        : "failed",
+    message,
+  };
 }

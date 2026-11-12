@@ -16,7 +16,10 @@
  * login-hold calls refuse here. The user's Atlassian credential is the
  * gateway's too (Task-1397): `remoteIntegrations.ts` sets, clears and reads
  * its status through `integrations.*`; after every connect the link reads
- * the status and announces the Jira section, so Settings shows it.
+ * the status and announces the Jira section, so Settings shows it. The
+ * gateway's tools (Task-1398) are listed on every connect before the
+ * connection is published (`remoteTools.ts`), and the agents' calls go out
+ * as `tools.call`, each bounded at 40 s.
  */
 import {
   mirrorRemoteCredentialProfiles,
@@ -31,6 +34,8 @@ import {
   decodeIntegrationStatus,
   decodeLoginEvent,
   decodeLoginStarted,
+  decodeToolAnswer,
+  decodeToolListing,
   encodeClientMessage,
   type ClientAccount,
 } from "./gateway/clientMethods.ts";
@@ -54,10 +59,21 @@ import {
   rememberAtlassianStatus,
 } from "./remoteIntegrations.ts";
 import { installRemoteLoginPort, remoteLoginEvent } from "./remoteLogins.ts";
+import {
+  RemoteToolRefusal,
+  acceptRemoteTools,
+  applyListing,
+  installRemoteToolPort,
+  markDisconnected,
+  type RemoteToolAnswer,
+  type RemoteToolDescriptor,
+} from "./remoteTools.ts";
 import type { Payload } from "./workerProtocol/codec.ts";
 import {
+  UNKNOWN_METHOD,
   WorkerConnection,
   WorkerRequestError,
+  WorkerRequestNotSentError,
 } from "./workerProtocol/connection.ts";
 import type { EngineGatewayAccess } from "./workerProtocol/engineMethods.ts";
 import { dialUnixSocket } from "./workerProtocol/unixSocketTransport.ts";
@@ -66,6 +82,8 @@ const READY_TIMEOUT_MS = 10_000;
 /** The in-process Worker's id, as `gatewayLink.ts` names it. */
 const IN_PROCESS_WORKER_ID = "local";
 const REDIAL_MS = 2_000;
+/** Bounds an agent's gateway tool call beyond the edge's own 30 s. */
+const TOOL_CALL_MS = 40_000;
 
 export interface GatewayClientLinkOptions {
   /** The relay's client-protocol socket. */
@@ -143,6 +161,7 @@ export function startGatewayClientLink(
       onEnd: (reason) => {
         if (connection === opened) {
           connection = undefined;
+          markDisconnected();
           stateChanged();
         }
         if (closing) return;
@@ -155,8 +174,9 @@ export function startGatewayClientLink(
 
   const connect = async (): Promise<void> => {
     redial = undefined;
+    let opened: WorkerConnection | undefined;
     try {
-      const opened = await dial();
+      opened = await dial();
       const { clientId, userId } = decodeClientIdentity(
         await opened.request(CLIENT_METHODS.hello, encodeClientMessage({})),
       );
@@ -179,10 +199,14 @@ export function startGatewayClientLink(
         reconciled = true;
         log(`revoked ${revoked.length} engine leases of earlier boots`);
       }
-      if (closing) {
+      const tools = await listTools(opened);
+      // A dial that ended meanwhile has scheduled its redial; it publishes
+      // nothing, nor does a closing link.
+      if (closing || opened.isEnded) {
         opened.end("the server link closed");
         return;
       }
+      applyListing(tools);
       connection = opened;
       stateChanged();
       log(`ready as client ${clientId} of user ${userId}`);
@@ -190,7 +214,32 @@ export function startGatewayClientLink(
       void readIntegrationStatus(opened);
     } catch (err) {
       log(`unavailable: ${failure(err)}`);
+      // An unpublished dial goes with its failed connect; the redial replaces it.
+      if (opened && connection !== opened) opened.end("the connect failed");
       schedule();
+    }
+  };
+
+  /** The gateway's tools; a gateway without tools lists none. */
+  const listTools = async (
+    opened: WorkerConnection,
+  ): Promise<RemoteToolDescriptor[]> => {
+    try {
+      return acceptRemoteTools(
+        decodeToolListing(
+          await opened.request(
+            CLIENT_METHODS.toolsList,
+            encodeClientMessage({}),
+          ),
+        ),
+      );
+    } catch (err) {
+      if (
+        err instanceof WorkerRequestError &&
+        (err.code === "tools_unavailable" || err.code === UNKNOWN_METHOD)
+      )
+        return [];
+      throw err;
     }
   };
 
@@ -340,6 +389,59 @@ export function startGatewayClientLink(
       );
     },
   });
+  const uninstallTools = installRemoteToolPort({
+    async call(name, args, signal) {
+      const opened = connection;
+      if (!opened) throw new RemoteToolRefusal("gateway_unavailable");
+      // One controller for the caller's abort and the local bound: either
+      // settles the call now and sends a cancel; the edge's late answer
+      // retires the request and is dropped unread.
+      const controller = new AbortController();
+      let timedOut = false;
+      let stop = (): void => {};
+      const stopped = new Promise<RemoteToolAnswer>((resolve) => {
+        stop = () =>
+          resolve({
+            ok: false,
+            code: timedOut ? "timeout" : "cancelled",
+            message: "",
+          });
+        controller.signal.addEventListener("abort", stop, { once: true });
+      });
+      const cancel = (): void => controller.abort();
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) cancel();
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, TOOL_CALL_MS);
+      try {
+        return await Promise.race([
+          opened
+            .request(
+              CLIENT_METHODS.toolsCall,
+              encodeClientMessage({ name, args }),
+              controller.signal,
+            )
+            .then(decodeToolAnswer),
+          stopped,
+        ]);
+      } catch (err) {
+        if (err instanceof WorkerRequestNotSentError)
+          return { ok: false, code: "cancelled", message: "" };
+        log(`${CLIENT_METHODS.toolsCall}: ${failure(err)}`);
+        throw new RemoteToolRefusal(
+          err instanceof WorkerRequestError && err.code === "tools_unavailable"
+            ? "tools_unavailable"
+            : "gateway_unavailable",
+        );
+      } finally {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", cancel);
+        controller.signal.removeEventListener("abort", stop);
+      }
+    },
+  });
   let uninstall: () => void = () => {};
   const link: GatewayLink = {
     ready,
@@ -430,6 +532,7 @@ export function startGatewayClientLink(
       uninstall();
       uninstallLogins();
       uninstallIntegrations();
+      uninstallTools();
       if (redial) clearTimeout(redial);
       connection?.end("the server link closed");
       mirrorRemoteCredentialProfiles(undefined);

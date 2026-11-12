@@ -27,3 +27,5 @@
   `session_spawn` profile and agent-definition inspection; `spawn`/`propose`
   still refuse persisted Plan mode. One needing an external subprocess belongs
   in `mcp/toolGroups/`.
+- Gateway tools come only via the remote group (`remoteTools.ts`): mapped read
+  tools until approvals wrap writes; calls recheck connection, gate, listing.

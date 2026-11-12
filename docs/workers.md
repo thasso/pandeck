@@ -1753,6 +1753,42 @@ path above.
   does not move Claude's local runtime/transcript directories: Pandeck's
   one-time Default transcript import and startup gate still apply before the
   client link starts (`docs/credential-distribution.md`).
+- **Gateway tools** (Task-1398, `remoteTools.ts`,
+  `tools/gateway/remoteToolGroup.ts`). On every connect the link calls
+  `tools.list` after `accounts.list` and the first reconcile, and publishes the
+  connection and resolves `ready` only after it applied that listing, never for
+  a closing link or a dial that ended meanwhile. An edge without tools
+  (`tools_unavailable` or an unknown method) counts as an empty listing. Pandeck
+  accepts at most 64 entries, each a read tool (`effect: "read"`) whose
+  `actionKey` prefix names a mapped product (`jira` only), within the bounds the
+  edge's `gatewayTools/tools.test.ts` checks (name, 1,024-character description,
+  4,096-character object schema); a name listed twice is dropped. Every name
+  accepted in a boot stays in the catalog for that boot; the catalog's deferred
+  `gateway-jira` group replaces the local `jira` group and is gated by
+  `gatewayJira` (connected and Settings → Jira enabled), so a connect, a lost
+  connection and the Jira toggle reach live sessions as `tools/list_changed` and
+  pi's gate command. Its tools are `sideEffects: "none"`, so Plan keeps them,
+  and a remote name equal to another tool of the persona is left out. Before
+  every call the tool checks the connection, the toggle and that the latest
+  listing still offers it, with no gateway call otherwise; then `tools.call`
+  goes out on the link's connection, bounded at 40 s by a cancel (the request
+  stays until the edge answers or the connection ends; that late answer is
+  dropped). Only the edge's `tool_error` and `invalid_params` texts reach the
+  agent; every other failure is Pandeck's fixed text. A pi open (new, existing,
+  fork or staged replacement) waits up to 10 s for the boot's first listing and
+  is otherwise refused with the gateway-unavailable text, so its up-front tool
+  registration holds the gateway's tools.
+- **Known limitations of gateway tools.** A tool newly deployed on the gateway
+  reaches a live pi session only at its next open, because pi registers its tool
+  universe at open; Claude sessions get it once the next connection's listing is
+  applied, without reopening (D8). This includes tools added after an empty
+  first listing. The follow-up, named and not built: "pi late registration or
+  reopen on listing change". A changed schema of a known name reaches pi at its
+  next open too; the edge checks arguments either way. Only Jira is mapped: a
+  gateway tool of another product needs a Pandeck change (mapping and gate)
+  before it appears. Pandeck's local Jira search, lookup and mutate tools are
+  not offered in client mode, and Confluence's local tools still list and fail
+  there (Task-1399).
 - **Local live test.**
   `pnpm --filter @assistant/server gateway:dev --state-dir <dir>`
   (`gatewayDevMain.ts`) remains the separate composition with the client
@@ -1826,6 +1862,16 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   token. Failures carry fixed codes and texts: `integration_invalid`,
   `integration_rejected`, `integration_unreachable`, `vault_locked`,
   `vault_unavailable`, `tools_unavailable`.
+- **Tool calls** (`gateway-client/1.0`, additive, Task-1398), the client's
+  second adapter over the same host: `tools.list {}` answers `{tools}`, each
+  `{name, description, inputSchema, effect, actionKey}`;
+  `tools.call {name, args}` runs the host with the client's registry user's
+  credential, read from the vault per call as `/mcp` does (a payload's `userId`
+  is ignored), and answers `{ok: true, text}` or `{ok: false, code, message}` as
+  a successful reply. A malformed name or non-object `args` fail the call with
+  `invalid_params`; without tools both methods fail with `tools_unavailable`.
+  The client's `cancel` frame and the connection's end abort the call. No
+  argument or result is logged.
 - **Pandeck in client mode** (`remoteIntegrations.ts`, installed by
   `gatewayClientLink.ts`): Settings → Jira sends a newly entered token with the
   email and `JIRA_HOST` through `integrations.set`, a clear through
@@ -1835,9 +1881,10 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   needs the token again; a clear wins over an email or token in the same patch.
   After every connect the link reads the status and announces the Jira section,
   so a restarted Pandeck shows connected. Settings reports
-  `credentialStore: "gateway"`. Pandeck's own Jira tools and its non-agent Jira
-  features (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no
-  credential in client mode until a later slice (D3).
+  `credentialStore: "gateway"`. Agents read Jira through the gateway's tools
+  ("Gateway tools" under Client mode). Pandeck's non-agent Jira features
+  (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no credential in
+  client mode until a later slice (D3, Task-1399).
 
 ### Remote vault
 

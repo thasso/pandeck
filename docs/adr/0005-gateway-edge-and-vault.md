@@ -91,6 +91,9 @@ on the edge"):
   error; only fixed, edge-owned tool texts reach a caller.
 - The MCP endpoint needs the client's certificate and that client's MCP token,
   kept only as a hash; it never forwards and spends no lease.
+- Gateway client 1.0's `tools.list` and `tools.call` (Task-1398) are the second
+  adapter over the same host: Pandeck's server lists the tools and calls them
+  for its agents, so approvals can later wrap write tools there (G5).
 
 The API token reaches the edge in plaintext per call. That is accepted for the
 pilot (M22); OAuth apps (G12) replace it later.

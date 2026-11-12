@@ -1,7 +1,7 @@
 /**
  * The edge's tool host (Task-1397): lists the registered tools and runs one
  * call for one client. MCP (`mcp.ts`) is one adapter over it; gateway client
- * 1.0's `tools.*` (T2) is the next.
+ * 1.0's `tools.*` (`gateway/clientListener.ts`, Task-1398) is the other.
  *
  * `call` never throws and settles by its deadline (30 s) or the caller's
  * abort, whatever an await inside the tool ignores. It answers the tool's

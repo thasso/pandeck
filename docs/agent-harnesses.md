@@ -330,7 +330,10 @@ kinds"). Further capabilities join the table when a later step needs them.
 - Unchanged by this migration: SDK packages stay inside their folders
   (`architecture.test.ts`), app prompts go through `runtimePrompt.ts`, app tools
   come from `tools/catalog.ts`, and background work goes through the ports in
-  `backgroundWork/backends.ts`.
+  `backgroundWork/backends.ts`. In gateway client mode the gateway's tools are
+  one more catalog group, and a pi open waits for the gateway's first tool
+  listing so its up-front registration holds them (`docs/workers.md` "Client
+  mode").
 
 ## Status
 
