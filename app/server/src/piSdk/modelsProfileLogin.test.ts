@@ -24,6 +24,7 @@ const {
   subscribeCredentialProfileDeleted,
 } = await import("../credentialProfiles.ts");
 const {
+  cancelOpenAiProfileLogin,
   setOpenAiProfileLoginForTests,
   setOpenAiProfileLoginTimeoutForTests,
   startOpenAiProfileLogin,
@@ -56,7 +57,27 @@ async function waitFor<T>(read: () => T | undefined): Promise<T> {
   throw new Error("Timed out waiting for profile login state.");
 }
 
-test("OpenAI device-code login exposes only transient verification guidance and ready state", async () => {
+/** An observer that records the device code and the settle, in `events` too. */
+function recordingObserver(events?: string[]) {
+  const seen = {
+    code: undefined as
+      { verificationUri: string; userCode: string } | undefined,
+    outcome: undefined as [string, string | undefined] | undefined,
+    settles: 0,
+  };
+  return Object.assign(seen, {
+    device(verificationUri: string, userCode: string) {
+      seen.code = { verificationUri, userCode };
+    },
+    settled(outcome: string, text?: string) {
+      seen.settles += 1;
+      seen.outcome = [outcome, text];
+      events?.push(`settled ${outcome}`);
+    },
+  });
+}
+
+test("OpenAI device-code login hands the device code only to its observer; the summary shows connecting, then ready", async () => {
   const profile = createCredentialProfile({
     name: "OAuth test",
     provider: "openai-codex",
@@ -79,22 +100,23 @@ test("OpenAI device-code login exposes only transient verification guidance and 
     );
   });
 
-  startOpenAiProfileLogin(profile.id);
-  const connecting = await waitFor(() =>
-    listCredentialProfiles().find(
-      (item) =>
-        item.id === profile.id &&
-        item.status === "connecting" &&
-        item.setup?.userCode === "ABCD-EFGH",
-    ),
-  );
-  assert.equal(
-    connecting.setup?.verificationUri,
-    "https://auth.example/verify",
-  );
-  assert.equal(connecting.setup?.userCode, "ABCD-EFGH");
+  const observer = recordingObserver();
+  startOpenAiProfileLogin(profile.id, observer);
+  await waitFor(() => observer.code);
+  assert.deepEqual(observer.code, {
+    verificationUri: "https://auth.example/verify",
+    userCode: "ABCD-EFGH",
+  });
+  const connecting = listCredentialProfiles().find(
+    (item) => item.id === profile.id,
+  )!;
+  assert.equal(connecting.status, "connecting");
   assert.equal(connecting.health.state, "needs-login");
-  assert.doesNotMatch(JSON.stringify(connecting), /access|token/i);
+  // AC9: the code travels only to the observer (the login dialog's socket).
+  assert.doesNotMatch(
+    JSON.stringify(connecting),
+    /access|token|ABCD-EFGH|auth\.example/i,
+  );
 
   release();
   const ready = await waitFor(() =>
@@ -136,15 +158,9 @@ test("persisted OAuth completes the UI while pi's post-login refresh is still se
     await refreshSettled;
   });
 
-  startOpenAiProfileLogin(profile.id);
-  await waitFor(() =>
-    listCredentialProfiles().find(
-      (item) =>
-        item.id === profile.id &&
-        item.status === "connecting" &&
-        item.setup?.userCode === "SLOW-REFRESH",
-    ),
-  );
+  const observer = recordingObserver();
+  startOpenAiProfileLogin(profile.id, observer);
+  await waitFor(() => observer.code);
   persist();
 
   const ready = await waitFor(() =>
@@ -277,27 +293,29 @@ test("a timed-out login remains authoritative until the provider operation settl
     );
   });
 
-  startOpenAiProfileLogin(profile.id);
-  await waitFor(() =>
-    listCredentialProfiles().find(
-      (item) =>
-        item.id === profile.id &&
-        item.status === "error" &&
-        /active login/i.test(item.error ?? ""),
-    ),
+  const observer = recordingObserver();
+  startOpenAiProfileLogin(profile.id, observer);
+  await waitFor(() => (calls === 1 ? true : undefined));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  // D4: the timeout aborts; the account's error waits for the settle.
+  assert.equal(
+    listCredentialProfiles().find((item) => item.id === profile.id)?.status,
+    "connecting",
   );
-  startOpenAiProfileLogin(profile.id);
+  assert.equal(startOpenAiProfileLogin(profile.id), false);
   assert.equal(
     calls,
     1,
     "retry must not overlap the provider operation that timed out locally",
   );
 
+  // This fake ignores the abort and still commits: the commit wins.
   release();
-  await waitFor(() =>
-    listCredentialProfiles().find(
-      (item) => item.id === profile.id && item.status === "ready",
-    ),
+  await waitFor(() => observer.outcome);
+  assert.deepEqual(observer.outcome, ["ready", undefined]);
+  assert.equal(
+    listCredentialProfiles().find((item) => item.id === profile.id)?.status,
+    "ready",
   );
 });
 
@@ -751,10 +769,10 @@ describe("G5b: the pi login's hold", () => {
       assert.equal(setup.state()?.status, "connecting");
 
       acquired.resolve("hold-1");
-      await waitFor(() =>
-        setup.state()?.status === "error" ? true : undefined,
-      );
-      assert.equal(setup.state()?.error, TIMED_OUT);
+      await waitFor(() => (setup.events.includes("login") ? true : undefined));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      // D4: the timeout aborts, but the account's error waits for the settle.
+      assert.equal(setup.state()?.status, "connecting");
       assert.equal(setup.runtimes(), 1);
       assert.deepEqual(
         setup.events,
@@ -776,8 +794,9 @@ describe("G5b: the pi login's hold", () => {
           ? true
           : undefined,
       );
-      if (outcome === "reject")
-        assert.equal(setup.state()?.error, "The provider refused.");
+      // A login resolving after the abort still committed; a rejection
+      // after the timeout ends with the timeout's text.
+      if (outcome === "reject") assert.equal(setup.state()?.error, TIMED_OUT);
 
       // The login has ended here, so a restart takes a new hold at once.
       setup.next();
@@ -900,6 +919,273 @@ describe("G5b: the pi login's hold", () => {
     assert.equal(loginHolds.loginStuckOf(setup.profile), false);
     await loginHolds.clearUnfinishedLogin(setup.profile);
     assert.deepEqual(setup.events, ["login", "settled"]);
+  });
+});
+
+// Task-1402 B1: cancel, the UI timeout's abort and the outcome precedence
+// (AC2, AC3, AC12, AC14). The commit wins; otherwise the first stop reason;
+// the observer hears the outcome only after release, cleanup and the map.
+describe("Task-1402 B1: cancel and outcome precedence", () => {
+  const TIMED_OUT =
+    "OpenAI device-code login timed out. The active login will finish before another can start.";
+  type Login = Parameters<typeof setOpenAiProfileLoginForTests>[0];
+
+  function setup(name: string, login: (events: string[]) => Login) {
+    const profile = createCredentialProfile({ name, provider: "openai-codex" });
+    const events: string[] = [];
+    const fake = fakeLoginHoldLink(events);
+    loginHolds.setLoginHoldLinkForTests(fake.link);
+    let calls = 0;
+    const run = login(events)!;
+    setOpenAiProfileLoginForTests(async (...args) => {
+      calls += 1;
+      return await run(...args);
+    });
+    const observer = recordingObserver(events);
+    return {
+      profile,
+      events,
+      fake,
+      observer,
+      calls: () => calls,
+      // Read before any deletion: `piAgentDir` creates what it names.
+      root: dirname(piAgentDir(profile.id)),
+      authPath: join(piAgentDir(profile.id), "auth.json"),
+      state: () => listCredentialProfiles().find((p) => p.id === profile.id),
+    };
+  }
+
+  /** pi's login as measured: the device code, then a rejection on abort. */
+  const honorsAbort: (events: string[]) => Login =
+    (events) => async (_runtime, interaction) => {
+      events.push("login");
+      interaction.notify({
+        type: "device_code",
+        verificationUri: "https://auth.example/verify",
+        userCode: "CANCEL-ME",
+      });
+      await new Promise<never>((_resolve, reject) =>
+        interaction.signal!.addEventListener(
+          "abort",
+          () => {
+            events.push("aborted");
+            reject(new Error("This operation was aborted"));
+          },
+          { once: true },
+        ),
+      );
+    };
+
+  /** A login that commits its own credential, then synchronizes until `sync` settles. */
+  function commitsThenSyncs(sync: Promise<void>) {
+    return (events: string[]): Login =>
+      async (_runtime, interaction, committed, authPath) => {
+        events.push("login");
+        interaction.signal!.addEventListener("abort", () =>
+          events.push("aborted"),
+        );
+        writeFileSync(authPath, '{"openai-codex":{}}', { mode: 0o600 });
+        committed();
+        await sync;
+      };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    loginHolds.setLoginHoldLinkForTests(null);
+  });
+
+  test.each(["no credential", "an earlier credential"] as const)(
+    "AC2: Cancel before the commit aborts pi's login; it settles cancelled after the release, with %s and no error, and a fresh start runs a new login",
+    async (before) => {
+      const t = setup(`Cancel ${before}`, honorsAbort);
+      if (before === "an earlier credential")
+        writeFileSync(t.authPath, '{"openai-codex":{}}', { mode: 0o600 });
+      let atSettle: { status?: string; error?: string } | undefined;
+      let freshStart: boolean | undefined;
+      startOpenAiProfileLogin(t.profile.id, {
+        device: t.observer.device,
+        settled(outcome, text) {
+          t.observer.settled(outcome, text);
+          const state = t.state();
+          atSettle = {
+            ...(state?.status ? { status: state.status } : {}),
+            ...(state?.error ? { error: state.error } : {}),
+          };
+          // The operation has already left its map: a start runs anew.
+          freshStart = startOpenAiProfileLogin(t.profile.id);
+        },
+      });
+      await waitFor(() => t.observer.code);
+      assert.equal(t.state()?.status, "connecting");
+
+      cancelOpenAiProfileLogin(t.profile.id);
+      await waitFor(() => t.observer.outcome);
+      assert.deepEqual(t.observer.outcome, ["cancelled", undefined]);
+      assert.deepEqual(t.events.slice(0, 5), [
+        `acquire ${t.profile.id}`,
+        "login",
+        "aborted",
+        "release hold-1",
+        "settled cancelled",
+      ]);
+      assert.deepEqual(atSettle, {
+        status: before === "no credential" ? "disconnected" : "ready",
+      });
+      assert.equal(freshStart, true);
+      await waitFor(() => (t.calls() === 2 ? true : undefined));
+      cancelOpenAiProfileLogin(t.profile.id);
+      await waitFor(() =>
+        t.events.includes("release hold-2") ? true : undefined,
+      );
+    },
+  );
+
+  test("AC3: Cancel before the hold is granted starts no login, releases the later hold and settles cancelled", async () => {
+    const t = setup("Cancel before hold", honorsAbort);
+    const acquired = deferred<string>();
+    t.fake.acquire = () => acquired.promise;
+    startOpenAiProfileLogin(t.profile.id, t.observer);
+    cancelOpenAiProfileLogin(t.profile.id);
+    acquired.resolve("hold-1");
+    await waitFor(() => t.observer.outcome);
+    assert.deepEqual(t.observer.outcome, ["cancelled", undefined]);
+    assert.equal(t.calls(), 0);
+    assert.deepEqual(t.events, [
+      `acquire ${t.profile.id}`,
+      "release hold-1",
+      "settled cancelled",
+    ]);
+    assert.equal(t.state()?.status, "disconnected");
+    assert.equal(t.state()?.error, undefined);
+  });
+
+  test("AC12: the UI timeout aborts an uncommitted login; a later Cancel changes nothing; it settles with the timeout's error after the release", async () => {
+    const settle = deferred<void>();
+    const t = setup("Timed out", (events) => async (_runtime, interaction) => {
+      events.push("login");
+      interaction.signal!.addEventListener("abort", () =>
+        events.push("aborted"),
+      );
+      await settle.promise;
+    });
+    setOpenAiProfileLoginTimeoutForTests(20);
+    startOpenAiProfileLogin(t.profile.id, t.observer);
+    await waitFor(() => (t.events.includes("aborted") ? true : undefined));
+    assert.equal(t.state()?.status, "connecting");
+    assert.equal(t.state()?.error, undefined);
+    cancelOpenAiProfileLogin(t.profile.id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(t.observer.settles, 0, "no outcome before pi settled");
+
+    settle.reject(new Error("This operation was aborted"));
+    await waitFor(() => t.observer.outcome);
+    assert.deepEqual(t.observer.outcome, ["error", TIMED_OUT]);
+    assert.deepEqual(t.events.slice(-2), ["release hold-1", "settled error"]);
+    assert.equal(t.events.filter((e) => e === "aborted").length, 1);
+    assert.equal(t.state()?.status, "error");
+    assert.equal(t.state()?.error, TIMED_OUT);
+  });
+
+  test("AC12: Cancel then the timeout ends cancelled", async () => {
+    const settle = deferred<void>();
+    const t = setup("Cancel then timeout", (events) => async (_r, i) => {
+      events.push("login");
+      i.signal!.addEventListener("abort", () => events.push("aborted"));
+      await settle.promise;
+    });
+    setOpenAiProfileLoginTimeoutForTests(40);
+    startOpenAiProfileLogin(t.profile.id, t.observer);
+    await waitFor(() => (t.events.includes("login") ? true : undefined));
+    cancelOpenAiProfileLogin(t.profile.id);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    settle.reject(new Error("This operation was aborted"));
+    await waitFor(() => t.observer.outcome);
+    assert.deepEqual(t.observer.outcome, ["cancelled", undefined]);
+    assert.equal(t.state()?.status, "disconnected");
+    assert.equal(t.state()?.error, undefined);
+  });
+
+  test.each(["cancel", "timeout", "sync failure"] as const)(
+    "AC14: after the own commit, a %s neither aborts nor changes the outcome: ready after the settle",
+    async (event) => {
+      const sync = deferred<void>();
+      const t = setup(`Committed ${event}`, commitsThenSyncs(sync.promise));
+      if (event === "timeout") setOpenAiProfileLoginTimeoutForTests(20);
+      startOpenAiProfileLogin(t.profile.id, t.observer);
+      await waitFor(() => (t.state()?.status === "ready" ? true : undefined));
+      assert.equal(t.state()?.health.state, "ok");
+      if (event === "cancel") cancelOpenAiProfileLogin(t.profile.id);
+      if (event === "timeout")
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(t.events.includes("aborted"), false);
+      assert.equal(t.observer.settles, 0);
+      // A start meanwhile joins the running operation.
+      assert.equal(startOpenAiProfileLogin(t.profile.id), false);
+      assert.equal(t.calls(), 1);
+
+      if (event === "sync failure")
+        sync.reject(new Error("post-login synchronization failed"));
+      else sync.resolve();
+      await waitFor(() => t.observer.outcome);
+      assert.deepEqual(t.observer.outcome, ["ready", undefined]);
+      assert.deepEqual(t.events.slice(-2), ["release hold-1", "settled ready"]);
+      assert.equal(t.events.includes("aborted"), false);
+      assert.equal(t.state()?.status, "ready");
+      assert.equal(t.state()?.error, undefined);
+      assert.equal(startOpenAiProfileLogin(t.profile.id), true);
+      cancelOpenAiProfileLogin(t.profile.id);
+    },
+  );
+
+  test("AC14: a login that commits right after the abort still ends ready, with no error", async () => {
+    const t = setup(
+      "Commit races abort",
+      (events) => async (_runtime, interaction, committed, authPath) => {
+        events.push("login");
+        await new Promise<void>((resolve) =>
+          interaction.signal!.addEventListener("abort", () => resolve(), {
+            once: true,
+          }),
+        );
+        events.push("aborted");
+        writeFileSync(authPath, '{"openai-codex":{}}', { mode: 0o600 });
+        committed();
+        throw new Error("This operation was aborted");
+      },
+    );
+    startOpenAiProfileLogin(t.profile.id, t.observer);
+    await waitFor(() => (t.events.includes("login") ? true : undefined));
+    cancelOpenAiProfileLogin(t.profile.id);
+    await waitFor(() => t.observer.outcome);
+    assert.deepEqual(t.observer.outcome, ["ready", undefined]);
+    assert.equal(t.state()?.status, "ready");
+    assert.equal(t.state()?.error, undefined);
+  });
+
+  test("AC14: a deletion after the commit ends cancelled with the deletion text and removes the directory after the settle", async () => {
+    const sync = deferred<void>();
+    const t = setup("Deleted after commit", commitsThenSyncs(sync.promise));
+    startOpenAiProfileLogin(t.profile.id, t.observer);
+    await waitFor(() => (t.state()?.status === "ready" ? true : undefined));
+    deleteCredentialProfile(t.profile.id);
+    assert.equal(t.events.includes("aborted"), false);
+    assert.equal(t.observer.settles, 0);
+    // The still-synchronizing login writes into its stale directory.
+    mkdirSync(dirname(t.authPath), { recursive: true });
+    writeFileSync(t.authPath, '{"openai-codex":{}}');
+    sync.resolve();
+    await waitFor(() => t.observer.outcome);
+    assert.deepEqual(t.observer.outcome, [
+      "cancelled",
+      "Profile deleted; OpenAI login cancelled.",
+    ]);
+    assert.deepEqual(t.events.slice(-2), [
+      "release hold-1",
+      "settled cancelled",
+    ]);
+    // The commit's own snapshot refresh may still write; it removes it too.
+    await waitFor(() => (existsSync(t.root) ? undefined : true));
   });
 });
 

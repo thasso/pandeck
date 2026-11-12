@@ -4,7 +4,6 @@ import type {
   AccountPickPreviewResult,
   CredentialProfileProvider,
   CredentialProfileSlotUsage,
-  CredentialProfileStatus,
   CredentialProfileSummary,
   ModelOption,
   OpenAiCompatibleConnectionStatus,
@@ -505,15 +504,6 @@ export async function testCredentialProfileEndpoint(
   );
 }
 
-export async function startOpenAiProfileLogin(id: string): Promise<void> {
-  await body<{ ok: true }>(
-    await fetch(
-      `${serverHttpOrigin()}/api/credential-profiles/${encodeURIComponent(id)}/login`,
-      { method: "POST", headers: authHeaders() },
-    ),
-  );
-}
-
 /**
  * Clears a login account's unfinished login. The server refuses while this
  * account's login is still running and it cannot end it.
@@ -525,14 +515,4 @@ export async function clearUnfinishedProfileLogin(id: string): Promise<void> {
       { method: "POST", headers: authHeaders() },
     ),
   );
-}
-
-export function openAiProfileConnectionAction(
-  status: CredentialProfileStatus,
-): { label: string; disabled: boolean } {
-  if (status === "connecting") return { label: "Connecting…", disabled: true };
-  return {
-    label: status === "ready" ? "Reconnect" : "Connect",
-    disabled: false,
-  };
 }

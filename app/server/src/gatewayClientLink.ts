@@ -13,7 +13,8 @@
  * with U7's text. The server's own requests spend a client lease
  * (`leases.client`), one per account for this boot. Logins are the gateway's
  * (Task-1385): `remoteLogins.ts` drives them through `logins.*`, and the
- * login-hold calls refuse here. The user's Atlassian credential is the
+ * login-hold calls refuse here. A lost connection marks the running logins
+ * interrupted, and every connect has them reconciled with the gateway. The user's Atlassian credential is the
  * gateway's too (Task-1397): `remoteIntegrations.ts` sets, clears and reads
  * its status through `integrations.*`; after every connect the link reads
  * the status and announces the Jira section, so Settings shows it. The
@@ -37,6 +38,7 @@ import {
   decodeToolAnswer,
   decodeToolListing,
   encodeClientMessage,
+  UNKNOWN_LOGIN,
   type ClientAccount,
 } from "./gateway/clientMethods.ts";
 import {
@@ -58,7 +60,12 @@ import {
   isIntegrationRefusalCode,
   rememberAtlassianStatus,
 } from "./remoteIntegrations.ts";
-import { installRemoteLoginPort, remoteLoginEvent } from "./remoteLogins.ts";
+import {
+  installRemoteLoginPort,
+  remoteLoginEvent,
+  remoteLoginsDisconnected,
+  remoteLoginsReconnected,
+} from "./remoteLogins.ts";
 import {
   RemoteToolRefusal,
   acceptRemoteTools,
@@ -162,6 +169,8 @@ export function startGatewayClientLink(
         if (connection === opened) {
           connection = undefined;
           markDisconnected();
+          // Login events sent meanwhile are lost (the gateway keeps none).
+          remoteLoginsDisconnected();
           stateChanged();
         }
         if (closing) return;
@@ -210,6 +219,7 @@ export function startGatewayClientLink(
       connection = opened;
       stateChanged();
       log(`ready as client ${clientId} of user ${userId}`);
+      remoteLoginsReconnected();
       resolveReady(true);
       void readIntegrationStatus(opened);
     } catch (err) {
@@ -348,10 +358,17 @@ export function startGatewayClientLink(
       );
     },
     async cancel(loginId) {
-      await request(
-        CLIENT_METHODS.loginCancel,
-        encodeClientMessage({ loginId }),
-      );
+      try {
+        await request(
+          CLIENT_METHODS.loginCancel,
+          encodeClientMessage({ loginId }),
+        );
+        return "cancelled";
+      } catch (err) {
+        if (err instanceof WorkerRequestError && err.code === UNKNOWN_LOGIN)
+          return "unknown";
+        throw err;
+      }
     },
   });
   const integrationRequest = async (

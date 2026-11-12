@@ -9,36 +9,11 @@ import {
   automaticModels,
   automaticPreviewHint,
   isAutomaticModelOption,
-  openAiProfileConnectionAction,
   orderCredentialProfilesByProvider,
   pickerCredentialProfiles,
   setCredentialProfileEnterprise,
   slotModelOptions,
 } from "./credentialProfiles.ts";
-
-describe("OpenAI profile connection action", () => {
-  it("keeps a reconnect action available when local credentials look ready", () => {
-    expect(openAiProfileConnectionAction("ready")).toEqual({
-      label: "Reconnect",
-      disabled: false,
-    });
-  });
-
-  it("prevents duplicate clicks only while a login is active", () => {
-    expect(openAiProfileConnectionAction("connecting")).toEqual({
-      label: "Connecting…",
-      disabled: true,
-    });
-    expect(openAiProfileConnectionAction("disconnected")).toEqual({
-      label: "Connect",
-      disabled: false,
-    });
-    expect(openAiProfileConnectionAction("error")).toEqual({
-      label: "Connect",
-      disabled: false,
-    });
-  });
-});
 
 describe("credential profile provider order", () => {
   it("groups Claude before OpenAI without changing registry order within a provider", () => {

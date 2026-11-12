@@ -7,9 +7,11 @@
  * of pi is in `gatewayPorts.ts`.
  */
 export {
+  cancelOpenAiProfileLogin,
   modelRuntimeForProfile,
   startOpenAiProfileLogin,
   warmCredentialProfileModelRuntimes,
+  type OpenAiProfileLoginOutcome,
 } from "../piSdk/models.ts";
 export { linkPiToolBinaries } from "../piSdk/toolBinaries.ts";
 export { homeTranscriptImportStartupRefusal } from "../claudeSdk/homeTranscriptImport.ts";

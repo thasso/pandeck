@@ -83,8 +83,6 @@ export interface CredentialProfileSummary extends CredentialProfile {
     path: string;
     command: string;
     detail: string;
-    verificationUri?: string;
-    userCode?: string;
   };
   error?: string;
   /** An OpenAI-compatible account's endpoint, without its key. */
@@ -102,8 +100,6 @@ const NO_HEALTH: AccountHealth = { state: "unknown", since: null };
 interface TransientCredentialProfileState {
   status: CredentialProfileStatus;
   error?: string;
-  verificationUri?: string;
-  userCode?: string;
 }
 const transient = new Map<string, TransientCredentialProfileState>();
 let credentialProfileDeletedHandler: ((id: string) => void) | undefined;
@@ -441,13 +437,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
               path: "",
               command: "",
               detail:
-                "Open the verification link and enter the one-time code. The gateway stores the resulting OAuth credential.",
-              ...(pending?.verificationUri !== undefined
-                ? { verificationUri: pending.verificationUri }
-                : {}),
-              ...(pending?.userCode !== undefined
-                ? { userCode: pending.userCode }
-                : {}),
+                "Use Continue login to see the verification link and one-time code. The gateway stores the resulting OAuth credential.",
             },
           }
         : {}),
@@ -502,13 +492,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
             path: piAgentDir(profile.id),
             command: "",
             detail:
-              "Open the verification link and enter the one-time code. PA stores the resulting OAuth credential privately.",
-            ...(pending?.verificationUri !== undefined
-              ? { verificationUri: pending.verificationUri }
-              : {}),
-            ...(pending?.userCode !== undefined
-              ? { userCode: pending.userCode }
-              : {}),
+              "Use Continue login to see the verification link and one-time code. Pandeck stores the resulting OAuth credential privately.",
           },
         }
       : {}),
@@ -1009,8 +993,6 @@ export function setCredentialProfileLoginState(
   state: {
     status: CredentialProfileStatus;
     error?: string;
-    verificationUri?: string;
-    userCode?: string;
   },
 ): void {
   transient.set(id, { ...transient.get(id), ...state });

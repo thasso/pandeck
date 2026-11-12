@@ -19,11 +19,8 @@ import type {
 import { settingDescriptor } from "@assistant/shared/settingsRegistry";
 import { serverHttpOrigin } from "../lib/serverOrigin.ts";
 import { startGoogleOAuth } from "../lib/googleOAuth.ts";
-import {
-  fetchCredentialProfiles,
-  startOpenAiProfileLogin,
-} from "../lib/credentialProfiles.ts";
-import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
+import { fetchCredentialProfiles } from "../lib/credentialProfiles.ts";
+import { AccountLoginDialog } from "./AccountLoginDialog.tsx";
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Button } from "@/components/ui/button";
@@ -174,8 +171,8 @@ function ConnectControls(props: ControlProps) {
 const SIGN_IN_POLL_MS = 2500;
 
 /**
- * Signing a Claude or OpenAI account in. OpenAI's device login shows its link
- * and code here; Claude's runs in the official CLI login terminal. The card
+ * Signing a Claude or OpenAI account in, through the same login dialog as
+ * Settings: Claude's official CLI login, or OpenAI's device code. The card
  * re-reads the account while it waits; the server resolves the card once the
  * account is signed in.
  */
@@ -187,8 +184,7 @@ function SignInControls(props: ControlProps) {
     CredentialProfileSummary | null | undefined
   >(undefined);
   const [readError, setReadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!accountId) return;
@@ -213,19 +209,9 @@ function SignInControls(props: ControlProps) {
   }, [accountId]);
 
   const signIn = () => {
-    if (!account?.enabled) return;
-    setActionError(null);
-    if (account.provider === "claude") {
-      setTerminalOpen(true);
-      return;
-    }
-    startOpenAiProfileLogin(account.id).catch((err: unknown) =>
-      setActionError(err instanceof Error ? err.message : String(err)),
-    );
+    if (account?.enabled) setDialogOpen(true);
   };
 
-  const verification = account?.setup?.verificationUri;
-  const code = account?.setup?.userCode;
   const status =
     account === undefined
       ? "Reading the account…"
@@ -238,34 +224,15 @@ function SignInControls(props: ControlProps) {
             : "Runs the provider's own sign-in. The assistant never sees it.";
   return (
     <>
-      {verification && code && account?.enabled ? (
-        <div className="flex flex-col gap-1 text-foreground">
-          <div>
-            Open{" "}
-            <a
-              href={verification}
-              target="_blank"
-              rel="noreferrer"
-              className="text-primary hover:underline"
-            >
-              {verification}
-            </a>{" "}
-            and enter this code:
-          </div>
-          <div className="font-mono font-semibold tracking-wider">{code}</div>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 text-muted-foreground">
-          {account === undefined && <Spinner size="sm" />}
-          {status}
-        </div>
-      )}
+      <div className="flex items-center gap-2 text-muted-foreground">
+        {account === undefined && <Spinner size="sm" />}
+        {status}
+      </div>
       {/* The provider's own error, for the user only; the agent gets none. */}
       {account?.status === "error" && account.error && (
         <ErrorNote message={account.error} />
       )}
       {readError && <ErrorNote message={readError} />}
-      {actionError && <ErrorNote message={actionError} />}
       <div className="flex items-center justify-end gap-2 pt-1">
         <DismissButton {...props} />
         <Button
@@ -274,15 +241,15 @@ function SignInControls(props: ControlProps) {
           disabled={!active || !account?.enabled}
         >
           <LogIn />
-          {account?.status === "connecting" ? "Sign in again" : "Sign in"}
+          {account?.status === "connecting" ? "Continue sign-in" : "Sign in"}
         </Button>
       </div>
-      {/* The terminal is a ui/dialog, which portals itself out of the row. */}
-      {terminalOpen && account && (
-        <ClaudeLoginTerminal
+      {/* The dialog is a ui/dialog, which portals itself out of the row. */}
+      {dialogOpen && account && (
+        <AccountLoginDialog
           profile={account}
-          onFinished={() => setTerminalOpen(false)}
-          onClose={() => setTerminalOpen(false)}
+          onFinished={() => setDialogOpen(false)}
+          onClose={() => setDialogOpen(false)}
         />
       )}
     </>

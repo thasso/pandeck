@@ -305,11 +305,17 @@ vocabulary, display projection, and normalized session model types.
   picker offers only what is reported and nothing at all while it is unknown.
   One registry and one help list either way; a known command is ALWAYS
   intercepted, never forwarded to the model.
-- `protocol.ts` owns the small dedicated Claude-login terminal contract
-  (`ClaudeLoginClientMessage`/`ClaudeLoginServerMessage`/status) used only on
-  `/ws/claude-login`; it carries bounded terminal text and lifecycle state,
-  never profile credentials or echoed authorization input, and deliberately
-  stays outside the main `ClientMessage`/`ServerMessage` unions.
+- `protocol.ts` owns the small dedicated account-login contract
+  (`AccountLoginClientMessage`/`AccountLoginServerMessage`/status/intent/device)
+  used only on `/ws/account-login`, for Claude and OpenAI logins alike; it
+  carries bounded terminal text, OpenAI's short-lived device code and lifecycle
+  state, never profile credentials or echoed authorization input, and
+  deliberately stays outside the main `ClientMessage`/`ServerMessage` unions.
+  The device code lives only there: `CredentialProfileSummary.setup` has none.
+  Snapshots and run statuses carry the run's opaque `runId`, and `cancel` may
+  name it; a run's snapshots also echo the `startToken` of the start that
+  created it. A client thus cancels only a run its own start created or joined,
+  never another start's login of the same account.
 - `protocol.ts` also owns the dictation contract: `SpeechToTextSettings` (an
   `AppSettings` section), the deployment-state `SpeechToTextStatus` (carried on
   `ready` AND re-sent as a `speechToTextStatus` message after any `speechToText`

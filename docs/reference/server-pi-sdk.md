@@ -183,8 +183,9 @@ and headless one-shot utility runs.
   `ASSISTANT_LEGACY_PI_AGENT_DIR` overrides that source and can point to a
   nonexistent path to disable the seed. Every subsequent runtime read remains
   PA-owned. `startOpenAiProfileLogin` delegates device-code OAuth to pi and
-  exposes only short-lived verification instructions through the
-  credential-profile registry; tokens remain in the private pi auth file. Pi
+  hands the short-lived verification instructions only to its observer (the
+  login dialog's run, `openAiLoginTerminal.ts`); `cancelOpenAiProfileLogin`
+  aborts it before its commit. Tokens remain in the private pi auth file. Pi
   writes OAuth before its post-login model refresh resolves, so a changed
   credential hash completes the UI and the profile projection immediately
   includes that profile's built-in OpenAI models even if the SDK availability

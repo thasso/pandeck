@@ -63,16 +63,11 @@ describe("accounts_read and accounts_update", () => {
       name: "Office Claude",
     });
     await call("accounts_update", { operation: "disable", id: account.id });
-    // A login in progress carries a device code; it never reaches the agent.
-    setCredentialProfileLoginState(account.id, {
-      status: "connecting",
-      verificationUri: "https://example.invalid/device",
-      userCode: "WXYZ-1234",
-    });
+    // A login in progress: its device code travels only on the login
+    // dialog's socket, so nothing of it can reach the agent.
+    setCredentialProfileLoginState(account.id, { status: "connecting" });
     const result = await tool("accounts_read").execute({}, ctx("s-accounts"));
-    const text = JSON.stringify(result);
-    assert.equal(text.includes("WXYZ-1234"), false);
-    assert.equal(text.includes("example.invalid/device"), false);
+    assert.doesNotMatch(JSON.stringify(result), /verificationUri|userCode/);
     clearCredentialProfileLoginState(account.id);
     const listed = (result.details as { accounts: Account[] }).accounts.find(
       (a) => a.id === account.id,

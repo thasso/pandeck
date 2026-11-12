@@ -1418,7 +1418,20 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     second viewer attaches to the running login. The pi login takes the hold
     before it creates its runtime and starts the device-code login.
   - **Release** comes only once the writer ended: the Claude child's `close`, or
-    pi's provider login settling, never pi's UI timeout.
+    pi's provider login settling, never on pi's UI timeout or a cancel.
+  - **Stopping a pi login** (`piSdk/models.ts`). Before its commit, Cancel, the
+    10-minute UI timeout and the profile's deletion each record a stop reason,
+    the first one winning, and abort pi's device-code login through its
+    `AbortSignal`; only deletion invalidates the operation. The commit wins:
+    once the login attested its own credential, or pi's login resolved, a later
+    cancel or timeout records nothing and aborts nothing, and the outcome is
+    ready even if pi rejects afterwards. A login that commits right after an
+    abort is ready too. At settle, uncommitted: a cancel clears the login state,
+    a timeout sets its text as the account's error, a deletion ends cancelled,
+    and anything else sets pi's error. The login dialog hears the outcome only
+    after the release, the file cleanup and the operation leaving its map, so a
+    new login can start then. An abort before the commit leaves the account's
+    credential as it was; a committed login is never rolled back.
   - **Stopping a Claude login.** A timeout, cancel, server stop, failed writer
     registration or input error sends SIGTERM, then SIGKILL after 5 seconds;
     deleting the profile or Clear sends SIGKILL at once. The run ends, and
@@ -1426,6 +1439,23 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     When the server process exits, every unclosed child gets SIGKILL. The same
     stop path runs with the switch off, without a hold: the texts are unchanged,
     but a stopped login reports its end only on `close`.
+  - **Cancel is run-scoped.** The login dialog's socket
+    (`accountLoginSocket.ts`) gives every login run an opaque `runId` on its
+    snapshot and statuses, and each dialog's `start` sends an opaque
+    `startToken` (at most 64 characters) that the run it creates keeps and
+    echoes in its snapshots. A Cancel is sent only for a run that dialog started
+    or joined: the run it saw, or, if pressed before any snapshot, the start
+    socket's own run, or after a reconnect the run carrying its `startToken`. It
+    is repeated after a reconnect only while that same run is still connecting,
+    and dropped unsent for any other or finished run; the server ignores a
+    cancel naming another run. So a Cancel never ends a login of the same
+    account that the dialog neither started nor joined. An early Cancel that
+    cannot be proven to be for the shown run is never sent: if that run is still
+    running (a start that joined another's login and lost its first snapshot),
+    the dialog shows "Cancel not confirmed. Press Cancel again to stop this
+    login." and keeps Cancel enabled; pressing it cancels the shown run. A
+    finished run needs nothing, and the notice clears when the run ends or the
+    dialog closes.
   - **Refusals** map to existing texts only. A `login_stuck` refusal naming its
     hold marks the account login-stuck, and the login starts nothing.
     `hold_exists`, a `login_stuck` refusal without a hold, and a link that is
@@ -1440,7 +1470,7 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     account's token. If no login is still running, choose Clear the unfinished
     login.") with "Clear the unfinished login" in place of Connect. A login
     started on it leaves no login state on the account, so the account's text
-    ends with the flag; the Claude login dialog shows the text too.
+    ends with the flag; the login dialog shows the text too.
   - **Clear** (`POST /api/credential-profiles/<id>/login/clear`, answering
     `{ok: true}` or a 400 `{error}`) is the operator's assertion that no login
     runs. With no stuck hold, or with the switch off, it does nothing. A hold
@@ -1451,7 +1481,8 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     counts as done). A failure answers the unreachable text above.
   - **Known limits.**
     - A pi login whose provider never settles keeps its hold: Clear refuses it
-      while this server runs it, and a restart ends it.
+      while this server runs it, and a restart ends it. Its abort on Cancel or
+      the timeout normally ends it.
     - In development, a `claude` wrapper on `PATH` that does not `exec`
       registers the wrapper's pid.
     - A `login_stuck` refusal for another boot's hold that later ends by
@@ -1760,11 +1791,23 @@ path above.
   relay's socket, mirrors the gateway's accounts into the profile registry and
   gives engines the relay's loopback URL. Settings' existing UI drives the
   gateway (`remoteLogins.ts`): adding an account starts its first login, the
-  Claude login terminal renders the login's events, a Codex device code shows on
-  the account, and delete calls `accounts.remove`. This credential ownership
-  does not move Claude's local runtime/transcript directories: Pandeck's
-  one-time Default transcript import and startup gate still apply before the
-  client link starts (`docs/credential-distribution.md`).
+  login dialog renders both providers' login events (Claude's output, Codex's
+  URL and code as one `device` message, never on the account), Cancel sends
+  `logins.cancel`, also while the gateway's start has not answered yet (it is
+  latched and forwarded once the login id is known), and delete calls
+  `accounts.remove`. The gateway sends a login's events only over current
+  connections, so a lost connection marks the server's running logins
+  interrupted; after the next connect each is cancelled on the gateway. An
+  `unknown_login` answer, to that cancel or to the user's, means the gateway no
+  longer runs it: the dialog ends with "The gateway connection was interrupted.
+  Start the login again." and the account shows the mirror's state. Otherwise
+  the gateway's own terminal event ends it. Known limit: a start whose answer is
+  lost with the connection can leave the gateway's login running until its
+  10-minute timeout; a retry rejoins it (without the device code or output it
+  already sent) and Cancel ends it. This credential ownership does not move
+  Claude's local runtime/transcript directories: Pandeck's one-time Default
+  transcript import and startup gate still apply before the client link starts
+  (`docs/credential-distribution.md`).
 - **Gateway tools** (Task-1398, `remoteTools.ts`,
   `tools/gateway/remoteToolGroup.ts`). On every connect the link calls
   `tools.list` after `accounts.list` and the first reconcile, and publishes the

@@ -17,6 +17,7 @@ import {
   ACCOUNT_KINDS,
   accountServesModel,
   isOpenAiCompatibleModelProvider,
+  loginStuckText,
   THINKING_LEVELS,
   type ModelOption,
   type ThinkingLevel,
@@ -135,9 +136,14 @@ const compatibleRegistrations = new Map<string, string>();
  * the next lookup.
  */
 const compatibleRuntimes = new Map<string, ModelRuntime>();
+/** Why a login stopped before its commit; the first one wins. */
+type ProfileLoginStopReason = "cancelled" | "timedOut" | "deleted";
 interface ProfileLoginOperation {
+  /** The profile was deleted: callbacks are ignored, files removed after settle. */
   invalidated: boolean;
   agentDir: string;
+  /** Records a pre-commit stop reason, if none yet, and aborts pi's login. */
+  stop(reason: ProfileLoginStopReason): void;
 }
 const profileLogins = new Map<string, ProfileLoginOperation>();
 setCredentialProfileDeletedHandler((id) => {
@@ -147,8 +153,7 @@ setCredentialProfileDeletedHandler((id) => {
   if (held?.getRegisteredProviderConfig(id)) held.unregisterProvider(id);
   compatibleRuntimes.delete(id);
   compatibleRegistrations.delete(id);
-  const operation = profileLogins.get(id);
-  if (operation) operation.invalidated = true;
+  profileLogins.get(id)?.stop("deleted");
 });
 // An endpoint edit, a discovery or a rename is announced synchronously, before
 // the write's caller hears back, so the next request on any held runtime uses
@@ -573,23 +578,65 @@ export function setOpenAiProfileLoginTimeoutForTests(
 
 const OPENAI_LOGIN_TIMED_OUT_TEXT =
   "OpenAI device-code login timed out. The active login will finish before another can start.";
+const OPENAI_LOGIN_DELETED_TEXT = "Profile deleted; OpenAI login cancelled.";
+
+/** How a profile login ended, told once its provider work has settled. */
+export type OpenAiProfileLoginOutcome = "ready" | "cancelled" | "error";
+
+/** What the login dialog's run hears from one profile login. */
+export interface OpenAiProfileLoginObserver {
+  /** The device code's link and code: short-lived, never logged or stored. */
+  device(verificationUri: string, userCode: string): void;
+  /**
+   * Once, after the hold's release, the file cleanup and the operation's
+   * removal: a new login can start from here.
+   */
+  settled(outcome: OpenAiProfileLoginOutcome, text?: string): void;
+}
 
 /**
  * Start pi's provider-owned OpenAI device-code flow without exposing a token.
  * With the gateway switch on, the profile's login hold is taken before the
  * runtime, and released only once the provider's login has settled, never on
- * the UI timeout. Clear refuses this login while it runs here (DQ2).
+ * the UI timeout or a cancel. Clear refuses this login while it runs here
+ * (DQ2). Answers false, starting nothing, while the profile's login runs.
+ *
+ * Outcome precedence (Task-1402 B1, `docs/workers.md` "Credentials"):
+ * - The commit wins: once this flow's own credential is attested, or pi's
+ *   login resolved, the outcome is `ready`; a later cancel or timeout records
+ *   nothing and aborts nothing, and a later rejection is no error.
+ * - Before the commit the first stop reason wins: cancel, the UI timeout or
+ *   deletion records it and aborts pi's login through its signal. Only
+ *   deletion invalidates, so a commit racing a cancel's abort still counts.
+ * - At settle, uncommitted: cancelled clears the login state; a timeout sets
+ *   its error; deletion ends cancelled; otherwise pi's error.
  */
-export function startOpenAiProfileLogin(profileId: string): void {
-  if (profileLogins.has(profileId)) return;
+export function startOpenAiProfileLogin(
+  profileId: string,
+  observer?: OpenAiProfileLoginObserver,
+): boolean {
+  if (profileLogins.has(profileId)) return false;
   const profile = credentialProfileById(profileId);
   if (!profile || profile.provider !== "openai-codex")
     throw new Error("That is not an OpenAI profile.");
   const agentDir = piAgentDir(profileId);
-  const operation: ProfileLoginOperation = { invalidated: false, agentDir };
+  const abort = new AbortController();
+  let stopReason: ProfileLoginStopReason | undefined;
+  // The commit flag: set once, final.
+  let completed = false;
+  const operation: ProfileLoginOperation = {
+    invalidated: false,
+    agentDir,
+    stop(reason) {
+      if (reason === "deleted") operation.invalidated = true;
+      // A committed login is never aborted: pi may still be synchronizing.
+      if (completed || stopReason) return;
+      stopReason = reason;
+      abort.abort();
+    },
+  };
   const isCurrent = () =>
     !operation.invalidated && profileLogins.get(profileId) === operation;
-  let completed = false;
   const completeLogin = () => {
     if (!isCurrent() || completed) return;
     completed = true;
@@ -624,21 +671,22 @@ export function startOpenAiProfileLogin(profileId: string): void {
   setCredentialProfileLoginState(profileId, { status: "connecting" });
   let hold: LoginHold | undefined;
   let providerLogin: Promise<unknown> | undefined;
+  /** The hold refused the login: its text, and whether the account shows it. */
+  let unstarted: { error: string; onAccount: boolean } | undefined;
+  let failure: string | undefined;
   void (async () => {
     const taken = await takeLoginHold(profile, () => {
       throw new Error(OPENAI_LOGIN_TIMED_OUT_TEXT);
     });
     if (taken.kind === "held") hold = taken.hold;
-    if (!isCurrent()) return;
+    if (!isCurrent() || stopReason) return;
     if (taken.kind === "stuck") {
-      clearCredentialProfileLoginState(profileId);
+      // The account shows U7's text from its login-stuck flag.
+      unstarted = { error: loginStuckText(profile.name), onAccount: false };
       return;
     }
     if (taken.kind === "unavailable") {
-      setCredentialProfileLoginState(profileId, {
-        status: "error",
-        error: GATEWAY_LOGIN_UNAVAILABLE_TEXT,
-      });
+      unstarted = { error: GATEWAY_LOGIN_UNAVAILABLE_TEXT, onAccount: true };
       return;
     }
     // A login-only facade can attest its own OAuth result without changing a
@@ -649,80 +697,42 @@ export function startOpenAiProfileLogin(profileId: string): void {
       ...runtimeOptions(agentDir),
       refreshOnCreate: false,
     });
+    if (!isCurrent() || stopReason) return;
     providerLogin = runOpenAiProfileLogin(
       runtime,
       deviceCodeInteraction((verificationUri, userCode) => {
-        if (isCurrent() && !completed)
-          setCredentialProfileLoginState(profileId, {
-            status: "connecting",
-            verificationUri,
-            userCode,
-          });
-      }),
+        if (isCurrent() && !completed && !stopReason)
+          observer?.device(verificationUri, userCode);
+      }, abort.signal),
       completeLogin,
       `${agentDir}/auth.json`,
     );
-    const login = providerLogin;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    // The UI timeout aborts an uncommitted login; the run still ends only
+    // once pi's login settled.
+    const timeout = setTimeout(
+      () => operation.stop("timedOut"),
+      openAiProfileLoginTimeoutMs,
+    );
     try {
-      await Promise.race([
-        login,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error(OPENAI_LOGIN_TIMED_OUT_TEXT)),
-            openAiProfileLoginTimeoutMs,
-          );
-        }),
-      ]);
+      await providerLogin;
       completeLogin();
-    } catch (error) {
-      if (completed) {
-        // Retain serialization until a hanging post-login refresh actually
-        // settles, but never turn a committed login back into an error.
-        await login.catch(() => {});
-        return;
-      }
-      if (
-        error instanceof Error &&
-        error.message.startsWith("OpenAI device-code login timed out.")
-      ) {
-        if (isCurrent()) {
-          setCredentialProfileLoginState(profileId, {
-            status: "error",
-            error: error.message,
-          });
-        }
-        // Promise.race cannot abort the SDK login. Keep this operation in the
-        // in-flight map until it truly settles, so a retry cannot race its auth
-        // file; then surface its actual result.
-        await login;
-        completeLogin();
-        return;
-      }
-      throw error;
     } finally {
-      if (timeout) clearTimeout(timeout);
+      clearTimeout(timeout);
     }
   })()
     .catch((error) => {
-      if (isCurrent() && !completed) {
-        setCredentialProfileLoginState(profileId, {
-          status: "error",
-          error:
-            error instanceof Error
-              ? error.message.slice(0, 180)
-              : "OpenAI login failed.",
-        });
-      }
+      failure =
+        error instanceof Error
+          ? error.message.slice(0, 180)
+          : "OpenAI login failed.";
     })
     .finally(() => {
       // The writer is pi's provider login: the hold ends once it settled.
       void Promise.allSettled([providerLogin]).then(() => {
         hold?.release();
         if (operation.invalidated) {
-          // The provider API has no cancellation signal. Deletion invalidates
-          // all callbacks immediately; after the operation settles, remove
-          // anything it may have written through its now-stale runtime paths.
+          // Deletion ignores every callback; after the operation settles,
+          // remove anything it may have written through its stale paths.
           rmSync(dirname(operation.agentDir), { recursive: true, force: true });
         } else {
           // pi owns the token serialization; tighten the file after every
@@ -733,10 +743,39 @@ export function startOpenAiProfileLogin(profileId: string): void {
             /* no credential was written */
           }
         }
+        const [outcome, text] = profileLoginOutcome();
         if (profileLogins.get(profileId) === operation)
           profileLogins.delete(profileId);
+        observer?.settled(outcome, text);
       });
     });
+
+  /** The account's effects at settle, and the dialog's outcome. */
+  function profileLoginOutcome(): [OpenAiProfileLoginOutcome, string?] {
+    if (operation.invalidated) return ["cancelled", OPENAI_LOGIN_DELETED_TEXT];
+    if (completed) return ["ready"];
+    if (stopReason === "cancelled") {
+      clearCredentialProfileLoginState(profileId);
+      return ["cancelled"];
+    }
+    const error =
+      stopReason === "timedOut"
+        ? OPENAI_LOGIN_TIMED_OUT_TEXT
+        : (unstarted?.error ?? failure ?? "OpenAI login failed.");
+    if (unstarted && !unstarted.onAccount)
+      clearCredentialProfileLoginState(profileId);
+    else setCredentialProfileLoginState(profileId, { status: "error", error });
+    return ["error", error];
+  }
+  return true;
+}
+
+/**
+ * Cancels the profile's running login: aborts pi's login unless it already
+ * committed or stopped. Never invalidates, so a racing commit still counts.
+ */
+export function cancelOpenAiProfileLogin(profileId: string): void {
+  profileLogins.get(profileId)?.stop("cancelled");
 }
 
 /**

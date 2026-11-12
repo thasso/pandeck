@@ -24,6 +24,7 @@ process.env.HOME = join(tmp, "home");
 
 const profiles = await import("./credentialProfiles.ts");
 const terminal = await import("./claudeLoginTerminal.ts");
+const { attachAccountLoginSocket } = await import("./accountLoginSocket.ts");
 const { setChildProcessEnvOverlay } = await import("./subprocessEnv.ts");
 const health = await import("./accountHealth.ts");
 const loginHolds = await import("./loginHolds.ts");
@@ -69,7 +70,7 @@ class FakeSocket extends EventEmitter {
 
 function request(profileId: string) {
   return {
-    url: `/ws/claude-login?profileId=${encodeURIComponent(profileId)}`,
+    url: `/ws/account-login?profileId=${encodeURIComponent(profileId)}&intent=start`,
     headers: { host: "localhost" },
   } as never;
 }
@@ -138,7 +139,7 @@ test("streams the official profile-isolated CLI flow and never echoes the submit
   const socket = new FakeSocket();
   setChildProcessEnvOverlay({ HTTPS_PROXY: "http://127.0.0.1:9/login" });
   try {
-    terminal.attachClaudeLoginSocket(
+    attachAccountLoginSocket(
       socket as unknown as WebSocket,
       request(profile.id),
     );
@@ -201,7 +202,7 @@ test("Default Claude's login runs the CLI in its DATA_DIR directory, never ~/.cl
     env = options.env;
     return childProcess(child);
   });
-  terminal.attachClaudeLoginSocket(
+  attachAccountLoginSocket(
     new FakeSocket() as unknown as WebSocket,
     request(profiles.DEFAULT_CLAUDE_PROFILE_ID),
   );
@@ -231,14 +232,8 @@ test("keeps one active process per profile across browser reconnects and support
   });
   const first = new FakeSocket();
   const second = new FakeSocket();
-  terminal.attachClaudeLoginSocket(
-    first as unknown as WebSocket,
-    request(profile.id),
-  );
-  terminal.attachClaudeLoginSocket(
-    second as unknown as WebSocket,
-    request(profile.id),
-  );
+  attachAccountLoginSocket(first as unknown as WebSocket, request(profile.id));
+  attachAccountLoginSocket(second as unknown as WebSocket, request(profile.id));
   assert.equal(spawns, 1);
 
   second.emit("message", Buffer.from("null"));
@@ -260,7 +255,7 @@ test.each(["cancelled", "error"] as const)(
     const child = new FakeChild();
     terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
     const socket = new FakeSocket();
-    terminal.attachClaudeLoginSocket(
+    attachAccountLoginSocket(
       socket as unknown as WebSocket,
       request(profile.id),
     );
@@ -308,7 +303,7 @@ test.each(["cancelled", "error", "ready"] as const)(
     const child = new FakeChild();
     terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
     const socket = new FakeSocket();
-    terminal.attachClaudeLoginSocket(
+    attachAccountLoginSocket(
       socket as unknown as WebSocket,
       request(profile.id),
     );
@@ -335,7 +330,7 @@ test("profile deletion cancels an in-flight login before its private directory i
   });
   const child = new FakeChild();
   terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
-  terminal.attachClaudeLoginSocket(
+  attachAccountLoginSocket(
     new FakeSocket() as unknown as WebSocket,
     request(profile.id),
   );
@@ -345,21 +340,28 @@ test("profile deletion cancels an in-flight login before its private directory i
   assert.equal(profiles.credentialProfileById(profile.id), undefined);
 });
 
-test("rejects a non-Claude profile without spawning a process", () => {
-  let spawned = false;
-  terminal.setClaudeLoginSpawnForTests(() => {
-    spawned = true;
-    return childProcess(new FakeChild());
-  });
-  const socket = new FakeSocket();
-  terminal.attachClaudeLoginSocket(
-    socket as unknown as WebSocket,
-    request("default"),
-  );
-  assert.equal(spawned, false);
-  assert.equal(socket.closed?.code, 1008);
-  assert.equal((socket.sent[0] as { status?: string }).status, "error");
-});
+test.each(["an unknown profile", "an endpoint account"] as const)(
+  "rejects %s without spawning a process",
+  (which) => {
+    let spawned = false;
+    terminal.setClaudeLoginSpawnForTests(() => {
+      spawned = true;
+      return childProcess(new FakeChild());
+    });
+    const id =
+      which === "an unknown profile"
+        ? "missing"
+        : profiles.createCredentialProfile({
+            name: "Endpoint",
+            provider: "openai-compatible",
+          }).id;
+    const socket = new FakeSocket();
+    attachAccountLoginSocket(socket as unknown as WebSocket, request(id));
+    assert.equal(spawned, false);
+    assert.equal(socket.closed?.code, 1008);
+    assert.equal((socket.sent[0] as { status?: string }).status, "error");
+  },
+);
 
 // G5b: the login hold around the child, and the one stop path (AC3-AC6, AC8,
 // AC14). Every child is a fake that closes only when the test says so, which
@@ -427,7 +429,7 @@ function holdSetup(options: { pid?: number | undefined; link?: boolean } = {}) {
   });
   const attach = () => {
     const socket = new EventSocket(events);
-    terminal.attachClaudeLoginSocket(
+    attachAccountLoginSocket(
       socket as unknown as WebSocket,
       request(profile.id),
     );
@@ -440,15 +442,24 @@ const input = (socket: FakeSocket, data: string) =>
   socket.emit("message", Buffer.from(JSON.stringify({ type: "input", data })));
 const cancel = (socket: FakeSocket) =>
   socket.emit("message", Buffer.from(JSON.stringify({ type: "cancel" })));
-const lastStatus = (socket: FakeSocket) =>
-  socket.sent
+/** The latest status, without its run id (`accountLoginSocket.test.ts`). */
+const lastStatus = (socket: FakeSocket) => {
+  const last = socket.sent
     .filter(
       (
         message,
-      ): message is { type: "status"; status: string; error?: string } =>
-        (message as { type?: string }).type === "status",
+      ): message is {
+        type: "status";
+        status: string;
+        error?: string;
+        runId?: string;
+      } => (message as { type?: string }).type === "status",
     )
     .at(-1);
+  if (!last) return undefined;
+  const { runId: _runId, ...status } = last;
+  return status;
+};
 /** Lets the promise reactions queued so far run. */
 const ticks = async () => {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();

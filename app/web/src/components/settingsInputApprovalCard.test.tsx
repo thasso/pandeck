@@ -10,16 +10,22 @@ import { ApprovalCard } from "./ApprovalCard.tsx";
 
 const accountsApi = vi.hoisted(() => ({
   fetchCredentialProfiles: vi.fn(),
-  startOpenAiProfileLogin: vi.fn(async () => {}),
 }));
 vi.mock("../lib/credentialProfiles.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/credentialProfiles.ts")>()),
   ...accountsApi,
 }));
-vi.mock("./ClaudeLoginTerminal.tsx", () => ({
-  ClaudeLoginTerminal: ({ profile }: { profile: { name: string } }) => (
-    <div role="dialog">Claude login for {profile.name}</div>
-  ),
+/** The login dialogs the card opened, by account. */
+const openedDialogs = vi.hoisted(() => [] as string[]);
+vi.mock("./AccountLoginDialog.tsx", () => ({
+  AccountLoginDialog: ({
+    profile,
+  }: {
+    profile: { id: string; name: string; provider: string };
+  }) => {
+    openedDialogs.push(`${profile.provider} ${profile.id}`);
+    return <div role="dialog">Login dialog for {profile.name}</div>;
+  },
 }));
 
 /**
@@ -293,14 +299,36 @@ function account(provider: "claude" | "openai-codex", setup?: object) {
   };
 }
 
-test("an OpenAI sign-in shows the device link and code, and starts the login", async () => {
+test.each(["openai-codex", "claude"] as const)(
+  "AC7: a %s sign-in opens the one login dialog, with no inline code and no HTTP login start",
+  async (provider) => {
+    openedDialogs.length = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    accountsApi.fetchCredentialProfiles.mockResolvedValue([account(provider)]);
+    render(
+      <ApprovalCard approval={signInCard(provider)} onResolve={vi.fn()} />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    click("Sign in");
+    // The dialog is a ui/dialog, which portals itself out of the transcript row.
+    expect(document.body.textContent).toContain(
+      "Login dialog for Work account",
+    );
+    expect(openedDialogs.at(-1)).toBe(`${provider} cp_fixture`);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  },
+);
+
+test("AC7: a connecting OpenAI account continues its sign-in in the dialog and shows no code on the card", async () => {
+  openedDialogs.length = 0;
   accountsApi.fetchCredentialProfiles.mockResolvedValue([
     account("openai-codex", {
       path: "",
       command: "",
-      detail: "",
-      verificationUri: "https://example.invalid/device",
-      userCode: "ABCD-1234",
+      detail: "Use Continue login to see the verification link.",
     }),
   ]);
   render(
@@ -309,25 +337,10 @@ test("an OpenAI sign-in shows the device link and code, and starts the login", a
   await act(async () => {
     await Promise.resolve();
   });
-  expect(container!.textContent).toContain("ABCD-1234");
-  expect(
-    container!.querySelector('a[href="https://example.invalid/device"]'),
-  ).not.toBeNull();
-  click("Sign in again");
-  expect(accountsApi.startOpenAiProfileLogin).toHaveBeenCalledWith(
-    "cp_fixture",
-  );
-});
-
-test("a Claude sign-in opens the official login terminal", async () => {
-  accountsApi.fetchCredentialProfiles.mockResolvedValue([account("claude")]);
-  render(<ApprovalCard approval={signInCard("claude")} onResolve={vi.fn()} />);
-  await act(async () => {
-    await Promise.resolve();
-  });
-  click("Sign in");
-  // The terminal is a ui/dialog, which portals itself out of the transcript row.
-  expect(document.body.textContent).toContain("Claude login for Work account");
+  expect(container!.textContent).toContain("Sign-in in progress");
+  expect(container!.querySelector("a")).toBeNull();
+  click("Continue sign-in");
+  expect(openedDialogs).toEqual(["openai-codex cp_fixture"]);
 });
 
 function signInButton(): HTMLButtonElement {
