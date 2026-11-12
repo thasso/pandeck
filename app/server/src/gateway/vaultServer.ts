@@ -103,6 +103,11 @@ export interface RunningVaultServer {
   readonly port: number;
   /** Runs one renewal tick now, as the timer does. */
   renewDue(): Promise<void>;
+  /**
+   * Stops admitting at once, then resolves once every login and renewal has
+   * ended and every credential is sealed. It rejects, naming the account ids
+   * only, when a credential could not be sealed. Once.
+   */
   close(): Promise<void>;
 }
 
@@ -594,6 +599,7 @@ export async function startVaultServer(
   const port = typeof address === "object" && address ? address.port : 0;
   log(`listening on ${options.host ?? "127.0.0.1"}:${port}`);
 
+  let stopping: Promise<void> | undefined;
   const renewTick = setInterval(() => {
     if (locked()) return;
     sealed?.sweep();
@@ -604,16 +610,24 @@ export async function startVaultServer(
   return {
     port,
     renewDue: () => (locked() ? Promise.resolve() : vault.renewDue()),
-    async close() {
-      clearInterval(renewTick);
-      // No login commits from here: each one running ends cancelled.
-      for (const login of logins.values()) withdraw(login);
-      await control?.close();
-      current?.end("the vault is stopping");
-      const closed = new Promise<void>((done) => server.close(() => done()));
-      for (const socket of sockets) socket.destroy();
-      // Every login and renewal has ended, sealed, before this resolves.
-      await Promise.all([vault.close(), closed]);
+    close() {
+      stopping ??= (async () => {
+        // All before the first await, so nothing starts once a stop began:
+        // no login commits (each running one ends cancelled), the vault
+        // admits no login or renewal, and no edge links.
+        clearInterval(renewTick);
+        for (const login of logins.values()) withdraw(login);
+        const vaultClosed = vault.close();
+        current?.end("the vault is stopping");
+        const closed = new Promise<void>((done) => server.close(() => done()));
+        for (const socket of sockets) socket.destroy();
+        await Promise.all([control?.close(), vaultClosed, closed]);
+        // Every login and renewal has ended; each file must match its record.
+        const unsealed = (await sealed?.flush()) ?? [];
+        if (unsealed.length > 0)
+          throw new Error(`not sealed at stop: ${unsealed.join(", ")}`);
+      })();
+      return stopping;
     },
   };
 }

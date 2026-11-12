@@ -70,6 +70,9 @@ const SEALED_FILES = new Set([
 const SEALED_SUFFIX = ".sealed";
 /** `statfs` type of a tmpfs. */
 const TMPFS_MAGIC = 0x01021994;
+/** A stop's seal: this many tries, this far apart, before it reports. */
+const FLUSH_ATTEMPTS = 3;
+const FLUSH_RETRY_MS = 200;
 const HELPER_CODES = new Set(["no_device", "no_key", "failed"]);
 
 export type Recipient =
@@ -242,6 +245,12 @@ export interface SealedStore {
   discarded(accountId: string): void;
   /** Seals every token file that drifted from its record. */
   sweep(): void;
+  /**
+   * A stop's last step: seals every file that drifted from its record,
+   * retrying a failure a few times, and answers the account ids still
+   * unsealed (none when every record matches its file).
+   */
+  flush(): Promise<string[]>;
   /** Re-reads the recipients and seals every token file to them. */
   reseal(): number;
   /** Where logins leave their credential: inside the RAM filesystem. */
@@ -461,6 +470,27 @@ export function createSealedStore(
       written(join(accountsDir, accountId, file));
   };
 
+  const flush = async (): Promise<string[]> => {
+    if (locked) return [];
+    let pending = tokenFilesUnder(accountsDir);
+    for (let attempt = 1; ; attempt++) {
+      pending = pending.filter(([accountId, file]) => {
+        try {
+          if (seal(accountId, file, false)) log(`sealed account ${accountId}`);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      if (pending.length === 0) return [];
+      for (const [accountId] of pending)
+        log(`sealing account ${accountId} failed at stop (try ${attempt})`);
+      if (attempt >= FLUSH_ATTEMPTS)
+        return [...new Set(pending.map(([accountId]) => accountId))].sort();
+      await new Promise((done) => setTimeout(done, FLUSH_RETRY_MS));
+    }
+  };
+
   return {
     locked: () => locked,
     unlock,
@@ -472,6 +502,7 @@ export function createSealedStore(
         known.delete(join(accountsDir, accountId, file));
     },
     sweep,
+    flush,
     reseal() {
       if (locked) throw new Error("The vault is locked.");
       const next = readRecipients(stateDir);

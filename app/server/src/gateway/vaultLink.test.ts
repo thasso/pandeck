@@ -6,6 +6,7 @@
  */
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -43,6 +44,7 @@ import { startGateway, type RunningGateway } from "./gateway.ts";
 import type { LeaseProvider } from "./leases.ts";
 import { loginChildDriver } from "./loginChild.ts";
 import { refusalText } from "./refusals.ts";
+import { openRecord, parseSealedRecord, softwareEcdh } from "./sealedRecord.ts";
 import { recipientOf, sealExisting, writeRecipients } from "./sealedStore.ts";
 import { askVaultControl } from "./vaultControl.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
@@ -52,6 +54,7 @@ import {
   LOGIN_CREDENTIAL_FILE,
   isPinnedPeer,
 } from "./vaultMethods.ts";
+import type { CodexRenewPort } from "./renewal.ts";
 import type { LoginDrivers, LoginRun } from "./vaultPort.ts";
 import { startVaultServer, type RunningVaultServer } from "./vaultServer.ts";
 import { selfSignedIdentity, type PinnedIdentity } from "./x509.ts";
@@ -140,6 +143,7 @@ async function vault(
     drivers?: LoginDrivers;
     loginTimeoutMs?: number;
     controlSocket?: string;
+    renewCodex?: CodexRenewPort;
   } = {},
 ): Promise<Vault> {
   const dir = options.dir ?? mkdtempSync(join(root, "vault-"));
@@ -158,6 +162,7 @@ async function vault(
       ? { loginTimeoutMs: options.loginTimeoutMs }
       : {}),
     ...(options.controlSocket ? { controlSocket: options.controlSocket } : {}),
+    ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
     log: (line) => lines.push(line),
   });
   open.push(running);
@@ -974,4 +979,203 @@ test("a sealing vault starts locked: the edge refuses 503 vault locked, nothing 
   assert.equal((await modelRequest(gw.port, CLAUDE_PATH, token)).status, 200);
   for (const line of [...gw.lines, ...v.lines])
     assert.ok(!line.includes(CLAUDE_ACCESS), line);
+});
+
+// --- the stop (Task-1387 review C1, C2) -----------------------------------
+
+/** Synthetic; not a real credential. */
+const RENEWED_ACCESS = "fake-stop-renewed-access";
+
+/** A vault dir with a software recipient and `claude-a`'s record sealed. */
+async function sealedVaultDir(): Promise<{
+  dir: string;
+  claudeFile: string;
+  controlSocket: string;
+  privateKeyFile: string;
+}> {
+  const dir = mkdtempSync(join(root, "sealed-stop-"));
+  const claudeFile = writeAccountFile(dir, "claude", "claude-a");
+  const { publicKey, privateKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const privateKeyFile = join(dir, "software-key.pem");
+  writeFileSync(
+    privateKeyFile,
+    privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+  );
+  writeRecipients(dir, [
+    recipientOf(publicKey.export({ type: "spki", format: "pem" }) as string, {
+      privateKeyFile,
+    }),
+  ]);
+  assert.deepEqual(await sealExisting(dir), { sealed: 1 });
+  return {
+    dir,
+    claudeFile,
+    controlSocket: join(dir, "control.sock"),
+    privateKeyFile,
+  };
+}
+
+async function settledWithin(
+  promise: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
+  return Promise.race([
+    promise.then(
+      () => true,
+      () => true,
+    ),
+    delay(ms).then(() => false),
+  ]);
+}
+
+test("C1: a stop admits nothing from its first moment, and an open control connection does not hold it", async () => {
+  const { dir, controlSocket } = await sealedVaultDir();
+  let portCalls = 0;
+  let driverStarts = 0;
+  const v = await vault({
+    dir,
+    controlSocket,
+    renewCodex: async () => {
+      portCalls += 1;
+      return { ok: true };
+    },
+    drivers: {
+      claude: (configDir) => {
+        driverStarts += 1;
+        writeFileSync(
+          join(configDir, ".credentials.json"),
+          JSON.stringify({
+            claudeAiOauth: { accessToken: CLAUDE_ACCESS, expiresAt: expires() },
+          }),
+        );
+        return { input: () => {}, cancel: () => {}, done: Promise.resolve() };
+      },
+    },
+  });
+  open.splice(open.indexOf(v), 1);
+  assert.deepEqual(
+    await askVaultControl(controlSocket, { method: "unlock", pin: "unused" }),
+    { ok: true, opened: 1, unopened: 0 },
+  );
+  // A Codex account due for renewal, leased.
+  const codexFile = join(v.dir, "accounts", "codex-a", "auth.json");
+  mkdirSync(join(v.dir, "accounts", "codex-a"), { recursive: true });
+  writeFileSync(
+    codexFile,
+    JSON.stringify({
+      "openai-codex": {
+        type: "oauth",
+        access: CODEX_ACCESS,
+        accountId: CODEX_ACCOUNT,
+        expires: Date.now() + 60_000,
+      },
+    }),
+  );
+  const accounts = new Map<string, string>([["codex-a", codexFile]]);
+  const remote = createRemoteVault(
+    { host: "127.0.0.1", port: v.port, tls: linkTls() },
+    {
+      profiles: () =>
+        [...accounts].map(([id, tokenFile]) => ({
+          id,
+          provider: id.startsWith("codex") ? "openai-codex" : "claude",
+          name: id,
+          enabled: true,
+          tokenFile,
+        })),
+      liveLeases: () => ["codex-a"],
+      report: () => {},
+      log: () => {},
+    },
+  );
+  open.push(remote);
+  await until(remote.connected, "the vault link");
+  const start = (accountId: string) => {
+    const tokenFile = remote.newTokenFile("claude", accountId);
+    accounts.set(accountId, tokenFile);
+    remote.inputsChanged();
+    const run = remote.login(
+      { kind: "claude", accountId, tokenFile, commit: () => true },
+      { output() {}, url() {}, code() {} },
+    )!;
+    run.done.catch(() => {});
+    return { run, tokenFile };
+  };
+  // The vault takes both inputs before the stop.
+  await delay(100);
+  // An idle control connection, held open across the stop.
+  const held = net.connect(controlSocket);
+  held.on("error", () => {});
+  await new Promise((resolve) => held.once("connect", resolve));
+  const heldClosed = new Promise((resolve) => held.once("close", resolve));
+
+  const closing = v.close();
+  // Asked once the stop began: no login runs, no renewal reaches the port.
+  const late = start("claude-late");
+  await assert.rejects(late.run.done);
+  await v.renewDue();
+  assert.equal(await settledWithin(closing, 10_000), true, "the stop hung");
+  await closing;
+  await heldClosed;
+  assert.equal(driverStarts, 0);
+  assert.equal(portCalls, 0);
+  assert.equal(existsSync(late.tokenFile), false);
+});
+
+test("C2: a seal that keeps failing at stop rejects the stop, naming the account; one that recovers seals the new credential", async () => {
+  for (const recovers of [false, true]) {
+    const { dir, claudeFile, controlSocket, privateKeyFile } =
+      await sealedVaultDir();
+    const v = await vault({ dir, controlSocket });
+    open.splice(open.indexOf(v), 1);
+    assert.deepEqual(
+      await askVaultControl(controlSocket, { method: "unlock", pin: "unused" }),
+      { ok: true, opened: 1, unopened: 0 },
+    );
+    // A renewal wrote the file and its seal failed: the record is stale.
+    const renewed = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: RENEWED_ACCESS,
+        expiresAt: expires(),
+      },
+    });
+    writeFileSync(claudeFile, renewed);
+    const recordDir = join(dir, "sealed", "claude-a");
+    chmodSync(recordDir, 0o500);
+    try {
+      const closing = v.close();
+      if (recovers) {
+        await until(
+          () => v.lines.some((line) => line.includes("failed at stop")),
+          "a failed seal",
+        );
+        chmodSync(recordDir, 0o700);
+        await closing;
+        const record = parseSealedRecord(
+          JSON.parse(
+            readFileSync(join(recordDir, ".credentials.json.sealed"), "utf8"),
+          ),
+        );
+        assert.ok(record);
+        const opened = await openRecord(
+          record,
+          "claude-a",
+          ".credentials.json",
+          (_kid, epk) =>
+            softwareEcdh(readFileSync(privateKeyFile, "utf8"), epk),
+        );
+        assert.equal(opened?.toString("utf8"), renewed);
+      } else {
+        await assert.rejects(closing, {
+          message: "not sealed at stop: claude-a",
+        });
+        for (const line of v.lines)
+          assert.ok(!line.includes(RENEWED_ACCESS), line);
+      }
+    } finally {
+      chmodSync(recordDir, 0o700);
+    }
+  }
 });

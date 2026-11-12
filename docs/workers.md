@@ -2003,12 +2003,17 @@ never falls back to plaintext on disk.
   `integrations.clear` delete the records. Every 60 s a sweep seals any token
   file whose content changed since it was last sealed or opened. A record whose
   plaintext is missing is never touched. A crash between a write and its seal
-  can leave the previous token sealed (accepted, M21); an orderly stop cannot.
-- **Stop.** SIGTERM or SIGINT withdraws every login, so none commits, admits no
-  further renewal, cancels the logins and aborts the renewals in flight. The
-  vault exits 0 only once each login's child group has ended and its directory
-  is gone, and each renewal attempt has sealed its file in the lane. A second
-  signal changes nothing.
+  can leave the previous token sealed (accepted, M21).
+- **Stop.** From the moment SIGTERM or SIGINT arrives the vault admits no login,
+  renewal or edge link: it withdraws every login, so none commits, cancels the
+  logins and aborts the renewals in flight, ends the control socket's
+  connections, and waits until each login's child group has ended and its
+  directory is gone and each renewal attempt has left its lane. Then it seals
+  every file that still differs from its record, trying three times. It exits 0
+  only when every record matches its file. A seal that still fails (a disk
+  fault) exits 1 with `stop failed, not sealed at stop: <account ids>`: those
+  records may still hold the previous token, and the next start opens it, so the
+  account may need a new login. A second signal changes nothing.
 - **Admin.** `vault-recipient add --from-piv <slot>` (no PIN),
   `--pem <file> --slot <slot>` or `--pem <file> --private-key <file>`;
   `vault-recipient list`; `vault-recipient remove <kid>` (never the last).

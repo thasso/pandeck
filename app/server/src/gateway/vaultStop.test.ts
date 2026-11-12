@@ -17,6 +17,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,9 +36,11 @@ import { openRecord, parseSealedRecord, softwareEcdh } from "./sealedRecord.ts";
 import {
   createSealedStore,
   recipientOf,
+  sealExisting,
   writeRecipients,
   type SealedStore,
 } from "./sealedStore.ts";
+import { askVaultControl } from "./vaultControl.ts";
 import { createRemoteVault } from "./remoteVault.ts";
 import { createVault, type Vault } from "./vault.ts";
 import { LOGIN_CREDENTIAL_FILE, vaultTlsFile } from "./vaultMethods.ts";
@@ -491,5 +494,92 @@ setInterval(() => {}, 1000);
         // Gone, as it should be.
       }
     }
+  }
+}, 90_000);
+
+test("vaultMain.ts exits 1, naming the account, when a credential cannot be sealed at stop", async () => {
+  // `vault.js` wants `accounts/` on a tmpfs: /dev/shm is one.
+  const dir = mkdtempSync(join(root, "seal-exit-"));
+  const shm = mkdtempSync("/dev/shm/pandeck-t1387-");
+  try {
+    symlinkSync(shm, join(dir, "accounts"));
+    mkdirSync(join(shm, "claude-a"), { mode: 0o700 });
+    const tokenFile = join(shm, "claude-a", ".credentials.json");
+    writeFileSync(tokenFile, CREDENTIAL.claude("fake-stop-old-access"));
+    const { publicKey, privateKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const privateKeyFile = join(dir, "soft.pem");
+    writeFileSync(
+      privateKeyFile,
+      privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+      { mode: 0o600 },
+    );
+    writeRecipients(dir, [
+      recipientOf(publicKey.export({ type: "spki", format: "pem" }) as string, {
+        privateKeyFile,
+      }),
+    ]);
+    assert.deepEqual(await sealExisting(dir), { sealed: 1 });
+    const vaultId = selfSignedIdentity("pandeck-gateway-vault", "server", [
+      "127.0.0.1",
+    ]);
+    const edgeId = selfSignedIdentity("pandeck-gateway-edge", "client");
+    vaultTlsFile(dir).write({
+      v: 1,
+      keyPem: vaultId.keyPem,
+      certPem: vaultId.certPem,
+      hosts: ["127.0.0.1"],
+      edgeCertPem: edgeId.certPem,
+    });
+    const controlSocket = join(dir, "c.sock");
+    const entry = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        resolve("src/gateway/vaultMain.ts"),
+        "--state-dir",
+        dir,
+        "--port",
+        "0",
+        "--control-socket",
+        controlSocket,
+      ],
+      {
+        env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let output = "";
+    entry.stdout.setEncoding("utf8");
+    entry.stderr.setEncoding("utf8");
+    entry.stdout.on("data", (chunk: string) => (output += chunk));
+    entry.stderr.on("data", (chunk: string) => (output += chunk));
+    const exited = new Promise<number | null>((done) =>
+      entry.on("exit", (code) => done(code)),
+    );
+    try {
+      await until(() => /port \d+/.test(output), "the vault to listen");
+      assert.deepEqual(
+        await askVaultControl(controlSocket, {
+          method: "unlock",
+          pin: "unused",
+        }),
+        { ok: true, opened: 1, unopened: 0 },
+      );
+      // A renewal wrote the file; its record cannot be written.
+      writeFileSync(tokenFile, CREDENTIAL.claude("fake-stop-unsealed-access"));
+      chmodSync(join(dir, "sealed", "claude-a"), 0o500);
+      entry.kill("SIGTERM");
+      assert.equal(await exited, 1);
+      assert.match(output, /not sealed at stop: claude-a/);
+      assert.equal(output.includes("fake-stop-unsealed-access"), false);
+    } finally {
+      if (entry.exitCode === null) entry.kill("SIGKILL");
+    }
+  } finally {
+    chmodSync(join(dir, "sealed", "claude-a"), 0o700);
+    rmSync(shm, { recursive: true, force: true });
   }
 }, 90_000);

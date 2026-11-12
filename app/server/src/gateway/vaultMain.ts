@@ -91,7 +91,13 @@ const stop = (signal: string): void => {
   log(`${signal}: stopping once logins and renewals have ended`);
   void vault.close().then(
     () => process.exit(0),
-    () => process.exit(1),
+    (err: unknown) => {
+      // Fixed text and account ids only (`vaultServer.ts`).
+      console.error(
+        `[vault] stop failed, ${err instanceof Error ? err.message : "unknown"}: their last renewal or login may be lost`,
+      );
+      process.exit(1);
+    },
   );
 };
 process.on("SIGTERM", () => stop("SIGTERM"));
