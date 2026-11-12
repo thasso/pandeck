@@ -187,7 +187,12 @@ backlog/task interaction and drag/reorder behavior.
   finished run. Pressed before any snapshot, it binds only to the start socket's
   own run or to a run echoing the mount's `startToken`; for any other run still
   running it is not sent, and `cancelUnconfirmed` asks the user to press Cancel
-  again. Authorization input is sent once and never retained in React state
+  again. It also reports what that Cancel did, per run: `cancelling` while it is
+  latched or sent for the shown run (cleared by another run's snapshot), and
+  `cancelledHere` once the shown run, which this mount actually sent a Cancel
+  for, ends cancelled. That is not proof of cause: if another place cancels the
+  same run at the same moment, the dialog still closes and that notice may not
+  be shown. Authorization input is sent once and never retained in React state
   beyond the password field owned by the modal.
 - `useDictation.ts` owns composer dictation: a single `toggle` (tap to start,
   tap to stop — no hold-to-talk, which lost its meaning once the control that

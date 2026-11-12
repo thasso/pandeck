@@ -3,21 +3,40 @@
  * supplied by its host: Pandeck's Settings (`AccountLoginDialog.tsx`) and the
  * gateway's page each render it over their own login API. It imports no
  * transport: only React, icons, `ui/` and three `common/` leaves
- * (`AccountLoginDialogView.test.tsx` pins this), so the gateway bundle stays
- * small.
+ * (`AccountLoginDialogView.imports.test.ts` pins this), so the gateway bundle
+ * stays small.
  *
- * Claude shows the official CLI's output, its authorization link and a paste
- * field; OpenAI shows its verification link and one-time code. Both offer
- * Cancel login while the login runs; Close (Done once signed in) never
- * cancels.
+ * Claude shows its authorization link and a paste field, never the CLI's
+ * output; OpenAI shows its verification link and one-time code. Each link also
+ * appears as selectable text with a Copy button where the browser offers a
+ * clipboard (plain http does not). While the login runs the only way out is
+ * Cancel login: no X, and Escape or an outside click does nothing. Close
+ * appears as soon as Cancel was pressed, so a cancel the server never confirms
+ * cannot trap the user. The host tells which run its Cancel concerns:
+ * `cancelling` shows "Cancelling…" for the shown run, and `cancelledHere`
+ * closes the dialog, with no cancelled screen, once the run this dialog sent a
+ * Cancel for ended cancelled. The dialog stays mounted until then because the
+ * host may still have to deliver a latched Cancel. A run this dialog sent no
+ * Cancel for (taken over elsewhere, cancelled by another viewer) keeps its
+ * notice and Close. If another place cancels the same run at the same moment,
+ * the dialog still closes and that notice may not be shown. A finished login
+ * offers Done (signed in) or Close.
  */
-import { useId, useMemo, useState, type SyntheticEvent } from "react";
 import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type SyntheticEvent,
+} from "react";
+import {
+  Check,
   CheckCircle2,
+  Copy,
   ExternalLink,
   KeyRound,
   Terminal,
-  X,
 } from "lucide-react";
 import type {
   AccountLoginDevice,
@@ -53,13 +72,19 @@ export interface AccountLoginDialogViewProps {
   provider: AccountLoginProvider;
   accountName: string;
   status: AccountLoginStatus;
-  /** Claude's CLI output; empty for OpenAI. */
+  /** Claude's CLI output, read only for its authorization URL and never
+   * shown; empty for OpenAI. */
   output: string;
   /** OpenAI's verification link and code, once known. */
   device?: AccountLoginDevice | undefined;
   error?: string | undefined;
   /** An early Cancel could not be tied to this run and was not sent. */
   cancelUnconfirmed?: boolean | undefined;
+  /** This dialog's Cancel is latched or sent for the shown run. */
+  cancelling?: boolean | undefined;
+  /** The run this dialog sent a Cancel for ended cancelled (whoever's cancel
+   * won): close silently. */
+  cancelledHere?: boolean | undefined;
   /** Claude's pasted code; answers whether it was sent. */
   submit?: ((code: string) => boolean) | undefined;
   cancel: () => void;
@@ -71,6 +96,9 @@ const PROVIDER_LABEL: Record<AccountLoginProvider, string> = {
   "openai-codex": "OpenAI",
 };
 
+/** How long the Copy button shows its check after a successful copy. */
+const COPIED_FEEDBACK_MS = 2000;
+
 export function AccountLoginDialogView({
   provider,
   accountName,
@@ -79,16 +107,32 @@ export function AccountLoginDialogView({
   device,
   error,
   cancelUnconfirmed,
+  cancelling: cancellingRun,
+  cancelledHere: cancelledHereRun,
   submit,
   cancel,
   onClose,
 }: AccountLoginDialogViewProps) {
   const label = PROVIDER_LABEL[provider];
+  // Only for the way out: whichever run a Cancel concerned, pressing it must
+  // never leave the user without Close.
+  const [cancelPressed, setCancelPressed] = useState(false);
+  const running = status === "connecting";
+  const closable = !running || cancelPressed;
+  const cancelling = running && cancellingRun === true && !cancelUnconfirmed;
+  const cancelledHere = status === "cancelled" && cancelledHereRun === true;
+  const closedRef = useRef(false);
+  useEffect(() => {
+    if (!cancelledHere || closedRef.current) return;
+    closedRef.current = true;
+    onClose();
+  }, [cancelledHere, onClose]);
   return (
     <Dialog
       open
+      disablePointerDismissal={!closable}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open && closable) onClose();
       }}
     >
       <DialogContent
@@ -106,20 +150,21 @@ export function AccountLoginDialogView({
               ? "Official Claude CLI · profile-isolated"
               : "OpenAI device-code sign-in"}
           </DialogDescription>
-          <IconButton
-            label={`Close ${label} login`}
-            onClick={onClose}
-            className="absolute right-2 top-2"
-          >
-            <X />
-          </IconButton>
         </DialogHeader>
-        {provider === "claude" ? (
+        {cancelling ? (
+          <p
+            role="status"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground"
+          >
+            <Spinner size="sm" />
+            Cancelling…
+          </p>
+        ) : provider === "claude" ? (
           <ClaudeStep status={status} output={output} submit={submit} />
         ) : (
           <OpenAiStep status={status} device={device} />
         )}
-        {status === "connecting" && cancelUnconfirmed && (
+        {running && cancelUnconfirmed && (
           <p role="status" className="text-sm text-foreground">
             Cancel not confirmed. Press Cancel again to stop this login.
           </p>
@@ -129,7 +174,7 @@ export function AccountLoginDialogView({
             <CheckCircle2 />
             {label} is connected for this account.
           </Badge>
-        ) : status === "cancelled" ? (
+        ) : status === "cancelled" && !cancelledHere ? (
           <p className="text-sm text-muted-foreground">
             {error ?? "Login cancelled."}
           </p>
@@ -137,17 +182,77 @@ export function AccountLoginDialogView({
           <ErrorNote message={error ?? `${label} login failed.`} />
         ) : null}
         <DialogFooter>
-          {status === "connecting" && (
-            <Button variant="outline" onClick={cancel}>
+          {running && (
+            <Button
+              variant="outline"
+              disabled={cancelling}
+              onClick={() => {
+                setCancelPressed(true);
+                cancel();
+              }}
+            >
               Cancel login
             </Button>
           )}
-          <Button variant="outline" onClick={onClose}>
-            {status === "ready" ? "Done" : "Close"}
-          </Button>
+          {closable && (
+            <Button variant="outline" onClick={onClose}>
+              {status === "ready" ? "Done" : "Close"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The browser's clipboard writer, absent outside a secure context (http). */
+function clipboardWriter(): ((text: string) => Promise<void>) | undefined {
+  const clipboard =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  if (typeof clipboard?.writeText !== "function") return undefined;
+  return (text) => clipboard.writeText(text);
+}
+
+/**
+ * A login link as read-only, selectable text with a Copy button. Without a
+ * clipboard the button is hidden and selecting the text is the fallback.
+ */
+function CopyableLink({ url, label }: { url: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const write = clipboardWriter();
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = () => {
+    if (!write) return;
+    // A refused write (permission, focus), rejected or thrown, leaves the
+    // text to select by hand.
+    try {
+      write(url).then(
+        () => setCopied(true),
+        () => {},
+      );
+    } catch {
+      // Nothing to report: the field stays selectable.
+    }
+  };
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        readOnly
+        value={url}
+        aria-label={label}
+        onFocus={(event) => event.currentTarget.select()}
+        className="min-w-0 flex-1 font-mono"
+      />
+      {write && (
+        <IconButton label={copied ? "Link copied" : "Copy link"} onClick={copy}>
+          {copied ? <Check /> : <Copy />}
+        </IconButton>
+      )}
+    </div>
   );
 }
 
@@ -167,6 +272,7 @@ function ClaudeStep({
     () => claudeLoginAuthorizationUrl(output),
     [output],
   );
+  if (status !== "connecting") return null;
   const submitCode = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     const value = code.trim();
@@ -176,63 +282,66 @@ function ClaudeStep({
   };
   return (
     <>
-      <Card>
-        <CardContent>
-          <pre className="max-h-80 min-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-sm">
-            {output || "Starting Claude login…"}
-          </pre>
-        </CardContent>
-      </Card>
-      {authorizationUrl && status === "connecting" && (
-        <LinkButton
-          variant="default"
-          href={authorizationUrl}
-          target="_blank"
-          rel="noreferrer"
+      {authorizationUrl ? (
+        <div className="flex flex-col gap-2">
+          <LinkButton
+            variant="default"
+            href={authorizationUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open Claude authorization <ExternalLink />
+          </LinkButton>
+          <CopyableLink
+            url={authorizationUrl}
+            label="Claude authorization link"
+          />
+        </div>
+      ) : (
+        <p
+          role="status"
+          className="flex items-center gap-1.5 text-sm text-muted-foreground"
         >
-          Open Claude authorization <ExternalLink />
-        </LinkButton>
+          <Spinner size="sm" />
+          Starting Claude login…
+        </p>
       )}
-      {status === "connecting" && (
-        <form onSubmit={submitCode} className="space-y-2">
-          <Field>
-            <FieldLabel htmlFor={codeId}>
-              Paste the authorization code
-            </FieldLabel>
-            <FieldDescription>
-              After signing in, Claude shows a code or callback URL. Paste it
-              here; Pandeck forwards it directly to the CLI and never displays
-              or stores it.
-            </FieldDescription>
-            <div className="flex gap-2">
-              <Input
-                id={codeId}
-                type="password"
-                value={code}
-                onChange={(event) => setCode(event.target.value)}
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                placeholder="Authorization code or callback URL"
-                className="min-w-0 flex-1"
-              />
-              <Button type="submit" disabled={!code.trim()}>
-                Submit
-              </Button>
-            </div>
-          </Field>
-          {/* The CLI answers this one; Submit has already emptied itself. */}
-          {submitted && (
-            <p
-              role="status"
-              className="flex items-center gap-1.5 text-sm text-muted-foreground"
-            >
-              <Spinner size="sm" />
-              Code submitted; waiting for Claude…
-            </p>
-          )}
-        </form>
-      )}
+      <form onSubmit={submitCode} className="space-y-2">
+        <Field>
+          <FieldLabel htmlFor={codeId}>Paste the authorization code</FieldLabel>
+          <FieldDescription>
+            After signing in, Claude shows a code or callback URL. Paste it
+            here; Pandeck forwards it directly to the CLI and never displays or
+            stores it.
+          </FieldDescription>
+          <div className="flex gap-2">
+            <Input
+              id={codeId}
+              type="password"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="Authorization code or callback URL"
+              className="min-w-0 flex-1"
+            />
+            <Button type="submit" disabled={!code.trim()}>
+              Submit
+            </Button>
+          </div>
+        </Field>
+        {/* The CLI answers this one; Submit has already emptied itself. */}
+        {submitted && (
+          <p
+            role="status"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground"
+          >
+            <Spinner size="sm" />
+            Code submitted; waiting for Claude…
+          </p>
+        )}
+      </form>
     </>
   );
 }
@@ -258,18 +367,7 @@ function OpenAiStep({
   return (
     <Card>
       <CardContent className="flex flex-col gap-3">
-        <p className="text-sm">
-          Open{" "}
-          <a
-            href={device.verificationUri}
-            target="_blank"
-            rel="noreferrer"
-            className="break-all text-primary underline"
-          >
-            {device.verificationUri}
-          </a>{" "}
-          and enter this code:
-        </p>
+        <p className="text-sm">Open the OpenAI sign-in and enter this code:</p>
         <p className="font-mono text-xl font-semibold tracking-wider">
           {device.userCode}
         </p>
@@ -281,6 +379,10 @@ function OpenAiStep({
         >
           Open OpenAI sign-in <ExternalLink />
         </LinkButton>
+        <CopyableLink
+          url={device.verificationUri}
+          label="OpenAI sign-in link"
+        />
       </CardContent>
     </Card>
   );
