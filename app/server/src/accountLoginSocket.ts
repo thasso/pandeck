@@ -14,7 +14,9 @@
  * Every message is validated before it has any effect: a non-null, non-array
  * object with a known `type`; `input` needs a string of at most 8,192
  * characters. Input is never logged or echoed. Closing the socket only
- * detaches its viewer; only `cancel` ends a login.
+ * detaches its viewer; only `cancel` ends a login. Each run has an opaque
+ * `runId` on its snapshot and status; a `cancel` naming another run than
+ * the socket's is ignored, so a replayed cancel never ends a later run.
  */
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
@@ -30,6 +32,7 @@ import { attachOpenAiLogin } from "./openAiLoginTerminal.ts";
 import { attachRemoteLogin, remoteLoginsActive } from "./remoteLogins.ts";
 
 const MAX_INPUT_CHARS = 8_192;
+const MAX_RUN_ID_CHARS = 64;
 export const LOGIN_NOT_RUNNING_TEXT =
   "This login is no longer running. Start it again from the account.";
 
@@ -45,8 +48,14 @@ function parseClientMessage(
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
     return undefined;
-  const message = parsed as { type?: unknown; data?: unknown };
-  if (message.type === "cancel") return { type: "cancel" };
+  const message = parsed as { type?: unknown; data?: unknown; runId?: unknown };
+  if (message.type === "cancel") {
+    if (message.runId === undefined) return { type: "cancel" };
+    return typeof message.runId === "string" &&
+      message.runId.length <= MAX_RUN_ID_CHARS
+      ? { type: "cancel", runId: message.runId }
+      : undefined;
+  }
   if (
     message.type === "input" &&
     typeof message.data === "string" &&
@@ -115,10 +124,18 @@ export function attachAccountLoginSocket(
     refuse(viewer, LOGIN_NOT_RUNNING_TEXT, 1000, "No login");
     return;
   }
-  const { message, detach } = attached;
+  const { runId, message, detach } = attached;
   viewer.on("message", (raw) => {
     const parsed = parseClientMessage(String(raw));
-    if (parsed) message(parsed);
+    // A cancel meant for another run of this account changes nothing.
+    if (
+      !parsed ||
+      (parsed.type === "cancel" &&
+        parsed.runId !== undefined &&
+        parsed.runId !== runId)
+    )
+      return;
+    message(parsed);
   });
   viewer.on("close", detach);
   viewer.on("error", detach);

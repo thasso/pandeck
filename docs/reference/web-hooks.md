@@ -182,7 +182,9 @@ backlog/task interaction and drag/reorder behavior.
   joins the login (`intent=start`), a reconnect while it still runs only rejoins
   it (`intent=attach`), it reduces bounded snapshot/output/device/status
   messages, and exposes only submit/cancel actions to the component. Cancel is
-  latched: it goes out on every socket that opens until a terminal status.
+  latched to the run's `runId`: it is repeated after a reconnect only when the
+  new snapshot shows the same run still connecting, and dropped for another or a
+  finished run; pressed before any snapshot, it binds to the first run seen.
   Authorization input is sent once and never retained in React state beyond the
   password field owned by the modal.
 - `useDictation.ts` owns composer dictation: a single `toggle` (tap to start,

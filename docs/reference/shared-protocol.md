@@ -312,6 +312,8 @@ vocabulary, display projection, and normalized session model types.
   state, never profile credentials or echoed authorization input, and
   deliberately stays outside the main `ClientMessage`/`ServerMessage` unions.
   The device code lives only there: `CredentialProfileSummary.setup` has none.
+  Snapshots and run statuses carry the run's opaque `runId`, and `cancel` may
+  name it, so a cancel never reaches a later run of the same account.
 - `protocol.ts` also owns the dictation contract: `SpeechToTextSettings` (an
   `AppSettings` section), the deployment-state `SpeechToTextStatus` (carried on
   `ready` AND re-sent as a `speechToTextStatus` message after any `speechToText`

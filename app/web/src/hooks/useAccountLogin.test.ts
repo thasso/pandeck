@@ -93,6 +93,7 @@ describe("useAccountLogin", () => {
     socket!.receive({
       type: "snapshot",
       profileId: "cp_fixture",
+      runId: "run-1",
       provider: "openai-codex",
       status: "connecting",
       output: "",
@@ -106,69 +107,121 @@ describe("useAccountLogin", () => {
     socket!.receive({ type: "device", device });
     expect(latest?.device).toEqual(device);
     act(() => latest!.cancel());
-    expect(socket!.sent).toEqual([JSON.stringify({ type: "cancel" })]);
+    expect(socket!.sent).toEqual([
+      JSON.stringify({ type: "cancel", runId: "run-1" }),
+    ]);
     act(() => view.root.unmount());
   });
 
   // C1 (rv-1402-b1-code-01): a Cancel pressed while no socket is open is
-  // latched, not dropped.
-  const CANCEL = JSON.stringify({ type: "cancel" });
-  const snapshot = {
+  // latched, not dropped. C3 (rv-1402-b1-code-02): it is latched to its run
+  // and never replayed onto a later run of the same account.
+  const cancelFor = (runId: string) =>
+    JSON.stringify({ type: "cancel", runId });
+  const snapshot = (runId: string, status = "connecting") => ({
     type: "snapshot",
     profileId: "cp_fixture",
+    runId,
     provider: "openai-codex",
-    status: "connecting",
+    status,
     output: "",
     startedAt: 0,
+  });
+  /** Drops the socket and lets the hook open its attach socket. */
+  const reconnect = (socket: FakeWebSocket) => {
+    socket.drop();
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    const next = FakeWebSocket.sockets.at(-1)!;
+    expect(intent(next)).toBe("attach");
+    return next;
   };
 
-  test("a Cancel pressed before the socket opens goes out once it opens", () => {
+  test("a Cancel pressed before the socket opens goes out with the start socket's run", () => {
     const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
     const [socket] = FakeWebSocket.sockets;
     expect(socket!.readyState).toBe(0);
     act(() => latest!.cancel());
-    expect(socket!.sent).toEqual([]);
     socket!.open();
-    socket!.receive(snapshot);
-    expect(socket!.sent).toEqual([CANCEL]);
+    expect(socket!.sent).toEqual([]);
+    socket!.receive(snapshot("run-1"));
+    expect(socket!.sent).toEqual([cancelFor("run-1")]);
     expect(latest?.status).toBe("connecting");
     act(() => view.root.unmount());
   });
 
-  test("a Cancel pressed in the reconnect gap goes out on the attach socket", () => {
+  test("a Cancel pressed in the reconnect gap goes out on the attach socket for the same run", () => {
     const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
     const [first] = FakeWebSocket.sockets;
     first!.open();
+    first!.receive(snapshot("run-1"));
     first!.drop();
     act(() => latest!.cancel());
     act(() => {
       vi.advanceTimersByTime(800);
     });
     const second = FakeWebSocket.sockets[1]!;
-    expect(intent(second)).toBe("attach");
     second.open();
-    expect(second.sent).toEqual([CANCEL]);
+    second.receive(snapshot("run-1"));
+    expect(second.sent).toEqual([cancelFor("run-1")]);
     expect(first!.sent).toEqual([]);
     act(() => view.root.unmount());
   });
 
-  test("a sent Cancel goes out again after a drop until a terminal status, and never after one", () => {
+  test("a sent Cancel goes out again after a drop to the same run, until a terminal status", () => {
     const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
     const [first] = FakeWebSocket.sockets;
     first!.open();
+    first!.receive(snapshot("run-1"));
     act(() => latest!.cancel());
-    expect(first!.sent).toEqual([CANCEL]);
-    // Dropped before the server answered: the next socket repeats it.
+    expect(first!.sent).toEqual([cancelFor("run-1")]);
+    // Dropped before the server answered: the same run gets it again.
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-1"));
+    expect(second.sent).toEqual([cancelFor("run-1")]);
+    second.receive({ type: "status", runId: "run-1", status: "cancelled" });
+    act(() => latest!.cancel());
+    expect(second.sent).toEqual([cancelFor("run-1")]);
+    act(() => view.root.unmount());
+  });
+
+  test("C3: a Cancel for a run that ended offline is never replayed onto another viewer's new run", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    first!.open();
+    first!.receive(snapshot("run-1"));
+    act(() => latest!.cancel());
+    expect(first!.sent).toEqual([cancelFor("run-1")]);
+    // Run 1 ends while this browser is offline; another viewer starts run 2.
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-2"));
+    expect(second.sent).toEqual([]);
+    expect(latest?.status).toBe("connecting");
+    // The latch is gone: a later reconnect to run 2 sends nothing either.
+    const third = reconnect(second);
+    third.open();
+    third.receive(snapshot("run-2"));
+    expect(third.sent).toEqual([]);
+    act(() => view.root.unmount());
+  });
+
+  test("C3: a latched Cancel meeting its run already finished is dropped unsent", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    first!.open();
+    first!.receive(snapshot("run-1"));
     first!.drop();
+    act(() => latest!.cancel());
     act(() => {
       vi.advanceTimersByTime(800);
     });
     const second = FakeWebSocket.sockets[1]!;
     second.open();
-    expect(second.sent).toEqual([CANCEL]);
-    second.receive({ type: "status", status: "cancelled" });
-    act(() => latest!.cancel());
-    expect(second.sent).toEqual([CANCEL]);
+    second.receive(snapshot("run-1", "cancelled"));
+    expect(second.sent).toEqual([]);
     act(() => view.root.unmount());
   });
 });

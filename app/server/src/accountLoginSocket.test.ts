@@ -61,7 +61,9 @@ class FakeChild extends EventEmitter {
   stdin = new PassThrough();
   stdout = new PassThrough();
   stderr = new PassThrough();
+  kills = 0;
   kill() {
+    this.kills += 1;
     return true;
   }
 }
@@ -77,6 +79,8 @@ interface Harness {
   progress(snapshot: Record<string, unknown>): boolean;
   /** Lets the latest provider login produce something new for its viewers. */
   emit(): void;
+  /** Whether the latest provider login was asked to stop. */
+  cancelled(): boolean;
   cleanup(): void;
 }
 
@@ -99,6 +103,7 @@ const KINDS: Record<string, () => Harness> = {
       progress: (s) =>
         /Starting the official Claude login/.test(String(s.output)),
       emit: () => children.at(-1)!.stdout.write("more output\n"),
+      cancelled: () => children.at(-1)!.kills > 0,
       cleanup: () => claudeTerminal.setClaudeLoginSpawnForTests(null),
     };
   },
@@ -109,13 +114,17 @@ const KINDS: Record<string, () => Harness> = {
     });
     const logins: ReturnType<typeof deferred<void>>[] = [];
     const notifiers: (() => void)[] = [];
+    const aborted: boolean[] = [];
     setOpenAiProfileLoginForTests(async (_runtime, interaction) => {
       const login = deferred<void>();
       logins.push(login);
       // As pi's login: an abort rejects it.
-      interaction.signal!.addEventListener("abort", () =>
-        login.reject(new Error("This operation was aborted")),
-      );
+      const index = logins.length - 1;
+      aborted[index] = false;
+      interaction.signal!.addEventListener("abort", () => {
+        aborted[index] = true;
+        login.reject(new Error("This operation was aborted"));
+      });
       const notify = () =>
         interaction.notify({
           type: "device_code",
@@ -133,6 +142,7 @@ const KINDS: Record<string, () => Harness> = {
       progress: (s) =>
         (s.device as { userCode?: string } | undefined)?.userCode === "CODE-1",
       emit: () => notifiers.at(-1)!(),
+      cancelled: () => aborted.at(-1) === true,
       cleanup: () => setOpenAiProfileLoginForTests(null),
     };
   },
@@ -142,10 +152,14 @@ const KINDS: Record<string, () => Harness> = {
       provider: "claude",
     });
     let started = 0;
+    const cancels: string[] = [];
     const uninstall = installRemoteLoginPort({
       start: async () => ({ loginId: `remote-${++started}`, accountId: id }),
       input: async () => {},
-      cancel: async () => "cancelled",
+      cancel: async (loginId) => {
+        cancels.push(loginId);
+        return "cancelled";
+      },
       remove: async () => {},
     });
     return {
@@ -163,6 +177,7 @@ const KINDS: Record<string, () => Harness> = {
           type: "output",
           text: "Paste code: ",
         }),
+      cancelled: () => cancels.includes(`remote-${started}`),
       cleanup: uninstall,
     };
   },
@@ -284,6 +299,38 @@ describe.each(Object.keys(KINDS))("AC6: the %s run", (kind) => {
     );
   });
 
+  test("C3: snapshots and statuses carry the run's id, a new run gets a new one, and a cancel naming another run is ignored", async () => {
+    const run = setup();
+    const first = open(run.profileId, "start");
+    await settle();
+    const firstRun = first.sent[0]?.runId;
+    assert.equal(typeof firstRun, "string");
+    first.type(JSON.stringify({ type: "cancel", runId: "another-run" }));
+    await settle();
+    assert.equal(run.cancelled(), false);
+    run.fail();
+    await settle();
+    assert.equal(
+      first.sent.filter((m) => m.type === "status").at(-1)?.runId,
+      firstRun,
+    );
+
+    const second = open(run.profileId, "start");
+    await settle();
+    const secondRun = second.sent[0]?.runId;
+    assert.equal(typeof secondRun, "string");
+    assert.notEqual(secondRun, firstRun);
+    // A cancel replayed for the finished run never reaches the new one.
+    second.type(JSON.stringify({ type: "cancel", runId: firstRun }));
+    await settle();
+    assert.equal(run.cancelled(), false);
+    second.type(JSON.stringify({ type: "cancel", runId: secondRun }));
+    await settle();
+    assert.equal(run.cancelled(), true);
+    run.fail();
+    await settle();
+  });
+
   test("AC11: malformed messages change nothing and throw nothing", async () => {
     const run = setup();
     const viewer = open(run.profileId, "start");
@@ -298,10 +345,13 @@ describe.each(Object.keys(KINDS))("AC6: the %s run", (kind) => {
       '{"type":"stop"}',
       '{"type":"input","data":7}',
       JSON.stringify({ type: "input", data: "x".repeat(8_193) }),
+      '{"type":"cancel","runId":7}',
+      JSON.stringify({ type: "cancel", runId: "x".repeat(65) }),
     ])
       assert.doesNotThrow(() => viewer.type(raw));
     await settle();
     assert.equal(lastStatus(viewer), undefined);
+    assert.equal(run.cancelled(), false);
     assert.equal(run.starts(), 1);
     run.fail();
     await settle();

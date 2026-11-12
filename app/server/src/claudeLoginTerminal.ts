@@ -3,6 +3,7 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 /**
  * The official Claude CLI's login for a profile, viewed and driven from the
@@ -91,6 +92,7 @@ interface LoginEnding {
 
 interface LoginRun {
   profileId: string;
+  runId: string;
   name: string;
   /** Absent until spawned. */
   child?: ChildProcessWithoutNullStreams;
@@ -186,6 +188,7 @@ function finish(
     clearCredentialProfileLoginState(run.profileId);
   broadcast(run, {
     type: "status",
+    runId: run.runId,
     status,
     ...(message ? { error: message } : {}),
   });
@@ -199,6 +202,7 @@ function startRun(profileId: string): LoginRun {
   setCredentialProfileLoginState(profileId, { status: "connecting" });
   const run: LoginRun = {
     profileId,
+    runId: randomUUID(),
     name: profile.name,
     viewers: new Set(),
     status: "connecting",
@@ -383,6 +387,7 @@ function snapshot(run: LoginRun): AccountLoginServerMessage {
   return {
     type: "snapshot",
     profileId: run.profileId,
+    runId: run.runId,
     provider: "claude",
     status: run.status,
     output: run.output,
@@ -423,7 +428,11 @@ export function attachClaudeLogin(
   profileId: string,
   intent: AccountLoginIntent,
 ):
-  | { message(message: AccountLoginClientMessage): void; detach(): void }
+  | {
+      runId: string;
+      message(message: AccountLoginClientMessage): void;
+      detach(): void;
+    }
   | undefined {
   let run = runs.get(profileId);
   if (intent === "attach") {
@@ -437,6 +446,7 @@ export function attachClaudeLogin(
   current.viewers.add(viewer);
   send(viewer, snapshot(current));
   return {
+    runId: current.runId,
     message: (message) => handleClientMessage(current, message),
     detach: () => current.viewers.delete(viewer),
   };

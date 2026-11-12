@@ -459,7 +459,9 @@ export interface CredentialProfileUsage {
  * The login dialog's socket (`/ws/account-login`) for one Claude or OpenAI
  * account login: Claude's official CLI output and pasted code, or OpenAI's
  * device code, with cancel. `start` begins or joins the account's login;
- * `attach` only rejoins one that still runs or just finished.
+ * `attach` only rejoins one that still runs or just finished. Each login run
+ * has an opaque `runId`, so a client can tell a later run of the same account
+ * from the one it cancelled.
  */
 export type AccountLoginProvider = "claude" | "openai-codex";
 export type AccountLoginStatus = "connecting" | "ready" | "error" | "cancelled";
@@ -473,6 +475,8 @@ export type AccountLoginServerMessage =
   | {
       type: "snapshot";
       profileId: string;
+      /** The run this socket views, for its whole life. */
+      runId: string;
       provider: AccountLoginProvider;
       status: AccountLoginStatus;
       output: string;
@@ -482,9 +486,17 @@ export type AccountLoginServerMessage =
     }
   | { type: "output"; chunk: string }
   | { type: "device"; device: AccountLoginDevice }
-  | { type: "status"; status: AccountLoginStatus; error?: string };
+  | {
+      type: "status";
+      status: AccountLoginStatus;
+      error?: string;
+      /** Absent only for a refusal before any run. */
+      runId?: string;
+    };
 export type AccountLoginClientMessage =
-  { type: "input"; data: string } | { type: "cancel" };
+  | { type: "input"; data: string }
+  /** With `runId`, the server ignores it for any other run. */
+  | { type: "cancel"; runId?: string };
 
 /**
  * Claude SDK picker models — the in-process Claude Agent SDK offered as an

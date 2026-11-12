@@ -30,6 +30,7 @@
  * account's state is the mirror's. Otherwise the gateway's own terminal
  * event ends it. A transport loss alone never ends a run.
  */
+import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type {
   AccountLoginClientMessage,
@@ -75,6 +76,8 @@ export interface RemoteLoginPort {
 }
 
 interface RemoteRun {
+  /** This server's id for the run, shown to viewers; not the gateway's. */
+  runId: string;
   /** Absent until the gateway answered the start. */
   loginId?: string;
   /** Empty for an account being added, until the gateway answered. */
@@ -163,7 +166,12 @@ function finish(
       error: error?.slice(0, 180) ?? "Login failed.",
     });
   else clearCredentialProfileLoginState(run.accountId);
-  broadcast(run, { type: "status", status, ...(error ? { error } : {}) });
+  broadcast(run, {
+    type: "status",
+    runId: run.runId,
+    status,
+    ...(error ? { error } : {}),
+  });
   setTimeout(() => {
     if (runs.get(run.accountId) === run) runs.delete(run.accountId);
   }, FINISHED_RETENTION_MS).unref?.();
@@ -253,6 +261,7 @@ function launch(start: {
   const gateway = port;
   if (!gateway) throw new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT);
   const run: RemoteRun = {
+    runId: randomUUID(),
     accountId: start.accountId ?? "",
     kind: start.kind,
     status: "connecting",
@@ -283,7 +292,12 @@ function launch(start: {
       run.status = "error";
       run.error = errorText(err);
       for (const viewer of run.viewers) {
-        send(viewer, { type: "status", status: "error", error: run.error });
+        send(viewer, {
+          type: "status",
+          runId: run.runId,
+          status: "error",
+          error: run.error,
+        });
         viewer.close(1011, "Login unavailable");
       }
       run.viewers.clear();
@@ -335,7 +349,11 @@ export function attachRemoteLogin(
   accountId: string,
   intent: AccountLoginIntent,
 ):
-  | { message(message: AccountLoginClientMessage): void; detach(): void }
+  | {
+      runId: string;
+      message(message: AccountLoginClientMessage): void;
+      detach(): void;
+    }
   | undefined {
   const profile = credentialProfileById(accountId);
   if (
@@ -357,6 +375,7 @@ export function attachRemoteLogin(
   send(viewer, {
     type: "snapshot",
     profileId: accountId,
+    runId: current.runId,
     provider: current.kind,
     status: current.status,
     output: current.output,
@@ -365,6 +384,7 @@ export function attachRemoteLogin(
     ...(device ? { device } : {}),
   });
   return {
+    runId: current.runId,
     message: (message) => handleMessage(current, message),
     detach: () => current.viewers.delete(viewer),
   };

@@ -16,6 +16,7 @@
  * finished run is kept exactly two minutes, whatever its viewers do. The
  * device code goes only to viewers, never into a log or the account summary.
  */
+import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type {
   AccountLoginClientMessage,
@@ -36,6 +37,7 @@ const ALREADY_RUNNING_TEXT =
 
 interface OpenAiLoginRun {
   profileId: string;
+  runId: string;
   viewers: Set<WebSocket>;
   status: AccountLoginStatus;
   startedAt: number;
@@ -69,7 +71,12 @@ function finish(
   run.finished = true;
   run.status = status;
   if (text !== undefined) run.error = text;
-  broadcast(run, { type: "status", status, ...(text ? { error: text } : {}) });
+  broadcast(run, {
+    type: "status",
+    runId: run.runId,
+    status,
+    ...(text ? { error: text } : {}),
+  });
   run.retention = setTimeout(() => {
     if (runs.get(run.profileId) === run) runs.delete(run.profileId);
   }, FINISHED_RETENTION_MS);
@@ -79,6 +86,7 @@ function finish(
 function startRun(profileId: string): OpenAiLoginRun {
   const run: OpenAiLoginRun = {
     profileId,
+    runId: randomUUID(),
     viewers: new Set(),
     status: "connecting",
     startedAt: Date.now(),
@@ -108,6 +116,7 @@ function snapshot(run: OpenAiLoginRun): AccountLoginServerMessage {
   return {
     type: "snapshot",
     profileId: run.profileId,
+    runId: run.runId,
     provider: "openai-codex",
     status: run.status,
     output: "",
@@ -127,7 +136,11 @@ export function attachOpenAiLogin(
   profileId: string,
   intent: AccountLoginIntent,
 ):
-  | { message(message: AccountLoginClientMessage): void; detach(): void }
+  | {
+      runId: string;
+      message(message: AccountLoginClientMessage): void;
+      detach(): void;
+    }
   | undefined {
   let run = runs.get(profileId);
   if (intent === "attach") {
@@ -141,6 +154,7 @@ export function attachOpenAiLogin(
   current.viewers.add(viewer);
   send(viewer, snapshot(current));
   return {
+    runId: current.runId,
     message(message) {
       // Input has no meaning for a device-code login.
       if (message.type === "cancel" && !current.finished)

@@ -442,15 +442,24 @@ const input = (socket: FakeSocket, data: string) =>
   socket.emit("message", Buffer.from(JSON.stringify({ type: "input", data })));
 const cancel = (socket: FakeSocket) =>
   socket.emit("message", Buffer.from(JSON.stringify({ type: "cancel" })));
-const lastStatus = (socket: FakeSocket) =>
-  socket.sent
+/** The latest status, without its run id (`accountLoginSocket.test.ts`). */
+const lastStatus = (socket: FakeSocket) => {
+  const last = socket.sent
     .filter(
       (
         message,
-      ): message is { type: "status"; status: string; error?: string } =>
-        (message as { type?: string }).type === "status",
+      ): message is {
+        type: "status";
+        status: string;
+        error?: string;
+        runId?: string;
+      } => (message as { type?: string }).type === "status",
     )
     .at(-1);
+  if (!last) return undefined;
+  const { runId: _runId, ...status } = last;
+  return status;
+};
 /** Lets the promise reactions queued so far run. */
 const ticks = async () => {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();

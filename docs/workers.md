@@ -1439,6 +1439,12 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     When the server process exits, every unclosed child gets SIGKILL. The same
     stop path runs with the switch off, without a hold: the texts are unchanged,
     but a stopped login reports its end only on `close`.
+  - **Cancel is run-scoped.** The login dialog's socket
+    (`accountLoginSocket.ts`) gives every login run an opaque `runId` on its
+    snapshot and statuses. The browser latches a Cancel to the run it saw and
+    repeats it after a reconnect only when the new snapshot shows that same run
+    still connecting; the server ignores a cancel naming another run. An earlier
+    Cancel never ends a later login of the same account.
   - **Refusals** map to existing texts only. A `login_stuck` refusal naming its
     hold marks the account login-stuck, and the login starts nothing.
     `hold_exists`, a `login_stuck` refusal without a hold, and a link that is
@@ -1775,8 +1781,11 @@ path above.
   `unknown_login` answer, to that cancel or to the user's, means the gateway no
   longer runs it: the dialog ends with "The gateway connection was interrupted.
   Start the login again." and the account shows the mirror's state. Otherwise
-  the gateway's own terminal event ends it. This credential ownership does not
-  move Claude's local runtime/transcript directories: Pandeck's one-time Default
+  the gateway's own terminal event ends it. Known limit: a start whose answer is
+  lost with the connection can leave the gateway's login running until its
+  10-minute timeout; a retry rejoins it (without the device code or output it
+  already sent) and Cancel ends it. This credential ownership does not move
+  Claude's local runtime/transcript directories: Pandeck's one-time Default
   transcript import and startup gate still apply before the client link starts
   (`docs/credential-distribution.md`).
 - **Gateway tools** (Task-1398, `remoteTools.ts`,
