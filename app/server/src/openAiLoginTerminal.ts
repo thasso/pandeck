@@ -38,6 +38,8 @@ const ALREADY_RUNNING_TEXT =
 interface OpenAiLoginRun {
   profileId: string;
   runId: string;
+  /** The token of the start that created it, if any. */
+  startToken?: string;
   viewers: Set<WebSocket>;
   status: AccountLoginStatus;
   startedAt: number;
@@ -83,10 +85,11 @@ function finish(
   run.retention.unref?.();
 }
 
-function startRun(profileId: string): OpenAiLoginRun {
+function startRun(profileId: string, startToken?: string): OpenAiLoginRun {
   const run: OpenAiLoginRun = {
     profileId,
     runId: randomUUID(),
+    ...(startToken !== undefined ? { startToken } : {}),
     viewers: new Set(),
     status: "connecting",
     startedAt: Date.now(),
@@ -117,6 +120,7 @@ function snapshot(run: OpenAiLoginRun): AccountLoginServerMessage {
     type: "snapshot",
     profileId: run.profileId,
     runId: run.runId,
+    ...(run.startToken !== undefined ? { startToken: run.startToken } : {}),
     provider: "openai-codex",
     status: run.status,
     output: "",
@@ -135,6 +139,7 @@ export function attachOpenAiLogin(
   viewer: WebSocket,
   profileId: string,
   intent: AccountLoginIntent,
+  startToken?: string,
 ):
   | {
       runId: string;
@@ -148,7 +153,7 @@ export function attachOpenAiLogin(
   } else if (!run || run.finished) {
     // A finished run's viewers keep it; the account's slot gets a new one.
     if (run?.retention) clearTimeout(run.retention);
-    run = startRun(profileId);
+    run = startRun(profileId, startToken);
   }
   const current = run;
   current.viewers.add(viewer);

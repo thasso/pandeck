@@ -93,6 +93,8 @@ interface LoginEnding {
 interface LoginRun {
   profileId: string;
   runId: string;
+  /** The token of the start that created it, if any. */
+  startToken?: string;
   name: string;
   /** Absent until spawned. */
   child?: ChildProcessWithoutNullStreams;
@@ -195,7 +197,7 @@ function finish(
   retainFinished(run);
 }
 
-function startRun(profileId: string): LoginRun {
+function startRun(profileId: string, startToken?: string): LoginRun {
   const profile = credentialProfileById(profileId);
   if (!profile || profile.provider !== "claude")
     throw new Error("That is not a Claude credential profile.");
@@ -203,6 +205,7 @@ function startRun(profileId: string): LoginRun {
   const run: LoginRun = {
     profileId,
     runId: randomUUID(),
+    ...(startToken !== undefined ? { startToken } : {}),
     name: profile.name,
     viewers: new Set(),
     status: "connecting",
@@ -388,6 +391,7 @@ function snapshot(run: LoginRun): AccountLoginServerMessage {
     type: "snapshot",
     profileId: run.profileId,
     runId: run.runId,
+    ...(run.startToken !== undefined ? { startToken: run.startToken } : {}),
     provider: "claude",
     status: run.status,
     output: run.output,
@@ -427,6 +431,7 @@ export function attachClaudeLogin(
   viewer: WebSocket,
   profileId: string,
   intent: AccountLoginIntent,
+  startToken?: string,
 ):
   | {
       runId: string;
@@ -440,7 +445,7 @@ export function attachClaudeLogin(
   } else if (!run || run.finished) {
     // A finished run's viewers keep it; the account's slot gets a new one.
     if (run?.retention) clearTimeout(run.retention);
-    run = startRun(profileId);
+    run = startRun(profileId, startToken);
   }
   const current = run;
   current.viewers.add(viewer);

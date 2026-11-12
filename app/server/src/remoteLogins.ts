@@ -78,6 +78,8 @@ export interface RemoteLoginPort {
 interface RemoteRun {
   /** This server's id for the run, shown to viewers; not the gateway's. */
   runId: string;
+  /** The token of the dialog start that created it; never sent upstream. */
+  startToken?: string;
   /** Absent until the gateway answered the start. */
   loginId?: string;
   /** Empty for an account being added, until the gateway answered. */
@@ -253,15 +255,19 @@ export function remoteLoginEvent(
  * slot when the account is known, else (an account being added) once the
  * gateway named it. A rejected start ends its viewers with its error.
  */
-function launch(start: {
-  kind: LoginKind;
-  accountId?: string;
-  name?: string;
-}): RemoteRun {
+function launch(
+  start: {
+    kind: LoginKind;
+    accountId?: string;
+    name?: string;
+  },
+  startToken?: string,
+): RemoteRun {
   const gateway = port;
   if (!gateway) throw new Error(GATEWAY_LOGIN_UNAVAILABLE_TEXT);
   const run: RemoteRun = {
     runId: randomUUID(),
+    ...(startToken !== undefined ? { startToken } : {}),
     accountId: start.accountId ?? "",
     kind: start.kind,
     status: "connecting",
@@ -348,6 +354,7 @@ export function attachRemoteLogin(
   viewer: WebSocket,
   accountId: string,
   intent: AccountLoginIntent,
+  startToken?: string,
 ):
   | {
       runId: string;
@@ -366,7 +373,7 @@ export function attachRemoteLogin(
     if (!run) return undefined;
   } else if (!run || run.finished) {
     // A finished run's viewers keep it; the account's slot gets a new one.
-    run = launch({ kind: profile.provider, accountId });
+    run = launch({ kind: profile.provider, accountId }, startToken);
     run.started.catch(() => {});
   }
   const current = run;
@@ -376,6 +383,9 @@ export function attachRemoteLogin(
     type: "snapshot",
     profileId: accountId,
     runId: current.runId,
+    ...(current.startToken !== undefined
+      ? { startToken: current.startToken }
+      : {}),
     provider: current.kind,
     status: current.status,
     output: current.output,

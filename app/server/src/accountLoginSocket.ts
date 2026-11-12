@@ -16,14 +16,17 @@
  * characters. Input is never logged or echoed. Closing the socket only
  * detaches its viewer; only `cancel` ends a login. Each run has an opaque
  * `runId` on its snapshot and status; a `cancel` naming another run than
- * the socket's is ignored, so a replayed cancel never ends a later run.
+ * the socket's is ignored, so a replayed cancel never ends a later run. A
+ * `start` may name an opaque `startToken`, which the run it creates keeps and
+ * echoes in its snapshots.
  */
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
-import type {
-  AccountLoginClientMessage,
-  AccountLoginIntent,
-  AccountLoginServerMessage,
+import {
+  ACCOUNT_LOGIN_TOKEN_MAX_CHARS,
+  type AccountLoginClientMessage,
+  type AccountLoginIntent,
+  type AccountLoginServerMessage,
 } from "@assistant/shared";
 import { attachClaudeLogin } from "./claudeLoginTerminal.ts";
 import { credentialProfileById } from "./credentialProfiles.ts";
@@ -32,7 +35,6 @@ import { attachOpenAiLogin } from "./openAiLoginTerminal.ts";
 import { attachRemoteLogin, remoteLoginsActive } from "./remoteLogins.ts";
 
 const MAX_INPUT_CHARS = 8_192;
-const MAX_RUN_ID_CHARS = 64;
 export const LOGIN_NOT_RUNNING_TEXT =
   "This login is no longer running. Start it again from the account.";
 
@@ -52,7 +54,7 @@ function parseClientMessage(
   if (message.type === "cancel") {
     if (message.runId === undefined) return { type: "cancel" };
     return typeof message.runId === "string" &&
-      message.runId.length <= MAX_RUN_ID_CHARS
+      message.runId.length <= ACCOUNT_LOGIN_TOKEN_MAX_CHARS
       ? { type: "cancel", runId: message.runId }
       : undefined;
   }
@@ -109,13 +111,25 @@ export function attachAccountLoginSocket(
     return;
   }
   const intent: AccountLoginIntent = rawIntent;
+  // Only a start names its token; the run it creates keeps it.
+  const rawToken = url.searchParams.get("startToken");
+  if (
+    intent === "start" &&
+    rawToken !== null &&
+    (rawToken.length === 0 || rawToken.length > ACCOUNT_LOGIN_TOKEN_MAX_CHARS)
+  ) {
+    refuse(viewer, "Invalid start token.", 1008, "Invalid start token");
+    return;
+  }
+  const startToken =
+    intent === "start" && rawToken !== null ? rawToken : undefined;
   let attached: ReturnType<typeof attachClaudeLogin>;
   try {
     attached = remoteLoginsActive()
-      ? attachRemoteLogin(viewer, profileId, intent)
+      ? attachRemoteLogin(viewer, profileId, intent, startToken)
       : profile.provider === "claude"
-        ? attachClaudeLogin(viewer, profileId, intent)
-        : attachOpenAiLogin(viewer, profileId, intent);
+        ? attachClaudeLogin(viewer, profileId, intent, startToken)
+        : attachOpenAiLogin(viewer, profileId, intent, startToken);
   } catch (error) {
     refuse(viewer, errorText(error), 1011, "Login unavailable");
     return;

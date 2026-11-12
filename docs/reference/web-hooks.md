@@ -184,9 +184,10 @@ backlog/task interaction and drag/reorder behavior.
   messages, and exposes only submit/cancel actions to the component. Cancel is
   latched to the run's `runId`: it is repeated after a reconnect only when the
   new snapshot shows the same run still connecting, and dropped for another or a
-  finished run; pressed before any snapshot, it binds to the first run seen.
-  Authorization input is sent once and never retained in React state beyond the
-  password field owned by the modal.
+  finished run. Pressed before any snapshot, it binds only to the start socket's
+  own run or to a run echoing the mount's `startToken`. Authorization input is
+  sent once and never retained in React state beyond the password field owned by
+  the modal.
 - `useDictation.ts` owns composer dictation: a single `toggle` (tap to start,
   tap to stop — no hold-to-talk, which lost its meaning once the control that
   starts recording stopped being the control that stops it), the `/ws/speech`

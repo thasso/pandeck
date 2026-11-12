@@ -1441,10 +1441,15 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     but a stopped login reports its end only on `close`.
   - **Cancel is run-scoped.** The login dialog's socket
     (`accountLoginSocket.ts`) gives every login run an opaque `runId` on its
-    snapshot and statuses. The browser latches a Cancel to the run it saw and
-    repeats it after a reconnect only when the new snapshot shows that same run
-    still connecting; the server ignores a cancel naming another run. An earlier
-    Cancel never ends a later login of the same account.
+    snapshot and statuses, and each dialog's `start` sends an opaque
+    `startToken` (at most 64 characters) that the run it creates keeps and
+    echoes in its snapshots. A Cancel is sent only for a run that dialog started
+    or joined: the run it saw, or, if pressed before any snapshot, the start
+    socket's own run, or after a reconnect the run carrying its `startToken`. It
+    is repeated after a reconnect only while that same run is still connecting,
+    and dropped unsent for any other or finished run; the server ignores a
+    cancel naming another run. So a Cancel never ends a login of the same
+    account that the dialog neither started nor joined.
   - **Refusals** map to existing texts only. A `login_stuck` refusal naming its
     hold marks the account login-stuck, and the login starts nothing.
     `hold_exists`, a `login_stuck` refusal without a hold, and a link that is

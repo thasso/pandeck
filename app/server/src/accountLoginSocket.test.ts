@@ -184,13 +184,17 @@ const KINDS: Record<string, () => Harness> = {
 };
 
 const sockets: FakeSocket[] = [];
-function open(profileId: string, intent: string) {
+function open(profileId: string, intent: string, startToken?: string) {
   const socket = new FakeSocket();
   sockets.push(socket);
+  const token =
+    startToken === undefined
+      ? ""
+      : `&startToken=${encodeURIComponent(startToken)}`;
   attachAccountLoginSocket(
     socket as unknown as WebSocket,
     {
-      url: `/ws/account-login?profileId=${profileId}&intent=${intent}`,
+      url: `/ws/account-login?profileId=${profileId}&intent=${intent}${token}`,
       headers: { host: "localhost" },
     } as IncomingMessage,
   );
@@ -331,6 +335,29 @@ describe.each(Object.keys(KINDS))("AC6: the %s run", (kind) => {
     await settle();
   });
 
+  test("C3: the run keeps the start token of the start that created it; a joining start and an attach see that one", async () => {
+    const run = setup();
+    const creator = open(run.profileId, "start", "token-a");
+    await settle();
+    assert.equal(creator.sent[0]?.startToken, "token-a");
+    const joiner = open(run.profileId, "start", "token-b");
+    await settle();
+    assert.equal(joiner.sent[0]?.runId, creator.sent[0]?.runId);
+    assert.equal(joiner.sent[0]?.startToken, "token-a");
+    const attached = open(run.profileId, "attach", "token-c");
+    assert.equal(attached.sent[0]?.startToken, "token-a");
+    assert.equal(run.starts(), 1);
+    run.fail();
+    await settle();
+    // A start without a token makes a run without one.
+    const plain = open(run.profileId, "start");
+    await settle();
+    assert.equal(plain.sent[0]?.type, "snapshot");
+    assert.equal("startToken" in plain.sent[0]!, false);
+    run.fail();
+    await settle();
+  });
+
   test("AC11: malformed messages change nothing and throw nothing", async () => {
     const run = setup();
     const viewer = open(run.profileId, "start");
@@ -380,6 +407,18 @@ test.each([
     profiles.credentialProfileSummaryById(id)?.status,
     "disconnected",
   );
+});
+
+test.each([
+  ["an empty start token", ""],
+  ["a start token over 64 characters", "x".repeat(65)],
+])("AC11: %s is refused and starts nothing", async (_case, token) => {
+  current = KINDS["local OpenAI"]!();
+  const socket = open(current.profileId, "start", token);
+  await settle();
+  assert.equal(socket.sent[0]?.status, "error");
+  assert.equal(socket.closed, 1008);
+  assert.equal(current.starts(), 0);
 });
 
 test("input on a local OpenAI login reaches no provider and ends nothing", async () => {

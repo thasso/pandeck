@@ -466,6 +466,12 @@ export interface CredentialProfileUsage {
 export type AccountLoginProvider = "claude" | "openai-codex";
 export type AccountLoginStatus = "connecting" | "ready" | "error" | "cancelled";
 export type AccountLoginIntent = "start" | "attach";
+/**
+ * A `start` may send an opaque `startToken` (at most 64 characters); the run
+ * it creates echoes it, so a client whose start snapshot was lost can still
+ * recognize its own run after a reconnect.
+ */
+export const ACCOUNT_LOGIN_TOKEN_MAX_CHARS = 64;
 /** OpenAI's verification link and one-time code: short-lived, never logged. */
 export interface AccountLoginDevice {
   verificationUri: string;
@@ -477,6 +483,8 @@ export type AccountLoginServerMessage =
       profileId: string;
       /** The run this socket views, for its whole life. */
       runId: string;
+      /** The `startToken` of the start that created this run, if it sent one. */
+      startToken?: string;
       provider: AccountLoginProvider;
       status: AccountLoginStatus;
       output: string;

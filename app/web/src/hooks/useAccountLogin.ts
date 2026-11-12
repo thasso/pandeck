@@ -11,12 +11,23 @@ import { serverHttpOrigin, withToken } from "../lib/serverOrigin.ts";
 function accountLoginSocketUrl(
   profileId: string,
   intent: AccountLoginIntent,
+  startToken: string,
 ): string {
   const url = new URL("/ws/account-login", serverHttpOrigin());
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("profileId", profileId);
   url.searchParams.set("intent", intent);
+  if (intent === "start") url.searchParams.set("startToken", startToken);
   return withToken(url.toString());
+}
+
+/** An opaque per-mount token; `getRandomValues` works without a secure context. */
+function newStartToken(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 /**
@@ -30,7 +41,12 @@ function accountLoginSocketUrl(
  * snapshot shows the same run still connecting, and again after every later
  * reconnect, until the run reports a terminal status. A snapshot of another
  * run (a later login of the account) or of a finished one drops it unsent.
- * Pressed before any snapshot, it binds to the first run this mount sees.
+ *
+ * Pressed before any snapshot, it is bound only to a run this mount's start
+ * chose: the start socket's own snapshot (the run it created or joined), or
+ * after a reconnect a snapshot echoing this mount's `startToken` (the run it
+ * created). Any other run drops it unsent: an earlier Cancel never ends a
+ * login this mount did not start or join.
  */
 export function useAccountLogin(profileId: string, onFinished: () => void) {
   const [status, setStatus] = useState<AccountLoginStatus>("connecting");
@@ -47,14 +63,20 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
   // The user's Cancel: the run it is for (unknown until a first snapshot),
   // or null. A terminal status or another run's snapshot drops it.
   const cancelRef = useRef<{ runId: string | undefined } | null>(null);
+  const [startToken] = useState(newStartToken);
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
 
   useEffect(() => {
     let disposed = false;
     let reconnectTimer: number | undefined;
+    const startSocket = reconnect === 0;
     const socket = new WebSocket(
-      accountLoginSocketUrl(profileId, reconnect === 0 ? "start" : "attach"),
+      accountLoginSocketUrl(
+        profileId,
+        startSocket ? "start" : "attach",
+        startToken,
+      ),
     );
     socketRef.current = socket;
     snapshotSeenRef.current = false;
@@ -81,7 +103,11 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
         // Replay a latched Cancel only onto the run it was pressed for.
         const latched = cancelRef.current;
         if (latched) {
-          latched.runId ??= message.runId;
+          if (
+            latched.runId === undefined &&
+            (startSocket || message.startToken === startToken)
+          )
+            latched.runId = message.runId;
           if (latched.runId === message.runId)
             socket.send(
               JSON.stringify({ type: "cancel", runId: message.runId }),
@@ -113,7 +139,7 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       socket.close();
     };
-  }, [profileId, reconnect]);
+  }, [profileId, reconnect, startToken]);
 
   const send = (message: AccountLoginClientMessage) => {
     if (socketRef.current?.readyState !== WebSocket.OPEN) return false;

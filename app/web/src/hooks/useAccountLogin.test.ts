@@ -118,15 +118,22 @@ describe("useAccountLogin", () => {
   // and never replayed onto a later run of the same account.
   const cancelFor = (runId: string) =>
     JSON.stringify({ type: "cancel", runId });
-  const snapshot = (runId: string, status = "connecting") => ({
+  const snapshot = (
+    runId: string,
+    status = "connecting",
+    startToken?: string,
+  ) => ({
     type: "snapshot",
     profileId: "cp_fixture",
     runId,
+    ...(startToken !== undefined ? { startToken } : {}),
     provider: "openai-codex",
     status,
     output: "",
     startedAt: 0,
   });
+  const tokenOf = (socket: FakeWebSocket) =>
+    new URL(socket.url).searchParams.get("startToken");
   /** Drops the socket and lets the hook open its attach socket. */
   const reconnect = (socket: FakeWebSocket) => {
     socket.drop();
@@ -222,6 +229,60 @@ describe("useAccountLogin", () => {
     second.open();
     second.receive(snapshot("run-1", "cancelled"));
     expect(second.sent).toEqual([]);
+    act(() => view.root.unmount());
+  });
+
+  test("C3: only the start socket names this mount's start token", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    expect(tokenOf(first!)).toMatch(/^[0-9a-f]{32}$/);
+    const second = reconnect(first!);
+    expect(tokenOf(second)).toBeNull();
+    act(() => view.root.unmount());
+    const other = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    expect(tokenOf(FakeWebSocket.sockets.at(-1)!)).not.toBe(tokenOf(first!));
+    act(() => other.root.unmount());
+  });
+
+  test("C3: a Cancel whose start snapshot was lost never binds to another start's run", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    act(() => latest!.cancel());
+    first!.open();
+    // The start socket dies before its snapshot; another viewer's start made
+    // run 2 meanwhile.
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-2", "connecting", "someone-elses-token"));
+    expect(second.sent).toEqual([]);
+    const third = reconnect(second);
+    third.open();
+    third.receive(snapshot("run-2", "connecting", "someone-elses-token"));
+    expect(third.sent).toEqual([]);
+    expect(first!.sent).toEqual([]);
+    act(() => view.root.unmount());
+  });
+
+  test("C3: a Cancel whose start snapshot was lost still reaches the run this mount's start created", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    act(() => latest!.cancel());
+    first!.open();
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-1", "connecting", tokenOf(first!)!));
+    expect(second.sent).toEqual([cancelFor("run-1")]);
+    act(() => view.root.unmount());
+  });
+
+  test("C3: a pre-open Cancel on a start that joined a running login reaches that run", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    act(() => latest!.cancel());
+    first!.open();
+    // Continue login: the start joined a run another start created.
+    first!.receive(snapshot("run-9", "connecting", "someone-elses-token"));
+    expect(first!.sent).toEqual([cancelFor("run-9")]);
     act(() => view.root.unmount());
   });
 });
