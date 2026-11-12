@@ -149,6 +149,7 @@ async function vault(
     self?: PinnedIdentity;
     drivers?: LoginDrivers;
     loginTimeoutMs?: number;
+    loginSettleGraceMs?: number;
     controlSocket?: string;
     renewCodex?: CodexRenewPort;
   } = {},
@@ -167,6 +168,9 @@ async function vault(
     ...(options.drivers ? { loginDrivers: options.drivers } : {}),
     ...(options.loginTimeoutMs
       ? { loginTimeoutMs: options.loginTimeoutMs }
+      : {}),
+    ...(options.loginSettleGraceMs
+      ? { loginSettleGraceMs: options.loginSettleGraceMs }
       : {}),
     ...(options.controlSocket ? { controlSocket: options.controlSocket } : {}),
     ...(options.renewCodex ? { renewCodex: options.renewCodex } : {}),
@@ -1141,7 +1145,7 @@ test("R1.6: the same actor's second start answers the same login over the link",
  */
 function interceptRequest(
   method: string,
-  hook: () => void,
+  hook: () => void | Promise<void>,
   { after }: { after: boolean },
 ): () => void {
   const original = WorkerConnection.prototype.request;
@@ -1152,13 +1156,13 @@ function interceptRequest(
   ) {
     if (args[0] === method && !fired && !after) {
       fired = true;
-      hook();
+      void hook();
     }
     const sent = original.apply(this, args);
     if (args[0] !== method || fired || !after) return sent;
     fired = true;
-    return sent.then((answer) => {
-      hook();
+    return sent.then(async (answer) => {
+      await hook();
       return answer;
     });
   };
@@ -1306,6 +1310,79 @@ test("C2: a lost vault link keeps the drivers' slots and cleanup until the hold 
   );
   const third = manager.start(a, { kind: "claude" });
   await until(() => vaultRecord(third.accountId).length === 1, "a new driver");
+});
+
+// --- review rv-1402-b2-res-01 (C5, C2) --------------------------------------
+
+test("C5: removing an account while its granted commit installs leaves neither the token nor its sealed record", async () => {
+  const { driver, release } = claudeDriver({ holdCancel: true });
+  const { dir, controlSocket } = await sealedVaultDir();
+  const v = await vault({ dir, controlSocket, drivers: { claude: driver } });
+  assert.deepEqual(
+    await askVaultControl(controlSocket, { method: "unlock", pin: "unused" }),
+    { ok: true, opened: 1, unopened: 0 },
+  );
+  const { manager, remote, vaultRecord } = await managedLink(v, release);
+  const a = linkActor("client", "a");
+  const old = manager.start(a, { kind: "claude" });
+  await until(() => vaultRecord(old.accountId).length === 1, "the driver");
+  const tokenFile = join(dir, "accounts", old.accountId, ".credentials.json");
+  const recordDir = join(dir, "sealed", old.accountId);
+  let discard: Promise<unknown> | undefined;
+  // The edge granted the commit, and the removal's discard reaches the
+  // vault before that answer does: the vault must not discard first and
+  // then install.
+  interceptRequest(
+    VAULT_METHODS.loginCommit,
+    async () => {
+      manager.forget(old.accountId);
+      discard = Promise.resolve(remote.discardCredential(old.accountId));
+      await delay(300);
+    },
+    { after: true },
+  );
+  manager.input(a, old.loginId, "removed-code");
+  await until(
+    () =>
+      discard !== undefined &&
+      manager.read(a, old.loginId, 0).state === "cancelled",
+    "the forgotten login's end",
+  );
+  await discard;
+  await until(() => !existsSync(tokenFile), "the discard after the install");
+  await delay(200);
+  assert.equal(existsSync(tokenFile), false, "the token came back");
+  assert.equal(existsSync(recordDir), false, "the sealed record came back");
+  // The vault's sweep finds nothing to seal again either.
+  await v.renewDue();
+  assert.equal(existsSync(recordDir), false);
+});
+
+test("C2: past its deadline and grace a run reports done even if its driver never settles", async () => {
+  const GRACE_MS = 300;
+  const { driver, release, cancelled } = claudeDriver({ holdCancel: true });
+  const v = await vault({
+    drivers: { claude: driver },
+    loginTimeoutMs: 100,
+    loginSettleGraceMs: GRACE_MS,
+  });
+  const { start } = await loginLink(v);
+  open.push({ close: release });
+  const began = Date.now();
+  const stuck = start("claude-stuck");
+  // The driver ignores the deadline's cancel; the vault reports anyway.
+  await assert.rejects(stuck.run.done, /cancelled/);
+  assert.ok(Date.now() - began >= 100 + GRACE_MS - 50);
+  assert.equal(cancelled.length, 1);
+  assert.ok(v.lines.some((line) => line.endsWith(": abandoned")));
+  // Its admission is free again: the same account may start.
+  const again = start("claude-stuck");
+  await until(
+    () => v.lines.filter((line) => line.endsWith(": started")).length === 2,
+    "the second start",
+  );
+  again.run.cancel();
+  release();
 });
 
 test("C5: dial, TLS and hello have deadlines; close stops a dial in flight", async () => {

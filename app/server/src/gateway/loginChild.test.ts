@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, test } from "vitest";
+import { afterAll, beforeAll, onTestFinished, test } from "vitest";
 import { loginChildDriver, type LoginChildOptions } from "./loginChild.ts";
 
 let dir: string;
@@ -307,4 +307,47 @@ test("a child that cannot spawn rejects with the fixed start text", async () => 
   await assert.rejects(run.done, { message: "The login could not start." });
   run.cancel();
   run.input("ignored");
+});
+
+test("a leader that ignores SIGTERM and a descendant outside the group holding the pipes: done still settles within the bound", async () => {
+  // The descendant leaves the group (its own session) and inherits stdout,
+  // so the leader's pipes never close and no group kill reaches it.
+  const pidFile = join(dir, `escaped-${(count += 1)}.pid`);
+  const killGraceMs = 200;
+  const closeWaitMs = 200;
+  const groupWaitMs = 200;
+  const { run, seen } = login(
+    child(`process.on("SIGTERM", () => {});
+const escaped = spawn(process.execPath, ["-e", ${JSON.stringify(
+      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);`,
+    )}], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+escaped.unref();
+const ready = setInterval(() => {
+  if (!fs.existsSync(${JSON.stringify(pidFile)})) return;
+  clearInterval(ready);
+  send({ type: "output", text: "ready" });
+}, 10);
+setInterval(() => {}, 1000);`),
+    { killGraceMs, closeWaitMs, groupWaitMs },
+  );
+  // Runs even when the test times out: the escaped process is ours.
+  onTestFinished(() => {
+    try {
+      process.kill(pidOf(pidFile), "SIGKILL");
+    } catch {
+      // Already gone, or never started.
+    }
+  });
+  await until(() => seen.includes("output:ready"), "the child");
+  const began = Date.now();
+  run.cancel();
+  await assert.rejects(run.done, { message: "The login did not complete." });
+  const took = Date.now() - began;
+  assert.ok(took >= killGraceMs, "settled before the escalation");
+  assert.ok(
+    took < killGraceMs + closeWaitMs + groupWaitMs + 1_000,
+    `settled after ${took} ms`,
+  );
 });

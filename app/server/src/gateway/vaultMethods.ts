@@ -92,6 +92,32 @@ export const VAULT_LIMITS: ConnectionLimits = {
 /** Logins the vault runs at once, across accounts. */
 export const MAX_VAULT_LOGINS = 4;
 
+/**
+ * A vault login's time bounds (Task-1402 B2). Past `VAULT_LOGIN_TIMEOUT_MS`
+ * the vault withdraws a run that was not granted its commit, abandons any
+ * queued ingest, and stops its child: SIGTERM, the group's SIGKILL after
+ * `LOGIN_KILL_GRACE_MS`, at most `LOGIN_CLOSE_WAIT_MS` for the pipes after the
+ * leader exited and `LOGIN_GROUP_WAIT_MS` for the group to empty. A granted
+ * commit is bounded by `LOGIN_COMMIT_TIMEOUT_MS` and a synchronous install and
+ * seal. So every run reports done within `VAULT_LOGIN_SETTLE_BOUND_MS` of its
+ * start, which the vault enforces itself; the edge's hold after a lost link
+ * (`logins.ts`) is derived from it.
+ */
+export const VAULT_LOGIN_TIMEOUT_MS = 10 * 60_000;
+export const LOGIN_KILL_GRACE_MS = 10_000;
+export const LOGIN_CLOSE_WAIT_MS = 5_000;
+export const LOGIN_GROUP_WAIT_MS = 5_000;
+export const LOGIN_COMMIT_TIMEOUT_MS = 10_000;
+/** After the deadline: the child's stop, a commit in flight, and 5 s spare. */
+export const VAULT_LOGIN_SETTLE_GRACE_MS =
+  LOGIN_KILL_GRACE_MS +
+  LOGIN_CLOSE_WAIT_MS +
+  LOGIN_GROUP_WAIT_MS +
+  LOGIN_COMMIT_TIMEOUT_MS +
+  5_000;
+export const VAULT_LOGIN_SETTLE_BOUND_MS =
+  VAULT_LOGIN_TIMEOUT_MS + VAULT_LOGIN_SETTLE_GRACE_MS;
+
 /** Why a login failed, as `logins.done` says it; never driver text. */
 export type LoginFailure = "cancelled" | "failed";
 

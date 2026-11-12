@@ -36,7 +36,10 @@ import {
   type LoginProfile,
   type ProfileRegistry,
 } from "./profiles.ts";
-import { MAX_VAULT_LOGINS } from "./vaultMethods.ts";
+import {
+  MAX_VAULT_LOGINS,
+  VAULT_LOGIN_SETTLE_BOUND_MS,
+} from "./vaultMethods.ts";
 import type { LoginRun, VaultPort } from "./vaultPort.ts";
 
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -49,11 +52,12 @@ const MAX_USER_LOGINS = 2;
 const MAX_EDGE_LOGINS = MAX_VAULT_LOGINS;
 /**
  * How long an account's driver counts as running after the vault link broke
- * under it: past the vault's own 10-minute deadline plus a minute for the
- * driver to settle. The vault's hello names no running logins, so nothing
+ * under it: the vault reports every run done within
+ * `VAULT_LOGIN_SETTLE_BOUND_MS` of its start, which it enforces itself, plus
+ * a minute's margin. The vault's hello names no running logins, so nothing
  * shorter is known to be safe; its own admission still answers last.
  */
-const UNCERTAIN_HOLD_MS = LOGIN_TIMEOUT_MS + 60_000;
+export const UNCERTAIN_HOLD_MS = VAULT_LOGIN_SETTLE_BOUND_MS + 60_000;
 /** How long, and how many, finished logins stay readable. */
 const FINISHED_TTL_MS = 2 * 60_000;
 const MAX_FINISHED = 64;

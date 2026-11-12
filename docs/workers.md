@@ -1799,16 +1799,20 @@ path above.
   never has its account removed, even if recording the account then fails (it
   ends `error`, reason `unavailable`). If the vault link breaks under a running
   login, the vault may still run its driver: the login ends for its actor
-  (`unavailable`), but its account's slot and any cleanup stay held for 11
-  minutes (the vault's 10-minute deadline plus a minute to settle), since the
-  vault's hello names no running logins; only the vault's own refusal of a start
-  counts as "never ran". Each login runs an injected driver (`startGateway`'s
-  `loginDrivers`: the official CLI's `claude auth login` as a child with
-  `CLAUDE_CONFIG_DIR` set, `claudeLoginDriver.ts`; pi's device-code login,
-  `piSdk/codexLogin.ts`) in a fresh directory under the state directory. On
-  success one writer-lane item checks the credential and renames it into the
-  account's token file, which replaces the whole file; the directory is always
-  deleted. The credential never leaves the gateway, and no login hold is taken.
+  (`unavailable`), but its account's slot and any cleanup stay held for the
+  vault's settle bound plus a minute (`UNCERTAIN_HOLD_MS`, 11 min 35 s, derived
+  from `VAULT_LOGIN_SETTLE_BOUND_MS`; see Remote vault, "Login bound"), since
+  the vault's hello names no running logins; only the vault's own refusal of a
+  start counts as "never ran". Removing an account while its granted commit is
+  installing is safe: the vault's discard runs in the account's writer lane,
+  after that ingest, so neither the token file nor its sealed record comes back.
+  Each login runs an injected driver (`startGateway`'s `loginDrivers`: the
+  official CLI's `claude auth login` as a child with `CLAUDE_CONFIG_DIR` set,
+  `claudeLoginDriver.ts`; pi's device-code login, `piSdk/codexLogin.ts`) in a
+  fresh directory under the state directory. On success one writer-lane item
+  checks the credential and renames it into the account's token file, which
+  replaces the whole file; the directory is always deleted. The credential never
+  leaves the gateway, and no login hold is taken.
 - **The relay** (`relay/`, its own entry and process under Pandeck's server
   account, `node:` only) is the only holder of the client key. It pipes its
   loopback port to the model port and each connection on its 0600 Unix socket to
@@ -2194,6 +2198,23 @@ server's local gateway does.
   login children"). A login child leads its own process group and writes only
   into the login's directory; the vault ends the whole group before it reads the
   credential or removes the directory.
+- **Login bound.** Every vault login run reports done within
+  `VAULT_LOGIN_SETTLE_BOUND_MS` (10 min 35 s) of its start
+  (`gateway/vaultMethods.ts`). At its 10-minute deadline the vault withdraws a
+  run that was not granted its commit: an ingest still waiting for its writer
+  lane turn is abandoned, and the child gets SIGTERM, its group SIGKILL after 10
+  s; `done` then waits at most 5 s for the pipes after the leader exited (a
+  descendant outside the group may hold them) and 5 s for the group to empty,
+  and settles even if they never close (`loginChild.ts`). A run granted its
+  commit is bounded by the 10 s commit exchange and a synchronous install and
+  seal. Whatever the driver does, the vault itself reports the run done
+  (`abandoned`) 35 s past the deadline, waiting only for a commit already in
+  flight. The edge's hold after a lost link is this bound plus a minute. An
+  abrupt vault restart cannot leave a driver behind as long as the vault's unit
+  keeps systemd's default `KillMode=control-group` (or `mixed`): either kills
+  every process left in the unit's cgroup when the unit stops or restarts.
+  `KillMode=process` or `none` would break this bound. The vault's unit is not
+  defined in this repository.
 
 #### Sealed store
 

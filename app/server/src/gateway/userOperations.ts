@@ -126,8 +126,11 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
       const profile = ownedAccount(userId, accountId);
       logins.forget(profile.id);
       deps.removeAccount(profile.id);
-      // Only a token file the vault made for the account goes with it.
-      deps.vault.discardCredential(profile.id);
+      // Only a token file the vault made for the account goes with it, after
+      // any ingest already in the vault's writer lane.
+      void Promise.resolve(deps.vault.discardCredential(profile.id)).catch(() =>
+        deps.log(`account ${profile.id}: discard failed`),
+      );
     },
     startLogin: (actor, start) => logins.start(actor, start),
     inputLogin: (actor, loginId, text) => logins.input(actor, loginId, text),

@@ -10,7 +10,13 @@
  * here; the credential never does. The edge's side is `logins.ts`.
  *
  * New accounts' token files live under `<stateDir>/accounts/<accountId>/`,
- * which `discardCredential` deletes when the account goes. A sealing vault
+ * which `discardCredential` deletes when the account goes, in the account's
+ * writer lane: after an ingest already there, so a commit the edge granted
+ * just before the removal never recreates the file or its record.
+ *
+ * A cancel abandons an ingest still waiting for its turn in the lane, so a
+ * busy lane never keeps a withdrawn run from reporting done; one already in
+ * its turn (asking the edge, then installing) is bounded and finishes. A sealing vault
  * (`sealedStore.ts`) moves the temporary directories into its RAM filesystem,
  * seals the moved-in file in the lane and deletes the account's records too.
  */
@@ -24,7 +30,7 @@ import {
   rmSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { WriterLane } from "./holds.ts";
+import { LaneHeldError, type WriterLane } from "./holds.ts";
 import { readCredential } from "./profileCredential.ts";
 import { LOGIN_CREDENTIAL_FILE } from "./vaultMethods.ts";
 import type { LoginDrivers, VaultPort } from "./vaultPort.ts";
@@ -90,29 +96,55 @@ export function createVaultLogins(
         rmSync(configDir, { recursive: true, force: true });
         throw err;
       }
+      /** Cancelled: an ingest not yet in its lane turn never takes it. */
+      let stopped = false;
+      let inTurn = false;
+      let abandon!: () => void;
+      const abandoned = new Promise<never>((_resolve, reject) => {
+        abandon = () => reject(new Error("The login was cancelled."));
+      });
+      abandoned.catch(() => {});
       const done = run.done
         .then(async () => {
           const source = join(configDir, LOGIN_CREDENTIAL_FILE[request.kind]);
           const read = await readCredential(request.kind, source);
           if (!read.ok) throw new Error("The login left no usable credential.");
-          await lane.run(request.accountId, async () => {
-            if ((await request.commit()) !== true)
-              throw new Error("The login was cancelled.");
-            install(source, request.tokenFile);
-            options.written?.(request.tokenFile);
-          });
+          await Promise.race([
+            lane.run(request.accountId, async () => {
+              if (stopped) throw new Error("The login was cancelled.");
+              inTurn = true;
+              if ((await request.commit()) !== true)
+                throw new Error("The login was cancelled.");
+              install(source, request.tokenFile);
+              options.written?.(request.tokenFile);
+            }),
+            abandoned,
+          ]);
           recheck(request.accountId);
         })
         .finally(() => rmSync(configDir, { recursive: true, force: true }));
-      return { input: run.input, cancel: run.cancel, done };
+      const cancel = (): void => {
+        stopped = true;
+        if (!inTurn) abandon();
+        run.cancel();
+      };
+      return { input: run.input, cancel, done };
     },
     newTokenFile: (kind, accountId) =>
       join(accountDir(accountId), LOGIN_CREDENTIAL_FILE[kind]),
     discardCredential(accountId) {
-      if (stateDir && ID_RE.test(accountId)) {
+      if (!stateDir || !ID_RE.test(accountId)) return Promise.resolve();
+      const discard = (): void => {
         rmSync(accountDir(accountId), { recursive: true, force: true });
         options.discarded?.(accountId);
-      }
+      };
+      // A held profile runs no ingest of ours: nothing to wait for.
+      return lane
+        .run(accountId, async () => discard())
+        .catch((err: unknown) => {
+          if (!(err instanceof LaneHeldError)) throw err;
+          discard();
+        });
     },
   };
 }

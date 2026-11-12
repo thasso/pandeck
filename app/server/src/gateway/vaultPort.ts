@@ -30,8 +30,11 @@ export interface VaultPort {
   login(request: VaultLogin, events: LoginDriverEvents): LoginRun | undefined;
   /** Where the vault keeps a new account's token file. */
   newTokenFile(kind: LeaseProvider, accountId: string): string;
-  /** Deletes the token files the vault made for the account, if any. */
-  discardCredential(accountId: string): void;
+  /**
+   * Deletes the token files the vault made for the account, if any, after
+   * any ingest already in its writer lane.
+   */
+  discardCredential(accountId: string): void | Promise<void>;
   /**
    * A user's integration credential (Task-1397): an opaque JSON string the
    * vault stores, sealed when it has recipients, and parses nothing in. None

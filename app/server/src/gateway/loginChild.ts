@@ -20,6 +20,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  LOGIN_CLOSE_WAIT_MS,
+  LOGIN_GROUP_WAIT_MS,
+  LOGIN_KILL_GRACE_MS,
+} from "./vaultMethods.ts";
 import type { LoginDriver } from "./vaultPort.ts";
 
 export interface LoginChildCommand {
@@ -30,6 +35,12 @@ export interface LoginChildCommand {
 export interface LoginChildOptions {
   /** Between a cancel's SIGTERM and the group's SIGKILL; 10 s. */
   killGraceMs?: number;
+  /**
+   * After the leader exited, how long its pipes may stay open (a descendant
+   * outside the group may hold them); 5 s. Also how long past the SIGKILL a
+   * leader that never exits is waited for.
+   */
+  closeWaitMs?: number;
   /** How long the group may take to end after its leader; 5 s. */
   groupWaitMs?: number;
   log?: (line: string) => void;
@@ -115,8 +126,9 @@ function isLoginUrl(text: string): boolean {
 export function loginChildDriver(
   command: LoginChildCommand,
   {
-    killGraceMs = 10_000,
-    groupWaitMs = 5_000,
+    killGraceMs = LOGIN_KILL_GRACE_MS,
+    closeWaitMs = LOGIN_CLOSE_WAIT_MS,
+    groupWaitMs = LOGIN_GROUP_WAIT_MS,
     log = (line) => console.error(`[vault] ${line}`),
   }: LoginChildOptions = {},
 ): LoginDriver {
@@ -146,6 +158,11 @@ export function loginChildDriver(
     let pending = "";
     let outputBytes = 0;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Settles `done` without waiting for a close that never comes. */
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    let finishing = false;
+    let exitCode: number | null = null;
 
     const killGroup = (): void => {
       if (settled || child.pid === undefined) return;
@@ -160,6 +177,8 @@ export function loginChildDriver(
       cancelled = true;
       child.kill("SIGTERM");
       graceTimer = setTimeout(killGroup, killGraceMs);
+      // Even a leader that never exits after the SIGKILL ends the run.
+      hardTimer = setTimeout(() => finish(null), killGraceMs + closeWaitMs);
     };
     const fault = (): void => {
       faulted = true;
@@ -220,13 +239,24 @@ export function loginChildDriver(
       }
       if (Buffer.byteLength(pending) > MAX_LINE_BYTES) fault();
     });
-    // A descendant may hold the leader's pipes: end the group at its exit.
-    child.on("exit", () => {
+    // A descendant may hold the leader's pipes: end the group at its exit,
+    // and stop waiting for the pipes after `closeWaitMs`.
+    child.on("exit", (code) => {
       exited = true;
+      exitCode = code;
       killGroup();
+      closeTimer = setTimeout(() => {
+        child.stdout?.destroy();
+        finish(exitCode);
+      }, closeWaitMs);
     });
-    child.on("close", (code) => {
-      if (settled) return;
+    child.on("close", (code) => finish(code));
+    /** Waits for the group to end, then settles `done`, once. */
+    function finish(code: number | null): void {
+      if (settled || finishing) return;
+      finishing = true;
+      clearTimeout(closeTimer);
+      clearTimeout(hardTimer);
       void (async () => {
         const pgid = child.pid!;
         const until = Date.now() + groupWaitMs;
@@ -251,7 +281,7 @@ export function loginChildDriver(
           settle.resolve();
         else settle.reject(new Error(DID_NOT_COMPLETE));
       })();
-    });
+    }
 
     child.stdin!.write(`${JSON.stringify({ configDir })}\n`);
     return {

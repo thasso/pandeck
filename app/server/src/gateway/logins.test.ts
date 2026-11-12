@@ -11,10 +11,19 @@ import {
   LoginNotRun,
   LoginOutcomeUnknown,
   LoginRefusal,
+  UNCERTAIN_HOLD_MS,
   type LoginActor,
   type LoginEvent,
 } from "./logins.ts";
 import type { LoginProfile } from "./profiles.ts";
+import {
+  LOGIN_CLOSE_WAIT_MS,
+  LOGIN_COMMIT_TIMEOUT_MS,
+  LOGIN_GROUP_WAIT_MS,
+  LOGIN_KILL_GRACE_MS,
+  VAULT_LOGIN_SETTLE_BOUND_MS,
+  VAULT_LOGIN_TIMEOUT_MS,
+} from "./vaultMethods.ts";
 import type { LoginDriverEvents, LoginRun, VaultPort } from "./vaultPort.ts";
 
 type VaultLogin = Parameters<VaultPort["login"]>[0];
@@ -629,4 +638,17 @@ test("C3: a registry write failing after success still ends the login, frees the
   assert.throws(() => h.manager.cancel(a, first.loginId), LoginRefusal);
   await h.runs[1]!.succeed();
   assert.equal(h.manager.read(a, retry.loginId, 0).state, "ready");
+});
+
+test("C2: the edge's hold after a lost link outlasts the vault's own settle bound, with a minute's margin", () => {
+  assert.equal(
+    VAULT_LOGIN_SETTLE_BOUND_MS,
+    VAULT_LOGIN_TIMEOUT_MS +
+      LOGIN_KILL_GRACE_MS +
+      LOGIN_CLOSE_WAIT_MS +
+      LOGIN_GROUP_WAIT_MS +
+      LOGIN_COMMIT_TIMEOUT_MS +
+      5_000,
+  );
+  assert.equal(UNCERTAIN_HOLD_MS, VAULT_LOGIN_SETTLE_BOUND_MS + 60_000);
 });
