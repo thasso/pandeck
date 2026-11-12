@@ -232,6 +232,62 @@ describe("useAccountLogin", () => {
     act(() => view.root.unmount());
   });
 
+  test("cancelling holds for the shown run across a reconnect, and cancelledHere follows only that run", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    first!.open();
+    first!.receive(snapshot("run-1"));
+    expect(latest?.cancelling).toBe(false);
+    act(() => latest!.cancel());
+    expect(latest?.cancelling).toBe(true);
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-1"));
+    expect(latest?.cancelling).toBe(true);
+    expect(latest?.cancelledHere).toBe(false);
+    second.receive({ type: "status", runId: "run-1", status: "cancelled" });
+    expect(latest?.cancelling).toBe(false);
+    expect(latest?.cancelledHere).toBe(true);
+    act(() => view.root.unmount());
+  });
+
+  test("a Cancel for run-1 neither marks another viewer's run-2 as cancelling nor claims its cancel", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    first!.open();
+    first!.receive(snapshot("run-1"));
+    act(() => latest!.cancel());
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-2"));
+    expect(latest?.cancelling).toBe(false);
+    expect(latest?.cancelUnconfirmed).toBe(false);
+    second.receive({ type: "status", runId: "run-2", status: "cancelled" });
+    expect(latest?.cancelledHere).toBe(false);
+    act(() => view.root.unmount());
+  });
+
+  test("an early Cancel never sent claims no cancelled run, and a refusal before any run is never ours", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    act(() => latest!.cancel());
+    expect(latest?.cancelling).toBe(true);
+    const second = reconnect(first!);
+    second.open();
+    second.receive(snapshot("run-2", "cancelled"));
+    expect(second.sent).toEqual([]);
+    expect(latest?.cancelling).toBe(false);
+    expect(latest?.cancelledHere).toBe(false);
+    act(() => view.root.unmount());
+
+    const again = mount(createElement(Probe, { profileId: "cp_other" }));
+    const socket = FakeWebSocket.sockets.at(-1)!;
+    act(() => latest!.cancel());
+    socket.receive({ type: "status", status: "cancelled" });
+    expect(latest?.cancelledHere).toBe(false);
+    act(() => again.root.unmount());
+  });
+
   test("C3: only the start socket names this mount's start token", () => {
     const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
     const [first] = FakeWebSocket.sockets;

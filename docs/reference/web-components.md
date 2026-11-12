@@ -2421,20 +2421,23 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   it shows the verification link and one-time code. Each link also appears as
   read-only, selectable text with a Copy button, hidden where the browser has no
   clipboard (plain http). While a login runs, Cancel login is the only way out:
-  no X, and Escape or an outside click does nothing. Cancel shows "Cancelling…"
-  and the dialog closes itself once the login reports cancelled, with no
-  cancelled screen; it stays mounted until then so the hook can deliver a
-  latched Cancel. Close appears as soon as Cancel was pressed, so an unconfirmed
-  cancel cannot trap the user. A login cancelled without the dialog's Cancel
-  (started again elsewhere) keeps its notice and Close; a finished login offers
-  Done or Close, and Close never cancels. Every Claude profile, the protected
-  Default Claude included, is isolated under `DATA_DIR/credential-profiles/` and
-  retains `CLAUDE_CONFIG_DIR=… claude` as a terminal fallback. Connect/Reconnect
-  uses the browser terminal for every Claude profile. Every profile, including
-  the default, can be disabled; only named profiles can be renamed/deleted
-  (deletion is refused while sessions remain bound). Settings → OpenAI owns
-  isolated OpenAI/Codex profiles and the pi device-code flow. Both list only
-  safe metadata; tokens and raw credential files never enter the UI.
+  no X, and Escape or an outside click does nothing. While the hook reports its
+  Cancel latched or sent for the shown run (`cancelling`) the dialog shows
+  "Cancelling…", and once that same run ends cancelled (`cancelledHere`) it
+  closes itself with no cancelled screen; it stays mounted until then so the
+  hook can deliver a latched Cancel. Both are run-scoped: after a reconnect to
+  another run, Cancel works again and that run's cancel is not claimed. Close
+  appears as soon as Cancel was pressed, so an unconfirmed cancel cannot trap
+  the user. A login cancelled by anyone else (started again elsewhere) keeps its
+  notice and Close; a finished login offers Done or Close, and Close never
+  cancels. Every Claude profile, the protected Default Claude included, is
+  isolated under `DATA_DIR/credential-profiles/` and retains
+  `CLAUDE_CONFIG_DIR=… claude` as a terminal fallback. Connect/Reconnect uses
+  the browser terminal for every Claude profile. Every profile, including the
+  default, can be disabled; only named profiles can be renamed/deleted (deletion
+  is refused while sessions remain bound). Settings → OpenAI owns isolated
+  OpenAI/Codex profiles and the pi device-code flow. Both list only safe
+  metadata; tokens and raw credential files never enter the UI.
 - Jira and Tempo are two separate settings pages. `Jira` is token-based
   (Atlassian email + API token, host shown read-only from deployment config)
   and, like `GitHub`, keeps an explicit token entry with a `Save and test`

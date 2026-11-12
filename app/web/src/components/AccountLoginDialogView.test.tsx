@@ -256,7 +256,7 @@ describe("closing", () => {
     },
   );
 
-  test("Cancel shows Cancelling… with Close available, so an unconfirmed cancel cannot trap the user", () => {
+  test("a pressed Cancel shows Close even before the host reports it, so an unconfirmed cancel cannot trap the user", () => {
     const cancel = vi.fn();
     const onClose = vi.fn();
     const { node, button, view } = dialog({
@@ -268,16 +268,40 @@ describe("closing", () => {
     act(() => button("Cancel login")!.click());
     expect(cancel).toHaveBeenCalledOnce();
     expect(onClose).not.toHaveBeenCalled();
+    // The host has not said it is cancelling this run: nothing else changes.
+    expect(node.textContent).not.toContain("Cancelling…");
+    expect(node.textContent).toContain("ABCD-1234");
+    expect(button("Cancel login")?.disabled).toBe(false);
+    pressEscape(node);
+    expect(onClose).toHaveBeenCalledOnce();
+    act(() => button("Close")!.click());
+    expect(onClose).toHaveBeenCalledTimes(2);
+    act(() => view.root.unmount());
+  });
+
+  test("cancelling the shown run shows Cancelling…, disables Cancel and keeps Close", () => {
+    const onClose = vi.fn();
+    const { node, button, view } = dialog({
+      ...openAi,
+      device: DEVICE,
+      onClose,
+    });
+    act(() => button("Cancel login")!.click());
+    view.render(
+      <AccountLoginDialogView
+        {...openAi}
+        device={DEVICE}
+        onClose={onClose}
+        cancelling
+      />,
+    );
     expect(node.querySelector('[role="status"]')?.textContent).toBe(
       "Cancelling…",
     );
     expect(node.textContent).not.toContain("ABCD-1234");
     expect(button("Cancel login")?.disabled).toBe(true);
-    pressEscape(node);
-    expect(onClose).toHaveBeenCalledOnce();
     act(() => button("Close")!.click());
-    expect(onClose).toHaveBeenCalledTimes(2);
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
     act(() => view.root.unmount());
   });
 
@@ -285,17 +309,17 @@ describe("closing", () => {
     ["Claude", { ...claude, output: CLAUDE_OUTPUT }],
     ["OpenAI", { ...openAi, device: DEVICE }],
   ] as const)(
-    "%s: the dialog's own Cancel ending the login closes it without a cancelled screen",
+    "%s: a run cancelled by this dialog's Cancel closes it once, without a cancelled screen",
     (_provider, props) => {
       const onClose = vi.fn();
-      const { node, button, view } = dialog({ ...props, onClose });
-      act(() => button("Cancel login")!.click());
+      const { node, view } = dialog({ ...props, onClose, cancelling: true });
       expect(onClose).not.toHaveBeenCalled();
       view.render(
         <AccountLoginDialogView
           {...props}
           onClose={onClose}
           status="cancelled"
+          cancelledHere
           error="The login was cancelled."
         />,
       );
@@ -308,6 +332,7 @@ describe("closing", () => {
           {...props}
           onClose={() => onClose()}
           status="cancelled"
+          cancelledHere
         />,
       );
       expect(onClose).toHaveBeenCalledOnce();
@@ -315,13 +340,14 @@ describe("closing", () => {
     },
   );
 
-  test("a login cancelled without this dialog's Cancel keeps its notice and Close", () => {
+  test("a cancelled run the host does not attribute to this dialog keeps its notice and Close, even after a press", () => {
     const onClose = vi.fn();
     const { node, button, view } = dialog({
       ...openAi,
       device: DEVICE,
       onClose,
     });
+    act(() => button("Cancel login")!.click());
     view.render(
       <AccountLoginDialogView
         {...openAi}
@@ -339,7 +365,7 @@ describe("closing", () => {
     act(() => view.root.unmount());
   });
 
-  test("C4 after a press: the unconfirmed notice replaces Cancelling…, Cancel is enabled again and Close stays", () => {
+  test("C4 after a press: the unconfirmed notice wins over Cancelling…, Cancel is enabled again and Close stays", () => {
     const cancel = vi.fn();
     const { node, button, view } = dialog({
       ...openAi,
@@ -352,6 +378,7 @@ describe("closing", () => {
         {...openAi}
         device={DEVICE}
         cancel={cancel}
+        cancelling
         cancelUnconfirmed
       />,
     );

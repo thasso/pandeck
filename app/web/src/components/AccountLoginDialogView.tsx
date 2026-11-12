@@ -10,13 +10,15 @@
  * output; OpenAI shows its verification link and one-time code. Each link also
  * appears as selectable text with a Copy button where the browser offers a
  * clipboard (plain http does not). While the login runs the only way out is
- * Cancel login: no X, and Escape or an outside click does nothing. Cancel shows
- * "Cancelling…" and the dialog closes itself once the login reports cancelled;
- * it stays mounted until then because the host's hook may still have to
- * deliver a latched Cancel. Close appears as soon as Cancel was pressed, so a
- * cancel the server never confirms cannot trap the user. A login cancelled
- * without this dialog's Cancel (taken over elsewhere, another viewer) keeps its
- * notice and Close; a finished login offers Done (signed in) or Close.
+ * Cancel login: no X, and Escape or an outside click does nothing. Close
+ * appears as soon as Cancel was pressed, so a cancel the server never confirms
+ * cannot trap the user. The host tells which run its Cancel concerns:
+ * `cancelling` shows "Cancelling…" for the shown run, and `cancelledHere`
+ * closes the dialog once that run ended cancelled by this dialog's Cancel,
+ * with no cancelled screen. The dialog stays mounted until then because the
+ * host may still have to deliver a latched Cancel. A login cancelled by anyone
+ * else (taken over elsewhere, another viewer) keeps its notice and Close; a
+ * finished login offers Done (signed in) or Close.
  */
 import {
   useEffect,
@@ -76,6 +78,10 @@ export interface AccountLoginDialogViewProps {
   error?: string | undefined;
   /** An early Cancel could not be tied to this run and was not sent. */
   cancelUnconfirmed?: boolean | undefined;
+  /** This dialog's Cancel is latched or sent for the shown run. */
+  cancelling?: boolean | undefined;
+  /** The shown run ended cancelled by this dialog's Cancel: close silently. */
+  cancelledHere?: boolean | undefined;
   /** Claude's pasted code; answers whether it was sent. */
   submit?: ((code: string) => boolean) | undefined;
   cancel: () => void;
@@ -98,19 +104,20 @@ export function AccountLoginDialogView({
   device,
   error,
   cancelUnconfirmed,
+  cancelling: cancellingRun,
+  cancelledHere: cancelledHereRun,
   submit,
   cancel,
   onClose,
 }: AccountLoginDialogViewProps) {
   const label = PROVIDER_LABEL[provider];
+  // Only for the way out: whichever run a Cancel concerned, pressing it must
+  // never leave the user without Close.
   const [cancelPressed, setCancelPressed] = useState(false);
   const running = status === "connecting";
-  // A running login closes only through Cancel, unless Cancel was already
-  // pressed: an unconfirmed cancel must not keep the user in the dialog.
   const closable = !running || cancelPressed;
-  const cancelling = running && cancelPressed && !cancelUnconfirmed;
-  // This dialog's own Cancel ended the login: close rather than show it.
-  const cancelledHere = cancelPressed && status === "cancelled";
+  const cancelling = running && cancellingRun === true && !cancelUnconfirmed;
+  const cancelledHere = status === "cancelled" && cancelledHereRun === true;
   const closedRef = useRef(false);
   useEffect(() => {
     if (!cancelledHere || closedRef.current) return;
