@@ -14,7 +14,74 @@ export interface GatewayUiMe {
 
 /** Every refusal body of the page's API, a fixed code and nothing else. */
 export interface GatewayUiError {
-  error: "signed_out" | "forbidden" | "unavailable";
+  error:
+    | "signed_out"
+    | "forbidden"
+    | "unavailable"
+    | "unknown_account"
+    | "unknown_login"
+    | "login_unavailable"
+    | "bad_request";
+}
+
+export type GatewayUiProvider = "claude" | "openai-codex";
+
+/** One of the signed-in user's accounts, as `GET /api/accounts` lists it. */
+export interface GatewayUiAccount {
+  id: string;
+  provider: GatewayUiProvider;
+  name: string;
+  /** Its first login has not succeeded, or renewal found it logged out. */
+  needsLogin: boolean;
+}
+
+export interface GatewayUiAccounts {
+  accounts: GatewayUiAccount[];
+}
+
+/**
+ * `POST /api/logins/start`: a login for the user's account `accountId`, or,
+ * without it, for a new account named `name` (the provider's name if empty).
+ */
+export interface GatewayUiLoginStartRequest {
+  kind: GatewayUiProvider;
+  accountId?: string;
+  name?: string;
+}
+
+/** What a start answers: the login to read, and its account. */
+export interface GatewayUiLoginStart {
+  loginId: string;
+  accountId: string;
+}
+
+export type GatewayUiLoginState = "running" | "ready" | "error" | "cancelled";
+
+/**
+ * Why a login ended other than ready, a fixed code the page turns into its
+ * own text: the login failed, ran past its deadline, was started again from
+ * elsewhere, could not run now, or its session ended. Never provider text.
+ */
+export const GATEWAY_UI_LOGIN_REASONS = [
+  "failed",
+  "timed_out",
+  "superseded",
+  "unavailable",
+  "session_ended",
+] as const;
+export type GatewayUiLoginReason = (typeof GATEWAY_UI_LOGIN_REASONS)[number];
+
+/**
+ * `GET /api/logins/read?login=<id>&cursor=<n>`: the login's state, its
+ * output from `cursor` on and the cursor to read from next. A ChatGPT login's
+ * `device` appears once both its link and code are known.
+ */
+export interface GatewayUiLogin {
+  state: GatewayUiLoginState;
+  reason?: GatewayUiLoginReason;
+  output: string;
+  cursor: number;
+  device?: { verificationUri: string; userCode: string };
 }
 
 /**
@@ -46,4 +113,86 @@ export function decodeGatewayUiMe(value: unknown): GatewayUiMe | undefined {
   )
     return undefined;
   return { userId, email, label };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isProvider = (value: unknown): value is GatewayUiProvider =>
+  value === "claude" || value === "openai-codex";
+
+/** A well-formed `GatewayUiAccounts`, or undefined. */
+export function decodeGatewayUiAccounts(
+  value: unknown,
+): GatewayUiAccounts | undefined {
+  if (!isRecord(value) || !Array.isArray(value.accounts)) return undefined;
+  const accounts: GatewayUiAccount[] = [];
+  for (const entry of value.accounts as unknown[]) {
+    if (!isRecord(entry)) return undefined;
+    const { id, provider, name, needsLogin } = entry;
+    if (
+      typeof id !== "string" ||
+      id === "" ||
+      !isProvider(provider) ||
+      typeof name !== "string" ||
+      typeof needsLogin !== "boolean"
+    )
+      return undefined;
+    accounts.push({ id, provider, name, needsLogin });
+  }
+  return { accounts };
+}
+
+/** A well-formed `GatewayUiLoginStart`, or undefined. */
+export function decodeGatewayUiLoginStart(
+  value: unknown,
+): GatewayUiLoginStart | undefined {
+  if (!isRecord(value)) return undefined;
+  const { loginId, accountId } = value;
+  if (
+    typeof loginId !== "string" ||
+    loginId === "" ||
+    typeof accountId !== "string" ||
+    accountId === ""
+  )
+    return undefined;
+  return { loginId, accountId };
+}
+
+/** A well-formed `GatewayUiLogin`, or undefined; an unknown reason drops. */
+export function decodeGatewayUiLogin(
+  value: unknown,
+): GatewayUiLogin | undefined {
+  if (!isRecord(value)) return undefined;
+  const { state, reason, output, cursor, device } = value;
+  if (
+    state !== "running" &&
+    state !== "ready" &&
+    state !== "error" &&
+    state !== "cancelled"
+  )
+    return undefined;
+  if (
+    typeof output !== "string" ||
+    typeof cursor !== "number" ||
+    !Number.isInteger(cursor) ||
+    cursor < 0
+  )
+    return undefined;
+  const login: GatewayUiLogin = { state, output, cursor };
+  if ((GATEWAY_UI_LOGIN_REASONS as readonly unknown[]).includes(reason))
+    login.reason = reason as GatewayUiLoginReason;
+  if (device !== undefined) {
+    if (
+      !isRecord(device) ||
+      typeof device.verificationUri !== "string" ||
+      typeof device.userCode !== "string"
+    )
+      return undefined;
+    login.device = {
+      verificationUri: device.verificationUri,
+      userCode: device.userCode,
+    };
+  }
+  return login;
 }
