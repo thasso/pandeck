@@ -60,10 +60,10 @@ const DEFAULT_NAME: Record<LeaseProvider, string> = {
   "openai-codex": "Codex",
 };
 
-export type LoginState = "running" | "ready" | "error" | "cancelled";
+type LoginState = "running" | "ready" | "error" | "cancelled";
 
 /** Why a login ended other than ready, as fixed codes a browser may see. */
-export type LoginReason =
+type LoginReason =
   "failed" | "timed_out" | "superseded" | "unavailable" | "session_ended";
 
 export type LoginEvent =
