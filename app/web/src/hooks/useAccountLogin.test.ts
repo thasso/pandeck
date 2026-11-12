@@ -10,6 +10,7 @@ class FakeWebSocket {
   static sockets: FakeWebSocket[] = [];
   readyState = 0;
   sent: string[] = [];
+  onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   onclose: (() => void) | null = null;
@@ -24,6 +25,7 @@ class FakeWebSocket {
   }
   open() {
     this.readyState = 1;
+    act(() => this.onopen?.());
   }
   receive(message: object) {
     act(() => this.onmessage?.({ data: JSON.stringify(message) }));
@@ -105,6 +107,68 @@ describe("useAccountLogin", () => {
     expect(latest?.device).toEqual(device);
     act(() => latest!.cancel());
     expect(socket!.sent).toEqual([JSON.stringify({ type: "cancel" })]);
+    act(() => view.root.unmount());
+  });
+
+  // C1 (rv-1402-b1-code-01): a Cancel pressed while no socket is open is
+  // latched, not dropped.
+  const CANCEL = JSON.stringify({ type: "cancel" });
+  const snapshot = {
+    type: "snapshot",
+    profileId: "cp_fixture",
+    provider: "openai-codex",
+    status: "connecting",
+    output: "",
+    startedAt: 0,
+  };
+
+  test("a Cancel pressed before the socket opens goes out once it opens", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [socket] = FakeWebSocket.sockets;
+    expect(socket!.readyState).toBe(0);
+    act(() => latest!.cancel());
+    expect(socket!.sent).toEqual([]);
+    socket!.open();
+    socket!.receive(snapshot);
+    expect(socket!.sent).toEqual([CANCEL]);
+    expect(latest?.status).toBe("connecting");
+    act(() => view.root.unmount());
+  });
+
+  test("a Cancel pressed in the reconnect gap goes out on the attach socket", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    first!.open();
+    first!.drop();
+    act(() => latest!.cancel());
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    const second = FakeWebSocket.sockets[1]!;
+    expect(intent(second)).toBe("attach");
+    second.open();
+    expect(second.sent).toEqual([CANCEL]);
+    expect(first!.sent).toEqual([]);
+    act(() => view.root.unmount());
+  });
+
+  test("a sent Cancel goes out again after a drop until a terminal status, and never after one", () => {
+    const view = mount(createElement(Probe, { profileId: "cp_fixture" }));
+    const [first] = FakeWebSocket.sockets;
+    first!.open();
+    act(() => latest!.cancel());
+    expect(first!.sent).toEqual([CANCEL]);
+    // Dropped before the server answered: the next socket repeats it.
+    first!.drop();
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    const second = FakeWebSocket.sockets[1]!;
+    second.open();
+    expect(second.sent).toEqual([CANCEL]);
+    second.receive({ type: "status", status: "cancelled" });
+    act(() => latest!.cancel());
+    expect(second.sent).toEqual([CANCEL]);
     act(() => view.root.unmount());
   });
 });

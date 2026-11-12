@@ -24,6 +24,10 @@ function accountLoginSocketUrl(
  * first socket of a mount starts (or joins) the login; a reconnect after an
  * unexpected close while it still runs only rejoins it (`attach`), so a
  * dropped connection never starts a second login.
+ *
+ * Cancel is latched for the mounted login: pressed while a socket opens or
+ * reconnects, it goes out once a socket is open, and again on every later
+ * socket, until the login reports a terminal status.
  */
 export function useAccountLogin(profileId: string, onFinished: () => void) {
   const [status, setStatus] = useState<AccountLoginStatus>("connecting");
@@ -33,6 +37,8 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
   const [reconnect, setReconnect] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<AccountLoginStatus>("connecting");
+  // The profile whose login the user cancelled; cleared by a terminal status.
+  const cancelledRef = useRef<string | null>(null);
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
 
@@ -45,9 +51,14 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
     socketRef.current = socket;
     const updateStatus = (next: AccountLoginStatus, nextError?: string) => {
       statusRef.current = next;
+      if (next !== "connecting") cancelledRef.current = null;
       setStatus(next);
       setError(nextError);
       if (next === "ready") onFinishedRef.current();
+    };
+    socket.onopen = () => {
+      if (cancelledRef.current === profileId)
+        socket.send(JSON.stringify({ type: "cancel" }));
     };
     socket.onmessage = (event) => {
       let message: AccountLoginServerMessage;
@@ -100,6 +111,8 @@ export function useAccountLogin(profileId: string, onFinished: () => void) {
     error,
     submit: (data: string) => send({ type: "input", data }),
     cancel: () => {
+      if (statusRef.current !== "connecting") return;
+      cancelledRef.current = profileId;
       send({ type: "cancel" });
     },
   };
