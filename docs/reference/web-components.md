@@ -2411,12 +2411,15 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   healthy/warning state, and tell users with invalid authorization to sign out
   and back in. Google and Slack do not offer a separate
   reauthorize/switch-account action.
-- Settings → Claude SDK owns Claude profiles. `ClaudeLoginTerminal.tsx` is the
-  mobile-safe modal around `hooks/useClaudeLoginTerminal.ts`: it shows bounded
-  streamed output from the official `claude auth login --claudeai` process,
-  turns only Claude's authorization URL into a tappable external action, and
-  forwards the password-masked pasted code without displaying it. Every Claude
-  profile, the protected Default Claude included, is isolated under
+- Settings → Claude SDK owns Claude profiles. `AccountLoginDialog.tsx` is the
+  mobile-safe modal around `hooks/useAccountLogin.ts`, rendering the
+  transport-free `AccountLoginDialogView.tsx` (which the gateway page can
+  reuse): for Claude it shows bounded streamed output from the official
+  `claude auth login --claudeai` process, turns only Claude's authorization URL
+  into a tappable external action, and forwards the password-masked pasted code
+  without displaying it; for OpenAI it shows the verification link and one-time
+  code. Both offer Cancel login; Close never cancels. Every Claude profile, the
+  protected Default Claude included, is isolated under
   `DATA_DIR/credential-profiles/` and retains `CLAUDE_CONFIG_DIR=… claude` as a
   terminal fallback. Connect/Reconnect uses the browser terminal for every
   Claude profile. Every profile, including the default, can be disabled; only

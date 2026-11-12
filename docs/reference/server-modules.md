@@ -17,8 +17,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   setup, and graceful process shutdown (stop accepting new work, drain active
   sessions, then exit through cleanup hooks). Three WebSocket surfaces share the
   HTTP server — the session protocol on `/ws`, dictation audio on `/ws/speech`,
-  and the official Claude CLI login terminal on `/ws/claude-login` — and ALL
-  must be `noServer: true` behind the single `server.on("upgrade")` router that
+  and the Claude and OpenAI login dialog on `/ws/account-login` — and ALL must
+  be `noServer: true` behind the single `server.on("upgrade")` router that
   applies the origin/token/shutdown gate once: constructing them with
   `{ server, path }` attaches independent upgrade listeners, each calling
   `handleUpgrade` unconditionally, and the one whose `path` does not match

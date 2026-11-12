@@ -374,7 +374,8 @@ page's `/api/credential-profiles` routes call:
 - `accounts_read`: each account's id, name, provider, enabled state and sign-in
   status, the settings that pin it, how many sessions are bound to it, and
   whether it takes its provider's unpinned work. A login in progress never shows
-  its device code or link here.
+  its device code or link here: the code travels only on the login dialog's
+  socket, never in an account summary.
 - `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
   default account or one a session is bound to, as the page does, and unpins the
   account from every setting through `clearProfilePins`. Only login kinds are
@@ -382,18 +383,19 @@ page's `/api/credential-profiles` routes call:
   the Settings page, so no agent tool reads or writes a URL or key.
 - `accounts_sign_in`: raises a `settingsInput` card in `signIn` mode
   (`path: accounts.<id>`, `account: { id, provider }`) and ends the turn. In the
-  browser an OpenAI account starts its device login and shows the link and code
-  there; a Claude account opens the official CLI login terminal. The card cannot
-  be approved before the account is ready. `credentialProfiles.ts` announces
-  every account change (`subscribeCredentialProfileChanges`: created, renamed,
-  enabled, deleted, login state moved), and a sign-in card for an account that
-  is now enabled and signed in is approved and its outcome handed to the
-  session. An OpenAI login counts as done once its credential file changes,
-  which nothing announces, so `watchSignInCards` also re-checks waiting sign-in
-  cards every few seconds while any waits, and once at boot for cards a restart
-  left waiting. An account that is already signed in gets no card: the tool
-  reports it, since a new login would satisfy a card with the old credential
-  before the new one exists.
+  browser, Sign in (Continue sign-in while a login runs) opens the same login
+  dialog as Settings for both providers: OpenAI's verification link and one-time
+  code, or Claude's official CLI login, each with Cancel login. The card itself
+  never shows a code. The card cannot be approved before the account is ready.
+  `credentialProfiles.ts` announces every account change
+  (`subscribeCredentialProfileChanges`: created, renamed, enabled, deleted,
+  login state moved), and a sign-in card for an account that is now enabled and
+  signed in is approved and its outcome handed to the session. An OpenAI login
+  counts as done once its credential file changes, which nothing announces, so
+  `watchSignInCards` also re-checks waiting sign-in cards every few seconds
+  while any waits, and once at boot for cards a restart left waiting. An account
+  that is already signed in gets no card: the tool reports it, since a new login
+  would satisfy a card with the old credential before the new one exists.
 - `accounts_sign_in` refuses an endpoint account
   (`ACCOUNT_KINDS[kind] .credential` is `endpoint`), naming its Settings page
   instead. Each account's Settings link comes from its kind's `settingsSection`.
