@@ -3,6 +3,7 @@
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -31,6 +32,16 @@ const outputDir = resolve(outputArg);
 // config/app.json is copied into the package below. Refuse secret-shaped fields
 // before touching the output so no package can carry deployment credentials.
 assertPackageConfigHasNoSecrets(join(repoRoot, "config", "app.json"));
+
+// The gateway UI ships as `gateway-web/`, the packaged edge's default
+// `distDir`; `pnpm run build` builds it beside the main web UI.
+const gatewayWebDist = join(repoRoot, "app/web/dist-gateway");
+if (!existsSync(join(gatewayWebDist, "gateway.html"))) {
+  console.error(
+    "app/web/dist-gateway/gateway.html is missing: run pnpm run build first.",
+  );
+  process.exit(2);
+}
 
 function copy(source, destination, mode) {
   const target = join(outputDir, destination);
@@ -167,10 +178,15 @@ const serverBundle = await bundle(join(repoRoot, "app/server/src/index.ts"), {
   define: SERVER_BUNDLE_DEFINE,
   plugins,
 });
-// The standalone gateway, the vault, and their children: Codex renewal and
-// the two logins, each its own entry (docs/deployment.md#bun-package).
+// The standalone gateway, the packaged edge (remote vault, tools, `/mcp`
+// and the gateway UI), the vault, and their children: Codex renewal and the
+// two logins, each its own entry (docs/deployment.md#bun-package).
 const gatewayBundle = await bundle(
   join(repoRoot, "app/server/src/gateway/main.ts"),
+  { define: SERVER_BUNDLE_DEFINE, plugins },
+);
+const gatewayEdgeBundle = await bundle(
+  join(repoRoot, "app/server/src/gatewayEdgeMain.ts"),
   { define: SERVER_BUNDLE_DEFINE, plugins },
 );
 const vaultBundle = await bundle(
@@ -204,6 +220,7 @@ mkdirSync(join(outputDir, "native"), { recursive: true });
 copy(process.execPath, "personal-assistant-server", 0o755);
 await write(join(outputDir, "server.js"), serverBundle);
 await write(join(outputDir, "gateway.js"), gatewayBundle);
+await write(join(outputDir, "gateway-edge.js"), gatewayEdgeBundle);
 await write(join(outputDir, "vault.js"), vaultBundle);
 await write(join(outputDir, "codex-renew.js"), codexRenewBundle);
 await write(join(outputDir, "claude-login.js"), claudeLoginBundle);
@@ -238,6 +255,7 @@ copy(join(repoRoot, "package.json"), "package.json");
 copy(join(repoRoot, "LICENSE"), "LICENSE");
 copy(join(repoRoot, "NOTICE"), "NOTICE");
 copy(join(repoRoot, "app/web/dist"), "web");
+copy(gatewayWebDist, "gateway-web");
 copy(join(repoRoot, "config/app.json"), "config/app.json");
 copy(join(repoRoot, "config/host-tools.json"), "config/host-tools.json");
 copy(join(repoRoot, "config/stt-models.json"), "config/stt-models.json");

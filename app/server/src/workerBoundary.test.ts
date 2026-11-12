@@ -636,7 +636,7 @@ test("only the edge's entry loads its tools, and they reach no server state", ()
     importersOf((target) => target.startsWith("gatewayTools/")).filter(
       (module) => !module.startsWith("gatewayTools/"),
     ),
-    ["gatewayDevMain.ts"],
+    ["gatewayEdge.ts"],
   );
   const modules = [...scans].filter(([module]) =>
     module.startsWith("gatewayTools/"),
@@ -679,7 +679,7 @@ test("only the edge's entry loads its sign-in, which alone uses the OIDC library
     importersOf((target) => target.startsWith("gatewayWeb/")).filter(
       (module) => !module.startsWith("gatewayWeb/"),
     ),
-    ["gatewayDevMain.ts"],
+    ["gatewayEdge.ts"],
   );
   const modules = [...scans].filter(([module]) =>
     module.startsWith("gatewayWeb/"),
@@ -710,18 +710,55 @@ test("only the edge's entry loads its sign-in, which alone uses the OIDC library
 test("only the server links and the error classifier import the gateway", () => {
   // The link starts it and speaks control, the client-mode link speaks
   // gateway client 1.0; engine modules reach it only through a link. The
-  // classifier reads the local-refusal marker. The dev entry runs the edge;
-  // the vault's entry is `gateway/vaultMain.ts`.
+  // classifier reads the local-refusal marker. The edge's composition, which
+  // both edge entries run, starts the edge; the vault's entry is
+  // `gateway/vaultMain.ts`.
   assert.deepEqual(
     importersOf((target) => target.startsWith("gateway/")).filter(
       (module) => !module.startsWith("gateway/"),
     ),
     [
       "gatewayClientLink.ts",
-      "gatewayDevMain.ts",
+      "gatewayEdge.ts",
       "gatewayLink.ts",
       "providerErrors.ts",
     ],
+  );
+});
+
+test("the packaged edge loads the gateway, its tools and its sign-in, and no engine, harness or login driver", () => {
+  // `gateway-edge.js` (Task-1401): its in-repo closure is the entry, the
+  // shared composition and what each part may import under its own rule.
+  const closure = closureOf("gatewayEdgeMain.ts");
+  assert.ok(closure.has("gatewayEdge.ts"), "the scan found the composition");
+  assert.ok(closure.has("gatewayTools/index.ts"), "the scan found the tools");
+  assert.ok(closure.has("gatewayWeb/server.ts"), "the scan found the sign-in");
+  for (const module of closure)
+    assert.ok(
+      module === "gatewayEdgeMain.ts" ||
+        module === "gatewayEdge.ts" ||
+        module.startsWith("node:") ||
+        module.startsWith("gateway/") ||
+        module.startsWith("gatewayTools/") ||
+        module.startsWith("gatewayWeb/") ||
+        module.startsWith("@modelcontextprotocol/sdk/") ||
+        GATEWAY_ALLOWED.has(module) ||
+        GATEWAY_TOOLS_ALLOWED.has(module) ||
+        GATEWAY_WEB_ALLOWED.has(module),
+      `gateway-edge.js reaches ${module}`,
+    );
+  // The composition itself imports only those parts.
+  for (const target of scans.get("gatewayEdge.ts")!.imports)
+    assert.ok(
+      target.startsWith("node:") ||
+        target.startsWith("gateway/") ||
+        target.startsWith("gatewayTools/") ||
+        target.startsWith("gatewayWeb/"),
+      `gatewayEdge.ts imports ${target}`,
+    );
+  assert.deepEqual(
+    [...scans.get("gatewayEdgeMain.ts")!.imports],
+    ["gatewayEdge.ts"],
   );
 });
 

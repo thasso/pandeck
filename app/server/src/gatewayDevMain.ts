@@ -14,7 +14,7 @@
  * `gateway/adminMain.ts vault-pair` set up in the state directory; this edge
  * then holds no token file and runs no login itself.
  *
- * It is the only entry that loads the edge's tools (`gatewayTools/`): `/mcp`
+ * Like the packaged entry, it loads the edge's tools (`gatewayTools/`): `/mcp`
  * on the model port and the integration methods (Task-1397), and the
  * gateway's own sign-in and page (`gatewayWeb/`, Task-1402): with
  * `--ui-config`, an HTTPS port for browsers on `--bind-host`, configured by
@@ -27,123 +27,42 @@
  * no `DATA_DIR`: the drivers and pi's Codex refresh load no server state.
  * Admin (users, enrollment codes, the CA) is `gateway/adminMain.ts` on the
  * same state directory; the relay is `relay/main.ts`. See `docs/workers.md`
- * "Client mode".
+ * "Client mode". The composition is `gatewayEdge.ts`, shared with the
+ * packaged entry (`gatewayEdgeMain.ts`), which has no in-process vault.
  */
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
-import { parseArgs } from "node:util";
 import { claudeLoginDriver } from "./claudeLoginDriver.ts";
-import { startGateway } from "./gateway/gateway.ts";
-import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
-import { createEdgeTools } from "./gatewayTools/index.ts";
-import {
-  GatewayWebConfigError,
-  loadGatewayWebConfig,
-} from "./gatewayWeb/config.ts";
-import { startGatewayWeb } from "./gatewayWeb/server.ts";
+import { EdgeStartRefusal, parseEdgeArgs, startEdge } from "./gatewayEdge.ts";
 import {
   codexLoginDriver,
   renewCodexCredential,
 } from "./harnesses/gatewayPorts.ts";
 
-function usage(): never {
+const options = parseEdgeArgs(process.argv.slice(2), { requireVault: false });
+if (!options) {
   console.error(
     "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... [--vault-host <address> [--vault-port <n>]] [--ui-config <file>]",
   );
   process.exit(2);
 }
 
-const { values } = parseArgs({
-  options: {
-    "state-dir": { type: "string" },
-    port: { type: "string" },
-    "model-port": { type: "string" },
-    "client-port": { type: "string" },
-    "enroll-port": { type: "string" },
-    "bind-host": { type: "string" },
-    host: { type: "string", multiple: true },
-    "vault-host": { type: "string" },
-    "vault-port": { type: "string" },
-    "ui-config": { type: "string" },
-  },
-});
-if (!values["state-dir"]) usage();
-const port = (value: string | undefined): number => {
-  const n = Number(value ?? 0);
-  if (!Number.isInteger(n) || n < 0 || n > 65_535) usage();
-  return n;
-};
-const stateDir = resolve(values["state-dir"]);
-mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-
-/** The remote vault's address and pinned link TLS, when `--vault-host`. */
-function remoteVault() {
-  const host = values["vault-host"];
-  if (!host) return undefined;
-  const tls = readEdgeVaultLink(stateDir);
-  if (typeof tls === "string") {
-    console.error(`[gateway-dev] not paired: ${tls}`);
-    process.exit(2);
-  }
-  return { host, port: port(values["vault-port"] ?? "8794"), tls };
+let edge;
+try {
+  edge = await startEdge(options, {
+    log: (line) => console.log(`[gateway-dev] ${line}`),
+    renewCodex: renewCodexCredential,
+    loginDrivers: {
+      claude: claudeLoginDriver,
+      "openai-codex": codexLoginDriver,
+    },
+  });
+} catch (err) {
+  if (!(err instanceof EdgeStartRefusal)) throw err;
+  console.error(`[gateway-dev] ${err.message}`);
+  process.exit(2);
 }
-const vault = remoteVault();
-
-/** The UI's config when `--ui-config`, checked before anything listens. */
-function uiConfig() {
-  const file = values["ui-config"];
-  if (!file) return undefined;
-  try {
-    return loadGatewayWebConfig(resolve(file));
-  } catch (err) {
-    if (!(err instanceof GatewayWebConfigError)) throw err;
-    console.error(`[gateway-dev] ${err.message}`);
-    process.exit(2);
-  }
-}
-const ui = uiConfig();
-
-const gateway = await startGateway({
-  stateDir,
-  port: port(values.port),
-  renewCodex: renewCodexCredential,
-  // The edge's tools and MCP endpoint run here only (Task-1397).
-  tools: createEdgeTools(),
-  clients: {
-    modelPort: port(values["model-port"]),
-    clientPort: port(values["client-port"]),
-    enrollPort: port(values["enroll-port"]),
-    ...(values["bind-host"] ? { bindHost: values["bind-host"] } : {}),
-    ...(values.host ? { hosts: values.host } : {}),
-  },
-  ...(vault
-    ? { vault }
-    : {
-        loginDrivers: {
-          claude: claudeLoginDriver,
-          "openai-codex": codexLoginDriver,
-        },
-      }),
-});
-const edge = gateway.clients!;
-const registry = edge.registry;
-const web = ui
-  ? await startGatewayWeb({
-      config: ui,
-      users: {
-        signIn: (identity) => registry.signIn(identity),
-        user: (id) => registry.user(id),
-      },
-      log: (line) => console.log(`[gateway] ${line}`),
-      ...(values["bind-host"] ? { bindHost: values["bind-host"] } : {}),
-    })
-  : undefined;
-console.log(
-  `[gateway-dev] state ${stateDir}; loopback ${gateway.port}, model ${edge.modelPort}, client ${edge.clientPort}, enroll ${edge.enrollPort}${web ? `, ui ${web.port}` : ""}${vault ? `; vault ${vault.host}:${vault.port}` : ""}`,
-);
 
 const stop = (): void => {
-  void Promise.all([gateway.close(), web?.close()]).then(() => process.exit(0));
+  void edge.close().then(() => process.exit(0));
 };
 process.once("SIGTERM", stop);
 process.once("SIGINT", stop);

@@ -21,6 +21,7 @@
         "src/initiativeLayoutWorker.ts",
         "src/gateway/adminMain.ts",
         "src/gatewayDevMain.ts",
+        "src/gatewayEdgeMain.ts",
         "src/gateway/vaultMain.ts",
         "src/gateway/main.ts",
         "src/gateway/processFixture.ts",
