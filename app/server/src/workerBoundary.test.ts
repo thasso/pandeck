@@ -542,6 +542,8 @@ const GATEWAY_EDGE = [
   // The edge's VaultPort over gateway-vault/1.0.
   "remoteVault",
   "upstreams",
+  // The user-scoped account and login operations both renderers call.
+  "userOperations",
   "x509",
 ];
 const GATEWAY_SHARED = [

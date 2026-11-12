@@ -1776,13 +1776,43 @@ path above.
   gateway sends `logins.event` (output, URL, code, state) to the starting
   client, which may send `logins.input` and `logins.cancel`. Without `accountId`
   the account is registered at once, needing a login, and removed if its first
-  login does not succeed. Each login runs an injected driver (`startGateway`'s
-  `loginDrivers`: the official CLI's `claude auth login` as a child with
-  `CLAUDE_CONFIG_DIR` set, `claudeLoginDriver.ts`; pi's device-code login,
-  `piSdk/codexLogin.ts`) in a fresh directory under the state directory. On
-  success one writer-lane item checks the credential and renames it into the
-  account's token file, which replaces the whole file; the directory is always
-  deleted. The credential never leaves the gateway, and no login hold is taken.
+  login does not succeed, once that login's driver settled. These methods and
+  `accounts.list`/`accounts.remove` run through the edge's one user-scoped seam,
+  `gateway/userOperations.ts`, which the gateway's page uses too (below): a
+  login's actor is a client or a page session. One login per account: the same
+  actor's second start answers its running login; another actor of the same user
+  takes it over. The old login ends for its actor at once, `cancelled` with
+  "This login was started again elsewhere.", and can no longer commit; the new
+  one is answered at once but starts its driver only after the account's earlier
+  driver settled, so the vault never runs two for one account. If that takes
+  over 30 s, the new login ends `error` ("The earlier login did not stop in
+  time. Try again.") and never starts later. An account holds a slot while it
+  has a login that is not terminal or a driver that has not settled (a cancel or
+  a deadline only asks a driver to stop): at most 2 per user and 4 on the edge
+  (`MAX_VAULT_LOGINS`), refused `login_unavailable` beyond them; the vault's own
+  admission (4 in all, one per account) still answers last. A new account whose
+  owning login ended other than ready is removed exactly once, when no driver of
+  it is left, unless a newer login took it over. Once the edge granted a login's
+  commit (the vault is moving the credential in), nothing takes it over or stops
+  it: a start from elsewhere waits for its driver and then runs as a re-login,
+  and the old dialog shows the real outcome. A login whose credential was saved
+  never has its account removed, even if recording the account then fails (it
+  ends `error`, reason `unavailable`). If the vault link breaks under a running
+  login, the vault may still run its driver: the login ends for its actor
+  (`unavailable`), but its account's slot and any cleanup stay held for the
+  vault's settle bound plus a minute (`UNCERTAIN_HOLD_MS`, 11 min 35 s, derived
+  from `VAULT_LOGIN_SETTLE_BOUND_MS`; see Remote vault, "Login bound"), since
+  the vault's hello names no running logins; only the vault's own refusal of a
+  start counts as "never ran". Removing an account while its granted commit is
+  installing is safe: the vault's discard runs in the account's writer lane,
+  after that ingest, so neither the token file nor its sealed record comes back.
+  Each login runs an injected driver (`startGateway`'s `loginDrivers`: the
+  official CLI's `claude auth login` as a child with `CLAUDE_CONFIG_DIR` set,
+  `claudeLoginDriver.ts`; pi's device-code login, `piSdk/codexLogin.ts`) in a
+  fresh directory under the state directory. On success one writer-lane item
+  checks the credential and renames it into the account's token file, which
+  replaces the whole file; the directory is always deleted. The credential never
+  leaves the gateway, and no login hold is taken.
 - **The relay** (`relay/`, its own entry and process under Pandeck's server
   account, `node:` only) is the only holder of the client key. It pipes its
   loopback port to the model port and each connection on its 0600 Unix socket to
@@ -1803,10 +1833,11 @@ path above.
   interrupted. Start the login again." and the account shows the mirror's state.
   Otherwise the gateway's own terminal event ends it. Known limit: a start whose
   answer is lost with the connection can leave the gateway's login running until
-  its 10-minute timeout; a retry rejoins it (without the device code or output
-  it already sent) and Cancel ends it. This credential ownership does not move
-  Claude's local runtime/transcript directories: Pandeck's one-time Default
-  transcript import and startup gate still apply before the client link starts
+  its 10-minute timeout; a retry from the same client rejoins it (without the
+  device code or output it already sent), a start from elsewhere takes it over,
+  and Cancel ends it. This credential ownership does not move Claude's local
+  runtime/transcript directories: Pandeck's one-time Default transcript import
+  and startup gate still apply before the client link starts
   (`docs/credential-distribution.md`).
 - **Gateway tools** (Task-1398, `remoteTools.ts`,
   `tools/gateway/remoteToolGroup.ts`). On every connect the link calls
@@ -1954,8 +1985,8 @@ HTTPS listener on `--bind-host` beside the client listener; without it nothing
 changes. The mutual-TLS ports, the enrollment port and the vault are untouched.
 The page is `app/web/gateway.html`, its own React entry, built by
 `vite.gateway.config.ts` into `app/web/dist-gateway/` (`pnpm run build` builds
-both bundles); it shows "Signed in as <email>" and Sign out, and reaches only
-its own origin with its session cookie.
+both bundles); it shows "Signed in as <email>", Sign out and the user's Claude
+and ChatGPT accounts, and reaches only its own origin with its session cookie.
 
 - **Config.** One JSON file, refused unless mode 0600 (no group or other bits),
   so the client secret stays out of argv. Every refusal is a fixed message
@@ -2037,7 +2068,12 @@ its own origin with its session cookie.
   holds 1,024 sessions and 16 per user (the oldest dropped). A sign-in waits at
   most 10 minutes, one of at most 256, under its random `state` and bound to the
   browser by `__Host-pgw_signin`; any callback naming the state uses it up.
-  `POST /auth/logout` ends the session on the server.
+  `POST /auth/logout` ends the session on the server. Each session has a random
+  actor id (never the cookie or its hash) and is the actor of the logins it
+  starts. Every way a session leaves the table (sign-out, idle or absolute
+  expiry, the 17th session of a user) cancels its running logins; expired
+  sessions are swept on every request and every 60 s, so their logins end within
+  a minute without a browser request, and they cannot commit even before that.
 - **Routes.** `GET /` (the page) and `GET /assets/<file>` (only files found at
   start; no path from a request reaches the filesystem); `GET /auth/login` and
   `GET /auth/callback`, which answers `303 /` with the session or
@@ -2045,20 +2081,48 @@ its own origin with its session cookie.
   `{userId, email, label}` from the session only, or
   `401 {"error": "signed_out"}`, or `503 {"error": "unavailable"}`. Every
   non-GET/HEAD needs `Origin` equal to `publicOrigin` and `x-gateway-ui: 1`,
-  else `403 {"error": "forbidden"}`; bodies above 1 KiB are refused. Every
-  answer carries
+  else `403 {"error": "forbidden"}`; bodies above 1 KiB are refused (16 KiB on
+  `/api/logins/input`, for Claude's pasted code), the limit chosen from the
+  method and path before a byte is read. Every answer carries
   `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   `nosniff` and `no-referrer`. The listener has the enrollment port's bounds (64
   connections, 10 s handshake, 5 s headers, 10 s request). The wire shapes are
   `app/shared/gatewayUi.ts`.
+- **Accounts and logins** (Task-1402 B2). Behind the session (else
+  `401 {"error": "signed_out"}`), the user and the actor only from it:
+  `GET /api/accounts` → `{accounts: [{id, provider, name, needsLogin}]}`;
+  `POST /api/accounts/remove {accountId}` → 204, which does what
+  `accounts.remove` does; `POST /api/logins/start {kind, accountId?, name?}` →
+  `{loginId, accountId}`; `POST /api/logins/input {loginId, text}` and
+  `POST /api/logins/cancel {loginId}` → 204;
+  `GET /api/logins/read?login=<id>&cursor=<n>` →
+  `{state, reason?, output, cursor, device?}`, the output from `cursor` on and a
+  ChatGPT login's `device` once both its link and code are known. Refusals:
+  `404 unknown_account` (not the user's), `404 unknown_login` (not this
+  session's, or finished over 2 minutes ago, or past the 64 kept),
+  `503 login_unavailable`, `400 bad_request`, `503 unavailable` (the registry).
+  The routes call the same user-scoped seam as `gateway-client/1.0`, through a
+  `GatewayWebAccounts` adapter in `gatewayEdge.ts` (`gatewayWeb/accounts.ts`),
+  so take-over, slots and cleanup are the client protocol's (Client mode,
+  Logins). The browser never gets a driver's or the vault's error text: a
+  finished login carries only a reason, `failed`, `timed_out`, `superseded`,
+  `unavailable` or `session_ended`, which the page turns into its own text. The
+  page polls a login's read about once a second while its dialog is open and the
+  login is not finished; it starts a login only on a click (Add or Log in),
+  renders it in B1's `AccountLoginDialogView` and asks before Remove. Its Cancel
+  shows "Cancelling…", and the dialog closes once that login ended cancelled; a
+  login ended elsewhere keeps its notice.
 - **Logs.** Only `ui sign-in: ok user=<id> (existing|created|bound)`,
   `ui sign-in: denied`,
   `ui sign-in: failed (discovery|exchange|keys|signature|claims|state|registry)`
-  and `ui sign-out: user=<id>`; never an email, code, state, nonce, verifier,
-  token, cookie, secret or query. Provider error text is never echoed.
+  `ui sign-out: user=<id>` and `ui session end: login cancel failed`, beside the
+  login manager's own `login <id> (account <id>): <state>`; never an email,
+  code, state, nonce, verifier, token, cookie, secret, query, pasted code, login
+  URL or output. Provider error text is never echoed.
 - **Packaged entry (Task-1401).** Both edge entries start the UI through
   `gatewayEdge.ts`, with a `GatewayWebUsers` adapter over the running gateway's
-  own `ClientRegistry`; the Bun package ships `dist-gateway` as `gateway-web/`.
+  own `ClientRegistry` and a `GatewayWebAccounts` adapter over its
+  `userOperations`; the Bun package ships `dist-gateway` as `gateway-web/`.
 
 ### Remote vault
 
@@ -2136,6 +2200,30 @@ server's local gateway does.
   login children"). A login child leads its own process group and writes only
   into the login's directory; the vault ends the whole group before it reads the
   credential or removes the directory.
+- **Login bound.** Every vault login run reports done within
+  `VAULT_LOGIN_SETTLE_BOUND_MS` (10 min 35 s) of its start
+  (`gateway/vaultMethods.ts`). The bound covers when a run reports done and the
+  killing of its child's process group; it does not physically contain
+  processes. At its 10-minute deadline the vault withdraws a run that was not
+  granted its commit: an ingest still waiting for its writer lane turn is
+  abandoned, and the child gets SIGTERM, its group SIGKILL after 10 s; `done`
+  then waits at most 5 s for the pipes after the leader exited and 5 s for the
+  group to empty, and settles even if they never close (`loginChild.ts`, which
+  then logs `login child settled with processes still running`). A run granted
+  its commit is bounded by the 10 s commit exchange and a synchronous install
+  and seal. Whatever the driver does, the vault itself reports the run done
+  (`abandoned`) 35 s past the deadline, waiting only for a commit already in
+  flight. The edge's hold after a lost link is this bound plus a minute.
+- **Not contained: detached descendants.** A descendant that leaves the child's
+  process group (its own session or group) survives a per-login Cancel and the
+  group kill while the vault keeps running, and may write into the login's
+  directory after `done`. Only the vault unit's stop or restart ends it:
+  `KillMode=control-group` (or `mixed`) kills every process left in the unit's
+  cgroup; `KillMode=process` or `none` would not. The vault's unit is not
+  defined in this repository; the deployed one uses `KillMode=control-group`.
+  This is accepted because the drivers are the official Claude CLI and pi's
+  device-code login, which the vault trusts with the credential by design. Full
+  per-login containment (its own cgroup) is Task-1407.
 
 #### Sealed store
 

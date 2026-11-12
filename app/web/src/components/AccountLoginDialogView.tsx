@@ -85,8 +85,11 @@ export interface AccountLoginDialogViewProps {
   /** The run this dialog sent a Cancel for ended cancelled (whoever's cancel
    * won): close silently. */
   cancelledHere?: boolean | undefined;
-  /** Claude's pasted code; answers whether it was sent. */
-  submit?: ((code: string) => boolean) | undefined;
+  /**
+   * Claude's pasted code; answers whether it was sent, at once or (a host
+   * that must ask its server first) as a promise.
+   */
+  submit?: ((code: string) => boolean | Promise<boolean>) | undefined;
   cancel: () => void;
   onClose: () => void;
 }
@@ -263,22 +266,48 @@ function ClaudeStep({
 }: {
   status: AccountLoginStatus;
   output: string;
-  submit?: ((code: string) => boolean) | undefined;
+  submit?: ((code: string) => boolean | Promise<boolean>) | undefined;
 }) {
   const [code, setCode] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  /** A promised submission is in flight. */
+  const [sending, setSending] = useState(false);
+  /** The last promised submission was not sent; the code stays. */
+  const [notSent, setNotSent] = useState(false);
   const codeId = useId();
   const authorizationUrl = useMemo(
     () => claudeLoginAuthorizationUrl(output),
     [output],
   );
+  // A promise answering after the login left `connecting` changes nothing.
+  const connecting = useRef(status === "connecting");
+  useEffect(() => {
+    connecting.current = status === "connecting";
+  }, [status]);
   if (status !== "connecting") return null;
   const submitCode = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     const value = code.trim();
-    if (!value || !submit?.(value)) return;
-    setCode("");
-    setSubmitted(true);
+    if (!value || !submit || sending) return;
+    const answer = submit(value);
+    if (typeof answer === "boolean") {
+      if (!answer) return;
+      setCode("");
+      setSubmitted(true);
+      return;
+    }
+    setSending(true);
+    setNotSent(false);
+    void answer
+      .catch(() => false)
+      .then((sent) => {
+        if (!connecting.current) return;
+        setSending(false);
+        if (sent) {
+          setCode("");
+          setSubmitted(true);
+        } else setNotSent(true);
+      });
   };
   return (
     <>
@@ -325,12 +354,18 @@ function ClaudeStep({
               spellCheck={false}
               placeholder="Authorization code or callback URL"
               className="min-w-0 flex-1"
+              disabled={sending}
             />
-            <Button type="submit" disabled={!code.trim()}>
+            <Button
+              type="submit"
+              busy={sending}
+              disabled={!code.trim() || sending}
+            >
               Submit
             </Button>
           </div>
         </Field>
+        {notSent && <ErrorNote message="The code was not sent. Try again." />}
         {/* The CLI answers this one; Submit has already emptied itself. */}
         {submitted && (
           <p

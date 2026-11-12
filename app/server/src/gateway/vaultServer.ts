@@ -53,7 +53,10 @@ import {
   LOGIN_CREDENTIAL_FILE,
   LOGIN_UNAVAILABLE,
   MAX_INTEGRATION_CREDENTIAL,
+  LOGIN_COMMIT_TIMEOUT_MS,
   MAX_VAULT_LOGINS,
+  VAULT_LOGIN_SETTLE_GRACE_MS,
+  VAULT_LOGIN_TIMEOUT_MS,
   OUTSIDE_ACCOUNTS,
   VAULT_LIMITS,
   VAULT_INVALID_PARAMS,
@@ -74,10 +77,10 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const KEEPALIVE_MS = 15_000;
 const LOGIN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_INPUT_CHARS = 8_192;
-/** A login ends after this long, as the edge's do (`logins.ts`). */
-const LOGIN_TIMEOUT_MS = 10 * 60_000;
+/** A login is withdrawn after this long, as the edge's are (`logins.ts`). */
+const LOGIN_TIMEOUT_MS = VAULT_LOGIN_TIMEOUT_MS;
 /** How long the edge has to answer `logins.commit`. */
-const COMMIT_TIMEOUT_MS = 10_000;
+const COMMIT_TIMEOUT_MS = LOGIN_COMMIT_TIMEOUT_MS;
 
 export interface VaultServerOptions {
   stateDir: string;
@@ -91,6 +94,8 @@ export interface VaultServerOptions {
   log?: (line: string) => void;
   /** Test seam: the login deadline, 10 minutes. */
   loginTimeoutMs?: number;
+  /** Test seam: past the deadline, how long until a run reports done anyway. */
+  loginSettleGraceMs?: number;
   /** A sealing vault's control socket; without it nothing can unlock it. */
   controlSocket?: string;
   /** A sealing vault refuses to start unless `accounts/` is a tmpfs. */
@@ -123,6 +128,8 @@ interface ServedLogin {
   accountId: string;
   run: LoginRun;
   withdrawn: boolean;
+  /** The edge's commit exchange, while it runs. */
+  committing?: Promise<boolean> | undefined;
 }
 
 function invalid(what: string): WorkerMethodError {
@@ -134,6 +141,8 @@ export async function startVaultServer(
 ): Promise<RunningVaultServer> {
   const log = options.log ?? ((line: string) => console.log(`[vault] ${line}`));
   const loginTimeoutMs = options.loginTimeoutMs ?? LOGIN_TIMEOUT_MS;
+  const loginSettleGraceMs =
+    options.loginSettleGraceMs ?? VAULT_LOGIN_SETTLE_GRACE_MS;
   const accountsDir = join(resolve(options.stateDir), "accounts");
   const pinned = new X509Certificate(options.tls.peerCertPem).fingerprint256;
 
@@ -292,7 +301,19 @@ export async function startVaultServer(
    * link. Anything but its explicit `true` in time, from the connection that
    * started the login, fails closed.
    */
-  const commitLogin = async (
+  const commitLogin = (
+    login: ServedLogin,
+    loginId: string,
+  ): Promise<boolean> => {
+    const asked = askCommit(login, loginId);
+    login.committing = asked;
+    const clear = (): void => {
+      if (login.committing === asked) login.committing = undefined;
+    };
+    void asked.then(clear, clear);
+    return asked;
+  };
+  const askCommit = async (
     login: ServedLogin,
     loginId: string,
   ): Promise<boolean> => {
@@ -375,9 +396,9 @@ export async function startVaultServer(
       if (!locked()) vault.upstream401(binding, body.sentToken);
       return {};
     },
-    [VAULT_METHODS.discard]: (body) => {
+    [VAULT_METHODS.discard]: async (body) => {
       if (!isProfileId(body.accountId)) throw invalid("account");
-      vault.discardCredential(body.accountId);
+      await vault.discardCredential(body.accountId);
       return {};
     },
     [VAULT_METHODS.integrationPut]: async (body) => {
@@ -462,25 +483,43 @@ export async function startVaultServer(
         withdraw(served);
       }, loginTimeoutMs);
       deadline.unref();
+      let reported = false;
+      const report = (
+        outcome: { ok: true } | { ok: false; error: LoginFailure },
+        state: string,
+      ): void => {
+        if (reported) return;
+        reported = true;
+        clearTimeout(deadline);
+        clearTimeout(backstop);
+        logins.delete(loginId);
+        log(`login ${loginId} (account ${accountId}): ${state}`);
+        if (current === connection)
+          tell(VAULT_METHODS.loginDone, { loginId, ...outcome });
+      };
+      // The vault's own bound: past the deadline and its grace the run
+      // reports done whatever its driver does (the child is killed by then);
+      // only a commit already in flight, itself bounded, is waited for.
+      const backstop = setTimeout(() => {
+        if (!served.withdrawn) withdraw(served);
+        void (served.committing ?? Promise.resolve(false))
+          .catch(() => false)
+          .then(() => report({ ok: false, error: "cancelled" }, "abandoned"));
+      }, loginTimeoutMs + loginSettleGraceMs);
+      backstop.unref();
       void run.done
         .then(
           (): { ok: true } | { ok: false; error: LoginFailure } => ({
             ok: true,
           }),
-          () => ({
+          (): { ok: false; error: LoginFailure } => ({
             ok: false,
             error: served.withdrawn ? "cancelled" : "failed",
           }),
         )
-        .then((outcome) => {
-          clearTimeout(deadline);
-          logins.delete(loginId);
-          log(
-            `login ${loginId} (account ${accountId}): ${outcome.ok ? "done" : outcome.error}`,
-          );
-          if (current === connection)
-            tell(VAULT_METHODS.loginDone, { loginId, ...outcome });
-        });
+        .then((outcome) =>
+          report(outcome, outcome.ok ? "done" : outcome.error),
+        );
       return {};
     },
     [VAULT_METHODS.loginInput]: (body) => {

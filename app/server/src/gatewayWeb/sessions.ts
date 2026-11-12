@@ -73,18 +73,35 @@ export class PendingSignins {
 
 interface Session {
   userId: string;
+  /** The session as a login actor; random, never the cookie or its hash. */
+  actorId: string;
   createdAt: number;
   lastSeenAt: number;
+}
+
+/** A live session's user and its login actor. */
+export interface SessionRef {
+  userId: string;
+  actorId: string;
 }
 
 /**
  * Signed-in sessions, kept by the SHA-256 of their cookie value: 2 h idle,
  * 12 h absolute, 1,024 in all and 16 per user (the oldest dropped).
+ *
+ * Every session that leaves the table, however (sign-out, expiry found by a
+ * lookup, `live` or the sweep, eviction by a newer one), is reported to
+ * `onEnded` exactly once, with its actor id.
  */
 export class Sessions {
   private readonly entries = new Map<string, Session>();
+  /** Actor id → the entry's key. */
+  private readonly actors = new Map<string, string>();
 
-  constructor(private readonly now: () => number) {}
+  constructor(
+    private readonly now: () => number,
+    private readonly onEnded: (actorId: string) => void = () => {},
+  ) {}
 
   /** Whether the table is full after dropping expired sessions. */
   full(): boolean {
@@ -99,38 +116,68 @@ export class Sessions {
     if (own.length >= MAX_SESSIONS_PER_USER) {
       own.sort(([, a], [, b]) => a.createdAt - b.createdAt);
       for (const [key] of own.slice(0, own.length - MAX_SESSIONS_PER_USER + 1))
-        this.entries.delete(key);
+        this.remove(key);
     }
     if (this.entries.size >= MAX_SESSIONS) return undefined;
     const value = token();
     const at = this.now();
-    this.entries.set(hashOf(value), {
+    const key = hashOf(value);
+    const actorId = token();
+    this.entries.set(key, {
       userId,
+      actorId,
       createdAt: at,
       lastSeenAt: at,
     });
+    this.actors.set(actorId, key);
     return value;
   }
 
-  /** The session's user, marking it seen; undefined once expired. */
-  userOf(value: string | undefined): string | undefined {
+  /** The session's user and actor, marking it seen; undefined once expired. */
+  lookup(value: string | undefined): SessionRef | undefined {
     if (value === undefined) return undefined;
     const key = hashOf(value);
     const session = this.entries.get(key);
     if (!session) return undefined;
     if (this.expired(session)) {
-      this.entries.delete(key);
+      this.remove(key);
       return undefined;
     }
     session.lastSeenAt = this.now();
-    return session.userId;
+    return { userId: session.userId, actorId: session.actorId };
+  }
+
+  /** Whether the actor's session is live; never marks it seen. */
+  live(actorId: string): boolean {
+    const key = this.actors.get(actorId);
+    const session = key === undefined ? undefined : this.entries.get(key);
+    if (!session) return false;
+    if (this.expired(session)) {
+      this.remove(key!);
+      return false;
+    }
+    return true;
   }
 
   /** Ends the session; answers its user, if it was live. */
   end(value: string | undefined): string | undefined {
-    const userId = this.userOf(value);
-    if (value !== undefined) this.entries.delete(hashOf(value));
+    const userId = this.lookup(value)?.userId;
+    if (value !== undefined) this.remove(hashOf(value));
     return userId;
+  }
+
+  /** Drops every expired session. */
+  sweep(): void {
+    for (const [key, session] of [...this.entries])
+      if (this.expired(session)) this.remove(key);
+  }
+
+  private remove(key: string): void {
+    const session = this.entries.get(key);
+    if (!session) return;
+    this.entries.delete(key);
+    this.actors.delete(session.actorId);
+    this.onEnded(session.actorId);
   }
 
   private expired(session: Session): boolean {
@@ -139,11 +186,6 @@ export class Sessions {
       at - session.lastSeenAt >= IDLE_MS ||
       at - session.createdAt >= ABSOLUTE_MS
     );
-  }
-
-  private sweep(): void {
-    for (const [key, session] of this.entries)
-      if (this.expired(session)) this.entries.delete(key);
   }
 }
 

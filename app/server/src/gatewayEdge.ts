@@ -8,7 +8,9 @@
  * integration methods), with either the remote vault over the pinned link
  * (`--vault-host`) or the vault in this process with the caller's login
  * drivers, and, with `--ui-config`, the gateway's sign-in and page
- * (`gatewayWeb/`) over the running gateway's own client registry.
+ * (`gatewayWeb/`) over the running gateway's own client registry and its
+ * user-scoped account and login operations (`gateway/userOperations.ts`), so
+ * the page and enrolled clients run the same implementation.
  *
  * It imports `gateway/`, `gatewayTools/`, `gatewayWeb/` and `node:` only: no
  * login driver, harness or SDK, so the packaged entry's closure holds none
@@ -18,10 +20,17 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { startGateway, type RunningGateway } from "./gateway/gateway.ts";
+import { LoginRefusal, type LoginActor } from "./gateway/logins.ts";
 import type { CodexRenewPort } from "./gateway/renewal.ts";
 import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
+import type { UserOperations } from "./gateway/userOperations.ts";
 import type { LoginDrivers } from "./gateway/vaultPort.ts";
 import { createEdgeTools } from "./gatewayTools/index.ts";
+import {
+  AccountsRefusal,
+  type GatewayWebAccounts,
+  type GatewayWebActor,
+} from "./gatewayWeb/accounts.ts";
 import {
   GatewayWebConfigError,
   loadGatewayWebConfig,
@@ -110,6 +119,47 @@ export function parseEdgeArgs(
   };
 }
 
+/** A refusal of the seam as the page's fixed code; anything else rethrown. */
+function refused<T>(call: () => T): T {
+  try {
+    return call();
+  } catch (err) {
+    if (err instanceof LoginRefusal) throw new AccountsRefusal(err.code);
+    throw err;
+  }
+}
+
+/** The page's accounts over the edge's user-scoped operations. */
+function webAccounts(operations: UserOperations): GatewayWebAccounts {
+  const actor = ({ actorId, userId, active }: GatewayWebActor): LoginActor => ({
+    kind: "session",
+    id: actorId,
+    userId,
+    active,
+  });
+  return {
+    list: (userId) =>
+      operations.accounts(userId).map(({ id, provider, name, needsLogin }) => ({
+        id,
+        provider,
+        name,
+        needsLogin,
+      })),
+    remove: (userId, accountId) =>
+      refused(() => operations.removeAccount(userId, accountId)),
+    start: (session, start) =>
+      refused(() => operations.startLogin(actor(session), start)),
+    input: (session, loginId, text) =>
+      refused(() => operations.inputLogin(actor(session), loginId, text)),
+    cancel: (session, loginId) =>
+      refused(() => operations.cancelLogin(actor(session), loginId)),
+    read: (session, loginId, cursor) =>
+      refused(() => operations.readLogin(actor(session), loginId, cursor)),
+    endActor: (actorId) =>
+      operations.endActor({ kind: "session", id: actorId }),
+  };
+}
+
 /** A start the operator must fix (exit 2): not paired, a bad UI config. */
 export class EdgeStartRefusal extends Error {}
 
@@ -122,6 +172,8 @@ export interface EdgeExtras {
   renewCodex?: CodexRenewPort;
   /** Tests only; no entry passes it, and nothing reads it from a flag or file. */
   oidcTestOptions?: OidcTestOptions;
+  /** Tests only, as `oidcTestOptions`: the UI's clock, for session expiry. */
+  uiNow?: () => number;
 }
 
 export interface RunningEdge {
@@ -186,11 +238,13 @@ export async function startEdge(
             signIn: (identity) => registry.signIn(identity),
             user: (id) => registry.user(id),
           },
+          accounts: webAccounts(edge.userOperations),
           log: (line) => console.log(`[gateway] ${line}`),
           ...(options.bindHost ? { bindHost: options.bindHost } : {}),
           ...(extras.oidcTestOptions
             ? { oidcTestOptions: extras.oidcTestOptions }
             : {}),
+          ...(extras.uiNow ? { now: extras.uiNow } : {}),
         })
       : undefined;
   } catch (err) {

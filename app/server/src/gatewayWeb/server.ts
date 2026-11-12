@@ -1,7 +1,13 @@
 /**
  * The gateway's own browser listener (Task-1402, `docs/workers.md` "The
  * gateway's sign-in and UI"): HTTPS with the deployment's certificate, OIDC
- * sign-in, in-memory sessions, `/api/me` and the gateway page's built files.
+ * sign-in, in-memory sessions, `/api/me`, the user's accounts and logins
+ * (`/api/accounts*`, `/api/logins*`, over the injected `GatewayWebAccounts`)
+ * and the gateway page's built files.
+ *
+ * A session is the actor of the logins it starts: it alone reads, feeds and
+ * cancels them, and when it ends (sign-out, expiry, eviction) they are
+ * cancelled. Expired sessions are swept on every request and every 60 s.
  *
  * The user comes only from the session, the session only from a validated
  * callback. Mutations need `Origin` equal to the public origin and the
@@ -15,11 +21,26 @@ import https from "node:https";
 import { join } from "node:path";
 import {
   GATEWAY_UI_CSRF_HEADER,
+  type GatewayUiAccounts,
   type GatewayUiError,
+  type GatewayUiLogin,
+  type GatewayUiLoginStart,
   type GatewayUiMe,
   type GatewayUiSigninCode,
 } from "@assistant/shared/gatewayUi";
 import { contentTypeFor } from "../webStatic.ts";
+import {
+  AccountsRefusal,
+  browserLogin,
+  decodeAccountRequest,
+  decodeCursor,
+  decodeInputRequest,
+  decodeLoginRequest,
+  decodeStartRequest,
+  parseJson,
+  type GatewayWebAccounts,
+  type GatewayWebActor,
+} from "./accounts.ts";
 import { admittedEmail, type GatewayWebConfig } from "./config.ts";
 import { createOidcClient, OidcFailure, type OidcTestOptions } from "./oidc.ts";
 import {
@@ -27,6 +48,7 @@ import {
   PENDING_TTL_MS,
   PendingSignins,
   Sessions,
+  type SessionRef,
 } from "./sessions.ts";
 import type { GatewayWebUsers } from "./users.ts";
 
@@ -34,6 +56,10 @@ const SESSION_COOKIE = "__Host-pgw_session";
 const SIGNIN_COOKIE = "__Host-pgw_signin";
 const MAX_CONNECTIONS = 64;
 const MAX_BODY_BYTES = 1_024;
+/** Claude's pasted code: up to 8,192 characters, JSON-quoted. */
+const MAX_INPUT_BODY_BYTES = 16 * 1_024;
+const INPUT_PATH = "/api/logins/input";
+const SWEEP_MS = 60_000;
 
 const SECURITY_HEADERS = {
   "content-security-policy":
@@ -45,6 +71,7 @@ const SECURITY_HEADERS = {
 export interface GatewayWebOptions {
   config: GatewayWebConfig;
   users: GatewayWebUsers;
+  accounts: GatewayWebAccounts;
   log: (line: string) => void;
   /** Where the port binds; `127.0.0.1` unless given. */
   bindHost?: string;
@@ -105,32 +132,48 @@ function cookie(name: string, value: string, maxAgeS: number): string {
   return `${name}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}`;
 }
 
-/** Reads and drops a body of at most `MAX_BODY_BYTES`; false when larger. */
-function drain(req: IncomingMessage): Promise<boolean> {
+/**
+ * Reads a body of at most `limit` bytes; undefined when larger. The limit is
+ * the route's, decided from method and path before any byte is read.
+ */
+function readBody(
+  req: IncomingMessage,
+  limit: number,
+): Promise<Buffer | undefined> {
   return new Promise((resolve) => {
-    if (Number(req.headers["content-length"] ?? 0) > MAX_BODY_BYTES)
-      return resolve(false);
+    if (Number(req.headers["content-length"] ?? 0) > limit)
+      return resolve(undefined);
+    const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        resolve(false);
+      if (size > limit) {
+        resolve(undefined);
         req.pause();
+        return;
       }
+      chunks.push(chunk);
     });
-    req.on("end", () => resolve(true));
-    req.on("error", () => resolve(false));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", () => resolve(undefined));
   });
 }
 
 export async function startGatewayWeb(
   options: GatewayWebOptions,
 ): Promise<RunningGatewayWeb> {
-  const { config, users, log } = options;
+  const { config, users, accounts, log } = options;
   const now = options.now ?? Date.now;
   const files = staticFiles(config.distDir);
   const pending = new PendingSignins(now);
-  const sessions = new Sessions(now);
+  // A session that leaves the table, however, ends its logins.
+  const sessions = new Sessions(now, (actorId) => {
+    try {
+      accounts.endActor(actorId);
+    } catch {
+      log("ui session end: login cancel failed");
+    }
+  });
   const oidc = createOidcClient({
     ...config.oidc,
     redirectUri: `${config.publicOrigin}/auth/callback`,
@@ -150,7 +193,12 @@ export async function startGatewayWeb(
   const json = (
     res: ServerResponse,
     status: number,
-    value: GatewayUiMe | GatewayUiError,
+    value:
+      | GatewayUiMe
+      | GatewayUiError
+      | GatewayUiAccounts
+      | GatewayUiLoginStart
+      | GatewayUiLogin,
   ): void =>
     send(
       res,
@@ -246,7 +294,7 @@ export async function startGatewayWeb(
   };
 
   const me = (req: IncomingMessage, res: ServerResponse): void => {
-    const userId = sessions.userOf(cookieOf(req, SESSION_COOKIE));
+    const userId = sessions.lookup(cookieOf(req, SESSION_COOKIE))?.userId;
     if (userId === undefined) return json(res, 401, { error: "signed_out" });
     let user;
     try {
@@ -271,6 +319,77 @@ export async function startGatewayWeb(
     });
   };
 
+  const noContent = (res: ServerResponse): void =>
+    send(res, 204, { "cache-control": "no-store" });
+
+  /**
+   * `/api/accounts*` and `/api/logins*`, behind the session; the user and
+   * the actor come only from it, never from the body or query.
+   */
+  const accountsApi = (
+    method: string,
+    path: string,
+    url: URL,
+    body: Buffer,
+    session: SessionRef,
+    res: ServerResponse,
+  ): void => {
+    const { userId, actorId } = session;
+    const actor: GatewayWebActor = {
+      actorId,
+      userId,
+      active: () => sessions.live(actorId),
+    };
+    const badRequest = () => json(res, 400, { error: "bad_request" });
+    try {
+      if (method === "GET" && path === "/api/accounts")
+        return json(res, 200, { accounts: accounts.list(userId) });
+      if (method === "GET" && path === "/api/logins/read") {
+        const loginId = url.searchParams.get("login");
+        const cursor = decodeCursor(url.searchParams.get("cursor"));
+        if (!loginId || loginId.length > 128 || cursor === undefined)
+          return badRequest();
+        return json(
+          res,
+          200,
+          browserLogin(accounts.read(actor, loginId, cursor)),
+        );
+      }
+      if (method !== "POST") return text(res, 404, "not found");
+      const value = parseJson(body);
+      if (path === "/api/accounts/remove") {
+        const accountId = decodeAccountRequest(value);
+        if (accountId === undefined) return badRequest();
+        accounts.remove(userId, accountId);
+        return noContent(res);
+      }
+      if (path === "/api/logins/start") {
+        const start = decodeStartRequest(value);
+        if (!start) return badRequest();
+        return json(res, 200, accounts.start(actor, start));
+      }
+      if (path === INPUT_PATH) {
+        const input = decodeInputRequest(value);
+        if (!input) return badRequest();
+        accounts.input(actor, input.loginId, input.text);
+        return noContent(res);
+      }
+      if (path === "/api/logins/cancel") {
+        const loginId = decodeLoginRequest(value);
+        if (loginId === undefined) return badRequest();
+        accounts.cancel(actor, loginId);
+        return noContent(res);
+      }
+      return text(res, 404, "not found");
+    } catch (err) {
+      if (err instanceof AccountsRefusal)
+        return json(res, err.code === "login_unavailable" ? 503 : 404, {
+          error: err.code,
+        });
+      return json(res, 503, { error: "unavailable" });
+    }
+  };
+
   const handle = async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -288,7 +407,14 @@ export async function startGatewayWeb(
         return json(res, 403, { error: "forbidden" });
       }
     }
-    if (!(await drain(req))) {
+    sessions.sweep();
+    const body = await readBody(
+      req,
+      method === "POST" && path === INPUT_PATH
+        ? MAX_INPUT_BODY_BYTES
+        : MAX_BODY_BYTES,
+    );
+    if (!body) {
       res.setHeader("connection", "close");
       return text(res, 413, "request body too large");
     }
@@ -297,6 +423,15 @@ export async function startGatewayWeb(
     if (method === "GET" && path === "/auth/callback")
       return callback(req, url, res);
     if (method === "GET" && path === "/api/me") return me(req, res);
+    if (
+      path === "/api/accounts" ||
+      path.startsWith("/api/accounts/") ||
+      path.startsWith("/api/logins/")
+    ) {
+      const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
+      if (!session) return json(res, 401, { error: "signed_out" });
+      return accountsApi(method, path, url, body, session, res);
+    }
     const file = read ? files.get(path) : undefined;
     if (!file) return text(res, 404, "not found");
     send(
@@ -339,10 +474,15 @@ export async function startGatewayWeb(
   const port = typeof address === "object" && address ? address.port : 0;
   log(`ui listener on ${bindHost}:${port}`);
 
+  // Ends expired sessions' logins without waiting for a request.
+  const sweeper = setInterval(() => sessions.sweep(), SWEEP_MS);
+  sweeper.unref();
+
   return {
     port,
     close: () =>
       new Promise<void>((resolve) => {
+        clearInterval(sweeper);
         server.close(() => resolve());
         server.closeAllConnections();
       }),
