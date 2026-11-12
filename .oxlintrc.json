@@ -19,6 +19,7 @@
   "ignorePatterns": [
     "**/node_modules/**",
     "app/web/dist/**",
+    "app/web/dist-gateway/**",
     "app/web/component-preview/dist/**",
     "app/web/component-preview/storybook-static/**",
     "app/shell/**",

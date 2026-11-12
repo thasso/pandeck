@@ -141,6 +141,79 @@ function serverProxy(): Record<string, ProxyOptions> {
   };
 }
 
+/**
+ * The source aliases both web builds use: Pandeck's app and the gateway's page
+ * (`vite.gateway.config.ts`). The shared package is consumed from source so
+ * both toolchains agree. Subpath entries must precede the root so prefix
+ * matching resolves them first.
+ */
+export const webAliases: Record<string, string> = {
+  "@/": fileURLToPath(new URL("./src/", import.meta.url)),
+  "@assistant/shared/buildInfo": fileURLToPath(
+    new URL("../shared/buildInfo.ts", import.meta.url),
+  ),
+  "@assistant/shared/session": fileURLToPath(
+    new URL("../shared/session/index.ts", import.meta.url),
+  ),
+  "@assistant/shared/runtime": fileURLToPath(
+    new URL("../shared/runtimeEvents.ts", import.meta.url),
+  ),
+  "@assistant/shared/display": fileURLToPath(
+    new URL("../shared/displayMapping.ts", import.meta.url),
+  ),
+  "@assistant/shared/cardPlacement": fileURLToPath(
+    new URL("../shared/cardPlacement.ts", import.meta.url),
+  ),
+  "@assistant/shared/turnStats": fileURLToPath(
+    new URL("../shared/turnStats.ts", import.meta.url),
+  ),
+  "@assistant/shared/objectLinks": fileURLToPath(
+    new URL("../shared/objectLinks.ts", import.meta.url),
+  ),
+  "@assistant/shared/comments": fileURLToPath(
+    new URL("../shared/comments.ts", import.meta.url),
+  ),
+  "@assistant/shared/openAiCompatibleValidation": fileURLToPath(
+    new URL("../shared/openAiCompatibleValidation.ts", import.meta.url),
+  ),
+  "@assistant/shared/accountHealth": fileURLToPath(
+    new URL("../shared/accountHealth.ts", import.meta.url),
+  ),
+  "@assistant/shared/usage": fileURLToPath(
+    new URL("../shared/usage.ts", import.meta.url),
+  ),
+  "@assistant/shared/servedFiles": fileURLToPath(
+    new URL("../shared/servedFiles.ts", import.meta.url),
+  ),
+  "@assistant/shared/documentTargets": fileURLToPath(
+    new URL("../shared/documentTargets.ts", import.meta.url),
+  ),
+  "@assistant/shared/portForwarding": fileURLToPath(
+    new URL("../shared/portForwarding.ts", import.meta.url),
+  ),
+  "@assistant/shared/settingsRegistry": fileURLToPath(
+    new URL("../shared/settingsRegistry.ts", import.meta.url),
+  ),
+  "@assistant/shared/toolCards": fileURLToPath(
+    new URL("../shared/toolCards.ts", import.meta.url),
+  ),
+  "@assistant/shared/frontmatter": fileURLToPath(
+    new URL("../shared/frontmatter.ts", import.meta.url),
+  ),
+  "@assistant/shared/zonedTime": fileURLToPath(
+    new URL("../shared/zonedTime.ts", import.meta.url),
+  ),
+  "@assistant/shared/sessionTreeWorktrees": fileURLToPath(
+    new URL("../shared/sessionTreeWorktrees.ts", import.meta.url),
+  ),
+  "@assistant/shared/gatewayUi": fileURLToPath(
+    new URL("../shared/gatewayUi.ts", import.meta.url),
+  ),
+  "@assistant/shared": fileURLToPath(
+    new URL("../shared/protocol.ts", import.meta.url),
+  ),
+};
+
 export default defineConfig(({ command }) => {
   forceDevNodeEnvForServe(command);
   return {
@@ -200,71 +273,7 @@ export default defineConfig(({ command }) => {
       },
     },
     resolve: {
-      // Consume the shared package from source so both toolchains agree. Subpath
-      // entries must precede the root so prefix matching resolves them first.
-      alias: {
-        "@/": fileURLToPath(new URL("./src/", import.meta.url)),
-        "@assistant/shared/buildInfo": fileURLToPath(
-          new URL("../shared/buildInfo.ts", import.meta.url),
-        ),
-        "@assistant/shared/session": fileURLToPath(
-          new URL("../shared/session/index.ts", import.meta.url),
-        ),
-        "@assistant/shared/runtime": fileURLToPath(
-          new URL("../shared/runtimeEvents.ts", import.meta.url),
-        ),
-        "@assistant/shared/display": fileURLToPath(
-          new URL("../shared/displayMapping.ts", import.meta.url),
-        ),
-        "@assistant/shared/cardPlacement": fileURLToPath(
-          new URL("../shared/cardPlacement.ts", import.meta.url),
-        ),
-        "@assistant/shared/turnStats": fileURLToPath(
-          new URL("../shared/turnStats.ts", import.meta.url),
-        ),
-        "@assistant/shared/objectLinks": fileURLToPath(
-          new URL("../shared/objectLinks.ts", import.meta.url),
-        ),
-        "@assistant/shared/comments": fileURLToPath(
-          new URL("../shared/comments.ts", import.meta.url),
-        ),
-        "@assistant/shared/openAiCompatibleValidation": fileURLToPath(
-          new URL("../shared/openAiCompatibleValidation.ts", import.meta.url),
-        ),
-        "@assistant/shared/accountHealth": fileURLToPath(
-          new URL("../shared/accountHealth.ts", import.meta.url),
-        ),
-        "@assistant/shared/usage": fileURLToPath(
-          new URL("../shared/usage.ts", import.meta.url),
-        ),
-        "@assistant/shared/servedFiles": fileURLToPath(
-          new URL("../shared/servedFiles.ts", import.meta.url),
-        ),
-        "@assistant/shared/documentTargets": fileURLToPath(
-          new URL("../shared/documentTargets.ts", import.meta.url),
-        ),
-        "@assistant/shared/portForwarding": fileURLToPath(
-          new URL("../shared/portForwarding.ts", import.meta.url),
-        ),
-        "@assistant/shared/settingsRegistry": fileURLToPath(
-          new URL("../shared/settingsRegistry.ts", import.meta.url),
-        ),
-        "@assistant/shared/toolCards": fileURLToPath(
-          new URL("../shared/toolCards.ts", import.meta.url),
-        ),
-        "@assistant/shared/frontmatter": fileURLToPath(
-          new URL("../shared/frontmatter.ts", import.meta.url),
-        ),
-        "@assistant/shared/zonedTime": fileURLToPath(
-          new URL("../shared/zonedTime.ts", import.meta.url),
-        ),
-        "@assistant/shared/sessionTreeWorktrees": fileURLToPath(
-          new URL("../shared/sessionTreeWorktrees.ts", import.meta.url),
-        ),
-        "@assistant/shared": fileURLToPath(
-          new URL("../shared/protocol.ts", import.meta.url),
-        ),
-      },
+      alias: webAliases,
     },
     // No proxy by default: the client talks to the server directly (see
     // socket.ts `defaultSocketUrl`). This keeps the Vite dev server a pure

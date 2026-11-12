@@ -3,7 +3,11 @@
  * edits `clients.json` in the gateway's state directory; a running edge reads
  * the change at its next check.
  *
- * - `user add <id> [--label <text>]`
+ * - `user add <id> [--label <text>]`, `user list`
+ * - `user claim <id> --email <addr> [--ttl-minutes <n>]`: the next sign-in to
+ *   the gateway's page (Task-1402) with that verified, admitted email becomes
+ *   this user, once, within 60 minutes unless given (at most 1,440); only for
+ *   a user that has no sign-in identity yet
  * - `enroll-code --user <id> --label <text>`: prints a one-time code, valid
  *   15 minutes
  * - `clients list`, `clients revoke <id>`
@@ -57,7 +61,7 @@ import { selfSignedIdentity } from "./x509.ts";
 
 function usage(): never {
   console.error(
-    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | enroll-code --user <id> --label <text> | clients list | clients revoke <id> | clients mcp-token <id> | clients mcp-token-revoke <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file> | vault-recipient (add (--from-piv <slot> | --pem <file> (--slot <slot> | --private-key <file>)) | list | remove <kid>) | vault-seal-existing | vault-reseal | unlock) [--control-socket <path>]",
+    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | user list | user claim <id> --email <addr> [--ttl-minutes <n>] | enroll-code --user <id> --label <text> | clients list | clients revoke <id> | clients mcp-token <id> | clients mcp-token-revoke <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file> | vault-recipient (add (--from-piv <slot> | --pem <file> (--slot <slot> | --private-key <file>)) | list | remove <kid>) | vault-seal-existing | vault-reseal | unlock) [--control-socket <path>]",
   );
   process.exit(2);
 }
@@ -68,6 +72,8 @@ const { values, positionals } = parseArgs({
     "state-dir": { type: "string" },
     user: { type: "string" },
     label: { type: "string" },
+    email: { type: "string" },
+    "ttl-minutes": { type: "string" },
     host: { type: "string", multiple: true },
     "edge-cert": { type: "string" },
     "vault-cert": { type: "string" },
@@ -259,6 +265,24 @@ const registry = new ClientRegistry(stateDir);
 if (command === "user" && sub === "add" && arg) {
   registry.addUser(arg, values.label ?? arg);
   console.log(`user ${arg} added`);
+} else if (command === "user" && sub === "list") {
+  for (const user of registry.users())
+    console.log(
+      `${user.id}\t${user.label}\t${user.email ?? "-"}\toidc=${user.oidc ? "yes" : "no"}`,
+    );
+} else if (command === "user" && sub === "claim" && arg) {
+  const minutes = Number(values["ttl-minutes"] ?? 60);
+  if (
+    !values.email ||
+    !Number.isInteger(minutes) ||
+    minutes < 1 ||
+    minutes > 1_440
+  )
+    usage();
+  registry.claimUser(arg, values.email, minutes * 60_000);
+  console.log(
+    `user ${arg}: the next admitted sign-in with that email within ${minutes} minutes becomes this user`,
+  );
 } else if (command === "enroll-code") {
   if (!values.user || !values.label) usage();
   console.log(registry.createCode(values.user, values.label));

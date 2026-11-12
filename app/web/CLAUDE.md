@@ -3,7 +3,8 @@
 - Follow `app/web/docs/ui-shell.md` for any change to the app shell, sidebar,
   routing, or page composition.
 - Route API and WebSocket calls through the existing `serverOrigin` helpers so
-  auth token handling stays in one place.
+  auth token handling stays in one place; the token-free gateway page
+  (`src/gateway/`) calls only its own origin.
 - The Tauri shell loads this same build: native behavior is an enhancement
   behind `src/lib/nativeShell.ts`, ordinary browsers must work unchanged, and
   its overlay title bar reuses the desktop top bar and adds no page height

@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import { afterEach, test } from "vitest";
 import {
   ClientRegistry,
+  ClientRegistryLockedError,
   clientListLine,
   mcpTokenMatches,
 } from "./clientRegistry.ts";
@@ -240,4 +241,100 @@ test("an MCP token is minted once, kept only as its hash, replaced, cleared and 
   assert.throws(() => registry.setMcpToken("nope"), /No active client nope/);
   registry.revoke("c1");
   assert.throws(() => registry.setMcpToken("c1"), /No active client c1/);
+});
+
+test("a v1 file without identities or claims loads, and new fields round-trip", () => {
+  const dir = mkdtempSync(join(tmpdir(), "client-registry-v1-"));
+  directories.push(dir);
+  const path = join(dir, "clients.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      v: 1,
+      users: [{ id: "thasso", label: "Thasso" }],
+      clients: [],
+      codes: [],
+      accounts: [],
+    }),
+    { mode: 0o600 },
+  );
+  const registry = new ClientRegistry(dir);
+  assert.deepEqual(registry.users(), [{ id: "thasso", label: "Thasso" }]);
+  registry.claimUser("thasso", "Person@Example.org", 60_000);
+  assert.deepEqual(
+    registry.signIn({
+      issuer: "https://issuer.example",
+      subject: "s1",
+      email: "person@example.org",
+    }),
+    { userId: "thasso", outcome: "bound" },
+  );
+  const stored = JSON.parse(readFileSync(path, "utf8"));
+  assert.equal(stored.v, 1);
+  assert.deepEqual(stored.claims, []);
+  assert.deepEqual(stored.users, [
+    {
+      id: "thasso",
+      label: "Thasso",
+      oidc: { issuer: "https://issuer.example", subject: "s1" },
+      email: "person@example.org",
+    },
+  ]);
+  assert.deepEqual(new ClientRegistry(dir).user("thasso"), stored.users[0]);
+});
+
+test("claims expire and are pruned on the next write", () => {
+  let clock = 1_000_000;
+  const dir = mkdtempSync(join(tmpdir(), "client-registry-claims-"));
+  directories.push(dir);
+  const registry = new ClientRegistry(dir, () => clock);
+  registry.addUser("a");
+  registry.addUser("b");
+  registry.claimUser("a", "a@example.org", 60_000);
+  registry.claimUser("b", "b@example.org", 120_000);
+  const claims = () =>
+    JSON.parse(readFileSync(join(dir, "clients.json"), "utf8")).claims;
+  assert.equal(claims().length, 2);
+  clock += 90_000;
+  registry.addUser("c");
+  assert.deepEqual(
+    claims().map((c: { userId: string }) => c.userId),
+    ["b"],
+  );
+  // The expired one binds nothing: a new user instead.
+  const answer = registry.signIn({
+    issuer: "https://issuer.example",
+    subject: "s",
+    email: "a@example.org",
+  });
+  assert.equal(answer.outcome, "created");
+  assert.match(answer.userId, /^u_[A-Za-z0-9_-]{16}$/);
+  assert.throws(
+    () => registry.claimUser("nobody", "x@example.org", 1),
+    /No user/,
+  );
+  assert.throws(() => registry.claimUser("b", "not-an-email", 1), /email/);
+});
+
+test("signIn writes under the registry lock, and only when something changed", () => {
+  const { registry, path } = fixture();
+  const identity = {
+    issuer: "https://issuer.example",
+    subject: "s1",
+    email: "p@example.org",
+  };
+  writeFileSync(`${path}.lock`, "2147483647\n");
+  assert.throws(() => registry.signIn(identity), ClientRegistryLockedError);
+  assert.equal(registry.users().length, 1);
+  unlinkSync(`${path}.lock`);
+  const created = registry.signIn(identity);
+  assert.equal(created.outcome, "created");
+  const before = statSync(path).mtimeMs;
+  const written = readFileSync(path, "utf8");
+  assert.deepEqual(registry.signIn(identity), {
+    userId: created.userId,
+    outcome: "existing",
+  });
+  assert.equal(readFileSync(path, "utf8"), written);
+  assert.equal(statSync(path).mtimeMs, before);
 });

@@ -11,5 +11,10 @@
       "@assistant/shared": ["../shared/protocol.ts"]
     }
   },
-  "include": ["src", "component-preview", "vite.config.ts"]
+  "include": [
+    "src",
+    "component-preview",
+    "vite.config.ts",
+    "vite.gateway.config.ts"
+  ]
 }

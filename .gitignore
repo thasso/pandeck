@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 assistant-data/
 app/web/dist/
+app/web/dist-gateway/
 app/web/component-preview/dist/
 app/web/component-preview/storybook-static/
 app/server/dist/

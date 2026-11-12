@@ -7,6 +7,7 @@
  *   gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>]
  *     [--client-port <n>] [--enroll-port <n>] [--bind-host <address>]
  *     [--host <name>]... [--vault-host <address> [--vault-port <n>]]
+ *     [--ui-config <file>]
  *
  * With `--vault-host`, the vault runs in its own process (`gateway/vaultMain.ts`,
  * port 8794 unless `--vault-port`), reached over the pinned link that
@@ -14,7 +15,10 @@
  * then holds no token file and runs no login itself.
  *
  * It is the only entry that loads the edge's tools (`gatewayTools/`): `/mcp`
- * on the model port and the integration methods (Task-1397).
+ * on the model port and the integration methods (Task-1397), and the
+ * gateway's own sign-in and page (`gatewayWeb/`, Task-1402): with
+ * `--ui-config`, an HTTPS port for browsers on `--bind-host`, configured by
+ * that 0600 file.
  *
  * Every port defaults to a free one; the ports in use are printed. The edge's
  * three ports bind to `--bind-host`, 127.0.0.1 unless given, and each `--host`
@@ -33,13 +37,18 @@ import { startGateway } from "./gateway/gateway.ts";
 import { readEdgeVaultLink } from "./gateway/vaultMethods.ts";
 import { createEdgeTools } from "./gatewayTools/index.ts";
 import {
+  GatewayWebConfigError,
+  loadGatewayWebConfig,
+} from "./gatewayWeb/config.ts";
+import { startGatewayWeb } from "./gatewayWeb/server.ts";
+import {
   codexLoginDriver,
   renewCodexCredential,
 } from "./harnesses/gatewayPorts.ts";
 
 function usage(): never {
   console.error(
-    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... [--vault-host <address> [--vault-port <n>]]",
+    "usage: gateway-dev --state-dir <dir> [--port <n>] [--model-port <n>] [--client-port <n>] [--enroll-port <n>] [--bind-host <address>] [--host <name>]... [--vault-host <address> [--vault-port <n>]] [--ui-config <file>]",
   );
   process.exit(2);
 }
@@ -55,6 +64,7 @@ const { values } = parseArgs({
     host: { type: "string", multiple: true },
     "vault-host": { type: "string" },
     "vault-port": { type: "string" },
+    "ui-config": { type: "string" },
   },
 });
 if (!values["state-dir"]) usage();
@@ -79,6 +89,20 @@ function remoteVault() {
 }
 const vault = remoteVault();
 
+/** The UI's config when `--ui-config`, checked before anything listens. */
+function uiConfig() {
+  const file = values["ui-config"];
+  if (!file) return undefined;
+  try {
+    return loadGatewayWebConfig(resolve(file));
+  } catch (err) {
+    if (!(err instanceof GatewayWebConfigError)) throw err;
+    console.error(`[gateway-dev] ${err.message}`);
+    process.exit(2);
+  }
+}
+const ui = uiConfig();
+
 const gateway = await startGateway({
   stateDir,
   port: port(values.port),
@@ -102,12 +126,24 @@ const gateway = await startGateway({
       }),
 });
 const edge = gateway.clients!;
+const registry = edge.registry;
+const web = ui
+  ? await startGatewayWeb({
+      config: ui,
+      users: {
+        signIn: (identity) => registry.signIn(identity),
+        user: (id) => registry.user(id),
+      },
+      log: (line) => console.log(`[gateway] ${line}`),
+      ...(values["bind-host"] ? { bindHost: values["bind-host"] } : {}),
+    })
+  : undefined;
 console.log(
-  `[gateway-dev] state ${stateDir}; loopback ${gateway.port}, model ${edge.modelPort}, client ${edge.clientPort}, enroll ${edge.enrollPort}${vault ? `; vault ${vault.host}:${vault.port}` : ""}`,
+  `[gateway-dev] state ${stateDir}; loopback ${gateway.port}, model ${edge.modelPort}, client ${edge.clientPort}, enroll ${edge.enrollPort}${web ? `, ui ${web.port}` : ""}${vault ? `; vault ${vault.host}:${vault.port}` : ""}`,
 );
 
 const stop = (): void => {
-  void gateway.close().then(() => process.exit(0));
+  void Promise.all([gateway.close(), web?.close()]).then(() => process.exit(0));
 };
 process.once("SIGTERM", stop);
 process.once("SIGINT", stop);
