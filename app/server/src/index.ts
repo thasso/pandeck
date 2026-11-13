@@ -72,6 +72,7 @@ import {
 } from "./harnesses/usage.ts";
 import { modelsForAccount } from "./harnesses/models.ts";
 import { pickAccount } from "./accountRouter.ts";
+import { startClaudeCredentialStatusChecks } from "./claudeCredentialStatus.ts";
 import {
   createCredentialProfile,
   credentialProfileById,
@@ -1982,6 +1983,8 @@ verifyRequiredHostTools();
 // pi's grep/find resolve rg/fd on every call and fork this server to probe PATH
 // unless its bin dir already holds them; link the host's copies there once.
 linkPiToolBinaries();
+// Direct local macOS logins may use the isolated profile's Keychain entry.
+await startClaudeCredentialStatusChecks();
 
 // Discover the optional streaming runtime once, without loading any weights.
 await probeStreamingRecognizer();

@@ -1415,8 +1415,15 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
     right after the spawn. It forwards no input until the gateway acknowledged
     the writer: earlier input is held in order, up to 64,000 characters (more is
     dropped), and a stop discards it, so a late acknowledgement sends nothing. A
-    second viewer attaches to the running login. The pi login takes the hold
-    before it creates its runtime and starts the device-code login.
+    second viewer attaches to the running login. Pasted callback URLs are
+    converted locally to the CLI's `code#state` input without logging or echoing
+    either form; the gateway's shared Claude driver applies the same conversion.
+    A zero exit succeeds only with a saved subscription login: file presence, or
+    in direct local macOS mode the official CLI's non-secret profile-scoped
+    Keychain status (`docs/account-routing.md`, "Health and login evidence").
+    This does not export Keychain tokens or change gateway readiness. The pi
+    login takes the hold before it creates its runtime and starts the
+    device-code login.
   - **Release** comes only once the writer ended: the Claude child's `close`, or
     pi's provider login settling, never on pi's UI timeout or a cancel.
   - **Stopping a pi login** (`piSdk/models.ts`). Before its commit, Cancel, the

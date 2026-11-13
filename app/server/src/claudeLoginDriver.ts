@@ -95,6 +95,21 @@ export function sanitizeClaudeLoginOutput(value: string): string {
     .replace(/[\u202a-\u202e\u2066-\u2069]/g, "");
 }
 
+/** Convert a pasted callback URL to the CLI's code#state format, without I/O. */
+export function claudeLoginInput(value: string): string {
+  const input = value.trim();
+  try {
+    const url = new URL(input);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return input;
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    if (code && state && !/[\s#]/.test(code + state)) return `${code}#${state}`;
+  } catch {
+    // The provider's normal code#state blob is already in CLI format.
+  }
+  return input;
+}
+
 const LOGIN_URL_RE = /https:\/\/\S+oauth\S*/;
 
 /**
@@ -158,7 +173,8 @@ export function claudeLoginDriver(
   });
   return {
     input: (text) => {
-      if (child.exitCode === null) child.stdin.write(`${text}\n`);
+      const input = claudeLoginInput(text);
+      if (child.exitCode === null && input) child.stdin.write(`${input}\n`);
     },
     cancel: () => {
       if (child.exitCode !== null || killTimer) return;

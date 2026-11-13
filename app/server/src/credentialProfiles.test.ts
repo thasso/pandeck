@@ -33,6 +33,7 @@ const {
   renameCredentialProfile,
   patchCredentialProfile,
   setCredentialProfileEnabled,
+  setClaudeStoredLoginPresence,
   subscribeCredentialProfileChanges,
   subscribeCredentialProfileDeleted,
   credentialProfileHasCredential,
@@ -105,6 +106,39 @@ test("keeps profile metadata and provider directories private without exposing a
   assert.equal(mode(piAgentDir(openai.id)), 0o700);
   assert.equal(mode(claudeConfigDir(claude.id)), 0o700);
   assert.equal(mode(authPath), 0o600);
+});
+
+test("CLI-proven stored OAuth counts without a file and publishes presence changes", () => {
+  const profile = createCredentialProfile({
+    name: "Keychain",
+    provider: "claude",
+  });
+  const changes: string[] = [];
+  const unsubscribe = subscribeCredentialProfileChanges((id) =>
+    changes.push(id),
+  );
+  try {
+    assert.equal(credentialProfileHasCredential(profile.id), false);
+    setClaudeStoredLoginPresence(profile.id, true);
+    assert.equal(credentialProfileSummaryById(profile.id)?.status, "ready");
+    assert.equal(
+      existsSync(join(claudeConfigDir(profile.id), ".credentials.json")),
+      false,
+    );
+    setClaudeStoredLoginPresence(profile.id, true);
+    assert.deepEqual(changes, [profile.id]);
+    setClaudeStoredLoginPresence(profile.id, false);
+    assert.equal(
+      credentialProfileSummaryById(profile.id)?.status,
+      "disconnected",
+    );
+    assert.deepEqual(changes, [profile.id, profile.id]);
+    deleteCredentialProfile(profile.id);
+    setClaudeStoredLoginPresence(profile.id, true);
+    assert.equal(credentialProfileSummaryById(profile.id), undefined);
+  } finally {
+    unsubscribe();
+  }
 });
 
 test("allows the protected default account to be disabled in favor of a secondary profile", () => {

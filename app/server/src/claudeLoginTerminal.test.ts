@@ -22,6 +22,11 @@ const previousNodeEnv = process.env.NODE_ENV;
 process.env.DATA_DIR = join(tmp, "data");
 process.env.HOME = join(tmp, "home");
 
+vi.mock("./claudeCredentialStatus.ts", () => ({
+  refreshClaudeCredentialStatus: vi.fn(async () => {}),
+}));
+const { refreshClaudeCredentialStatus } =
+  await import("./claudeCredentialStatus.ts");
 const profiles = await import("./credentialProfiles.ts");
 const terminal = await import("./claudeLoginTerminal.ts");
 const { attachAccountLoginSocket } = await import("./accountLoginSocket.ts");
@@ -217,6 +222,92 @@ test("Default Claude's login runs the CLI in its DATA_DIR directory, never ~/.cl
   );
   assert.equal(env?.ANTHROPIC_API_KEY, undefined);
   assert.equal(existsSync(join(process.env.HOME!, ".claude")), false);
+});
+
+test.each([
+  ["  fixture-code#fixture-state  ", "fixture-code#fixture-state"],
+  [
+    "http://localhost:12345/callback?code=fixture-code&state=fixture-state",
+    "fixture-code#fixture-state",
+  ],
+  [
+    "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture%2Bcode",
+    "fixture+code#fixture-state",
+  ],
+])(
+  "forwards pasted codes or callback URLs in CLI format without echoing them",
+  (input, expected) => {
+    const profile = profiles.createCredentialProfile({
+      name: "Callback Claude",
+      provider: "claude",
+    });
+    const child = new FakeChild();
+    terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
+    const socket = new FakeSocket();
+    attachAccountLoginSocket(
+      socket as unknown as WebSocket,
+      request(profile.id),
+    );
+    let stdin = "";
+    child.stdin.on("data", (chunk) => {
+      stdin += chunk.toString();
+    });
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "input", data: input })),
+    );
+    assert.equal(stdin, `${expected}\n`);
+    assert.doesNotMatch(
+      JSON.stringify(socket.sent),
+      /fixture-code|fixture-state/,
+    );
+  },
+);
+
+test("accepts a successful macOS profile login saved in Keychain without a credential file", async () => {
+  const profile = profiles.createCredentialProfile({
+    name: "Keychain Claude",
+    provider: "claude",
+  });
+  const child = new FakeChild();
+  terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
+  vi.mocked(refreshClaudeCredentialStatus).mockImplementationOnce(
+    async (id) => {
+      profiles.setClaudeStoredLoginPresence(id, true);
+    },
+  );
+  const socket = new FakeSocket();
+  attachAccountLoginSocket(socket as unknown as WebSocket, request(profile.id));
+  child.emit("close", 0, null);
+  await vi.waitFor(() =>
+    assert.equal((socket.sent.at(-1) as { status?: string }).status, "ready"),
+  );
+  assert.equal(
+    existsSync(join(profiles.claudeConfigDir(profile.id), ".credentials.json")),
+    false,
+  );
+  assert.equal(
+    profiles.credentialProfileSummaryById(profile.id)?.status,
+    "ready",
+  );
+});
+
+test("a zero exit without a verifiable saved login has an actionable error", async () => {
+  const profile = profiles.createCredentialProfile({
+    name: "No saved login",
+    provider: "claude",
+  });
+  const child = new FakeChild();
+  terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
+  const socket = new FakeSocket();
+  attachAccountLoginSocket(socket as unknown as WebSocket, request(profile.id));
+  child.emit("close", 0, null);
+  await vi.waitFor(() =>
+    assert.match(
+      String((socket.sent.at(-1) as { error?: string }).error),
+      /no saved Claude subscription login could be verified/,
+    ),
+  );
 });
 
 test("keeps one active process per profile across browser reconnects and supports cancellation", () => {

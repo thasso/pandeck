@@ -56,9 +56,11 @@ import {
   bundledClaudeCliPath,
   CLAUDE_LOGIN_ARGS,
   claudeLoginEnvironmentFrom,
+  claudeLoginInput,
   KILL_AFTER_MS,
   sanitizeClaudeLoginOutput,
 } from "./claudeLoginDriver.ts";
+import { refreshClaudeCredentialStatus } from "./claudeCredentialStatus.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
 /** Input held until the gateway acknowledged the writer (L8). */
@@ -296,7 +298,7 @@ function begin(run: LoginRun, taken: LoginHoldTaken): void {
       `Could not start the official Claude CLI: ${errorText(error)}`,
     );
   });
-  child.on("close", (code, signal) => closed(run, code, signal));
+  child.on("close", (code, signal) => void closed(run, code, signal));
   const { hold } = run;
   if (!hold) {
     run.writerReady = true;
@@ -325,11 +327,11 @@ function begin(run: LoginRun, taken: LoginHoldTaken): void {
 }
 
 /** The child closed: the hold ends, then the run finishes. */
-function closed(
+async function closed(
   run: LoginRun,
   code: number | null,
   signal: NodeJS.Signals | null,
-): void {
+): Promise<void> {
   run.closed = true;
   clearTimeout(run.killTimer);
   run.pendingInput = [];
@@ -340,6 +342,11 @@ function closed(
     finish(run, run.ending.status, run.ending.message);
     return;
   }
+  // In direct local mode, macOS may save this profile's login in Keychain
+  // instead of .credentials.json. The official CLI verifies it without export.
+  if (code === 0 && !claudeProfileHasCredential(run.profileId))
+    await refreshClaudeCredentialStatus(run.profileId);
+  if (run.finished || !credentialProfileById(run.profileId)) return;
   if (code === 0 && claudeProfileHasCredential(run.profileId)) {
     appendOutput(run, "\nClaude login completed.\n");
     finish(run, "ready");
@@ -347,7 +354,9 @@ function closed(
   }
   const detail = signal
     ? `Claude login stopped (${signal}).`
-    : `Claude login exited with code ${code ?? "unknown"}.`;
+    : code === 0
+      ? "Claude login finished, but no saved Claude subscription login could be verified. Try Connect again."
+      : `Claude login exited with code ${code ?? "unknown"}.`;
   finish(run, "error", detail);
 }
 
@@ -410,7 +419,7 @@ function handleClientMessage(
     return;
   }
   if (!acceptsInput(run)) return;
-  const data = message.data.trim();
+  const data = claudeLoginInput(message.data);
   if (!data) return;
   // Never append or log this value: it may be the short-lived OAuth authorization code.
   if (run.writerReady) {

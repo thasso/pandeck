@@ -95,6 +95,16 @@ Evidence rules (a gateway-served account's login evidence follows
   listing. File changes alone have no filesystem watch; the next listing clears
   a derived alert when credentials reappear, even without a registry event.
   Observed rejection remains until positive proof.
+- In direct local macOS mode, stored Claude OAuth can also be proved by the
+  official CLI's `auth status --json` (`loggedIn: true`,
+  `authMethod: claude.ai`). It runs with the account's isolated
+  `CLAUDE_CONFIG_DIR`, including Default Claude; it never imports the user's
+  normal home login. The bounded subprocess runs at boot, every 30 seconds and
+  after a zero-exit login without a credential file. PA retains only a presence
+  boolean, publishes changes through the registry, and preserves previous
+  evidence on failed or malformed probes. API keys do not count as a
+  subscription login. Gateway and relay modes never run these probes: their
+  file-backed or remote readiness remains authoritative.
 - OpenAI usage with `available: true` marks the account `ok`; `rejected` marks
   it `needs-login`. `not-signed-in` is not runtime evidence because an
   unreadable or partially rewritten auth file also produces it. Credential
