@@ -1123,13 +1123,13 @@ export async function startClientListener(
           ? undefined
           : req.url === "/enroll"
             ? redeemCode
-            : approvalOrigin === undefined
-              ? undefined
-              : req.url === "/enroll/start"
-                ? startRequest
-                : req.url === "/enroll/poll"
-                  ? pollRequest
-                  : undefined;
+            : req.url === "/enroll/start"
+              ? approvalOrigin === undefined
+                ? undefined
+                : startRequest
+              : req.url === "/enroll/poll"
+                ? pollRequest
+                : undefined;
       if (!route) return json(res, 404, { error: "not found" });
       // A poll is limited once its id is read: per request when known.
       if (route !== pollRequest && !admitEnrollment(sourceOf(req)))

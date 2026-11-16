@@ -5,7 +5,7 @@
  */
 import { clientPublicKey } from "./x509.ts";
 import {
-  MAX_LIVE_REQUESTS,
+  MAX_RETAINED_REQUESTS,
   isHash,
   isRequestId,
   type EnrollmentKind,
@@ -67,15 +67,16 @@ export function decodePoll(body: unknown): string | undefined {
 
 /**
  * Admits at most one poll per known request every `POLL_INTERVAL_MS`. Its
- * keys are the hashes of live requests only (an unknown id never reaches it),
- * an entry is dropped once its interval has passed, and it holds at most
- * `capacity` entries, by default the bound on live requests. Full, it admits
- * nothing new and allocates nothing.
+ * keys are the hashes of retained requests only (an unknown id never reaches
+ * it), an entry is dropped once its interval has passed, and it holds at most
+ * `capacity` entries, by default the bound on retained records. Full, it
+ * admits nothing new and allocates nothing; recent receipt churn can therefore
+ * briefly cause `slow_down` for another retained request.
  */
 export class PollLimiter {
   private readonly last = new Map<string, number>();
 
-  constructor(private readonly capacity = MAX_LIVE_REQUESTS) {}
+  constructor(private readonly capacity = MAX_RETAINED_REQUESTS) {}
 
   /** Whether a poll of the request `key` may run now. */
   admit(key: string, now: number): boolean {

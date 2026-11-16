@@ -221,7 +221,7 @@ function mcp(
   });
 }
 
-test("without an approval origin the approval routes are unknown paths; /enroll still works", async () => {
+test("without an approval origin start is unavailable, but poll remains available; /enroll still works", async () => {
   const { gateway } = await edge({});
   const who = machine();
   const start = await post(gateway, "/enroll/start", {
@@ -235,13 +235,32 @@ test("without an approval origin the approval routes are unknown paths; /enroll 
     requestId: randomBytes(32).toString("base64url"),
   });
   assert.equal(polled.status, 404);
-  assert.deepEqual(polled.json, { error: "not found" });
+  assert.deepEqual(polled.json, { error: "unknown request" });
   const code = gateway.clients!.registry.createCode("u1", "typed");
   assert.equal(
     (await post(gateway, "/enroll", { code, publicKeyPem: who.publicKeyPem }))
       .status,
     200,
   );
+});
+
+test("an approved request can be collected and recovered after restart without an approval origin", async () => {
+  const first = await edge({ approvalOrigin: ORIGIN });
+  const started = await startRequest(first.gateway);
+  assert.equal(
+    first.gateway.clients!.registry.decide(started.userCode, "u1", true),
+    "approved",
+  );
+  const file = join(first.stateDir, "clients.json");
+  await open.pop()!.close();
+
+  const { gateway } = await edge({ stateDir: first.stateDir });
+  const collected = await poll(gateway, started.requestId);
+  assert.equal(collected.status, 200);
+  const before = await readFile(file, "utf8");
+  const duplicate = await poll(gateway, started.requestId);
+  assert.deepEqual(duplicate.json, collected.json);
+  assert.equal(await readFile(file, "utf8"), before);
 });
 
 test("a start answers the request id, the user code and a link with the code in its fragment only", async () => {
@@ -492,8 +511,9 @@ test("polls of one request faster than every 4 s answer 429 slow_down; unknown i
 
 test("start admission: the 5th open request from one address answers 429 while another address starts; 64 in all, then 503", async () => {
   const { gateway } = await edge();
+  const sourceRequests = [];
   for (let i = 0; i < 4; i++)
-    await startRequest(gateway, machine(), "127.0.0.2");
+    sourceRequests.push(await startRequest(gateway, machine(), "127.0.0.2"));
   const who = machine();
   const body = {
     publicKeyPem: who.publicKeyPem,
@@ -503,6 +523,14 @@ test("start admission: the 5th open request from one address answers 429 while a
   const fifth = await post(gateway, "/enroll/start", body, "127.0.0.2");
   assert.equal(fifth.status, 429);
   assert.deepEqual(fifth.json, { error: "too many open enrollment requests" });
+  assert.equal(
+    gateway.clients!.registry.decide(sourceRequests[0]!.userCode, "u1", false),
+    "denied",
+  );
+  assert.equal(
+    (await post(gateway, "/enroll/start", body, "127.0.0.2")).status,
+    200,
+  );
   await startRequest(gateway, machine(), "127.0.0.3");
   for (let opened = 5; opened < MAX_OPEN_REQUESTS; opened++)
     await startRequest(gateway, machine(), `127.0.1.${Math.floor(opened / 4)}`);

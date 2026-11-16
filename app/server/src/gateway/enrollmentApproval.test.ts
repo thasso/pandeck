@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { test } from "vitest";
-import { MAX_LIVE_REQUESTS } from "./clientRegistry.ts";
+import { MAX_RETAINED_REQUESTS } from "./clientRegistry.ts";
 import {
   POLL_INTERVAL_MS,
   PollLimiter,
@@ -111,13 +111,13 @@ test("the poll limiter drops entries once their interval passes, also after a cl
   assert.equal(limiter.size, 1);
 });
 
-test("the poll limiter holds at most its capacity, the live-request bound, and allocates nothing when full", () => {
+test("the poll limiter holds at most the retained-record bound and allocates nothing when full", () => {
   const limiter = new PollLimiter();
-  for (let i = 0; i < MAX_LIVE_REQUESTS; i++)
+  for (let i = 0; i < MAX_RETAINED_REQUESTS; i++)
     assert.equal(limiter.admit(`k${i}`, 0), true);
-  assert.equal(limiter.size, MAX_LIVE_REQUESTS);
+  assert.equal(limiter.size, MAX_RETAINED_REQUESTS);
   assert.equal(limiter.admit("one more", 1), false);
-  assert.equal(limiter.size, MAX_LIVE_REQUESTS);
+  assert.equal(limiter.size, MAX_RETAINED_REQUESTS);
   assert.equal(limiter.admit("one more", POLL_INTERVAL_MS), true);
   assert.equal(limiter.size, 1);
 });

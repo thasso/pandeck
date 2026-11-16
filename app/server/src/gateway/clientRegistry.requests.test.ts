@@ -411,7 +411,7 @@ test("a throwing issue or a failed write leaves no client, no certificate and th
   assert.equal(registry.clients().length, 1);
 });
 
-test("admission: at most 4 open requests per source and 64 in all; a refusal writes nothing; expiry frees the place", () => {
+test("admission: open limits release on denial and collection; retention has a separate hard cap", () => {
   const { registry, path, clock } = fixture();
   for (let i = 0; i < MAX_OPEN_REQUESTS_PER_SOURCE; i++)
     start(registry, "10.0.0.1");
@@ -428,22 +428,24 @@ test("admission: at most 4 open requests per source and 64 in all; a refusal wri
   );
   assert.deepEqual(snapshot(path), before);
   start(registry, "10.0.0.2");
-  // Decided and collected requests stay open until they expire.
-  const decided = start(registry, "10.0.0.3");
-  registry.decide(decided.userCode, "u", false);
+  // Denial frees one of four source slots, while the record remains retained.
+  const denied = start(registry, "10.0.0.3");
+  registry.decide(denied.userCode, "u", false);
   for (let i = 0; i < 3; i++) start(registry, "10.0.0.3");
-  assert.deepEqual(
-    registry.startRequest({
-      publicKeyPem: KEY,
-      mcpTokenHash: sha256(TOKEN),
-      name: "x",
-      kind: "other",
-      from: "10.0.0.3",
-    }),
-    { ok: false, reason: "source_limit" },
+  start(registry, "10.0.0.3");
+
+  // A collected approval also frees its source slot and global open slot.
+  const completed = start(registry, "10.0.0.4");
+  registry.decide(completed.userCode, "u", true);
+  assert.equal(
+    registry.collect(completed.requestId, issuer().issue).status,
+    "approved",
   );
+  for (let i = 0; i < 3; i++) start(registry, "10.0.0.4");
+  start(registry, "10.0.0.4");
+
   let source = 10;
-  for (let open = 9; open < MAX_OPEN_REQUESTS; open++)
+  for (let open = 13; open < MAX_OPEN_REQUESTS; open++)
     start(registry, `10.0.1.${source++ % 200}`);
   const full = snapshot(path);
   assert.deepEqual(
@@ -460,7 +462,34 @@ test("admission: at most 4 open requests per source and 64 in all; a refusal wri
   clock.t += ENROLLMENT_REQUEST_TTL_MS;
   // Expired records stay for retention, but no longer count as open.
   start(registry, "10.0.0.1");
-  assert.equal(stored(path).requests!.length, MAX_OPEN_REQUESTS + 1);
+  assert.equal(stored(path).requests!.length, MAX_OPEN_REQUESTS + 3);
+});
+
+test("retained records have a separate hard cap of 256", () => {
+  const { registry, path, clock } = fixture();
+  for (let wave = 0; wave < 4; wave++) {
+    if (wave > 0) clock.t += ENROLLMENT_REQUEST_TTL_MS / 2;
+    for (let i = 0; i < MAX_OPEN_REQUESTS; i++) {
+      const request = start(
+        registry,
+        `10.${wave}.${Math.floor(i / 250)}.${(i % 250) + 1}`,
+      );
+      assert.equal(registry.decide(request.userCode, "u", false), "denied");
+    }
+  }
+  assert.equal(stored(path).requests!.length, 256);
+  const before = snapshot(path);
+  assert.deepEqual(
+    registry.startRequest({
+      publicKeyPem: KEY,
+      mcpTokenHash: sha256(TOKEN),
+      name: "x",
+      kind: "other",
+      from: "10.8.8.8",
+    }),
+    { ok: false, reason: "capacity" },
+  );
+  assert.deepEqual(snapshot(path), before);
 });
 
 test("limits: approved-uncollected requests count as pending codes, codes then approvals", () => {

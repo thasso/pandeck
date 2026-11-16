@@ -39,7 +39,7 @@ import { createPrivateJsonFile } from "../privateJsonFile.ts";
 
 /** How long an enrollment code stays valid. */
 export const ENROLLMENT_CODE_TTL_MS = 15 * 60_000;
-/** How long an enrollment request is open, decided or not. */
+/** How long an enrollment request may be decided or collected. */
 export const ENROLLMENT_REQUEST_TTL_MS = 10 * 60_000;
 /**
  * How long a request's record stays after it expires, so a machine that lost
@@ -50,12 +50,8 @@ export const ENROLLMENT_REQUEST_RETAIN_MS = 10 * 60_000;
 export const MAX_OPEN_REQUESTS_PER_SOURCE = 4;
 /** Open requests at most in all. */
 export const MAX_OPEN_REQUESTS = 64;
-/**
- * Live records at most: each open request's record lives for its TTL plus
- * the retention, twice the TTL, so admission keeps the table within twice
- * the open bound. Checked as well, against a clock that went back.
- */
-export const MAX_LIVE_REQUESTS = 2 * MAX_OPEN_REQUESTS;
+/** Retained enrollment records at most, including open and terminal requests. */
+export const MAX_RETAINED_REQUESTS = 256;
 const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
 const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
 const REQUEST_ID_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -586,11 +582,13 @@ export class ClientRegistry {
 
   /**
    * Opens an enrollment request for a machine (Task-1410), unless that
-   * address has `MAX_OPEN_REQUESTS_PER_SOURCE` open requests or all have
-   * `MAX_OPEN_REQUESTS` (or the table `MAX_LIVE_REQUESTS` live records); a
-   * refusal writes nothing. Answers the request id, the machine's secret for
-   * collecting, and the user code, shown to a person; only their hashes are
-   * kept. A request is open until it expires, decided or not.
+   * address has `MAX_OPEN_REQUESTS_PER_SOURCE` open requests, all have
+   * `MAX_OPEN_REQUESTS` open requests, or the retained table has
+   * `MAX_RETAINED_REQUESTS` records. A refusal writes nothing. Answers the
+   * request id, the machine's secret for collecting, and the user code, shown
+   * to a person; only their hashes are kept. Open requests are undecided or
+   * approved but uncollected; denied and collected records remain retained
+   * without consuming open-request admission.
    */
   startRequest(start: EnrollmentRequestStart): StartOutcome {
     return this.change(
@@ -598,16 +596,15 @@ export class ClientRegistry {
         const now = this.now();
         const requests = (state.requests ??= []);
         const live = requests.filter((request) => this.live(request));
-        const open = live.filter((request) => request.expiresAt > now);
+        if (live.length >= MAX_RETAINED_REQUESTS)
+          return { ok: false, reason: "capacity" };
+        const open = live.filter((request) => this.open(request, now));
         if (
           open.filter((request) => request.from === start.from).length >=
           MAX_OPEN_REQUESTS_PER_SOURCE
         )
           return { ok: false, reason: "source_limit" };
-        if (
-          open.length >= MAX_OPEN_REQUESTS ||
-          live.length >= MAX_LIVE_REQUESTS
-        )
+        if (open.length >= MAX_OPEN_REQUESTS)
           return { ok: false, reason: "capacity" };
         const taken = (field: "idHash" | "userCodeHash", value: string) => {
           const hash = Buffer.from(hashOf(value), "hex");
@@ -769,6 +766,15 @@ export class ClientRegistry {
       (answer) => answer.created,
     );
     return outcome;
+  }
+
+  /** Whether a request still consumes open-request admission. */
+  private open(request: EnrollmentRequest, now: number): boolean {
+    return (
+      request.expiresAt > now &&
+      (request.decision === undefined ||
+        (approverOf(request) !== undefined && request.issued === undefined))
+    );
   }
 
   /** Whether the request's record is kept: until its retention ends. */
