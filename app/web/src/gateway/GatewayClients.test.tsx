@@ -51,6 +51,31 @@ async function click(label: string) {
   await act(async () => target!.click());
 }
 
+/** Opens `row`'s ⋯ menu and answers its item `label`. */
+async function menuItem(row: string, label: string): Promise<HTMLElement> {
+  await click(`More actions for ${row}`);
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((node) => node.textContent === label);
+  expect(item, `${row}: ${label}`).toBeDefined();
+  return item!;
+}
+
+async function choose(row: string, label: string) {
+  const item = await menuItem(row, label);
+  await act(async () => item.click());
+}
+
+/** Whether `row`'s menu item `label` is disabled; closes the menu again. */
+async function itemDisabled(row: string, label: string): Promise<boolean> {
+  const item = await menuItem(row, label);
+  const disabled =
+    item.getAttribute("aria-disabled") === "true" ||
+    item.hasAttribute("data-disabled");
+  await click(`More actions for ${row}`);
+  return disabled;
+}
+
 async function typeLabel(text: string) {
   const input = document.querySelector<HTMLInputElement>(
     "#gateway-client-label",
@@ -78,7 +103,7 @@ test("a created code is shown once; Done drops it from the DOM and reloads", asy
   const p = props();
   mount(<GatewayClients {...p} />);
   await typeLabel("  Work laptop ");
-  await click("Create enrollment code");
+  await click("Get code");
   expect(p.createCode).toHaveBeenCalledWith("Work laptop");
   expect(dialog()?.textContent).toContain("Valid for 15 minutes, once.");
   expect(
@@ -94,7 +119,7 @@ test("a created code is shown once; Done drops it from the DOM and reloads", asy
 test("revoking a client asks first, then sends its id only", async () => {
   const p = props();
   mount(<GatewayClients {...p} />);
-  await click("Revoke Laptop");
+  await choose("Laptop", "Revoke client");
   expect(p.revoke).not.toHaveBeenCalled();
   expect(dialog()?.textContent).toContain("Revoke Laptop?");
   expect(dialog()?.textContent).toContain("must enroll again");
@@ -106,7 +131,7 @@ test("revoking a client asks first, then sends its id only", async () => {
 test("minting shows the token once; replacing an existing one asks first", async () => {
   const p = props();
   mount(<GatewayClients {...p} />);
-  await click("Mint MCP token for Laptop");
+  await click("Create MCP token");
   expect(p.mintMcpToken).toHaveBeenCalledWith("c1");
   expect(
     document.querySelector<HTMLInputElement>('input[aria-label="MCP token"]')
@@ -115,7 +140,7 @@ test("minting shows the token once; replacing an existing one asks first", async
   await click("Done");
   expect(document.body.innerHTML).not.toContain("pgmcp_FAKE");
 
-  await click("Replace MCP token of Desktop");
+  await choose("Desktop", "Replace MCP token");
   expect(p.mintMcpToken).toHaveBeenCalledTimes(1);
   expect(dialog()?.textContent).toContain("The current token stops working.");
   await click("Replace token");
@@ -126,12 +151,7 @@ test("minting shows the token once; replacing an existing one asks first", async
   ).toBe("pgmcp_FAKE");
   await click("Done");
 
-  // With three actions, revoking the token sits in the row's menu.
-  await click("Desktop actions");
-  const item = [
-    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-  ].find((node) => node.textContent?.includes("Revoke MCP token of Desktop"));
-  await act(async () => item!.click());
+  await choose("Desktop", "Revoke MCP token");
   expect(p.revokeMcpToken).not.toHaveBeenCalled();
   await click("Revoke token");
   expect(p.revokeMcpToken).toHaveBeenCalledWith("c2");
@@ -155,7 +175,7 @@ test("each refusal shows its fixed text", async () => {
       />,
     );
     await typeLabel("x");
-    await click("Create enrollment code");
+    await click("Get code");
     expect(view.container.textContent).toContain(text);
     act(() => view.root.unmount());
   }
@@ -167,7 +187,7 @@ test("each refusal shows its fixed text", async () => {
       })}
     />,
   );
-  await click("Revoke Laptop");
+  await choose("Laptop", "Revoke client");
   await click("Revoke client");
   expect(dialog()?.textContent).toContain("This client is no longer enrolled.");
   act(() => view.root.unmount());
@@ -184,33 +204,33 @@ test("a repeated Mint click sends one mint; the client's actions wait for it", a
   const minted = deferred<{ token: string }>();
   const p = props({ mintMcpToken: vi.fn(() => minted.promise) });
   mount(<GatewayClients {...p} />);
-  const mint = button("Mint MCP token for Laptop")!;
+  const mint = button("Create MCP token")!;
   // Two clicks before any re-render, then a third once it rendered.
   await act(async () => {
     mint.click();
     mint.click();
   });
-  await act(async () => button("Mint MCP token for Laptop")!.click());
+  await act(async () => button("Create MCP token")!.click());
   expect(p.mintMcpToken).toHaveBeenCalledTimes(1);
-  expect(button("Mint MCP token for Laptop")!.disabled).toBe(true);
-  expect(button("Revoke Laptop")!.disabled).toBe(true);
+  expect(button("Create MCP token")!.disabled).toBe(true);
+  expect(await itemDisabled("Laptop", "Revoke client")).toBe(true);
   // Another client is not held up.
-  expect(button("Revoke Desktop")!.disabled).toBe(false);
+  expect(await itemDisabled("Desktop", "Revoke client")).toBe(false);
   await act(async () => minted.resolve({ token: "pgmcp_ONCE" }));
   expect(
     document.querySelector<HTMLInputElement>('input[aria-label="MCP token"]')
       ?.value,
   ).toBe("pgmcp_ONCE");
   await click("Done");
-  expect(button("Mint MCP token for Laptop")!.disabled).toBe(false);
-  expect(button("Revoke Laptop")!.disabled).toBe(false);
+  expect(button("Create MCP token")!.disabled).toBe(false);
+  expect(await itemDisabled("Laptop", "Revoke client")).toBe(false);
 });
 
 test("a confirmed revoke holds the client's actions until it settles", async () => {
   const revoked = deferred<void>();
   const p = props({ revoke: vi.fn(() => revoked.promise) });
   mount(<GatewayClients {...p} />);
-  await click("Revoke Laptop");
+  await choose("Laptop", "Revoke client");
   const confirm = [
     ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
   ].find((b) => b.textContent === "Revoke client")!;
@@ -219,7 +239,7 @@ test("a confirmed revoke holds the client's actions until it settles", async () 
     confirm.click();
   });
   expect(p.revoke).toHaveBeenCalledTimes(1);
-  expect(button("Mint MCP token for Laptop")!.disabled).toBe(true);
+  expect(button("Create MCP token")!.disabled).toBe(true);
   await act(async () => revoked.resolve());
-  expect(button("Mint MCP token for Laptop")!.disabled).toBe(false);
+  expect(button("Create MCP token")!.disabled).toBe(false);
 });

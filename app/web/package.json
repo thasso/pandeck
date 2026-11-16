@@ -6,6 +6,7 @@
   "version": "0.65.0",
   "scripts": {
     "dev": "vite",
+    "dev:gateway": "vite --config vite.gateway.config.ts",
     "build": "vite build && vite build --config vite.gateway.config.ts",
     "preview": "vite preview",
     "preview:story": "tsx component-preview/build-story.ts",

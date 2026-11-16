@@ -128,6 +128,17 @@ export interface GatewayUiAtlassian {
   /** Atlassian's name for the account, from the check a set ran. */
   displayName?: string;
   problem?: GatewayUiAtlassianProblem;
+  /**
+   * What the deployment fixes ahead of time: its Atlassian site, and the
+   * signed-in email when the deployment binds the credential to it. A set
+   * uses these whatever the request says; the page shows no field for them.
+   */
+  preset?: GatewayUiAtlassianPreset;
+}
+
+export interface GatewayUiAtlassianPreset {
+  site?: string;
+  email?: string;
 }
 
 /** `POST /api/integrations/atlassian/set`: checked, then stored. */
@@ -269,7 +280,7 @@ export function decodeGatewayUiAtlassian(
   value: unknown,
 ): GatewayUiAtlassian | undefined {
   if (!isRecord(value)) return undefined;
-  const { connected, site, email, displayName, problem } = value;
+  const { connected, site, email, displayName, problem, preset } = value;
   if (
     typeof connected !== "boolean" ||
     !optionalText(site) ||
@@ -277,6 +288,18 @@ export function decodeGatewayUiAtlassian(
     !optionalText(displayName)
   )
     return undefined;
+  let fixed: GatewayUiAtlassianPreset | undefined;
+  if (preset !== undefined) {
+    if (!isRecord(preset)) return undefined;
+    const presetSite = preset.site;
+    const presetEmail = preset.email;
+    if (!optionalText(presetSite) || !optionalText(presetEmail))
+      return undefined;
+    fixed = {
+      ...(presetSite !== undefined ? { site: presetSite } : {}),
+      ...(presetEmail !== undefined ? { email: presetEmail } : {}),
+    };
+  }
   return {
     connected,
     ...(site !== undefined ? { site } : {}),
@@ -285,6 +308,7 @@ export function decodeGatewayUiAtlassian(
     ...((GATEWAY_UI_ATLASSIAN_PROBLEMS as readonly unknown[]).includes(problem)
       ? { problem: problem as GatewayUiAtlassianProblem }
       : {}),
+    ...(fixed ? { preset: fixed } : {}),
   };
 }
 

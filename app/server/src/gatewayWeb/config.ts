@@ -29,6 +29,17 @@ export interface GatewayWebConfig {
   distDir: string;
   oidc: { issuer: string; clientId: string; clientSecret: string };
   allow: AllowRule;
+  /**
+   * What the deployment fixes for every user's Atlassian credential: the site,
+   * and whether the email is the one the user signed in with. Absent, the
+   * user enters both.
+   */
+  atlassian?: AtlassianPreset;
+}
+
+export interface AtlassianPreset {
+  site?: string;
+  emailFromSignIn: boolean;
 }
 
 export class GatewayWebConfigError extends Error {}
@@ -112,6 +123,24 @@ function allowRule(value: unknown): AllowRule {
   return { emailDomains, emails, claims };
 }
 
+function atlassianPreset(value: unknown): AtlassianPreset | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null)
+    refuse("atlassian must be an object");
+  const raw = value as Record<string, unknown>;
+  if (
+    raw.emailFromSignIn !== undefined &&
+    typeof raw.emailFromSignIn !== "boolean"
+  )
+    refuse("atlassian.emailFromSignIn must be a boolean");
+  return {
+    ...(raw.site !== undefined
+      ? { site: text(raw.site, "atlassian.site") }
+      : {}),
+    emailFromSignIn: raw.emailFromSignIn === true,
+  };
+}
+
 /** Reads and checks the UI config at `file`; throws `GatewayWebConfigError`. */
 export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   let mode: number;
@@ -147,6 +176,7 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
   const clientId = text(oidc.clientId, "oidc.clientId");
   const clientSecret = text(oidc.clientSecret, "oidc.clientSecret");
   const allow = allowRule(raw.allow);
+  const atlassian = atlassianPreset(raw.atlassian);
 
   const certPem = pem(raw.certFile, "certFile");
   const keyPem = pem(raw.keyFile, "keyFile");
@@ -163,6 +193,7 @@ export function loadGatewayWebConfig(file: string): GatewayWebConfig {
     distDir,
     oidc: { issuer: text(oidc.issuer, "oidc.issuer"), clientId, clientSecret },
     allow,
+    ...(atlassian ? { atlassian } : {}),
   };
 }
 

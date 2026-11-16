@@ -34,6 +34,7 @@ import {
   type GatewayWebIntegrations,
   type IntegrationsRefusalCode,
 } from "./integrations.ts";
+import type { AtlassianPreset } from "./config.ts";
 import { startGatewayWeb } from "./server.ts";
 
 const EDGE_ISSUER = "https://issuer.test";
@@ -221,7 +222,13 @@ function fakeSettings() {
 async function startUi(
   fake = fakeSettings(),
   testIdleMs?: { idle: number; integration: number },
+  deployment: {
+    atlassian?: AtlassianPreset;
+    /** The signed-in user's stored email; `null` stores none. */
+    email?: string | null;
+  } = {},
 ) {
+  const email = deployment.email === undefined ? EMAIL : deployment.email;
   const web = await startGatewayWeb({
     config: {
       port: 0,
@@ -235,10 +242,11 @@ async function startUi(
         clientSecret: CLIENT_PW,
       },
       allow: { emailDomains: ["example.org"], emails: [], claims: {} },
+      ...(deployment.atlassian ? { atlassian: deployment.atlassian } : {}),
     },
     users: {
       signIn: () => ({ userId: "u1", outcome: "existing" }),
-      user: (id) => ({ id, label: EMAIL, email: EMAIL }),
+      user: (id) => ({ id, label: EMAIL, ...(email ? { email } : {}) }),
     },
     accounts: NO_ACCOUNTS,
     integrations: fake.integrations,
@@ -320,6 +328,69 @@ test("T4 every new route answers 401 signed_out without a session, and its POSTs
     }
   }
   assert.deepEqual(fake.calls, []);
+});
+
+test("a deployment's Atlassian preset is in every answer and wins over the request's site and email", async () => {
+  const plain = await startUi();
+  const plainCookie = await signIn(plain.port);
+  const plainStatus = await api(
+    plain.port,
+    plainCookie,
+    "GET",
+    "/api/integrations/atlassian",
+  );
+  assert.equal(json(plainStatus).preset, undefined);
+
+  const { port, fake } = await startUi(fakeSettings(), undefined, {
+    atlassian: { site: "fixed.atlassian.net", emailFromSignIn: true },
+  });
+  const cookie = await signIn(port);
+  const preset = { site: "fixed.atlassian.net", email: EMAIL };
+  const status = await api(port, cookie, "GET", "/api/integrations/atlassian");
+  assert.equal(status.status, 200);
+  assert.deepEqual(json(status).preset, preset);
+  const set = await api(
+    port,
+    cookie,
+    "POST",
+    "/api/integrations/atlassian/set",
+    {
+      site: "other.atlassian.net",
+      email: "someone@else.test",
+      token: MARKER,
+    },
+  );
+  assert.equal(set.status, 200);
+  assert.deepEqual(json(set).preset, preset);
+  assert.deepEqual(
+    fake.calls.filter((c) => c.op === "set").map((c) => c.args[0]),
+    [{ site: "fixed.atlassian.net", email: EMAIL, token: MARKER }],
+  );
+});
+
+test("a preset bound to the sign-in email refuses a user with none instead of taking the request's", async () => {
+  const { port, fake } = await startUi(fakeSettings(), undefined, {
+    atlassian: { emailFromSignIn: true },
+    email: null,
+  });
+  const cookie = await signIn(port);
+  const set = await api(
+    port,
+    cookie,
+    "POST",
+    "/api/integrations/atlassian/set",
+    {
+      site: "x.atlassian.net",
+      email: "someone@else.test",
+      token: MARKER,
+    },
+  );
+  assert.equal(set.status, 503);
+  assert.deepEqual(json(set), { error: "unavailable" });
+  assert.deepEqual(
+    fake.calls.filter((c) => c.op === "set"),
+    [],
+  );
 });
 
 /** A JSON body of exactly `bytes` bytes: `value` with a padding field. */

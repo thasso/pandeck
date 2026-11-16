@@ -86,10 +86,10 @@ test("signed in: the email, and sign-out posts with the header", async () => {
   );
   const reload = vi.fn();
   await render("/", reload);
-  expect(host.textContent).toContain("Signed in as person@example.org");
+  expect(host.textContent).toContain("person@example.org");
   fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
   const button = [...host.querySelectorAll("button")].find(
-    (b) => b.textContent === "Sign out",
+    (b) => b.getAttribute("aria-label") === "Sign out",
   );
   await act(async () => button!.click());
   expect(fetchMock).toHaveBeenLastCalledWith("/auth/logout", {

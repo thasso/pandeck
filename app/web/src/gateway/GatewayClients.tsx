@@ -16,8 +16,6 @@ import type {
   GatewayUiMcpToken,
 } from "@assistant/shared/gatewayUi";
 import { ConfirmDialog } from "../components/common/dialogs.tsx";
-import { ListRow } from "../components/common/ListRow.tsx";
-import { ListRowActions } from "../components/common/ListRowActions.tsx";
 import {
   EmptyBox,
   ErrorNote,
@@ -30,6 +28,7 @@ import { Input } from "../components/ui/input.tsx";
 import type { LoadState } from "../lib/loadState.ts";
 import { GatewayApiError } from "./gatewayApi.ts";
 import { GatewaySecretDialog } from "./GatewaySecretDialog.tsx";
+import { GatewayRow } from "./GatewayRow.tsx";
 
 export interface GatewayClientsProps {
   clients: LoadState<GatewayUiClient[]>;
@@ -223,8 +222,13 @@ export function GatewayClients({
       : 0;
 
   return (
-    <section aria-label="Clients" className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">Clients</h2>
+    <section
+      aria-label="Clients"
+      className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 shadow-sm"
+    >
+      <h2 className="-mx-5 border-b border-border px-5 pb-3 text-base font-semibold">
+        Clients
+      </h2>
       {clients.status === "loading" || clients.status === "idle" ? (
         <PaneLoading />
       ) : null}
@@ -240,61 +244,66 @@ export function GatewayClients({
       {list && list.length > 0 ? (
         <div role="list">
           {list.map((client) => (
-            <ListRow
+            <GatewayRow
               key={client.id}
-              role="listitem"
-              interaction="content"
               title={client.label}
-              details={`Enrolled ${dateOf(client.createdAt)}`}
-              signals={
+              subtitle={`Enrolled ${dateOf(client.createdAt)}`}
+              status={
                 client.mcpToken ? (
-                  <Badge variant="secondary">MCP token</Badge>
-                ) : null
+                  <Badge variant="success">MCP token</Badge>
+                ) : (
+                  <Badge variant="outline">No MCP token</Badge>
+                )
               }
-              actions={
-                <ListRowActions
-                  alwaysVisible
-                  label={`${client.label} actions`}
-                  actions={[
-                    {
+              primary={
+                client.mcpToken
+                  ? undefined
+                  : {
                       id: "mint",
-                      label: client.mcpToken
-                        ? `Replace MCP token of ${client.label}`
-                        : `Mint MCP token for ${client.label}`,
+                      label: "Create MCP token",
                       icon: <KeyRound />,
-                      primary: true,
                       disabled: busyIds.has(client.id),
                       onSelect: () => startMint(client),
-                    },
-                    ...(client.mcpToken
-                      ? [
-                          {
-                            id: "revoke-token",
-                            label: `Revoke MCP token of ${client.label}`,
-                            icon: <Ban />,
-                            disabled: busyIds.has(client.id),
-                            onSelect: () =>
-                              ask({ kind: "revokeToken", client }),
-                          },
-                        ]
-                      : []),
-                    {
-                      id: "revoke",
-                      label: `Revoke ${client.label}`,
-                      icon: <Trash2 />,
-                      primary: true,
-                      disabled: busyIds.has(client.id),
-                      variant: "destructive" as const,
-                      onSelect: () => ask({ kind: "revoke", client }),
-                    },
-                  ]}
-                />
+                    }
               }
+              menuLabel={`More actions for ${client.label}`}
+              menu={[
+                ...(client.mcpToken
+                  ? [
+                      {
+                        id: "mint",
+                        label: "Replace MCP token",
+                        icon: <KeyRound />,
+                        disabled: busyIds.has(client.id),
+                        onSelect: () => startMint(client),
+                      },
+                      {
+                        id: "revoke-token",
+                        label: "Revoke MCP token",
+                        icon: <Ban />,
+                        disabled: busyIds.has(client.id),
+                        onSelect: () => ask({ kind: "revokeToken", client }),
+                      },
+                    ]
+                  : []),
+                {
+                  id: "revoke",
+                  label: "Revoke client",
+                  icon: <Trash2 />,
+                  destructive: true,
+                  disabled: busyIds.has(client.id),
+                  onSelect: () => ask({ kind: "revoke", client }),
+                },
+              ]}
             />
           ))}
         </div>
       ) : null}
-      <form className="flex flex-col gap-2" onSubmit={create}>
+      <form
+        className="-mx-5 -mb-5 mt-1 flex flex-col gap-3 rounded-b-xl border-t border-border bg-muted/40 px-5 py-4"
+        onSubmit={create}
+      >
+        <h3 className="text-sm font-semibold">Enroll a new client</h3>
         <Field>
           <FieldLabel htmlFor="gateway-client-label">
             New client name
@@ -308,7 +317,7 @@ export function GatewayClients({
           />
         </Field>
         {createError ? <ErrorNote message={createError} /> : null}
-        <div>
+        <div className="flex justify-end">
           <Button
             type="submit"
             variant="outline"
@@ -316,7 +325,7 @@ export function GatewayClients({
             disabled={!label.trim()}
           >
             <Plus />
-            Create enrollment code
+            Get code
           </Button>
         </div>
       </form>
