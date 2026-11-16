@@ -1442,7 +1442,9 @@ on its own ([deployment.md](deployment.md) "Credential gateway unit").
   - **Stopping a Claude login.** A timeout, cancel, server stop, failed writer
     registration or input error sends SIGTERM, then SIGKILL after 5 seconds;
     deleting the profile or Clear sends SIGKILL at once. The run ends, and
-    releases, on the child's `close`; a spawn without a pid releases at once.
+    releases, on the child's `close`; a spawn without a pid releases at once. A
+    stop after the `close`, while the Keychain check still runs, ends the run at
+    once with its own outcome; the check's evidence still reaches the account.
     When the server process exits, every unclosed child gets SIGKILL. The same
     stop path runs with the switch off, without a hold: the texts are unchanged,
     but a stopped login reports its end only on `close`.

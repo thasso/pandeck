@@ -5,10 +5,12 @@ const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
   exists: vi.fn(() => false),
   presence: vi.fn(),
+  observed: [] as unknown[],
+  mark: undefined as object | undefined,
+  deleted: new Set<string>(),
   gateway: false,
   relay: undefined as { port: number } | undefined,
 }));
-vi.mock("node:fs", () => ({ existsSync: mocks.exists }));
 vi.mock("./spawnBroker.ts", () => ({ brokerExecFile: mocks.exec }));
 vi.mock("./config.ts", () => ({
   get GATEWAY_ENABLED() {
@@ -19,7 +21,7 @@ vi.mock("./config.ts", () => ({
   },
 }));
 vi.mock("./credentialProfiles.ts", () => ({
-  claudeConfigDir: (id: string) => `/fixtures/${id}`,
+  claudeCredentialFileExists: () => mocks.exists(),
   claudeProfileEnvironment: (id: string) => ({
     HOME: "/fixtures/home",
     PATH: "/bin",
@@ -28,9 +30,18 @@ vi.mock("./credentialProfiles.ts", () => ({
     CLAUDE_CODE_OAUTH_TOKEN: "must-not-leak",
     ASSISTANT_TOKEN: "must-not-leak",
   }),
-  credentialProfileById: (id: string) => ({ id, provider: "claude" }),
+  credentialProfileById: (id: string) =>
+    mocks.deleted.has(id) ? undefined : { id, provider: "claude" },
+  credentialProfileLoginStateMark: () => mocks.mark,
   credentialProfilesOfKind: () => [],
-  setClaudeStoredLoginPresence: mocks.presence,
+  setClaudeStoredLoginPresence: (
+    id: string,
+    present: boolean,
+    observed?: object,
+  ) => {
+    mocks.presence(id, present);
+    mocks.observed.push(observed);
+  },
 }));
 const { refreshClaudeCredentialStatus } =
   await import("./claudeCredentialStatus.ts");
@@ -41,6 +52,9 @@ beforeEach(() => {
   mocks.exec.mockReset();
   mocks.exists.mockReturnValue(false);
   mocks.presence.mockClear();
+  mocks.observed = [];
+  mocks.mark = undefined;
+  mocks.deleted.clear();
   mocks.gateway = false;
   mocks.relay = undefined;
 });
@@ -136,4 +150,75 @@ test("concurrent probes for one profile share one bounded subprocess", async () 
   complete(result({ loggedIn: true, authMethod: "claude.ai" }));
   await Promise.all([first, second]);
   assert.equal(mocks.presence.mock.calls.length, 1);
+});
+
+test("a fresh check runs after a probe already running, never joins it", async () => {
+  let completeStale!: (value: ReturnType<typeof result>) => void;
+  mocks.exec.mockReturnValueOnce(
+    new Promise((resolve) => {
+      completeStale = resolve;
+    }),
+  );
+  mocks.exec.mockResolvedValueOnce(
+    result({ loggedIn: true, authMethod: "claude.ai" }),
+  );
+  const poll = refreshClaudeCredentialStatus("claude-default");
+  const afterLogin = refreshClaudeCredentialStatus("claude-default", {
+    fresh: true,
+  });
+  // Queued, not parallel: the stale answer cannot land after the fresh one.
+  assert.equal(mocks.exec.mock.calls.length, 1);
+  completeStale(result({ loggedIn: false }, { code: 1 }));
+  await Promise.all([poll, afterLogin]);
+  assert.equal(mocks.exec.mock.calls.length, 2);
+  assert.deepEqual(mocks.presence.mock.calls, [
+    ["claude-default", false],
+    ["claude-default", true],
+  ]);
+  mocks.exec.mockResolvedValueOnce(
+    result({ loggedIn: true, authMethod: "claude.ai" }),
+  );
+  await refreshClaudeCredentialStatus("claude-default");
+  assert.equal(mocks.exec.mock.calls.length, 3);
+});
+
+test("a queued probe takes the login-state mark when it starts, and skips a deleted profile", async () => {
+  let completeStale!: (value: ReturnType<typeof result>) => void;
+  mocks.exec.mockReturnValueOnce(
+    new Promise((resolve) => {
+      completeStale = resolve;
+    }),
+  );
+  mocks.exec.mockResolvedValueOnce(
+    result({ loggedIn: true, authMethod: "claude.ai" }),
+  );
+  const pollMark = {};
+  mocks.mark = pollMark;
+  const poll = refreshClaudeCredentialStatus("claude-default");
+  const afterLogin = refreshClaudeCredentialStatus("claude-default", {
+    fresh: true,
+  });
+  const loginMark = {};
+  mocks.mark = loginMark;
+  completeStale(result({ loggedIn: false }, { code: 1 }));
+  await Promise.all([poll, afterLogin]);
+  assert.deepEqual(mocks.observed, [pollMark, loginMark]);
+  assert.equal(mocks.observed[1], loginMark);
+
+  mocks.exec.mockReturnValueOnce(
+    new Promise((resolve) => {
+      completeStale = resolve;
+    }),
+  );
+  const running = refreshClaudeCredentialStatus("named-profile");
+  const queued = refreshClaudeCredentialStatus("named-profile", {
+    fresh: true,
+  });
+  const fileChecks = mocks.exists.mock.calls.length;
+  mocks.deleted.add("named-profile");
+  completeStale(result({ loggedIn: false }, { code: 1 }));
+  await Promise.all([running, queued]);
+  // Neither its directory nor the CLI is touched for a deleted profile.
+  assert.equal(mocks.exists.mock.calls.length, fileChecks);
+  assert.equal(mocks.exec.mock.calls.length, 3);
 });

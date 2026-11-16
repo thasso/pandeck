@@ -100,9 +100,13 @@ Evidence rules (a gateway-served account's login evidence follows
   `authMethod: claude.ai`). It runs with the account's isolated
   `CLAUDE_CONFIG_DIR`, including Default Claude; it never imports the user's
   normal home login. The bounded subprocess runs at boot, every 30 seconds and
-  after a zero-exit login without a credential file. PA retains only a presence
-  boolean, publishes changes through the registry, and preserves previous
-  evidence on failed or malformed probes. API keys do not count as a
+  after every zero-exit login without a credential file, whatever the cached
+  presence says. That last check never joins a probe already running, which may
+  predate the login, but runs after it, so its answer lands last. PA retains
+  only a presence boolean, publishes changes through the registry, and preserves
+  previous evidence on failed or malformed probes. A login that appears clears
+  only a failed login's error that was already there when its probe started; a
+  newer failure or a connecting login's state stays. API keys do not count as a
   subscription login. Gateway and relay modes never run these probes: their
   file-backed or remote readiness remains authoritative.
 - OpenAI usage with `available: true` marks the account `ok`; `rejected` marks

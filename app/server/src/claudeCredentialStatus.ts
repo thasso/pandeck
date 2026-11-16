@@ -3,17 +3,16 @@
  * only its profile's Keychain entry; PA retains a boolean, never a credential.
  * Gateway modes remain file-backed (or use the remote account mirror).
  */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import {
   bundledClaudeCliPath,
   claudeLoginEnvironmentFrom,
 } from "./claudeLoginDriver.ts";
 import { GATEWAY_ENABLED, GATEWAY_RELAY } from "./config.ts";
 import {
-  claudeConfigDir,
+  claudeCredentialFileExists,
   claudeProfileEnvironment,
   credentialProfileById,
+  credentialProfileLoginStateMark,
   credentialProfilesOfKind,
   setClaudeStoredLoginPresence,
 } from "./credentialProfiles.ts";
@@ -25,9 +24,14 @@ const POLL_MS = 30_000;
 const supportsKeychain = () =>
   process.platform === "darwin" && !GATEWAY_ENABLED && !GATEWAY_RELAY;
 
-/** Re-check one profile after login, without exporting its Keychain credential. */
+/**
+ * Re-check one profile without exporting its Keychain credential. Callers join
+ * a probe already running; `fresh` instead queues a new one behind it, for an
+ * answer observed after the call (a login child that just closed).
+ */
 export async function refreshClaudeCredentialStatus(
   profileId: string,
+  { fresh = false }: { fresh?: boolean } = {},
 ): Promise<void> {
   if (
     !supportsKeychain() ||
@@ -35,21 +39,28 @@ export async function refreshClaudeCredentialStatus(
   )
     return;
   const existing = pending.get(profileId);
-  if (existing) return existing;
-  const check = probe(profileId);
+  if (existing && !fresh) return existing;
+  // Queued, not parallel: an earlier probe can never overwrite a later answer.
+  const check = existing
+    ? existing.then(() => probe(profileId))
+    : probe(profileId);
   pending.set(profileId, check);
   try {
     await check;
   } finally {
-    pending.delete(profileId);
+    if (pending.get(profileId) === check) pending.delete(profileId);
   }
 }
 
 async function probe(profileId: string): Promise<void> {
-  if (existsSync(join(claudeConfigDir(profileId), ".credentials.json"))) {
+  // A queued probe may start after the profile was deleted: its directory
+  // must not be recreated.
+  if (credentialProfileById(profileId)?.provider !== "claude") return;
+  if (claudeCredentialFileExists(profileId)) {
     setClaudeStoredLoginPresence(profileId, false);
     return;
   }
+  const observed = credentialProfileLoginStateMark(profileId);
   try {
     const result = await brokerExecFile({
       file: bundledClaudeCliPath(),
@@ -68,6 +79,7 @@ async function probe(profileId: string): Promise<void> {
     setClaudeStoredLoginPresence(
       profileId,
       !result.error && status.loggedIn && status.authMethod === "claude.ai",
+      observed,
     );
   } catch {
     // Never log CLI output/errors: they can contain account-identifying data.
