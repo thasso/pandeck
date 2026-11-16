@@ -132,6 +132,131 @@ test("signed out: the fragment is cleared before any request, the code waits in 
   expect(dialog()).toBeNull();
 });
 
+test("same-document enrollment navigation opens approval in the mounted gateway", async () => {
+  signedIn = true;
+  await render("/");
+
+  await act(async () => {
+    window.history.pushState(null, "", `/#enroll=${CODE}`);
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  await act(async () => {});
+
+  expect(window.location.hash).toBe("");
+  expect(sessionStorage.getItem(STORAGE_KEY)).toBe(CODE);
+  expect(dialog()?.textContent).toContain(
+    "Enroll devbox-7 for person@example.org?",
+  );
+  expect(decisions()).toEqual([]);
+  expect(
+    sent().filter((call) => call.url === "/api/enrollments/lookup"),
+  ).toEqual([
+    {
+      url: "/api/enrollments/lookup",
+      method: "POST",
+      body: JSON.stringify({ userCode: CODE }),
+    },
+  ]);
+  for (const call of sent()) expect(call.url).not.toContain(CODE);
+});
+
+test("signed-out same-document navigation stores the code without looking it up", async () => {
+  await render("/");
+  await act(async () => {
+    window.history.pushState(null, "", `/#enroll=${CODE}`);
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+
+  expect(window.location.hash).toBe("");
+  expect(sessionStorage.getItem(STORAGE_KEY)).toBe(CODE);
+  expect(host.textContent).toContain("A machine is waiting for your approval");
+  expect(
+    sent().filter((call) => call.url === "/api/enrollments/lookup"),
+  ).toEqual([]);
+});
+
+test("a malformed later fragment is cleared without opening approval", async () => {
+  signedIn = true;
+  await render("/");
+  await act(async () => {
+    window.history.pushState(null, "", "/#enroll=invalid");
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+
+  expect(window.location.hash).toBe("");
+  expect(sessionStorage.getItem(STORAGE_KEY)).toBeNull();
+  expect(dialog()).toBeNull();
+  expect(
+    sent().filter((call) => call.url === "/api/enrollments/lookup"),
+  ).toEqual([]);
+});
+
+test("replacing an enrollment ignores the previous lookup completion", async () => {
+  let rejectFirst!: (error: Error) => void;
+  const firstLookup = new Promise<never>((_resolve, reject) => {
+    rejectFirst = reject;
+  });
+  fetchMock.mockImplementation((input, init) => {
+    if (String(input) === "/api/enrollments/lookup") {
+      const body = JSON.parse(String(init?.body)) as { userCode: string };
+      return body.userCode === CODE
+        ? firstLookup.then(() => answer(500))
+        : Promise.resolve(lookupAnswer());
+    }
+    return Promise.resolve(
+      String(input) === "/api/me" ? answer(200, ME) : answer(200, {}),
+    );
+  });
+  signedIn = true;
+  sessionStorage.setItem(STORAGE_KEY, CODE);
+  await render("/");
+  await act(async () => {
+    window.history.pushState(null, "", "/#enroll=JKLM-NPQR");
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  rejectFirst(new Error("stale lookup"));
+  await act(async () => {});
+
+  expect(sessionStorage.getItem(STORAGE_KEY)).toBe("JKLM-NPQR");
+  expect(dialog()?.textContent).toContain(
+    "Enroll devbox-7 for person@example.org?",
+  );
+  expect(
+    sent().filter((call) => call.url === "/api/enrollments/lookup"),
+  ).toHaveLength(2);
+  expect(decisions()).toEqual([]);
+});
+
+test("replacing an enrollment ignores the previous decision completion", async () => {
+  let finishDecision!: (response: Response) => void;
+  const originalFetch = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation((input, init) =>
+    String(input) === "/api/enrollments/decide"
+      ? new Promise<Response>((resolve) => {
+          finishDecision = resolve;
+        })
+      : originalFetch(input, init),
+  );
+  signedIn = true;
+  sessionStorage.setItem(STORAGE_KEY, CODE);
+  await render("/");
+  await click("Approve");
+
+  await act(async () => {
+    window.history.pushState(null, "", "/#enroll=JKLM-NPQR");
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  finishDecision(answer(204));
+  await act(async () => {});
+
+  expect(sessionStorage.getItem(STORAGE_KEY)).toBe("JKLM-NPQR");
+  expect(dialog()?.textContent).toContain(
+    "Enroll devbox-7 for person@example.org?",
+  );
+  expect(decisions()).toHaveLength(1);
+});
+
 test("after sign-in the stored code opens the dialog: code to compare, labelled claims, source, age, consequences; no decision without a click", async () => {
   sessionStorage.setItem(STORAGE_KEY, CODE);
   signedIn = true;

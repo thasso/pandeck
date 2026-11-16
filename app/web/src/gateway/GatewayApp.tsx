@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   decodeGatewayUiMe,
   GATEWAY_UI_CSRF_HEADER,
@@ -66,6 +66,14 @@ export function GatewayApp({
 }) {
   // A machine's `#enroll=` code leaves the address before the first fetch.
   const [enrollCode, setEnrollCode] = useState(takeEnrollmentCode);
+  useEffect(() => {
+    const onHashChange = () => {
+      const code = takeEnrollmentCode();
+      if (code) setEnrollCode(code);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
   const { state } = useFetchState("me", fetchMe);
   const [signingOut, setSigningOut] = useState(false);
   const signedIn =
@@ -166,6 +174,7 @@ export function GatewayApp({
       />
       {page.kind === "signedIn" && enrollCode ? (
         <GatewayEnrollApproval
+          key={enrollCode}
           userCode={enrollCode}
           email={page.me.email}
           lookup={lookupEnrollment}

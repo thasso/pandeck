@@ -133,13 +133,24 @@ export function GatewayEnrollApproval({
   const [error, setError] = useState<string | null>(null);
   // One lookup per code, also under StrictMode's repeated effects.
   const looked = useRef<string | null>(null);
+  const active = useRef(true);
+
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (looked.current === userCode) return;
     looked.current = userCode;
     lookup(userCode).then(
-      (request) => setView({ kind: "found", request }),
+      (request) => {
+        if (active.current) setView({ kind: "found", request });
+      },
       (err: unknown) => {
+        if (!active.current) return;
         forgetEnrollmentCode();
         setView({ kind: "failed", message: refusalText(err) });
       },
@@ -152,10 +163,12 @@ export function GatewayEnrollApproval({
     setError(null);
     decide(userCode, approve).then(
       () => {
+        if (!active.current) return;
         forgetEnrollmentCode();
         setView({ kind: "decided", approved: approve });
       },
       (err: unknown) => {
+        if (!active.current) return;
         setBusy(null);
         if (err instanceof GatewayApiError && err.code === "unknown_request") {
           forgetEnrollmentCode();
@@ -206,7 +219,7 @@ export function GatewayEnrollApproval({
                 match and you started this enrollment.
               </span>
             </div>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
               <dt className="text-muted-foreground">Name, as reported</dt>
               <dd className="break-all">{view.request.name}</dd>
               <dt className="text-muted-foreground">Kind, as reported</dt>
