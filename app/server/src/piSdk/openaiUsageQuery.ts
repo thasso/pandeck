@@ -257,11 +257,24 @@ function classifyWindow(
   return "unknown";
 }
 
+/**
+ * null only when the response states no such window (null or omitted); a slot
+ * present in another shape is an unclassified window of unknown usage, so it
+ * can never pass as proof that a cap is absent.
+ */
 function mapWindow(
   raw: unknown,
   label: string | null,
 ): OpenAiUsageWindow | null {
-  if (!raw || typeof raw !== "object") return null;
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object")
+    return {
+      kind: "unknown",
+      label,
+      usedPercent: null,
+      windowSeconds: null,
+      resetsAt: null,
+    };
   const w = raw as Record<string, unknown>;
   const windowSeconds = numberOrNull(w.limit_window_seconds);
   return {

@@ -212,6 +212,35 @@ test("unknown windows, unavailable limits and rolled-over cycles are not fresh h
     );
   }
 });
+test("a window the fresh snapshot does not report is room, not unknown usage", () => {
+  // Default Claude: both windows known with room, weekly resets later.
+  const known = account("a-known", 46, 90, 68);
+  // Claude Private: no 5-hour window reported, weekly resets sooner.
+  const no5h = account("b-no-5h", null, 3, 41);
+  no5h.usage!.short = null;
+  assert.equal(rank([known, no5h]).profileId, no5h.profile.id);
+  const noWeekly = account("b-no-weekly", 10, null, 41);
+  noWeekly.usage!.long = null;
+  assert.equal(
+    rank([noWeekly, account("z-spent", 95)]).profileId,
+    "b-no-weekly",
+  );
+  // The absent window carries no reset, so a known earlier reset still wins.
+  assert.equal(rank([noWeekly, account("z-fresh")]).profileId, "z-fresh");
+  // Stale or unavailable usage never turns an absent window into room.
+  const stale = account("c-stale");
+  stale.usage!.short = null;
+  stale.usage!.fetchedAt = now - USAGE_STALE_MS["openai-codex"];
+  assert.equal(rank([stale, account("z-fresh")]).profileId, "z-fresh");
+  const unavailable = account("c-unavailable");
+  unavailable.usage!.short = null;
+  unavailable.usage!.limitsAvailable = false;
+  assert.equal(rank([unavailable, account("z-fresh")]).profileId, "z-fresh");
+  // The absent window still lets the other one exhaust the account.
+  const spent = account("c-spent", null, 95);
+  spent.usage!.short = null;
+  assert.equal(rank([spent, stale]).profileId, stale.profile.id);
+});
 test("malformed cached percentages cannot count as fresh headroom", () => {
   const malformed = account("a-malformed", NaN);
   assert.equal(rank([malformed, account("z-fresh")]).profileId, "z-fresh");

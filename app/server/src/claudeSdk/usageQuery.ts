@@ -92,10 +92,15 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/**
+ * null only when the response states no such window (null or omitted); a slot
+ * present in another shape is a window whose usage is unknown, never "no cap".
+ */
 function mapLimitWindow(
   raw: unknown,
 ): { utilizationPct: number | null; resetsAt: string | null } | null {
-  if (!raw || typeof raw !== "object") return null;
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") return { utilizationPct: null, resetsAt: null };
   const w = raw as Record<string, unknown>;
   return {
     utilizationPct: numberOrNull(w.utilization),

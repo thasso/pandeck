@@ -482,9 +482,24 @@ interface ProviderProjection {
   long: UsageIndicatorWindow | null;
 }
 
+/**
+ * A slot is null ONLY when the provider proves the window absent, which
+ * routing reads as "no such cap"; anything less certain is a window of
+ * unknown usage. That keeps parsing gaps out of the headroom tier.
+ */
+const UNKNOWN_WINDOW: UsageIndicatorWindow = { usedPct: null, resetsAt: null };
+
 function projectClaude(snapshot: ClaudeUsageSnapshot): ProviderProjection {
   if (!snapshot.rateLimitsAvailable)
     return { limitsAvailable: false, short: null, long: null };
+  // Limits with no window at all prove nothing about either cap (the gateway
+  // refuses that shape for the same reason).
+  if (!snapshot.fiveHour && !snapshot.weekly)
+    return {
+      limitsAvailable: true,
+      short: UNKNOWN_WINDOW,
+      long: UNKNOWN_WINDOW,
+    };
   return {
     limitsAvailable: true,
     short: snapshot.fiveHour
@@ -507,12 +522,17 @@ function projectOpenAi(snapshot: OpenAiUsageSnapshot): ProviderProjection {
     return { limitsAvailable: false, short: null, long: null };
   // The plain plan windows carry no label; named model caps (e.g. "Codex
   // Spark") belong to the Usage page's detail, not to a two-row card.
+  // A missing kind is "no such cap" only when every plan window was
+  // classified; an empty or unclassifiable response proves nothing.
+  const plan = snapshot.windows.filter((window) => !window.label);
+  const absenceProven =
+    plan.length > 0 && plan.every((window) => window.kind !== "unknown");
   const pick = (kind: "five_hour" | "weekly") => {
     const matches = snapshot.windows.filter((window) => window.kind === kind);
     const window = matches.find((item) => !item.label) ?? matches[0];
-    return window
-      ? { usedPct: window.usedPercent, resetsAt: window.resetsAt }
-      : null;
+    if (window)
+      return { usedPct: window.usedPercent, resetsAt: window.resetsAt };
+    return absenceProven ? null : UNKNOWN_WINDOW;
   };
   return {
     limitsAvailable: true,

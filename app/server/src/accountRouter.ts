@@ -113,15 +113,20 @@ function usageRank(
   now: number,
 ): { tier: number; weeklyReset: number; fiveHourUsed: number } {
   const usage = candidate.usage;
-  const shortPct = usage ? usageWindowPct(usage.short, now) : null;
-  const longPct = usage ? usageWindowPct(usage.long, now) : null;
-  const short =
-    shortPct !== null && Number.isFinite(shortPct) ? shortPct : null;
-  const long = longPct !== null && Number.isFinite(longPct) ? longPct : null;
   const fresh =
     usage &&
     usage.limitsAvailable &&
     usageIndicatorState(usage, now) === "fresh";
+  // The usage projection reports a null window only when the provider proved
+  // it absent ("no 5h limit"): with fresh usage that is room, not unknown
+  // usage. Unproven absence arrives as a window of unknown percent instead.
+  const windowPct = (window: UsageIndicator["short"]): number | null => {
+    if (fresh && window === null) return 0;
+    const pct = usageWindowPct(window, now);
+    return pct !== null && Number.isFinite(pct) ? pct : null;
+  };
+  const short = usage ? windowPct(usage.short) : null;
+  const long = usage ? windowPct(usage.long) : null;
   const exhausted =
     (short !== null && short >= thresholds.fiveHourUsedThreshold) ||
     (long !== null && long >= thresholds.weeklyUsedThreshold);
