@@ -6,6 +6,12 @@
  * by its fingerprint too. A client's MCP token (Task-1397) is likewise kept
  * only as its SHA-256.
  *
+ * A machine can also enroll by approval (Task-1410): it starts a request
+ * with its public key and the hash of the MCP token it generated, a signed-in
+ * user approves or denies it once by its user code, and the machine collects
+ * its certificate with its request id. The first collect stores the issued
+ * (public) certificate on the request, so a repeat answers it unchanged.
+ *
  * A user signs in to the gateway's page (Task-1402) with an OIDC identity,
  * issuer plus subject; the email is an attribute. An operator's claim binds
  * the next admitted sign-in with that email to an existing user once.
@@ -15,7 +21,12 @@
  * read-modify-rename, including code redemption. A crashed writer leaves its
  * lock behind and fails closed until an operator removes it.
  */
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomInt,
+  timingSafeEqual,
+} from "node:crypto";
 import {
   closeSync,
   mkdirSync,
@@ -28,6 +39,31 @@ import { createPrivateJsonFile } from "../privateJsonFile.ts";
 
 /** How long an enrollment code stays valid. */
 export const ENROLLMENT_CODE_TTL_MS = 15 * 60_000;
+/** How long an enrollment request is open, decided or not. */
+export const ENROLLMENT_REQUEST_TTL_MS = 10 * 60_000;
+/**
+ * How long a request's record stays after it expires, so a machine that lost
+ * its collect's answer can poll it again.
+ */
+export const ENROLLMENT_REQUEST_RETAIN_MS = 10 * 60_000;
+/** Open requests at most from one source address. */
+export const MAX_OPEN_REQUESTS_PER_SOURCE = 4;
+/** Open requests at most in all. */
+export const MAX_OPEN_REQUESTS = 64;
+/**
+ * Live records at most: each open request's record lives for its TTL plus
+ * the retention, twice the TTL, so admission keeps the table within twice
+ * the open bound. Checked as well, against a clock that went back.
+ */
+export const MAX_LIVE_REQUESTS = 2 * MAX_OPEN_REQUESTS;
+const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
+const USER_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{43}$/;
+
+/** Whether `text` has the shape of a request id: 32 bytes in base64url. */
+export function isRequestId(text: unknown): text is string {
+  return typeof text === "string" && REQUEST_ID_RE.test(text);
+}
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_LABEL = 200;
 const MAX_EMAIL = 254;
@@ -61,6 +97,32 @@ interface PendingCode {
   expiresAt: number;
 }
 
+/** What a machine asking to enroll says it is; only ever displayed. */
+export type EnrollmentKind = "devbox" | "laptop" | "other";
+
+/**
+ * A machine's pending enrollment (Task-1410): started on the enrollment port,
+ * decided once in the gateway page, collected by the machine with its
+ * `requestId`. Only the hashes of the request id and user code are kept.
+ */
+interface EnrollmentRequest {
+  idHash: string;
+  userCodeHash: string;
+  /** The machine's public key, as SPKI PEM. */
+  publicKeyPem: string;
+  /** Hex SHA-256 of the MCP token the machine generated. */
+  mcpTokenHash: string;
+  name: string;
+  kind: EnrollmentKind;
+  /** The address the request came from. */
+  from: string;
+  createdAt: number;
+  expiresAt: number;
+  decision?: { userId: string; at: number } | "denied";
+  /** The client the first collect created; the certificate is public. */
+  issued?: { clientId: string; certificatePem: string };
+}
+
 /** An operator's `user claim`: binds the next admitted sign-in once. */
 interface PendingClaim {
   userId: string;
@@ -85,6 +147,8 @@ interface Stored {
   accounts: AccountOwner[];
   /** Absent in a file an older build wrote; read as empty. */
   claims?: PendingClaim[];
+  /** Absent in a file an older build wrote; read as empty. */
+  requests?: EnrollmentRequest[];
 }
 
 const empty = (): Stored => ({
@@ -141,6 +205,32 @@ function hashOf(code: string): string {
 
 const HASH_RE = /^[a-f0-9]{64}$/;
 
+/** Whether `text` has the shape of a stored hash: 64 lowercase hex. */
+export function isHash(text: unknown): text is string {
+  return typeof text === "string" && HASH_RE.test(text);
+}
+
+/** Whether the stored hash equals `hash`, in constant time; malformed is no. */
+function hashEquals(stored: unknown, hash: Buffer): boolean {
+  return isHash(stored) && timingSafeEqual(Buffer.from(stored, "hex"), hash);
+}
+
+/**
+ * The user code without its dash, spaces or case, if it can be one: 8 letters
+ * of the code alphabet.
+ */
+function normalUserCode(text: string): string | undefined {
+  const code = text.replace(/[\s-]/g, "").toUpperCase();
+  return USER_CODE_RE.test(code) ? code : undefined;
+}
+
+function newUserCode(): string {
+  let code = "";
+  for (let i = 0; i < 8; i++)
+    code += USER_CODE_ALPHABET[randomInt(USER_CODE_ALPHABET.length)];
+  return code;
+}
+
 /**
  * Whether `token` is the client's MCP token. A stored hash that is not 64
  * hex characters counts as none.
@@ -171,7 +261,9 @@ export class ClientRegistryLockedError extends Error {
  * Bounds on a user's enrollment codes, checked where a code is issued: at
  * most `maxPendingCodes` unexpired codes, and active clients plus unexpired
  * codes at most `maxClients`. A pending code reserves a client's place, so
- * redeeming every code keeps the user within `maxClients`.
+ * redeeming every code keeps the user within `maxClients`. An approved,
+ * uncollected, unexpired enrollment request counts as a pending code, both
+ * where a code is issued and where a request is approved.
  */
 export interface EnrollmentLimits {
   maxPendingCodes: number;
@@ -183,6 +275,68 @@ export class EnrollmentLimitError extends Error {
   constructor() {
     super("The user has too many clients or unused enrollment codes.");
   }
+}
+
+/** What `startRequest` gets from the enrollment port, already checked. */
+interface EnrollmentRequestStart {
+  publicKeyPem: string;
+  mcpTokenHash: string;
+  name: string;
+  kind: EnrollmentKind;
+  from: string;
+}
+
+/**
+ * A started request, or why none was: `source_limit` for too many open
+ * requests from that address, `capacity` for too many in all.
+ */
+type StartOutcome =
+  | { ok: true; requestId: string; userCode: string; expiresAt: number }
+  | { ok: false; reason: "source_limit" | "capacity" };
+
+/** What the gateway page shows of an undecided request. */
+interface EnrollmentRequestView {
+  name: string;
+  kind: EnrollmentKind;
+  from: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** A decision's outcome; `unknown` covers decided and expired requests too. */
+type DecideOutcome = "approved" | "denied" | "unknown" | "limit";
+
+/** What a collect answers the machine. */
+export type CollectOutcome =
+  | {
+      status: "approved";
+      clientId: string;
+      certificatePem: string;
+      /** Whether this collect created the client. */
+      first: boolean;
+    }
+  | { status: "pending" | "denied" | "expired" | "revoked" | "unknown" };
+
+/** The client and certificate `collect` asks its caller to issue. */
+interface IssuedCertificate {
+  clientId: string;
+  certificatePem: string;
+  fingerprint: string;
+}
+
+/** The user an approval bound, if the request was approved. */
+function approverOf(request: EnrollmentRequest): string | undefined {
+  const decision = request.decision;
+  return typeof decision === "object" &&
+    decision !== null &&
+    typeof decision.userId === "string"
+    ? decision.userId
+    : undefined;
+}
+
+/** The user code as the machine shows it: `XXXX-XXXX`. */
+function displayUserCode(code: string): string {
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
 }
 
 export class ClientRegistry {
@@ -218,7 +372,8 @@ export class ClientRegistry {
         !Array.isArray(value.users) ||
         !Array.isArray(value.clients) ||
         !Array.isArray(value.codes) ||
-        !Array.isArray(value.accounts)
+        !Array.isArray(value.accounts) ||
+        (value.requests !== undefined && !Array.isArray(value.requests))
       )
         throw new Error("Invalid gateway client registry.");
       this.seenFile = true;
@@ -262,6 +417,10 @@ export class ClientRegistry {
         state.claims = (state.claims ?? []).filter(
           (claim) => claim.expiresAt > this.now(),
         );
+        if (state.requests)
+          state.requests = state.requests.filter((request) =>
+            this.live(request),
+          );
         this.file.write(state);
         this.seenFile = true;
       }
@@ -383,20 +542,8 @@ export class ClientRegistry {
     if (!this.user(userId)) throw new Error(`No user ${userId}.`);
     const code = randomBytes(18).toString("base64url");
     this.change((state) => {
-      if (limits) {
-        const now = this.now();
-        const pending = state.codes.filter(
-          (c) => c.userId === userId && c.expiresAt > now,
-        ).length;
-        const active = state.clients.filter(
-          (c) => c.userId === userId && c.revokedAt === undefined,
-        ).length;
-        if (
-          pending >= limits.maxPendingCodes ||
-          active + pending >= limits.maxClients
-        )
-          throw new EnrollmentLimitError();
-      }
+      if (limits && this.overLimits(state, userId, limits))
+        throw new EnrollmentLimitError();
       state.codes.push({
         hash: hashOf(code),
         userId,
@@ -434,6 +581,270 @@ export class ClientRegistry {
         return client;
       },
       (client) => client !== undefined,
+    );
+  }
+
+  /**
+   * Opens an enrollment request for a machine (Task-1410), unless that
+   * address has `MAX_OPEN_REQUESTS_PER_SOURCE` open requests or all have
+   * `MAX_OPEN_REQUESTS` (or the table `MAX_LIVE_REQUESTS` live records); a
+   * refusal writes nothing. Answers the request id, the machine's secret for
+   * collecting, and the user code, shown to a person; only their hashes are
+   * kept. A request is open until it expires, decided or not.
+   */
+  startRequest(start: EnrollmentRequestStart): StartOutcome {
+    return this.change(
+      (state): StartOutcome => {
+        const now = this.now();
+        const requests = (state.requests ??= []);
+        const live = requests.filter((request) => this.live(request));
+        const open = live.filter((request) => request.expiresAt > now);
+        if (
+          open.filter((request) => request.from === start.from).length >=
+          MAX_OPEN_REQUESTS_PER_SOURCE
+        )
+          return { ok: false, reason: "source_limit" };
+        if (
+          open.length >= MAX_OPEN_REQUESTS ||
+          live.length >= MAX_LIVE_REQUESTS
+        )
+          return { ok: false, reason: "capacity" };
+        const taken = (field: "idHash" | "userCodeHash", value: string) => {
+          const hash = Buffer.from(hashOf(value), "hex");
+          return live.some((request) => hashEquals(request[field], hash));
+        };
+        let requestId: string;
+        do requestId = randomBytes(32).toString("base64url");
+        while (taken("idHash", requestId));
+        let userCode: string;
+        do userCode = newUserCode();
+        while (taken("userCodeHash", userCode));
+        const expiresAt = now + ENROLLMENT_REQUEST_TTL_MS;
+        requests.push({
+          idHash: hashOf(requestId),
+          userCodeHash: hashOf(userCode),
+          publicKeyPem: start.publicKeyPem,
+          mcpTokenHash: start.mcpTokenHash,
+          name: label(start.name),
+          kind: start.kind,
+          from: start.from,
+          createdAt: now,
+          expiresAt,
+        });
+        return {
+          ok: true,
+          requestId,
+          userCode: displayUserCode(userCode),
+          expiresAt,
+        };
+      },
+      (outcome) => outcome.ok,
+    );
+  }
+
+  /**
+   * What the page shows of the undecided, unexpired request with this user
+   * code (dash, spaces and case ignored); undefined for any other. Read-only.
+   */
+  enrollmentRequest(userCode: string): EnrollmentRequestView | undefined {
+    const request = this.undecided(this.load(), userCode);
+    return request
+      ? {
+          name: request.name,
+          kind: request.kind,
+          from: request.from,
+          createdAt: request.createdAt,
+          expiresAt: request.expiresAt,
+        }
+      : undefined;
+  }
+
+  /**
+   * Decides the undecided, unexpired request with this user code, once: the
+   * first decision wins, rechecked under the lock. An approval binds `userId`
+   * and, with `limits`, counts against them as a pending code (`limit`, and
+   * nothing written, past them). A miss is read-only. Throws for an unknown
+   * user.
+   */
+  decide(
+    userCode: string,
+    userId: string,
+    approve: boolean,
+    limits?: EnrollmentLimits,
+  ): DecideOutcome {
+    if (!this.undecided(this.load(), userCode)) return "unknown";
+    return this.change(
+      (state): DecideOutcome => {
+        if (!state.users.some((user) => user.id === userId))
+          throw new Error(`No user ${userId}.`);
+        const request = this.undecided(state, userCode);
+        if (!request) return "unknown";
+        if (!approve) {
+          request.decision = "denied";
+          return "denied";
+        }
+        if (limits && this.overLimits(state, userId, limits)) return "limit";
+        request.decision = { userId, at: this.now() };
+        return "approved";
+      },
+      (outcome) => outcome === "approved" || outcome === "denied",
+    );
+  }
+
+  /**
+   * The hash of the live request with this id, a key for its poll limiter;
+   * undefined when there is none. Read-only.
+   */
+  knownRequest(requestId: string): string | undefined {
+    return this.requestById(this.load(), requestId)?.idHash;
+  }
+
+  /**
+   * The machine's collect: `pending`, `denied` or `expired` while it can't
+   * be collected, read-only. The first collect of an approved, unexpired
+   * request asks `issue` for a client id and a certificate of the request's
+   * key and, in one change, records the client with the request's MCP token
+   * hash and the certificate on the request. Every later collect answers that
+   * same certificate without writing, while the client is active, else
+   * `revoked`. Each is rechecked under the lock. A collect never changes a
+   * client's MCP token. A throwing `issue` or a failed write leaves the file
+   * as it was. `unknown` once the record is swept.
+   */
+  collect(
+    requestId: string,
+    issue: (publicKeyPem: string) => IssuedCertificate,
+  ): CollectOutcome {
+    const seen = this.requestById(this.load(), requestId);
+    if (!seen) return { status: "unknown" };
+    const waiting = this.waiting(seen);
+    if (waiting) return { status: waiting };
+    const { outcome } = this.change(
+      (state): { outcome: CollectOutcome; created: boolean } => {
+        const request = this.requestById(state, requestId);
+        if (!request) return { outcome: { status: "unknown" }, created: false };
+        const waiting = this.waiting(request);
+        if (waiting) return { outcome: { status: waiting }, created: false };
+        const done = request.issued;
+        if (done) {
+          const client = state.clients.find((c) => c.id === done.clientId);
+          return {
+            outcome:
+              client && client.revokedAt === undefined
+                ? {
+                    status: "approved",
+                    clientId: done.clientId,
+                    certificatePem: done.certificatePem,
+                    first: false,
+                  }
+                : { status: "revoked" },
+            created: false,
+          };
+        }
+        const userId = approverOf(request)!;
+        const issued = issue(request.publicKeyPem);
+        if (state.clients.some((client) => client.id === issued.clientId))
+          throw new Error("Client id already enrolled.");
+        state.clients.push({
+          id: issued.clientId,
+          userId,
+          label: label(request.name),
+          fingerprint: issued.fingerprint,
+          createdAt: this.now(),
+          mcpTokenHash: request.mcpTokenHash,
+        });
+        request.issued = {
+          clientId: issued.clientId,
+          certificatePem: issued.certificatePem,
+        };
+        return {
+          outcome: {
+            status: "approved",
+            clientId: issued.clientId,
+            certificatePem: issued.certificatePem,
+            first: true,
+          },
+          created: true,
+        };
+      },
+      (answer) => answer.created,
+    );
+    return outcome;
+  }
+
+  /** Whether the request's record is kept: until its retention ends. */
+  private live(request: EnrollmentRequest): boolean {
+    return (
+      typeof request.expiresAt === "number" &&
+      request.expiresAt + ENROLLMENT_REQUEST_RETAIN_MS > this.now()
+    );
+  }
+
+  private undecided(
+    state: Stored,
+    userCode: string,
+  ): EnrollmentRequest | undefined {
+    const code = normalUserCode(userCode);
+    if (!code) return undefined;
+    const hash = Buffer.from(hashOf(code), "hex");
+    const now = this.now();
+    return state.requests?.find(
+      (request) =>
+        request.expiresAt > now &&
+        request.decision === undefined &&
+        hashEquals(request.userCodeHash, hash),
+    );
+  }
+
+  private requestById(
+    state: Stored,
+    requestId: string,
+  ): EnrollmentRequest | undefined {
+    if (!isRequestId(requestId)) return undefined;
+    const hash = Buffer.from(hashOf(requestId), "hex");
+    return state.requests?.find(
+      (request) => this.live(request) && hashEquals(request.idHash, hash),
+    );
+  }
+
+  /**
+   * Why a request can't be collected now, or undefined when it can: issued
+   * (answered again until swept), or approved and unexpired.
+   */
+  private waiting(
+    request: EnrollmentRequest,
+  ): "pending" | "denied" | "expired" | undefined {
+    if (request.issued !== undefined) return undefined;
+    if (!(request.expiresAt > this.now())) return "expired";
+    if (request.decision === "denied") return "denied";
+    if (approverOf(request) === undefined) return "pending";
+    return undefined;
+  }
+
+  /**
+   * Whether one more pending code would take `userId` past `limits`: its
+   * unexpired codes and approved, uncollected, unexpired requests are
+   * pending, and count with its active clients.
+   */
+  private overLimits(
+    state: Stored,
+    userId: string,
+    limits: EnrollmentLimits,
+  ): boolean {
+    const now = this.now();
+    const pending =
+      state.codes.filter((c) => c.userId === userId && c.expiresAt > now)
+        .length +
+      (state.requests ?? []).filter(
+        (r) =>
+          r.expiresAt > now &&
+          r.issued === undefined &&
+          approverOf(r) === userId,
+      ).length;
+    const active = state.clients.filter(
+      (c) => c.userId === userId && c.revokedAt === undefined,
+    ).length;
+    return (
+      pending >= limits.maxPendingCodes || active + pending >= limits.maxClients
     );
   }
 
