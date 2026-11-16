@@ -265,6 +265,12 @@ async function startUi(fake = fakeAccounts()) {
       revokeMcpToken: () => {
         throw new ClientsRefusal("unknown_client");
       },
+      enrollment: () => {
+        throw new ClientsRefusal("unknown_request");
+      },
+      decideEnrollment: () => {
+        throw new ClientsRefusal("unknown_request");
+      },
     },
     log: (line) => logs.push(line),
     now: () => clock,

@@ -4,7 +4,10 @@
  * - the enrollment port, HTTPS with the edge's server certificate and no
  *   client certificate: `POST /enroll {code, publicKeyPem}` uses up a
  *   one-time code and answers `{clientId, certificatePem, caPem, modelPort,
- *   clientPort}`;
+ *   clientPort}`; an optional `mcpTokenHash` becomes the client's MCP token.
+ *   With `approvalOrigin` (Task-1410), `POST /enroll/start` opens a request
+ *   for the page to approve and `POST /enroll/poll {requestId}` collects it,
+ *   answering the same fields (`enrollmentApproval.ts`);
  * - the model port, HTTP over mutual TLS, the same routes as the loopback
  *   listener through a forwarder that spends only the calling client's
  *   leases;
@@ -69,6 +72,8 @@ import {
 import {
   ClientRegistry,
   ClientRegistryLockedError,
+  ENROLLMENT_REQUEST_TTL_MS,
+  isHash,
   mcpTokenMatches,
   newClientId,
   type GatewayClient,
@@ -104,6 +109,12 @@ import {
 import { refusalResponse } from "./refusals.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { StateWriteError } from "./state.ts";
+import {
+  POLL_ADVICE_SECONDS,
+  PollLimiter,
+  decodePoll,
+  decodeStart,
+} from "./enrollmentApproval.ts";
 import {
   clientPublicKey,
   edgeTlsFor,
@@ -155,6 +166,12 @@ export interface ClientListenerOptions {
   modelPort?: number;
   clientPort?: number;
   enrollPort?: number;
+  /**
+   * The gateway page's public origin. With it the enrollment port also
+   * serves approval enrollment (`/enroll/start`, `/enroll/poll`), whose link
+   * points there; without it both are unknown paths.
+   */
+  approvalOrigin?: string;
 }
 
 interface ClientListenerDeps {
@@ -924,6 +941,172 @@ export async function startClientListener(
     }
     return ++entry.count <= ENROLL_ATTEMPTS;
   };
+  const approvalOrigin = options.approvalOrigin?.replace(/\/+$/, "");
+  const polls = new PollLimiter();
+  const sourceOf = (req: http.IncomingMessage): string =>
+    req.socket.remoteAddress ?? "unknown";
+  const refuseAttempts = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void => {
+    res.setHeader("retry-after", "60");
+    res.setHeader("connection", "close");
+    req.resume();
+    json(res, 429, { error: "too many enrollment attempts" });
+  };
+  /** The JSON body within `MAX_ENROLL_BYTES`; undefined when not JSON. */
+  const readBody = (
+    req: http.IncomingMessage,
+    then: (body: unknown) => void,
+  ): void => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_ENROLL_BYTES) req.destroy();
+      else chunks.push(chunk);
+    });
+    req.on("end", () => {
+      let body: unknown;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+      } catch {
+        body = undefined;
+      }
+      then(body);
+    });
+  };
+  const enrolled = (
+    res: http.ServerResponse,
+    clientId: string,
+    certificatePem: string,
+  ): void =>
+    json(res, 200, {
+      clientId,
+      certificatePem,
+      caPem: edgeTls.caCertPem,
+      ...ports,
+    });
+  /** A new client id and its certificate for a request's stored key. */
+  const issueFor = (publicKeyPem: string) => {
+    const publicKey = clientPublicKey(publicKeyPem);
+    if (!publicKey) throw new Error("The request's key is not EC P-256.");
+    const clientId = newClientId();
+    return {
+      clientId,
+      ...issueClientCertificate(edgeTls, clientId, publicKey),
+    };
+  };
+
+  /** `POST /enroll`: a typed one-time code. */
+  const redeemCode = (
+    body: unknown,
+    _req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void => {
+    const fields = (body ?? {}) as Record<string, unknown>;
+    const code = fields.code;
+    const publicKey =
+      typeof fields.publicKeyPem === "string"
+        ? clientPublicKey(fields.publicKeyPem)
+        : undefined;
+    if (typeof code !== "string" || !publicKey)
+      return json(res, 400, { error: "code and an EC P-256 key needed" });
+    const mcpTokenHash = fields.mcpTokenHash;
+    if (mcpTokenHash !== undefined && !isHash(mcpTokenHash))
+      return json(res, 400, { error: "malformed MCP token hash" });
+    let certificatePem = "";
+    const client = registry.redeem(code, ({ userId, label }) => {
+      const id = newClientId();
+      const issued = issueClientCertificate(edgeTls, id, publicKey);
+      certificatePem = issued.certificatePem;
+      return {
+        id,
+        userId,
+        label,
+        fingerprint: issued.fingerprint,
+        createdAt: now(),
+        ...(mcpTokenHash !== undefined ? { mcpTokenHash } : {}),
+      };
+    });
+    if (!client) {
+      log("enrollment refused: unknown, used or expired code");
+      return json(res, 403, { error: "unknown, used or expired code" });
+    }
+    log(`enrolled client ${client.id} for user ${client.userId}`);
+    enrolled(res, client.id, certificatePem);
+  };
+
+  /** `POST /enroll/start`: a machine asks to be approved. */
+  const startRequest = (
+    body: unknown,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void => {
+    const start = decodeStart(body);
+    if (!start)
+      return json(res, 400, {
+        error: "an EC P-256 key, an MCP token hash and a name needed",
+      });
+    const outcome = registry.startRequest({ ...start, from: sourceOf(req) });
+    if (!outcome.ok) {
+      res.setHeader("retry-after", "60");
+      return outcome.reason === "source_limit"
+        ? json(res, 429, { error: "too many open enrollment requests" })
+        : json(res, 503, { error: "enrollment requests full" });
+    }
+    log("enrollment request started");
+    json(res, 200, {
+      requestId: outcome.requestId,
+      userCode: outcome.userCode,
+      verificationUri: `${approvalOrigin}/#enroll=${outcome.userCode}`,
+      expiresInSeconds: ENROLLMENT_REQUEST_TTL_MS / 1000,
+      intervalSeconds: POLL_ADVICE_SECONDS,
+    });
+  };
+
+  /**
+   * `POST /enroll/poll`: the machine collects its decision. A malformed or
+   * unknown id costs a per-source attempt and allocates nothing else; a known
+   * one is limited per request.
+   */
+  const pollRequest = (
+    body: unknown,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void => {
+    const requestId = decodePoll(body);
+    const key =
+      requestId === undefined ? undefined : registry.knownRequest(requestId);
+    if (requestId === undefined || key === undefined) {
+      if (!admitEnrollment(sourceOf(req))) return refuseAttempts(req, res);
+      return requestId === undefined
+        ? json(res, 400, { error: "requestId needed" })
+        : json(res, 404, { error: "unknown request" });
+    }
+    if (!polls.admit(key, now())) {
+      res.setHeader("retry-after", String(POLL_ADVICE_SECONDS));
+      return json(res, 429, { error: "slow_down" });
+    }
+    const outcome = registry.collect(requestId, issueFor);
+    switch (outcome.status) {
+      case "approved":
+        if (outcome.first)
+          log(`enrolled client ${outcome.clientId} by approval`);
+        return enrolled(res, outcome.clientId, outcome.certificatePem);
+      case "pending":
+        return json(res, 202, { status: "pending" });
+      case "denied":
+        return json(res, 403, { error: "denied" });
+      case "expired":
+        return json(res, 410, { error: "expired" });
+      case "revoked":
+        return json(res, 410, { error: "revoked" });
+      case "unknown":
+        return json(res, 404, { error: "unknown request" });
+    }
+  };
+
   const enroll = https.createServer(
     {
       key: edgeTls.serverKeyPem,
@@ -935,63 +1118,25 @@ export async function startClientListener(
     },
     (req, res) => {
       req.on("error", () => {});
-      if (req.method !== "POST" || req.url !== "/enroll")
-        return json(res, 404, { error: "not found" });
-      if (!admitEnrollment(req.socket.remoteAddress ?? "unknown")) {
-        res.setHeader("retry-after", "60");
-        res.setHeader("connection", "close");
-        req.resume();
-        return json(res, 429, { error: "too many enrollment attempts" });
-      }
-      const chunks: Buffer[] = [];
-      let size = 0;
-      req.on("data", (chunk: Buffer) => {
-        size += chunk.length;
-        if (size > MAX_ENROLL_BYTES) req.destroy();
-        else chunks.push(chunk);
-      });
-      req.on("end", () => {
+      const route =
+        req.method !== "POST"
+          ? undefined
+          : req.url === "/enroll"
+            ? redeemCode
+            : req.url === "/enroll/start"
+              ? approvalOrigin === undefined
+                ? undefined
+                : startRequest
+              : req.url === "/enroll/poll"
+                ? pollRequest
+                : undefined;
+      if (!route) return json(res, 404, { error: "not found" });
+      // A poll is limited once its id is read: per request when known.
+      if (route !== pollRequest && !admitEnrollment(sourceOf(req)))
+        return refuseAttempts(req, res);
+      readBody(req, (body) => {
         try {
-          let body: Record<string, unknown> | undefined;
-          try {
-            body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
-              string,
-              unknown
-            >;
-          } catch {
-            body = undefined;
-          }
-          const code = body?.code;
-          const publicKey =
-            typeof body?.publicKeyPem === "string"
-              ? clientPublicKey(body.publicKeyPem)
-              : undefined;
-          if (typeof code !== "string" || !publicKey)
-            return json(res, 400, { error: "code and an EC P-256 key needed" });
-          let certificatePem = "";
-          const client = registry.redeem(code, ({ userId, label }) => {
-            const id = newClientId();
-            const issued = issueClientCertificate(edgeTls, id, publicKey);
-            certificatePem = issued.certificatePem;
-            return {
-              id,
-              userId,
-              label,
-              fingerprint: issued.fingerprint,
-              createdAt: now(),
-            };
-          });
-          if (!client) {
-            log("enrollment refused: unknown, used or expired code");
-            return json(res, 403, { error: "unknown, used or expired code" });
-          }
-          log(`enrolled client ${client.id} for user ${client.userId}`);
-          json(res, 200, {
-            clientId: client.id,
-            certificatePem,
-            caPem: edgeTls.caCertPem,
-            ...ports,
-          });
+          route(body, req, res);
         } catch (err) {
           if (!(err instanceof ClientRegistryLockedError))
             log("enrollment failed: client registry unavailable");

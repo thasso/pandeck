@@ -1774,6 +1774,74 @@ path above.
   reads its code from stdin, or from `--code-file <0600 file>`. Never put the
   code in argv or a shell command. For example, redirect a protected code file
   into stdin rather than using `echo <code>`.
+- **Approval enrollment** (Task-1410, `gateway/enrollmentApproval.ts`). With the
+  gateway's page configured, `gatewayEdge.ts` passes its `publicOrigin` to the
+  listener (`approvalOrigin`) and machines can enroll by an approval on the page
+  instead of a code.
+  `POST /enroll/start {publicKeyPem, mcpTokenHash, name, kind?}` (an EC P-256
+  key; the SHA-256 of the machine's MCP token as 64 lowercase hex; a name of
+  1-64 shown characters, no control or format characters; `kind` `devbox`,
+  `laptop` or `other`, the default) answers
+  `{requestId, userCode, verificationUri, expiresInSeconds: 600, intervalSeconds: 5}`,
+  with `verificationUri` `<publicOrigin>/#enroll=<userCode>`: the code only in
+  the fragment, the request id nowhere in it. A malformed body is 400; without
+  the page, `/enroll/start` is 404 like an unknown path. `requestId` (32 random
+  bytes) is the machine's secret for collecting; `userCode` (8 letters of
+  `BCDFGHJKLMNPQRSTVWXZ`, shown `XXXX-XXXX`) is what a person compares.
+  `clients.json` keeps only their SHA-256 hashes, in an optional `requests` list
+  that older builds keep and ignore.
+  - Admission: a start costs a per-source attempt (above). A source address has
+    at most 4 open requests (429) and the edge 64 (503); open means undecided or
+    approved and not collected, and unexpired. Denied, collected and expired
+    requests free their slot, but at most 256 records are retained in all (503
+    at the cap, nothing written). A request expires 600 s after its start,
+    decided or not; its record is swept 600 s after that.
+  - Decision: only the page's (below). The first decision wins; an approval
+    binds the session's user and counts as one of the page's pending codes
+    (bounds below), both ways, under the registry's lock.
+  - `POST /enroll/poll {requestId}` works with or without the page, so an
+    approved request is still collected after a restart that dropped it. It
+    answers 202 `{status: "pending"}`, 200
+    `{clientId, certificatePem, caPem, modelPort, clientPort}`, 403 `denied`,
+    410 `expired` (not collected in time), 410 `revoked` or 404 (unknown or
+    swept). A known request polled faster than every 4 s answers 429 `slow_down`
+    with `retry-after: 5`. A malformed or unknown id costs a per-source attempt
+    and allocates nothing per request. The per-request limiter holds at most 256
+    entries; after many collected requests are swept at once, a stale entry can
+    cause one extra `slow_down` for at most its remaining 4 s.
+  - Collect: the first one issues the certificate for the request's key and, in
+    one locked change, adds the client with the request's MCP token hash and
+    keeps the certificate (public) on the request; a failed issue or write
+    leaves no client. Every later poll until the sweep answers the same client
+    id and a byte-identical certificate, also after a restart, and writes
+    nothing. A collect never sets, restores or replaces a token, so a revoke or
+    replacement from the page or admin CLI stays in force; once the client is
+    revoked, a repeated collect answers 410 `revoked`, checked under the lock.
+  - A lost answer is recovered by polling again until the record is swept, up to
+    1,200 s after the start. After that, or when the machine lost its key or
+    token, the orphan client shows in the user's list: revoke it there and
+    enroll again.
+  - Logs: `enrollment request started` and `enrolled client <id> by approval`,
+    never a request id, user code, token hash or key.
+- **MCP token at enrollment** (Task-1410), on both paths: the relay makes its
+  token (`pgmcp_` and 32 random bytes from `randomBytes`, the format the page
+  mints), sends only its SHA-256 as `mcpTokenHash` with `/enroll/start` or
+  `/enroll`, and writes it to `mcp-token` (0600) beside its key, certificate, CA
+  and `edge.json`, all only after a 200. The token's plaintext never crosses the
+  network during enrollment and no enrollment answer holds one; `/mcp` still
+  receives it as the bearer token, and the page's Replace still answers a new
+  one. The gateway cannot check the machine's randomness from a hash, as it
+  cannot check its private key's. `/enroll` without `mcpTokenHash` enrolls a
+  tokenless client as before; such callers are not migrated.
+- **Relay approval mode.**
+  `gateway:relay enroll --approve --name <text> [--kind devbox|laptop|other] --state-dir <dir> --gateway <host:port> --ca <pem file>`
+  prints the link and the code, nothing secret, and waits. It polls every
+  `intervalSeconds`, 5 s longer after each 429; after a 5xx or a network error
+  it waits 5 s, doubling to 60 s, until a poll is answered again. Every
+  enrollment request (both paths) has a 15 s deadline. It gives up 630 s after
+  the start (`expiresInSeconds` + 30 s, its own deadline, shorter than the
+  record's 1,200 s retention), on `denied`, `expired`, `revoked` or an unknown
+  request (exit 1), or on Ctrl-C (exit 130), writing nothing in each case.
 - **Client ids.** A client's id, its certificate's CN, is `c_` and 16 random
   base64url characters, so it never starts with `-`. Ids enrolled before the
   prefix keep their shape; one that starts with `-` goes after `--` on the admin
@@ -1947,7 +2015,8 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   `clients list` shows `mcp=yes|no`. Revoking the token or the client takes
   effect on the next request. The token identifies the client and so its user.
   The gateway's page mints, replaces and revokes a user's own clients' tokens
-  over the same registry (Task-1405, below).
+  over the same registry (Task-1405, below). A relay enrolled by either path
+  brings its own token from enrollment (Client mode, MCP token at enrollment).
 - **Integration credentials.** The user's Atlassian site, email and API token
   are entered in Pandeck's Settings → Jira or on the gateway's page (Task-1405,
   below; any `<name>.atlassian.net`), both through the edge's user-scoped seam
@@ -2189,14 +2258,44 @@ data, never in a build; `GATEWAY_DEV_GENERIC=1` drops the Atlassian preset).
   - A revoke on the page takes effect at once, as the listener's own revocation:
     the client's protocol connections end, its mutual-TLS sockets (relay,
     `/mcp`) close, its running logins are cancelled and its leases revoked; its
-    accounts stay with the user. The machine enrolls again with a new code. The
-    250 ms poll still applies CLI revocations.
+    accounts stay with the user. The machine enrolls again with a new code or
+    approval. The 250 ms poll still applies CLI revocations.
   - A code or MCP token exists outside its hash only in the answer that creates
     it (`no-store`): the page shows it once in a dialog with a Copy button and
     drops it on Done. Every secret travels in a POST body or its answer, never a
     URL. The page asks before every client revoke, every token revoke and a
     token replacement, and before clearing the credential; its token field is a
     password field, emptied once saved.
+- **Enrollment requests** (Task-1410). A machine's link
+  `<publicOrigin>/#enroll=<code>` carries the user code only in the fragment,
+  which no browser sends. Before its first request the page moves the code to
+  `sessionStorage` and clears the fragment with `history.replaceState`, so the
+  code survives the sign-in round trip in that tab and is in no request line,
+  redirect or log. Behind the session, the user only from it:
+  `POST /api/enrollments/lookup {userCode}` →
+  `{name, kind, from, createdAt, expiresAt}` of an undecided, unexpired request;
+  `POST /api/enrollments/decide {userCode, approve}` → 204, approving for the
+  session's user or denying. Refusals: `404 unknown_request` (unknown, decided
+  or expired), `409 limit_reached` (an approval past the page bounds),
+  `400 bad_request`, `429 rate_limited` with `retry-after`.
+  - Budget (`gatewayWeb/enrollmentBudget.ts`, in memory, reset by a restart):
+    lookup and decide share one per user, whichever session sends them, 10
+    well-formed calls a minute and 60 an hour. Unknown codes across all users
+    are capped at 120 an hour; past that every lookup and decide is refused for
+    everyone until the oldest miss is an hour old. That bounds guessing the 20^8
+    codes, at a cost: two signed-in users spending their misses block approvals
+    for an hour. It does not protect against malicious signed-in users. Storage
+    holds only users who called in the last hour.
+  - The dialog shows the code to compare with the machine's, the name and kind
+    labelled as the machine's own report, the source address, the request's age
+    and expiry, and what approving gives: a client in the user's name with their
+    accounts, Jira credential and the machine's MCP token. It decides only on a
+    click of Approve or Deny; closing it decides nothing. Every outcome drops
+    the stored code.
+  - Phishing remains possible: anyone who reaches the enrollment port can start
+    a request with any name and send its link. The code comparison, the labelled
+    claims, the address, the age, the consequence text and the 10 minute expiry
+    mitigate it.
 - **Logs.** Only `ui sign-in: ok user=<id> (existing|created|bound)`,
   `ui sign-in: denied`,
   `ui sign-in: failed (discovery|exchange|keys|signature|claims|state|registry)`
@@ -2204,8 +2303,11 @@ data, never in a build; `GATEWAY_DEV_GENERIC=1` drops the Atlassian preset).
   `ui clients: code created user=<id>`,
   `ui clients: client <id> revoked user=<id>`,
   `ui clients: client <id> mcp token minted|revoked user=<id>` and
-  `ui integration atlassian: set|cleared user=<id>`, beside the login manager's
-  own `login <id> (account <id>): <state>`; never an email, code, state, nonce,
+  `ui integration atlassian: set|cleared user=<id>`,
+  `ui enrollments: request approved|denied user=<id>`,
+  `ui enrollments: refused, budget spent|miss cap reached user=<id>` and
+  `ui enrollments: miss cap reached`, beside the login manager's own
+  `login <id> (account <id>): <state>`; never an email, code, state, nonce,
   verifier, token, cookie, secret, query, pasted code, login URL or output.
   Provider error text is never echoed.
 - **Packaged entry (Task-1401).** Both edge entries start the UI through

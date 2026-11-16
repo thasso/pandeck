@@ -134,6 +134,12 @@ const NO_CLIENTS: GatewayWebClients = {
   revokeMcpToken: () => {
     throw new ClientsRefusal("unknown_client");
   },
+  enrollment: () => {
+    throw new ClientsRefusal("unknown_request");
+  },
+  decideEnrollment: () => {
+    throw new ClientsRefusal("unknown_request");
+  },
 };
 
 /** Sign-in tests touch no account: every account call is refused. */

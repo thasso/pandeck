@@ -20,6 +20,7 @@ import {
   ENROLLMENT_CODE_TTL_MS,
   EnrollmentLimitError,
   type ClientRegistry,
+  type EnrollmentKind,
   type EnrollmentLimits,
   type GatewayClient,
 } from "./clientRegistry.ts";
@@ -45,7 +46,11 @@ export type UserAccountRecord = LoginProfile & { userId: string };
 /** A refused user operation: a fixed code, never request or upstream text. */
 export class UserOperationRefusal extends Error {
   constructor(
-    readonly code: IntegrationFailure | "unknown_client" | "limit_reached",
+    readonly code:
+      | IntegrationFailure
+      | "unknown_client"
+      | "limit_reached"
+      | "unknown_request",
   ) {
     super(code);
   }
@@ -53,7 +58,9 @@ export class UserOperationRefusal extends Error {
 
 /**
  * The bounds on codes the page issues (the admin CLI's are unbounded): four
- * unused codes, and sixteen active clients counting those codes.
+ * unused codes, and sixteen active clients counting those codes. An approved
+ * enrollment request not yet collected counts as an unused code, both where
+ * a code is issued and where a request is approved (Task-1410).
  */
 const PAGE_ENROLLMENT_LIMITS: EnrollmentLimits = {
   maxPendingCodes: 4,
@@ -66,6 +73,15 @@ interface UserClient {
   label: string;
   createdAt: number;
   mcpToken: boolean;
+}
+
+/** What the page shows of a machine's pending enrollment request. */
+interface PendingEnrollment {
+  name: string;
+  kind: EnrollmentKind;
+  from: string;
+  createdAt: number;
+  expiresAt: number;
 }
 
 /** What Atlassian said about a credential that works. */
@@ -113,7 +129,13 @@ interface UserOperationsDeps {
   checkSignal(): AbortSignal;
   registry: Pick<
     ClientRegistry,
-    "clients" | "createCode" | "revoke" | "setMcpToken" | "clearMcpToken"
+    | "clients"
+    | "createCode"
+    | "revoke"
+    | "setMcpToken"
+    | "clearMcpToken"
+    | "enrollmentRequest"
+    | "decide"
   >;
   /**
    * A client was revoked: its connections end and its logins and leases go
@@ -184,6 +206,17 @@ export interface UserOperations {
     userId: string,
     label: string,
   ): { code: string; validForSeconds: number };
+  /**
+   * The undecided, unexpired enrollment request with this user code, for the
+   * user to decide (`unknown_request` otherwise). Read-only.
+   */
+  enrollmentRequest(userId: string, userCode: string): PendingEnrollment;
+  /**
+   * Approves the request for the user, within the page's limits
+   * (`limit_reached`), or denies it; the first decision wins
+   * (`unknown_request` for a decided, expired or unknown one).
+   */
+  decideEnrollment(userId: string, userCode: string, approve: boolean): void;
   /** Revokes the user's client (`unknown_client` if not theirs or active). */
   revokeClient(userId: string, clientId: string): void;
   /** Mints the client's MCP token, replacing any earlier one; shown once. */
@@ -385,6 +418,22 @@ export function createUserOperations(deps: UserOperationsDeps): UserOperations {
           throw new UserOperationRefusal("limit_reached");
         throw err;
       }
+    },
+    enrollmentRequest(_userId, userCode) {
+      const request = deps.registry.enrollmentRequest(userCode);
+      if (!request) throw new UserOperationRefusal("unknown_request");
+      return request;
+    },
+    decideEnrollment(userId, userCode, approve) {
+      const outcome = deps.registry.decide(
+        userCode,
+        userId,
+        approve,
+        PAGE_ENROLLMENT_LIMITS,
+      );
+      if (outcome === "unknown")
+        throw new UserOperationRefusal("unknown_request");
+      if (outcome === "limit") throw new UserOperationRefusal("limit_reached");
     },
     revokeClient(userId, clientId) {
       const client = ownedClient(userId, clientId);

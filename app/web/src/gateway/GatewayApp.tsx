@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   decodeGatewayUiMe,
   GATEWAY_UI_CSRF_HEADER,
@@ -11,15 +11,21 @@ import { useFetchState } from "../hooks/useFetchState.ts";
 import {
   clearAtlassian,
   createEnrollmentCode,
+  decideEnrollment,
   fetchAccounts,
   fetchAtlassian,
   fetchClients,
+  lookupEnrollment,
   mintMcpToken,
   removeAccount,
   revokeClient,
   revokeMcpToken,
   setAtlassian,
 } from "./gatewayApi.ts";
+import {
+  GatewayEnrollApproval,
+  takeEnrollmentCode,
+} from "./GatewayEnrollApproval.tsx";
 import { GatewayPage, type GatewayPageState } from "./GatewayPage.tsx";
 import { useGatewayLogin } from "./useGatewayLogin.ts";
 
@@ -58,6 +64,16 @@ export function GatewayApp({
   /** After sign-out; tests observe it. */
   reload?: () => void;
 }) {
+  // A machine's `#enroll=` code leaves the address before the first fetch.
+  const [enrollCode, setEnrollCode] = useState(takeEnrollmentCode);
+  useEffect(() => {
+    const onHashChange = () => {
+      const code = takeEnrollmentCode();
+      if (code) setEnrollCode(code);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
   const { state } = useFetchState("me", fetchMe);
   const [signingOut, setSigningOut] = useState(false);
   const signedIn =
@@ -120,6 +136,14 @@ export function GatewayApp({
       .then(reload);
   }, [reload]);
 
+  const closeEnrollment = useCallback(
+    (approved: boolean) => {
+      setEnrollCode(null);
+      if (approved) reloadClients();
+    },
+    [reloadClients],
+  );
+
   const signin = signinCode(window.location.search);
   const page: GatewayPageState =
     state.status === "error"
@@ -127,21 +151,37 @@ export function GatewayApp({
       : state.status === "ready" || state.status === "refreshing"
         ? state.data
           ? { kind: "signedIn", me: state.data }
-          : { kind: "signedOut", ...(signin ? { signin } : {}) }
+          : {
+              kind: "signedOut",
+              ...(signin ? { signin } : {}),
+              ...(enrollCode ? { enrollmentWaiting: true } : {}),
+            }
         : { kind: "loading" };
 
   return (
-    <GatewayPage
-      state={page}
-      onSignOut={signOut}
-      signingOut={signingOut}
-      accounts={{ accounts, login, remove }}
-      atlassian={{
-        status: atlassian,
-        save: saveAtlassian,
-        clear: removeAtlassian,
-      }}
-      clients={clientsProps}
-    />
+    <>
+      <GatewayPage
+        state={page}
+        onSignOut={signOut}
+        signingOut={signingOut}
+        accounts={{ accounts, login, remove }}
+        atlassian={{
+          status: atlassian,
+          save: saveAtlassian,
+          clear: removeAtlassian,
+        }}
+        clients={clientsProps}
+      />
+      {page.kind === "signedIn" && enrollCode ? (
+        <GatewayEnrollApproval
+          key={enrollCode}
+          userCode={enrollCode}
+          email={page.me.email}
+          lookup={lookupEnrollment}
+          decide={decideEnrollment}
+          onClose={closeEnrollment}
+        />
+      ) : null}
+    </>
   );
 }

@@ -209,6 +209,12 @@ function fakeSettings() {
     },
     revokeMcpToken: (userId, clientId) =>
       record("revokeMcpToken", userId, clientId),
+    enrollment: (userId, userCode) => {
+      record("enrollment", userId, userCode);
+      throw new ClientsRefusal("unknown_request");
+    },
+    decideEnrollment: (userId, userCode, approve) =>
+      record("decideEnrollment", userId, userCode, approve),
   };
   return {
     integrations,

@@ -18,6 +18,8 @@ Contract: `docs/workers.md` "The gateway's sign-in and UI".
   browser gets a login's fixed reason code, never driver or vault text.
 - An enrollment code or MCP token appears only in the answer that creates it;
   the Atlassian token in no answer.
+- A machine's enrollment request is decided only by its session's click. Its
+  user code travels only in a URL fragment or a POST body.
 - Refusals and log lines are fixed. No secret, code, state, nonce, verifier,
   token, cookie or email in a log line, a refusal body or a redirect back to the
   gateway; only the provider authorization redirect carries state, nonce and the

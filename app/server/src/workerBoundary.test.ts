@@ -536,6 +536,8 @@ const GATEWAY_EDGE = [
   "compatUpstream",
   "control",
   "controlMethods",
+  // Approval enrollment's bodies and poll limiter (Task-1410).
+  "enrollmentApproval",
   "forward",
   "leases",
   "logins",

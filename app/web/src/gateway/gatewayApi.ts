@@ -3,14 +3,15 @@
  * session cookie and, on every POST, the CSRF header. No Pandeck token and no
  * `serverOrigin`. Answers are checked with the shared decoders; any other
  * answer is a `GatewayApiError` carrying the status and the fixed code.
- * Secrets (the Atlassian token, enrollment codes, MCP tokens) travel only in
- * POST bodies and their answers, never in a URL.
+ * Secrets (the Atlassian token, enrollment codes, MCP tokens) and a machine's
+ * user code travel only in POST bodies and their answers, never in a URL.
  */
 import {
   decodeGatewayUiAccounts,
   decodeGatewayUiAtlassian,
   decodeGatewayUiClients,
   decodeGatewayUiEnrollmentCode,
+  decodeGatewayUiEnrollmentRequest,
   decodeGatewayUiLogin,
   decodeGatewayUiLoginStart,
   decodeGatewayUiMcpToken,
@@ -20,6 +21,7 @@ import {
   type GatewayUiAtlassianSetRequest,
   type GatewayUiClient,
   type GatewayUiEnrollmentCode,
+  type GatewayUiEnrollmentRequest,
   type GatewayUiError,
   type GatewayUiLogin,
   type GatewayUiLoginStart,
@@ -172,4 +174,20 @@ export async function mintMcpToken(
 
 export async function revokeMcpToken(clientId: string): Promise<void> {
   await post("/api/clients/mcp-token/revoke", { clientId });
+}
+
+/** The machine's pending request for this user code (Task-1410). */
+export async function lookupEnrollment(
+  userCode: string,
+): Promise<GatewayUiEnrollmentRequest> {
+  const response = await post("/api/enrollments/lookup", { userCode });
+  return decoded(decodeGatewayUiEnrollmentRequest(await response.json()));
+}
+
+/** Approves or denies it for the signed-in user; the first decision wins. */
+export async function decideEnrollment(
+  userCode: string,
+  approve: boolean,
+): Promise<void> {
+  await post("/api/enrollments/decide", { userCode, approve });
 }

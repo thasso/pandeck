@@ -9,11 +9,15 @@
  * - A Unix socket (0600, the relay's account) for the client protocol: each
  *   accepted connection is piped byte for byte to the edge's client port.
  *
- * `enrollRelay` makes the key with `node:crypto`, redeems a one-time code at
- * the edge's enrollment port and keeps key, certificate, CA and the edge's
- * ports in the state directory, the key 0600. Imports only `node:` modules.
+ * `enrollRelay` makes the key and the MCP token with `node:crypto`, redeems a
+ * one-time code at the edge's enrollment port with the public key and the
+ * token's hash, and keeps key, certificate, CA, the edge's ports and the token
+ * (`mcp-token`) in the state directory, every file 0600.
+ * `enrollRelayByApproval` (Task-1410) does the same through a request the
+ * user approves in the gateway page instead of a code. Imports only `node:`
+ * modules.
  */
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -27,12 +31,17 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import tls from "node:tls";
 
 const KEY_FILE = "client-key.pem";
 const CERT_FILE = "client-cert.pem";
 const CA_FILE = "gateway-ca.pem";
 const EDGE_FILE = "edge.json";
+/** The machine's MCP token, for the agents on this machine; never sent. */
+const MCP_TOKEN_FILE = "mcp-token";
+/** Every enrollment request's deadline, connect to last byte. */
+const ENROLL_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_ENROLL_ANSWER_BYTES = 64 * 1024;
 
 /** Where the edge listens, as the relay's state names it. */
@@ -78,35 +87,83 @@ function writePrivate(path: string, text: string): void {
   chmodSync(path, 0o600);
 }
 
-export interface RelayEnrollment {
-  stateDir: string;
-  /** The edge's host and enrollment port. */
-  host: string;
-  enrollPort: number;
-  /** The gateway's CA, PEM: the only trust root for the edge. */
-  caPem: string;
-  code: string;
+/**
+ * What this machine makes for an enrollment: its key pair and its MCP token
+ * (`pgmcp_` and 32 random bytes, base64url, the format of the page's minted
+ * tokens). Only the public key and the token's SHA-256 leave the machine.
+ */
+interface MachineSecrets {
+  privateKeyPem: string;
+  publicKeyPem: string;
+  mcpToken: string;
+  mcpTokenHash: string;
 }
 
-/** Enrolls this relay: answers the client id the gateway assigned. */
-export async function enrollRelay(options: RelayEnrollment): Promise<string> {
+function machineSecrets(): MachineSecrets {
   const { privateKey, publicKey } = generateKeyPairSync("ec", {
     namedCurve: "prime256v1",
   });
-  const body = JSON.stringify({
-    code: options.code,
-    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
-  });
-  const answer = await new Promise<unknown>((resolve, reject) => {
+  const mcpToken = `pgmcp_${randomBytes(32).toString("base64url")}`;
+  return {
+    privateKeyPem: privateKey.export({
+      type: "pkcs8",
+      format: "pem",
+    }) as string,
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }) as string,
+    mcpToken,
+    mcpTokenHash: createHash("sha256").update(mcpToken, "utf8").digest("hex"),
+  };
+}
+
+/** An answer of the enrollment port: its status, `retry-after` and JSON. */
+interface EnrollAnswer {
+  status: number;
+  retryAfterSeconds: number | undefined;
+  body: unknown;
+}
+
+interface EnrollTarget {
+  host: string;
+  enrollPort: number;
+  caPem: string;
+}
+
+/**
+ * POSTs a JSON body to the enrollment port. Rejects on a network error, when
+ * the answer has not fully arrived within `timeoutMs`, or when `signal`
+ * aborts (with its reason). A body that is not JSON reads as undefined.
+ */
+function postEnroll(
+  target: EnrollTarget,
+  path: string,
+  json: object,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<EnrollAnswer> {
+  const body = JSON.stringify(json);
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  return new Promise<EnrollAnswer>((resolve, reject) => {
+    const fail = (err: Error) => {
+      const reason: unknown = signal?.aborted ? signal.reason : undefined;
+      reject(
+        reason instanceof Error
+          ? reason
+          : deadline.aborted
+            ? new Error("The gateway did not answer in time.")
+            : err,
+      );
+    };
     const request = https.request(
       {
-        host: options.host,
-        port: options.enrollPort,
-        ...tlsName(options.host),
-        ca: options.caPem,
+        host: target.host,
+        port: target.enrollPort,
+        ...tlsName(target.host),
+        ca: target.caPem,
         method: "POST",
-        path: "/enroll",
+        path,
         agent: false,
+        signal: bounded,
         headers: {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(body),
@@ -117,31 +174,48 @@ export async function enrollRelay(options: RelayEnrollment): Promise<string> {
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
-          if (size > MAX_ENROLL_ANSWER_BYTES) response.destroy();
+          if (size > MAX_ENROLL_ANSWER_BYTES)
+            response.destroy(
+              new Error("The gateway's enrollment answer is too large."),
+            );
           else chunks.push(chunk);
         });
         response.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          if (response.statusCode !== 200) {
-            reject(
-              new Error(
-                `The gateway refused the enrollment (${response.statusCode}).`,
-              ),
-            );
-            return;
-          }
+          let parsed: unknown;
           try {
-            resolve(JSON.parse(text));
+            parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
           } catch {
-            reject(new Error("The gateway's enrollment answer is not JSON."));
+            parsed = undefined;
           }
+          const retryAfter = Number(response.headers["retry-after"]);
+          resolve({
+            status: response.statusCode ?? 0,
+            retryAfterSeconds:
+              Number.isFinite(retryAfter) && retryAfter > 0
+                ? retryAfter
+                : undefined,
+            body: parsed,
+          });
         });
-        response.on("error", reject);
+        response.on("error", fail);
       },
     );
-    request.on("error", reject);
+    request.on("error", fail);
     request.end(body);
   });
+}
+
+/**
+ * Writes what an enrollment answered, with the machine's key and MCP token,
+ * into the state directory, every file 0600. Checks the whole answer before
+ * the first write.
+ */
+function writeEnrollment(
+  stateDir: string,
+  host: string,
+  secrets: MachineSecrets,
+  answer: unknown,
+): string {
   const { clientId, certificatePem, caPem, modelPort, clientPort } = (answer ??
     {}) as Record<string, unknown>;
   if (
@@ -152,25 +226,266 @@ export async function enrollRelay(options: RelayEnrollment): Promise<string> {
     !Number.isSafeInteger(clientPort)
   )
     throw new Error("The gateway's enrollment answer is malformed.");
-  mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(options.stateDir, 0o700);
-  writePrivate(
-    join(options.stateDir, KEY_FILE),
-    privateKey.export({ type: "pkcs8", format: "pem" }) as string,
-  );
-  writePrivate(join(options.stateDir, CERT_FILE), certificatePem);
-  writePrivate(join(options.stateDir, CA_FILE), caPem);
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  chmodSync(stateDir, 0o700);
+  writePrivate(join(stateDir, KEY_FILE), secrets.privateKeyPem);
+  writePrivate(join(stateDir, CERT_FILE), certificatePem);
+  writePrivate(join(stateDir, CA_FILE), caPem);
+  writePrivate(join(stateDir, MCP_TOKEN_FILE), `${secrets.mcpToken}\n`);
   const edge: EdgeAddress = {
-    host: options.host,
+    host,
     clientId,
     modelPort: modelPort as number,
     clientPort: clientPort as number,
   };
-  writePrivate(
-    join(options.stateDir, EDGE_FILE),
-    `${JSON.stringify(edge, null, 2)}\n`,
-  );
+  writePrivate(join(stateDir, EDGE_FILE), `${JSON.stringify(edge, null, 2)}\n`);
   return clientId;
+}
+
+export interface RelayEnrollment extends EnrollTarget {
+  stateDir: string;
+  /** The edge's host and enrollment port. */
+  host: string;
+  enrollPort: number;
+  /** The gateway's CA, PEM: the only trust root for the edge. */
+  caPem: string;
+  code: string;
+}
+
+/**
+ * Enrolls this relay with a typed one-time code: answers the client id the
+ * gateway assigned. Sends the MCP token's hash with the code; the files,
+ * `mcp-token` among them, are written only after the gateway answered 200.
+ */
+export async function enrollRelay(options: RelayEnrollment): Promise<string> {
+  const secrets = machineSecrets();
+  const answer = await postEnroll(
+    options,
+    "/enroll",
+    {
+      code: options.code,
+      publicKeyPem: secrets.publicKeyPem,
+      mcpTokenHash: secrets.mcpTokenHash,
+    },
+    ENROLL_REQUEST_TIMEOUT_MS,
+    undefined,
+  );
+  if (answer.status !== 200)
+    throw new Error(`The gateway refused the enrollment (${answer.status}).`);
+  return writeEnrollment(options.stateDir, options.host, secrets, answer.body);
+}
+
+/** What a machine says it is; the page shows it as the machine's claim. */
+export type MachineKind = "devbox" | "laptop" | "other";
+
+/** What the person approving needs: the link and the code. Nothing secret. */
+export interface ApprovalPrompt {
+  verificationUri: string;
+  userCode: string;
+  expiresInSeconds: number;
+}
+
+/** Time for the approval loop; tests pass a virtual one. */
+export interface EnrollClock {
+  now(): number;
+  /** Resolves after `ms`; rejects with the signal's reason when it aborts. */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+}
+
+const REAL_CLOCK: EnrollClock = {
+  now: () => Date.now(),
+  sleep: (ms, signal) =>
+    sleep(ms, undefined, signal ? { signal } : {}).catch((err: unknown) => {
+      throw signal?.aborted ? signal.reason : err;
+    }),
+};
+
+export interface RelayApprovalEnrollment extends EnrollTarget {
+  stateDir: string;
+  /** Shown on the page as the machine's own claim. */
+  name: string;
+  kind?: MachineKind;
+  /** Called once the request is open: show the link and code to a person. */
+  onPrompt(prompt: ApprovalPrompt): void;
+  /** Aborting (SIGINT) stops the wait; nothing is written. */
+  signal?: AbortSignal;
+  /** Test seam: a virtual clock. */
+  clock?: EnrollClock;
+  /** Test seam: a shorter per-request deadline than 15 s. */
+  requestTimeoutMs?: number;
+}
+
+/** A refusal that ends an approval enrollment, with a fixed reason. */
+export class ApprovalEnrollmentError extends Error {
+  constructor(
+    readonly reason:
+      "refused" | "denied" | "expired" | "revoked" | "unknown" | "malformed",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** The first and the longest wait after a 503 or a network error. */
+const BACKOFF_FIRST_MS = 5_000;
+const BACKOFF_MAX_MS = 60_000;
+/** Added to the poll interval on each `slow_down`. */
+const SLOW_DOWN_MS = 5_000;
+/** How long past the request's expiry the machine keeps polling. */
+const DEADLINE_GRACE_MS = 30_000;
+
+function decodeStartAnswer(body: unknown) {
+  const {
+    requestId,
+    userCode,
+    verificationUri,
+    expiresInSeconds,
+    intervalSeconds,
+  } = (body ?? {}) as Record<string, unknown>;
+  if (
+    typeof requestId !== "string" ||
+    typeof userCode !== "string" ||
+    typeof verificationUri !== "string" ||
+    !Number.isSafeInteger(expiresInSeconds) ||
+    (expiresInSeconds as number) <= 0 ||
+    !Number.isSafeInteger(intervalSeconds) ||
+    (intervalSeconds as number) <= 0
+  )
+    throw new ApprovalEnrollmentError(
+      "malformed",
+      "The gateway's enrollment request answer is malformed.",
+    );
+  return {
+    requestId,
+    userCode,
+    verificationUri,
+    expiresInSeconds: expiresInSeconds as number,
+    intervalSeconds: intervalSeconds as number,
+  };
+}
+
+/**
+ * Enrolls this relay by approval in the gateway page (Task-1410): opens a
+ * request with the public key, the MCP token's hash, `name` and `kind`, hands
+ * the link and code to `onPrompt`, then polls until the request is decided.
+ *
+ * Polls every `intervalSeconds` the gateway gave, 5 s longer after each 429
+ * `slow_down`; after a 503 (any 5xx) or a network error it waits 5 s, doubling
+ * to 60 s, until a poll is answered again. Every request has a 15 s deadline.
+ * It gives up `expiresInSeconds` + 30 s after the start, on a denial, an
+ * expired, revoked or unknown request, or when `signal` aborts. Its files
+ * are written only after a 200, so a stopped or refused enrollment leaves
+ * none.
+ */
+export async function enrollRelayByApproval(
+  options: RelayApprovalEnrollment,
+): Promise<string> {
+  const clock = options.clock ?? REAL_CLOCK;
+  const timeoutMs = options.requestTimeoutMs ?? ENROLL_REQUEST_TIMEOUT_MS;
+  const { signal } = options;
+  signal?.throwIfAborted();
+  const secrets = machineSecrets();
+  const started = await postEnroll(
+    options,
+    "/enroll/start",
+    {
+      publicKeyPem: secrets.publicKeyPem,
+      mcpTokenHash: secrets.mcpTokenHash,
+      name: options.name,
+      kind: options.kind ?? "other",
+    },
+    timeoutMs,
+    signal,
+  );
+  if (started.status !== 200)
+    throw new ApprovalEnrollmentError(
+      "refused",
+      `The gateway refused the enrollment request (${started.status}).`,
+    );
+  const start = decodeStartAnswer(started.body);
+  const deadline =
+    clock.now() + start.expiresInSeconds * 1000 + DEADLINE_GRACE_MS;
+  options.onPrompt({
+    verificationUri: start.verificationUri,
+    userCode: start.userCode,
+    expiresInSeconds: start.expiresInSeconds,
+  });
+
+  let interval = start.intervalSeconds * 1000;
+  let backoff = BACKOFF_FIRST_MS;
+  let wait = interval;
+  const expired = () =>
+    new ApprovalEnrollmentError(
+      "expired",
+      "The enrollment request expired before it was approved.",
+    );
+  for (;;) {
+    const left = deadline - clock.now();
+    if (left <= 0) throw expired();
+    await clock.sleep(Math.min(wait, left), signal);
+    const remaining = deadline - clock.now();
+    if (remaining <= 0) throw expired();
+    let answer: EnrollAnswer;
+    try {
+      answer = await postEnroll(
+        options,
+        "/enroll/poll",
+        { requestId: start.requestId },
+        Math.min(timeoutMs, remaining),
+        signal,
+      );
+    } catch (err) {
+      // A cancel ends the wait; a network error or a stall backs off.
+      if (signal?.aborted) throw signal.reason;
+      if (!(err instanceof Error)) throw err;
+      wait = backoff;
+      backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
+      continue;
+    }
+    const error = (answer.body as { error?: unknown } | undefined)?.error;
+    if (answer.status === 200)
+      return writeEnrollment(
+        options.stateDir,
+        options.host,
+        secrets,
+        answer.body,
+      );
+    if (answer.status === 202) {
+      backoff = BACKOFF_FIRST_MS;
+      wait = interval;
+      continue;
+    }
+    if (answer.status === 429) {
+      interval += SLOW_DOWN_MS;
+      wait = Math.max(interval, (answer.retryAfterSeconds ?? 0) * 1000);
+      continue;
+    }
+    if (answer.status >= 500) {
+      wait = backoff;
+      backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
+      continue;
+    }
+    if (answer.status === 403)
+      throw new ApprovalEnrollmentError(
+        "denied",
+        "The enrollment request was denied.",
+      );
+    if (answer.status === 410 && error === "revoked")
+      throw new ApprovalEnrollmentError(
+        "revoked",
+        "The client enrolled by this request was revoked.",
+      );
+    if (answer.status === 410) throw expired();
+    if (answer.status === 404)
+      throw new ApprovalEnrollmentError(
+        "unknown",
+        "The gateway no longer knows this enrollment request.",
+      );
+    throw new ApprovalEnrollmentError(
+      "refused",
+      `The gateway refused the poll (${answer.status}).`,
+    );
+  }
 }
 
 function readIdentity(stateDir: string): RelayIdentity {
