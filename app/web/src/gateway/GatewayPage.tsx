@@ -22,6 +22,8 @@ import {
   type GatewayAtlassianProps,
 } from "./GatewayAtlassian.tsx";
 import { GatewayClients, type GatewayClientsProps } from "./GatewayClients.tsx";
+import logoUrl from "../../public/icon.svg";
+import { LogOut } from "lucide-react";
 
 export type GatewayPageState =
   | { kind: "loading" }
@@ -64,59 +66,76 @@ export function GatewayPage({
   atlassian,
   clients,
 }: GatewayPageProps) {
-  const signedIn = state.kind === "signedIn";
   return (
-    <main className="flex min-h-svh items-center justify-center bg-background p-4 text-foreground">
-      <Card className={signedIn ? "w-full max-w-2xl" : "w-full max-w-md"}>
-        <CardHeader>
-          <CardTitle>Pandeck gateway</CardTitle>
-          <CardDescription>
-            Your accounts, logins and clients for Pandeck.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {state.kind === "loading" ? <PaneLoading /> : null}
-          {state.kind === "unavailable" ? (
-            <ErrorNote message="The gateway cannot answer right now. Reload the page to try again." />
-          ) : null}
-          {state.kind === "signedOut" && state.signin ? (
-            <ErrorNote message={SIGNIN_TEXT[state.signin]} />
-          ) : null}
-          {state.kind === "signedOut" ? (
-            <p className="text-sm text-muted-foreground">
-              Sign in to continue.
-            </p>
-          ) : null}
-          {state.kind === "signedIn" ? (
-            <p className="text-sm">
-              Signed in as <span className="font-medium">{state.me.email}</span>
-            </p>
-          ) : null}
-          {state.kind === "signedIn" && accounts ? (
-            <GatewayAccounts {...accounts} />
-          ) : null}
-          {state.kind === "signedIn" && atlassian ? (
-            <GatewayAtlassian {...atlassian} />
-          ) : null}
-          {state.kind === "signedIn" && clients ? (
-            <GatewayClients {...clients} />
-          ) : null}
-        </CardContent>
+    <div className="flex min-h-svh flex-col bg-background text-foreground">
+      <header className="sticky top-0 z-10 border-b border-border bg-card/80 backdrop-blur">
+        <div className="mx-auto flex h-14 w-full max-w-4xl items-center gap-3 px-4">
+          <img src={logoUrl} alt="" className="size-8 rounded-md" />
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold">Pandeck gateway</span>
+            <span className="text-xs text-muted-foreground">
+              Accounts, logins and clients
+            </span>
+          </div>
+          <div className="ml-auto flex items-center gap-3">
+            {state.kind === "signedIn" ? (
+              <>
+                <span className="hidden text-sm text-muted-foreground sm:inline">
+                  {state.me.email}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  busy={signingOut}
+                  onClick={onSignOut}
+                  aria-label="Sign out"
+                  title="Sign out"
+                >
+                  <LogOut />
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </header>
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-4 py-8">
+        {state.kind === "loading" ? <PaneLoading /> : null}
+        {state.kind === "unavailable" ? (
+          <ErrorNote message="The gateway cannot answer right now. Reload the page to try again." />
+        ) : null}
         {state.kind === "signedOut" ? (
-          <CardFooter>
-            <LinkButton variant="default" size="default" href="/auth/login">
-              Sign in
-            </LinkButton>
-          </CardFooter>
+          <Card className="mx-auto mt-16 w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Sign in</CardTitle>
+              <CardDescription>
+                Your accounts, logins and clients for Pandeck.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {state.signin ? (
+                <ErrorNote message={SIGNIN_TEXT[state.signin]} />
+              ) : null}
+              <p className="text-sm text-muted-foreground">
+                Sign in to continue.
+              </p>
+            </CardContent>
+            <CardFooter>
+              <LinkButton variant="default" size="default" href="/auth/login">
+                Sign in
+              </LinkButton>
+            </CardFooter>
+          </Card>
         ) : null}
-        {state.kind === "signedIn" ? (
-          <CardFooter>
-            <Button variant="outline" busy={signingOut} onClick={onSignOut}>
-              Sign out
-            </Button>
-          </CardFooter>
+        {state.kind === "signedIn" && accounts ? (
+          <GatewayAccounts {...accounts} />
         ) : null}
-      </Card>
-    </main>
+        {state.kind === "signedIn" && atlassian ? (
+          <GatewayAtlassian {...atlassian} />
+        ) : null}
+        {state.kind === "signedIn" && clients ? (
+          <GatewayClients {...clients} />
+        ) : null}
+      </main>
+    </div>
   );
 }

@@ -92,6 +92,23 @@ test("a well-formed file loads, lowercasing the rule", () => {
   });
 });
 
+test("the Atlassian preset is optional and, when given, fixes the site and the sign-in email", () => {
+  assert.equal(loadGatewayWebConfig(fixture().file).atlassian, undefined);
+  const { file } = fixture(
+    (c) =>
+      (c.atlassian = { site: " team.atlassian.net ", emailFromSignIn: true }),
+  );
+  assert.deepEqual(loadGatewayWebConfig(file).atlassian, {
+    site: "team.atlassian.net",
+    emailFromSignIn: true,
+  });
+  const siteOnly = fixture((c) => (c.atlassian = { site: "t.atlassian.net" }));
+  assert.deepEqual(loadGatewayWebConfig(siteOnly.file).atlassian, {
+    site: "t.atlassian.net",
+    emailFromSignIn: false,
+  });
+});
+
 test("the port defaults to 443", () => {
   const { file } = fixture((c) => delete c.port);
   assert.equal(loadGatewayWebConfig(file).port, 443);
@@ -149,6 +166,17 @@ test("each unsafe or incomplete setting refuses with a fixed message", () => {
     ["missing key", (c) => (c.keyFile = "/nonexistent/key.pem"), /keyFile/],
     ["no gateway.html", (c) => (c.distDir = "/nonexistent"), /gateway.html/],
     ["port out of range", (c) => (c.port = 70_000), /port/],
+    ["atlassian not an object", (c) => (c.atlassian = "x"), /atlassian/],
+    [
+      "empty atlassian site",
+      (c) => (c.atlassian = { site: " " }),
+      /atlassian.site/,
+    ],
+    [
+      "emailFromSignIn not a boolean",
+      (c) => (c.atlassian = { emailFromSignIn: "yes" }),
+      /atlassian.emailFromSignIn/,
+    ],
   ];
   for (const [name, change, expected] of cases)
     assert.match(refusal(fixture(change).file), expected, name);

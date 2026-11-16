@@ -6,15 +6,14 @@
  * view Pandeck's Settings uses.
  */
 import { useCallback, useState, type SyntheticEvent } from "react";
-import { LogIn, Plus, Trash2 } from "lucide-react";
+import { RefreshCw, Trash2 } from "lucide-react";
+import { ProviderMark } from "../components/common/ProviderMark.tsx";
 import type {
   GatewayUiAccount,
   GatewayUiProvider,
 } from "@assistant/shared/gatewayUi";
 import { AccountLoginDialogView } from "../components/AccountLoginDialogView.tsx";
 import { ConfirmDialog } from "../components/common/dialogs.tsx";
-import { ListRow } from "../components/common/ListRow.tsx";
-import { ListRowActions } from "../components/common/ListRowActions.tsx";
 import {
   EmptyBox,
   ErrorNote,
@@ -26,6 +25,7 @@ import { Field, FieldLabel } from "../components/ui/field.tsx";
 import { Input } from "../components/ui/input.tsx";
 import type { LoadState } from "../lib/loadState.ts";
 import type { GatewayLogin } from "./useGatewayLogin.ts";
+import { GatewayRow } from "./GatewayRow.tsx";
 
 const PROVIDER_LABEL: Record<GatewayUiProvider, string> = {
   claude: "Claude",
@@ -82,8 +82,13 @@ export function GatewayAccounts({
       : accounts.data;
 
   return (
-    <section aria-label="Accounts" className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">Accounts</h2>
+    <section
+      aria-label="Accounts"
+      className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 shadow-sm"
+    >
+      <h2 className="-mx-5 border-b border-border px-5 pb-3 text-base font-semibold">
+        Accounts
+      </h2>
       {accounts.status === "loading" || accounts.status === "idle" ? (
         <PaneLoading />
       ) : null}
@@ -98,57 +103,53 @@ export function GatewayAccounts({
       {list && list.length > 0 ? (
         <div role="list">
           {list.map((account) => (
-            <ListRow
+            <GatewayRow
               key={account.id}
-              role="listitem"
-              interaction="content"
               title={account.name}
-              details={PROVIDER_LABEL[account.provider]}
-              signals={
+              subtitle={PROVIDER_LABEL[account.provider]}
+              status={
                 account.needsLogin ? (
                   <Badge variant="warning">Needs login</Badge>
-                ) : null
+                ) : (
+                  <Badge variant="success">Connected</Badge>
+                )
               }
-              actions={
-                <ListRowActions
-                  alwaysVisible
-                  label={`${account.name} actions`}
-                  actions={[
-                    {
-                      id: "login",
-                      label: `Log in ${account.name}`,
-                      icon: <LogIn />,
-                      primary: true,
-                      onSelect: () =>
-                        login.open({
-                          provider: account.provider,
-                          accountName: account.name,
-                          accountId: account.id,
-                        }),
-                    },
-                    {
-                      id: "remove",
-                      label: `Remove ${account.name}`,
-                      icon: <Trash2 />,
-                      variant: "destructive",
-                      onSelect: () => {
-                        setRemoveError(null);
-                        setRemoving(account);
-                      },
-                    },
-                  ]}
-                />
-              }
+              primary={{
+                id: "login",
+                label: "Reconnect",
+                icon: <RefreshCw />,
+                onSelect: () =>
+                  login.open({
+                    provider: account.provider,
+                    accountName: account.name,
+                    accountId: account.id,
+                  }),
+              }}
+              primaryEmphasis={account.needsLogin}
+              menuLabel={`More actions for ${account.name}`}
+              menu={[
+                {
+                  id: "remove",
+                  label: "Remove account",
+                  icon: <Trash2 />,
+                  destructive: true,
+                  onSelect: () => {
+                    setRemoveError(null);
+                    setRemoving(account);
+                  },
+                },
+              ]}
             />
           ))}
         </div>
       ) : null}
       <form
-        className="flex flex-col gap-2"
+        className="-mx-5 -mb-5 mt-1 flex flex-col gap-3 rounded-b-xl border-t border-border bg-muted/40 px-5 py-4"
         onSubmit={(event: SyntheticEvent<HTMLFormElement>) =>
           event.preventDefault()
         }
       >
+        <h3 className="text-sm font-semibold">Add an account</h3>
         <Field>
           <FieldLabel htmlFor="gateway-account-name">
             New account name (optional)
@@ -161,18 +162,18 @@ export function GatewayAccounts({
             placeholder="Work"
           />
         </Field>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => add("claude")}>
-            <Plus />
-            Add Claude account
+            <ProviderMark brand="anthropic" />
+            Add Claude
           </Button>
           <Button
             type="button"
             variant="outline"
             onClick={() => add("openai-codex")}
           >
-            <Plus />
-            Add OpenAI account
+            <ProviderMark brand="openai" />
+            Add OpenAI
           </Button>
         </div>
       </form>

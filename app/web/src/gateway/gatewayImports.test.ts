@@ -17,10 +17,12 @@ const ALLOWED = [
   /^\.\/[A-Za-z]+\.tsx?$/,
   /^\.\.\/components\/AccountLoginDialogView\.tsx$/,
   /^\.\.\/components\/ui\/[a-z-]+\.tsx$/,
-  /^\.\.\/components\/common\/(?:load|dialogs|ListRow|ListRowActions|LinkButton|CopyableText)\.tsx$/,
+  /^\.\.\/components\/common\/(?:load|dialogs|OverflowMenu|ProviderMark|LinkButton|CopyableText)\.tsx$/,
   /^\.\.\/hooks\/useFetchState\.ts$/,
   /^\.\.\/lib\/loadState\.ts$/,
   /^\.\.\/index\.css$/,
+  // Emitted as a file (`assetsInlineLimit: 0`), never inlined past the CSP.
+  /^\.\.\/\.\.\/public\/icon\.svg$/,
 ];
 
 test("src/gateway imports only what the gateway bundle may carry", () => {

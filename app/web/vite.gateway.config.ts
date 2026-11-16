@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { webAliases } from "./vite.config.ts";
+import { gatewayDevApi } from "./gatewayDevApi.ts";
 
 /**
  * The gateway's own page (Task-1402, `src/gateway/`): its own entry and
@@ -15,7 +16,8 @@ export default defineConfig(({ command }) => {
   if (command === "serve" && process.env.NODE_ENV === "production")
     process.env.NODE_ENV = "development";
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), gatewayDevApi()],
+    server: { port: 5180, strictPort: true, allowedHosts: [".ts.net"] },
     publicDir: false,
     build: {
       outDir: "dist-gateway",

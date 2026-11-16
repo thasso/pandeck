@@ -2009,8 +2009,12 @@ HTTPS listener on `--bind-host` beside the client listener; without it nothing
 changes. The mutual-TLS ports, the enrollment port and the vault are untouched.
 The page is `app/web/gateway.html`, its own React entry, built by
 `vite.gateway.config.ts` into `app/web/dist-gateway/` (`pnpm run build` builds
-both bundles); it shows "Signed in as <email>", Sign out and the user's Claude
-and ChatGPT accounts, and reaches only its own origin with its session cookie.
+both bundles); under a top bar with the signed-in email and Sign out it shows
+the user's Claude and ChatGPT accounts, Jira credential and clients, and reaches
+only its own origin with its session cookie.
+`pnpm --filter @assistant/web dev:gateway` serves the page on port 5180 over a
+dev-only fake `/api` and `/auth` (`app/web/gatewayDevApi.ts`, in-memory sample
+data, never in a build; `GATEWAY_DEV_GENERIC=1` drops the Atlassian preset).
 
 - **Config.** One JSON file, refused unless mode 0600 (no group or other bits),
   so the client secret stays out of argv. Every refusal is a fixed message
@@ -2044,7 +2048,10 @@ and ChatGPT accounts, and reaches only its own origin with its session cookie.
   browser-trusted pair. The provider's client needs the redirect URI
   `<publicOrigin>/auth/callback`. A Google Workspace deployment, for example,
   uses `https://accounts.google.com` as the issuer, its domain in `emailDomains`
-  and the `hd` claim.
+  and the `hd` claim. An optional
+  `"atlassian": {"site": "team.atlassian.net", "emailFromSignIn": true}` fixes
+  every user's Atlassian site and, with `emailFromSignIn`, binds the credential
+  to the email the user signed in with; either may be given alone.
 
 - **Allow rule.** Admitted only when `email_verified` is the boolean `true`,
   `email` is a string whose lowercased address is in `emails` or whose domain is
@@ -2147,11 +2154,17 @@ and ChatGPT accounts, and reaches only its own origin with its session cookie.
   seam as `gateway-client/1.0`, through the `GatewayWebIntegrations` and
   `GatewayWebClients` adapters in `gatewayEdge.ts`
   (`gatewayWeb/integrations.ts`, `gatewayWeb/clients.ts`):
-  - `GET /api/integrations/atlassian` → `{connected, site?, email?, problem?}`
-    with `problem` one of `vault_locked`, `vault_unavailable`, `invalid`; no
-    live check. `POST /api/integrations/atlassian/set {site, email, token}`
-    checks with Atlassian (15 s from the check's start) then stores, as
-    `integrations.set` does, → `{connected: true, site, email, displayName?}`;
+  - `GET /api/integrations/atlassian` →
+    `{connected, site?, email?, problem?, preset?}` with `problem` one of
+    `vault_locked`, `vault_unavailable`, `invalid`; no live check. `preset`
+    (`{site?, email?}`) is what the config's `atlassian` fixes, and in it the
+    signed-in user's email; it is on every answer of this route and of a set. A
+    set uses the preset's values whatever the request says, and a preset bound
+    to the sign-in for a user with no email answers `503 unavailable`. The page
+    shows no field for a preset value.
+    `POST /api/integrations/atlassian/set {site, email, token}` checks with
+    Atlassian (15 s from the check's start) then stores, as `integrations.set`
+    does, → `{connected: true, site, email, displayName?}`;
     `POST /api/integrations/atlassian/clear` → 204. While a set or clear of the
     user runs (from this page, another tab or a client), another is refused
     `409 integration_busy` and changes nothing; the page itself never sends one

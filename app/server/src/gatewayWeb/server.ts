@@ -26,6 +26,7 @@ import {
   GATEWAY_UI_CSRF_HEADER,
   type GatewayUiAccounts,
   type GatewayUiAtlassian,
+  type GatewayUiAtlassianPreset,
   type GatewayUiClients,
   type GatewayUiEnrollmentCode,
   type GatewayUiError,
@@ -441,6 +442,29 @@ export async function startGatewayWeb(
   };
 
   /**
+   * The deployment's fixed Atlassian site and, when it binds the credential
+   * to the sign-in, the user's email; undefined when it fixes neither. A
+   * user record without an email throws, so a bound deployment never falls
+   * back to what the request says.
+   */
+  const atlassianPreset = (
+    userId: string,
+  ): GatewayUiAtlassianPreset | undefined => {
+    const fixed = config.atlassian;
+    if (!fixed) return undefined;
+    const preset: GatewayUiAtlassianPreset = {};
+    if (fixed.site !== undefined) preset.site = fixed.site;
+    if (fixed.emailFromSignIn) {
+      const email = users.user(userId)?.email;
+      if (!email) throw new Error("no sign-in email");
+      preset.email = email;
+    }
+    return preset.site !== undefined || preset.email !== undefined
+      ? preset
+      : undefined;
+  };
+
+  /**
    * `/api/integrations/*` and `/api/clients*`, behind the session; the user
    * comes only from it. Log lines name the user and client ids only.
    */
@@ -466,15 +490,24 @@ export async function startGatewayWeb(
             req.socket.setTimeout(idleMs);
           }
         };
+        // The deployment's fixed site and sign-in email win over the request.
+        const preset = atlassianPreset(userId);
+        const withPreset = (answer: GatewayUiAtlassian): GatewayUiAtlassian =>
+          preset ? { ...answer, preset } : answer;
         if (method === "GET" && path === "/api/integrations/atlassian")
-          return json(res, 200, await held(() => integrations.status(userId)));
+          return json(
+            res,
+            200,
+            withPreset(await held(() => integrations.status(userId))),
+          );
         if (method !== "POST") return text(res, 404, "not found");
         if (path === ATLASSIAN_SET_PATH) {
           const input = decodeAtlassianSet(parseJson(body));
           if (!input) return badRequest();
-          const answer = await held(() => integrations.set(userId, input));
+          const fixed = { ...input, ...preset };
+          const answer = await held(() => integrations.set(userId, fixed));
           log(`ui integration atlassian: set user=${userId}`);
-          return json(res, 200, answer);
+          return json(res, 200, withPreset(answer));
         }
         if (path === "/api/integrations/atlassian/clear") {
           await held(() => integrations.clear(userId));

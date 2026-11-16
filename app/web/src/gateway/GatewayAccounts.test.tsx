@@ -94,7 +94,7 @@ test("lists the user's accounts with their needs-login state", async () => {
 test("one Add click opens the dialog and starts exactly one login, under StrictMode", async () => {
   const view = await render();
   expect(calls.some((c) => c.path === "/api/logins/start")).toBe(false);
-  await act(async () => button("Add Claude account")!.click());
+  await act(async () => button("Add Claude")!.click());
   await act(async () => {});
   expect(calls.filter((c) => c.path === "/api/logins/start")).toEqual([
     { method: "POST", path: "/api/logins/start", body: { kind: "claude" } },
@@ -108,9 +108,9 @@ test("one Add click opens the dialog and starts exactly one login, under StrictM
   act(() => view.root.unmount());
 });
 
-test("Log in on a listed account starts with its id", async () => {
+test("Reconnect on a listed account starts with its id", async () => {
   const view = await render();
-  await act(async () => button("Log in Work")!.click());
+  await act(async () => button("Reconnect")!.click());
   await act(async () => {});
   expect(calls.filter((c) => c.path === "/api/logins/start")).toEqual([
     {
@@ -124,7 +124,11 @@ test("Log in on a listed account starts with its id", async () => {
 
 test("Remove asks first and removes only on confirmation", async () => {
   const view = await render();
-  await act(async () => button("Remove Work")!.click());
+  await act(async () => button("More actions for Work")!.click());
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((node) => node.textContent === "Remove account");
+  await act(async () => item!.click());
   expect(document.body.textContent).toContain("Remove Work?");
   expect(calls.some((c) => c.path === "/api/accounts/remove")).toBe(false);
   await act(async () => button("Remove")!.click());
