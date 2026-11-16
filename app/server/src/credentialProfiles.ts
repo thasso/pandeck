@@ -102,6 +102,40 @@ interface TransientCredentialProfileState {
   error?: string;
 }
 const transient = new Map<string, TransientCredentialProfileState>();
+/** Non-secret direct-mode evidence from the official CLI's macOS status check. */
+const claudeStoredLogins = new Set<string>();
+
+/**
+ * An opaque mark of the account's current login state: every change replaces
+ * it. Evidence gathering takes one before it starts.
+ */
+export function credentialProfileLoginStateMark(
+  id: string,
+): object | undefined {
+  return transient.get(id);
+}
+
+/**
+ * `observed` is the login-state mark taken when the evidence was gathered. A
+ * login that appeared clears only the failed login error that was already
+ * there then: a newer failure or a connecting login stays.
+ */
+export function setClaudeStoredLoginPresence(
+  id: string,
+  present: boolean,
+  observed?: object,
+): void {
+  if (remoteProfiles || credentialProfileById(id)?.provider !== "claude")
+    return;
+  const previous = claudeStoredLogins.has(id);
+  if (present) claudeStoredLogins.add(id);
+  else claudeStoredLogins.delete(id);
+  if (previous === present) return;
+  const state = transient.get(id);
+  if (present && state?.status === "error" && state === observed)
+    transient.delete(id);
+  credentialProfileChanged(id);
+}
 let credentialProfileDeletedHandler: ((id: string) => void) | undefined;
 const credentialProfileDeletedListeners = new Set<(id: string) => void>();
 
@@ -375,14 +409,19 @@ export function openAiProfileHasCredential(id: string): boolean {
   }
 }
 
+/** The profile's own credential file, not the cached Keychain evidence. */
+export function claudeCredentialFileExists(id: string): boolean {
+  return existsSync(join(claudeConfigDir(id), ".credentials.json"));
+}
+
 export function claudeProfileHasCredential(id: string): boolean {
   if (remoteProfiles) return remoteAccountReady(id);
   // Claude owns this format. Presence is enough for a non-secret readiness hint;
   // the SDK remains the final authority when it starts a query.
-  return existsSync(join(claudeConfigDir(id), ".credentials.json"));
+  return claudeCredentialFileExists(id) || claudeStoredLogins.has(id);
 }
 
-/** File presence is independent of transient login/setup state. */
+/** Stored credential presence is independent of transient login/setup state. */
 export function credentialProfileHasCredential(id: string): boolean {
   const profile = credentialProfileById(id);
   if (!profile) return false;
@@ -982,6 +1021,7 @@ export function deleteCredentialProfile(id: string): void {
     throw new Error("Credential profile not found.");
   writeRegistry(profiles.filter((profile) => profile.id !== id));
   transient.delete(id);
+  claudeStoredLogins.delete(id);
   credentialProfileDeletedHandler?.(id);
   for (const listener of credentialProfileDeletedListeners) listener(id);
   rmSync(profileRoot(id), { recursive: true, force: true });

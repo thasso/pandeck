@@ -66,7 +66,12 @@ and preview rules independently. With the credential gateway on (the NixOS
 module's default, "Credential gateway service" below), the gateway renews these
 tokens in place, in the same profile files and formats; no new location holds
 them. A terminal CLI shares a profile's directory only when the user points it
-there with that profile's `CLAUDE_CONFIG_DIR` (`docs/workers.md` "Renewal").
+there with that profile's `CLAUDE_CONFIG_DIR` (`docs/workers.md` "Renewal"). In
+direct local macOS mode, the official CLI may instead store that isolated
+profile's login in Keychain. PA asks the CLI for non-secret login status and
+retains only presence; this neither reads the user's normal home login nor
+exports a token. Gateway modes still require their owned credential files or
+remote account mirror.
 
 ### Default Claude
 

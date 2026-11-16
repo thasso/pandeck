@@ -12,8 +12,11 @@ import type { WebSocket } from "ws";
  *
  * Lifecycle: `start` joins an unfinished run, or retires a finished one (its
  * viewers keep their finished state) and starts anew; `attach` joins any
- * retained run and never spawns. A run finishes only on its child's `close`
- * and is kept exactly two minutes from then, whatever its viewers do.
+ * retained run and never spawns. A run finishes no earlier than its child's
+ * `close`: at once, or after the macOS Keychain check that follows a zero
+ * exit without a credential file (a stop during that check finishes it at
+ * once). It is kept exactly two minutes from finishing, whatever its viewers
+ * do.
  *
  * With the gateway switch on, the run takes the profile's login hold before
  * it spawns `claude auth login`, names the child as the hold's writer right
@@ -24,8 +27,8 @@ import type { WebSocket } from "ws";
  * Every way a run is stopped (timeout, cancel, server stop, a failed
  * registration, a stdin error, the profile's deletion, Clear) signals the
  * child and waits for its `close`: SIGTERM, then SIGKILL after 5 s; deletion
- * and Clear send SIGKILL at once. Only `close` releases the hold and finishes
- * the run, so no hold ends while its writer may still write. An exit hook
+ * and Clear send SIGKILL at once. Only `close` releases the hold and lets the
+ * run finish, so no hold ends while its writer may still write. An exit hook
  * sends SIGKILL to every child not closed yet.
  */
 import { releaseChildOomScore } from "./childOomScore.ts";
@@ -37,6 +40,7 @@ import {
   type AccountLoginStatus,
 } from "@assistant/shared";
 import {
+  claudeCredentialFileExists,
   claudeProfileEnvironment,
   claudeProfileHasCredential,
   clearCredentialProfileLoginState,
@@ -56,9 +60,11 @@ import {
   bundledClaudeCliPath,
   CLAUDE_LOGIN_ARGS,
   claudeLoginEnvironmentFrom,
+  claudeLoginInput,
   KILL_AFTER_MS,
   sanitizeClaudeLoginOutput,
 } from "./claudeLoginDriver.ts";
+import { refreshClaudeCredentialStatus } from "./claudeCredentialStatus.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
 /** Input held until the gateway acknowledged the writer (L8). */
@@ -296,7 +302,7 @@ function begin(run: LoginRun, taken: LoginHoldTaken): void {
       `Could not start the official Claude CLI: ${errorText(error)}`,
     );
   });
-  child.on("close", (code, signal) => closed(run, code, signal));
+  child.on("close", (code, signal) => void closed(run, code, signal));
   const { hold } = run;
   if (!hold) {
     run.writerReady = true;
@@ -325,19 +331,33 @@ function begin(run: LoginRun, taken: LoginHoldTaken): void {
 }
 
 /** The child closed: the hold ends, then the run finishes. */
-function closed(
+async function closed(
   run: LoginRun,
   code: number | null,
   signal: NodeJS.Signals | null,
-): void {
+): Promise<void> {
   run.closed = true;
   clearTimeout(run.killTimer);
+  // Nothing is left to time out: the check below is bounded on its own.
+  clearTimeout(run.timeout);
   run.pendingInput = [];
   run.pendingChars = 0;
   run.hold?.release();
   if (run.finished) return;
   if (run.ending) {
     finish(run, run.ending.status, run.ending.message);
+    return;
+  }
+  // In direct local mode, macOS may save this profile's login in Keychain
+  // instead of .credentials.json. The official CLI verifies it without export,
+  // in a probe started after the close, whatever the cached evidence says: a
+  // running probe may predate the login and would otherwise land after it.
+  if (code === 0 && !claudeCredentialFileExists(run.profileId))
+    await refreshClaudeCredentialStatus(run.profileId, { fresh: true });
+  // A stop during the check (Cancel, deletion, server stop) already finished it.
+  if (run.finished) return;
+  if (!credentialProfileById(run.profileId)) {
+    finish(run, "cancelled");
     return;
   }
   if (code === 0 && claudeProfileHasCredential(run.profileId)) {
@@ -347,21 +367,31 @@ function closed(
   }
   const detail = signal
     ? `Claude login stopped (${signal}).`
-    : `Claude login exited with code ${code ?? "unknown"}.`;
+    : code === 0
+      ? "Claude login finished, but no saved Claude subscription login could be verified. Try Connect again."
+      : `Claude login exited with code ${code ?? "unknown"}.`;
   finish(run, "error", detail);
 }
 
 /**
  * Stops the run: the first ending wins, held input is dropped, and the child
  * gets `signal` (SIGTERM escalates to SIGKILL after 5 s). The run finishes
- * only on the child's `close`; before the spawn, `begin` sees the ending.
+ * only on the child's `close`; before the spawn, `begin` sees the ending. A
+ * run whose child closed but that is not finished is waiting only for its
+ * login check: the stop finishes it at once, and the check's evidence still
+ * reaches the account.
  */
 function stop(
   run: LoginRun,
   ending: LoginEnding,
   signal: "SIGTERM" | "SIGKILL",
 ): void {
-  if (run.finished || run.closed) return;
+  if (run.finished) return;
+  if (run.closed) {
+    if (ending.line) appendOutput(run, ending.line);
+    finish(run, ending.status, ending.message);
+    return;
+  }
   if (run.ending) {
     // A later SIGKILL stop still escalates.
     if (signal !== "SIGKILL") return;
@@ -410,7 +440,7 @@ function handleClientMessage(
     return;
   }
   if (!acceptsInput(run)) return;
-  const data = message.data.trim();
+  const data = claudeLoginInput(message.data);
   if (!data) return;
   // Never append or log this value: it may be the short-lived OAuth authorization code.
   if (run.writerReady) {

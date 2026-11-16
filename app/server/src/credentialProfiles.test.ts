@@ -33,6 +33,9 @@ const {
   renameCredentialProfile,
   patchCredentialProfile,
   setCredentialProfileEnabled,
+  setClaudeStoredLoginPresence,
+  setCredentialProfileLoginState,
+  credentialProfileLoginStateMark,
   subscribeCredentialProfileChanges,
   subscribeCredentialProfileDeleted,
   credentialProfileHasCredential,
@@ -105,6 +108,92 @@ test("keeps profile metadata and provider directories private without exposing a
   assert.equal(mode(piAgentDir(openai.id)), 0o700);
   assert.equal(mode(claudeConfigDir(claude.id)), 0o700);
   assert.equal(mode(authPath), 0o600);
+});
+
+test("CLI-proven stored OAuth counts without a file and publishes presence changes", () => {
+  const profile = createCredentialProfile({
+    name: "Keychain",
+    provider: "claude",
+  });
+  const changes: string[] = [];
+  const unsubscribe = subscribeCredentialProfileChanges((id) =>
+    changes.push(id),
+  );
+  try {
+    assert.equal(credentialProfileHasCredential(profile.id), false);
+    setClaudeStoredLoginPresence(profile.id, true);
+    assert.equal(credentialProfileSummaryById(profile.id)?.status, "ready");
+    assert.equal(
+      existsSync(join(claudeConfigDir(profile.id), ".credentials.json")),
+      false,
+    );
+    setClaudeStoredLoginPresence(profile.id, true);
+    assert.deepEqual(changes, [profile.id]);
+    setClaudeStoredLoginPresence(profile.id, false);
+    assert.equal(
+      credentialProfileSummaryById(profile.id)?.status,
+      "disconnected",
+    );
+    assert.deepEqual(changes, [profile.id, profile.id]);
+    deleteCredentialProfile(profile.id);
+    setClaudeStoredLoginPresence(profile.id, true);
+    assert.equal(credentialProfileSummaryById(profile.id), undefined);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test("stored OAuth that appears clears only the login error its probe observed", () => {
+  const failed = createCredentialProfile({
+    name: "Failed",
+    provider: "claude",
+  });
+  setCredentialProfileLoginState(failed.id, {
+    status: "error",
+    error: "Claude login failed.",
+  });
+  setClaudeStoredLoginPresence(
+    failed.id,
+    true,
+    credentialProfileLoginStateMark(failed.id),
+  );
+  const summary = credentialProfileSummaryById(failed.id);
+  assert.equal(summary?.status, "ready");
+  assert.equal(summary?.error, undefined);
+
+  // A probe started during run A; A was cancelled and run B failed since.
+  const raced = createCredentialProfile({
+    name: "Raced",
+    provider: "claude",
+  });
+  setCredentialProfileLoginState(raced.id, { status: "connecting" });
+  const observedDuringA = credentialProfileLoginStateMark(raced.id);
+  clearCredentialProfileLoginState(raced.id);
+  setCredentialProfileLoginState(raced.id, { status: "connecting" });
+  setCredentialProfileLoginState(raced.id, {
+    status: "error",
+    error: "Claude login exited with code 9.",
+  });
+  setClaudeStoredLoginPresence(raced.id, true, observedDuringA);
+  assert.equal(
+    credentialProfileSummaryById(raced.id)?.error,
+    "Claude login exited with code 9.",
+  );
+
+  const connecting = createCredentialProfile({
+    name: "Connecting",
+    provider: "claude",
+  });
+  setCredentialProfileLoginState(connecting.id, { status: "connecting" });
+  setClaudeStoredLoginPresence(
+    connecting.id,
+    true,
+    credentialProfileLoginStateMark(connecting.id),
+  );
+  assert.equal(
+    credentialProfileSummaryById(connecting.id)?.status,
+    "connecting",
+  );
 });
 
 test("allows the protected default account to be disabled in favor of a secondary profile", () => {
