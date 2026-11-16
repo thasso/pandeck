@@ -1,5 +1,5 @@
 /**
- * The edge's `VaultPort` over `gateway-vault/1.0` (plan Task-1394,
+ * The edge's `VaultPort` over `gateway-vault/1.1` (plan Task-1394,
  * `vaultMethods.ts`): a vault in its own process, dialed over mutual TLS
  * with each side's self-signed certificate pinned. The edge then holds no
  * refresh token. It dials at once and again with backoff whenever the link
@@ -31,6 +31,8 @@ import {
   VAULT_LOCKED,
   VAULT_METHODS,
   accountTokenFile,
+  isAtlassianSite,
+  isCloudId,
   isPinnedPeer,
   vaultBody,
   vaultMessage,
@@ -39,6 +41,7 @@ import {
 } from "./vaultMethods.ts";
 import type { CredentialProblem } from "./refusals.ts";
 import type {
+  IntegrationConnect,
   IntegrationRecord,
   IntegrationWrite,
   LoginDriverEvents,
@@ -54,8 +57,16 @@ const CREDENTIAL_TIMEOUT_MS = 30_000;
 const KEEPALIVE_MS = 15_000;
 /** Dial, TLS handshake and `vault.hello` each get this long. */
 const CONNECT_TIMEOUT_MS = 10_000;
-/** An integration call the vault has not answered by then is unavailable. */
-const INTEGRATION_TIMEOUT_MS = 10_000;
+/**
+ * An integration call the vault has not answered by then is unavailable. A
+ * get may wait for a refresh (8 s at the vault, behind its record's lane) and
+ * a connect for an exchange and a site list (8 s each); the vault finishes
+ * either way, so a late answer loses nothing there. A put or clear only
+ * writes, behind the lane.
+ */
+const INTEGRATION_WRITE_TIMEOUT_MS = 10_000;
+const INTEGRATION_GET_TIMEOUT_MS = 20_000;
+const INTEGRATION_CONNECT_TIMEOUT_MS = 30_000;
 
 const UNAVAILABLE: VaultCredential = {
   ok: false,
@@ -67,7 +78,10 @@ export interface RemoteVaultOptions {
   host: string;
   port: number;
   tls: VaultLinkTls;
-  /** Test seam: the integration calls' deadline; 10 s. */
+  /**
+   * Test seam: every integration call's deadline; else 10 s for a put or
+   * clear, 20 s for a get, 30 s for a connect.
+   */
   integrationTimeoutMs?: number;
 }
 
@@ -388,8 +402,6 @@ export function createRemoteVault(
     return connection.request(method, vaultMessage(json));
   };
 
-  const integrationTimeoutMs =
-    options.integrationTimeoutMs ?? INTEGRATION_TIMEOUT_MS;
   /**
    * One integration request, bounded (Task-1397): no link, the deadline or
    * `signal` first, or any request error answers unavailable; `VAULT_LOCKED`
@@ -399,6 +411,7 @@ export function createRemoteVault(
     method: string,
     json: unknown,
     decode: (body: Record<string, unknown>) => T,
+    timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<
     T | { ok: false; locked: true } | { ok: false; unavailable: true }
@@ -410,7 +423,7 @@ export function createRemoteVault(
     const giveUp = new Promise<typeof unavailable>((resolveGiveUp) => {
       timer = setTimeout(
         () => resolveGiveUp(unavailable),
-        integrationTimeoutMs,
+        options.integrationTimeoutMs ?? timeoutMs,
       );
       onAbort = () => resolveGiveUp(unavailable);
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -439,7 +452,25 @@ export function createRemoteVault(
     if (r.ok === true && typeof r.credential === "string")
       return { ok: true, credential: r.credential };
     if (r.absent === true) return { ok: false, absent: true };
+    if (r.rejected === true) return { ok: false, rejected: true };
     if (r.locked === true) return { ok: false, locked: true };
+    return { ok: false, unavailable: true };
+  };
+  const decodeConnect = (body: Record<string, unknown>): IntegrationConnect => {
+    const answer = body.connect;
+    if (typeof answer !== "object" || answer === null)
+      return { ok: false, unavailable: true };
+    const a = answer as Record<string, unknown>;
+    if (a.ok === true)
+      return isAtlassianSite(a.site) && isCloudId(a.cloudId)
+        ? { ok: true, site: a.site, cloudId: a.cloudId }
+        : { ok: false, unavailable: true };
+    if (a.rejected === true) return { ok: false, rejected: true };
+    if (a.unreachable === true) return { ok: false, unreachable: true };
+    if (a.site === "missing" || a.site === "ambiguous")
+      return { ok: false, site: a.site };
+    if (a.notConfigured === true) return { ok: false, notConfigured: true };
+    if (a.locked === true) return { ok: false, locked: true };
     return { ok: false, unavailable: true };
   };
   const written = (): IntegrationWrite => ({ ok: true });
@@ -532,12 +563,14 @@ export function createRemoteVault(
         VAULT_METHODS.integrationPut,
         { userId, integration, credential },
         written,
+        INTEGRATION_WRITE_TIMEOUT_MS,
       ),
     integrationGet: (userId, integration, { signal } = {}) =>
       integrationCall(
         VAULT_METHODS.integrationGet,
         { userId, integration },
         decodeRecord,
+        INTEGRATION_GET_TIMEOUT_MS,
         signal,
       ),
     integrationClear: (userId, integration) =>
@@ -545,6 +578,20 @@ export function createRemoteVault(
         VAULT_METHODS.integrationClear,
         { userId, integration },
         written,
+        INTEGRATION_WRITE_TIMEOUT_MS,
+      ),
+    integrationConnect: (userId, integration, { code, redirectUri, site }) =>
+      integrationCall(
+        VAULT_METHODS.integrationConnect,
+        {
+          userId,
+          integration,
+          code,
+          redirectUri,
+          ...(site !== undefined ? { site } : {}),
+        },
+        decodeConnect,
+        INTEGRATION_CONNECT_TIMEOUT_MS,
       ),
     inputsChanged() {
       if (sendQueued) return;

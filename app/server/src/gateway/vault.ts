@@ -1,8 +1,9 @@
 /**
  * The gateway's vault tier (ADR-0005): renewal, credential reads, the writer
- * lane and the login holds, behind `VaultPort`. It reads the edge only
- * through `VaultInputs`: the profile registry, the live-lease demand signal
- * and the needs-login report. Both tiers run in one process today.
+ * lane, the login holds and users' integration records, behind `VaultPort`.
+ * It reads the edge only through `VaultInputs`: the profile registry, the
+ * live-lease demand signal and the needs-login report. Both tiers run in one
+ * process or apart (`vaultServer.ts`).
  *
  * Every hold that ends here, by release, force release, evidence or a fence,
  * has its profile's file re-read (`renewal.recheck`) before the call returns,
@@ -61,9 +62,11 @@ export interface Vault extends LocalVaultPort {
   /** One renewal tick: renews every leased profile inside its margin. */
   renewDue(): Promise<void>;
   /**
-   * Starts no further login or renewal, cancels the logins it started and
-   * aborts renewals, then resolves once each has ended: a login's driver,
-   * ingest and directory removal, a renewal's attempt with its seal.
+   * Starts no further login, renewal or integration operation, cancels the
+   * logins it started, aborts renewals and refuses queued integration
+   * operations, then resolves once each has ended: a login's driver, ingest
+   * and directory removal, a renewal's attempt with its seal, a running
+   * integration connect or refresh with its write and seal.
    */
   close(): Promise<void>;
 }
@@ -119,6 +122,11 @@ export function createVault(options: VaultOptions): Vault {
       lane.acquire(profileId, holdId, owner, signal),
   };
 
+  const integrations = createVaultIntegrations(
+    options.integrations ?? { stateDir: undefined },
+    log,
+    now,
+  );
   const logins = createVaultLogins(
     options.logins ?? { stateDir: undefined, drivers: {} },
     lane,
@@ -151,17 +159,23 @@ export function createVault(options: VaultOptions): Vault {
       }
       return run;
     },
-    ...createVaultIntegrations(options.integrations ?? { stateDir: undefined }),
+    integrationPut: integrations.integrationPut,
+    integrationGet: integrations.integrationGet,
+    integrationClear: integrations.integrationClear,
+    integrationConnect: integrations.integrationConnect,
     lane,
     holdRecords: () => table.records(),
     recheck: (profileId) => renewal.recheck(profileId),
     renewDue: () => renewal.tick(),
     async close() {
+      // Before any await: no integration operation is admitted from here.
+      const integrationsClosed = integrations.close();
       closed = true;
       for (const run of runs) run.cancel();
       await Promise.allSettled([
         ...[...runs].map((run) => run.done),
         renewal.close(),
+        integrationsClosed,
       ]);
     },
   };

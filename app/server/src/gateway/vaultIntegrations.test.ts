@@ -1,12 +1,16 @@
 /**
  * Users' integration credentials in the vault (Task-1397): `integrations.*`
- * over `gateway-vault/1.0` to a vault process in this one, sealed to a
+ * over `gateway-vault/1.1` to a vault process in this one, sealed to a
  * software recipient, locked after a restart, swept and resealed like token
- * files, and every remote call bounded. Every value is fake.
+ * files, and every remote call bounded. Atlassian OAuth records (Task-1411):
+ * connect, refresh and stop over the real link against a loopback Atlassian
+ * fake, sealed, with nothing lost to an edge timeout, a stop or a failed
+ * seal. Every value is fake.
  */
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -19,7 +23,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import tls from "node:tls";
-import { afterAll, afterEach, test } from "vitest";
+import { afterAll, afterEach, beforeAll, test } from "vitest";
+import {
+  FAKE_CLIENT,
+  FAKE_CLOUD_ID,
+  FAKE_CODE,
+  FAKE_REDIRECT,
+  FAKE_SITE,
+  jsonResponder,
+  startAtlassianFake,
+  type AtlassianFake,
+} from "../test/atlassianFake.ts";
 import { WorkerConnection } from "../workerProtocol/connection.ts";
 import { socketEndpoint } from "../workerProtocol/unixSocketTransport.ts";
 import { createRemoteVault, type RemoteVault } from "./remoteVault.ts";
@@ -29,12 +43,17 @@ import {
   GATEWAY_VAULT_PROTOCOL,
   GATEWAY_VAULT_VERSION,
   INTEGRATION_FILE,
+  MAX_INTEGRATION_CREDENTIAL,
   VAULT_LIMITS,
   VAULT_METHODS,
   integrationDirId,
   vaultMessage,
 } from "./vaultMethods.ts";
-import { startVaultServer, type RunningVaultServer } from "./vaultServer.ts";
+import {
+  startVaultServer,
+  type RunningVaultServer,
+  type VaultServerOptions,
+} from "./vaultServer.ts";
 import { selfSignedIdentity } from "./x509.ts";
 
 const root = mkdtempSync(join(tmpdir(), "vault-int-"));
@@ -50,10 +69,22 @@ const CREDENTIAL = JSON.stringify({
   token: "FAKE-INT-TOKEN",
 });
 
+/** The Atlassian fake for the OAuth records' tests (Task-1411). */
+let atl: AtlassianFake;
+let atlToken: AtlassianFake["token"];
+beforeAll(async () => {
+  atl = await startAtlassianFake();
+  atlToken = atl.token;
+});
 afterEach(async () => {
   while (open.length) await open.pop()!.close();
+  atl.token = atlToken;
+  atl.expiresInS = 3600;
 });
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(async () => {
+  await atl.close();
+  rmSync(root, { recursive: true, force: true });
+});
 
 async function until(check: () => boolean, what: string): Promise<void> {
   for (let i = 0; i < 200; i++) {
@@ -89,6 +120,7 @@ function sealingDir(): { dir: string; addRecipient(): void } {
 
 async function vault(
   dir: string,
+  extra: Partial<VaultServerOptions> = {},
 ): Promise<RunningVaultServer & { lines: string[]; control: string }> {
   const lines: string[] = [];
   const control = join(dir, "control.sock");
@@ -102,6 +134,7 @@ async function vault(
     },
     controlSocket: control,
     log: (line) => lines.push(line),
+    ...extra,
   });
   open.push(running);
   return Object.assign(running, { lines, control });
@@ -423,4 +456,258 @@ test("bounded remote calls: a held reply answers unavailable on schedule, an abo
     ok: false,
     unavailable: true,
   });
+});
+
+// --- Atlassian OAuth records (Task-1411) -----------------------------------
+
+const DIR_ID = integrationDirId("u1", "atlassian");
+const plaintextOf = (dir: string): string =>
+  join(dir, "accounts", DIR_ID, INTEGRATION_FILE);
+const sealedOf = (dir: string): string =>
+  join(dir, "sealed", DIR_ID, `${INTEGRATION_FILE}.sealed`);
+const storedRefresh = (dir: string): unknown =>
+  (
+    JSON.parse(readFileSync(plaintextOf(dir), "utf8")) as Record<
+      string,
+      unknown
+    >
+  ).refreshToken;
+const refreshesSent = (): string[] =>
+  atl
+    .on("token")
+    .map((request) => JSON.parse(request.body) as Record<string, string>)
+    .filter((body) => body.grant_type === "refresh_token")
+    .map((body) => body.refresh_token!);
+const connectU1 = (remote: RemoteVault) =>
+  remote.integrationConnect("u1", "atlassian", {
+    code: FAKE_CODE,
+    redirectUri: FAKE_REDIRECT,
+  });
+const accessOf = (
+  record: Awaited<ReturnType<RemoteVault["integrationGet"]>>,
+) => {
+  assert.equal(record.ok, true, JSON.stringify(record));
+  return (
+    JSON.parse((record as { credential: string }).credential) as {
+      accessToken: string;
+    }
+  ).accessToken;
+};
+/** Every file under `accounts/` with its content. */
+const accountsSnapshot = (dir: string): string =>
+  JSON.stringify(
+    readdirSync(join(dir, "accounts"), { recursive: true })
+      .map(String)
+      .sort()
+      .map((name) => {
+        try {
+          return [name, readFileSync(join(dir, "accounts", name), "utf8")];
+        } catch {
+          return [name, "(directory)"];
+        }
+      }),
+  );
+const noSecretsIn = (lines: string[]): void => {
+  for (const line of lines)
+    assert.doesNotMatch(line, /fake-atl-|fake-atlassian-|u1\b/, line);
+};
+
+async function oauthVault(dir: string) {
+  return vault(dir, {
+    integrationClients: { atlassian: FAKE_CLIENT },
+    atlassianEndpoint: atl.endpoint,
+  });
+}
+
+/** A restart on `dir` (tmpfs plaintext gone), unlocked, linked. */
+async function restarted(dir: string) {
+  rmSync(join(dir, "accounts"), { recursive: true, force: true });
+  const v = await oauthVault(dir);
+  const remote = await link(v.port);
+  assert.deepEqual(await unlock(v.control), {
+    ok: true,
+    opened: 1,
+    unopened: 0,
+  });
+  return { v, remote };
+}
+
+test("connect over the link: a sealed record without the access token; access views, rejected and the record cap", async () => {
+  const { dir } = sealingDir();
+  const v = await oauthVault(dir);
+  const remote = await link(v.port);
+  assert.deepEqual(await connectU1(remote), { ok: false, locked: true });
+  await unlock(v.control);
+  atl.expiresInS = 60;
+  const answer = await connectU1(remote);
+  assert.deepEqual(answer, {
+    ok: true,
+    site: FAKE_SITE,
+    cloudId: FAKE_CLOUD_ID,
+  });
+  assert.ok(existsSync(sealedOf(dir)));
+  assert.doesNotMatch(readFileSync(sealedOf(dir), "utf8"), /fake-atl-/);
+  assert.doesNotMatch(
+    readFileSync(plaintextOf(dir), "utf8"),
+    /fake-atl-access/,
+  );
+  assert.equal(storedRefresh(dir), atl.issuedRefresh.at(-1));
+  // Due within the margin: the get refreshes, and the view crosses the link.
+  const record = await remote.integrationGet("u1", "atlassian");
+  assert.match(accessOf(record), /^fake-atl-access-\d+$/);
+  assert.doesNotMatch(JSON.stringify(record), /fake-atl-refresh/);
+  atl.token = jsonResponder(400, { error: "invalid_grant" });
+  assert.deepEqual(await remote.integrationGet("u1", "atlassian"), {
+    ok: false,
+    rejected: true,
+  });
+  // A malformed connect is refused before the vault runs it.
+  assert.deepEqual(
+    await remote.integrationConnect("u1", "atlassian", {
+      code: FAKE_CODE,
+      redirectUri: "http://plain.example.test/callback",
+    }),
+    { ok: false, unavailable: true },
+  );
+  // The record cap is 16 KiB.
+  assert.deepEqual(
+    await remote.integrationPut(
+      "u2",
+      "atlassian",
+      "x".repeat(MAX_INTEGRATION_CREDENTIAL),
+    ),
+    { ok: true },
+  );
+  assert.deepEqual(
+    await remote.integrationPut(
+      "u2",
+      "atlassian",
+      "x".repeat(MAX_INTEGRATION_CREDENTIAL + 1),
+    ),
+    { ok: false, unavailable: true },
+  );
+  assert.equal(MAX_INTEGRATION_CREDENTIAL, 16_384);
+  noSecretsIn(v.lines);
+});
+
+for (const route of ["token", "resources"] as const)
+  test(`a stop during a connect held at ${route === "token" ? "the code exchange" : "the site list"} waits, then the record is written and sealed before the flush`, async () => {
+    const { dir } = sealingDir();
+    const v = await oauthVault(dir);
+    const remote = await link(v.port);
+    await unlock(v.control);
+    atl.expiresInS = 60;
+    const held = atl.hold(route);
+    const connecting = connectU1(remote);
+    await held.arrived;
+    let closed = false;
+    const closing = v.close().then(() => (closed = true));
+    await delay(150);
+    assert.equal(closed, false, "the stop waits for the running connect");
+    held.release();
+    await closing;
+    await connecting;
+    const issued = atl.issuedRefresh.at(-1);
+    assert.equal(storedRefresh(dir), issued);
+    assert.ok(existsSync(sealedOf(dir)));
+    const after = accountsSnapshot(dir);
+    await delay(100);
+    assert.equal(
+      accountsSnapshot(dir),
+      after,
+      "nothing written after the stop",
+    );
+    remote.close();
+    // The sealed record holds the exchanged token: the restart refreshes it.
+    const again = await restarted(dir);
+    accessOf(await again.remote.integrationGet("u1", "atlassian"));
+    assert.equal(refreshesSent().at(-1), issued);
+    noSecretsIn([...v.lines, ...again.v.lines]);
+  });
+
+test("a stop during a held refresh waits; the rotation is on disk and sealed, a queued clear refused", async () => {
+  const { dir } = sealingDir();
+  const v = await oauthVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  atl.expiresInS = 60;
+  await connectU1(remote);
+  const held = atl.hold("token");
+  const reading = remote.integrationGet("u1", "atlassian");
+  await held.arrived;
+  const clearing = remote.integrationClear("u1", "atlassian");
+  await delay(50);
+  let closed = false;
+  const closing = v.close().then(() => (closed = true));
+  await delay(150);
+  assert.equal(closed, false, "the stop waits for the running refresh");
+  held.release();
+  await closing;
+  await reading;
+  assert.deepEqual(await clearing, { ok: false, unavailable: true });
+  const rotated = atl.issuedRefresh.at(-1);
+  assert.equal(storedRefresh(dir), rotated, "the clear never ran");
+  const after = accountsSnapshot(dir);
+  await delay(100);
+  assert.equal(accountsSnapshot(dir), after);
+  remote.close();
+  const again = await restarted(dir);
+  accessOf(await again.remote.integrationGet("u1", "atlassian"));
+  assert.equal(refreshesSent().at(-1), rotated);
+  noSecretsIn([...v.lines, ...again.v.lines]);
+});
+
+test("an edge-side timeout during a held refresh answers unavailable; the vault still stores and serves the rotation", async () => {
+  const { dir } = sealingDir();
+  const v = await oauthVault(dir);
+  const first = await link(v.port);
+  await unlock(v.control);
+  atl.expiresInS = 60;
+  await connectU1(first);
+  first.close();
+  const remote = await link(v.port, 300);
+  atl.expiresInS = 3600;
+  const held = atl.hold("token");
+  const reading = remote.integrationGet("u1", "atlassian");
+  await held.arrived;
+  assert.deepEqual(await reading, { ok: false, unavailable: true });
+  held.release();
+  const rotated = (): boolean =>
+    storedRefresh(dir) === atl.issuedRefresh.at(-1);
+  await until(rotated, "the rotated record");
+  const sent = refreshesSent().length;
+  // Cached by the finished refresh: no second refresh.
+  accessOf(await remote.integrationGet("u1", "atlassian"));
+  assert.equal(refreshesSent().length, sent);
+  noSecretsIn(v.lines);
+});
+
+test("a failed seal after a refresh still answers; the record is sealed later and the rotation survives a restart", async () => {
+  const { dir } = sealingDir();
+  const v = await oauthVault(dir);
+  const remote = await link(v.port);
+  await unlock(v.control);
+  atl.expiresInS = 60;
+  await connectU1(remote);
+  // The record's sealed directory refuses the write once.
+  chmodSync(join(dir, "sealed", DIR_ID), 0o500);
+  let rotated: string | undefined;
+  try {
+    accessOf(await remote.integrationGet("u1", "atlassian"));
+    rotated = atl.issuedRefresh.at(-1);
+    assert.equal(storedRefresh(dir), rotated);
+  } finally {
+    chmodSync(join(dir, "sealed", DIR_ID), 0o700);
+  }
+  const failures = v.lines.filter((line) => line.includes("sealing"));
+  assert.deepEqual(failures, [
+    `sealing account ${DIR_ID} failed; the sweep retries`,
+  ]);
+  // The stop's flush seals what drifted and reports nothing unsealed.
+  remote.close();
+  await v.close();
+  const again = await restarted(dir);
+  accessOf(await again.remote.integrationGet("u1", "atlassian"));
+  assert.equal(refreshesSent().at(-1), rotated);
+  noSecretsIn([...v.lines, ...again.v.lines]);
 });

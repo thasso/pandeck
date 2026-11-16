@@ -12,6 +12,7 @@ import type http from "node:http";
 export type CredentialOutcome =
   | { ok: true; credential: string }
   | { ok: false; absent: true }
+  | { ok: false; rejected: true }
   | { ok: false; locked: true }
   | { ok: false; unavailable: true };
 

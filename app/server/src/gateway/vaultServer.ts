@@ -1,7 +1,7 @@
 /**
  * The vault as its own process (plan Task-1394, ADR-0005): today's
  * `createVault` (renewal, token files, the writer lane, login runs) served to
- * one edge over `gateway-vault/1.0` (`vaultMethods.ts`) on mutual TLS. Each
+ * one edge over `gateway-vault/1.1` (`vaultMethods.ts`) on mutual TLS. Each
  * side trusts exactly the other's self-signed certificate, also checked by
  * fingerprint. A newer edge connection replaces the older one.
  *
@@ -12,7 +12,10 @@
  * under `<stateDir>/accounts/`, and refuses any binding outside it.
  *
  * It answers access tokens only: never a refresh token or a token file's
- * content. No log line holds a token, a login's input or its output.
+ * content. With `integrationClients` it holds those OAuth clients' secrets
+ * and exchanges users' codes and refreshes their records itself
+ * (`vaultIntegrations.ts`). No log line holds a token, a code, a secret, a
+ * login's input or its output.
  *
  * With recipients (plan Task-1395, `sealedStore.ts`) the disk holds only
  * sealed records and the vault starts locked: until a human unlocks it over
@@ -44,7 +47,9 @@ import {
 } from "./profiles.ts";
 import type { PivHelperCommand } from "./pivChild.ts";
 import { RENEW_TICK_MS, type CodexRenewPort } from "./renewal.ts";
+import type { IntegrationClients } from "./integrationClients.ts";
 import { createSealedStore } from "./sealedStore.ts";
+import type { AtlassianEndpoint } from "./vaultAtlassian.ts";
 import { createVault } from "./vault.ts";
 import { startVaultControl, type VaultControl } from "./vaultControl.ts";
 import {
@@ -63,6 +68,7 @@ import {
   VAULT_LOCKED,
   VAULT_METHODS,
   accountTokenFile,
+  isAtlassianSite,
   isIntegration,
   isPinnedPeer,
   isVaultId,
@@ -77,6 +83,9 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const KEEPALIVE_MS = 15_000;
 const LOGIN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_INPUT_CHARS = 8_192;
+/** A connect's authorization code and redirect URI, each at most this. */
+const MAX_CONNECT_FIELD_CHARS = 2_048;
+const CODE_RE = /^[\x21-\x7e]+$/;
 /** A login is withdrawn after this long, as the edge's are (`logins.ts`). */
 const LOGIN_TIMEOUT_MS = VAULT_LOGIN_TIMEOUT_MS;
 /** How long the edge has to answer `logins.commit`. */
@@ -102,6 +111,10 @@ export interface VaultServerOptions {
   requireTmpfs?: boolean;
   /** Test seam: the YubiKey helper (`pivChild.ts`). */
   pivHelper?: PivHelperCommand;
+  /** Users' OAuth clients (`--integrations-config`); without them no connect. */
+  integrationClients?: IntegrationClients | undefined;
+  /** Test seam: where Atlassian is reached (`vaultAtlassian.ts`). */
+  atlassianEndpoint?: AtlassianEndpoint;
 }
 
 export interface RunningVaultServer {
@@ -109,8 +122,8 @@ export interface RunningVaultServer {
   /** Runs one renewal tick now, as the timer does. */
   renewDue(): Promise<void>;
   /**
-   * Stops admitting at once, then resolves once every login and renewal has
-   * ended and every credential is sealed. It rejects with a fixed text,
+   * Stops admitting at once, then resolves once every login, renewal and
+   * running integration operation has ended and every credential is sealed. It rejects with a fixed text,
    * naming only the record directories (ID-checked), when one could not be
    * sealed. Once.
    */
@@ -130,6 +143,14 @@ interface ServedLogin {
   withdrawn: boolean;
   /** The edge's commit exchange, while it runs. */
   committing?: Promise<boolean> | undefined;
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function invalid(what: string): WorkerMethodError {
@@ -240,6 +261,8 @@ export async function startVaultServer(
       stateDir: options.stateDir,
       written: sealed?.written,
       discarded: sealed?.discarded,
+      clients: options.integrationClients,
+      atlassianEndpoint: options.atlassianEndpoint,
     },
   });
 
@@ -425,6 +448,28 @@ export async function startVaultServer(
       const { userId, integration } = integrationOf(body);
       refuseLocked();
       return wrote(await vault.integrationClear(userId, integration));
+    },
+    [VAULT_METHODS.integrationConnect]: async (body) => {
+      const { userId, integration } = integrationOf(body);
+      const { code, redirectUri, site } = body;
+      if (
+        typeof code !== "string" ||
+        code.length > MAX_CONNECT_FIELD_CHARS ||
+        !CODE_RE.test(code) ||
+        typeof redirectUri !== "string" ||
+        redirectUri.length > MAX_CONNECT_FIELD_CHARS ||
+        !isHttpsUrl(redirectUri) ||
+        (site !== undefined && !isAtlassianSite(site))
+      )
+        throw invalid("integration connect");
+      refuseLocked();
+      return {
+        connect: await vault.integrationConnect(userId, integration, {
+          code,
+          redirectUri,
+          ...(site !== undefined ? { site } : {}),
+        }),
+      };
     },
     [VAULT_METHODS.loginStart]: (body) => {
       const { loginId, kind, accountId, tokenFile } = body;
@@ -670,7 +715,9 @@ export async function startVaultServer(
       stopping ??= (async () => {
         // All before the first await, so nothing starts once a stop began:
         // no login commits (each running one ends cancelled), the vault
-        // admits no login or renewal, and no edge links.
+        // admits no login, renewal or integration operation (queued ones are
+        // refused, a running one ends with its write and seal), and no edge
+        // links. The flush below runs after all of them.
         halted = true;
         clearInterval(renewTick);
         for (const login of logins.values()) withdraw(login);
