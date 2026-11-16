@@ -176,7 +176,17 @@ describe("content policy refusals", () => {
     assert.equal(shouldSuppressProviderRetry(info), true);
     assert.match(
       providerErrorDisplayText(info),
-      /^Provider flagged possible cybersecurity risk \(openai-codex\/gpt-6\.1-sol\): The provider flagged this conversation for possible cybersecurity risk\. .*an enterprise account can run this work\./,
+      /^Provider flagged possible cybersecurity risk \(openai-codex\/gpt-6\.1-sol\): The provider flagged this conversation for possible cybersecurity risk, so sending it again on the same account will likely be refused again\./,
+    );
+    // The classifier cannot know the account it ran on, so its advice holds
+    // for an enterprise account too and points at no action already spent.
+    assert.match(
+      info.detail ?? "",
+      /already on an enterprise account, narrow the request/,
+    );
+    assert.doesNotMatch(
+      providerErrorDisplayText(info),
+      /an enterprise account can run|Require enterprise account/,
     );
     assert.match(
       providerErrorDisplayText(info),
@@ -235,6 +245,26 @@ describe("content policy refusals", () => {
     });
     assert.equal(bio.refusalCategory, "bio");
     assert.equal(runFailureFacts(bio).cyberRefusal, undefined);
+  });
+
+  test("a category-less structured refusal never reads a category from the model's prose", () => {
+    for (const refusalCategory of [undefined, "", "  "]) {
+      const info = analyzeProviderError(
+        "I cannot help explain the cyber_policy filter or anything flagged for possible cybersecurity risk.",
+        {
+          provider: "anthropic",
+          structuredRefusal: true,
+          ...(refusalCategory !== undefined ? { refusalCategory } : {}),
+        },
+      );
+      assert.equal(info.kind, "content_policy");
+      assert.equal(info.refusalCategory, undefined);
+      assert.equal(runFailureFacts(info).cyberRefusal, undefined);
+      assert.match(
+        providerErrorDisplayText(info),
+        /^Provider refused the content/,
+      );
+    }
   });
 
   test("the cyber flag is never read from other failures' prose", () => {

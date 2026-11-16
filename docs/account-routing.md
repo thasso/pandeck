@@ -277,13 +277,18 @@ forks. After creation it can only be turned on, never cleared: by the user's
 (`setSessionRequiresEnterprise`, refused for deleted and non-user sessions,
 allowed while a turn runs), by an owning coordinator's `session_control`
 `require_enterprise` on its idle direct child, and by cybersecurity-refusal
-recovery (below). The inspector offers the action only when an enabled
-enterprise account of the session account's provider exists. Regular sessions
-may choose enterprise or personal accounts. The enterprise requirement
-constrains the account executing the session and automatically derived work.
-Neither normal ranking nor degradation may select a personal account. An
-explicit personal pick is refused when the requirement is set. This is an
-account constraint, not end-to-end data confinement.
+recovery (below). Both manual paths share `requireSessionEnterprise`, which also
+refuses a session bound to a non-enterprise account that is no subscription
+login: that account alone serves its models, so the session could never move and
+every later turn would be refused. The inspector offers the action only on a
+subscription login, when an enabled enterprise account of the same provider
+exists. Like a requirement set at creation, a later one is inherited by children
+the session spawns and excludes it from memory capture. Regular sessions may
+choose enterprise or personal accounts. The enterprise requirement constrains
+the account executing the session and automatically derived work. Neither normal
+ranking nor degradation may select a personal account. An explicit personal pick
+is refused when the requirement is set. This is an account constraint, not
+end-to-end data confinement.
 
 Every session turn passes the shared `session/runtimePrompt.ts` admission check,
 including restored sessions, first prompts and spawned peers on both engines. An
@@ -292,9 +297,12 @@ append. A turn starting on a disabled bound account, or an enterprise-required
 session's turn starting on a non-enterprise one, first moves the session; see
 [Live account switching](#live-account-switching). Enterprise flag changes apply
 to runs and one-shots admitted after the change; an already admitted run may
-finish. Policy is not rechecked inside provider engines. Manual compaction on
-both engines checks the same enterprise assertion at the shared host-command
-entry, before flushing memory or making its model call.
+finish, and a genuine steer into it (the facade and the runtime both still see
+it running) skips the check. A refusal names what is true: the bound account is
+missing, or names it as not marked as enterprise. Policy is not rechecked inside
+provider engines. Manual compaction on both engines checks the same enterprise
+assertion at the shared host-command entry, before flushing memory or making its
+model call.
 
 Enterprise scope follows work the session starts automatically. Spawned peers
 inherit `requiresEnterprise: true`, including approval-delayed creation. An
@@ -578,7 +586,11 @@ naming the disabled account, or saying no eligible enterprise account is
 available. A running turn, a steer into it, a steer-only message, a recovery
 continuation and a provider-initiated turn (`beginRuntimeProviderTurn`) are
 never moved this way. Disabling an account therefore takes effect on each bound
-session's next turn.
+session's next turn. Known limit: after a requirement is set, a Claude
+provider-initiated turn (a native reaction to a background completion) on the
+personal account is refused at that admission and its native reaction is
+discarded; the durable completion is still delivered later through an ordinary
+wake, whose turn moves the session first.
 
 An explicitly bound session can also move after its own subscription provider
 reports `quota`, `rate_limit` or structured `loginDeath`. A cybersecurity

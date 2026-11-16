@@ -129,6 +129,17 @@ describe("SessionInspector layout", () => {
     expect(action(render({ ...offered, credentialProfile: undefined }))).toBe(
       false,
     );
+    expect(
+      action(
+        render({
+          ...offered,
+          credentialProfile: {
+            name: "Endpoint",
+            provider: "openai-compatible",
+          },
+        }),
+      ),
+    ).toBe(false);
     const required = render({ ...offered, sessions: row(true) });
     expect(action(required)).toBe(false);
     expect(required).toContain("enterprise only");

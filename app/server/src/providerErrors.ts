@@ -200,6 +200,9 @@ function refusalCategoryOf(
 ): string | undefined {
   const structured = context.refusalCategory?.trim().toLowerCase();
   if (structured && /^[a-z0-9_-]{1,40}$/.test(structured)) return structured;
+  // A structured refusal names its category or has none: its prose is the
+  // model's own text, which may mention anything.
+  if (context.structuredRefusal === true) return undefined;
   return CYBER_REFUSAL_RE.test(raw) ? "cyber" : undefined;
 }
 
@@ -319,10 +322,10 @@ function classify(
       kind: "content_policy",
       title: "Provider flagged possible cybersecurity risk",
       summary:
-        "The provider flagged this conversation for possible cybersecurity risk. The same account will refuse it again; an enterprise account can run this work.",
+        "The provider flagged this conversation for possible cybersecurity risk, so sending it again on the same account will likely be refused again.",
       retryable: false,
       detail:
-        'A session on a personal subscription account moves to an eligible enterprise account automatically. With none available, enable one, or mark the session "Require enterprise account" and send again.',
+        "A session on a personal subscription account moves to an eligible enterprise account automatically when one is available, and its transcript notes the move; with none, enable one and send again. If it was already on an enterprise account, narrow the request or hand the work to a fresh session.",
     };
   if (contentRefusal) {
     return {

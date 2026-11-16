@@ -274,3 +274,57 @@ test("a refused steer frees its request id for the fallback delivery", async () 
   release();
   await retry;
 });
+
+test("requiring enterprise while a personal-account turn runs keeps steering into it and refuses the next turn", async () => {
+  const { createCredentialProfile } = await import("../credentialProfiles.ts");
+  const { sessionStore } = await import("../db/sessionStore.ts");
+  const { requireSessionEnterprise } = await import("../sessionAccount.ts");
+  const profile = createCredentialProfile({
+    name: "Personal steer",
+    provider: "claude",
+  });
+  const id = "steer-enterprise-marked";
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: profile.id,
+  });
+  const { runtime, live, sent, driver, release } = harnessed(id, true);
+  const bound = { ...driver, credentialProfileId: profile.id };
+  await startTurn(live as never);
+  bound.isRunning = true;
+  try {
+    assert.equal(requireSessionEnterprise(id), false);
+    // The admitted run keeps its account: both steer forms still join it.
+    await promptRuntimeSessionWithRuntime(runtime, bound, "steer only", {
+      steer: true,
+      steerOnly: true,
+    });
+    assert.ok(userTexts(runtime, id).includes("steer only"));
+    assert.ok(sent.some((s) => s.text.endsWith("steer only")));
+
+    release();
+    await Promise.resolve();
+    bound.isRunning = false;
+    // The next turn is where the requirement applies, and its refusal says
+    // what is actually true of the bound account.
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(runtime, bound, "next turn"),
+      /requires an enterprise account, but its bound account Personal steer is not marked as enterprise/,
+    );
+    assert.ok(!userTexts(runtime, id).includes("next turn"));
+    // A steer that has no admitted run to join is held to the same rule.
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(runtime, bound, "late steer", {
+        steer: true,
+      }),
+      /requires an enterprise account/,
+    );
+    assert.ok(!userTexts(runtime, id).includes("late steer"));
+  } finally {
+    release();
+    await runtime.disposeSession(id);
+    sessionStore.remove(id);
+  }
+});

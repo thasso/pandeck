@@ -263,9 +263,13 @@ export function assertSessionEnterpriseAccount(
   if (!source?.requiresEnterprise) return;
   const profileId = driver.credentialProfileId ?? source.credentialProfileId;
   const profile = profileId ? credentialProfileById(profileId) : undefined;
-  if (!profile?.enterprise)
+  if (!profile)
     throw new Error(
-      "This session requires an enterprise account, but its bound account is missing or no longer marked as enterprise.",
+      "This session requires an enterprise account, but its bound account is missing.",
+    );
+  if (!profile.enterprise)
+    throw new Error(
+      `This session requires an enterprise account, but its bound account ${profile.name} is not marked as enterprise.`,
     );
 }
 
@@ -336,15 +340,17 @@ async function deliverWithRuntime(
   receipt: PromptDeliveryReceipt,
 ): Promise<void> {
   const { admit, accountRecovery, ...options } = facadeOptions;
+  // A genuine steer joins a run admitted earlier; both owners must still
+  // consider that run live. Nothing awaits between the last such check and the
+  // runtime's own steer decision, so it cannot become a fresh turn.
+  const joinsAdmittedRun = () =>
+    options.steer === true &&
+    driver.isRunning &&
+    runtime.get(driver.sessionId)?.isRunning === true;
   const assertRecoveryAdmission = () => {
     // Keep the idle edge reserved without blocking a genuine steer into the
-    // admitted continuation. Both owners must still consider that run live.
-    if (
-      options.steer &&
-      driver.isRunning &&
-      runtime.get(driver.sessionId)?.isRunning
-    )
-      return;
+    // admitted continuation.
+    if (joinsAdmittedRun()) return;
     assertAccountRecoveryAdmission(driver.sessionId, accountRecovery);
   };
   assertRecoveryAdmission();
@@ -401,7 +407,9 @@ async function deliverWithRuntime(
     // `admit`, which must stay the last check: a peer admission reserves its
     // delivery, and a refusal after that reservation could strand the prompt.
     accountMove?.usable();
-    assertSessionEnterpriseAccount(driver);
+    // An enterprise requirement set while a run is admitted applies from the
+    // next turn: steering into that run stays allowed.
+    if (!joinsAdmittedRun()) assertSessionEnterpriseAccount(driver);
     admit?.();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
     if (accountMove) live.appendNotice(accountMove.notice);

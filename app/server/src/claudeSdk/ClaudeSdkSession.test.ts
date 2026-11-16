@@ -1151,6 +1151,22 @@ test.each([null, undefined, "bio"])(
   },
 );
 
+test.each([null, undefined])(
+  "a refusal with category %s is not cyber even when the model's text mentions it",
+  async (category) => {
+    const { result, errorInfo } = await refusedTurn([
+      refusalFrame({
+        text: "I won't explain how to slip past the cyber_policy filter.",
+      }),
+      noFallback(category),
+      refusalResult(false),
+    ]);
+    assert.equal(result.failure?.kind, "content_policy");
+    assert.equal(result.failure?.cyberRefusal, undefined);
+    assert.equal(errorInfo?.refusalCategory, undefined);
+  },
+);
+
 test("a subagent's refusal does not fail the turn", async () => {
   const subagent = {
     ...(refusalFrame({ text: "No." }) as object),

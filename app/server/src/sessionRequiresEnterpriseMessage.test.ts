@@ -83,6 +83,96 @@ test("inspector command makes a session enterprise-only and refuses deleted and 
   }
 });
 
+test("a session bound to a personal endpoint account is refused, since it could never move", async () => {
+  const { createCredentialProfile, patchCredentialProfile } =
+    await import("./credentialProfiles.ts");
+  const { requireSessionEnterprise } = await import("./sessionAccount.ts");
+  const { assertSessionEnterpriseAccount } =
+    await import("./session/runtimePrompt.ts");
+  const personal = createCredentialProfile({
+    name: "Personal endpoint",
+    provider: "openai-compatible",
+  });
+  const enterprise = createCredentialProfile({
+    name: "Enterprise endpoint",
+    provider: "openai-compatible",
+  });
+  patchCredentialProfile(enterprise.id, { enterprise: true });
+  const login = createCredentialProfile({
+    name: "Personal login",
+    provider: "claude",
+  });
+  const onPersonal = "requires-enterprise-personal-endpoint";
+  const onEnterprise = "requires-enterprise-enterprise-endpoint";
+  const onLogin = "requires-enterprise-personal-login";
+  for (const [id, profile] of [
+    [onPersonal, personal],
+    [onEnterprise, enterprise],
+    [onLogin, login],
+  ] as const)
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      credentialProfileId: profile.id,
+    });
+  const sent: ServerMessage[] = [];
+  const connection = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: (raw: string) => sent.push(JSON.parse(raw)),
+  } as never);
+  try {
+    await connection.handle({
+      type: "setSessionRequiresEnterprise",
+      sessionId: onPersonal,
+    });
+    assert.equal(sessionStore.get(onPersonal)?.requiresEnterprise, undefined);
+    assert.ok(
+      sent.some(
+        (msg) =>
+          msg.type === "error" &&
+          /Personal endpoint is the only account that serves this session's model/.test(
+            msg.message,
+          ),
+      ),
+    );
+    // Its turns keep running as before.
+    assertSessionEnterpriseAccount({
+      sessionId: onPersonal,
+      credentialProfileId: personal.id,
+    });
+
+    // An endpoint already enterprise, or a subscription login, may be marked.
+    assert.equal(requireSessionEnterprise(onEnterprise), false);
+    assertSessionEnterpriseAccount({
+      sessionId: onEnterprise,
+      credentialProfileId: enterprise.id,
+    });
+    assert.equal(requireSessionEnterprise(onLogin), false);
+    assert.throws(
+      () =>
+        assertSessionEnterpriseAccount({
+          sessionId: onLogin,
+          credentialProfileId: login.id,
+        }),
+      /its bound account Personal login is not marked as enterprise\.$/,
+    );
+    assert.throws(
+      () =>
+        assertSessionEnterpriseAccount({
+          sessionId: onLogin,
+          credentialProfileId: "cp_missing",
+        }),
+      /its bound account is missing\.$/,
+    );
+  } finally {
+    connection.dispose();
+    for (const id of [onPersonal, onEnterprise, onLogin])
+      sessionStore.remove(id);
+  }
+});
+
 test("wire validation accepts only a session id", () => {
   assert.equal(
     validateClientMessage({

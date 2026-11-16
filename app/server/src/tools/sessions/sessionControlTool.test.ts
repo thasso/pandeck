@@ -340,6 +340,39 @@ describe("session_control tool", () => {
     assert.equal(required(child), true);
   });
 
+  it("refuses to make a child on a personal endpoint account enterprise-only", async () => {
+    const { createCredentialProfile } =
+      await import("../../credentialProfiles.ts");
+    const endpoint = createCredentialProfile({
+      name: "Child endpoint",
+      provider: "openai-compatible",
+    });
+    const caller = seed("Caller");
+    const child = `session-control-${sequence++}`;
+    sessionStore.upsert({
+      id: child,
+      harness: "pi",
+      agentType: "assistant",
+      title: "Endpoint child",
+      credentialProfileId: endpoint.id,
+    });
+    sessions.push(child);
+    sessionStore.linkSpawned(caller, child);
+    setSessionControlRuntimeForTests({
+      isRunning: () => false,
+      abort: () => assert.fail("no abort"),
+    });
+    await assert.rejects(
+      () =>
+        tool().execute(
+          { operation: "require_enterprise", targetSessionId: child },
+          context(caller),
+        ),
+      /Child endpoint is the only account that serves this session's model and is not an enterprise account/,
+    );
+    assert.equal(sessionStore.get(child)?.requiresEnterprise, undefined);
+  });
+
   it("cancels only the caller's own waiting prompts", async () => {
     const caller = seed("Caller");
     const other = seed("Other sender");

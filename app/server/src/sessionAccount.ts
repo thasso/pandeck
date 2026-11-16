@@ -60,8 +60,9 @@ export function assertSessionAccountSwitch(
  * The user's or an owning coordinator's one-way "Require enterprise account":
  * from now on only enterprise accounts may run the session, and its next turn
  * moves it to one first (`moveOffDisabledAccount`). A running turn keeps its
- * account. Only user sessions qualify; the caller owns any further authority
- * checks and list publication.
+ * account. Only user sessions qualify, and not one bound to a non-enterprise
+ * account that is no subscription login (it could never move). The caller owns
+ * any further authority checks and list publication.
  * Answers whether the session already required it.
  */
 export function requireSessionEnterprise(sessionId: string): boolean {
@@ -70,6 +71,15 @@ export function requireSessionEnterprise(sessionId: string): boolean {
   if (row.scope !== "user")
     throw new Error("Only a user session can require an enterprise account.");
   if (row.requiresEnterprise) return true;
+  // Only a subscription login ever moves; any other account alone serves its
+  // models, so requiring enterprise of one that is not would refuse every turn.
+  const bound = row.credentialProfileId
+    ? credentialProfileById(row.credentialProfileId)
+    : undefined;
+  if (bound && !bound.enterprise && !isSubscriptionAccountKind(bound.provider))
+    throw new Error(
+      `${bound.name} is the only account that serves this session's model and is not an enterprise account, so the session cannot move to one.`,
+    );
   sessionStore.requireEnterprise(sessionId);
   return false;
 }

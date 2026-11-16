@@ -32,6 +32,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
+  isSubscriptionAccountKind,
   providerLabel,
   MIN_SESSION_PEER_TURN_CAP,
   MAX_SESSION_PEER_TURN_CAP,
@@ -1666,6 +1667,9 @@ export function SessionInspector({
                 sessionId &&
                 onRequireEnterprise &&
                 credentialProfile &&
+                // Only a subscription login ever moves; any other account
+                // alone serves its models (the server refuses those too).
+                isSubscriptionAccountKind(credentialProfile.provider) &&
                 enterpriseAccountAvailable &&
                 !requiresEnterprise
                   ? () => onRequireEnterprise(sessionId)
