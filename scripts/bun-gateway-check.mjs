@@ -868,8 +868,9 @@ export async function checkEdgeEntry(runtimeRoot) {
       socketPath: join(temp, "r.sock"),
       log: () => {},
     });
+    // `--`: a client id is never read as an option, whatever its first character.
     const mcpToken = (
-      await admin(edgeDir, "clients", "mcp-token", clientId)
+      await admin(edgeDir, "clients", "mcp-token", "--", clientId)
     ).trim();
 
     // (5) Gateway client 1.0 through the relay's socket (the client port).

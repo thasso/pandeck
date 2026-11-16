@@ -14,6 +14,9 @@
  * - `clients mcp-token <id>`: mints the client's MCP token (Task-1397),
  *   printed once and kept only as its hash, replacing an earlier one;
  *   `clients mcp-token-revoke <id>` removes it
+ * - A client id enrolled before the `c_` prefix may start with `-`; it goes
+ *   after `--` (`clients revoke -- -AbC…`), which ends the options. Options
+ *   such as `--control-socket` come before `--`.
  * - `ca`: prints the gateway's CA, which a relay's enrollment trusts
  *
  * Pairing a vault in its own process (`gateway-vault/1.0`, plan Task-1394).
@@ -61,7 +64,7 @@ import { selfSignedIdentity } from "./x509.ts";
 
 function usage(): never {
   console.error(
-    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | user list | user claim <id> --email <addr> [--ttl-minutes <n>] | enroll-code --user <id> --label <text> | clients list | clients revoke <id> | clients mcp-token <id> | clients mcp-token-revoke <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file> | vault-recipient (add (--from-piv <slot> | --pem <file> (--slot <slot> | --private-key <file>)) | list | remove <kid>) | vault-seal-existing | vault-reseal | unlock) [--control-socket <path>]",
+    "usage: gateway-admin --state-dir <dir> (user add <id> [--label <text>] | user list | user claim <id> --email <addr> [--ttl-minutes <n>] | enroll-code --user <id> --label <text> | clients list | clients revoke [--] <id> | clients mcp-token [--] <id> | clients mcp-token-revoke [--] <id> | ca | vault-init [--host <name>]... [--edge-cert <file>] | vault-pair --vault-cert <file> | vault-recipient (add (--from-piv <slot> | --pem <file> (--slot <slot> | --private-key <file>)) | list | remove <kid>) | vault-seal-existing | vault-reseal | unlock) [--control-socket <path>]\n(an id starting with '-' goes after '--'; options come before it)",
   );
   process.exit(2);
 }

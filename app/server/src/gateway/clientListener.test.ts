@@ -283,6 +283,7 @@ test("an enrollment code is used once, expires, and yields a certificate of the 
   const cert = new X509Certificate(first.json.certificatePem as string);
   const ca = new X509Certificate(gateway.clients!.caPem);
   assert.ok(cert.checkIssued(ca) && cert.verify(ca.publicKey));
+  assert.match(first.json.clientId as string, /^c_[A-Za-z0-9_-]{16}$/);
   assert.equal(cert.subject, `CN=${first.json.clientId as string}`);
   assert.equal(first.json.modelPort, gateway.clients!.modelPort);
 

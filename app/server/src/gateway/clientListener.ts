@@ -34,7 +34,6 @@
  * live in `edge-tls.json`, the clients in `clients.json` (`clientRegistry.ts`),
  * both under the state directory.
  */
-import { randomBytes } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import type net from "node:net";
@@ -71,6 +70,7 @@ import {
   ClientRegistry,
   ClientRegistryLockedError,
   mcpTokenMatches,
+  newClientId,
   type GatewayClient,
 } from "./clientRegistry.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
@@ -970,7 +970,7 @@ export async function startClientListener(
             return json(res, 400, { error: "code and an EC P-256 key needed" });
           let certificatePem = "";
           const client = registry.redeem(code, ({ userId, label }) => {
-            const id = randomBytes(12).toString("base64url");
+            const id = newClientId();
             const issued = issueClientCertificate(edgeTls, id, publicKey);
             certificatePem = issued.certificatePem;
             return {

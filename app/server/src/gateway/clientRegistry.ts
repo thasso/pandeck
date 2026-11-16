@@ -123,6 +123,18 @@ function newUserId(state: Stored): string {
   }
 }
 
+/**
+ * A new client's opaque random id; it fits `ID_RE`. The `c_` prefix keeps it
+ * from starting with `-`, which an argument parser would read as an option
+ * (`gateway-admin clients revoke <id>`). Ids enrolled before the prefix keep
+ * their shape and may start with `-`; the admin CLI takes them after `--`.
+ */
+export function newClientId(
+  random: (size: number) => Buffer = randomBytes,
+): string {
+  return `c_${random(12).toString("base64url")}`;
+}
+
 function hashOf(code: string): string {
   return createHash("sha256").update(code, "utf8").digest("hex");
 }
