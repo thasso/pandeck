@@ -32,8 +32,10 @@
  *   `{connected: true, site, email, displayName?, accountId?}`.
  * - `integrations.clear {integration}` answers `{}`.
  * - `integrations.status {integration, check?}` answers `{connected, site?,
- *   email?, displayName?, accountId?, problem?}`: `site` and `email` whenever
- *   a credential is stored, and with `check` whether it works. Never a token.
+ *   email?, displayName?, accountId?, problem?}`: `site` whenever a
+ *   credential is stored, `email` for an API token (an OAuth record has none),
+ *   and with `check` whether it works; `problem: "rejected"` also when the
+ *   vault's OAuth refresh was refused. Never a token.
  *
  * The edge's tools (Task-1398), run with the client's user's credential:
  *

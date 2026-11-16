@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { FAKE_ACCESS } from "../test/atlassianFake.ts";
 import { atlassianDownload, atlassianFetch } from "./atlassianFetch.ts";
 
 const CONFIG = {
@@ -77,6 +78,155 @@ describe("atlassianDownload", () => {
     for (const path of ["https://evil.test/x", "//evil.test/x", "x"])
       await expect(
         atlassianDownload(CONFIG, "Confluence", path, 10),
+      ).rejects.toThrow(/site-relative/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// --- Bearer (Task-1411): the destination is fixed, never the site ----------
+
+const CLOUD_ID = "00000000-0000-4000-8000-00000000fa4e";
+const FAKE_ACCESS_BEARER = FAKE_ACCESS;
+const BEARER = {
+  host: "castlabs-test.atlassian.net",
+  cloudId: CLOUD_ID,
+  bearerToken: FAKE_ACCESS_BEARER,
+};
+
+describe("atlassianFetch with a Bearer config", () => {
+  test("Jira goes to the fixed Jira base for the cloud id, with Bearer", async () => {
+    const fetchMock = stubFetch(() => Response.json({ accountId: "a" }));
+    await atlassianFetch(
+      BEARER,
+      "Jira",
+      "GET",
+      "/rest/api/3/myself",
+      undefined,
+      {
+        expand: "groups",
+      },
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/3/myself?expand=groups`,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: `Bearer ${FAKE_ACCESS_BEARER}`,
+    });
+  });
+
+  test("Confluence content goes to the fixed Confluence base", async () => {
+    const fetchMock = stubFetch(() => Response.json({ id: "1" }));
+    await atlassianFetch(
+      BEARER,
+      "Confluence",
+      "GET",
+      "/wiki/rest/api/content/1",
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `https://api.atlassian.com/ex/confluence/${CLOUD_ID}/wiki/rest/api/content/1`,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: `Bearer ${FAKE_ACCESS_BEARER}`,
+    });
+  });
+
+  test("a hostile site still reaches only api.atlassian.com", async () => {
+    const fetchMock = stubFetch(() => Response.json({}));
+    await atlassianFetch(
+      { ...BEARER, host: "https://evil.example" },
+      "Jira",
+      "GET",
+      "/rest/api/3/myself",
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/3/myself`,
+    );
+  });
+
+  test("absolute, scheme-relative, relative and escaping paths are refused before any request", async () => {
+    const fetchMock = stubFetch(() => Response.json({}));
+    for (const path of [
+      "https://evil.example/x",
+      "http://api.atlassian.com/ex/jira/x",
+      "//evil.example/x",
+      "rest/api/3/myself",
+      "/../../confluence/x",
+      "/%2e%2e/%2e%2e/confluence/x",
+      "/..",
+      "/\\evil.example/x",
+    ])
+      await expect(
+        atlassianFetch(BEARER, "Jira", "GET", path),
+        path,
+      ).rejects.toThrow(/site-relative/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("a cloud id that is not a UUID, or no token, is refused before any request", async () => {
+    const fetchMock = stubFetch(() => Response.json({}));
+    for (const cloudId of [
+      "x",
+      `${CLOUD_ID}/..`,
+      "../jira",
+      CLOUD_ID.toUpperCase(),
+    ])
+      await expect(
+        atlassianFetch({ ...BEARER, cloudId }, "Jira", "GET", "/rest/api/3/x"),
+        cloudId,
+      ).rejects.toThrow(/cloud id/);
+    await expect(
+      atlassianFetch({ ...BEARER, bearerToken: "" }, "Jira", "GET", "/x"),
+    ).rejects.toThrow(/access token/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("the Basic member keeps taking an absolute URL as the whole URL", async () => {
+    const fetchMock = stubFetch(() => Response.json({}));
+    await atlassianFetch(
+      CONFIG,
+      "Jira",
+      "GET",
+      "https://example.atlassian.net/rest/api/3/search?jql=x",
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://example.atlassian.net/rest/api/3/search?jql=x",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: `Basic ${Buffer.from("a@b.c:t").toString("base64")}`,
+    });
+  });
+});
+
+describe("atlassianDownload with a Bearer config", () => {
+  test("an attachment comes from the fixed Confluence base, with Bearer", async () => {
+    const fetchMock = stubFetch(() => new Response("png"));
+    const result = await atlassianDownload(
+      BEARER,
+      "Confluence",
+      "/wiki/download/attachments/1/a.png",
+      10,
+    );
+    expect(new TextDecoder().decode(result.bytes)).toBe("png");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `https://api.atlassian.com/ex/confluence/${CLOUD_ID}/wiki/download/attachments/1/a.png`,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual({
+      method: "GET",
+      headers: { Authorization: `Bearer ${FAKE_ACCESS_BEARER}` },
+    });
+  });
+
+  test("never sends the access token off the API base", async () => {
+    const fetchMock = stubFetch(() => new Response("x"));
+    for (const path of [
+      "https://evil.example/x",
+      "//evil.example/x",
+      "x",
+      "/../../jira/x",
+    ])
+      await expect(
+        atlassianDownload(BEARER, "Confluence", path, 10),
+        path,
       ).rejects.toThrow(/site-relative/);
     expect(fetchMock).not.toHaveBeenCalled();
   });

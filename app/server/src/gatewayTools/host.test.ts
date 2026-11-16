@@ -270,6 +270,10 @@ test("credential outcomes become fixed tool errors; an undecodable credential is
       { ok: false, absent: true },
       "Jira is not connected for this user; connect it in Pandeck's Settings.",
     ],
+    [
+      { ok: false, rejected: true },
+      "Atlassian rejected the credential; reconnect Jira on the gateway's page.",
+    ],
     [{ ok: false, locked: true }, "The vault is locked."],
     [{ ok: false, unavailable: true }, "The vault did not answer; try again."],
     [

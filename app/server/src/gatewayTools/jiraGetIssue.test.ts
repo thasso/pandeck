@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import { setRetrySleepForTests } from "../httpRetry.ts";
+import { FAKE_ACCESS } from "../test/atlassianFake.ts";
 import { encodeAtlassianCredential } from "./atlassian.ts";
 import { createToolHost, type ToolCaller } from "./host.ts";
 import { EDGE_TOOLS } from "./tools.ts";
@@ -194,4 +195,47 @@ test("the deadline cuts a comments fetch: it sees the abort and no retry runs", 
   assert.equal(commentSignal?.aborted, true);
   assert.equal(commentCalls, 1);
   assert.deepEqual(sleeps, []);
+});
+
+test("with the vault's OAuth view: the fixed Jira base for the cloud id, Bearer, and browse URLs on the site", async () => {
+  const cloudId = "00000000-0000-4000-8000-00000000fa4e";
+  const FAKE_ACCESS_VIEW = FAKE_ACCESS;
+  const view = JSON.stringify({
+    kind: "atlassian-oauth",
+    site: "castlabs-test.atlassian.net",
+    cloudId,
+    accessToken: FAKE_ACCESS_VIEW,
+    expiresAt: 1_900_000_000_000,
+  });
+  const calls = stubFetch(
+    () => new Response(JSON.stringify({ ...issueBody("d"), key: "OPS-1" })),
+  );
+  const host = createToolHost(EDGE_TOOLS, { log: () => {} });
+  const answer = await host.call(
+    "jira_get_issue",
+    { issue: "OPS-1" },
+    {
+      clientId: "client-1",
+      credential: () => Promise.resolve({ ok: true, credential: view }),
+    },
+  );
+  assert.ok(answer.ok);
+  assert.equal(calls.length, 1);
+  const url = new URL(calls[0]!.url);
+  assert.equal(
+    `${url.origin}${url.pathname}`,
+    `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/OPS-1`,
+  );
+  assert.match(url.searchParams.get("fields")!, /^summary,project,/);
+  assert.equal(calls[0]!.auth, `Bearer ${FAKE_ACCESS_VIEW}`);
+  const { jiraHost, issue } = JSON.parse(answer.text) as {
+    jiraHost: string;
+    issue: { issueUrl: string };
+  };
+  assert.equal(jiraHost, "castlabs-test.atlassian.net");
+  assert.equal(
+    issue.issueUrl,
+    "https://castlabs-test.atlassian.net/browse/OPS-1",
+  );
+  assert.doesNotMatch(answer.text, new RegExp(FAKE_ACCESS_VIEW));
 });

@@ -13,6 +13,12 @@
  * Atlassian credential, clients and MCP tokens), so the page and enrolled
  * clients run the same implementation.
  *
+ * The UI config's Atlassian OAuth client follows the vault's topology
+ * (`atlassianClientFor`, Task-1411): the in-process vault takes
+ * `atlassian.clientId` and `atlassian.clientSecret` together or neither; a
+ * remote vault holds its own client, so the edge keeps only the id (for the
+ * page's sign-in link) and never passes or uses a secret it finds.
+ *
  * It imports `gateway/`, `gatewayTools/`, `gatewayWeb/` and `node:` only: no
  * login driver, harness or SDK, so the packaged entry's closure holds none
  * (`workerBoundary.test.ts`). It reads no `DATA_DIR`.
@@ -30,6 +36,7 @@ import {
   type UserOperations,
 } from "./gateway/userOperations.ts";
 import type { EdgeTools } from "./gateway/edgeTools.ts";
+import type { IntegrationClients } from "./gateway/integrationClients.ts";
 import type { LoginDrivers } from "./gateway/vaultPort.ts";
 import { createEdgeTools } from "./gatewayTools/index.ts";
 import {
@@ -44,6 +51,7 @@ import {
 import {
   GatewayWebConfigError,
   loadGatewayWebConfig,
+  type AtlassianPreset,
 } from "./gatewayWeb/config.ts";
 import {
   IntegrationsRefusal,
@@ -255,8 +263,35 @@ function webClients(operations: UserOperations): GatewayWebClients {
 /** A start the operator must fix (exit 2): not paired, a bad UI config. */
 export class EdgeStartRefusal extends Error {}
 
+/**
+ * The UI config's Atlassian OAuth client for this vault topology: with the
+ * vault in this process, both halves or neither (else `EdgeStartRefusal`)
+ * and the pair goes to it; with a remote vault nothing goes anywhere, and a
+ * configured secret only earns the fixed `warning`. No text holds a value.
+ */
+export function atlassianClientFor(
+  preset: AtlassianPreset | undefined,
+  remoteVault: boolean,
+): { integrationClients?: IntegrationClients; warning?: string } {
+  const clientId = preset?.clientId;
+  const clientSecret = preset?.clientSecret;
+  if (remoteVault)
+    return clientSecret !== undefined
+      ? {
+          warning:
+            "atlassian.clientSecret in the UI config is ignored: the remote vault holds the Atlassian client secret; remove it from this file",
+        }
+      : {};
+  if (clientId === undefined && clientSecret === undefined) return {};
+  if (clientId === undefined || clientSecret === undefined)
+    throw new EdgeStartRefusal(
+      "atlassian.clientId and atlassian.clientSecret must both be set, or neither, with the vault in this process",
+    );
+  return { integrationClients: { atlassian: { clientId, clientSecret } } };
+}
+
 export interface EdgeExtras {
-  /** The entry's own lines: the ports line. */
+  /** The entry's own lines: the ports line, the topology warning. */
   log: (line: string) => void;
   /** The in-process vault's login drivers, without `--vault-host`. */
   loginDrivers?: LoginDrivers;
@@ -302,6 +337,11 @@ export async function startEdge(
       throw err;
     }
   }
+  const atlassianClient = atlassianClientFor(
+    ui?.atlassian,
+    vault !== undefined,
+  );
+  if (atlassianClient.warning) extras.log(atlassianClient.warning);
 
   const gateway = await startGateway({
     stateDir,
@@ -323,6 +363,9 @@ export async function startEdge(
       : extras.loginDrivers
         ? { loginDrivers: extras.loginDrivers }
         : {}),
+    ...(atlassianClient.integrationClients
+      ? { integrationClients: atlassianClient.integrationClients }
+      : {}),
   });
   const edge = gateway.clients!;
   const registry = edge.registry;

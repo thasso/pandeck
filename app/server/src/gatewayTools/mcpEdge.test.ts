@@ -4,6 +4,12 @@
  * host and an in-process vault, against a stubbed Atlassian `fetch`. Two
  * users, three clients; credentials set over gateway client 1.0 through each
  * relay's socket. Every value is fake.
+ *
+ * And one Atlassian OAuth record end to end (Task-1411): connected through a
+ * real vault process's link against the loopback Atlassian fake, then read
+ * by an edge on that vault's link for an MCP call that reaches the stubbed
+ * Jira with Bearer on the fixed API base; a refused refresh becomes the
+ * fixed reconnect text and the status problem `rejected`.
  */
 import assert from "node:assert/strict";
 import {
@@ -39,6 +45,21 @@ import {
 } from "../workerProtocol/connection.ts";
 import type { Payload } from "../workerProtocol/codec.ts";
 import { dialUnixSocket } from "../workerProtocol/unixSocketTransport.ts";
+import {
+  createRemoteVault,
+  type RemoteVaultOptions,
+} from "../gateway/remoteVault.ts";
+import { startVaultServer } from "../gateway/vaultServer.ts";
+import { selfSignedIdentity } from "../gateway/x509.ts";
+import {
+  FAKE_CLIENT,
+  FAKE_CLOUD_ID,
+  FAKE_CODE,
+  FAKE_REDIRECT,
+  FAKE_SITE,
+  jsonResponder,
+  startAtlassianFake,
+} from "../test/atlassianFake.ts";
 import { createEdgeTools } from "./index.ts";
 
 const realFetch = globalThis.fetch;
@@ -123,6 +144,16 @@ interface Edge {
 }
 
 async function edge(deadlineMs?: number): Promise<Edge> {
+  return edgeWith({ ...(deadlineMs ? { deadlineMs } : {}) });
+}
+
+async function edgeWith({
+  deadlineMs,
+  vault,
+}: {
+  deadlineMs?: number;
+  vault?: RemoteVaultOptions;
+}): Promise<Edge> {
   const lines: string[] = [];
   const log = (line: string) => lines.push(line);
   const inner = createEdgeTools({ log, ...(deadlineMs ? { deadlineMs } : {}) });
@@ -155,6 +186,7 @@ async function edge(deadlineMs?: number): Promise<Edge> {
     log,
     clients: {},
     tools,
+    ...(vault ? { vault } : {}),
   });
   open.push(gateway);
   gateway.clients!.registry.addUser("A");
@@ -629,4 +661,124 @@ test("no token or credential reaches a log, an MCP error, a method error or the 
   // clients.json holds the MCP tokens only as hashes.
   const clients = readFileSync(join(e.stateDir, "clients.json"), "utf8");
   assert.match(clients, /"mcpTokenHash": ?"[0-9a-f]{64}"/);
+});
+
+test("an OAuth record connected in a vault process reaches Jira with Bearer through the vault link, the relay and /mcp", async () => {
+  const atl = await startAtlassianFake();
+  open.push({ close: () => atl.close() });
+  const vaultId = selfSignedIdentity("pandeck-gateway-vault", "server", [
+    "localhost",
+    "127.0.0.1",
+  ]);
+  const edgeId = selfSignedIdentity("pandeck-gateway-edge", "client");
+  const vaultLines: string[] = [];
+  const vaultDir = mkdtempSync(join(relayRoot, "vault-"));
+  const vault = await startVaultServer({
+    stateDir: vaultDir,
+    port: 0,
+    tls: {
+      keyPem: vaultId.keyPem,
+      certPem: vaultId.certPem,
+      peerCertPem: edgeId.certPem,
+    },
+    controlSocket: join(vaultDir, "control.sock"),
+    log: (line) => vaultLines.push(line),
+    integrationClients: { atlassian: FAKE_CLIENT },
+    atlassianEndpoint: atl.endpoint,
+  });
+  open.push(vault);
+  const link = {
+    host: "127.0.0.1",
+    port: vault.port,
+    tls: {
+      keyPem: edgeId.keyPem,
+      certPem: edgeId.certPem,
+      peerCertPem: vaultId.certPem,
+    },
+  };
+
+  // Every access token is due within the vault's refresh margin.
+  atl.expiresInS = 60;
+  // PR1 has no browser connect: the code goes in over the vault link, as
+  // the edge's connect will, before the edge itself links.
+  const connector = createRemoteVault(link, {
+    profiles: () => [],
+    liveLeases: () => [],
+    report: () => {},
+    log: () => {},
+  });
+  for (let i = 0; i < 200 && !connector.connected(); i++) await delay(25);
+  assert.deepEqual(
+    await connector.integrationConnect("A", "atlassian", {
+      code: FAKE_CODE,
+      redirectUri: FAKE_REDIRECT,
+    }),
+    { ok: true, site: FAKE_SITE, cloudId: FAKE_CLOUD_ID },
+  );
+  connector.close();
+
+  const e = await edgeWith({ vault: link });
+  const a1 = await e.relay("A");
+  const token = e.gateway.clients!.registry.setMcpToken(a1.clientId);
+  const linkA = await clientLink(a1.relay);
+  let status: Record<string, unknown> = {};
+  for (let i = 0; i < 200; i++) {
+    status = await linkA.status();
+    if (status.connected) break;
+    await delay(25);
+  }
+  // An OAuth record has a site and no email.
+  assert.deepEqual(status, { connected: true, site: FAKE_SITE });
+
+  const client = await mcpClient(a1.url, token);
+  outbound = [];
+  const answer = await client.callTool({
+    name: "jira_get_issue",
+    arguments: { issue: "OPS-1" },
+  });
+  assert.equal(answer.isError, undefined, textOf(answer));
+  assert.equal(outbound.length, 1);
+  assert.equal(
+    `${outbound[0]!.url.origin}${outbound[0]!.url.pathname}`,
+    `https://api.atlassian.com/ex/jira/${FAKE_CLOUD_ID}/rest/api/3/issue/OPS-1`,
+  );
+  const access = outbound[0]!.auth!;
+  assert.match(access, /^Bearer fake-atl-access-\d+$/);
+  const result = JSON.parse(textOf(answer)) as {
+    jiraHost: string;
+    issue: { issueUrl: string };
+  };
+  assert.equal(result.jiraHost, FAKE_SITE);
+  assert.equal(result.issue.issueUrl, `https://${FAKE_SITE}/browse/OPS-1`);
+
+  // Every get refreshes (the token expires within the margin); a refused
+  // refresh is the fixed reconnect text, with no Jira request, and the
+  // status problem `rejected`.
+  atl.token = jsonResponder(400, { error: "invalid_grant" });
+  outbound = [];
+  const rejected = await client.callTool({
+    name: "jira_get_issue",
+    arguments: { issue: "OPS-2" },
+  });
+  assert.equal(rejected.isError, true);
+  assert.equal(
+    textOf(rejected),
+    "Atlassian rejected the credential; reconnect Jira on the gateway's page.",
+  );
+  assert.equal(outbound.length, 0);
+  assert.deepEqual(await linkA.status(), {
+    connected: false,
+    problem: "rejected",
+  });
+
+  // No refresh token or client secret reached the edge, a log or an answer.
+  const seen = [
+    ...e.lines,
+    ...vaultLines,
+    JSON.stringify(answer),
+    JSON.stringify(rejected),
+    JSON.stringify(status),
+  ].join("\n");
+  assert.doesNotMatch(seen, /fake-atl-refresh|fake-atl-access/);
+  assert.ok(!seen.includes(FAKE_CLIENT.clientSecret));
 });

@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3600 reason="Twelve contracts; edge tools add the injected-tools rule, the per-call credential read of /mcp and tools.call, an integration-record writer next to logins and the sealed store, and approval enrollment's collect that never touches a token." task=1410 date=2026-11-16 -->
+<!-- instruction-budget: bytes=3750 reason="Twelve contracts; edge tools add the injected-tools rule, the per-call credential read of /mcp and tools.call, approval enrollment's collect that never touches a token, and the integration records' four writers (OAuth connect and rotating refresh) with their per-record lane and stop." task=1411 date=2026-11-16 -->
 
 # Credential gateway
 
@@ -20,8 +20,9 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
   creates a directory, Codex's only through the injected pi port's lock-fenced
   atomic store. Exception: a login's ingest (`vaultLogins.ts`) renames a checked
   credential in, in the same lane; its driver writes only its own fresh
-  directory. Integration records: only the vault's put and clear
-  (`vaultIntegrations.ts`), sealed right after.
+  directory. Integration records: only the vault's put, clear, connect and
+  refresh (`vaultIntegrations.ts`), one at a time per record, sealed right
+  after; a stop lets the running one finish and refuses the rest.
 - No tool code or package here: tools come only as the injected `EdgeTools`,
   which get typed credential outcomes, never a tool error built here. `/mcp`
   needs the client's certificate, no `Origin`, and its MCP token (hashed); it

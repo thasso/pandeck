@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "vitest";
+import { FAKE_CLIENT } from "../test/atlassianFake.ts";
 import {
   admittedEmail,
   defaultDistDir,
@@ -107,6 +108,58 @@ test("the Atlassian preset is optional and, when given, fixes the site and the s
     site: "t.atlassian.net",
     emailFromSignIn: false,
   });
+});
+
+test("the Atlassian OAuth client: clientId and clientSecret each load alone or together; empty ones refuse without echoing", () => {
+  const load = (atlassian: Record<string, unknown>) =>
+    loadGatewayWebConfig(fixture((c) => (c.atlassian = atlassian)).file)
+      .atlassian;
+  assert.deepEqual(load({ clientId: FAKE_CLIENT.clientId }), {
+    emailFromSignIn: false,
+    clientId: FAKE_CLIENT.clientId,
+  });
+  assert.deepEqual(load({ clientSecret: FAKE_CLIENT.clientSecret }), {
+    emailFromSignIn: false,
+    clientSecret: FAKE_CLIENT.clientSecret,
+  });
+  assert.deepEqual(
+    load({
+      site: "t.atlassian.net",
+      clientId: FAKE_CLIENT.clientId,
+      clientSecret: FAKE_CLIENT.clientSecret,
+    }),
+    {
+      site: "t.atlassian.net",
+      emailFromSignIn: false,
+      clientId: FAKE_CLIENT.clientId,
+      clientSecret: FAKE_CLIENT.clientSecret,
+    },
+  );
+  for (const [atlassian, field] of [
+    [
+      { clientId: "", clientSecret: FAKE_CLIENT.clientSecret },
+      /atlassian\.clientId/,
+    ],
+    [
+      { clientId: " ", clientSecret: FAKE_CLIENT.clientSecret },
+      /atlassian\.clientId/,
+    ],
+    [
+      { clientId: FAKE_CLIENT.clientId, clientSecret: "" },
+      /atlassian\.clientSecret/,
+    ],
+    [
+      { clientId: FAKE_CLIENT.clientId, clientSecret: 7 },
+      /atlassian\.clientSecret/,
+    ],
+  ] as const) {
+    const message = refusal(fixture((c) => (c.atlassian = atlassian)).file);
+    assert.match(message, field);
+    assert.doesNotMatch(
+      message,
+      new RegExp(`${FAKE_CLIENT.clientId}|${FAKE_CLIENT.clientSecret}`),
+    );
+  }
 });
 
 test("the port defaults to 443", () => {
