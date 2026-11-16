@@ -1774,6 +1774,10 @@ path above.
   reads its code from stdin, or from `--code-file <0600 file>`. Never put the
   code in argv or a shell command. For example, redirect a protected code file
   into stdin rather than using `echo <code>`.
+- **Client ids.** A client's id, its certificate's CN, is `c_` and 16 random
+  base64url characters, so it never starts with `-`. Ids enrolled before the
+  prefix keep their shape; one that starts with `-` goes after `--` on the admin
+  command line (`clients revoke -- <id>`), where any option comes before `--`.
 - **`gateway-client/1.0`** (`gateway/clientMethods.ts`), on the worker
   protocol's framing: `client.hello`, `accounts.list` and the gateway's
   `accounts.changed`, `leases.grant`, `leases.client` (the server's own

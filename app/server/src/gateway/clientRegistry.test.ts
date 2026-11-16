@@ -20,6 +20,7 @@ import {
   EnrollmentLimitError,
   clientListLine,
   mcpTokenMatches,
+  newClientId,
 } from "./clientRegistry.ts";
 
 const directories: string[] = [];
@@ -191,6 +192,59 @@ test("admin mutations fail loudly on a stale lock and never report success", asy
     ),
   );
   assert.ok(registry.active("c0", "fp0"));
+}, 10_000);
+
+test("a new client id never starts with '-', even when its random part does", () => {
+  // 0xf8 opens with the six bits 111110, base64url's '-'.
+  const random = (size: number) => Buffer.alloc(size, 0xf8);
+  assert.ok(random(12).toString("base64url").startsWith("-"));
+  const id = newClientId(random);
+  assert.equal(id, `c_${random(12).toString("base64url")}`);
+  assert.match(id, /^c_[A-Za-z0-9_-]{16}$/);
+  assert.match(newClientId(), /^c_[A-Za-z0-9_-]{16}$/);
+});
+
+test("the admin CLI takes an earlier client id starting with '-' after '--'", async () => {
+  const { dir, registry } = fixture();
+  const id = "-3xYlegacyId0000";
+  registry.redeem(registry.createCode("u", "old"), () => ({
+    id,
+    userId: "u",
+    label: "old",
+    fingerprint: "fp0",
+    createdAt: 1,
+  }));
+  const cli = new URL("./adminMain.ts", import.meta.url).pathname;
+  const admin = (...args: string[]) =>
+    run(process.execPath, [
+      "--import",
+      "tsx",
+      cli,
+      "--state-dir",
+      dir,
+      ...args,
+    ]);
+  await assert.rejects(admin("clients", "revoke", id), (err: unknown) => {
+    assert.match((err as { stderr: string }).stderr, /after '--'/);
+    return true;
+  });
+  assert.ok(registry.active(id, "fp0"));
+
+  const minted = await admin("clients", "mcp-token", "--", id);
+  assert.match(minted.stdout, /^pgmcp_/);
+  assert.equal(
+    mcpTokenMatches(registry.active(id, "fp0")!, minted.stdout.trim()),
+    true,
+  );
+  assert.equal(
+    (await admin("clients", "mcp-token-revoke", "--", id)).stdout,
+    `client ${id} MCP token revoked\n`,
+  );
+  assert.equal(
+    (await admin("clients", "revoke", "--", id)).stdout,
+    `client ${id} revoked\n`,
+  );
+  assert.equal(registry.active(id, "fp0"), undefined);
 }, 10_000);
 
 test("failed writes release their lock and corrupt data is not overwritten", () => {
