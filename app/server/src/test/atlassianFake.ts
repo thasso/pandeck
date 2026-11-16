@@ -1,7 +1,7 @@
 /**
  * A loopback stand-in for Atlassian's OAuth hosts (Task-1411): one HTTPS
- * server presenting a CA-issued certificate for `auth.atlassian.com` or
- * `api.atlassian.com` by the TLS name asked for, reached through the vault's
+ * server presenting one CA-issued `*.atlassian.com` certificate for both
+ * `auth.atlassian.com` and `api.atlassian.com`, reached through the vault's
  * connect override (`AtlassianEndpoint`), so the TLS name and `Host` stay the
  * real ones and are recorded per request. It imports nothing from `gateway/`
  * (`workerBoundary.test.ts`). It answers `POST /oauth/token` with rotating fake
@@ -13,13 +13,11 @@
 import type { ServerResponse } from "node:http";
 import https from "node:https";
 import type net from "node:net";
-import tls, { type TLSSocket } from "node:tls";
+import type { TLSSocket } from "node:tls";
 import {
   issueLeafCertificate,
   loadOrCreateCa,
 } from "../packageProxy/certificateAuthority.ts";
-
-const HOSTS = ["auth.atlassian.com", "api.atlassian.com"] as const;
 
 export const FAKE_CLIENT = {
   clientId: "fake-atlassian-client-id",
@@ -111,12 +109,8 @@ export const ONE_SITE = [
 
 export async function startAtlassianFake(): Promise<AtlassianFake> {
   const ca = await loadOrCreateCa();
-  const leaves = new Map<string, { key: string; cert: string }>(
-    HOSTS.map((host) => {
-      const leaf = issueLeafCertificate(ca, host);
-      return [host, { key: leaf.keyPem, cert: leaf.certPem }];
-    }),
-  );
+  // Bun's https.Server ignores SNICallback; one leaf must cover both names.
+  const leaf = issueLeafCertificate(ca, "*.atlassian.com");
   const seen: SeenAtlassianRequest[] = [];
   const issuedRefresh: string[] = [];
   const holds = new Map<
@@ -161,12 +155,8 @@ export async function startAtlassianFake(): Promise<AtlassianFake> {
 
   const server = https.createServer(
     {
-      ...leaves.get(HOSTS[0])!,
-      // Each name gets its own certificate; any other gets none that fits.
-      SNICallback: (name, done) => {
-        const leaf = leaves.get(name);
-        done(null, leaf ? tls.createSecureContext(leaf) : undefined);
-      },
+      key: leaf.keyPem,
+      cert: leaf.certPem,
     },
     (req, res) => {
       const chunks: Buffer[] = [];

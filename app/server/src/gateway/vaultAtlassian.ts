@@ -189,16 +189,17 @@ function parseTokens(body: string): AtlassianTokens | undefined {
 }
 
 /**
- * Atlassian refused the grant: a 4xx other than a timeout or rate limit.
- * Anything else may pass, so the stored record is kept.
+ * An exchange refusal: a 4xx other than a timeout or rate limit.
+ * Refresh has a narrower refusal list: only 400/401/403 reject its grant.
  */
-function isRefusal(status: number): boolean {
+function isExchangeRefusal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }
 
 async function tokenGrant(
   grant: Record<string, string>,
   endpoint: AtlassianEndpoint | undefined,
+  isRejectedStatus: (status: number) => boolean,
 ): Promise<AtlassianTokenResult> {
   const body = JSON.stringify(grant);
   const answer = await call(
@@ -216,7 +217,7 @@ async function tokenGrant(
     endpoint,
   );
   if (answer.kind === "unreachable") return answer;
-  if (isRefusal(answer.status)) return { kind: "rejected" };
+  if (isRejectedStatus(answer.status)) return { kind: "rejected" };
   if (answer.status < 200 || answer.status >= 300)
     return { kind: "unreachable", code: String(answer.status) };
   const tokens = parseTokens(answer.body);
@@ -243,6 +244,7 @@ export async function exchangeAtlassianCode(
       redirect_uri: grant.redirectUri,
     },
     endpoint,
+    isExchangeRefusal,
   );
   return result.kind === "ok" && result.tokens.refreshToken === undefined
     ? { kind: "rejected" }
@@ -263,6 +265,7 @@ export function refreshAtlassian(
       refresh_token: refreshToken,
     },
     endpoint,
+    (status) => status === 400 || status === 401 || status === 403,
   );
 }
 

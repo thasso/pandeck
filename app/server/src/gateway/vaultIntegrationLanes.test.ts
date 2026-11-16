@@ -7,7 +7,15 @@
  * An injected clock; a loopback Atlassian fake; every value fake.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -24,7 +32,15 @@ import {
   startAtlassianFake,
   type AtlassianFake,
 } from "../test/atlassianFake.ts";
-import { createVaultIntegrations } from "./vaultIntegrations.ts";
+import {
+  createSealedStore,
+  recipientOf,
+  writeRecipients,
+} from "./sealedStore.ts";
+import {
+  createVaultIntegrations,
+  type VaultIntegrationOptions,
+} from "./vaultIntegrations.ts";
 import { INTEGRATION_FILE, integrationDirId } from "./vaultMethods.ts";
 import type { IntegrationRecord } from "./vaultPort.ts";
 
@@ -48,7 +64,10 @@ afterAll(async () => {
 
 const TOKEN_CREDENTIAL = FAKE_API_TOKEN_RECORD;
 
-function harness(dir = mkdtempSync(join(root, "v-"))) {
+function harness(
+  dir = mkdtempSync(join(root, "v-")),
+  hooks: Pick<VaultIntegrationOptions, "written" | "discarded"> = {},
+) {
   const clock = { now: 1_000_000_000 };
   const lines: string[] = [];
   const port = createVaultIntegrations(
@@ -56,6 +75,7 @@ function harness(dir = mkdtempSync(join(root, "v-"))) {
       stateDir: dir,
       clients: { atlassian: FAKE_CLIENT },
       atlassianEndpoint: fake.endpoint,
+      ...hooks,
     },
     (line) => lines.push(line),
     () => clock.now,
@@ -174,15 +194,175 @@ test("(e) a rejected refresh answers rejected and keeps the record; (f) a transi
   fake.token = jsonResponder(400, { error: "invalid_grant" });
   assert.deepEqual(await h.get(), { ok: false, rejected: true });
   assert.equal(readFileSync(h.file, "utf8"), before);
-  fake.token = jsonResponder(503, {});
-  assert.deepEqual(await h.get(), { ok: false, unavailable: true });
-  assert.equal(readFileSync(h.file, "utf8"), before);
+  for (const status of [404, 405, 408, 409, 410, 422, 429, 500, 503]) {
+    fake.token = jsonResponder(status, {});
+    assert.deepEqual(
+      await h.get(),
+      { ok: false, unavailable: true },
+      String(status),
+    );
+    assert.equal(readFileSync(h.file, "utf8"), before);
+  }
   fake.token = defaultToken;
   view(await h.get());
-  assert.deepEqual(refreshes(), [storedToken, storedToken, storedToken]);
+  assert.deepEqual(refreshes(), Array(11).fill(storedToken));
   for (const line of h.lines)
     assert.doesNotMatch(line, /fake-atl-|invalid_grant/);
   await h.port.close();
+});
+
+/** Fail a stranded lane promptly without leaving a live deadline behind. */
+async function within<T>(answer: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      answer,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("lane did not settle")),
+          1_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+for (const queued of [false, true]) {
+  test(`a real sealed discard failure settles ${queued ? "queued" : "immediate"} clear, continues the lane and drains`, async () => {
+    const dir = mkdtempSync(join(root, "discard-"));
+    const { publicKey, privateKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const privateKeyFile = join(dir, "fake-software-key.pem");
+    writeFileSync(
+      privateKeyFile,
+      privateKey.export({ type: "pkcs8", format: "pem" }),
+      { mode: 0o600 },
+    );
+    writeRecipients(dir, [
+      recipientOf(publicKey.export({ type: "spki", format: "pem" }) as string, {
+        privateKeyFile,
+      }),
+    ]);
+    const sealed = createSealedStore({ stateDir: dir, log: () => {} })!;
+    assert.deepEqual(await sealed.unlock("unused"), {
+      ok: true,
+      opened: 0,
+      unopened: 0,
+    });
+    const h = harness(dir, {
+      written: sealed.written,
+      discarded: sealed.discarded,
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown): void => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    const sealedDir = join(dir, "sealed");
+    try {
+      assert.deepEqual(
+        await h.port.integrationPut("u1", "atlassian", TOKEN_CREDENTIAL),
+        { ok: true },
+      );
+      await delay(0);
+      const sealedRecordDir = join(
+        sealedDir,
+        integrationDirId("u1", "atlassian"),
+      );
+      assert.equal(
+        existsSync(join(sealedRecordDir, `${INTEGRATION_FILE}.sealed`)),
+        true,
+      );
+      // Plaintext removal succeeds; the real discarded hook cannot remove
+      // the sealed child from its non-writable parent.
+      chmodSync(sealedDir, 0o500);
+      const occupied = queued
+        ? h.port.integrationPut("u1", "atlassian", TOKEN_CREDENTIAL)
+        : Promise.resolve({ ok: true });
+      const clear = h.port.integrationClear("u1", "atlassian");
+      const next = h.port.integrationPut(
+        "u1",
+        "atlassian",
+        "fake-next-api-record",
+      );
+      assert.deepEqual(await within(Promise.all([occupied, clear, next])), [
+        { ok: true },
+        { ok: false, unavailable: true },
+        { ok: true },
+      ]);
+      assert.equal(readFileSync(h.file, "utf8"), "fake-next-api-record");
+      // Also close while a failing item is still accounted as running.
+      const last = h.port.integrationClear("u1", "atlassian");
+      const closing = h.port.close();
+      assert.deepEqual(await within(last), { ok: false, unavailable: true });
+      await within(closing);
+      assert.equal(existsSync(h.file), false);
+      // rmSync can remove the child files before its final rmdir fails.
+      assert.equal(existsSync(sealedRecordDir), true);
+      await delay(0);
+      assert.deepEqual(unhandled, []);
+    } finally {
+      chmodSync(sealedDir, 0o700);
+      await h.port.close();
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+}
+
+test("written hook exceptions settle immediate and queued puts without stranding later work", async () => {
+  let calls = 0;
+  const h = harness(undefined, {
+    written: () => {
+      if (++calls === 1 || calls === 3)
+        throw new Error("fake written hook failure");
+    },
+  });
+  try {
+    assert.deepEqual(
+      await within(h.port.integrationPut("u1", "atlassian", "fake-first")),
+      { ok: false, unavailable: true },
+    );
+    const occupied = h.port.integrationPut("u1", "atlassian", "fake-second");
+    const failed = h.port.integrationPut("u1", "atlassian", "fake-third");
+    const next = h.port.integrationPut("u1", "atlassian", "fake-fourth");
+    assert.deepEqual(await within(Promise.all([occupied, failed, next])), [
+      { ok: true },
+      { ok: false, unavailable: true },
+      { ok: true },
+    ]);
+    assert.equal(readFileSync(h.file, "utf8"), "fake-fourth");
+  } finally {
+    await h.port.close();
+  }
+});
+
+test("written hook exceptions after awaited connect and refresh settle unavailable and permit retry", async () => {
+  let fail = true;
+  const h = harness(undefined, {
+    written: () => {
+      if (fail) throw new Error("fake written hook failure");
+    },
+  });
+  try {
+    assert.deepEqual(await within(h.connect()), {
+      ok: false,
+      unavailable: true,
+    });
+    fail = false;
+    fake.expiresInS = 60;
+    assert.equal((await h.connect()).ok, true);
+    fail = true;
+    assert.deepEqual(await within(h.get()), { ok: false, unavailable: true });
+    const rotated = h.stored().refreshToken;
+    fail = false;
+    view(await h.get());
+    assert.equal(refreshes().at(-1), rotated);
+  } finally {
+    await h.port.close();
+  }
 });
 
 test("(g) a new vault on the same state refreshes on its first read", async () => {

@@ -194,6 +194,47 @@ test("each token-endpoint failure maps to rejected or unreachable", async () => 
   );
 });
 
+test("exchange refusals and refresh service errors have separate status mappings", async () => {
+  for (const status of [
+    400, 401, 403, 404, 405, 408, 409, 410, 422, 429, 500, 503,
+  ]) {
+    fake.token = jsonResponder(status, {});
+    const exchange = await exchangeAtlassianCode(
+      FAKE_CLIENT,
+      { code: FAKE_CODE, redirectUri: FAKE_REDIRECT },
+      fake.endpoint,
+    );
+    const refreshed = await refreshAtlassian(
+      FAKE_CLIENT,
+      FAKE_STORED_REFRESH,
+      fake.endpoint,
+    );
+    const unreachable = { kind: "unreachable", code: String(status) };
+    assert.deepEqual(
+      exchange,
+      status < 500 && status !== 408 && status !== 429
+        ? { kind: "rejected" }
+        : unreachable,
+      `exchange ${status}`,
+    );
+    assert.deepEqual(
+      refreshed,
+      [400, 401, 403].includes(status) ? { kind: "rejected" } : unreachable,
+      `refresh ${status}`,
+    );
+  }
+  for (const status of [400, 401, 403, 404, 408, 429, 500, 503]) {
+    fake.resources = jsonResponder(status, {});
+    assert.deepEqual(
+      await atlassianResources(FAKE_ACCESS, fake.endpoint),
+      status === 401 || status === 403
+        ? { kind: "rejected" }
+        : { kind: "unreachable", code: String(status) },
+      `resources ${status}`,
+    );
+  }
+});
+
 test("the site choice groups by host and counts sites, not entries", () => {
   // Jira and Confluence entries of one site, no preset: that site.
   assert.deepEqual(selectAtlassianSite(ONE_SITE, undefined), {

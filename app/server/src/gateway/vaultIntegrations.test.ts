@@ -8,7 +8,7 @@
  * seal. Every value is fake.
  */
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
+import { X509Certificate, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -47,6 +47,7 @@ import {
   VAULT_LIMITS,
   VAULT_METHODS,
   integrationDirId,
+  isPinnedPeer,
   vaultMessage,
 } from "./vaultMethods.ts";
 import {
@@ -359,15 +360,21 @@ async function holdingVault(): Promise<{
 }> {
   const releases: (() => void)[] = [];
   const state = { held: 0 };
+  const pinned = new X509Certificate(edgeId.certPem).fingerprint256;
   const server = tls.createServer(
     {
       key: vaultId.keyPem,
       cert: vaultId.certPem,
       ca: edgeId.certPem,
       requestCert: true,
-      rejectUnauthorized: true,
+      // Match the real vault link: Bun rejects a self-signed CA anchor.
+      rejectUnauthorized: false,
     },
     (socket) => {
+      if (!isPinnedPeer(socket, pinned)) {
+        socket.destroy();
+        return;
+      }
       const hold = () =>
         new Promise<ReturnType<typeof vaultMessage>>((resolve) => {
           state.held++;
@@ -417,6 +424,40 @@ async function holdingVault(): Promise<{
     },
   };
 }
+
+test("the holding vault refuses an unpinned client before its protocol handshake", async () => {
+  const held = await holdingVault();
+  const stranger = selfSignedIdentity("pandeck-gateway-edge", "client");
+  const lines: string[] = [];
+  const remote = createRemoteVault(
+    {
+      host: "127.0.0.1",
+      port: held.port,
+      tls: {
+        keyPem: stranger.keyPem,
+        certPem: stranger.certPem,
+        peerCertPem: vaultId.certPem,
+      },
+    },
+    {
+      profiles: () => [],
+      liveLeases: () => [],
+      report: () => {},
+      log: (line) => lines.push(line),
+    },
+  );
+  open.push(remote);
+  await until(
+    () => lines.some((line) => line.startsWith("vault unreachable:")),
+    "the unpinned link refusal",
+  );
+  assert.equal(remote.connected(), false);
+  assert.equal(
+    lines.some((line) => line.startsWith("vault link up")),
+    false,
+  );
+  assert.equal(held.held, 0);
+});
 
 test("bounded remote calls: a held reply answers unavailable on schedule, an aborted read at once, a late reply changes nothing", async () => {
   const held = await holdingVault();

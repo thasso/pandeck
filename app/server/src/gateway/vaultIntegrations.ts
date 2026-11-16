@@ -208,10 +208,14 @@ export function createVaultIntegrations(
       const lane = lanes.get(dirId) ?? { queue: [], running: undefined };
       lanes.set(dirId, lane);
       lane.queue.push({
-        run: () =>
-          work().then(resolve, () => {
+        run: async () => {
+          try {
+            resolve(await work());
+          } catch {
+            // Hooks and filesystem work can throw before returning a promise.
             resolve(refused);
-          }),
+          }
+        },
         refuse: () => resolve(refused),
       });
       pump(dirId, lane);
