@@ -171,10 +171,12 @@ describe("content policy refusals", () => {
       CODEX,
     );
     assert.equal(info.kind, "content_policy");
+    assert.equal(info.refusalCategory, "cyber");
+    assert.equal(runFailureFacts(info).cyberRefusal, true);
     assert.equal(shouldSuppressProviderRetry(info), true);
     assert.match(
       providerErrorDisplayText(info),
-      /^Provider refused the content \(openai-codex\/gpt-6\.1-sol\): The provider's safety filter flagged/,
+      /^Provider flagged possible cybersecurity risk \(openai-codex\/gpt-6\.1-sol\): The provider flagged this conversation for possible cybersecurity risk\. .*an enterprise account can run this work\./,
     );
     assert.match(
       providerErrorDisplayText(info),
@@ -189,8 +191,60 @@ describe("content policy refusals", () => {
       '400 {"error":{"code":"invalid_prompt","message":"Invalid prompt"}}',
       "The response was filtered due to the prompt triggering the content_filter policy.",
     ]) {
-      assert.equal(analyzeProviderError(raw).kind, "content_policy", raw);
+      const info = analyzeProviderError(raw);
+      assert.equal(info.kind, "content_policy", raw);
+      assert.equal(info.refusalCategory, undefined, raw);
+      assert.equal(runFailureFacts(info).cyberRefusal, undefined, raw);
+      assert.match(
+        providerErrorDisplayText(info),
+        /^Provider refused the content/,
+        raw,
+      );
     }
+  });
+
+  test("a Codex cyber_policy code is the same cybersecurity refusal", () => {
+    const info = analyzeProviderError(
+      '400 {"error":{"code":"cyber_policy","message":"Request blocked"}}',
+      CODEX,
+    );
+    assert.equal(info.kind, "content_policy");
+    assert.equal(runFailureFacts(info).cyberRefusal, true);
+  });
+
+  test("a structured refusal is a content refusal whatever its prose says", () => {
+    const plain = analyzeProviderError("I can't help with that.", {
+      provider: "anthropic",
+      structuredRefusal: true,
+    });
+    assert.equal(plain.kind, "content_policy");
+    assert.equal(plain.refusalCategory, undefined);
+    assert.equal(runFailureFacts(plain).cyberRefusal, undefined);
+    const cyber = analyzeProviderError("I can't help with that.", {
+      provider: "anthropic",
+      structuredRefusal: true,
+      refusalCategory: "Cyber",
+    });
+    assert.equal(cyber.kind, "content_policy");
+    assert.equal(cyber.refusalCategory, "cyber");
+    assert.equal(runFailureFacts(cyber).cyberRefusal, true);
+    const bio = analyzeProviderError("I can't help with that.", {
+      provider: "anthropic",
+      structuredRefusal: true,
+      refusalCategory: "bio",
+    });
+    assert.equal(bio.refusalCategory, "bio");
+    assert.equal(runFailureFacts(bio).cyberRefusal, undefined);
+  });
+
+  test("the cyber flag is never read from other failures' prose", () => {
+    const info = analyzeProviderError(
+      "Rate limit reached while checking cyber_policy",
+      { ...CODEX, statusCode: 429 },
+    );
+    assert.equal(info.kind, "rate_limit");
+    assert.equal(info.refusalCategory, undefined);
+    assert.equal(runFailureFacts(info).cyberRefusal, undefined);
   });
 });
 

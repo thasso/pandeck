@@ -4836,6 +4836,11 @@ export interface ProviderErrorInfo {
   activeLimit?: string;
   /** Short structured facts extracted from headers/body for display/debugging. */
   facts?: Array<{ label: string; value: string }>;
+  /**
+   * The provider's refusal category on a `content_policy` failure, when it
+   * named one (`cyber` for a cybersecurity flag). Absent for other refusals.
+   */
+  refusalCategory?: string;
 }
 
 export interface DisplayMessage {
@@ -7811,6 +7816,11 @@ export type ClientMessage =
       inheritable?: boolean;
     }
   | { type: "setSessionPeerTurnCap"; sessionId: string; cap: number | null }
+  /**
+   * One-way: only enterprise accounts may run the session from now on. Its
+   * next turn moves it to one first; nothing clears the requirement.
+   */
+  | { type: "setSessionRequiresEnterprise"; sessionId: string }
   /**
    * Set the scope of the session's OWN grants named in `keys`: true also
    * covers the sessions it starts, false keeps them to this session. Keys the

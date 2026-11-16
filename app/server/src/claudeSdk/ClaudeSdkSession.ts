@@ -169,7 +169,10 @@ import type {
   ClaudeSdkUsageRecord,
 } from "./claudeSdkRecords.ts";
 import { sessionStore } from "../db/sessionStore.ts";
-import { assertSessionAccountSwitch } from "../sessionAccount.ts";
+import {
+  assertSessionAccountSwitch,
+  type AccountSwitchOptions,
+} from "../sessionAccount.ts";
 import {
   approvalsForSession,
   hasPendingApproval,
@@ -207,6 +210,8 @@ import {
   assistantMessageId,
   assistantModel,
   assistantProviderError,
+  assistantRefused,
+  assistantText,
   assistantUsage,
   captureSessionId,
   type ClaudeResultMessage,
@@ -473,6 +478,11 @@ interface ProviderFailure {
   /** The wording the provider gave the user; may be empty. */
   text: string;
   statusCode?: number;
+  /**
+   * The model refused (`stop_reason: "refusal"` or the CLI's
+   * `model_refusal_no_fallback`), with the category the API named, if any.
+   */
+  refusal?: { category?: string };
 }
 
 /**
@@ -1496,13 +1506,16 @@ export class ClaudeSdkSession implements LiveSession {
   /**
    * End the old epoch before migrating any native history or changing
    * credentials. A session with no native id yet (new, or after /clear) has no
-   * history to carry; only a caller that has not started its turn may move it.
+   * history to carry; only a caller that has not started its turn may move it
+   * (`allowWithoutHistory`). `requireEnterprise` commits the session's
+   * enterprise requirement with the new binding.
    */
   async switchAccount(
     profileId: string,
     admit: () => void,
-    allowWithoutHistory = false,
+    options: AccountSwitchOptions = {},
   ): Promise<void> {
+    const { allowWithoutHistory = false, requireEnterprise } = options;
     this.assertNotDisposed();
     const previous = this.profileId;
     if (!previous || this.running)
@@ -1519,7 +1532,13 @@ export class ClaudeSdkSession implements LiveSession {
         throw new Error(
           "The Claude session changed during its account switch.",
         );
-      assertSessionAccountSwitch(this.id, previous, profileId, "claude");
+      assertSessionAccountSwitch(
+        this.id,
+        previous,
+        profileId,
+        "claude",
+        requireEnterprise ? { requireEnterprise } : {},
+      );
     };
     check();
     const closing = this.queryLoop;
@@ -1558,7 +1577,12 @@ export class ClaudeSdkSession implements LiveSession {
     let committed = false;
     try {
       check();
-      sessionStore.switchCredentialProfile(this.id, previous, profileId);
+      sessionStore.switchCredentialProfile(
+        this.id,
+        previous,
+        profileId,
+        requireEnterprise ? { requireEnterprise } : {},
+      );
       committed = true;
       this.profileId = profileId;
       this.onPersist();
@@ -3437,10 +3461,20 @@ export class ClaudeSdkSession implements LiveSession {
     if (!this.running && !this.liveTurn) return;
     const errorMessage =
       result.stopReason === "error" ? result.errorMessage : undefined;
+    // A refusal this turn saw decides the classification, not its prose.
+    const refusal = this.pendingProviderError?.refusal;
     const errorInfo = errorMessage
       ? analyzeProviderError(errorMessage, {
           provider: "anthropic",
           model: this.modelId,
+          ...(refusal
+            ? {
+                structuredRefusal: true,
+                ...(refusal.category !== undefined
+                  ? { refusalCategory: refusal.category }
+                  : {}),
+              }
+            : {}),
           ...(result.statusCode !== undefined
             ? { statusCode: result.statusCode }
             : {}),
@@ -3945,13 +3979,22 @@ export class ClaudeSdkSession implements LiveSession {
    * `result` that follows only restates it generically.
    */
   private noteProviderFailure(failure: ProviderFailure): void {
-    if (this.pendingProviderError) {
+    const pending = this.pendingProviderError;
+    if (pending) {
       // A result can supply the HTTP status omitted by its synthetic assistant.
       if (failure.statusCode !== undefined)
-        this.pendingProviderError.statusCode ??= failure.statusCode;
+        pending.statusCode ??= failure.statusCode;
+      // The refusal's structured notice and its error frame arrive in either
+      // order; the turn keeps the first wording and whichever names a category.
+      if (failure.refusal) {
+        const category = pending.refusal?.category ?? failure.refusal.category;
+        pending.refusal = category !== undefined ? { category } : {};
+      }
+      if (!pending.text.trim() && failure.text.trim())
+        pending.text = failure.text;
       return;
     }
-    this.pendingProviderError = failure;
+    this.pendingProviderError = { ...failure };
   }
 
   /**
@@ -4103,6 +4146,22 @@ export class ClaudeSdkSession implements LiveSession {
           this.handleBackgroundSystemMessage(message)
         )
           return;
+        if (
+          message.type === "system" &&
+          message.subtype === "model_refusal_no_fallback"
+        ) {
+          // The structured refusal of the open turn; `isTurnTranscriptMessage`
+          // keeps a closing epoch's from reaching here while another runs.
+          if (this.running && this.liveTurn) {
+            const category = message.api_refusal_category?.trim();
+            this.noteProviderFailure({
+              reason: "refusal",
+              text: message.content ?? "",
+              refusal: category ? { category } : {},
+            });
+          }
+          return;
+        }
         if (message.type === "system" && message.subtype === "api_retry") {
           // Only the run's observed progress hears it: the transcript gains
           // nothing, and a retry that recovers stays invisible afterwards.
@@ -4450,11 +4509,24 @@ export class ClaudeSdkSession implements LiveSession {
     // visible text belongs to the live-delta path, and this wording is the only
     // statement of WHICH limit or fault was hit.
     const failure = assistantProviderError(message);
+    const refused = assistantRefused(message);
     if (failure) {
-      this.noteProviderFailure({ reason: failure.kind, text: failure.text });
+      this.noteProviderFailure({
+        reason: failure.kind,
+        text: failure.text,
+        ...(refused ? { refusal: {} } : {}),
+      });
       this.streamSubIndex += 1;
       return;
     }
+    // A refusal the model streamed as ordinary text still fails the turn: its
+    // words are already live, so only the failure is noted here.
+    if (refused)
+      this.noteProviderFailure({
+        reason: "refusal",
+        text: assistantText(message),
+        refusal: {},
+      });
     // The `command` load's confirmation: a native model answer — neither a
     // recognised provider failure nor the CLI's synthetic sentinel, which can
     // arrive without `error` — to a command that expanded.
@@ -5028,7 +5100,9 @@ function isTurnTranscriptMessage(
     message.type === "assistant" ||
     message.type === "user" ||
     message.type === "result" ||
-    (message.type === "system" && message.subtype === "api_retry")
+    (message.type === "system" &&
+      (message.subtype === "api_retry" ||
+        message.subtype === "model_refusal_no_fallback"))
   );
 }
 

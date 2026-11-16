@@ -6866,6 +6866,8 @@ export interface AssistantActions {
    */
   setSpawnOwnership: (id: string, ownership: SettableSpawnOwnership) => void;
   setSessionPeerTurnCap: (sessionId: string, cap: number | null) => void;
+  /** One-way: only enterprise accounts run the session from its next turn. */
+  requireSessionEnterprise: (sessionId: string) => void;
   /**
    * Stop one background item, or everything one session owns, under HUMAN
    * authorization. The server calls the supervisor's Stop service directly; the
@@ -8779,6 +8781,9 @@ export function useAssistant({
       },
       setSessionPeerTurnCap: (sessionId, cap) => {
         send({ type: "setSessionPeerTurnCap", sessionId, cap });
+      },
+      requireSessionEnterprise: (sessionId) => {
+        send({ type: "setSessionRequiresEnterprise", sessionId });
       },
       setSpawnOwnership: (id, ownership) => {
         const requestId = trackMutation(

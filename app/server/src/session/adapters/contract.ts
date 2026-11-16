@@ -248,6 +248,11 @@ export interface RunFailureFacts {
   gatewayNeedsLogin?: true;
   /** OpenAI explicitly rejected opaque reasoning after a cross-account replay. */
   encryptedReasoningRejected?: true;
+  /**
+   * The provider refused the content for possible cybersecurity risk
+   * (`refusalCategory: "cyber"`): an enterprise account may run it.
+   */
+  cyberRefusal?: true;
 }
 
 /**

@@ -2728,6 +2728,87 @@ describe("a journaled failure replays only what it was owed when it happened", (
     }
   });
 
+  it("a cybersecurity refusal keeps its own category and sentence through the journal, whatever recovery did", async () => {
+    const CYBER_SENTENCE =
+      /flagged the conversation for possible cybersecurity risk, and automatic account recovery did not complete the turn \(the session's transcript says whether it moved\)\. If it is a child you still own, not yet enterprise-only and idle, `session_control` `require_enterprise`/;
+    // The three terminal paths reach the notice as the same final failure:
+    // no enterprise account to move to, refused again on the enterprise
+    // account it moved to, and an enterprise-bound start refused.
+    for (const path of [
+      "personal-no-enterprise",
+      "moved-then-refused-again",
+      "enterprise-start",
+    ] as const) {
+      for (const via of ["recorded", "replayed"] as const) {
+        freshJournal();
+        const { id: parent } = coordinator(`Cyber parent (${path} ${via})`);
+        const child = piChild(parent, `Cyber child (${path} ${via})`);
+        const t = Date.now();
+        const report = {
+          sessionId: child.sessionId,
+          runId: `cyber-${path}-${via}`,
+          origin: BACKGROUND,
+          errorMessage: "flagged for possible cybersecurity risk",
+          failure: {
+            kind: "content_policy" as const,
+            cyberRefusal: true as const,
+          },
+          at: t,
+        };
+        if (via === "recorded") recordRunFailureNotices(report);
+        else {
+          const restore = refusingDatabase();
+          try {
+            recordRunFailureNotices(report);
+          } finally {
+            restore();
+          }
+          closeDb();
+          getDb();
+          assert.equal(recoverJournaledFailuresOnBoot(), 1);
+        }
+        const pending = delegationFailureNoticeStore.pendingFor(parent);
+        assert.equal(pending.length, 1, `${path} ${via}`);
+        assert.equal(pending[0]!.category, "content_policy_cyber");
+        const text = delegationFailureNoticeLines(pending).join("\n");
+        assert.match(text, CYBER_SENTENCE, `${path} ${via}`);
+        assert.doesNotMatch(text, /will likely be refused again|not moved/);
+      }
+    }
+    // A generic refusal keeps today's sentence.
+    freshJournal();
+    const { id: parent } = coordinator("Generic refusal parent");
+    const child = piChild(parent, "Generic refusal child");
+    const [row] = recordRunFailureNotices({
+      sessionId: child.sessionId,
+      runId: "generic-refusal",
+      origin: BACKGROUND,
+      errorMessage: "flagged as potentially violating our usage policy",
+      failure: { kind: "content_policy" },
+      at: Date.now(),
+    });
+    assert.equal(row!.category, "content_policy");
+    const text = delegationFailureNoticeLines([row!]).join("\n");
+    assert.match(text, /will likely be refused again/);
+    assert.doesNotMatch(text, /cybersecurity/);
+  });
+
+  it("a cybersecurity refusal reported only in prose is still classified as one", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Prose cyber parent");
+    const child = piChild(parent, "Prose cyber child");
+    const [row] = recordRunFailureNotices({
+      sessionId: child.sessionId,
+      runId: "prose-cyber",
+      origin: BACKGROUND,
+      errorMessage:
+        "Codex error: This content was flagged for possible cybersecurity risk.",
+      failure: undefined,
+      at: Date.now(),
+    });
+    assert.equal(row!.category, "content_policy_cyber");
+  });
+
   it("a recorded failure whose retirement was lost grows no new route on replay", async () => {
     for (const planned of [true, false]) {
       freshJournal();

@@ -190,13 +190,28 @@ export function assistantProviderError(
 ): { kind: string; text: string } | undefined {
   const kind = message.error;
   if (!kind) return undefined;
-  const text = mapAssistantBlocks(message)
+  return { kind, text: assistantText(message) };
+}
+
+/** The message's text blocks, joined; empty when it has none. */
+export function assistantText(message: ClaudeAssistantMessage): string {
+  return mapAssistantBlocks(message)
     .filter((block) => block.type === "text")
     .map((block) => block.text.trim())
     .filter((text) => text.length > 0)
     .join("\n")
     .trim();
-  return { kind, text };
+}
+
+/**
+ * Whether the model ended this top-level assistant message by refusing
+ * (`stop_reason: "refusal"`), whatever text it streamed before. A subagent's
+ * refusal answers its own tool call, not the turn.
+ */
+export function assistantRefused(message: ClaudeAssistantMessage): boolean {
+  if (message.parent_tool_use_id) return false;
+  const apiMessage = message.message as { stop_reason?: unknown };
+  return apiMessage.stop_reason === "refusal";
 }
 
 /**

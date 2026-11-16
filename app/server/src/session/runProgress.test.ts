@@ -687,6 +687,81 @@ test("Claude: a closing epoch's late messages never reach the next turn", async 
   );
 });
 
+test("Claude: a closing epoch's late refusal neither fails nor flags the next turn", async () => {
+  const gated = gatedSeam(
+    [
+      assistantText("m1", "one"),
+      result(),
+      GATE, // 1: turn one is over; its process has not exited yet
+      {
+        type: "assistant",
+        uuid: "a-refused",
+        session_id: "s-old",
+        parent_tool_use_id: null,
+        error: "invalid_request",
+        message: {
+          id: "m-refused",
+          model: "<synthetic>",
+          stop_reason: "refusal",
+          content: [{ type: "text", text: "API Error: refused" }],
+          usage: { input_tokens: 0 },
+        },
+      } as unknown as ClaudeSdkMessage,
+      {
+        type: "system",
+        subtype: "model_refusal_no_fallback",
+        original_model: "claude-sonnet-4-6",
+        request_id: null,
+        api_refusal_category: "cyber",
+        content: "refused",
+        uuid: "nf-old",
+        session_id: "s-old",
+      } as unknown as ClaudeSdkMessage,
+      {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: "API Error: refused",
+        session_id: "s-old",
+        usage: { input_tokens: 0 },
+        total_cost_usd: 0,
+      } as unknown as ClaudeSdkMessage,
+    ],
+    [
+      GATE, // 2: turn two's own query, before it says anything
+      assistantText("m2", "two"),
+      result(),
+    ],
+  );
+  const runtime = new SessionRuntime(new SessionLogStore(true));
+  const session = new ClaudeSdkSession("cl-refusal", {
+    seam: async () => gated.seam,
+    title: FIXED_TITLE,
+  });
+  const failing: unknown[] = [];
+  session.subscribeAdapterEvents((event) => {
+    if (event.type === "runFailing") failing.push(event.failure);
+  });
+  runtime.createSession("cl-refusal", session.createRuntimeAdapter());
+  await runtime.prompt("cl-refusal", "one");
+  await gated.atGate();
+
+  const second = runtime.prompt("cl-refusal", "two");
+  await tick();
+  gated.release(); // the old epoch delivers its refusal while turn two is open
+  await gated.atGate();
+  gated.release();
+  await second;
+
+  assert.deepEqual(failing, [], "turn two did not fail");
+  const entries = runtime.get("cl-refusal")!.getSnapshot().entries;
+  const turnTwo = entries
+    .filter((entry) => entry.type === "message" && entry.role === "assistant")
+    .at(-1)!;
+  assert.equal((turnTwo as { error?: string }).error, undefined);
+  assert.equal(JSON.stringify(entries).includes("refused"), false);
+});
+
 /* ------------------------- runtime, scripted adapter ---------------------- */
 
 class ScriptedAdapter implements PromptableAdapter {

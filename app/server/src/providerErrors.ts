@@ -14,6 +14,13 @@ export interface ProviderErrorContext {
   responseId?: string;
   authMode?: "subscription" | "api_key" | "unknown";
   statusCode?: number;
+  /**
+   * The harness saw a structured refusal (Claude: `stop_reason: "refusal"` or
+   * `model_refusal_no_fallback`): a content refusal whatever its prose says.
+   */
+  structuredRefusal?: boolean;
+  /** The structured refusal's category as the provider named it (`cyber`, …). */
+  refusalCategory?: string;
 }
 
 function namedLimitModel(info: ProviderErrorInfo): string | undefined {
@@ -122,6 +129,9 @@ function responseStatus(message: string): number | undefined {
   );
 }
 
+/** OpenAI Codex's cybersecurity flag, by its wording or its error code. */
+const CYBER_REFUSAL_RE =
+  /flagged for possible cybersecurity risk|cyber_policy/i;
 const CONTENT_POLICY_RE =
   /flagged for possible cybersecurity risk|flagged as potentially violating|violat\w* (our |the )?usage polic|content[_ ]policy|content[_ ]filter|invalid_prompt|cyber_policy/i;
 const QUOTA_RE =
@@ -155,6 +165,10 @@ export function analyzeProviderError(
   const modelValue = cleanOptional(context.model);
   const apiValue = cleanOptional(context.api);
   const responseIdValue = cleanOptional(context.responseId);
+  const refusalCategory =
+    classification.kind === "content_policy"
+      ? refusalCategoryOf(raw, context)
+      : undefined;
   return {
     ...codex,
     ...(claudeResetAt !== undefined ? { resetAt: claudeResetAt } : {}),
@@ -172,7 +186,21 @@ export function analyzeProviderError(
     ...(responseIdValue !== undefined ? { responseId: responseIdValue } : {}),
     authMode: context.authMode ?? "unknown",
     detail: classification.detail,
+    ...(refusalCategory !== undefined ? { refusalCategory } : {}),
   };
+}
+
+/**
+ * A content refusal's category: the structured one the harness passed, else
+ * `cyber` for OpenAI's cybersecurity flag. Any other refusal has none.
+ */
+function refusalCategoryOf(
+  raw: string,
+  context: ProviderErrorContext,
+): string | undefined {
+  const structured = context.refusalCategory?.trim().toLowerCase();
+  if (structured && /^[a-z0-9_-]{1,40}$/.test(structured)) return structured;
+  return CYBER_REFUSAL_RE.test(raw) ? "cyber" : undefined;
 }
 
 /**
@@ -202,6 +230,9 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
       : {}),
     ...(isNeedsLoginRefusal(info.rawMessage)
       ? { gatewayNeedsLogin: true as const }
+      : {}),
+    ...(info.kind === "content_policy" && info.refusalCategory === "cyber"
+      ? { cyberRefusal: true as const }
       : {}),
     // Checked after the conversion: seconds that look fine can still overflow
     // into a number no `Date` represents.
@@ -276,13 +307,24 @@ function classify(
       context.provider === "anthropic") &&
     CLAUDE_USAGE_LIMIT_RE.test(raw) &&
     !/rate.?limit|too many requests/i.test(raw);
-  if (
-    !gatewayRefusal &&
-    !loginDeath &&
-    !serverStatus &&
-    status !== 429 &&
-    CONTENT_POLICY_RE.test(raw)
-  ) {
+  const contentRefusal =
+    context.structuredRefusal === true ||
+    (!gatewayRefusal &&
+      !loginDeath &&
+      !serverStatus &&
+      status !== 429 &&
+      CONTENT_POLICY_RE.test(raw));
+  if (contentRefusal && refusalCategoryOf(raw, context) === "cyber")
+    return {
+      kind: "content_policy",
+      title: "Provider flagged possible cybersecurity risk",
+      summary:
+        "The provider flagged this conversation for possible cybersecurity risk. The same account will refuse it again; an enterprise account can run this work.",
+      retryable: false,
+      detail:
+        'A session on a personal subscription account moves to an eligible enterprise account automatically. With none available, enable one, or mark the session "Require enterprise account" and send again.',
+    };
+  if (contentRefusal) {
     return {
       kind: "content_policy",
       title: "Provider refused the content",

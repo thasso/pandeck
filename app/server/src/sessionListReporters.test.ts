@@ -187,6 +187,7 @@ const CLASSIFIED: Record<
       upsert: "projected-write",
       setPeerTurnCap: "projected-write",
       switchCredentialProfile: "projected-write",
+      requireEnterprise: "projected-write",
       setCompactionWindow: "non-projected-write",
       markDeleted: "projected-write",
       remove: "projected-write",
@@ -897,6 +898,11 @@ describe("fan-out", () => {
           "profile-a",
           "profile-b",
         ),
+      [switched],
+    );
+    await assertReported(
+      "enterprise requirement",
+      () => sessionStore.requireEnterprise(switched),
       [switched],
     );
     const [parent, child] = [seed("parent"), seed("child")];

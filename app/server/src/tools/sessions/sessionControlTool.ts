@@ -1,8 +1,9 @@
 /**
  * `session_control`: retract the caller's waiting peer prompts, stop an owned
- * child, or dismiss its unhandled background updates while it is not running.
- * A sender may retract only its own messages. Stopping and dismissal require a
- * direct spawn edge still owned by `coordinator`; user takeover revokes both.
+ * child, or, while it is not running, dismiss its unhandled background updates
+ * or make it enterprise-only. A sender may retract only its own messages. The
+ * other operations require a direct spawn edge still owned by `coordinator`;
+ * user takeover revokes them.
  */
 import {
   dismissAllBackgroundHandling,
@@ -12,11 +13,15 @@ import { sessionStore } from "../../db/sessionStore.ts";
 import { noteDelegationStandDown } from "../../delegationFailureNotice.ts";
 import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
 import { cancelQueuedPeerPrompts } from "../../peerPrompt.ts";
+import { requireSessionEnterprise } from "../../sessionAccount.ts";
 import { sessionRuntime } from "../../session/runtimeInstance.ts";
 import { cleanSessionId, SessionInspectionError } from "./sessionInspection.ts";
 
 type SessionControlOperation =
-  "cancel_queued_prompts" | "stop" | "dismiss_background_updates";
+  | "cancel_queued_prompts"
+  | "stop"
+  | "dismiss_background_updates"
+  | "require_enterprise";
 type SessionControlParams = {
   operation?: unknown;
   targetSessionId?: unknown;
@@ -50,9 +55,9 @@ function makeSessionControlTool() {
     name: "session_control",
     label: "Control Session",
     description:
-      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it. dismiss_background_updates is the user's Dismiss for every unhandled update of your still-owned direct child, refused while it runs; dismissal is not handling and leaves jobs and output unchanged.",
+      "Abort a child you spawned and still own, or retract your own waiting peer deliveries. The cancellation operation removes every delivery YOU sent to the target that has not started dispatching. The stop operation aborts the child's current turn. Its `clearQueue` option cancels every not-yet-dispatched delivery queued for that child before aborting, so the idle transition does not start the next turn. A child the user took over cannot be stopped. Stopping does not archive or delete it. dismiss_background_updates is the user's Dismiss for every unhandled update of your still-owned direct child, refused while it runs; dismissal is not handling and leaves jobs and output unchanged. require_enterprise makes that idle child enterprise-only for good; its next prompt moves it to an enterprise account.",
     searchHint:
-      "stop abort spawned child cancel retract remove queued peer delivery clear queue dismiss unhandled background updates",
+      "stop abort spawned child cancel retract remove queued peer delivery clear queue dismiss unhandled background updates require enterprise account cybersecurity refusal",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -60,9 +65,14 @@ function makeSessionControlTool() {
       properties: {
         operation: {
           type: "string",
-          enum: ["cancel_queued_prompts", "stop", "dismiss_background_updates"],
+          enum: [
+            "cancel_queued_prompts",
+            "stop",
+            "dismiss_background_updates",
+            "require_enterprise",
+          ],
           description:
-            '"cancel_queued_prompts" retracts your waiting messages. "stop" aborts an owned child. "dismiss_background_updates" dismisses its interrupted receipts.',
+            '"cancel_queued_prompts" retracts your waiting messages. "stop" aborts an owned child. "dismiss_background_updates" dismisses its interrupted receipts. "require_enterprise" makes it enterprise-only.',
         },
         targetSessionId: {
           type: "string",
@@ -118,6 +128,23 @@ function makeSessionControlTool() {
         );
       }
 
+      if (operation === "require_enterprise") {
+        requireOwnedChild(
+          ctx.session.sessionId,
+          targetSessionId,
+          "made enterprise-only",
+        );
+        if (runtime().isRunning(targetSessionId))
+          throw new Error(
+            `Session ${targetSessionId} is running; require an enterprise account once its turn ends.`,
+          );
+        return textResult(
+          requireSessionEnterprise(targetSessionId)
+            ? `${targetSessionId} already requires an enterprise account; nothing changed.`
+            : `${targetSessionId} now requires an enterprise account. Its next prompt moves it to an eligible enterprise account first, or is refused when none is available. This cannot be undone.`,
+        );
+      }
+
       const clearQueue = readOptionalBoolean(params.clearQueue, "clearQueue");
       requireOwnedChild(ctx.session.sessionId, targetSessionId);
       const cancelled = clearQueue
@@ -147,11 +174,12 @@ function readOperation(value: unknown): SessionControlOperation {
   if (
     value === "cancel_queued_prompts" ||
     value === "stop" ||
-    value === "dismiss_background_updates"
+    value === "dismiss_background_updates" ||
+    value === "require_enterprise"
   )
     return value;
   throw new Error(
-    'operation must be "cancel_queued_prompts", "stop" or "dismiss_background_updates".',
+    'operation must be "cancel_queued_prompts", "stop", "dismiss_background_updates" or "require_enterprise".',
   );
 }
 

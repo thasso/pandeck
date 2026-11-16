@@ -321,7 +321,10 @@ the outcome:
   dismissed and remaining counts. Takeover revokes dismissal and hand-back
   restores it. Dismiss is not handling: jobs, output and the Stop hold stay
   untouched, and no child timeline note is added. Recover stays user-only; later
-  ordinary turns recover nothing.
+  ordinary turns recover nothing. `require_enterprise` uses the same edge and
+  the same refusal while the child runs; it sets the child's one-way enterprise
+  requirement, so its next prompt moves it to an enterprise account first
+  (`docs/account-routing.md`). Repeating it changes nothing.
 
   #### Peer-message hop limit
 

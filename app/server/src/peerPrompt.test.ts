@@ -2465,7 +2465,10 @@ describe("interruption notice to the sender", () => {
     assert.equal(peerPromptStore.getById(message.id)?.status, "interrupted");
     const delivered = readFileSync(canonicalSessionLogPath(sender), "utf8");
     assert.ok(
-      delivered.includes("refused the conversation's content"),
+      // A cybersecurity refusal is its own category (Task-1414).
+      delivered.includes(
+        "flagged the conversation for possible cybersecurity risk",
+      ),
       "the sender learns the kind of failure without anyone draining it",
     );
     assert.ok(

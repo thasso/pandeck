@@ -22,6 +22,7 @@ import {
   Pencil,
   RotateCcw,
   SearchCheck,
+  ShieldCheck,
   SlidersHorizontal,
   Trash2,
   Undo2,
@@ -77,6 +78,7 @@ import {
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { Button } from "./ui/button.tsx";
+import { useDialogs } from "./common/dialogs.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
 import {
   PROPERTY_TRIGGER,
@@ -1513,6 +1515,8 @@ export function sessionInspectorActions({
 export function SessionInspector({
   sessionId,
   onSetPeerTurnCap,
+  onRequireEnterprise,
+  enterpriseAccountAvailable = false,
   originTask,
   relatedTasks,
   sessionTasks,
@@ -1542,6 +1546,10 @@ export function SessionInspector({
   sessionId: string | undefined;
   onSetPeerTurnCap?:
     ((sessionId: string, cap: number | null) => void) | undefined;
+  /** One-way "Require enterprise account"; absent where the session has no row yet. */
+  onRequireEnterprise?: ((sessionId: string) => void) | undefined;
+  /** An enabled enterprise account of the session's account provider exists. */
+  enterpriseAccountAvailable?: boolean | undefined;
   originTask?: TaskBackRef | undefined;
   relatedTasks: TaskSummary[];
   /** Session-scoped task progress merged into the inspector's single Tasks section. */
@@ -1621,6 +1629,8 @@ export function SessionInspector({
     }),
   ];
   const groups = withPeerPrompts(relationGroups, peerPromptPeers, sessions);
+  const listItem = sessions.find((item) => item.id === sessionId);
+  const requiresEnterprise = listItem?.requiresEnterprise === true;
   return (
     <Inspector
       relations={[
@@ -1634,12 +1644,8 @@ export function SessionInspector({
           alwaysShown: true,
           content: (
             <SessionDetails
-              waiting={waitingForSlotLabel(
-                sessions.find((item) => item.id === sessionId) ?? {},
-              )}
-              peerTurnCap={
-                sessions.find((item) => item.id === sessionId)?.peerTurnCap
-              }
+              waiting={waitingForSlotLabel(listItem ?? {})}
+              peerTurnCap={listItem?.peerTurnCap}
               onSetPeerTurnCap={
                 sessionId && onSetPeerTurnCap
                   ? (cap) => onSetPeerTurnCap(sessionId, cap)
@@ -1655,6 +1661,16 @@ export function SessionInspector({
               worktree={worktree}
               worktreeStatus={worktreeStatus}
               credentialProfile={credentialProfile}
+              requiresEnterprise={requiresEnterprise}
+              onRequireEnterprise={
+                sessionId &&
+                onRequireEnterprise &&
+                credentialProfile &&
+                enterpriseAccountAvailable &&
+                !requiresEnterprise
+                  ? () => onRequireEnterprise(sessionId)
+                  : undefined
+              }
               model={model}
               thinkingLevel={thinkingLevel}
               openers={openers}
@@ -1823,6 +1839,8 @@ function withPeerPrompts(
  * and thinking level it runs on now), as the Task inspector's property list.
  */
 function SessionDetails({
+  requiresEnterprise,
+  onRequireEnterprise,
   waiting,
   peerTurnCap,
   onSetPeerTurnCap,
@@ -1842,11 +1860,26 @@ function SessionDetails({
   worktree: WorktreeRelationSource | undefined;
   worktreeStatus: WorktreeGitStatus | undefined;
   credentialProfile: { name: string } | undefined;
+  /** Only enterprise accounts may run it; nothing clears this. */
+  requiresEnterprise: boolean;
+  /** Offered only when it would change something and could be honored. */
+  onRequireEnterprise: (() => void) | undefined;
   model: { id: string; name?: string; provider: string } | undefined;
   thinkingLevel: ThinkingLevel | undefined;
   openers: ObjectOpeners;
 }) {
   const onAct = useInspectorAct();
+  const dialogs = useDialogs();
+  const requireEnterprise = onRequireEnterprise
+    ? async () => {
+        const confirmed = await dialogs.confirm({
+          title: "Require an enterprise account?",
+          body: "From now on only enterprise accounts run this session. Its next turn moves it to an enterprise account first. This cannot be undone.",
+          confirmLabel: "Require enterprise account",
+        });
+        if (confirmed) onRequireEnterprise();
+      }
+    : undefined;
   const open = (run: () => void) => () => {
     run();
     onAct?.();
@@ -1950,7 +1983,24 @@ function SessionDetails({
           <PropertyLabel>Account</PropertyLabel>
           <PropertyText className="truncate">
             {credentialProfile.name}
+            {requiresEnterprise ? (
+              <span className="text-muted-foreground"> · enterprise only</span>
+            ) : null}
           </PropertyText>
+          {requireEnterprise ? (
+            <>
+              <span aria-hidden />
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`${PROPERTY_TRIGGER} justify-start text-muted-foreground`}
+                onClick={() => void requireEnterprise()}
+              >
+                <ShieldCheck aria-hidden />
+                Require enterprise account
+              </Button>
+            </>
+          ) : null}
         </>
       ) : null}
       {model ? (

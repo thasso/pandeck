@@ -15,6 +15,7 @@ export type DelegationFailureCategory =
   | "usage_limit"
   | "rate_limit"
   | "content_policy"
+  | "content_policy_cyber"
   | "provider_error"
   | "delivery";
 
@@ -38,6 +39,7 @@ const KNOWN_CATEGORIES: ReadonlySet<string> = new Set<NoticeCategory>([
   "usage_limit",
   "rate_limit",
   "content_policy",
+  "content_policy_cyber",
   "provider_error",
   "delivery",
   "held_runtime_removed",

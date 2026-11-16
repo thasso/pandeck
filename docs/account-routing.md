@@ -272,17 +272,24 @@ PATCH, an integer field on the Settings account card). A PATCH may include
 `name`, `enabled`, `enterprise` and `priority` together. The server validates
 every supplied field before one metadata write and publication. A session's
 `requiresEnterprise` is durable, defaults to false and survives restore and
-forks. Regular sessions may choose enterprise or personal accounts. The
-enterprise requirement constrains the account executing the session and
-automatically derived work. Neither normal ranking nor degradation may select a
-personal account. An explicit personal pick is refused when the requirement is
-set. This is an account constraint, not end-to-end data confinement.
+forks. After creation it can only be turned on, never cleared: by the user's
+"Require enterprise account" on the inspector's Account row
+(`setSessionRequiresEnterprise`, refused for deleted and non-user sessions,
+allowed while a turn runs), by an owning coordinator's `session_control`
+`require_enterprise` on its idle direct child, and by cybersecurity-refusal
+recovery (below). The inspector offers the action only when an enabled
+enterprise account of the session account's provider exists. Regular sessions
+may choose enterprise or personal accounts. The enterprise requirement
+constrains the account executing the session and automatically derived work.
+Neither normal ranking nor degradation may select a personal account. An
+explicit personal pick is refused when the requirement is set. This is an
+account constraint, not end-to-end data confinement.
 
 Every session turn passes the shared `session/runtimePrompt.ts` admission check,
 including restored sessions, first prompts and spawned peers on both engines. An
-enterprise-required session whose bound account is missing or no longer
-enterprise is refused before any append. A turn starting on a disabled bound
-account first moves the session; see
+enterprise-required session whose bound account is missing is refused before any
+append. A turn starting on a disabled bound account, or an enterprise-required
+session's turn starting on a non-enterprise one, first moves the session; see
 [Live account switching](#live-account-switching). Enterprise flag changes apply
 to runs and one-shots admitted after the change; an already admitted run may
 finish. Policy is not rechecked inside provider engines. Manual compaction on
@@ -549,33 +556,44 @@ or push notification projection.
 
 ## Live account switching
 
-A turn that starts on a disabled bound subscription account moves first
-(`moveOffDisabledAccount`, called by `session/runtimePrompt.ts` after skill
-admission). An account of any other kind is the only one serving its models, so
-the turn is refused instead and the session stays where it is. It picks a
-non-degraded account for the session's model, effort and enterprise requirement
-and moves the idle session through the same `driver.switchAccount` as failover
-below. Every switch step rechecks the turn's Stop hold and recovery admission,
-the target's health and bench, and the model selection, and the facade repeats a
-target-bound check (binding, enabled, enterprise, health, bench, selection)
-after the move and right before the turn's final admission. A Claude session
-with no native id yet (new, or after `/clear`) has no history to copy and moves
-by rebinding alone; failover still refuses that case. The display-only marker
-`Switched from A to B — A is disabled.` is appended only once the turn is
-admitted. The session's next run that actually starts counts as moved for the
+A turn that starts on a disabled bound subscription account, or an
+enterprise-required session's turn on a non-enterprise subscription account,
+moves first (`moveOffDisabledAccount`, called by `session/runtimePrompt.ts`
+after skill admission). An account of any other kind is the only one serving its
+models, so the turn is refused instead and the session stays where it is. It
+picks a non-degraded account for the session's model, effort and enterprise
+requirement and moves the idle session through the same `driver.switchAccount`
+as failover below. Every switch step rechecks the turn's Stop hold and recovery
+admission, the target's health and bench, and the model selection, and the
+facade repeats a target-bound check (binding, enabled, enterprise, health,
+bench, selection) after the move and right before the turn's final admission. A
+Claude session with no native id yet (new, or after `/clear`) has no history to
+copy and moves by rebinding alone; failover still refuses that case. The
+display-only marker `Switched from A to B — A is disabled.` (or
+`— this session requires an enterprise account.`) is appended only once the turn
+is admitted. The session's next run that actually starts counts as moved for the
 encrypted-reasoning retry below, even if the turn that moved it was refused.
 With no eligible account the turn is refused before any append with a message
-naming the disabled account. A running turn, a steer into it, a steer-only
-message, a recovery continuation and a provider-initiated turn
-(`beginRuntimeProviderTurn`) are never moved this way. Disabling an account
-therefore takes effect on each bound session's next turn.
+naming the disabled account, or saying no eligible enterprise account is
+available. A running turn, a steer into it, a steer-only message, a recovery
+continuation and a provider-initiated turn (`beginRuntimeProviderTurn`) are
+never moved this way. Disabling an account therefore takes effect on each bound
+session's next turn.
 
 An explicitly bound session can also move after its own subscription provider
-reports `quota`, `rate_limit` or structured `loginDeath`. Plain auth errors,
-unrelated providers/errors and Stop or abort never trigger a move. This applies
-to interactive, background and provider-initiated runs, including explicitly
-selected session accounts. Existing Settings one-shot pins keep their policy
-above.
+reports `quota`, `rate_limit` or structured `loginDeath`. A cybersecurity
+refusal (`RunFailureFacts.cyberRefusal`: Codex's "flagged for possible
+cybersecurity risk"/`cyber_policy`, or a structured Claude refusal whose
+`api_refusal_category` is `cyber`) on a non-enterprise account moves the session
+once to an enterprise account and continues. The same compare-and-set that
+changes the binding sets `requiresEnterprise`, so the session never runs on a
+personal account again; with no eligible enterprise account it stays, keeps the
+failure, gets a notice, and its requirement is unchanged. A refusal on an
+enterprise account, and any other `content_policy` failure, never moves. Plain
+auth errors, unrelated providers/errors and Stop or abort never trigger a move.
+This applies to interactive, background and provider-initiated runs, including
+explicitly selected session accounts. Existing Settings one-shot pins keep their
+policy above.
 
 `sessionAccountSwitch.ts` observes the normalized native run lifecycle. Health
 and bench reporting happens first. At failed-run closure it reserves admission

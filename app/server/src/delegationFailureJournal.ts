@@ -89,6 +89,7 @@ const CATEGORIES: ReadonlySet<string> = new Set<DelegationFailureCategory>([
   "usage_limit",
   "rate_limit",
   "content_policy",
+  "content_policy_cyber",
   "provider_error",
   "delivery",
 ]);
