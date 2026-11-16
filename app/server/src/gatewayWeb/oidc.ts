@@ -248,6 +248,15 @@ export function createOidcClient(options: {
     [oauth.clockSkew]: Math.round((now() - Date.now()) / 1000),
   });
 
+  // Post the secret when the provider offers it. Basic auth form-encodes the
+  // client id first (RFC 6749 2.3.1), which Google does not decode: it answers
+  // 401 "client not found" for any id with `-` or `.`. Basic stays the OIDC
+  // default for a provider that names no methods.
+  const clientAuth = (as: oauth.AuthorizationServer): oauth.ClientAuth =>
+    as.token_endpoint_auth_methods_supported?.includes("client_secret_post")
+      ? oauth.ClientSecretPost(clientSecret)
+      : oauth.ClientSecretBasic(clientSecret);
+
   let discovered: { as: oauth.AuthorizationServer; at: number } | undefined;
   const server = async (): Promise<oauth.AuthorizationServer> => {
     if (discovered && now() - discovered.at < DISCOVERY_TTL_MS)
@@ -318,7 +327,7 @@ export function createOidcClient(options: {
         response = await oauth.authorizationCodeGrantRequest(
           as,
           client(),
-          oauth.ClientSecretBasic(clientSecret),
+          clientAuth(as),
           parameters,
           redirectUri,
           request.codeVerifier,

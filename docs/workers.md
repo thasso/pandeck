@@ -2039,29 +2039,31 @@ and ChatGPT accounts, and reaches only its own origin with its session cookie.
   exactly. A rule without emails and domains refuses to start. The rule runs
   before the registry sees the identity.
 - **OIDC.** Authorization code with PKCE S256, `state` and `nonce`,
-  `scope=openid email`, client secret basic, on `oauth4webapi` 3.8.8 (exact in
-  the catalog, imported only under `gatewayWeb/`). Discovery is cached for an
-  hour, every provider call bounded at 10 s. The library checks state, `iss`,
-  `aud`, `azp`, `exp` (30 s tolerance), the presence and type of `iat` and
-  `sub`, the nonce and that an ID token came; the gateway adds the ID token's
-  signature, an `iat` more than 30 s ahead and the allow rule above. Discovery
-  must name exactly the configured `issuer` (the same string, no added slash),
-  and the authorization, token and key-set endpoints it names must be `https`;
-  anything else fails the sign-in as `discovery` before any redirect. The
-  signature is checked against the discovered `jwks_uri`
-  (`validateApplicationLevelSignature`). The gateway owns the key-set cache, and
-  it is the only one (the library's own never answers): a set is read within 10
-  s and 64 KiB and kept only if it is a JSON key set (JSON media type, an
-  object, `keys` a list of objects), so a maintenance page answering 200 never
-  replaces it. A kept set serves for 5 minutes; a `kid` it lacks asks once for a
-  newer one. One fetch is in flight per issuer, shared by every waiting
-  callback, and the network is asked at most once a minute, whether the last
-  fetch succeeded or failed. A failed or refused fetch keeps the last good set,
-  which keeps its age; without one the sign-in fails as `keys`. A rotated key is
-  therefore found at most a minute after the last fetch, and a `kid` the set
-  lacks costs at most one fetch a minute however many callbacks carry it, and
-  then fails as `signature`. `oidcTestOptions` (HTTP endpoints, a stub fetch) is
-  reachable only through `startGatewayWeb`, never from the file.
+  `scope=openid email`, the client secret posted when discovery lists
+  `client_secret_post` (Google refuses basic auth's form-encoded client id),
+  else basic, on `oauth4webapi` 3.8.8 (exact in the catalog, imported only under
+  `gatewayWeb/`). Discovery is cached for an hour, every provider call bounded
+  at 10 s. The library checks state, `iss`, `aud`, `azp`, `exp` (30 s
+  tolerance), the presence and type of `iat` and `sub`, the nonce and that an ID
+  token came; the gateway adds the ID token's signature, an `iat` more than 30 s
+  ahead and the allow rule above. Discovery must name exactly the configured
+  `issuer` (the same string, no added slash), and the authorization, token and
+  key-set endpoints it names must be `https`; anything else fails the sign-in as
+  `discovery` before any redirect. The signature is checked against the
+  discovered `jwks_uri` (`validateApplicationLevelSignature`). The gateway owns
+  the key-set cache, and it is the only one (the library's own never answers): a
+  set is read within 10 s and 64 KiB and kept only if it is a JSON key set (JSON
+  media type, an object, `keys` a list of objects), so a maintenance page
+  answering 200 never replaces it. A kept set serves for 5 minutes; a `kid` it
+  lacks asks once for a newer one. One fetch is in flight per issuer, shared by
+  every waiting callback, and the network is asked at most once a minute,
+  whether the last fetch succeeded or failed. A failed or refused fetch keeps
+  the last good set, which keeps its age; without one the sign-in fails as
+  `keys`. A rotated key is therefore found at most a minute after the last
+  fetch, and a `kid` the set lacks costs at most one fetch a minute however many
+  callbacks carry it, and then fails as `signature`. `oidcTestOptions` (HTTP
+  endpoints, a stub fetch) is reachable only through `startGatewayWeb`, never
+  from the file.
 - **Users.** Keyed by issuer plus subject; the email (lowercased) and the label
   are attributes. The first admitted sign-in of an identity creates a user with
   an opaque id (`u_` and 16 random characters, label = email); a later one
