@@ -27,7 +27,12 @@ import { LogOut } from "lucide-react";
 
 export type GatewayPageState =
   | { kind: "loading" }
-  | { kind: "signedOut"; signin?: GatewayUiSigninCode }
+  | {
+      kind: "signedOut";
+      signin?: GatewayUiSigninCode;
+      /** A machine's enrollment link was opened; it waits for sign-in. */
+      enrollmentWaiting?: boolean;
+    }
   | { kind: "signedIn"; me: GatewayUiMe }
   | { kind: "unavailable" };
 
@@ -116,7 +121,9 @@ export function GatewayPage({
                 <ErrorNote message={SIGNIN_TEXT[state.signin]} />
               ) : null}
               <p className="text-sm text-muted-foreground">
-                Sign in to continue.
+                {state.enrollmentWaiting
+                  ? "A machine is waiting for your approval. Sign in to review it."
+                  : "Sign in to continue."}
               </p>
             </CardContent>
             <CardFooter>

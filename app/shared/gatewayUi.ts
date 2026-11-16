@@ -30,7 +30,9 @@ export interface GatewayUiError {
     | "vault_locked"
     | "vault_unavailable"
     | "tools_unavailable"
-    | "integration_busy";
+    | "integration_busy"
+    | "unknown_request"
+    | "rate_limited";
 }
 
 export type GatewayUiProvider = "claude" | "openai-codex";
@@ -171,6 +173,35 @@ export interface GatewayUiEnrollmentCode {
 /** `POST /api/clients/mcp-token`: the client's new MCP token, shown once. */
 export interface GatewayUiMcpToken {
   token: string;
+}
+
+/** What a machine says it is; shown, never trusted (Task-1410). */
+export type GatewayUiEnrollmentKind = "devbox" | "laptop" | "other";
+
+/**
+ * `POST /api/enrollments/lookup`: a machine's pending enrollment request, as
+ * the machine reported it. Name and kind are the machine's own claims; `from`
+ * is the address its request came from. Epoch milliseconds.
+ */
+export interface GatewayUiEnrollmentRequest {
+  name: string;
+  kind: GatewayUiEnrollmentKind;
+  from: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/**
+ * The bodies of `POST /api/enrollments/lookup` and `/decide`. The user code
+ * travels only in a POST body, never in a URL; a decision answers 204.
+ */
+export interface GatewayUiEnrollmentLookupRequest {
+  userCode: string;
+}
+
+export interface GatewayUiEnrollmentDecideRequest {
+  userCode: string;
+  approve: boolean;
 }
 
 /** Every mutation sends this header with the value `1` (and its Origin). */
@@ -359,4 +390,36 @@ export function decodeGatewayUiMcpToken(
   if (!isRecord(value)) return undefined;
   const { token } = value;
   return typeof token === "string" && token !== "" ? { token } : undefined;
+}
+
+const ENROLLMENT_KINDS: readonly GatewayUiEnrollmentKind[] = [
+  "devbox",
+  "laptop",
+  "other",
+];
+
+/** A well-formed `GatewayUiEnrollmentRequest`, or undefined. */
+export function decodeGatewayUiEnrollmentRequest(
+  value: unknown,
+): GatewayUiEnrollmentRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const { name, kind, from, createdAt, expiresAt } = value;
+  if (
+    typeof name !== "string" ||
+    name === "" ||
+    !ENROLLMENT_KINDS.includes(kind as GatewayUiEnrollmentKind) ||
+    typeof from !== "string" ||
+    typeof createdAt !== "number" ||
+    !Number.isFinite(createdAt) ||
+    typeof expiresAt !== "number" ||
+    !Number.isFinite(expiresAt)
+  )
+    return undefined;
+  return {
+    name,
+    kind: kind as GatewayUiEnrollmentKind,
+    from,
+    createdAt,
+    expiresAt,
+  };
 }

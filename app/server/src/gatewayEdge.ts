@@ -177,7 +177,9 @@ function webAccounts(operations: UserOperations): GatewayWebAccounts {
 /** A seam refusal as the page's fixed code; anything else rethrown. */
 function settingsRefusal(err: unknown): never {
   if (err instanceof UserOperationRefusal)
-    throw err.code === "unknown_client" || err.code === "limit_reached"
+    throw err.code === "unknown_client" ||
+      err.code === "limit_reached" ||
+      err.code === "unknown_request"
       ? new ClientsRefusal(err.code)
       : new IntegrationsRefusal(err.code);
   throw err;
@@ -243,6 +245,10 @@ function webClients(operations: UserOperations): GatewayWebClients {
     }),
     revokeMcpToken: (userId, clientId) =>
       call(() => operations.revokeMcpToken(userId, clientId)),
+    enrollment: (userId, userCode) =>
+      call(() => operations.enrollmentRequest(userId, userCode)),
+    decideEnrollment: (userId, userCode, approve) =>
+      call(() => operations.decideEnrollment(userId, userCode, approve)),
   };
 }
 
@@ -308,6 +314,9 @@ export async function startEdge(
       enrollPort: options.enrollPort,
       ...(options.bindHost ? { bindHost: options.bindHost } : {}),
       ...(options.hosts ? { hosts: options.hosts } : {}),
+      // The page approves enrollment requests, so only with it may machines
+      // start them; the link they show points at it.
+      ...(ui ? { approvalOrigin: ui.publicOrigin } : {}),
     },
     ...(vault
       ? { vault }

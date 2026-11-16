@@ -3,6 +3,7 @@ import {
   decodeGatewayUiAtlassian,
   decodeGatewayUiClients,
   decodeGatewayUiEnrollmentCode,
+  decodeGatewayUiEnrollmentRequest,
   decodeGatewayUiMcpToken,
   decodeGatewayUiMe,
   GATEWAY_UI_SIGNIN_CODES,
@@ -123,5 +124,58 @@ describe("gateway UI wire model", () => {
     });
     for (const value of [{ token: "" }, { token: 5 }, {}, "pgmcp_x"])
       expect(decodeGatewayUiMcpToken(value)).toBeUndefined();
+  });
+
+  test("decodes an enrollment request and drops extra fields (Task-1410)", () => {
+    const request = {
+      name: "devbox-7",
+      kind: "devbox",
+      from: "100.64.0.7",
+      createdAt: 1_000,
+      expiresAt: 601_000,
+    };
+    expect(
+      decodeGatewayUiEnrollmentRequest({
+        ...request,
+        userCode: "BCDF-GHJK",
+        requestId: "secret",
+        mcpTokenHash: "a".repeat(64),
+      }),
+    ).toEqual(request);
+    for (const kind of ["laptop", "other"])
+      expect(decodeGatewayUiEnrollmentRequest({ ...request, kind })).toEqual({
+        ...request,
+        kind,
+      });
+  });
+
+  test("rejects an enrollment request with a missing or malformed field", () => {
+    const request = {
+      name: "devbox-7",
+      kind: "devbox",
+      from: "100.64.0.7",
+      createdAt: 1_000,
+      expiresAt: 601_000,
+    };
+    for (const value of [
+      undefined,
+      null,
+      "devbox-7",
+      [],
+      { ...request, name: "" },
+      { ...request, name: 7 },
+      { ...request, kind: "server" },
+      { ...request, kind: undefined },
+      { ...request, from: undefined },
+      { ...request, from: 1 },
+      { ...request, createdAt: "1000" },
+      { ...request, createdAt: Number.NaN },
+      { ...request, expiresAt: Number.POSITIVE_INFINITY },
+      { ...request, expiresAt: undefined },
+    ])
+      expect(
+        decodeGatewayUiEnrollmentRequest(value),
+        JSON.stringify(value),
+      ).toBeUndefined();
   });
 });

@@ -4,9 +4,11 @@
  * sign-in, in-memory sessions, `/api/me`, the user's accounts and logins
  * (`/api/accounts*`, `/api/logins*`, over the injected `GatewayWebAccounts`),
  * the Atlassian credential (`/api/integrations/*`, `GatewayWebIntegrations`),
- * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`) and the
- * gateway page's built files. An enrollment code or MCP token is only in the
- * answer that creates it; the Atlassian token is in no answer.
+ * clients and MCP tokens (`/api/clients*`, `GatewayWebClients`), machines'
+ * enrollment requests (`/api/enrollments/*`, Task-1410: looked up and decided
+ * by user code under a per-user and global budget, `enrollmentBudget.ts`) and
+ * the gateway page's built files. An enrollment code or MCP token is only in
+ * the answer that creates it; the Atlassian token is in no answer.
  *
  * A session is the actor of the logins it starts: it alone reads, feeds and
  * cancels them, and when it ends (sign-out, expiry, eviction) they are
@@ -29,6 +31,7 @@ import {
   type GatewayUiAtlassianPreset,
   type GatewayUiClients,
   type GatewayUiEnrollmentCode,
+  type GatewayUiEnrollmentRequest,
   type GatewayUiError,
   type GatewayUiLogin,
   type GatewayUiLoginStart,
@@ -53,8 +56,11 @@ import {
   ClientsRefusal,
   decodeClientRequest,
   decodeCodeRequest,
+  decodeEnrollmentDecision,
+  decodeEnrollmentLookup,
   type GatewayWebClients,
 } from "./clients.ts";
+import { EnrollmentBudget } from "./enrollmentBudget.ts";
 import { admittedEmail, type GatewayWebConfig } from "./config.ts";
 import {
   decodeAtlassianSet,
@@ -212,6 +218,7 @@ export async function startGatewayWeb(
     options.testIdleMs?.integration ?? INTEGRATION_IDLE_MS;
   const now = options.now ?? Date.now;
   const files = staticFiles(config.distDir);
+  const enrollmentBudget = new EnrollmentBudget(now);
   const pending = new PendingSignins(now);
   // A session that leaves the table, however, ends its logins.
   const sessions = new Sessions(now, (actorId) => {
@@ -249,6 +256,7 @@ export async function startGatewayWeb(
       | GatewayUiAtlassian
       | GatewayUiClients
       | GatewayUiEnrollmentCode
+      | GatewayUiEnrollmentRequest
       | GatewayUiMcpToken,
   ): void =>
     send(
@@ -564,6 +572,57 @@ export async function startGatewayWeb(
     }
   };
 
+  /**
+   * `/api/enrollments/lookup` and `/decide`, behind the session: the user
+   * code only in the body, the user only from the session. Each well-formed
+   * call spends the user's budget first; an unknown code also spends the
+   * global miss budget. Log lines name the user only, never the code.
+   */
+  const enrollmentsApi = (
+    method: string,
+    path: string,
+    body: Buffer,
+    userId: string,
+    res: ServerResponse,
+  ): void => {
+    const lookup = path === "/api/enrollments/lookup";
+    if (method !== "POST" || (!lookup && path !== "/api/enrollments/decide"))
+      return text(res, 404, "not found");
+    const value = parseJson(body);
+    const decision = lookup ? undefined : decodeEnrollmentDecision(value);
+    const userCode = lookup
+      ? decodeEnrollmentLookup(value)
+      : decision?.userCode;
+    if (userCode === undefined) return json(res, 400, { error: "bad_request" });
+    const refused = enrollmentBudget.admit(userId);
+    if (refused) {
+      log(
+        refused.scope === "global"
+          ? `ui enrollments: refused, miss cap reached user=${userId}`
+          : `ui enrollments: refused, budget spent user=${userId}`,
+      );
+      res.setHeader("retry-after", String(refused.retryAfterSeconds));
+      return json(res, 429, { error: "rate_limited" });
+    }
+    try {
+      if (lookup) return json(res, 200, clients.enrollment(userId, userCode));
+      clients.decideEnrollment(userId, userCode, decision!.approve);
+      log(
+        `ui enrollments: request ${decision!.approve ? "approved" : "denied"} user=${userId}`,
+      );
+      return noContent(res);
+    } catch (err) {
+      if (err instanceof ClientsRefusal) {
+        if (err.code === "unknown_request" && enrollmentBudget.miss())
+          log("ui enrollments: miss cap reached");
+        return json(res, err.code === "limit_reached" ? 409 : 404, {
+          error: err.code,
+        });
+      }
+      return json(res, 503, { error: "unavailable" });
+    }
+  };
+
   const handle = async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -616,6 +675,11 @@ export async function startGatewayWeb(
       const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
       if (!session) return json(res, 401, { error: "signed_out" });
       return settingsApi(req, method, path, body, session.userId, res);
+    }
+    if (path.startsWith("/api/enrollments/")) {
+      const session = sessions.lookup(cookieOf(req, SESSION_COOKIE));
+      if (!session) return json(res, 401, { error: "signed_out" });
+      return enrollmentsApi(method, path, body, session.userId, res);
     }
     const file = read ? files.get(path) : undefined;
     if (!file) return text(res, 404, "not found");

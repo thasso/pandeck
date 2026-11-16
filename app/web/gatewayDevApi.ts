@@ -48,6 +48,15 @@ export function gatewayDevApi(): Plugin {
       mcpToken: false,
     },
   ];
+  // One pending machine: open `/#enroll=BCDF-GHJK` to approve or deny it.
+  let enrollment: { decided: boolean; createdAt: number } = {
+    decided: false,
+    createdAt: Date.now(),
+  };
+  const DEV_USER_CODE = "BCDFGHJK";
+  const devCode = (value: unknown) =>
+    typeof value === "string" &&
+    value.replace(/[-\s]/g, "").toUpperCase() === DEV_USER_CODE;
   const logins = new Map<
     string,
     { kind: string; reads: number; input: boolean; cancelled: boolean }
@@ -222,6 +231,31 @@ export function gatewayDevApi(): Plugin {
             if (c) c.mcpToken = false;
             return json(res, 204);
           }
+          case "/api/enrollments/lookup":
+            // A fresh request every 10 minutes, so the dialog can be tried again.
+            if (Date.now() - enrollment.createdAt > 600e3)
+              enrollment = { decided: false, createdAt: Date.now() };
+            if (!devCode(body.userCode) || enrollment.decided)
+              return json(res, 404, { error: "unknown_request" });
+            return json(res, 200, {
+              name: "devbox-thasso",
+              kind: "devbox",
+              from: "100.64.0.7",
+              createdAt: enrollment.createdAt,
+              expiresAt: enrollment.createdAt + 600e3,
+            });
+          case "/api/enrollments/decide":
+            if (!devCode(body.userCode) || enrollment.decided)
+              return json(res, 404, { error: "unknown_request" });
+            enrollment.decided = true;
+            if (body.approve === true)
+              clients.push({
+                id: `c_${++n}`,
+                label: "devbox-thasso",
+                createdAt: Date.now(),
+                mcpToken: true,
+              });
+            return json(res, 204);
           default:
             return json(res, 404, { error: "not_found" });
         }
