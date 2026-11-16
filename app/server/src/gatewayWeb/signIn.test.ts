@@ -401,6 +401,8 @@ test("the client secret is posted when discovery offers it, else sent as basic a
     const gateway = await startUi();
     const answer = await signIn(gateway);
     assert.equal(answer.status, 303, `signed in with ${expected}`);
+    assert.equal(answer.headers.location, "/");
+    sessionOf(answer);
     assert.deepEqual(issuer.tokenAuth, [expected]);
   }
   assert.ok(logs.every((line) => !line.includes(CLIENT_PW)));
