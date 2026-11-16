@@ -621,6 +621,7 @@ describe("absent versus unknown windows, mapper to router", () => {
     }));
     return {
       short: candidates[0]!.usage.short,
+      long: candidates[0]!.usage.long,
       picked: rankAccountCandidates(
         candidates,
         {
@@ -649,7 +650,7 @@ describe("absent versus unknown windows, mapper to router", () => {
         }),
       knownClaude,
     );
-    expect(result).toEqual({ short: null, picked: "a-candidate" });
+    expect(result).toMatchObject({ short: null, picked: "a-candidate" });
   });
 
   test.each([
@@ -674,7 +675,7 @@ describe("absent versus unknown windows, mapper to router", () => {
     ],
   ])("%s stays unknown usage", async (_name, candidate) => {
     const result = await pick("claude", candidate, knownClaude);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       short: { usedPct: null, resetsAt: null },
       picked: "z-known",
     });
@@ -698,7 +699,7 @@ describe("absent versus unknown windows, mapper to router", () => {
         ),
       knownOpenAi,
     );
-    expect(result).toEqual({ short: null, picked: "a-candidate" });
+    expect(result).toMatchObject({ short: null, picked: "a-candidate" });
   });
 
   test.each([
@@ -723,11 +724,55 @@ describe("absent versus unknown windows, mapper to router", () => {
       "an empty successful OpenAI body",
       () => mapOpenAiUsageResponse({}, clock),
     ],
+    [
+      "a malformed OpenAI primary slot beside a valid weekly window",
+      () =>
+        mapOpenAiUsageResponse(
+          {
+            rate_limit: {
+              primary_window: "malformed-present-slot",
+              secondary_window: {
+                used_percent: 10,
+                limit_window_seconds: 604800,
+                reset_at: epoch(24),
+              },
+            },
+          },
+          clock,
+        ),
+    ],
   ])("%s stays unknown usage", async (_name, candidate) => {
     const result = await pick("openai-codex", candidate, knownOpenAi);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       short: { usedPct: null, resetsAt: null },
       picked: "z-known",
     });
+  });
+});
+
+test("a malformed OpenAI secondary slot is an unknown weekly window, not no cap", async () => {
+  install([profile("openai", "openai-codex")]);
+  openAiResult = () =>
+    Promise.resolve(
+      mapOpenAiUsageResponse(
+        {
+          rate_limit: {
+            primary_window: {
+              used_percent: 3,
+              limit_window_seconds: 18000,
+              reset_at: Math.floor((clock + 3600_000) / 1000),
+            },
+            secondary_window: 42,
+          },
+        },
+        clock,
+      ),
+    );
+  await readUsageSnapshot("openai", "openai-codex");
+  expect(
+    cachedUsageIndicator({ id: "openai", provider: "openai-codex" }),
+  ).toMatchObject({
+    short: { usedPct: 3 },
+    long: { usedPct: null, resetsAt: null },
   });
 });
