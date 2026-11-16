@@ -33,7 +33,11 @@ const {
   setUsageBroadcaster,
   setUsageCacheDepsForTests,
   usageIndicators,
+  cachedUsageIndicator,
 } = await import("./usageCache.ts");
+const { mapClaudeUsageResponse } = await import("./claudeSdk/usageQuery.ts");
+const { mapOpenAiUsageResponse } = await import("./piSdk/openaiUsageQuery.ts");
+const { rankAccountCandidates } = await import("./accountRouter.ts");
 const { usageProfileForSession } = await import("./harnesses/usage.ts");
 
 const CACHE_DIR = join(process.env.DATA_DIR, "cache", "usage");
@@ -554,5 +558,176 @@ describe("usageIndicators", () => {
       profile("disabled", "openai-codex", false),
     ]);
     expect(usageIndicators().map((item) => item.profileId)).toEqual(["openai"]);
+  });
+});
+
+describe("absent versus unknown windows, mapper to router", () => {
+  const hour = 3600_000;
+  const iso = (hours: number) => new Date(clock + hours * hour).toISOString();
+  const epoch = (hours: number) => Math.floor((clock + hours * hour) / 1000);
+  // Fully known room: 46% / 90%, weekly reset in 68h (the "Default Claude" card).
+  const knownClaude = () =>
+    mapClaudeUsageResponse({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 46, resets_at: iso(2) },
+        seven_day: { utilization: 90, resets_at: iso(68) },
+      },
+    });
+  const knownOpenAi = () =>
+    mapOpenAiUsageResponse(
+      {
+        rate_limit: {
+          primary_window: {
+            used_percent: 10,
+            limit_window_seconds: 18000,
+            reset_at: epoch(2),
+          },
+          secondary_window: {
+            used_percent: 10,
+            limit_window_seconds: 604800,
+            reset_at: epoch(48),
+          },
+        },
+      },
+      clock,
+    );
+
+  async function pick(
+    provider: "claude" | "openai-codex",
+    candidate: () => ClaudeUsageSnapshot | OpenAiUsageSnapshot,
+    known: () => ClaudeUsageSnapshot | OpenAiUsageSnapshot,
+  ) {
+    install([profile("a-candidate", provider), profile("z-known", provider)]);
+    const results = { "a-candidate": candidate, "z-known": known };
+    const fetch = (id: string) =>
+      Promise.resolve(results[id as keyof typeof results]());
+    setUsageCacheDepsForTests({
+      fetchClaude: fetch as (id: string) => Promise<ClaudeUsageSnapshot>,
+      fetchOpenAi: fetch as (id: string) => Promise<OpenAiUsageSnapshot>,
+    });
+    await readUsageSnapshot("a-candidate", provider);
+    await readUsageSnapshot("z-known", provider);
+    const candidates = ["a-candidate", "z-known"].map((id) => ({
+      profile: {
+        id,
+        provider,
+        enabled: true,
+        enterprise: false,
+        health: { state: "ok" as const, since: clock },
+      },
+      offersModel: true,
+      usage: cachedUsageIndicator({ id, provider }),
+    }));
+    return {
+      short: candidates[0]!.usage.short,
+      picked: rankAccountCandidates(
+        candidates,
+        {
+          model: {
+            provider: provider === "claude" ? "claude-sdk" : "openai-codex",
+            modelId: "m",
+          },
+        },
+        { fiveHourUsedThreshold: 90, weeklyUsedThreshold: 95 },
+        clock,
+        undefined,
+      ).profileId,
+    };
+  }
+
+  test("a Claude response that states no 5-hour window is room", async () => {
+    const result = await pick(
+      "claude",
+      () =>
+        mapClaudeUsageResponse({
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: null,
+            seven_day: { utilization: 3, resets_at: iso(41) },
+          },
+        }),
+      knownClaude,
+    );
+    expect(result).toEqual({ short: null, picked: "a-candidate" });
+  });
+
+  test.each([
+    [
+      "a malformed Claude 5-hour slot",
+      () =>
+        mapClaudeUsageResponse({
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: "soon",
+            seven_day: { utilization: 3, resets_at: iso(41) },
+          },
+        }),
+    ],
+    [
+      "Claude limits with no window at all",
+      () =>
+        mapClaudeUsageResponse({
+          rate_limits_available: true,
+          rate_limits: {},
+        }),
+    ],
+  ])("%s stays unknown usage", async (_name, candidate) => {
+    const result = await pick("claude", candidate, knownClaude);
+    expect(result).toEqual({
+      short: { usedPct: null, resetsAt: null },
+      picked: "z-known",
+    });
+  });
+
+  test("an OpenAI response with only a classified weekly window is room", async () => {
+    const result = await pick(
+      "openai-codex",
+      () =>
+        mapOpenAiUsageResponse(
+          {
+            rate_limit: {
+              primary_window: {
+                used_percent: 3,
+                limit_window_seconds: 604800,
+                reset_at: epoch(24),
+              },
+            },
+          },
+          clock,
+        ),
+      knownOpenAi,
+    );
+    expect(result).toEqual({ short: null, picked: "a-candidate" });
+  });
+
+  test.each([
+    [
+      "an unclassifiable OpenAI plan window",
+      () =>
+        mapOpenAiUsageResponse(
+          {
+            rate_limit: {
+              primary_window: { used_percent: 96, reset_at: epoch(2) },
+              secondary_window: {
+                used_percent: 10,
+                limit_window_seconds: 604800,
+                reset_at: epoch(24),
+              },
+            },
+          },
+          clock,
+        ),
+    ],
+    [
+      "an empty successful OpenAI body",
+      () => mapOpenAiUsageResponse({}, clock),
+    ],
+  ])("%s stays unknown usage", async (_name, candidate) => {
+    const result = await pick("openai-codex", candidate, knownOpenAi);
+    expect(result).toEqual({
+      short: { usedPct: null, resetsAt: null },
+      picked: "z-known",
+    });
   });
 });

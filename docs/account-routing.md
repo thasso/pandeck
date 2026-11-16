@@ -345,9 +345,13 @@ not need login, offer the exact model and requested effort, and not be benched.
 Claude shares its curated model list; pi availability comes from each account's
 isolated SDK runtime. Ranking is:
 
-1. Fresh usage with room in both plan windows. A window the fresh snapshot does
-   not report at all (the card's "no 5h limit") is no cap, so it counts as room
-   with 0% used and no known reset.
+1. Fresh usage with room in both plan windows. A window the provider proves
+   absent (the card's "no 5h limit") is no cap, so it counts as room with 0%
+   used and no known reset. The usage projection decides proof: Claude needs the
+   slot null or omitted while another window is reported; OpenAI needs every
+   unlabeled plan window classified as 5-hour or weekly. Anything less (an empty
+   body, an unclassifiable or malformed window) projects a window of unknown
+   usage instead.
 2. Missing, partial, unavailable or stale usage. A reported window whose
    percentage is missing, malformed or past its reset is partial.
 3. Fresh usage at or beyond either threshold, even if the other window is

@@ -117,9 +117,9 @@ function usageRank(
     usage &&
     usage.limitsAvailable &&
     usageIndicatorState(usage, now) === "fresh";
-  // A fresh snapshot that reports no window at all means the plan has no such
-  // cap right now ("no 5h limit"): that is room, not unknown usage. A window
-  // whose percent is missing, malformed or rolled over stays unknown.
+  // The usage projection reports a null window only when the provider proved
+  // it absent ("no 5h limit"): with fresh usage that is room, not unknown
+  // usage. Unproven absence arrives as a window of unknown percent instead.
   const windowPct = (window: UsageIndicator["short"]): number | null => {
     if (fresh && window === null) return 0;
     const pct = usageWindowPct(window, now);
