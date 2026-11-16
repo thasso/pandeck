@@ -1,7 +1,8 @@
 /**
  * The gateway UI's fake OIDC issuer for tests (Task-1402): loopback HTTP,
  * reached through the test-only `allowInsecureRequests`. It checks PKCE, the
- * client's basic auth and the redirect URI, and signs RS256 ID tokens whose
+ * client's secret (posted or basic, only as advertised) and the redirect URI,
+ * and signs RS256 ID tokens whose
  * claims each test can change. `signIn.test.ts` and `gatewayWeb/accounts.test.ts`
  * share it.
  */
@@ -64,6 +65,14 @@ export interface FakeIssuer {
   idTokens: string[];
   publicKey: KeyObject;
   keySet: KeySet;
+  /**
+   * The `token_endpoint_auth_methods_supported` discovery names; undefined
+   * leaves it out, so only basic auth is accepted (the OIDC default). Starts
+   * as Google's list.
+   */
+  authMethods: string[] | undefined;
+  /** How each token request authenticated: `post`, `basic`, `both` or `none`. */
+  tokenAuth: string[];
   /** How often `jwks_uri` was asked. */
   keyRequests(): number;
   close(): Promise<void>;
@@ -95,6 +104,11 @@ export async function startFakeIssuer({
   };
   const keySet: KeySet = { kids: ["k1"], status: 200, padding: 0, delayMs: 0 };
   let keyRequests = 0;
+  const tokenAuth: string[] = [];
+  let authMethods: string[] | undefined = [
+    "client_secret_post",
+    "client_secret_basic",
+  ];
   const pending = new Map<string, Authorization>();
   const secrets = new Set<string>([CLIENT_PW]);
   const idTokens: string[] = [];
@@ -126,6 +140,9 @@ export async function startFakeIssuer({
         response_types_supported: ["code"],
         subject_types_supported: ["public"],
         id_token_signing_alg_values_supported: ["RS256"],
+        ...(authMethods
+          ? { token_endpoint_auth_methods_supported: authMethods }
+          : {}),
       });
     if (url.pathname === "/jwks") {
       keyRequests++;
@@ -149,11 +166,28 @@ export async function startFakeIssuer({
     req.on("data", (chunk: string) => (raw += chunk));
     req.on("end", () => {
       const form = new URLSearchParams(raw);
-      const basic = Buffer.from(
-        (req.headers.authorization ?? "").replace(/^Basic /, ""),
-        "base64",
-      ).toString();
-      const [id, pw] = basic.split(":").map(decodeURIComponent);
+      // Exactly one method, and only one the discovery offered.
+      const header = req.headers.authorization ?? "";
+      const posted = form.has("client_secret");
+      const method = header.startsWith("Basic ")
+        ? posted
+          ? "both"
+          : "basic"
+        : posted
+          ? "post"
+          : "none";
+      tokenAuth.push(method);
+      const offered = authMethods ?? ["client_secret_basic"];
+      let id: string | null | undefined;
+      let pw: string | null | undefined;
+      if (method === "post" && offered.includes("client_secret_post")) {
+        id = form.get("client_id");
+        pw = form.get("client_secret");
+      } else if (method === "basic" && offered.includes("client_secret_basic"))
+        [id, pw] = Buffer.from(header.slice(6), "base64")
+          .toString()
+          .split(":")
+          .map(decodeURIComponent);
       const code = form.get("code") ?? "";
       const verifier = form.get("code_verifier") ?? "";
       secrets.add(verifier);
@@ -205,6 +239,13 @@ export async function startFakeIssuer({
     idTokens,
     publicKey,
     keySet,
+    tokenAuth,
+    get authMethods() {
+      return authMethods;
+    },
+    set authMethods(methods: string[] | undefined) {
+      authMethods = methods;
+    },
     keyRequests: () => keyRequests,
     authorize(provider, testCase = {}) {
       assert.equal(provider.origin + provider.pathname, `${base}/authorize`);

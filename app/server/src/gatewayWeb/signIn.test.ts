@@ -316,6 +316,8 @@ afterEach(async () => {
     delayMs: 0,
     raw: undefined,
   });
+  issuer.authMethods = ["client_secret_post", "client_secret_basic"];
+  issuer.tokenAuth.length = 0;
   while (open.length) await open.pop()!.close();
   clock = Date.now();
   logs.length = 0;
@@ -382,6 +384,28 @@ test("AC1/AC4: a first sign-in creates an opaque user; the same subject reaches 
     testCase: { claims: (c) => ({ ...c, sub: "subject-2" }) },
   });
   assert.equal(gateway.registry.users().length, 2);
+});
+
+test("the client secret is posted when discovery offers it, else sent as basic auth", async () => {
+  // Google offers both and refuses basic auth's form-encoded id (`-` → %2D).
+  assert.match(CLIENT_ID, /-/);
+  const cases: [string[] | undefined, string][] = [
+    [["client_secret_post", "client_secret_basic"], "post"],
+    [["client_secret_basic", "client_secret_post"], "post"],
+    [["client_secret_basic"], "basic"],
+    [undefined, "basic"],
+  ];
+  for (const [methods, expected] of cases) {
+    issuer.authMethods = methods;
+    issuer.tokenAuth.length = 0;
+    const gateway = await startUi();
+    const answer = await signIn(gateway);
+    assert.equal(answer.status, 303, `signed in with ${expected}`);
+    assert.equal(answer.headers.location, "/");
+    sessionOf(answer);
+    assert.deepEqual(issuer.tokenAuth, [expected]);
+  }
+  assert.ok(logs.every((line) => !line.includes(CLIENT_PW)));
 });
 
 test("AC3: only a verified email the rule admits gets a session or a user", async () => {
