@@ -113,15 +113,20 @@ function usageRank(
   now: number,
 ): { tier: number; weeklyReset: number; fiveHourUsed: number } {
   const usage = candidate.usage;
-  const shortPct = usage ? usageWindowPct(usage.short, now) : null;
-  const longPct = usage ? usageWindowPct(usage.long, now) : null;
-  const short =
-    shortPct !== null && Number.isFinite(shortPct) ? shortPct : null;
-  const long = longPct !== null && Number.isFinite(longPct) ? longPct : null;
   const fresh =
     usage &&
     usage.limitsAvailable &&
     usageIndicatorState(usage, now) === "fresh";
+  // A fresh snapshot that reports no window at all means the plan has no such
+  // cap right now ("no 5h limit"): that is room, not unknown usage. A window
+  // whose percent is missing, malformed or rolled over stays unknown.
+  const windowPct = (window: UsageIndicator["short"]): number | null => {
+    if (fresh && window === null) return 0;
+    const pct = usageWindowPct(window, now);
+    return pct !== null && Number.isFinite(pct) ? pct : null;
+  };
+  const short = usage ? windowPct(usage.short) : null;
+  const long = usage ? windowPct(usage.long) : null;
   const exhausted =
     (short !== null && short >= thresholds.fiveHourUsedThreshold) ||
     (long !== null && long >= thresholds.weeklyUsedThreshold);
