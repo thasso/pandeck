@@ -56,6 +56,7 @@ const { formatLocalDateTime } = await import("./googleTime.ts");
 const usageCache = await import("./usageCache.ts");
 const { usageProfileForSession } = await import("./harnesses/usage.ts");
 const health = await import("./accountHealth.ts");
+const { setDeliveryWake } = await import("./deliveryWake.ts");
 const { installGatewayLink } = await import("./gatewayLink.ts");
 type GatewayLink = import("./gatewayLink.ts").GatewayLink;
 health.initializeAccountHealth({
@@ -1162,6 +1163,10 @@ function pick(
   });
 }
 
+const RUNNING = "This session is running; move it once its turn ends.";
+const BUSY =
+  "This session is starting a turn or already moving; try again once it is idle.";
+
 /** Nothing the move held is still held: a new turn and a new move may start. */
 function released(s: ReturnType<typeof setup>) {
   assert.equal(s.runtime.isBusy(s.id), false, "harness admission released");
@@ -1423,12 +1428,15 @@ for (const harness of engines) {
     const s = setup(harness, a, []);
     host(s);
     const admitted = s.runtime.admitPrompt(s.id);
-    await assert.rejects(pick(s, b), {
-      message: `Session ${s.id} is running; move it once its turn ends.`,
-    });
+    await assert.rejects(pick(s, b), { message: BUSY });
     admitted();
     assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
     released(s);
+    host(s, async () => ({ ...s.driver, isRunning: true }));
+    await assert.rejects(pick(s, b), { message: RUNNING });
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    released(s);
+    host(s);
     await pick(s, b);
     assert.equal(sessionStore.get(s.id)?.credentialProfileId, b);
   });
@@ -1465,10 +1473,8 @@ for (const harness of engines) {
     // Slash commands open their synthetic turn behind this same typed-busy
     // check, and a queued row stays queued on SessionBusyError.
     assert.throws(() => assertAccountRecoveryAdmission(s.id), SessionBusyError);
-    // A second move finds the first one's admission.
-    await assert.rejects(pick(s, b), {
-      message: `Session ${s.id} is running; move it once its turn ends.`,
-    });
+    // A second move finds the first one's admission, which is no run.
+    await assert.rejects(pick(s, b), { message: BUSY });
     assert.equal(s.runtime.get(s.id)!.clientTimeline().length, before);
     assert.equal(s.calls.length, 1);
     const idle = vi.spyOn(s.runtime.get(s.id)!, "notifyIdle");
@@ -1638,6 +1644,121 @@ for (const harness of engines) {
     await assert.rejects(pick(deleted, b), {
       message: "Session does not exist or was deleted.",
     });
+  });
+
+  // Work refused as busy while the move held the session (a queued row, a peer
+  // delivery) waits for one re-offer at release, however the move ended: the
+  // bound runtime's idle edge, or a wake by id when no live runtime remains.
+  test.each([
+    "success",
+    "acquisition missing",
+    "acquisition throws",
+    "released driver",
+    "no switchAccount",
+    "engine switch throws",
+    "model change",
+    "authority loss",
+    "target needs login",
+    "harness torn down mid-move",
+  ] as const)(
+    `${harness} every exit after the holds re-offers delivery exactly once: %s`,
+    async (exit) => {
+      const a = account(harness, "A");
+      const b = account(harness, "B");
+      const s = setup(harness, a, []);
+      let owned = true;
+      host(s, async () => {
+        if (exit === "acquisition throws") throw new Error("disk is gone");
+        if (exit === "acquisition missing") return undefined;
+        if (exit === "released driver")
+          return { ...s.driver, released: true } as RuntimePromptDriver;
+        if (exit === "no switchAccount") {
+          const { switchAccount: _unused, ...rest } = s.driver;
+          return rest;
+        }
+        return s.driver;
+      });
+      s.gate(async () => {
+        if (exit === "engine switch throws") throw new Error("engine refused");
+        if (exit === "model change")
+          s.driver.modelSelection = () => ({
+            model: offers.get(a),
+            thinkingLevel: "high",
+          });
+        if (exit === "authority loss") owned = false;
+        if (exit === "target needs login")
+          health.reportAccountRunFailure(
+            b,
+            { kind: "auth", loginDeath: true },
+            offers.get(b)!.provider,
+            health.observeAccountHealth(b),
+          );
+        if (exit === "harness torn down mid-move") {
+          // What a harness store does when its engine is lost: the session
+          // stays, its runtime goes.
+          s.runtime.closeForTeardown(s.id);
+          await s.runtime.releaseHarness(s.id);
+          throw new Error("engine lost");
+        }
+      });
+      const wakes: string[] = [];
+      lifecycle.setSessionIdleHook((id) => {
+        if (id === s.id) wakes.push("idle");
+      });
+      setDeliveryWake((id, reminders) => {
+        if (id === s.id) wakes.push(`wake reminders=${reminders}`);
+      });
+      try {
+        const moving = pick(s, b, {
+          authorize: () => {
+            if (!owned) throw new Error("taken over");
+          },
+        });
+        if (exit === "success") await moving;
+        else await assert.rejects(moving);
+        released(s);
+        assert.equal(
+          sessionStore.get(s.id)?.credentialProfileId,
+          exit === "success" ? b : a,
+        );
+        assert.deepEqual(
+          wakes,
+          exit.startsWith("acquisition") ||
+            exit === "released driver" ||
+            exit === "no switchAccount" ||
+            exit === "harness torn down mid-move"
+            ? ["wake reminders=true"]
+            : ["idle"],
+        );
+      } finally {
+        lifecycle.setSessionIdleHook(undefined);
+        setDeliveryWake(undefined);
+      }
+    },
+  );
+
+  test(`${harness} a move refused before its holds wakes nothing, and a deleted session is not woken`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, []);
+    const wakes: string[] = [];
+    setDeliveryWake((id) => {
+      if (id === s.id) wakes.push("wake");
+    });
+    try {
+      const admitted = s.runtime.admitPrompt(s.id);
+      host(s);
+      await assert.rejects(pick(s, b), { message: BUSY });
+      admitted();
+      host(s, async () => {
+        sessionStore.markDeleted(s.id);
+        return undefined;
+      });
+      await assert.rejects(pick(s, b));
+      assert.deepEqual(wakes, []);
+    } finally {
+      setDeliveryWake(undefined);
+    }
   });
 }
 

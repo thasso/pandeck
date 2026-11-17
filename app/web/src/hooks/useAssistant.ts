@@ -5406,12 +5406,19 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       },
     };
   if (action.kind === "accountMoveSent")
+    // The move is the session's own send, so like a prompt it retires that
+    // session's earlier failure (a refused move a retry may now fix); its
+    // answer never does, which could erase a newer failure.
     return {
       ...state,
       accountMovePending: {
         ...state.accountMovePending,
         [action.sessionId]: action.requestId,
       },
+      sessionFailures: withoutSessionFailure(
+        state.sessionFailures,
+        action.sessionId,
+      ),
     };
   if (action.kind === "backgroundStopSent") {
     return {

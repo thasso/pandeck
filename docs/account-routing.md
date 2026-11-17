@@ -713,13 +713,17 @@ effort, and never moves a running session. The list reads the model of a
 resident session, or the one the stored row names; it opens no harness. The move
 opens a session that is not resident (`hub.acquireById`).
 
-The move takes every turn hold before any await: the session must not be busy
-(running, or holding an admitted prompt), and account recovery must not be
-reserved. It then takes the run lease (a worktree hold refuses it), the recovery
-reservation and harness admission. While the move runs, prompts, provider turns,
-slash commands and queued or peer deliveries see the typed busy state and wait.
-A second move is refused. Each engine step and the binding compare-and-set
-recheck the following:
+The move takes every turn hold before any await: the session must not be busy,
+and account recovery must not be reserved. A running session is refused with
+"This session is running; move it once its turn ends."; one only holding an
+admitted prompt, or another move, with "This session is starting a turn or
+already moving; try again once it is idle." It then takes the run lease (a
+worktree hold refuses it), the recovery reservation and harness admission. While
+the move runs, a prompt or slash command sent directly, and a provider turn, are
+refused with the typed busy error (`AccountSwitchInProgressError`). Queued
+prompts and queued slash commands, and peer deliveries, stay queued and run once
+the move releases. A second move is refused. Each engine step and the binding
+compare-and-set recheck the following:
 
 - the caller's authority (the coordinator's still-owned spawn edge; takeover
   refuses);
@@ -730,9 +734,13 @@ recheck the following:
 
 The move goes through the same `driver.switchAccount` as failover. On Claude
 this is the history copy; on pi, the staged reopen. Every hold is released in
-`finally`, and the idle edge is re-offered, so queued work drains on the new
-account. The next run counts as moved for the encrypted-reasoning retry. After
-the commit, a display-only marker `Switched from A to B — chosen by you.` (or
+`finally`, and delivery is re-offered once on every exit, so queued work drains
+(on the new account after a success). The bound runtime re-offers it as its idle
+edge. When none is bound (the load failed) or it was torn down during the move
+(an engine loss), the scheduler is woken by session id instead, unless the
+session was deleted or a run that owns its own idle edge is live. The next run
+counts as moved for the encrypted-reasoning retry. After the commit, a
+display-only marker `Switched from A to B — chosen by you.` (or
 `— chosen by its coordinating session.`) is appended. If that append fails, the
 failure is logged and the move still succeeds.
 
@@ -740,8 +748,8 @@ The server answers each list request with `sessionAccountMoveTargets`. Only the
 latest request's answer lands. A move answers once with
 `sessionAccountMoveAnswer`. A successful move is silent: the session row shows
 the new account. A refusal carries `error` and becomes that session's failure
-(`docs/messaging.md`). It shows in place above the session's composer, or as one
-toast naming the session when the user is elsewhere. A dropped connection
-retires the pending control. The control is offered only on a subscription
-login, and it is disabled with "Available once the current turn ends." while the
-session runs.
+(`docs/messaging.md`); the session's next move, like its next prompt, retires it
+when sent. It shows in place above the session's composer, or as one toast
+naming the session when the user is elsewhere. A dropped connection retires the
+pending control. The control is offered only on a subscription login, and it is
+disabled with "Available once the current turn ends." while the session runs.

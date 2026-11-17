@@ -118,4 +118,39 @@ describe("the account picker's state", () => {
     expect(state.accountMovePending).toEqual({});
     expect(state.sessionFailures.s1).toBeUndefined();
   });
+
+  it("retires a refused move's failure when the session's next move is sent", () => {
+    let state = server(createInitialState(), {
+      type: "error",
+      message: "Unrelated failure",
+      target: { type: "session", id: "s2" },
+    });
+    state = reduceAssistantState(state, {
+      kind: "accountMoveSent",
+      sessionId: "s1",
+      requestId: "first",
+    });
+    state = server(state, {
+      type: "sessionAccountMoveAnswer",
+      requestId: "first",
+      sessionId: "s1",
+      error: "Account B needs login.",
+    });
+    expect(state.sessionFailures.s1).toBe("Account B needs login.");
+
+    state = reduceAssistantState(state, {
+      kind: "accountMoveSent",
+      sessionId: "s1",
+      requestId: "retry",
+    });
+    expect(state.sessionFailures.s1).toBeUndefined();
+    state = server(state, {
+      type: "sessionAccountMoveAnswer",
+      requestId: "retry",
+      sessionId: "s1",
+    });
+    expect(state.accountMovePending).toEqual({});
+    expect(state.sessionFailures.s1).toBeUndefined();
+    expect(state.sessionFailures.s2).toBe("Unrelated failure");
+  });
 });

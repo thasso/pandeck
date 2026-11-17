@@ -1899,3 +1899,116 @@ test("an explicit move reopens an evicted pi session on the target with its hist
     profiles.setCredentialProfileEnabled(b, false);
   }
 });
+
+test("a cold pi move whose load fails still wakes the queued work it refused", async () => {
+  const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
+  const { dirname } = await import("node:path");
+  const queue = await import("./promptQueue.ts");
+  const { promptQueueStore } = await import("./db/promptQueueStore.ts");
+  const { assertAccountRecoveryAdmission } =
+    await import("./session/runtime/accountRecoveryAdmission.ts");
+  const { setDeliveryWake } = await import("./deliveryWake.ts");
+  const a = account("openai-codex", "Failed cold A");
+  const b = account("openai-codex", "Failed cold B");
+  const id = randomUUID();
+  const file = canonicalPiSessionPath(id);
+  mkdirSync(dirname(file), { recursive: true });
+  const at = new Date().toISOString();
+  writeFileSync(
+    file,
+    [
+      { type: "session", version: 3, id, timestamp: at, cwd: tmp },
+      {
+        type: "model_change",
+        id: "model",
+        parentId: null,
+        timestamp: at,
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+      },
+      {
+        type: "message",
+        id: "user",
+        parentId: "model",
+        timestamp: at,
+        message: { role: "user", content: "prior prompt", timestamp: at },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n") + "\n",
+  );
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    provider: "openai-codex",
+    model: "gpt-5.5",
+    credentialProfileId: a,
+  });
+  type PiLive = import("./piSdk/PiLiveSession.ts").PiLiveSession;
+  let entered!: (driver: PiLive) => void;
+  const ready = new Promise<PiLive>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const wakes: string[] = [];
+  lifecycle.setSessionIdleHook((wakeId) => {
+    if (wakeId === id) wakes.push("idle");
+  });
+  setDeliveryWake((wakeId) => {
+    if (wakeId === id) wakes.push("wake");
+  });
+  // piStore tracks the driver before its integration-gate catch-up resolves;
+  // a failed catch-up evicts it and throws, so the move's load fails while a
+  // queue drain already reached the tracked driver.
+  const internals = piStore as unknown as {
+    catchUpIntegrationGates(live: PiLive, gates: unknown): Promise<unknown>;
+  };
+  const catchup = vi
+    .spyOn(internals, "catchUpIntegrationGates")
+    .mockImplementationOnce(async (live) => {
+      entered(live);
+      await gate;
+      piStore.evict(live.key);
+      throw new Error("injected integration-gate catch-up failure");
+    });
+  queue.setPromptQueueHost({
+    live: (sessionId) => hub.getLiveById(sessionId) as never,
+    publish: () => {},
+    reportError: () => {},
+    yieldToOthers: () => {},
+  });
+  try {
+    const move = moveSessionAccount({
+      sessionId: id,
+      targetProfileId: b,
+      by: "user",
+      authorize: () => {},
+    });
+    const rejected = assert.rejects(move, /could not be loaded/);
+    const driver = await ready;
+    queue.queuePrompt(id, { text: "queued during the failed load" });
+    await queue.drainPromptQueue(id, () => true, driver);
+    assert.equal(promptQueueStore.list(id).length, 1, "refused as busy");
+    // Queueing woke the scheduler itself; only the release's own wake counts.
+    wakes.length = 0;
+    release();
+    await rejected;
+    assertAccountRecoveryAdmission(id);
+    assert.equal(sessionRuntime.isBusy(id), false);
+    assert.equal(sessionStore.get(id)?.credentialProfileId, a);
+    assert.equal(promptQueueStore.list(id).length, 1);
+    assert.deepEqual(wakes, ["wake"], "the release re-offers delivery once");
+  } finally {
+    release();
+    catchup.mockRestore();
+    lifecycle.setSessionIdleHook(undefined);
+    setDeliveryWake(undefined);
+    piStore.evict(id);
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});

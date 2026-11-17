@@ -26,6 +26,7 @@ import {
   type CredentialProfile,
 } from "./credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
+import { wakeSessionDelivery } from "./deliveryWake.ts";
 import { formatLocalDateTime } from "./googleTime.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
 import {
@@ -271,10 +272,27 @@ export interface AccountMoveRequest {
   authorize: () => void;
 }
 
-function busy(sessionId: string): Error {
-  return new Error(
-    `Session ${sessionId} is running; move it once its turn ends.`,
-  );
+const RUNNING = "This session is running; move it once its turn ends.";
+/** Admitted but not running: a prompt on its way in, or another move. */
+const BUSY =
+  "This session is starting a turn or already moving; try again once it is idle.";
+
+/**
+ * Every exit after the move took its holds re-offers delivery once: queued
+ * rows and peer deliveries refused as busy during the move wait for exactly
+ * this edge. A live bound runtime offers it as its idle edge. With none bound
+ * (the load failed) or one torn down under the move (Worker loss), the
+ * scheduler is woken by id, unless the session is gone or a run that owns its
+ * own idle edge is live.
+ */
+function reofferDelivery(
+  runtime: SessionRuntime,
+  id: string,
+  live: ReturnType<SessionRuntime["createSession"]> | undefined,
+): void {
+  if (live?.notifyIdle()) return;
+  if (runtime.isRunning(id) || !sessionStore.get(id)) return;
+  wakeSessionDelivery(id, true);
 }
 
 /**
@@ -294,7 +312,8 @@ export async function moveSessionAccount(
   const target = credentialProfileById(request.targetProfileId);
   const refused = targetRefusal(row, source, target);
   if (refused || !target) throw new Error(refused);
-  if (runtime.isBusy(id)) throw busy(id);
+  if (runtime.isBusy(id))
+    throw new Error(runtime.isRunning(id) ? RUNNING : BUSY);
   assertAccountRecoveryAdmission(id);
   // Throws on a worktree hold, before anything is held.
   const releaseRun = beginPromptRun(id);
@@ -313,7 +332,7 @@ export async function moveSessionAccount(
     }
     if (!driver || driver.released)
       throw new Error("This session could not be loaded for the move.");
-    if (driver.isRunning) throw busy(id);
+    if (driver.isRunning) throw new Error(RUNNING);
     if (!driver.switchAccount || !driver.modelSelection)
       throw new Error("This session cannot switch accounts.");
     const engine = driver;
@@ -328,8 +347,9 @@ export async function moveSessionAccount(
       authorize();
       if (!ownsAccountRecovery(id, owned))
         throw new Error("Another account switch took over this session.");
-      if (engine.released || engine.isRunning || session.isRunning)
-        throw busy(id);
+      if (engine.released)
+        throw new Error("This session was unloaded during the move.");
+      if (engine.isRunning || session.isRunning) throw new Error(RUNNING);
       if (!sessionStore.get(id))
         throw new Error("Session does not exist or was deleted.");
       if (selectionSignature(engine.modelSelection?.()) !== signature)
@@ -362,6 +382,6 @@ export async function moveSessionAccount(
     releaseAdmission?.();
     releaseRun();
     if (ticket) releaseAccountRecovery(id, ticket);
-    live?.notifyIdle();
+    reofferDelivery(runtime, id, live);
   }
 }
