@@ -3,7 +3,8 @@
  * Settings → Jira says where the token is kept: server-side here, or on the
  * credential gateway in client mode (Task-1397). Fields and flow are the same.
  * A gateway that connects Jira only with Sign in with Atlassian on its page
- * (Task-1411) takes no email or token here: enable, test and clear stay.
+ * (Task-1411) takes no email or token here: enable, save-and-test and clear
+ * stay, and no separate Test button.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -136,7 +137,7 @@ const buttonNamed = (label: string) =>
     (b) => b.textContent === label,
   );
 
-it("a sign-in gateway: no email or token fields; Save sends exactly enabled, Test tests, Clear removes", async () => {
+it("a sign-in gateway: no email or token fields; Save and test sends exactly enabled, Clear removes", async () => {
   const onSaveAndTest = vi.fn<(patch: JiraSettingsPatch) => void>();
   const onTest = vi.fn();
   const text = await renderJira(
@@ -163,10 +164,12 @@ it("a sign-in gateway: no email or token fields; Save sends exactly enabled, Tes
 
   const toggle = container!.querySelector<HTMLElement>('[role="switch"]')!;
   await act(async () => toggle.click());
-  await act(async () => buttonNamed("Save")!.click());
-  expect(onSaveAndTest).toHaveBeenLastCalledWith({ enabled: true });
-  await act(async () => buttonNamed("Test")!.click());
-  expect(onTest).toHaveBeenCalledTimes(2);
+  expect(buttonNamed("Test")).toBeUndefined();
+  expect(buttonNamed("Save")).toBeUndefined();
+  await act(async () => buttonNamed("Save and test")!.click());
+  expect(onSaveAndTest).toHaveBeenCalledTimes(1);
+  expect(onSaveAndTest.mock.calls[0]![0]).toStrictEqual({ enabled: true });
+  expect(onTest).toHaveBeenCalledTimes(1);
   await act(async () => buttonNamed("Clear")!.click());
   expect(onSaveAndTest).toHaveBeenLastCalledWith({
     enabled: true,
@@ -183,7 +186,8 @@ it("a sign-in gateway with nothing stored: no Clear, the page remedy", async () 
     "Not connected yet. Sign in with Atlassian on your gateway's page.",
   );
   expect(buttonNamed("Clear")).toBeUndefined();
-  expect(buttonNamed("Test")).toBeDefined();
+  expect(buttonNamed("Test")).toBeUndefined();
+  expect(buttonNamed("Save and test")).toBeDefined();
 });
 
 it("a sign-in gateway keeping an old API token says so and keeps Clear", async () => {

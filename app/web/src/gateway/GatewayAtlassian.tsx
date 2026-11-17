@@ -60,7 +60,10 @@ export interface GatewayAtlassianProps {
   callback?: GatewayUiAtlassianConnectCode | undefined;
 }
 
-/** Fixed text per callback code; success comes back without one. */
+/**
+ * Fixed text per callback code; success comes back without one. Each describes
+ * the failed attempt only: an earlier credential may still be stored and work.
+ */
 const CONNECT_TEXT: Record<GatewayUiAtlassianConnectCode, string> = {
   rejected:
     "Atlassian did not accept the sign-in. Sign in with Atlassian again.",
@@ -75,7 +78,7 @@ const CONNECT_TEXT: Record<GatewayUiAtlassianConnectCode, string> = {
   vault_locked:
     "The gateway's vault is locked, so the sign-in could not be kept. Ask its operator to unlock it.",
   vault_unavailable:
-    "The gateway's vault did not answer. Reload the page; if Jira is still not connected, sign in again.",
+    "The gateway's vault did not answer, so the sign-in may not have been kept. Reload the page to see the credential.",
   busy: "Another change to this credential was still running. Sign in with Atlassian again.",
   tools_unavailable: "This gateway does not run the Jira tools.",
   signed_out:
@@ -84,7 +87,7 @@ const CONNECT_TEXT: Record<GatewayUiAtlassianConnectCode, string> = {
     "The sign-in took too long or was started in another browser. Sign in with Atlassian again.",
   failed: "The sign-in with Atlassian did not finish. Try again.",
   denied:
-    "Access was not granted on Atlassian's page, so Jira is not connected.",
+    "Access was not granted on Atlassian's page, so the sign-in did not finish.",
 };
 
 /** Fixed text per stored-record problem. */

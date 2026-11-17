@@ -9,6 +9,7 @@
  * sign-in once and handing its URL to `navigate`, the rows and actions per
  * stored kind, and the callback's fixed texts.
  */
+import { GATEWAY_UI_ATLASSIAN_CONNECT_CODES } from "@assistant/shared/gatewayUi";
 import { act } from "react";
 import { expect, test, vi } from "vitest";
 import { failed, loading, ready } from "../lib/loadState.ts";
@@ -427,6 +428,34 @@ test("the callback's code shows its fixed text until the user acts", async () =>
   await act(async () => button("Sign in with Atlassian")!.click());
   expect(text()).not.toContain(note);
 });
+
+test("a denied new sign-in leaves a stored token connected and says nothing else", () => {
+  const p = props({
+    status: ready({
+      connected: true,
+      kind: "token",
+      site: "x.atlassian.net",
+      email: "p@example.org",
+      connectWith: "oauth",
+    }),
+    callback: "denied",
+  });
+  mount(<GatewayAtlassian {...p} />);
+  expect(text()).toContain("Access was not granted on Atlassian's page");
+  expect(text()).toContain("Connected");
+  expect(text()).not.toMatch(/not connected/i);
+});
+
+test.each([...GATEWAY_UI_ATLASSIAN_CONNECT_CODES])(
+  "the %s callback text does not claim a stored sign-in is gone",
+  (code) => {
+    mount(
+      <GatewayAtlassian {...props({ status: ready(OAUTH), callback: code })} />,
+    );
+    expect(text()).toContain("Connected");
+    expect(text()).not.toMatch(/not connected/i);
+  },
+);
 
 test("a page refusal of a new API token reads as such", async () => {
   const p = props({

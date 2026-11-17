@@ -2140,11 +2140,13 @@ host and a standalone MCP endpoint, and the first tool, `jira_get_issue`.
   (linked-ticket and Tempo enrichment, `isJiraConfigured`) have no credential in
   client mode until a later slice (D3, Task-1399). Against a gateway that
   answers `connectWith: "oauth"`, Settings reports `gatewaySignIn: true` and
-  `gatewayKind`, shows no email or token field, and keeps enable (only `enabled`
-  is sent), the connection test and Clear while a record is stored, a refused
-  OAuth record included (a status naming a site or a `kind` counts as stored); a
-  clear keeps the gateway's last `connectWith` until a later status says
-  otherwise, also when that read fails. Users connect on the gateway's page.
+  `gatewayKind`, shows no email or token field, and keeps enable with "Save and
+  test" (only `enabled` is sent, then the connection test, which also runs when
+  the card opens; no separate Test button) and Clear while a record is stored, a
+  refused OAuth record included (a status naming a site or a `kind` counts as
+  stored); a clear keeps the gateway's last `connectWith` until a later status
+  says otherwise, also when that read fails. Users connect on the gateway's
+  page.
 
 #### The gateway's sign-in and UI
 
@@ -2328,7 +2330,8 @@ preset).
     no email answers `503 unavailable`. The page shows no field for a preset
     value. `POST /api/integrations/atlassian/set {site, email, token}` checks
     with Atlassian (15 s from the check's start) then stores, as
-    `integrations.set` does, → `{connected: true, site, email, displayName?}`;
+    `integrations.set` does, →
+    `{connected: true, kind: "token", connectWith: "token", site, email, displayName?, preset?}`;
     `POST /api/integrations/atlassian/clear` → 204. While a set or clear of the
     user runs (from this page, another tab or a client), another is refused
     `409 integration_busy` and changes nothing; the page itself never sends one

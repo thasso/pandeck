@@ -2823,7 +2823,8 @@ function JiraCard({
   };
 
   // Client mode against a gateway that connects Jira only on its own page
-  // (Task-1411): nothing to enter here; enable, test and remove stay.
+  // (Task-1411): nothing to enter here; enable, save-and-test and remove
+  // stay, and the check on open still tests a stored connection.
   if (jira.credentialStore === "gateway" && jira.gatewaySignIn) {
     return (
       <div className="mx-auto max-w-2xl px-6 py-6">
@@ -2846,9 +2847,8 @@ function JiraCard({
                 : "Your gateway has a Jira connection."}
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <Button onClick={() => onSaveAndTest({ enabled })}>Save</Button>
-            <Button variant="outline" onClick={onTest}>
-              Test
+            <Button onClick={() => onSaveAndTest({ enabled })}>
+              Save and test
             </Button>
             {jira.atlassianTokenConfigured && (
               <Button
