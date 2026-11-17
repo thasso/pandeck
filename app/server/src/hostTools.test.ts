@@ -110,6 +110,33 @@ describe("checkHostTool", () => {
     assert.match(check.problem ?? "", /older than the required 5\.0/);
   });
 
+  it("applies an alternative implementation's own floor when its banner matches", () => {
+    const coreutils = {
+      ...requirement,
+      minVersion: "9.0",
+      alternatives: [{ match: "uutils", minVersion: "0.1" }],
+    };
+    process.env.PATH = fakeTool(
+      "faketool",
+      "faketool (uutils coreutils) 0.10.0",
+    );
+    assert.equal(checkHostTool(coreutils).ok, true);
+    process.env.PATH = fakeTool(
+      "faketool",
+      "faketool (uutils coreutils) 0.0.9",
+    );
+    assert.match(
+      checkHostTool(coreutils).problem ?? "",
+      /older than the required 0\.1/,
+    );
+    // Without a matching banner the requirement's own floor still applies.
+    process.env.PATH = fakeTool("faketool", "faketool (GNU coreutils) 8.32");
+    assert.match(
+      checkHostTool(coreutils).problem ?? "",
+      /older than the required 9\.0/,
+    );
+  });
+
   it("distinguishes absent from too-old", () => {
     process.env.PATH = emptyDir("host-tools-empty-");
     const check = checkHostTool(requirement);

@@ -10,8 +10,9 @@
     {
       "binary": "env",
       "minVersion": "9.0",
+      "alternatives": [{ "match": "uutils", "minVersion": "0.1" }],
       "versionArgs": ["--version"],
-      "reason": "Stands in for coreutils, which agent shell commands and the unit's drain script assume."
+      "reason": "Stands in for coreutils, which agent shell commands and the unit's drain script assume. GNU coreutils 9.0+, or uutils coreutils (numbered 0.x), which current Ubuntu images ship instead."
     }
   ]
 }
