@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   decodeGatewayUiMe,
+  GATEWAY_UI_ATLASSIAN_CONNECT_CODES,
   GATEWAY_UI_CSRF_HEADER,
   GATEWAY_UI_SIGNIN_CODES,
+  type GatewayUiAtlassianConnectCode,
   type GatewayUiAtlassianSetRequest,
   type GatewayUiMe,
   type GatewayUiSigninCode,
@@ -21,6 +23,7 @@ import {
   revokeClient,
   revokeMcpToken,
   setAtlassian,
+  startAtlassianConnect,
 } from "./gatewayApi.ts";
 import {
   GatewayEnrollApproval,
@@ -58,6 +61,20 @@ function signinCode(search: string): GatewayUiSigninCode | undefined {
     : "failed";
 }
 
+/**
+ * The Atlassian callback's `?atlassian=` code (Task-1411). Only a fixed code
+ * is kept; any other value is dropped unread, never shown.
+ */
+function atlassianCode(
+  search: string,
+): GatewayUiAtlassianConnectCode | undefined {
+  const code = new URLSearchParams(search).get("atlassian");
+  return code !== null &&
+    (GATEWAY_UI_ATLASSIAN_CONNECT_CODES as readonly string[]).includes(code)
+    ? (code as GatewayUiAtlassianConnectCode)
+    : undefined;
+}
+
 export function GatewayApp({
   reload = () => window.location.reload(),
 }: {
@@ -73,6 +90,21 @@ export function GatewayApp({
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  // The callback's code is read once and leaves the address; the kept code
+  // outlives the `/api/me` load that decides where it shows.
+  const [connectCode] = useState(() => atlassianCode(window.location.search));
+  useEffect(() => {
+    const { pathname, search, hash } = window.location;
+    const query = new URLSearchParams(search);
+    if (!query.has("atlassian")) return;
+    query.delete("atlassian");
+    const rest = query.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      pathname + (rest ? `?${rest}` : "") + hash,
+    );
   }, []);
   const { state } = useFetchState("me", fetchMe);
   const [signingOut, setSigningOut] = useState(false);
@@ -154,6 +186,9 @@ export function GatewayApp({
           : {
               kind: "signedOut",
               ...(signin ? { signin } : {}),
+              ...(connectCode === "signed_out"
+                ? { atlassianSignedOut: true }
+                : {}),
               ...(enrollCode ? { enrollmentWaiting: true } : {}),
             }
         : { kind: "loading" };
@@ -169,6 +204,8 @@ export function GatewayApp({
           status: atlassian,
           save: saveAtlassian,
           clear: removeAtlassian,
+          connect: startAtlassianConnect,
+          callback: connectCode,
         }}
         clients={clientsProps}
       />

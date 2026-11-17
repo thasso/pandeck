@@ -2,11 +2,13 @@
 /**
  * Settings → Jira says where the token is kept: server-side here, or on the
  * credential gateway in client mode (Task-1397). Fields and flow are the same.
+ * A gateway that connects Jira only with Sign in with Atlassian on its page
+ * (Task-1411) takes no email or token here: enable, test and clear stay.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it } from "vitest";
-import type { AppSettings } from "@assistant/shared";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { AppSettings, JiraSettingsPatch } from "@assistant/shared";
 import { SettingsPage } from "./SettingsPage.tsx";
 import { ready } from "../lib/loadState.ts";
 import {
@@ -42,6 +44,11 @@ const noop = () => {};
 
 async function renderJira(
   credentialStore: AppSettings["jira"]["credentialStore"],
+  over: Partial<AppSettings["jira"]> = {},
+  handlers: {
+    onSaveAndTest?: (patch: JiraSettingsPatch) => void;
+    onTest?: () => void;
+  } = {},
 ): Promise<string> {
   const settings: AppSettings = {
     ...settingsFixture,
@@ -49,6 +56,7 @@ async function renderJira(
       ...settingsFixture.jira,
       atlassianTokenConfigured: false,
       credentialStore,
+      ...over,
     },
   };
   await act(async () =>
@@ -71,8 +79,8 @@ async function renderJira(
         onUpdatePrefs={noop}
         onToggleSkill={noop}
         onRefreshModels={noop}
-        onSaveAndTestJira={noop}
-        onTestJira={noop}
+        onSaveAndTestJira={handlers.onSaveAndTest ?? noop}
+        onTestJira={handlers.onTest ?? noop}
         jiraStatus={null}
         onSaveAndTestConfluence={noop}
         onTestConfluence={noop}
@@ -121,4 +129,81 @@ it("keeps the local copy otherwise", async () => {
     "The token is stored server-side and never sent back to the browser.",
   );
   expect(text).not.toContain("kept on your gateway");
+});
+
+const buttonNamed = (label: string) =>
+  [...container!.querySelectorAll("button")].find(
+    (b) => b.textContent === label,
+  );
+
+it("a sign-in gateway: no email or token fields; Save sends exactly enabled, Test tests, Clear removes", async () => {
+  const onSaveAndTest = vi.fn<(patch: JiraSettingsPatch) => void>();
+  const onTest = vi.fn();
+  const text = await renderJira(
+    "gateway",
+    {
+      enabled: false,
+      atlassianTokenConfigured: true,
+      gatewayKind: "oauth",
+      gatewaySignIn: true,
+    },
+    { onSaveAndTest, onTest },
+  );
+  expect(text).toContain("use Sign in with Atlassian there");
+  expect(text).not.toContain("Atlassian API token");
+  expect(text).not.toContain("Atlassian email");
+  expect(container!.querySelector('input[type="password"]')).toBeNull();
+  expect(
+    container!.querySelector('input[placeholder="you@example.com"]'),
+  ).toBeNull();
+  for (const word of ["OAuth", "scope", "Basic auth"])
+    expect(text).not.toContain(word);
+  // Opening the card checks the stored connection once.
+  expect(onTest).toHaveBeenCalledTimes(1);
+
+  const toggle = container!.querySelector<HTMLElement>('[role="switch"]')!;
+  await act(async () => toggle.click());
+  await act(async () => buttonNamed("Save")!.click());
+  expect(onSaveAndTest).toHaveBeenLastCalledWith({ enabled: true });
+  await act(async () => buttonNamed("Test")!.click());
+  expect(onTest).toHaveBeenCalledTimes(2);
+  await act(async () => buttonNamed("Clear")!.click());
+  expect(onSaveAndTest).toHaveBeenLastCalledWith({
+    enabled: true,
+    clearAtlassianToken: true,
+  });
+});
+
+it("a sign-in gateway with nothing stored: no Clear, the page remedy", async () => {
+  const text = await renderJira("gateway", {
+    atlassianTokenConfigured: false,
+    gatewaySignIn: true,
+  });
+  expect(text).toContain(
+    "Not connected yet. Sign in with Atlassian on your gateway's page.",
+  );
+  expect(buttonNamed("Clear")).toBeUndefined();
+  expect(buttonNamed("Test")).toBeDefined();
+});
+
+it("a sign-in gateway keeping an old API token says so and keeps Clear", async () => {
+  const text = await renderJira("gateway", {
+    atlassianTokenConfigured: true,
+    gatewayKind: "token",
+    gatewaySignIn: true,
+  });
+  expect(text).toContain("Your gateway keeps an API token for Jira.");
+  expect(buttonNamed("Clear")).toBeDefined();
+});
+
+it("a token gateway keeps today's form", async () => {
+  const text = await renderJira("gateway", {
+    atlassianTokenConfigured: true,
+    gatewaySignIn: false,
+  });
+  expect(text).toContain("Atlassian API token");
+  expect(text).toContain("Atlassian email");
+  expect(buttonNamed("Save and test")).toBeDefined();
+  expect(buttonNamed("Clear token")).toBeDefined();
+  expect(text).not.toContain("Sign in with Atlassian");
 });

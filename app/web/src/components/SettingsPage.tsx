@@ -2822,6 +2822,51 @@ function JiraCard({
     onSaveAndTest({ enabled, atlassianEmail, clearAtlassianToken: true });
   };
 
+  // Client mode against a gateway that connects Jira only on its own page
+  // (Task-1411): nothing to enter here; enable, test and remove stay.
+  if (jira.credentialStore === "gateway" && jira.gatewaySignIn) {
+    return (
+      <div className="mx-auto max-w-2xl px-6 py-6">
+        <h2 className="text-sm font-semibold">Jira</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Jira is connected through your gateway's page: use Sign in with
+          Atlassian there. Nothing is entered on this machine.
+        </p>
+        <SettingsCard className="mt-6">
+          <PreferenceToggle
+            label="Enable Jira tools for the Assistant agent"
+            checked={enabled}
+            onChange={setEnabled}
+          />
+          <p className="text-sm text-muted-foreground">
+            {!jira.atlassianTokenConfigured
+              ? "Not connected yet. Sign in with Atlassian on your gateway's page."
+              : jira.gatewayKind === "token"
+                ? "Your gateway keeps an API token for Jira. Sign in with Atlassian on its page to replace it."
+                : "Your gateway has a Jira connection."}
+          </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button onClick={() => onSaveAndTest({ enabled })}>Save</Button>
+            <Button variant="outline" onClick={onTest}>
+              Test
+            </Button>
+            {jira.atlassianTokenConfigured && (
+              <Button
+                variant="outline"
+                onClick={() =>
+                  onSaveAndTest({ enabled, clearAtlassianToken: true })
+                }
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+        </SettingsCard>
+        <IntegrationStatusBanner status={status} />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-sm font-semibold">Jira</h2>

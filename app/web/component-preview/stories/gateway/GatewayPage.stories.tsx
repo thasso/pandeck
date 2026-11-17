@@ -34,6 +34,8 @@ const atlassian = (
   status,
   save: () => Promise.resolve(gatewayUiAtlassianConnected),
   clear: () => Promise.resolve(),
+  connect: () => new Promise<string>(() => {}),
+  navigate: () => {},
 });
 const clients = (
   state: GatewayClientsProps["clients"],

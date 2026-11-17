@@ -9,6 +9,7 @@
 import {
   decodeGatewayUiAccounts,
   decodeGatewayUiAtlassian,
+  decodeGatewayUiAtlassianConnectStart,
   decodeGatewayUiClients,
   decodeGatewayUiEnrollmentCode,
   decodeGatewayUiEnrollmentRequest,
@@ -144,6 +145,16 @@ export async function setAtlassian(
 
 export async function clearAtlassian(): Promise<void> {
   await post("/api/integrations/atlassian/clear", {});
+}
+
+/**
+ * Starts "Sign in with Atlassian": the URL the browser goes to next, accepted
+ * only on Atlassian's authorize endpoint.
+ */
+export async function startAtlassianConnect(): Promise<string> {
+  const response = await post("/api/integrations/atlassian/connect", {});
+  return decoded(decodeGatewayUiAtlassianConnectStart(await response.json()))
+    .authorizeUrl;
 }
 
 export async function fetchClients(

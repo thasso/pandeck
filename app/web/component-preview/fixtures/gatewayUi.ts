@@ -46,6 +46,28 @@ export const gatewayUiAtlassianConnected: GatewayUiAtlassian = {
   displayName: "Person Example",
 };
 
+/** A gateway that connects Jira with Sign in with Atlassian, nothing stored. */
+export const gatewayUiAtlassianSignInNotSet: GatewayUiAtlassian = {
+  connected: false,
+  connectWith: "oauth",
+};
+
+/** Signed in with Atlassian: the site only. */
+export const gatewayUiAtlassianSignedIn: GatewayUiAtlassian = {
+  connected: true,
+  kind: "oauth",
+  connectWith: "oauth",
+  site: "example-team.atlassian.net",
+};
+
+/** Atlassian no longer accepts the stored sign-in. */
+export const gatewayUiAtlassianSignInRejected: GatewayUiAtlassian = {
+  connected: false,
+  kind: "oauth",
+  problem: "rejected",
+  connectWith: "oauth",
+};
+
 /** The vault is locked: the stored credential cannot be read now. */
 export const gatewayUiAtlassianLocked: GatewayUiAtlassian = {
   connected: false,

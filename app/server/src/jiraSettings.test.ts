@@ -196,6 +196,7 @@ test("client mode: a token goes to the gateway with the deployment's site; jira.
       atlassianEmail: "me@example.com",
       atlassianTokenConfigured: true,
       credentialStore: "gateway",
+      gatewaySignIn: false,
     });
     const stored = JSON.parse(readFileSync(JIRA_FILE, "utf8")) as Record<
       string,
@@ -376,5 +377,124 @@ test("client mode without a deployment site refuses with the fixed text and call
   } finally {
     vi.doUnmock("./config.ts");
     vi.resetModules();
+  }
+});
+
+// --- a gateway that signs in with Atlassian (Task-1411, AC9) ---------------
+
+test("client mode, sign-in gateway: an OAuth record projects its kind; a refused one stays stored with the sign-in remedy", async () => {
+  const port = fakePort({
+    connected: true,
+    kind: "oauth",
+    site: "example.atlassian.net",
+    connectWith: "oauth",
+  });
+  try {
+    assert.equal((await testJiraSettings()).ok, true);
+    const signedIn = getJiraSettings();
+    assert.equal(signedIn.credentialStore, "gateway");
+    assert.equal(signedIn.gatewayKind, "oauth");
+    assert.equal(signedIn.gatewaySignIn, true);
+    assert.equal(signedIn.atlassianTokenConfigured, true);
+
+    // (c) a refresh-rejected OAuth record names no site but stays stored.
+    port.answer({
+      connected: false,
+      kind: "oauth",
+      problem: "rejected",
+      connectWith: "oauth",
+    });
+    const rejected = await testJiraSettings();
+    assert.equal(
+      rejected.message,
+      "Atlassian no longer accepts the gateway's sign-in; sign in with Atlassian again on the gateway's page.",
+    );
+    assert.equal(getJiraSettings().atlassianTokenConfigured, true);
+    assert.equal(getJiraSettings().gatewayKind, "oauth");
+
+    // The same problem on a token record keeps the token text.
+    port.answer({
+      connected: false,
+      kind: "token",
+      site: "example.atlassian.net",
+      problem: "rejected",
+      connectWith: "oauth",
+    });
+    assert.equal(
+      (await testJiraSettings()).message,
+      "Atlassian rejected the email and API token.",
+    );
+    // Nothing stored: the sign-in remedy, not the token fields.
+    port.answer({ connected: false, connectWith: "oauth" });
+    assert.equal(
+      (await testJiraSettings()).message,
+      "Jira is not connected on the gateway; sign in with Atlassian on the gateway's page.",
+    );
+  } finally {
+    port.uninstall();
+  }
+});
+
+test("client mode, sign-in gateway: enable persists alone, test stays callable, clear keeps the sign-in mode even when the next read fails", async () => {
+  const port = fakePort({
+    connected: true,
+    kind: "oauth",
+    site: "example.atlassian.net",
+    connectWith: "oauth",
+  });
+  try {
+    await testJiraSettings();
+    const before = port.calls.length;
+    // (a) enable without email or token writes `enabled` and asks nothing.
+    const enabled = await updateJiraSettings({ enabled: true });
+    assert.equal(enabled.enabled, true);
+    assert.equal(port.calls.length, before);
+    assert.equal(
+      (JSON.parse(readFileSync(JIRA_FILE, "utf8")) as { enabled: boolean })
+        .enabled,
+      true,
+    );
+    // (b) test stays callable.
+    assert.equal((await testJiraSettings()).ok, true);
+    assert.deepEqual(port.calls.at(-1), { method: "status", args: [true] });
+
+    // (c, d) clear forgets the record but not how the gateway connects.
+    const cleared = await updateJiraSettings({ clearAtlassianToken: true });
+    assert.deepEqual(port.calls.at(-1), { method: "clear", args: [] });
+    assert.equal(cleared.atlassianTokenConfigured, false);
+    assert.equal(cleared.gatewayKind, undefined);
+    assert.equal(cleared.gatewaySignIn, true);
+    port.answer(new IntegrationRefusal("gateway_unavailable"));
+    assert.equal((await testJiraSettings()).ok, false);
+    assert.equal(getJiraSettings().gatewaySignIn, true);
+
+    // A token is refused with the fixed text, before anything is written.
+    port.answer(new IntegrationRefusal("integration_sign_in_required"));
+    await assert.rejects(
+      updateJiraSettings({ enabled: false, atlassianToken: "fake-x" }),
+      /^Error: Jira: the gateway connects Jira only with Sign in with Atlassian on its page\.$/,
+    );
+    assert.equal(getJiraSettings().enabled, true);
+  } finally {
+    port.uninstall();
+  }
+});
+
+test("client mode, token gateway: no sign-in, and a token record projects its kind", async () => {
+  const port = fakePort({
+    connected: true,
+    kind: "token",
+    site: "example.atlassian.net",
+    email: "a@x.test",
+    connectWith: "token",
+  });
+  try {
+    await testJiraSettings();
+    const settings = getJiraSettings();
+    assert.equal(settings.gatewaySignIn, false);
+    assert.equal(settings.gatewayKind, "token");
+    assert.equal(settings.atlassianEmail, "a@x.test");
+  } finally {
+    port.uninstall();
   }
 });

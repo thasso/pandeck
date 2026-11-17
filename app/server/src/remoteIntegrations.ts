@@ -2,13 +2,20 @@
  * Client mode's integration credentials (Task-1397): Settings → Jira sends
  * the Atlassian email and API token to the gateway (`integrations.*` on
  * gateway client 1.0, through `gatewayClientLink.ts`), which checks it and
- * has its vault keep it. This server keeps no token: only the last status the
- * gateway told, the site, email and whether a credential is stored.
+ * has its vault keep it. A gateway that signs in with Atlassian (Task-1411,
+ * `connectWith: "oauth"`) takes no token: the user connects on its page, and
+ * Settings only enables, tests and removes. This server keeps no token: only
+ * the last status the gateway told, the site, email, which kind is stored and
+ * how the gateway makes a new connection.
  */
 
 /** `integrations.set` and `integrations.status` answers, as the link decodes them. */
 export interface IntegrationStatus {
   connected: boolean;
+  /** How the stored credential was made. */
+  kind?: "token" | "oauth";
+  /** How the gateway makes a new connection; absent means an API token. */
+  connectWith?: "token" | "oauth";
   site?: string;
   email?: string;
   displayName?: string;
@@ -34,6 +41,8 @@ const REFUSALS = {
   tools_unavailable: "the credential gateway runs no integrations.",
   integration_busy:
     "another change to this credential is still running; try again.",
+  integration_sign_in_required:
+    "the gateway connects Jira only with Sign in with Atlassian on its page.",
   gateway_unavailable:
     "the credential gateway is unreachable; try again shortly.",
 } as const;
@@ -67,6 +76,10 @@ export interface RemoteIntegrationPort {
 export interface AtlassianStatus {
   /** A credential is stored on the gateway. */
   stored: boolean;
+  /** How the stored credential was made. */
+  kind?: "token" | "oauth";
+  /** How the gateway makes a new connection, as it last said. */
+  connectWith?: "token" | "oauth";
   site?: string;
   email?: string;
 }
@@ -96,16 +109,31 @@ export function lastAtlassianStatus(): AtlassianStatus {
   return { ...last };
 }
 
-/** Records what the gateway answered; a credential is stored when it names a site. */
+/**
+ * Records what the gateway answered. A credential is stored when the answer
+ * names a site or a kind: a refused OAuth record names no site.
+ */
 export function rememberAtlassianStatus(status: IntegrationStatus): void {
   last = {
-    stored: status.site !== undefined,
+    stored: status.site !== undefined || status.kind !== undefined,
+    ...(status.kind !== undefined ? { kind: status.kind } : {}),
+    ...(status.connectWith !== undefined
+      ? { connectWith: status.connectWith }
+      : {}),
     ...(status.site !== undefined ? { site: status.site } : {}),
     ...(status.email !== undefined ? { email: status.email } : {}),
   };
 }
 
-/** After a clear: nothing is stored. */
+/**
+ * After a clear: nothing is stored, and the gateway still makes a new
+ * connection as it last said until a later answer says otherwise.
+ */
 export function forgetAtlassianStatus(): void {
-  last = { stored: false };
+  last = {
+    stored: false,
+    ...(last.connectWith !== undefined
+      ? { connectWith: last.connectWith }
+      : {}),
+  };
 }
