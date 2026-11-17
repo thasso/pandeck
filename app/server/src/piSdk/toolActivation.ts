@@ -11,7 +11,7 @@
  *    from the snapshot the server handed the engine at open and updates with
  *    `setIntegrationGates`: the engine reads no settings;
  *  - loaded  = names activated during the session (find_tools) plus the
- *    deferred names the reopened transcript still declares and called (see
+ *    deferred names the reopened transcript ever declared and called (see
  *    `loadedToolNamesFromMessages`), so previously loaded tools stay active
  *    across reopen;
  *  - active  = usable ∩ (eager ∪ loaded ∪ find_tools) — or simply usable when
@@ -408,13 +408,15 @@ export function mergedActiveToolNames(input: {
  * in the transcript. Reopen is cold by construction, so carrying never-used
  * historical definitions has no cache benefit.
  *
- * pi 1.5 records tool-set changes as `system` messages carrying `toolsAdded`
- * (definitions) and `toolsRemoved` (references); replaying them in order, each
- * message's removals before its additions (pi-ai `getCurrentTools`), yields the
- * set the model was last told it may call. Older transcripts recorded loads as
- * `addedToolNames` on the loader's tool result. The replay also returns eager
- * and builtin names (the leading and post-compaction system messages declare
- * the whole set); `initialize` keeps only deferred bridge tools.
+ * A name counts as loaded once any `system` message declared it in
+ * `toolsAdded` (pi 1.5) or a loader's tool result listed it in
+ * `addedToolNames` (older transcripts). `toolsRemoved` is deliberately
+ * ignored: pi writes it as an availability delta against the active set, and
+ * every removal comes from our own active-set policy (Plan, integration gates,
+ * a lost reopen seed) or a redefinition, never an unload. The activation
+ * re-applies that policy itself, so a tool hidden at shutdown comes back when
+ * it is usable again. The leading and post-compaction declarations also name
+ * eager and builtin tools; `initialize` keeps only deferred bridge tools.
  */
 export function loadedToolNamesFromMessages(
   messages: ReadonlyArray<unknown>,
@@ -426,29 +428,17 @@ export function loadedToolNamesFromMessages(
       role?: unknown;
       addedToolNames?: unknown;
       toolsAdded?: unknown;
-      toolsRemoved?: unknown;
     };
-    if (record.role === "system") {
-      for (const name of declaredToolNames(record.toolsRemoved))
-        loaded.delete(name);
-      for (const name of declaredToolNames(record.toolsAdded)) loaded.add(name);
-    }
+    if (record.role === "system" && Array.isArray(record.toolsAdded))
+      for (const tool of record.toolsAdded) {
+        const name = (tool as { name?: unknown } | null)?.name;
+        if (typeof name === "string") loaded.add(name);
+      }
     if (record.role === "toolResult" && Array.isArray(record.addedToolNames))
       for (const name of record.addedToolNames)
         if (typeof name === "string") loaded.add(name);
   }
   return [...loaded].filter((name) => called.has(name));
-}
-
-/** Names of a system message's `toolsAdded`/`toolsRemoved` entries. */
-function declaredToolNames(tools: unknown): string[] {
-  if (!Array.isArray(tools)) return [];
-  const names: string[] = [];
-  for (const tool of tools) {
-    const name = (tool as { name?: unknown } | null)?.name;
-    if (typeof name === "string") names.push(name);
-  }
-  return names;
 }
 
 /** Every app tool called in a pi transcript, for inspector diagnostics. */

@@ -23,6 +23,12 @@ import {
   piPromptExtras,
 } from "./piPromptMeasure.ts";
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";
+import {
+  getCurrentTools,
+  getToolStateChanges,
+  toToolDeclaration,
+  type Message,
+} from "@earendil-works/pi-ai";
 import { currentIntegrationToolGates } from "../tools/toolPolicy.ts";
 import { agentToolsFor, eagerToolNamesFor } from "../tools/catalog.ts";
 import {
@@ -290,17 +296,12 @@ const called = (name: string) => ({
   content: [{ type: "toolCall", id: name, name, arguments: {} }],
 });
 
-test("loadedToolNamesFromMessages replays pi 1.5 toolsAdded/toolsRemoved in order", () => {
+test("loadedToolNamesFromMessages seeds every called pi 1.5 load; toolsRemoved never unloads", () => {
   const leading = {
     role: "system",
     content: "",
     sections: { preamble: "p" },
     toolsAdded: declared("read", "current_time", FIND_TOOLS_NAME),
-  };
-  const load = {
-    role: "system",
-    content: "",
-    toolsAdded: declared("web_search", "web_fetch"),
   };
   const remove = {
     role: "system",
@@ -310,7 +311,11 @@ test("loadedToolNamesFromMessages replays pi 1.5 toolsAdded/toolsRemoved in orde
   const loadedAndCalled = [
     leading,
     { role: "toolResult", toolName: FIND_TOOLS_NAME, content: [] },
-    load,
+    {
+      role: "system",
+      content: "",
+      toolsAdded: declared("web_search", "web_fetch"),
+    },
     called("web_search"),
     { role: "toolResult", toolName: "web_search", content: [] },
   ];
@@ -319,11 +324,13 @@ test("loadedToolNamesFromMessages replays pi 1.5 toolsAdded/toolsRemoved in orde
     FIND_TOOLS_NAME,
     "web_search",
   ]);
-  // A later removal drops it, even though the call stays in the transcript.
+  // pi's removal is an availability delta (Plan, a gate, a lost seed), not an
+  // unload: the tool stays seeded, and the activation applies the policy.
   assert.deepEqual(loadedToolNamesFromMessages([...loadedAndCalled, remove]), [
     FIND_TOOLS_NAME,
+    "web_search",
   ]);
-  // A re-add after the removal loads it again.
+  // A re-add after the removal changes nothing.
   assert.deepEqual(
     loadedToolNamesFromMessages([
       ...loadedAndCalled,
@@ -332,7 +339,7 @@ test("loadedToolNamesFromMessages replays pi 1.5 toolsAdded/toolsRemoved in orde
     ]),
     [FIND_TOOLS_NAME, "web_search"],
   );
-  // One message's removals apply before its additions (pi-ai getCurrentTools).
+  // A redefinition (remove + add in one message) keeps it too.
   assert.deepEqual(
     loadedToolNamesFromMessages([
       ...loadedAndCalled,
@@ -365,21 +372,162 @@ test("loadedToolNamesFromMessages keeps legacy addedToolNames alongside pi 1.5 d
     called("web_search"),
     { role: "system", content: "", toolsAdded: declared("kb_write") },
     called("kb_write"),
+    // A later pi 1.5 removal does not drop a legacy load either.
+    { role: "system", content: "", toolsRemoved: [{ name: "web_search" }] },
   ]);
   assert.deepEqual(names, ["web_search", "kb_write"]);
-  // A pi 1.5 removal also drops a name a legacy result loaded.
-  assert.deepEqual(
-    loadedToolNamesFromMessages([
-      {
-        role: "toolResult",
-        toolName: FIND_TOOLS_NAME,
-        addedToolNames: ["web_search"],
-      },
-      called("web_search"),
-      { role: "system", content: "", toolsRemoved: [{ name: "web_search" }] },
-    ]),
-    [],
+});
+
+/** Build-mode load and call of kb_write, then pi's removal of it. */
+const kbWriteLoadedThenRemoved = [
+  {
+    role: "system",
+    content: "",
+    sections: { preamble: "p" },
+    toolsAdded: declared("read", FIND_TOOLS_NAME),
+  },
+  { role: "system", content: "", toolsAdded: declared("kb_write") },
+  called("kb_write"),
+  { role: "system", content: "", toolsRemoved: [{ name: "kb_write" }] },
+];
+
+test("a tool loaded and called in Build, hidden by Plan, comes back after a reopen in Plan and a return to Build", () => {
+  assert.equal(eagerToolNamesFor("assistant").has("kb_write"), false);
+  const applied: Array<ReadonlySet<string>> = [];
+  let mode: "build" | "plan" = "plan";
+  const activation = createPiToolActivation({
+    sessionId: `plan-reopen-${Date.now()}`,
+    agentType: "assistant",
+    integrationGates: { ...currentIntegrationToolGates(), knowledgeBase: true },
+    agentTools: agentToolsFor("assistant"),
+    eagerToolNames: eagerToolNamesFor("assistant"),
+    deferToolLoading: true,
+    mode: () => mode,
+    applyActiveToolNames: (names) => applied.push(new Set(names)),
+  });
+  try {
+    activation.initialize(
+      loadedToolNamesFromMessages(kbWriteLoadedThenRemoved),
+    );
+    assert.equal(applied.at(-1)!.has("kb_write"), false, "Plan hides it");
+    mode = "build";
+    activation.reapply();
+    assert.ok(applied.at(-1)!.has("kb_write"), "Build restores it");
+  } finally {
+    activation.dispose();
+  }
+});
+
+test("a tool loaded and called, hidden by an integration gate, comes back when the gate is re-enabled after a reopen", () => {
+  const applied: Array<ReadonlySet<string>> = [];
+  const gates = currentIntegrationToolGates();
+  const activation = createPiToolActivation({
+    sessionId: `gate-reopen-${Date.now()}`,
+    agentType: "assistant",
+    integrationGates: { ...gates, knowledgeBase: false },
+    agentTools: agentToolsFor("assistant"),
+    eagerToolNames: eagerToolNamesFor("assistant"),
+    deferToolLoading: true,
+    applyActiveToolNames: (names) => applied.push(new Set(names)),
+  });
+  try {
+    activation.initialize(
+      loadedToolNamesFromMessages(kbWriteLoadedThenRemoved),
+    );
+    assert.equal(applied.at(-1)!.has("kb_write"), false, "gate hides it");
+    activation.setIntegrationGates({ ...gates, knowledgeBase: true });
+    assert.ok(applied.at(-1)!.has("kb_write"), "re-enabling restores it");
+  } finally {
+    activation.dispose();
+  }
+});
+
+/**
+ * Session 01a1ea81's shape: the leading declaration, a find_tools load of two
+ * tools, a call to one, and (when `damaged`) the erroneous removal of both
+ * that an empty reopen seed caused. Declarations are the real definitions,
+ * so pi-ai's own diff compares them as pi does.
+ */
+function lunaTranscript(damaged: boolean) {
+  const fresh: Array<ReadonlySet<string>> = [];
+  const probe = assistantActivation(fresh);
+  const universe = new Map(
+    probe.piToolUniverse.map((tool) => [tool.name, tool]),
   );
+  const initial = [...fresh.at(-1)!];
+  probe.dispose();
+  const declare = (names: string[]) =>
+    names.map((name) => toToolDeclaration(universe.get(name)!));
+  const messages: unknown[] = [
+    {
+      role: "system",
+      content: "",
+      sections: { preamble: "p" },
+      toolsAdded: declare(initial),
+      timestamp: 1,
+    },
+    called(FIND_TOOLS_NAME),
+    {
+      role: "system",
+      content: "",
+      toolsAdded: declare(["session_lookup", "session_send_prompt"]),
+      timestamp: 2,
+    },
+    called("session_send_prompt"),
+  ];
+  if (damaged)
+    messages.push({
+      role: "system",
+      content: "",
+      toolsRemoved: [
+        { name: "session_lookup" },
+        { name: "session_send_prompt" },
+      ],
+      timestamp: 3,
+    });
+  return { messages, universe };
+}
+
+/** pi's next declaration delta after a reopen seeded from `messages`. */
+function reopenDelta(damaged: boolean) {
+  const { messages, universe } = lunaTranscript(damaged);
+  const applied: Array<ReadonlySet<string>> = [];
+  const activation = assistantActivation(
+    applied,
+    loadedToolNamesFromMessages(messages),
+  );
+  try {
+    const next = [...applied.at(-1)!].map((name) => universe.get(name)!);
+    const changes = getToolStateChanges(
+      getCurrentTools(messages as Message[]),
+      next,
+    );
+    return {
+      added: changes.toolsAdded.map((tool) => tool.name),
+      removed: changes.toolsRemoved.map((tool) => tool.name),
+    };
+  } finally {
+    activation.dispose();
+  }
+}
+
+test("an undamaged pi 1.5 reopen declares no removal for the loaded and called tool", () => {
+  assert.equal(
+    eagerToolNamesFor("assistant").has("session_send_prompt"),
+    false,
+  );
+  // session_lookup was loaded but never called: dropping it is intended.
+  assert.deepEqual(reopenDelta(false), {
+    added: [],
+    removed: ["session_lookup"],
+  });
+});
+
+test("a session damaged by the empty seed re-declares its called tool on reopen", () => {
+  assert.deepEqual(reopenDelta(true), {
+    added: ["session_send_prompt"],
+    removed: [],
+  });
 });
 
 test("a pi 1.5 transcript's loaded and called tool stays active on reopen; eager and builtin names are not reopen loads", () => {

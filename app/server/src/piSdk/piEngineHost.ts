@@ -717,7 +717,7 @@ const startPiSession: PiEngineStart = async (spec, ctx, { sm, cwd, model }) => {
     installToolPayloadProbe(session);
     installDynamicToolTurnRefresh(session);
     // Initial active set: eager + find_tools + everything the transcript
-    // declares loaded and called, gate-filtered — so a reopened session keeps
+    // ever loaded and called, gate-filtered — so a reopened session keeps
     // its loaded tools and a fresh one starts small.
     sessionRef = session;
     activation.initialize(
