@@ -73,7 +73,7 @@ function noteLiveness(ids: readonly string[]): void {
  */
 function lifecycleCounterparts(ids: readonly string[]): string[] {
   const db = getDb();
-  const open = `status NOT IN ('settled', 'failed', 'interrupted', 'cancelled', 'expired')`;
+  const open = `status NOT IN ('settled', 'withdrawn', 'failed', 'interrupted', 'cancelled', 'expired')`;
   const toRecipients = db.prepare(
     `SELECT DISTINCT recipient_session_id AS id FROM peer_prompts WHERE sender_session_id = ? AND ${open}`,
   );

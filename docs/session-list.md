@@ -61,8 +61,8 @@ reply reminder (`peerPromptStore.remindersExhaustedByRecipient`, projected as
 `awaiting_response` rows whose `reminder_count` reached
 `sessionPeerPromptReminderLimit`, from a user session neither archived nor
 deleted, served by `peer_prompts_expiry_idx`. A change of the limit rebuilds
-every row; nothing clears the field but a reply, a settle or the request's
-deadline passing the watermark (below).
+every row; nothing clears the field but a reply, a settle, a withdraw or the
+request's deadline passing the watermark (below).
 
 Each rebuild also reads who still owes each session a reply
 (`peerPromptStore.outstandingRepliesBySender`, projected as
@@ -83,12 +83,13 @@ rather than by history. A request already marked `replied` whose correlated
 reply was cancelled or failed before delivery stays owed; that half starts from
 the lost replies and follows the `replied_by_message_id` back-link
 (`0066_peer_prompt_replied_by_index.sql`). `peerPromptStore.test.ts` pins the
-plan. A request its recipient settled (`settled`, Task-942) is not owed: the
-read takes only `awaiting_response` and lost-reply `replied` rows. Any delivered
-message from the owed peer counts as a handoff, so a peer that only asked a
-sibling something on their shared chain is cleared by that sibling's own report
-— the same rows as a real forward. Measured on a copy of the production database
-(7,539 peer prompts, 16 senders owed): 0.24 ms median.
+plan. A request its recipient settled (`settled`, Task-942) or its requester
+withdrew (`withdrawn`, Task-1427) is not owed: the read takes only
+`awaiting_response` and lost-reply `replied` rows. Any delivered message from
+the owed peer counts as a handoff, so a peer that only asked a sibling something
+on their shared chain is cleared by that sibling's own report — the same rows as
+a real forward. Measured on a copy of the production database (7,539 peer
+prompts, 16 senders owed): 0.24 ms median.
 
 ## Touched rows
 
@@ -249,10 +250,10 @@ first touches the sender and recipient of every request whose deadline lies in
 A timer runs it at the next deadline after W over a deliberate superset of
 statuses: every status from which a `response_requested` request is, or can
 still become, owed (`held` through `replied`). No transition leaves
-`settled`/`failed`/`interrupted`/`cancelled`/`expired` (`transitionInTxn`
-refuses to), so a deadline stays scheduled from the write that stores it until
-its request closes for good. Every write of `expires_at_ms` calls
-`noteDeadline`, which arms earlier when needed. The delay is clamped to
+`settled`/`withdrawn`/`failed`/`interrupted`/`cancelled`/`expired`
+(`transitionInTxn` refuses to), so a deadline stays scheduled from the write
+that stores it until its request closes for good. Every write of `expires_at_ms`
+calls `noteDeadline`, which arms earlier when needed. The delay is clamped to
 `setTimeout`'s 2^31−1 ms (the 30-day reply TTL exceeds it; an early fire only
 re-arms) and `unref`'d; a failed advance keeps W and retries after 60 s.
 Retention (`runPeerPromptRetention`) advances W before it expires and prunes

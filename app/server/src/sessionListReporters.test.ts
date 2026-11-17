@@ -270,6 +270,7 @@ const CLASSIFIED: Record<
       recordAdmission: "projected-write",
       markReplied: "projected-write",
       markSettled: "projected-write",
+      withdrawFromSender: "projected-write",
       markInterrupted: "projected-write",
       interruptAsTold: "projected-write",
       markRetryable: "projected-write",
@@ -290,6 +291,7 @@ const CLASSIFIED: Record<
       interruptedOwingSenderNotice: "read",
       openForRecipient: "read",
       openRequestsTo: "read",
+      withdrawableFrom: "read",
       dueReminderRequests: "read",
       remindersExhaustedByRecipient: "read",
       listRepliedBy: "read",
@@ -755,6 +757,23 @@ describe("fan-out", () => {
     );
   });
 
+  test("a withdrawn owed request moves its requester and its addressee", async () => {
+    const original = getSettings().sessionPeerPromptReminderLimit;
+    updateSettings({ sessionPeerPromptReminderLimit: 1 });
+    try {
+      const [sender, recipient] = [seed("w-sender"), seed("w-recipient")];
+      const r = owed(sender, recipient);
+      peerPromptStore.markReminded([r.id]);
+      await assertReported(
+        "withdraw the request",
+        () => peerPromptStore.withdrawFromSender(sender, [r.id], "not needed"),
+        [sender, recipient],
+      );
+    } finally {
+      updateSettings({ sessionPeerPromptReminderLimit: original });
+    }
+  });
+
   test("a sender owed by two recipients: archiving it moves both recipients' rows", async () => {
     const original = getSettings().sessionPeerPromptReminderLimit;
     updateSettings({ sessionPeerPromptReminderLimit: 1 });
@@ -942,7 +961,7 @@ describe("the deadline timer's scheduled set", () => {
     assert.equal(new Set(all).size, all.length, "no status is both");
     assert.deepEqual(
       [...peerDeadlineClock.CLOSED_PEER_PROMPT_STATUSES].sort(),
-      ["cancelled", "expired", "failed", "interrupted", "settled"],
+      ["cancelled", "expired", "failed", "interrupted", "settled", "withdrawn"],
     );
   });
 

@@ -17,6 +17,7 @@ import type {
   PeerPromptCard,
   PeerPromptInterruption,
   PeerPromptSettledRequest,
+  PeerPromptWithdrawnRequest,
   PeerPromptState,
   PeerPromptToolRow,
   PushDisplay,
@@ -155,6 +156,7 @@ const PEER_PROMPT_STATES: Record<PeerPromptState, true> = {
   awaiting_response: true,
   replied: true,
   settled: true,
+  withdrawn: true,
   retrying: true,
   interrupted: true,
   cancelled: true,
@@ -225,6 +227,9 @@ export function parsePeerPromptCard(value: unknown): PeerPromptCard | null {
     ...(typeof raw.settledReason === "string" && raw.settledReason
       ? { settledReason: raw.settledReason }
       : {}),
+    ...(typeof raw.withdrawnReason === "string" && raw.withdrawnReason
+      ? { withdrawnReason: raw.withdrawnReason }
+      : {}),
     ...(typeof raw.replyTo === "string" && raw.replyTo
       ? { replyTo: raw.replyTo }
       : {}),
@@ -247,6 +252,24 @@ function parseSettledRequest(value: unknown): PeerPromptSettledRequest | null {
   };
 }
 
+function parseWithdrawnRequest(
+  value: unknown,
+): PeerPromptWithdrawnRequest | null {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.message !== "string") return null;
+  return {
+    recipientTitle:
+      typeof raw.recipientTitle === "string" && raw.recipientTitle
+        ? raw.recipientTitle
+        : "another session",
+    ...(typeof raw.peerSessionId === "string" && raw.peerSessionId
+      ? { peerSessionId: raw.peerSessionId }
+      : {}),
+    message: raw.message,
+    ...(raw.beforeDelivery === true ? { beforeDelivery: true } : {}),
+  };
+}
+
 function parsePeerPromptToolRow(value: unknown): PeerPromptToolRow | null {
   const raw = asRecord(value);
   if (!raw) return null;
@@ -262,6 +285,16 @@ function parsePeerPromptToolRow(value: unknown): PeerPromptToolRow | null {
       .filter((r): r is PeerPromptSettledRequest => r !== null);
     return settled.length > 0
       ? { kind: "settle", reason: raw.reason, settled }
+      : null;
+  }
+  if (raw.kind === "withdraw") {
+    if (typeof raw.reason !== "string" || !Array.isArray(raw.withdrawn))
+      return null;
+    const withdrawn = raw.withdrawn
+      .map(parseWithdrawnRequest)
+      .filter((r): r is PeerPromptWithdrawnRequest => r !== null);
+    return withdrawn.length > 0
+      ? { kind: "withdraw", reason: raw.reason, withdrawn }
       : null;
   }
   if (raw.kind === "error") {

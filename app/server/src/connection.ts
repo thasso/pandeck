@@ -65,6 +65,7 @@ import {
   drainRecipient,
   peerPromptAnchorFor,
   sendQueuedPeerPromptNow,
+  withdrawPeerRequestByUser,
   withdrawQueuedPeerPrompt,
 } from "./peerPrompt.ts";
 import {
@@ -962,6 +963,8 @@ export class Connection implements Viewer {
       case "recoverBackgroundUpdates":
       case "dismissBackgroundUpdates":
         return this.onPromptQueueCommand(msg);
+      case "withdrawPeerRequest":
+        return this.onWithdrawPeerRequest(msg.sessionId, msg.id);
       case "loadTimelineBlock":
         return this.onLoadTimelineBlock(msg.entryId, msg.blockIndex, msg.kind);
       case "setLiveBodySubscriptions":
@@ -3435,6 +3438,27 @@ export class Connection implements Viewer {
         ...(commandSessionId
           ? { target: { type: "session" as const, id: commandSessionId } }
           : {}),
+      });
+    }
+  }
+
+  /**
+   * The user closes a request the session sent from its sent card: the same
+   * withdraw the requester's own `session_send_prompt` row makes.
+   */
+  private onWithdrawPeerRequest(sessionId: string, key: string): void {
+    const target = { type: "session" as const, id: sessionId };
+    if (!this.resolveSessionRef(sessionId)) {
+      this.send({ type: "error", message: "Unknown session.", target });
+      return;
+    }
+    try {
+      withdrawPeerRequestByUser(sessionId, key);
+    } catch (err) {
+      this.send({
+        type: "error",
+        message: `Failed to withdraw the request: ${errorText(err)}`,
+        target,
       });
     }
   }

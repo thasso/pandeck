@@ -73,6 +73,11 @@ export interface ToolRenderContext {
     status: TaskStatus;
   }) => void;
   onOpenSession?: (id: string) => void;
+  /**
+   * Close a request the viewed session SENT, by its sent card's key: the same
+   * withdraw its own `session_send_prompt` row makes.
+   */
+  onWithdrawPeerRequest?: (messageKey: string) => void;
   models?: ModelOption[];
   defaultModel?: ModelOption;
   defaultThinkingLevel?: ThinkingLevel;
@@ -500,7 +505,11 @@ const TOOL_RENDERERS: ToolRenderer[] = [
     render: (block, ctx) => {
       const rows = peerPromptRowsFrom(block);
       return rows ? (
-        <PeerPromptToolRowsView rows={rows} onOpenSession={ctx.onOpenSession} />
+        <PeerPromptToolRowsView
+          rows={rows}
+          onOpenSession={ctx.onOpenSession}
+          onWithdrawRequest={ctx.onWithdrawPeerRequest}
+        />
       ) : null;
     },
   },

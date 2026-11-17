@@ -327,6 +327,15 @@ export function useSessionChat({
   // The id is the whole of what this reads, and it must stay referentially
   // stable for the memoized transcript rows that carry it.
   const forkSourceSessionId = state.session?.sessionId;
+  // The viewed session's own sent requests: the user closes one it no longer
+  // needs answered, as the requester's withdraw row would.
+  const withdrawPeerRequest = useCallback(
+    (messageKey: string) => {
+      if (forkSourceSessionId)
+        actions.withdrawPeerRequest(forkSourceSessionId, messageKey);
+    },
+    [actions, forkSourceSessionId],
+  );
   const forkMessage = useCallback(
     (entryId: string, position: "before" | "at") => {
       if (!forkSourceSessionId) return;
@@ -1095,6 +1104,7 @@ export function useSessionChat({
       onOpenBackgroundWork: host.onOpenBackgroundWork,
       onOpenWorktree: host.onOpenWorktree,
       onApplyTaskStatusSuggestion: applyTaskStatusSuggestion,
+      onWithdrawPeerRequest: withdrawPeerRequest,
       onResolveApproval: actions.resolveApproval,
       approvalGrants,
       onRevokeApprovalGrant: actions.revokeApprovalGrant,

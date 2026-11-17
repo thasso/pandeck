@@ -35,6 +35,7 @@ const DEADLINE_SCHEDULING: Record<PeerPromptStatus, "scheduled" | "closed"> = {
   retryable_failed: "scheduled",
   replied: "scheduled",
   settled: "closed",
+  withdrawn: "closed",
   failed: "closed",
   interrupted: "closed",
   cancelled: "closed",

@@ -32,6 +32,7 @@ import type {
   PeerPromptPeerSummary,
   PeerPromptSettledRequest,
   PeerPromptThreadsProjection,
+  PeerPromptWithdrawnRequest,
   QueuedPeerPrompt,
 } from "@assistant/shared";
 import {
@@ -101,8 +102,8 @@ import {
 export const MAX_PEER_PROMPT_CHARS = 8_000;
 /** The most rows one `session_send_prompt` call may carry. */
 export const MAX_SEND_ROWS = 10;
-/** The longest reason a settle may give; it is shown on the requester's card. */
-export const MAX_SETTLE_REASON_CHARS = 200;
+/** The longest reason a settle or withdraw may give; the cards show it. */
+export const MAX_CLOSE_REASON_CHARS = 200;
 export const BATCH_MAX_MESSAGES = 5;
 const BATCH_MAX_CHARS = 16_000;
 /** Non-message overhead budget for the delivered envelope. */
@@ -170,6 +171,7 @@ export interface PeerPromptHub {
       failureReason?: string;
       interruption?: PeerPromptInterruption;
       settledReason?: string;
+      withdrawnReason?: string;
     },
   ): void;
   /** Tell a recipient's viewers what still waits for it; optional for test hubs. */
@@ -332,12 +334,7 @@ export interface SettlePeerRequestsInput {
 export function settlePeerRequests(
   input: SettlePeerRequestsInput,
 ): PeerPromptSettledRequest[] {
-  const reason = input.reason.trim();
-  if (!reason) throw new Error("settle needs a short reason.");
-  if (reason.length > MAX_SETTLE_REASON_CHARS)
-    throw new Error(
-      `settle reason exceeds the ${MAX_SETTLE_REASON_CHARS}-character limit (${reason.length}).`,
-    );
+  const reason = closeReason(input.reason, "settle");
   const requests = resolveRequestKeys(input.settlerSessionId, input.keys);
   let settled: PeerPromptRecord[];
   try {
@@ -358,6 +355,84 @@ export function settlePeerRequests(
     peerSessionId: m.senderSessionId,
     message: peerPromptExcerpt(m.prompt),
   }));
+}
+
+function closeReason(raw: string, what: "settle" | "withdraw"): string {
+  const reason = raw.trim();
+  if (!reason) throw new Error(`${what} needs a short reason.`);
+  if (reason.length > MAX_CLOSE_REASON_CHARS)
+    throw new Error(
+      `${what} reason exceeds the ${MAX_CLOSE_REASON_CHARS}-character limit (${reason.length}).`,
+    );
+  return reason;
+}
+
+export interface WithdrawPeerRequestsInput {
+  /** The session that sent the requests. */
+  senderSessionId: string;
+  /** Keys of its sent cards ({@link peerRequestKey}). */
+  keys: readonly string[];
+  reason: string;
+}
+
+/**
+ * The requester takes back what it no longer needs answered. A prompt not yet
+ * dispatched is cancelled, as the user's queue withdraw does; a delivered
+ * request still open becomes `withdrawn` with the reason, which both cards
+ * show. Either way nothing reaches the addressee's model: its reminders stop,
+ * the request drops out of "owes a reply", and a reply naming it is refused.
+ * No hop is spent. All or nothing.
+ */
+export function withdrawPeerRequests(
+  input: WithdrawPeerRequestsInput,
+): PeerPromptWithdrawnRequest[] {
+  const reason = closeReason(input.reason, "withdraw");
+  const requests = resolveOwnRequestKeys(input.senderSessionId, input.keys);
+  let rows: PeerPromptRecord[];
+  try {
+    rows = peerPromptStore.withdrawFromSender(
+      input.senderSessionId,
+      requests.map((r) => r.id),
+      reason,
+    );
+  } catch (err) {
+    if (err instanceof PeerPromptRequestClosedError)
+      throw requestClosedError(err, "Nothing was withdrawn.");
+    throw err;
+  }
+  broadcastPeerPromptChanges(rows);
+  // A withdrawn opening prompt that waited for a slot was its drain's barrier.
+  for (const recipient of new Set(
+    requests
+      .filter((r) => r.status === "held")
+      .map((r) => r.recipientSessionId),
+  ))
+    wakeRecipient(recipient);
+  return rows.map((m) => ({
+    recipientTitle: otherPartyTitle(m, "sent"),
+    peerSessionId: m.recipientSessionId,
+    message: peerPromptExcerpt(m.prompt),
+    ...(m.status === "cancelled" ? { beforeDelivery: true as const } : {}),
+  }));
+}
+
+/** The reason the user's close from a requester's card records. */
+const USER_WITHDRAW_REASON = "closed by the user";
+
+/**
+ * The user closes one request `senderSessionId` sent (the key of its sent
+ * card) that still waits for its reply, with the same effect as the
+ * requester's own withdraw.
+ */
+export function withdrawPeerRequestByUser(
+  senderSessionId: string,
+  key: string,
+): void {
+  withdrawPeerRequests({
+    senderSessionId,
+    keys: [key],
+    reason: USER_WITHDRAW_REASON,
+  });
 }
 
 export interface CancelQueuedPeerPromptsInput {
@@ -863,7 +938,7 @@ function resolveRequestKeys(
     const matches = open.filter((r) => peerRequestKey(r) === key);
     if (matches.length === 0)
       throw new Error(
-        `Request key \`${key}\` is not an open request to you: it is unknown, did not ask for a reply, or was already answered, settled or closed.${instead}`,
+        `Request key \`${key}\` is not an open request to you: it is unknown, did not ask for a reply, or was already answered, settled, withdrawn or closed.${instead}`,
       );
     if (matches.length > 1)
       throw new Error(
@@ -879,6 +954,50 @@ function resolveRequestKeys(
   return resolved;
 }
 
+/**
+ * The caller's own prompts named by the keys of its sent cards: each still
+ * withdrawable, or an error saying why not, with the requests it could name.
+ */
+function resolveOwnRequestKeys(
+  senderId: string,
+  keys: readonly string[],
+): PeerPromptRecord[] {
+  const own = peerPromptStore.withdrawableFrom(senderId);
+  const resolved: PeerPromptRecord[] = [];
+  for (const key of new Set(keys)) {
+    const matches = own.filter((r) => peerRequestKey(r) === key);
+    if (matches.length === 0)
+      throw new Error(
+        `Request key \`${key}\` is not an open request you sent: it is unknown, did not ask for a reply, or was already answered, settled, withdrawn or closed.${openRequestsHint(own)}`,
+      );
+    if (matches.length > 1)
+      throw new Error(`Request key \`${key}\` matches more than one request.`);
+    const request = matches[0]!;
+    if (request.status === "dispatching")
+      throw new Error(
+        `Request \`${key}\` is being delivered right now; withdraw it once it has arrived.`,
+      );
+    resolved.push(request);
+  }
+  return resolved;
+}
+
+const OPEN_REQUESTS_HINT_MAX = 5;
+
+/** The caller's open requests, by key and addressee, for a key it got wrong. */
+function openRequestsHint(own: readonly PeerPromptRecord[]): string {
+  const open = own.filter((r) => r.responseRequested);
+  if (open.length === 0) return " You have no open requests.";
+  const named = open
+    .slice(-OPEN_REQUESTS_HINT_MAX)
+    .map((r) => `\`${peerRequestKey(r)}\` to ${otherPartyTitle(r, "sent")}`);
+  const more =
+    open.length > OPEN_REQUESTS_HINT_MAX
+      ? ` (newest ${OPEN_REQUESTS_HINT_MAX} of ${open.length})`
+      : "";
+  return ` Your open requests${more}: ${named.join("; ")}.`;
+}
+
 /** A request that closed between its lookup and the write, in the model's terms. */
 function requestClosedError(
   err: PeerPromptRequestClosedError,
@@ -886,7 +1005,7 @@ function requestClosedError(
 ): Error {
   const keys = err.ids.map((id) => `\`${opaqueKey(id)}\``).join(", ");
   return new Error(
-    `Request ${keys} was answered, settled or closed meanwhile. ${outcome}`,
+    `Request ${keys} was answered, settled, withdrawn or closed meanwhile. ${outcome}`,
   );
 }
 
@@ -2309,6 +2428,8 @@ function cardState(status: PeerPromptStatus): PeerPromptState {
       return "replied";
     case "settled":
       return "settled";
+    case "withdrawn":
+      return "withdrawn";
     case "retryable_failed":
       return "retrying";
     case "interrupted":
@@ -2344,7 +2465,7 @@ function cardFor(
     ...(message.taskLabel ? { taskTitle: message.taskLabel } : {}),
     ...(message.failureReason ? { failureReason: message.failureReason } : {}),
     ...interruptionField(message),
-    ...(message.settleReason ? { settledReason: message.settleReason } : {}),
+    ...closeReasons(message),
     state: cardState(message.status),
   };
 }
@@ -2413,7 +2534,7 @@ async function broadcastCardKeyUpdate(
   state: PeerPromptState,
   failureReason?: string,
   interruption?: PeerPromptInterruption,
-  settledReason?: string,
+  reasons: CloseReasons = {},
 ): Promise<void> {
   try {
     const hub = await getHub();
@@ -2422,11 +2543,33 @@ async function broadcastCardKeyUpdate(
       state,
       ...(failureReason ? { failureReason } : {}),
       ...(interruption ? { interruption } : {}),
-      ...(settledReason ? { settledReason } : {}),
+      ...reasons,
     });
   } catch {
     // Best-effort UI refresh only; the durable Peer prompts history stays authoritative.
   }
+}
+
+/** Why a request was closed without a reply, as its card carries it. */
+type CloseReasons = Pick<PeerPromptCard, "settledReason" | "withdrawnReason">;
+
+function closeReasons(m: PeerPromptRecord): CloseReasons {
+  return {
+    ...(m.settleReason ? { settledReason: m.settleReason } : {}),
+    ...(m.withdrawReason ? { withdrawnReason: m.withdrawReason } : {}),
+  };
+}
+
+/** A batch card's reasons: the first member's of each kind. */
+function aggregateCloseReasons(
+  rows: readonly PeerPromptRecord[],
+): CloseReasons {
+  const settledReason = rows.find((r) => r.settleReason)?.settleReason;
+  const withdrawnReason = rows.find((r) => r.withdrawReason)?.withdrawReason;
+  return {
+    ...(settledReason ? { settledReason } : {}),
+    ...(withdrawnReason ? { withdrawnReason } : {}),
+  };
 }
 
 /**
@@ -2447,6 +2590,7 @@ const AGGREGATE_STATE_PRIORITY: PeerPromptState[] = [
   "acknowledged",
   "replied",
   "settled",
+  "withdrawn",
   "completed",
 ];
 
@@ -2483,9 +2627,6 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
   const aggregateFailureReason = rowsForAggregate.find(
     (r) => r.failureReason,
   )?.failureReason;
-  const aggregateSettleReason = rowsForAggregate.find(
-    (r) => r.settleReason,
-  )?.settleReason;
   await Promise.all([
     broadcastCardKeyUpdate(
       m.senderSessionId,
@@ -2493,7 +2634,7 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
       cardState(m.status),
       m.failureReason,
       interruptionOf(m),
-      m.settleReason,
+      closeReasons(m),
     ),
     broadcastCardKeyUpdate(
       m.recipientSessionId,
@@ -2501,7 +2642,7 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
       aggregateState,
       aggregateFailureReason,
       aggregateInterruption(rowsForAggregate, aggregateState),
-      aggregateSettleReason,
+      aggregateCloseReasons(rowsForAggregate),
     ),
   ]);
 }
@@ -2633,7 +2774,7 @@ export function peerPromptThreadsFor(
       ...(r.taskLabel ? { taskTitle: r.taskLabel } : {}),
       ...(r.failureReason ? { failureReason: r.failureReason } : {}),
       ...interruptionField(r),
-      ...(r.settleReason ? { settledReason: r.settleReason } : {}),
+      ...closeReasons(r),
       createdAt: r.createdAt,
     };
     thread.messages.push(message);
@@ -2651,7 +2792,6 @@ function buildReceivedGroupMessage(
   const aggregateState = aggregateCardState(rows);
   const sorted = [...rows].sort((a, b) => a.queueSeq - b.queueSeq);
   const failureReason = rows.find((r) => r.failureReason)?.failureReason;
-  const settledReason = rows.find((r) => r.settleReason)?.settleReason;
   const interruption = aggregateInterruption(rows, aggregateState);
   return {
     id: batchCardKey(effectiveHeadId),
@@ -2662,7 +2802,7 @@ function buildReceivedGroupMessage(
     ...(sorted[0]?.taskLabel ? { taskTitle: sorted[0].taskLabel } : {}),
     ...(failureReason ? { failureReason } : {}),
     ...(interruption ? { interruption } : {}),
-    ...(settledReason ? { settledReason } : {}),
+    ...aggregateCloseReasons(rows),
     createdAt: Math.min(...rows.map((r) => r.createdAt)),
   };
 }

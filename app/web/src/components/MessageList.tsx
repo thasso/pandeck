@@ -879,6 +879,8 @@ interface Props {
     id: string;
     status: TaskStatus;
   }) => void;
+  /** Close a request this session sent, from its sent card (see `ToolRenderContext`). */
+  onWithdrawPeerRequest?: (messageKey: string) => void;
   onResolveApproval?: (
     approvalId: string,
     decision: import("@assistant/shared").ApprovalDecision,
@@ -1004,6 +1006,7 @@ interface MessageRowProps {
   /** Answer an agent's status suggestion from a Task card (see `ToolRenderContext`). */
   onApplyTaskStatusSuggestion?:
     ((task: { id: string; status: TaskStatus }) => void) | undefined;
+  onWithdrawPeerRequest?: ((messageKey: string) => void) | undefined;
   onResolveApproval?:
     | ((
         approvalId: string,
@@ -1099,6 +1102,7 @@ const MessageRow = memo(function MessageRow({
   onOpenWorktree,
   onRetryWorktreeProvision,
   onApplyTaskStatusSuggestion,
+  onWithdrawPeerRequest,
   onResolveApproval,
   approvalGrants,
   onRevokeApprovalGrant,
@@ -1187,6 +1191,7 @@ const MessageRow = memo(function MessageRow({
           onOpenWorktree={onOpenWorktree}
           onRetryWorktreeProvision={onRetryWorktreeProvision}
           onApplyTaskStatusSuggestion={onApplyTaskStatusSuggestion}
+          onWithdrawPeerRequest={onWithdrawPeerRequest}
           onResolveApproval={onResolveApproval}
           approvalGrants={approvalGrants}
           onRevokeApprovalGrant={onRevokeApprovalGrant}
@@ -1281,6 +1286,7 @@ export function MessageList({
   onOpenWorktree,
   onRetryWorktreeProvision,
   onApplyTaskStatusSuggestion,
+  onWithdrawPeerRequest,
   onResolveApproval,
   approvalGrants,
   onRevokeApprovalGrant,
@@ -1996,6 +2002,7 @@ export function MessageList({
                   onOpenWorktree={onOpenWorktree}
                   onRetryWorktreeProvision={onRetryWorktreeProvision}
                   onApplyTaskStatusSuggestion={onApplyTaskStatusSuggestion}
+                  onWithdrawPeerRequest={onWithdrawPeerRequest}
                   onResolveApproval={onResolveApproval}
                   approvalGrants={approvalGrants}
                   onRevokeApprovalGrant={onRevokeApprovalGrant}

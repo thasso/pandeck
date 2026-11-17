@@ -1,8 +1,9 @@
 /**
- * `session_send_prompt` (Task 90, rows Task-942): one open, safe API to send
- * peer prompts to other app sessions and to close the requests sent to this
- * one. Works for ordinary and Task-attached sessions alike; a Task id is audit
- * context only and never authorizes participants or changes delivery. No
+ * `session_send_prompt` (Task 90, rows Task-942, withdraw Task-1427): one open,
+ * safe API to send peer prompts to other app sessions, to close the requests
+ * sent to this one, and to withdraw the ones it sent. Works for ordinary and
+ * Task-attached sessions alike; a Task id is audit context only and never
+ * authorizes participants or changes delivery. No
  * target kind, role, interrupt/priority, or thread parameter is exposed. A
  * reply names the requests it answers with `inReplyTo` (their reply keys, never
  * raw ids); without it correlation stays server-owned and automatic.
@@ -16,9 +17,10 @@ import { cleanSessionId, SessionInspectionError } from "./sessionInspection.ts";
 import {
   MAX_PEER_PROMPT_CHARS,
   MAX_SEND_ROWS,
-  MAX_SETTLE_REASON_CHARS,
+  MAX_CLOSE_REASON_CHARS,
   sendPeerPrompt,
   settlePeerRequests,
+  withdrawPeerRequests,
 } from "../../peerPrompt.ts";
 import type { PeerPromptToolRow } from "@assistant/shared";
 
@@ -39,10 +41,11 @@ type SendRow =
       inReplyTo?: string[];
       taskId?: string;
     }
-  | { kind: "settle"; inReplyTo: string[]; reason: string };
+  | { kind: "settle"; inReplyTo: string[]; reason: string }
+  | { kind: "withdraw"; keys: string[]; reason: string };
 
 const ROWS_SHAPE =
-  'Pass rows: [{ "targetSessionId": "…", "prompt": "…" }] — one object per message, or { "inReplyTo": ["k…"], "settle": "reason" } to settle.';
+  'Pass rows: [{ "targetSessionId": "…", "prompt": "…" }] — one object per message, { "inReplyTo": ["k…"], "settle": "reason" } to settle, or { "withdraw": ["k…"], "reason": "…" } to withdraw.';
 
 export function sessionSendPromptTools(): AgentTool[] {
   return [makeSessionSendPromptTool()];
@@ -59,7 +62,7 @@ export function sessionSendPromptTools(): AgentTool[] {
  * `piSdk/sessionSendPromptBoundary.test.ts` holds this against pi's validator.
  */
 const ROW = {
-  description: `One object, of one of two shapes. A message: { targetSessionId, prompt, responseRequested?, inReplyTo?, taskId? }. A settle: { inReplyTo, settle } — closes requests sent to you without sending anything, when acting answered them or they are superseded; the requester's card shows the reason.`,
+  description: `One object, of one of three shapes. A message: { targetSessionId, prompt, responseRequested?, inReplyTo?, taskId? }. A settle: { inReplyTo, settle } — closes requests sent to you without sending anything, when acting answered them or they are superseded; the requester's card shows the reason. A withdraw: { withdraw, reason } — closes requests YOU sent whose answer you no longer need; use it instead of a "never mind" message, which leaves the request open. The addressee is not prompted; its reminders stop.`,
   properties: {
     targetSessionId: {
       description:
@@ -80,7 +83,14 @@ const ROW = {
       description: "string — optional related Task id for audit context only.",
     },
     settle: {
-      description: `string — a settle row's short reason, max ${MAX_SETTLE_REASON_CHARS} characters (e.g. "applied the PR body").`,
+      description: `string — a settle row's short reason, max ${MAX_CLOSE_REASON_CHARS} characters (e.g. "applied the PR body").`,
+    },
+    withdraw: {
+      description:
+        "array of request keys — requests you sent, each the messageKey your sending row returned. One not yet delivered is cancelled.",
+    },
+    reason: {
+      description: `string — a withdraw row's short reason, max ${MAX_CLOSE_REASON_CHARS} characters (e.g. "found the answer myself").`,
     },
   },
 } as const;
@@ -89,7 +99,7 @@ function makeSessionSendPromptTool() {
   return defineAgentTool<{ rows?: unknown }>({
     name: "session_send_prompt",
     label: "Send Session Prompt",
-    description: `Send prompts to other app sessions — ask one to review your work, answer a question, or coordinate — and answer or settle requests sent to you. Pass rows (1 to ${MAX_SEND_ROWS}); each row is its own message with its own result, and a bad row fails only itself. Delivery is durable and never interrupts a running target: a busy session receives it when it next goes idle. Keep each prompt concise and self-contained; the recipient sees it as a peer message, not as a new user task. A reply reaches you the same way: later, as a new incoming peer message that starts a fresh turn. So after sending, end your turn and go idle — waiting, sleeping, or polling for the reply only delays it. Each message row spends one hop of its conversation's limit; a settle row sends nothing and spends none. You cannot prompt your own session or an archived, deleted, or internal one.`,
+    description: `Send prompts to other app sessions — ask one to review your work, answer a question, or coordinate — answer or settle requests sent to you, and withdraw your own. Pass rows (1 to ${MAX_SEND_ROWS}); each row is its own message with its own result, and a bad row fails only itself. Delivery is durable and never interrupts a running target: a busy session receives it when it next goes idle. Keep each prompt concise and self-contained; the recipient sees it as a peer message, not as a new user task. A reply reaches you the same way: later, as a new incoming peer message that starts a fresh turn. So after sending, end your turn and go idle — waiting, sleeping, or polling for the reply only delays it. Each message row spends one hop of its conversation's limit; a settle or withdraw row sends nothing and spends none. You cannot prompt your own session or an archived, deleted, or internal one.`,
     parameters: {
       type: "object",
       properties: {
@@ -158,6 +168,14 @@ async function runRow(
   row: SendRow,
   session: { sessionId: string; title?: string },
 ): Promise<PeerPromptToolRow> {
+  if (row.kind === "withdraw") {
+    const withdrawn = withdrawPeerRequests({
+      senderSessionId: session.sessionId,
+      keys: row.keys,
+      reason: row.reason,
+    });
+    return { kind: "withdraw", reason: row.reason, withdrawn };
+  }
   if (row.kind === "settle") {
     const settled = settlePeerRequests({
       settlerSessionId: session.sessionId,
@@ -187,6 +205,21 @@ function parseRow(raw: unknown): SendRow {
     throw new Error(`A row must be an object. ${ROWS_SHAPE}`);
   const row = raw as Record<string, unknown>;
   const present = Object.keys(row).filter((key) => row[key] !== undefined);
+  if (row.withdraw !== undefined) {
+    const extra = present.filter((k) => k !== "withdraw" && k !== "reason");
+    if (extra.length > 0)
+      throw new Error(
+        `A withdraw row takes only withdraw and reason; got ${extra.join(", ")}.`,
+      );
+    const keys = requestKeys(row.withdraw, "withdraw");
+    if (row.reason === undefined)
+      throw new Error("A withdraw row needs reason: why you withdraw it.");
+    return {
+      kind: "withdraw",
+      keys,
+      reason: requiredString(row.reason, "reason"),
+    };
+  }
   if (row.settle !== undefined) {
     const extra = present.filter((k) => k !== "settle" && k !== "inReplyTo");
     if (extra.length > 0)
@@ -196,7 +229,11 @@ function parseRow(raw: unknown): SendRow {
     const reason = requiredString(row.settle, "settle");
     if (row.inReplyTo === undefined)
       throw new Error("A settle row needs inReplyTo: the requests to close.");
-    return { kind: "settle", inReplyTo: requestKeys(row.inReplyTo), reason };
+    return {
+      kind: "settle",
+      inReplyTo: requestKeys(row.inReplyTo, "inReplyTo"),
+      reason,
+    };
   }
   const unknown = present.filter((k) => !MESSAGE_FIELDS.has(k));
   if (unknown.length > 0)
@@ -222,7 +259,7 @@ function parseRow(raw: unknown): SendRow {
     prompt,
     responseRequested: row.responseRequested === true,
     ...(row.inReplyTo !== undefined
-      ? { inReplyTo: requestKeys(row.inReplyTo) }
+      ? { inReplyTo: requestKeys(row.inReplyTo, "inReplyTo") }
       : {}),
     ...(taskId ? { taskId } : {}),
   };
@@ -235,14 +272,14 @@ function requiredString(value: unknown, name: string): string {
   return text;
 }
 
-function requestKeys(value: unknown): string[] {
+function requestKeys(value: unknown, name: string): string[] {
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
     !value.every((k) => typeof k === "string" && k.trim())
   )
     throw new Error(
-      'inReplyTo must be a non-empty array of request keys, e.g. ["k1x2y3z"].',
+      `${name} must be a non-empty array of request keys, e.g. ["k1x2y3z"].`,
     );
   return value.map((k: string) => k.trim());
 }

@@ -552,3 +552,108 @@ describe("a rows payload (Task-942)", () => {
     expect(container.textContent).not.toContain("In reply to");
   });
 });
+
+describe("withdrawing a sent request (Task-1427)", () => {
+  const request = {
+    direction: "sent",
+    messageKey: "k7",
+    senderTitle: "Coordinator",
+    recipientTitle: "Verifier",
+    message: "verify the fix",
+    responseRequested: true,
+    state: "awaiting_response",
+  } as PeerPromptCardType;
+  const withdrawButton = () =>
+    [...container.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Withdraw request"),
+    );
+  const sentBlock = (
+    rows: unknown[],
+  ): Extract<DisplayBlock, { kind: "tool" }> => ({
+    kind: "tool",
+    toolId: "call_w",
+    name: "session_send_prompt",
+    args: { rows: [] },
+    output: JSON.stringify({
+      renderKind: "sessionPeerPrompt",
+      version: 2,
+      rows,
+    }),
+    isError: false,
+    done: true,
+  });
+
+  it("offers Withdraw on a sent request still owed, through the transcript's tool card", () => {
+    const onWithdrawPeerRequest = vi.fn();
+    act(() =>
+      root.render(
+        <>
+          {renderToolBlock(sentBlock([{ kind: "message", card: request }]), {
+            showTools: false,
+            expandTools: false,
+            onWithdrawPeerRequest,
+          })}
+        </>,
+      ),
+    );
+    expandCard();
+    act(() => withdrawButton()!.click());
+    expect(onWithdrawPeerRequest).toHaveBeenCalledWith("k7");
+  });
+
+  it("offers nothing on a closed, received or unrequested card, or without a handler", () => {
+    const onWithdraw = vi.fn();
+    for (const card of [
+      { ...request, state: "replied" },
+      { ...request, state: "withdrawn" },
+      { ...request, direction: "received" },
+      { ...request, responseRequested: false },
+    ] as PeerPromptCardType[]) {
+      renderCard(card, { onWithdraw });
+      expandCard();
+      expect(withdrawButton()).toBeUndefined();
+    }
+    renderCard(request);
+    expandCard();
+    expect(withdrawButton()).toBeUndefined();
+  });
+
+  it("shows a withdrawn card and a withdraw row with their reason", () => {
+    renderCard({
+      ...request,
+      state: "withdrawn",
+      withdrawnReason: "no further work needed",
+    });
+    expandCard();
+    expect(container.textContent).toContain("Withdrawn");
+    expect(container.textContent).toContain(
+      "Withdrawn: no further work needed",
+    );
+    act(() =>
+      root.render(
+        <>
+          {renderToolBlock(
+            sentBlock([
+              {
+                kind: "withdraw",
+                reason: "plan changed",
+                withdrawn: [
+                  {
+                    recipientTitle: "Verifier",
+                    message: "verify the fix",
+                    beforeDelivery: true,
+                  },
+                ],
+              },
+            ]),
+            { showTools: false, expandTools: false },
+          )}
+        </>,
+      ),
+    );
+    expect(container.textContent).toContain("request to Verifier");
+    expandCard();
+    expect(container.textContent).toContain("Withdrawn: plan changed");
+    expect(container.textContent).toContain("(before delivery)");
+  });
+});

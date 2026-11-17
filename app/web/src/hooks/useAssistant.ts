@@ -6689,6 +6689,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             ...(msg.settledReason !== undefined
               ? { settledReason: msg.settledReason }
               : {}),
+            ...(msg.withdrawnReason !== undefined
+              ? { withdrawnReason: msg.withdrawnReason }
+              : {}),
           },
         },
       };
@@ -6849,6 +6852,8 @@ export interface AssistantActions {
   promptSkill: (text: string, skill: string) => void;
   /** Edit a session's prompt queue; the server answers with its new state. */
   promptQueue: (command: PromptQueueCommand) => void;
+  /** Close a request `sessionId` sent (its sent card's key); it stays unanswered. */
+  withdrawPeerRequest: (sessionId: string, messageKey: string) => void;
   acceptCommitDryRun: (entryId: string) => void;
   respondToQuestion: (response: AgentQuestionResponse) => void;
   abort: () => void;
@@ -8523,6 +8528,8 @@ export function useAssistant({
         send({ type: "prompt", text, skill, clientRequestId });
       },
       promptQueue: (command) => send(command),
+      withdrawPeerRequest: (sessionId, id) =>
+        send({ type: "withdrawPeerRequest", sessionId, id }),
       acceptCommitDryRun: (entryId) =>
         send({ type: "acceptCommitDryRun", entryId }),
       respondToQuestion: (response) =>

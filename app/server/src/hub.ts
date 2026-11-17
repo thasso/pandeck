@@ -599,6 +599,7 @@ class SessionHub {
       failureReason?: string;
       interruption?: import("@assistant/shared").PeerPromptInterruption;
       settledReason?: string;
+      withdrawnReason?: string;
     },
   ): void {
     const msg: import("@assistant/shared").ServerMessage = {

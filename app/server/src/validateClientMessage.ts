@@ -1015,6 +1015,7 @@ const REGISTRY = defineRegistry({
   resumePromptQueue: fields({ sessionId: STRING }),
   sendQueuedPeerPromptNow: fields({ sessionId: STRING, id: STRING }),
   withdrawQueuedPeerPrompt: fields({ sessionId: STRING, id: STRING }),
+  withdrawPeerRequest: fields({ sessionId: STRING, id: STRING }),
   recoverBackgroundUpdates: fields({
     sessionId: STRING,
     items: BACKGROUND_REFS,

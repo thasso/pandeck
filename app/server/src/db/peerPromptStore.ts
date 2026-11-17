@@ -38,6 +38,7 @@ export type PeerPromptStatus =
   | "awaiting_response"
   | "replied"
   | "settled"
+  | "withdrawn"
   | "retryable_failed"
   | "interrupted"
   | "cancelled"
@@ -72,6 +73,7 @@ const TERMINAL_STATUSES: PeerPromptStatus[] = [
   "completed",
   "replied",
   "settled",
+  "withdrawn",
   "failed",
   "interrupted",
   "cancelled",
@@ -79,8 +81,8 @@ const TERMINAL_STATUSES: PeerPromptStatus[] = [
 ];
 
 /**
- * A delivered request not yet closed: what an answer marks `replied` and a
- * settle marks `settled`. Its turn may still be running.
+ * A delivered request not yet closed: what an answer marks `replied`, a settle
+ * `settled` and a withdraw `withdrawn`. Its turn may still be running.
  */
 const OPEN_REQUEST_STATUSES: PeerPromptStatus[] = [
   "admitted",
@@ -126,6 +128,8 @@ export interface PeerPromptRecord {
   repliedByMessageId?: string;
   /** Why the recipient closed this request without answering it (`settled`). */
   settleReason?: string;
+  /** Why its sender, or the user, withdrew this request (`withdrawn`). */
+  withdrawReason?: string;
   /** Idle-edge reminder turns this request was listed in (`peerPrompt.ts`). */
   reminderCount: number;
   nextAttemptAt?: number;
@@ -180,6 +184,7 @@ interface Row {
   reply_to_message_id: string | null;
   replied_by_message_id: string | null;
   settle_reason: string | null;
+  withdraw_reason: string | null;
   reminder_count: number;
   created_at_ms: number;
   updated_at_ms: number;
@@ -252,6 +257,7 @@ function map(r: Row): PeerPromptRecord {
       ? { repliedByMessageId: r.replied_by_message_id }
       : {}),
     ...(r.settle_reason ? { settleReason: r.settle_reason } : {}),
+    ...(r.withdraw_reason ? { withdrawReason: r.withdraw_reason } : {}),
     reminderCount: r.reminder_count,
     createdAt: r.created_at_ms,
     updatedAt: r.updated_at_ms,
@@ -783,6 +789,7 @@ type TransitionPatch = Partial<{
   repliedAt: number;
   repliedByMessageId: string;
   settleReason: string;
+  withdrawReason: string;
   /** A request's reply deadline, restarted when a held opening prompt starts. */
   expiresAt: number | null;
   bumpAttempts: boolean;
@@ -869,6 +876,10 @@ function transitionInTxn(
   if (patch.settleReason !== undefined) {
     sets.push("settle_reason = ?");
     params.push(patch.settleReason);
+  }
+  if (patch.withdrawReason !== undefined) {
+    sets.push("withdraw_reason = ?");
+    params.push(patch.withdrawReason);
   }
   if (patch.expiresAt !== undefined) {
     sets.push("expires_at_ms = ?");
@@ -1701,6 +1712,96 @@ function markSettled(
     db.exec("ROLLBACK");
     throw err;
   }
+}
+
+/** Statuses a sender may still recall without its recipient reading it. */
+const WITHDRAWABLE_UNDELIVERED: PeerPromptStatus[] = [
+  "held",
+  "queued",
+  "retryable_failed",
+];
+
+/**
+ * The sender closes what it sent and no longer needs, all or nothing in one
+ * transaction: a row not yet dispatched is `cancelled` (as the user's queue
+ * withdraw does, the reason as its `failureReason`), a delivered request still
+ * open is `withdrawn` with `reason`. A row that is not the sender's, is being
+ * dispatched, or is no longer open rolls every one back with
+ * {@link PeerPromptRequestClosedError}.
+ */
+function withdrawFromSender(
+  senderSessionId: string,
+  ids: readonly string[],
+  reason: string,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const closed = ids.filter((id) => {
+      const row = getRow(id);
+      if (!row || row.sender_session_id !== senderSessionId) return true;
+      if (WITHDRAWABLE_UNDELIVERED.includes(row.status))
+        return !transitionInTxn(
+          db,
+          id,
+          WITHDRAWABLE_UNDELIVERED,
+          "cancelled",
+          {
+            failureReason: `Withdrawn before delivery: ${reason}`,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            nextAttemptAt: null,
+          },
+          now,
+        );
+      return (
+        row.response_requested !== 1 ||
+        !transitionInTxn(
+          db,
+          id,
+          OPEN_REQUEST_STATUSES,
+          "withdrawn",
+          { withdrawReason: reason },
+          now,
+        )
+      );
+    });
+    if (closed.length > 0) throw new PeerPromptRequestClosedError(closed);
+    db.exec("COMMIT");
+    return ids.map((id) => map(getRow(id)!));
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * What a sender may still withdraw: its undelivered prompts (a `dispatching`
+ * one included, so the caller can say it is being delivered) and its delivered
+ * requests still open and unexpired. Served by `peer_prompts_sender_idx`.
+ */
+function withdrawableFrom(
+  senderSessionId: string,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  const open = OPEN_REQUEST_STATUSES.map(() => "?").join(", ");
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM peer_prompts
+          WHERE sender_session_id = ?
+            AND (status IN ('held', 'queued', 'retryable_failed', 'dispatching')
+              OR (status IN (${open}) AND response_requested = 1
+                AND (expires_at_ms IS NULL OR expires_at_ms > ?)))
+          ORDER BY queue_seq`,
+      )
+      .all(
+        senderSessionId,
+        ...(OPEN_REQUEST_STATUSES as never[]),
+        now,
+      ) as unknown as Row[]
+  ).map(map);
 }
 
 /* ------------------------------- reads ----------------------------------- */
@@ -2575,6 +2676,8 @@ export const peerPromptStore = {
   recordAdmission,
   markReplied,
   markSettled,
+  withdrawFromSender,
+  withdrawableFrom,
   markInterrupted,
   interruptAsTold,
   markRetryable,
