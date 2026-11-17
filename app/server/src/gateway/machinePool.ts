@@ -173,8 +173,7 @@ const ASCTIME_DATE_RE = new RegExp(
 
 /**
  * The instant an HTTP-date names, in any of its three forms, or undefined
- * when the value is not one. RFC 850's two-digit year is the most recent
- * year not more than 50 years ahead of `now` (RFC 9110 section 5.6.7).
+ * when the value is not one. An RFC 850 year is resolved by `rfc850Instant`.
  */
 function httpDate(value: string, now: number): number | undefined {
   const imf = IMF_FIXDATE_RE.exec(value);
@@ -187,11 +186,12 @@ function httpDate(value: string, now: number): number | undefined {
     );
   const rfc850 = RFC850_DATE_RE.exec(value);
   if (rfc850)
-    return utcInstant(
-      twoDigitYear(rfc850[3]!, now),
+    return rfc850Instant(
+      Number(rfc850[3]),
       rfc850[2]!,
       Number(rfc850[1]),
       rfc850.slice(4, 7).map(Number),
+      now,
     );
   const asctime = ASCTIME_DATE_RE.exec(value);
   if (asctime)
@@ -204,10 +204,27 @@ function httpDate(value: string, now: number): number | undefined {
   return undefined;
 }
 
-function twoDigitYear(digits: string, now: number): number {
+/**
+ * An RFC 850 date's instant. Its two-digit year is read in `now`'s century,
+ * unless that full timestamp lies after the UTC calendar's fifty-year cutoff
+ * (`now` plus 50 calendar years); then it is the same date a century earlier,
+ * the most recent past year with those two digits (RFC 9110 section 5.6.7).
+ * A cutoff on 29 February rolls to 1 March, as `setUTCFullYear` does.
+ */
+function rfc850Instant(
+  yearDigits: number,
+  month: string,
+  day: number,
+  clock: readonly number[],
+  now: number,
+): number | undefined {
   const nowYear = new Date(now).getUTCFullYear();
-  const year = Math.floor(nowYear / 100) * 100 + Number(digits);
-  return year - nowYear > 50 ? year - 100 : year;
+  const cutoff = new Date(now);
+  cutoff.setUTCFullYear(nowYear + 50);
+  const year = Math.floor(nowYear / 100) * 100 + yearDigits;
+  const ahead = utcInstant(year, month, day, clock);
+  if (ahead !== undefined && ahead <= cutoff.getTime()) return ahead;
+  return utcInstant(year - 100, month, day, clock);
 }
 
 /**

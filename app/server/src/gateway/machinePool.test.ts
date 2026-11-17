@@ -426,6 +426,112 @@ describe("HTTP-date forms (A3, F001)", () => {
     );
   });
 
+  // F003: an RFC 850 year is read in the current century unless the full
+  // timestamp lies more than 50 years after now, on the UTC calendar.
+  const rfc850Cases: [
+    string,
+    string,
+    { long: boolean; benchUntil: number | undefined },
+  ][] = [
+    [
+      "exactly 50 years ahead keeps 2076: a long reset",
+      "Tuesday, 17-Nov-76 12:00:00 GMT",
+      { long: true, benchUntil: Date.parse("2076-11-17T12:00:00Z") },
+    ],
+    [
+      "one second under the cutoff keeps 2076",
+      "Tuesday, 17-Nov-76 11:59:59 GMT",
+      { long: true, benchUntil: Date.parse("2076-11-17T11:59:59Z") },
+    ],
+    [
+      "one second past the cutoff is 1976: elapsed",
+      "Tuesday, 17-Nov-76 12:00:01 GMT",
+      { long: false, benchUntil: undefined },
+    ],
+    [
+      "a day past the cutoff is 1976: elapsed",
+      "Wednesday, 18-Nov-76 12:00:00 GMT",
+      { long: false, benchUntil: undefined },
+    ],
+    [
+      "an hour past the cutoff day is 1976: elapsed",
+      "Tuesday, 17-Nov-76 13:00:00 GMT",
+      { long: false, benchUntil: undefined },
+    ],
+    [
+      "a later month of the cutoff year is 1976: elapsed",
+      "Tuesday, 01-Dec-76 12:00:00 GMT",
+      { long: false, benchUntil: undefined },
+    ],
+    [
+      "an earlier month of the cutoff year keeps 2076",
+      "Wednesday, 01-Jan-76 12:00:00 GMT",
+      { long: true, benchUntil: Date.parse("2076-01-01T12:00:00Z") },
+    ],
+  ];
+  for (const [name, value, expected] of rfc850Cases)
+    test(`F003: RFC 850 ${name}`, () => {
+      assert.deepEqual(
+        classifyReset("claude", ["retry-after", value], now),
+        expected,
+      );
+    });
+
+  test("F003: a century boundary: 2049 reads 99 as 2099 up to its cutoff, then 1999", () => {
+    const century = Date.parse("2049-11-17T12:00:00Z");
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        ["retry-after", "Tuesday, 17-Nov-99 12:00:00 GMT"],
+        century,
+      ),
+      { long: true, benchUntil: Date.parse("2099-11-17T12:00:00Z") },
+    );
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        ["retry-after", "Wednesday, 18-Nov-99 12:00:00 GMT"],
+        century,
+      ),
+      { long: false, benchUntil: undefined },
+    );
+  });
+
+  test("F003: a cutoff from a leap day rolls to 1 March, as the UTC calendar does", () => {
+    const leap = Date.parse("2024-02-29T12:00:00Z");
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        ["retry-after", "Thursday, 01-Mar-74 12:00:00 GMT"],
+        leap,
+      ),
+      { long: true, benchUntil: Date.parse("2074-03-01T12:00:00Z") },
+    );
+    assert.deepEqual(
+      classifyReset(
+        "claude",
+        ["retry-after", "Saturday, 02-Mar-74 12:00:00 GMT"],
+        leap,
+      ),
+      { long: false, benchUntil: undefined },
+    );
+  });
+
+  test("F003: an elapsed RFC 850 date past the cutoff leaves the pin and tried set unchanged", () => {
+    const f = fixture();
+    f.clock.now = now;
+    const ref = claudeRef("session-key");
+    const first = served(f.pool.select("u1", ref));
+    const before = f.pool.records();
+    answer(f.pool, first, 429, [
+      "retry-after",
+      "Wednesday, 18-Nov-76 12:00:00 GMT",
+    ]);
+    assert.deepEqual(f.pool.records(), before);
+    assert.equal(profileOf(f.pool.select("u1", ref)), "claude-a");
+    assert.deepEqual(f.pool.records()[0]!.tried, []);
+  });
+
   test("F001: date forms that are not valid HTTP-dates stay unknown, so long", () => {
     const unknown = { long: true, benchUntil: now + RATE_LIMIT_BENCH_MS };
     for (const value of [
