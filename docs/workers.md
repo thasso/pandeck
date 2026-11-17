@@ -1247,31 +1247,36 @@ and `profiles.remove`). A newer connection's hello ends the older one.
   mints its session id (a new or forked pi session) completes the owner with
   `leases.bindSession` once the open answers, and a different id later is a
   conflict. A server lease, for the server's own requests, belongs to one
-  `serverBootId`.
+  `serverBootId`. A machine lease (Task-1424) belongs to one enrolled client:
+  the edge grants it itself for that machine's standalone harnesses, discards
+  its token and addresses it by id ("Standalone harnesses" under "Client mode").
+  Hellos and reconciles leave it alone; it counts as live for renewal.
 - The boot rule: a hello revokes every server lease of another boot and leaves
   engine leases alone. A previous boot's engine lease keeps forwarding until
   `leases.reconcileWorker {workerId, live}` revokes that Worker's engine leases
   not in `live`; it never touches another Worker's or a server lease.
 - The registry records each profile's provider, name, `enabled` flag and, for a
   Claude or Codex login, its token file path; an OpenAI-compatible profile names
-  none. `enabled` is metadata only: disabling an account takes effect at the
-  server's next turn, so the gateway never ends a running turn for it. Deleting
-  a profile, by `profiles.remove` or a sync that omits it, is the only registry
-  change that revokes, and its leases' requests are refused with "the account
-  was removed". The other reasons are "the session moved to another account" and
-  "the session ended".
+  none. `enabled` revokes nothing: disabling an account takes effect at the
+  server's next turn, so the gateway never ends a running turn for it. A machine
+  pool skips a disabled account at its next selection. Deleting a profile, by
+  `profiles.remove` or a sync that omits it, is the only registry change that
+  revokes, and its leases' requests are refused with "the account was removed".
+  The other reasons are "the session moved to another account" and "the session
+  ended".
 - The state lives in the gateway's state directory (0700), in `leases.json`
   (lease id, secret hash, kind, owner, profile, provider, a login's token file
-  path, grant and revocation times) and `profiles.json`, each written whole to a
-  0600 temp file and renamed. Neither holds a token, a lease token or its
-  secret, and no file holds the pushed compatible key or endpoint. A grant or
-  session bind is saved before it is answered and undone when saving fails; a
-  revocation takes effect at once and stays in force even then. After a failed
-  save, repeating a revocation or profile removal saves again even though it
-  changes nothing, so it fails again or succeeds with the earlier change saved;
-  a repeated revocation keeps its first reason and time. Both files load at
-  start, so a gateway restarted with the server down still forwards. An
-  unreadable `leases.json` starts empty, refusing every old token; an unreadable
+  path, grant and revocation times), `profiles.json` and `machinePins.json`
+  (hashes, account ids, tried sets and times), each written whole to a 0600 temp
+  file and renamed. None holds a token, a lease token or its secret, and no file
+  holds the pushed compatible key or endpoint. A grant or session bind is saved
+  before it is answered and undone when saving fails; a revocation takes effect
+  at once and stays in force even then. After a failed save, repeating a
+  revocation or profile removal saves again even though it changes nothing, so
+  it fails again or succeeds with the earlier change saved; a repeated
+  revocation keeps its first reason and time. Both files load at start, so a
+  gateway restarted with the server down still forwards. An unreadable
+  `leases.json` starts empty, refusing every old token; an unreadable
   `profiles.json` starts an empty registry, so grants wait for a sync while
   restored leases keep forwarding on their own binding. A revoked lease is
   forgotten 24 hours after its revocation.
@@ -1989,7 +1994,12 @@ path above.
 - **The relay** (`relay/`, its own entry and process under Pandeck's server
   account, `node:` only) is the only holder of the client key. It pipes its
   loopback port to the model port and each connection on its 0600 Unix socket to
-  the client-protocol port, understanding neither.
+  the client-protocol port, understanding neither. Model requests and answers
+  keep their header fields as received, in order and with every repeat, without
+  hop-by-hop fields; a request with no `Host` gets the edge's address, as Node
+  would set it. Its TLS checks the edge's certificate for the enrolled address,
+  never a forwarded `Host`: a DNS name is the SNI, and an IP sends none and is
+  matched as an IP (Task-1424 transport amendment).
 - **The server** (`gatewayClientLink.ts`) speaks the client protocol through the
   relay's socket, mirrors the gateway's accounts into the profile registry and
   gives engines the relay's loopback URL. Settings' existing UI drives the
@@ -2061,10 +2071,173 @@ path above.
   dev instance with its own `DATA_DIR`, `ASSISTANT_PORT`, `VITE_SERVER_ORIGIN`
   and `ASSISTANT_GATEWAY_RELAY` is the client.
 - **Known gaps.** No automatic recovery of a crashed registry writer's lock. No
-  OpenAI-compatible accounts and no lease TTL (leases live until revoked). In
-  client mode, no rename, enable toggle or Clear of an unfinished login, and
-  `gateway:dev`'s own vault runs both drivers in its process; a vault process
-  runs them as children ("Remote vault").
+  OpenAI-compatible accounts and no lease TTL (leases live until revoked,
+  machine leases included). In client mode, no rename, enable toggle or Clear of
+  an unfinished login, and `gateway:dev`'s own vault runs both drivers in its
+  process; a vault process runs them as children ("Remote vault").
+
+#### Standalone harnesses
+
+Claude Code, Codex, pi and OpenCode on an enrolled machine (a devbox or laptop)
+use the gateway's accounts through the local relay (Task-1424 PR 1). The harness
+points its base URL at the relay's loopback port and sends a fixed, public
+placeholder as its key. Any process on the machine can do this; Thasso accepted
+that. The relay's client certificate is the capability, and revoking the machine
+ends access at once. The relay changes only in transport (Task-1424 delivery
+amendment, Thasso's decision): it forwards request and response header fields as
+received, repeats included, and verifies the edge by its enrolled address
+whatever the `Host` (above). No route, body or credential handling changes.
+
+- **Placeholder.** One literal, JWT-shaped because pi and Codex accept only
+  that, pinned in `gatewayMachinePool.test.ts`:
+
+  ```text
+  eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoicGFuZGVjay1nYXRld2F5In0sInBhbmRlY2siOnsidiI6MSwibWFjaGluZSI6dHJ1ZX19.pandeck
+  ```
+
+  Header `{"alg":"none","typ":"JWT"}`, payload
+  `{"https://api.openai.com/auth":{"chatgpt_account_id":"pandeck-gateway"},"pandeck":{"v":1,"machine":true}}`.
+  It names no lease, so it is not lease-shaped, and it grants nothing on its
+  own. It may sit in the environment.
+
+- **Setup.** `<port>` is the relay's loopback port. `127.0.0.1` and `localhost`
+  both work (the `Host` check below); another name for the same address does
+  not.
+  - **Claude Code:** `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/anthropic` and
+    `CLAUDE_CODE_OAUTH_TOKEN=<placeholder>`. Under a managed `forceLoginOrgUUID`
+    (IDB), plain `claude` refuses before any model call, because its org check
+    goes to the fixed host `api.anthropic.com`. There it runs through a wrapper
+    with its own settings over the managed file, as the devbox's `claude-pool`
+    does; the IDB template owns that wrapper. No gateway route answers the org
+    check.
+  - **Codex:** a custom provider with
+    `base_url = "http://127.0.0.1:<port>/chatgpt/backend-api/codex"`,
+    `wire_api = "responses"` and `env_key` naming a variable that holds the
+    placeholder. This form starts under IDB's managed
+    `forced_login_method = "chatgpt"`, which refuses the `auth.json` API-key
+    form. Without that lock, `auth.json`
+    `{"auth_mode":"apikey","OPENAI_API_KEY":"<placeholder>"}` with
+    `requires_openai_auth = true` works too.
+  - **pi:** in `models.json`, provider `openai-codex` with `baseUrl`
+    `http://127.0.0.1:<port>/chatgpt/backend-api`, `api`
+    `openai-codex-responses` and `apiKey` the placeholder. pi first tries a
+    WebSocket `GET`, which the gateway refuses, then uses SSE.
+  - **OpenCode:** a custom provider with `npm: "@ai-sdk/openai"`,
+    `options.baseURL = "http://127.0.0.1:<port>/chatgpt/backend-api/codex"` and
+    `options.apiKey` the placeholder. The built-in `openai` provider with the
+    same `baseURL` also works but tries a refused WebSocket `GET` first.
+    OpenCode itself refuses the built-in `openai-codex` name.
+  - **Not yet proven live:** OpenCode answering through the gateway and ChatGPT
+    accepting each harness's API-key-mode body are operator checks on a devbox
+    after merge. A body a provider rejects is fixed in that harness's documented
+    config; a gateway change returns to planning.
+- **Machine path.** On a client's model port, a request whose bearer is not
+  lease-shaped (three base64url segments whose payload names a lease), or that
+  has none, is a machine request. A lease-shaped bearer takes the lease path
+  unchanged: an unknown or revoked one gets 401 and never falls back to the
+  pool. The loopback listener has no machine path. A machine request:
+  1. is refused 403 `machine-origin` if it carries any `Origin`, or lacks
+     exactly one `Host` whose name is `127.0.0.1`, `localhost` or `[::1]` (any
+     case, optional port), so a web page cannot spend it, DNS rebinding
+     included. Through the relay these reach the edge as sent: a foreign `Host`,
+     or a second one, gets this marked 403 for an IP- or DNS-enrolled relay
+     alike;
+  2. reaches only the engine routes: `POST /anthropic/v1/messages`, its
+     `count_tokens`, and `POST /chatgpt/backend-api/codex/responses`. No usage,
+     credit or consume route, never `/compat`, and WebSocket stays refused;
+  3. is served on the account its pool picks for the route's provider (Claude
+     for `/anthropic`, OpenAI for `/chatgpt`) from the client's user's registry
+     accounts, with that account's credential and, on `/chatgpt`, its
+     `ChatGPT-Account-Id`. Nothing in the request names the account;
+  4. after the credential read, is checked again: the client still active, its
+     machine lease live, its pin still on that account, the account still
+     usable, and no needs-login answer. A change re-selects once; a second
+     change gives 503 `machine-retry` with no third credential read. No request
+     reaches the upstream with a credential that is no longer its selection's.
+     This holds when the second read just found the last usable-looking account
+     needs a login: that request gets the 503, and the next one, whose selection
+     sees the empty pool, gets 403 `machine-pool-empty`. No extra final check
+     runs (AC7b over AC8 for the first request, requester's ruling).
+- **Machine lease.** At most one live per (client, account), granted when a pin
+  first lands there and saved in `leases.json`. It has no TTL. It ends when the
+  machine is revoked, the account is removed, or no pin of that client uses the
+  account any more (the sweep). A grant that cannot be saved refuses that
+  request (500) and the gateway keeps serving.
+- **Pools and pins** (`gateway/machinePool.ts`). Usable: a login account of the
+  client's user, of the route's provider, enabled and not needing a login.
+  Eligible: usable and not benched. Ranking is Pandeck's
+  (`docs/account-routing.md` "Gateway machine pools") with usage unknown.
+  - A pin is keyed by (client, provider, SHA-256 of the session key). The key is
+    the first of these headers present: `x-claude-code-session-id` on
+    `/anthropic`; `session-id`, then `x-opencode-session-id` on `/chatgpt`. A
+    repeated, empty or over-256-character value counts as no key, and the
+    request uses the client's per-provider pin; a later header is not tried.
+    Repeats are read from the raw fields, which the relay keeps. The body is
+    never read.
+  - `machinePins.json` holds key hashes, account ids, tried sets and last use,
+    never a key. It is saved on every pin change, and at most every 10 minutes
+    for use alone; a failed save is logged and memory stays in force. An
+    unreadable file starts empty, and sessions re-pin.
+  - A pin idle 7 days is dropped, and a client keeps at most 1,024 (least
+    recently used first). Revoking the machine drops its pins.
+- **Stickiness.** A pin moves only when its account cannot serve: it is unusable
+  (removed, disabled, needs a login, no longer the user's) or has a long limit.
+  It never moves for ranking, or because an account it left recovered: the
+  provider's prompt cache stays on one account.
+- **Limits.** Each model-run answer (`POST /v1/messages`,
+  `POST /backend-api/codex/responses`) from any lease kind is evidence; usage,
+  credit, consume and `count_tokens` answers are not. A 2xx clears the account's
+  bench. A 429 passes through unchanged, every header field and repeat included
+  (gateway and relay drop only hop-by-hop, `proxy-*` and `set-cookie` fields),
+  and is classified by its stated reset, read from the upstream's raw headers:
+  `retry-after` sent exactly once (whole seconds or an RFC 9110 HTTP-date), else
+  on `/chatgpt` the latest valid `x-codex-{primary,secondary}-reset-at` or
+  `-reset-after-seconds`.
+  - Now or past: short, with no bench.
+  - Up to 60 s away (`MACHINE_SHORT_LIMIT_MS`, inclusive): short. The account is
+    benched until then and new sessions avoid it; the session keeps its pin and
+    tried set, so the harness's retry lands on the same account.
+  - Further, or no valid reset (benched 5 minutes): long. The account joins the
+    session's tried set and the pin moves at once, saved, to the best eligible
+    account outside that set. With none, the pin stays and later 429s pass
+    through.
+  - A later 429 never shortens a bench; a long one makes a short one long. A
+    pinned account with a long bench from another session or the lease path
+    moves the pin before the request. Benches live in memory, so a restart costs
+    at most one extra 429 per account; pins and tried sets persist.
+  - A sustained run of short 429s keeps a session on its account until the
+    harness gives up; that is the price of cache stickiness.
+- **Recovery from an unusable account,** in order: the best eligible untried
+  account; else the best eligible tried one (a return, allowed only because its
+  bench has ended); else the best usable untried one, benched, whose answer
+  passes through. Else, if usable accounts remain (all tried and benched), 429
+  `machine-session-limited` with `retry-after` the whole seconds until the first
+  of their benches ends; the session returns there once it does. With no usable
+  account, 403 `machine-pool-empty`. A returned-to account stays tried, so a 429
+  there never sends the session back again. After a restart the benches are
+  gone, so a return can come one bench early.
+- **Refusals.** Marked and provider-shaped, the provider named from the route:
+
+  | Case                      | Status | Text after "Pandeck gateway:"                                                                                |
+  | ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------ |
+  | `machine-pool-empty`      | 403    | no <Claude\|OpenAI> account is available to this machine's user. Add or log in to one on the gateway's page. |
+  | `machine-session-limited` | 429    | every <Claude\|OpenAI> account this session can use is rate-limited; retry later.                            |
+  | `machine-origin`          | 403    | model access from this machine is for local tools only.                                                      |
+  | `machine-retry`           | 503    | this machine's account changed while the request waited; retry.                                              |
+
+  The vault's needs-login 401 never reaches a machine request: a dead login is a
+  changed selection.
+
+- **Logs.** Every forward line on a client's port names
+  `kind=<engine|server|machine>` and `client=<id>`. No line holds the
+  placeholder, a session key or its hash, a token, a query or a body. A failure
+  while recording an answer (a registry read, a pin save) is logged with a fixed
+  line and never changes the answer.
+- **Encrypted reasoning.** After a move between accounts, a Codex, pi or
+  OpenCode conversation that carries encrypted reasoning may be refused by the
+  new account. Pandeck rewrites history on the driver side for its own sessions
+  (`sessionAccountSwitch.ts`); the gateway never edits a body, so the user
+  starts a new session.
 
 #### Tools on the edge
 

@@ -13,7 +13,9 @@
  *   (`devboxProof.ts`, `ClientRegistry.approveAutomatically`);
  * - the model port, HTTP over mutual TLS, the same routes as the loopback
  *   listener through a forwarder that spends only the calling client's
- *   leases;
+ *   leases, and serves its requests without a lease token from its user's
+ *   machine pool (Task-1424, `machinePool.ts`), whose pins a client
+ *   revocation drops;
  * - the client port, TLS with mutual TLS, serving gateway client 1.0
  *   (`clientMethods.ts`).
  *
@@ -84,6 +86,8 @@ import {
 } from "./clientRegistry.ts";
 import type { DevboxApproval } from "./devboxProof.ts";
 import type { CredentialOutcome, EdgeTools } from "./edgeTools.ts";
+import type { MachineAccess } from "./forward.ts";
+import { MachinePool, type MachinePinRecord } from "./machinePool.ts";
 import { LoginRefusal, type LoginActor } from "./logins.ts";
 import {
   createUserOperations,
@@ -212,13 +216,23 @@ interface ClientListenerDeps {
   profiles: ProfileRegistry;
   /** The profiles renewal found needing a login. */
   needsLogin: () => string[];
-  /** The model forwarder built with `clientOf: peerClientId`. */
-  forwarder: {
+  /**
+   * Builds the model forwarder, with `clientOf: peerClientId` and the
+   * listener's machine path.
+   */
+  forwarder: (machine: MachineAccess) => {
     handleRequest: (
       req: http.IncomingMessage,
       res: http.ServerResponse,
     ) => void;
   };
+  /** The saved machine pins and their writer; without them, memory only. */
+  machinePins?:
+    | {
+        restored: readonly MachinePinRecord[];
+        persist: (records: MachinePinRecord[]) => void;
+      }
+    | undefined;
   log: (line: string) => void;
   now?: () => number;
   /** The vault's side of logins and integration credentials. */
@@ -254,6 +268,8 @@ export interface RunningClientListener {
   /** The model port's deadlines in force. */
   readonly modelDeadlines: Readonly<ModelDeadlines>;
   readonly registry: ClientRegistry;
+  /** The clients' machine pools: pins, benches and machine leases. */
+  readonly machinePool: MachinePool;
   /**
    * The user-scoped account and login operations, which the client methods
    * and the gateway page both use.
@@ -401,6 +417,24 @@ export async function startClientListener(
     options.hosts ?? ["localhost", "127.0.0.1"],
   );
   const registry = new ClientRegistry(deps.stateDir, now, log);
+  // Usable accounts are read per selection, so account and login changes
+  // reach the pools without a call here.
+  const machinePool = new MachinePool({
+    leases,
+    accountsOf: (userId) => registry.accountsOf(userId),
+    profile: (profileId) => profiles.get(profileId),
+    needsLogin: deps.needsLogin,
+    now,
+    persist: deps.machinePins?.persist,
+    log,
+  });
+  try {
+    machinePool.restore(deps.machinePins?.restored ?? []);
+  } catch {
+    // Its pins are loaded; a lease release that failed to save is retried by
+    // the next sweep.
+    log("machine pins: restore sweep failed; retried by the next sweep");
+  }
   const sockets = new Set<net.Socket>();
   const authenticated = new Map<net.Socket, GatewayClient>();
   const knownClients = new Set<string>();
@@ -463,6 +497,8 @@ export async function startClientListener(
     for (const [socket, client] of authenticated)
       if (client.id === clientId) socket.destroy();
     userOperations.endActor({ kind: "client", id: clientId });
+    // Before the leases: dropping pins never throws, a failed lease save may.
+    machinePool.dropClient(clientId);
     leases.revokeWhere(
       (record) => record.owner.clientId === clientId,
       "session-ended",
@@ -893,6 +929,11 @@ export async function startClientListener(
     });
   };
 
+  const forwarder = deps.forwarder({
+    pool: machinePool,
+    // Checked again after the credential wait: a revocation meanwhile wins.
+    userOf: (req) => activeClient(req.socket)?.userId,
+  });
   const modelDeadlines = deps.modelDeadlines ?? MODEL_DEADLINES;
   const modelConnections = new WeakMap<net.Socket, ModelConnection>();
   // Never listened: only admitted sockets reach it, through `connection`.
@@ -934,7 +975,7 @@ export async function startClientListener(
     // The path only, without parsing: a malformed target must not throw here.
     if (deps.tools && (req.url ?? "").split("?")[0] === "/mcp")
       return mcpGate(req, res, client, deps.tools);
-    deps.forwarder.handleRequest(req, res);
+    forwarder.handleRequest(req, res);
   };
   const model = tls.createServer(mutualTls, (socket) => {
     track(socket);
@@ -1325,6 +1366,7 @@ export async function startClientListener(
     caPem: edgeTls.caCertPem,
     modelDeadlines,
     registry,
+    machinePool,
     userOperations,
     putAccount,
     removeAccount,

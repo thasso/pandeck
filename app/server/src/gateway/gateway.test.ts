@@ -30,6 +30,7 @@ import {
 import { startGateway, type RunningGateway } from "./gateway.ts";
 import type { LeaseProvider } from "./leases.ts";
 import { refusalText } from "./refusals.ts";
+import { isAllowed, routeFor } from "./upstreams.ts";
 
 // Synthetic fixture values; none is a real credential.
 const CLAUDE_ACCESS = "fake-claude-access";
@@ -1197,5 +1198,27 @@ test("AC2: a server lease's extra routes match exactly and only its provider's",
       ["POST", "/v1/messages"],
       ["POST", "/v1/messages/count_tokens"],
     ],
+  );
+});
+
+test("AC10: a machine lease reaches only each provider's engine routes, never a server route or /compat", () => {
+  const allowed = (method: string, url: string): boolean =>
+    isAllowed(routeFor(url)!, method, "machine");
+  assert.equal(allowed("POST", "/anthropic/v1/messages"), true);
+  assert.equal(allowed("POST", "/anthropic/v1/messages/count_tokens"), true);
+  assert.equal(allowed("POST", "/chatgpt/backend-api/codex/responses"), true);
+  for (const [method, url] of [
+    ["GET", "/anthropic/api/oauth/usage"],
+    ["GET", "/chatgpt/backend-api/wham/usage"],
+    ["GET", "/chatgpt/backend-api/wham/rate-limit-reset-credits"],
+    ["POST", "/chatgpt/backend-api/wham/rate-limit-reset-credits/consume"],
+    ["GET", "/chatgpt/backend-api/codex/responses"],
+    ["POST", "/compat/v1/chat/completions"],
+  ] as const)
+    assert.equal(allowed(method, url), false, `${method} ${url}`);
+  // The server lease's usage route stays its own.
+  assert.equal(
+    isAllowed(routeFor("/anthropic/api/oauth/usage")!, "GET", "server"),
+    true,
   );
 });

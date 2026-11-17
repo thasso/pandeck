@@ -10,6 +10,10 @@ import {
   type ThinkingLevel,
 } from "@assistant/shared";
 import {
+  rankCandidates,
+  type RankingUsage,
+} from "@assistant/shared/accountRanking";
+import {
   usageIndicatorState,
   usageWindowPct,
   type UsageIndicator,
@@ -65,26 +69,20 @@ export function rankAccountCandidates(
       (!request.requiresEnterprise || profile.enterprise) &&
       !request.excludeProfileIds?.includes(profile.id),
   );
-  const enabled = scope.filter(({ profile }) => profile.enabled);
-  const eligible = enabled.filter(
-    (candidate) =>
-      candidate.profile.health.state !== "needs-login" &&
-      candidate.offersModel &&
-      !candidate.limited,
+  const ranked = rankCandidates(
+    scope.map((candidate) => ({
+      ...candidate,
+      usage: rankingUsage(candidate.usage, now),
+      source: candidate,
+    })),
+    thresholds,
+    now,
   );
-  const pool = eligible.length ? eligible : enabled;
-  if (pool.length) {
-    const first = [...pool].sort(
-      (a, b) =>
-        Number(a.profile.health.state === "needs-login") -
-          Number(b.profile.health.state === "needs-login") ||
-        Number(!!a.limited) - Number(!!b.limited) ||
-        Number(!a.offersModel) - Number(!b.offersModel) ||
-        compareUsage(a, b, thresholds, now),
-    )[0]!;
+  if (ranked) {
+    const first = ranked.pick.source;
     return {
       profileId: first.profile.id,
-      ...(eligible.length ? {} : { degraded: "no-eligible-account" as const }),
+      ...(ranked.eligible ? {} : { degraded: "no-eligible-account" as const }),
       ...(first.limited ? { limited: first.limited } : {}),
     };
   }
@@ -107,62 +105,30 @@ export function rankAccountCandidates(
   };
 }
 
-function usageRank(
-  candidate: AccountCandidate,
-  thresholds: AccountRoutingThresholds,
+/**
+ * The ranking's usage facts: only fresh usage with limits counts, else it is
+ * unknown.
+ */
+function rankingUsage(
+  usage: UsageIndicator | null,
   now: number,
-): { tier: number; weeklyReset: number; fiveHourUsed: number } {
-  const usage = candidate.usage;
-  const fresh =
-    usage &&
-    usage.limitsAvailable &&
-    usageIndicatorState(usage, now) === "fresh";
+): RankingUsage | null {
+  if (!usage?.limitsAvailable || usageIndicatorState(usage, now) !== "fresh")
+    return null;
   // The usage projection reports a null window only when the provider proved
   // it absent ("no 5h limit"): with fresh usage that is room, not unknown
   // usage. Unproven absence arrives as a window of unknown percent instead.
   const windowPct = (window: UsageIndicator["short"]): number | null => {
-    if (fresh && window === null) return 0;
+    if (window === null) return 0;
     const pct = usageWindowPct(window, now);
     return pct !== null && Number.isFinite(pct) ? pct : null;
   };
-  const short = usage ? windowPct(usage.short) : null;
-  const long = usage ? windowPct(usage.long) : null;
-  const exhausted =
-    (short !== null && short >= thresholds.fiveHourUsedThreshold) ||
-    (long !== null && long >= thresholds.weeklyUsedThreshold);
-  const tier = !fresh
-    ? 1
-    : exhausted
-      ? 2
-      : short === null || long === null
-        ? 1
-        : 0;
-  const reset =
-    fresh && usage.long?.resetsAt ? Date.parse(usage.long.resetsAt) : NaN;
+  const reset = usage.long?.resetsAt ? Date.parse(usage.long.resetsAt) : NaN;
   return {
-    tier,
-    weeklyReset: Number.isFinite(reset) && reset > now ? reset : Infinity,
-    fiveHourUsed: fresh && short !== null ? short : Infinity,
+    shortPct: windowPct(usage.short),
+    longPct: windowPct(usage.long),
+    longResetsAt: Number.isFinite(reset) ? reset : null,
   };
-}
-
-function compareUsage(
-  a: AccountCandidate,
-  b: AccountCandidate,
-  thresholds: AccountRoutingThresholds,
-  now: number,
-): number {
-  const left = usageRank(a, thresholds, now);
-  const right = usageRank(b, thresholds, now);
-  // Infinity - Infinity is NaN; `||` deliberately proceeds to the next key.
-  // The manual priority orders accounts within a usage tier only.
-  return (
-    left.tier - right.tier ||
-    (b.profile.priority ?? 0) - (a.profile.priority ?? 0) ||
-    left.weeklyReset - right.weeklyReset ||
-    left.fiveHourUsed - right.fiveHourUsed ||
-    (a.profile.id < b.profile.id ? -1 : a.profile.id > b.profile.id ? 1 : 0)
-  );
 }
 
 /**

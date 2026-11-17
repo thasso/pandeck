@@ -369,6 +369,7 @@ const scans = new Map(
   [
     ...sourceModules(),
     resolve(SRC_ROOT, "../../shared/openAiCompatibleValidation.ts"),
+    resolve(SRC_ROOT, "../../shared/accountRanking.ts"),
   ].map((file) => [relative(SRC_ROOT, file), scanModule(file)]),
 );
 
@@ -448,10 +449,12 @@ test("the Worker side reaches no server state", () => {
  * itself: the private atomic writer for its state, the worker protocol's codec
  * and connection for its control channel (gateway control 1.0), the socket
  * transport for its client port (gateway client 1.0), and what those import. No package either, and each of these imports only `node:` or this
- * list, including the dependency-free shared endpoint rules, so the closure
- * ends here and the gateway can run as its own process (ADR-0005).
+ * list, including the dependency-free shared endpoint rules and account
+ * ranking (Task-1424), so the closure ends here and the gateway can run as its
+ * own process (ADR-0005).
  */
 const GATEWAY_ALLOWED = new Set([
+  "../../shared/accountRanking.ts",
   "../../shared/openAiCompatibleValidation.ts",
   "errors.ts",
   "privateJsonFile.ts",
@@ -495,6 +498,13 @@ test("the gateway reaches no server state", () => {
     pending.push(...(scans.get(target)?.imports ?? []));
   }
   assert.deepEqual([...reached].sort(), [...GATEWAY_ALLOWED].sort());
+  // The ranking Pandeck and the gateway share imports nothing, not even a
+  // type, so it can never pull server code into the gateway's closure.
+  assert.deepEqual(
+    [...scans.get("../../shared/accountRanking.ts")!.imports],
+    [],
+    "the shared account ranking imports nothing",
+  );
 });
 
 /**
@@ -548,6 +558,8 @@ const GATEWAY_EDGE = [
   "forward",
   "leases",
   "logins",
+  // Machine pools: a client's harness sessions pinned to accounts (Task-1424).
+  "machinePool",
   // The edge's VaultPort over gateway-vault/1.1.
   "remoteVault",
   "upstreams",
@@ -1571,11 +1583,30 @@ const CHECKOUT_FILE_ACCESS_EXPORTS = [
   "throwInCheckoutReadForTests",
 ];
 
+/**
+ * `symbolImports`, memoized for the default-Worker guard. Each call there
+ * rescans every production module, so a module whose exact text was analysed
+ * once is not parsed again. The entry is keyed by filename and reused only when
+ * the source text is identical, so an edited or synthetic source (a new text
+ * under the same name) is always analysed afresh.
+ */
+const importsByFile = new Map<
+  string,
+  { source: string; imports: SymbolImport[] }
+>();
+function cachedSymbolImports(file: string, source: string): SymbolImport[] {
+  const known = importsByFile.get(file);
+  if (known?.source === source) return known.imports;
+  const imports = symbolImports(file, source);
+  importsByFile.set(file, { source, imports });
+  return imports;
+}
+
 /** Modules binding the default Worker's id or side, or all of `placement.ts`. */
 function defaultWorkerNamers(sources: Map<string, string>): string[] {
   return [...sources]
     .filter(([file, source]) =>
-      symbolImports(file, source).some(
+      cachedSymbolImports(file, source).some(
         (ref) =>
           ref.module === "workers/placement.ts" &&
           ["DEFAULT_WORKER_ID", "DEFAULT_WORKER_SIDE", "*"].includes(

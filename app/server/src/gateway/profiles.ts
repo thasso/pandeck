@@ -5,10 +5,11 @@
  * and key arrive by `compat.set`, in memory only. A grant binds its lease
  * from here, never from the request (C5).
  *
- * `enabled` and `name` are recorded and never enforced: disabling an account
- * takes effect at the server's next turn, so the gateway never ends a running
- * one for it. Only removing a profile revokes its leases, which the control
- * endpoint does.
+ * `enabled` and `name` are recorded and never enforced on a lease: disabling an
+ * account takes effect at the server's next turn, so the gateway never ends a
+ * running one for it. `enabled` does steer a machine pool's next selection
+ * (`machinePool.ts`), still revoking nothing. Only removing a profile revokes
+ * its leases, which the control endpoint does.
  */
 import { isAbsolute } from "node:path";
 import type { LeaseProvider } from "./leases.ts";

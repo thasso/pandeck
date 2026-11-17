@@ -47,7 +47,13 @@ export type LeaseOwnership =
       owner: { workerId: string; sessionId?: string; clientId?: string };
     }
   /** The server's own requests, for one server boot or one client. */
-  | { kind: "server"; owner: { serverBootId: string; clientId?: string } };
+  | { kind: "server"; owner: { serverBootId: string; clientId?: string } }
+  /**
+   * A client's machine (`machinePool.ts`): its harnesses' requests without a
+   * lease token, at most one live lease per client and profile. Its token is
+   * discarded on grant; the machine path addresses it by id.
+   */
+  | { kind: "machine"; owner: { clientId: string } };
 
 export type LeaseRecord = LeaseBinding &
   LeaseOwnership & {
@@ -107,6 +113,21 @@ function tokenLeaseId(payloadSegment: string): string | undefined {
   if (typeof pandeck !== "object" || pandeck === null) return undefined;
   const { v, lease } = pandeck as { v?: unknown; lease?: unknown };
   return v === 1 && isLeaseId(lease) ? lease : undefined;
+}
+
+/**
+ * Whether a bearer is shaped like a lease token: three base64url segments
+ * whose payload names a lease. On a client's model port such a bearer takes
+ * the lease path, valid or not, and never falls back to the machine pool.
+ */
+export function isLeaseShaped(bearer: string | undefined): boolean {
+  if (!bearer) return false;
+  const segments = bearer.split(".");
+  return (
+    segments.length === 3 &&
+    segments.every((s) => SEGMENT_RE.test(s)) &&
+    tokenLeaseId(segments[1]!) !== undefined
+  );
 }
 
 interface Lease {
@@ -190,7 +211,7 @@ export class LeaseTable {
     const lease = this.leases.get(leaseId);
     if (!lease || lease.revoked) return "unknown";
     const { ownership } = lease;
-    if (ownership.kind === "server") return "server";
+    if (ownership.kind !== "engine") return "server";
     if (ownership.owner.sessionId !== undefined)
       return ownership.owner.sessionId === sessionId ? "unchanged" : "conflict";
     ownership.owner.sessionId = sessionId;
@@ -268,6 +289,34 @@ export class LeaseTable {
     return false;
   }
 
+  /**
+   * Grants a machine lease and discards its token: only the id, which the
+   * machine path holds, addresses it, and `verify` never accepts one.
+   */
+  grantMachine(binding: LoginBinding, clientId: string): string {
+    return this.grant(binding, { kind: "machine", owner: { clientId } })
+      .leaseId;
+  }
+
+  /** The client's live machine lease on the profile, if any. */
+  liveMachineLease(clientId: string, profileId: string): string | undefined {
+    for (const [leaseId, lease] of this.leases)
+      if (
+        !lease.revoked &&
+        lease.ownership.kind === "machine" &&
+        lease.ownership.owner.clientId === clientId &&
+        lease.binding.profileId === profileId
+      )
+        return leaseId;
+    return undefined;
+  }
+
+  /** Whether the lease is held and not revoked. */
+  isLive(leaseId: string): boolean {
+    const lease = this.leases.get(leaseId);
+    return lease !== undefined && !lease.revoked;
+  }
+
   /** Whose a held lease is: the routes beyond its provider's depend on it. */
   kindOf(leaseId: string): LeaseOwnership["kind"] | undefined {
     return this.leases.get(leaseId)?.ownership.kind;
@@ -310,6 +359,8 @@ export class LeaseTable {
     const lease = this.leases.get(leaseId);
     if (!lease || !timingSafeEqual(sha256(secret), lease.secretHash))
       return unknown;
+    // A machine lease's token was discarded at its grant.
+    if (lease.ownership.kind === "machine") return unknown;
     if (lease.revoked)
       return { ok: false, refusal: "revoked", leaseId, reason: lease.revoked };
     return { ok: true, leaseId, binding: { ...lease.binding } };
@@ -317,9 +368,14 @@ export class LeaseTable {
 }
 
 function copyOwnership(ownership: LeaseOwnership): LeaseOwnership {
-  return ownership.kind === "engine"
-    ? { kind: "engine", owner: { ...ownership.owner } }
-    : { kind: "server", owner: { ...ownership.owner } };
+  switch (ownership.kind) {
+    case "engine":
+      return { kind: "engine", owner: { ...ownership.owner } };
+    case "server":
+      return { kind: "server", owner: { ...ownership.owner } };
+    case "machine":
+      return { kind: "machine", owner: { clientId: ownership.owner.clientId } };
+  }
 }
 
 function recordOf(leaseId: string, lease: Lease): LeaseRecord {
