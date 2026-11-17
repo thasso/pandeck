@@ -1,17 +1,19 @@
 /**
  * The gateway's state directory (`docs/workers.md` "Credentials"):
- * `leases.json`, `profiles.json` and `holds.json`, each a `{ v: 1, … }`
- * document written whole through the private atomic writer (directory 0700,
- * file 0600, temp file plus rename). None holds a token, a lease token or its
- * secret: a lease is saved with its secret's hash, a login profile with its
- * token file's path, a login hold with its processes' pids and start times.
- * No file holds an OpenAI-compatible endpoint or key.
+ * `leases.json`, `profiles.json`, `holds.json` and `machinePins.json`, each a
+ * `{ v: 1, … }` document written whole through the private atomic writer
+ * (directory 0700, file 0600, temp file plus rename). None holds a token, a
+ * lease token or its secret: a lease is saved with its secret's hash, a login
+ * profile with its token file's path, a login hold with its processes' pids
+ * and start times, a machine pin with its session key's hash. No file holds
+ * an OpenAI-compatible endpoint or key.
  *
  * All load when the gateway starts, so it forwards with the server down. A
  * missing file is empty. An unreadable file, or one of another version, is
  * logged by name and loaded as empty, so an unreadable `leases.json` refuses
  * every old token; an unreadable `holds.json` instead fences every login
- * profile (`holds.ts`). A record that does not validate is skipped and logged the
+ * profile (`holds.ts`), and an unreadable `machinePins.json` re-pins every
+ * session. A record that does not validate is skipped and logged the
  * same way. No log line holds file content. The next save replaces the file.
  */
 import { join } from "node:path";
@@ -28,6 +30,11 @@ import {
   type LeaseOwnership,
   type LeaseRecord,
 } from "./leases.ts";
+import {
+  parsePinRecord,
+  pinRecordKey,
+  type MachinePinRecord,
+} from "./machinePool.ts";
 import { isPid, isStartTime } from "./processIdentity.ts";
 import {
   isAbsolutePath,
@@ -56,9 +63,11 @@ export interface GatewayState {
   holds: HoldRecord[];
   /** `holds.json` was unreadable: every profile is fenced. */
   holdsUnreadable: boolean;
+  machinePins: MachinePinRecord[];
   persistLeases(records: LeaseRecord[]): void;
   persistProfiles(profiles: GatewayProfile[]): void;
   persistHolds(records: HoldRecord[]): void;
+  persistMachinePins(records: MachinePinRecord[]): void;
 }
 
 /** Whether `value` is a non-empty owner id of bounded length. */
@@ -93,6 +102,14 @@ function parseOwnership(
   }
   if (kind === "server" && isOwnerId(serverBootId))
     return { kind, owner: { serverBootId, ...client } };
+  if (
+    kind === "machine" &&
+    clientId !== undefined &&
+    workerId === undefined &&
+    sessionId === undefined &&
+    serverBootId === undefined
+  )
+    return { kind, owner: { clientId } };
   return undefined;
 }
 
@@ -113,7 +130,9 @@ function parseLeaseRecord(value: unknown): LeaseRecord | undefined {
   // A login's lease names its token file; an endpoint account's names none.
   let binding: LeaseBinding;
   if (r.provider === "openai-compatible") {
-    if (r.tokenFile !== undefined) return undefined;
+    // A machine lease spends only a login's token file.
+    if (r.tokenFile !== undefined || ownership.kind === "machine")
+      return undefined;
     binding = { profileId: r.profileId, provider: r.provider };
   } else if (isLeaseProvider(r.provider) && isAbsolutePath(r.tokenFile))
     binding = {
@@ -261,6 +280,11 @@ export function openGatewayState(
     "gateway login holds",
     { privateDirectory: "enforce" },
   );
+  const machinePinsFile = createPrivateJsonFile(
+    join(stateDir, "machinePins.json"),
+    "gateway machine pins",
+    { privateDirectory: "enforce" },
+  );
   const holds = loadRecords(
     holdsFile,
     "holds.json",
@@ -292,8 +316,18 @@ export function openGatewayState(
       ) ?? [],
     holds: holds ?? [],
     holdsUnreadable: holds === undefined,
+    machinePins:
+      loadRecords(
+        machinePinsFile,
+        "machinePins.json",
+        "pins",
+        parsePinRecord,
+        pinRecordKey,
+        log,
+      ) ?? [],
     persistLeases: writer(leasesFile, "leases.json", "leases"),
     persistProfiles: writer(profilesFile, "profiles.json", "profiles"),
     persistHolds: writer(holdsFile, "holds.json", "holds"),
+    persistMachinePins: writer(machinePinsFile, "machinePins.json", "pins"),
   };
 }

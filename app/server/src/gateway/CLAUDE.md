@@ -1,15 +1,18 @@
-<!-- instruction-budget: bytes=4040 reason="Thirteen contracts: edge tools, per-call credential reads, enrollment collect and automatic approval, and the integration records' four writers with their lane and stop." task=1410 date=2026-11-17 -->
+<!-- instruction-budget: bytes=4096 reason="Fourteen contracts: edge tools, credential reads, enrollment, integration writers' lanes and machine-lease grants." task=1424 date=2026-11-17 -->
 
 # Credential gateway
 
 Contract: `docs/workers.md` "Credentials" and ADR-0005.
 
 - `gateway/` imports only `node:` modules, itself and `GATEWAY_ALLOWED` in
-  `workerBoundary.test.ts`, never a package or other server module; that list
-  stays closed. Only `gatewayLink.ts`, `gatewayClientLink.ts`, `gatewayEdge.ts`
-  and `providerErrors.ts` (the marker) import it; new wiring updates that pin.
-- Only a control or client connection grants a lease, and a grant binds provider
-  and, for a login, token file from the registry, never from the request.
+  `workerBoundary.test.ts` (with the import-free `accountRanking.ts`), never a
+  package or other server module; that list stays closed. Only `gatewayLink.ts`,
+  `gatewayClientLink.ts`, `gatewayEdge.ts` and `providerErrors.ts` (the marker)
+  import it; new wiring updates that pin.
+- Only a control or client connection grants a lease, or the edge a machine
+  lease to its pool's pick of the client user's registry accounts; a grant binds
+  provider and, for a login, token file from the registry, never from the
+  request.
 - State goes only to `stateDir`, through `privateJsonFile.ts`. It holds hashes
   and paths (lease secrets and enrollment codes hashed), never a token, lease
   token or pushed key; its only keys are TLS keys (edge, vault link). Each
@@ -45,8 +48,8 @@ Contract: `docs/workers.md` "Credentials" and ADR-0005.
   owner and registered writer (`processState`; uncertain is alive), or the
   operator's force release; never on elapsed time, a lost connection, a restart
   or a sync.
-- Forward bodies with `pipe` in both directions, never `on("data")` writes that
-  ignore `write()`'s result: a paused client must hold the upstream back.
+- Forward bodies with `pipe` both ways, never unchecked `on("data")` writes: a
+  paused client must hold the upstream back.
 - No log line or refusal holds a credential, PIN, lease token or secret, query
   or body. Refusal texts hold no string from a request or upstream; a profile
   name comes only from the registry.

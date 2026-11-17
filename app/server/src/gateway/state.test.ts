@@ -58,6 +58,7 @@ import { processStartTime } from "./processIdentity.ts";
 import { LeaseTable } from "./leases.ts";
 import type { GatewayProfile, LoginProfile } from "./profiles.ts";
 import { refusalText, type Refusal, type RevokeReason } from "./refusals.ts";
+import { openGatewayState } from "./state.ts";
 
 const HOUR = 60 * 60 * 1000;
 const T0 = 1_800_000_000_000;
@@ -1009,4 +1010,51 @@ test("AC20: holds.json holds pids, start times and ids, never a token or credent
     CODEX_ACCOUNT,
   ])
     assert.ok(!saved.includes(value), "holds.json leaks a secret");
+});
+
+test("Task-1424: a machine lease record loads only with a login binding and a client owner; an unreadable machinePins.json starts empty", async () => {
+  const stateDir = await freshStateDir();
+  const base = {
+    secretHash: "a".repeat(64),
+    profileId: "claude-a",
+    provider: "claude",
+    tokenFile: "/tmp/fixture/.credentials.json",
+    grantedAt: T0,
+    kind: "machine",
+  };
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(stateDir, "leases.json"),
+    JSON.stringify({
+      v: 1,
+      leases: [
+        { ...base, leaseId: "kept", owner: { clientId: "client-1" } },
+        { ...base, leaseId: "no-client", owner: {} },
+        {
+          ...base,
+          leaseId: "with-worker",
+          owner: { clientId: "client-1", workerId: "w" },
+        },
+        {
+          ...base,
+          leaseId: "compat",
+          provider: "openai-compatible",
+          tokenFile: undefined,
+          owner: { clientId: "client-1" },
+        },
+      ],
+    }),
+  );
+  await writeFile(join(stateDir, "machinePins.json"), "{not json");
+  const logged: string[] = [];
+  const state = openGatewayState(stateDir, (line) => logged.push(line));
+  assert.deepEqual(
+    state.leases.map((record) => [record.leaseId, record.kind, record.owner]),
+    [["kept", "machine", { clientId: "client-1" }]],
+  );
+  assert.deepEqual(state.machinePins, []);
+  assert.deepEqual(logged.sort(), [
+    "leases.json: skipped 3 unreadable record(s); loading the rest",
+    "machinePins.json unreadable; starting without it",
+  ]);
 });

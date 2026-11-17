@@ -86,3 +86,84 @@ test("a revoked lease with the wrong secret is unknown, not revoked", () => {
   const forged = `${header}.${payload}.${secret[0] === "A" ? "B" : "A"}${secret.slice(1)}`;
   assert.deepEqual(leases.verify(forged), { ok: false, refusal: "unknown" });
 });
+
+test("a machine lease: one live per client and profile, never verified by token, revoked by the client and profile predicates", () => {
+  const leases = new LeaseTable({ now: () => GRANTED_AT });
+  const leaseId = leases.grantMachine(BINDING, "client-1");
+  const record = leases.records().find((r) => r.leaseId === leaseId)!;
+  assert.equal(record.kind, "machine");
+  assert.deepEqual(record.owner, { clientId: "client-1" });
+  assert.equal(leases.kindOf(leaseId), "machine");
+  assert.equal(leases.clientOf(leaseId), "client-1");
+  assert.equal(leases.liveMachineLease("client-1", BINDING.profileId), leaseId);
+  assert.equal(
+    leases.liveMachineLease("client-2", BINDING.profileId),
+    undefined,
+  );
+  assert.equal(leases.liveMachineLease("client-1", "claude-other"), undefined);
+  // An engine lease of the same client and profile is no machine lease.
+  leases.grant(BINDING, {
+    kind: "engine",
+    owner: { workerId: "w", clientId: "client-2" },
+  });
+  assert.equal(
+    leases.liveMachineLease("client-2", BINDING.profileId),
+    undefined,
+  );
+  // A machine lease has no session.
+  assert.equal(leases.bindSession(leaseId, "s1"), "server");
+  assert.equal(leases.isLive(leaseId), true);
+
+  // Even a token carrying its id and secret is refused: grants discard it.
+  const other = new LeaseTable({ now: () => GRANTED_AT });
+  const { token, leaseId: forged } = other.grant(BINDING, {
+    kind: "machine",
+    owner: { clientId: "client-1" },
+  });
+  assert.equal(other.kindOf(forged), "machine");
+  assert.deepEqual(other.verify(token), { ok: false, refusal: "unknown" });
+
+  // The client-revoke predicate (`clientListener.ts` revokeClient).
+  assert.deepEqual(
+    leases.revokeWhere((r) => r.owner.clientId === "client-1", "session-ended"),
+    [leaseId],
+  );
+  assert.equal(leases.isLive(leaseId), false);
+  assert.equal(
+    leases.liveMachineLease("client-1", BINDING.profileId),
+    undefined,
+  );
+  // The profile-removal predicate.
+  const again = leases.grantMachine(BINDING, "client-1");
+  assert.ok(
+    leases
+      .revokeWhere((r) => r.profileId === BINDING.profileId, "profile-removed")
+      .includes(again),
+  );
+  assert.equal(leases.isLive("no-such-lease"), false);
+});
+
+test("AC13: a machine lease keeps its profile live for renewal until it is revoked", () => {
+  const leases = new LeaseTable({ now: () => GRANTED_AT });
+  assert.equal(leases.hasLiveLease(BINDING.profileId), false);
+  const leaseId = leases.grantMachine(BINDING, "client-1");
+  assert.equal(leases.hasLiveLease(BINDING.profileId), true);
+  leases.revoke(leaseId, "session-ended");
+  assert.equal(leases.hasLiveLease(BINDING.profileId), false);
+});
+
+test("a machine lease survives persist and restore with its kind and client", () => {
+  const saved: ReturnType<LeaseTable["records"]>[] = [];
+  const leases = new LeaseTable({
+    now: () => GRANTED_AT,
+    persist: (records) => saved.push(records),
+  });
+  const leaseId = leases.grantMachine(BINDING, "client-1");
+  const restored = new LeaseTable({ now: () => GRANTED_AT });
+  restored.restore(saved.at(-1)!);
+  assert.equal(
+    restored.liveMachineLease("client-1", BINDING.profileId),
+    leaseId,
+  );
+  assert.deepEqual(restored.records(), leases.records());
+});

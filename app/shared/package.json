@@ -15,6 +15,7 @@
     "./objectLinks": "./objectLinks.ts",
     "./comments": "./comments.ts",
     "./usage": "./usage.ts",
+    "./accountRanking": "./accountRanking.ts",
     "./accountHealth": "./accountHealth.ts",
     "./openAiCompatibleValidation": "./openAiCompatibleValidation.ts",
     "./servedFiles": "./servedFiles.ts",
