@@ -1294,6 +1294,7 @@ const REGISTRY = defineRegistry({
     validateResolveApproval,
   ),
   revokeApprovalGrant: fields({ sessionId: STRING, key: STRING }),
+  setSessionRequiresEnterprise: fields({ sessionId: STRING }),
   setSessionPeerTurnCap: fields({
     sessionId: STRING,
     cap: {

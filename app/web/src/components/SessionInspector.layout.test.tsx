@@ -19,6 +19,7 @@ import {
   SessionInspector,
   sessionInspectorActions,
 } from "./objectInspectors.tsx";
+import { DialogProvider } from "./common/dialogs.tsx";
 
 const openers = {
   onOpenTask: () => {},
@@ -100,6 +101,133 @@ describe("SessionInspector layout", () => {
       ["s1", null],
     ]);
   });
+  it("offers Require enterprise account only when it would apply, and sends it once confirmed", async () => {
+    const account = { name: "Personal", provider: "claude" as const };
+    const action = (html: string) =>
+      html.includes("Require enterprise account");
+    const row = (requiresEnterprise?: true) => [
+      {
+        id: "s1",
+        title: "Session",
+        ...(requiresEnterprise ? { requiresEnterprise } : {}),
+      } as SessionListItem,
+    ];
+    const offered = {
+      ...base,
+      sessions: row(),
+      credentialProfile: account,
+      enterpriseAccountAvailable: true,
+      onRequireEnterprise: () => {},
+    };
+    expect(action(render(offered))).toBe(true);
+    expect(
+      action(render({ ...offered, enterpriseAccountAvailable: false })),
+    ).toBe(false);
+    expect(action(render({ ...offered, onRequireEnterprise: undefined }))).toBe(
+      false,
+    );
+    expect(action(render({ ...offered, credentialProfile: undefined }))).toBe(
+      false,
+    );
+    expect(
+      action(
+        render({
+          ...offered,
+          credentialProfile: {
+            name: "Endpoint",
+            provider: "openai-compatible",
+          },
+        }),
+      ),
+    ).toBe(false);
+    const required = render({ ...offered, sessions: row(true) });
+    expect(action(required)).toBe(false);
+    expect(required).toContain("enterprise only");
+
+    const asked: string[] = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { host, root };
+    await act(async () =>
+      root.render(
+        <DialogProvider>
+          <SessionInspector
+            {...offered}
+            onRequireEnterprise={(id) => asked.push(id)}
+          />
+        </DialogProvider>,
+      ),
+    );
+    const button = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (item) => item.textContent?.trim() === label,
+      );
+    await act(async () => button("Require enterprise account")!.click());
+    expect(document.body.textContent).toContain("This cannot be undone.");
+    expect(document.body.textContent).toContain("next turn moves it");
+    expect(asked).toEqual([]);
+    await act(async () => button("Cancel")!.click());
+    expect(asked).toEqual([]);
+    await act(async () => button("Require enterprise account")!.click());
+    const confirm = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '[role="dialog"] button, dialog button',
+      ),
+    ].find((item) => item.textContent?.trim() === "Require enterprise account");
+    await act(async () => confirm!.click());
+    expect(asked).toEqual(["s1"]);
+  });
+
+  it("disables Require enterprise account while the session runs, with a hint", async () => {
+    const props = {
+      ...base,
+      credentialProfile: { name: "Personal", provider: "claude" as const },
+      enterpriseAccountAvailable: true,
+      onRequireEnterprise: () => {},
+    };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { host, root };
+    const show = (isStreaming: boolean) =>
+      act(async () =>
+        root.render(
+          <DialogProvider>
+            <SessionInspector
+              {...props}
+              sessions={[
+                {
+                  id: "s1",
+                  title: "Session",
+                  ...(isStreaming ? { isStreaming } : {}),
+                } as SessionListItem,
+              ]}
+            />
+          </DialogProvider>,
+        ),
+      );
+    const button = () =>
+      [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+        (item) => item.textContent?.trim() === "Require enterprise account",
+      );
+    const hint = "Available once the current turn ends.";
+
+    await show(true);
+    expect(button()).toBeDefined();
+    expect(button()!.disabled).toBe(true);
+    expect(host.textContent).toContain(hint);
+    const describedBy = button()!.getAttribute("aria-describedby");
+    expect(
+      describedBy && document.getElementById(describedBy)?.textContent,
+    ).toBe(hint);
+
+    await show(false);
+    expect(button()!.disabled).toBe(false);
+    expect(button()!.hasAttribute("aria-describedby")).toBe(false);
+    expect(host.textContent).not.toContain(hint);
+  });
+
   it("lists no actions: the session header's menu holds them", () => {
     const html = render({ ...base, relatedTasks: [task(1)] });
     expect(html).toContain("Tasks");

@@ -111,6 +111,71 @@ test("live failover alone replaces a binding, with a stale/deleted-row fence", (
   );
 });
 
+test("a switch can make the session enterprise-only in the same compare-and-set", () => {
+  const id = `switch-require-enterprise-${Date.now()}`;
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "personal",
+  });
+  assert.throws(() =>
+    sessionStore.switchCredentialProfile(id, "stale", "work", {
+      requireEnterprise: true,
+    }),
+  );
+  assert.equal(
+    sessionStore.get(id)?.requiresEnterprise,
+    undefined,
+    "a refused switch sets no requirement",
+  );
+  sessionStore.switchCredentialProfile(id, "personal", "work", {
+    requireEnterprise: true,
+  });
+  assert.equal(sessionStore.get(id)?.credentialProfileId, "work");
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+  sessionStore.switchCredentialProfile(id, "work", "other-work");
+  assert.equal(
+    sessionStore.get(id)?.requiresEnterprise,
+    true,
+    "a later plain switch keeps the requirement",
+  );
+  sessionStore.markDeleted(id);
+  assert.throws(() =>
+    sessionStore.switchCredentialProfile(id, "other-work", "work", {
+      requireEnterprise: true,
+    }),
+  );
+});
+
+test("requiring enterprise is one-way and refuses a deleted session", () => {
+  const id = `require-enterprise-${Date.now()}`;
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "developer",
+    credentialProfileId: "personal",
+  });
+  sessionStore.requireEnterprise(id);
+  sessionStore.requireEnterprise(id);
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "developer",
+    requiresEnterprise: false,
+  });
+  assert.equal(
+    sessionStore.get(id)?.requiresEnterprise,
+    true,
+    "metadata refreshes never clear it",
+  );
+  assert.equal(sessionStore.get(id)?.credentialProfileId, "personal");
+  sessionStore.markDeleted(id);
+  assert.throws(() => sessionStore.requireEnterprise(id), /deleted/);
+  assert.throws(() => sessionStore.requireEnterprise("no-such-session"));
+});
+
 test("SQLite session store durably freezes an enterprise account requirement", () => {
   const id = `enterprise-session-${Date.now()}`;
   sessionStore.claimScope({

@@ -171,6 +171,7 @@ test("sessionStore metadata writers, lifecycle, outcomes and spawn ownership", a
     () => sessions.switchCredentialProfile(a, "old", "new"),
     [a],
   );
+  await check("requireEnterprise", () => sessions.requireEnterprise(a), [a]);
   await check("markRead", () => sessions.markRead(a, 1001), [a]);
   await check("touch", () => sessions.touch(a, 2000), [a]);
   await check("setArchived", () => sessions.setArchived(a, true), [a]);

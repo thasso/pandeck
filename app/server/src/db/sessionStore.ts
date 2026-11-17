@@ -503,6 +503,21 @@ function upsert(input: SessionUpsert): boolean {
   }
 }
 
+/**
+ * One-way: only enterprise accounts may run the session from now on. Nothing
+ * clears it. Throws when no live row exists.
+ */
+function requireEnterprise(id: string): void {
+  const result = getDb()
+    .prepare(
+      "UPDATE session_index SET requires_enterprise = 1 WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(id);
+  if (result.changes !== 1)
+    throw new Error("Session does not exist or was deleted.");
+  touchSessionRows([id]);
+}
+
 /** Validated synchronous write; the domain API owns notification. */
 function setPeerTurnCap(id: string, cap: number | null): void {
   if (cap !== null && !isSessionPeerTurnCap(cap))
@@ -517,15 +532,22 @@ function setPeerTurnCap(id: string, cap: number | null): void {
   touchSessionRows([id]);
 }
 
-/** Live failover only: refuse a stale binding or a session deleted during the move. */
+/**
+ * Live failover only: refuse a stale binding or a session deleted during the
+ * move. `requireEnterprise` makes the session enterprise-only in the SAME
+ * write, so the new binding never exists without its requirement.
+ */
 function switchCredentialProfile(
   id: string,
   previous: string,
   next: string,
+  options: { requireEnterprise?: true } = {},
 ): void {
   const result = getDb()
     .prepare(
-      "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
+      options.requireEnterprise
+        ? "UPDATE session_index SET credential_profile_id = ?, requires_enterprise = 1 WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL"
+        : "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
     )
     .run(next, id, previous);
   if (result.changes !== 1)
@@ -2125,6 +2147,7 @@ export const sessionStore = {
   upsert,
   setPeerTurnCap,
   switchCredentialProfile,
+  requireEnterprise,
   setCompactionWindow,
   markDeleted,
   remove,

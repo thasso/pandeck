@@ -6,6 +6,7 @@
  * is attached to the normalized runtime before prompting, so run-state and the
  * durable app-owned log are updated for viewed and background runs alike.
  */
+import type { AccountSwitchOptions } from "../sessionAccount.ts";
 import type {
   AgentType,
   ContextInfo,
@@ -79,11 +80,10 @@ export interface RuntimePromptDriver {
     model?: { provider: string; id: string } | undefined;
     thinkingLevel?: ThinkingLevel | undefined;
   };
-  /** `allowWithoutHistory`: the turn has not started, so no history is lost. */
   switchAccount?(
     profileId: string,
     admit: () => void,
-    allowWithoutHistory?: boolean,
+    options?: AccountSwitchOptions,
   ): Promise<void>;
   dropEncryptedReasoning?(admit: () => void): Promise<boolean>;
   contextInfo(): ContextInfo;
@@ -263,9 +263,13 @@ export function assertSessionEnterpriseAccount(
   if (!source?.requiresEnterprise) return;
   const profileId = driver.credentialProfileId ?? source.credentialProfileId;
   const profile = profileId ? credentialProfileById(profileId) : undefined;
-  if (!profile?.enterprise)
+  if (!profile)
     throw new Error(
-      "This session requires an enterprise account, but its bound account is missing or no longer marked as enterprise.",
+      "This session requires an enterprise account, but its bound account is missing.",
+    );
+  if (!profile.enterprise)
+    throw new Error(
+      `This session requires an enterprise account, but its bound account ${profile.name} is not marked as enterprise.`,
     );
 }
 

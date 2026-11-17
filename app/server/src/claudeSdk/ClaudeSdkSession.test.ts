@@ -1031,3 +1031,147 @@ test("a zeroed result neither bills nor erases the epoch", async () => {
     "the zeroed result did not erase the session total",
   );
 });
+
+/* ----------------------------- model refusals ----------------------------- */
+
+const REFUSAL_TEXT =
+  "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy.";
+
+function refusalFrame(options: {
+  error?: string;
+  text?: string;
+}): ClaudeSdkMessage {
+  return {
+    type: "assistant",
+    uuid: `refusal-${Math.random()}`,
+    session_id: "sess-refusal",
+    parent_tool_use_id: null,
+    ...(options.error ? { error: options.error } : {}),
+    message: {
+      id: "refused-message",
+      role: "assistant",
+      model: options.error ? "<synthetic>" : "claude-opus-4-6",
+      stop_reason: "refusal",
+      content: [{ type: "text", text: options.text ?? REFUSAL_TEXT }],
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  } as unknown as ClaudeSdkMessage;
+}
+
+function noFallback(category: string | null | undefined): ClaudeSdkMessage {
+  return {
+    type: "system",
+    subtype: "model_refusal_no_fallback",
+    original_model: "claude-opus-4-6",
+    request_id: null,
+    ...(category !== undefined ? { api_refusal_category: category } : {}),
+    content: "Claude refused this request.",
+    uuid: `no-fallback-${Math.random()}`,
+    session_id: "sess-refusal",
+  } as unknown as ClaudeSdkMessage;
+}
+
+function refusalResult(isError: boolean): ClaudeSdkMessage {
+  return {
+    type: "result",
+    subtype: "success",
+    session_id: "sess-refusal",
+    is_error: isError,
+    result: isError ? REFUSAL_TEXT : "I can't help with that.",
+    total_cost_usd: 0,
+    usage: { input_tokens: 0, output_tokens: 0 },
+    modelUsage: {},
+  } as unknown as ClaudeSdkMessage;
+}
+
+async function refusedTurn(messages: ClaudeSdkMessage[]) {
+  const session = new ClaudeSdkSession(`claude-refusal-${Math.random()}`, {
+    seam: () => Promise.resolve(fakeSeam(messages)),
+  });
+  const envelopes: ServerMessage[] = [];
+  session.addViewer({ send: (message) => envelopes.push(message) });
+  try {
+    const result = await session.createRuntimeAdapter().prompt("go");
+    const end = envelopes.find((event) => event.type === "assistantEnd");
+    return {
+      result,
+      errorInfo: end?.type === "assistantEnd" ? end.errorInfo : undefined,
+    };
+  } finally {
+    session.dispose();
+  }
+}
+
+test.each([
+  [
+    "error frame first",
+    [refusalFrame({ error: "invalid_request" }), noFallback("cyber")],
+  ],
+  [
+    "structured notice first",
+    [noFallback("CYBER"), refusalFrame({ error: "invalid_request" })],
+  ],
+] as const)(
+  "a cyber refusal fails the turn as a cybersecurity refusal: %s",
+  async (_order, frames) => {
+    const { result, errorInfo } = await refusedTurn([
+      ...frames,
+      refusalResult(true),
+    ]);
+    assert.equal(result.stopReason, "error");
+    assert.equal(result.failure?.kind, "content_policy");
+    assert.equal(result.failure?.cyberRefusal, true);
+    assert.equal(errorInfo?.kind, "content_policy");
+    assert.equal(errorInfo?.refusalCategory, "cyber");
+  },
+);
+
+test("a streamed refusal with no error frame still fails the turn as a refusal", async () => {
+  const { result, errorInfo } = await refusedTurn([
+    refusalFrame({ text: "I can't help with that." }),
+    refusalResult(false),
+  ]);
+  assert.equal(result.stopReason, "error", "a refusal is not a success");
+  assert.equal(result.failure?.kind, "content_policy");
+  assert.equal(result.failure?.cyberRefusal, undefined);
+  assert.equal(errorInfo?.refusalCategory, undefined);
+});
+
+test.each([null, undefined, "bio"])(
+  "a refusal with category %s is a content refusal without the cyber flag",
+  async (category) => {
+    const { result } = await refusedTurn([
+      refusalFrame({ error: "invalid_request" }),
+      noFallback(category),
+      refusalResult(true),
+    ]);
+    assert.equal(result.stopReason, "error");
+    assert.equal(result.failure?.kind, "content_policy");
+    assert.equal(result.failure?.cyberRefusal, undefined);
+  },
+);
+
+test.each([null, undefined])(
+  "a refusal with category %s is not cyber even when the model's text mentions it",
+  async (category) => {
+    const { result, errorInfo } = await refusedTurn([
+      refusalFrame({
+        text: "I won't explain how to slip past the cyber_policy filter.",
+      }),
+      noFallback(category),
+      refusalResult(false),
+    ]);
+    assert.equal(result.failure?.kind, "content_policy");
+    assert.equal(result.failure?.cyberRefusal, undefined);
+    assert.equal(errorInfo?.refusalCategory, undefined);
+  },
+);
+
+test("a subagent's refusal does not fail the turn", async () => {
+  const subagent = {
+    ...(refusalFrame({ text: "No." }) as object),
+    parent_tool_use_id: "toolu_task",
+  } as unknown as ClaudeSdkMessage;
+  const { result } = await refusedTurn([subagent, refusalResult(false)]);
+  assert.equal(result.stopReason, "end");
+});

@@ -1355,3 +1355,339 @@ test("real Claude store moves a session with no native history off a disabled ac
     profiles.setCredentialProfileEnabled(b, false);
   }
 });
+
+/* ------------------- cybersecurity refusals → enterprise ------------------- */
+
+const CYBER_TEXT =
+  "This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request.";
+
+test.each(["moved", "revoked-while-staging"] as const)(
+  "real pi store: a cybersecurity refusal moves to an enterprise account with the requirement in the same commit: %s",
+  async (mode) => {
+    const a = account("openai-codex", `Cyber personal ${mode}`);
+    const e = account("openai-codex", `Cyber work ${mode}`);
+    profiles.patchCredentialProfile(e, { enterprise: true });
+    const calls: string[] = [];
+    const internals = piStore as unknown as {
+      openEngine: (
+        spec: PiEngineOpenSpec,
+      ) => Promise<{ engine: PiEngineHandle; info: unknown }>;
+    };
+    const original = internals.openEngine.bind(piStore);
+    const factory = vi
+      .spyOn(internals, "openEngine")
+      .mockImplementation(async (spec) => {
+        const opened = await original(spec);
+        const session = nativePiSessionForTests(opened.engine);
+        const profile = spec.credentialProfileId;
+        session.setAutoRetryEnabled(false);
+        session.agent.streamFunction = (model) => {
+          calls.push(profile);
+          const failure = profile === a;
+          const message: AssistantMessage = {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            content: [{ type: "text", text: failure ? "" : "Reviewed" }],
+            stopReason: failure ? "error" : "stop",
+            ...(failure ? { errorMessage: CYBER_TEXT } : {}),
+            timestamp: Date.now(),
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+          };
+          const stream = createAssistantMessageEventStream();
+          queueMicrotask(() => {
+            stream.push({ type: "start", partial: message });
+            stream.push(
+              failure
+                ? { type: "error", reason: "error", error: message }
+                : { type: "done", reason: "stop", message },
+            );
+            stream.end();
+          });
+          return stream;
+        };
+        // The target loses its enterprise flag while the replacement stages.
+        if (mode === "revoked-while-staging" && profile === e && spec.staged)
+          profiles.patchCredentialProfile(e, { enterprise: false });
+        return opened;
+      });
+    let id: string | undefined;
+    try {
+      const live = await createSession({
+        harness: "pi",
+        agentType: "assistant",
+        credentialProfileId: a,
+        model: await piModelForAccount(a, "openai-codex", "gpt-5.5"),
+        thinkingLevel: "off",
+        title: "Cyber review",
+      });
+      id = live.id;
+      await promptRuntimeSessionWithRuntime(
+        sessionRuntime,
+        live,
+        "Review the exploit",
+      ).catch(() => {});
+      await vi.waitFor(() =>
+        assert.ok(
+          JSON.stringify(sessionRuntime.get(live.id)!.clientTimeline()).match(
+            /Switched from|could not safely resume/,
+          ),
+        ),
+      );
+      await vi.waitFor(() => assert.equal(live.isRunning, false));
+      const row = sessionStore.get(live.id);
+      if (mode === "moved") {
+        await vi.waitFor(() => assert.deepEqual(calls, [a, e]));
+        assert.equal(live.credentialProfileId, e);
+        assert.equal(row?.credentialProfileId, e);
+        assert.equal(row?.requiresEnterprise, true);
+        assert.ok(
+          JSON.stringify(
+            sessionRuntime.get(live.id)!.clientTimeline(),
+          ).includes(
+            `Switched from Cyber personal moved to Cyber work moved — cybersecurity refusal. This session now requires an enterprise account.`,
+          ),
+        );
+      } else {
+        assert.deepEqual(calls, [a], "no continuation runs");
+        assert.equal(live.credentialProfileId, a);
+        assert.equal(row?.credentialProfileId, a);
+        assert.equal(row?.requiresEnterprise, undefined);
+      }
+    } finally {
+      factory.mockRestore();
+      if (id) {
+        await sessionRuntime.disposeSession(id);
+        piStore.evict(id);
+      }
+      profiles.setCredentialProfileEnabled(a, false);
+      profiles.setCredentialProfileEnabled(e, false);
+    }
+  },
+);
+
+test.each(["continues", "fails-after-commit"] as const)(
+  "real Claude store: a structured cyber refusal moves to an enterprise account with the requirement persisted: %s",
+  async (mode) => {
+    const a = account("claude", `Claude personal ${mode}`);
+    const e = account("claude", `Claude work ${mode}`);
+    profiles.patchCredentialProfile(e, { enterprise: true });
+    const providerId = randomUUID();
+    const project = "-cyber-switch-test";
+    const from = join(profiles.claudeConfigDir(a), "projects", project);
+    mkdirSync(from, { recursive: true });
+    writeFileSync(join(from, `${providerId}.jsonl`), "{}\n");
+    const queries: ClaudeQueryParams[] = [];
+    const seam: ClaudeSdkSeam = {
+      query(params) {
+        const index = queries.length;
+        queries.push(params);
+        return {
+          async *[Symbol.asyncIterator]() {
+            if (typeof params.prompt !== "string") {
+              const iterator = params.prompt[Symbol.asyncIterator]();
+              await iterator.next();
+              await iterator.return?.();
+            }
+            yield {
+              type: "system",
+              subtype: "init",
+              session_id: providerId,
+              uuid: randomUUID(),
+            } as ClaudeSdkMessage;
+            if (!index) {
+              yield {
+                type: "assistant",
+                session_id: providerId,
+                uuid: randomUUID(),
+                parent_tool_use_id: null,
+                error: "invalid_request",
+                message: {
+                  id: randomUUID(),
+                  model: "<synthetic>",
+                  stop_reason: "refusal",
+                  content: [{ type: "text", text: "I can't help with that." }],
+                  usage: { input_tokens: 0, output_tokens: 0 },
+                },
+              } as unknown as ClaudeSdkMessage;
+              yield {
+                type: "system",
+                subtype: "model_refusal_no_fallback",
+                original_model: "claude-sonnet-4-6",
+                request_id: null,
+                api_refusal_category: "cyber",
+                content: "Claude refused this request.",
+                session_id: providerId,
+                uuid: randomUUID(),
+              } as unknown as ClaudeSdkMessage;
+            }
+            yield {
+              type: "result",
+              subtype: "success",
+              is_error: !index,
+              session_id: providerId,
+              uuid: randomUUID(),
+              total_cost_usd: 0,
+              modelUsage: {},
+            } as unknown as ClaudeSdkMessage;
+          },
+        };
+      },
+    };
+    const internals = claudeSdkStore as unknown as {
+      seam: () => Promise<ClaudeSdkSeam>;
+    };
+    const factory = vi.spyOn(internals, "seam").mockResolvedValue(seam);
+    const id = randomUUID();
+    try {
+      const live = await createSession({
+        harness: "claude-sdk",
+        id,
+        agentType: "assistant",
+        credentialProfileId: a,
+        modelId: "sonnet",
+        thinkingLevel: "medium",
+        title: "Cyber Claude",
+      });
+      const claude =
+        live as import("./claudeSdk/ClaudeSdkSession.ts").ClaudeSdkSession;
+      if (mode === "fails-after-commit") {
+        // The first step after the binding's compare-and-set throws.
+        const broadcast = claude.broadcastState.bind(claude);
+        let thrown = false;
+        vi.spyOn(claude, "broadcastState").mockImplementation(() => {
+          if (!thrown && sessionStore.get(id)?.credentialProfileId === e) {
+            thrown = true;
+            throw new Error("post-commit failure");
+          }
+          broadcast();
+        });
+      }
+      await promptRuntimeSessionWithRuntime(
+        sessionRuntime,
+        live,
+        "Review the exploit",
+      ).catch(() => {});
+      await vi.waitFor(() =>
+        assert.equal(sessionStore.get(id)?.credentialProfileId, e),
+      );
+      await vi.waitFor(() => assert.equal(live.isRunning, false));
+      const row = sessionStore.get(id);
+      assert.equal(row?.requiresEnterprise, true);
+      if (mode === "continues") {
+        await vi.waitFor(() => assert.equal(queries.length, 2));
+        assert.equal(live.credentialProfileId, e);
+        assert.equal(queries[1]!.options?.resume, providerId);
+        assert.equal(
+          queries[1]!.options?.env?.CLAUDE_CONFIG_DIR,
+          profiles.claudeConfigDir(e),
+        );
+      } else {
+        await vi.waitFor(() =>
+          assert.ok(
+            JSON.stringify(sessionRuntime.get(id)!.clientTimeline()).includes(
+              "could not safely resume",
+            ),
+          ),
+        );
+        assert.equal(queries.length, 1, "no continuation after the failure");
+      }
+    } finally {
+      vi.restoreAllMocks();
+      factory.mockRestore();
+      await sessionRuntime.disposeSession(id);
+      claudeSdkStore.remove(id);
+      profiles.setCredentialProfileEnabled(a, false);
+      profiles.setCredentialProfileEnabled(e, false);
+    }
+  },
+);
+
+test("real Claude store moves a fresh session that requires enterprise before its first turn", async () => {
+  const a = account("claude", "Fresh personal");
+  const e = account("claude", "Fresh work");
+  profiles.patchCredentialProfile(e, { enterprise: true });
+  const providerId = randomUUID();
+  const queries: ClaudeQueryParams[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      queries.push(params);
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (typeof params.prompt !== "string") {
+            const iterator = params.prompt[Symbol.asyncIterator]();
+            await iterator.next();
+            await iterator.return?.();
+          }
+          yield {
+            type: "system",
+            subtype: "init",
+            session_id: providerId,
+            uuid: randomUUID(),
+          } as ClaudeSdkMessage;
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: providerId,
+            uuid: randomUUID(),
+            total_cost_usd: 0,
+            modelUsage: {},
+          } as unknown as ClaudeSdkMessage;
+        },
+      };
+    },
+  };
+  const internals = claudeSdkStore as unknown as {
+    seam: () => Promise<ClaudeSdkSeam>;
+  };
+  const factory = vi.spyOn(internals, "seam").mockResolvedValue(seam);
+  const id = randomUUID();
+  try {
+    const live = await createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: a,
+      modelId: "sonnet",
+      thinkingLevel: "medium",
+      title: "Fresh enterprise Claude",
+    });
+    sessionStore.requireEnterprise(id);
+    await promptRuntimeSessionWithRuntime(sessionRuntime, live, "First turn");
+    assert.equal(live.credentialProfileId, e);
+    assert.equal(sessionStore.get(id)?.credentialProfileId, e);
+    assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+    assert.equal(queries.length, 1);
+    assert.equal(queries[0]!.options?.resume, undefined);
+    assert.equal(
+      queries[0]!.options?.env?.CLAUDE_CONFIG_DIR,
+      profiles.claudeConfigDir(e),
+    );
+    assert.ok(
+      JSON.stringify(sessionRuntime.get(id)!.clientTimeline()).includes(
+        "Switched from Fresh personal to Fresh work — this session requires an enterprise account.",
+      ),
+    );
+  } finally {
+    factory.mockRestore();
+    await sessionRuntime.disposeSession(id);
+    claudeSdkStore.remove(id);
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(e, false);
+  }
+});

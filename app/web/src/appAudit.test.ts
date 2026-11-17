@@ -49,6 +49,20 @@ describe("App session peer cap control", () => {
       /runtimeHasStarted|displayHasUserPrompt|displayMessages/,
     );
   });
+  test("Require enterprise account is wired to the persisted row and the session's account provider", () => {
+    const inspector = APP_SOURCE.slice(APP_SOURCE.indexOf("<SessionInspector"));
+    expect(inspector.match(/onRequireEnterprise=\{([\s\S]*?)\}/)?.[1]).toMatch(
+      /displaySessionListItem\s*\?\s*actions\.requireSessionEnterprise\s*:\s*undefined/,
+    );
+    const available = inspector.match(
+      /enterpriseAccountAvailable=\{([\s\S]*?)\n {8}\}/,
+    )?.[1];
+    expect(available).toMatch(/profile\.enabled/);
+    expect(available).toMatch(/profile\.enterprise/);
+    expect(available).toMatch(
+      /profile\.provider === displayCredentialProfile\.provider/,
+    );
+  });
 });
 
 describe("App new-session drafts", () => {

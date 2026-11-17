@@ -6810,6 +6810,18 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onSetPeerTurnCap={
           displaySessionListItem ? actions.setSessionPeerTurnCap : undefined
         }
+        onRequireEnterprise={
+          displaySessionListItem ? actions.requireSessionEnterprise : undefined
+        }
+        enterpriseAccountAvailable={
+          displayCredentialProfile !== undefined &&
+          credentialProfiles.some(
+            (profile) =>
+              profile.enabled &&
+              profile.enterprise &&
+              profile.provider === displayCredentialProfile.provider,
+          )
+        }
         originTask={sessionOriginTask}
         relatedTasks={relatedGlobalTasks}
         sessionTasks={sessionTasks}

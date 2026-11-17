@@ -47,6 +47,14 @@ native identity refuses the move. The resumed query uses the same provider
 session id with the replacement's credential environment. Signed thinking and
 tool history are copied byte-for-byte.
 
+A refusal is recognized from structure, never prose: an assistant frame of the
+live turn with `stop_reason: "refusal"` (subagent frames excluded) or a
+`model_refusal_no_fallback` system message fails the turn as `content_policy`.
+That message's `api_refusal_category` rides along as `refusalCategory`, and
+`cyber` (any case) sets `RunFailureFacts.cyberRefusal`, which drives the
+enterprise move. Both frames are turn transcript, so a closing epoch's late
+refusal is dropped with the rest of that epoch.
+
 The record timeline remains append-only. A model-only continuation creates no
 new committed user entry; switch notices live only in the app-owned display log.
 Selection, stop/enterprise checks and retry bounds belong to

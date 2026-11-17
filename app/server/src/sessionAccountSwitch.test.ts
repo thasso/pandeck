@@ -12,6 +12,7 @@ import type {
 } from "./session/runtime/liveSession.ts";
 import { SessionBusyError } from "./session/runtime/errors.ts";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
+import type { AccountSwitchOptions } from "./sessionAccount.ts";
 
 const offers = vi.hoisted(
   () => new Map<string, { provider: string; id: string }>(),
@@ -135,6 +136,7 @@ function setup(
   const calls: { text: string; continuation: boolean; profileId: string }[] =
     [];
   const moves: string[] = [];
+  const switchOptions: AccountSwitchOptions[] = [];
   let moveGate: (() => Promise<void>) | undefined;
   let afterMove: (() => Promise<void>) | undefined;
   let failureGate: (() => Promise<void>) | undefined;
@@ -214,11 +216,17 @@ function setup(
       };
       return adapter;
     },
-    switchAccount: async (next, admit) => {
+    switchAccount: async (next, admit, options) => {
+      switchOptions.push({ ...options });
       admit();
       await moveGate?.();
       admit();
-      sessionStore.switchCredentialProfile(id, profileId, next);
+      sessionStore.switchCredentialProfile(
+        id,
+        profileId,
+        next,
+        options?.requireEnterprise ? { requireEnterprise: true } : {},
+      );
       profileId = next;
       moves.push(next);
       await afterMove?.();
@@ -230,6 +238,7 @@ function setup(
     driver,
     calls,
     moves,
+    switchOptions,
     gate: (fn: () => Promise<void>) => {
       moveGate = fn;
     },
@@ -741,6 +750,7 @@ for (const harness of engines) {
     { kind: "auth" },
     { kind: "server" },
     { kind: "unknown" },
+    { kind: "content_policy" },
   ] as RunFailureFacts[])(
     `${harness} never switches for unrelated %j`,
     async (failure) => {
@@ -777,6 +787,137 @@ for (const harness of engines) {
     assert.deepEqual(s.moves, []);
     assert.equal(s.calls.length, 1);
     assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+  });
+}
+
+const CYBER: RunFailureFacts = { kind: "content_policy", cyberRefusal: true };
+
+/** The send's final outcome, once its deferred settlement decided it. */
+async function finalOutcome(
+  sent: ReturnType<ReturnType<typeof setup>["send"]>,
+): Promise<RunOutcome | undefined> {
+  let outcome: RunOutcome | undefined;
+  sent.observe((event) => {
+    if (event.type === "run-ended") outcome = event.outcome;
+  });
+  await sent.catch(() => {});
+  return outcome;
+}
+
+for (const harness of engines) {
+  test(`${harness} a cybersecurity refusal on a personal account moves once to an enterprise account and continues`, async () => {
+    const a = account(harness, "A");
+    account(harness, "Other personal");
+    const e = account(harness, "Work", true);
+    const s = setup(harness, a, [CYBER, undefined]);
+    const outcome = await finalOutcome(s.send());
+    await vi.waitFor(() => assert.equal(s.calls.length, 2));
+    assert.deepEqual(s.moves, [e]);
+    assert.deepEqual(s.switchOptions, [{ requireEnterprise: true }]);
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, e);
+    assert.equal(sessionStore.get(s.id)?.requiresEnterprise, true);
+    assert.deepEqual(
+      s.calls.map((call) => [call.profileId, call.continuation]),
+      [
+        [a, false],
+        [e, true],
+      ],
+    );
+    assert.equal(outcome?.stopReason, "end");
+    assert.ok(
+      JSON.stringify(messages(s)).includes(
+        "Switched from A to Work — cybersecurity refusal. This session now requires an enterprise account.",
+      ),
+    );
+  });
+  test(`${harness} a cybersecurity refusal with no eligible enterprise account stays and keeps the failure`, async () => {
+    const a = account(harness, "A");
+    account(harness, "Other personal");
+    const disabled = account(harness, "Disabled work", true);
+    profiles.setCredentialProfileEnabled(disabled, false);
+    const s = setup(harness, a, [CYBER]);
+    const outcome = await finalOutcome(s.send());
+    await vi.waitFor(() =>
+      assert.ok(
+        JSON.stringify(messages(s)).includes(
+          "No enterprise account is available for this cybersecurity refusal. This session remains on A.",
+        ),
+      ),
+    );
+    assert.deepEqual(s.moves, []);
+    assert.equal(s.calls.length, 1);
+    assert.equal(outcome?.stopReason, "error");
+    assert.equal(sessionStore.get(s.id)?.credentialProfileId, a);
+    assert.equal(sessionStore.get(s.id)?.requiresEnterprise, undefined);
+  });
+  test(`${harness} refused again on the enterprise account it moved to, the failure stands`, async () => {
+    const a = account(harness, "A");
+    const e1 = account(harness, "Work 1", true);
+    const e2 = account(harness, "Work 2", true);
+    const s = setup(harness, a, [CYBER, CYBER, undefined]);
+    const outcome = await finalOutcome(s.send());
+    await vi.waitFor(() => assert.equal(s.calls.length, 2));
+    await Promise.resolve();
+    assert.equal(s.moves.length, 1, "one move in total");
+    assert.ok([e1, e2].includes(s.moves[0]!));
+    assert.equal(s.calls.length, 2);
+    assert.equal(outcome?.stopReason, "error");
+    assert.equal(sessionStore.get(s.id)?.requiresEnterprise, true);
+  });
+  test(`${harness} a cybersecurity refusal on an enterprise account never moves`, async () => {
+    const e1 = account(harness, "Work 1", true);
+    account(harness, "Work 2", true);
+    const s = setup(harness, e1, [CYBER]);
+    const outcome = await finalOutcome(s.send());
+    await Promise.resolve();
+    assert.deepEqual(s.moves, []);
+    assert.equal(s.calls.length, 1);
+    assert.equal(outcome?.stopReason, "error");
+  });
+  test(`${harness} a session required to be enterprise moves before its next turn`, async () => {
+    const a = account(harness, "A");
+    account(harness, "Other personal");
+    const e = account(harness, "Work", true);
+    const s = setup(harness, a, [undefined]);
+    sessionStore.requireEnterprise(s.id);
+    await s.send();
+    assert.deepEqual(s.moves, [e]);
+    assert.deepEqual(s.switchOptions, [
+      { allowWithoutHistory: true, requireEnterprise: true },
+    ]);
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [e],
+    );
+    assert.ok(
+      JSON.stringify(messages(s)).includes(
+        "Switched from A to Work — this session requires an enterprise account.",
+      ),
+    );
+  });
+  test(`${harness} a session required to be enterprise with none eligible refuses the turn`, async () => {
+    const a = account(harness, "A");
+    account(harness, "Other personal");
+    const s = setup(harness, a, [undefined]);
+    sessionStore.requireEnterprise(s.id);
+    await assert.rejects(
+      s.send(),
+      /This session requires an enterprise account, and no eligible enterprise account is available\. It remains on A\./,
+    );
+    assert.deepEqual(s.moves, []);
+    assert.equal(s.calls.length, 0);
+    assert.equal(s.runtime.get(s.id)?.clientTimeline().length ?? 0, 0);
+  });
+  test(`${harness} a session already on an enterprise account does not move for the requirement`, async () => {
+    const e = account(harness, "Work", true);
+    account(harness, "Work 2", true);
+    const s = setup(harness, e, [undefined], true);
+    await s.send();
+    assert.deepEqual(s.moves, []);
+    assert.deepEqual(
+      s.calls.map((call) => call.profileId),
+      [e],
+    );
   });
 }
 

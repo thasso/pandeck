@@ -91,6 +91,7 @@ export function clearDelegationStandDown(childSessionId: string): void {
 
 function categoryForKind(
   kind: ReturnType<typeof analyzeProviderError>["kind"],
+  cyberRefusal = false,
 ): DelegationFailureCategory {
   switch (kind) {
     case "auth":
@@ -100,7 +101,7 @@ function categoryForKind(
     case "rate_limit":
       return "rate_limit";
     case "content_policy":
-      return "content_policy";
+      return cyberRefusal ? "content_policy_cyber" : "content_policy";
     default:
       return "provider_error";
   }
@@ -139,15 +140,16 @@ function classify(
   failedAt: number,
 ): { category: DelegationFailureCategory; resetAt?: number } {
   if (facts) {
-    const category = categoryForKind(facts.kind);
+    const category = categoryForKind(facts.kind, facts.cyberRefusal === true);
     const resetAt =
       category === "usage_limit" || category === "rate_limit"
         ? plausibleReset(facts.resetAtMs, failedAt)
         : undefined;
     return { category, ...(resetAt !== undefined ? { resetAt } : {}) };
   }
+  const info = analyzeProviderError(errorMessage ?? "");
   return {
-    category: categoryForKind(analyzeProviderError(errorMessage ?? "").kind),
+    category: categoryForKind(info.kind, info.refusalCategory === "cyber"),
   };
 }
 
@@ -162,6 +164,8 @@ const PEER_FAILURE_REASONS: Record<DelegationFailureCategory, string> = {
   rate_limit: "The recipient's turn failed: it was rate-limited.",
   content_policy:
     "The recipient's turn failed: the provider refused the content.",
+  content_policy_cyber:
+    "The recipient's turn failed: the provider flagged possible cybersecurity risk.",
   provider_error: "The recipient's turn failed: a provider or harness error.",
   delivery: "The message could not be delivered.",
 };
@@ -804,6 +808,10 @@ export function failureSentence(
       return `The provider rate-limited it and the harness's retries ran out.${reset}`;
     case "content_policy":
       return "The provider refused the conversation's content; sending the same session more of it will likely be refused again.";
+    case "content_policy_cyber":
+      // True for every terminal case: no move possible, a move that failed,
+      // or a move whose continuation was refused again on enterprise.
+      return "The provider flagged the conversation for possible cybersecurity risk, and automatic account recovery did not complete the turn (the session's transcript says whether it moved). If it is a child you still own, not yet enterprise-only and idle, `session_control` `require_enterprise` followed by a new prompt moves it to an enterprise account when one is available; a refusal on an enterprise account needs a narrower brief or another reviewer.";
     case "delivery":
       return "Your message could not be delivered after repeated attempts: the session could not be started or did not accept it.";
     case "provider_error":

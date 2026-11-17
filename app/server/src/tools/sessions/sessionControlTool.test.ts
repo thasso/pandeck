@@ -130,6 +130,7 @@ describe("session_control tool", () => {
       "cancel_queued_prompts",
       "stop",
       "dismiss_background_updates",
+      "require_enterprise",
     ]);
     assert.deepEqual(Object.keys(schema.properties).sort(), [
       "clearQueue",
@@ -283,6 +284,93 @@ describe("session_control tool", () => {
     assert.match(resultText(await dismiss()), /Dismissed 1.*0 remain/);
     assert.equal(outbox.interruptedCount(child), 0);
     assert.equal(automaticTurnsHeld(child), true);
+  });
+
+  it("makes an owned idle child enterprise-only, once, and refuses everyone else", async () => {
+    const caller = seed("Caller");
+    const child = seed("Child");
+    sessionStore.linkSpawned(caller, child);
+    const other = seed("Other parent");
+    const unrelated = seed("Other parent's child");
+    sessionStore.linkSpawned(other, unrelated);
+    const taken = seed("Taken over");
+    sessionStore.linkSpawned(caller, taken, 123, "taken-over");
+    const grandchild = seed("Grandchild");
+    sessionStore.linkSpawned(child, grandchild);
+    let running = true;
+    setSessionControlRuntimeForTests({
+      isRunning: () => running,
+      abort: () => assert.fail("no abort"),
+    });
+    const requireEnterprise = (target: string) =>
+      tool().execute(
+        { operation: "require_enterprise", targetSessionId: target },
+        context(caller),
+      );
+    const required = (id: string) =>
+      sessionStore.get(id)?.requiresEnterprise === true;
+
+    await assert.rejects(
+      () => requireEnterprise(child),
+      /is running; require an enterprise account once its turn ends/,
+    );
+    assert.equal(required(child), false);
+
+    running = false;
+    for (const [target, error] of [
+      [caller, /current session/],
+      [unrelated, /not spawned/],
+      [grandchild, /not spawned/],
+      [taken, /no longer owned.*cannot be made enterprise-only here/],
+    ] as const) {
+      await assert.rejects(() => requireEnterprise(target), error);
+      assert.equal(required(target), false, target);
+    }
+
+    const stamp = sessionStore.get(child)!.updatedAt;
+    const first = resultText(await requireEnterprise(child));
+    assert.match(first, /now requires an enterprise account/);
+    assert.match(first, /next prompt moves it/);
+    assert.equal(required(child), true);
+    assert.equal(sessionStore.get(child)!.updatedAt, stamp);
+    assert.match(
+      resultText(await requireEnterprise(child)),
+      /already requires an enterprise account; nothing changed/,
+    );
+    assert.equal(required(child), true);
+  });
+
+  it("refuses to make a child on a personal endpoint account enterprise-only", async () => {
+    const { createCredentialProfile } =
+      await import("../../credentialProfiles.ts");
+    const endpoint = createCredentialProfile({
+      name: "Child endpoint",
+      provider: "openai-compatible",
+    });
+    const caller = seed("Caller");
+    const child = `session-control-${sequence++}`;
+    sessionStore.upsert({
+      id: child,
+      harness: "pi",
+      agentType: "assistant",
+      title: "Endpoint child",
+      credentialProfileId: endpoint.id,
+    });
+    sessions.push(child);
+    sessionStore.linkSpawned(caller, child);
+    setSessionControlRuntimeForTests({
+      isRunning: () => false,
+      abort: () => assert.fail("no abort"),
+    });
+    await assert.rejects(
+      () =>
+        tool().execute(
+          { operation: "require_enterprise", targetSessionId: child },
+          context(caller),
+        ),
+      /Child endpoint is the only account that serves this session's model and is not an enterprise account/,
+    );
+    assert.equal(sessionStore.get(child)?.requiresEnterprise, undefined);
   });
 
   it("cancels only the caller's own waiting prompts", async () => {

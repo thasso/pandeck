@@ -156,7 +156,10 @@ import {
   stopBackgroundWorkForHuman,
 } from "./backgroundWorkHumanStop.ts";
 import { backgroundCompletionTurns } from "./backgroundWork/completionDelivery.ts";
-import { resolveSessionAccount } from "./sessionAccount.ts";
+import {
+  requireSessionEnterprise,
+  resolveSessionAccount,
+} from "./sessionAccount.ts";
 import { revalidateUsage, usageIndicators } from "./usageCache.ts";
 import {
   broadcastWorkflowRuns,
@@ -1198,6 +1201,20 @@ export class Connection implements Viewer {
           setSessionPeerTurnCap(msg.sessionId, msg.cap);
           // Delivery failures stay in the topic (Task-1310), so only the
           // write itself can report an error here.
+          publishSessionRowsNow();
+        } catch (err) {
+          this.send({
+            type: "error",
+            message: errorText(err),
+            target: { type: "session", id: msg.sessionId },
+          });
+        }
+        return;
+
+      case "setSessionRequiresEnterprise":
+        try {
+          // Refused while the session runs; its next turn moves first.
+          requireSessionEnterprise(msg.sessionId, sessionRuntime);
           publishSessionRowsNow();
         } catch (err) {
           this.send({

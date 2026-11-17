@@ -317,14 +317,25 @@ messages to it by send time (and Task id), never their text. Then: nothing was
 retried, restarted or reassigned; decide under your own instructions, and tell
 the user when unsure.
 
-| Category         | Source                                                      |
-| ---------------- | ----------------------------------------------------------- |
-| `auth`           | provider kind `auth`                                        |
-| `usage_limit`    | provider kind `quota` (spend, usage, billing, subscription) |
-| `rate_limit`     | provider kind `rate_limit`                                  |
-| `content_policy` | provider kind `content_policy`                              |
-| `provider_error` | every other kind, and a harness that refused the prompt     |
-| `delivery`       | an abandoned delivery the reason does not name more closely |
+| Category               | Source                                                      |
+| ---------------------- | ----------------------------------------------------------- |
+| `auth`                 | provider kind `auth`                                        |
+| `usage_limit`          | provider kind `quota` (spend, usage, billing, subscription) |
+| `rate_limit`           | provider kind `rate_limit`                                  |
+| `content_policy`       | provider kind `content_policy`                              |
+| `content_policy_cyber` | provider kind `content_policy` with `cyberRefusal`          |
+| `provider_error`       | every other kind, and a harness that refused the prompt     |
+| `delivery`             | an abandoned delivery the reason does not name more closely |
+
+`content_policy_cyber` is the cybersecurity refusal that account recovery
+(`docs/account-routing.md` "Live account switching") did not complete: no
+enterprise account to move to, refused again after moving, or refused on an
+enterprise account. Its sentence says the session's transcript tells whether it
+moved, and that `session_control` `require_enterprise` on a child the
+coordinator still owns, not yet enterprise-only and idle, followed by a new
+prompt moves it to an enterprise account when one is available; a refusal on an
+enterprise account needs a narrower brief or another reviewer. Plain
+`content_policy` keeps its own sentence.
 
 A refused start is worded apart from failures, under its own heading ("A session
 you spawned was waiting for a slot and was NOT started"), and never says a turn

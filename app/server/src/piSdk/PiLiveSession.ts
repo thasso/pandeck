@@ -57,7 +57,10 @@ import {
 } from "../serialize.ts";
 import { deriveTitle, type LiveListInfo } from "../sessions.ts";
 import { sessionStore } from "../db/sessionStore.ts";
-import { assertSessionAccountSwitch } from "../sessionAccount.ts";
+import {
+  assertSessionAccountSwitch,
+  type AccountSwitchOptions,
+} from "../sessionAccount.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
 import type {
   CompactionWindowApplyResult,
@@ -1125,8 +1128,17 @@ export class PiLiveSession implements LiveSession {
     });
   }
 
-  /** Rebuild on the new login only after the old SDK operation has settled. */
-  async switchAccount(profileId: string, admit: () => void): Promise<void> {
+  /**
+   * Rebuild on the new login only after the old SDK operation has settled.
+   * A pi session always keeps its transcript, so `allowWithoutHistory` changes
+   * nothing; `requireEnterprise` commits the requirement with the binding.
+   */
+  async switchAccount(
+    profileId: string,
+    admit: () => void,
+    options: AccountSwitchOptions = {},
+  ): Promise<void> {
+    const { requireEnterprise } = options;
     const previous = this.profileId;
     if (!previous || !this.reopenForAccount)
       throw new Error("This pi session cannot switch accounts.");
@@ -1139,7 +1151,13 @@ export class PiLiveSession implements LiveSession {
         this.profileId !== previous
       )
         throw new Error("The pi session changed during its account switch.");
-      assertSessionAccountSwitch(this.id, previous, profileId, "openai-codex");
+      assertSessionAccountSwitch(
+        this.id,
+        previous,
+        profileId,
+        "openai-codex",
+        requireEnterprise ? { requireEnterprise } : {},
+      );
     };
     await this.driveCompletion?.catch(() => {});
     check();
@@ -1156,7 +1174,12 @@ export class PiLiveSession implements LiveSession {
         replacement.engine.transcript.getLeafId() !== leaf
       )
         throw new Error("The pi transcript changed during its account switch.");
-      sessionStore.switchCredentialProfile(this.id, previous, profileId);
+      sessionStore.switchCredentialProfile(
+        this.id,
+        previous,
+        profileId,
+        requireEnterprise ? { requireEnterprise } : {},
+      );
       committed = true;
       const old = this.engine;
       this.unsubscribe();
